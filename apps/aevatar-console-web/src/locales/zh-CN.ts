@@ -585,7 +585,7 @@ const zhCNMessages = {
   'pages.teammemberinvoke.service.pending': '发布服务暂不可见。',
   'pages.teammemberinvoke.service.pending.description':
     '成员绑定已经存在，但服务目录还没有暴露它的可调用端点。',
-  'pages.teammemberinvoke.title': '运行工作流成员',
+  'pages.teammemberinvoke.title': '运行成员',
   'pages.teammemberinvoke.revision.ready': '就绪',
   'pages.teammemberinvoke.service.bound': '已绑定服务',
   'pages.teammemberinvoke.unbound': '这个 Workflow 成员尚未绑定。',
@@ -595,7 +595,7 @@ const zhCNMessages = {
   'pages.teammemberinvoke.workflow.only.description':
     '这个页面只运行 Workflow 成员。其他实现类型请使用对应成员自己的入口。',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.description':
-    '你可以在这里搭建或粘贴 workflow。保存时会创建可恢复的 workflow 草稿，直到成员关联完成物化。',
+    '当前 Phase 1 页面只会通过稳定 Workflow 引用加载成员。请先补齐后端或 ReadModel 引用，再在这里编辑这个成员。',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.title':
     '这个成员还没有关联 Workflow 草稿。',
   'teamMemberWorkflowStudio.common.close': '关闭',
@@ -605,27 +605,16 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.executionPanel.emptyEvidence':
     '后端返回 Usage、Snapshot 或原始观察事件后，这里会展示对应证据。',
   'teamMemberWorkflowStudio.executionPanel.emptyLogs':
-    'Workflow 草稿运行后，这里会展示每个步骤的输出。',
-  'teamMemberWorkflowStudio.executionPanel.emptyNodeInput':
-    '未提供用户输入。',
-  'teamMemberWorkflowStudio.executionPanel.emptyNodeOutput':
-    '未捕获输出。',
+    'Workflow 草稿返回事件后，这里会展示运行日志。',
   'teamMemberWorkflowStudio.executionPanel.emptyOutput':
     '草稿运行返回结果后，这里会展示输出。',
   'teamMemberWorkflowStudio.executionPanel.evidence': '证据帧',
   'teamMemberWorkflowStudio.executionPanel.events': '事件',
   'teamMemberWorkflowStudio.executionPanel.items': '条',
   'teamMemberWorkflowStudio.executionPanel.logs': '日志',
-  'teamMemberWorkflowStudio.executionPanel.node': '节点',
-  'teamMemberWorkflowStudio.executionPanel.nodeInput': '输入',
-  'teamMemberWorkflowStudio.executionPanel.nodeInteraction': '交互',
-  'teamMemberWorkflowStudio.executionPanel.nodeOutput': '输出',
-  'teamMemberWorkflowStudio.executionPanel.nodePrompt': '提示',
-  'teamMemberWorkflowStudio.executionPanel.nodeRunCardAria':
-    '{stepId} 节点运行',
   'teamMemberWorkflowStudio.executionPanel.output': '输出',
   'teamMemberWorkflowStudio.executionPanel.rawFrames':
-    '已收到 {count} 个运行事件，但暂时还没有步骤输出。',
+    '已收到 {count} 个运行事件，但暂时还没有步骤日志。',
   'teamMemberWorkflowStudio.executionPanel.resultFirst': '结果',
   'teamMemberWorkflowStudio.executionPanel.runLog': '运行日志',
   'teamMemberWorkflowStudio.executionPanel.steps': '步骤',
@@ -653,30 +642,18 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.header.addNode': '添加节点',
   'teamMemberWorkflowStudio.header.back': '返回',
   'teamMemberWorkflowStudio.header.currentTeam': '当前团队',
-  'teamMemberWorkflowStudio.header.confirmDeleteConnection':
-    '确定删除当前选中的连接吗？此操作不可撤销。',
-  'teamMemberWorkflowStudio.header.confirmDeleteNode':
-    '确定删除当前选中的节点吗？此操作不可撤销。',
   'teamMemberWorkflowStudio.header.deleteConnection': '删除连接',
   'teamMemberWorkflowStudio.header.deleteNode': '删除节点',
-  'teamMemberWorkflowStudio.header.deleteSelectedConnection':
-    '删除选中的连接',
-  'teamMemberWorkflowStudio.header.deleteSelectedNode': '删除选中的节点',
   'teamMemberWorkflowStudio.header.editWorkflowName': '编辑 Workflow 名称',
   'teamMemberWorkflowStudio.header.identityAria': 'Workflow 身份信息',
   'teamMemberWorkflowStudio.header.inputSet': '已设置输入',
-  'teamMemberWorkflowStudio.header.more': '更多',
-  'teamMemberWorkflowStudio.header.moreActions': '更多 Workflow 操作',
   'teamMemberWorkflowStudio.header.nodeActionsAria':
     'Workflow 草稿和节点操作',
   'teamMemberWorkflowStudio.header.pasteYaml': '粘贴 YAML',
   'teamMemberWorkflowStudio.header.primaryActionsAria':
     'Workflow 主操作',
-  'teamMemberWorkflowStudio.header.prepareDraftRun': '准备草稿运行',
-  'teamMemberWorkflowStudio.header.publish': '发布',
   'teamMemberWorkflowStudio.header.runMessage': '运行消息',
-  'teamMemberWorkflowStudio.header.refreshPublishStatus': '刷新状态',
-  'teamMemberWorkflowStudio.header.run': '运行',
+  'teamMemberWorkflowStudio.header.runOptionsAria': '运行选项',
   'teamMemberWorkflowStudio.header.runActiveMember': '运行草稿',
   'teamMemberWorkflowStudio.header.runDraft': '运行草稿',
   'teamMemberWorkflowStudio.header.save': '保存',
@@ -689,20 +666,12 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.header.publish.error': '错误',
   'teamMemberWorkflowStudio.header.publish.published': '已发布',
   'teamMemberWorkflowStudio.header.publish.publishing': '发布中',
-  'teamMemberWorkflowStudio.header.publish.publishingStatus': '发布中',
   'teamMemberWorkflowStudio.header.publishMember': '发布成员 Workflow',
   'teamMemberWorkflowStudio.header.publishMemberShort': '发布成员',
   'teamMemberWorkflowStudio.header.teamBreadcrumb': '团队',
   'teamMemberWorkflowStudio.header.unsavedChanges': '有未保存更改',
-  'teamMemberWorkflowStudio.header.viewYaml': '查看 YAML',
-  'teamMemberWorkflowStudio.header.viewYamlUnavailable':
-    '加载 Workflow 草稿后才能查看 YAML。',
   'teamMemberWorkflowStudio.header.viewsAria': 'Workflow 视图',
   'teamMemberWorkflowStudio.header.workflowTitleAria': 'Workflow 标题',
-  'teamMemberWorkflowStudio.header.yaml': 'YAML',
-  'teamMemberWorkflowStudio.header.yamlActions': 'YAML',
-  'teamMemberWorkflowStudio.header.yamlActionsTitle':
-    '查看或导入 Workflow YAML',
   'teamMemberWorkflowStudio.nodeDetail.advancedRawConfiguration':
     '高级原始配置',
   'teamMemberWorkflowStudio.nodeDetail.advancedRawConfigurationDescription':
@@ -743,16 +712,12 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.nodeLibrary.title': '节点库',
   'teamMemberWorkflowStudio.resize.executionPanel': '调整运行控制台大小',
   'teamMemberWorkflowStudio.resize.sidePanel': '调整侧边面板大小',
-  'teamMemberWorkflowStudio.draftRunPanel.closeAria': '关闭草稿运行面板',
-  'teamMemberWorkflowStudio.draftRunPanel.emptyInputHint':
-    '留空则不携带用户输入运行。',
-  'teamMemberWorkflowStudio.draftRunPanel.messageLabel':
+  'teamMemberWorkflowStudio.runOptionsPanel.messageLabel':
     '草稿运行输入',
-  'teamMemberWorkflowStudio.draftRunPanel.messagePlaceholder':
+  'teamMemberWorkflowStudio.runOptionsPanel.messagePlaceholder':
     '本次 Workflow 草稿运行的可选输入',
-  'teamMemberWorkflowStudio.draftRunPanel.sectionAria': '草稿运行面板',
-  'teamMemberWorkflowStudio.draftRunPanel.startDraftRun': '开始草稿运行',
-  'teamMemberWorkflowStudio.draftRunPanel.title': '草稿运行',
+  'teamMemberWorkflowStudio.runOptionsPanel.sectionAria': '运行选项面板',
+  'teamMemberWorkflowStudio.runOptionsPanel.title': '运行选项',
   'teamMemberWorkflowStudio.runsPanel.description':
     '这个 tab 只展示明确关联到当前 Workflow 成员的运行记录。',
   'teamMemberWorkflowStudio.runsPanel.empty':
@@ -765,55 +730,87 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.runsPanel.sectionAria': '成员运行记录',
   'teamMemberWorkflowStudio.runsPanel.title': '成员运行记录',
   'teamMemberWorkflowStudio.runsPanel.unknownStatus': '未知',
-  'teamMemberWorkflowStudio.yamlImportPanel.cancel': '取消',
-  'teamMemberWorkflowStudio.yamlImportPanel.closeAria':
-    '关闭粘贴 YAML 面板',
-  'teamMemberWorkflowStudio.yamlImportPanel.import': '导入',
-  'teamMemberWorkflowStudio.yamlImportPanel.placeholder':
+  'teamMemberWorkflowStudio.yamlModal.import': '导入',
+  'teamMemberWorkflowStudio.yamlModal.placeholder':
     'name: Untitled workflow\nsteps:\n  - id: triage\n    type: llm_call',
-  'teamMemberWorkflowStudio.yamlImportPanel.sectionAria':
-    '粘贴 Workflow YAML 面板',
-  'teamMemberWorkflowStudio.yamlImportPanel.subtitle':
-    '导入到当前草稿',
-  'teamMemberWorkflowStudio.yamlImportPanel.textareaAria': 'Workflow YAML',
-  'teamMemberWorkflowStudio.yamlImportPanel.title': '粘贴 YAML',
-  'teamMemberWorkflowStudio.yamlPanel.closeAria': '关闭 YAML 面板',
-  'teamMemberWorkflowStudio.yamlPanel.copy': '复制',
-  'teamMemberWorkflowStudio.yamlPanel.copyFailed': '复制 YAML 失败。',
-  'teamMemberWorkflowStudio.yamlPanel.copySuccess': '已复制 YAML。',
-  'teamMemberWorkflowStudio.yamlPanel.empty': '当前草稿没有可用 YAML。',
-  'teamMemberWorkflowStudio.yamlPanel.retry': '重试',
-  'teamMemberWorkflowStudio.yamlPanel.sectionAria': 'Workflow YAML 面板',
-  'teamMemberWorkflowStudio.yamlPanel.subtitle': '当前草稿源码',
-  'teamMemberWorkflowStudio.yamlPanel.textareaAria': '当前 Workflow YAML',
-  'teamMemberWorkflowStudio.yamlPanel.title': 'Workflow YAML',
+  'teamMemberWorkflowStudio.yamlModal.textareaAria': 'Workflow YAML',
+  'teamMemberWorkflowStudio.yamlModal.title': '粘贴 Workflow YAML',
   'pages.studio.studiomembercurrentrunpanel.details': '详情',
-  'pages.studio.studiomemberinvokeinspector.copy':
-    '端点详情、类型化载荷和最近运行记录会在这里按需打开，不改变主控制台布局。',
-  'pages.studio.studiomemberinvokeinspector.current.run': '当前运行',
-  'pages.studio.studiomemberinvokeinspector.close': '关闭详情',
-  'pages.studio.studiomemberinvokeinspector.drag.handle': '拖拽详情面板',
-  'pages.studio.studiomemberinvokeinspector.endpoint': '端点',
-  'pages.studio.studiomemberinvokeinspector.endpoint.2': '端点',
-  'pages.studio.studiomemberinvokeinspector.history': '历史',
-  'pages.studio.studiomemberinvokeinspector.payload': '载荷',
-  'pages.studio.studiomemberinvokeinspector.payload.base64': '载荷 base64',
-  'pages.studio.studiomemberinvokeinspector.payload.base64.2':
-    '载荷 base64',
-  'pages.studio.studiomemberinvokeinspector.payload.type.url':
-    '载荷类型 URL',
-  'pages.studio.studiomemberinvokeinspector.payload.type.url.2':
-    '载荷类型 URL',
-  'pages.studio.studiomemberinvokeinspector.paste.encoded.protobuf.payload.when':
-    '当文本无法构造该类型时，粘贴编码后的 protobuf 载荷。',
-  'pages.studio.studiomemberinvokeinspector.revision': '版本',
-  'pages.studio.studiomemberinvokeinspector.resize.handle':
-    '调整调用检查器宽度',
-  'pages.studio.studiomemberinvokeinspector.run': '运行',
-  'pages.studio.studiomemberinvokeinspector.service.target': '服务目标',
-  'pages.studio.studiomemberinvokeinspector.title': '详情',
+  'pages.studio.studiomembercurrentrunpanel.diagnostics': '诊断',
+  'pages.studio.studiomembercurrentrunpanel.open.diagnostics': '打开诊断',
+  'pages.studio.studiomembercurrentrunpanel.this.failed.only.the.invoke.run.open.diagnostics':
+    '本次失败只影响 Invoke 运行。可以用更小的提示词重试、打开诊断查看后端信号，或在成员契约需要调整时返回 Build/Bind。',
   'pages.studio.studiomemberinvokepanel.endpoint': '端点',
   'pages.studio.studiomemberinvokepanel.inspector': '详情',
+  'pages.studio.studiomemberinvokepanel.lifecycle': '生命周期',
+  'pages.studio.studiomemberinvokepanel.member': '成员',
+  'pages.studio.studiomemberinvokepanel.service': '服务',
+  'pages.studio.studiomemberinvokepanel.status': '状态',
+  'pages.studio.studiomemberinvokepanel.team': '团队',
+  'pages.studio.studioinvokediagnosticsdrawer.actor.id': 'Actor ID',
+  'pages.studio.studioinvokediagnosticsdrawer.agent.message': 'Agent 消息',
+  'pages.studio.studioinvokediagnosticsdrawer.command.id': 'Command ID',
+  'pages.studio.studioinvokediagnosticsdrawer.completed': '已完成',
+  'pages.studio.studioinvokediagnosticsdrawer.created': '创建时间',
+  'pages.studio.studioinvokediagnosticsdrawer.duration': '耗时',
+  'pages.studio.studioinvokediagnosticsdrawer.endpoint': '端点',
+  'pages.studio.studioinvokediagnosticsdrawer.endpoint.2': '端点',
+  'pages.studio.studioinvokediagnosticsdrawer.event.count': '事件数量',
+  'pages.studio.studioinvokediagnosticsdrawer.event.payload': '事件载荷',
+  'pages.studio.studioinvokediagnosticsdrawer.events': '事件',
+  'pages.studio.studioinvokediagnosticsdrawer.events.count':
+    '事件（{count}）',
+  'pages.studio.studioinvokediagnosticsdrawer.finished.at': '完成时间',
+  'pages.studio.studioinvokediagnosticsdrawer.historical.run.detail':
+    '历史运行详情',
+  'pages.studio.studioinvokediagnosticsdrawer.history.detail': '历史详情',
+  'pages.studio.studioinvokediagnosticsdrawer.latest.run.detail':
+    '最新运行详情',
+  'pages.studio.studioinvokediagnosticsdrawer.no.displayable.output':
+    '没有可展示输出。',
+  'pages.studio.studioinvokediagnosticsdrawer.no.extra.error.text':
+    '没有额外错误文本',
+  'pages.studio.studioinvokediagnosticsdrawer.no.raw.json': '没有原始 JSON。',
+  'pages.studio.studioinvokediagnosticsdrawer.no.run.selected':
+    '尚未选择运行。',
+  'pages.studio.studioinvokediagnosticsdrawer.no.run.yet': '还没有运行。',
+  'pages.studio.studioinvokediagnosticsdrawer.output': '输出',
+  'pages.studio.studioinvokediagnosticsdrawer.participant.joined':
+    'Participant 加入',
+  'pages.studio.studioinvokediagnosticsdrawer.participant.left':
+    'Participant 离开',
+  'pages.studio.studioinvokediagnosticsdrawer.payload.base64':
+    '载荷 base64',
+  'pages.studio.studioinvokediagnosticsdrawer.payload.help':
+    '当文本无法构造该类型时，粘贴编码后的 protobuf 载荷。',
+  'pages.studio.studioinvokediagnosticsdrawer.payload.type.url':
+    '载荷类型 URL',
+  'pages.studio.studioinvokediagnosticsdrawer.pending.start.timestamp':
+    '等待开始时间戳',
+  'pages.studio.studioinvokediagnosticsdrawer.historical.payload.read.only':
+    '历史运行载荷只读。如需修改载荷字段，请重试为新的运行。',
+  'pages.studio.studioinvokediagnosticsdrawer.run.details': '运行详情',
+  'pages.studio.studioinvokediagnosticsdrawer.run.diagnostics': '运行诊断',
+  'pages.studio.studioinvokediagnosticsdrawer.run.failed': '运行失败',
+  'pages.studio.studioinvokediagnosticsdrawer.run.failed.2': '运行失败',
+  'pages.studio.studioinvokediagnosticsdrawer.run.finished': '运行完成',
+  'pages.studio.studioinvokediagnosticsdrawer.run.finished.2': '运行完成',
+  'pages.studio.studioinvokediagnosticsdrawer.run.has.no.structured.events':
+    '当前运行没有结构化事件。',
+  'pages.studio.studioinvokediagnosticsdrawer.run.id': 'Run ID',
+  'pages.studio.studioinvokediagnosticsdrawer.run.in.progress': '运行中',
+  'pages.studio.studioinvokediagnosticsdrawer.run.started': '运行开始',
+  'pages.studio.studioinvokediagnosticsdrawer.run.started.2': '运行开始',
+  'pages.studio.studioinvokediagnosticsdrawer.run.stopped': '运行已停止',
+  'pages.studio.studioinvokediagnosticsdrawer.started.at': '开始时间',
+  'pages.studio.studioinvokediagnosticsdrawer.status': '状态',
+  'pages.studio.studioinvokediagnosticsdrawer.status.2': '状态',
+  'pages.studio.studioinvokediagnosticsdrawer.summary': '摘要',
+  'pages.studio.studioinvokediagnosticsdrawer.timeline': '时间线',
+  'pages.studio.studioinvokediagnosticsdrawer.typed.payload':
+    '高级类型化载荷',
+  'pages.studio.studioinvokediagnosticsdrawer.waiting.for.output':
+    '等待输出',
 };
 
 export default zhCNMessages;
