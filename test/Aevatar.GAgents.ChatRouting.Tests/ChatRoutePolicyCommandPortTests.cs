@@ -68,6 +68,36 @@ public sealed class ChatRoutePolicyCommandPortTests
         envelope.Route.Direct.TargetActorId.Should().Be("chat-route-policy:scope-1");
     }
 
+    [Fact]
+    public async Task UpsertRuleAsync_DispatchesSingleRulePayloadToScopeActor()
+    {
+        var actorRuntime = new RecordingActorRuntime();
+        var dispatchPort = new RecordingActorDispatchPort();
+        using var provider = CreateProvider(actorRuntime, dispatchPort);
+        var commandPort = provider.GetRequiredService<IChatRoutePolicyCommandPort>();
+        var command = new UpsertChatRouteRuleRequested
+        {
+            Rule = new ChatRouteRule
+            {
+                RuleId = "voice-demo",
+                Action = new ChatRouteAction
+                {
+                    ForwardToModel = new ForwardToModel { ModelName = "voice-model" },
+                },
+            },
+        };
+
+        await commandPort.UpsertRuleAsync("scope-1", command);
+
+        dispatchPort.Dispatches.Should().ContainSingle();
+        var (actorId, envelope) = dispatchPort.Dispatches[0];
+        actorId.Should().Be("chat-route-policy:scope-1");
+        envelope.Payload.Unpack<UpsertChatRouteRuleRequested>()
+            .Rule.RuleId.Should().Be("voice-demo");
+        envelope.Route.PublisherActorId.Should().Be("chat-route-policy-admin");
+        envelope.Route.Direct.TargetActorId.Should().Be("chat-route-policy:scope-1");
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]
@@ -109,6 +139,22 @@ public sealed class ChatRoutePolicyCommandPortTests
         var commandPort = provider.GetRequiredService<IChatRoutePolicyCommandPort>();
 
         var act = () => commandPort.RemoveRuleAsync("scope-1", null!);
+
+        await act.Should().ThrowAsync<ArgumentNullException>()
+            .WithParameterName("command");
+        actorRuntime.CreatedActors.Should().BeEmpty();
+        dispatchPort.Dispatches.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task UpsertRuleAsync_RejectsNullCommand()
+    {
+        var actorRuntime = new RecordingActorRuntime();
+        var dispatchPort = new RecordingActorDispatchPort();
+        using var provider = CreateProvider(actorRuntime, dispatchPort);
+        var commandPort = provider.GetRequiredService<IChatRoutePolicyCommandPort>();
+
+        var act = () => commandPort.UpsertRuleAsync("scope-1", null!);
 
         await act.Should().ThrowAsync<ArgumentNullException>()
             .WithParameterName("command");

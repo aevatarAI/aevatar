@@ -2,9 +2,12 @@ using System.Collections;
 using System.Net.Http;
 using System.Reflection;
 using System.Text.Json;
+using Aevatar.AI.Abstractions.Voice;
+using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.Core.Voice;
 using Aevatar.AI.Core.LLMProviders;
 using Aevatar.AI.LLMProviders.MEAI;
@@ -17,6 +20,7 @@ using Aevatar.Bootstrap.Extensions.AI.Connectors;
 using Aevatar.Configuration;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.VoicePresence;
 using Aevatar.Foundation.Abstractions.Connectors;
@@ -24,7 +28,10 @@ using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.Abstractions.Sessions;
 using Aevatar.Foundation.VoicePresence.Hosting;
 using Aevatar.Foundation.VoicePresence.Modules;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Modules;
+using Aevatar.Workflow.Core.Primitives;
+using Aevatar.Workflow.Integration.AI;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -109,7 +116,6 @@ public class AIFeatureBootstrapCoverageTests
         });
 
         using var provider = services.BuildServiceProvider();
-        provider.GetService<IRoleAgentTypeResolver>().Should().NotBeNull();
         provider.GetService<IVoiceToolInvoker>().Should().NotBeNull();
 
         var llmFactory = provider.GetRequiredService<ILLMProviderFactory>();
@@ -118,6 +124,26 @@ public class AIFeatureBootstrapCoverageTests
         var skillOptions = provider.GetRequiredService<SkillsOptions>();
         skillOptions.Directories.Should().ContainSingle().Which.Should().Be("./skills-a");
         provider.GetServices<IAgentToolSource>().Should().ContainSingle(x => x is SkillsAgentToolSource);
+    }
+
+    [Fact]
+    public void AddAevatarAIFeatures_ShouldRegisterWorkflowRolePrimaryKind()
+    {
+        var services = new ServiceCollection();
+        var config = new ConfigurationBuilder().Build();
+
+        services.AddAevatarAIFeatures(config, options => options.EnableMEAIProviders = false);
+
+        using var provider = services.BuildServiceProvider();
+        var registry = provider.GetRequiredService<IAgentKindRegistry>();
+
+        var primary = registry.Resolve(WorkflowRoleConventions.DefaultAgentKind);
+        var formerAliasFound = registry.TryResolve("workflow.assistant-role", out var formerAlias);
+
+        primary.Metadata.Kind.Should().Be(WorkflowRoleConventions.DefaultAgentKind);
+        primary.Metadata.ImplementationClrTypeName.Should().Be(typeof(WorkflowRoleGAgent).FullName);
+        formerAliasFound.Should().BeFalse();
+        formerAlias.Should().BeNull();
     }
 
     [Fact]
@@ -146,6 +172,7 @@ public class AIFeatureBootstrapCoverageTests
         var services = new ServiceCollection();
         var config = new ConfigurationBuilder().Build();
         services.AddLogging();
+        services.AddSingleton<IActorRuntime, StaticActorRuntime>();
         services.AddSingleton<IActorDispatchPort, NoOpActorDispatchPort>();
         services.AddSingleton<IProjectionDocumentReader<VoicePresenceCapabilityReadModel, string>>(
             new EmptyVoicePresenceCapabilityReader());
@@ -175,19 +202,88 @@ public class AIFeatureBootstrapCoverageTests
             .Should().BeOfType<ActorOwnedVoiceRealtimeSession>();
         provider.GetRequiredService<IVoicePresenceCapabilityQueryPort>()
             .Should().NotBeNull();
+        provider.GetRequiredService<IVoicePresenceCapabilityCommandPort>()
+            .Should().BeOfType<VoicePresenceCapabilityCommandPort>();
         provider.GetRequiredService<IVoicePresenceSessionLeasePort>()
             .Should().NotBeNull();
         provider.GetRequiredService<IVoiceVolatileMediaStreamPort>()
-            .Should().BeOfType<FailClosedVoiceVolatileMediaStreamPort>();
+            .Should().BeOfType<VoiceVolatileMediaStreamPort>();
 
         factory.TryCreate("voice_presence", out var defaultModule).Should().BeTrue();
         defaultModule.Should().BeOfType<VoicePresenceModule>();
+        defaultModule.As<VoicePresenceModule>()
+            .CanHandle(new EventEnvelope
+            {
+                Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new Google.Protobuf.WellKnownTypes.StringValue
+                {
+                    Value = "doorbell",
+                }),
+                Route = EnvelopeRouteSemantics.CreateDirect("device-events.callback", "voice-agent"),
+            })
+            .Should()
+            .BeFalse();
 
         factory.TryCreate("voice_presence_openai", out var openAIModule).Should().BeTrue();
         openAIModule.Should().BeOfType<VoicePresenceModule>();
 
         factory.TryCreate("voice_presence_minicpm", out var miniCpmModule).Should().BeFalse();
         miniCpmModule.Should().BeNull();
+    }
+
+    [Fact]
+    public void AddAevatarAIFeatures_ShouldPreserveConfiguredVoiceDirectExternalEventTypeUrls()
+    {
+        var services = new ServiceCollection();
+        var config = new ConfigurationBuilder().Build();
+        services.AddLogging();
+        services.AddSingleton<IActorDispatchPort, NoOpActorDispatchPort>();
+        services.AddSingleton<IProjectionDocumentReader<VoicePresenceCapabilityReadModel, string>>(
+            new EmptyVoicePresenceCapabilityReader());
+
+        services.AddAevatarAIFeatures(config, options =>
+        {
+            options.EnableMEAIProviders = false;
+            options.VoicePresence.Module = new VoicePresenceModuleOptions
+            {
+                DirectExternalEventTypeUrls =
+                [
+                    " type.googleapis.com/example.External ",
+                    "type.googleapis.com/example.External",
+                ],
+            };
+            options.VoicePresence.OpenAIProvider = new VoiceProviderConfig
+            {
+                ProviderName = "openai",
+                ApiKey = "voice-openai-key",
+            };
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var factory = provider.GetServices<IEventModuleFactory<IEventHandlerContext>>()
+            .OfType<VoicePresenceModuleFactory>()
+            .Single();
+
+        factory.TryCreate("voice_presence", out var module).Should().BeTrue();
+        var voiceModule = module.Should().BeOfType<VoicePresenceModule>().Subject;
+
+        voiceModule.CanHandle(new EventEnvelope
+        {
+            Payload = new Google.Protobuf.WellKnownTypes.Any
+            {
+                TypeUrl = "type.googleapis.com/example.External",
+                Value = Google.Protobuf.ByteString.CopyFromUtf8("payload"),
+            },
+            Route = EnvelopeRouteSemantics.CreateDirect("device-events.callback", "voice-agent"),
+        }).Should().BeTrue();
+        voiceModule.CanHandle(new EventEnvelope
+        {
+            Payload = new Google.Protobuf.WellKnownTypes.Any
+            {
+                TypeUrl = "type.googleapis.com/example.Other",
+                Value = Google.Protobuf.ByteString.CopyFromUtf8("payload"),
+            },
+            Route = EnvelopeRouteSemantics.CreateDirect("device-events.callback", "voice-agent"),
+        }).Should().BeFalse();
     }
 
     [Fact]
@@ -371,7 +467,12 @@ public class AIFeatureBootstrapCoverageTests
 
         using var provider = services.BuildServiceProvider();
         provider.GetService<ILLMProviderFactory>().Should().BeNull();
-        provider.GetService<IRoleAgentTypeResolver>().Should().NotBeNull();
+        provider.GetRequiredService<IAgentKindRegistry>()
+            .Resolve(WorkflowRoleConventions.DefaultAgentKind)
+            .Metadata
+            .ImplementationClrTypeName
+            .Should()
+            .Be(typeof(WorkflowRoleGAgent).FullName);
     }
 
     [Fact]
@@ -550,6 +651,11 @@ public class AIFeatureBootstrapCoverageTests
         services.AddAevatarAIFeatures(config, options => options.EnableMEAIProviders = false);
 
         await using var provider = services.BuildServiceProvider();
+        // Yield capability follows the actor, never the container (#2004): bootstrap must
+        // not hand a yielding handler to surfaces without a pending-approval continuation.
+        provider.GetService<IToolApprovalHandler>().Should().BeNull();
+        provider.GetServices<IToolCallMiddleware>().Should().NotContain(x => x is ToolApprovalMiddleware);
+
         var workflowSource = provider.GetServices<IWorkflowToolSource>()
             .Should()
             .ContainSingle()
@@ -560,7 +666,16 @@ public class AIFeatureBootstrapCoverageTests
             .Subject;
 
         tool.Name.Should().Be("demo_tool");
-        (await tool.ExecuteAsync("{}")).Should().Be("""{"ok":true}""");
+        var result = await tool.ExecuteAsync(
+            new WorkflowToolExecutionRequest(
+                ArgumentsJson: "{}",
+                RunId: "run-1",
+                StepId: "step-1",
+                ExecutionId: "exec-1",
+                CallId: "call-1",
+                ScopeId: "scope-1",
+                CallerCredential: new WorkflowCallerCredential()));
+        result.ResultJson.Should().Be("""{"ok":true}""");
     }
 
     [Fact]
@@ -755,6 +870,31 @@ public class AIFeatureBootstrapCoverageTests
     {
         public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default) =>
             Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
+    }
+
+    private sealed class StaticActorRuntime : IActorRuntime
+    {
+        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
+            where TAgent : IAgent =>
+            throw new NotSupportedException();
+
+        public Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task DestroyAsync(string id, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task<IActor?> GetAsync(string id) =>
+            Task.FromResult<IActor?>(null);
+
+        public Task<bool> ExistsAsync(string id) =>
+            Task.FromResult(true);
+
+        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task UnlinkAsync(string childId, CancellationToken ct = default) =>
+            Task.CompletedTask;
     }
 
     private sealed class EmptyVoicePresenceCapabilityReader

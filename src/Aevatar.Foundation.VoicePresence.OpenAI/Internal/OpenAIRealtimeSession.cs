@@ -86,6 +86,16 @@ internal sealed class OpenAIRealtimeSession : IOpenAIRealtimeSession
     public Task SendInputAudioAsync(BinaryData audio, CancellationToken ct) =>
         _session.SendInputAudioAsync(audio, ct);
 
+    public async Task SendInputImageAsync(BinaryData inputImageEvent, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(inputImageEvent);
+        await _session.WebSocket.SendAsync(
+            inputImageEvent.ToMemory(),
+            WebSocketMessageType.Text,
+            endOfMessage: true,
+            cancellationToken: ct);
+    }
+
     public Task AddItemAsync(RealtimeItem item, CancellationToken ct) =>
         _session.AddItemAsync(item, ct);
 

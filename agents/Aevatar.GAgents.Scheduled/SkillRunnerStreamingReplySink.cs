@@ -28,12 +28,21 @@ internal sealed class SkillRunnerStreamingReplySink : IDisposable
 
     private const string TruncationMarker = "\n\n…[truncated]";
 
+    /// <summary>
+    /// Lark error code for "the message has reached the number of times it can be edited".
+    /// This is terminal for the message — it never recovers on retry — so the sink seals the
+    /// message (stops editing) and delivers the complete text as a fresh POST at finalize,
+    /// instead of PUT-storming and throwing (which re-fired the run and spammed the chat).
+    /// </summary>
+    private const int LarkEditCapReachedCode = 230072;
+
     private readonly ILarkOutboundDispatcher _outboundDispatcher;
     private readonly LarkSendNewMessageRequest _initialMessageTemplate;
     private readonly NyxIdApiClient _editClient;
     private readonly Func<int?, string, string> _rejectionMessageBuilder;
     private readonly ILogger? _logger;
     private string? _platformMessageId;
+    private bool _editCapReached;
     private bool _disposed;
 
     public SkillRunnerStreamingReplySink(
@@ -76,7 +85,14 @@ internal sealed class SkillRunnerStreamingReplySink : IDisposable
         if (string.IsNullOrWhiteSpace(capped))
             return;
 
-        if (_platformMessageId is null)
+        // Once Lark's per-message edit cap (230072) is hit, the message can never be edited
+        // again. Suppress further mid-stream snapshots; the complete text is delivered as a
+        // fresh POST at finalize (the second branch condition below) so the run completes
+        // instead of PUT-storming + throwing.
+        if (_editCapReached && !isFinal)
+            return;
+
+        if (_platformMessageId is null || (_editCapReached && isFinal))
         {
             LarkSendNewMessageResult result;
             try
@@ -94,7 +110,10 @@ internal sealed class SkillRunnerStreamingReplySink : IDisposable
 
             if (result.MessageId is not null)
             {
-                _platformMessageId = result.MessageId;
+                // After an edit-cap seal we POST the complete text as a NEW message at
+                // finalize; do not re-capture the id (there is nothing left to edit).
+                if (!_editCapReached)
+                    _platformMessageId = result.MessageId;
                 ChunksEmitted++;
                 return;
             }
@@ -128,6 +147,31 @@ internal sealed class SkillRunnerStreamingReplySink : IDisposable
         {
             ChunksEmitted++;
             return;
+        }
+
+        // Lark's per-message edit-count cap is terminal for THIS message and never recovers
+        // on retry. Seal it: stop editing, and deliver the complete text as a fresh message so
+        // the run completes instead of throwing → retrying → re-firing → spamming the chat.
+        if (edit.larkCode == LarkEditCapReachedCode)
+        {
+            _editCapReached = true;
+            if (!isFinal)
+            {
+                _logger?.LogWarning(
+                    "SkillRunner streaming sink: Lark edit cap reached (lark_code={LarkCode}); sealing message — the final snapshot will post a fresh message. slug={Slug}",
+                    edit.larkCode,
+                    _initialMessageTemplate.NyxProviderSlug);
+                return;
+            }
+
+            var fresh = await SendInitialAsync(capped, ct).ConfigureAwait(false);
+            if (fresh.MessageId is not null)
+            {
+                ChunksEmitted++;
+                return;
+            }
+
+            throw new InvalidOperationException(_rejectionMessageBuilder(fresh.LarkCode, fresh.Detail));
         }
 
         if (isFinal)

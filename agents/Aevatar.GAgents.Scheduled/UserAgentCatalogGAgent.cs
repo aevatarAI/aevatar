@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
@@ -10,6 +11,7 @@ namespace Aevatar.GAgents.Scheduled;
 // Refactor (iter1/cluster-001):
 //   Old pattern: UserAgentCatalogGAgent owned both catalog membership and per-runner execution summaries.
 //   New principle: Catalog actor owns membership only; execution facts remain runner-owned.
+[GAgent("scheduled.user-agent-catalog")]
 public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
 {
     public const string WellKnownId = UserAgentCatalogStorageContracts.StoreActorId;
@@ -54,6 +56,9 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             LarkReceiveIdType = MergeNonEmpty(command.LarkReceiveIdType, existing?.LarkReceiveIdType),
             LarkReceiveIdFallback = MergeNonEmpty(command.LarkReceiveIdFallback, existing?.LarkReceiveIdFallback),
             LarkReceiveIdTypeFallback = MergeNonEmpty(command.LarkReceiveIdTypeFallback, existing?.LarkReceiveIdTypeFallback),
+            OutputFormat = command.OutputFormat == SkillRunnerOutputFormat.Auto
+                ? existing?.OutputFormat ?? SkillRunnerOutputFormat.Auto
+                : command.OutputFormat,
         };
 
         // Issue #466 critical: copy OwnerScope from the command (or inherit existing on

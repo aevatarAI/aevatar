@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
+using Aevatar.Foundation.Abstractions.Interactions;
 using Aevatar.GAgents.Platform.Lark;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -30,6 +31,7 @@ public sealed class FeishuCardHumanInteractionPortTests
                 LarkReceiveIdType: string.Empty,
                 LarkReceiveIdFallback: string.Empty,
                 LarkReceiveIdTypeFallback: string.Empty,
+                OutputFormat: SkillRunnerOutputFormat.Auto,
                 TemplateName: "social_media",
                 AgentType: string.Empty)));
 
@@ -98,6 +100,7 @@ public sealed class FeishuCardHumanInteractionPortTests
                 LarkReceiveIdType: "chat_id",
                 LarkReceiveIdFallback: "on_user_1",
                 LarkReceiveIdTypeFallback: "union_id",
+                OutputFormat: SkillRunnerOutputFormat.Auto,
                 TemplateName: "social_media",
                 AgentType: string.Empty)));
 
@@ -157,6 +160,7 @@ public sealed class FeishuCardHumanInteractionPortTests
                 LarkReceiveIdType: string.Empty,
                 LarkReceiveIdFallback: string.Empty,
                 LarkReceiveIdTypeFallback: string.Empty,
+                OutputFormat: SkillRunnerOutputFormat.Auto,
                 TemplateName: string.Empty,
                 AgentType: string.Empty)));
 
@@ -247,6 +251,69 @@ public sealed class FeishuCardHumanInteractionPortTests
         markdown.Should().Contain("Actor: `workflow-actor-1`");
         markdown.Should().Contain("/approve actor_id=workflow-actor-1 run_id=run-1 step_id=approval-1");
         markdown.Should().Contain("/reject actor_id=workflow-actor-1 run_id=run-1 step_id=approval-1");
+    }
+
+    [Fact]
+    public void BuildCardJson_ShouldRenderTypedInteractionSpec_WithWorkflowResumePayload()
+    {
+        var cardJson = FeishuCardHumanInteractionPort.BuildCardJson(new HumanInteractionRequest
+        {
+            ActorId = "workflow-actor-typed",
+            RunId = "run-typed",
+            StepId = "approval-typed",
+            SuspensionType = "human_approval",
+            Prompt = "fallback prompt",
+            Options = ["approve", "reject"],
+            InteractionSpec = new InteractionSpec
+            {
+                Title = "Typed approval",
+                Body = "Review the typed body",
+                Actions =
+                {
+                    new InteractionAction
+                    {
+                        Kind = InteractionActionKind.FormSubmit,
+                        ActionId = "primary-review-action",
+                        Label = "Approve typed",
+                        Style = InteractionActionStyle.Primary,
+                        ApprovalDecision = InteractionApprovalDecision.Approve,
+                    },
+                    new InteractionAction
+                    {
+                        Kind = InteractionActionKind.FormSubmit,
+                        ActionId = "danger-review-action",
+                        Label = "Reject typed",
+                        Style = InteractionActionStyle.Danger,
+                        ApprovalDecision = InteractionApprovalDecision.Reject,
+                    },
+                },
+            },
+        });
+
+        using var document = JsonDocument.Parse(cardJson);
+        document.RootElement.GetProperty("header").GetProperty("title").GetProperty("content").GetString()
+            .Should().Contain("Typed approval");
+        document.RootElement.GetProperty("body").GetProperty("elements")[0].GetProperty("content").GetString()
+            .Should().Contain("Review the typed body");
+        var formElements = document.RootElement.GetProperty("body").GetProperty("elements")[1].GetProperty("elements");
+        var approveButton = formElements
+            .EnumerateArray()
+            .Single(e => e.GetProperty("tag").GetString() == "button" &&
+                         e.GetProperty("text").GetProperty("content").GetString() == "Approve typed");
+        var approveValue = approveButton.GetProperty("behaviors")[0].GetProperty("value");
+        approveValue.GetProperty("action_kind").GetString().Should().Be("form_submit");
+        approveValue.GetProperty("action_id").GetString().Should().Be("primary-review-action");
+        approveValue.GetProperty("actor_id").GetString().Should().Be("workflow-actor-typed");
+        approveValue.GetProperty("run_id").GetString().Should().Be("run-typed");
+        approveValue.GetProperty("step_id").GetString().Should().Be("approval-typed");
+        approveValue.GetProperty("approved").GetBoolean().Should().BeTrue();
+        var rejectButton = formElements
+            .EnumerateArray()
+            .Single(e => e.GetProperty("tag").GetString() == "button" &&
+                         e.GetProperty("text").GetProperty("content").GetString() == "Reject typed");
+        var rejectValue = rejectButton.GetProperty("behaviors")[0].GetProperty("value");
+        rejectValue.GetProperty("action_id").GetString().Should().Be("danger-review-action");
+        rejectValue.GetProperty("approved").GetBoolean().Should().BeFalse();
     }
 
     [Fact]

@@ -1,0 +1,180 @@
+using System.Net;
+using Aevatar.Bootstrap.Hosting;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider;
+using Aevatar.Mainnet.Host.Api.Hosting;
+using FluentAssertions;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
+using Orleans;
+using Orleans.Configuration;
+using Orleans.Streams;
+
+namespace Aevatar.Capabilities.Tests;
+
+[Collection(ProcessEnvSerialCollection.Name)]
+public sealed class MainnetDistributedHostBuilderExtensionsTests
+{
+    [Fact]
+    public void AddMainnetDistributedOrleansHost_WhenKafkaProviderConfigured_ShouldRegisterKafkaTransport()
+    {
+        // Use env vars for values that must survive Distributed.json loading.
+        // appsettings.Distributed.json is copied to the test output directory
+        // by the build and would override in-memory collection values.
+        using var streamBackend = new EnvironmentVariableScope("AEVATAR_ActorRuntime__OrleansStreamBackend", "KafkaProvider");
+        using var persistence = new EnvironmentVariableScope("AEVATAR_ActorRuntime__OrleansPersistenceBackend", "Garnet");
+        using var garnetConn = new EnvironmentVariableScope("AEVATAR_ActorRuntime__OrleansGarnetConnectionString", "127.0.0.1:6379");
+        using var kafkaServers = new EnvironmentVariableScope("AEVATAR_ActorRuntime__KafkaBootstrapServers", "localhost:19092");
+        using var topicName = new EnvironmentVariableScope("AEVATAR_ActorRuntime__KafkaTopicName", "mainnet-kafka-provider-events");
+        using var consumerGroup = new EnvironmentVariableScope("AEVATAR_ActorRuntime__KafkaConsumerGroup", "mainnet-kafka-provider-group");
+        using var queueCount = new EnvironmentVariableScope("AEVATAR_Orleans__QueueCount", "6");
+        using var queueCacheSize = new EnvironmentVariableScope("AEVATAR_Orleans__QueueCacheSize", "512");
+
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["ActorRuntime:Provider"] = "Orleans",
+        });
+
+        builder.AddAevatarDefaultHost();
+        builder.AddMainnetDistributedOrleansHost();
+
+        using var app = builder.Build();
+        var runtimeOptions = app.Services.GetRequiredService<AevatarOrleansRuntimeOptions>();
+        var transportOptions = app.Services.GetRequiredService<KafkaProviderTransportOptions>();
+
+        runtimeOptions.QueueCount.Should().Be(6);
+        runtimeOptions.QueueCacheSize.Should().Be(512);
+        transportOptions.TopicPartitionCount.Should().Be(6);
+        transportOptions.TopicName.Should().Be("mainnet-kafka-provider-events");
+        app.Services.GetRequiredService<IQueueAdapterFactory>().Should().BeOfType<KafkaProviderQueueAdapterFactory>();
+        app.Services.GetRequiredService<KafkaProviderProducer>().Should().NotBeNull();
+    }
+
+    [Fact]
+    public void AddMainnetDistributedOrleansHost_EnvironmentVariables_ShouldOverrideDistributedJson()
+    {
+        // Simulate Distributed.json defaults via in-memory collection (loaded first).
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["ActorRuntime:Provider"] = "Orleans",
+            ["ActorRuntime:OrleansStreamBackend"] = "KafkaProvider",
+            ["ActorRuntime:OrleansPersistenceBackend"] = "Garnet",
+            ["ActorRuntime:OrleansGarnetConnectionString"] = "127.0.0.1:6379",
+            ["ActorRuntime:KafkaBootstrapServers"] = "localhost:19092",
+            ["ActorRuntime:KafkaTopicName"] = "topic",
+            ["ActorRuntime:KafkaConsumerGroup"] = "group",
+            ["Projection:Policies:Environment"] = "Production",
+        });
+
+        // Set env vars that should override the above after AddMainnetDistributedOrleansHost.
+        // Both stream and persistence must be InMemory together to pass validation.
+        using var prefixedStream = new EnvironmentVariableScope(
+            "AEVATAR_ActorRuntime__OrleansStreamBackend", "InMemory");
+        using var prefixedPersistence = new EnvironmentVariableScope(
+            "AEVATAR_ActorRuntime__OrleansPersistenceBackend", "InMemory");
+        using var prefixedRuntimeEnv = new EnvironmentVariableScope(
+            "AEVATAR_ActorRuntime__Policies__Environment", "Development");
+        using var bare = new EnvironmentVariableScope(
+            "Projection__Policies__Environment", "Development");
+
+        builder.AddAevatarDefaultHost();
+        builder.AddMainnetDistributedOrleansHost();
+
+        // AEVATAR_ prefixed env vars should win.
+        builder.Configuration["ActorRuntime:OrleansPersistenceBackend"]
+            .Should().Be("InMemory", "AEVATAR_ prefixed env vars must override Distributed.json");
+        builder.Configuration["ActorRuntime:OrleansStreamBackend"]
+            .Should().Be("InMemory", "AEVATAR_ prefixed env vars must override Distributed.json");
+
+        // Bare env var should win.
+        builder.Configuration["Projection:Policies:Environment"]
+            .Should().Be("Development", "bare env vars must override Distributed.json");
+    }
+
+    [Fact]
+    public void AddMainnetDistributedOrleansHost_GarnetClusteringMode_ShouldUseGarnetBackedMembership()
+    {
+        using var clusteringMode = new EnvironmentVariableScope("AEVATAR_Orleans__ClusteringMode", "Garnet");
+        using var siloHost = new EnvironmentVariableScope("AEVATAR_Orleans__SiloHost", "10.255.0.7");
+        using var streamBackend = new EnvironmentVariableScope("AEVATAR_ActorRuntime__OrleansStreamBackend", "KafkaProvider");
+        using var persistence = new EnvironmentVariableScope("AEVATAR_ActorRuntime__OrleansPersistenceBackend", "Garnet");
+        using var garnetConn = new EnvironmentVariableScope("AEVATAR_ActorRuntime__OrleansGarnetConnectionString", "127.0.0.1:6379");
+
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["ActorRuntime:Provider"] = "Orleans",
+        });
+
+        builder.AddAevatarDefaultHost();
+        builder.AddMainnetDistributedOrleansHost();
+
+        using var app = builder.Build();
+
+        app.Services.GetRequiredService<IMembershipTable>().GetType().Name.Should().Be("RedisMembershipTable",
+            "Garnet clustering must store membership in the same Garnet instance as reminders and grain state");
+
+        var clusterOptions = app.Services.GetRequiredService<IOptions<ClusterOptions>>().Value;
+        clusterOptions.ClusterId.Should().Be("aevatar-mainnet-cluster");
+        clusterOptions.ServiceId.Should().Be("aevatar-mainnet-host-api");
+
+        var endpointOptions = app.Services.GetRequiredService<IOptions<EndpointOptions>>().Value;
+        endpointOptions.AdvertisedIPAddress.Should().Be(IPAddress.Parse("10.255.0.7"));
+        endpointOptions.SiloPort.Should().Be(11111);
+        endpointOptions.SiloListeningEndpoint.Should().NotBeNull();
+    }
+
+    [Fact]
+    public void AddMainnetDistributedOrleansHost_DistributedProfile_ShouldDefaultToGarnetClustering()
+    {
+        // Regression pin for the production rolling-deploy incident: the shipped
+        // Distributed profile combined Localhost clustering with a shared Garnet
+        // reminder table + grain state, so the old and new pod each ran as a
+        // complete single-silo cluster, both fired every reminder, and ping-ponged
+        // RuntimeCallbackSchedulerGrain etags (InconsistentStateException) until
+        // the old pod died. The profile must keep membership in Garnet.
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["ActorRuntime:Provider"] = "Orleans",
+        });
+
+        builder.AddAevatarDefaultHost();
+        builder.AddMainnetDistributedOrleansHost();
+
+        using var app = builder.Build();
+
+        app.Services.GetRequiredService<IMembershipTable>().GetType().Name.Should().Be("RedisMembershipTable");
+
+        var endpointOptions = app.Services.GetRequiredService<IOptions<EndpointOptions>>().Value;
+        endpointOptions.AdvertisedIPAddress.Should().NotBeNull(
+            "with no SiloHost configured the silo must advertise an interface address peers can reach");
+    }
+
+    private static WebApplicationBuilder CreateBuilder(Dictionary<string, string?> values)
+    {
+        var options = new WebApplicationOptions
+        {
+            EnvironmentName = Environments.Development,
+        };
+        var builder = WebApplication.CreateBuilder(options);
+        builder.Configuration.AddInMemoryCollection(values);
+        return builder;
+    }
+
+    private sealed class EnvironmentVariableScope : IDisposable
+    {
+        private readonly string _name;
+        private readonly string? _previous;
+
+        public EnvironmentVariableScope(string name, string value)
+        {
+            _name = name;
+            _previous = Environment.GetEnvironmentVariable(name);
+            Environment.SetEnvironmentVariable(name, value);
+        }
+
+        public void Dispose() => Environment.SetEnvironmentVariable(_name, _previous);
+    }
+}

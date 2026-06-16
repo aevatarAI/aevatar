@@ -83,6 +83,58 @@ public sealed class NyxIdRemoteToolApprovalPortTests
         handler.Requests[0].Headers.Authorization!.ToString().Should().Be("Bearer token-1");
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task DecideAsync_ShouldCallDecisionEndpointWithApprovedBoolBody(bool approved)
+    {
+        var handler = new CaptureHandler(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                """{"id":"approval-1","status":"decided"}""",
+                Encoding.UTF8,
+                "application/json"),
+        });
+        var port = CreatePort(handler);
+
+        using var _ = AgentToolContextScope.Push(WithNyxIdAccessToken("token-1"));
+        var result = await port.DecideAsync(
+            new RemoteToolApprovalDecision("approval-1", approved),
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        handler.Requests.Should().ContainSingle();
+        handler.Requests[0].Method.Should().Be(HttpMethod.Post);
+        handler.Requests[0].RequestUri!.AbsolutePath.Should()
+            .Be("/api/v1/approvals/requests/approval-1/decide");
+        handler.Requests[0].Headers.Authorization!.ToString().Should().Be("Bearer token-1");
+        handler.Bodies[0].Should().Be(approved ? """{"approved":true}""" : """{"approved":false}""");
+        handler.Bodies[0].Should().NotContain("decision");
+    }
+
+    [Fact]
+    public async Task DecideAsync_ShouldMapNyxIdErrorEnvelope()
+    {
+        var handler = new CaptureHandler(new HttpResponseMessage(HttpStatusCode.Conflict)
+        {
+            Content = new StringContent(
+                """{"error":"already_decided","message":"Approval already decided"}""",
+                Encoding.UTF8,
+                "application/json"),
+        });
+        var port = CreatePort(handler);
+
+        using var _ = AgentToolContextScope.Push(WithNyxIdAccessToken("token-1"));
+        var result = await port.DecideAsync(
+            new RemoteToolApprovalDecision("approval-1", false),
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Status.Should().Be(409);
+        result.ErrorKey.Should().Be("already_decided");
+        result.Detail.Should().Be("Approval already decided");
+    }
+
     [Fact]
     public async Task SubmitAsync_ShouldRequireTypedCredential()
     {
@@ -120,6 +172,25 @@ public sealed class NyxIdRemoteToolApprovalPortTests
         using var _ = AgentToolContextScope.Push(null);
         var act = () => port.GetStatusAsync(
             new RemoteToolApprovalStatusQuery("req-1", "approval-1"),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("NyxID authentication required for remote approval.");
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DecideAsync_ShouldRequireTypedCredential()
+    {
+        var handler = new CaptureHandler(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("""{"id":"approval-1"}""", Encoding.UTF8, "application/json"),
+        });
+        var port = CreatePort(handler);
+
+        using var _ = AgentToolContextScope.Push(null);
+        var act = () => port.DecideAsync(
+            new RemoteToolApprovalDecision("approval-1", true),
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()

@@ -1,13 +1,19 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Core;
+using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Workflow.Abstractions.Execution;
+using Aevatar.Workflow.Core.Composition;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Execution;
+using Aevatar.Workflow.Core.Modules;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Reflection;
 
 namespace Aevatar.Workflow.Core.Tests.Execution;
 
@@ -37,6 +43,57 @@ public sealed class WorkflowExecutionContextAdapterTests
 
         adapter.RuntimeContext.Should().BeSameAs(host.RuntimeContext);
         adapter.RuntimeContext.RequestPassthroughMetadata.Values["trace-id"].Should().Be("abc");
+    }
+
+    [Fact]
+    public void ScopeId_ShouldExposeStateHostScopeId()
+    {
+        var host = new RecordingStateHost { ScopeId = "scope-1" };
+
+        var adapter = WorkflowExecutionContextAdapter.Create(new RecordingEventHandlerContext(), host);
+
+        adapter.ScopeId.Should().Be("scope-1");
+    }
+
+    [Fact]
+    public void ScopeId_ShouldDefaultToEmptyWhenStateHostDoesNotOverride()
+    {
+        IWorkflowExecutionStateHost host = new DefaultScopeStateHost();
+
+        var adapter = WorkflowExecutionContextAdapter.Create(new RecordingEventHandlerContext(), host);
+
+        host.ScopeId.Should().BeEmpty();
+        adapter.ScopeId.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ScopeId_ShouldFlowFromWorkflowRunStateHostToAdapter()
+    {
+        var agent = new WorkflowRunGAgent(
+            new UnsupportedActorRuntime(),
+            new UnsupportedActorRuntime(),
+            new EmptyEventModuleFactory(),
+            [])
+        {
+            EventSourcingBehaviorFactory = new InMemoryEventSourcingBehaviorFactory<WorkflowRunState>(),
+        };
+        SetAgentId(agent, "workflow-run-scope-bridge");
+        var stateHost = (IWorkflowExecutionStateHost)agent;
+        var adapterBeforeBind = WorkflowExecutionContextAdapter.Create(new RecordingEventHandlerContext(), stateHost);
+
+        stateHost.ScopeId.Should().BeEmpty();
+        adapterBeforeBind.ScopeId.Should().BeEmpty();
+
+        await agent.BindWorkflowRunDefinitionAsync(
+            definitionActorId: "definition-1",
+            workflowYaml: "",
+            workflowName: "wf_scope",
+            runId: "run-1",
+            scopeId: " scope-1 ");
+        var adapter = WorkflowExecutionContextAdapter.Create(new RecordingEventHandlerContext(), stateHost);
+
+        stateHost.ScopeId.Should().Be("scope-1");
+        adapter.ScopeId.Should().Be("scope-1");
     }
 
     [Fact]
@@ -118,7 +175,6 @@ public sealed class WorkflowExecutionContextAdapterTests
         var inner = new RecordingEventHandlerContext();
         var adapter = WorkflowExecutionContextAdapter.Create(inner, new RecordingStateHost { RunId = "run-42" });
         var timeoutEvent = new Empty();
-        var timerEvent = new StringValue { Value = "tick" };
         var cancelLease = new RuntimeCallbackLease("agent-1", "cancel-me", 7, RuntimeCallbackBackend.InMemory);
 
         adapter.AgentId.Should().Be("agent-1");
@@ -144,19 +200,6 @@ public sealed class WorkflowExecutionContextAdapterTests
                 },
             },
             CancellationToken.None);
-        var timerLease = await adapter.ScheduleSelfDurableTimerAsync(
-            "timer-1",
-            TimeSpan.FromSeconds(1),
-            TimeSpan.FromSeconds(2),
-            timerEvent,
-            new EventEnvelopePublishOptions
-            {
-                Propagation = new EventEnvelopePropagationOverrides
-                {
-                    Baggage = { ["mode"] = "timer" },
-                },
-            },
-            CancellationToken.None);
         await adapter.CancelDurableCallbackAsync(cancelLease, CancellationToken.None);
 
         inner.Published.Should().ContainSingle(x =>
@@ -166,9 +209,7 @@ public sealed class WorkflowExecutionContextAdapterTests
             x.TargetActorId == "child-1" &&
             x.Event.Unpack<Int32Value>().Value == 3);
         timeoutLease.CallbackId.Should().Be("timeout-1");
-        timerLease.CallbackId.Should().Be("timer-1");
         inner.ScheduledTimeouts.Should().ContainSingle(x => x.CallbackId == "timeout-1");
-        inner.ScheduledTimers.Should().ContainSingle(x => x.CallbackId == "timer-1");
         inner.Canceled.Should().ContainSingle(x => x.CallbackId == "cancel-me");
     }
 
@@ -213,8 +254,6 @@ public sealed class WorkflowExecutionContextAdapterTests
         public List<(string TargetActorId, Any Event)> Sent { get; } = [];
 
         public List<RecordedCallback> ScheduledTimeouts { get; } = [];
-
-        public List<RecordedTimer> ScheduledTimers { get; } = [];
 
         public List<RuntimeCallbackLease> Canceled { get; } = [];
 
@@ -263,7 +302,6 @@ public sealed class WorkflowExecutionContextAdapterTests
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            ScheduledTimers.Add(new RecordedTimer(callbackId, dueTime, period, Any.Pack(evt), options));
             return Task.FromResult(new RuntimeCallbackLease(AgentId, callbackId, 2, RuntimeCallbackBackend.InMemory));
         }
 
@@ -278,6 +316,8 @@ public sealed class WorkflowExecutionContextAdapterTests
     private sealed class RecordingStateHost : IWorkflowExecutionStateHost
     {
         public string RunId { get; set; } = "run-1";
+
+        public string ScopeId { get; set; } = string.Empty;
 
         public WorkflowExecutionRuntimeContext RuntimeContext { get; } = new();
 
@@ -294,7 +334,7 @@ public sealed class WorkflowExecutionContextAdapterTests
         public Task ClearExecutionContextAsync(CancellationToken ct = default)
         {
             ExecutionContextState.Llm = null;
-            ExecutionContextState.Connector = null;
+            ExecutionContextState.CallerCredential = null;
             return Task.CompletedTask;
         }
 
@@ -317,6 +357,51 @@ public sealed class WorkflowExecutionContextAdapterTests
         {
             ct.ThrowIfCancellationRequested();
             States.Remove(scopeKey);
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class DefaultScopeStateHost : IWorkflowExecutionStateHost
+    {
+        public string RunId => "run-1";
+
+        public WorkflowExecutionRuntimeContext RuntimeContext { get; } = new();
+
+        public WorkflowRunExecutionContextState ExecutionContextSnapshot { get; } = new();
+
+        public Task UpdateExecutionContextAsync(WorkflowRunExecutionContextDelta delta, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            _ = delta;
+            return Task.CompletedTask;
+        }
+
+        public Task ClearExecutionContextAsync(CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Any? GetExecutionState(string scopeKey)
+        {
+            _ = scopeKey;
+            return null;
+        }
+
+        public IReadOnlyList<KeyValuePair<string, Any>> GetExecutionStates() => [];
+
+        public Task UpsertExecutionStateAsync(string scopeKey, Any state, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            _ = scopeKey;
+            _ = state;
+            return Task.CompletedTask;
+        }
+
+        public Task ClearExecutionStateAsync(string scopeKey, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            _ = scopeKey;
             return Task.CompletedTask;
         }
     }
@@ -348,24 +433,25 @@ public sealed class WorkflowExecutionContextAdapterTests
     {
         if (delta.ClearLlm)
             state.Llm = null;
-        if (delta.ClearConnector)
-            state.Connector = null;
+        if (delta.ClearCallerCredential)
+            state.CallerCredential = null;
         if (delta.Llm != null)
         {
             state.Llm = new WorkflowLlmExecutionContextState
             {
                 ModelOverride = delta.Llm.ModelOverride,
                 UserMemoryPrompt = delta.Llm.UserMemoryPrompt,
+                RoutePreference = delta.Llm.RoutePreference,
             };
             if (delta.Llm.HasMaxToolRoundsOverride)
                 state.Llm.MaxToolRoundsOverride = delta.Llm.MaxToolRoundsOverride;
         }
 
-        if (delta.Connector != null)
+        if (delta.CallerCredential != null)
         {
-            state.Connector = new WorkflowConnectorExecutionContextState
+            state.CallerCredential = new WorkflowCallerCredentialState
             {
-                HttpAuthorization = delta.Connector.HttpAuthorization,
+                BearerToken = delta.CallerCredential.BearerToken,
             };
         }
     }
@@ -400,10 +486,115 @@ public sealed class WorkflowExecutionContextAdapterTests
         Any Event,
         EventEnvelopePublishOptions? Options);
 
-    private sealed record RecordedTimer(
-        string CallbackId,
-        TimeSpan DueTime,
-        TimeSpan Period,
-        Any Event,
-        EventEnvelopePublishOptions? Options);
+    private static void SetAgentId(GAgentBase agent, string agentId)
+    {
+        var setIdMethod = typeof(GAgentBase).GetMethod(
+            "SetId",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        setIdMethod.Should().NotBeNull();
+        setIdMethod!.Invoke(agent, [agentId]);
+    }
+
+    private sealed class InMemoryEventSourcingBehaviorFactory<TState>
+        : IEventSourcingBehaviorFactory<TState>
+        where TState : class, IMessage<TState>, new()
+    {
+        public IEventSourcingBehavior<TState> Create(
+            string agentId,
+            global::System.Type actorType,
+            Func<TState, IMessage, TState> transitionState)
+        {
+            _ = actorType;
+            return new InMemoryEventSourcingBehavior<TState>(agentId, transitionState);
+        }
+    }
+
+    private sealed class InMemoryEventSourcingBehavior<TState>(
+        string agentId,
+        Func<TState, IMessage, TState> transitionState)
+        : IEventSourcingBehavior<TState>
+        where TState : class, IMessage<TState>, new()
+    {
+        private readonly List<IMessage> _pending = [];
+        private TState _state = new();
+
+        public long CurrentVersion { get; private set; }
+
+        public void RaiseEvent<TEvent>(TEvent evt)
+            where TEvent : IMessage =>
+            _pending.Add(evt);
+
+        public Task<EventStoreCommitResult> ConfirmEventsAsync(CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            foreach (var evt in _pending)
+            {
+                _state = transitionState(_state, evt);
+                CurrentVersion++;
+            }
+
+            var result = new EventStoreCommitResult
+            {
+                AgentId = agentId,
+                LatestVersion = CurrentVersion,
+            };
+            _pending.Clear();
+            return Task.FromResult(result);
+        }
+
+        public Task PersistSnapshotAsync(TState currentState, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task<TState?> ReplayAsync(string replayAgentId, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<TState?>(_state.Clone());
+        }
+
+        public void DiscardPendingEvents() => _pending.Clear();
+
+        public TState TransitionState(TState current, IMessage evt) =>
+            transitionState(current, evt);
+    }
+
+    private sealed class EmptyEventModuleFactory : IEventModuleFactory<IWorkflowExecutionContext>
+    {
+        public bool TryCreate(string name, out IEventModule<IWorkflowExecutionContext>? module)
+        {
+            _ = name;
+            module = null;
+            return false;
+        }
+    }
+
+    private sealed class UnsupportedActorRuntime : IActorRuntime, IActorDispatchPort
+    {
+        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
+            where TAgent : IAgent =>
+            throw new NotSupportedException();
+
+        public Task<IActor> CreateAsync(global::System.Type agentType, string? id = null, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task DestroyAsync(string id, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<IActor?> GetAsync(string id) =>
+            throw new NotSupportedException();
+
+        public Task<bool> ExistsAsync(string id) =>
+            throw new NotSupportedException();
+
+        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task UnlinkAsync(string childId, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+    }
 }

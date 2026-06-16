@@ -77,6 +77,16 @@ public class WorkflowDefinitionToolsTests
     #region WorkflowCreateDefTool
 
     [Fact]
+    public void WorkflowCreateDefTool_ShouldExecuteWithoutLocalApproval()
+    {
+        var adapter = new StubDefinitionAdapter();
+        var options = new WorkflowToolOptions();
+        var tool = new WorkflowCreateDefTool(adapter, options);
+
+        tool.ApprovalMode.Should().Be(ToolApprovalMode.NeverRequire);
+    }
+
+    [Fact]
     public async Task WorkflowCreateDefTool_ReturnsSuccess()
     {
         var adapter = new StubDefinitionAdapter(

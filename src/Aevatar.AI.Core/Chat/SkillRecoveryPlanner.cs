@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
@@ -7,6 +8,9 @@ namespace Aevatar.AI.Core.Chat;
 
 internal static class SkillRecoveryPlanner
 {
+    internal const int MaxCallIdLength = 64;
+    private const int CallIdFingerprintLength = 16;
+    private const string CompactCallIdPrefix = "sr";
     private const string OrnnSearchSkillsToolName = "ornn_search_skills";
     private const string UseSkillToolName = "use_skill";
 
@@ -84,17 +88,6 @@ internal static class SkillRecoveryPlanner
         "blocker",
     ];
 
-    private static readonly string[] OrnnSearchNoMatchPhrases =
-    [
-        "no skills found",
-        "search failed",
-        "error:",
-        "no nyxid access token",
-        "not reachable",
-        "not available",
-        "unavailable",
-    ];
-
     public static bool TryPlanNextDirective(
         AgentSkillRecoveryContext recovery,
         IReadOnlyList<ChatMessage> messages,
@@ -111,19 +104,6 @@ internal static class SkillRecoveryPlanner
             ? recovery.MaxOrnnSearchAttempts
             : 1;
 
-        if (recovery.RequireInitialOrnnSearch &&
-            !HasToolCall(messages, OrnnSearchSkillsToolName))
-        {
-            if (recoveryAttempts >= maxAttempts)
-                return false;
-
-            directive = new RecoveryDirective(
-                BuildOrnnSearchToolCall(BuildCallId(callIdPrefix, OrnnSearchSkillsToolName), BuildInitialSearchQuery(recovery)),
-                ConsumesOrnnSearchAttempt: true,
-                Nudge: null);
-            return true;
-        }
-
         if (!string.IsNullOrWhiteSpace(recovery.PrimarySkillName) &&
             !HasUseSkillFor(messages, recovery.PrimarySkillName))
         {
@@ -137,10 +117,25 @@ internal static class SkillRecoveryPlanner
             return true;
         }
 
+        if (recovery.RequireInitialOrnnSearch &&
+            !HasToolCall(messages, OrnnSearchSkillsToolName))
+        {
+            if (recoveryAttempts >= maxAttempts)
+                return false;
+
+            directive = new RecoveryDirective(
+                BuildOrnnSearchToolCall(BuildCallId(callIdPrefix, OrnnSearchSkillsToolName), BuildInitialSearchQuery(recovery)),
+                ConsumesOrnnSearchAttempt: true,
+                Nudge: null);
+            return true;
+        }
+
         if (TryGetLatestOrnnSearchWithMatches(messages, out var latestSearchIndex, out var latestSearchResult) &&
             !HasToolCallAfter(messages, UseSkillToolName, latestSearchIndex))
         {
-            var skillName = ExtractFirstSkillName(latestSearchResult);
+            var skillName = latestSearchResult.Matches.Count > 0
+                ? latestSearchResult.Matches[0].SkillName
+                : null;
             directive = !string.IsNullOrWhiteSpace(skillName)
                 ? new RecoveryDirective(
                     BuildUseSkillToolCall(
@@ -154,7 +149,7 @@ internal static class SkillRecoveryPlanner
                     : new RecoveryDirective(
                     ToolCall: null,
                     ConsumesOrnnSearchAttempt: true,
-                    Nudge: BuildUseDiscoveredSkillNudge(recovery, latestSearchResult));
+                    Nudge: BuildUseDiscoveredSkillNudge(recovery, latestSearchResult.DisplayText));
             return directive.ToolCall is not null || !string.IsNullOrWhiteSpace(directive.Nudge);
         }
 
@@ -199,19 +194,105 @@ internal static class SkillRecoveryPlanner
             {
                 skill = skillName,
                 args,
+                mount_workflows = true,
             }),
         };
 
     private static string BuildCallId(string? callIdPrefix, string toolName)
     {
         var suffix = toolName.Replace('_', '-');
-        return string.IsNullOrWhiteSpace(callIdPrefix)
+        var callId = string.IsNullOrWhiteSpace(callIdPrefix)
             ? $"skill-recovery:{suffix}"
             : $"{callIdPrefix}:skill-recovery:{suffix}";
+
+        return EnsureCallIdLimit(callId);
+    }
+
+    internal static string EnsureCallIdLimit(string callId)
+    {
+        if (callId.Length <= MaxCallIdLength)
+            return callId;
+
+        var readableSegment = ExtractReadableCallIdSegment(callId);
+        var fingerprint = BuildCallIdFingerprint(callId);
+        var readableBudget = MaxCallIdLength
+            - CompactCallIdPrefix.Length
+            - 2
+            - fingerprint.Length;
+        if (readableSegment.Length > readableBudget)
+            readableSegment = readableSegment[^readableBudget..];
+
+        return $"{CompactCallIdPrefix}:{readableSegment}:{fingerprint}";
+    }
+
+    internal static string BuildSequencedCallId(string? callId, int sequence)
+    {
+        if (string.IsNullOrWhiteSpace(callId))
+            return EnsureCallIdLimit($"skill-recovery:{sequence}");
+
+        var sequenceSegment = $"recovery:{sequence}";
+        return EnsureCallIdLimit(AppendCallIdSegment(callId, sequenceSegment));
+    }
+
+    private static string AppendCallIdSegment(string callId, string segment)
+    {
+        if (TrySplitCompactCallId(callId, out var readableSegment, out var fingerprint))
+            return $"{CompactCallIdPrefix}:{readableSegment}:{segment}:{fingerprint}";
+
+        return $"{callId}:{segment}";
+    }
+
+    private static string ExtractReadableCallIdSegment(string callId)
+    {
+        if (TrySplitCompactCallId(callId, out var compactReadableSegment, out _))
+            return compactReadableSegment;
+
+        var markerIndex = callId.IndexOf(":skill-recovery:", StringComparison.Ordinal);
+        if (markerIndex >= 0)
+            return callId[(markerIndex + ":skill-recovery:".Length)..];
+
+        var recoveryIndex = callId.IndexOf("skill-recovery:", StringComparison.Ordinal);
+        if (recoveryIndex >= 0)
+            return callId[(recoveryIndex + "skill-recovery:".Length)..];
+
+        var lastSeparator = callId.LastIndexOf(':');
+        return lastSeparator >= 0 && lastSeparator < callId.Length - 1
+            ? callId[(lastSeparator + 1)..]
+            : callId;
+    }
+
+    private static bool TrySplitCompactCallId(
+        string callId,
+        out string readableSegment,
+        out string fingerprint)
+    {
+        readableSegment = string.Empty;
+        fingerprint = string.Empty;
+
+        if (!callId.StartsWith($"{CompactCallIdPrefix}:", StringComparison.Ordinal))
+            return false;
+
+        var segments = callId[(CompactCallIdPrefix.Length + 1)..].Split(':');
+        if (segments.Length < 2 || !IsCallIdFingerprint(segments[^1]))
+            return false;
+
+        fingerprint = segments[^1];
+        readableSegment = string.Join(':', segments[..^1]);
+        return !string.IsNullOrWhiteSpace(readableSegment);
+    }
+
+    private static bool IsCallIdFingerprint(string value) =>
+        value.Length == CallIdFingerprintLength &&
+        value.All(static c => c is >= '0' and <= '9' or >= 'a' and <= 'f');
+
+    private static string BuildCallIdFingerprint(string callId)
+    {
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(callId));
+        return Convert.ToHexString(hash)[..CallIdFingerprintLength].ToLowerInvariant();
     }
 
     private static bool IsEnabled(AgentSkillRecoveryContext recovery) =>
-        recovery.RequireInitialOrnnSearch || recovery.RequireOrnnSearchOnBlocker;
+        recovery.RequireInitialOrnnSearch || recovery.RequireOrnnSearchOnBlocker || recovery.DiscoveryRequested;
 
     private static bool HasToolCall(IReadOnlyList<ChatMessage> messages, string toolName) =>
         messages.Any(message =>
@@ -267,10 +348,10 @@ internal static class SkillRecoveryPlanner
     private static bool TryGetLatestOrnnSearchWithMatches(
         IReadOnlyList<ChatMessage> messages,
         out int searchMessageIndex,
-        out string searchResult)
+        out SkillSearchToolResultView searchResult)
     {
         searchMessageIndex = -1;
-        searchResult = string.Empty;
+        searchResult = new SkillSearchToolResultView(ToolResultViewStatus.Unknown, false, [], null, null, string.Empty);
 
         for (var i = messages.Count - 1; i >= 0; i--)
         {
@@ -285,18 +366,21 @@ internal static class SkillRecoveryPlanner
                     continue;
 
                 searchMessageIndex = i;
-                searchResult = FindToolResult(messages, call.Id, i + 1);
-                return SearchResultHasMatches(searchResult);
+                var toolResult = FindToolResult(messages, call.Id, i + 1);
+                searchResult = toolResult?.ToolResultView?.SkillSearch
+                               ?? new SkillSearchToolResultView(ToolResultViewStatus.Unknown, false, [], null, null, string.Empty);
+                return searchResult.Status == ToolResultViewStatus.Success &&
+                       searchResult.HasMatches;
             }
         }
 
         return false;
     }
 
-    private static string FindToolResult(IReadOnlyList<ChatMessage> messages, string? callId, int startIndex)
+    private static ChatMessage? FindToolResult(IReadOnlyList<ChatMessage> messages, string? callId, int startIndex)
     {
         if (string.IsNullOrWhiteSpace(callId))
-            return string.Empty;
+            return null;
 
         for (var i = Math.Max(0, startIndex); i < messages.Count; i++)
         {
@@ -304,23 +388,11 @@ internal static class SkillRecoveryPlanner
             if (string.Equals(message.Role, "tool", StringComparison.OrdinalIgnoreCase) &&
                 string.Equals(message.ToolCallId, callId, StringComparison.Ordinal))
             {
-                return message.Content ?? string.Empty;
+                return message;
             }
         }
 
-        return string.Empty;
-    }
-
-    private static bool SearchResultHasMatches(string? result)
-    {
-        if (string.IsNullOrWhiteSpace(result))
-            return false;
-
-        if (ContainsAny(result, OrnnSearchNoMatchPhrases))
-            return false;
-
-        return result.Contains("Found ", StringComparison.OrdinalIgnoreCase) &&
-               result.Contains("skill", StringComparison.OrdinalIgnoreCase);
+        return null;
     }
 
     private static bool HasBlockerAfterLastOrnnSearch(IReadOnlyList<ChatMessage> messages, string? finalContent)
@@ -339,7 +411,7 @@ internal static class SkillRecoveryPlanner
         {
             var message = messages[i];
             if (string.Equals(message.Role, "tool", StringComparison.OrdinalIgnoreCase) &&
-                ContainsAny(message.Content, BlockerPhrases))
+                IsToolBlocker(message))
             {
                 return true;
             }
@@ -362,6 +434,22 @@ internal static class SkillRecoveryPlanner
         return false;
     }
 
+    private static bool IsToolBlocker(ChatMessage message)
+    {
+        var view = message.ToolResultView;
+        if (view?.SkillSearch is { } searchResult)
+        {
+            return searchResult.Status == ToolResultViewStatus.Error;
+        }
+
+        if (view?.SkillLoad is { } loadResult)
+        {
+            return loadResult.Status is ToolResultViewStatus.Error or ToolResultViewStatus.NotFound;
+        }
+
+        return ContainsAny(message.Content, BlockerPhrases);
+    }
+
     private static string BuildUseDiscoveredSkillNudge(AgentSkillRecoveryContext recovery, string searchResult)
     {
         var command = DescribeCommand(recovery);
@@ -375,6 +463,9 @@ internal static class SkillRecoveryPlanner
 
     private static string ExtractCommandArguments(AgentSkillRecoveryContext recovery)
     {
+        if (!string.IsNullOrWhiteSpace(recovery.CommandArguments))
+            return recovery.CommandArguments.Trim();
+
         var original = recovery.OriginalCommand?.Trim();
         var command = recovery.CommandName?.Trim().TrimStart('/');
         if (string.IsNullOrWhiteSpace(original) || string.IsNullOrWhiteSpace(command))
@@ -392,46 +483,20 @@ internal static class SkillRecoveryPlanner
             : string.Empty;
     }
 
-    private static string? ExtractFirstSkillName(string searchResult)
-    {
-        foreach (var rawLine in searchResult.Split('\n'))
-        {
-            var line = rawLine.Trim();
-            if (!line.StartsWith("- ", StringComparison.Ordinal))
-                continue;
-
-            var item = line[2..].Trim();
-            if (item.StartsWith("**", StringComparison.Ordinal))
-            {
-                var end = item.IndexOf("**", 2, StringComparison.Ordinal);
-                if (end > 2)
-                    return item[2..end].Trim();
-            }
-
-            var paren = item.IndexOf(" (", StringComparison.Ordinal);
-            var colon = item.IndexOf(':', StringComparison.Ordinal);
-            var endIndex = item.Length;
-            if (paren > 0)
-                endIndex = Math.Min(endIndex, paren);
-            if (colon > 0)
-                endIndex = Math.Min(endIndex, colon);
-
-            var candidate = item[..endIndex].Trim().Trim('*', '`');
-            if (!string.IsNullOrWhiteSpace(candidate))
-                return candidate;
-        }
-
-        return null;
-    }
-
     private static string SummarizeBlocker(IReadOnlyList<ChatMessage> messages, string? finalContent)
     {
         for (var i = messages.Count - 1; i >= 0; i--)
         {
             var message = messages[i];
             if (string.Equals(message.Role, "tool", StringComparison.OrdinalIgnoreCase) &&
-                ContainsAny(message.Content, BlockerPhrases))
+                IsToolBlocker(message))
             {
+                if (message.ToolResultView?.SkillSearch is { Error: { } searchError })
+                    return TrimForPrompt(searchError);
+
+                if (message.ToolResultView?.SkillLoad is { Error: { } loadError })
+                    return TrimForPrompt(loadError);
+
                 return TrimForPrompt(message.Content);
             }
         }
@@ -450,7 +515,7 @@ internal static class SkillRecoveryPlanner
         if (!string.IsNullOrWhiteSpace(recovery.PrimarySkillName))
             return recovery.PrimarySkillName.Trim();
 
-        return "the slash command";
+        return recovery.DiscoveryRequested ? "skill discovery" : "the skill command";
     }
 
     private static string BuildInitialSearchQuery(AgentSkillRecoveryContext recovery)
@@ -460,6 +525,9 @@ internal static class SkillRecoveryPlanner
 
         if (!string.IsNullOrWhiteSpace(recovery.CommandName))
             return recovery.CommandName.Trim().TrimStart('/');
+
+        if (recovery.DiscoveryRequested)
+            return "skill discovery";
 
         return DescribeCommand(recovery);
     }

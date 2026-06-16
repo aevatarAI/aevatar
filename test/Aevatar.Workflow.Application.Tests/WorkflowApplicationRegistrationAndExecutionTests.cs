@@ -6,11 +6,15 @@ using Aevatar.CQRS.Core.Interactions;
 using Aevatar.CQRS.Core.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
+using Aevatar.Workflow.Application.Abstractions.RunForks;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Application.DependencyInjection;
+using Aevatar.Workflow.Application.RunForks;
 using Aevatar.Workflow.Application.Runs;
 using Aevatar.Workflow.Application.Workflows;
 using FluentAssertions;
@@ -189,6 +193,15 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             x.ServiceType == typeof(IWorkflowChatRunInteractionPort) &&
             x.ImplementationFactory != null);
         services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandTargetResolver<WorkflowForkRunCommand, WorkflowForkRunCommandTarget, WorkflowForkRunStartError>) &&
+            x.ImplementationType == typeof(WorkflowForkRunCommandTargetResolver));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>) &&
+            x.ImplementationType == typeof(WorkflowForkRunCommandDispatchService));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandTargetEnvelopeFactory<WorkflowForkRunCommand, WorkflowForkRunCommandTarget>) &&
+            x.ImplementationType == typeof(WorkflowForkRunCommandEnvelopeFactory));
+        services.Should().Contain(x =>
             x.ServiceType == typeof(DefaultCommandDispatchService<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>) &&
             x.ImplementationType == typeof(DefaultCommandDispatchService<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>));
         services.Should().Contain(x =>
@@ -206,6 +219,28 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         services.Should().Contain(x =>
             x.ServiceType == typeof(ICommandDispatchService<WorkflowStopCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>) &&
             x.ImplementationType == typeof(DefaultCommandDispatchService<WorkflowStopCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>));
+        services.Should().NotContain(x =>
+            x.ServiceType == typeof(IWorkflowRunForkSeedQueryPort));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandDispatchPipeline<WorkflowForkRunCommand, WorkflowForkRunCommandTarget, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>) &&
+            x.ImplementationType == typeof(DefaultCommandDispatchPipeline<WorkflowForkRunCommand, WorkflowForkRunCommandTarget, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>));
+    }
+
+    [Fact]
+    public void AddWorkflowApplication_ShouldResolvePublicationHooksWithoutForkReadModelDependencies()
+    {
+        var services = new ServiceCollection();
+        services.AddWorkflowApplication();
+
+        using var provider = services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateOnBuild = false,
+            ValidateScopes = true,
+        });
+
+        provider.GetServices<ICommittedStatePublicationHook>()
+            .Should()
+            .ContainSingle(hook => hook.GetType().Name == "WorkflowRunForkCoordinator");
     }
 
     [Fact]
@@ -311,7 +346,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
                 ["connector.http.authorization"] = "Bearer metadata-secret",
             },
             ScopeId: "u-1001",
-            ConnectorHttpAuthorization: " Bearer typed-secret ");
+            CallerCredential: new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential(" typed-secret "));
 
         var envelope = factory.CreateEnvelope(command, context);
         var request = envelope.Payload.Unpack<WorkflowChatRequestEvent>();
@@ -324,7 +359,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         request.Prompt.Should().Be("hello");
         request.SessionId.Should().Be("session-42");
         request.ScopeId.Should().Be("u-1001");
-        request.ConnectorHttpAuthorization.Should().Be("Bearer typed-secret");
+        request.CallerCredential.BearerToken.Should().Be("typed-secret");
         request.Headers[WorkflowRunCommandMetadataKeys.ChannelId].Should().Be("slack#ops");
         request.Headers["source"].Should().Be("headers");
         request.Metadata[WorkflowRunCommandMetadataKeys.ChannelId].Should().Be("slack#request");
@@ -347,7 +382,8 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             LlmControl: new WorkflowLlmControl(
                 ModelOverride: " model-a ",
                 MaxToolRoundsOverride: 3,
-                UserMemoryPrompt: " memory "));
+                UserMemoryPrompt: " memory ",
+                RoutePreference: " route-a "));
 
         var envelope = factory.CreateEnvelope(command, new CommandContext(
             "actor-1",
@@ -359,6 +395,74 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         request.LlmControl.ModelOverride.Should().Be(" model-a ");
         request.LlmControl.MaxToolRoundsOverride.Should().Be(3);
         request.LlmControl.UserMemoryPrompt.Should().Be(" memory ");
+        request.LlmControl.RoutePreference.Should().Be(" route-a ");
+    }
+
+    [Fact]
+    public void EnvelopeFactory_ShouldCarryForkSeed()
+    {
+        var services = new ServiceCollection();
+        services.AddWorkflowApplication();
+        using var provider = services.BuildServiceProvider();
+        var factory = provider.GetRequiredService<ICommandEnvelopeFactory<WorkflowChatRunRequest>>();
+        var command = new WorkflowChatRunRequest(
+            "resume-input",
+            WorkflowChatSource.DefinitionActor("actor-1", "direct"),
+            ForkSeed: new WorkflowChatRunForkSeed(
+                "source-run",
+                "step-b",
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["input"] = "seed-input",
+                    ["step-a"] = "alpha",
+                }));
+
+        var envelope = factory.CreateEnvelope(command, new CommandContext(
+            "actor-1",
+            "cmd-1",
+            "corr-1",
+            new Dictionary<string, string>()));
+        var request = envelope.Payload.Unpack<WorkflowChatRequestEvent>();
+
+        request.Prompt.Should().Be("resume-input");
+        request.ForkSeed.SourceRunId.Should().Be("source-run");
+        request.ForkSeed.StartAtStepId.Should().Be("step-b");
+        request.ForkSeed.Variables.Should().Contain("input", "seed-input");
+        request.ForkSeed.Variables.Should().Contain("step-a", "alpha");
+    }
+
+    [Fact]
+    public void EnvelopeFactory_ShouldCarryForkSeedOnRequestLevel()
+    {
+        var services = new ServiceCollection();
+        services.AddWorkflowApplication();
+        using var provider = services.BuildServiceProvider();
+        var factory = provider.GetRequiredService<ICommandEnvelopeFactory<WorkflowChatRunRequest>>();
+        var command = new WorkflowChatRunRequest(
+            "resume-input",
+            WorkflowChatSource.DefinitionActor("actor-1", "direct"),
+            ForkSeed: new WorkflowChatRunForkSeed(
+                "source-run",
+                "step-b",
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["input"] = "seed-input",
+                    ["step-a"] = "alpha",
+                },
+                Attempt: 2));
+
+        var envelope = factory.CreateEnvelope(command, new CommandContext(
+            "actor-1",
+            "cmd-1",
+            "corr-1",
+            new Dictionary<string, string>()));
+        var request = envelope.Payload.Unpack<WorkflowChatRequestEvent>();
+
+        request.ForkSeed.SourceRunId.Should().Be("source-run");
+        request.ForkSeed.StartAtStepId.Should().Be("step-b");
+        request.ForkSeed.Attempt.Should().Be(2);
+        request.ForkSeed.Variables.Should().Contain("input", "seed-input");
+        request.ForkSeed.Variables.Should().Contain("step-a", "alpha");
     }
 
     [Fact]
@@ -381,7 +485,8 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             LlmControl: new WorkflowLlmControl(
                 ModelOverride: "model-a",
                 MaxToolRoundsOverride: 5,
-                UserMemoryPrompt: "memory"));
+                UserMemoryPrompt: "memory",
+                RoutePreference: "route-a"));
 
         var envelope = factory.CreateEnvelope(command, new CommandContext(
             "actor-1",
@@ -394,9 +499,32 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         request.LlmControl.ModelOverride.Should().Be("model-a");
         request.LlmControl.MaxToolRoundsOverride.Should().Be(5);
         request.LlmControl.UserMemoryPrompt.Should().Be("memory");
+        request.LlmControl.RoutePreference.Should().Be("route-a");
         request.Metadata.Should().Contain("client-note", "open-extension");
         request.Metadata.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
         request.Metadata.Should().NotContainKey("scope_id");
+    }
+
+    [Fact]
+    public void EnvelopeFactory_ShouldRejectMalformedDirectCallerCredential()
+    {
+        var services = new ServiceCollection();
+        services.AddWorkflowApplication();
+        using var provider = services.BuildServiceProvider();
+        var factory = provider.GetRequiredService<ICommandEnvelopeFactory<WorkflowChatRunRequest>>();
+        var command = new WorkflowChatRunRequest(
+            "hello",
+            WorkflowChatSource.DefinitionActor("actor-1", "direct"),
+            CallerCredential: new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential("Bearer token-123"));
+
+        FluentActions.Invoking(() => factory.CreateEnvelope(command, new CommandContext(
+                "actor-1",
+                "cmd-1",
+                "corr-1",
+                new Dictionary<string, string>())))
+            .Should()
+            .Throw<ArgumentException>()
+            .WithMessage("*caller credential*invalid*");
     }
 
     [Fact]
@@ -422,6 +550,19 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
                     Uri = "https://example.com/cat.png",
                     MediaType = "image/png",
                     Name = "cat",
+                    FileRef = new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileRef
+                    {
+                        FileId = "file-1",
+                        ArtifactId = "artifact-1",
+                        SourceKind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileSourceKind.ConnectedServiceResource,
+                        SourceMessageId = "om_1",
+                        SourceResourceKey = "image_key_1",
+                        FileName = "cat.png",
+                        MediaType = "image/png",
+                        Sha256 = "abc",
+                        CreatedAtUnixMs = 1710000000000,
+                        ExpiresAtUnixMs = 1710003600000,
+                    },
                 },
             ],
             ScopeId: "scope-7");
@@ -441,6 +582,16 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         request.InputParts[1].Uri.Should().Be("https://example.com/cat.png");
         request.InputParts[1].MediaType.Should().Be("image/png");
         request.InputParts[1].Name.Should().Be("cat");
+        request.InputParts[1].FileRef.FileId.Should().Be("file-1");
+        request.InputParts[1].FileRef.ArtifactId.Should().Be("artifact-1");
+        request.InputParts[1].FileRef.SourceKind.Should().Be(Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.ConnectedServiceResource);
+        request.InputParts[1].FileRef.SourceMessageId.Should().Be("om_1");
+        request.InputParts[1].FileRef.SourceResourceKey.Should().Be("image_key_1");
+        request.InputParts[1].FileRef.FileName.Should().Be("cat.png");
+        request.InputParts[1].FileRef.MediaType.Should().Be("image/png");
+        request.InputParts[1].FileRef.Sha256.Should().Be("abc");
+        request.InputParts[1].FileRef.CreatedAtUnixMs.Should().Be(1710000000000);
+        request.InputParts[1].FileRef.ExpiresAtUnixMs.Should().Be(1710003600000);
     }
 
     [Fact]
@@ -466,4 +617,5 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             new Dictionary<string, string>()));
         whiteSpaceSession.Payload.Unpack<WorkflowChatRequestEvent>().SessionId.Should().Be("corr-3");
     }
+
 }

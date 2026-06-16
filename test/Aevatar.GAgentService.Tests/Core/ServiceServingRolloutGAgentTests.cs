@@ -568,7 +568,11 @@ public sealed class ServiceServingRolloutGAgentTests
     public async Task ServiceServingSetManager_ShouldAcceptResolvedServingTargetsWithoutResolverLookup()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var agent = CreateServingSetAgent(new InMemoryEventStore(), ServiceActorIds.ServingSet(identity));
+        var dispatchPort = new RecordingActorDispatchPort();
+        var agent = CreateServingSetAgent(
+            new InMemoryEventStore(),
+            ServiceActorIds.ServingSet(identity),
+            dispatchPort: dispatchPort);
         await agent.ActivateAsync();
 
         await agent.HandleReplaceResolvedAsync(new ReplaceResolvedServiceServingTargetsCommand
@@ -596,6 +600,16 @@ public sealed class ServiceServingRolloutGAgentTests
         agent.State.Targets[0].PrimaryActorId.Should().Be("actor-1");
         agent.State.Targets[0].AllocationWeight.Should().Be(100);
         agent.State.Targets[0].EnabledEndpointIds.Should().Equal("chat");
+        dispatchPort.Calls.Should().ContainSingle();
+        dispatchPort.Calls[0].ActorId.Should().Be(ServiceActorIds.InvocationCatalog(identity));
+        var observation = dispatchPort.Calls[0].Envelope.Payload.Unpack<ObserveServiceInvocationServingCommand>();
+        observation.Identity.Should().BeEquivalentTo(identity);
+        observation.SourceServingVersion.Should().Be(1);
+        observation.ServingTargets.Should().ContainSingle();
+        observation.ServingTargets[0].DeploymentId.Should().Be("dep-1");
+        observation.ServingTargets[0].RevisionId.Should().Be("rev-1");
+        observation.ServingTargets[0].PrimaryActorId.Should().Be("actor-1");
+        observation.ServingTargets[0].EnabledEndpointIds.Should().Equal("chat");
     }
 
     [Fact]
@@ -1127,12 +1141,15 @@ public sealed class ServiceServingRolloutGAgentTests
     private static ServiceServingSetManagerGAgent CreateServingSetAgent(
         InMemoryEventStore eventStore,
         string actorId,
-        IServiceServingTargetResolver? targetResolver = null)
+        IServiceServingTargetResolver? targetResolver = null,
+        IActorDispatchPort? dispatchPort = null)
     {
         return GAgentServiceTestKit.CreateStatefulAgent<ServiceServingSetManagerGAgent, ServiceServingSetState>(
             eventStore,
             actorId,
-            () => new ServiceServingSetManagerGAgent(targetResolver ?? new PassthroughServingTargetResolver()));
+            () => new ServiceServingSetManagerGAgent(
+                dispatchPort ?? GAgentServiceTestKit.NoOpDispatchPort,
+                targetResolver ?? new PassthroughServingTargetResolver()));
     }
 
     private static ServiceRolloutPlanSpec CreateRolloutPlan(string rolloutId, params ServiceRolloutStageSpec[] stages)

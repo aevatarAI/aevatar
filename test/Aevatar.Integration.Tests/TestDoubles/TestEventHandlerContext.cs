@@ -168,6 +168,7 @@ internal sealed class TestEventHandlerContext :
         EventEnvelopePublishOptions? options = null,
         CancellationToken ct = default)
     {
+        _ = ct;
         var lease = Schedule(callbackId, evt, dueTime, period, options);
         return Task.FromResult(lease);
     }
@@ -293,7 +294,7 @@ internal sealed class TestAgent(string id, string? runId = null) : IAgent, IWork
     public Task ClearExecutionContextAsync(CancellationToken ct = default)
     {
         ExecutionContextState.Llm = null;
-        ExecutionContextState.Connector = null;
+        ExecutionContextState.CallerCredential = null;
         return Task.CompletedTask;
     }
 
@@ -357,7 +358,7 @@ internal sealed class TestWorkflowRunAgent(string id, string runId) : IAgent, IW
     public Task ClearExecutionContextAsync(CancellationToken ct = default)
     {
         ExecutionContextState.Llm = null;
-        ExecutionContextState.Connector = null;
+        ExecutionContextState.CallerCredential = null;
         return Task.CompletedTask;
     }
 
@@ -406,8 +407,8 @@ internal static class WorkflowExecutionContextTestState
     {
         if (delta.ClearLlm)
             state.Llm = null;
-        if (delta.ClearConnector)
-            state.Connector = null;
+        if (delta.ClearCallerCredential)
+            state.CallerCredential = null;
         if (delta.Llm != null)
         {
             state.Llm = new WorkflowLlmExecutionContextState
@@ -419,11 +420,11 @@ internal static class WorkflowExecutionContextTestState
                 state.Llm.MaxToolRoundsOverride = delta.Llm.MaxToolRoundsOverride;
         }
 
-        if (delta.Connector != null)
+        if (delta.CallerCredential != null)
         {
-            state.Connector = new WorkflowConnectorExecutionContextState
+            state.CallerCredential = new WorkflowCallerCredentialState
             {
-                HttpAuthorization = delta.Connector.HttpAuthorization,
+                BearerToken = delta.CallerCredential.BearerToken,
             };
         }
     }

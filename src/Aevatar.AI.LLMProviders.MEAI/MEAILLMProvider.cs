@@ -77,15 +77,20 @@ public sealed class MEAILLMProvider : ILLMProvider
         LLMRequest request,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        var messages = ConvertMessages(request.Messages);
+        var messages = ConvertMessages(request.Messages, _logger);
         var options = BuildOptions(request);
 
         _logger.LogDebug("MEAI ChatStreamAsync: {MessageCount} messages", messages.Count);
         var emittedStreamChunk = false;
         string? lastFinishReason = null;
+        var updateCount = 0;
+        var textEmits = 0;
+        var reasoningEmits = 0;
+        var toolCallEmits = 0;
 
         await foreach (var update in _client.GetStreamingResponseAsync(messages, options, ct))
         {
+            updateCount++;
             if (update.FinishReason != null)
                 lastFinishReason = update.FinishReason.Value.ToString();
 
@@ -100,6 +105,7 @@ public sealed class MEAILLMProvider : ILLMProvider
                         case TextContent textContent when !string.IsNullOrEmpty(textContent.Text):
                             emittedTextFromContents = true;
                             emittedStreamChunk = true;
+                            textEmits++;
                             yield return new LLMStreamChunk
                             {
                                 DeltaContent = textContent.Text,
@@ -108,6 +114,7 @@ public sealed class MEAILLMProvider : ILLMProvider
                         case TextReasoningContent reasoningContent when !string.IsNullOrEmpty(reasoningContent.Text):
                             emittedReasoningFromContents = true;
                             emittedStreamChunk = true;
+                            reasoningEmits++;
                             yield return new LLMStreamChunk
                             {
                                 DeltaReasoningContent = reasoningContent.Text,
@@ -115,6 +122,7 @@ public sealed class MEAILLMProvider : ILLMProvider
                             break;
                         case FunctionCallContent functionCall:
                             emittedStreamChunk = true;
+                            toolCallEmits++;
                             yield return new LLMStreamChunk
                             {
                                 DeltaToolCall = ConvertFunctionCallDelta(functionCall),
@@ -141,6 +149,7 @@ public sealed class MEAILLMProvider : ILLMProvider
             if (!emittedTextFromContents && !string.IsNullOrEmpty(update.Text))
             {
                 emittedStreamChunk = true;
+                textEmits++;
                 yield return new LLMStreamChunk
                 {
                     DeltaContent = update.Text,
@@ -171,6 +180,17 @@ public sealed class MEAILLMProvider : ILLMProvider
                 yield return fallbackChunk;
             yield break;
         }
+
+        // Stream-shape probe for the 2026-06-12 empty-reply incident: counts only, no content.
+        _logger.LogInformation(
+            "MEAI stream completed: provider={Provider} updates={Updates} textEmits={TextEmits} reasoningEmits={ReasoningEmits} toolCallEmits={ToolCallEmits} finish={Finish} messages={MessageCount}",
+            Name,
+            updateCount,
+            textEmits,
+            reasoningEmits,
+            toolCallEmits,
+            lastFinishReason ?? "(none)",
+            messages.Count);
 
         // The final chunk marks the end
         yield return new LLMStreamChunk { IsLast = true, FinishReason = lastFinishReason };
@@ -247,8 +267,10 @@ public sealed class MEAILLMProvider : ILLMProvider
     // ─── Conversion: Aevatar -> MEAI ───
 
     private static List<Microsoft.Extensions.AI.ChatMessage> ConvertMessages(
-        IEnumerable<Aevatar.AI.Abstractions.LLMProviders.ChatMessage> messages)
+        IEnumerable<Aevatar.AI.Abstractions.LLMProviders.ChatMessage> messages,
+        ILogger logger)
     {
+        messages = ChatMessageToolCallTranscript.WithoutInvalidToolCallPairs(messages);
         var result = new List<Microsoft.Extensions.AI.ChatMessage>();
 
         foreach (var msg in messages)
@@ -302,14 +324,20 @@ public sealed class MEAILLMProvider : ILLMProvider
                         {
                             args = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object?>>(tc.ArgumentsJson);
                         }
-                        catch { /* If parsing fails, do not pass arguments */ }
+                        catch (JsonException ex)
+                        {
+                            logger.LogWarning(
+                                ex,
+                                "Failed to parse MEAI tool call arguments for tool {ToolName}; arguments will be omitted.",
+                                tc.Name);
+                        }
                     }
 
                     meaiMsg.Contents.Add(new FunctionCallContent(tc.Id, tc.Name, args));
                 }
             }
 
-            AttachOpenAIRawRepresentationForReasoning(meaiMsg, msg);
+            AttachOpenAIRawRepresentationForReasoning(meaiMsg, msg, logger);
             result.Add(meaiMsg);
         }
 
@@ -318,7 +346,8 @@ public sealed class MEAILLMProvider : ILLMProvider
 
     private static void AttachOpenAIRawRepresentationForReasoning(
         Microsoft.Extensions.AI.ChatMessage meaiMessage,
-        Aevatar.AI.Abstractions.LLMProviders.ChatMessage sourceMessage)
+        Aevatar.AI.Abstractions.LLMProviders.ChatMessage sourceMessage,
+        ILogger logger)
     {
         if (sourceMessage.Role != "assistant" || string.IsNullOrEmpty(sourceMessage.ReasoningContent))
             return;
@@ -357,12 +386,11 @@ public sealed class MEAILLMProvider : ILLMProvider
 #pragma warning restore SCME0001
             meaiMessage.RawRepresentation = rawMessage;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Reasoning continuity is best-effort; on a SDK contract break we
-            // proceed without it rather than throwing. The source message's
-            // ReasoningContent stays in our own state and can be re-rendered
-            // through other paths if needed.
+            logger.LogWarning(
+                ex,
+                "Failed to attach OpenAI reasoning raw representation; reasoning replay will continue without SDK patch data.");
         }
     }
 

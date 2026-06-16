@@ -93,8 +93,8 @@ public sealed class StudioMemberEndpointsRouteBindingTests
             string scopeId, string memberId, string revisionId, CancellationToken ct = default) =>
             Task.FromException<StudioMemberBindingRevisionActionResponse>(new NotImplementedException());
 
-        public Task<StudioMemberDetailResponse> UpdateAsync(
+        public Task<StudioMemberCommandResponse> UpdateAsync(
             string scopeId, string memberId, UpdateStudioMemberRequest request, CancellationToken ct = default) =>
-            Task.FromException<StudioMemberDetailResponse>(new NotImplementedException());
+            Task.FromException<StudioMemberCommandResponse>(new NotImplementedException());
     }
 }

@@ -67,7 +67,7 @@ public sealed class ServiceImplementationAdaptersTests
     }
 
     [Fact]
-    public async Task StaticAdapter_ShouldTranslateLegacyActorTypeNameToAgentKind()
+    public async Task StaticAdapter_ShouldRejectLegacyActorTypeNameAsIdentity()
     {
         var adapter = new StaticServiceImplementationAdapter(CreateStaticAgentKindRegistry());
         var request = new PrepareServiceRevisionRequest
@@ -77,10 +77,10 @@ public sealed class ServiceImplementationAdaptersTests
                 agentKind: string.Empty),
         };
 
-        var artifact = await adapter.PrepareRevisionAsync(request);
+        var act = () => adapter.PrepareRevisionAsync(request);
 
-        artifact.DeploymentPlan.StaticPlan.AgentKind.Should().Be(GAgentServiceTestKit.TestStaticServiceAgentKind);
-        artifact.DeploymentPlan.StaticPlan.ActorTypeName.Should().Be(typeof(TestStaticServiceAgent).AssemblyQualifiedName);
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage($"Static actor_type_name '{typeof(TestStaticServiceAgent).AssemblyQualifiedName}' is deprecated and cannot be used for identity. Provide static agent_kind.");
     }
 
     [Fact]

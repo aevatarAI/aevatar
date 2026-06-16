@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Middleware;
 using FluentAssertions;
@@ -8,6 +9,100 @@ namespace Aevatar.AI.Core.Tests.Middleware;
 
 public class ToolApprovalMiddlewareTests
 {
+    [Fact]
+    public async Task ForAgentRuntime_NullApprovalHandler_DeniesAlwaysRequireTool()
+    {
+        var middlewares = ToolCallMiddlewareChainFactory.ForAgentRuntime([], null, null);
+        var ctx = NewContext("danger", "tc-factory-1");
+
+        var nextExecuted = false;
+        await InvokeChainAsync(middlewares, ctx, () =>
+        {
+            nextExecuted = true;
+            return Task.CompletedTask;
+        });
+
+        nextExecuted.Should().BeFalse();
+        ctx.Terminate.Should().BeTrue();
+        ctx.TerminationKind.Should().Be(ToolCallTerminationKind.ApprovalDenied);
+        ctx.TerminationKind.Should().NotBe(ToolCallTerminationKind.ApprovalPending);
+        ctx.PendingApproval.Should().BeNull();
+        ctx.Result.Should().Contain("approval-gated tools cannot run here");
+    }
+
+    [Fact]
+    public async Task ForAgentRuntime_NullApprovalHandler_AllowsNeverRequireTool()
+    {
+        var duplicateHandler = new ScriptedApprovalHandler(ToolApprovalResult.Denied("duplicate"));
+        var middlewares = ToolCallMiddlewareChainFactory.ForAgentRuntime(
+            [new ToolApprovalMiddleware(duplicateHandler)],
+            null,
+            null);
+        var ctx = new ToolCallContext
+        {
+            Tool = new FakeAgentTool("search", ToolApprovalMode.NeverRequire),
+            ToolName = "search",
+            ToolCallId = "tc-factory-2",
+            ArgumentsJson = "{}",
+        };
+
+        var nextExecuted = false;
+        await InvokeChainAsync(middlewares, ctx, () =>
+        {
+            nextExecuted = true;
+            return Task.CompletedTask;
+        });
+
+        nextExecuted.Should().BeTrue();
+        ctx.Terminate.Should().BeFalse();
+        duplicateHandler.Requests.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task ForAgentRuntime_NullApprovalHandler_DeniesAutoToolWhenRuntimeRequiresApprovalOrDestructive(
+        bool requiresApproval,
+        bool isDestructive)
+    {
+        var middlewares = ToolCallMiddlewareChainFactory.ForAgentRuntime([], null, null);
+        var ctx = new ToolCallContext
+        {
+            Tool = new FakeAgentTool("auto-danger", ToolApprovalMode.Auto)
+            {
+                RuntimeDecision = requiresApproval ? true : null,
+                IsDestructive = isDestructive,
+            },
+            ToolName = "auto-danger",
+            ToolCallId = "tc-factory-3",
+            ArgumentsJson = "{}",
+        };
+
+        var nextExecuted = false;
+        await InvokeChainAsync(middlewares, ctx, () =>
+        {
+            nextExecuted = true;
+            return Task.CompletedTask;
+        });
+
+        nextExecuted.Should().BeFalse();
+        ctx.Terminate.Should().BeTrue();
+        ctx.TerminationKind.Should().Be(ToolCallTerminationKind.ApprovalDenied);
+        ctx.TerminationKind.Should().NotBe(ToolCallTerminationKind.ApprovalPending);
+        ctx.PendingApproval.Should().BeNull();
+        ctx.Result.Should().Contain("approval-gated tools cannot run here");
+    }
+
+    [Fact]
+    public void Factory_DoesNotExposeForPort()
+    {
+        typeof(ToolCallMiddlewareChainFactory)
+            .GetMethods()
+            .Where(method => method.Name == "ForPort")
+            .Should()
+            .BeEmpty();
+    }
+
     [Fact]
     public async Task NeverRequireMode_BypassesApprovalAndExecutesNext()
     {
@@ -165,7 +260,17 @@ public class ToolApprovalMiddlewareTests
 
         nextExecuted.Should().BeFalse();
         ctx.Terminate.Should().BeTrue();
+        ctx.TerminationKind.Should().Be(ToolCallTerminationKind.ApprovalDenied);
+        ctx.TerminationReason.Should().Be("blocked");
         ctx.Result.Should().Contain("Tool 'danger' execution denied: blocked");
+        ctx.Receipt.Should().NotBeNull();
+        ctx.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Denied);
+        ctx.Receipt.ToolName.Should().Be("danger");
+        ctx.Receipt.CallId.Should().Be("tc-6");
+        ctx.Receipt.ApprovalMode.Should().Be(AgentToolReceiptApprovalMode.AlwaysRequire);
+        ctx.Receipt.ApprovalRequestId.Should().NotBeNullOrWhiteSpace();
+        ctx.Receipt.ErrorCode.Should().Be("approval_denied");
+        ctx.Receipt.ErrorMessage.Should().Be("blocked");
     }
 
     [Fact]
@@ -183,7 +288,13 @@ public class ToolApprovalMiddlewareTests
         await middleware.InvokeAsync(ctx, () => Task.CompletedTask);
 
         ctx.Terminate.Should().BeTrue();
+        ctx.TerminationKind.Should().Be(ToolCallTerminationKind.ApprovalTimedOut);
         ctx.Result.Should().Contain("approval timed out");
+        ctx.Receipt.Should().NotBeNull();
+        ctx.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        ctx.Receipt.ErrorCode.Should().Be("approval_timeout");
+        ctx.Receipt.ErrorMessage.Should().Be("Tool approval timed out.");
+        ctx.Receipt.ApprovalRequestId.Should().NotBeNullOrWhiteSpace();
     }
 
     [Fact]
@@ -207,16 +318,100 @@ public class ToolApprovalMiddlewareTests
 
         nextExecuted.Should().BeFalse();
         ctx.Terminate.Should().BeTrue();
+        ctx.TerminationKind.Should().Be(ToolCallTerminationKind.ApprovalPending);
+        ctx.TerminationReason.Should().Be("req-1");
         ctx.Result.Should().Contain("\"approval_required\":true");
         ctx.Result.Should().Contain("\"request_id\":\"");
+        ctx.Receipt.Should().NotBeNull();
+        ctx.Receipt!.Status.Should().Be(AgentToolReceiptStatus.ApprovalRequired);
+        ctx.Receipt.ToolName.Should().Be("danger");
+        ctx.Receipt.CallId.Should().Be("tc-8");
+        ctx.Receipt.ApprovalMode.Should().Be(AgentToolReceiptApprovalMode.AlwaysRequire);
+        ctx.Receipt.IsDestructive.Should().BeTrue();
+        ctx.Receipt.ApprovalRequestId.Should().NotBeNullOrWhiteSpace();
+        ctx.Receipt.ResultJson.Should().Be(ctx.Result);
         ctx.PendingApproval.Should().NotBeNull();
         ctx.PendingApproval!.ApprovalRequestId.Should().NotBeNullOrWhiteSpace();
+        ctx.Receipt.ApprovalRequestId.Should().Be(ctx.PendingApproval.ApprovalRequestId);
         ctx.PendingApproval.ToolCallId.Should().Be("tc-8");
         ctx.PendingApproval.ToolName.Should().Be("danger");
         ctx.PendingApproval.ArgumentsJson.Should().Be("{}");
         ctx.PendingApproval.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
         ctx.PendingApproval.IsReadOnly.Should().BeFalse();
         ctx.PendingApproval.IsDestructive.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task MatchingToolApprovalGrant_ShouldBypassApprovalAndExecuteNext()
+    {
+        var handler = new ScriptedApprovalHandler(ToolApprovalResult.Denied("should-not-run"));
+        var middleware = new ToolApprovalMiddleware(handler);
+        var ctx = NewContext("danger", "tc-grant-1");
+        ctx.ApprovalGrant = new ToolApprovalGrant(
+            ApprovalRequestId: "approval-1",
+            ToolName: "danger",
+            ToolCallId: "tc-grant-1");
+
+        var nextExecuted = false;
+        await middleware.InvokeAsync(ctx, () =>
+        {
+            nextExecuted = true;
+            return Task.CompletedTask;
+        });
+
+        nextExecuted.Should().BeTrue();
+        handler.Requests.Should().BeEmpty();
+        ctx.Terminate.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task MismatchedToolApprovalGrant_ShouldFailClosedWithoutCallingHandlerOrTool()
+    {
+        var handler = new ScriptedApprovalHandler(ToolApprovalResult.Approved());
+        var middleware = new ToolApprovalMiddleware(handler);
+        var ctx = NewContext("danger", "tc-grant-2");
+        ctx.ApprovalGrant = new ToolApprovalGrant(
+            ApprovalRequestId: "approval-1",
+            ToolName: "other_tool",
+            ToolCallId: "tc-grant-2");
+
+        var nextExecuted = false;
+        await middleware.InvokeAsync(ctx, () =>
+        {
+            nextExecuted = true;
+            return Task.CompletedTask;
+        });
+
+        nextExecuted.Should().BeFalse();
+        handler.Requests.Should().BeEmpty();
+        ctx.Terminate.Should().BeTrue();
+        ctx.TerminationKind.Should().Be(ToolCallTerminationKind.ApprovalDenied);
+        ctx.Result.Should().Contain("approval grant does not match");
+    }
+
+    [Fact]
+    public async Task IncompleteToolApprovalGrant_ShouldFailClosedWithoutCallingHandlerOrTool()
+    {
+        var handler = new ScriptedApprovalHandler(ToolApprovalResult.Approved());
+        var middleware = new ToolApprovalMiddleware(handler);
+        var ctx = NewContext("danger", "tc-grant-3");
+        ctx.ApprovalGrant = new ToolApprovalGrant(
+            ApprovalRequestId: " ",
+            ToolName: "danger",
+            ToolCallId: "tc-grant-3");
+
+        var nextExecuted = false;
+        await middleware.InvokeAsync(ctx, () =>
+        {
+            nextExecuted = true;
+            return Task.CompletedTask;
+        });
+
+        nextExecuted.Should().BeFalse();
+        handler.Requests.Should().BeEmpty();
+        ctx.Terminate.Should().BeTrue();
+        ctx.TerminationKind.Should().Be(ToolCallTerminationKind.ApprovalDenied);
+        ctx.Result.Should().Contain("approval grant does not match");
     }
 
     [Fact]
@@ -231,6 +426,8 @@ public class ToolApprovalMiddlewareTests
         await middleware.InvokeAsync(ctx, () => Task.CompletedTask);
 
         ctx.Terminate.Should().BeTrue();
+        ctx.TerminationKind.Should().Be(ToolCallTerminationKind.ApprovalDenied);
+        ctx.TerminationReason.Should().Contain("denied 3 times");
         ctx.Result.Should().Contain("has been denied 3 times");
         handler.Requests.Should().BeEmpty();
     }
@@ -276,6 +473,23 @@ public class ToolApprovalMiddlewareTests
         ToolCallId = callId,
         ArgumentsJson = "{}",
     };
+
+    private static Task InvokeChainAsync(
+        IReadOnlyList<IToolCallMiddleware> middlewares,
+        ToolCallContext context,
+        Func<Task> terminal)
+    {
+        var next = terminal;
+
+        for (var i = middlewares.Count - 1; i >= 0; i--)
+        {
+            var middleware = middlewares[i];
+            var currentNext = next;
+            next = () => middleware.InvokeAsync(context, currentNext);
+        }
+
+        return next();
+    }
 
     private sealed class ScriptedApprovalHandler(params ToolApprovalResult[] results) : IToolApprovalHandler
     {

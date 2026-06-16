@@ -1,4 +1,6 @@
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgentService.Abstractions;
@@ -10,15 +12,19 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Core.GAgents;
 
+[GAgent("gagent.service.revision-catalog")]
 public sealed class ServiceRevisionCatalogGAgent : GAgentBase<ServiceRevisionCatalogState>
 {
+    private readonly IActorDispatchPort _dispatchPort;
     private readonly IReadOnlyDictionary<ServiceImplementationKind, IServiceImplementationAdapter> _adapters;
     private readonly PreparedServiceRevisionArtifactAssembler _artifactAssembler;
 
     public ServiceRevisionCatalogGAgent(
+        IActorDispatchPort dispatchPort,
         IEnumerable<IServiceImplementationAdapter> adapters,
         PreparedServiceRevisionArtifactAssembler artifactAssembler)
     {
+        _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _artifactAssembler = artifactAssembler ?? throw new ArgumentNullException(nameof(artifactAssembler));
         _adapters = (adapters ?? throw new ArgumentNullException(nameof(adapters)))
             .ToDictionary(x => x.ImplementationKind, x => x);
@@ -41,6 +47,7 @@ public sealed class ServiceRevisionCatalogGAgent : GAgentBase<ServiceRevisionCat
             Spec = command.Spec.Clone(),
             CreatedAt = Timestamp.FromDateTime(DateTime.UtcNow),
         });
+        await DispatchInvocationRevisionObservationAsync(CancellationToken.None);
     }
 
     [EventHandler]
@@ -75,6 +82,7 @@ public sealed class ServiceRevisionCatalogGAgent : GAgentBase<ServiceRevisionCat
                 // Refactor (iter100/cluster-100): Old callers rehydrated this from a process-local artifact store. / New the committed prepared event is the artifact authority.
                 PreparedArtifact = assembled.Clone(),
             });
+            await DispatchInvocationRevisionObservationAsync(CancellationToken.None);
         }
         catch (Exception ex)
         {
@@ -85,6 +93,7 @@ public sealed class ServiceRevisionCatalogGAgent : GAgentBase<ServiceRevisionCat
                 FailureReason = ex.Message,
                 OccurredAt = Timestamp.FromDateTime(DateTime.UtcNow),
             });
+            await DispatchInvocationRevisionObservationAsync(CancellationToken.None);
             throw;
         }
     }
@@ -107,6 +116,7 @@ public sealed class ServiceRevisionCatalogGAgent : GAgentBase<ServiceRevisionCat
             RevisionId = command.RevisionId ?? string.Empty,
             PublishedAt = Timestamp.FromDateTime(DateTime.UtcNow),
         });
+        await DispatchInvocationRevisionObservationAsync(CancellationToken.None);
     }
 
     [EventHandler]
@@ -121,6 +131,7 @@ public sealed class ServiceRevisionCatalogGAgent : GAgentBase<ServiceRevisionCat
             RevisionId = command.RevisionId ?? string.Empty,
             RetiredAt = Timestamp.FromDateTime(DateTime.UtcNow),
         });
+        await DispatchInvocationRevisionObservationAsync(CancellationToken.None);
     }
 
     protected override ServiceRevisionCatalogState TransitionState(ServiceRevisionCatalogState current, IMessage evt) =>
@@ -253,4 +264,35 @@ public sealed class ServiceRevisionCatalogGAgent : GAgentBase<ServiceRevisionCat
         var serviceKey = identity == null ? "unbound" : ServiceKeys.Build(identity);
         return $"{serviceKey}:{revisionId ?? "unknown"}:{suffix}";
     }
+
+    private Task DispatchInvocationRevisionObservationAsync(CancellationToken ct)
+    {
+        var identity = State.Identity;
+        if (identity == null || string.IsNullOrWhiteSpace(identity.ServiceId))
+            return Task.CompletedTask;
+
+        var actorId = ServiceActorIds.InvocationCatalog(identity);
+        return _dispatchPort.DispatchAsync(
+            actorId,
+            CreateEnvelope(
+                actorId,
+                new ObserveServiceInvocationRevisionsCommand
+                {
+                    Identity = identity.Clone(),
+                    Revisions = { State.Revisions.ToDictionary(x => x.Key, x => x.Value.Clone(), StringComparer.Ordinal) },
+                    SourceRevisionVersion = State.LastAppliedEventVersion,
+                    ObservedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+                }),
+            ct);
+    }
+
+    private static EventEnvelope CreateEnvelope(string actorId, IMessage payload) =>
+        new()
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(payload),
+            Route = EnvelopeRouteSemantics.CreateDirect("gagent-service.revisions", actorId),
+            Propagation = new EnvelopePropagation(),
+        };
 }

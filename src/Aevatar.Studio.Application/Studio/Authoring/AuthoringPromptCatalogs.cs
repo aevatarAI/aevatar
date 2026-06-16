@@ -32,7 +32,7 @@ public sealed class WorkflowAuthoringPromptCatalog
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "Failed to load workflow authoring skill from {Path}", candidate);
+                _logger.LogWarning(ex, "Failed to load workflow authoring skill from {Path}", candidate);
             }
         }
 
@@ -57,7 +57,15 @@ public sealed class WorkflowAuthoringPromptCatalog
             {
                 fullPath = Path.GetFullPath(Path.Combine(root, SkillRelativePath));
             }
-            catch
+            catch (ArgumentException)
+            {
+                continue;
+            }
+            catch (NotSupportedException)
+            {
+                continue;
+            }
+            catch (PathTooLongException)
             {
                 continue;
             }
@@ -136,7 +144,7 @@ public sealed class ScriptAuthoringPromptCatalog
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "Failed to build script generation prompt.");
+            _logger.LogWarning(ex, "Failed to build script generation prompt.");
             return BuiltInTemplate;
         }
     }

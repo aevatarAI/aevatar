@@ -1,5 +1,9 @@
-using Aevatar.AI.Abstractions.Agents;
+using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Core;
+using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Abstractions.Voice;
+using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.Core.Voice;
 using Aevatar.AI.Core.LLMProviders;
 using Aevatar.AI.LLMProviders.MEAI;
@@ -12,8 +16,10 @@ using Aevatar.AI.ToolProviders.ServiceInvoke;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.AI.ToolProviders.Web;
 using Aevatar.AI.ToolProviders.Binding;
+using Aevatar.AI.ToolProviders.Ornn.Publishing;
 using Aevatar.AI.ToolProviders.Workflow;
 using Aevatar.AI.ToolProviders.Workflow.Ports;
+using Aevatar.Bootstrap.Extensions.AI.OrnnPublishing;
 using Aevatar.AI.Infrastructure.Local.Adapters;
 using Aevatar.Bootstrap.Connectors;
 using Aevatar.Bootstrap.Extensions.AI.Connectors;
@@ -28,6 +34,7 @@ using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Foundation.VoicePresence;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.Abstractions.Sessions;
@@ -94,10 +101,17 @@ public static class ServiceCollectionExtensions
         var options = new AevatarAIFeatureOptions();
         configure?.Invoke(options);
 
-        services.TryAddSingleton<IRoleAgentTypeResolver, WorkflowRoleGAgentTypeResolver>();
+        services.AddAevatarAgentKindRegistry(builder => builder
+            .ScanAssemblies(typeof(RoleGAgent).Assembly)
+            .Register<WorkflowRoleGAgent>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowToolSource, AgentWorkflowToolSourceAdapter>());
+        // No container-level IToolApprovalHandler: a yielding handler is only valid on
+        // actors that implement the pending-approval continuation (RoleGAgent wires its
+        // own). Surfaces without that capability fall back to MissingApprovalHandler and
+        // fail closed instead of stranding a dead-letter approval (#2004).
         services.TryAddSingleton<IVoiceToolInvoker, AgentToolVoiceInvoker>();
         services.TryAddSingleton<IVoiceToolCatalog, AgentToolVoiceCatalog>();
+        services.TryAddSingleton<IVoicePresenceCapabilityCommandPort, VoicePresenceCapabilityCommandPort>();
         services.TryAddSingleton<IWorkflowYamlValidator, WorkflowYamlValidatorImpl>();
         services.TryAddSingleton<IWorkflowDefinitionCommandAdapter>(sp =>
             new LocalWorkflowDefinitionCommandAdapter(
@@ -151,10 +165,20 @@ public static class ServiceCollectionExtensions
         if (registrations.Count == 0)
             return;
 
+        // Refactor (cluster-voice-nyxid-ephemeral-broker): when the OpenAI realtime credential is
+        // brokered through NyxID, register the resolver so the provider mints a per-session ephemeral
+        // instead of reading a static OPENAI_API_KEY. Requires NyxID tools (INyxIdApiClientFactory) wired.
+        var nyxIdRealtimeCredentialOptions = BuildNyxIdRealtimeCredentialOptions(configuration);
+        if (nyxIdRealtimeCredentialOptions.Enabled)
+        {
+            services.TryAddSingleton(nyxIdRealtimeCredentialOptions);
+            services.TryAddSingleton<IRealtimeProviderCredentialResolver, NyxIdRealtimeProviderCredentialResolver>();
+        }
+
         services.TryAddSingleton<IVoicePresenceCapabilityQueryPort, VoicePresenceCapabilityQueryPort>();
         services.TryAddSingleton<IVoicePresenceSessionLeasePort, VoicePresenceSessionLeasePort>();
-        services.TryAddSingleton<IVoicePresenceTransportAttachmentPort, NoOpVoicePresenceTransportAttachmentPort>();
-        services.TryAddSingleton<IVoiceVolatileMediaStreamPort, FailClosedVoiceVolatileMediaStreamPort>();
+        services.TryAddSingleton<IVoicePresenceTransportAttachmentPort, VoicePresenceTransportAttachmentPort>();
+        services.TryAddSingleton<IVoiceVolatileMediaStreamPort, VoiceVolatileMediaStreamPort>();
         services.TryAddSingleton<IRealtimeSession<VoiceRealtimeSessionRequest, VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeFrame, VoiceRealtimeSessionCompletion>, ActorOwnedVoiceRealtimeSession>();
         services.AddVoicePresenceCapabilityProjection();
         services.AddVoicePresenceCapabilityProjectionStore(configuration);
@@ -206,12 +230,13 @@ public static class ServiceCollectionExtensions
         var voiceOptions = options.VoicePresence;
         var openAIProviderConfig = BuildOpenAIVoiceProviderConfig(configuration, options);
         var miniCpmProviderConfig = BuildMiniCpmVoiceProviderConfig(configuration, options);
+        var nyxIdRealtimeBrokerEnabled = IsNyxIdRealtimeBrokerEnabled(configuration);
         var resolvedDefaultProvider = ResolveVoicePresenceDefaultProvider(
             voiceOptions.DefaultProvider,
             openAIProviderConfig,
             miniCpmProviderConfig);
 
-        if (IsOpenAIVoiceConfigured(openAIProviderConfig))
+        if (IsOpenAIVoiceConfigured(openAIProviderConfig) || nyxIdRealtimeBrokerEnabled)
         {
             registrations.Add(new VoicePresenceModuleRegistration(
                 BuildVoicePresenceModuleNames(
@@ -221,13 +246,26 @@ public static class ServiceCollectionExtensions
                 (serviceProvider, resolvedModuleName) => new VoicePresenceModule(
                     new OpenAIRealtimeProvider(
                         voiceOptions.OpenAIProviderOptions,
-                        serviceProvider.GetService<ILogger<OpenAIRealtimeProvider>>()),
+                        serviceProvider.GetService<ILogger<OpenAIRealtimeProvider>>(),
+                        serviceProvider.GetService<IRealtimeProviderCredentialResolver>()),
                     openAIProviderConfig.Clone(),
                     BuildOpenAIVoiceSessionConfig(configuration, options),
                     CloneVoicePresenceModuleOptions(voiceOptions.Module, resolvedModuleName),
                     serviceProvider.GetService<IVoiceToolInvoker>(),
                     serviceProvider.GetService<IVoiceToolCatalog>(),
                     serviceProvider.GetService<ILogger<VoicePresenceModule>>()),
+                (serviceProvider, handle, eventSink, audioSink, ct) => ConnectVoiceProviderSessionAsync(
+                    handle,
+                    new OpenAIRealtimeProvider(
+                        voiceOptions.OpenAIProviderOptions,
+                        serviceProvider.GetService<ILogger<OpenAIRealtimeProvider>>(),
+                        serviceProvider.GetService<IRealtimeProviderCredentialResolver>()),
+                    openAIProviderConfig.Clone(),
+                    BuildOpenAIVoiceSessionConfig(configuration, options),
+                    serviceProvider.GetService<IVoiceToolCatalog>(),
+                    eventSink,
+                    audioSink,
+                    ct),
                 BuildOpenAIVoiceSessionConfig(configuration, options).SampleRateHz));
         }
 
@@ -248,10 +286,84 @@ public static class ServiceCollectionExtensions
                     serviceProvider.GetService<IVoiceToolInvoker>(),
                     serviceProvider.GetService<IVoiceToolCatalog>(),
                     serviceProvider.GetService<ILogger<VoicePresenceModule>>()),
+                (serviceProvider, handle, eventSink, audioSink, ct) => ConnectVoiceProviderSessionAsync(
+                    handle,
+                    new MiniCPMRealtimeProvider(
+                        voiceOptions.MiniCPMProviderOptions,
+                        serviceProvider.GetService<ILogger<MiniCPMRealtimeProvider>>()),
+                    miniCpmProviderConfig.Clone(),
+                    BuildMiniCpmVoiceSessionConfig(configuration, options),
+                    serviceProvider.GetService<IVoiceToolCatalog>(),
+                    eventSink,
+                    audioSink,
+                    ct),
                 BuildMiniCpmVoiceSessionConfig(configuration, options).SampleRateHz));
         }
 
         return registrations;
+    }
+
+    private static async Task<RealtimeVoiceProviderSession> ConnectVoiceProviderSessionAsync(
+        VoicePresenceSessionLeaseHandle handle,
+        IRealtimeVoiceProvider provider,
+        VoiceProviderConfig providerConfig,
+        VoiceSessionConfig sessionConfig,
+        IVoiceToolCatalog? toolCatalog,
+        Func<VoiceProviderSessionKey, VoiceProviderEvent, CancellationToken, Task> eventSink,
+        Func<VoiceProviderSessionKey, VoiceProviderAudioFrame, CancellationToken, Task> audioSink,
+        CancellationToken ct)
+    {
+        var providerSession = await provider.ConnectAsync(
+            new VoiceProviderSessionKey(
+                handle.SessionId,
+                handle.OwnerId,
+                handle.ActiveTransportLeaseId ?? string.Empty,
+                0,
+                Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(handle.ExpiresAtUtc.ToUniversalTime()),
+                handle.ActorId,
+                handle.ModuleName),
+            providerConfig,
+            eventSink,
+            audioSink,
+            ct);
+
+        var effectiveSession = await BuildEffectiveVoiceSessionConfigAsync(sessionConfig, toolCatalog, ct);
+        await providerSession.UpdateSessionAsync(effectiveSession, ct);
+        return providerSession;
+    }
+
+    private static async Task<VoiceSessionConfig> BuildEffectiveVoiceSessionConfigAsync(
+        VoiceSessionConfig sessionConfig,
+        IVoiceToolCatalog? toolCatalog,
+        CancellationToken ct)
+    {
+        var effectiveSession = sessionConfig.Clone();
+        if (toolCatalog == null)
+            return effectiveSession;
+
+        var knownNames = new HashSet<string>(
+            effectiveSession.ToolDefinitions
+                .Select(static definition => definition.Name)
+                .Where(static name => !string.IsNullOrWhiteSpace(name)),
+            StringComparer.OrdinalIgnoreCase);
+
+        foreach (var discoveredTool in await toolCatalog.DiscoverAsync(ct))
+        {
+            var toolName = discoveredTool.Name?.Trim();
+            if (string.IsNullOrWhiteSpace(toolName) || !knownNames.Add(toolName))
+                continue;
+
+            effectiveSession.ToolDefinitions.Add(new VoiceToolDefinition
+            {
+                Name = toolName,
+                Description = discoveredTool.Description ?? string.Empty,
+                ParametersSchema = string.IsNullOrWhiteSpace(discoveredTool.ParametersSchema)
+                    ? "{}"
+                    : discoveredTool.ParametersSchema,
+            });
+        }
+
+        return effectiveSession;
     }
 
     private static string? ResolveVoicePresenceDefaultProvider(
@@ -295,6 +407,28 @@ public static class ServiceCollectionExtensions
             names.Add(providerName == "openai" ? "voice_presence_openai" : "voice_presence_minicpm");
 
         return names.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static bool IsNyxIdRealtimeBrokerEnabled(IConfiguration configuration) =>
+        !string.IsNullOrWhiteSpace(configuration["Aevatar:VoicePresence:OpenAI:Nyxid:ServiceSlug"]);
+
+    private static NyxIdRealtimeProviderCredentialOptions BuildNyxIdRealtimeCredentialOptions(
+        IConfiguration configuration)
+    {
+        var options = new NyxIdRealtimeProviderCredentialOptions
+        {
+            ServiceSlug = configuration["Aevatar:VoicePresence:OpenAI:Nyxid:ServiceSlug"]?.Trim() ?? string.Empty,
+        };
+
+        var mintPath = configuration["Aevatar:VoicePresence:OpenAI:Nyxid:MintPath"];
+        if (!string.IsNullOrWhiteSpace(mintPath))
+            options.MintPath = mintPath.Trim();
+
+        var model = configuration["Aevatar:VoicePresence:OpenAI:Nyxid:Model"];
+        if (!string.IsNullOrWhiteSpace(model))
+            options.Model = model.Trim();
+
+        return options;
     }
 
     private static VoiceProviderConfig BuildOpenAIVoiceProviderConfig(
@@ -378,6 +512,8 @@ public static class ServiceCollectionExtensions
             ToolExecutionTimeout = options.ToolExecutionTimeout,
             PendingInjectionCapacity = options.PendingInjectionCapacity,
             TimeProvider = options.TimeProvider,
+            DirectExternalEventTypeUrls = options.DirectExternalEventTypeUrls,
+            DirectExternalEventNoActiveSessionPolicy = options.DirectExternalEventNoActiveSessionPolicy,
         };
 
     private static bool IsOpenAIVoiceConfigured(VoiceProviderConfig config) =>
@@ -435,8 +571,9 @@ public static class ServiceCollectionExtensions
             {
                 var secretsStoreAccessor = CreateSecretsStoreAccessor(options, sp);
                 var logger = sp.GetService<ILogger<ReloadableLLMProviderFactory>>();
+                var loggerFactory = sp.GetService<ILoggerFactory>();
                 return new ReloadableLLMProviderFactory(
-                    () => BuildLlmProviderFactory(configuration, options, secretsStoreAccessor),
+                    () => BuildLlmProviderFactory(configuration, options, secretsStoreAccessor, loggerFactory),
                     versionProvider,
                     logger);
             });
@@ -446,14 +583,15 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ILLMProviderFactory>(sp =>
         {
             var secretsStoreAccessor = CreateSecretsStoreAccessor(options, sp);
-            return BuildLlmProviderFactory(configuration, options, secretsStoreAccessor);
+            return BuildLlmProviderFactory(configuration, options, secretsStoreAccessor, sp.GetService<ILoggerFactory>());
         });
     }
 
     private static ILLMProviderFactory BuildLlmProviderFactory(
         IConfiguration configuration,
         AevatarAIFeatureOptions options,
-        Func<IAevatarSecretsStore> secretsStoreAccessor)
+        Func<IAevatarSecretsStore> secretsStoreAccessor,
+        ILoggerFactory? loggerFactory = null)
     {
         var secrets = secretsStoreAccessor();
         var configuredProviders = ReadConfiguredProviders(secrets, configuration, options);
@@ -493,16 +631,16 @@ public static class ServiceCollectionExtensions
         }
 
         if (nyxIdProviders.Count == 0)
-            return BuildPrimaryFactory(configuredProviders, defaultName, options);
+            return BuildPrimaryFactory(configuredProviders, defaultName, options, loggerFactory);
 
         var standardProviders = configuredProviders
             .Where(provider => !IsNyxIdProviderType(provider.ProviderType))
             .ToList();
-        var nyxIdFactory = BuildNyxIdFactory(nyxIdProviders, defaultName);
+        var nyxIdFactory = BuildNyxIdFactory(nyxIdProviders, defaultName, loggerFactory);
         if (standardProviders.Count == 0)
             return nyxIdFactory;
 
-        var primaryFactory = BuildPrimaryFactory(standardProviders, defaultName, options);
+        var primaryFactory = BuildPrimaryFactory(standardProviders, defaultName, options, loggerFactory);
         var extraProviders = nyxIdFactory
             .GetAvailableProviders()
             .Select(nyxIdFactory.GetProvider)
@@ -513,15 +651,16 @@ public static class ServiceCollectionExtensions
     private static ILLMProviderFactory BuildPrimaryFactory(
         IReadOnlyList<ConfiguredProvider> configuredProviders,
         string defaultName,
-        AevatarAIFeatureOptions options)
+        AevatarAIFeatureOptions options,
+        ILoggerFactory? loggerFactory = null)
     {
         var primaryDefaultName = ResolveDefaultProviderName(configuredProviders, defaultName);
-        var meaiFactory = BuildMeaiFactory(configuredProviders, primaryDefaultName);
+        var meaiFactory = BuildMeaiFactory(configuredProviders, primaryDefaultName, loggerFactory);
         if (!options.EnableMEAIToTornadoFailover)
             return meaiFactory;
 
         var tornadoDefaultName = ResolveTornadoDefaultProviderName(configuredProviders, primaryDefaultName, options);
-        var tornadoFactory = BuildTornadoFactory(configuredProviders, tornadoDefaultName);
+        var tornadoFactory = BuildTornadoFactory(configuredProviders, tornadoDefaultName, loggerFactory);
         return new FailoverLLMProviderFactory(
             meaiFactory,
             tornadoFactory,
@@ -568,16 +707,19 @@ public static class ServiceCollectionExtensions
 
     private static MEAILLMProviderFactory BuildMeaiFactory(
         IEnumerable<ConfiguredProvider> configuredProviders,
-        string defaultName)
+        string defaultName,
+        ILoggerFactory? loggerFactory = null)
     {
         var factory = new MEAILLMProviderFactory();
+        var providerLogger = loggerFactory?.CreateLogger<MEAILLMProvider>();
         foreach (var provider in configuredProviders)
         {
             factory.RegisterOpenAI(
                 provider.Name,
                 provider.Model,
                 provider.ApiKey,
-                string.IsNullOrWhiteSpace(provider.Endpoint) ? null : provider.Endpoint);
+                string.IsNullOrWhiteSpace(provider.Endpoint) ? null : provider.Endpoint,
+                providerLogger);
         }
 
         factory.SetDefault(defaultName);
@@ -586,16 +728,19 @@ public static class ServiceCollectionExtensions
 
     private static TornadoLLMProviderFactory BuildTornadoFactory(
         IEnumerable<ConfiguredProvider> configuredProviders,
-        string defaultName)
+        string defaultName,
+        ILoggerFactory? loggerFactory = null)
     {
         var factory = new TornadoLLMProviderFactory();
+        var providerLogger = loggerFactory?.CreateLogger<TornadoLLMProvider>();
         foreach (var provider in configuredProviders)
         {
             factory.RegisterOpenAICompatible(
                 provider.Name,
                 provider.ApiKey,
                 provider.Model,
-                string.IsNullOrWhiteSpace(provider.Endpoint) ? null : provider.Endpoint);
+                string.IsNullOrWhiteSpace(provider.Endpoint) ? null : provider.Endpoint,
+                providerLogger);
         }
 
         factory.SetDefault(defaultName);
@@ -604,9 +749,15 @@ public static class ServiceCollectionExtensions
 
     private static NyxIdLLMProviderFactory BuildNyxIdFactory(
         IEnumerable<ConfiguredProvider> configuredProviders,
-        string defaultName)
+        string defaultName,
+        ILoggerFactory? loggerFactory = null)
     {
         var factory = new NyxIdLLMProviderFactory();
+        // Without an explicit logger the provider chain (NyxIdLLMProvider and the
+        // MEAILLMProvider it delegates to) falls back to NullLogger, which silences
+        // upstream LLM error translations and the no-chunks streaming fallback in
+        // production. Always wire the host logger when one is available.
+        var providerLogger = loggerFactory?.CreateLogger<NyxIdLLMProvider>();
         foreach (var provider in configuredProviders)
         {
             if (string.IsNullOrWhiteSpace(provider.Endpoint))
@@ -622,7 +773,8 @@ public static class ServiceCollectionExtensions
                 provider.Endpoint,
                 // NyxID gateway token comes exclusively from per-request metadata
                 // (the caller's Bearer token). No local secrets fallback.
-                static () => null);
+                static () => null,
+                providerLogger);
         }
 
         factory.SetDefault(ResolveDefaultProviderName(configuredProviders.ToList(), defaultName));
@@ -952,6 +1104,8 @@ public static class ServiceCollectionExtensions
             if (!string.IsNullOrWhiteSpace(options.OrnnNyxIdSlug))
                 o.NyxIdSlug = options.OrnnNyxIdSlug;
         });
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IOrnnSkillPublishAssetValidator, WorkflowOrnnSkillPublishAssetValidator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IOrnnSkillPublishAssetValidator, ScriptOrnnSkillPublishAssetValidator>());
     }
 
     private static void RegisterWebTools(IServiceCollection services, AevatarAIFeatureOptions options)

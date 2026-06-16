@@ -160,7 +160,7 @@ public sealed class NyxIdSshExecTool : IAgentTool
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(
+            _logger.LogWarning(
                 ex, "[ssh_exec] direct /keys/{Service} lookup failed; falling back to list", serviceIdOrSlug);
         }
 
@@ -209,7 +209,7 @@ public sealed class NyxIdSshExecTool : IAgentTool
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "[ssh_exec] /keys list lookup failed for {Service}", serviceIdOrSlug);
+            _logger.LogWarning(ex, "[ssh_exec] /keys list lookup failed for {Service}", serviceIdOrSlug);
         }
 
         // Caller passed a raw catalog id directly (the CLI also falls through this way).

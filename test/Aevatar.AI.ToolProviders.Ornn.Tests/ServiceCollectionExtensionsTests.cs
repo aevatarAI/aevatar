@@ -8,6 +8,40 @@ namespace Aevatar.AI.ToolProviders.Ornn.Tests;
 public sealed class ServiceCollectionExtensionsTests
 {
     [Fact]
+    public void AddOrnnSkills_WithoutNyxIdTools_ShouldBuildPublishGraphWithFullDiValidation()
+    {
+        var services = new ServiceCollection();
+
+        services.AddOrnnSkills();
+
+        using var provider = services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateOnBuild = true,
+            ValidateScopes = true
+        });
+
+        provider.GetRequiredService<OrnnAgentToolSource>().Should().NotBeNull();
+    }
+
+    [Fact]
+    public void AddOrnnSkills_WhenNyxIdToolsRegisteredLater_ShouldNotShadowConfiguredNyxIdOptions()
+    {
+        var services = new ServiceCollection();
+
+        services.AddOrnnSkills();
+        services.AddNyxIdTools(options => options.BaseUrl = "https://nyx.example");
+
+        using var provider = services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateOnBuild = true,
+            ValidateScopes = true
+        });
+
+        provider.GetRequiredService<NyxIdToolOptions>().BaseUrl.Should().Be("https://nyx.example");
+        provider.GetRequiredService<OrnnAgentToolSource>().Should().NotBeNull();
+    }
+
+    [Fact]
     public async Task AddOrnnSkills_WhenCalledTwice_ShouldRemainIdempotentAndReuseConcreteToolSource()
     {
         var services = new ServiceCollection();

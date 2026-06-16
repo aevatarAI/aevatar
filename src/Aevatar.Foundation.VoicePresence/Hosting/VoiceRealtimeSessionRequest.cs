@@ -1,3 +1,4 @@
+using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.Abstractions.Sessions;
 
 namespace Aevatar.Foundation.VoicePresence.Hosting;
@@ -5,7 +6,8 @@ namespace Aevatar.Foundation.VoicePresence.Hosting;
 public sealed record VoiceRealtimeSessionRequest(
     string ActorId,
     string? ModuleName = null,
-    VoiceRealtimeSessionPurpose Purpose = VoiceRealtimeSessionPurpose.Attach);
+    VoiceRealtimeSessionPurpose Purpose = VoiceRealtimeSessionPurpose.Attach,
+    VoiceSessionOverrides? SessionOverrides = null);
 
 public enum VoiceRealtimeSessionPurpose
 {

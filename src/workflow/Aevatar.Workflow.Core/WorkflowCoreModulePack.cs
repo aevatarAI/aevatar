@@ -14,7 +14,7 @@ public sealed class WorkflowCoreModulePack : IWorkflowModulePack
         WorkflowModuleRegistration.Create<CheckpointModule>("checkpoint"),
         WorkflowModuleRegistration.Create<AssignModule>("assign"),
         WorkflowModuleRegistration.Create<ParallelFanOutModule>("parallel_fanout", "parallel", "fan_out"),
-        WorkflowModuleRegistration.Create<VoteConsensusModule>("vote_consensus", "vote"),
+        WorkflowModuleRegistration.Create<VoteAgreementModule>("vote", "vote_consensus"),
         WorkflowModuleRegistration.Create<ForEachModule>("foreach", "for_each"),
         WorkflowModuleRegistration.Create<RaceModule>("race", "select"),
         WorkflowModuleRegistration.Create<MapReduceModule>("map_reduce", "mapreduce"),
@@ -29,6 +29,7 @@ public sealed class WorkflowCoreModulePack : IWorkflowModulePack
         WorkflowModuleRegistration.Create<ReflectModule>("reflect"),
         WorkflowModuleRegistration.Create<DelayModule>("delay", "sleep"),
         WorkflowModuleRegistration.Create<EmitModule>("emit", "publish"),
+        WorkflowModuleRegistration.Create<NotifyModule>("notify"),
         WorkflowModuleRegistration.Create<ActorSendModule>("actor_send"),
         WorkflowModuleRegistration.Create<CacheModule>("cache"),
         WorkflowModuleRegistration.Create<HumanApprovalModule>("human_approval"),
@@ -36,6 +37,7 @@ public sealed class WorkflowCoreModulePack : IWorkflowModulePack
         WorkflowModuleRegistration.Create<SecureInputModule>("secure_input", "secret_input"),
         WorkflowModuleRegistration.Create<WorkflowYamlValidateModule>("workflow_yaml_validate"),
         WorkflowModuleRegistration.Create<DynamicWorkflowModule>("dynamic_workflow"),
+        WorkflowModuleRegistration.Create<LeaseModule>("lease", "mutex"),
     ];
 
     private static readonly IReadOnlyList<IWorkflowModuleDependencyExpander> DependencyExpanderRegistrations =

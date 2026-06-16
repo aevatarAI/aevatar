@@ -93,7 +93,7 @@ describe("scopeConsole", () => {
 
   it("creates the shared NyxID binding request shape", () => {
     expect(createNyxIdChatBindingInput("scope-a")).toEqual({
-      actorTypeName: "Aevatar.GAgents.NyxidChat.NyxIdChatGAgent",
+      agentKind: "nyxid.chat",
       displayName: "NyxID Chat",
       endpoints: [
         {

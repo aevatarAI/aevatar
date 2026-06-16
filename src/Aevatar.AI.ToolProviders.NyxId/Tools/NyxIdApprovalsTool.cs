@@ -15,7 +15,7 @@ public sealed class NyxIdApprovalsTool : IAgentTool
 
     public string Description =>
         "Manage approval requests for proxied service calls. " +
-        "Actions: list, show, approve, deny, configs, grants, revoke_grant, enable, disable, set_config.";
+        "Actions: list, show, approve, reject, deny, configs, grants, revoke_grant, enable, disable, set_config.";
 
     public string ParametersSchema => """
         {
@@ -23,7 +23,7 @@ public sealed class NyxIdApprovalsTool : IAgentTool
           "properties": {
             "action": {
               "type": "string",
-              "enum": ["list", "show", "approve", "deny", "configs", "grants", "revoke_grant", "enable", "disable", "set_config"],
+              "enum": ["list", "show", "approve", "reject", "deny", "configs", "grants", "revoke_grant", "enable", "disable", "set_config"],
               "description": "Action to perform (default: list)"
             },
             "id": {
@@ -58,15 +58,15 @@ public sealed class NyxIdApprovalsTool : IAgentTool
             "show" when !string.IsNullOrWhiteSpace(id) =>
                 await _client.GetApprovalAsync(token, id, ct),
             "approve" when !string.IsNullOrWhiteSpace(id) =>
-                await _client.DecideApprovalAsync(token, id, """{"decision":"approve"}""", ct),
-            "deny" when !string.IsNullOrWhiteSpace(id) =>
-                await _client.DecideApprovalAsync(token, id, """{"decision":"deny"}""", ct),
+                await _client.DecideApprovalAsync(token, id, true, ct),
+            "reject" or "deny" when !string.IsNullOrWhiteSpace(id) =>
+                await _client.DecideApprovalAsync(token, id, false, ct),
             "revoke_grant" when !string.IsNullOrWhiteSpace(id) =>
                 await _client.RevokeApprovalGrantAsync(token, id, ct),
             "set_config" when !string.IsNullOrWhiteSpace(id) =>
                 await SetConfigAsync(token, id, args, ct),
 
-            "show" or "approve" or "deny" or "revoke_grant" or "set_config" =>
+            "show" or "approve" or "reject" or "deny" or "revoke_grant" or "set_config" =>
                 $"{{\"error\":\"'id' is required for {action}\"}}",
 
             "grants" => await _client.ListApprovalGrantsAsync(token, ct),

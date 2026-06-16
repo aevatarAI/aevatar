@@ -508,11 +508,11 @@ jest.mock("@/shared/api/runtimeGAgentApi", () => ({
   runtimeGAgentApi: {
     listActors: jest.fn(async () => [
       {
-        gAgentType: "IntakeAgent",
+        agentKind: "IntakeAgent",
         actorIds: ["actor-intake"],
       },
       {
-        gAgentType: "RiskReviewAgent",
+        agentKind: "RiskReviewAgent",
         actorIds: ["actor-risk"],
       },
     ]),
@@ -871,12 +871,10 @@ jest.mock("@/shared/studio/api", () => ({
       memberId: string;
       teamId: string | null;
     }) => ({
-      summary: {
-        ...mockCreateTeamMembersCatalog().members[0],
-        teamId: null,
-      },
-      implementationRef: null,
-      lastBinding: null,
+      ackedAt: "2026-04-27T08:11:00Z",
+      memberId: _input.memberId,
+      scopeId: _input.scopeId,
+      status: "accepted",
     })),
     archiveTeam: jest.fn(async () => ({
       ...mockCreateTeamSummary(),
@@ -1006,12 +1004,10 @@ describe("TeamDetailPage", () => {
     (studioApi.updateMemberTeamAssignment as jest.Mock).mockReset();
     (studioApi.updateMemberTeamAssignment as jest.Mock).mockImplementation(
       async (_input: { scopeId: string; memberId: string; teamId: string | null }) => ({
-        summary: {
-          ...mockCreateTeamMembersCatalog().members[0],
-          teamId: null,
-        },
-        implementationRef: null,
-        lastBinding: null,
+        ackedAt: "2026-04-27T08:11:00Z",
+        memberId: _input.memberId,
+        scopeId: _input.scopeId,
+        status: "accepted",
       }),
     );
     (studioApi.archiveTeam as jest.Mock).mockReset();

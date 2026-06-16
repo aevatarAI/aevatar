@@ -48,4 +48,4 @@ Phase 1 only establishes the foundation-layer contracts and the local module/sta
 - `bash tools/ci/test_stability_guards.sh`
 - `bash tools/ci/solution_split_guards.sh`
 
-`bash tools/ci/solution_split_test_guards.sh` currently fails in existing test `Aevatar.Hosting.Tests.MainnetHealthEndpointsTests.MainnetHost_ShouldExposeHealthEndpoints_AndDocumentThemInOpenApi` because the test environment cannot connect to Redis. That failure is outside the phase-1 VoicePresence change set.
+`bash tools/ci/solution_split_test_guards.sh` currently fails in existing test `Aevatar.Capabilities.Tests.MainnetHealthEndpointsTests.MainnetHost_ShouldExposeHealthEndpoints_AndDocumentThemInOpenApi` because the test environment cannot connect to Redis. That failure is outside the phase-1 VoicePresence change set.

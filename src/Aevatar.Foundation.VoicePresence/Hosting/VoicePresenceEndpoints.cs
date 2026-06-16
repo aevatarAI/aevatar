@@ -59,10 +59,32 @@ public static class VoicePresenceEndpoints
             var transport = new WebSocketVoiceTransport(ws);
             var mediaPort = resolveMediaPort(ctx);
             var attached = false;
+            var detachHandle = accepted.LeaseHandle;
+            IAsyncDisposable? realtimeSubscription = null;
 
             try
             {
-                await mediaPort.AttachAsync(accepted.LeaseHandle, transport, ctx.RequestAborted);
+                realtimeSubscription = await VoiceRealtimeTransportControlBridge.SubscribeAsync(
+                    ctx.RequestServices,
+                    accepted,
+                    transport,
+                    ctx.RequestAborted);
+                try
+                {
+                    await VoiceRealtimeTransportControlBridge.SendSessionAcceptedAsync(
+                        transport,
+                        accepted,
+                        ctx.RequestAborted);
+                }
+                catch
+                {
+                    await CleanupAcceptedTransportAsync(mediaPort, accepted.LeaseHandle, transport);
+                    throw;
+                }
+
+                var lifetimeCompleted = await mediaPort.AttachAsync(accepted.LeaseHandle, transport, ctx.RequestAborted);
+                if (!string.IsNullOrWhiteSpace(lifetimeCompleted?.TransportLeaseId))
+                    detachHandle = detachHandle with { ActiveTransportLeaseId = lifetimeCompleted.TransportLeaseId };
                 attached = true;
                 await WaitUntilClosedAsync(transport, ctx.RequestAborted);
             }
@@ -76,8 +98,11 @@ public static class VoicePresenceEndpoints
             }
             finally
             {
+                if (realtimeSubscription != null)
+                    await realtimeSubscription.DisposeAsync();
+
                 if (attached)
-                    await mediaPort.DetachAsync(accepted.LeaseHandle, transport, ctx.RequestAborted);
+                    await mediaPort.DetachAsync(detachHandle, transport, ctx.RequestAborted);
             }
         });
     }
@@ -327,6 +352,23 @@ public static class VoicePresenceEndpoints
         catch (OperationCanceledException)
         {
         }
+    }
+
+    private static async Task CleanupAcceptedTransportAsync(
+        IVoiceVolatileMediaStreamPort mediaPort,
+        VoicePresenceSessionLeaseHandle handle,
+        WebSocketVoiceTransport transport)
+    {
+        try
+        {
+            await mediaPort.DetachAsync(handle, transport, CancellationToken.None);
+        }
+        catch
+        {
+            // best effort cleanup for an accepted lease whose control channel failed before attach
+        }
+
+        await transport.DisposeAsync();
     }
 
     private static async Task<string> ReadSdpBodyAsync(HttpRequest request)

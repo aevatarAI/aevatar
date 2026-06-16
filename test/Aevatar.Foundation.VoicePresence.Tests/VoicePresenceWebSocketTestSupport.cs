@@ -35,19 +35,29 @@ internal sealed class FakeWebSocket : WebSocket
 
     public bool ThrowOnClose { get; set; }
 
+    public Func<WebSocketMessageType, CancellationToken, Task>? BeforeSendAsync { get; set; }
+
+    public int ConcurrentSends { get; private set; }
+
+    public int MaxConcurrentSends { get; private set; }
+
     public Exception? SendException { get; set; }
 
     public bool Disposed { get; private set; }
 
     public int CloseCalls { get; private set; }
 
+    public WebSocketCloseStatus? LastCloseStatus { get; private set; }
+
+    public string? LastCloseDescription { get; private set; }
+
     public List<string> SentTexts { get; } = [];
 
     public List<byte[]> SentBinaries { get; } = [];
 
-    public override WebSocketCloseStatus? CloseStatus => null;
+    public override WebSocketCloseStatus? CloseStatus => LastCloseStatus;
 
-    public override string? CloseStatusDescription => null;
+    public override string? CloseStatusDescription => LastCloseDescription;
 
     public override WebSocketState State => _state;
 
@@ -70,8 +80,9 @@ internal sealed class FakeWebSocket : WebSocket
     {
         cancellationToken.ThrowIfCancellationRequested();
         _ = closeStatus;
-        _ = statusDescription;
         CloseCalls++;
+        LastCloseStatus = closeStatus;
+        LastCloseDescription = statusDescription;
         if (ThrowOnClose)
             throw new WebSocketException("close failed");
 
@@ -86,7 +97,8 @@ internal sealed class FakeWebSocket : WebSocket
     {
         cancellationToken.ThrowIfCancellationRequested();
         _ = closeStatus;
-        _ = statusDescription;
+        LastCloseStatus = closeStatus;
+        LastCloseDescription = statusDescription;
         _state = WebSocketState.CloseSent;
         return Task.CompletedTask;
     }
@@ -124,52 +136,60 @@ internal sealed class FakeWebSocket : WebSocket
         return new WebSocketReceiveResult(frame.Data.Length, frame.MessageType, frame.EndOfMessage);
     }
 
-    public override Task SendAsync(
+    public override async Task SendAsync(
         ArraySegment<byte> buffer,
         WebSocketMessageType messageType,
         bool endOfMessage,
         CancellationToken cancellationToken)
     {
-        cancellationToken.ThrowIfCancellationRequested();
         _ = endOfMessage;
-        if (SendException != null)
-            throw SendException;
-
-        if (messageType == WebSocketMessageType.Text)
-        {
-            SentTexts.Add(Encoding.UTF8.GetString(buffer.Array!, buffer.Offset, buffer.Count));
-        }
-        else if (messageType == WebSocketMessageType.Binary)
-        {
-            var bytes = new byte[buffer.Count];
-            Array.Copy(buffer.Array!, buffer.Offset, bytes, 0, buffer.Count);
-            SentBinaries.Add(bytes);
-        }
-
-        return Task.CompletedTask;
+        await SendCoreAsync(buffer.AsMemory(), messageType, cancellationToken);
     }
 
-    public override ValueTask SendAsync(
+    public override async ValueTask SendAsync(
         ReadOnlyMemory<byte> buffer,
         WebSocketMessageType messageType,
         WebSocketMessageFlags flags,
+        CancellationToken cancellationToken)
+    {
+        _ = flags;
+        await SendCoreAsync(buffer, messageType, cancellationToken);
+    }
+
+    private async ValueTask SendCoreAsync(
+        ReadOnlyMemory<byte> buffer,
+        WebSocketMessageType messageType,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (SendException != null)
             throw SendException;
 
-        if (messageType == WebSocketMessageType.Text)
+        var activeSends = Interlocked.Increment(ref _activeSends);
+        try
         {
-            SentTexts.Add(Encoding.UTF8.GetString(buffer.Span));
-        }
-        else if (messageType == WebSocketMessageType.Binary)
-        {
-            SentBinaries.Add(buffer.ToArray());
-        }
+            if (activeSends > MaxConcurrentSends)
+                MaxConcurrentSends = activeSends;
 
-        return ValueTask.CompletedTask;
+            if (BeforeSendAsync != null)
+                await BeforeSendAsync(messageType, cancellationToken);
+
+            if (messageType == WebSocketMessageType.Text)
+            {
+                SentTexts.Add(Encoding.UTF8.GetString(buffer.Span));
+            }
+            else if (messageType == WebSocketMessageType.Binary)
+            {
+                SentBinaries.Add(buffer.ToArray());
+            }
+        }
+        finally
+        {
+            ConcurrentSends = Interlocked.Decrement(ref _activeSends);
+        }
     }
+
+    private int _activeSends;
 
     private readonly record struct ReceiveFrame(
         WebSocketMessageType MessageType,

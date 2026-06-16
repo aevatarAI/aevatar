@@ -121,6 +121,61 @@ check_channel_inbound_no_runtime_credential() {
 
 check_channel_inbound_no_runtime_credential
 
+check_workflow_core_interaction_boundary() {
+  local workflow_core_dir="src/workflow/Aevatar.Workflow.Core"
+  local report
+
+  set +e
+  report="$(
+    rg -n "Aevatar\.GAgents\.Channel\.Abstractions|MessageContent|LarkMessageComposer|open-apis/im/v1/messages|interactive_card|raw Lark|raw card JSON|\"type\"[[:space:]]*:[[:space:]]*\"template\"" "${workflow_core_dir}" \
+      -g '!**/bin/**' \
+      -g '!**/obj/**' \
+      -g '!*.g.cs' \
+      -g '!*.Designer.cs'
+  )"
+  local status=$?
+  set -e
+
+  if [[ ${status} -ne 0 && ${status} -ne 1 ]]; then
+    echo "Workflow Core interaction boundary guard execution failed."
+    exit "${status}"
+  fi
+
+  if [ -n "${report}" ]; then
+    echo "${report}"
+    echo "Workflow Core must carry typed InteractionSpec only; channel content and raw card payloads belong at the channel boundary."
+    exit 1
+  fi
+
+  set +e
+  report="$(
+    rg -n "Metadata[[:space:]]*\[[[:space:]]*\"interaction\"|metadata[[:space:]]*\[[[:space:]]*\"interaction\"" \
+      src/workflow agents \
+      -g '*Human*Interaction*.cs' \
+      -g '*Notify*.cs' \
+      -g '*Notification*.cs' \
+      -g '!**/bin/**' \
+      -g '!**/obj/**' \
+      -g '!*.g.cs' \
+      -g '!*.Designer.cs'
+  )"
+  status=$?
+  set -e
+
+  if [[ ${status} -ne 0 && ${status} -ne 1 ]]; then
+    echo "HITL/notify metadata interaction guard execution failed."
+    exit "${status}"
+  fi
+
+  if [ -n "${report}" ]; then
+    echo "${report}"
+    echo "HITL/notify control must consume typed interaction contracts, not Metadata[\"interaction\"] bags."
+    exit 1
+  fi
+}
+
+check_workflow_core_interaction_boundary
+
 bash tools/ci/aevatar_oauth_client_es_acl_guard.sh
 bash tools/ci/static_service_activation_guard.sh || exit $?
 
@@ -515,6 +570,7 @@ streaming_proxy_consumer_report="$(
     | awk -F: '
 BEGIN {
   allowed["src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs"] = 1;
+  allowed["src/Aevatar.Mainnet.Host.Api/Hosting/MainnetAgentProjectionDocumentStoresExtensions.cs"] = 1;
   allowed["tools/ci/architecture_guards.sh"] = 1;
   allowed["tools/ci/README.md"] = 1;
 }
@@ -839,6 +895,7 @@ END {
 fi
 
 bash "${SCRIPT_DIR}/query_projection_priming_guard.sh"
+bash "${SCRIPT_DIR}/workflow_call_context_guard.sh"
 bash "${SCRIPT_DIR}/command_observation_attach_only_guard.sh"
 bash "${SCRIPT_DIR}/projection_attach_existing_side_read_guard.sh"
 bash "${SCRIPT_DIR}/public_projection_ensure_ports_guard.sh"
@@ -846,10 +903,13 @@ bash "${SCRIPT_DIR}/scripting_write_path_cqrs_guard.sh"
 bash "${SCRIPT_DIR}/projection_state_version_guard.sh"
 bash "${SCRIPT_DIR}/projection_state_mirror_current_state_guard.sh"
 bash "${SCRIPT_DIR}/agent_kind_naming_guard.sh"
+bash "${SCRIPT_DIR}/gagent_registry_kind_guard.sh"
 bash "${SCRIPT_DIR}/proto_lint_guard.sh"
 bash "${SCRIPT_DIR}/channel_mega_interface_guard.sh"
 bash "${SCRIPT_DIR}/channel_native_sdk_import_guard.sh"
 bash "${SCRIPT_DIR}/channel_platform_project_reference_guard.sh"
+echo "Running catch exception observability guard..."
+bash "${SCRIPT_DIR}/catch_exception_observability_guard.sh"
 python3 "${REPO_ROOT}/tools/ci/guards/project_reference_layer_guard.py" \
   --root "${REPO_ROOT}" \
   --allowlist "${REPO_ROOT}/tools/ci/project_reference_layer_allowlist.tsv" \
@@ -1332,7 +1392,7 @@ if [ -n "${reducer_test_coverage_violations}" ]; then
 fi
 
 stateful_replay_contract_requirements=(
-  "WorkflowGAgent:test/Aevatar.Integration.Tests/WorkflowGAgentCoverageTests.cs"
+  "WorkflowGAgent:test/Aevatar.Integration.Tests/WorkflowGAgentReplayContractTests.cs"
   "RoleGAgent:test/Aevatar.AI.Tests/RoleGAgentReplayContractTests.cs"
 )
 
@@ -1686,6 +1746,21 @@ if [ -n "${projection_provider_business_using_hits}" ]; then
   exit 1
 fi
 
+agent_projection_provider_hits="$(
+  rg -n "Aevatar\.CQRS\.Projection\.Providers\.(Elasticsearch|InMemory|Neo4j)|Projection\.Providers\.(Elasticsearch|InMemory|Neo4j)" \
+    agents \
+    -g '*.cs' \
+    -g '*.csproj' \
+    -g '!**/bin/**' \
+    -g '!**/obj/**' || true
+)"
+
+if [ -n "${agent_projection_provider_hits}" ]; then
+  echo "${agent_projection_provider_hits}"
+  echo "Agent projects must not reference concrete projection providers. Wire provider-specific document stores in the host composition root."
+  exit 1
+fi
+
 projection_provider_store_files=(
   "src/Aevatar.CQRS.Projection.Providers.InMemory/Stores/InMemoryProjectionDocumentStore.cs"
   "src/Aevatar.CQRS.Projection.Providers.Elasticsearch/Stores/ElasticsearchOptimisticWriter.cs"
@@ -1715,7 +1790,9 @@ command_side_readmodel_violations="$(
     src/workflow/Aevatar.Workflow.Application \
     src/workflow/Aevatar.Workflow.Host.Api \
     src/Aevatar.Mainnet.Host.Api \
-    -g '*.cs' || true
+    -g '*.cs' \
+    -g '!src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs' \
+    -g '!src/Aevatar.Mainnet.Host.Api/Hosting/MainnetAgentProjectionDocumentStoresExtensions.cs' || true
 )"
 
 if [ -n "${command_side_readmodel_violations}" ]; then
@@ -1904,6 +1981,9 @@ bash tools/ci/runtime_callback_guards.sh
 
 echo "Running channel card literal guard..."
 bash tools/ci/channel_card_literal_guard.sh
+
+echo "Running tool approval wiring guard..."
+bash tools/ci/tool_approval_wiring_guard.sh
 
 echo "Running Nyx relay replay authority guard..."
 python3 tools/ci/guards/nyx_relay_replay_authority_guard.py

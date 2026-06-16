@@ -3,8 +3,12 @@ test/Aevatar.Foundation.Runtime.Hosting.Tests/DistributedClusterConsistencyInteg
 test/Aevatar.Integration.Tests/ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests.cs
 test/Aevatar.Integration.Tests/ScriptEvolutionIntegrationTestKit.cs
 test/Aevatar.Integration.Tests/ScriptReadModelVisibilityTestHelper.cs
+# Scripting service republish validates eventually-consistent projection visibility after
+# runtime invocation; no deterministic read-model visibility signal exists in this path.
+test/Aevatar.Integration.Tests/ScriptingServiceRevisionRepublishIntegrationTests.cs
 test/Aevatar.GAgentService.Integration.Tests/ScopeScriptSaveObservationRuntimeTests.cs
-# Workflow current-state endpoint observes eventually-consistent projection readmodel materialization after draft-run returns.
+# Draft-run endpoint returns after live SSE completion; workflow actor current-state
+# readmodel visibility is an eventually-consistent HTTP query surface under test.
 test/Aevatar.GAgentService.Integration.Tests/ScopeDraftRunWorkflowRunCurrentStateIntegrationTests.cs
 test/Aevatar.Foundation.Runtime.Hosting.Tests/DistributedMixedVersionClusterIntegrationTests.cs
 test/Aevatar.Foundation.Runtime.Hosting.Tests/OrleansMassTransitRuntimeIntegrationTests.cs

@@ -3,6 +3,8 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.TypeSystem;
+using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Application.ScopeGAgents;
 using Aevatar.AGUI.Contracts;
@@ -12,8 +14,10 @@ namespace Aevatar.GAgentService.Tests.Application;
 
 public sealed class GAgentDraftRunInteractionPortTests
 {
+    private const string TestAgentKind = "tests.draft-run-agent";
+
     [Fact]
-    public async Task ExecuteAsync_ShouldReturnUnknownActorType_WhenTypeCannotBeResolved()
+    public async Task ExecuteAsync_ShouldReturnUnknownAgentKind_WhenTypeCannotBeResolved()
     {
         var port = CreatePort(
             new RecordingActorRuntime(_ => null),
@@ -22,12 +26,12 @@ public sealed class GAgentDraftRunInteractionPortTests
             new RecordingInteractionService());
 
         var result = await port.ExecuteAsync(
-            Request("Aevatar.IamNotReal, Aevatar.IamNotReal"),
+            Request(agentKind: "tests.missing-draft-run-agent"),
             (_, _) => ValueTask.CompletedTask,
             ct: CancellationToken.None);
 
         result.Succeeded.Should().BeFalse();
-        result.Error.Should().Be(GAgentDraftRunStartError.UnknownActorType);
+        result.Error.Should().Be(GAgentDraftRunStartError.UnknownAgentKind);
     }
 
     [Fact]
@@ -48,12 +52,12 @@ public sealed class GAgentDraftRunInteractionPortTests
             ct: CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
-        runtime.CreateCalls.Should().BeEmpty();
+        runtime.CreateByKindCalls.Should().BeEmpty();
         registry.RegisteredActors.Should().BeEmpty();
         admission.Targets.Should().ContainSingle().Which.Should().Be(new ScopeResourceTarget(
             "scope-a",
             ScopeResourceKind.GAgentActor,
-            typeof(TestAgent).AssemblyQualifiedName!,
+            TestAgentKind,
             "existing-actor",
             ScopeResourceOperation.DraftRunReuse));
         interaction.Commands.Should().ContainSingle().Which.PreferredActorId.Should().Be("existing-actor");
@@ -76,7 +80,7 @@ public sealed class GAgentDraftRunInteractionPortTests
             ct: CancellationToken.None);
 
         result.Succeeded.Should().BeFalse();
-        result.Error.Should().Be(GAgentDraftRunStartError.ActorTypeMismatch);
+        result.Error.Should().Be(GAgentDraftRunStartError.ActorKindMismatch);
         runtime.DestroyedActorIds.Should().BeEmpty();
         interaction.Commands.Should().BeEmpty();
     }
@@ -126,7 +130,7 @@ public sealed class GAgentDraftRunInteractionPortTests
             ct: CancellationToken.None);
 
         result.Succeeded.Should().BeFalse();
-        result.Error.Should().Be(GAgentDraftRunStartError.ActorTypeMismatch);
+        result.Error.Should().Be(GAgentDraftRunStartError.ActorKindMismatch);
         interaction.Commands.Should().BeEmpty();
         runtime.DestroyedActorIds.Should().ContainSingle("draft-actor");
         operations.Should().ContainInOrder(
@@ -215,7 +219,7 @@ public sealed class GAgentDraftRunInteractionPortTests
         {
             ResultFactory = (_, _, _, _) => Task.FromResult(
                 CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>.Failure(
-                    GAgentDraftRunStartError.ActorTypeMismatch)),
+                    GAgentDraftRunStartError.ActorKindMismatch)),
         };
         var port = CreatePort(runtime, registry, new RecordingAdmissionPort(), interaction);
 
@@ -225,7 +229,7 @@ public sealed class GAgentDraftRunInteractionPortTests
             ct: CancellationToken.None);
 
         result.Succeeded.Should().BeFalse();
-        result.Error.Should().Be(GAgentDraftRunStartError.ActorTypeMismatch);
+        result.Error.Should().Be(GAgentDraftRunStartError.ActorKindMismatch);
         runtime.DestroyedActorIds.Should().ContainSingle("draft-actor");
         registry.UnregisteredActors.Should().ContainSingle().Which.ActorId.Should().Be("draft-actor");
     }
@@ -303,9 +307,8 @@ public sealed class GAgentDraftRunInteractionPortTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_ShouldNotReleaseActivationOrRollback_WhenInnerAcceptsThenReturnsFailure()
+    public async Task ExecuteAsync_ShouldNotRollback_WhenInnerAcceptsThenReturnsFailure()
     {
-        var activation = new RecordingActivationPort();
         var runtime = new RecordingActorRuntime(_ => null);
         var registry = new RecordingRegistryCommandPort();
         var interaction = new RecordingInteractionService
@@ -316,7 +319,7 @@ public sealed class GAgentDraftRunInteractionPortTests
                 await onAcceptedAsync!(
                     new GAgentDraftRunAcceptedReceipt(
                         command.PreferredActorId ?? "actor-1",
-                        command.ActorTypeName,
+                        command.AgentKind,
                         command.CommandIdSeed ?? "cmd-1",
                         command.CorrelationIdSeed ?? "corr-1",
                         command.SessionId ?? string.Empty),
@@ -326,7 +329,7 @@ public sealed class GAgentDraftRunInteractionPortTests
                     .Failure(GAgentDraftRunStartError.ProjectionUnavailable);
             },
         };
-        var port = CreatePort(runtime, registry, new RecordingAdmissionPort(), interaction, activation);
+        var port = CreatePort(runtime, registry, new RecordingAdmissionPort(), interaction);
 
         var result = await port.ExecuteAsync(
             Request(preferredActorId: "draft-actor"),
@@ -335,15 +338,13 @@ public sealed class GAgentDraftRunInteractionPortTests
 
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Be(GAgentDraftRunStartError.ProjectionUnavailable);
-        activation.Released.Should().BeEmpty();
         runtime.DestroyedActorIds.Should().BeEmpty();
         registry.UnregisteredActors.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task ExecuteAsync_ShouldNotReleaseActivationOrRollback_WhenInnerAcceptsThenThrows()
+    public async Task ExecuteAsync_ShouldNotRollback_WhenInnerAcceptsThenThrows()
     {
-        var activation = new RecordingActivationPort();
         var runtime = new RecordingActorRuntime(_ => null);
         var registry = new RecordingRegistryCommandPort();
         var interaction = new RecordingInteractionService
@@ -354,7 +355,7 @@ public sealed class GAgentDraftRunInteractionPortTests
                 await onAcceptedAsync!(
                     new GAgentDraftRunAcceptedReceipt(
                         command.PreferredActorId ?? "actor-1",
-                        command.ActorTypeName,
+                        command.AgentKind,
                         command.CommandIdSeed ?? "cmd-1",
                         command.CorrelationIdSeed ?? "corr-1",
                         command.SessionId ?? string.Empty),
@@ -363,7 +364,7 @@ public sealed class GAgentDraftRunInteractionPortTests
                 throw new InvalidOperationException("pump failed");
             },
         };
-        var port = CreatePort(runtime, registry, new RecordingAdmissionPort(), interaction, activation);
+        var port = CreatePort(runtime, registry, new RecordingAdmissionPort(), interaction);
 
         var act = () => port.ExecuteAsync(
             Request(preferredActorId: "draft-actor"),
@@ -372,7 +373,6 @@ public sealed class GAgentDraftRunInteractionPortTests
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("pump failed");
-        activation.Released.Should().BeEmpty();
         runtime.DestroyedActorIds.Should().BeEmpty();
         registry.UnregisteredActors.Should().BeEmpty();
     }
@@ -381,18 +381,17 @@ public sealed class GAgentDraftRunInteractionPortTests
         RecordingActorRuntime runtime,
         RecordingRegistryCommandPort registry,
         RecordingAdmissionPort admission,
-        RecordingInteractionService interaction,
-        IGAgentDraftRunObservationScopeActivationPort? activation = null) =>
-        new(runtime, registry, admission, interaction, activation ?? new NoOpActivationPort());
+        RecordingInteractionService interaction) =>
+        new(runtime, registry, admission, interaction, BuildRegistry());
 
     private static GAgentDraftRunInteractionRequest Request(
-        string? actorTypeName = null,
+        string? agentKind = TestAgentKind,
         string? preferredActorId = "draft-actor",
         AgentToolExecutionContext? toolContext = null,
         LLMControlContext? llmControl = null) =>
         new(
             "scope-a",
-            actorTypeName ?? typeof(TestAgent).AssemblyQualifiedName!,
+            agentKind ?? string.Empty,
             "hello",
             preferredActorId,
             "session-1",
@@ -401,6 +400,13 @@ public sealed class GAgentDraftRunInteractionPortTests
             " route ",
             ToolContext: toolContext,
             LlmControl: llmControl);
+
+    private static IAgentKindRegistry BuildRegistry()
+    {
+        var builder = new AgentKindRegistryBuilder();
+        builder.Register<TestAgent>();
+        return new AgentKindRegistry(builder.Build());
+    }
 
     private static AgentToolExecutionContext NewToolContext() =>
         new(
@@ -425,7 +431,7 @@ public sealed class GAgentDraftRunInteractionPortTests
         CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>.Success(
             new GAgentDraftRunAcceptedReceipt(
                 command.PreferredActorId ?? "actor-1",
-                command.ActorTypeName,
+                command.AgentKind,
                 "cmd-1",
                 "corr-1",
                 command.SessionId ?? string.Empty),
@@ -464,49 +470,6 @@ public sealed class GAgentDraftRunInteractionPortTests
                 CancellationToken ct)
         {
             return await ExecuteAsync(inbound, emitAsync, onAcceptedAsync, ct);
-        }
-    }
-
-    private sealed class NoOpActivationPort : IGAgentDraftRunObservationScopeActivationPort
-    {
-        public Task<GAgentDraftRunObservationScopeActivation?> ActivateAsync(
-            string actorId,
-            string commandId,
-            string correlationId,
-            CancellationToken ct = default) =>
-            Task.FromResult<GAgentDraftRunObservationScopeActivation?>(new GAgentDraftRunObservationScopeActivation(
-                actorId,
-                commandId,
-                correlationId));
-
-        public Task ReleaseAsync(
-            GAgentDraftRunObservationScopeActivation activation,
-            CancellationToken ct = default) =>
-            Task.CompletedTask;
-    }
-
-    private sealed class RecordingActivationPort : IGAgentDraftRunObservationScopeActivationPort
-    {
-        public List<GAgentDraftRunObservationScopeActivation> Handles { get; } = [];
-        public List<GAgentDraftRunObservationScopeActivation> Released { get; } = [];
-
-        public Task<GAgentDraftRunObservationScopeActivation?> ActivateAsync(
-            string actorId,
-            string commandId,
-            string correlationId,
-            CancellationToken ct = default)
-        {
-            var handle = new GAgentDraftRunObservationScopeActivation(actorId, commandId, correlationId);
-            Handles.Add(handle);
-            return Task.FromResult<GAgentDraftRunObservationScopeActivation?>(handle);
-        }
-
-        public Task ReleaseAsync(
-            GAgentDraftRunObservationScopeActivation activation,
-            CancellationToken ct = default)
-        {
-            Released.Add(activation);
-            return Task.CompletedTask;
         }
     }
 
@@ -566,6 +529,7 @@ public sealed class GAgentDraftRunInteractionPortTests
     {
         private readonly Dictionary<string, IActor> _createdActors = new(StringComparer.Ordinal);
         public List<(Type AgentType, string? ActorId)> CreateCalls { get; } = [];
+        public List<(string AgentKind, string? ActorId)> CreateByKindCalls { get; } = [];
         public List<string> DestroyedActorIds { get; } = [];
 
         public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
@@ -577,6 +541,16 @@ public sealed class GAgentDraftRunInteractionPortTests
             var actorId = id ?? "created";
             operations?.Add($"runtime:create:{actorId}");
             CreateCalls.Add((agentType, actorId));
+            var actor = new TestActor(actorId);
+            _createdActors[actorId] = actor;
+            return Task.FromResult<IActor>(actor);
+        }
+
+        public Task<IActor> CreateByKindAsync(string agentKind, string? id = null, CancellationToken ct = default)
+        {
+            var actorId = id ?? "created";
+            operations?.Add($"runtime:create:{actorId}");
+            CreateByKindCalls.Add((agentKind, actorId));
             var actor = new TestActor(actorId);
             _createdActors[actorId] = actor;
             return Task.FromResult<IActor>(actor);
@@ -616,6 +590,7 @@ public sealed class GAgentDraftRunInteractionPortTests
         public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
     }
 
+    [GAgent(TestAgentKind)]
     private sealed class TestAgent : IAgent
     {
         public string Id { get; } = "test-agent";

@@ -7,6 +7,7 @@ This directory keeps CI gate scripts and smoke tests.
 - `tools/ci/coverage_quality_guard.sh`: coverage collection and threshold gate (generated files are excluded by default via file filters, e.g. `obj/**`, `Generated/**`, `*.g.cs`).
   - Produces a filtered `Cobertura.xml` under `artifacts/coverage/<timestamp>-ci-gate/report/` after applying assembly/file exclusions for non-core shells/adapters such as `Aevatar.Tools.*`, `Aevatar.Studio.*`, `Aevatar.Authentication.*`, and host app entrypoints.
 - `tools/ci/architecture_guards.sh`: architecture/static guards (includes projection route mapping guard, source-regression bans for direct actor `HandleEventAsync` dispatch / raw `SubscribeAsync<EventEnvelope>` outside runtime transport internals, command-observation attach-only lifecycle guard, a focused Web/API forbidden-port guard that blocks loopback URL/defaultPort regressions while avoiding generic numeric timeout/page-size matches, a StreamingProxy deprecation guard that blocks new production consumers, and a workflow actor-query guard requiring `.RequireAuthorization()` or a per-endpoint `security-allowlist` comment on `/api/agents` and `/api/actors/{actorId}*` mappings).
+- `tools/ci/catch_exception_observability_guard.sh`: blocks regressions beyond the checked-in baseline for empty broad catches, broad `catch (Exception)` blocks that only log at Debug, and broad return-null fallbacks without visible logging/rethrow/committed failure events.
 - `tools/ci/channel_mega_interface_guard.sh`: blocks regressions that merge channel runtime and outbound methods back into one mega interface.
 - `tools/ci/frontend_static_boundary_guard.sh`: blocks frontend regressions that call actor-state/replay/projection-refresh endpoints, parse actorId prefixes, or depend on internal EventEnvelope routing fields.
 - `tools/ci/fetch_latest_ci_failure.sh`: downloads the latest failed GitHub Actions run metadata and failed logs into `artifacts/ci-failures/latest/` via `gh`.
@@ -49,6 +50,6 @@ This directory keeps CI gate scripts and smoke tests.
   - Job `coverage-quality`
     - Runs restore/build + `tools/ci/coverage_quality_guard.sh`.
     - Uploads `artifacts/coverage/**` as CI artifacts (`coverage-quality-report`).
-    - Uploads the filtered `artifacts/coverage/**/report/Cobertura.xml` file to Codecov when `CODECOV_TOKEN` is available, using the same assembly/file filters as the local quality gate.
+    - Uploads the filtered `artifacts/coverage/**/report/Cobertura.xml` file to Codecov when `CODECOV_TOKEN` is available, using the same assembly/file filters as the local quality gate; upload failures are non-blocking because the local coverage guard is the authoritative quality gate.
     - Triggered on `main/dev` pushes, nightly schedule, or manual dispatch.
   - Job `distributed-3node-smoke` -> `tools/ci/distributed_3node_smoke.sh`

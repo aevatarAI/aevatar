@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Projection.ReadModels;
 
@@ -10,6 +11,8 @@ public sealed class WorkflowExecutionCurrentStateProjector
         WorkflowRunState,
         WorkflowExecutionCurrentStateDocument>
 {
+    private readonly WorkflowRunForkSeedReadModelMapper _forkSeedMapper = new();
+
     public WorkflowExecutionCurrentStateProjector(
         IProjectionWriteDispatcher<WorkflowExecutionCurrentStateDocument> writeDispatcher,
         IProjectionClock clock)
@@ -31,6 +34,7 @@ public sealed class WorkflowExecutionCurrentStateProjector
 
         var stateEvent = input.StateEvent;
         var state = input.State;
+        var seedSnapshot = _forkSeedMapper.ToProjectionSnapshot(state);
 
         // Refactor (iter97/cluster-591): Old/New
         //   Old: every current-state projector hand-rolled committed-state unpack, timestamp resolution, and upsert.
@@ -44,6 +48,7 @@ public sealed class WorkflowExecutionCurrentStateProjector
             RunId = string.IsNullOrWhiteSpace(state.RunId) ? context.RootActorId : state.RunId,
             WorkflowName = state.WorkflowName ?? string.Empty,
             Status = state.Status ?? string.Empty,
+            ScopeId = state.ScopeId ?? string.Empty,
             Compiled = state.Compiled,
             CompilationError = state.CompilationError ?? string.Empty,
             Input = state.Input ?? string.Empty,
@@ -54,6 +59,40 @@ public sealed class WorkflowExecutionCurrentStateProjector
             StateVersion = stateEvent.Version,
             LastEventId = stateEvent.EventId ?? string.Empty,
             UpdatedAt = input.ObservedAt,
+            WorkflowYaml = seedSnapshot.WorkflowYaml,
+            InlineWorkflowYamls = seedSnapshot.InlineWorkflowYamls.ToDictionary(
+                x => x.Key,
+                x => x.Value,
+                StringComparer.Ordinal),
+            ForkSeedVariables = seedSnapshot.Variables.ToDictionary(
+                x => x.Key,
+                x => x.Value,
+                StringComparer.Ordinal),
+            ForkSeedCompletedStepIds = seedSnapshot.CompletedStepIds.ToList(),
+            ForkSeedLastFailedStepId = seedSnapshot.LastFailedStepId,
+            InputFileRefs = seedSnapshot.InputFileRefs.Select(MapInputFileRef).ToList(),
+        };
+    }
+
+    private static WorkflowExecutionInputFileRefReadModel MapInputFileRef(WorkflowFileRef source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        return new WorkflowExecutionInputFileRefReadModel
+        {
+            FileId = source.FileId ?? string.Empty,
+            ArtifactId = source.ArtifactId ?? string.Empty,
+            SourceKindValue = (int)source.SourceKind,
+            SourceMessageId = source.SourceMessageId ?? string.Empty,
+            SourceResourceKey = source.SourceResourceKey ?? string.Empty,
+            FileName = source.FileName ?? string.Empty,
+            MediaType = source.MediaType ?? string.Empty,
+            SizeBytes = source.SizeBytes,
+            Sha256 = source.Sha256 ?? string.Empty,
+            CreatedAtUnixMs = source.CreatedAtUnixMs,
+            ExpiresAtUnixMs = source.ExpiresAtUnixMs,
+            OwnerRunId = source.OwnerRunId ?? string.Empty,
+            OwnerScopeId = source.OwnerScopeId ?? string.Empty,
         };
     }
 

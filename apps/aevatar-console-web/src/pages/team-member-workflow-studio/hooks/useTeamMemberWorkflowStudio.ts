@@ -37,6 +37,7 @@ import {
   STUDIO_GRAPH_CATEGORIES,
 } from "@/shared/studio/graph";
 import { isStudioApiStatus, studioApi } from "@/shared/studio/api";
+import { normalizeStudioMemberLifecycleStage } from "@/shared/studio/models";
 import type {
   StudioExecutionDetail,
   StudioExecutionFrame,
@@ -217,6 +218,53 @@ const CREATED_MEMBER_MATERIALIZATION_DELAY_MS = 450;
 
 function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? "";
+}
+
+function hasCurrentCompletedMemberBinding(
+  detail: StudioMemberDetail | null | undefined,
+): boolean {
+  if (
+    normalizeStudioMemberLifecycleStage(detail?.summary.lifecycleStage) !==
+    "bind_ready"
+  ) {
+    return false;
+  }
+
+  return Boolean(
+    trimOptional(detail?.summary.lastBoundRevisionId) ||
+      trimOptional(detail?.lastBinding?.revisionId),
+  );
+}
+
+function hasActiveMemberBindingRun(
+  detail: StudioMemberDetail | null | undefined,
+): boolean {
+  return Boolean(
+    detail?.currentBindingRun &&
+      !isTerminalBindingRun(detail.currentBindingRun),
+  );
+}
+
+function readActiveMemberBindingRunId(
+  detail: StudioMemberDetail | null | undefined,
+): string {
+  if (!hasActiveMemberBindingRun(detail)) {
+    return "";
+  }
+
+  return trimOptional(detail?.currentBindingRun?.bindingRunId);
+}
+
+function readFallbackBindingRun(
+  detail: StudioMemberDetail | null | undefined,
+  bindingRunId: string,
+): StudioMemberBindingRunStatusResponse | null {
+  const currentRun = detail?.currentBindingRun ?? null;
+  if (!isSameBindingRun(currentRun, bindingRunId)) {
+    return null;
+  }
+
+  return currentRun;
 }
 
 function readPathSegments(): {
@@ -518,11 +566,18 @@ function isTerminalBindingRun(
   return run?.status === "succeeded" || run?.status === "failed" || run?.status === "rejected";
 }
 
+function isSameBindingRun(
+  run: StudioMemberBindingRunStatusResponse | null,
+  bindingRunId: string,
+): boolean {
+  return Boolean(run && trimOptional(run.bindingRunId) === bindingRunId);
+}
+
 function readBindingRunFailureMessage(
   run: StudioMemberBindingRunStatusResponse | null,
 ): string {
   if (!run) {
-    return "Publish binding status is still pending.";
+    return "Publish status is still pending.";
   }
 
   if (run.failure?.message) {
@@ -856,6 +911,57 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     },
     [queryClient],
   );
+  const updateMemberDisplayNameCache = React.useCallback(
+    (
+      scopeId: string,
+      teamId: string,
+      memberId: string,
+      displayName: string,
+    ) => {
+      queryClient.setQueryData<StudioMemberDetail | undefined>(
+        getTeamMemberWorkflowStudioMemberQueryKey(scopeId, memberId),
+        (current) =>
+          current
+            ? {
+                ...current,
+                summary: {
+                  ...current.summary,
+                  displayName,
+                },
+              }
+            : current,
+      );
+      const patchRoster = (current: unknown) => {
+        if (
+          !current ||
+          typeof current !== "object" ||
+          !Array.isArray((current as { members?: unknown }).members)
+        ) {
+          return current;
+        }
+
+        return {
+          ...current,
+          members: (current as { members: unknown[] }).members.map((member) =>
+            member &&
+            typeof member === "object" &&
+            (member as { memberId?: unknown }).memberId === memberId
+              ? {
+                  ...member,
+                  displayName,
+                }
+              : member,
+          ),
+        };
+      };
+      queryClient.setQueryData(
+        ["teams", "team-members", scopeId, teamId],
+        patchRoster,
+      );
+      queryClient.setQueryData(["teams", "members", scopeId], patchRoster);
+    },
+    [queryClient],
+  );
   const workspaceSettingsQuery = useQuery({
     enabled: Boolean(route.scopeId),
     queryKey: [
@@ -1068,13 +1174,59 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       workflowQueryKey,
     ],
   );
+  const renameExistingMemberFromTitle = React.useCallback(
+    async (displayName: string) => {
+      const scopeId = trimOptional(route.scopeId);
+      const teamId = trimOptional(route.teamId);
+      const memberId = trimOptional(route.memberId);
+      const normalizedDisplayName = trimOptional(displayName);
+      const currentDisplayName = trimOptional(
+        memberQuery.data?.summary.displayName,
+      );
+      if (
+        route.mode !== "existing" ||
+        !scopeId ||
+        !teamId ||
+        !memberId ||
+        !normalizedDisplayName ||
+        normalizedDisplayName === currentDisplayName
+      ) {
+        return;
+      }
+
+      await studioApi.updateMemberDisplayName({
+        scopeId,
+        memberId,
+        displayName: normalizedDisplayName,
+      });
+      updateMemberDisplayNameCache(
+        scopeId,
+        teamId,
+        memberId,
+        normalizedDisplayName,
+      );
+      await refreshTeamMemberSurfaces(scopeId, teamId);
+    },
+    [
+      memberQuery.data?.summary.displayName,
+      refreshTeamMemberSurfaces,
+      route.memberId,
+      route.mode,
+      route.scopeId,
+      route.teamId,
+      updateMemberDisplayNameCache,
+    ],
+  );
 
   const saveMutation = useMutation({
-    mutationFn: (variables: SaveWorkflowDraftVariables) =>
-      saveWorkflowDraft({
+    mutationFn: async (variables: SaveWorkflowDraftVariables) => {
+      const saved = await saveWorkflowDraft({
         ...variables,
         routeScopeId: route.scopeId,
-      }),
+      });
+      await renameExistingMemberFromTitle(saved.title);
+      return saved;
+    },
     onError: (error) => {
       void message.error(
         error instanceof Error ? error.message : "Failed to save workflow draft.",
@@ -1256,6 +1408,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
           workflowId: savedWorkflowId,
         },
       });
+      await renameExistingMemberFromTitle(normalizedTitle);
 
       history.replace(
         buildTeamMemberWorkflowStudioHref({
@@ -1457,6 +1610,23 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         throw new Error("Resolve an existing workflow member before publishing.");
       }
 
+      const currentMember = await studioApi.getMember(route.scopeId, route.memberId);
+      queryClient.setQueryData(
+        getTeamMemberWorkflowStudioMemberQueryKey(route.scopeId, route.memberId),
+        currentMember,
+      );
+      if (!dirty && hasCurrentCompletedMemberBinding(currentMember)) {
+        throw new Error(
+          "This member workflow is already published. Refresh status to check readiness.",
+        );
+      }
+
+      if (hasActiveMemberBindingRun(currentMember)) {
+        throw new Error(
+          "Publish is already in progress for this member. Refresh status before publishing again.",
+        );
+      }
+
       let savedDraft: SavedWorkflowDraft | null = null;
       let documentForPublish = document;
       let titleForPublish = trimOptional(title) || trimOptional(document.name);
@@ -1486,6 +1656,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         },
         availableStepTypes: AVAILABLE_STEP_TYPES,
       });
+      await renameExistingMemberFromTitle(titleForPublish);
       const receipt = await studioApi.bindMemberWorkflow({
         scopeId: route.scopeId,
         memberId: route.memberId,
@@ -1511,7 +1682,9 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
             throw error;
           }
         }
-        await waitForBindingRunPollTick();
+        if (attempt < MEMBER_BINDING_RUN_POLL_ATTEMPTS - 1) {
+          await waitForBindingRunPollTick();
+        }
       }
 
       if (lastRun?.status === "failed" || lastRun?.status === "rejected") {
@@ -1542,7 +1715,9 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       if (run?.status === "succeeded") {
         void message.success("Workflow member published.");
       } else {
-        void message.info("Publish was accepted and is still binding.");
+        void message.info(
+          "Publish was accepted. Studio is still waiting for published status.",
+        );
       }
     },
   });
@@ -1585,18 +1760,31 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
             ((workflowQuery.data && !linkedWorkflowMissing) ||
               canCreateUnlinkedMemberDraft),
         );
-  const memberPublishedByQuery =
-    memberQuery.data?.summary.lifecycleStage === "bind_ready" &&
-    !linkedWorkflowMissing &&
-    Boolean(workflowQuery.data);
+  const authoritativeMemberPublished = hasCurrentCompletedMemberBinding(
+    memberQuery.data,
+  );
+  const authoritativeBindingRunId = readActiveMemberBindingRunId(
+    memberQuery.data,
+  );
+  const publishBindingRunTerminal = isTerminalBindingRun(publishBindingRun);
+  const publishBindingRunFailed = Boolean(
+    publishBindingRun?.status === "failed" ||
+      publishBindingRun?.status === "rejected",
+  );
+  const authoritativeBindingRunInProgress = Boolean(
+    authoritativeBindingRunId &&
+      (!publishBindingRunTerminal ||
+        !isSameBindingRun(publishBindingRun, authoritativeBindingRunId)),
+  );
+  const memberPublishedByQuery = authoritativeMemberPublished;
   const memberIsPublished =
     memberPublishedByQuery ||
     publishBindingRun?.status === "succeeded";
-  const publishBindingStillInProgress = Boolean(
-    !memberPublishedByQuery &&
-      publishBindingRun &&
-      publishBindingRun.status !== "succeeded" &&
-      !isTerminalBindingRun(publishBindingRun),
+  const publishStatusStillInProgress = Boolean(
+    authoritativeBindingRunInProgress ||
+      (publishBindingRun &&
+        publishBindingRun.status !== "succeeded" &&
+        !publishBindingRunTerminal),
   );
   const publishHasDraftChanges = Boolean(dirty && workflowHasSteps);
   const publishPending = publishMutation.isPending;
@@ -1626,6 +1814,12 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
           "teamMemberWorkflowStudio.header.openAutomations",
           "Open recurring work for this member",
         );
+  const publishVisibleError =
+    publishError &&
+    (publishBindingRunFailed ||
+      (!memberIsPublished && !publishStatusStillInProgress))
+      ? publishError
+      : "";
   const publishDisabled = Boolean(
     route.mode === "new" ||
       linkedWorkflowMissing ||
@@ -1634,7 +1828,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       !workflowHasSteps ||
       Boolean(selectedStepConfigurationError) ||
       publishMutation.isPending ||
-      publishBindingStillInProgress ||
+      publishStatusStillInProgress ||
       (memberIsPublished && !publishHasDraftChanges),
   );
   const publishPlaceholderReason =
@@ -1644,10 +1838,12 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         ? "No stable workflow draft is linked to this member yet."
         : selectedStepConfigurationError
           ? selectedStepConfigurationError
-        : publishBindingStillInProgress
-          ? "Publish was accepted and binding is still in progress. Refresh later before publishing again."
-        : memberIsPublished && !publishHasDraftChanges
-          ? "This member workflow is already published. Edit the draft before publishing a new version."
+        : publishStatusStillInProgress
+          ? "Publish is still in progress. Use Refresh status before publishing again."
+        : memberIsPublished
+          ? publishHasDraftChanges
+            ? "Publish saves draft changes, binds the member workflow, and observes readiness."
+            : "This member workflow is already published. Use Refresh status to check readiness."
         : !workflowQuery.data || !editableDocument
             ? "Load the workflow draft before publishing."
             : !workflowHasSteps
@@ -1656,18 +1852,24 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
                 ? "Publish saves draft changes, binds the member workflow, and observes readiness."
                 : "Publish binds the saved workflow draft to this member and observes readiness.";
   const publishTone: WorkflowPublishTone = publishError
-    ? "error"
-    : publishPending || publishBindingStillInProgress
+    ? publishVisibleError
+      ? "error"
+      : publishStatusStillInProgress
+        ? "processing"
+        : memberIsPublished
+          ? "success"
+          : "default"
+    : publishPending || publishStatusStillInProgress
       ? "processing"
       : memberIsPublished
         ? "success"
         : "default";
   const publishNotice =
-    publishError ||
+    publishVisibleError ||
     (publishPending
-      ? `Publish binding status: ${publishBindingRun?.status ?? "accepted"}.`
-      : publishBindingStillInProgress
-        ? `Publish was accepted and binding is still in progress (${publishBindingRun?.status ?? "accepted"}). Refresh later to check readiness.`
+      ? `Publish status: ${publishBindingRun?.status ?? "accepted"}.`
+      : publishStatusStillInProgress
+        ? `Publish is still in progress (${memberQuery.data?.currentBindingRun?.status ?? publishBindingRun?.status ?? "accepted"}). Use Refresh status to check readiness.`
       : memberIsPublished
         ? "Published member workflow is serviceable."
         : "Draft member workflow is not published to the active member yet.");
@@ -1675,21 +1877,77 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     route.mode === "existing" &&
       route.scopeId &&
       route.memberId &&
-      publishBindingStillInProgress &&
-      !publishPending,
+      (publishStatusStillInProgress ||
+        memberIsPublished ||
+        publishError ||
+        publishBindingRun),
   );
   const refreshPublishStatusPending = Boolean(
     memberQuery.isFetching || workflowQuery.isFetching,
   );
-  const refreshPublishStatus = React.useCallback(() => {
+  const refreshPublishStatus = React.useCallback(async () => {
     if (route.mode !== "existing" || !route.scopeId || !route.memberId) {
       return;
     }
 
-    void memberQuery.refetch();
+    const memberResult = await memberQuery.refetch();
     if (routeDraftWorkflowId) {
-      void workflowQuery.refetch();
+      await workflowQuery.refetch();
     }
+
+    const refreshedMember = memberResult.data;
+    const activeRunId = readActiveMemberBindingRunId(refreshedMember);
+    if (activeRunId) {
+      let refreshedRun: StudioMemberBindingRunStatusResponse | null = null;
+      try {
+        refreshedRun = await studioApi.getMemberBindingRun(
+          route.scopeId,
+          route.memberId,
+          activeRunId,
+        );
+      } catch (error) {
+        if (!isStudioApiStatus(error, 404)) {
+          throw error;
+        }
+
+        refreshedRun = readFallbackBindingRun(refreshedMember, activeRunId);
+      }
+
+      if (!refreshedRun) {
+        void message.info("Publish status is not materialized yet. Try refreshing again.");
+        return;
+      }
+
+      setPublishBindingRun(refreshedRun);
+      if (refreshedRun.status === "failed" || refreshedRun.status === "rejected") {
+        setPublishError(readBindingRunFailureMessage(refreshedRun));
+        void message.error(readBindingRunFailureMessage(refreshedRun));
+        return;
+      }
+
+      if (refreshedRun.status === "succeeded") {
+        void message.success("Published member status refreshed.");
+        return;
+      }
+
+      void message.info("Publish is still in progress.");
+      return;
+    }
+
+    if (hasCurrentCompletedMemberBinding(refreshedMember)) {
+      setPublishBindingRun((currentRun) =>
+        currentRun && !isTerminalBindingRun(currentRun)
+          ? {
+              ...currentRun,
+              status: "succeeded",
+            }
+          : currentRun,
+      );
+      void message.success("Published member status refreshed.");
+      return;
+    }
+
+    void message.info("No published member status is visible yet.");
   }, [memberQuery, route.memberId, route.mode, route.scopeId, routeDraftWorkflowId, workflowQuery]);
   const executionStatus = activeMemberRunMutation.isPending
     ? "running"

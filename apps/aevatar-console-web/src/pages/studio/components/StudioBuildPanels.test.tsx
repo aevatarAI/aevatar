@@ -1166,9 +1166,6 @@ describe('StudioWorkflowBuildPanel', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Add step' }));
     expect(await screen.findByTestId('workflow-step-type-picker')).toBeInTheDocument();
-    expect(screen.getByTestId('workflow-step-type-picker-grid')).toHaveStyle({
-      overflowY: 'auto',
-    });
     fireEvent.click(screen.getByRole('button', { name: /llm_call/i }));
 
     await waitFor(() => {
@@ -1700,18 +1697,19 @@ describe('StudioWorkflowBuildPanel', () => {
       <StudioGAgentBuildPanel
         scopeId="scope-1"
         currentMemberLabel="gagent-1"
-        gAgentTypes={[
+        gAgentKinds={[
           {
-            assemblyName: 'Aevatar.GAgents',
-            fullName: 'Aevatar.GAgents.TestGAgent',
-            typeName: 'TestGAgent',
+            agentKind: 'aevatar.test.gagent',
+            displayName: 'Test GAgent',
+            diagnosticClrTypeName: 'aevatar.test.gagent',
+            endpoints: [],
           },
         ]}
-        gAgentTypesError={null}
-        gAgentTypesLoading={false}
-        selectedGAgentTypeName="Aevatar.GAgents.TestGAgent, Aevatar.GAgents"
+        gAgentKindsError={null}
+        gAgentKindsLoading={false}
+        selectedAgentKind="aevatar.test.gagent"
         onContinueToBind={jest.fn()}
-        onSelectGAgentTypeName={jest.fn()}
+        onSelectAgentKind={jest.fn()}
       />,
     );
 

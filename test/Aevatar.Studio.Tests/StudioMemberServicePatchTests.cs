@@ -16,6 +16,117 @@ public sealed class StudioMemberServicePatchTests
     private const string PublishedServiceId = "svc-alpha";
 
     [Fact]
+    public async Task PatchAsync_DisplayName_ShouldDispatchRenameAndPreserveOtherFields()
+    {
+        var commandPort = new RecordingMemberCommandPort();
+        var service = NewService(commandPort, NewQueryPort(MemberImplementationKindNames.Workflow));
+
+        var response = await service.UpdateAsync(
+            ScopeId,
+            MemberId,
+            new UpdateStudioMemberRequest(
+                DisplayName: PatchValue<string>.Of("  Renamed Workflow  ")),
+            CancellationToken.None);
+
+        commandPort.Renames.Should().ContainSingle()
+            .Which.Should().Be(new RenameUpdate(ScopeId, MemberId, "Renamed Workflow"));
+        commandPort.ImplementationUpdates.Should().BeEmpty();
+        commandPort.RecordedBindings.Should().BeEmpty();
+        response.Should().Be(new StudioMemberCommandResponse(
+            StudioMemberCommandStatusNames.Accepted,
+            ScopeId,
+            MemberId,
+            response.AckedAt));
+        response.AckedAt.Should().NotBeNull();
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task PatchAsync_DisplayName_ShouldRejectEmptyName(string displayName)
+    {
+        var service = NewService(
+            new RecordingMemberCommandPort(),
+            NewQueryPort(MemberImplementationKindNames.Workflow));
+
+        var act = () => service.UpdateAsync(
+            ScopeId,
+            MemberId,
+            new UpdateStudioMemberRequest(DisplayName: PatchValue<string>.Of(displayName)),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*displayName is required*");
+    }
+
+    [Fact]
+    public async Task PatchAsync_DisplayName_ShouldUseCreateTimeLengthLimit()
+    {
+        var service = NewService(
+            new RecordingMemberCommandPort(),
+            NewQueryPort(MemberImplementationKindNames.Workflow));
+        var tooLong = new string('x', StudioMemberInputLimits.MaxDisplayNameLength + 1);
+
+        var act = () => service.UpdateAsync(
+            ScopeId,
+            MemberId,
+            new UpdateStudioMemberRequest(DisplayName: PatchValue<string>.Of(tooLong)),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage($"*{StudioMemberInputLimits.MaxDisplayNameLength} characters*");
+    }
+
+    [Fact]
+    public async Task PatchAsync_ShouldValidateTeamIdBeforeDispatchingRename()
+    {
+        var commandPort = new RecordingMemberCommandPort();
+        var service = NewService(
+            commandPort,
+            NewQueryPort(MemberImplementationKindNames.Workflow));
+
+        var act = () => service.UpdateAsync(
+            ScopeId,
+            MemberId,
+            new UpdateStudioMemberRequest(
+                DisplayName: PatchValue<string>.Of("Renamed Workflow"),
+                TeamId: PatchValue<string>.Of("   ")),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*teamId must not be empty*");
+        commandPort.Renames.Should().BeEmpty();
+        commandPort.ImplementationUpdates.Should().BeEmpty();
+        commandPort.RecordedBindings.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task PatchAsync_ShouldValidateImplementationRefBeforeDispatchingRename()
+    {
+        var commandPort = new RecordingMemberCommandPort();
+        var service = NewService(
+            commandPort,
+            NewQueryPort(MemberImplementationKindNames.Workflow));
+
+        var act = () => service.UpdateAsync(
+            ScopeId,
+            MemberId,
+            new UpdateStudioMemberRequest(
+                DisplayName: PatchValue<string>.Of("Renamed Workflow"),
+                ImplementationRef: PatchValue<StudioMemberImplementationRefResponse>.Of(
+                    new StudioMemberImplementationRefResponse(
+                        ImplementationKind: MemberImplementationKindNames.Workflow,
+                        WorkflowId: "   "))),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*implementationRef.workflowId is required*");
+        commandPort.Renames.Should().BeEmpty();
+        commandPort.ImplementationUpdates.Should().BeEmpty();
+        commandPort.RecordedBindings.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task PatchAsync_WorkflowImplementationRef_ShouldUpdateMemberAuthorityOnly()
     {
         var commandPort = new RecordingMemberCommandPort();
@@ -39,7 +150,9 @@ public sealed class StudioMemberServicePatchTests
             ImplementationKind: MemberImplementationKindNames.Workflow,
             WorkflowId: "wf-alpha"));
         commandPort.RecordedBindings.Should().BeEmpty();
-        response.Summary.MemberId.Should().Be(MemberId);
+        response.Status.Should().Be(StudioMemberCommandStatusNames.Accepted);
+        response.ScopeId.Should().Be(ScopeId);
+        response.MemberId.Should().Be(MemberId);
     }
 
     [Fact]
@@ -68,7 +181,7 @@ public sealed class StudioMemberServicePatchTests
     }
 
     [Fact]
-    public async Task PatchAsync_GAgentImplementationRef_ShouldUpdateActorTypeName()
+    public async Task PatchAsync_GAgentImplementationRef_ShouldUpdateDiagnosticActorTypeName()
     {
         var commandPort = new RecordingMemberCommandPort();
         var service = NewService(
@@ -80,13 +193,13 @@ public sealed class StudioMemberServicePatchTests
             MemberId,
             ImplementationPatch(new StudioMemberImplementationRefResponse(
                     ImplementationKind: MemberImplementationKindNames.GAgent,
-                    ActorTypeName: "Aevatar.SomeAgent")),
+                    DiagnosticActorTypeName: "Aevatar.SomeAgent")),
             CancellationToken.None);
 
         commandPort.ImplementationUpdates.Should().ContainSingle()
             .Which.Implementation.Should().Be(new StudioMemberImplementationRefResponse(
                 ImplementationKind: MemberImplementationKindNames.GAgent,
-                ActorTypeName: "Aevatar.SomeAgent"));
+                DiagnosticActorTypeName: "Aevatar.SomeAgent"));
         commandPort.RecordedBindings.Should().BeEmpty();
     }
 
@@ -135,7 +248,7 @@ public sealed class StudioMemberServicePatchTests
     [Theory]
     [InlineData("")]
     [InlineData("   ")]
-    public async Task PatchAsync_GAgentImplementationRef_ShouldRejectEmptyActorTypeName(string actorTypeName)
+    public async Task PatchAsync_GAgentImplementationRef_ShouldRejectEmptyDiagnosticActorTypeName(string diagnosticActorTypeName)
     {
         var service = NewService(
             new RecordingMemberCommandPort(),
@@ -146,17 +259,17 @@ public sealed class StudioMemberServicePatchTests
             MemberId,
             ImplementationPatch(new StudioMemberImplementationRefResponse(
                     ImplementationKind: MemberImplementationKindNames.GAgent,
-                    ActorTypeName: actorTypeName)),
+                    DiagnosticActorTypeName: diagnosticActorTypeName)),
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*implementationRef.actorTypeName is required*");
+            .WithMessage("*implementationRef.diagnosticActorTypeName is required*");
     }
 
     [Theory]
     [InlineData("scriptId")]
     [InlineData("scriptRevision")]
-    [InlineData("actorTypeName")]
+    [InlineData("diagnosticActorTypeName")]
     public async Task PatchAsync_WorkflowImplementationRef_ShouldRejectNonWorkflowFields(string disallowedField)
     {
         var service = NewService(
@@ -173,10 +286,10 @@ public sealed class StudioMemberServicePatchTests
                 MemberImplementationKindNames.Workflow,
                 WorkflowId: "wf-alpha",
                 ScriptRevision: "rev-script-1"),
-            "actorTypeName" => new StudioMemberImplementationRefResponse(
+            "diagnosticActorTypeName" => new StudioMemberImplementationRefResponse(
                 MemberImplementationKindNames.Workflow,
                 WorkflowId: "wf-alpha",
-                ActorTypeName: "Aevatar.SomeAgent"),
+                DiagnosticActorTypeName: "Aevatar.SomeAgent"),
             _ => throw new ArgumentOutOfRangeException(nameof(disallowedField)),
         };
 
@@ -193,7 +306,7 @@ public sealed class StudioMemberServicePatchTests
     [Theory]
     [InlineData("workflowId")]
     [InlineData("workflowRevision")]
-    [InlineData("actorTypeName")]
+    [InlineData("diagnosticActorTypeName")]
     public async Task PatchAsync_ScriptImplementationRef_ShouldRejectNonScriptFields(string disallowedField)
     {
         var service = NewService(
@@ -210,10 +323,10 @@ public sealed class StudioMemberServicePatchTests
                 MemberImplementationKindNames.Script,
                 WorkflowRevision: "wf-rev-1",
                 ScriptId: "script-alpha"),
-            "actorTypeName" => new StudioMemberImplementationRefResponse(
+            "diagnosticActorTypeName" => new StudioMemberImplementationRefResponse(
                 MemberImplementationKindNames.Script,
                 ScriptId: "script-alpha",
-                ActorTypeName: "Aevatar.SomeAgent"),
+                DiagnosticActorTypeName: "Aevatar.SomeAgent"),
             _ => throw new ArgumentOutOfRangeException(nameof(disallowedField)),
         };
 
@@ -243,19 +356,19 @@ public sealed class StudioMemberServicePatchTests
             "workflowId" => new StudioMemberImplementationRefResponse(
                 MemberImplementationKindNames.GAgent,
                 WorkflowId: "wf-alpha",
-                ActorTypeName: "Aevatar.SomeAgent"),
+                DiagnosticActorTypeName: "Aevatar.SomeAgent"),
             "workflowRevision" => new StudioMemberImplementationRefResponse(
                 MemberImplementationKindNames.GAgent,
                 WorkflowRevision: "wf-rev-1",
-                ActorTypeName: "Aevatar.SomeAgent"),
+                DiagnosticActorTypeName: "Aevatar.SomeAgent"),
             "scriptId" => new StudioMemberImplementationRefResponse(
                 MemberImplementationKindNames.GAgent,
                 ScriptId: "script-alpha",
-                ActorTypeName: "Aevatar.SomeAgent"),
+                DiagnosticActorTypeName: "Aevatar.SomeAgent"),
             "scriptRevision" => new StudioMemberImplementationRefResponse(
                 MemberImplementationKindNames.GAgent,
                 ScriptRevision: "rev-script-1",
-                ActorTypeName: "Aevatar.SomeAgent"),
+                DiagnosticActorTypeName: "Aevatar.SomeAgent"),
             _ => throw new ArgumentOutOfRangeException(nameof(disallowedField)),
         };
 
@@ -332,7 +445,7 @@ public sealed class StudioMemberServicePatchTests
             MemberId: MemberId,
             ScopeId: ScopeId,
             DisplayName: "Alpha",
-            Description: string.Empty,
+            Description: "existing description",
             ImplementationKind: implementationKind,
             LifecycleStage: MemberLifecycleStageNames.BindReady,
             PublishedServiceId: PublishedServiceId,
@@ -352,29 +465,31 @@ public sealed class StudioMemberServicePatchTests
 
     private sealed class InMemoryQueryPort : IStudioMemberQueryPort
     {
-        private readonly StudioMemberDetailResponse _detail;
+        private readonly Queue<StudioMemberDetailResponse> _details;
 
-        public InMemoryQueryPort(StudioMemberDetailResponse detail)
+        public InMemoryQueryPort(params StudioMemberDetailResponse[] details)
         {
-            _detail = detail;
+            _details = new Queue<StudioMemberDetailResponse>(details);
         }
 
         public Task<StudioMemberRosterResponse> ListAsync(
             string scopeId,
             StudioMemberRosterPageRequest? page = null,
             CancellationToken ct = default) =>
-            Task.FromResult(new StudioMemberRosterResponse(scopeId, [_detail.Summary]));
+            Task.FromResult(new StudioMemberRosterResponse(scopeId, [_details.Peek().Summary]));
 
         public Task<StudioMemberDetailResponse?> GetAsync(
             string scopeId,
             string memberId,
             CancellationToken ct = default) =>
-            Task.FromResult<StudioMemberDetailResponse?>(_detail);
+            Task.FromResult<StudioMemberDetailResponse?>(
+                _details.Count > 1 ? _details.Dequeue() : _details.Peek());
     }
 
     private sealed class RecordingMemberCommandPort : IStudioMemberCommandPort
     {
         public List<ImplementationUpdate> ImplementationUpdates { get; } = [];
+        public List<RenameUpdate> Renames { get; } = [];
         public List<string> RecordedBindings { get; } = [];
 
         public Task<StudioMemberSummaryResponse> CreateAsync(
@@ -390,6 +505,16 @@ public sealed class StudioMemberServicePatchTests
             CancellationToken ct = default)
         {
             ImplementationUpdates.Add(new ImplementationUpdate(scopeId, memberId, implementation));
+            return Task.CompletedTask;
+        }
+
+        public Task RenameAsync(
+            string scopeId,
+            string memberId,
+            string displayName,
+            CancellationToken ct = default)
+        {
+            Renames.Add(new RenameUpdate(scopeId, memberId, displayName));
             return Task.CompletedTask;
         }
 
@@ -410,6 +535,8 @@ public sealed class StudioMemberServicePatchTests
         string ScopeId,
         string MemberId,
         StudioMemberImplementationRefResponse Implementation);
+
+    private sealed record RenameUpdate(string ScopeId, string MemberId, string DisplayName);
 
     private sealed class ThrowingBindingRunQueryPort : IStudioMemberBindingRunQueryPort
     {

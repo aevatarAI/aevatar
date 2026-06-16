@@ -1,7 +1,6 @@
 using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.Studio.Application.Studio.Abstractions;
-using Aevatar.Studio.Application.Studio.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -35,10 +34,15 @@ public sealed class DefaultUserLlmOptionsService : IUserLlmOptionsService
         var accessToken = await IssueAccessTokenAsync(query, ct).ConfigureAwait(false);
         var catalog = await _catalogClient.GetServicesAsync(query, accessToken, ct).ConfigureAwait(false);
         var available = catalog.Services.Select(NyxIdLlmServiceMapping.ToOption).ToArray();
-        var current = await ResolveCurrentAsync(query, available, ct).ConfigureAwait(false);
+        var currentConfig = await ResolveCurrentConfigAsync(query, ct).ConfigureAwait(false);
+        var current = ResolveCurrentOption(currentConfig?.PreferredLlmRoute, available);
         var setupHint = available.Length == 0 ? catalog.SetupHint : null;
 
-        return new UserLlmOptionsView(current, available, setupHint);
+        return new UserLlmOptionsView(current, available, setupHint)
+        {
+            CurrentRouteValue = UserConfigLlmRoute.Normalize(currentConfig?.PreferredLlmRoute),
+            CurrentModel = currentConfig?.DefaultModel,
+        };
     }
 
     private async Task<string> IssueAccessTokenAsync(UserLlmOptionsQuery query, CancellationToken ct)
@@ -52,9 +56,8 @@ public sealed class DefaultUserLlmOptionsService : IUserLlmOptionsService
         return handle.AccessToken;
     }
 
-    private async Task<UserLlmOption?> ResolveCurrentAsync(
+    private async Task<StudioUserConfig?> ResolveCurrentConfigAsync(
         UserLlmOptionsQuery query,
-        IReadOnlyList<UserLlmOption> available,
         CancellationToken ct)
     {
         if (_scopeFactory is null || string.IsNullOrWhiteSpace(query.BindingId.Value))
@@ -83,7 +86,14 @@ public sealed class DefaultUserLlmOptionsService : IUserLlmOptionsService
             return null;
         }
 
-        var route = UserConfigLlmRoute.Normalize(config.PreferredLlmRoute);
+        return config;
+    }
+
+    private static UserLlmOption? ResolveCurrentOption(
+        string? routeValue,
+        IReadOnlyList<UserLlmOption> available)
+    {
+        var route = UserConfigLlmRoute.Normalize(routeValue);
         if (string.IsNullOrWhiteSpace(route))
             return null;
 

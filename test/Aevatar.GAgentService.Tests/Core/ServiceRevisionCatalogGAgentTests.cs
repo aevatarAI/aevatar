@@ -28,9 +28,10 @@ public sealed class ServiceRevisionCatalogGAgentTests
         var eventStore = new InMemoryEventStore();
         var identity = GAgentServiceTestKit.CreateIdentity();
         var actorId = ServiceActorIds.RevisionCatalog(identity);
+        var dispatchPort = new RecordingActorDispatchPort();
         var adapter = new RecordingAdapter(_ => Task.FromResult(
             GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1")));
-        var agent = CreateAgent(eventStore, adapter, actorId);
+        var agent = CreateAgent(eventStore, adapter, actorId, dispatchPort);
         await agent.ActivateAsync();
 
         await agent.HandleCreateRevisionAsync(new CreateServiceRevisionCommand
@@ -54,6 +55,22 @@ public sealed class ServiceRevisionCatalogGAgentTests
         record.Endpoints.Should().ContainSingle(x => x.EndpointId == "run");
         record.PreparedArtifact.Should().NotBeNull();
         record.PreparedArtifact.RevisionId.Should().Be("r1");
+        dispatchPort.Calls.Should().HaveCount(3);
+        dispatchPort.Calls.Should().OnlyContain(x =>
+            x.ActorId == ServiceActorIds.InvocationCatalog(identity));
+        var createObservation = dispatchPort.Calls[0].Envelope.Payload.Unpack<ObserveServiceInvocationRevisionsCommand>();
+        createObservation.SourceRevisionVersion.Should().Be(1);
+        createObservation.Revisions.Should().ContainKey("r1")
+            .WhoseValue.Status.Should().Be(ServiceRevisionStatus.Created);
+        var prepareObservation = dispatchPort.Calls[1].Envelope.Payload.Unpack<ObserveServiceInvocationRevisionsCommand>();
+        prepareObservation.SourceRevisionVersion.Should().Be(2);
+        prepareObservation.Revisions["r1"].Status.Should().Be(ServiceRevisionStatus.Prepared);
+        prepareObservation.Revisions["r1"].PreparedArtifact.Should().NotBeNull();
+        prepareObservation.Revisions["r1"].PreparedArtifact.Endpoints.Should().ContainSingle(x => x.EndpointId == "run");
+        var publishObservation = dispatchPort.Calls[2].Envelope.Payload.Unpack<ObserveServiceInvocationRevisionsCommand>();
+        publishObservation.SourceRevisionVersion.Should().Be(3);
+        publishObservation.Identity.Should().BeEquivalentTo(identity);
+        publishObservation.Revisions["r1"].Status.Should().Be(ServiceRevisionStatus.Published);
 
         await agent.DeactivateAsync();
 
@@ -251,6 +268,7 @@ public sealed class ServiceRevisionCatalogGAgentTests
             new InMemoryEventStore(),
             ServiceActorIds.RevisionCatalog(identity),
             () => new ServiceRevisionCatalogGAgent(
+                GAgentServiceTestKit.NoOpDispatchPort,
                 [],
                 new PreparedServiceRevisionArtifactAssembler()));
 
@@ -321,12 +339,14 @@ public sealed class ServiceRevisionCatalogGAgentTests
     private static ServiceRevisionCatalogGAgent CreateAgent(
         InMemoryEventStore eventStore,
         IServiceImplementationAdapter adapter,
-        string actorId)
+        string actorId,
+        IActorDispatchPort? dispatchPort = null)
     {
         return GAgentServiceTestKit.CreateStatefulAgent<ServiceRevisionCatalogGAgent, ServiceRevisionCatalogState>(
             eventStore,
             actorId,
             () => new ServiceRevisionCatalogGAgent(
+                dispatchPort ?? GAgentServiceTestKit.NoOpDispatchPort,
                 [adapter],
                 new PreparedServiceRevisionArtifactAssembler()));
     }

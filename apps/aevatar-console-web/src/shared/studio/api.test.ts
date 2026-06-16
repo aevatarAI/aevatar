@@ -942,7 +942,7 @@ describe('studioApi host-session requests', () => {
         implementationKind: 'GAgent',
         expectedActorId: 'orders-gagent:dep-1',
         gAgent: {
-          actorTypeName: 'Tests.OrdersGAgent, Tests',
+          agentKind: 'Tests.OrdersGAgent',
         },
       }),
     } as Response);
@@ -951,7 +951,7 @@ describe('studioApi host-session requests', () => {
     const result = await studioApi.bindScopeGAgent({
       scopeId: 'scope-1',
       displayName: 'orders-gagent',
-      actorTypeName: 'Tests.OrdersGAgent, Tests',
+      agentKind: 'Tests.OrdersGAgent',
       revisionId: 'rev-1',
       endpoints: [
         {
@@ -966,9 +966,9 @@ describe('studioApi host-session requests', () => {
 
     expect(result.implementationKind).toBe('gagent');
     expect(result.targetKind).toBe('gagent');
-    expect(result.targetName).toBe('Tests.OrdersGAgent, Tests');
+    expect(result.targetName).toBe('orders-gagent');
     expect(result.gAgent).toEqual({
-      actorTypeName: 'Tests.OrdersGAgent, Tests',
+      diagnosticClrTypeName: '',
     });
 
     const [input, init] = fetchMock.mock.calls[0] as [
@@ -981,7 +981,7 @@ describe('studioApi host-session requests', () => {
       implementationKind: 'gagent',
       displayName: 'orders-gagent',
       gagent: {
-        actorTypeName: 'Tests.OrdersGAgent, Tests',
+        agentKind: 'Tests.OrdersGAgent',
         endpoints: [
           {
             endpointId: 'run',
@@ -1455,7 +1455,8 @@ describe('studioApi host-session requests', () => {
             workflowRevision: 'rev-workflow-joker',
             scriptId: null,
             scriptRevision: null,
-            actorTypeName: null,
+            agentKind: null,
+            diagnosticActorTypeName: null,
           },
           lifecycleStage: 'bind_ready',
           publishedServiceId: 'member-joker',
@@ -1707,7 +1708,8 @@ describe('studioApi host-session requests', () => {
         workflowRevision: 'rev-2',
         scriptId: null,
         scriptRevision: null,
-        actorTypeName: null,
+        agentKind: null,
+        diagnosticActorTypeName: null,
       },
       lastBinding: {
         publishedServiceId: 'member-joker',
@@ -1908,26 +1910,12 @@ describe('studioApi host-session requests', () => {
 
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
-      status: 200,
+      status: 202,
       json: async () => ({
-        summary: {
-          memberId: 'orders-draft',
-          scopeId: 'scope-1',
-          displayName: 'orders-draft',
-          description: '',
-          implementationKind: 'workflow',
-          lifecycleStage: 'created',
-          publishedServiceId: '',
-          lastBoundRevisionId: null,
-          teamId: 'team-1',
-          createdAt: '2026-04-27T08:10:00Z',
-          updatedAt: '2026-04-27T08:11:00Z',
-        },
-        implementationRef: {
-          implementationKind: 'workflow',
-          workflowId: 'orders-draft',
-        },
-        lastBinding: null,
+        status: 'accepted',
+        scopeId: 'scope-1',
+        memberId: 'orders-draft',
+        ackedAt: '2026-04-27T08:11:00Z',
       }),
     } as Response);
     global.fetch = fetchMock as typeof global.fetch;
@@ -1939,28 +1927,10 @@ describe('studioApi host-session requests', () => {
         teamId: 'team-1',
       }),
     ).resolves.toEqual({
-      summary: {
-        memberId: 'orders-draft',
-        scopeId: 'scope-1',
-        displayName: 'orders-draft',
-        description: '',
-        implementationKind: 'workflow',
-        lifecycleStage: 'created',
-        publishedServiceId: '',
-        lastBoundRevisionId: null,
-        teamId: 'team-1',
-        createdAt: '2026-04-27T08:10:00Z',
-        updatedAt: '2026-04-27T08:11:00Z',
-      },
-      implementationRef: {
-        actorTypeName: null,
-        implementationKind: 'workflow',
-        scriptId: null,
-        scriptRevision: null,
-        workflowId: 'orders-draft',
-        workflowRevision: null,
-      },
-      lastBinding: null,
+      status: 'accepted',
+      scopeId: 'scope-1',
+      memberId: 'orders-draft',
+      ackedAt: '2026-04-27T08:11:00Z',
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -1970,6 +1940,56 @@ describe('studioApi host-session requests', () => {
         method: 'PATCH',
         body: JSON.stringify({
           teamId: 'team-1',
+        }),
+      }),
+    );
+  });
+
+  it('renames a workflow member with the member patch endpoint', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 202,
+      json: async () => ({
+        status: 'accepted',
+        scopeId: 'scope-1',
+        memberId: 'm-alpha',
+        ackedAt: '2026-04-27T08:12:00Z',
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      studioApi.updateMemberDisplayName({
+        scopeId: 'scope-1',
+        memberId: 'm-alpha',
+        displayName: '  Workflow Alpha Renamed  ',
+      }),
+    ).resolves.toEqual({
+      status: 'accepted',
+      scopeId: 'scope-1',
+      memberId: 'm-alpha',
+      ackedAt: '2026-04-27T08:12:00Z',
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/scopes/scope-1/members/m-alpha',
+      expect.objectContaining({
+        credentials: 'same-origin',
+        method: 'PATCH',
+        body: JSON.stringify({
+          displayName: 'Workflow Alpha Renamed',
         }),
       }),
     );
@@ -1990,26 +2010,12 @@ describe('studioApi host-session requests', () => {
 
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
-      status: 200,
+      status: 202,
       json: async () => ({
-        summary: {
-          memberId: 'm-alpha',
-          scopeId: 'scope-1',
-          displayName: 'Alpha',
-          description: '',
-          implementationKind: 'workflow',
-          lifecycleStage: 'build_ready',
-          publishedServiceId: 'svc-alpha',
-          lastBoundRevisionId: null,
-          teamId: 'team-1',
-          createdAt: '2026-04-27T08:10:00Z',
-          updatedAt: '2026-04-27T08:11:00Z',
-        },
-        implementationRef: {
-          implementationKind: 'workflow',
-          workflowId: 'wf-alpha',
-        },
-        lastBinding: null,
+        status: 'accepted',
+        scopeId: 'scope-1',
+        memberId: 'm-alpha',
+        ackedAt: '2026-04-27T08:11:00Z',
       }),
     } as Response);
     global.fetch = fetchMock as typeof global.fetch;
@@ -2023,14 +2029,11 @@ describe('studioApi host-session requests', () => {
           workflowId: 'wf-alpha',
         },
       }),
-    ).resolves.toMatchObject({
-      implementationRef: {
-        implementationKind: 'workflow',
-        workflowId: 'wf-alpha',
-      },
-      summary: {
-        memberId: 'm-alpha',
-      },
+    ).resolves.toEqual({
+      status: 'accepted',
+      scopeId: 'scope-1',
+      memberId: 'm-alpha',
+      ackedAt: '2026-04-27T08:11:00Z',
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -2048,7 +2051,66 @@ describe('studioApi host-session requests', () => {
     );
   });
 
-  it('removes an existing workflow member from a team with explicit null teamId', async () => {
+  it('synthesizes a member command response from legacy member detail for team patch responses', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 202,
+      json: async () => ({
+        summary: {
+          memberId: 'm-alpha',
+          scopeId: 'scope-1',
+          displayName: 'Workflow Alpha',
+          description: '',
+          implementationKind: 'workflow',
+          implementationRef: {
+            implementationKind: 'workflow',
+            workflowId: 'wf-alpha',
+            workflowRevision: 'rev-wf-alpha',
+          },
+          lifecycleStage: 'build_ready',
+          publishedServiceId: 'svc-alpha',
+          lastBoundRevisionId: null,
+          teamId: 'team-1',
+          createdAt: '2026-04-27T08:00:00Z',
+          updatedAt: '2026-04-27T08:11:00Z',
+        },
+        implementationRef: {
+          implementationKind: 'workflow',
+          workflowId: 'wf-alpha',
+          workflowRevision: 'rev-wf-alpha',
+        },
+        lastBinding: null,
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      studioApi.updateMemberTeamAssignment({
+        scopeId: 'scope-1',
+        memberId: 'm-alpha',
+        teamId: 'team-1',
+      }),
+    ).resolves.toEqual({
+      status: 'accepted',
+      scopeId: 'scope-1',
+      memberId: 'm-alpha',
+      ackedAt: null,
+    });
+  });
+
+  it('synthesizes a member command response from legacy member detail for implementation ref patch responses', async () => {
     persistAuthSession({
       tokens: {
         accessToken: 'access-token',
@@ -2066,20 +2128,190 @@ describe('studioApi host-session requests', () => {
       status: 200,
       json: async () => ({
         summary: {
-          memberId: 'orders-draft',
+          memberId: 'm-alpha',
           scopeId: 'scope-1',
-          displayName: 'orders-draft',
+          displayName: 'Workflow Alpha',
           description: '',
           implementationKind: 'workflow',
-          lifecycleStage: 'created',
-          publishedServiceId: '',
+          implementationRef: {
+            implementationKind: 'workflow',
+            workflowId: 'wf-alpha',
+            workflowRevision: 'rev-wf-alpha',
+          },
+          lifecycleStage: 'build_ready',
+          publishedServiceId: 'svc-alpha',
           lastBoundRevisionId: null,
-          teamId: null,
-          createdAt: '2026-04-27T08:10:00Z',
+          teamId: 'team-1',
+          createdAt: '2026-04-27T08:00:00Z',
           updatedAt: '2026-04-27T08:11:00Z',
         },
-        implementationRef: null,
+        implementationRef: {
+          implementationKind: 'workflow',
+          workflowId: 'wf-alpha',
+          workflowRevision: 'rev-wf-alpha',
+        },
         lastBinding: null,
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      studioApi.updateMemberImplementationRef({
+        scopeId: 'scope-1',
+        memberId: 'm-alpha',
+        implementationRef: {
+          implementationKind: 'workflow',
+          workflowId: 'wf-alpha',
+          workflowRevision: 'rev-wf-alpha',
+        },
+      }),
+    ).resolves.toEqual({
+      status: 'accepted',
+      scopeId: 'scope-1',
+      memberId: 'm-alpha',
+      ackedAt: null,
+    });
+  });
+
+  it('synthesizes a member command response when legacy detail reflects the display name patch', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        summary: {
+          memberId: 'm-alpha',
+          scopeId: 'scope-1',
+          displayName: 'Workflow Alpha Renamed',
+          description: '',
+          implementationKind: 'workflow',
+          implementationRef: {
+            implementationKind: 'workflow',
+            workflowId: 'wf-alpha',
+            workflowRevision: 'rev-wf-alpha',
+          },
+          lifecycleStage: 'build_ready',
+          publishedServiceId: 'svc-alpha',
+          lastBoundRevisionId: null,
+          teamId: 'team-1',
+          createdAt: '2026-04-27T08:00:00Z',
+          updatedAt: '2026-04-27T08:12:00Z',
+        },
+        implementationRef: {
+          implementationKind: 'workflow',
+          workflowId: 'wf-alpha',
+          workflowRevision: 'rev-wf-alpha',
+        },
+        lastBinding: null,
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      studioApi.updateMemberDisplayName({
+        scopeId: 'scope-1',
+        memberId: 'm-alpha',
+        displayName: '  Workflow Alpha Renamed  ',
+      }),
+    ).resolves.toEqual({
+      status: 'accepted',
+      scopeId: 'scope-1',
+      memberId: 'm-alpha',
+      ackedAt: null,
+    });
+  });
+
+  it('synthesizes a member command response when legacy detail ignores the display name patch', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        summary: {
+          memberId: 'm-alpha',
+          scopeId: 'scope-1',
+          displayName: 'Workflow Alpha',
+          description: '',
+          implementationKind: 'workflow',
+          implementationRef: {
+            implementationKind: 'workflow',
+            workflowId: 'wf-alpha',
+            workflowRevision: 'rev-wf-alpha',
+          },
+          lifecycleStage: 'build_ready',
+          publishedServiceId: 'svc-alpha',
+          lastBoundRevisionId: null,
+          teamId: 'team-1',
+          createdAt: '2026-04-27T08:00:00Z',
+          updatedAt: '2026-04-27T08:12:00Z',
+        },
+        implementationRef: {
+          implementationKind: 'workflow',
+          workflowId: 'wf-alpha',
+          workflowRevision: 'rev-wf-alpha',
+        },
+        lastBinding: null,
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      studioApi.updateMemberDisplayName({
+        scopeId: 'scope-1',
+        memberId: 'm-alpha',
+        displayName: 'Workflow Alpha Renamed',
+      }),
+    ).resolves.toEqual({
+      status: 'accepted',
+      scopeId: 'scope-1',
+      memberId: 'm-alpha',
+      ackedAt: null,
+    });
+  });
+
+  it('removes an existing workflow member from a team with explicit null teamId', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 202,
+      json: async () => ({
+        status: 'accepted',
+        scopeId: 'scope-1',
+        memberId: 'orders-draft',
+        ackedAt: '2026-04-27T08:11:00Z',
       }),
     } as Response);
     global.fetch = fetchMock as typeof global.fetch;
@@ -2091,21 +2323,10 @@ describe('studioApi host-session requests', () => {
         teamId: null,
       }),
     ).resolves.toEqual({
-      summary: {
-        memberId: 'orders-draft',
-        scopeId: 'scope-1',
-        displayName: 'orders-draft',
-        description: '',
-        implementationKind: 'workflow',
-        lifecycleStage: 'created',
-        publishedServiceId: '',
-        lastBoundRevisionId: null,
-        teamId: null,
-        createdAt: '2026-04-27T08:10:00Z',
-        updatedAt: '2026-04-27T08:11:00Z',
-      },
-      implementationRef: null,
-      lastBinding: null,
+      status: 'accepted',
+      scopeId: 'scope-1',
+      memberId: 'orders-draft',
+      ackedAt: '2026-04-27T08:11:00Z',
     });
 
     expect(fetchMock).toHaveBeenCalledWith(

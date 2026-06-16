@@ -20,6 +20,8 @@ import {
 import { studioApi } from "@/shared/studio/api";
 import {
   normalizeStudioMemberBindingImplementationKind,
+  normalizeStudioMemberLifecycleStage,
+  type StudioMemberBindingContract,
 } from "@/shared/studio/models";
 import {
   AevatarInspectorEmpty,
@@ -38,6 +40,13 @@ type TeamMemberInvokeRouteState = {
 
 function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? "";
+}
+
+function getCompletedBindingRevisionId(
+  lastBinding: StudioMemberBindingContract | null | undefined,
+  lastBoundRevisionId: string | null | undefined,
+): string {
+  return trimOptional(lastBinding?.revisionId) || trimOptional(lastBoundRevisionId);
 }
 
 function decodePathSegment(value: string): string {
@@ -122,18 +131,28 @@ const TeamMemberInvokePage: React.FC = () => {
   const memberKind = normalizeStudioMemberBindingImplementationKind(
     memberSummary?.implementationKind,
   );
+  const memberLifecycleStage = normalizeStudioMemberLifecycleStage(
+    memberSummary?.lifecycleStage,
+  );
   const lastBinding = bindingQuery.data?.lastBinding ?? memberQuery.data?.lastBinding ?? null;
-  const publishedServiceId =
-    trimOptional(lastBinding?.publishedServiceId) ||
-    trimOptional(memberSummary?.publishedServiceId);
+  const completedBindingRevisionId = getCompletedBindingRevisionId(
+    lastBinding,
+    memberSummary?.lastBoundRevisionId,
+  );
+  const memberBindingCompleted =
+    memberLifecycleStage === "bind_ready" && Boolean(completedBindingRevisionId);
+  const boundPublishedServiceId = memberBindingCompleted
+    ? trimOptional(lastBinding?.publishedServiceId) ||
+      trimOptional(memberSummary?.publishedServiceId)
+    : "";
   const selectedService = React.useMemo(
     () =>
-      publishedServiceId
+      boundPublishedServiceId
         ? (servicesQuery.data ?? []).find(
-            (service) => trimOptional(service.serviceId) === publishedServiceId,
+            (service) => trimOptional(service.serviceId) === boundPublishedServiceId,
           ) ?? null
         : null,
-    [publishedServiceId, servicesQuery.data],
+    [boundPublishedServiceId, servicesQuery.data],
   );
   const invokeServices = React.useMemo(
     () =>
@@ -149,10 +168,10 @@ const TeamMemberInvokePage: React.FC = () => {
       "team-member-invoke",
       "service-revisions",
       route.scopeId,
-      publishedServiceId,
+      boundPublishedServiceId,
     ],
-    enabled: Boolean(route.scopeId && publishedServiceId),
-    queryFn: () => scopeRuntimeApi.getServiceRevisions(route.scopeId, publishedServiceId),
+    enabled: Boolean(route.scopeId && boundPublishedServiceId),
+    queryFn: () => scopeRuntimeApi.getServiceRevisions(route.scopeId, boundPublishedServiceId),
   });
   const memberRevision =
     getScopeServiceCurrentRevision(serviceRevisionQuery.data) ??
@@ -222,7 +241,7 @@ const TeamMemberInvokePage: React.FC = () => {
       };
     }
 
-    if (memberSummary && !publishedServiceId) {
+    if (memberSummary && !memberBindingCompleted) {
       return {
         description: t(
           "pages.teammemberinvoke.unbound.description",
@@ -233,7 +252,7 @@ const TeamMemberInvokePage: React.FC = () => {
       };
     }
 
-    if (memberSummary && publishedServiceId && !selectedService && !servicesQuery.isLoading) {
+    if (memberSummary && memberBindingCompleted && !selectedService && !servicesQuery.isLoading) {
       return {
         description: t(
           "pages.teammemberinvoke.service.pending.description",
@@ -259,9 +278,9 @@ const TeamMemberInvokePage: React.FC = () => {
   }, [
     invokeServices.length,
     loadError,
+    memberBindingCompleted,
     memberKind,
     memberSummary,
-    publishedServiceId,
     route.memberId,
     route.scopeId,
     route.teamId,
@@ -315,7 +334,7 @@ const TeamMemberInvokePage: React.FC = () => {
           </AevatarPanel>
         ) : (
           <StudioMemberInvokePanel
-            initialServiceId={publishedServiceId}
+            initialServiceId={boundPublishedServiceId}
             memberId={route.memberId}
             memberRevision={memberRevision}
             runtimeTarget="service"

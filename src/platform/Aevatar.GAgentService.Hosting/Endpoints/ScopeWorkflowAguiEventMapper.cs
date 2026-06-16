@@ -9,7 +9,8 @@ namespace Aevatar.GAgentService.Hosting.Endpoints;
 
 internal static class ScopeWorkflowAguiEventMapper
 {
-    public static readonly TypeRegistry TypeRegistry = WorkflowJsonTypeRegistry.Create(AGUIEvent.Descriptor.File);
+    public static readonly TypeRegistry TypeRegistry = WorkflowJsonTypeRegistry.Create(
+        AGUIEvent.Descriptor.File);
 
     public static AGUIEvent BuildRunContextEvent(WorkflowChatRunAcceptedReceipt receipt)
     {
@@ -34,14 +35,15 @@ internal static class ScopeWorkflowAguiEventMapper
     public static AGUIEvent BuildRunErrorEvent(Exception exception)
     {
         ArgumentNullException.ThrowIfNull(exception);
+        var (code, message) = WorkflowCapabilityEndpoints.WorkflowExecutionErrorMapper.ToError(exception);
 
         return new AGUIEvent
         {
             Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             RunError = new RunErrorEvent
             {
-                Message = exception.Message,
-                Code = "EXECUTION_FAILED",
+                Message = message,
+                Code = code,
             },
         };
     }
@@ -135,6 +137,18 @@ internal static class ScopeWorkflowAguiEventMapper
                 {
                     ToolCallId = frame.ToolCallEnd.ToolCallId,
                     Result = frame.ToolCallEnd.Result,
+                };
+                return true;
+            case WorkflowRunEventEnvelope.EventOneofCase.Usage:
+                aguiEvent.Usage = new UsageEvent
+                {
+                    Available = frame.Usage.Available,
+                    PromptTokens = frame.Usage.PromptTokens,
+                    CompletionTokens = frame.Usage.CompletionTokens,
+                    TotalTokens = frame.Usage.TotalTokens,
+                    Model = frame.Usage.Model,
+                    Cost = frame.Usage.Cost,
+                    LatencyMs = frame.Usage.LatencyMs,
                 };
                 return true;
             case WorkflowRunEventEnvelope.EventOneofCase.Custom:

@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Workflow.Abstractions;
@@ -13,6 +14,9 @@ using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics.CodeAnalysis;
+using ApplicationWorkflowFileArtifactOwnershipPort = Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowFileArtifactOwnershipPort;
+using ApplicationWorkflowFileRef = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileRef;
+using ApplicationWorkflowFileSourceKind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileSourceKind;
 
 namespace Aevatar.Workflow.Core;
 
@@ -28,6 +32,7 @@ namespace Aevatar.Workflow.Core;
 // Refactor (iter78/cluster-078-workflow-subrun-lifecycle-handoff):
 //   Old pattern: create/link/bind/start child before persisting invocation → orphan on crash
 //   New principle (narrow): persist PendingSubWorkflowInvocation before child side-effects; 4 phases idempotent by invocation_id + child_actor_id
+[GAgent("workflow.run")]
 public sealed class WorkflowRunGAgent
     : GAgentBase<WorkflowRunState>,
       IWorkflowExecutionStateHost
@@ -47,13 +52,15 @@ public sealed class WorkflowRunGAgent
     private readonly IReadOnlyList<IWorkflowModuleConfigurator> _moduleConfigurators;
     private readonly ISet<string> _knownModuleStepTypes;
     private readonly SubWorkflowOrchestrator _subWorkflowOrchestrator;
+    private readonly ApplicationWorkflowFileArtifactOwnershipPort? _fileArtifactOwnership;
 
     public WorkflowRunGAgent(
         IActorRuntime runtime,
         IActorDispatchPort dispatchPort,
         IEventModuleFactory<IWorkflowExecutionContext> stepExecutorFactory,
         IEnumerable<IWorkflowModulePack> modulePacks,
-        IWorkflowDefinitionResolver? workflowDefinitionResolver = null)
+        IWorkflowDefinitionResolver? workflowDefinitionResolver = null,
+        ApplicationWorkflowFileArtifactOwnershipPort? fileArtifactOwnership = null)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
@@ -81,6 +88,7 @@ public sealed class WorkflowRunGAgent
             packs
                 .SelectMany(x => x.Modules)
                 .SelectMany(x => x.Names));
+        _fileArtifactOwnership = fileArtifactOwnership;
 
         _subWorkflowOrchestrator = new SubWorkflowOrchestrator(
             _runtime,
@@ -98,6 +106,8 @@ public sealed class WorkflowRunGAgent
     public string RunId => string.IsNullOrWhiteSpace(State.RunId)
         ? Id
         : State.RunId;
+
+    public string ScopeId => State.ScopeId ?? string.Empty;
 
     WorkflowExecutionRuntimeContext IWorkflowExecutionStateHost.RuntimeContext => _runtimeContext;
 
@@ -259,34 +269,48 @@ public sealed class WorkflowRunGAgent
                 CancellationToken.None);
         }
 
-        // Refactor (iter169/cluster-issue1551): Old pattern: connector auth was promoted from request.Metadata. New principle: connector auth is carried by WorkflowChatRequestEvent.ConnectorHttpAuthorization.
-        var connectorAuthorizationDelta = WorkflowRunExecutionContextStateAccess.BuildConnectorAuthorizationDelta(request.ConnectorHttpAuthorization);
+        var callerCredentialDelta = WorkflowRunExecutionContextStateAccess.BuildCallerCredentialDelta(request.CallerCredential);
         _runtimeContext.ApplyRequestMetadata(request.Metadata);
         _runtimeContext.ApplySenderNyxIdAccessToken(request.LlmControl?.SenderNyxIdAccessToken);
         var llmControlDelta = WorkflowRunExecutionContextStateAccess.BuildLlmControlDelta(request.LlmControl);
+        var inputFileRefs = ExtractInputFileRefs(request.InputParts);
 
         await EnsureAgentTreeAsync();
 
         var runId = string.IsNullOrWhiteSpace(State.RunId)
             ? WorkflowRunIdNormalizer.Normalize(Id)
             : WorkflowRunIdNormalizer.Normalize(State.RunId);
-        var executionContextDelta = MergeExecutionContextDeltas(connectorAuthorizationDelta, llmControlDelta);
+        var scopeId = ResolveScopeId(request.ScopeId, State.ScopeId);
+        inputFileRefs = StampInputFileRefs(inputFileRefs, runId, scopeId);
+        if (!await BindInputFileArtifactsAsync(inputFileRefs, runId, scopeId, request.SessionId))
+            return;
+
+        var executionContextDelta = MergeExecutionContextDeltas(
+            callerCredentialDelta,
+            llmControlDelta,
+            WorkflowRunExecutionContextStateAccess.ClearWorkflowRuntimeDelta());
+        var executionInput = ResolveExecutionInput(request);
         await PersistDomainEventAsync(new WorkflowRunExecutionStartedEvent
         {
             RunId = runId,
             WorkflowName = _compiledWorkflow.Name,
-            Input = request.Prompt ?? string.Empty,
+            Input = executionInput,
             DefinitionActorId = State.DefinitionActorId ?? string.Empty,
-            ScopeId = ResolveScopeId(request.ScopeId, State.ScopeId),
+            ScopeId = scopeId,
             ExecutionContextDelta = executionContextDelta,
+            Attempt = Math.Max(0, request.ForkSeed?.Attempt ?? 0),
+            InputFileRefs = { inputFileRefs.Select(static fileRef => fileRef.Clone()) },
         });
 
-        await PublishAsync(new StartWorkflowEvent
+        var start = new StartWorkflowEvent
         {
             WorkflowName = _compiledWorkflow.Name,
-            Input = request.Prompt,
+            Input = executionInput,
             RunId = runId,
-        }, TopologyAudience.Self);
+            ForkSeed = request.ForkSeed,
+        };
+        start.InputFileRefs.Add(inputFileRefs.Select(static fileRef => fileRef.Clone()));
+        await PublishAsync(start, TopologyAudience.Self);
     }
 
     [EventHandler]
@@ -335,6 +359,8 @@ public sealed class WorkflowRunGAgent
             Input = request.Input ?? string.Empty,
             DefinitionActorId = State.DefinitionActorId ?? string.Empty,
             ScopeId = State.ScopeId ?? string.Empty,
+            ExecutionContextDelta = WorkflowRunExecutionContextStateAccess.ClearWorkflowRuntimeDelta(),
+            Attempt = State.ForkAttempt,
         });
 
         await PublishAsync(new StartWorkflowEvent
@@ -344,6 +370,109 @@ public sealed class WorkflowRunGAgent
             RunId = runId,
         }, TopologyAudience.Self);
     }
+
+    private static string ResolveExecutionInput(WorkflowChatRequestEvent request)
+    {
+        if (request.ForkSeed != null &&
+            request.ForkSeed.Variables.TryGetValue("input", out var seedInput))
+        {
+            return seedInput ?? string.Empty;
+        }
+
+        return request.Prompt ?? string.Empty;
+    }
+
+    private static IReadOnlyList<WorkflowFileRef> ExtractInputFileRefs(
+        IEnumerable<WorkflowChatInputPartPayload> inputParts) =>
+        inputParts
+            .Where(static part => part.FileRef is not null && HasFileRefIdentity(part.FileRef))
+            .Select(static part => part.FileRef.Clone())
+            .ToArray();
+
+    private static bool HasFileRefIdentity(WorkflowFileRef fileRef) =>
+        !string.IsNullOrWhiteSpace(fileRef.FileId) ||
+        !string.IsNullOrWhiteSpace(fileRef.ArtifactId);
+
+    private static IReadOnlyList<WorkflowFileRef> StampInputFileRefs(
+        IReadOnlyList<WorkflowFileRef> fileRefs,
+        string runId,
+        string scopeId) =>
+        fileRefs
+            .Select(fileRef =>
+            {
+                var clone = fileRef.Clone();
+                clone.OwnerRunId = runId;
+                clone.OwnerScopeId = scopeId ?? string.Empty;
+                return clone;
+            })
+            .ToArray();
+
+    private async Task<bool> BindInputFileArtifactsAsync(
+        IReadOnlyList<WorkflowFileRef> fileRefs,
+        string runId,
+        string scopeId,
+        string? sessionId)
+    {
+        if (fileRefs.Count == 0 || _fileArtifactOwnership == null)
+            return true;
+
+        foreach (var fileRef in fileRefs.Where(static x => !string.IsNullOrWhiteSpace(x.ArtifactId)))
+        {
+            try
+            {
+                await _fileArtifactOwnership.BindOwnerAsync(
+                    ToApplicationWorkflowFileRef(fileRef),
+                    runId,
+                    scopeId,
+                    CancellationToken.None);
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or FileNotFoundException or IOException or UnauthorizedAccessException)
+            {
+                Logger.LogWarning(ex, "Workflow input file artifact owner binding failed: {RunId}", runId);
+                await PublishAsync(new WorkflowLlmInvocationCompletedEvent
+                {
+                    RunId = runId,
+                    Content = "Workflow input file artifact could not be bound to the current run.",
+                    SessionId = sessionId ?? string.Empty,
+                    Success = false,
+                    Error = "workflow_input_file_binding_failed",
+                }, TopologyAudience.Parent);
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static ApplicationWorkflowFileRef ToApplicationWorkflowFileRef(WorkflowFileRef source) =>
+        new()
+        {
+            FileId = source.FileId,
+            ArtifactId = source.ArtifactId,
+            SourceKind = ToApplicationWorkflowFileSourceKind(source.SourceKind),
+            SourceMessageId = source.SourceMessageId,
+            SourceResourceKey = source.SourceResourceKey,
+            FileName = source.FileName,
+            MediaType = source.MediaType,
+            SizeBytes = source.SizeBytes,
+            Sha256 = source.Sha256,
+            CreatedAtUnixMs = source.CreatedAtUnixMs,
+            ExpiresAtUnixMs = source.ExpiresAtUnixMs,
+            OwnerRunId = source.OwnerRunId,
+            OwnerScopeId = source.OwnerScopeId,
+        };
+
+    private static ApplicationWorkflowFileSourceKind ToApplicationWorkflowFileSourceKind(
+        WorkflowFileSourceKind source) =>
+        source switch
+        {
+            WorkflowFileSourceKind.ChatInput => ApplicationWorkflowFileSourceKind.ChatInput,
+            WorkflowFileSourceKind.FormUpload => ApplicationWorkflowFileSourceKind.FormUpload,
+            WorkflowFileSourceKind.ConnectedServiceResource => ApplicationWorkflowFileSourceKind.ConnectedServiceResource,
+            WorkflowFileSourceKind.ExternalResource => ApplicationWorkflowFileSourceKind.ExternalResource,
+            WorkflowFileSourceKind.Generated => ApplicationWorkflowFileSourceKind.Generated,
+            _ => ApplicationWorkflowFileSourceKind.Unspecified,
+        };
 
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
     public async Task HandleSubWorkflowInvokeRequested(SubWorkflowInvokeRequestedEvent request)
@@ -464,6 +593,7 @@ public sealed class WorkflowRunGAgent
     {
         var stateBeforeCompletion = State.Clone();
         await PersistDomainEventAsync(evt);
+        await PersistForkRequestOnTerminalFailureAsync(evt, stateBeforeCompletion, CancellationToken.None);
         await _subWorkflowOrchestrator.CancelPendingDefinitionResolutionTimeoutsAsync(stateBeforeCompletion, CancellationToken.None);
         await _subWorkflowOrchestrator.CleanupPendingInvocationsForRunAsync(evt.RunId, stateBeforeCompletion, CancellationToken.None);
         await CleanupRoleAgentTreeAsync(CancellationToken.None);
@@ -495,6 +625,50 @@ public sealed class WorkflowRunGAgent
             Content = evt.Success ? evt.Output : $"Workflow execution failed: {evt.Error}",
             Error = evt.Success ? string.Empty : evt.Error,
         }, TopologyAudience.Parent);
+    }
+
+    private async Task PersistForkRequestOnTerminalFailureAsync(
+        WorkflowCompletedEvent evt,
+        WorkflowRunState stateBeforeCompletion,
+        CancellationToken ct)
+    {
+        if (evt.Success || _compiledWorkflow?.OnFailure == null)
+            return;
+
+        var policy = _compiledWorkflow.OnFailure;
+        if (!string.Equals(
+                policy.Action,
+                WorkflowRunFailureActions.ForkFromFailedStep,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var maxAttempts = Math.Max(0, policy.MaxAttempts);
+        var currentAttempt = Math.Max(0, State.ForkAttempt);
+        if (currentAttempt >= maxAttempts)
+            return;
+
+        var failedStepId = ResolveLastFailedStepId(State);
+        if (string.IsNullOrWhiteSpace(failedStepId))
+            failedStepId = ResolveLastFailedStepId(stateBeforeCompletion);
+        if (string.IsNullOrWhiteSpace(failedStepId))
+        {
+            Logger.LogWarning(
+                "Workflow run {RunId} failed with on_failure fork policy but no failed step id was available.",
+                evt.RunId);
+            return;
+        }
+
+        await PersistDomainEventAsync(
+            new WorkflowRunForkRequestedEvent
+            {
+                SourceRunId = string.IsNullOrWhiteSpace(evt.RunId) ? RunId : WorkflowRunIdNormalizer.Normalize(evt.RunId),
+                StartAtStepId = failedStepId,
+                Attempt = currentAttempt + 1,
+                ScopeId = State.ScopeId ?? string.Empty,
+            },
+            ct);
     }
 
     [EventHandler]
@@ -623,17 +797,12 @@ public sealed class WorkflowRunGAgent
 
     private Task<DispatchAdmission> DispatchRoleInitializationAsync(string actorId, EventEnvelope envelope) =>
         _dispatchPort.DispatchAsync(actorId, envelope);
-
-    // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
-    //   Old pattern: WorkflowStepTargetAgentResolver 用 agent_type/agent_id 通过 Type.GetType + AppDomain scan + IRoleAgentTypeResolver 直接 create/link actors,workflow step parameter 暴露 raw CLR lifecycle
-    //   New principle: role-level agent_kind 配合 WorkflowRunGAgent runtime lifecycle;step 只用 target_role;删 agent_type/agent_id raw lifecycle 参数 + IWorkflowAgentTypeAliasProvider;Foundation 加 CreateByKindAsync;Bridge 注册 stable kind token
     private async Task<IActor> CreateRoleActorAsync(RoleDefinition role, string childActorId)
     {
-        if (!string.IsNullOrWhiteSpace(role.AgentKind))
-            return await _runtime.CreateByKindAsync(role.AgentKind.Trim(), childActorId);
-
-        throw new InvalidOperationException(
-            $"Role '{role.Id}' must declare agent_kind because Workflow.Core no longer depends on AI role implementations.");
+        var agentKind = string.IsNullOrWhiteSpace(role.AgentKind)
+            ? WorkflowRoleConventions.DefaultAgentKind
+            : role.AgentKind.Trim();
+        return await _runtime.CreateByKindAsync(agentKind, childActorId);
     }
 
     private string BuildChildActorId(string roleId)
@@ -757,6 +926,7 @@ public sealed class WorkflowRunGAgent
         next.Input = string.Empty;
         next.FinalOutput = string.Empty;
         next.FinalError = string.Empty;
+        next.ForkAttempt = 0;
         next.ExecutionStates.Clear();
         next.ExecutionContext = new WorkflowRunExecutionContextState();
         next.SubWorkflowBindings.Clear();
@@ -794,6 +964,7 @@ public sealed class WorkflowRunGAgent
         next.Status = RunningStatus;
         next.FinalOutput = string.Empty;
         next.FinalError = string.Empty;
+        next.ForkAttempt = Math.Max(0, evt.Attempt);
         next.ExecutionContext ??= new WorkflowRunExecutionContextState();
         ApplyExecutionContextDelta(next.ExecutionContext, evt.ExecutionContextDelta);
         if (string.IsNullOrWhiteSpace(next.DefinitionActorId) && !string.IsNullOrWhiteSpace(evt.DefinitionActorId))
@@ -830,12 +1001,16 @@ public sealed class WorkflowRunGAgent
         {
             if (delta.ClearLlm)
                 merged.ClearLlm = true;
-            if (delta.ClearConnector)
-                merged.ClearConnector = true;
+            if (delta.ClearCallerCredential)
+                merged.ClearCallerCredential = true;
             if (delta.Llm != null)
                 merged.Llm = delta.Llm.Clone();
-            if (delta.Connector != null)
-                merged.Connector = delta.Connector.Clone();
+            if (delta.CallerCredential != null)
+                merged.CallerCredential = delta.CallerCredential.Clone();
+            if (delta.ClearWorkflowRuntime)
+                merged.ClearWorkflowRuntime = true;
+            if (delta.WorkflowRuntime != null)
+                merged.WorkflowRuntime = delta.WorkflowRuntime.Clone();
         }
 
         return merged;
@@ -850,8 +1025,10 @@ public sealed class WorkflowRunGAgent
 
         if (delta.ClearLlm)
             state.Llm = null;
-        if (delta.ClearConnector)
-            state.Connector = null;
+        if (delta.ClearCallerCredential)
+            state.CallerCredential = null;
+        if (delta.ClearWorkflowRuntime)
+            state.WorkflowRuntime = null;
 
         if (delta.Llm != null)
         {
@@ -859,16 +1036,30 @@ public sealed class WorkflowRunGAgent
             {
                 ModelOverride = delta.Llm.ModelOverride?.Trim() ?? string.Empty,
                 UserMemoryPrompt = delta.Llm.UserMemoryPrompt?.Trim() ?? string.Empty,
+                RoutePreference = delta.Llm.RoutePreference?.Trim() ?? string.Empty,
             };
             if (delta.Llm.HasMaxToolRoundsOverride)
                 state.Llm.MaxToolRoundsOverride = delta.Llm.MaxToolRoundsOverride;
         }
 
-        if (delta.Connector != null)
+        if (delta.CallerCredential != null)
         {
-            state.Connector = new WorkflowConnectorExecutionContextState
+            var parsed = WorkflowCallerCredentialTokens.ParseOptional(delta.CallerCredential.BearerToken);
+            state.CallerCredential = new WorkflowCallerCredentialState
             {
-                HttpAuthorization = delta.Connector.HttpAuthorization?.Trim() ?? string.Empty,
+                BearerToken = parsed.IsValid ? parsed.NormalizedBearerToken ?? string.Empty : string.Empty,
+            };
+        }
+
+        if (delta.WorkflowRuntime != null)
+        {
+            state.WorkflowRuntime = new WorkflowToolRuntimeContextState
+            {
+                ParentActorId = delta.WorkflowRuntime.ParentActorId?.Trim() ?? string.Empty,
+                ParentRunId = WorkflowRunIdNormalizer.Normalize(delta.WorkflowRuntime.ParentRunId),
+                ParentStepId = delta.WorkflowRuntime.ParentStepId?.Trim() ?? string.Empty,
+                RootRunId = WorkflowRunIdNormalizer.Normalize(delta.WorkflowRuntime.RootRunId),
+                Depth = Math.Max(0, delta.WorkflowRuntime.Depth),
             };
         }
     }
@@ -958,6 +1149,17 @@ public sealed class WorkflowRunGAgent
         string.Equals(status, CompletedStatus, StringComparison.OrdinalIgnoreCase) ||
         string.Equals(status, FailedStatus, StringComparison.OrdinalIgnoreCase) ||
         string.Equals(status, StoppedStatus, StringComparison.OrdinalIgnoreCase);
+
+    private static string ResolveLastFailedStepId(WorkflowRunState state)
+    {
+        foreach (var packedState in state.ExecutionStates.Values)
+        {
+            if (packedState?.Is(WorkflowExecutionKernelState.Descriptor) == true)
+                return packedState.Unpack<WorkflowExecutionKernelState>().CurrentStepId?.Trim() ?? string.Empty;
+        }
+
+        return string.Empty;
+    }
 
     private static string BuildStoppedMessage(string? reason) =>
         string.IsNullOrWhiteSpace(reason)
@@ -1165,7 +1367,7 @@ public sealed class WorkflowRunGAgent
             }
             catch (Exception ex)
             {
-                Logger.LogDebug(ex, "Failed to parse current workflow while capturing role actor ids for reset.");
+                Logger.LogWarning(ex, "Failed to parse current workflow while capturing role actor ids for reset.");
             }
         }
 

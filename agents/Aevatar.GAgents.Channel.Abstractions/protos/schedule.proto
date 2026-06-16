@@ -20,6 +20,14 @@ message ScheduleState {
   google.protobuf.Timestamp last_run_at = 5;
   // The consecutive scheduler error count.
   int32 error_count = 6;
+  // The scheduling strategy. Empty/cron means recurring cron; one_shot means
+  // exactly one fixed UTC trigger.
+  string mode = 7;
+  // Fixed UTC trigger instant for one-shot schedules.
+  google.protobuf.Timestamp run_at = 8;
+  // Terminal retirement timestamp for one-shot schedules after completion,
+  // rejection, or exhausted failure.
+  google.protobuf.Timestamp retired_at = 9;
 }
 
 // Describes how one projector should treat a state entry.
