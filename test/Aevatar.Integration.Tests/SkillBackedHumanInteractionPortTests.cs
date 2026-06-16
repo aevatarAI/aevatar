@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
+using Aevatar.Foundation.Abstractions.Interactions;
 using Aevatar.Workflow.Integration.AI;
 using FluentAssertions;
 using Microsoft.Extensions.Options;
@@ -43,6 +44,47 @@ public sealed class SkillBackedHumanInteractionPortTests
     }
 
     [Fact]
+    public async Task HumanInteractionChannelToolSource_ShouldExposeGenericCapabilitiesAndDelegateToChannelPort()
+    {
+        var notificationPort = new RecordingNotificationPort();
+        var source = new HumanInteractionChannelToolSource(notificationPort);
+        var tools = await source.DiscoverToolsAsync();
+        var port = new SkillBackedHumanInteractionPort([source]);
+
+        await port.DeliverSuspensionAsync(
+            new HumanInteractionRequest
+            {
+                ActorId = "workflow-actor",
+                RunId = "run-1",
+                StepId = "approval",
+                SuspensionType = "human_approval",
+                Prompt = "Approve?",
+                Options = ["approve", "reject"],
+                TimeoutSeconds = 60,
+            },
+            "delivery-target-1",
+            CancellationToken.None);
+
+        tools.Should().HaveCount(2);
+        tools.OfType<IAgentToolCapabilityDescriptor>().Should().Contain(descriptor =>
+            descriptor.Capabilities.Contains("human_interaction.delivery"));
+        tools.OfType<IAgentToolCapabilityDescriptor>().Should().Contain(descriptor =>
+            descriptor.Capabilities.Contains("human_interaction.resolution_update"));
+        var call = notificationPort.Calls.Should().ContainSingle().Subject;
+        call.DeliveryTargetId.Should().Be("delivery-target-1");
+        call.ActorId.Should().Be("workflow-actor");
+        call.RunId.Should().Be("run-1");
+        call.StepId.Should().Be("approval");
+        call.InteractionSpec.Should().NotBeNull();
+        call.InteractionSpec!.Actions.Should().Contain(action =>
+            action.Kind == InteractionActionKind.FormSubmit &&
+            action.ApprovalDecision == InteractionApprovalDecision.Approve);
+        call.InteractionSpec.Actions.Should().Contain(action =>
+            action.Kind == InteractionActionKind.FormSubmit &&
+            action.ApprovalDecision == InteractionApprovalDecision.Reject);
+    }
+
+    [Fact]
     public async Task DeliverApprovalResolutionAsync_ShouldInvokeConfiguredResolutionTool()
     {
         var deliveryTool = new RecordingTool("delivery-tool", "generic delivery", ["human_interaction.delivery"]);
@@ -79,6 +121,19 @@ public sealed class SkillBackedHumanInteractionPortTests
     {
         public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<IAgentTool>>(tools);
+    }
+
+    private sealed class RecordingNotificationPort : IChannelInteractionNotificationPort
+    {
+        public List<ChannelInteractionNotificationRequest> Calls { get; } = [];
+
+        public Task DeliverAsync(
+            ChannelInteractionNotificationRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            Calls.Add(request);
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class RecordingTool(

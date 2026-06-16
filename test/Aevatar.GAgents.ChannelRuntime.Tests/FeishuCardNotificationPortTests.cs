@@ -123,6 +123,42 @@ public sealed class FeishuCardNotificationPortTests
     }
 
     [Fact]
+    public void BuildCardJson_WhenApprovalInteractionSpecPresent_ShouldIncludeWorkflowResumeIdentity()
+    {
+        var cardJson = FeishuCardNotificationPort.BuildCardJson(
+            new ChannelInteractionNotificationRequest
+            {
+                ActorId = "workflow-actor-1",
+                RunId = "run-1",
+                StepId = "approval-1",
+                DeliveryTargetId = "agent-1",
+                InteractionSpec = new InteractionSpec
+                {
+                    Title = "Approval required",
+                    Body = "Approve?",
+                    Actions =
+                    {
+                        new InteractionAction
+                        {
+                            Kind = InteractionActionKind.FormSubmit,
+                            ActionId = "approve",
+                            Label = "Approve",
+                            ApprovalDecision = InteractionApprovalDecision.Approve,
+                        },
+                    },
+                },
+            });
+
+        using var document = JsonDocument.Parse(cardJson);
+        var approveValue = FindCallbackValue(document.RootElement, "approve");
+
+        approveValue.GetProperty("actor_id").GetString().Should().Be("workflow-actor-1");
+        approveValue.GetProperty("run_id").GetString().Should().Be("run-1");
+        approveValue.GetProperty("step_id").GetString().Should().Be("approval-1");
+        approveValue.GetProperty("approved").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
     public void BuildCardJson_WhenTemplateSpecPresent_ShouldRenderLarkTemplateContent()
     {
         var template = new InteractionTemplateSpec { TemplateId = "tpl-1" };
@@ -228,6 +264,48 @@ public sealed class FeishuCardNotificationPortTests
             .WithMessage("*payload is required*");
         await bothAct.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*exactly one typed payload*");
+    }
+
+    private static JsonElement FindCallbackValue(JsonElement element, string actionId)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            if (element.TryGetProperty("type", out var type) &&
+                type.GetString() == "callback" &&
+                element.TryGetProperty("value", out var value) &&
+                value.TryGetProperty("action_id", out var callbackActionId) &&
+                callbackActionId.GetString() == actionId)
+            {
+                return value;
+            }
+
+            foreach (var property in element.EnumerateObject())
+                if (TryFindCallbackValue(property.Value, actionId, out var match))
+                    return match;
+        }
+
+        if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+                if (TryFindCallbackValue(item, actionId, out var match))
+                    return match;
+        }
+
+        throw new InvalidOperationException($"Callback value '{actionId}' was not found.");
+    }
+
+    private static bool TryFindCallbackValue(JsonElement element, string actionId, out JsonElement match)
+    {
+        try
+        {
+            match = FindCallbackValue(element, actionId);
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            match = default;
+            return false;
+        }
     }
 
     private static FeishuCardNotificationPort CreatePort(IUserAgentDeliveryTargetReader registry) =>

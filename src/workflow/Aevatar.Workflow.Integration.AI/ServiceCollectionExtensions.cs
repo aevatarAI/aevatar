@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -15,6 +16,7 @@ public static class ServiceCollectionExtensions
         if (configure != null)
             services.Configure(configure);
 
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAgentToolSource, HumanInteractionChannelToolSource>());
         services.Replace(ServiceDescriptor.Singleton<IHumanInteractionPort, SkillBackedHumanInteractionPort>());
         return services;
     }

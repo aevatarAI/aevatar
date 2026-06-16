@@ -5,7 +5,7 @@ namespace Aevatar.GAgents.Scheduled;
 /// <summary>
 /// Internal-only delivery target reader. Combines the public projection document
 /// (delivery routing) with the credential read model (NyxApiKey). Only registered for
-/// outbound delivery components (e.g. <see cref="FeishuCardHumanInteractionPort"/>);
+/// outbound delivery components (e.g. Lark notification/card senders);
 /// not visible to LLM tools.
 ///
 /// Returns <c>null</c> when:
@@ -17,8 +17,8 @@ namespace Aevatar.GAgents.Scheduled;
 ///
 /// The blank-credential case is a fail-closed signal — never construct a delivery
 /// target with an empty <c>NyxApiKey</c>. If the runtime received one,
-/// <see cref="FeishuCardHumanInteractionPort"/> would call the NyxID proxy with an
-/// empty token, surfacing what is really a "credential not yet projected" condition
+/// outbound Lark senders would call the NyxID proxy with an empty token,
+/// surfacing what is really a "credential not yet projected" condition
 /// as an outbound 401/403. Returning null here is the right shape: the caller sees
 /// "delivery target unavailable" and surfaces a re-try / propagating message instead.
 /// </summary>
