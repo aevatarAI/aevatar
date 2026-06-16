@@ -1,11 +1,23 @@
+using System.Net;
+using System.Net.Http.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
 using FluentAssertions;
+using Google.Protobuf;
+using Google.Protobuf.Reflection;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
 namespace Aevatar.GAgentService.Integration.Tests;
 
@@ -17,7 +29,7 @@ public sealed class ScheduledDispatchEndpointsTests
         var service = new RecordingScheduledDispatchApplicationService();
         var request = CreateEnvelopeRequest(scheduleId: "schedule-1");
 
-        var result = await ScheduledDispatchEndpoints.Create(request, service);
+        var result = await CreateAsync(request, service);
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
@@ -40,7 +52,7 @@ public sealed class ScheduledDispatchEndpointsTests
     [Fact]
     public async Task Create_ShouldRejectRequestsWithoutExactlyOneTarget()
     {
-        var result = await ScheduledDispatchEndpoints.Create(
+        var result = await CreateAsync(
             new ScheduledDispatchConfigurationHttpRequest
             {
                 ScheduleId = "schedule-1",
@@ -62,7 +74,7 @@ public sealed class ScheduledDispatchEndpointsTests
             CreateException = new ScheduledDispatchConflictException("schedule-1", "Schedule target cannot be prepared."),
         };
 
-        var result = await ScheduledDispatchEndpoints.Create(CreateEnvelopeRequest(scheduleId: "schedule-1"), service);
+        var result = await CreateAsync(CreateEnvelopeRequest(scheduleId: "schedule-1"), service);
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
@@ -78,7 +90,7 @@ public sealed class ScheduledDispatchEndpointsTests
             UpdateException = new ArgumentException("invalid update"),
         };
 
-        var result = await ScheduledDispatchEndpoints.Update(
+        var result = await UpdateAsync(
             "route-schedule",
             CreateEnvelopeRequest(scheduleId: null),
             service);
@@ -112,7 +124,8 @@ public sealed class ScheduledDispatchEndpointsTests
                     ServiceId = "svc",
                 },
                 EndpointId = "run",
-                Payload = payload,
+                PayloadTypeUrl = payload.TypeUrl,
+                PayloadBase64 = Convert.ToBase64String(payload.Value.ToByteArray()),
                 RevisionId = "rev-1",
                 Caller = new ServiceInvocationCaller
                 {
@@ -123,7 +136,7 @@ public sealed class ScheduledDispatchEndpointsTests
             },
         };
 
-        var result = await ScheduledDispatchEndpoints.Update("schedule-1", request, service);
+        var result = await UpdateAsync("schedule-1", request, service);
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
@@ -145,7 +158,7 @@ public sealed class ScheduledDispatchEndpointsTests
     {
         var request = CreateServiceInvocationRequestWithAuth(new ScheduledServiceInvocationAuthHttpRequest());
 
-        var result = await ScheduledDispatchEndpoints.Create(
+        var result = await CreateAsync(
             request,
             new RecordingScheduledDispatchApplicationService());
 
@@ -172,7 +185,7 @@ public sealed class ScheduledDispatchEndpointsTests
             },
         });
 
-        var result = await ScheduledDispatchEndpoints.Create(request, service);
+        var result = await CreateAsync(request, service);
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
@@ -199,7 +212,7 @@ public sealed class ScheduledDispatchEndpointsTests
             },
         });
 
-        var result = await ScheduledDispatchEndpoints.Create(
+        var result = await CreateAsync(
             request,
             new RecordingScheduledDispatchApplicationService());
 
@@ -226,7 +239,7 @@ public sealed class ScheduledDispatchEndpointsTests
             },
         });
 
-        var result = await ScheduledDispatchEndpoints.Create(
+        var result = await CreateAsync(
             request,
             new RecordingScheduledDispatchApplicationService());
 
@@ -449,6 +462,242 @@ public sealed class ScheduledDispatchEndpointsTests
         http.Response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
     }
 
+    [Fact]
+    public async Task Create_WithServiceInvocationPayloadBase64Json_ShouldBindAndPackPayload()
+    {
+        await using var host = await ScheduleEndpointTestHost.StartAsync();
+        var chat = new ChatRequestEvent { Prompt = "summarize status" };
+
+        var response = await host.Client.PostAsJsonAsync("/api/schedules", new
+        {
+            scheduleId = "schedule-chat",
+            displayName = "Workflow chat",
+            cronExpression = "0 9 * * *",
+            timezone = "UTC",
+            serviceInvocation = new
+            {
+                identity = new
+                {
+                    tenantId = "tenant",
+                    appId = "app",
+                    @namespace = "default",
+                    serviceId = "workflow",
+                },
+                endpointId = "chat",
+                payloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                payloadBase64 = Convert.ToBase64String(chat.ToByteArray()),
+                revisionId = "rev-chat",
+            },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        var configuration = host.Schedules.Created.Should().ContainSingle().Which;
+        configuration.Target.Kind.Should().Be(ScheduledDispatchTargetKind.ServiceInvocation);
+        configuration.Target.ServiceInvocation.Should().NotBeNull();
+        var invocation = configuration.Target.ServiceInvocation!;
+        invocation.EndpointId.Should().Be("chat");
+        invocation.Payload.TypeUrl.Should().Be("type.googleapis.com/aevatar.ai.ChatRequestEvent");
+        invocation.Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("summarize status");
+        invocation.RevisionId.Should().Be("rev-chat");
+    }
+
+    [Fact]
+    public async Task Update_WithServiceInvocationPayloadBase64Json_ShouldBindAndPackPayload()
+    {
+        await using var host = await ScheduleEndpointTestHost.StartAsync();
+        var chat = new ChatRequestEvent { Prompt = "refresh standup" };
+
+        var response = await host.Client.PutAsJsonAsync("/api/schedules/schedule-chat", new
+        {
+            displayName = "Workflow chat",
+            cronExpression = "0 10 * * *",
+            timezone = "UTC",
+            enabled = false,
+            serviceInvocation = new
+            {
+                identity = new
+                {
+                    tenantId = "tenant",
+                    appId = "app",
+                    @namespace = "default",
+                    serviceId = "workflow",
+                },
+                endpointId = "chat",
+                payloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                payloadBase64 = Convert.ToBase64String(chat.ToByteArray()),
+                revisionId = "rev-chat",
+            },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        var configuration = host.Schedules.Updated.Should().ContainSingle().Which.Configuration;
+        configuration.ScheduleId.Should().Be("schedule-chat");
+        configuration.Enabled.Should().BeFalse();
+        configuration.Target.ServiceInvocation.Should().NotBeNull();
+        var invocation = configuration.Target.ServiceInvocation!;
+        invocation.EndpointId.Should().Be("chat");
+        invocation.Payload.TypeUrl.Should().Be("type.googleapis.com/aevatar.ai.ChatRequestEvent");
+        invocation.Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("refresh standup");
+    }
+
+    [Fact]
+    public async Task Create_WithInvalidServiceInvocationPayloadBase64_ShouldReturnStructuredBadRequest()
+    {
+        await using var host = await ScheduleEndpointTestHost.StartAsync();
+
+        var response = await host.Client.PostAsJsonAsync("/api/schedules", new
+        {
+            scheduleId = "schedule-chat",
+            displayName = "Workflow chat",
+            cronExpression = "0 9 * * *",
+            timezone = "UTC",
+            serviceInvocation = new
+            {
+                identity = new
+                {
+                    tenantId = "tenant",
+                    appId = "app",
+                    @namespace = "default",
+                    serviceId = "workflow",
+                },
+                endpointId = "chat",
+                payloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                payloadBase64 = "not-base64",
+            },
+        });
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, object>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        body.Should().NotBeNull();
+        body!["code"].ToString().Should().Be("INVALID_SCHEDULED_DISPATCH_REQUEST");
+        body["message"].ToString().Should().Contain("payloadBase64");
+        host.Schedules.Created.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Create_WithServiceInvocationPayloadJson_ShouldResolveActiveRevisionAndPackPayload()
+    {
+        await using var host = await ScheduleEndpointTestHost.StartAsync();
+        host.CatalogReader.Service = CreateServiceCatalog(activeRevisionId: "rev-active");
+        host.RevisionCatalog.UpsertRevision(
+            "tenant:app:default:workflow",
+            "rev-active",
+            BuildPreparedArtifact(ChatRequestEvent.Descriptor));
+
+        var response = await host.Client.PostAsJsonAsync("/api/schedules", new
+        {
+            scheduleId = "schedule-chat",
+            displayName = "Workflow chat",
+            cronExpression = "0 9 * * *",
+            timezone = "UTC",
+            serviceInvocation = new
+            {
+                identity = new
+                {
+                    tenantId = "tenant",
+                    appId = "app",
+                    @namespace = "default",
+                    serviceId = "workflow",
+                },
+                endpointId = "chat",
+                payloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                payloadJson = """{"prompt":"json prompt"}""",
+            },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        var serviceInvocation = host.Schedules.Created.Should().ContainSingle().Which.Target.ServiceInvocation;
+        serviceInvocation.Should().NotBeNull();
+        var invocation = serviceInvocation!;
+        invocation.RevisionId.Should().Be("rev-active");
+        invocation.Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("json prompt");
+    }
+
+    [Fact]
+    public async Task Create_WithServiceInvocationPayloadJsonWithoutRevision_ShouldReturnBadRequest()
+    {
+        await using var host = await ScheduleEndpointTestHost.StartAsync();
+
+        var response = await host.Client.PostAsJsonAsync("/api/schedules", new
+        {
+            scheduleId = "schedule-chat",
+            displayName = "Workflow chat",
+            cronExpression = "0 9 * * *",
+            timezone = "UTC",
+            serviceInvocation = new
+            {
+                identity = new
+                {
+                    tenantId = "tenant",
+                    appId = "app",
+                    @namespace = "default",
+                    serviceId = "workflow",
+                },
+                endpointId = "chat",
+                payloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                payloadJson = """{"prompt":"json prompt"}""",
+            },
+        });
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        body.Should().NotBeNull();
+        body!["code"].Should().Be("INVALID_SCHEDULED_DISPATCH_REQUEST");
+        body["message"].Should().Contain("revisionId");
+        host.Schedules.Created.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Create_WithNoOrMultipleTargets_ShouldKeepExactlyOneTargetValidation()
+    {
+        await using var host = await ScheduleEndpointTestHost.StartAsync();
+
+        var none = await host.Client.PostAsJsonAsync("/api/schedules", new
+        {
+            scheduleId = "schedule-chat",
+            displayName = "Workflow chat",
+            cronExpression = "0 9 * * *",
+            timezone = "UTC",
+        });
+        var both = await host.Client.PostAsJsonAsync("/api/schedules", new
+        {
+            scheduleId = "schedule-chat",
+            displayName = "Workflow chat",
+            cronExpression = "0 9 * * *",
+            timezone = "UTC",
+            envelope = new
+            {
+                actorId = "actor-1",
+                envelope = new
+                {
+                    id = "template",
+                    payload = new
+                    {
+                        typeUrl = Any.Pack(new StringValue()).TypeUrl,
+                        value = Convert.ToBase64String(new StringValue { Value = "run" }.ToByteArray()),
+                    },
+                },
+            },
+            serviceInvocation = new
+            {
+                identity = new
+                {
+                    tenantId = "tenant",
+                    appId = "app",
+                    @namespace = "default",
+                    serviceId = "workflow",
+                },
+                endpointId = "chat",
+                payloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                payloadBase64 = Convert.ToBase64String(new ChatRequestEvent { Prompt = "run" }.ToByteArray()),
+            },
+        });
+
+        none.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        both.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        host.Schedules.Created.Should().BeEmpty();
+    }
+
     private static ScheduledDispatchConfigurationHttpRequest CreateEnvelopeRequest(string? scheduleId) =>
         new()
         {
@@ -488,10 +737,73 @@ public sealed class ScheduledDispatchEndpointsTests
                     ServiceId = "svc",
                 },
                 EndpointId = "run",
-                Payload = Any.Pack(new StringValue { Value = "run" }),
+                PayloadTypeUrl = Any.Pack(new StringValue()).TypeUrl,
+                PayloadBase64 = Convert.ToBase64String(new StringValue { Value = "run" }.ToByteArray()),
                 Auth = auth,
             },
         };
+
+    private static Task<IResult> CreateAsync(
+        ScheduledDispatchConfigurationHttpRequest request,
+        RecordingScheduledDispatchApplicationService service) =>
+        ScheduledDispatchEndpoints.Create(
+            request,
+            service,
+            new FakeServiceCatalogQueryReader(),
+            new FakeServiceRevisionCatalogQueryReader());
+
+    private static Task<IResult> UpdateAsync(
+        string scheduleId,
+        ScheduledDispatchConfigurationHttpRequest request,
+        RecordingScheduledDispatchApplicationService service) =>
+        ScheduledDispatchEndpoints.Update(
+            scheduleId,
+            request,
+            service,
+            new FakeServiceCatalogQueryReader(),
+            new FakeServiceRevisionCatalogQueryReader());
+
+    private static ServiceCatalogSnapshot CreateServiceCatalog(string activeRevisionId) =>
+        new(
+            "tenant:app:default:workflow",
+            "tenant",
+            "app",
+            "default",
+            "workflow",
+            "Workflow",
+            string.Empty,
+            activeRevisionId,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            [],
+            [],
+            DateTimeOffset.UtcNow);
+
+    private static PreparedServiceRevisionArtifact BuildPreparedArtifact(MessageDescriptor descriptor) =>
+        new()
+        {
+            ProtocolDescriptorSet = BuildProtocolDescriptorSetFor(descriptor),
+        };
+
+    private static ByteString BuildProtocolDescriptorSetFor(MessageDescriptor descriptor)
+    {
+        var fds = new FileDescriptorSet();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        CollectFileProto(descriptor.File, fds, seen);
+        return fds.ToByteString();
+    }
+
+    private static void CollectFileProto(FileDescriptor file, FileDescriptorSet fds, ISet<string> seen)
+    {
+        if (!seen.Add(file.Name))
+            return;
+
+        foreach (var dependency in file.Dependencies)
+            CollectFileProto(dependency, fds, seen);
+
+        fds.File.Add(FileDescriptorProto.Parser.ParseFrom(file.SerializedData));
+    }
 
     private static ScheduledDispatchDetail CreateDetail(string scheduleId) =>
         new(
@@ -532,6 +844,139 @@ public sealed class ScheduledDispatchEndpointsTests
         };
         http.Response.Body = new MemoryStream();
         return http;
+    }
+
+    private sealed class ScheduleEndpointTestHost : IAsyncDisposable
+    {
+        private readonly WebApplication _app;
+
+        private ScheduleEndpointTestHost(
+            WebApplication app,
+            HttpClient client,
+            RecordingScheduledDispatchApplicationService schedules,
+            FakeServiceCatalogQueryReader catalogReader,
+            FakeServiceRevisionCatalogQueryReader revisionCatalog)
+        {
+            _app = app;
+            Client = client;
+            Schedules = schedules;
+            CatalogReader = catalogReader;
+            RevisionCatalog = revisionCatalog;
+        }
+
+        public HttpClient Client { get; }
+
+        public RecordingScheduledDispatchApplicationService Schedules { get; }
+
+        public FakeServiceCatalogQueryReader CatalogReader { get; }
+
+        public FakeServiceRevisionCatalogQueryReader RevisionCatalog { get; }
+
+        public static async Task<ScheduleEndpointTestHost> StartAsync()
+        {
+            var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+            {
+                EnvironmentName = Environments.Development,
+            });
+            builder.WebHost.UseUrls("http://127.0.0.1:0");
+
+            var schedules = new RecordingScheduledDispatchApplicationService();
+            var catalogReader = new FakeServiceCatalogQueryReader();
+            var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+            builder.Services.AddSingleton<IScheduledDispatchApplicationService>(schedules);
+            builder.Services.AddSingleton<IServiceCatalogQueryReader>(catalogReader);
+            builder.Services.AddSingleton<IServiceRevisionCatalogQueryReader>(revisionCatalog);
+
+            var app = builder.Build();
+            ScheduledDispatchEndpoints.Map(app.MapGroup("/api"));
+            await app.StartAsync();
+
+            var addressFeature = app.Services
+                .GetRequiredService<IServer>()
+                .Features
+                .Get<IServerAddressesFeature>()
+                ?? throw new InvalidOperationException("Server addresses are unavailable.");
+            var client = new HttpClient
+            {
+                BaseAddress = new Uri(addressFeature.Addresses.Single()),
+            };
+
+            return new ScheduleEndpointTestHost(app, client, schedules, catalogReader, revisionCatalog);
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            Client.Dispose();
+            await _app.DisposeAsync();
+        }
+    }
+
+    private sealed class FakeServiceCatalogQueryReader : IServiceCatalogQueryReader
+    {
+        public ServiceCatalogSnapshot? Service { get; set; }
+
+        public Task<ServiceCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
+            Task.FromResult(Service);
+
+        public Task<IReadOnlyList<ServiceCatalogSnapshot>> QueryAllAsync(
+            int take = 1000,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<ServiceCatalogSnapshot>>(Service == null ? [] : [Service]);
+
+        public Task<IReadOnlyList<ServiceCatalogSnapshot>> QueryByScopeAsync(
+            string tenantId,
+            string appId,
+            string @namespace,
+            int take = 200,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<ServiceCatalogSnapshot>>(Service == null ? [] : [Service]);
+    }
+
+    private sealed class FakeServiceRevisionCatalogQueryReader : IServiceRevisionCatalogQueryReader
+    {
+        private readonly Dictionary<string, PreparedServiceRevisionArtifact> _revisionCatalog = new(StringComparer.Ordinal);
+
+        public void UpsertRevision(string serviceKey, string revisionId, PreparedServiceRevisionArtifact artifact)
+        {
+            var clone = artifact.Clone();
+            clone.RevisionId = revisionId;
+            _revisionCatalog[$"{serviceKey}:{revisionId}"] = clone;
+        }
+
+        public Task<ServiceRevisionCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default)
+        {
+            var serviceKey = $"{identity.TenantId}:{identity.AppId}:{identity.Namespace}:{identity.ServiceId}";
+            var revisions = _revisionCatalog
+                .Where(x => x.Key.StartsWith(serviceKey + ":", StringComparison.Ordinal))
+                .Select(x => x.Value)
+                .Select(artifact => new ServiceRevisionSnapshot(
+                    artifact.RevisionId,
+                    artifact.ImplementationKind.ToString(),
+                    ServiceRevisionStatus.Prepared.ToString(),
+                    artifact.ArtifactHash,
+                    string.Empty,
+                    artifact.Endpoints.Select(endpoint => new ServiceEndpointSnapshot(
+                        endpoint.EndpointId,
+                        endpoint.DisplayName,
+                        endpoint.Kind.ToString(),
+                        endpoint.RequestTypeUrl,
+                        endpoint.ResponseTypeUrl,
+                        endpoint.Description)).ToList(),
+                    null,
+                    DateTimeOffset.UtcNow,
+                    null,
+                    null,
+                    null,
+                    artifact.Clone()))
+                .ToList();
+
+            return Task.FromResult<ServiceRevisionCatalogSnapshot?>(new ServiceRevisionCatalogSnapshot(
+                serviceKey,
+                revisions,
+                DateTimeOffset.UtcNow,
+                revisions.Count,
+                string.Empty));
+        }
     }
 
     private sealed class RecordingScheduledDispatchApplicationService : IScheduledDispatchApplicationService
