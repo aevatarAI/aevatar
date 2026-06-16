@@ -53,6 +53,31 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
     }
 
     [Fact]
+    public async Task GetAsync_WhenIndexMissingAndAutoCreateEnabled_ShouldCreateIndexAndReturnNull()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        EnqueueGreenfieldLifecycleResponses(handler);
+        EnqueueGreenfieldLifecycleResponses(handler);
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"acknowledged":true}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, """{"found":false}"""));
+
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions
+            {
+                AutoCreateIndex = true,
+            },
+            handler);
+
+        var result = await store.GetAsync("actor-1");
+
+        result.Should().BeNull();
+        GetIndexCreateRequest(handler).PathAndQuery.Should().Contain("aevatar-projection-core-tests-v");
+        handler.CapturedRequests.Should().Contain(r =>
+            r.Method == "GET" &&
+            r.PathAndQuery.EndsWith("/aevatar-projection-core-tests/_doc/actor-1", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task QueryAsync_WhenSortFieldNotConfigured_ShouldUseProjectionDocumentIdAsDeterministicTiebreakSort()
     {
         var handler = new ScriptedHttpMessageHandler();
