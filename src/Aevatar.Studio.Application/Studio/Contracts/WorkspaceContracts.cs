@@ -46,6 +46,22 @@ public sealed record WorkflowDraftResponse(
     WorkflowLayoutDocument? Layout,
     DateTimeOffset UpdatedAtUtc);
 
+public sealed record WorkflowDraftCreateAcceptedResponse(
+    bool Accepted,
+    string WorkflowId,
+    string CommandId,
+    string AckStage,
+    string ActorId,
+    string WorkspaceId,
+    long? ExpectedVersion,
+    DateTimeOffset AckedAtUtc,
+    WorkflowDraftReadinessResponse Readiness);
+
+public sealed record WorkflowDraftReadinessResponse(
+    bool Readable,
+    string Stage,
+    string Message);
+
 public sealed record WorkflowCommittedResponse(
     string WorkflowId,
     string Name,
