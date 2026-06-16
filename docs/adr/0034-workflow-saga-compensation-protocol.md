@@ -88,8 +88,7 @@ state already holds the execution context, variables, and sub-workflow bindings.
 Introducing a separate coordinator would violate "Actor 即业务实体" and create a
 cross-actor consistency problem (who is authoritative for run termination?) that
 does not exist today. Compensation is a terminal phase of the run's own state
-machine:
-`WORKFLOW_SAGA_STATUS_UNSPECIFIED → WORKFLOW_SAGA_STATUS_COMPENSATING → WORKFLOW_SAGA_STATUS_COMPENSATED_FAILED | WORKFLOW_SAGA_STATUS_COMPENSATION_DEAD_LETTER`.
+machine: `running → compensating → compensated_failed | compensation_dead_letter`.
 
 ### Q2. Choreography or orchestration?
 
@@ -261,14 +260,7 @@ message CompletedStepLedgerEntry {
 // Added to WorkflowRunState (run-owned, durable):
 //   repeated CompletedStepLedgerEntry compensable_ledger = N;
 //   int32  compensation_cursor = N+1;   // index into ledger, walked downward
-//   WorkflowSagaStatus saga_status = N+2; // UNSPECIFIED for non-compensating runs
-//
-enum WorkflowSagaStatus {
-  WORKFLOW_SAGA_STATUS_UNSPECIFIED = 0;
-  WORKFLOW_SAGA_STATUS_COMPENSATING = 1;
-  WORKFLOW_SAGA_STATUS_COMPENSATED_FAILED = 2;
-  WORKFLOW_SAGA_STATUS_COMPENSATION_DEAD_LETTER = 3;
-}
+//   string saga_status = N+2;           // running | compensating | compensated_failed | compensation_dead_letter
 ```
 
 ### Proto — events (`workflow_execution_messages.proto`)
@@ -375,3 +367,14 @@ committed effects in reverse order on terminal failure, with idempotent
 re-delivery, a durable dead-letter for stuck sagas, and read-model visibility —
 closing the "幂等键 ✅ 重试 ✅ 补偿 ❌" gap named in ADR-0002 and realizing the saga
 protocol that ADR-0017 and ADR-0006 deferred to a dedicated ADR.
+
+## Update — 2026-06-16 (saga v1.1, #2130)
+
+The illustrative sketches above are preserved as the v1 record. As of saga v1.1,
+`saga_status` is the typed `WorkflowSagaStatus` enum
+(`WORKFLOW_SAGA_STATUS_UNSPECIFIED = 0`, `_COMPENSATING`, `_COMPENSATED_FAILED`,
+`_COMPENSATION_DEAD_LETTER`) defined in `workflow_execution_messages.proto`, not a
+string. A non-compensating run carries `UNSPECIFIED`; there is no distinct
+`running` saga state (the run-level status remains `running` while
+`saga_status = UNSPECIFIED`). The authoritative proto enum is the live contract;
+current operational vocabulary lives in `docs/canon/workflow-runtime.md`.

@@ -313,17 +313,17 @@ Workflow step 可以通过 `compensation` 声明一个已存在的 step id。静
 
 当后续 step 发生终止失败且 ledger 非空时，run 不直接提交 `WorkflowCompletedEvent(success=false)`。`WorkflowExecutionKernel` 先请求 run actor 开启补偿相位，run actor 按 ledger 反向顺序提交 `CompensationRequestEvent`，再通过 self continuation 派发对应补偿 step。补偿 step 完成后以 `CompensationStepCompletedEvent` 回到 run actor，由 actor 校验 `run_id + compensation_step_id + execution_id`，拒绝陈旧或重复完成事件。
 
-Saga 状态生命周期为：
+Saga 状态由强类型枚举 `WorkflowSagaStatus`（`workflow_execution_messages.proto`）表达，生命周期为：
 
 ```text
-running -> compensating -> compensated_failed
-running -> compensating -> compensation_dead_letter
+WORKFLOW_SAGA_STATUS_UNSPECIFIED -> WORKFLOW_SAGA_STATUS_COMPENSATING -> WORKFLOW_SAGA_STATUS_COMPENSATED_FAILED
+WORKFLOW_SAGA_STATUS_UNSPECIFIED -> WORKFLOW_SAGA_STATUS_COMPENSATING -> WORKFLOW_SAGA_STATUS_COMPENSATION_DEAD_LETTER
 ```
 
-- `running`：正常执行阶段，成功的 compensable step 按完成顺序写入 ledger。
-- `compensating`：终止失败已转入补偿相位，`compensation_cursor` 指向当前待补偿 ledger 项。
-- `compensated_failed`：所有补偿按反向顺序成功，随后发布失败的 `WorkflowCompletedEvent`，表示原业务 run 失败但补偿已完成。
-- `compensation_dead_letter`：某个补偿 step 失败或补偿耗尽，run actor 提交 `WorkflowCompensationFailedEvent`，记录失败补偿 step、剩余未补偿数量和错误；此状态不再走 on_error fallback，也不会静默丢弃。
+- `UNSPECIFIED`：非补偿阶段（run 仍是普通 `running` 运行态），成功的 compensable step 按完成顺序写入 ledger；saga_status 没有独立的 `running` 取值。
+- `COMPENSATING`：终止失败已转入补偿相位，`compensation_cursor` 指向当前待补偿 ledger 项。
+- `COMPENSATED_FAILED`：所有补偿按反向顺序成功，随后发布失败的 `WorkflowCompletedEvent`，表示原业务 run 失败但补偿已完成。
+- `COMPENSATION_DEAD_LETTER`：某个补偿 step 失败或补偿耗尽，run actor 提交 `WorkflowCompensationFailedEvent`，记录失败补偿 step、剩余未补偿数量和错误；此状态不再走 on_error fallback，也不会静默丢弃。
 
 补偿相位继续遵守 actor 化执行约束：补偿推进只通过 self message 进入 actor inbox，不在 callback 线程或 helper 内 inline 推进；crash/reactivation 时，actor 根据已提交 `CompensationRequestEvent` 和当前 cursor 重发当前 self continuation，不重复提交领域事件。
 
