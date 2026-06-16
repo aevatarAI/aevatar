@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using FluentAssertions;
 
@@ -127,6 +128,161 @@ public sealed class NyxIdApiClientProxyBinaryTests
         body.Should().Contain("""name=file; filename=report.txt""");
         body.Should().Contain("Content-Type: text/plain");
         body.Should().Contain("hello lark upload");
+    }
+
+    [Fact]
+    public async Task ProxyRequestAsync_ShouldForwardContextIdempotencyKeyForSideEffectingMethods()
+    {
+        var handler = new CapturingHandler("""{ "ok": true }""");
+        var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            new HttpClient(handler));
+
+        using var _ = AgentToolContextScope.Push(WithIdempotencyKey("  idem-json-1  "));
+
+        await client.ProxyRequestAsync(
+            token: "token",
+            slug: "github",
+            path: "/repos",
+            method: "POST",
+            body: """{ "name": "repo" }""",
+            extraHeaders: null,
+            ct: CancellationToken.None);
+
+        var request = handler.Requests.Should().ContainSingle().Subject;
+        request.Headers.Should().ContainKey("Idempotency-Key");
+        request.Headers["Idempotency-Key"].Should().Equal("idem-json-1");
+    }
+
+    [Fact]
+    public async Task ProxyRequestBinaryAsync_ShouldForwardContextIdempotencyKeyForSideEffectingMethods()
+    {
+        var handler = new CapturingHandler("""{ "ok": true }""");
+        var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            new HttpClient(handler));
+
+        using var _ = AgentToolContextScope.Push(WithIdempotencyKey("  idem-binary-1  "));
+
+        await client.ProxyRequestBinaryAsync(
+            token: "token",
+            slug: "ornn",
+            path: "api/v1/skills",
+            method: "POST",
+            body: [1],
+            contentType: "application/zip",
+            extraHeaders: null,
+            ct: CancellationToken.None);
+
+        var request = handler.Requests.Should().ContainSingle().Subject;
+        request.Headers.Should().ContainKey("Idempotency-Key");
+        request.Headers["Idempotency-Key"].Should().Equal("idem-binary-1");
+    }
+
+    [Fact]
+    public async Task ProxyRequestMultipartAsync_ShouldForwardContextIdempotencyKeyForSideEffectingMethods()
+    {
+        var handler = new CapturingHandler("""{ "ok": true }""");
+        var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            new HttpClient(handler));
+        await using var stream = new MemoryStream([1, 2, 3]);
+
+        using var _ = AgentToolContextScope.Push(WithIdempotencyKey("  idem-multipart-1  "));
+
+        await client.ProxyRequestMultipartAsync(
+            token: "token",
+            slug: "api-lark-bot",
+            path: "/upload",
+            method: "POST",
+            formFields: new Dictionary<string, string>
+            {
+                ["file_name"] = "report.txt",
+            },
+            fileFieldName: "file",
+            fileName: "report.txt",
+            fileContentType: "text/plain",
+            fileContent: stream,
+            extraHeaders: null,
+            ct: CancellationToken.None);
+
+        var request = handler.Requests.Should().ContainSingle().Subject;
+        request.Headers.Should().ContainKey("Idempotency-Key");
+        request.Headers["Idempotency-Key"].Should().Equal("idem-multipart-1");
+    }
+
+    [Fact]
+    public async Task ProxyRequestAsync_ShouldNotForwardIdempotencyKeyForGet()
+    {
+        var handler = new CapturingHandler("""{ "ok": true }""");
+        var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            new HttpClient(handler));
+
+        using var _ = AgentToolContextScope.Push(WithIdempotencyKey("idem-get-1"));
+
+        await client.ProxyRequestAsync(
+            token: "token",
+            slug: "github",
+            path: "/repos",
+            method: "GET",
+            body: null,
+            extraHeaders: null,
+            ct: CancellationToken.None);
+
+        var request = handler.Requests.Should().ContainSingle().Subject;
+        request.Method.Should().Be(HttpMethod.Get);
+        request.Headers.Should().NotContainKey("Idempotency-Key");
+    }
+
+    [Fact]
+    public async Task ProxyRequestAsync_ShouldNotOverwriteCallerProvidedIdempotencyKey()
+    {
+        var handler = new CapturingHandler("""{ "ok": true }""");
+        var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            new HttpClient(handler));
+
+        using var _ = AgentToolContextScope.Push(WithIdempotencyKey("context-idem-1"));
+
+        await client.ProxyRequestAsync(
+            token: "token",
+            slug: "github",
+            path: "/repos",
+            method: "POST",
+            body: """{ "name": "repo" }""",
+            extraHeaders: new Dictionary<string, string>
+            {
+                ["Idempotency-Key"] = "caller-idem-1",
+            },
+            ct: CancellationToken.None);
+
+        var request = handler.Requests.Should().ContainSingle().Subject;
+        request.Headers.Should().ContainKey("Idempotency-Key");
+        request.Headers["Idempotency-Key"].Should().Equal("caller-idem-1");
+    }
+
+    [Fact]
+    public async Task ProxyRequestAsync_ShouldNotForwardBlankContextIdempotencyKey()
+    {
+        var handler = new CapturingHandler("""{ "ok": true }""");
+        var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            new HttpClient(handler));
+
+        using var _ = AgentToolContextScope.Push(WithIdempotencyKey("   "));
+
+        await client.ProxyRequestAsync(
+            token: "token",
+            slug: "github",
+            path: "/repos",
+            method: "POST",
+            body: """{ "name": "repo" }""",
+            extraHeaders: null,
+            ct: CancellationToken.None);
+
+        var request = handler.Requests.Should().ContainSingle().Subject;
+        request.Headers.Should().NotContainKey("Idempotency-Key");
     }
 
     [Fact]
@@ -280,4 +436,10 @@ public sealed class NyxIdApiClientProxyBinaryTests
         string? ContentTypeHeader,
         byte[] Body,
         IReadOnlyDictionary<string, string[]> Headers);
+
+    private static AgentToolExecutionContext WithIdempotencyKey(string? idempotencyKey) =>
+        AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity(null, null, idempotencyKey),
+        };
 }
