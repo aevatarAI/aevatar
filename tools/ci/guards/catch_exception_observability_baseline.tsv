@@ -28,7 +28,6 @@ src/Aevatar.AI.ToolProviders.Skills/UseSkillTool.cs	348	empty broad catch block
 src/Aevatar.CQRS.Core.Abstractions/Streaming/EventSinkProjectionLeaseOrchestrator.cs	47	empty broad catch block
 src/Aevatar.CQRS.Core.Abstractions/Streaming/EventSinkProjectionLeaseOrchestrator.cs	59	empty broad catch block
 src/Aevatar.CQRS.Projection.Providers.Elasticsearch/Stores/ElasticsearchOptimisticWriter.cs	170	broad catch returns null without visible failure signal
-src/Aevatar.CQRS.Projection.Providers.Elasticsearch/Stores/ElasticsearchProjectionDocumentStore.cs	493	broad catch returns null without visible failure signal
 src/Aevatar.Configuration/AevatarSecretsStore.cs	217	empty broad catch block
 src/Aevatar.Configuration/AevatarSecretsStore.cs	231	empty broad catch block
 src/Aevatar.Configuration/AevatarSecretsStore.cs	253	broad catch returns null without visible failure signal
