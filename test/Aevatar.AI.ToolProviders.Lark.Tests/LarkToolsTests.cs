@@ -441,6 +441,36 @@ public class LarkToolsTests
     }
 
     [Fact]
+    public async Task LarkMessageResourceFetchAdapter_ShouldMapFileRouteToBinaryDownload()
+    {
+        var client = new StubLarkNyxClient
+        {
+            MessageResourceResponse = new LarkMessageResourceDownloadResult(
+                Succeeded: true,
+                Content: Encoding.UTF8.GetBytes("downloaded-file"),
+                ContentType: "application/pdf",
+                FileName: "receipt.pdf"),
+        };
+        var adapter = new LarkMessageResourceFetchAdapter(client);
+
+        var result = await adapter.FetchAsync(new WorkflowConnectedServiceResourceFetchRequest(
+            Route: new WorkflowConnectedServiceResourceFetchRoute("lark", "message_resource_download", "file"),
+            SourceMessageId: "om_123",
+            SourceResourceKey: "file_v3_456",
+            CallerCredential: new WorkflowCallerCredential("token-123")));
+
+        result.Succeeded.Should().BeTrue();
+        result.Content.ToArray().Should().Equal(Encoding.UTF8.GetBytes("downloaded-file"));
+        result.MediaType.Should().Be("application/pdf");
+        result.FileName.Should().Be("receipt.pdf");
+        client.LastMessageResourceToken.Should().Be("token-123");
+        client.LastMessageResourceRequest.Should().Be(new LarkMessageResourceDownloadRequest(
+            "om_123",
+            "file_v3_456",
+            LarkMessageResourceKind.File));
+    }
+
+    [Fact]
     public async Task LarkMessageResourceFetchAdapter_ShouldFailClosedForWrongRoute()
     {
         var client = new StubLarkNyxClient();

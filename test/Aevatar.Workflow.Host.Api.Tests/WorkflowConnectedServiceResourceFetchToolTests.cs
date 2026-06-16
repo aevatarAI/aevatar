@@ -136,15 +136,183 @@ public sealed class WorkflowConnectedServiceResourceFetchToolTests
         output.ResultJson.Should().Contain("unsupported_resource_route");
     }
 
+    [Theory]
+    [InlineData("{bad json")]
+    [InlineData("[]")]
+    public async Task ExecuteAsync_ShouldRejectInvalidArgumentsBeforeProviderCall(string argumentsJson)
+    {
+        var ingressPort = new RecordingWorkflowFileIngressPort();
+        var adapter = new RecordingConnectedServiceResourceFetchAdapter(
+            new WorkflowConnectedServiceResourceFetchRoute("lark", "message_resource_download", "image"));
+        var tool = await GetFetchToolAsync(adapter, ingressPort);
+
+        var output = await tool.ExecuteAsync(NewFetchRequest(argumentsJson));
+
+        AssertError(output, "invalid_arguments");
+        adapter.Requests.Should().BeEmpty();
+        ingressPort.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldRejectMissingBearerBeforeProviderCall()
+    {
+        var ingressPort = new RecordingWorkflowFileIngressPort();
+        var adapter = new RecordingConnectedServiceResourceFetchAdapter(
+            new WorkflowConnectedServiceResourceFetchRoute("lark", "message_resource_download", "image"));
+        var tool = await GetFetchToolAsync(adapter, ingressPort);
+
+        var output = await tool.ExecuteAsync(NewFetchRequest(ValidImageArguments, bearerToken: " "));
+
+        AssertError(output, "missing_bearer");
+        adapter.Requests.Should().BeEmpty();
+        ingressPort.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldFailClosedWhenProviderThrowsBeforeIngress()
+    {
+        var ingressPort = new RecordingWorkflowFileIngressPort();
+        var adapter = new RecordingConnectedServiceResourceFetchAdapter(
+            new WorkflowConnectedServiceResourceFetchRoute("lark", "message_resource_download", "image"))
+        {
+            FetchException = new InvalidOperationException("""{"body":"bad upstream","data_base64":"AAAA"}"""),
+        };
+        var tool = await GetFetchToolAsync(adapter, ingressPort);
+
+        var output = await tool.ExecuteAsync(NewFetchRequest(ValidImageArguments));
+
+        AssertError(output, "provider_call_failed");
+        output.ResultJson.Should().NotContain("bad upstream");
+        output.ResultJson.Contains("base64", StringComparison.OrdinalIgnoreCase).Should().BeFalse();
+        adapter.Requests.Should().ContainSingle();
+        ingressPort.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldFailClosedWhenProviderDoesNotSucceedBeforeIngress()
+    {
+        var ingressPort = new RecordingWorkflowFileIngressPort();
+        var adapter = new RecordingConnectedServiceResourceFetchAdapter(
+            new WorkflowConnectedServiceResourceFetchRoute("lark", "message_resource_download", "image"))
+        {
+            Result = new WorkflowConnectedServiceResourceFetchResult(
+                Succeeded: false,
+                Content: Encoding.UTF8.GetBytes("provider-bytes"),
+                Detail: "provider detail"),
+        };
+        var tool = await GetFetchToolAsync(adapter, ingressPort);
+
+        var output = await tool.ExecuteAsync(NewFetchRequest(ValidImageArguments));
+
+        AssertError(output, "provider_resource_unavailable");
+        output.ResultJson.Should().NotContain("provider detail");
+        output.ResultJson.Should().NotContain("provider-bytes");
+        adapter.Requests.Should().ContainSingle();
+        ingressPort.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldRejectEmptyProviderContentBeforeIngress()
+    {
+        var ingressPort = new RecordingWorkflowFileIngressPort();
+        var adapter = new RecordingConnectedServiceResourceFetchAdapter(
+            new WorkflowConnectedServiceResourceFetchRoute("lark", "message_resource_download", "image"))
+        {
+            Result = new WorkflowConnectedServiceResourceFetchResult(
+                Succeeded: true,
+                Content: ReadOnlyMemory<byte>.Empty),
+        };
+        var tool = await GetFetchToolAsync(adapter, ingressPort);
+
+        var output = await tool.ExecuteAsync(NewFetchRequest(ValidImageArguments));
+
+        AssertError(output, "empty_resource");
+        adapter.Requests.Should().ContainSingle();
+        ingressPort.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldFailClosedWhenArtifactIngressThrows()
+    {
+        var ingressPort = new RecordingWorkflowFileIngressPort
+        {
+            IngestException = new InvalidOperationException("""{"path":"secret","data_base64":"AAAA"}"""),
+        };
+        var adapter = new RecordingConnectedServiceResourceFetchAdapter(
+            new WorkflowConnectedServiceResourceFetchRoute("lark", "message_resource_download", "image"))
+        {
+            Result = new WorkflowConnectedServiceResourceFetchResult(
+                Succeeded: true,
+                Content: Encoding.UTF8.GetBytes("image-bytes"),
+                MediaType: "image/png",
+                FileName: "photo.png"),
+        };
+        var tool = await GetFetchToolAsync(adapter, ingressPort);
+
+        var output = await tool.ExecuteAsync(NewFetchRequest(ValidImageArguments));
+
+        AssertError(output, "artifact_ingress_failed");
+        output.ResultJson.Should().NotContain("secret");
+        output.ResultJson.Contains("base64", StringComparison.OrdinalIgnoreCase).Should().BeFalse();
+        adapter.Requests.Should().ContainSingle();
+        ingressPort.Requests.Should().ContainSingle();
+    }
+
+    private const string ValidImageArguments =
+        """
+        {
+          "provider": "lark",
+          "operation": "message_resource_download",
+          "resource_kind": "image",
+          "message_id": "om_123",
+          "resource_key": "img_v3_456"
+        }
+        """;
+
+    private static async Task<IWorkflowTool> GetFetchToolAsync(
+        IWorkflowConnectedServiceResourceFetchAdapter adapter,
+        IWorkflowFileIngressPort ingressPort)
+    {
+        var source = new WorkflowConnectedServiceResourceFetchToolSource([adapter], ingressPort);
+        return (await source.GetToolsAsync()).Single();
+    }
+
+    private static WorkflowToolExecutionRequest NewFetchRequest(
+        string argumentsJson,
+        string? bearerToken = "token-123") =>
+        new(
+            ArgumentsJson: argumentsJson,
+            RunId: "run-1",
+            StepId: "step-1",
+            ExecutionId: "exec-1",
+            CallId: "call-1",
+            ScopeId: "scope-1",
+            CallerCredential: new ProtoWorkflowCallerCredential { BearerToken = bearerToken });
+
+    private static void AssertError(WorkflowToolExecutionResult output, string expectedError)
+    {
+        using var document = JsonDocument.Parse(output.ResultJson);
+        var root = document.RootElement;
+        root.GetProperty("success").GetBoolean().Should().BeFalse();
+        root.GetProperty("error").GetString().Should().Be(expectedError);
+        root.GetProperty("detail").GetString().Should().NotBeNullOrWhiteSpace();
+        root.TryGetProperty("file_ref", out _).Should().BeFalse();
+    }
+
     private sealed class RecordingWorkflowFileIngressPort : IWorkflowFileIngressPort
     {
         public List<WorkflowFileIngressRequest> Requests { get; } = [];
+
+        public Exception? IngestException { get; init; }
 
         public ValueTask<WorkflowFileIngressResult> IngestAsync(
             WorkflowFileIngressRequest request,
             CancellationToken cancellationToken = default)
         {
             Requests.Add(request);
+            if (IngestException != null)
+                throw IngestException;
+
             return ValueTask.FromResult(new WorkflowFileIngressResult(new AppWorkflowFileRef
             {
                 FileId = "wf-file-1",
@@ -174,11 +342,16 @@ public sealed class WorkflowConnectedServiceResourceFetchToolTests
         public WorkflowConnectedServiceResourceFetchResult Result { get; init; } =
             new(true, Encoding.UTF8.GetBytes("resource"));
 
+        public Exception? FetchException { get; init; }
+
         public ValueTask<WorkflowConnectedServiceResourceFetchResult> FetchAsync(
             WorkflowConnectedServiceResourceFetchRequest request,
             CancellationToken cancellationToken = default)
         {
             Requests.Add(request);
+            if (FetchException != null)
+                throw FetchException;
+
             return ValueTask.FromResult(Result);
         }
     }

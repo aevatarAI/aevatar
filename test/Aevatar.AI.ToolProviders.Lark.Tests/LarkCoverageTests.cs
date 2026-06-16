@@ -143,6 +143,7 @@ public sealed class LarkCoverageTests
         services.Should().ContainSingle(descriptor =>
             descriptor.ServiceType == typeof(IWorkflowToolSource) &&
             descriptor.ImplementationType == typeof(LarkWorkflowFileSubmitToolSource));
+
         services.Single(descriptor => descriptor.ServiceType == typeof(LarkToolOptions))
             .ImplementationInstance.Should().BeOfType<LarkToolOptions>()
             .Which.ProviderSlug.Should().Be("custom-provider");
