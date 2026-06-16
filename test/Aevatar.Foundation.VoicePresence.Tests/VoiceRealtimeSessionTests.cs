@@ -827,6 +827,13 @@ public class VoiceRealtimeSessionTests
     {
         public bool SupportsRemoteAudio { get; } = supportsRemoteAudio;
 
+        public Task<bool> TrySendToolResultAsync(
+            string transportLeaseId,
+            string callId,
+            string resultJson,
+            CancellationToken ct = default) =>
+            Task.FromResult(false);
+
         public Task<VoiceTransportLifetimeCompleted?> AttachAsync(
             VoicePresenceSessionLeaseHandle handle,
             IVoiceTransport transport,
