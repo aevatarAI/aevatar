@@ -92,6 +92,7 @@
     <!-- Orleans                                                     -->
     <!-- ════════════════════════════════════════════════════════════ -->
     <PackageVersion Include="Microsoft.Orleans.Client" Version="$(OrleansVersion)" />
+    <PackageVersion Include="Microsoft.Orleans.Clustering.Redis" Version="$(OrleansVersion)" />
     <PackageVersion Include="Microsoft.Orleans.Core" Version="$(OrleansVersion)" />
     <PackageVersion Include="Microsoft.Orleans.EventSourcing" Version="$(OrleansVersion)" />
     <PackageVersion Include="Microsoft.Orleans.Persistence.Memory" Version="$(OrleansVersion)" />

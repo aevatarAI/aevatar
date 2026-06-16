@@ -3,6 +3,7 @@ using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.ScopeScripts;
+using Aevatar.GAgentService.Application.ServiceRuns;
 using Aevatar.AGUI.Contracts;
 
 namespace Aevatar.GAgentService.Application.Scripts;
@@ -24,7 +25,7 @@ public sealed class ScriptServiceRunRegistrationInteraction
         _serviceRunRegistrationPort = serviceRunRegistrationPort ?? throw new ArgumentNullException(nameof(serviceRunRegistrationPort));
     }
 
-    public Task<CommandInteractionResult<ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, ScriptServiceRunCompletionStatus>> ExecuteAsync(
+    public async Task<CommandInteractionResult<ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, ScriptServiceRunCompletionStatus>> ExecuteAsync(
         ScriptServiceRunCommand command,
         Func<AGUIEvent, CancellationToken, ValueTask> emitAsync,
         Func<ScriptServiceRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
@@ -33,12 +34,21 @@ public sealed class ScriptServiceRunRegistrationInteraction
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(emitAsync);
 
-        return _inner.ExecuteAsync(
+        ServiceRunRegistrationResult? registeredRun = null;
+        var terminalObservation = new ServiceRunTerminalAguiObservation();
+
+        async ValueTask EmitObservedAsync(AGUIEvent aguiEvent, CancellationToken token)
+        {
+            terminalObservation.Observe(aguiEvent);
+            await emitAsync(aguiEvent, token);
+        }
+
+        var result = await _inner.ExecuteAsync(
             command,
-            emitAsync,
+            EmitObservedAsync,
             async (receipt, token) =>
             {
-                await _serviceRunRegistrationPort.RegisterAsync(
+                registeredRun = await _serviceRunRegistrationPort.RegisterAsync(
                     new ServiceRunRecord
                     {
                         ScopeId = command.ScopeId ?? string.Empty,
@@ -61,6 +71,51 @@ public sealed class ScriptServiceRunRegistrationInteraction
                     await onAcceptedAsync(receipt, token);
             },
             ct);
+
+        await PersistTerminalStatusAsync(registeredRun, result, terminalObservation);
+        return result;
+    }
+
+    private async Task PersistTerminalStatusAsync(
+        ServiceRunRegistrationResult? registeredRun,
+        CommandInteractionResult<ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, ScriptServiceRunCompletionStatus> result,
+        ServiceRunTerminalAguiObservation terminalObservation)
+    {
+        if (registeredRun == null ||
+            !result.Succeeded ||
+            result.FinalizeResult?.Completed != true ||
+            !TryMapTerminalStatus(result.FinalizeResult.Completion, terminalObservation, out var status))
+        {
+            return;
+        }
+
+        await _serviceRunRegistrationPort.UpdateStatusAsync(
+            registeredRun.RunActorId,
+            registeredRun.RunId,
+            status,
+            terminalObservation.LastOutput,
+            terminalObservation.LastError,
+            CancellationToken.None);
+    }
+
+    private static bool TryMapTerminalStatus(
+        ScriptServiceRunCompletionStatus completion,
+        ServiceRunTerminalAguiObservation terminalObservation,
+        out ServiceRunStatus status)
+    {
+        if (terminalObservation.HasTerminalObservation)
+        {
+            status = terminalObservation.Status;
+            return status != ServiceRunStatus.Unspecified;
+        }
+
+        status = completion switch
+        {
+            ScriptServiceRunCompletionStatus.RunFinished => ServiceRunStatus.Completed,
+            ScriptServiceRunCompletionStatus.RunError => ServiceRunStatus.Failed,
+            _ => ServiceRunStatus.Unspecified,
+        };
+        return status != ServiceRunStatus.Unspecified;
     }
 
     async Task<RealtimeSessionResult<ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, ScriptServiceRunCompletionStatus>> IRealtimeSession<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus>.ExecuteAsync(

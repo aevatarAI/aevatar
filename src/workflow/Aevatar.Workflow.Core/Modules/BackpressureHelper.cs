@@ -9,29 +9,55 @@ namespace Aevatar.Workflow.Core.Modules;
 internal static class BackpressureHelper
 {
     public const int DefaultMaxConcurrentWorkers = 20;
+    public const int MaxConcurrentWorkersHardLimit = 200;
 
-    /// <summary>Reads max_concurrent_workers from step parameters, clamped to [1, fallback].</summary>
-    public static int ResolveMaxConcurrent(IDictionary<string, string>? parameters, int fallback = DefaultMaxConcurrentWorkers)
+    /// <summary>
+    /// Reads max_concurrent_workers from step parameters.
+    /// Defaults to the safe baseline and allows explicit opt-in above that baseline up to a hard limit.
+    /// </summary>
+    public static int ResolveMaxConcurrent(
+        IDictionary<string, string>? parameters,
+        int fallback = DefaultMaxConcurrentWorkers,
+        int hardLimit = MaxConcurrentWorkersHardLimit)
     {
+        var boundedFallback = Math.Clamp(fallback, 1, Math.Max(1, hardLimit));
         if (parameters != null &&
             parameters.TryGetValue("max_concurrent_workers", out var raw) &&
             int.TryParse(raw, out var parsed) &&
             parsed > 0)
         {
-            return Math.Min(parsed, fallback);
+            return Math.Clamp(parsed, 1, Math.Max(1, hardLimit));
         }
 
-        return fallback;
+        return boundedFallback;
     }
 
     /// <summary>
-    /// Attempts to admit a worker for dispatch.
-    /// Returns true if under the concurrency limit (caller should dispatch immediately).
-    /// Returns false if at limit (entry has been queued for later dispatch).
+    /// Reads min_concurrent_workers from step parameters and clamps it into [0, maxConcurrent].
+    /// When omitted or invalid, no explicit floor is applied and the helper falls back to max concurrency behavior.
     /// </summary>
+    public static int ResolveMinConcurrent(IDictionary<string, string>? parameters, int maxConcurrent)
+    {
+        if (maxConcurrent <= 0)
+            return 0;
+
+        if (parameters != null &&
+            TryGetPositiveInt(parameters, out var parsed, "min_concurrent_workers", "min_workers", "concurrency_floor"))
+        {
+            return Math.Clamp(parsed, 0, maxConcurrent);
+        }
+
+        return 0;
+    }
+
+    /// <summary>
+     /// Attempts to admit a worker for dispatch.
+    /// Returns true if under the immediate dispatch target (caller should dispatch immediately).
+    /// Returns false if at target (entry has been queued for later dispatch).
+     /// </summary>
     public static bool TryAdmit(BackpressureQueueState bp, BackpressureQueueEntry entry)
     {
-        if (bp.ActiveWorkers < bp.MaxConcurrentWorkers)
+        if (bp.ActiveWorkers < ResolveDispatchTarget(bp))
         {
             bp.ActiveWorkers++;
             return true;
@@ -39,6 +65,38 @@ internal static class BackpressureHelper
 
         bp.Queue.Add(entry);
         return false;
+    }
+
+    /// <summary>
+    /// Called when a worker completes. Decrements active count and dequeues enough queued work
+    /// to restore the configured floor/target.
+    /// </summary>
+    public static IReadOnlyList<BackpressureQueueEntry> CompleteAndTopUp(BackpressureQueueState bp)
+    {
+        bp.ActiveWorkers = Math.Max(0, bp.ActiveWorkers - 1);
+        return TopUpToTarget(bp);
+    }
+
+    /// <summary>
+    /// Dequeues enough queued work to restore the configured floor/target without exceeding max.
+    /// </summary>
+    public static IReadOnlyList<BackpressureQueueEntry> TopUpToTarget(BackpressureQueueState bp)
+    {
+        NormalizeHeadIndex(bp);
+
+        var target = ResolveDispatchTarget(bp);
+        if (target <= 0 || bp.ActiveWorkers >= target || QueuedCount(bp) == 0)
+            return [];
+
+        var drained = new List<BackpressureQueueEntry>();
+        while (bp.ActiveWorkers < target && QueuedCount(bp) > 0)
+        {
+            drained.Add(DequeueOne(bp));
+            bp.ActiveWorkers++;
+        }
+
+        CompactIfNeeded(bp);
+        return drained;
     }
 
     /// <summary>
@@ -54,8 +112,7 @@ internal static class BackpressureHelper
         if (QueuedCount(bp) == 0)
             return null;
 
-        var next = bp.Queue[bp.HeadIndex];
-        bp.HeadIndex++;
+        var next = DequeueOne(bp);
         bp.ActiveWorkers++;
         CompactIfNeeded(bp);
         return next;
@@ -93,18 +150,66 @@ internal static class BackpressureHelper
             Parameters = { parameters ?? new Dictionary<string, string>() },
         };
 
-    /// <summary>Initializes backpressure state with the resolved max concurrency.</summary>
-    public static BackpressureQueueState Initialize(int maxConcurrent) =>
-        new() { MaxConcurrentWorkers = maxConcurrent };
+    /// <summary>Initializes backpressure state with the resolved max/min concurrency.</summary>
+    public static BackpressureQueueState Initialize(int maxConcurrent, int minConcurrent = 0) =>
+        new()
+        {
+            MaxConcurrentWorkers = Math.Max(1, maxConcurrent),
+            MinConcurrentWorkers = Math.Clamp(minConcurrent, 0, Math.Max(1, maxConcurrent)),
+        };
 
     /// <summary>
     /// Ensures a usable backpressure state exists. Proto message fields may be null on older
     /// persisted state or on paths that complete before the admission path initialized them.
     /// </summary>
-    public static BackpressureQueueState EnsureInitialized(BackpressureQueueState? current, int maxConcurrent) =>
-        current != null && current.MaxConcurrentWorkers > 0
-            ? current
-            : Initialize(maxConcurrent);
+    public static BackpressureQueueState EnsureInitialized(
+        BackpressureQueueState? current,
+        int maxConcurrent,
+        int minConcurrent = 0)
+    {
+        if (current == null || current.MaxConcurrentWorkers <= 0)
+            return Initialize(maxConcurrent, minConcurrent);
+
+        current.MaxConcurrentWorkers = Math.Max(1, current.MaxConcurrentWorkers);
+        current.MinConcurrentWorkers = Math.Clamp(current.MinConcurrentWorkers, 0, current.MaxConcurrentWorkers);
+        return current;
+    }
+
+    private static BackpressureQueueEntry DequeueOne(BackpressureQueueState bp)
+    {
+        NormalizeHeadIndex(bp);
+        var next = bp.Queue[bp.HeadIndex];
+        bp.HeadIndex++;
+        return next;
+    }
+
+    private static int ResolveDispatchTarget(BackpressureQueueState bp)
+    {
+        var maxConcurrent = Math.Max(1, bp.MaxConcurrentWorkers);
+        var minConcurrent = Math.Clamp(bp.MinConcurrentWorkers, 0, maxConcurrent);
+        return minConcurrent > 0 ? minConcurrent : maxConcurrent;
+    }
+
+    private static bool TryGetPositiveInt(
+        IDictionary<string, string> parameters,
+        out int value,
+        params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (!parameters.TryGetValue(key, out var raw) || string.IsNullOrWhiteSpace(raw))
+                continue;
+
+            if (!int.TryParse(raw.Trim(), out var parsed) || parsed <= 0)
+                continue;
+
+            value = parsed;
+            return true;
+        }
+
+        value = default;
+        return false;
+    }
 
     private static void NormalizeHeadIndex(BackpressureQueueState bp)
     {

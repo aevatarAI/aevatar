@@ -87,7 +87,7 @@ public class AIGAgentBaseToolRefreshTests
 
         chunks.Select(x => x.DeltaContent).Where(x => x is not null).Should()
             .ContainSingle()
-            .Which.Should().Contain("No tool approval handler is registered.");
+            .Which.Should().Contain("approval-gated tools cannot run here");
         tool.ExecuteCount.Should().Be(0);
     }
 

@@ -21,6 +21,32 @@ public sealed record ChatRunContentPart
     public string? MediaType { get; init; }
     public string? Uri { get; init; }
     public string? Name { get; init; }
+    public ChatRunInlineFilePart? InlineFile { get; init; }
+    public ChatRunFileRefPart? FileRef { get; init; }
+}
+
+public sealed record ChatRunInlineFilePart
+{
+    public string? DataBase64 { get; init; }
+    public string? MediaType { get; init; }
+    public string? Name { get; init; }
+    public long? SizeBytes { get; init; }
+}
+
+public sealed record ChatRunFileRefPart
+{
+    public string? FileId { get; init; }
+    public string? ArtifactId { get; init; }
+    public string? SourceKind { get; init; }
+    public string? SourceMessageId { get; init; }
+    public string? SourceResourceKey { get; init; }
+    public string? FileName { get; init; }
+    public string? Uri { get; init; }
+    public string? MediaType { get; init; }
+    public string? Name { get; init; }
+    public long? CreatedAtUnixMs { get; init; }
+    public long? ExpiresAtUnixMs { get; init; }
+    public string? Sha256 { get; init; }
 }
 
 public sealed record WorkflowResumeRequest
@@ -36,6 +62,14 @@ public sealed record WorkflowResumeRequest
     public string? EditedContent { get; init; }
     public string? Feedback { get; init; }
     public IDictionary<string, string>? Metadata { get; init; }
+    public WorkflowToolApprovalResumeRequest? ToolApproval { get; init; }
+}
+
+public sealed record WorkflowToolApprovalResumeRequest
+{
+    public required string ExecutionId { get; init; }
+    public required string ToolCallId { get; init; }
+    public required string ApprovalRequestId { get; init; }
 }
 
 public sealed record WorkflowSignalRequest

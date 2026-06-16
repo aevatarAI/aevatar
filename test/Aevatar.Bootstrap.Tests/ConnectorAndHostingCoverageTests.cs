@@ -1,11 +1,13 @@
 using System.Net;
 using System.Net.Http;
 using System.Text;
+using System.Text.Json.Nodes;
 using Aevatar.Bootstrap;
 using Aevatar.Bootstrap.Connectors;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.Configuration;
 using Aevatar.Foundation.Abstractions.Connectors;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Workflow.Core.Connectors;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -654,10 +656,54 @@ public class ConnectorAndHostingCoverageTests
     }
 
     [Fact]
+    public async Task HostCallbackConnector_ShouldReturnStructuredResult_AndEnforceAllowlist()
+    {
+        var connector = new HostCallbackConnector(
+            "host-github",
+            "github",
+            new RecordingHostCallbackHandler("github"),
+            allowedOperations: ["classify_pr"],
+            allowedInputKeys: ["issue", "repo"]);
+
+        var operationRejected = await connector.ExecuteAsync(new ConnectorRequest
+        {
+            Operation = "close_pr",
+            Payload = """{"issue":"1738"}""",
+        });
+        operationRejected.Success.Should().BeFalse();
+        operationRejected.Error.Should().Contain("not allowed");
+
+        var schemaRejected = await connector.ExecuteAsync(new ConnectorRequest
+        {
+            Operation = "classify_pr",
+            Payload = """{"issue":"1738","owner":"blocked"}""",
+        });
+        schemaRejected.Success.Should().BeFalse();
+        schemaRejected.Error.Should().Contain("schema violation");
+
+        var success = await connector.ExecuteAsync(new ConnectorRequest
+        {
+            RunId = "run-1738",
+            StepId = "classify",
+            Operation = "classify_pr",
+            Payload = """{"issue":"1738","repo":"aevatar"}""",
+        });
+
+        success.Success.Should().BeTrue();
+        success.Output.Should().Be("""{"route":"phase9-router","approved":true,"budget":{"remainingTokens":128}}""");
+        success.Metadata["host_callback.handler"].Should().Be("github");
+        success.Metadata["host_callback.operation"].Should().Be("classify_pr");
+        success.Metadata["host_callback.result.route"].Should().Be("phase9-router");
+        success.Metadata["host_callback.result.approved"].Should().Be("true");
+        success.Metadata["host_callback.result.budget.remainingTokens"].Should().Be("128");
+    }
+
+    [Fact]
     public void ConnectorBuilders_ShouldValidateAndBuild()
     {
         var cliBuilder = new CliConnectorBuilder();
         var httpBuilder = new HttpConnectorBuilder();
+        var hostCallbackBuilder = new HostCallbackConnectorBuilder([new RecordingHostCallbackHandler("host-router")]);
         var telegramUserBuilder = new TelegramUserConnectorBuilder();
 
         var missingCli = new ConnectorConfigEntry
@@ -709,6 +755,34 @@ public class ConnectorAndHostingCoverageTests
         httpConnector.Should().NotBeNull();
         httpConnector!.Type.Should().Be("http");
         httpConnector.Name.Should().Be("http-valid");
+
+        var missingHostHandler = new ConnectorConfigEntry
+        {
+            Name = "host-missing",
+            Type = "host_callback",
+            HostCallback = new HostCallbackConnectorConfig
+            {
+                Handler = "unknown",
+            },
+        };
+        hostCallbackBuilder.TryBuild(missingHostHandler, NullLogger.Instance, out var missingHostCallbackConnector).Should().BeFalse();
+        missingHostCallbackConnector.Should().BeNull();
+
+        var validHostHandler = new ConnectorConfigEntry
+        {
+            Name = "host-valid",
+            Type = "host_callback",
+            HostCallback = new HostCallbackConnectorConfig
+            {
+                Handler = "host-router",
+                AllowedOperations = ["classify"],
+                AllowedInputKeys = ["issue"],
+            },
+        };
+        hostCallbackBuilder.TryBuild(validHostHandler, NullLogger.Instance, out var hostConnector).Should().BeTrue();
+        hostConnector.Should().NotBeNull();
+        hostConnector!.Type.Should().Be("host_callback");
+        hostConnector.Name.Should().Be("host-valid");
 
         var missingTelegramUser = new ConnectorConfigEntry
         {
@@ -926,6 +1000,116 @@ public class ConnectorAndHostingCoverageTests
         factory.RequestedNames.Should().Contain("aevatar.connector.http.nyxid-main");
     }
 
+    [Fact]
+    public async Task HttpConnectorBuilder_WithSecretRefHeaderAuth_ShouldInjectHeaderFromCredentialProvider()
+    {
+        var handler = new StubHttpMessageHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"ok\":true}", Encoding.UTF8, "application/json"),
+                ReasonPhrase = "OK",
+            });
+        var factory = new RecordingHttpClientFactory(_ => new HttpClient(handler));
+        var builder = new HttpConnectorBuilder(factory, new StubCredentialProvider("secret-ref", "api-token"));
+        var entry = new ConnectorConfigEntry
+        {
+            Name = "twitterapi",
+            Type = "http",
+            Http = new HttpConnectorConfig
+            {
+                BaseUrl = "https://api.example.com",
+                Auth = new ConnectorAuthConfig
+                {
+                    Type = "secret_ref_header",
+                    SecretRef = "secret-ref",
+                    HeaderName = "X-API-Key",
+                    HeaderValuePrefix = "Token ",
+                },
+            },
+        };
+
+        var built = builder.TryBuild(entry, NullLogger.Instance, out var connector);
+        built.Should().BeTrue();
+
+        var result = await connector!.ExecuteAsync(new ConnectorRequest
+        {
+            Operation = "/query",
+            Parameters = new Dictionary<string, string> { ["method"] = "POST" },
+        });
+
+        result.Success.Should().BeTrue();
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.Headers.GetValues("X-API-Key").Should().ContainSingle().Which.Should().Be("Token api-token");
+    }
+
+    [Fact]
+    public async Task HttpConnectorBuilder_WithSecretRefHeaderAuth_ShouldFailClosedWhenSecretMissing()
+    {
+        var handler = new StubHttpMessageHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"ok\":true}", Encoding.UTF8, "application/json"),
+                ReasonPhrase = "OK",
+            });
+        var factory = new RecordingHttpClientFactory(_ => new HttpClient(handler));
+        var builder = new HttpConnectorBuilder(factory, new StubCredentialProvider("other-ref", "api-token"));
+        var entry = new ConnectorConfigEntry
+        {
+            Name = "twitterapi",
+            Type = "http",
+            Http = new HttpConnectorConfig
+            {
+                BaseUrl = "https://api.example.com",
+                Auth = new ConnectorAuthConfig
+                {
+                    Type = "secret_ref_header",
+                    SecretRef = "missing-ref",
+                    HeaderName = "X-API-Key",
+                },
+            },
+        };
+
+        builder.TryBuild(entry, NullLogger.Instance, out var connector).Should().BeTrue();
+
+        var result = await connector!.ExecuteAsync(new ConnectorRequest
+        {
+            Operation = "/query",
+            Parameters = new Dictionary<string, string> { ["method"] = "POST" },
+        });
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("secret");
+        handler.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public void HttpConnectorBuilder_WithSecretRefHeaderAuth_ShouldRejectHeaderCollision()
+    {
+        var builder = new HttpConnectorBuilder(new StubCredentialProvider("secret-ref", "api-token"));
+        var entry = new ConnectorConfigEntry
+        {
+            Name = "twitterapi",
+            Type = "http",
+            Http = new HttpConnectorConfig
+            {
+                BaseUrl = "https://api.example.com",
+                DefaultHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["X-API-Key"] = "static",
+                },
+                Auth = new ConnectorAuthConfig
+                {
+                    Type = "secret_ref_header",
+                    SecretRef = "secret-ref",
+                    HeaderName = "x-api-key",
+                },
+            },
+        };
+
+        builder.TryBuild(entry, NullLogger.Instance, out var connector).Should().BeFalse();
+        connector.Should().BeNull();
+    }
+
     private sealed class StubHttpMessageHandler : HttpMessageHandler
     {
         private readonly Func<HttpRequestMessage, HttpResponseMessage> _responseFactory;
@@ -991,6 +1175,17 @@ public class ConnectorAndHostingCoverageTests
         }
     }
 
+    private sealed class StubCredentialProvider(string knownRef, string secret) : ICredentialProvider
+    {
+        public Task<string?> ResolveAsync(string credentialRef, CancellationToken ct = default)
+        {
+            _ = ct;
+            return Task.FromResult(string.Equals(credentialRef, knownRef, StringComparison.Ordinal)
+                ? secret
+                : null);
+        }
+    }
+
     private sealed class RecordingConnectorBuilder(string type, IConnector connector) : IConnectorBuilder
     {
         public string Type { get; } = type;
@@ -1023,6 +1218,35 @@ public class ConnectorAndHostingCoverageTests
         {
             DisposeCount++;
             return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingHostCallbackHandler(string name) : IHostCallbackConnectorHandler
+    {
+        public string Name { get; } = name;
+
+        public Task<HostCallbackConnectorResponse> HandleAsync(
+            HostCallbackConnectorRequest request,
+            CancellationToken ct = default)
+        {
+            _ = ct;
+            request.Operation.Should().Be("classify_pr");
+            request.RunId.Should().Be("run-1738");
+            request.StepId.Should().Be("classify");
+
+            return Task.FromResult(new HostCallbackConnectorResponse
+            {
+                Success = true,
+                Result = new JsonObject
+                {
+                    ["route"] = "phase9-router",
+                    ["approved"] = true,
+                    ["budget"] = new JsonObject
+                    {
+                        ["remainingTokens"] = 128,
+                    },
+                },
+            });
         }
     }
 

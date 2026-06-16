@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
+using Aevatar.Foundation.Abstractions.Interactions;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Presentation.AGUIAdapter;
 using Aevatar.Workflow.Projection;
@@ -31,6 +32,11 @@ public sealed class WorkflowHumanInteractionProjectorTests
                     Content = "Please review the summary.",
                     DeliveryTargetId = "agent-delivery-1",
                     TimeoutSeconds = 90,
+                    Interaction = new InteractionSpec
+                    {
+                        Title = "Typed review",
+                        Body = "Approve the summary",
+                    },
                     VariableName = "approval_note",
                     Secure = true,
                     RedactedOutput = "[captured]",
@@ -55,12 +61,66 @@ public sealed class WorkflowHumanInteractionProjectorTests
         call.request.SuspensionType.Should().Be("human_approval");
         call.request.Content.Should().Be("Please review the summary.");
         call.request.Options.Should().Equal("approve", "reject");
+        call.request.InteractionSpec.Should().NotBeNull();
+        call.request.InteractionSpec!.Title.Should().Be("Typed review");
+        call.request.InteractionSpec.Body.Should().Be("Approve the summary");
         call.request.TimeoutSeconds.Should().Be(90);
         call.request.Annotations.Should().ContainKey("source").WhoseValue.Should().Be("workflow-test");
         call.request.Annotations.Should().ContainKey("variable").WhoseValue.Should().Be("approval_note");
         call.request.Annotations.Should().ContainKey("secure").WhoseValue.Should().Be("true");
         call.request.Annotations.Should().ContainKey("redacted_output").WhoseValue.Should().Be("[captured]");
         call.request.Annotations.Should().NotContainKey("input_mode");
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldDerivePromptAndOptionsFromTypedInteraction()
+    {
+        var port = new RecordingHumanInteractionPort();
+        var projector = new WorkflowHumanInteractionProjector(port);
+
+        await projector.ProjectAsync(
+            BuildContext(),
+            new EventEnvelope
+            {
+                Id = "evt-human-typed-1",
+                Route = EnvelopeRouteSemantics.CreateObserverPublication("workflow-human-interaction-test"),
+                Payload = Any.Pack(new WorkflowSuspendedEvent
+                {
+                    RunId = "run-typed",
+                    StepId = "approval-typed",
+                    SuspensionType = "human_approval",
+                    DeliveryTargetId = "agent-delivery-typed",
+                    Interaction = new InteractionSpec
+                    {
+                        Title = "Typed approval",
+                        Body = "Review typed payload",
+                        Actions =
+                        {
+                            new InteractionAction
+                            {
+                                Kind = InteractionActionKind.FormSubmit,
+                                ActionId = "approve",
+                                Label = "Approve",
+                            },
+                            new InteractionAction
+                            {
+                                Kind = InteractionActionKind.FormSubmit,
+                                ActionId = "reject",
+                                Label = "Reject",
+                            },
+                        },
+                    },
+                }),
+            },
+            CancellationToken.None);
+
+        port.Calls.Should().ContainSingle();
+        var request = port.Calls[0].request;
+        request.Prompt.Should().Be("Review typed payload");
+        request.Options.Should().Equal("approve", "reject");
+        request.InteractionSpec.Should().NotBeNull();
+        request.InteractionSpec!.Actions.Select(action => action.ActionId)
+            .Should().Equal("approve", "reject");
     }
 
     [Fact]
@@ -152,7 +212,6 @@ public sealed class WorkflowHumanInteractionProjectorTests
                         ToolName = "dangerous_tool",
                         ToolCallId = "call-tool",
                         ApprovalRequestId = "approval-tool",
-                        ArgumentsJson = "{}",
                     },
                 }),
             },

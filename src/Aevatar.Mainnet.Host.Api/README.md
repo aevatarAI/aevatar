@@ -33,15 +33,20 @@ ASPNETCORE_ENVIRONMENT=Distributed dotnet run --project src/Aevatar.Mainnet.Host
 - `ActorRuntime:Provider=Orleans`
 - `ActorRuntime:OrleansStreamBackend=KafkaProvider`
 - `ActorRuntime:OrleansPersistenceBackend=Garnet`
-- `Orleans:ClusteringMode=Localhost`
+- `Orleans:ClusteringMode=Garnet`
 
 在上述配置下，Event Sourcing 的 `IEventStore` 会自动使用 `GarnetEventStore`（连接串复用 `ActorRuntime:OrleansGarnetConnectionString`）。
 `Projection:Graph:Providers:Neo4j:Password` 不再在仓库内提供默认明文值，需通过环境变量注入。
 
 `Orleans:ClusteringMode` 支持：
 
-- `Localhost`：本机多进程开发模式（默认）。
-- `Development`：多机测试模式（主节点 + 从节点），通过 `Orleans:PrimarySiloEndpoint` 加入集群。
+- `Garnet`：共享 membership 模式（Distributed 配置默认，生产必须）。membership 表与
+  reminder 表、grain state 共用同一 Garnet 实例与 `ServiceId`，滚动发布期间新旧 silo
+  组成同一集群、分摊 reminder ring，避免双触发与 grain-state etag 冲突。
+  `Orleans:SiloHost` 留空时自动通告第一个非回环网卡地址（k8s 内即 Pod IP）。
+- `Localhost`：本机单进程开发模式（代码默认值），membership 仅在进程内，禁止用于多副本部署。
+- `Development`：多机测试模式（主节点 + 从节点），通过 `Orleans:PrimarySiloEndpoint` 加入集群；
+  membership 由主节点内存持有，主节点重启即丢失，不可用于生产。
 
 可通过 `AEVATAR_` 前缀环境变量覆盖，例如：
 
@@ -139,7 +144,7 @@ Responses / Messages 直连接口也挂在主机上，外部推荐经 NyxID prox
 - `stream=true` 时返回 Responses 风格 SSE：`response.created`、`response.output_item.added`、`response.output_text.delta`、`response.output_text.done`、`response.output_item.done`、`response.completed`；失败时输出 `response.failed` / `error`。
 - `Authorization: Bearer <token>` 只在请求上下文中透传，不会落盘；持久化的 response session 只记录 NyxID `/me` 解析出的 caller scope 与 opaque `response.id`。
 - forward tool call 在输出给客户端前会先落 response session actor，记录 `call_id`、`tool_name`、`schema_hash`、arguments、状态与过期时间。客户端续传 tool result 时可携带 `schema_hash`，不匹配会返回明确 4xx。
-- `/v1/responses`、`/v1/messages`、`/v1/chat/completions` 共用同一套 `IResponsesDirectToolPlanService` + `IResponsesToolClassificationService` 抽象。三条入口都会合并全局 `IResponsesToolProvider`，并按 chat-route `ForwardToModel.ToolSetRef` 追加同一个 route tool set；Mainnet 默认补 `workspace.default`，`lark.self_notify` 也组合同一批 workspace tools。`TodoWrite`、`WebFetch`、`WebSearch` 属于 substitute 类，会替换同名客户端 declared tools；其他客户端 declared tools 默认 forward。`use_skill`、`ornn_search_skills` 属于 additive 类，会在三条直连接口注入，并使用当前 caller bearer 经 NyxID proxy 访问调用者可见的 Ornn skills。
+- `/v1/responses`、`/v1/messages`、`/v1/chat/completions` 共用同一套 `IResponsesDirectToolPlanService` + `IResponsesToolClassificationService` 抽象。三条入口都会合并全局 `IResponsesToolProvider`，并按 chat-route `ForwardToModel.ToolSetRef` 追加同一个 route tool set；Mainnet 默认补 `workspace.default`，`lark.self_notify` 也组合同一批 workspace tools。`TodoWrite`、`WebFetch`、`WebSearch` 属于 substitute 类，会替换同名客户端 declared tools；其他客户端 declared tools 默认 forward。`use_skill`、`ornn_search_skills`、`ornn_publish_skill` 属于 additive 类，会在三条直连接口注入，并使用当前 caller bearer 经 NyxID proxy 访问调用者可见的 Ornn skills。
 - substitute 工具状态归 `ResponsesAgentToolStateGAgent` 拥有：`TodoWrite` 写入 agent-scoped todo state，`WebFetch` / `WebSearch` 记录 trace 与简单 cache 命中状态；这些状态通过 ProjectionPipeline 物化为 current-state read model，可供后续会话查询。旧 `Task` trace 契约暂留为 dead surface，当前 Mainnet 不再注册 `Task` / `task` substitute。
 - cancel 端点会复用同一 bearer token scope resolution；可见性通过后，session actor 会把 response 标记为 `cancelled` 并将 pending forwarded tool call 标为 `cancelled`。已过期或已取消的 `previous_response_id` 不能 resume。
 - `/v1/messages` 是 Anthropic Messages 兼容门面。它每次请求注册一个新的 `LlmSession`，不支持 `previous_response_id`，`max_tokens` 必填，共享直连 tool-source plan、工具分类与 Ornn skill bridge；`top_p`、`top_k`、`stop_sequences` 和 forced `tool_choice` 会被拒绝，image content v1 会被丢弃并记录 warning。

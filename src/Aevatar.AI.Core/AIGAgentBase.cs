@@ -6,6 +6,7 @@
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Hooks.BuiltIn;
+using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.Core.Tools;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
@@ -302,11 +303,10 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         }
 
         // 构建 Tool Call Middleware 链（审批中间件在最前面，不可绕过）
-        var effectiveToolMiddlewares = new List<IToolCallMiddleware>(_toolMiddlewares.Count + 1)
-        {
-            new Middleware.ToolApprovalMiddleware(_approvalHandler ?? Middleware.MissingApprovalHandler.Instance, _hooks),
-        };
-        effectiveToolMiddlewares.AddRange(_toolMiddlewares);
+        var effectiveToolMiddlewares = ToolCallMiddlewareChainFactory.ForAgentRuntime(
+            _toolMiddlewares,
+            _approvalHandler,
+            _hooks);
 
         // 构建 Chat Runtime
         var toolLoop = new ToolCallLoop(Tools, _hooks, effectiveToolMiddlewares, _llmMiddlewares, History.Budget);

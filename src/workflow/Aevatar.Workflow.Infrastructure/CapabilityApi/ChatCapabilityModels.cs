@@ -121,6 +121,7 @@ public sealed record WorkflowChatInlineYamlDocumentInput
     public string? Yaml { get; init; }
 }
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ChatInputContentPart
 {
     public required string Type { get; init; }
@@ -129,8 +130,40 @@ public sealed record ChatInputContentPart
     public string? MediaType { get; init; }
     public string? Uri { get; init; }
     public string? Name { get; init; }
+    public ChatInputInlineFile? InlineFile { get; init; }
+    public ChatInputFileRef? FileRef { get; init; }
 }
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record ChatInputInlineFile
+{
+    public string? DataBase64 { get; init; }
+    public string? MediaType { get; init; }
+    public string? Name { get; init; }
+    public long? SizeBytes { get; init; }
+    public string? OwnerScopeId { get; init; }
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record ChatInputFileRef
+{
+    public string? FileId { get; init; }
+    public string? ArtifactId { get; init; }
+    public string? SourceKind { get; init; }
+    public string? SourceMessageId { get; init; }
+    public string? SourceResourceKey { get; init; }
+    public string? FileName { get; init; }
+    public string? Uri { get; init; }
+    public string? MediaType { get; init; }
+    public string? Name { get; init; }
+    public long? CreatedAtUnixMs { get; init; }
+    public long? ExpiresAtUnixMs { get; init; }
+    public string? Sha256 { get; init; }
+    public string? OwnerRunId { get; init; }
+    public string? OwnerScopeId { get; init; }
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record WorkflowResumeInput
 {
     public required string ActorId { get; init; }
@@ -142,6 +175,15 @@ public sealed record WorkflowResumeInput
     public string? EditedContent { get; init; }
     public string? Feedback { get; init; }
     public IDictionary<string, string>? Metadata { get; init; }
+    public WorkflowToolApprovalResumeInput? ToolApproval { get; init; }
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record WorkflowToolApprovalResumeInput
+{
+    public required string ExecutionId { get; init; }
+    public required string ToolCallId { get; init; }
+    public required string ApprovalRequestId { get; init; }
 }
 
 public sealed record WorkflowSignalInput
@@ -160,6 +202,19 @@ public sealed record WorkflowStopInput
     public required string RunId { get; init; }
     public string? CommandId { get; init; }
     public string? Reason { get; init; }
+}
+
+public sealed record WorkflowForkRunInput
+{
+    public required string SourceRunId { get; init; }
+    public required string StartAtStepId { get; init; }
+    public string? InlineYaml { get; init; }
+    public IDictionary<string, string>? InlineSubYamls { get; init; }
+    public IDictionary<string, string>? VariableOverrides { get; init; }
+    public string? Input { get; init; }
+    public string? ScopeId { get; init; }
+    public string? CommandId { get; init; }
+    public string? CorrelationId { get; init; }
 }
 
 internal sealed record ChatWsCommand

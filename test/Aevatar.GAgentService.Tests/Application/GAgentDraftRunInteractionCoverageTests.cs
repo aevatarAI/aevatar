@@ -10,6 +10,7 @@ using Aevatar.CQRS.Core.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;
+using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Application.ScopeGAgents;
 using Aevatar.AGUI.Contracts;
@@ -23,20 +24,26 @@ namespace Aevatar.GAgentService.Tests.Application;
 //   Cluster intent: draft-run cleanup owns typed live-sink leases and detaches without a process registry.
 public sealed class GAgentDraftRunInteractionCoverageTests
 {
+    private const string ExpectedAgentKind = "tests.draft-run-expected";
+
     [Fact]
-    public async Task Resolver_ShouldReturnUnknownActorType_WhenTypeCannotBeResolved()
+    public async Task Resolver_ShouldReturnUnknownAgentKind_WhenTypeCannotBeResolved()
     {
         var resolver = new GAgentDraftRunCommandTargetResolver(
             new DraftRunStubActorRuntime(),
             new DraftRunProjectionPort(),
-            new RecordingGAgentRunTerminalProjectionPort());
+            new RecordingGAgentRunTerminalProjectionPort(),
+            agentKindRegistry: BuildRegistry());
 
         var result = await resolver.ResolveAsync(
-            new GAgentDraftRunCommand("scope-a", "missing-type", "hello"),
+            new GAgentDraftRunCommand(
+                "scope-a",
+                "tests.missing-draft-run-agent",
+                "hello"),
             CancellationToken.None);
 
         result.Succeeded.Should().BeFalse();
-        result.Error.Should().Be(GAgentDraftRunStartError.UnknownActorType);
+        result.Error.Should().Be(GAgentDraftRunStartError.UnknownAgentKind);
     }
 
     [Fact]
@@ -46,21 +53,23 @@ public sealed class GAgentDraftRunInteractionCoverageTests
         var resolver = new GAgentDraftRunCommandTargetResolver(
             runtime,
             new DraftRunProjectionPort(),
-            new RecordingGAgentRunTerminalProjectionPort());
+            new RecordingGAgentRunTerminalProjectionPort(),
+            agentKindRegistry: BuildRegistry());
 
         var result = await resolver.ResolveAsync(
             new GAgentDraftRunCommand(
                 "scope-a",
-                typeof(DraftRunExpectedAgent).AssemblyQualifiedName!,
+                ExpectedAgentKind,
                 "hello",
                 PreferredActorId: "preferred-1"),
             CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
-        runtime.CreateCalls.Should().ContainSingle();
-        runtime.CreateCalls[0].actorId.Should().Be("preferred-1");
+        runtime.CreateByKindCalls.Should().ContainSingle();
+        runtime.CreateByKindCalls[0].agentKind.Should().Be(ExpectedAgentKind);
+        runtime.CreateByKindCalls[0].actorId.Should().Be("preferred-1");
         result.Target!.ActorId.Should().Be("preferred-1");
-        result.Target.ActorTypeName.Should().Be(typeof(DraftRunExpectedAgent).AssemblyQualifiedName!);
+        result.Target.DiagnosticClrTypeName.Should().Be(typeof(DraftRunExpectedAgent).FullName);
     }
 
     [Fact]
@@ -293,7 +302,7 @@ public sealed class GAgentDraftRunInteractionCoverageTests
         var context = new CommandContext("actor-1", "cmd-1", "corr-1", new Dictionary<string, string>());
 
         var result = await lifecycle.BindAsync(
-            new GAgentDraftRunCommand("scope-a", typeof(DraftRunExpectedAgent).AssemblyQualifiedName!, "hello"),
+            new GAgentDraftRunCommand("scope-a", ExpectedAgentKind, "hello"),
             CreateExecution(target, context),
             CancellationToken.None);
 
@@ -321,7 +330,7 @@ public sealed class GAgentDraftRunInteractionCoverageTests
         var context = new CommandContext("actor-1", "cmd-1", "corr-1", new Dictionary<string, string>());
 
         var result = await lifecycle.BindAsync(
-            new GAgentDraftRunCommand("scope-a", typeof(DraftRunExpectedAgent).AssemblyQualifiedName!, "hello"),
+            new GAgentDraftRunCommand("scope-a", ExpectedAgentKind, "hello"),
             CreateExecution(target, context),
             CancellationToken.None);
 
@@ -345,7 +354,7 @@ public sealed class GAgentDraftRunInteractionCoverageTests
         var envelope = factory.CreateEnvelope(
             new GAgentDraftRunCommand(
                 ScopeId: "scope-a",
-                ActorTypeName: typeof(DraftRunExpectedAgent).AssemblyQualifiedName!,
+                AgentKind: ExpectedAgentKind,
                 Prompt: "hello",
                 SessionId: " ",
                 NyxIdAccessToken: " token ",
@@ -410,7 +419,7 @@ public sealed class GAgentDraftRunInteractionCoverageTests
         var envelope = factory.CreateEnvelope(
             new GAgentDraftRunCommand(
                 ScopeId: "scope-a",
-                ActorTypeName: typeof(DraftRunExpectedAgent).AssemblyQualifiedName!,
+                AgentKind: ExpectedAgentKind,
                 Prompt: "hello",
                 NyxIdAccessToken: " legacy-token ",
                 ModelOverride: " legacy-model ",
@@ -437,7 +446,7 @@ public sealed class GAgentDraftRunInteractionCoverageTests
         var envelope = factory.CreateEnvelope(
             new GAgentDraftRunCommand(
                 ScopeId: "scope-a",
-                ActorTypeName: typeof(DraftRunExpectedAgent).AssemblyQualifiedName!,
+                AgentKind: ExpectedAgentKind,
                 Prompt: "hello",
                 SessionId: null,
                 UseCorrelationIdAsFallbackSessionId: false),
@@ -627,7 +636,7 @@ public sealed class GAgentDraftRunInteractionCoverageTests
         var context = new CommandContext("actor-1", "cmd-1", "corr-1", new Dictionary<string, string>());
 
         var result = await lifecycle.BindAsync(
-            new GAgentDraftRunCommand("scope-a", typeof(DraftRunExpectedAgent).AssemblyQualifiedName!, "hello"),
+            new GAgentDraftRunCommand("scope-a", ExpectedAgentKind, "hello"),
             CreateExecution(target, context),
             CancellationToken.None);
 
@@ -697,7 +706,7 @@ public sealed class GAgentDraftRunInteractionCoverageTests
             Envelope = new EventEnvelope { Id = "evt-1" },
             Receipt = new GAgentDraftRunAcceptedReceipt(
                 target.ActorId,
-                target.ActorTypeName,
+                target.DiagnosticClrTypeName,
                 context.CommandId,
                 context.CorrelationId,
                 string.Empty),
@@ -712,7 +721,8 @@ public sealed class GAgentDraftRunInteractionCoverageTests
             new GAgentDraftRunCommandTargetResolver(
                 new DraftRunStubActorRuntime(),
                 projectionPort,
-                terminalPort),
+                terminalPort,
+                agentKindRegistry: BuildRegistry()),
             new DefaultCommandContextPolicy(),
             new GAgentDraftRunCommandEnvelopeFactory(),
             new ActorCommandTargetDispatcher<GAgentDraftRunCommandTarget>(dispatchPort),
@@ -728,7 +738,14 @@ public sealed class GAgentDraftRunInteractionCoverageTests
     }
 
     private static GAgentDraftRunCommand CreateCommand() =>
-        new("scope-a", typeof(DraftRunExpectedAgent).AssemblyQualifiedName!, "hello");
+        new("scope-a", ExpectedAgentKind, "hello");
+
+    private static IAgentKindRegistry BuildRegistry()
+    {
+        var builder = new AgentKindRegistryBuilder();
+        builder.Register<DraftRunExpectedAgent>();
+        return new AgentKindRegistry(builder.Build());
+    }
 
     private sealed class DraftRunProjectionPort : IGAgentDraftRunProjectionPort
     {
@@ -860,6 +877,7 @@ public sealed class GAgentDraftRunInteractionCoverageTests
     {
         private readonly Dictionary<string, IActor> _actors = actors.ToDictionary(x => x.Id, StringComparer.Ordinal);
         public List<(Type agentType, string? actorId)> CreateCalls { get; } = [];
+        public List<(string agentKind, string? actorId)> CreateByKindCalls { get; } = [];
 
         public Task<IActor?> GetAsync(string id) =>
             Task.FromResult(_actors.TryGetValue(id, out var actor) ? actor : null);
@@ -873,6 +891,15 @@ public sealed class GAgentDraftRunInteractionCoverageTests
             var actorId = id ?? Guid.NewGuid().ToString("N");
             CreateCalls.Add((agentType, actorId));
             var actor = new DraftRunStubActor(actorId, (IAgent)Activator.CreateInstance(agentType)!);
+            _actors[actorId] = actor;
+            return Task.FromResult<IActor>(actor);
+        }
+
+        public Task<IActor> CreateByKindAsync(string agentKind, string? id = null, CancellationToken ct = default)
+        {
+            var actorId = id ?? Guid.NewGuid().ToString("N");
+            CreateByKindCalls.Add((agentKind, actorId));
+            var actor = new DraftRunStubActor(actorId, new DraftRunExpectedAgent());
             _actors[actorId] = actor;
             return Task.FromResult<IActor>(actor);
         }
@@ -905,6 +932,7 @@ public sealed class GAgentDraftRunInteractionCoverageTests
         public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
     }
 
+    [GAgent(ExpectedAgentKind)]
     private sealed class DraftRunExpectedAgent : IAgent
     {
         public string Id => "draft-run-agent";

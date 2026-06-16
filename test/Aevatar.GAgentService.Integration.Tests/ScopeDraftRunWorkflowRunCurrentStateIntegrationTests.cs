@@ -127,6 +127,56 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
         return null;
     }
 
+    private static async Task<WorkflowActorCurrentStateHttpResponse> WaitForCompletedWorkflowActorCurrentStateAsync(
+        HttpClient client,
+        string actorId)
+    {
+        using var timeoutCts = new CancellationTokenSource(QueryVisibilityTimeout);
+        var path = $"/api/workflow-actors/{Uri.EscapeDataString(actorId)}/current-state";
+        WorkflowActorCurrentStateHttpResponse? lastSnapshot = null;
+        string? lastBody = null;
+        HttpStatusCode? lastStatus = null;
+
+        try
+        {
+            while (true)
+            {
+                using var snapshotResponse = await client.GetAsync(path, timeoutCts.Token);
+                lastStatus = snapshotResponse.StatusCode;
+                lastBody = await snapshotResponse.Content.ReadAsStringAsync(timeoutCts.Token);
+
+                if (snapshotResponse.StatusCode == HttpStatusCode.OK)
+                {
+                    lastSnapshot = JsonSerializer.Deserialize<WorkflowActorCurrentStateHttpResponse>(
+                        lastBody,
+                        new JsonSerializerOptions(JsonSerializerDefaults.Web));
+
+                    if (lastSnapshot?.CompletionStatus == WorkflowRunCompletionStatus.Completed)
+                        return lastSnapshot;
+                }
+                else if (snapshotResponse.StatusCode != HttpStatusCode.NotFound)
+                {
+                    throw new InvalidOperationException(
+                        $"Workflow actor current-state query failed. status={(int)snapshotResponse.StatusCode} body={lastBody}");
+                }
+
+                await Task.Delay(QueryVisibilityPollInterval, timeoutCts.Token);
+            }
+        }
+        catch (OperationCanceledException) when (!timeoutCts.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            throw new InvalidOperationException(
+                $"Workflow actor current-state did not reach Completed before timeout. actor_id={actorId} last_status={lastStatus?.ToString() ?? "<none>"} last_completion={lastSnapshot?.CompletionStatus.ToString() ?? "<none>"} last_body={lastBody ?? "<none>"}");
+        }
+    }
+
+    private static readonly TimeSpan QueryVisibilityTimeout = TimeSpan.FromSeconds(45);
+    private static readonly TimeSpan QueryVisibilityPollInterval = TimeSpan.FromMilliseconds(100);
+
     private sealed class DraftRunWorkflowActorCurrentStateHost : IAsyncDisposable
     {
         private readonly WebApplication _app;
@@ -388,7 +438,7 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
             GAgentActorRegistration registration,
             CancellationToken cancellationToken = default)
         {
-            _registrations.Add(new ActorRegistration(registration.ScopeId, registration.GAgentType, registration.ActorId));
+            _registrations.Add(new ActorRegistration(registration.ScopeId, registration.AgentKind, registration.ActorId));
             return Task.FromResult(new GAgentActorRegistryCommandReceipt(
                 registration,
                 GAgentActorRegistryCommandStage.AdmissionVisible));
@@ -400,7 +450,7 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
         {
             _registrations.RemoveAll(registration =>
                 string.Equals(registration.ScopeId, target.ScopeId, StringComparison.Ordinal) &&
-                string.Equals(registration.GAgentType, target.GAgentType, StringComparison.Ordinal) &&
+                string.Equals(registration.AgentKind, target.AgentKind, StringComparison.Ordinal) &&
                 string.Equals(registration.ActorId, target.ActorId, StringComparison.Ordinal));
             return Task.FromResult(new GAgentActorRegistryCommandReceipt(
                 target,
@@ -413,7 +463,7 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
         {
             var exists = _registrations.Any(registration =>
                 string.Equals(registration.ScopeId, target.ScopeId, StringComparison.Ordinal) &&
-                string.Equals(registration.GAgentType, target.GAgentType, StringComparison.Ordinal) &&
+                string.Equals(registration.AgentKind, target.AgentKind, StringComparison.Ordinal) &&
                 string.Equals(registration.ActorId, target.ActorId, StringComparison.Ordinal));
             return Task.FromResult(exists
                 ? ScopeResourceAdmissionResult.Allowed()
@@ -422,13 +472,13 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
 
         private static IReadOnlyList<GAgentActorGroup> BuildGroups(IEnumerable<ActorRegistration> registrations) =>
             registrations
-                .GroupBy(static registration => registration.GAgentType, StringComparer.Ordinal)
+                .GroupBy(static registration => registration.AgentKind, StringComparer.Ordinal)
                 .Select(static group => new GAgentActorGroup(
                     group.Key,
                     group.Select(static registration => registration.ActorId).ToArray()))
                 .ToArray();
 
-        private sealed record ActorRegistration(string ScopeId, string GAgentType, string ActorId);
+        private sealed record ActorRegistration(string ScopeId, string AgentKind, string ActorId);
     }
 
     private sealed class TestAuthHandler : AuthenticationHandler<AuthenticationSchemeOptions>

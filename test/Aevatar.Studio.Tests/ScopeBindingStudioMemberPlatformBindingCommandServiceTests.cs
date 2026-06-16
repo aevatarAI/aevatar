@@ -157,7 +157,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
 
         var request = scopeBindingPort.Requests.Should().ContainSingle().Subject;
         request.ImplementationKind.Should().Be(ScopeBindingImplementationKind.GAgent);
-        request.GAgent!.ActorTypeName.Should().Be("Tests.JokerGAgent");
+        request.GAgent!.AgentKind.Should().Be("tests.joker");
         request.GAgent.Endpoints.Should().ContainSingle().Which.Kind.Should().Be(ServiceEndpointKind.Chat);
         request.GAgent.Endpoints[0].EndpointId.Should().Be("chat");
         readinessPort.Requests.Should().ContainSingle().Which.ExpectedEndpointIds.Should().BeEquivalentTo(["chat"]);
@@ -603,7 +603,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
         request.Request.Script = null;
         request.Request.Gagent = new StudioMemberGAgentBindingRequest
         {
-            ActorTypeName = "Tests.JokerGAgent",
+            AgentKind = "tests.joker",
             Endpoints =
             {
                 new StudioMemberGAgentEndpointBindingRequest
@@ -737,7 +737,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
                 RevisionId: revisionId,
                 ImplementationKind: request.ImplementationKind,
                 ExpectedActorId: "scope-gagent:scope-1:joker",
-                GAgent: new ScopeBindingGAgentResult(request.GAgent?.ActorTypeName ?? string.Empty),
+                GAgent: new ScopeBindingGAgentResult("Tests.JokerGAgent"),
                 ExpectedDeploymentId: "deployment-1");
         }
     }

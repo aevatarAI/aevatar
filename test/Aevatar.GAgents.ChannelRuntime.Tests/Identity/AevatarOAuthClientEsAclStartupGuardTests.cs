@@ -4,7 +4,6 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using FluentAssertions;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 
@@ -13,10 +12,9 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
 public sealed class AevatarOAuthClientEsAclStartupGuardTests
 {
     [Fact]
-    public async Task StartAsync_WhenElasticsearchEnabledWithoutAclAssertion_ShouldFailClosed()
+    public async Task StartAsync_WhenAclAssertionMissing_ShouldFailClosed()
     {
-        var configuration = BuildConfiguration(esEnabled: true, aclAsserted: false);
-        await using var provider = BuildProvider(configuration);
+        await using var provider = BuildProvider(aclAsserted: false);
         var guard = ActivatorUtilities.CreateInstance<AevatarOAuthClientEsAclStartupGuard>(provider);
 
         Func<Task> act = () => guard.StartAsync(CancellationToken.None);
@@ -26,10 +24,9 @@ public sealed class AevatarOAuthClientEsAclStartupGuardTests
     }
 
     [Fact]
-    public async Task StartAsync_WhenElasticsearchEnabledWithAclAssertion_ShouldPass()
+    public async Task StartAsync_WhenAclAssertionPresent_ShouldPass()
     {
-        var configuration = BuildConfiguration(esEnabled: true, aclAsserted: true);
-        await using var provider = BuildProvider(configuration);
+        await using var provider = BuildProvider(aclAsserted: true);
         var guard = ActivatorUtilities.CreateInstance<AevatarOAuthClientEsAclStartupGuard>(provider);
 
         Func<Task> act = () => guard.StartAsync(CancellationToken.None);
@@ -37,34 +34,13 @@ public sealed class AevatarOAuthClientEsAclStartupGuardTests
         await act.Should().NotThrowAsync();
     }
 
-    [Fact]
-    public async Task StartAsync_WhenElasticsearchDisabled_ShouldNotRequireAclAssertion()
-    {
-        var configuration = BuildConfiguration(esEnabled: false, aclAsserted: false);
-        await using var provider = BuildProvider(configuration);
-        var guard = ActivatorUtilities.CreateInstance<AevatarOAuthClientEsAclStartupGuard>(provider);
-
-        Func<Task> act = () => guard.StartAsync(CancellationToken.None);
-
-        await act.Should().NotThrowAsync();
-    }
-
-    private static IConfiguration BuildConfiguration(bool esEnabled, bool aclAsserted) =>
-        new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Projection:Document:Providers:Elasticsearch:Enabled"] = esEnabled.ToString(),
-                ["Projection:Document:Providers:Elasticsearch:Endpoints:0"] = "http://127.0.0.1:9200",
-                [$"{AevatarOAuthClientEsAclOptions.SectionName}:GrantMatchesGrainEventStoreInternal"] = aclAsserted.ToString(),
-            })
-            .Build();
-
-    private static ServiceProvider BuildProvider(IConfiguration configuration)
+    private static ServiceProvider BuildProvider(bool aclAsserted)
     {
         var services = new ServiceCollection();
-        services.AddSingleton(configuration);
-        services.AddOptions<AevatarOAuthClientEsAclOptions>()
-            .Bind(configuration.GetSection(AevatarOAuthClientEsAclOptions.SectionName));
+        services.AddSingleton(Options.Create(new AevatarOAuthClientEsAclOptions
+        {
+            GrantMatchesGrainEventStoreInternal = aclAsserted,
+        }));
         services.AddSingleton<IAevatarOAuthClientProvider, AevatarOAuthClientProjectionProvider>();
         services.AddSingleton<IProjectionDocumentReader<AevatarOAuthClientDocument, string>, NoOpOAuthClientDocumentReader>();
         services.AddSingleton<IProjectionDocumentWriter<AevatarOAuthClientDocument>, NoOpOAuthClientDocumentWriter>();

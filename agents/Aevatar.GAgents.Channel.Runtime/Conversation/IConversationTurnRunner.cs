@@ -149,7 +149,12 @@ public sealed record ConversationTurnResult(
     string ErrorSummary,
     FailureKind FailureKind,
     TimeSpan? RetryAfter,
-    NeedsLlmReplyEvent? LlmReplyRequest)
+    NeedsLlmReplyEvent? LlmReplyRequest,
+    NeedsWorkflowDraftRunEvent? WorkflowDraftRunRequest,
+    // Typed business outcome of a /clear turn: the conversation actor (the sole
+    // owner of retained history) persists ConversationRetainedHistoryClearedEvent
+    // and resets its transcript window when this is set.
+    bool RetainedHistoryClearRequested = false)
 {
     /// <summary>
     /// Success factory.
@@ -169,6 +174,7 @@ public sealed record ConversationTurnResult(
             string.Empty,
             FailureKind.Unspecified,
             null,
+            null,
             null);
 
     /// <summary>
@@ -184,6 +190,21 @@ public sealed record ConversationTurnResult(
             string.Empty,
             string.Empty,
             FailureKind.Unspecified,
+            null,
+            request?.Clone() ?? throw new ArgumentNullException(nameof(request)),
+            null);
+
+    public static ConversationTurnResult WorkflowDraftRunRequested(NeedsWorkflowDraftRunEvent request, string authPrincipal = "bot") =>
+        new(
+            true,
+            string.Empty,
+            new MessageContent(),
+            authPrincipal,
+            null,
+            string.Empty,
+            string.Empty,
+            FailureKind.Unspecified,
+            null,
             null,
             request?.Clone() ?? throw new ArgumentNullException(nameof(request)));
 
@@ -207,6 +228,7 @@ public sealed record ConversationTurnResult(
             detail ?? string.Empty,
             FailureKind.Unspecified,
             null,
+            null,
             null);
 
     /// <summary>
@@ -223,6 +245,7 @@ public sealed record ConversationTurnResult(
             errorSummary,
             FailureKind.TransientAdapterError,
             retryAfter,
+            null,
             null);
 
     /// <summary>
@@ -238,6 +261,7 @@ public sealed record ConversationTurnResult(
             errorCode,
             errorSummary,
             FailureKind.PermanentAdapterError,
+            null,
             null,
             null);
 }

@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Runtime.Actors;
 using Aevatar.Foundation.Abstractions.Context;
+using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Foundation.Abstractions.Streaming;
 using FluentAssertions;
@@ -44,6 +45,9 @@ public class LocalActorRuntimeTests : IAsyncLifetime
     {
         var services = new ServiceCollection();
         services.AddAevatarRuntime();
+        services.AddAevatarAgentKindRegistry(builder => builder
+            .Register<EchoAgent>()
+            .Register<CollectorAgent>());
         _serviceProvider = services.BuildServiceProvider();
         _runtime = _serviceProvider.GetRequiredService<IActorRuntime>();
         _forwardingRegistry = _serviceProvider.GetRequiredService<IStreamForwardingRegistry>();

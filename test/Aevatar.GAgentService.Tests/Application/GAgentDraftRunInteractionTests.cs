@@ -1,6 +1,7 @@
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.TypeSystem;
+using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Application.ScopeGAgents;
 using Aevatar.AGUI.Contracts;
@@ -10,42 +11,50 @@ namespace Aevatar.GAgentService.Tests.Application;
 
 public sealed class GAgentDraftRunInteractionTests
 {
+    private const string ExpectedAgentKind = "tests.draft-run-expected";
+
     [Fact]
-    public async Task Resolver_ShouldRejectExistingActor_WhenRuntimeTypeDoesNotMatchRequestedType()
+    public async Task Resolver_ShouldRejectExistingActor_WhenActorOwnedKindVerifierDoesNotConfirmExpectedKind()
     {
-        var runtime = new StubActorRuntime(new StubActor("actor-1", new DifferentAgent()));
+        var verifier = new StubAgentKindVerifier(result: false);
+        var runtime = new StubActorRuntime(new StubActor("actor-1", new ExpectedAgent()));
         var resolver = new GAgentDraftRunCommandTargetResolver(
             runtime,
             new NoOpDraftRunProjectionPort(),
-            new NoOpGAgentRunTerminalProjectionPort());
+            new NoOpGAgentRunTerminalProjectionPort(),
+            verifier,
+            agentKindRegistry: BuildRegistry());
 
         var result = await resolver.ResolveAsync(
             new GAgentDraftRunCommand(
                 ScopeId: "scope-a",
-                ActorTypeName: typeof(ExpectedAgent).AssemblyQualifiedName!,
+                AgentKind: ExpectedAgentKind,
                 Prompt: "hello",
                 PreferredActorId: "actor-1"),
             CancellationToken.None);
 
         result.Succeeded.Should().BeFalse();
-        result.Error.Should().Be(GAgentDraftRunStartError.ActorTypeMismatch);
+        result.Error.Should().Be(GAgentDraftRunStartError.ActorKindMismatch);
+        verifier.Calls.Should().ContainSingle().Which.Should().Be(("actor-1", ExpectedAgentKind));
     }
 
     [Fact]
-    public async Task Resolver_ShouldAllowExistingActor_WhenVerifierConfirmsExpectedType()
+    public async Task Resolver_ShouldAllowExistingActor_WhenVerifierConfirmsExpectedKind()
     {
         var existingActor = new StubActor("actor-1", new ProxyAgent());
         var runtime = new StubActorRuntime(existingActor);
+        var verifier = new StubAgentKindVerifier(result: true);
         var resolver = new GAgentDraftRunCommandTargetResolver(
             runtime,
             new NoOpDraftRunProjectionPort(),
             new NoOpGAgentRunTerminalProjectionPort(),
-            new StubAgentTypeVerifier(result: true));
+            verifier,
+            BuildRegistry());
 
         var result = await resolver.ResolveAsync(
             new GAgentDraftRunCommand(
                 ScopeId: "scope-a",
-                ActorTypeName: typeof(ExpectedAgent).AssemblyQualifiedName!,
+                AgentKind: ExpectedAgentKind,
                 Prompt: "hello",
                 PreferredActorId: "actor-1"),
             CancellationToken.None);
@@ -53,12 +62,14 @@ public sealed class GAgentDraftRunInteractionTests
         result.Succeeded.Should().BeTrue();
         result.Target.Should().NotBeNull();
         result.Target!.Actor.Should().BeSameAs(existingActor);
-        runtime.CreateCalls.Should().BeEmpty();
+        runtime.CreateByKindCalls.Should().BeEmpty();
+        verifier.Calls.Should().ContainSingle().Which.Should().Be(("actor-1", ExpectedAgentKind));
     }
 
     private sealed class StubActorRuntime(IActor? existingActor) : IActorRuntime
     {
         public List<(Type AgentType, string? ActorId)> CreateCalls { get; } = [];
+        public List<(string AgentKind, string? ActorId)> CreateByKindCalls { get; } = [];
 
         public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
             where TAgent : IAgent =>
@@ -68,6 +79,12 @@ public sealed class GAgentDraftRunInteractionTests
         {
             CreateCalls.Add((agentType, id));
             return Task.FromResult<IActor>(new StubActor(id ?? "created", (IAgent)Activator.CreateInstance(agentType)!));
+        }
+
+        public Task<IActor> CreateByKindAsync(string agentKind, string? id = null, CancellationToken ct = default)
+        {
+            CreateByKindCalls.Add((agentKind, id));
+            return Task.FromResult<IActor>(new StubActor(id ?? "created", new ExpectedAgent()));
         }
 
         public Task DestroyAsync(string id, CancellationToken ct = default) => Task.CompletedTask;
@@ -144,30 +161,31 @@ public sealed class GAgentDraftRunInteractionTests
         string CorrelationId,
         GAgentRunTerminalInteractionKind InteractionKind) : IGAgentRunTerminalProjectionLease;
 
-    private sealed class StubAgentTypeVerifier(bool result) : IAgentTypeVerifier
+    private static IAgentKindRegistry BuildRegistry() =>
+        new AgentKindRegistry(
+            [
+                new AgentRegistration(
+                    Kind: ExpectedAgentKind,
+                    ImplementationType: typeof(ExpectedAgent),
+                    StateContractType: typeof(object)),
+            ]);
+
+    private sealed class StubAgentKindVerifier(bool result) : IAgentKindVerifier
     {
-        public Task<bool> IsExpectedAsync(string actorId, Type expectedType, CancellationToken ct = default)
+        public List<(string ActorId, string ExpectedKind)> Calls { get; } = [];
+
+        public Task<bool> IsExpectedKindAsync(string actorId, string expectedKind, CancellationToken ct = default)
         {
-            _ = actorId;
-            _ = expectedType;
             _ = ct;
+            Calls.Add((actorId, expectedKind));
             return Task.FromResult(result);
         }
     }
 
+    [GAgent(ExpectedAgentKind)]
     private sealed class ExpectedAgent : IAgent
     {
         public string Id { get; } = "expected";
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task<string> GetDescriptionAsync() => Task.FromResult(string.Empty);
-        public Task<IReadOnlyList<Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<Type>>([]);
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
-    }
-
-    private sealed class DifferentAgent : IAgent
-    {
-        public string Id { get; } = "different";
         public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
         public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
         public Task<string> GetDescriptionAsync() => Task.FromResult(string.Empty);

@@ -29,7 +29,11 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         AppendMetadata(chatRequest.Metadata, command.Metadata);
         if (command.LlmControl != null)
             chatRequest.LlmControl = ToProto(command.LlmControl);
-        chatRequest.ConnectorHttpAuthorization = Normalize(command.ConnectorHttpAuthorization);
+        chatRequest.CallerCredential = ToProto(command.CallerCredential);
+        if (command.ForkSeed != null)
+            chatRequest.ForkSeed = ToProto(command.ForkSeed);
+        if (command.ExternalIngress != null)
+            chatRequest.ExternalIngress = ToProto(command.ExternalIngress);
 
         var envelope = new EventEnvelope
         {
@@ -54,7 +58,7 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
     {
         ArgumentNullException.ThrowIfNull(source);
 
-        return new WorkflowChatInputPartPayload
+        var payload = new WorkflowChatInputPartPayload
         {
             Kind = source.Kind switch
             {
@@ -70,6 +74,41 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             Uri = source.Uri ?? string.Empty,
             Name = source.Name ?? string.Empty,
         };
+        if (source.FileRef != null)
+            payload.FileRef = ToProto(source.FileRef);
+
+        return payload;
+    }
+
+    private static Aevatar.Workflow.Abstractions.WorkflowFileRef ToProto(
+        Application.Abstractions.Runs.WorkflowFileRef source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        return new Aevatar.Workflow.Abstractions.WorkflowFileRef
+        {
+            FileId = source.FileId ?? string.Empty,
+            ArtifactId = source.ArtifactId ?? string.Empty,
+            SourceKind = source.SourceKind switch
+            {
+                Application.Abstractions.Runs.WorkflowFileSourceKind.ChatInput => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.ChatInput,
+                Application.Abstractions.Runs.WorkflowFileSourceKind.FormUpload => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.FormUpload,
+                Application.Abstractions.Runs.WorkflowFileSourceKind.ConnectedServiceResource => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.ConnectedServiceResource,
+                Application.Abstractions.Runs.WorkflowFileSourceKind.ExternalResource => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.ExternalResource,
+                Application.Abstractions.Runs.WorkflowFileSourceKind.Generated => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.Generated,
+                _ => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.Unspecified,
+            },
+            SourceMessageId = source.SourceMessageId ?? string.Empty,
+            SourceResourceKey = source.SourceResourceKey ?? string.Empty,
+            FileName = source.FileName ?? string.Empty,
+            MediaType = source.MediaType ?? string.Empty,
+            SizeBytes = source.SizeBytes,
+            Sha256 = source.Sha256 ?? string.Empty,
+            CreatedAtUnixMs = source.CreatedAtUnixMs,
+            ExpiresAtUnixMs = source.ExpiresAtUnixMs,
+            OwnerRunId = source.OwnerRunId ?? string.Empty,
+            OwnerScopeId = source.OwnerScopeId ?? string.Empty,
+        };
     }
 
     private static WorkflowLlmControlContext ToProto(WorkflowLlmControl source)
@@ -78,11 +117,56 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         {
             ModelOverride = source.ModelOverride ?? string.Empty,
             UserMemoryPrompt = source.UserMemoryPrompt ?? string.Empty,
+            RoutePreference = source.RoutePreference ?? string.Empty,
             SenderNyxIdAccessToken = source.SenderNyxIdAccessToken ?? string.Empty,
         };
         if (source.MaxToolRoundsOverride.HasValue)
             payload.MaxToolRoundsOverride = source.MaxToolRoundsOverride.Value;
         return payload;
+    }
+
+    private static Aevatar.Workflow.Abstractions.WorkflowCallerCredential ToProto(
+        Application.Abstractions.Runs.WorkflowCallerCredential? source)
+    {
+        var parsed = WorkflowCallerCredentialTokens.ParseOptional(source?.BearerToken);
+        if (parsed.IsInvalid)
+            throw new ArgumentException("Workflow caller credential bearer token is invalid.", nameof(source));
+
+        return new Aevatar.Workflow.Abstractions.WorkflowCallerCredential
+        {
+            BearerToken = parsed.NormalizedBearerToken ?? string.Empty,
+        };
+    }
+
+    private static Aevatar.Workflow.Abstractions.WorkflowRunForkSeed ToProto(
+        WorkflowChatRunForkSeed source)
+    {
+        var payload = new Aevatar.Workflow.Abstractions.WorkflowRunForkSeed
+        {
+            SourceRunId = Normalize(source.SourceRunId),
+            StartAtStepId = Normalize(source.StartAtStepId),
+            Attempt = Math.Max(0, source.Attempt),
+        };
+        AppendVariables(payload.Variables, source.Variables);
+        return payload;
+    }
+
+    private static Aevatar.Workflow.Abstractions.WorkflowExternalIngressContext ToProto(
+        Application.Abstractions.Runs.WorkflowExternalIngressContext source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        return new Aevatar.Workflow.Abstractions.WorkflowExternalIngressContext
+        {
+            RouteKey = Normalize(source.RouteKey),
+            SourceId = Normalize(source.SourceId),
+            DeliveryId = Normalize(source.DeliveryId),
+            ReceivedAtUnixMs = Math.Max(0, source.ReceivedAtUnixMs),
+            ContentType = Normalize(source.ContentType),
+            PayloadFingerprint = Normalize(source.PayloadFingerprint),
+            AuthScheme = Normalize(source.AuthScheme),
+            PrincipalSubject = Normalize(source.PrincipalSubject),
+        };
     }
 
     private static void AppendMetadata(
@@ -102,6 +186,23 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
                 continue;
 
             destination[normalizedKey] = normalizedValue;
+        }
+    }
+
+    private static void AppendVariables(
+        Google.Protobuf.Collections.MapField<string, string> destination,
+        IReadOnlyDictionary<string, string>? source)
+    {
+        if (source == null || source.Count == 0)
+            return;
+
+        foreach (var (key, value) in source)
+        {
+            var normalizedKey = string.IsNullOrWhiteSpace(key) ? string.Empty : key.Trim();
+            if (normalizedKey.Length == 0)
+                continue;
+
+            destination[normalizedKey] = value ?? string.Empty;
         }
     }
 

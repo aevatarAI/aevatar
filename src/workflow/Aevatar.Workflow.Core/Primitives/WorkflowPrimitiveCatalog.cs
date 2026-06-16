@@ -35,8 +35,9 @@ public static class WorkflowPrimitiveCatalog
             ["http_delete"] = "connector_call",
             ["secure_connector"] = "secure_connector_call",
             ["secret_input"] = "secure_input",
-            // Keep runtime module matching stable: VoteConsensusModule currently handles "vote".
             ["vote_consensus"] = "vote",
+            ["mutex"] = "lease",
+            ["schedule_workflow"] = "self_reschedule",
         };
 
     private static readonly string[] IdentityPrimitives =
@@ -51,7 +52,8 @@ public static class WorkflowPrimitiveCatalog
         "llm_call", "tool_call", "connector_call", "secure_connector_call",
         "evaluate", "reflect", "human_input", "secure_input",
         "human_approval", "wait_signal", "emit", "parallel", "race",
-        "map_reduce", "vote", "foreach", "dynamic_workflow",
+        "map_reduce", "vote", "foreach", "dynamic_workflow", "lease",
+        "notify",
     ];
 
     public static IReadOnlySet<string> BuiltInCanonicalTypes { get; } = DeriveBuiltInCanonicalTypes();

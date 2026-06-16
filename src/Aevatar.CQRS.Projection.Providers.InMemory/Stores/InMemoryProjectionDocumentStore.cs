@@ -413,6 +413,8 @@ public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
         {
             ProjectionDocumentFilterOperator.Exists => actualValue != null,
             ProjectionDocumentFilterOperator.Eq => CompareNormalizedValues(actualValue, GetScalarValue(filter.Value)) == 0,
+            ProjectionDocumentFilterOperator.EqOrMissing =>
+                actualValue == null || CompareNormalizedValues(actualValue, GetScalarValue(filter.Value)) == 0,
             ProjectionDocumentFilterOperator.In => GetCollectionValues(filter.Value)
                 .Any(expected => CompareNormalizedValues(actualValue, expected) == 0),
             ProjectionDocumentFilterOperator.Gt => CompareNormalizedValues(actualValue, GetScalarValue(filter.Value)) > 0,

@@ -60,16 +60,6 @@ internal static class AevatarInvocationJson
             }, Options)
             : Error(result.Error);
 
-    public static string Serialize(QueryReadModelResult result) =>
-        result.Error == null
-            ? JsonSerializer.Serialize(new
-            {
-                readmodel_name = result.ReadmodelName,
-                result = TryParseJson(result.ResultJson),
-                count = result.Count,
-            }, Options)
-            : Error(result.Error);
-
     public static Dictionary<string, string> ToDictionary(MapField<string, string> source)
     {
         var result = new Dictionary<string, string>(StringComparer.Ordinal);

@@ -18,6 +18,9 @@
     <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Providers.Elasticsearch\Aevatar.CQRS.Projection.Providers.Elasticsearch.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Providers.Neo4j\Aevatar.CQRS.Projection.Providers.Neo4j.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
+    <ProjectReference Include="..\..\agents\Aevatar.GAgents.Channel.Runtime\Aevatar.GAgents.Channel.Runtime.csproj" />
+    <ProjectReference Include="..\..\agents\Aevatar.GAgents.Device\Aevatar.GAgents.Device.csproj" />
+    <ProjectReference Include="..\..\agents\Aevatar.GAgents.Scheduled\Aevatar.GAgents.Scheduled.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="coverlet.collector" />

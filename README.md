@@ -292,7 +292,7 @@ sequenceDiagram
 | **Application** | `workflow/Aevatar.Workflow.Application.Abstractions` / `workflow/Aevatar.Workflow.Application` / `Aevatar.CQRS.Core*` | 命令执行编排、查询服务、应用层端口 | 通过抽象依赖 Domain/Projection，不直接耦合 Host 细节 |
 | **Projection / Read Side** | `Aevatar.CQRS.Projection.*` / `Aevatar.Foundation.Projection` / `Aevatar.AI.Projection` / `workflow/Aevatar.Workflow.Projection` | 统一事件投影、ReadModel 更新、查询输入 | CQRS 与 AGUI 共享同一投影输入链路，避免双轨 |
 | **Infrastructure** | `workflow/Aevatar.Workflow.Infrastructure` / `workflow/Aevatar.Workflow.Presentation.AGUIAdapter` / `Aevatar.Configuration` / `Aevatar.Foundation.Runtime.*` | 持久化、外部 I/O 适配、运行时实现、AGUI 映射 | 不承载业务编排事实态（run/session/actor 映射） |
-| **Host / Composition** | `Aevatar.Mainnet.Host.Api` / `workflow/Aevatar.Workflow.Host.Api` / `Aevatar.Hosting` / `Aevatar.Bootstrap*` | 协议适配（HTTP/SSE/WS）、DI 组合、能力装配 | Host 只做宿主与组合，不承载核心业务流程 |
+| **Host / Composition** | `Aevatar.Mainnet.Host.Api` / `workflow/Aevatar.Workflow.Host.Api` / `Aevatar.Capabilities` / `Aevatar.Bootstrap*` | 协议适配（HTTP/SSE/WS）、DI 组合、能力边界支持 | Host 只做宿主与组合，不承载核心业务流程 |
 
 ### 模块地图（按能力）
 
@@ -358,5 +358,5 @@ sequenceDiagram
 
 - **运行测试**：`dotnet test test/Aevatar.Foundation.Core.Tests/Aevatar.Foundation.Core.Tests.csproj`
 - **默认全量测试**：`dotnet test aevatar.slnx --nologo`
-- **按域构建**：`dotnet build aevatar.foundation.slnf` / `dotnet build aevatar.ai.slnf` / `dotnet build aevatar.cqrs.slnf` / `dotnet build aevatar.workflow.slnf` / `dotnet build aevatar.hosting.slnf`
+- **按域构建**：`dotnet build aevatar.foundation.slnf` / `dotnet build aevatar.ai.slnf` / `dotnet build aevatar.cqrs.slnf` / `dotnet build aevatar.workflow.slnf` / `dotnet build aevatar.capabilities.slnf`
 - **Agent 命名约定**：带 **GAgent** 的类负责框架能力（事件分发、状态、路由）；业务逻辑放在基于 GAgent 的扩展或自定义步骤/Connector 里。

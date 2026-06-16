@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgentService.Abstractions;
@@ -7,6 +8,7 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Core.GAgents;
 
+[GAgent("gagent.service.run")]
 public sealed class ServiceRunGAgent : GAgentBase<ServiceRunState>
 {
     public ServiceRunGAgent()
@@ -62,7 +64,14 @@ public sealed class ServiceRunGAgent : GAgentBase<ServiceRunState>
         if (command.Status == ServiceRunStatus.Unspecified)
             return;
 
-        if (existing.Status == command.Status)
+        if (IsTerminal(existing.Status) && existing.Status != command.Status)
+            return;
+
+        var outputChanged = command.LastOutput != null &&
+                            !string.Equals(existing.LastOutput ?? string.Empty, command.LastOutput ?? string.Empty, StringComparison.Ordinal);
+        var errorChanged = command.LastError != null &&
+                           !string.Equals(existing.LastError ?? string.Empty, command.LastError ?? string.Empty, StringComparison.Ordinal);
+        if (existing.Status == command.Status && !outputChanged && !errorChanged)
             return;
 
         await PersistDomainEventAsync(new ServiceRunStatusUpdatedEvent
@@ -70,6 +79,8 @@ public sealed class ServiceRunGAgent : GAgentBase<ServiceRunState>
             RunId = existing.RunId,
             Status = command.Status,
             UpdatedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+            LastOutput = command.LastOutput,
+            LastError = command.LastError,
         });
     }
 
@@ -96,10 +107,17 @@ public sealed class ServiceRunGAgent : GAgentBase<ServiceRunState>
             next.Record = new ServiceRunRecord();
         next.Record.Status = evt.Status;
         next.Record.UpdatedAt = evt.UpdatedAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
+        if (evt.LastOutput != null)
+            next.Record.LastOutput = evt.LastOutput ?? string.Empty;
+        if (evt.LastError != null)
+            next.Record.LastError = evt.LastError ?? string.Empty;
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         next.LastEventId = $"{next.Record.RunId}:status:{(int)evt.Status}";
         return next;
     }
+
+    private static bool IsTerminal(ServiceRunStatus status) =>
+        status is ServiceRunStatus.Completed or ServiceRunStatus.Failed or ServiceRunStatus.Stopped;
 
     private void EnsureExistingMatches(ServiceRunRecord existing, ServiceRunRecord incoming)
     {

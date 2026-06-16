@@ -47,6 +47,7 @@ owner: eanzhao
 - `EventEnvelope` 在这里是 runtime message envelope，不等于 Event Sourcing 的领域事件记录。
 - `WorkflowRunGAgent` / `WorkflowGAgent` 只有在显式 `PersistDomainEventAsync(...)` 时，才把领域事实写入 EventStore。
 - 定时触发属于 Aevatar workflow runtime 能力；NyxID 只保留 credential/proxy/audit 职责，ORNN 只保留 deterministic skill/payload-builder 职责。
+- 认证 webhook start-run 是 Host/Adapter 触发面：raw JSON、HMAC、route binding 与 prompt mapping 留在 Host；进入应用层后只使用 typed `WorkflowChatRunRequest` 与 `WorkflowExternalIngressContext`。
 
 ---
 
@@ -62,9 +63,10 @@ owner: eanzhao
    - 作为 definition/source actor 被解析与绑定
 2. `WorkflowRunGAgent`
    - 一次 run 一个 actor
-   - 按 `roles` 创建 run-scoped role actor 树；`agent_kind` 由 Foundation runtime 解析
+  - 按 `roles` 创建 run-scoped role actor 树；`agent_kind` 由 Foundation runtime 解析，省略时默认 `workflow.role-agent`
    - 通过依赖推导（`IWorkflowModuleDependencyExpander`）确定所需模块，经 `WorkflowModuleFactory` 创建并安装
    - 收到 `ChatRequestEvent` envelope 后发布 `StartWorkflowEvent`
+   - fork/resume-from-step seed 只走 request-level `WorkflowChatRequestEvent.fork_seed -> StartWorkflowEvent.fork_seed`；run bind 只表达 definition/run binding，不携带 seed。
    - 由 `WorkflowExecutionKernel` 推进 `StepRequestEvent -> StepCompletedEvent -> WorkflowCompletedEvent`
 
 ```
@@ -98,14 +100,17 @@ BindWorkflowDefinition(yaml)
 
 ### Scheduled Dispatch API
 
-第一版定时触发只提供 API 配置面，不提供 UI。主 API 路径为 `/api/scheduled-dispatches`，支持 create/update/enable/disable/list/get/preview/run-now。`/api/workflow-schedules` 仅作为 workflow 兼容入口，内部映射到统一 scheduled dispatch 应用契约。
+第一版定时触发只提供 API 配置面，不提供 UI。主 API 路径为 `/api/schedules`，支持 create/update/enable/disable/delete/list/get/preview/run-now。旧 `/api/workflow-schedules` 兼容入口已删除；workflow 内部调度只通过 actor-owned scheduled dispatch 应用契约进入统一主链路。
 
 运行边界：
 
 - `ScheduledDispatchGAgent` 是每个 schedule 的唯一写侧事实源，持有 cron、timezone、enabled、typed target descriptor、dispatch headers、next fire lease 与 recent fire records。
+- workflow 内部的 `self_reschedule` / `schedule_workflow` step 只向 `ScheduledDispatchGAgent` 发送幂等 ensure 命令；跨 run schedule fact 不归 workflow run actor 持有。
+- workflow schedule ensure 同步结果只表示 `accepted` command receipt（schedule id、schedule actor id、command id、correlation id）；readmodel freshness 通过 projection/readmodel 观察，不能由 step completion 暗示强一致。
 - 定时唤醒走 `ScheduleSelfDurableTimeoutAsync`，在 Orleans runtime 下由 durable callback/reminder 机制承载；回调只向 schedule actor 发 fire command，不在中间层保存 schedule 状态。
 - schedule actor 只负责计算下一次 fire、生成幂等 key 并投递 prepared target envelope；workflow、GAgent service invocation 与 scripting 目标准备由 application/infrastructure adapter 承载，不进入 schedule actor core。
 - workflow schedule 的 `WorkflowName`、`Prompt`、`ScopeId` 仅存在 typed workflow target descriptor 中；service invocation 与 envelope target 使用各自 typed target descriptor；dispatch `Headers` 只保留传输扩展。
+- workflow fork 的 HTTP/automation 入口只构造 typed `WorkflowForkRunCommand` 并走 `ICommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>`；seed 来源读取 `IWorkflowRunForkSeedQueryPort` read model，不走 event-store replay 或 actor state side-read。
 - public API identity fields 必须显式区分 `ScheduleActorId` 与 `TargetActorId`：`ScheduleActorId` 表示持有定时配置与 fire 事实的 schedule actor receipt，`TargetActorId` 表示最近一次或摘要中的投递目标；不得用一个 `ActorId` 混用 schedule actor receipt 和目标摘要。
 - 幂等 key 格式固定为 `schedule:{scheduleId}:fire:{scheduledFireAtUtc:o}`，并随 scheduled fire dispatch headers 透传。
 - schedule 查询只读取 `ScheduledDispatchDocument` read model；API 不读取 actor state，不在 query path replay event store。
@@ -116,6 +121,40 @@ BindWorkflowDefinition(yaml)
 - cron 使用 standard 5-field format。
 - timezone 为空时默认为 `UTC`，非空时必须能被 runtime `TimeZoneInfo` 解析。
 - `Headers` 是 command dispatch headers，不用于承载 schedule 核心语义。
+
+### Webhook Ingress API
+
+`POST /api/workflow-webhooks/{routeKey}` 是 workflow 的第四个 start-run 入口。它和 `/api/chat` 复用同一条 `WorkflowChatRunRequest` accepted-only command dispatch 主干；它不是 workflow YAML 顶级 trigger，也不复用 channel inbound 或 `WorkflowSignalCommand`。
+
+运行边界：
+
+- Binding 由 Host-owned `WorkflowWebhookIngress` options/config 承载，包含 `routeKey`、`sourceId`、workflow 名称、scope、delivery id 来源、prompt 映射与 HMAC 策略。
+- Host/Adapter 负责读取 raw body、校验 HMAC、解析简单 JSON path/template，并生成稳定 `webhook:{routeKey}:{sourceId}:{deliveryId}` command/correlation seed。
+- 应用层只接收 typed `WorkflowChatRunRequest.ExternalIngress`，command envelope 写入 `WorkflowChatRequestEvent.external_ingress`；不得把 route、delivery、fingerprint、auth 等稳定语义塞进 `Metadata`。
+- Replay/idempotency 权威是 `IWorkflowWebhookReplayStore`，生产实现必须是 durable/distributed first-writer-wins store；`InMemoryWorkflowWebhookReplayStore` 只在显式配置时用于本地或测试。
+- Host 启用 webhook ingress 但没有 replay store 时返回 `503 WEBHOOK_REPLAY_STORE_UNAVAILABLE`，不能退化为无幂等的生产路径。
+- HTTP 成功响应只返回 `202 Accepted + commandId/correlationId/actorId/statusUrl/deliveryId`，不暗示 committed、result 或 readmodel-observed。
+
+不属于 v1 的范围：
+
+- 不新增 `WorkflowWebhookTriggerGAgent`、trigger state proto、trigger projection/readmodel 或 `/api/workflow-triggers/{triggerId}/deliveries` endpoint family。
+- 不在 endpoint 或中间层维护生产 `Dictionary` / `ConcurrentDictionary` / `MemoryCache` delivery ledger。
+- 不依赖 NyxID、chrono-storage 或 Ornn 新增端点、schema 或能力。
+
+### Workflow Lease
+
+`WorkflowLeaseGAgent` 是 workflow 跨 run 单例 lease 的唯一事实源。一个 canonical `lease_key` 对应一个 deterministic lease actor；`WorkflowRunGAgent` 与 `LeaseModule` 只是 client，不保存可复用 credential，也不把进程内状态当成互斥事实。
+
+运行语义：
+
+- canonical key = trim 后 lower-invariant；actor id 由 `workflow.lease:` 加 key hash 生成，真实 key 保存在 actor state 和 typed event 中，调用方不得解析 actor id。
+- acquire 空闲或已过期时生成新的 `holder_token`，`generation += 1`，并基于 actor state 持久化 holder、expiry 和 callback intent。
+- renew/release 必须显式带 `holder_token + generation`；generation 不匹配、token 不匹配或 holder run 不匹配时返回 typed rejection，不修改 holder。
+- renew 只延长 `expires_at_unix_ms`，不提升 generation。
+- conflict policy v1 只支持 `fail` 或 FIFO `wait`；wait queue 上限固定为 32，不从 DSL 配置。
+- TTL expiry 与 wait timeout 都通过 durable self callback 事件化；callback 回到 lease actor 后再次按 token/generation/request_id 对账，陈旧 callback 被忽略。
+- release 或 TTL 清 holder 后由同一个 lease actor 授予 FIFO waiter；grant/reject 作为 continuation event 发送回请求方 run actor。
+- `.refactor-loop/host.env` 不是生产事实源，不保存 branch topology、machine path、ledger authority 或 workflow lease 常量。
 
 ### WorkflowModuleFactory
 
@@ -138,7 +177,7 @@ YAML 里 `type: parallel` 会经工厂解析到 `ParallelFanOutModule`。
 roles:
   - id: planner
     name: Planner
-    agent_kind: aevatar.role-agent
+    agent_kind: workflow.role-agent
     system_prompt: "You are a planning assistant."
     provider: openai
     model: gpt-5.4
@@ -150,6 +189,7 @@ roles:
     event_routes: |
       event.type == ChatRequestEvent -> llm_handler
     connectors: [incident_api, search_mcp]
+    allowed_tools: [web_search, issue_lookup]
     extensions:
       event_modules: "fallback_module"
       event_routes: "event.type == X -> fallback_module"
@@ -158,7 +198,10 @@ roles:
 语义规则：
 
 - `workflow roles` 与 `role yaml` 共用同一份解析归一化逻辑（`RoleConfigurationNormalizer`）。
-- `agent_kind` 是 role-level actor lifecycle 入口；step 只使用 `target_role` / `role`，不得通过参数选择 CLR 类型或 actor id。
+- `agent_kind` 是 role-level actor lifecycle 入口，可指向任意已注册 primary `[GAgent]` kind；step 只使用 `target_role` / `role`，不得通过参数选择 CLR 类型或 actor id。
+- `allowed_tools` 是 role actor 上 agent tool 可见范围的上限；未配置表示兼容旧行为的全量工具，配置为空数组表示默认不暴露工具。
+- `llm_call` step 可在根部配置 `allowed_tools` 继续收窄本次调用；role scope 与 step scope 取交集后写入 `WorkflowStepParameters.agent_tool_scope`，再由 `WorkflowLlmExecutionIntent.agent_tool_scope` 传给 AI `AgentToolExecutionContext.ToolVisibility`。
+- 工具可见范围同时作用于 provider 看到的 `LLMRequest.Tools` 和 streaming tool executor 的实际 lookup；未授权工具调用会得到 not-available tool result，不会执行工具。
 - `event_modules` / `event_routes` 支持平铺写法和 `extensions.*` 写法，且**平铺字段优先级更高**。
 - 未配置 `event_modules` 时，`RoleGAgent` 不会额外装配 event modules（保持旧行为）。
 - Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
@@ -174,14 +217,15 @@ roles:
 | **引擎** | N/A | `WorkflowExecutionKernel` | 按步骤顺序派发，收到完成事件后推进下一步或结束 |
 | **执行** | `llm_call` | `LLMCallModule` | 向目标 RoleGAgent 发 `ChatRequestEvent`，等回复转 `StepCompletedEvent` |
 | | `tool_call` | `ToolCallModule` | 调用已注册的 Agent 工具（MCP/Skills） |
-| | `connector_call` | `ConnectorCallModule` | 按名称调用配置好的 HTTP/CLI/MCP connector |
-| **并行** | `parallel` | `ParallelFanOutModule` | 拆 N 个子步骤并行发给不同 role，收齐后合并，可选触发投票 |
-| **共识** | `vote` | `VoteConsensusModule` | 对多个候选结果做共识选择 |
+| | `connector_call` | `ConnectorCallModule` | 按名称调用配置好的 HTTP/CLI/MCP/host_callback connector |
+| **并行** | `parallel` | `ParallelFanOutModule` | 拆 N 个子步骤并行发给不同 role，收齐后合并，可选触发 typed vote agreement |
+| **共识** | `vote` | `VoteAgreementModule` | 基于 typed candidate/rule/decision 做结构化 agreement 判定（`vote_consensus` 为别名） |
 | **迭代** | `foreach` | `ForEachModule` | 按分隔符拆分输入，逐项执行子步骤 |
 | **流程** | `conditional` | `ConditionalModule` | 条件分支 |
 | | `while` | `WhileModule` | 循环执行（别名 `loop`） |
 | | `workflow_call` | `WorkflowCallModule` | 调用子工作流（别名 `sub_workflow`，支持 `lifecycle=singleton/transient/scope`） |
 | | `dynamic_workflow` | `DynamicWorkflowModule` | 从 LLM 输出提取 YAML，动态重配后继续执行 |
+| | `lease` | `LeaseModule` | 跨 run 显式 acquire/renew/release 单例 lease（别名 `mutex`） |
 | | `assign` | `AssignModule` | 变量赋值 |
 | | `checkpoint` | `CheckpointModule` | 检查点 |
 | **数据** | `transform` | `TransformModule` | 纯函数变换（count/take/join/split/distinct 等） |
@@ -196,6 +240,8 @@ roles:
 - `parent_step_id` 必须非空；缺失时直接失败，不再生成兜底 step token；
 - `WorkflowCallModule` 与 `WorkflowGAgent` 共用同一规则，避免双点实现漂移；
 - 子流程 run id 复用 invocation id，便于父子流程关联追踪。
+- 父子 run 的 root/depth/fanout 由父 `WorkflowRunGAgent` 持久态与 `SubWorkflowOrchestrator` 判定；`llm_call` / `tool_call` 只能透传 host stamped typed runtime context。
+- workflow 内调用 `aevatar_start_workflow` 时，如果工具上下文带有可信 workflow runtime context，dispatcher 必须发布 `SubWorkflowInvokeRequestedEvent` 给父 run actor，由父 actor 完成 admission、registration、start、completion 与 cleanup；公开 tool 参数不得暴露 parent/root/depth 字段。
 
 ### 从 Foundation Orchestration 迁移
 
@@ -205,7 +251,7 @@ roles:
 |------|------|
 | `SequentialOrchestration` | 线性 `steps`（由 `WorkflowLoopModule` 推进） |
 | `ConcurrentOrchestration` | `type: parallel`（`ParallelFanOutModule`） |
-| `VoteOrchestration` | `parallel + vote`（`VoteConsensusModule`） |
+| `VoteOrchestration` | `parallel + vote`（`VoteAgreementModule` typed agreement rule） |
 | `HandoffOrchestration` | `type: conditional` / `type: switch` + 分支推进 |
 
 最小迁移示例（并行 + 投票）：
@@ -217,6 +263,8 @@ steps:
     parameters:
       workers: "agent_a,agent_b,agent_c"
       vote_step_type: "vote"
+      vote_param_rule_mode: "quorum"
+      vote_param_quorum_count: "2"
 ```
 
 ---
@@ -257,6 +305,32 @@ POST /api/chat { prompt, workflow?, workflowYaml?, source? }
 ```
 
 关键点：**流程控制由模块完成，不写死在单个 Agent 的方法里。**
+
+## Host Boundary For GitHub / Router / Closure
+
+和 issue #1738 相关的几个职责边界在 runtime 层明确如下：
+
+- GitHub inbound、label、merge、close 是 host 职责。
+- 跨条目的 `phase9-router` 是 host 职责。
+- `vibe-map` closure 是 host 职责。
+
+Workflow engine 只接收这些 host 能力已经发布出来的表面契约，例如：
+
+- `connector_call -> host_callback`
+- 已镜像到 `workflow.usage.*` / `steps.<id>.usage.*` 的 usage facts
+
+Workflow engine 不新增：
+
+- 专用 GitHub controller primitive
+- phase9-router built-in capability
+- vibe-map closure built-in capability
+- 为上述职责新增的 Aevatar endpoint
+
+这条边界对应三个原则：
+
+- `host-not-controller`
+- `published-surfaces-only`
+- `no-new-aevatar-endpoints`
 
 ### `/api/chat` 入参矩阵（推荐）
 
@@ -449,9 +523,10 @@ steps:
     parameters:
       workers: "analyst_a,analyst_b,analyst_c"
       vote_step_type: "vote"
+      vote_param_rule_mode: "majority"
 ```
 
-三个分析师并行工作，结果经投票选出最佳。
+三个分析师并行工作，结果作为 typed candidates 扇入 `vote`；`vote` 根据配置的 agreement rule 产出 `agreed` / `rejected` / `inconclusive` 分支与结构化 decision。
 
 ### 示例 4：LLM + Connector 调外部 API
 

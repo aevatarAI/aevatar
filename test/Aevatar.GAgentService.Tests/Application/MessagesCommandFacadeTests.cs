@@ -4,6 +4,7 @@ using Aevatar.ChatRouting.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Application.Responses;
 using FluentAssertions;
@@ -84,25 +85,108 @@ public sealed class MessagesCommandFacadeTests
     }
 
     [Fact]
-    public async Task StreamAsync_ShouldReturnAcceptedDispatchReceipt()
+    public async Task CreateAsync_WhenNamedSkillTriggerProvided_ShouldRouteCommandAndCarryRecoveryContext()
+    {
+        var dispatch = new RecordingActorDispatchPort();
+        var routeDecisionPort = new StaticResponsesChatRouteDecisionPort(ForwardToModelAction("anthropic/claude"));
+        var facade = CreateFacade(dispatchPort: dispatch, chatRouteDecisionPort: routeDecisionPort);
+
+        var result = await facade.CreateAsync(
+            BuildRequest("claude-sonnet", chatMessages: [ChatMessage.User("::Goal ship today")]),
+            CallerScopeContext("token"));
+
+        result.Error.Should().BeNull();
+        routeDecisionPort.LastRequest.Should().NotBeNull();
+        routeDecisionPort.LastRequest!.CommandName.Should().Be("goal");
+        var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
+        var recovery = AgentToolExecutionContextMapper.FromPayload(command.ToolContext).SkillRecovery;
+        recovery.RequireInitialOrnnSearch.Should().BeTrue();
+        recovery.RequireOrnnSearchOnBlocker.Should().BeTrue();
+        recovery.CommandName.Should().Be("goal");
+        recovery.PrimarySkillName.Should().Be("goal");
+        recovery.CommandArguments.Should().Be("ship today");
+        recovery.OriginalCommand.Should().Be("::Goal ship today");
+        recovery.DiscoveryRequested.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenDiscoveryTriggerProvided_ShouldKeepRouteCommandEmptyAndRequestDiscovery()
+    {
+        var dispatch = new RecordingActorDispatchPort();
+        var routeDecisionPort = new StaticResponsesChatRouteDecisionPort(ForwardToModelAction("anthropic/claude"));
+        var facade = CreateFacade(dispatchPort: dispatch, chatRouteDecisionPort: routeDecisionPort);
+
+        var result = await facade.CreateAsync(
+            BuildRequest("claude-sonnet", chatMessages: [ChatMessage.User("::")]),
+            CallerScopeContext("token"));
+
+        result.Error.Should().BeNull();
+        routeDecisionPort.LastRequest.Should().NotBeNull();
+        routeDecisionPort.LastRequest!.CommandName.Should().BeEmpty();
+        var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
+        var recovery = AgentToolExecutionContextMapper.FromPayload(command.ToolContext).SkillRecovery;
+        recovery.DiscoveryRequested.Should().BeTrue();
+        recovery.CommandName.Should().BeNull();
+        recovery.PrimarySkillName.Should().BeNull();
+        recovery.OriginalCommand.Should().Be("::");
+    }
+
+    [Fact]
+    public async Task StreamAsync_ShouldReturnObservedCompletion_AndDispatchWithResponseCorrelation()
     {
         var sessions = new RecordingSessionPort();
         var dispatch = new RecordingActorDispatchPort();
-        var facade = CreateFacade(sessionPort: sessions, dispatchPort: dispatch);
+        var observer = StaticLlmSessionRunObservationService.Completed("Hello");
+        var facade = CreateFacade(sessionPort: sessions, dispatchPort: dispatch, observationService: observer);
+        var deltas = new List<string>();
 
-        var result = await facade.StreamAsync(BuildStreamPlan(), (_, _) => ValueTask.CompletedTask);
+        var result = await facade.StreamAsync(
+            BuildStreamPlan(),
+            (delta, _) =>
+            {
+                deltas.Add(delta);
+                return ValueTask.CompletedTask;
+            });
 
         result.Error.Should().BeNull();
-        result.Accepted.Should().NotBeNull();
-        result.Completion.Should().BeNull();
+        result.Completion.Should().NotBeNull();
+        result.Completion!.OutputText.Should().Be("Hello");
+        deltas.Should().Equal("Hello");
         sessions.RecordedCompletions.Should().BeEmpty();
         sessions.UpdatedStatuses.Should().BeEmpty();
         var call = dispatch.Calls.Should().ContainSingle().Subject;
         call.ActorId.Should().Be("actor-msg_stream");
+        call.Envelope.Propagation!.CorrelationId.Should().Be("msg_stream");
         var command = call.Envelope.Payload.Unpack<LlmRunRequested>();
         command.ResponseId.Should().Be("msg_stream");
         command.RunId.Should().Be("msg_stream:llm-run");
         command.Model.Should().Be("claude-sonnet");
+        observer.LastRequest.Should().NotBeNull();
+        observer.LastRequest!.ResponseId.Should().Be("msg_stream");
+        observer.LastRequest.RunId.Should().Be("msg_stream:llm-run");
+    }
+
+    [Theory]
+    [InlineData(LlmSessionRunObservedTerminalKind.Failed, 500, "llm_run_failed", "provider crashed", LlmSessionStatus.Failed)]
+    [InlineData(LlmSessionRunObservedTerminalKind.Cancelled, 409, "run_cancelled", "LLM run was cancelled.", LlmSessionStatus.Cancelled)]
+    [InlineData(LlmSessionRunObservedTerminalKind.TimedOut, 504, "response_timeout", "Timed out waiting 30 seconds for the LLM run to emit a terminal event.", LlmSessionStatus.Failed)]
+    public async Task StreamAsync_WhenObservedTerminalError_ShouldReturnError_AndMarkSession(
+        LlmSessionRunObservedTerminalKind kind,
+        int statusCode,
+        string code,
+        string message,
+        LlmSessionStatus status)
+    {
+        var sessions = new RecordingSessionPort();
+        var facade = CreateFacade(
+            sessionPort: sessions,
+            observationService: StaticLlmSessionRunObservationService.Error(kind, statusCode, code, message));
+
+        var result = await facade.StreamAsync(BuildStreamPlan(), (_, _) => ValueTask.CompletedTask);
+
+        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(statusCode, code, message));
+        result.Completion.Should().BeNull();
+        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(status);
     }
 
     [Fact]
@@ -188,7 +272,8 @@ public sealed class MessagesCommandFacadeTests
         ILlmSessionRegistrationPort? sessionPort = null,
         IResponsesChatRouteDecisionPort? chatRouteDecisionPort = null,
         RecordingActorDispatchPort? dispatchPort = null,
-        IResponsesToolClassificationService? toolClassificationService = null)
+        IResponsesToolClassificationService? toolClassificationService = null,
+        ILlmSessionRunObservationService? observationService = null)
     {
         var effectiveSessionPort = sessionPort ?? new RecordingSessionPort();
         return new MessagesCommandFacade(
@@ -199,6 +284,7 @@ public sealed class MessagesCommandFacadeTests
             dispatchPort ?? new RecordingActorDispatchPort(),
             toolClassificationService ?? new StaticResponsesToolClassificationService(),
             new StaticResponsesDirectToolPlanService(),
+            observationService ?? StaticLlmSessionRunObservationService.Completed("ok"),
             NullLogger<MessagesCommandFacade>.Instance);
     }
 
@@ -279,18 +365,20 @@ public sealed class MessagesCommandFacadeTests
         string matchedRuleId = "")
         : IResponsesChatRouteDecisionPort
     {
+        public ResponsesChatRouteDecisionRequest? LastRequest { get; private set; }
+
         public Task<ChatRouteDecision> ResolveAsync(
-            ResponsesCallerScope callerScope,
-            string model,
-            ToolMode toolMode,
-            string contentHint,
+            ResponsesChatRouteDecisionRequest request,
             CancellationToken ct = default)
-            => Task.FromResult(new ChatRouteDecision
+        {
+            LastRequest = request;
+            return Task.FromResult(new ChatRouteDecision
             {
                 Action = action.Clone(),
                 UsedFallback = usedFallback,
                 MatchedRuleId = matchedRuleId,
             });
+        }
     }
 
     private sealed class StaticResponsesToolClassificationService(
@@ -312,6 +400,47 @@ public sealed class MessagesCommandFacadeTests
                 ResponsesToolChoiceHints.Create(
                     routeAction?.ForwardToModel?.ToolChoiceHint?.ToolName,
                     routeAction?.ForwardToModel?.ToolChoiceHint?.PrefilledArguments));
+    }
+
+    private sealed class StaticLlmSessionRunObservationService(
+        LlmSessionRunObservedResult result,
+        IReadOnlyList<LlmSessionRunObservedDelta>? deltas = null) : ILlmSessionRunObservationService
+    {
+        public LlmSessionRunObservationRequest? LastRequest { get; private set; }
+
+        public static StaticLlmSessionRunObservationService Completed(string outputText) =>
+            new(
+                new LlmSessionRunObservedResult(
+                    null,
+                    new LlmSessionCompletionSnapshot(outputText, [], DateTimeOffset.UtcNow, null, null),
+                    null),
+                [new LlmSessionRunObservedDelta(outputText, null, null)]);
+
+        public static StaticLlmSessionRunObservationService Error(
+            LlmSessionRunObservedTerminalKind kind,
+            int statusCode,
+            string code,
+            string message) =>
+            new(new LlmSessionRunObservedResult(
+                null,
+                null,
+                new LlmSessionRunObservedError(kind, statusCode, code, message)));
+
+        public async Task<LlmSessionRunObservedResult> ObserveAsync(
+            LlmSessionRunObservationRequest request,
+            Func<LlmSessionRunObservedDelta, CancellationToken, ValueTask>? onDelta,
+            CancellationToken ct = default)
+        {
+            LastRequest = request;
+            var admission = await request.DispatchAsync(ct);
+            foreach (var delta in deltas ?? [])
+            {
+                if (onDelta != null)
+                    await onDelta(delta, ct);
+            }
+
+            return result with { Admission = admission };
+        }
     }
 
     private sealed class RecordingActorDispatchPort : IActorDispatchPort

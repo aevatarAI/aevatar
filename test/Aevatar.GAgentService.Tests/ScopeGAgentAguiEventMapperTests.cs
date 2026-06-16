@@ -94,6 +94,25 @@ public sealed class ScopeGAgentAguiEventMapperTests
         approvalStruct.Fields["isDestructive"].BoolValue.Should().BeTrue();
         approvalStruct.Fields["timeoutSeconds"].NumberValue.Should().Be(30);
 
+        var usage = ScopeGAgentAguiEventMapper.TryMap(BuildEventEnvelope(new ChatTokenUsageEvent
+        {
+            SessionId = "s1",
+            Usage = new TokenUsagePayload
+            {
+                PromptTokens = 5,
+                CompletionTokens = 7,
+                TotalTokens = 12,
+            },
+            Model = "nyxid-model",
+        }));
+        usage.Should().NotBeNull();
+        usage!.Usage.Should().NotBeNull();
+        usage.Usage.Available.Should().BeTrue();
+        usage.Usage.PromptTokens.Should().Be(5);
+        usage.Usage.CompletionTokens.Should().Be(7);
+        usage.Usage.TotalTokens.Should().Be(12);
+        usage.Usage.Model.Should().Be("nyxid-model");
+
         var agui = ScopeGAgentAguiEventMapper.TryMap(BuildEventEnvelope(new AGUIEvent
         {
             TextMessageEnd = new Aevatar.AGUI.Contracts.TextMessageEndEvent { MessageId = "m2" },

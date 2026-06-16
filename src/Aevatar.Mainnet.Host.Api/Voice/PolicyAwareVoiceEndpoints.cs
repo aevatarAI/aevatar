@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
@@ -11,12 +12,14 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Mainnet.Host.Api.Voice;
 
 public static class PolicyAwareVoiceEndpoints
 {
     private const string DefaultPattern = "/ws/voice";
+    internal const string VoiceNotConfiguredReason = "voice_not_configured";
     private const string ScopeClaimType = "scope";
     private const string RemoteAudioTransportUnavailableReason = "remote_audio_transport_unavailable";
     private static readonly string[] RoleClaimTypes =
@@ -37,6 +40,33 @@ public static class PolicyAwareVoiceEndpoints
 
     public static IEndpointConventionBuilder MapPolicyAwareVoiceEndpoint(this IEndpointRouteBuilder app) =>
         app.Map(DefaultPattern, HandlePolicyAwareVoiceAsync);
+
+    /// <summary>
+    /// True when the voice feature registered its realtime session services.
+    /// Voice registration is conditional (no provider configured → skipped),
+    /// so the host must not map handlers whose [FromServices] dependencies
+    /// would crash request-time DI resolution (issue #2023).
+    /// </summary>
+    public static bool IsVoiceRealtimeConfigured(IServiceProvider services) =>
+        services.GetService<IRealtimeSession<VoiceRealtimeSessionRequest, VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeFrame, VoiceRealtimeSessionCompletion>>() is not null;
+
+    /// <summary>
+    /// Fail-closed stand-ins for deployments without a configured voice
+    /// provider: both voice routes answer 503 voice_not_configured instead
+    /// of throwing an unhandled DI exception.
+    /// </summary>
+    public static IEndpointRouteBuilder MapVoiceNotConfiguredEndpoints(this IEndpointRouteBuilder app)
+    {
+        app.Map(DefaultPattern, HandleVoiceNotConfiguredAsync);
+        app.Map(DefaultPattern + "/{actorId}", HandleVoiceNotConfiguredAsync);
+        return app;
+    }
+
+    private static async Task HandleVoiceNotConfiguredAsync(HttpContext http)
+    {
+        http.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        await http.Response.WriteAsync(VoiceNotConfiguredReason, http.RequestAborted);
+    }
 
     // Implement (issue #695):
     //   Behavior: resolve /ws/voice target through ChatRoutePolicy before WebSocket upgrade.
@@ -103,7 +133,8 @@ public static class PolicyAwareVoiceEndpoints
             new VoiceRealtimeSessionRequest(
                 voiceTarget.ActorId.Trim(),
                 NormalizeOptional(voiceTarget.VoiceModuleName),
-                VoiceRealtimeSessionPurpose.Attach),
+                VoiceRealtimeSessionPurpose.Attach,
+                voiceTarget.SessionOverrides?.Clone()),
             static (_, _) => ValueTask.CompletedTask,
             ct: http.RequestAborted);
 
@@ -114,9 +145,36 @@ public static class PolicyAwareVoiceEndpoints
         var ws = await http.WebSockets.AcceptWebSocketAsync();
         var transport = new WebSocketVoiceTransport(ws);
         var attached = false;
+        IAsyncDisposable? realtimeSubscription = null;
         try
         {
-            await mediaStreamPort.AttachAsync(accepted.LeaseHandle, transport, http.RequestAborted);
+            realtimeSubscription = await VoiceRealtimeTransportControlBridge.SubscribeAsync(
+                http.RequestServices,
+                accepted,
+                transport,
+                http.RequestAborted);
+            try
+            {
+                await VoiceRealtimeTransportControlBridge.SendSessionAcceptedAsync(
+                    transport,
+                    accepted,
+                    http.RequestAborted);
+            }
+            catch
+            {
+                await CleanupAcceptedTransportAsync(mediaStreamPort, accepted.LeaseHandle, transport);
+                throw;
+            }
+
+            // Refactor (cluster-voice-nyxid-ephemeral-broker): the realtime provider connect runs
+            // in-process inside AttachAsync, so the caller's NyxID bearer (already validated by the
+            // JWT handler) flows via AsyncLocal to the NyxID credential resolver, which mints the
+            // provider ephemeral on the caller's identity. The token is never persisted.
+            using (AgentToolContextScope.Push(BuildVoiceCallerToolContext(http)))
+            {
+                await mediaStreamPort.AttachAsync(accepted.LeaseHandle, transport, http.RequestAborted);
+            }
+
             attached = true;
             await WaitUntilClosedAsync(transport, http.RequestAborted);
         }
@@ -130,9 +188,41 @@ public static class PolicyAwareVoiceEndpoints
         }
         finally
         {
+            if (realtimeSubscription != null)
+                await realtimeSubscription.DisposeAsync();
+
             if (attached)
                 await mediaStreamPort.DetachAsync(accepted.LeaseHandle, transport, http.RequestAborted);
         }
+    }
+
+    // Caller credential for realtime provider brokering: the NyxID resolver reads
+    // AgentToolRequestContext.NyxIdAccessToken to mint the provider ephemeral on the caller's
+    // identity. Sourced from the same places the JWT bearer handler accepts for /ws/voice.
+    private static AgentToolExecutionContext BuildVoiceCallerToolContext(HttpContext http)
+    {
+        var bearer = ExtractCallerBearer(http);
+        return string.IsNullOrWhiteSpace(bearer)
+            ? AgentToolExecutionContext.Empty
+            : AgentToolExecutionContext.Empty with
+            {
+                Credentials = new AgentToolCredentials(bearer, null, null),
+            };
+    }
+
+    private static string? ExtractCallerBearer(HttpContext http)
+    {
+        var header = http.Request.Headers.Authorization.ToString();
+        const string bearerPrefix = "Bearer ";
+        if (header.StartsWith(bearerPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            var token = header[bearerPrefix.Length..].Trim();
+            if (!string.IsNullOrWhiteSpace(token))
+                return token;
+        }
+
+        var queryToken = http.Request.Query["access_token"].ToString();
+        return string.IsNullOrWhiteSpace(queryToken) ? null : queryToken.Trim();
     }
 
     private static async Task<VoiceRealtimeSessionAccepted?> WriteNonAcceptedResolutionAsync(
@@ -212,6 +302,23 @@ public static class PolicyAwareVoiceEndpoints
         }
     }
 
+    private static async Task CleanupAcceptedTransportAsync(
+        IVoiceVolatileMediaStreamPort mediaStreamPort,
+        VoicePresenceSessionLeaseHandle handle,
+        WebSocketVoiceTransport transport)
+    {
+        try
+        {
+            await mediaStreamPort.DetachAsync(handle, transport, CancellationToken.None);
+        }
+        catch
+        {
+            // best effort cleanup for an accepted lease whose control channel failed before attach
+        }
+
+        await transport.DisposeAsync();
+    }
+
     private static ChatRouteInput BuildRouteInput(
         HttpContext http,
         OwnerScope callerScope,
@@ -220,9 +327,7 @@ public static class PolicyAwareVoiceEndpoints
         var voice = new VoiceInput
         {
             Codec = ParseEnum(http.Request.Query["codec"].ToString(), VoiceCodec.Pcm16),
-            SampleRateHz = ParseInt(http.Request.Query["sample_rate_hz"].ToString()),
             Mode = ParseEnum(http.Request.Query["mode"].ToString(), VoiceConversationMode.Unspecified),
-            VadMode = ParseEnum(http.Request.Query["vad_mode"].ToString(), VadMode.Unspecified),
             VoiceModuleName = NormalizeOptional(http.Request.Query["voice_module_name"].ToString())
                               ?? NormalizeOptional(http.Request.Query["module"].ToString())
                               ?? string.Empty,
@@ -318,9 +423,6 @@ public static class PolicyAwareVoiceEndpoints
         var normalized = value?.Trim();
         return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
-
-    private static int ParseInt(string value) =>
-        int.TryParse(value, out var parsed) && parsed > 0 ? parsed : 0;
 
     private static TEnum ParseEnum<TEnum>(string value, TEnum fallback)
         where TEnum : struct, Enum

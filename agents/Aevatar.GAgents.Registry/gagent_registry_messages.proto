@@ -5,7 +5,8 @@ option csharp_namespace = "Aevatar.GAgents.Registry";
 // ─── State ───
 
 message GAgentRegistryEntry {
-  string gagent_type = 1;
+  reserved "gagent_type";
+  string agent_kind = 1;
   repeated string actor_ids = 2;
 }
 
@@ -16,13 +17,22 @@ message GAgentRegistryState {
 // ─── Events ───
 
 message ActorRegisteredEvent {
-  string gagent_type = 1;
+  reserved "gagent_type";
+  string agent_kind = 1;
   string actor_id = 2;
+  repeated string removed_legacy_keys = 3;
 }
 
 message ActorUnregisteredEvent {
-  string gagent_type = 1;
+  reserved "gagent_type";
+  string agent_kind = 1;
   string actor_id = 2;
+}
+
+message ActorRegistrationKeyCanonicalizedEvent {
+  string previous_registry_key = 1;
+  string agent_kind = 2;
+  string actor_id = 3;
 }
 
 // ─── Admission ───
@@ -40,7 +50,8 @@ enum GAgentRegistryOperation {
 }
 
 message ScopeResourceAdmissionRequested {
-  string gagent_type = 1;
+  reserved "gagent_type";
+  string agent_kind = 1;
   string actor_id = 2;
   GAgentRegistryOperation operation = 3;
   string scope_id = 4;

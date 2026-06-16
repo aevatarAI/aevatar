@@ -13,13 +13,6 @@ public sealed class LarkApprovalsActTool : AgentToolBase<LarkApprovalsActTool.Pa
         "transfer",
     ];
 
-    private static readonly HashSet<string> AllowedUserIdTypes =
-    [
-        "user_id",
-        "union_id",
-        "open_id",
-    ];
-
     private readonly ILarkNyxClient _client;
 
     public LarkApprovalsActTool(ILarkNyxClient client)
@@ -30,10 +23,17 @@ public sealed class LarkApprovalsActTool : AgentToolBase<LarkApprovalsActTool.Pa
     public override string Name => "lark_approvals_act";
 
     public override string Description =>
-        "Act on a Lark approval task through Nyx-backed transport. " +
-        "Supports approve, reject, and transfer for a known instance_code + task_id pair.";
+        "Act on a Lark approval task through Nyx-backed transport as the current operator " +
+        "(the user behind this turn; their identity is taken from the channel context, not from arguments). " +
+        "Supports approve, reject, and transfer for a known approval_code + instance_code + task_id triple; " +
+        "approval_code comes from lark_approvals_get (approval_code) or lark_approvals_list (definition_code).";
 
     public override ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
+
+    // Approve/reject/transfer irreversibly advance someone's approval flow through an
+    // org-shared tenant credential — never let the Auto classifier wave this through.
+    public override bool IsDestructive => true;
+    public override bool? RequiresApproval(string argumentsJson) => true;
 
     protected override async Task<string> ExecuteAsync(Parameters parameters, CancellationToken ct)
     {
@@ -51,6 +51,10 @@ public sealed class LarkApprovalsActTool : AgentToolBase<LarkApprovalsActTool.Pa
             });
         }
 
+        var approvalCode = parameters.ApprovalCode?.Trim();
+        if (string.IsNullOrWhiteSpace(approvalCode))
+            return LarkProxyResponseParser.Serialize(new { success = false, error = "approval_code is required. Read it from lark_approvals_get (approval_code) or lark_approvals_list (definition_code)." });
+
         var instanceCode = parameters.InstanceCode?.Trim();
         if (string.IsNullOrWhiteSpace(instanceCode))
             return LarkProxyResponseParser.Serialize(new { success = false, error = "instance_code is required." });
@@ -58,14 +62,6 @@ public sealed class LarkApprovalsActTool : AgentToolBase<LarkApprovalsActTool.Pa
         var taskId = parameters.TaskId?.Trim();
         if (string.IsNullOrWhiteSpace(taskId))
             return LarkProxyResponseParser.Serialize(new { success = false, error = "task_id is required." });
-
-        var userIdType = parameters.UserIdType?.Trim().ToLowerInvariant();
-        if (!string.IsNullOrWhiteSpace(userIdType) && !AllowedUserIdTypes.Contains(userIdType))
-            return LarkProxyResponseParser.Serialize(new { success = false, error = "user_id_type must be one of: user_id, union_id, open_id" });
-
-        var userId = ResolveUserId(parameters.UserId);
-        if (string.IsNullOrWhiteSpace(userId))
-            return LarkProxyResponseParser.Serialize(new { success = false, error = "user_id is required. Use the Lark approval operator user_id from current turn context." });
 
         var transferUserId = parameters.TransferUserId?.Trim();
         if (action == "transfer" && string.IsNullOrWhiteSpace(transferUserId))
@@ -88,17 +84,28 @@ public sealed class LarkApprovalsActTool : AgentToolBase<LarkApprovalsActTool.Pa
             }
         }
 
+        var operatorIdentity = LarkApprovalOperatorIdentity.Resolve();
+        if (operatorIdentity == null)
+        {
+            return LarkProxyResponseParser.Serialize(new
+            {
+                success = false,
+                error = "No Lark operator identity in the current channel context. Approval actions can only run as the user behind this turn.",
+            });
+        }
+
         var response = await _client.ActOnApprovalTaskAsync(
             token,
             new LarkApprovalTaskActionRequest(
                 Action: action,
+                ApprovalCode: approvalCode,
                 InstanceCode: instanceCode,
                 TaskId: taskId,
-                UserId: userId,
+                UserId: operatorIdentity.UserId,
                 Comment: parameters.Comment,
                 FormJson: parameters.FormJson,
                 TransferUserId: transferUserId,
-                UserIdType: userIdType),
+                UserIdType: operatorIdentity.UserIdType),
             ct);
 
         if (LarkProxyResponseParser.TryParseError(response, out var error))
@@ -117,35 +124,22 @@ public sealed class LarkApprovalsActTool : AgentToolBase<LarkApprovalsActTool.Pa
         {
             success = true,
             action,
+            approval_code = approvalCode,
             instance_code = instanceCode,
             task_id = taskId,
-            user_id = userId,
+            user_id = operatorIdentity.UserId,
             transfer_user_id = transferUserId,
         });
-    }
-
-    private static string? ResolveUserId(string? explicitUserId)
-    {
-        var operatorUserId = AgentToolRequestContext.TryGetExternalMetadata("channel.lark.operator_user_id")?.Trim();
-        if (!string.IsNullOrWhiteSpace(operatorUserId))
-            return operatorUserId;
-
-        var normalized = explicitUserId?.Trim();
-        if (!string.IsNullOrWhiteSpace(normalized))
-            return normalized;
-
-        return null;
     }
 
     public sealed class Parameters
     {
         public string? Action { get; set; }
+        public string? ApprovalCode { get; set; }
         public string? InstanceCode { get; set; }
         public string? TaskId { get; set; }
-        public string? UserId { get; set; }
         public string? Comment { get; set; }
         public string? FormJson { get; set; }
         public string? TransferUserId { get; set; }
-        public string? UserIdType { get; set; }
     }
 }

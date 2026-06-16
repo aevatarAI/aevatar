@@ -158,6 +158,18 @@ New principle: CLAUDE.md keeps the cross-process architecture and engineering bo
 - Skill routing：请求明确匹配仓库内 skill 时优先使用对应 skill；skill 已自包含的操作细则不复制回本文件。
 - Codex loop 细则由 `.claude/skills/codex-refactor-loop/` 与 `.claude/skills/codex-implement-loop/` 自维护；`CLAUDE.md` 只保留跨流程架构与工程边界。
 
+<!-- consensus-rnd:foundational-invariants:start version=1 sha256=f5c24b0c3515993a7b86c4ed78ce7386add665f8c8b84cc7275aedebd6c3e6af -->
+## 共识研发不动点（由 consensus-rnd 管理）
+
+- FI-001 AI 产物默认不可信；进入主线前必须经过独立检查，至少包含共识、review 或自动验证中的适用组合。
+- FI-002 Host 事实必须由 host 配置或 host 规则注入；通用 skill / engine 不硬编码具体项目、组织、路径、分支或人员事实；skill-private runtime directories such as `.refactor-loop/` must not become host production configuration or ledger SSOT.
+- FI-003 稳定核心保持小而可审计；高频变化留在 host 规则、prompt、脚本或扩展层，不下沉为核心不变量。
+- FI-004 跨进程、跨 turn 或跨节点的事实必须有权威记录；进程内记忆、cache、临时变量不能冒充事实源。
+- FI-005 边界优先于便利；职责、层级、协议和状态所有权必须清楚，禁止用中间层快捷方式绕过主链路。
+- FI-006 变更必须可验证且基于 evidence；失败、缺口和越界承诺要显式暴露，禁止用静默假设或禁用测试换取通过。
+- FI-007 删除优先；废弃路径直接移除，除非 host 规则明确要求迁移期兼容。
+<!-- consensus-rnd:foundational-invariants:end -->
+
 ## 面向对象原则（强制）
 - 富模型而非贫血模型：数据与操作它的行为同住一个对象（Actor 即业务实体）；禁止“只有 getter/setter 的数据类 + 一堆 manager 在外面摆弄它”。
 - 封装状态：对象只暴露表达业务意图的方法，隐藏内部字段与集合；状态变更走方法/命令，禁止对外开放可变 setter 或直接返回内部集合引用。

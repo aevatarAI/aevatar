@@ -26,6 +26,7 @@ public sealed class ServiceCommandApplicationService : IServiceCommandPort
         CancellationToken ct = default)
     {
         var actorId = await _targetProvisioner.EnsureDefinitionTargetAsync(command.Spec.Identity, ct);
+        await _targetProvisioner.EnsureInvocationCatalogTargetAsync(command.Spec.Identity, ct);
         return await DispatchAsync(actorId, command, CorrelationForService(command.Spec.Identity), ct);
     }
 
@@ -34,7 +35,17 @@ public sealed class ServiceCommandApplicationService : IServiceCommandPort
         CancellationToken ct = default)
     {
         var actorId = await _targetProvisioner.EnsureDefinitionTargetAsync(command.Spec.Identity, ct);
+        await _targetProvisioner.EnsureInvocationCatalogTargetAsync(command.Spec.Identity, ct);
         return await DispatchAsync(actorId, command, CorrelationForService(command.Spec.Identity), ct);
+    }
+
+    public async Task<ServiceCommandAcceptedReceipt> UpdateServiceExternalExposureAsync(
+        UpdateServiceExternalExposureCommand command,
+        CancellationToken ct = default)
+    {
+        var actorId = await _targetProvisioner.EnsureDefinitionTargetAsync(command.Identity, ct);
+        await _targetProvisioner.EnsureInvocationCatalogTargetAsync(command.Identity, ct);
+        return await DispatchAsync(actorId, command, CorrelationForService(command.Identity), ct);
     }
 
     public async Task<ServiceCommandAcceptedReceipt> CreateRevisionAsync(
@@ -42,6 +53,7 @@ public sealed class ServiceCommandApplicationService : IServiceCommandPort
         CancellationToken ct = default)
     {
         var actorId = await _targetProvisioner.EnsureRevisionCatalogTargetAsync(command.Spec.Identity, ct);
+        await _targetProvisioner.EnsureInvocationCatalogTargetAsync(command.Spec.Identity, ct);
         return await DispatchAsync(actorId, command, CorrelationForRevision(command.Spec.Identity, command.Spec.RevisionId), ct);
     }
 
@@ -50,6 +62,7 @@ public sealed class ServiceCommandApplicationService : IServiceCommandPort
         CancellationToken ct = default)
     {
         var actorId = await _targetProvisioner.EnsureRevisionCatalogTargetAsync(command.Identity, ct);
+        await _targetProvisioner.EnsureInvocationCatalogTargetAsync(command.Identity, ct);
         return await DispatchAsync(actorId, command, CorrelationForRevision(command.Identity, command.RevisionId), ct);
     }
 
@@ -58,6 +71,7 @@ public sealed class ServiceCommandApplicationService : IServiceCommandPort
         CancellationToken ct = default)
     {
         var actorId = await _targetProvisioner.EnsureRevisionCatalogTargetAsync(command.Identity, ct);
+        await _targetProvisioner.EnsureInvocationCatalogTargetAsync(command.Identity, ct);
         return await DispatchAsync(actorId, command, CorrelationForRevision(command.Identity, command.RevisionId), ct);
     }
 
@@ -66,6 +80,7 @@ public sealed class ServiceCommandApplicationService : IServiceCommandPort
         CancellationToken ct = default)
     {
         var actorId = await _targetProvisioner.EnsureRevisionCatalogTargetAsync(command.Identity, ct);
+        await _targetProvisioner.EnsureInvocationCatalogTargetAsync(command.Identity, ct);
         return await DispatchAsync(actorId, command, CorrelationForRevision(command.Identity, command.RevisionId), ct);
     }
 
@@ -74,6 +89,7 @@ public sealed class ServiceCommandApplicationService : IServiceCommandPort
         CancellationToken ct = default)
     {
         var actorId = await _targetProvisioner.EnsureDefinitionTargetAsync(command.Identity, ct);
+        await _targetProvisioner.EnsureInvocationCatalogTargetAsync(command.Identity, ct);
         return await DispatchAsync(actorId, command, CorrelationForRevision(command.Identity, command.RevisionId), ct);
     }
 
@@ -83,6 +99,7 @@ public sealed class ServiceCommandApplicationService : IServiceCommandPort
     {
         var actorId = await _targetProvisioner.EnsureDeploymentTargetAsync(command.Identity, ct);
         await _targetProvisioner.EnsureServingSetTargetAsync(command.Identity, ct);
+        await _targetProvisioner.EnsureInvocationCatalogTargetAsync(command.Identity, ct);
         return await DispatchAsync(actorId, command, CorrelationForRevision(command.Identity, command.RevisionId), ct);
     }
 
@@ -99,6 +116,7 @@ public sealed class ServiceCommandApplicationService : IServiceCommandPort
         CancellationToken ct = default)
     {
         var actorId = await _targetProvisioner.EnsureServingSetTargetAsync(command.Identity, ct);
+        await _targetProvisioner.EnsureInvocationCatalogTargetAsync(command.Identity, ct);
         return await DispatchAsync(actorId, command, CorrelationForService(command.Identity!), ct);
     }
 
@@ -109,6 +127,7 @@ public sealed class ServiceCommandApplicationService : IServiceCommandPort
         ArgumentNullException.ThrowIfNull(command.Plan);
         var actorId = await _targetProvisioner.EnsureRolloutTargetAsync(command.Identity, ct);
         await _targetProvisioner.EnsureServingSetTargetAsync(command.Identity, ct);
+        await _targetProvisioner.EnsureInvocationCatalogTargetAsync(command.Identity, ct);
         return await DispatchAsync(actorId, command, $"{CorrelationForService(command.Identity!)}:{command.Plan.RolloutId}", ct);
     }
 
@@ -118,6 +137,7 @@ public sealed class ServiceCommandApplicationService : IServiceCommandPort
     {
         var actorId = await _targetProvisioner.EnsureRolloutTargetAsync(command.Identity, ct);
         await _targetProvisioner.EnsureServingSetTargetAsync(command.Identity, ct);
+        await _targetProvisioner.EnsureInvocationCatalogTargetAsync(command.Identity, ct);
         return await DispatchAsync(actorId, command, $"{CorrelationForService(command.Identity)}:{command.RolloutId}", ct);
     }
 
@@ -135,6 +155,7 @@ public sealed class ServiceCommandApplicationService : IServiceCommandPort
     {
         var actorId = await _targetProvisioner.EnsureRolloutTargetAsync(command.Identity, ct);
         await _targetProvisioner.EnsureServingSetTargetAsync(command.Identity, ct);
+        await _targetProvisioner.EnsureInvocationCatalogTargetAsync(command.Identity, ct);
         return await DispatchAsync(actorId, command, $"{CorrelationForService(command.Identity)}:{command.RolloutId}", ct);
     }
 
@@ -144,6 +165,7 @@ public sealed class ServiceCommandApplicationService : IServiceCommandPort
     {
         var actorId = await _targetProvisioner.EnsureRolloutTargetAsync(command.Identity, ct);
         await _targetProvisioner.EnsureServingSetTargetAsync(command.Identity, ct);
+        await _targetProvisioner.EnsureInvocationCatalogTargetAsync(command.Identity, ct);
         return await DispatchAsync(actorId, command, $"{CorrelationForService(command.Identity)}:{command.RolloutId}", ct);
     }
 

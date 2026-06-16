@@ -26,7 +26,7 @@ public sealed class ScopeWorkflowAguiEventMapperTests
         var ex = new InvalidOperationException("boom");
         var evt = ScopeWorkflowAguiEventMapper.BuildRunErrorEvent(ex);
         evt.RunError.Should().NotBeNull();
-        evt.RunError.Message.Should().Be("boom");
+        evt.RunError.Message.Should().Be("Workflow execution failed.");
         evt.RunError.Code.Should().Be("EXECUTION_FAILED");
     }
 

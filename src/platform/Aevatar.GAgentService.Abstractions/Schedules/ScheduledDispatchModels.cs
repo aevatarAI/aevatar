@@ -13,6 +13,7 @@ public enum ScheduledDispatchScheduleKind
 {
     Generic = 0,
     Workflow = 1,
+    SkillRunner = 2,
 }
 
 public sealed record ScheduledDispatchTargetDescriptor(
@@ -93,7 +94,8 @@ public sealed record ScheduledDispatchSummary(
     int FailureCount,
     IReadOnlyDictionary<string, string> Headers,
     string ScheduleActorId,
-    ScheduledDispatchScheduleKind ScheduleKind = ScheduledDispatchScheduleKind.Generic);
+    ScheduledDispatchScheduleKind ScheduleKind = ScheduledDispatchScheduleKind.Generic,
+    bool Deleted = false);
 
 public sealed record ScheduledDispatchFireRecord(
     DateTimeOffset ScheduledFireAt,
@@ -165,12 +167,23 @@ public interface IScheduledDispatchActorPort
         PreparedScheduledDispatchTarget dispatch,
         CancellationToken ct = default);
 
+    Task<DispatchAdmission> DispatchEnsureAsync(
+        string actorId,
+        ScheduledDispatchConfiguration configuration,
+        PreparedScheduledDispatchTarget dispatch,
+        CancellationToken ct = default);
+
     Task<DispatchAdmission> DispatchEnableAsync(
         string actorId,
         string reason,
         CancellationToken ct = default);
 
     Task<DispatchAdmission> DispatchDisableAsync(
+        string actorId,
+        string reason,
+        CancellationToken ct = default);
+
+    Task<DispatchAdmission> DispatchDeleteAsync(
         string actorId,
         string reason,
         CancellationToken ct = default);
@@ -214,7 +227,8 @@ public sealed record ScheduledServiceInvocationDispatchReceipt(
 public sealed record ScheduledServiceInvocationDispatchRequest(
     ServiceInvocationRequest Request,
     ScheduledServiceInvocationAuth? Auth = null,
-    IReadOnlyDictionary<string, string>? Headers = null);
+    IReadOnlyDictionary<string, string>? Headers = null,
+    bool ProjectSenderNyxIdAccessTokenToWorkflowCallerCredential = false);
 
 public interface IScheduledServiceInvocationDispatchPort
 {
@@ -236,6 +250,10 @@ public interface IScheduledDispatchApplicationService
         ScheduledDispatchConfiguration configuration,
         CancellationToken ct = default);
 
+    Task<ScheduledDispatchMutationReceipt> EnsureAsync(
+        ScheduledDispatchConfiguration configuration,
+        CancellationToken ct = default);
+
     Task<ScheduledDispatchMutationReceipt> UpdateAsync(
         string scheduleId,
         ScheduledDispatchConfiguration configuration,
@@ -247,6 +265,11 @@ public interface IScheduledDispatchApplicationService
         CancellationToken ct = default);
 
     Task<ScheduledDispatchMutationReceipt> DisableAsync(
+        string scheduleId,
+        string reason,
+        CancellationToken ct = default);
+
+    Task<ScheduledDispatchMutationReceipt> DeleteAsync(
         string scheduleId,
         string reason,
         CancellationToken ct = default);

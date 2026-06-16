@@ -2,6 +2,8 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.GAgentService.Abstractions.Responses;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.GAgentService.Application.Responses;
 
@@ -30,8 +32,11 @@ public sealed record ResponsesDirectToolPlan(
 }
 
 public sealed class ResponsesDirectToolPlanService(
-    IToolSetRegistry toolSetRegistry) : IResponsesDirectToolPlanService
+    IToolSetRegistry toolSetRegistry,
+    ILogger<ResponsesDirectToolPlanService>? logger = null) : IResponsesDirectToolPlanService
 {
+    private readonly ILogger _logger = logger ?? NullLogger<ResponsesDirectToolPlanService>.Instance;
+
     public ResponsesDirectToolPlan Build(ChatRouteAction? routeAction)
     {
         var forwardToModel = routeAction?.ForwardToModel;
@@ -52,7 +57,7 @@ public sealed class ResponsesDirectToolPlanService(
                     error.Message));
             }
 
-            additionalProviders.Add(new ToolSetResponsesToolProvider(toolSet.Sources));
+            additionalProviders.Add(new ToolSetResponsesToolProvider(toolSet.Sources, _logger));
         }
 
         return ResponsesDirectToolPlan.Success(
@@ -65,19 +70,45 @@ public sealed class ResponsesDirectToolPlanService(
     private sealed class ToolSetResponsesToolProvider : IResponsesToolProvider
     {
         private readonly IReadOnlyList<IAgentToolSource> _sources;
+        private readonly ILogger _logger;
 
-        public ToolSetResponsesToolProvider(IReadOnlyList<IAgentToolSource> sources)
+        public ToolSetResponsesToolProvider(
+            IReadOnlyList<IAgentToolSource> sources,
+            ILogger logger)
         {
             _sources = sources ?? throw new ArgumentNullException(nameof(sources));
+            _logger = logger ?? NullLogger.Instance;
         }
 
         public async ValueTask<IReadOnlyList<IAgentTool>> GetAdditiveToolsAsync(
             ResponsesToolProviderContext context,
             CancellationToken ct = default)
         {
+            // Discovery runs on behalf of this request's caller, so the request's typed tool
+            // context (NyxID access token, scope, channel) must be visible to context-aware
+            // sources. IAgentToolSource.DiscoverToolsAsync has no context parameter, so publish
+            // it through the AsyncLocal the tools already read at execution time.
+            using var _ = AgentToolContextScope.Push(context.ToolContext);
+
             var tools = new List<IAgentTool>();
             foreach (var source in _sources)
-                tools.AddRange(await source.DiscoverToolsAsync(ct));
+            {
+                try
+                {
+                    tools.AddRange(await source.DiscoverToolsAsync(ct).ConfigureAwait(false));
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(
+                        ex,
+                        "Responses route tool source discovery failed for source {SourceType}; continuing without that source.",
+                        source.GetType().Name);
+                }
+            }
 
             return tools;
         }

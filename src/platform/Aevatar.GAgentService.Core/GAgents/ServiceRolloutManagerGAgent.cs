@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgentService.Abstractions;
@@ -11,6 +12,7 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Core.GAgents;
 
+[GAgent("gagent.service.rollout-manager")]
 public sealed class ServiceRolloutManagerGAgent : GAgentBase<ServiceRolloutExecutionState>
 {
     private readonly IActorDispatchPort _dispatchPort;
