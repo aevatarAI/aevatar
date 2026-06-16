@@ -592,6 +592,101 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
+    public async Task ChatStreamAsync_WhenFinalTextToolHasNoMutatingSuccess_ShouldInjectSummaryConstraint()
+    {
+        var provider = new QueuedStreamingProvider(
+        [
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "tc-initial-read",
+                        Name = "lookup",
+                        ArgumentsJson = "{\"q\":\"initial\"}",
+                    },
+                },
+            ],
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = """
+                        <function_calls>
+                        <invoke name="lookup">
+                        <parameter name="q">final</parameter>
+                        </invoke>
+                        </function_calls>
+                        """,
+                },
+            ],
+            [
+                new LLMStreamChunk { DeltaContent = "summary-ready" },
+            ],
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("lookup", args => $"RESULT:{args}", isReadOnly: true));
+        var runtime = CreateRuntime(provider, tools: tools);
+
+        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 1))
+        {
+        }
+
+        provider.StreamRequests.Should().HaveCount(3);
+        provider.StreamRequests[2].Messages
+            .Where(message => message.Role == "system" &&
+                              message.Content?.Contains("no successful mutating tool execution") == true)
+            .Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ChatStreamAsync_WhenFinalTextToolHasMutatingSuccess_ShouldNotInjectSummaryConstraint()
+    {
+        var provider = new QueuedStreamingProvider(
+        [
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "tc-initial-read",
+                        Name = "lookup",
+                        ArgumentsJson = "{\"q\":\"initial\"}",
+                    },
+                },
+            ],
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = """
+                        <function_calls>
+                        <invoke name="write_config">
+                        <parameter name="value">new</parameter>
+                        </invoke>
+                        </function_calls>
+                        """,
+                },
+            ],
+            [
+                new LLMStreamChunk { DeltaContent = "summary-ready" },
+            ],
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("lookup", args => $"RESULT:{args}", isReadOnly: true));
+        tools.Register(new DelegateTool("write_config", args => $"RESULT:{args}"));
+        var runtime = CreateRuntime(provider, tools: tools);
+
+        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 1))
+        {
+        }
+
+        provider.StreamRequests.Should().HaveCount(3);
+        provider.StreamRequests[2].Messages
+            .Where(message => message.Role == "system" &&
+                              message.Content?.Contains("no successful mutating tool execution") == true)
+            .Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ChatStreamAsync_WhenFinalNoToolsHasNoMutatingSuccess_ShouldInjectEphemeralConstraint()
     {
         var provider = new QueuedStreamingProvider(

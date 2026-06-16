@@ -183,9 +183,9 @@ Use this playbook when the user asks for a recurring, scheduled, monitored, or o
    - For plain text output, the skill should send a concise digest back to Lark. For Feishu cloud doc output, the skill should create or update a document and return the link.
 
 6. Recover cleanly.
-- Publish failure means the package is wrong; refine and republish.
-- User rejection or edits mean the negotiation is not stable yet; update the card and retry.
-- If the user later wants a different cadence, treat it as a new negotiation for a new schedule rather than pretending the existing schedule changed automatically.
+   - Publish failure means the package is wrong; refine and republish.
+   - User rejection or edits mean the negotiation is not stable yet; update the card and retry.
+   - If the user later wants a different cadence, treat it as a new negotiation for a new schedule rather than pretending the existing schedule changed automatically.
 
 ## Honest Success Rule
 
