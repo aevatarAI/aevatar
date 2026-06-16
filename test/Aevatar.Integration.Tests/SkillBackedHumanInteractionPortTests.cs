@@ -44,6 +44,37 @@ public sealed class SkillBackedHumanInteractionPortTests
     }
 
     [Fact]
+    public async Task AddSkillBackedHumanInteractionDelivery_ShouldApplyConfiguredDeliveryToolName()
+    {
+        var deliveryTool = new RecordingTool("configured-delivery-tool", "configured delivery");
+        var capabilityTool = new RecordingTool("capability-delivery-tool", "generic delivery", ["human_interaction.delivery"]);
+        var services = new ServiceCollection();
+        services.AddSingleton<IAgentToolSource>(new RecordingToolSource(capabilityTool, deliveryTool));
+        services.AddSkillBackedHumanInteractionDelivery(options =>
+        {
+            options.DeliveryToolName = "configured-delivery-tool";
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var port = provider.GetRequiredService<IHumanInteractionPort>();
+
+        await port.DeliverSuspensionAsync(
+            new HumanInteractionRequest
+            {
+                ActorId = "workflow-actor",
+                RunId = "run-1",
+                StepId = "approval",
+                SuspensionType = "human_approval",
+                Prompt = "Approve?",
+            },
+            "delivery-target-1",
+            CancellationToken.None);
+
+        capabilityTool.Calls.Should().BeEmpty();
+        deliveryTool.Calls.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task DeliverSuspensionAsync_ShouldInvokeCapabilityMatchedToolWithStructuredPayload()
     {
         var tool = new RecordingTool("generic-human-delivery", "generic delivery", ["human_interaction.delivery"]);
