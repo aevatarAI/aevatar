@@ -122,6 +122,18 @@ BindWorkflowDefinition(yaml)
 - timezone 为空时默认为 `UTC`，非空时必须能被 runtime `TimeZoneInfo` 解析。
 - `Headers` 是 command dispatch headers，不用于承载 schedule 核心语义。
 
+### Connected-Service Resource Fetch
+
+Workflow runtime owns the canonical connected-service resource fetch use case. The only workflow-callable tool name is `workflow_connected_service_resource_fetch`; connected-service provider packages do not publish a same-name workflow tool.
+
+运行边界：
+
+- Tool arguments identify a narrow route with typed fields: `provider`、`operation`、`resource_kind`、`message_id`、`resource_key`。
+- Workflow infrastructure resolves the route through registered `IWorkflowConnectedServiceResourceFetchAdapter` instances. Unsupported routes fail before any provider call.
+- Provider packages only register binary adapters for their own public surface. The first Lark adapter exposes `lark/message_resource_download/image` and `lark/message_resource_download/file`.
+- Downloaded bytes must enter workflow storage only through `IWorkflowFileIngressPort` with `WorkflowFileSourceKind.ConnectedServiceResource`; workflow commands, actor state, readmodels, logs, and tool results must not carry raw bytes or base64.
+- The tool result is a sanitized `WorkflowFileRef` plus route facts. It does not expose provider response bodies, base64, or downloaded content.
+
 ### Webhook Ingress API
 
 `POST /api/workflow-webhooks/{routeKey}` 是 workflow 的第四个 start-run 入口。它和 `/api/chat` 复用同一条 `WorkflowChatRunRequest` accepted-only command dispatch 主干；它不是 workflow YAML 顶级 trigger，也不复用 channel inbound 或 `WorkflowSignalCommand`。

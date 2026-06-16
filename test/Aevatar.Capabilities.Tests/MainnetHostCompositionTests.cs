@@ -199,6 +199,16 @@ public sealed class MainnetHostCompositionTests
         workspace.Sources.Should().Contain(source => source is OrnnAgentToolSource);
         app.Services.GetRequiredService<LarkToolOptions>()
             .EnableWorkflowFileSubmit.Should().BeFalse();
+        app.Services.GetServices<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowConnectedServiceResourceFetchAdapter>()
+            .Should()
+            .ContainSingle(adapter => adapter.GetType().Name == "LarkMessageResourceFetchAdapter");
+        var workflowToolNames = new List<string>();
+        foreach (var source in app.Services.GetServices<Aevatar.Workflow.Core.Modules.IWorkflowToolSource>())
+        {
+            var tools = await source.GetToolsAsync();
+            workflowToolNames.AddRange(tools.Select(static tool => tool.Name));
+        }
+        workflowToolNames.Should().ContainSingle(name => name == "workflow_connected_service_resource_fetch");
 
         var larkSelfNotify = registry.Resolve(new ChatRouteToolSetRef { Name = ToolSetNames.LarkSelfNotify });
         larkSelfNotify.IsSuccess.Should().BeTrue(larkSelfNotify.Error?.Message);
