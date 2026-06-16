@@ -382,6 +382,23 @@ public sealed class OrnnSkillClientTests
         await act.Should().ThrowAsync<OperationCanceledException>();
     }
 
+    [Fact]
+    public async Task UpdateSkillAsync_RoutesPutThroughNyxIdProxyWithEscapedIdAndZipContentType()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson("""{ "data": { "id": "skill-1" } }""");
+        var client = CreateClient(handler);
+
+        var result = await client.UpdateSkillAsync("access-token", "skill id/1", [1, 2, 3]);
+
+        result.Succeeded.Should().BeTrue();
+        var request = handler.Requests.Should().ContainSingle().Subject;
+        request.Method.Should().Be(HttpMethod.Put);
+        request.Authorization!.Parameter.Should().Be("access-token");
+        request.ContentType.Should().Be("application/zip");
+        request.RequestUri!.AbsoluteUri.Should().Be(
+            "https://nyx.example/api/v1/proxy/s/ornn/api/v1/skills/skill%20id%2F1");
+    }
+
     private static OrnnSkillClient CreateClient(
         OrnnTestHttpMessageHandler handler,
         string slug = "ornn",
