@@ -241,7 +241,7 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
     }
 
     [Fact]
-    public async Task FailedCompensation_ShouldPersistDeadLetterTerminal()
+    public async Task FailedCompensation_ShouldPersistDeadLetterTerminalAndNotifyCaller()
     {
         var harness = await CreateStartedRunAsync(SagaWorkflowYaml());
         await CompleteStepAsync(harness, "create_order", "order-output");
@@ -274,10 +274,14 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
             RemainingUncompensated = 2,
             Error = "refund failed",
         });
-        CommittedEvents<WorkflowCompletedEvent>(harness.CommittedPublisher)
+        var completed = CommittedEvents<WorkflowCompletedEvent>(harness.CommittedPublisher)
             .Where(x => !x.Success)
             .Should()
-            .BeEmpty();
+            .ContainSingle()
+            .Subject;
+        completed.RunId.Should().Be(harness.RunId);
+        completed.Error.Should().Be("refund failed");
+        AssertDeadLetterCompletionPublished(harness, "refund failed");
         CommittedEvents<WorkflowCompensationCompletedEvent>(harness.CommittedPublisher).Should().BeEmpty();
         harness.Agent.State.Status.Should().Be("failed");
         harness.Agent.State.SagaStatus.Should().Be(WorkflowSagaStatus.CompensationDeadLetter);
@@ -314,7 +318,9 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
         CommittedEvents<WorkflowCompletedEvent>(harness.CommittedPublisher)
             .Where(x => !x.Success)
             .Should()
-            .BeEmpty();
+            .ContainSingle()
+            .Which.Error.Should().Be("cancel failed");
+        AssertDeadLetterCompletionPublished(harness, "cancel failed");
         var failed = CommittedEvents<WorkflowCompensationFailedEvent>(harness.CommittedPublisher)
             .Should()
             .ContainSingle()
@@ -395,6 +401,28 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
         }));
     }
 
+    private static void AssertDeadLetterCompletionPublished(RunHarness harness, string error)
+    {
+        var parentCompletion = PublishedEvents<WorkflowCompletedEvent>(harness.Publisher)
+            .Where(x => x.Audience == TopologyAudience.Parent && !x.Event.Success)
+            .Should()
+            .ContainSingle()
+            .Subject
+            .Event;
+        parentCompletion.RunId.Should().Be(harness.RunId);
+        parentCompletion.Error.Should().Be(error);
+
+        var llmCompletion = PublishedEvents<WorkflowLlmInvocationCompletedEvent>(harness.Publisher)
+            .Where(x => x.Audience == TopologyAudience.Parent)
+            .Should()
+            .ContainSingle()
+            .Subject
+            .Event;
+        llmCompletion.RunId.Should().Be(harness.RunId);
+        llmCompletion.Success.Should().BeFalse();
+        llmCompletion.Error.Should().Be(error);
+    }
+
     private static async Task<RunHarness> CreateStartedRunAsync(string workflowYaml)
     {
         var runId = "run-2097-" + Guid.NewGuid().ToString("N");
@@ -455,6 +483,14 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
         publisher.Published
             .Where(x => x.Event is CompensationRequestEvent)
             .Select(x => (CompensationRequestEvent)x.Event)
+            .ToArray();
+
+    private static IReadOnlyList<(TEvent Event, TopologyAudience Audience)> PublishedEvents<TEvent>(
+        RecordingEventPublisher publisher)
+        where TEvent : class, IMessage<TEvent>, new() =>
+        publisher.Published
+            .Where(x => x.Event is TEvent)
+            .Select(x => ((TEvent)x.Event, x.Audience))
             .ToArray();
 
     private static IReadOnlyList<TEvent> CommittedEvents<TEvent>(RecordingCommittedStatePublicationHook committedPublisher)
