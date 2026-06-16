@@ -169,6 +169,11 @@ public static class MainnetHostBuilderExtensions
             builder.Configuration.GetSection(ResponsesNyxIdIdentityAssertionOptions.SectionName));
         builder.Services.TryAddSingleton<NyxIdIdentityAssertionValidator>();
         builder.Services.TryAddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
+        // Default model for direct OpenAI-compatible ingress (/v1/responses, /v1/messages,
+        // /v1/chat/completions) when the caller omits `model`. The slug/model value is a
+        // host fact supplied by configuration; an explicit caller model always wins.
+        builder.Services.Configure<ResponsesIngressOptions>(
+            builder.Configuration.GetSection(ResponsesIngressOptions.SectionName));
         builder.Services.TryAddSingleton<IResponsesCommandFacade, ResponsesCommandFacade>();
         builder.Services.TryAddSingleton<IMessagesCommandFacade, MessagesCommandFacade>();
         builder.Services.TryAddSingleton<IChatCompletionsCommandFacade, ChatCompletionsCommandFacade>();

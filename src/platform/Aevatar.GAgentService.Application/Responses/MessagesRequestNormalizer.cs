@@ -5,11 +5,15 @@ namespace Aevatar.GAgentService.Application.Responses;
 //   New principle: Host converts Anthropic JSON into typed chat/tool inputs; Application validates command semantics and builds the normalized session request.
 public static class MessagesRequestNormalizer
 {
-    public static MessagesRequestNormalizationResult Normalize(MessagesCommandRequest request)
+    public static MessagesRequestNormalizationResult Normalize(
+        MessagesCommandRequest request,
+        string? defaultModel = null)
     {
         ArgumentNullException.ThrowIfNull(request);
 
         var model = request.Model?.Trim();
+        if (string.IsNullOrWhiteSpace(model))
+            model = defaultModel?.Trim();
         if (string.IsNullOrWhiteSpace(model))
             return MessagesRequestNormalizationResult.Failed("model_required", "model is required.");
 
