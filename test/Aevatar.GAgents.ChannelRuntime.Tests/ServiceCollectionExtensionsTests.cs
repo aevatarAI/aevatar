@@ -41,6 +41,9 @@ public sealed class ServiceCollectionExtensionsTests
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<ChannelBotRegistrationDocument>));
         services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<ConversationDeliveryCurrentStateDocument>) &&
+            descriptor.ImplementationType == typeof(ConversationDeliveryDocumentMetadataProvider));
+        services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<ProjectionScopeStatusDocument>));
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IProjectionScopeWatermarkQueryPort) &&
@@ -52,6 +55,9 @@ public sealed class ServiceCollectionExtensionsTests
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IChannelBotRegistrationQueryByNyxIdentityPort));
         services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IConversationDeliveryQueryPort) &&
+            descriptor.ImplementationType == typeof(ConversationDeliveryQueryPort));
+        services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(INyxIdRelayScopeResolver));
         services.Any(descriptor =>
                 descriptor.ServiceType.FullName is { } name &&
@@ -62,6 +68,14 @@ public sealed class ServiceCollectionExtensionsTests
             descriptor.ImplementationType == typeof(ChannelBotRegistrationStartupService));
         AssertProjectionActivationProviderRegistered<ChannelBotRegistrationCommittedStateProjectionActivationPlanProvider>(
             services);
+        AssertProjectionActivationProviderRegistered<ConversationDeliveryCommittedStateProjectionActivationPlanProvider>(
+            services);
+        services.Any(descriptor =>
+                ContainsConversationDeliveryBootstrapActivatorName(descriptor.ServiceType.FullName) ||
+                ContainsConversationDeliveryBootstrapActivatorName(descriptor.ImplementationType?.FullName) ||
+                ContainsConversationDeliveryBootstrapActivatorName(descriptor.ImplementationInstance?.GetType().FullName) ||
+                ContainsConversationDeliveryBootstrapActivatorName(descriptor.ImplementationFactory?.Method.ReturnType.FullName))
+            .Should().BeFalse();
         // Refactor (iter20/cluster-003):
         //   Old pattern: Lark-local durable inbox subscriber worker stream path(orphan)
         //   New principle: delete orphan path,NyxID relay 唯一 ingress
@@ -196,6 +210,9 @@ public sealed class ServiceCollectionExtensionsTests
 
     private static bool ContainsChannelRuntimeDiagnosticsName(string? name) =>
         name is not null && name.Contains("ChannelRuntimeDiagnostics", StringComparison.Ordinal);
+
+    private static bool ContainsConversationDeliveryBootstrapActivatorName(string? name) =>
+        name is not null && name.Contains("ConversationDeliveryProjectionBootstrapActivator", StringComparison.Ordinal);
 
     private static string? GetOptionalSourcePath(params string[] relativePath)
     {

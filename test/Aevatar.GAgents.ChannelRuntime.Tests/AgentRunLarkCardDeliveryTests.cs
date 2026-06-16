@@ -133,6 +133,13 @@ public sealed class AgentRunLarkCardDeliveryTests
         completed.CardMessageId.Should().Be("om-card-ok");
         completed.OutboundText.Should().Be("final");
         completed.DeliveryFailure.Should().BeNull();
+        var delivery = agent.State.RecentDeliveries.Should().ContainSingle().Subject;
+        delivery.DeliveryKind.Should().Be(DeliveryKind.StreamingCard);
+        delivery.Status.Should().Be(DeliveryStatus.Succeeded);
+        delivery.LarkMessageId.Should().Be("om-card-ok");
+        delivery.RequestId.Should().Be("llm:corr-card");
+        agent.State.LastSuccessfulDelivery.Should().NotBeNull();
+        agent.State.LastSuccessfulDelivery!.LarkMessageId.Should().Be("om-card-ok");
         scheduler.Timeouts.Should().Contain(timeout => timeout.CallbackId.StartsWith(
             "agent-run-terminal-cleanup:run-1",
             StringComparison.Ordinal));

@@ -15,6 +15,7 @@ using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Platform.Lark;
 using Aevatar.GAgents.Scheduled;
@@ -1265,6 +1266,13 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         using var body = JsonDocument.Parse(handler.LastBody!);
         body.RootElement.GetProperty("receive_id").GetString().Should().Be("ou_user_1");
         body.RootElement.GetProperty("msg_type").GetString().Should().Be("text");
+        var delivery = await ReadSingleDeliveryProducedEventAsync(_store, "skill-runner-test");
+        delivery.DeliveryKind.Should().Be(DeliveryKind.TextMessage);
+        delivery.Status.Should().Be(DeliveryStatus.Succeeded);
+        delivery.LarkMessageId.Should().Be("om_1");
+        delivery.Target.ReceiveId.Should().Be("ou_user_1");
+        _agent.State.LastSuccessfulDelivery.Should().NotBeNull();
+        _agent.State.LastSuccessfulDelivery!.LarkMessageId.Should().Be("om_1");
     }
 
     [Fact]
@@ -1831,6 +1839,14 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         handler.Requests[3].RequestUri!.AbsolutePath.Should()
             .EndWith("/open-apis/cardkit/v1/cards/card_auto/settings");
         ExtractCardKitSettings(handler.Bodies[3]!).Should().Contain("streaming_mode");
+        var deliveries = await ReadDeliveryProducedEventsAsync(_store, "skill-runner-cardkit-auto");
+        deliveries.Should().ContainSingle(delivery =>
+            delivery.DeliveryKind == DeliveryKind.StreamingCard &&
+            delivery.Status == DeliveryStatus.Succeeded &&
+            delivery.LarkMessageId == "om_card" &&
+            delivery.CardId == "card_auto");
+        agent.State.LastSuccessfulDelivery.Should().NotBeNull();
+        agent.State.LastSuccessfulDelivery!.CardId.Should().Be("card_auto");
     }
 
     [Fact]
@@ -1898,6 +1914,18 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             .EndWith("/open-apis/cardkit/v1/cards/card_partial/elements/streaming_main/content");
         handler.Requests[4].RequestUri!.AbsolutePath.Should().EndWith("/open-apis/im/v1/messages");
         ExtractLarkText(handler.Bodies[4]!).Should().Contain("Skill runner failed");
+        var deliveries = await ReadDeliveryProducedEventsAsync(
+            serviceProvider.GetRequiredService<IEventStore>() as InMemoryEventStore
+            ?? throw new InvalidOperationException("test store missing"),
+            "skill-runner-cardkit-visible-failure");
+        deliveries.Should().Contain(delivery =>
+            delivery.DeliveryKind == DeliveryKind.StreamingCard &&
+            delivery.Status == DeliveryStatus.FailedPostSend &&
+            delivery.CardId == "card_partial");
+        deliveries.Should().Contain(delivery =>
+            delivery.DeliveryKind == DeliveryKind.TextMessage &&
+            delivery.Status == DeliveryStatus.Succeeded &&
+            delivery.LarkMessageId == "om_failure");
     }
 
     [Fact]
@@ -2688,6 +2716,23 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             .Should()
             .ContainSingle()
             .Subject;
+    }
+
+    private static async Task<DeliveryProducedEvent> ReadSingleDeliveryProducedEventAsync(
+        InMemoryEventStore store,
+        string actorId) =>
+        (await ReadDeliveryProducedEventsAsync(store, actorId)).Should().ContainSingle().Subject;
+
+    private static async Task<IReadOnlyList<DeliveryProducedEvent>> ReadDeliveryProducedEventsAsync(
+        InMemoryEventStore store,
+        string actorId)
+    {
+        var persisted = await store.GetEventsAsync(actorId);
+        return persisted
+            .Select(x => x.EventData)
+            .Where(x => x.Is(DeliveryProducedEvent.Descriptor))
+            .Select(x => x.Unpack<DeliveryProducedEvent>())
+            .ToArray();
     }
 
     private static async Task<object> InvokeExecuteSkillResultObjectAsync(SkillRunnerGAgent agent)

@@ -27,12 +27,22 @@ public sealed class ChannelRuntimeRetiredActorSpec : RetiredActorSpec
             CleanupReadModels: true),
     ];
 
-    public override Task DeleteReadModelsForActorAsync(
+    public override async Task DeleteReadModelsForActorAsync(
         IServiceProvider services,
         string actorId,
         CancellationToken ct) =>
-        RetiredActorReadModelHelpers.DeleteByActorAsync<ChannelBotRegistrationDocument>(
-            services, actorId, ct);
+        await DeleteReadModelsAsync(services, actorId, ct);
+
+    private static async Task DeleteReadModelsAsync(
+        IServiceProvider services,
+        string actorId,
+        CancellationToken ct)
+    {
+        await RetiredActorReadModelHelpers.DeleteByActorAsync<ChannelBotRegistrationDocument>(
+            services, actorId, ct).ConfigureAwait(false);
+        await RetiredActorReadModelHelpers.DeleteByActorAsync<ConversationDeliveryCurrentStateDocument>(
+            services, actorId, ct).ConfigureAwait(false);
+    }
 }
 
 /// <summary>

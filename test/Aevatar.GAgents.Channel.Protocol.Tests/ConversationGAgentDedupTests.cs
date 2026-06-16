@@ -103,9 +103,11 @@ public sealed class ConversationGAgentDedupTests
         agent.State.ProcessedCommandIds.ShouldContain("cmd-1");
 
         var events = await store.GetEventsAsync(agent.Id);
-        events.Count.ShouldBe(2);
+        events.Count.ShouldBe(3);
+        events.Count(e => e.EventType.Contains(nameof(DeliveryProducedEvent), StringComparison.Ordinal))
+            .ShouldBe(1);
 
-        var rejected = events.Skip(1).First();
+        var rejected = events.Last();
         rejected.EventType.ShouldContain(nameof(ConversationContinueRejectedEvent));
         var parsed = ConversationContinueRejectedEvent.Parser.ParseFrom(rejected.EventData.Value);
         parsed.Reason.ShouldBe(RejectReason.DuplicateCommand);
@@ -1015,9 +1017,12 @@ public sealed class ConversationGAgentDedupTests
         runner.LlmReplyCount.ShouldBe(1);
         agent.State.ProcessedCommandIds.ShouldContain("llm:act-llm-ready");
         var events = await store.GetEventsAsync(agent.Id);
-        // NeedsLlmReplyEvent + LlmReplyDeliveredEvent (ADR-0021 chain.delivered) +
-        // ConversationTurnCompletedEvent. Duplicate ready event must not add more.
-        events.Count.ShouldBe(3);
+        // NeedsLlmReplyEvent + DeliveryProducedEvent + LlmReplyDeliveredEvent
+        // (ADR-0021 chain.delivered) + ConversationTurnCompletedEvent.
+        // Duplicate ready event must not add more.
+        events.Count.ShouldBe(4);
+        events.Count(e => e.EventType.Contains(nameof(DeliveryProducedEvent), StringComparison.Ordinal))
+            .ShouldBe(1);
         events.Last().EventType.ShouldContain(nameof(ConversationTurnCompletedEvent));
         events.Select(e => e.EventType).ShouldContain(s => s.Contains(nameof(LlmReplyDeliveredEvent)));
         agent.State.LastReplyDelivery.RunId.ShouldBe("act-llm-ready");

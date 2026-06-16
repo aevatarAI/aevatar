@@ -47,7 +47,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     // The runner reads it after each ChatStreamAsync to enforce the safety net for issue
     // #439 — see EnsureToolStatusAllowsCompletion.
     private readonly SkillRunnerToolFailureCounter _toolFailureCounter;
-    private readonly SkillRunnerInteractiveDeliveryTracker _interactiveDeliveryTracker;
+    private readonly SkillRunnerInteractiveDeliverySignalCollector _interactiveDeliverySignals;
     private string? _systemPromptOverride;
     private Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease? _oneShotLease;
     private Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease? _retryLease;
@@ -117,13 +117,13 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         _workflowDispatchService = workflowDispatchService;
         _clock = clock ?? new SystemClock();
         _toolFailureCounter = toolMiddlewareChain.Counter;
-        _interactiveDeliveryTracker = toolMiddlewareChain.InteractiveDeliveryTracker;
+        _interactiveDeliverySignals = toolMiddlewareChain.InteractiveDeliverySignals;
     }
 
     private readonly record struct ToolMiddlewareChain(
         IReadOnlyList<IToolCallMiddleware> Middlewares,
         SkillRunnerToolFailureCounter Counter,
-        SkillRunnerInteractiveDeliveryTracker InteractiveDeliveryTracker);
+        SkillRunnerInteractiveDeliverySignalCollector InteractiveDeliverySignals);
 
     private sealed record SkillRunnerExecutionPlan(
         SkillRunnerExecutionKind Kind,
@@ -209,11 +209,11 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         IEnumerable<IToolCallMiddleware>? input)
     {
         var counter = new SkillRunnerToolFailureCounter();
-        var interactiveDeliveryTracker = new SkillRunnerInteractiveDeliveryTracker();
+        var interactiveDeliverySignals = new SkillRunnerInteractiveDeliverySignalCollector();
         var combined = (input ?? Array.Empty<IToolCallMiddleware>()).ToList();
         combined.Add(new NyxIdProxyToolFailureCountingMiddleware(counter));
-        combined.Add(new SkillRunnerInteractiveDeliveryTrackingMiddleware(interactiveDeliveryTracker));
-        return new ToolMiddlewareChain(combined, counter, interactiveDeliveryTracker);
+        combined.Add(new SkillRunnerInteractiveDeliveryTrackingMiddleware(interactiveDeliverySignals));
+        return new ToolMiddlewareChain(combined, counter, interactiveDeliverySignals);
     }
 
     protected override async Task OnActivateAsync(CancellationToken ct)
@@ -257,6 +257,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             .On<SkillRunnerExternalTriggerRejectedEvent>(ApplyExternalTriggerRejected)
             .On<SkillRunnerExternalTriggerDuplicateIgnoredEvent>(ApplyExternalTriggerDuplicateIgnored)
             .On<SkillRunnerCronOccurrenceDuplicateIgnoredEvent>(ApplyCronOccurrenceDuplicateIgnored)
+            .On<DeliveryProducedEvent>(ApplyDeliveryProduced)
             .On<SkillRunnerDisabledEvent>(ApplyDisabled)
             .On<SkillRunnerEnabledEvent>(ApplyEnabled)
             .OrCurrent();
@@ -717,7 +718,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         // The counter is populated by NyxIdProxyToolFailureCountingMiddleware as the LLM
         // fans out nyxid_proxy calls inside the ChatStreamAsync loop.
         _toolFailureCounter.Reset();
-        _interactiveDeliveryTracker.Reset();
+        _interactiveDeliverySignals.Reset();
 
         if (State.ScheduleMode == SkillRunnerScheduleMode.OneShot &&
             !string.IsNullOrWhiteSpace(State.OneShotMessage) &&
@@ -812,10 +813,15 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 State.RequiresNyxidProxySuccess,
                 _toolFailureCounter.LatestFailure ?? _toolFailureCounter.FirstFailure);
 
-            if (_interactiveDeliveryTracker.HasSuccessfulInteractiveDelivery)
+            await PersistInteractiveDeliverySignalsAsync(requestId, CancellationToken.None);
+
+            if (State.RecentDeliveries.Any(entry =>
+                    entry.Status == DeliveryStatus.Succeeded &&
+                    entry.DeliveryKind == DeliveryKind.InteractiveCard &&
+                    string.Equals(entry.RequestId, requestId, StringComparison.Ordinal)))
             {
                 Logger.LogInformation(
-                    "Skill runner {ActorId} skipped outer Lark reply because the skill already delivered a successful interactive/card message.",
+                    "Skill runner {ActorId} skipped outer Lark reply because the current run already committed a successful interactive/card delivery.",
                     Id);
                 return output;
             }
@@ -830,6 +836,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             await DispatchOutputChunksAsync(
                 streamingState,
                 chunks,
+                requestId,
                 preferCardKit: ShouldPreferCardKitOutput(),
                 ct);
 
@@ -917,6 +924,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     private async Task DispatchOutputChunksAsync(
         SkillRunnerStreamingRunState? streamingState,
         IReadOnlyList<string> chunks,
+        string requestId,
         bool preferCardKit,
         CancellationToken ct)
     {
@@ -926,8 +934,16 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         if (streamingState is not null)
         {
             await streamingState.FinalizeAsync(chunks[0], ct);
+            await PersistDeliveryProducedAsync(
+                DeliveryKind.TextMessage,
+                DeliveryStatus.Succeeded,
+                requestId,
+                sourceEventId: string.Empty,
+                larkMessageId: streamingState.PlatformMessageId,
+                cardId: string.Empty,
+                ct);
         }
-        else if (preferCardKit && chunks.Count == 1 && await TryDispatchCardKitOutputAsync(chunks[0], ct))
+        else if (preferCardKit && chunks.Count == 1 && await TryDispatchCardKitOutputAsync(chunks[0], requestId, ct))
         {
             return;
         }
@@ -936,17 +952,17 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             // No CardKit/text streaming sink (explicit text mode, no NyxID client, missing
             // outbound config, or tests injecting a null client). Fall back to a one-shot
             // text send so the user still receives the report.
-            await SendTextOutputAsync(chunks[0], ct);
+            await SendTextOutputAsync(chunks[0], providerSlugOverride: null, requestId, ct);
         }
 
         for (var i = 1; i < chunks.Count; i++)
-            await SendTextOutputAsync(chunks[i], ct);
+            await SendTextOutputAsync(chunks[i], providerSlugOverride: null, requestId, ct);
     }
 
     private bool ShouldPreferCardKitOutput() =>
         State.OutboundConfig?.OutputFormat is null or SkillRunnerOutputFormat.Auto;
 
-    private async Task<bool> TryDispatchCardKitOutputAsync(string output, CancellationToken ct)
+    private async Task<bool> TryDispatchCardKitOutputAsync(string output, string requestId, CancellationToken ct)
     {
         var sink = TryCreateCardKitSink();
         if (sink is null)
@@ -954,10 +970,28 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
         var result = await sink.SendFinalAsync(output, ct);
         if (result.Succeeded)
+        {
+            await PersistDeliveryProducedAsync(
+                DeliveryKind.StreamingCard,
+                DeliveryStatus.Succeeded,
+                requestId,
+                sourceEventId: string.Empty,
+                larkMessageId: result.MessageId,
+                cardId: result.CardId,
+                ct);
             return true;
+        }
 
         if (!result.VisibleMessageCreated)
         {
+            await PersistDeliveryProducedAsync(
+                DeliveryKind.StreamingCard,
+                DeliveryStatus.FailedPreSend,
+                requestId,
+                sourceEventId: string.Empty,
+                larkMessageId: string.Empty,
+                cardId: result.CardId,
+                ct);
             Logger.LogWarning(
                 "Skill runner {ActorId} CardKit delivery failed before any visible Lark card was sent; falling back to text. card_id={CardId}, lark_code={LarkCode}, detail={Detail}",
                 Id,
@@ -967,6 +1001,14 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             return false;
         }
 
+        await PersistDeliveryProducedAsync(
+            DeliveryKind.StreamingCard,
+            DeliveryStatus.FailedPostSend,
+            requestId,
+            sourceEventId: string.Empty,
+            larkMessageId: result.MessageId,
+            cardId: result.CardId,
+            ct);
         throw new SkillRunnerVisibleDeliveryException(BuildLarkRejectionMessage(result.LarkCode, result.Detail));
     }
 
@@ -1109,6 +1151,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
         public Task FinalizeAsync(string finalText, CancellationToken ct) =>
             TryDispatchAsync(finalText, isFinal: true, ct);
+
+        public string? PlatformMessageId => _sink.PlatformMessageId;
 
         private async Task TryDispatchAsync(string text, bool isFinal, CancellationToken ct)
         {
@@ -1435,6 +1479,61 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             UserMemoryPrompt: llmControl.UserMemoryPrompt,
             RoutePreference: llmControl.NyxIdRoutePreference);
 
+    private async Task PersistInteractiveDeliverySignalsAsync(string requestId, CancellationToken ct)
+    {
+        foreach (var signal in _interactiveDeliverySignals.Signals)
+        {
+            await PersistDeliveryProducedAsync(
+                signal.DeliveryKind,
+                signal.Status,
+                string.IsNullOrWhiteSpace(signal.RequestId) ? requestId : signal.RequestId,
+                signal.SourceEventId,
+                signal.LarkMessageId,
+                signal.CardId,
+                ct);
+        }
+    }
+
+    private Task PersistDeliveryProducedAsync(
+        DeliveryKind kind,
+        DeliveryStatus status,
+        string? requestId,
+        string? sourceEventId,
+        string? larkMessageId,
+        string? cardId,
+        CancellationToken ct) =>
+        PersistDomainEventAsync(new DeliveryProducedEvent
+        {
+            RunId = Id,
+            TurnId = NormalizeOptional(requestId) ?? string.Empty,
+            DeliveryKind = kind,
+            Target = BuildDeliveryTarget(),
+            Status = status,
+            LarkMessageId = NormalizeOptional(larkMessageId) ?? string.Empty,
+            CardId = NormalizeOptional(cardId) ?? string.Empty,
+            RequestId = NormalizeOptional(requestId) ?? string.Empty,
+            SourceEventId = NormalizeOptional(sourceEventId) ?? string.Empty,
+            ProducedAtVersion = NextCommittedVersion(),
+        }, ct);
+
+    private DeliveryTarget BuildDeliveryTarget()
+    {
+        var outbound = State.OutboundConfig;
+        var target = LarkConversationTargets.Resolve(
+            outbound?.LarkReceiveId,
+            outbound?.LarkReceiveIdType,
+            outbound?.ConversationId);
+        return new DeliveryTarget
+        {
+            Channel = ChannelId.From("lark"),
+            ConversationKey = outbound?.ConversationId ?? string.Empty,
+            Platform = ResolveOutboundPlatform(outbound),
+            ReceiveId = target.ReceiveId ?? string.Empty,
+            ReceiveIdType = target.ReceiveIdType ?? string.Empty,
+            ConversationId = outbound?.ConversationId ?? string.Empty,
+        };
+    }
+
     private static bool HasSkillReference(SkillRunnerSkillReference? skillRef) =>
         skillRef is not null &&
         (!string.IsNullOrWhiteSpace(skillRef.Name) ||
@@ -1665,12 +1764,13 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         await DispatchOutputChunksAsync(
             streamingState: null,
             chunks,
+            requestId,
             preferCardKit: false,
             ct);
     }
 
     private Task SendTextOutputAsync(string output, CancellationToken ct) =>
-        SendTextOutputAsync(output, providerSlugOverride: null, ct);
+        SendTextOutputAsync(output, providerSlugOverride: null, requestId: null, ct);
 
     /// <summary>
     /// Posts <paramref name="output"/> as a Lark text message. <paramref name="providerSlugOverride"/>
@@ -1680,7 +1780,11 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     /// rejected (e.g. cross-tenant <c>99992364</c>). All other call sites — main report send,
     /// chunked overflow continuations — pass <c>null</c> and stay on the primary slug.
     /// </summary>
-    private async Task SendTextOutputAsync(string output, string? providerSlugOverride, CancellationToken ct)
+    private async Task SendTextOutputAsync(
+        string output,
+        string? providerSlugOverride,
+        string? requestId,
+        CancellationToken ct)
     {
         var client = _nyxIdApiClient ?? Services.GetService<NyxIdApiClient>();
         if (client is null)
@@ -1700,6 +1804,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         var slug = string.IsNullOrWhiteSpace(providerSlugOverride)
             ? State.OutboundConfig.NyxProviderSlug
             : providerSlugOverride!;
+        var deliveryRequestId = ResolveDeliveryRequestId(requestId);
 
         var deliveryTarget = LarkConversationTargets.Resolve(
             State.OutboundConfig.LarkReceiveId,
@@ -1729,6 +1834,14 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
         if (!outcome.Succeeded)
         {
+            await PersistDeliveryProducedAsync(
+                DeliveryKind.TextMessage,
+                DeliveryStatus.FailedPreSend,
+                requestId: deliveryRequestId,
+                sourceEventId: string.Empty,
+                larkMessageId: string.Empty,
+                cardId: string.Empty,
+                ct);
             // Surface downstream rejection so HandleTriggerAsync sees a real failure instead of
             // persisting SkillRunnerExecutionCompletedEvent on a silently-dropped Lark response.
             // The Error field on SkillRunnerExecutionFailedEvent ends up in `/agent-status`'s
@@ -1738,6 +1851,32 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             // agent.
             throw new InvalidOperationException(BuildLarkRejectionMessage(outcome.LarkCode, outcome.Detail));
         }
+
+        await PersistDeliveryProducedAsync(
+            string.IsNullOrWhiteSpace(providerSlugOverride) ? DeliveryKind.TextMessage : DeliveryKind.FailureNotification,
+            DeliveryStatus.Succeeded,
+            requestId: deliveryRequestId,
+            sourceEventId: string.Empty,
+            larkMessageId: outcome.MessageId,
+            cardId: string.Empty,
+            ct);
+    }
+
+    private static string ResolveDeliveryRequestId(string? requestId) =>
+        string.IsNullOrWhiteSpace(requestId) ? Guid.NewGuid().ToString("N") : requestId.Trim();
+
+    private static string? NormalizeOptional(string? value)
+    {
+        var normalized = value?.Trim();
+        return string.IsNullOrEmpty(normalized) ? null : normalized;
+    }
+
+    private static string ResolveOutboundPlatform(SkillRunnerOutboundConfig? outbound)
+    {
+        if (!string.IsNullOrWhiteSpace(outbound?.OwnerScope?.Platform))
+            return outbound.OwnerScope.Platform.Trim();
+
+        return ResolvePlatform(outbound?.Platform);
     }
 
     private LarkReceiveTarget? ResolveFallbackTarget()
@@ -1835,7 +1974,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         {
             try
             {
-                await SendTextOutputAsync(message, providerSlugOverride: failureSlug, ct);
+                await SendTextOutputAsync(message, providerSlugOverride: failureSlug, requestId: null, ct);
                 return;
             }
             catch (Exception ex)
@@ -1849,7 +1988,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
         try
         {
-            await SendTextOutputAsync(message, providerSlugOverride: null, ct);
+            await SendTextOutputAsync(message, providerSlugOverride: null, requestId: null, ct);
         }
         catch (Exception ex)
         {
@@ -2183,6 +2322,13 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         return next;
     }
 
+    private static SkillRunnerState ApplyDeliveryProduced(SkillRunnerState current, DeliveryProducedEvent evt)
+    {
+        var next = current.Clone();
+        next.AppendDelivery(evt);
+        return next;
+    }
+
     private static void MarkCronOccurrenceTerminal(
         SkillRunnerState state,
         string? cronOccurrenceKey,
@@ -2285,4 +2431,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
     private static DateTimeOffset ToDateTimeOffset(Timestamp? timestamp) =>
         timestamp?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
+
+    private long NextCommittedVersion() =>
+        (EventSourcing ?? throw new InvalidOperationException("Event sourcing must be configured before computing the next committed version."))
+        .CurrentVersion + 1;
 }

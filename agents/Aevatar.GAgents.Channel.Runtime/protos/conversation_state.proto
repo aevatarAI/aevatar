@@ -6,6 +6,7 @@ option csharp_namespace = "Aevatar.GAgents.Channel.Runtime";
 
 import "chat_activity.proto";
 import "conversation_events.proto";
+import "delivery_ledger.proto";
 
 message ConversationGAgentState {
   aevatar.gagents.channel.abstractions.ConversationReference conversation = 1;
@@ -31,6 +32,8 @@ message ConversationGAgentState {
   // The chat LLM path uses this bounded window for "send image, ask later" without
   // relying on NyxID history, which intentionally does not store message content.
   repeated RecentConversationAttachmentActivity recent_attachment_activities = 14;
+  repeated aevatar.gagents.channel.abstractions.DeliveryLedgerEntry recent_deliveries = 15;
+  aevatar.gagents.channel.abstractions.DeliveryLedgerEntry last_successful_delivery = 16;
 }
 
 // Refactor (iter80/cluster-081-channel-reply-lifecycle-event-state-schema):
