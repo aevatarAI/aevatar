@@ -4,7 +4,7 @@ namespace Aevatar.AI.Abstractions.ToolProviders;
 
 public static class WorkflowRunBackgroundDeliveryMetadataKeys
 {
-    public const string BotAgentKeyId = "channel.nyx_agent_api_key_id";
+    public const string DurableReplyCredentialRef = "channel.nyx_reply_credential_ref";
 }
 
 public interface IWorkflowRunBackgroundDeliveryRegistrationPort
@@ -24,5 +24,5 @@ public sealed record WorkflowRunBackgroundDeliveryRegistration(
     string ChannelPlatform,
     string ReplyMessageId,
     string PlatformMessageId,
-    string BotAgentKeyId,
+    string DurableReplyCredentialRef,
     string RegistrationScopeId);

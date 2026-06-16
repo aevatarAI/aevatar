@@ -764,7 +764,7 @@ public sealed class AevatarInvocationToolSourceTests
             callId: "call-workflow-delivery",
             externalMetadata: new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                [WorkflowRunBackgroundDeliveryMetadataKeys.BotAgentKeyId] = "bot-agent-key-1",
+                [WorkflowRunBackgroundDeliveryMetadataKeys.DurableReplyCredentialRef] = "secrets://nyx/reply-1",
             });
         var request = BuildChatRunRequest(
             "response-workflow",
@@ -795,8 +795,42 @@ public sealed class AevatarInvocationToolSourceTests
         registration.ChannelPlatform.Should().Be("telegram");
         registration.ReplyMessageId.Should().Be("message-1");
         registration.PlatformMessageId.Should().Be("platform-message-1");
-        registration.BotAgentKeyId.Should().Be("bot-agent-key-1");
+        registration.DurableReplyCredentialRef.Should().Be("secrets://nyx/reply-1");
         registration.RegistrationScopeId.Should().Be("registration-scope-1");
+    }
+
+    [Fact]
+    public async Task StartWorkflowForChatRun_WaitStreamWithoutDurableCredential_ShouldReturnTypedFailure()
+    {
+        var harness = new Harness();
+        harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
+            .Success(new WorkflowChatRunAcceptedReceipt("workflow-actor", "wf-main", "wf-command", "wf-correlation"));
+        var dispatcher = harness.CreateDispatcher();
+
+        using var _ = PushContext(
+            callId: "call-workflow-delivery-missing-credential",
+            externalMetadata: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [WorkflowRunBackgroundDeliveryMetadataKeys.DurableReplyCredentialRef] = string.Empty,
+            });
+        var request = BuildChatRunRequest(
+            "response-workflow",
+            "call-workflow-delivery-missing-credential-tool",
+            "aevatar_start_workflow",
+            """
+            {
+              "workflow_id": "wf-main",
+              "inputs": { "prompt": "run workflow" },
+              "wait": "stream"
+            }
+            """);
+
+        var result = await dispatcher.StartWorkflowForChatRunAsync(request, request.ArgumentsJson);
+
+        result.ErrorCode.Should().Be("workflow_background_delivery_unsupported");
+        result.RunId.Should().BeEmpty();
+        harness.WorkflowDispatch.Command.Should().BeNull();
+        harness.WorkflowRunDelivery.Registrations.Should().BeEmpty();
     }
 
     [Fact]
@@ -1961,6 +1995,7 @@ public sealed class AevatarInvocationToolSourceTests
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["external"] = "value",
+            [WorkflowRunBackgroundDeliveryMetadataKeys.DurableReplyCredentialRef] = "secrets://nyx/default-reply",
         };
         if (externalMetadata is not null)
         {
@@ -2222,8 +2257,8 @@ public sealed class AevatarInvocationToolSourceTests
                 ChannelPlatform = registration.ChannelPlatform,
                 ReplyMessageId = registration.ReplyMessageId,
                 PlatformMessageId = registration.PlatformMessageId,
-                BotAgentKeyId = registration.BotAgentKeyId,
                 RegistrationScopeId = registration.RegistrationScopeId,
+                DurableReplyCredentialRef = registration.DurableReplyCredentialRef,
             });
         }
     }

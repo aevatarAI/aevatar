@@ -169,7 +169,7 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
-    public async Task RunInboundAsync_ShouldExposeNyxAgentApiKeyIdForWorkflowBackgroundDelivery()
+    public async Task RunInboundAsync_ShouldNotExposeNyxAgentApiKeyIdAsWorkflowBackgroundDeliveryCredential()
     {
         var registration = BuildRegistrationEntry();
         registration.NyxAgentApiKeyId = "nyx-agent-key-1";
@@ -199,7 +199,7 @@ public sealed class ChannelConversationTurnRunnerTests
         result.LlmReplyRequest.Should().NotBeNull();
         var toolContext = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest!.ToolContext);
         toolContext.ExternalMetadata.Should()
-            .Contain(WorkflowRunBackgroundDeliveryMetadataKeys.BotAgentKeyId, "nyx-agent-key-1");
+            .NotContainKey(WorkflowRunBackgroundDeliveryMetadataKeys.DurableReplyCredentialRef);
     }
 
     [Fact]

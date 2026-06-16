@@ -220,6 +220,8 @@ message ManagedWorkflowHandoffReceipt {
 }
 
 message WorkflowRunBackgroundDeliveryReceipt {
+  reserved 10;
+  reserved "bot_agent_key_id";
   string delivery_actor_id = 1;
   string workflow_actor_id = 2;
   string workflow_run_id = 3;
@@ -229,8 +231,8 @@ message WorkflowRunBackgroundDeliveryReceipt {
   string channel_platform = 7;
   string reply_message_id = 8;
   string platform_message_id = 9;
-  string bot_agent_key_id = 10;
   string registration_scope_id = 11;
+  string durable_reply_credential_ref = 12;
 }
 
 message ToolResultEvent {

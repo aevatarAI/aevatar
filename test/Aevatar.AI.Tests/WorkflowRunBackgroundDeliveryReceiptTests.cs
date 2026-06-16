@@ -26,8 +26,8 @@ public sealed class WorkflowRunBackgroundDeliveryReceiptTests
                 ChannelPlatform = "lark",
                 ReplyMessageId = "reply-message-1",
                 PlatformMessageId = "platform-message-1",
-                BotAgentKeyId = "bot-agent-key-1",
                 RegistrationScopeId = "registration-scope-1",
+                DurableReplyCredentialRef = "secrets://nyx/reply-1",
             },
         };
 
@@ -44,8 +44,8 @@ public sealed class WorkflowRunBackgroundDeliveryReceiptTests
         roundTripped.WorkflowRunDelivery.ChannelPlatform.Should().Be("lark");
         roundTripped.WorkflowRunDelivery.ReplyMessageId.Should().Be("reply-message-1");
         roundTripped.WorkflowRunDelivery.PlatformMessageId.Should().Be("platform-message-1");
-        roundTripped.WorkflowRunDelivery.BotAgentKeyId.Should().Be("bot-agent-key-1");
         roundTripped.WorkflowRunDelivery.RegistrationScopeId.Should().Be("registration-scope-1");
+        roundTripped.WorkflowRunDelivery.DurableReplyCredentialRef.Should().Be("secrets://nyx/reply-1");
     }
 
     [Fact]

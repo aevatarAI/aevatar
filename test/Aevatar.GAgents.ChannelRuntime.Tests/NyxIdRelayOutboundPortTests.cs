@@ -82,6 +82,30 @@ public sealed class NyxIdRelayOutboundPortTests
         handler.Requests[0].Body.Should().Contain("\"text\":\"rendered:workflow done\"");
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task SendWithAgentKeyAsync_ShouldRejectMissingAgentKeyWithoutHttpRequest(string agentKey)
+    {
+        var handler = new RecordingJsonHandler();
+        var port = CreatePort(handler, new StubComposer("slack"));
+
+        var result = await port.SendWithAgentKeyAsync(
+            "slack",
+            BuildConversation(),
+            new MessageContent { Text = "workflow done" },
+            new OutboundDeliveryContext
+            {
+                ReplyMessageId = "msg-1",
+            },
+            agentKey,
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.ErrorCode.Should().Be("bot_agent_key_missing");
+        handler.Requests.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task SendAsync_LarkInteractiveContent_ShouldUseComposerPlainText()
     {

@@ -50,8 +50,8 @@ public sealed class WorkflowRunBackgroundDeliveryRegistrationPort
             ChannelPlatform = registration.ChannelPlatform ?? string.Empty,
             ReplyMessageId = registration.ReplyMessageId ?? string.Empty,
             PlatformMessageId = registration.PlatformMessageId ?? string.Empty,
-            BotAgentKeyId = registration.BotAgentKeyId ?? string.Empty,
             RegistrationScopeId = registration.RegistrationScopeId ?? string.Empty,
+            DurableReplyCredentialRef = registration.DurableReplyCredentialRef ?? string.Empty,
         };
         var envelope = new EventEnvelope
         {
@@ -86,8 +86,8 @@ public sealed class WorkflowRunBackgroundDeliveryRegistrationPort
             ChannelPlatform = registration.ChannelPlatform ?? string.Empty,
             ReplyMessageId = registration.ReplyMessageId ?? string.Empty,
             PlatformMessageId = registration.PlatformMessageId ?? string.Empty,
-            BotAgentKeyId = registration.BotAgentKeyId ?? string.Empty,
             RegistrationScopeId = registration.RegistrationScopeId ?? string.Empty,
+            DurableReplyCredentialRef = registration.DurableReplyCredentialRef ?? string.Empty,
         };
     }
 }

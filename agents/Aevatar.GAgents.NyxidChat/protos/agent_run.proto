@@ -545,6 +545,8 @@ enum WorkflowRunDeliveryStatus {
 }
 
 message WorkflowRunDeliveryGAgentState {
+  reserved 10;
+  reserved "bot_agent_key_id";
   string delivery_id = 1;
   string workflow_actor_id = 2;
   string workflow_run_id = 3;
@@ -554,7 +556,6 @@ message WorkflowRunDeliveryGAgentState {
   string channel_platform = 7;
   string reply_message_id = 8;
   string platform_message_id = 9;
-  string bot_agent_key_id = 10;
   string registration_scope_id = 11;
   WorkflowRunDeliveryStatus status = 12;
   int64 started_at_unix_ms = 13;
@@ -569,9 +570,12 @@ message WorkflowRunDeliveryGAgentState {
   string terminal_text = 22;
   string terminal_error_code = 23;
   int64 terminal_observed_at_unix_ms = 24;
+  string durable_reply_credential_ref = 25;
 }
 
 message WorkflowRunDeliveryStartRequested {
+  reserved 10;
+  reserved "bot_agent_key_id";
   string delivery_id = 1;
   string workflow_actor_id = 2;
   string workflow_run_id = 3;
@@ -581,11 +585,13 @@ message WorkflowRunDeliveryStartRequested {
   string channel_platform = 7;
   string reply_message_id = 8;
   string platform_message_id = 9;
-  string bot_agent_key_id = 10;
   string registration_scope_id = 11;
+  string durable_reply_credential_ref = 12;
 }
 
 message WorkflowRunDeliveryStartedEvent {
+  reserved 10;
+  reserved "bot_agent_key_id";
   string delivery_id = 1;
   string workflow_actor_id = 2;
   string workflow_run_id = 3;
@@ -595,9 +601,9 @@ message WorkflowRunDeliveryStartedEvent {
   string channel_platform = 7;
   string reply_message_id = 8;
   string platform_message_id = 9;
-  string bot_agent_key_id = 10;
   string registration_scope_id = 11;
   int64 started_at_unix_ms = 12;
+  string durable_reply_credential_ref = 13;
 }
 
 message WorkflowRunDeliveryTerminalFrameObserved {

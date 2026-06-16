@@ -281,6 +281,10 @@ public sealed class AevatarInvocationDispatcher
         if (scope.Error != null)
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(scope.Error), scope.Error);
 
+        var backgroundDelivery = ResolveWorkflowBackgroundDelivery(wait, AgentToolRequestContext.Current);
+        if (backgroundDelivery.Error != null)
+            return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(backgroundDelivery.Error), backgroundDelivery.Error);
+
         var callerCredential = ResolveWorkflowCallerCredential(AgentToolRequestContext.Current);
         if (callerCredential.Error != null)
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(callerCredential.Error), callerCredential.Error);
@@ -317,11 +321,12 @@ public sealed class AevatarInvocationDispatcher
         var streamTopic = wait == InvocationWaitMode.Stream
             ? AevatarInvocationStreamTopics.ForActorRun(receipt.ActorId, receipt.CommandId)
             : string.Empty;
-        if (wait == InvocationWaitMode.Stream)
+        if (wait == InvocationWaitMode.Stream && backgroundDelivery.ShouldRegister)
         {
             await TryRegisterWorkflowRunBackgroundDeliveryAsync(
                     receipt,
                     streamTopic,
+                    backgroundDelivery.DurableReplyCredentialRef!,
                     AgentToolRequestContext.Current,
                     ct)
                 .ConfigureAwait(false);
@@ -626,10 +631,15 @@ public sealed class AevatarInvocationDispatcher
     private async Task TryRegisterWorkflowRunBackgroundDeliveryAsync(
         WorkflowChatRunAcceptedReceipt receipt,
         string streamTopic,
+        string durableReplyCredentialRef,
         AgentToolExecutionContext? context,
         CancellationToken ct)
     {
-        var registration = BuildWorkflowRunDeliveryRegistration(receipt, streamTopic, context);
+        var registration = BuildWorkflowRunDeliveryRegistration(
+            receipt,
+            streamTopic,
+            durableReplyCredentialRef,
+            context);
         if (registration is null)
             return;
 
@@ -659,14 +669,14 @@ public sealed class AevatarInvocationDispatcher
     private static WorkflowRunBackgroundDeliveryRegistration? BuildWorkflowRunDeliveryRegistration(
         WorkflowChatRunAcceptedReceipt receipt,
         string streamTopic,
+        string durableReplyCredentialRef,
         AgentToolExecutionContext? context)
     {
         context ??= AgentToolExecutionContext.Empty;
         var platform = Normalize(context.Channel.Platform);
         var replyMessageId = Normalize(context.Channel.MessageId);
-        var botAgentKeyId = Normalize(TryGetExternalMetadata(context, WorkflowRunBackgroundDeliveryMetadataKeys.BotAgentKeyId)) ??
-                            Normalize(TryGetExternalMetadata(context, "nyx_agent_api_key_id"));
-        if (platform is null || replyMessageId is null || botAgentKeyId is null)
+        var normalizedCredentialRef = Normalize(durableReplyCredentialRef);
+        if (platform is null || replyMessageId is null || normalizedCredentialRef is null)
             return null;
 
         var platformMessageId = Normalize(context.Channel.PlatformMessageId) ??
@@ -686,8 +696,30 @@ public sealed class AevatarInvocationDispatcher
             ChannelPlatform: platform,
             ReplyMessageId: replyMessageId,
             PlatformMessageId: platformMessageId,
-            BotAgentKeyId: botAgentKeyId,
+            DurableReplyCredentialRef: normalizedCredentialRef,
             RegistrationScopeId: registrationScopeId);
+    }
+
+    private static WorkflowBackgroundDeliveryResolution ResolveWorkflowBackgroundDelivery(
+        InvocationWaitMode wait,
+        AgentToolExecutionContext? context)
+    {
+        if (wait != InvocationWaitMode.Stream)
+            return WorkflowBackgroundDeliveryResolution.Disabled();
+
+        context ??= AgentToolExecutionContext.Empty;
+        if (Normalize(context.Channel.Platform) is null || Normalize(context.Channel.MessageId) is null)
+            return WorkflowBackgroundDeliveryResolution.Disabled();
+
+        var credentialRef = Normalize(TryGetExternalMetadata(
+            context,
+            WorkflowRunBackgroundDeliveryMetadataKeys.DurableReplyCredentialRef));
+        if (credentialRef is not null)
+            return WorkflowBackgroundDeliveryResolution.Enabled(credentialRef);
+
+        return WorkflowBackgroundDeliveryResolution.Failed(Error(
+            "workflow_background_delivery_unsupported",
+            "This channel session cannot deliver workflow terminal results in the background because no durable NyxID reply credential reference is available."));
     }
 
     private static string? TryGetExternalMetadata(AgentToolExecutionContext context, string key) =>
@@ -1226,6 +1258,21 @@ public sealed class AevatarInvocationDispatcher
 
         public static WorkflowCallerCredentialResolution Failed(InvocationToolError error) =>
             new(null, error);
+    }
+
+    private sealed record WorkflowBackgroundDeliveryResolution(
+        bool ShouldRegister,
+        string? DurableReplyCredentialRef,
+        InvocationToolError? Error)
+    {
+        public static WorkflowBackgroundDeliveryResolution Disabled() =>
+            new(false, null, null);
+
+        public static WorkflowBackgroundDeliveryResolution Enabled(string durableReplyCredentialRef) =>
+            new(true, durableReplyCredentialRef, null);
+
+        public static WorkflowBackgroundDeliveryResolution Failed(InvocationToolError error) =>
+            new(false, null, error);
     }
 
     private sealed record ActorTargetResolution(string ActorId, InvocationToolError? Error)

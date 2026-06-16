@@ -1,6 +1,7 @@
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -19,6 +20,7 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
     private readonly IWorkflowExecutionProjectionPort _projectionPort;
     private readonly IActorDispatchPort _dispatchPort;
     private readonly NyxIdRelayOutboundPort _outboundPort;
+    private readonly ICredentialProvider _credentialProvider;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<WorkflowRunDeliveryGAgent> _logger;
     private IEventSink<WorkflowRunEventEnvelope>? _sink;
@@ -28,12 +30,14 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
         IWorkflowExecutionProjectionPort projectionPort,
         IActorDispatchPort dispatchPort,
         NyxIdRelayOutboundPort outboundPort,
+        ICredentialProvider credentialProvider,
         ILogger<WorkflowRunDeliveryGAgent> logger,
         TimeProvider? timeProvider = null)
     {
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _outboundPort = outboundPort ?? throw new ArgumentNullException(nameof(outboundPort));
+        _credentialProvider = credentialProvider ?? throw new ArgumentNullException(nameof(credentialProvider));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
@@ -99,8 +103,8 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
             ChannelPlatform = command.ChannelPlatform.Trim(),
             ReplyMessageId = command.ReplyMessageId.Trim(),
             PlatformMessageId = command.PlatformMessageId?.Trim() ?? string.Empty,
-            BotAgentKeyId = command.BotAgentKeyId.Trim(),
             RegistrationScopeId = command.RegistrationScopeId?.Trim() ?? string.Empty,
+            DurableReplyCredentialRef = command.DurableReplyCredentialRef.Trim(),
             StartedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
         });
 
@@ -119,6 +123,11 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
             ? command.ObservedAtUnixMs
             : _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
         var text = BuildTerminalReplyText(command);
+        var durableReplyCredential = await ResolveDurableReplyCredentialAsync(command, attempt, observedAt)
+            .ConfigureAwait(false);
+        if (durableReplyCredential is null)
+            return;
+
         var result = await _outboundPort.SendWithAgentKeyAsync(
                 State.ChannelPlatform,
                 BuildConversationReference(),
@@ -130,7 +139,7 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
                         ? State.WorkflowCommandId
                         : State.WorkflowCorrelationId,
                 },
-                State.BotAgentKeyId,
+                durableReplyCredential,
                 CancellationToken.None)
             .ConfigureAwait(false);
 
@@ -173,6 +182,74 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
             TerminalObservedAtUnixMs = observedAt,
         });
         await DetachProjectionAsync(CancellationToken.None).ConfigureAwait(false);
+    }
+
+    private async Task<string?> ResolveDurableReplyCredentialAsync(
+        WorkflowRunDeliveryTerminalFrameObserved command,
+        int attempt,
+        long observedAt)
+    {
+        string? credential;
+        try
+        {
+            credential = await _credentialProvider.ResolveAsync(
+                    State.DurableReplyCredentialRef,
+                    CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Workflow run delivery credential resolution failed: deliveryId={DeliveryId} credentialRef={CredentialRef}",
+                State.DeliveryId,
+                State.DurableReplyCredentialRef);
+            await PersistDeliveryFailureAsync(
+                    command,
+                    attempt,
+                    observedAt,
+                    "durable_reply_credential_unavailable",
+                    "Workflow terminal reply credential could not be resolved.")
+                .ConfigureAwait(false);
+            await DetachProjectionAsync(CancellationToken.None).ConfigureAwait(false);
+            return null;
+        }
+
+        if (!string.IsNullOrWhiteSpace(credential))
+            return credential.Trim();
+
+        await PersistDeliveryFailureAsync(
+                command,
+                attempt,
+                observedAt,
+                "durable_reply_credential_missing",
+                "Workflow terminal reply credential reference is not available.")
+            .ConfigureAwait(false);
+        await DetachProjectionAsync(CancellationToken.None).ConfigureAwait(false);
+        return null;
+    }
+
+    private async Task PersistDeliveryFailureAsync(
+        WorkflowRunDeliveryTerminalFrameObserved command,
+        int attempt,
+        long observedAt,
+        string errorCode,
+        string errorSummary)
+    {
+        await PersistDomainEventAsync(new WorkflowRunDeliveryFailedEvent
+        {
+            DeliveryId = State.DeliveryId,
+            WorkflowActorId = State.WorkflowActorId,
+            WorkflowCommandId = State.WorkflowCommandId,
+            ErrorCode = errorCode,
+            ErrorSummary = errorSummary,
+            Attempt = attempt,
+            FailedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+            TerminalStatus = command.Status,
+            TerminalText = command.Text,
+            TerminalErrorCode = command.ErrorCode,
+            TerminalObservedAtUnixMs = observedAt,
+        });
     }
 
     private async Task AttachProjectionAsync(CancellationToken ct)
@@ -261,9 +338,9 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
         if (string.IsNullOrWhiteSpace(State.ChannelPlatform))
             return new ConversationReference();
 
-        var bot = string.IsNullOrWhiteSpace(State.BotAgentKeyId)
+        var bot = string.IsNullOrWhiteSpace(State.DurableReplyCredentialRef)
             ? "nyx-relay-bot"
-            : State.BotAgentKeyId;
+            : State.DurableReplyCredentialRef;
         var partition = string.IsNullOrWhiteSpace(State.RegistrationScopeId)
             ? State.ReplyMessageId
             : State.RegistrationScopeId;
@@ -310,8 +387,8 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
             return ("channel_platform_required", "Workflow run delivery requires a channel platform.");
         if (string.IsNullOrWhiteSpace(command.ReplyMessageId))
             return ("reply_message_id_required", "Workflow run delivery requires a reply message id.");
-        if (string.IsNullOrWhiteSpace(command.BotAgentKeyId))
-            return ("bot_agent_key_required", "Workflow run delivery requires a bot agent key.");
+        if (string.IsNullOrWhiteSpace(command.DurableReplyCredentialRef))
+            return ("durable_reply_credential_ref_required", "Workflow run delivery requires a durable reply credential reference.");
 
         return null;
     }
@@ -330,8 +407,8 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
         next.ChannelPlatform = evt.ChannelPlatform;
         next.ReplyMessageId = evt.ReplyMessageId;
         next.PlatformMessageId = evt.PlatformMessageId;
-        next.BotAgentKeyId = evt.BotAgentKeyId;
         next.RegistrationScopeId = evt.RegistrationScopeId;
+        next.DurableReplyCredentialRef = evt.DurableReplyCredentialRef;
         next.Status = WorkflowRunDeliveryStatus.Started;
         next.StartedAtUnixMs = evt.StartedAtUnixMs;
         next.CompletedAtUnixMs = 0;

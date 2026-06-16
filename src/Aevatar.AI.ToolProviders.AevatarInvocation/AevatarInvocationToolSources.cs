@@ -208,13 +208,14 @@ internal sealed class StartWorkflowTool : IAevatarInvocationTool
         var context = AgentToolRequestContext.Current ?? AgentToolExecutionContext.Empty;
         var platform = Normalize(context.Channel.Platform);
         var replyMessageId = Normalize(context.Channel.MessageId);
-        var botAgentKeyId = Normalize(TryGetExternalMetadata(context, WorkflowRunBackgroundDeliveryMetadataKeys.BotAgentKeyId)) ??
-                            Normalize(TryGetExternalMetadata(context, "nyx_agent_api_key_id"));
+        var durableReplyCredentialRef = Normalize(TryGetExternalMetadata(
+            context,
+            WorkflowRunBackgroundDeliveryMetadataKeys.DurableReplyCredentialRef));
         if (string.IsNullOrWhiteSpace(actorId) ||
             string.IsNullOrWhiteSpace(commandId) ||
             platform is null ||
             replyMessageId is null ||
-            botAgentKeyId is null)
+            durableReplyCredentialRef is null)
         {
             return null;
         }
@@ -232,10 +233,10 @@ internal sealed class StartWorkflowTool : IAevatarInvocationTool
             PlatformMessageId = Normalize(context.Channel.PlatformMessageId) ??
                                 Normalize(TryGetExternalMetadata(context, "channel.platform_message_id")) ??
                                 string.Empty,
-            BotAgentKeyId = botAgentKeyId,
             RegistrationScopeId = Normalize(context.Channel.RegistrationScopeId) ??
                                   Normalize(context.Caller.ScopeId) ??
                                   string.Empty,
+            DurableReplyCredentialRef = durableReplyCredentialRef,
         };
     }
 

@@ -46,6 +46,68 @@ public sealed class WorkflowRunDeliveryProjectionSinkTests
         command.ErrorCode.Should().BeEmpty();
     }
 
+    [Theory]
+    [InlineData("custom_error", "boom", "error", "boom", "custom_error")]
+    [InlineData("", "", "error", "Workflow failed.", "workflow_run_error")]
+    public async Task PushAsync_RunError_ShouldPublishFailedTerminalContinuation(
+        string inputCode,
+        string inputMessage,
+        string expectedStatus,
+        string expectedText,
+        string expectedErrorCode)
+    {
+        var dispatchPort = new RecordingActorDispatchPort();
+        await using var sink = CreateSink(dispatchPort);
+
+        await sink.PushAsync(new WorkflowRunEventEnvelope
+        {
+            RunError = new WorkflowRunErrorEventPayload
+            {
+                Code = inputCode,
+                Message = inputMessage,
+            },
+        });
+
+        var command = dispatchPort.Calls.Single().Envelope.Payload.Unpack<WorkflowRunDeliveryTerminalFrameObserved>();
+        command.Status.Should().Be(expectedStatus);
+        command.Text.Should().Be(expectedText);
+        command.ErrorCode.Should().Be(expectedErrorCode);
+    }
+
+    [Theory]
+    [InlineData("user canceled", "user canceled")]
+    [InlineData("", "Workflow stopped.")]
+    public async Task PushAsync_RunStopped_ShouldPublishStoppedTerminalContinuation(
+        string inputReason,
+        string expectedText)
+    {
+        var dispatchPort = new RecordingActorDispatchPort();
+        await using var sink = CreateSink(dispatchPort);
+
+        await sink.PushAsync(new WorkflowRunEventEnvelope
+        {
+            RunStopped = new WorkflowRunStoppedEventPayload
+            {
+                Reason = inputReason,
+            },
+        });
+
+        var command = dispatchPort.Calls.Single().Envelope.Payload.Unpack<WorkflowRunDeliveryTerminalFrameObserved>();
+        command.Status.Should().Be("stopped");
+        command.Text.Should().Be(expectedText);
+        command.ErrorCode.Should().Be("workflow_run_stopped");
+    }
+
+    private static WorkflowRunDeliveryProjectionSink CreateSink(RecordingActorDispatchPort dispatchPort) =>
+        new(
+            dispatchPort,
+            "workflow-run-delivery:workflow-actor:wf-command",
+            "workflow-run-delivery:workflow-actor:wf-command",
+            "workflow-actor",
+            "wf-command",
+            TimeProvider.System,
+            NullLogger.Instance);
+
     private sealed class RecordingActorDispatchPort : IActorDispatchPort
     {
         public List<(string ActorId, EventEnvelope Envelope)> Calls { get; } = [];
