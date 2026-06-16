@@ -88,7 +88,8 @@ state already holds the execution context, variables, and sub-workflow bindings.
 Introducing a separate coordinator would violate "Actor 即业务实体" and create a
 cross-actor consistency problem (who is authoritative for run termination?) that
 does not exist today. Compensation is a terminal phase of the run's own state
-machine: `running → compensating → compensated_failed | compensation_dead_letter`.
+machine:
+`WORKFLOW_SAGA_STATUS_UNSPECIFIED → COMPENSATING → COMPENSATED_FAILED | COMPENSATION_DEAD_LETTER`.
 
 ### Q2. Choreography or orchestration?
 
@@ -260,7 +261,15 @@ message CompletedStepLedgerEntry {
 // Added to WorkflowRunState (run-owned, durable):
 //   repeated CompletedStepLedgerEntry compensable_ledger = N;
 //   int32  compensation_cursor = N+1;   // index into ledger, walked downward
-//   string saga_status = N+2;           // running | compensating | compensated_failed | compensation_dead_letter
+//   WorkflowSagaStatus saga_status = N+2; // UNSPECIFIED for non-compensating runs
+//
+enum WorkflowSagaStatus {
+  WORKFLOW_SAGA_STATUS_UNSPECIFIED = 0;
+  RUNNING = 1;
+  COMPENSATING = 2;
+  COMPENSATED_FAILED = 3;
+  COMPENSATION_DEAD_LETTER = 4;
+}
 ```
 
 ### Proto — events (`workflow_execution_messages.proto`)

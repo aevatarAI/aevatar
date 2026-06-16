@@ -41,9 +41,6 @@ public sealed class WorkflowRunGAgent
     private const string CompletedStatus = "completed";
     private const string FailedStatus = "failed";
     private const string StoppedStatus = "stopped";
-    private const string CompensatingSagaStatus = "compensating";
-    private const string CompensatedFailedSagaStatus = "compensated_failed";
-    private const string CompensationDeadLetterSagaStatus = "compensation_dead_letter";
     private WorkflowDefinition? _compiledWorkflow;
     private readonly WorkflowParser _parser = new();
     private readonly List<string> _childAgentIds = [];
@@ -1046,7 +1043,7 @@ public sealed class WorkflowRunGAgent
         next.ForkAttempt = 0;
         next.CompensableLedger.Clear();
         next.CompensationCursor = 0;
-        next.SagaStatus = string.Empty;
+        next.SagaStatus = WorkflowSagaStatus.Unspecified;
         next.CompensationExecutionId = string.Empty;
         next.DeadLetterFailedCompensationStepId = string.Empty;
         next.DeadLetterRemainingUncompensated = 0;
@@ -1091,7 +1088,7 @@ public sealed class WorkflowRunGAgent
         next.ForkAttempt = Math.Max(0, evt.Attempt);
         next.CompensableLedger.Clear();
         next.CompensationCursor = 0;
-        next.SagaStatus = string.Empty;
+        next.SagaStatus = WorkflowSagaStatus.Unspecified;
         next.CompensationExecutionId = string.Empty;
         next.DeadLetterFailedCompensationStepId = string.Empty;
         next.DeadLetterRemainingUncompensated = 0;
@@ -1264,7 +1261,7 @@ public sealed class WorkflowRunGAgent
         if (string.IsNullOrWhiteSpace(compensationStepId))
             return next;
 
-        next.SagaStatus = CompensatingSagaStatus;
+        next.SagaStatus = WorkflowSagaStatus.Compensating;
         next.CompensationExecutionId = evt.ExecutionId?.Trim() ?? string.Empty;
         for (var i = next.CompensableLedger.Count - 1; i >= 0; i--)
         {
@@ -1305,7 +1302,7 @@ public sealed class WorkflowRunGAgent
         WorkflowCompensationCompletedEvent evt)
     {
         var next = current.Clone();
-        next.SagaStatus = CompensatedFailedSagaStatus;
+        next.SagaStatus = WorkflowSagaStatus.CompensatedFailed;
         next.CompensationCursor = -1;
         next.CompensationExecutionId = string.Empty;
         return next;
@@ -1319,7 +1316,7 @@ public sealed class WorkflowRunGAgent
         next.Status = FailedStatus;
         next.FinalOutput = string.Empty;
         next.FinalError = evt.Error ?? string.Empty;
-        next.SagaStatus = CompensationDeadLetterSagaStatus;
+        next.SagaStatus = WorkflowSagaStatus.CompensationDeadLetter;
         next.CompensationExecutionId = string.Empty;
         next.DeadLetterFailedCompensationStepId = evt.FailedCompensationStepId ?? string.Empty;
         next.DeadLetterRemainingUncompensated = Math.Max(0, evt.RemainingUncompensated);
@@ -1462,7 +1459,7 @@ public sealed class WorkflowRunGAgent
     }
 
     private static bool IsCompensating(WorkflowRunState state) =>
-        string.Equals(state.SagaStatus, CompensatingSagaStatus, StringComparison.Ordinal);
+        state.SagaStatus == WorkflowSagaStatus.Compensating;
 
     private static string ResolveStepCompletionIdempotency(
         StepCompletedEvent evt,

@@ -4,6 +4,7 @@ option csharp_namespace = "Aevatar.Workflow.Projection.ReadModels";
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/wrappers.proto";
+import "workflow_execution_messages.proto";
 
 message WorkflowRunInsightReportDocument {
   string id = 1;
@@ -59,7 +60,7 @@ message WorkflowExecutionCurrentStateDocument {
   string scope_id = 23;
   repeated WorkflowExecutionInputFileRefReadModel input_file_ref_entries = 24;
   map<string, WorkflowStepIdempotencyReadModel> fork_seed_idempotency_entries = 25;
-  string saga_status = 26;
+  aevatar.workflow.WorkflowSagaStatus saga_status = 26;
   string dead_letter_failed_compensation_step_id = 27;
   int32 dead_letter_remaining_uncompensated = 28;
   string dead_letter_error = 29;

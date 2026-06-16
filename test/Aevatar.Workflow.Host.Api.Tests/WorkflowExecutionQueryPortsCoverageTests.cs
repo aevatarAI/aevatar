@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Projection.Configuration;
@@ -32,7 +33,7 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
             Status = status,
             FinalOutput = "done",
             FinalError = "err",
-            SagaStatus = "compensation_dead_letter", DeadLetterFailedCompensationStepId = "refund_payment",
+            SagaStatus = WorkflowSagaStatus.CompensationDeadLetter, DeadLetterFailedCompensationStepId = "refund_payment",
             DeadLetterRemainingUncompensated = 2, DeadLetterError = "refund failed",
             UpdatedAt = DateTimeOffset.Parse("2026-03-17T08:00:00+00:00"),
         });
@@ -40,7 +41,7 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
         snapshot.CompletionStatus.Should().Be(expected);
         snapshot.LastOutput.Should().Be("done");
         snapshot.LastError.Should().Be("err");
-        snapshot.SagaStatus.Should().Be("compensation_dead_letter");
+        snapshot.SagaStatus.Should().Be(WorkflowSagaStatus.CompensationDeadLetter);
         snapshot.DeadLetterFailedCompensationStepId.Should().Be("refund_payment");
         snapshot.DeadLetterRemainingUncompensated.Should().Be(2); snapshot.DeadLetterError.Should().Be("refund failed");
     }
@@ -296,7 +297,7 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
                     WorkflowName = "wf",
                     StateVersion = 12,
                     LastEventId = "evt-12",
-                    SagaStatus = "compensation_dead_letter", DeadLetterFailedCompensationStepId = "refund_payment",
+                    SagaStatus = WorkflowSagaStatus.CompensationDeadLetter, DeadLetterFailedCompensationStepId = "refund_payment",
                     DeadLetterRemainingUncompensated = 2, DeadLetterError = "refund failed",
                     UpdatedAt = now,
                 },
@@ -309,7 +310,7 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
                         WorkflowName = "wf",
                         StateVersion = 12,
                         LastEventId = "evt-12",
-                        SagaStatus = "compensation_dead_letter", DeadLetterFailedCompensationStepId = "refund_payment",
+                        SagaStatus = WorkflowSagaStatus.CompensationDeadLetter, DeadLetterFailedCompensationStepId = "refund_payment",
                         DeadLetterRemainingUncompensated = 2, DeadLetterError = "refund failed",
                         UpdatedAt = now,
                     },
@@ -323,7 +324,7 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
         snapshot.Should().NotBeNull();
         snapshot!.ActorId.Should().Be("actor-1");
         snapshot.StateVersion.Should().Be(12);
-        snapshot.SagaStatus.Should().Be("compensation_dead_letter");
+        snapshot.SagaStatus.Should().Be(WorkflowSagaStatus.CompensationDeadLetter);
         snapshot.DeadLetterFailedCompensationStepId.Should().Be("refund_payment");
         snapshot.DeadLetterRemainingUncompensated.Should().Be(2); snapshot.DeadLetterError.Should().Be("refund failed");
         snapshots.Should().ContainSingle();
