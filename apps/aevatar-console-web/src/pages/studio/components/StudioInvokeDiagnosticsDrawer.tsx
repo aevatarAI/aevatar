@@ -21,6 +21,7 @@ import { t } from '@/shared/i18n/messages';
 
 type TimelineItem = {
   readonly detail: string;
+  readonly id: string;
   readonly label: string;
 };
 
@@ -75,6 +76,22 @@ function getEventPreview(event: unknown): string {
   }
 
   return '';
+}
+
+function getEventKey(event: unknown): string {
+  if (!event || typeof event !== 'object') {
+    return 'event-empty';
+  }
+
+  const eventRecord = event as Record<string, unknown>;
+  return JSON.stringify({
+    commandId: eventRecord.commandId,
+    id: eventRecord.id,
+    name: eventRecord.name,
+    runId: eventRecord.runId,
+    timestamp: eventRecord.timestamp,
+    type: eventRecord.type,
+  });
 }
 
 function getStatusLabel(status: InvokeResultState['status']): string {
@@ -316,6 +333,7 @@ const StudioInvokeDiagnosticsDrawer: React.FC<
             'pages.studio.studioinvokediagnosticsdrawer.pending.start.timestamp',
             'Pending start timestamp',
           ),
+        id: 'run-started',
         label: t(
           'pages.studio.studioinvokediagnosticsdrawer.run.started',
           'Run started',
@@ -328,6 +346,7 @@ const StudioInvokeDiagnosticsDrawer: React.FC<
       if (type === 'TEXT_MESSAGE_CONTENT') {
         items.push({
           detail: getEventPreview(event),
+          id: `event-${String(event.timestamp || items.length)}-${type}`,
           label: t(
             'pages.studio.studioinvokediagnosticsdrawer.agent.message',
             'Agent message',
@@ -336,6 +355,7 @@ const StudioInvokeDiagnosticsDrawer: React.FC<
       } else if (type === 'RUN_STARTED') {
         items.push({
           detail: getEventPreview(event),
+          id: `event-${String(event.timestamp || items.length)}-${type}`,
           label: t(
             'pages.studio.studioinvokediagnosticsdrawer.run.started.2',
             'Run started',
@@ -344,6 +364,7 @@ const StudioInvokeDiagnosticsDrawer: React.FC<
       } else if (type === 'RUN_FINISHED') {
         items.push({
           detail: getEventPreview(event),
+          id: `event-${String(event.timestamp || items.length)}-${type}`,
           label: t(
             'pages.studio.studioinvokediagnosticsdrawer.run.finished',
             'Run finished',
@@ -352,6 +373,7 @@ const StudioInvokeDiagnosticsDrawer: React.FC<
       } else if (type === 'RUN_ERROR') {
         items.push({
           detail: getEventPreview(event),
+          id: `event-${String(event.timestamp || items.length)}-${type}`,
           label: t(
             'pages.studio.studioinvokediagnosticsdrawer.run.failed',
             'Run failed',
@@ -360,6 +382,7 @@ const StudioInvokeDiagnosticsDrawer: React.FC<
       } else if (type === 'PARTICIPANT_JOINED') {
         items.push({
           detail: getEventPreview(event),
+          id: `event-${String(event.timestamp || items.length)}-${type}`,
           label: t(
             'pages.studio.studioinvokediagnosticsdrawer.participant.joined',
             'Participant joined',
@@ -368,13 +391,18 @@ const StudioInvokeDiagnosticsDrawer: React.FC<
       } else if (type === 'PARTICIPANT_LEFT') {
         items.push({
           detail: getEventPreview(event),
+          id: `event-${String(event.timestamp || items.length)}-${type}`,
           label: t(
             'pages.studio.studioinvokediagnosticsdrawer.participant.left',
             'Participant left',
           ),
         });
       } else {
-        items.push({ detail: getEventPreview(event), label: type });
+        items.push({
+          detail: getEventPreview(event),
+          id: `event-${String(event.timestamp || items.length)}-${type}`,
+          label: type,
+        });
       }
     }
 
@@ -383,6 +411,7 @@ const StudioInvokeDiagnosticsDrawer: React.FC<
         detail:
           finishedAtLabel ||
           t('pages.studio.studioinvokediagnosticsdrawer.completed', 'Completed'),
+        id: 'run-finished',
         label: t(
           'pages.studio.studioinvokediagnosticsdrawer.run.finished.2',
           'Run finished',
@@ -396,6 +425,10 @@ const StudioInvokeDiagnosticsDrawer: React.FC<
             'pages.studio.studioinvokediagnosticsdrawer.no.extra.error.text',
             'No extra error text',
           ),
+        id:
+          invokeResult.status === 'cancelled'
+            ? 'run-stopped'
+            : 'run-failed',
         label:
           invokeResult.status === 'cancelled'
             ? t(
@@ -413,6 +446,7 @@ const StudioInvokeDiagnosticsDrawer: React.FC<
           'pages.studio.studioinvokediagnosticsdrawer.waiting.for.output',
           'Waiting for output',
         ),
+        id: 'run-in-progress',
         label: t(
           'pages.studio.studioinvokediagnosticsdrawer.run.in.progress',
           'Run in progress',
@@ -432,6 +466,7 @@ const StudioInvokeDiagnosticsDrawer: React.FC<
 
   return (
     <AevatarContextDrawer
+      mobilePlacement="bottom"
       open={open}
       subtitle={
         runViewMode === 'historical'
@@ -577,8 +612,8 @@ const StudioInvokeDiagnosticsDrawer: React.FC<
                     )}
                   </Typography.Text>
                 ) : (
-                  timelineItems.map((item, index) => (
-                    <div key={`${item.label}-${index}`} style={timelineRowStyle}>
+                  timelineItems.map((item) => (
+                    <div key={item.id} style={timelineRowStyle}>
                       <span style={timelineDotStyle} />
                       <div style={{ minWidth: 0 }}>
                         <div style={contractValueStyle}>{item.label}</div>
@@ -617,12 +652,14 @@ const StudioInvokeDiagnosticsDrawer: React.FC<
                         { count: invokeResult.events.length },
                       )}
                     />
-                    {invokeResult.events.map((event, index) => (
+                    {invokeResult.events.map((event) => (
                       <div
-                        key={`${event.type}-${event.timestamp || index}-${index}`}
+                        key={getEventKey(event)}
                         style={eventRowStyle}
                       >
-                        <span style={eventIndexStyle}>#{index + 1}</span>
+                        <span style={eventIndexStyle}>
+                          #{invokeResult.events.indexOf(event) + 1}
+                        </span>
                         <span title={event.type} style={eventTypeStyle}>
                           {event.type}
                         </span>

@@ -519,6 +519,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   );
   const [selectedHistoryId, setSelectedHistoryId] = useState('');
   const [diagnosticsDrawerOpen, setDiagnosticsDrawerOpen] = useState(false);
+  const [diagnosticsHistoryId, setDiagnosticsHistoryId] = useState('');
   const [activeRunCompletedAt, setActiveRunCompletedAt] = useState<
     number | null
   >(null);
@@ -696,52 +697,57 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   const selectedHistoryEntry =
     visibleRequestHistory.find((entry) => entry.id === selectedHistoryId) ??
     null;
+  const diagnosticsHistoryEntry =
+    visibleRequestHistory.find((entry) => entry.id === diagnosticsHistoryId) ??
+    null;
   const runViewMode = 'latest';
-  const diagnosticsRunViewMode = selectedHistoryEntry ? 'historical' : 'latest';
-  const diagnosticsRunRequest = selectedHistoryEntry
+  const diagnosticsRunViewMode = diagnosticsHistoryEntry
+    ? 'historical'
+    : 'latest';
+  const diagnosticsRunRequest = diagnosticsHistoryEntry
     ? {
-        mode: selectedHistoryEntry.mode,
-        payloadBase64: selectedHistoryEntry.payloadBase64,
-        payloadTypeUrl: selectedHistoryEntry.payloadTypeUrl,
-        prompt: selectedHistoryEntry.prompt,
-        startedAt: selectedHistoryEntry.startedAt,
+        mode: diagnosticsHistoryEntry.mode,
+        payloadBase64: diagnosticsHistoryEntry.payloadBase64,
+        payloadTypeUrl: diagnosticsHistoryEntry.payloadTypeUrl,
+        prompt: diagnosticsHistoryEntry.prompt,
+        startedAt: diagnosticsHistoryEntry.startedAt,
       }
     : currentRunRequest;
   const diagnosticsInvokeResult =
-    selectedHistoryEntry?.snapshot.result ?? invokeResult;
+    diagnosticsHistoryEntry?.snapshot.result ?? invokeResult;
   const diagnosticsChatMessages =
-    selectedHistoryEntry?.snapshot.chatMessages ?? chatMessages;
+    diagnosticsHistoryEntry?.snapshot.chatMessages ?? chatMessages;
   const diagnosticsCompletedAt =
-    selectedHistoryEntry?.completedAt ?? activeRunCompletedAt;
+    diagnosticsHistoryEntry?.completedAt ?? activeRunCompletedAt;
   const diagnosticsRawOutput =
-    selectedHistoryEntry && selectedHistoryEntry.snapshot.result.responseJson
-      ? selectedHistoryEntry.snapshot.result.responseJson
-      : selectedHistoryEntry
+    diagnosticsHistoryEntry?.snapshot.result.responseJson
+      ? diagnosticsHistoryEntry.snapshot.result.responseJson
+      : diagnosticsHistoryEntry
         ? JSON.stringify(
             {
-              endpointId: selectedHistoryEntry.endpointId || undefined,
-              error: selectedHistoryEntry.errorDetail || undefined,
+              endpointId: diagnosticsHistoryEntry.endpointId || undefined,
+              error: diagnosticsHistoryEntry.errorDetail || undefined,
               eventCount:
-                selectedHistoryEntry.snapshot.result.eventCount ||
-                selectedHistoryEntry.snapshot.result.events.length,
-              mode: selectedHistoryEntry.mode,
-              runId: selectedHistoryEntry.runId || undefined,
-              serviceId: selectedHistoryEntry.serviceId || undefined,
-              status: selectedHistoryEntry.status,
+                diagnosticsHistoryEntry.snapshot.result.eventCount ||
+                diagnosticsHistoryEntry.snapshot.result.events.length,
+              mode: diagnosticsHistoryEntry.mode,
+              runId: diagnosticsHistoryEntry.runId || undefined,
+              serviceId: diagnosticsHistoryEntry.serviceId || undefined,
+              status: diagnosticsHistoryEntry.status,
             },
             null,
             2,
           )
         : currentRawOutput;
-  const diagnosticsRunElapsedLabel = selectedHistoryEntry
+  const diagnosticsRunElapsedLabel = diagnosticsHistoryEntry
     ? formatElapsedTime(
-        selectedHistoryEntry.startedAt,
-        selectedHistoryEntry.completedAt,
+        diagnosticsHistoryEntry.startedAt,
+        diagnosticsHistoryEntry.completedAt,
       )
     : runElapsedLabel;
   const diagnosticsEndpointLabel =
-    selectedHistoryEntry?.endpointLabel || endpointLabel;
-  const diagnosticsHasData = selectedHistoryEntry ? true : currentRunHasData;
+    diagnosticsHistoryEntry?.endpointLabel || endpointLabel;
+  const diagnosticsHasData = diagnosticsHistoryEntry ? true : currentRunHasData;
 
   useEffect(() => {
     if (!services.length) {
@@ -907,6 +913,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     setChatMessages([]);
     setCurrentRunRequest(null);
     setSelectedHistoryId('');
+    setDiagnosticsHistoryId('');
     setDiagnosticsDrawerOpen(false);
     setFormError('');
     setInvokeResult(createIdleResult());
@@ -942,8 +949,26 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     }
 
     setSelectedHistoryId('');
+    setDiagnosticsHistoryId((current) =>
+      current === selectedHistoryId ? '' : current,
+    );
     setDiagnosticsDrawerOpen(false);
   }, [selectedHistoryId, visibleRequestHistory]);
+
+  useEffect(() => {
+    if (!diagnosticsHistoryId) {
+      return;
+    }
+
+    if (
+      visibleRequestHistory.some((entry) => entry.id === diagnosticsHistoryId)
+    ) {
+      return;
+    }
+
+    setDiagnosticsHistoryId('');
+    setDiagnosticsDrawerOpen(false);
+  }, [diagnosticsHistoryId, visibleRequestHistory]);
 
   useEffect(() => {
     if (!formError) {
@@ -1003,11 +1028,13 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
 
       if (selectedEntry.status === 'running') {
         setSelectedHistoryId('');
+        setDiagnosticsHistoryId('');
         setDiagnosticsDrawerOpen(false);
         return;
       }
 
       setSelectedHistoryId(entryId);
+      setDiagnosticsHistoryId(entryId);
       setDiagnosticsDrawerOpen(true);
     },
     [requestHistory],
@@ -1123,6 +1150,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     const historyEntryId = createClientId('run');
     activeHistoryEntryIdRef.current = historyEntryId;
     setSelectedHistoryId('');
+    setDiagnosticsHistoryId('');
     setDiagnosticsDrawerOpen(false);
     setCurrentRunRequest({
       mode: currentRunMode,
@@ -1536,6 +1564,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     setInvokeResult(createIdleResult());
     setActiveRunCompletedAt(null);
     setSelectedHistoryId('');
+    setDiagnosticsHistoryId('');
     setDiagnosticsDrawerOpen(false);
   }, []);
 
@@ -1600,6 +1629,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
               <Button
                 icon={<InfoCircleOutlined />}
                 onClick={() => {
+                  setDiagnosticsHistoryId('');
                   setDiagnosticsDrawerOpen(true);
                 }}
               >
@@ -1663,6 +1693,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
                         writeClipboardText(invokeResult.error, 'Error')
                       }
                       onOpenDiagnostics={() => {
+                        setDiagnosticsHistoryId('');
                         setDiagnosticsDrawerOpen(true);
                       }}
                       onRetryAsNewRun={() => {
@@ -1708,7 +1739,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
             currentRunHasData={diagnosticsHasData}
             currentRunRequest={diagnosticsRunRequest}
             endpointLabel={diagnosticsEndpointLabel}
-            historyEntry={selectedHistoryEntry}
+            historyEntry={diagnosticsHistoryEntry}
             invokeResult={diagnosticsInvokeResult}
             isChatEndpoint={isChatEndpoint}
             open={diagnosticsDrawerOpen}

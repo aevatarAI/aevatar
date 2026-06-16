@@ -1012,6 +1012,16 @@ describe('StudioMemberInvokePanel', () => {
     expect(screen.getByLabelText('Workflow request input')).toHaveValue(
       'Overwrite prompt',
     );
+
+    fireEvent.click(screen.getByLabelText('Close'));
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+    expect(await screen.findByText('Latest run detail')).toBeTruthy();
+    expect(screen.queryByText('Historical run detail')).toBeNull();
+    expect(screen.queryByText('History detail')).toBeNull();
+    expect(
+      screen.getAllByText('No run is selected yet.').length,
+    ).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText('run-1')).toBeNull();
   });
 
   it('routes structured endpoint invokes through the member endpoint when member target is explicit', async () => {
