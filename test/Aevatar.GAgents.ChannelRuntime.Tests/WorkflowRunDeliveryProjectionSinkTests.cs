@@ -46,6 +46,39 @@ public sealed class WorkflowRunDeliveryProjectionSinkTests
         command.ErrorCode.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task PushAsync_WhenTerminalDispatchFails_ShouldKeepFrameRetryable()
+    {
+        var dispatchPort = new RecordingActorDispatchPort
+        {
+            Failure = new InvalidOperationException("dispatch rejected"),
+        };
+        await using var sink = CreateSink(dispatchPort);
+        var terminalFrame = new WorkflowRunEventEnvelope
+        {
+            RunFinished = new WorkflowRunFinishedEventPayload
+            {
+                Result = Any.Pack(new WorkflowRunResultPayload { Output = "workflow output" }),
+            },
+        };
+
+        var failedPush = async () => await sink.PushAsync(terminalFrame);
+        await failedPush.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("dispatch rejected");
+        dispatchPort.Calls.Should().BeEmpty();
+
+        dispatchPort.Failure = null;
+        await sink.PushAsync(terminalFrame);
+
+        dispatchPort.Calls.Should().ContainSingle();
+        var command = dispatchPort.Calls.Single().Envelope.Payload.Unpack<WorkflowRunDeliveryTerminalFrameObserved>();
+        command.Status.Should().Be("completed");
+        command.Text.Should().Be("workflow output");
+
+        await sink.PushAsync(terminalFrame);
+        dispatchPort.Calls.Should().ContainSingle();
+    }
+
     [Theory]
     [InlineData("custom_error", "boom", "error", "boom", "custom_error")]
     [InlineData("", "", "error", "Workflow failed.", "workflow_run_error")]
@@ -111,9 +144,13 @@ public sealed class WorkflowRunDeliveryProjectionSinkTests
     private sealed class RecordingActorDispatchPort : IActorDispatchPort
     {
         public List<(string ActorId, EventEnvelope Envelope)> Calls { get; } = [];
+        public Exception? Failure { get; set; }
 
         public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
+            if (Failure != null)
+                throw Failure;
+
             Calls.Add((actorId, envelope.Clone()));
             return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }

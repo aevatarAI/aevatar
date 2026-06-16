@@ -51,7 +51,6 @@ internal sealed class WorkflowRunDeliveryProjectionSink : IEventSink<WorkflowRun
         if (terminal is null)
             return;
 
-        _completed = true;
         var command = new WorkflowRunDeliveryTerminalFrameObserved
         {
             DeliveryId = _deliveryId,
@@ -77,7 +76,11 @@ internal sealed class WorkflowRunDeliveryProjectionSink : IEventSink<WorkflowRun
 
         try
         {
-            await _dispatchPort.DispatchAsync(_deliveryActorId, envelope, ct).ConfigureAwait(false);
+            var admission = await _dispatchPort.DispatchAsync(_deliveryActorId, envelope, ct).ConfigureAwait(false);
+            if (!admission.Accepted)
+                throw new InvalidOperationException("Workflow run terminal delivery continuation was not accepted by the actor dispatch port.");
+
+            _completed = true;
         }
         catch (Exception ex)
         {
@@ -87,10 +90,13 @@ internal sealed class WorkflowRunDeliveryProjectionSink : IEventSink<WorkflowRun
                 _deliveryId,
                 _workflowActorId,
                 _workflowCommandId);
+            throw;
         }
     }
 
-    public void Complete() => _completed = true;
+    public void Complete()
+    {
+    }
 
     public async IAsyncEnumerable<WorkflowRunEventEnvelope> ReadAllAsync(
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)

@@ -170,6 +170,47 @@ public sealed class WorkflowRunDeliveryGAgentTests
     }
 
     [Fact]
+    public async Task TerminalWorkflowEvent_WhenContinuationDispatchFails_ShouldRemainRetryable()
+    {
+        var projectionPort = new RecordingWorkflowExecutionProjectionPort();
+        var nyxHandler = new RecordingJsonHandler();
+        var credentialProvider = new RecordingCredentialProvider
+        {
+            ["secrets://nyx/reply-1"] = "nyxid_ag_secret_1",
+        };
+        var deferredDispatchPort = new DeferredDispatchPort();
+        var agent = await CreateAgentAsync(
+            projectionPort,
+            CreateOutboundPort(nyxHandler),
+            deferredDispatchPort,
+            credentialProvider);
+        deferredDispatchPort.Inner = new ThrowingDispatchPort(new InvalidOperationException("dispatch rejected"));
+        await agent.HandleEventAsync(Envelope(StartRequest()));
+        var terminalFrame = new WorkflowRunEventEnvelope
+        {
+            RunFinished = new WorkflowRunFinishedEventPayload
+            {
+                Result = Any.Pack(new WorkflowRunResultPayload { Output = "workflow completed text" }),
+            },
+        };
+
+        var failedPush = async () => await projectionPort.LastSink!.PushAsync(terminalFrame);
+        await failedPush.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("dispatch rejected");
+        agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Started);
+        nyxHandler.Requests.Should().BeEmpty();
+
+        var dispatchPort = new DirectActorDispatchPort(agent);
+        deferredDispatchPort.Inner = dispatchPort;
+        await projectionPort.LastSink!.PushAsync(terminalFrame);
+
+        dispatchPort.Dispatches.Should().ContainSingle();
+        agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Delivered);
+        agent.State.TerminalText.Should().Be("workflow completed text");
+        nyxHandler.Requests.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task MissingResolvedCredential_ShouldPersistFailedTerminalStateWithoutHttpRequest()
     {
         var eventStore = new InMemoryEventStore();
@@ -324,6 +365,12 @@ public sealed class WorkflowRunDeliveryGAgentTests
             await agent.HandleEventAsync(envelope, ct);
             return DispatchAdmissionFactory.Create(actorId, envelope);
         }
+    }
+
+    private sealed class ThrowingDispatchPort(Exception exception) : IActorDispatchPort
+    {
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default) =>
+            Task.FromException<DispatchAdmission>(exception);
     }
 
     private sealed class RecordingWorkflowExecutionProjectionPort : IWorkflowExecutionProjectionPort

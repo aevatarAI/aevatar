@@ -189,7 +189,7 @@ internal sealed class StartWorkflowTool : IAevatarInvocationTool
                 ReadString(root, "status"),
                 ReadString(root, "actor_id"),
                 ReadString(root, "stream_topic"),
-                TryBuildWorkflowRunDeliveryReceipt(root));
+                TryReadWorkflowRunDeliveryReceipt(root));
         }
         catch (JsonException)
         {
@@ -197,61 +197,38 @@ internal sealed class StartWorkflowTool : IAevatarInvocationTool
         }
     }
 
-    private static WorkflowRunBackgroundDeliveryReceipt? TryBuildWorkflowRunDeliveryReceipt(JsonElement root)
+    private static WorkflowRunBackgroundDeliveryReceipt? TryReadWorkflowRunDeliveryReceipt(JsonElement root)
     {
-        if (!string.Equals(ReadString(root, "wait"), "stream", StringComparison.OrdinalIgnoreCase))
+        if (!root.TryGetProperty("workflow_run_delivery", out var value) ||
+            value.ValueKind != JsonValueKind.Object)
+        {
             return null;
+        }
 
-        var actorId = ReadString(root, "actor_id");
-        var commandId = ReadString(root, "command_id");
-        var streamTopic = ReadString(root, "stream_topic");
-        var context = AgentToolRequestContext.Current ?? AgentToolExecutionContext.Empty;
-        var platform = Normalize(context.Channel.Platform);
-        var replyMessageId = Normalize(context.Channel.MessageId);
-        var durableReplyCredentialRef = Normalize(context.Channel.DurableReplyCredentialRef);
-        if (string.IsNullOrWhiteSpace(actorId) ||
-            string.IsNullOrWhiteSpace(commandId) ||
-            platform is null ||
-            replyMessageId is null ||
-            durableReplyCredentialRef is null)
+        var deliveryActorId = ReadString(value, "delivery_actor_id");
+        var workflowActorId = ReadString(value, "workflow_actor_id");
+        var workflowCommandId = ReadString(value, "workflow_command_id");
+        if (string.IsNullOrWhiteSpace(deliveryActorId) ||
+            string.IsNullOrWhiteSpace(workflowActorId) ||
+            string.IsNullOrWhiteSpace(workflowCommandId))
         {
             return null;
         }
 
         return new WorkflowRunBackgroundDeliveryReceipt
         {
-            DeliveryActorId = WorkflowRunDeliveryId(actorId, commandId),
-            WorkflowActorId = actorId,
-            WorkflowRunId = commandId,
-            WorkflowCommandId = commandId,
-            WorkflowCorrelationId = ReadString(root, "correlation_id"),
-            StreamTopic = streamTopic,
-            ChannelPlatform = platform,
-            ReplyMessageId = replyMessageId,
-            PlatformMessageId = Normalize(context.Channel.PlatformMessageId) ?? string.Empty,
-            RegistrationScopeId = Normalize(context.Channel.RegistrationScopeId) ??
-                                  Normalize(context.Caller.ScopeId) ??
-                                  string.Empty,
-            DurableReplyCredentialRef = durableReplyCredentialRef,
+            DeliveryActorId = deliveryActorId,
+            WorkflowActorId = workflowActorId,
+            WorkflowRunId = ReadString(value, "workflow_run_id"),
+            WorkflowCommandId = workflowCommandId,
+            WorkflowCorrelationId = ReadString(value, "workflow_correlation_id"),
+            StreamTopic = ReadString(value, "stream_topic"),
+            ChannelPlatform = ReadString(value, "channel_platform"),
+            ReplyMessageId = ReadString(value, "reply_message_id"),
+            PlatformMessageId = ReadString(value, "platform_message_id"),
+            RegistrationScopeId = ReadString(value, "registration_scope_id"),
+            DurableReplyCredentialRef = ReadString(value, "durable_reply_credential_ref"),
         };
-    }
-
-    private static string? Normalize(string? value) =>
-        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-
-    private static string WorkflowRunDeliveryId(string workflowActorId, string workflowCommandId)
-    {
-        var actor = SanitizeSegment(workflowActorId);
-        var command = SanitizeSegment(workflowCommandId);
-        return $"workflow-run-delivery:{actor}:{command}";
-    }
-
-    private static string SanitizeSegment(string value)
-    {
-        var chars = value.Trim()
-            .Select(static c => char.IsLetterOrDigit(c) || c is '-' or '_' or '.' ? c : '-')
-            .ToArray();
-        return new string(chars);
     }
 
     private static string ReadString(JsonElement root, string propertyName) =>

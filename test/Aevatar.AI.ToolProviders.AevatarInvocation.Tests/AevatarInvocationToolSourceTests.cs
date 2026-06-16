@@ -783,6 +783,7 @@ public sealed class AevatarInvocationToolSourceTests
 
         result.WaitMode.Should().Be(ChatRunSubRunWaitMode.Stream);
         result.Status.Should().Be("streaming");
+        result.ErrorCode.Should().BeEmpty();
         result.CompletionObserved.Should().BeFalse();
         result.CompletionResultJson.Should().BeEmpty();
         harness.WorkflowRunDelivery.Registrations.Should().ContainSingle();
@@ -798,6 +799,120 @@ public sealed class AevatarInvocationToolSourceTests
         registration.PlatformMessageId.Should().Be("platform-message-1");
         registration.DurableReplyCredentialRef.Should().Be("secrets://nyx/reply-1");
         registration.RegistrationScopeId.Should().Be("registration-scope-1");
+
+        using var resultJson = JsonDocument.Parse(result.ToolExecutionResultJson);
+        var delivery = resultJson.RootElement.GetProperty("workflow_run_delivery");
+        delivery.GetProperty("delivery_actor_id").GetString().Should().Be("registered-delivery-actor");
+        delivery.GetProperty("workflow_actor_id").GetString().Should().Be("workflow-actor");
+        delivery.GetProperty("workflow_command_id").GetString().Should().Be("wf-command");
+        delivery.GetProperty("durable_reply_credential_ref").GetString().Should().Be("secrets://nyx/reply-1");
+    }
+
+    [Fact]
+    public async Task StartWorkflowForChatRun_WaitStreamWithoutRegistrationPort_ShouldReturnAcceptedWorkflowWithTypedFailure()
+    {
+        var harness = new Harness();
+        harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
+            .Success(new WorkflowChatRunAcceptedReceipt("workflow-actor", "wf-main", "wf-command", "wf-correlation"));
+        var dispatcher = harness.CreateDispatcher(withWorkflowRunDeliveryRegistrationPort: false);
+
+        using var _ = PushContext(
+            callId: "call-workflow-delivery-no-port",
+            durableReplyCredentialRef: "secrets://nyx/reply-1");
+        var request = BuildChatRunRequest(
+            "response-workflow",
+            "call-workflow-delivery-no-port-tool",
+            "aevatar_start_workflow",
+            """
+            {
+              "workflow_id": "wf-main",
+              "inputs": { "prompt": "run workflow" },
+              "wait": "stream"
+            }
+            """);
+
+        var result = await dispatcher.StartWorkflowForChatRunAsync(request, request.ArgumentsJson);
+
+        result.RunId.Should().Be("wf-command");
+        result.ActorId.Should().Be("workflow-actor");
+        result.Status.Should().Be("background_delivery_failed");
+        result.StreamTopic.Should().BeEmpty();
+        result.ErrorCode.Should().Be("workflow_background_delivery_unsupported");
+        harness.WorkflowDispatch.Command.Should().NotBeNull();
+        harness.WorkflowRunDelivery.Registrations.Should().BeEmpty();
+        using var resultJson = JsonDocument.Parse(result.ToolExecutionResultJson);
+        resultJson.RootElement.GetProperty("status").GetString().Should().Be("background_delivery_failed");
+        resultJson.RootElement.GetProperty("error").GetProperty("code").GetString()
+            .Should().Be("workflow_background_delivery_unsupported");
+        resultJson.RootElement.TryGetProperty("workflow_run_delivery", out var missingDelivery).Should().BeFalse();
+        missingDelivery.ValueKind.Should().Be(JsonValueKind.Undefined);
+    }
+
+    [Fact]
+    public async Task StartWorkflowForChatRun_WaitStreamWhenRegistrationThrows_ShouldReturnAcceptedWorkflowWithTypedFailure()
+    {
+        var harness = new Harness();
+        harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
+            .Success(new WorkflowChatRunAcceptedReceipt("workflow-actor", "wf-main", "wf-command", "wf-correlation"));
+        harness.WorkflowRunDelivery.Failure = new InvalidOperationException("registration boom");
+        var dispatcher = harness.CreateDispatcher();
+
+        using var _ = PushContext(
+            callId: "call-workflow-delivery-throws",
+            durableReplyCredentialRef: "secrets://nyx/reply-1");
+        var request = BuildChatRunRequest(
+            "response-workflow",
+            "call-workflow-delivery-throws-tool",
+            "aevatar_start_workflow",
+            """
+            {
+              "workflow_id": "wf-main",
+              "inputs": { "prompt": "run workflow" },
+              "wait": "stream"
+            }
+            """);
+
+        var result = await dispatcher.StartWorkflowForChatRunAsync(request, request.ArgumentsJson);
+
+        result.RunId.Should().Be("wf-command");
+        result.Status.Should().Be("background_delivery_failed");
+        result.StreamTopic.Should().BeEmpty();
+        result.ErrorCode.Should().Be("workflow_background_delivery_registration_failed");
+        harness.WorkflowDispatch.Command.Should().NotBeNull();
+        harness.WorkflowRunDelivery.Registrations.Should().ContainSingle();
+        using var resultJson = JsonDocument.Parse(result.ToolExecutionResultJson);
+        resultJson.RootElement.GetProperty("error").GetProperty("message").GetString()
+            .Should().Contain("registration boom");
+        resultJson.RootElement.TryGetProperty("workflow_run_delivery", out var missingDelivery).Should().BeFalse();
+        missingDelivery.ValueKind.Should().Be(JsonValueKind.Undefined);
+    }
+
+    [Fact]
+    public async Task StartWorkflow_WhenBackgroundDeliveryRegistered_ShouldCreateReceiptFromRegistrationReceipt()
+    {
+        var harness = new Harness();
+        harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
+            .Success(new WorkflowChatRunAcceptedReceipt("workflow-actor", "wf-main", "wf-command", "wf-correlation"));
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        using var _ = PushContext(
+            callId: "call-workflow-delivery-receipt",
+            durableReplyCredentialRef: "secrets://nyx/reply-1");
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_id": "wf-main",
+              "inputs": { "prompt": "run workflow" },
+              "wait": "stream"
+            }
+            """);
+        var receipt = tool.CreateSuccessReceipt("call-workflow-delivery-receipt", tool.Name, output);
+
+        receipt.Should().NotBeNull();
+        receipt!.WorkflowRunDelivery.Should().NotBeNull();
+        receipt.WorkflowRunDelivery.DeliveryActorId.Should().Be("registered-delivery-actor");
+        receipt.WorkflowRunDelivery.WorkflowActorId.Should().Be("workflow-actor");
+        receipt.WorkflowRunDelivery.WorkflowCommandId.Should().Be("wf-command");
+        receipt.WorkflowRunDelivery.DurableReplyCredentialRef.Should().Be("secrets://nyx/reply-1");
     }
 
     [Fact]
@@ -2079,7 +2194,7 @@ public sealed class AevatarInvocationToolSourceTests
         public StubWorkflowExecutionQueryService WorkflowQuery { get; } = new();
         public RecordingWorkflowRunBindingReader RunBindingReader { get; } = new();
 
-        public AevatarInvocationDispatcher CreateDispatcher() =>
+        public AevatarInvocationDispatcher CreateDispatcher(bool withWorkflowRunDeliveryRegistrationPort = true) =>
             new(
                 ActorDispatch,
                 ActorRegistry,
@@ -2089,7 +2204,7 @@ public sealed class AevatarInvocationToolSourceTests
                 ServiceRunQuery,
                 TerminalQuery,
                 WorkflowQuery,
-                WorkflowRunDelivery);
+                withWorkflowRunDeliveryRegistrationPort ? WorkflowRunDelivery : null);
 
         public void RegisterDependencies(IServiceCollection services)
         {
@@ -2249,15 +2364,19 @@ public sealed class AevatarInvocationToolSourceTests
         : IWorkflowRunBackgroundDeliveryRegistrationPort
     {
         public List<WorkflowRunBackgroundDeliveryRegistration> Registrations { get; } = [];
+        public Exception? Failure { get; set; }
 
         public Task<WorkflowRunBackgroundDeliveryReceipt> RegisterAsync(
             WorkflowRunBackgroundDeliveryRegistration registration,
             CancellationToken ct = default)
         {
             Registrations.Add(registration);
+            if (Failure != null)
+                throw Failure;
+
             return Task.FromResult(new WorkflowRunBackgroundDeliveryReceipt
             {
-                DeliveryActorId = registration.DeliveryId,
+                DeliveryActorId = "registered-delivery-actor",
                 WorkflowActorId = registration.WorkflowActorId,
                 WorkflowRunId = registration.WorkflowRunId,
                 WorkflowCommandId = registration.WorkflowCommandId,

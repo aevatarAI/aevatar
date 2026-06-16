@@ -321,15 +321,32 @@ public sealed class AevatarInvocationDispatcher
         var streamTopic = wait == InvocationWaitMode.Stream
             ? AevatarInvocationStreamTopics.ForActorRun(receipt.ActorId, receipt.CommandId)
             : string.Empty;
+        WorkflowRunBackgroundDeliveryReceipt? workflowRunDeliveryReceipt = null;
         if (wait == InvocationWaitMode.Stream && backgroundDelivery.ShouldRegister)
         {
-            await TryRegisterWorkflowRunBackgroundDeliveryAsync(
+            var registration = await RegisterWorkflowRunBackgroundDeliveryAsync(
                     receipt,
                     streamTopic,
                     backgroundDelivery.DurableReplyCredentialRef!,
                     AgentToolRequestContext.Current,
                     ct)
                 .ConfigureAwait(false);
+            if (registration.Error != null)
+            {
+                return ToChatRunRequest(chatRunRequest, new InvocationToolResult
+                {
+                    RunId = receipt.CommandId,
+                    Status = "background_delivery_failed",
+                    StreamTopic = string.Empty,
+                    ActorId = receipt.ActorId,
+                    CommandId = receipt.CommandId,
+                    CorrelationId = receipt.CorrelationId,
+                    Wait = wait,
+                    Error = registration.Error,
+                }, scope.Value!.ScopeId);
+            }
+
+            workflowRunDeliveryReceipt = registration.Receipt;
         }
 
         return ToChatRunRequest(chatRunRequest, new InvocationToolResult
@@ -341,6 +358,7 @@ public sealed class AevatarInvocationDispatcher
             CommandId = receipt.CommandId,
             CorrelationId = receipt.CorrelationId,
             Wait = wait,
+            WorkflowRunDelivery = workflowRunDeliveryReceipt,
         }, scope.Value!.ScopeId);
     }
 
@@ -628,7 +646,7 @@ public sealed class AevatarInvocationDispatcher
         }
     }
 
-    private async Task TryRegisterWorkflowRunBackgroundDeliveryAsync(
+    private async Task<WorkflowBackgroundDeliveryRegistrationResult> RegisterWorkflowRunBackgroundDeliveryAsync(
         WorkflowChatRunAcceptedReceipt receipt,
         string streamTopic,
         string durableReplyCredentialRef,
@@ -641,7 +659,11 @@ public sealed class AevatarInvocationDispatcher
             durableReplyCredentialRef,
             context);
         if (registration is null)
-            return;
+        {
+            return WorkflowBackgroundDeliveryRegistrationResult.Failed(Error(
+                "workflow_background_delivery_unsupported",
+                "This channel session cannot deliver workflow terminal results in the background because required reply target fields are unavailable."));
+        }
 
         if (_workflowRunDeliveryRegistrationPort is null)
         {
@@ -649,12 +671,24 @@ public sealed class AevatarInvocationDispatcher
                 "Workflow run background delivery registration skipped because no registration port is available: actorId={ActorId} commandId={CommandId}",
                 receipt.ActorId,
                 receipt.CommandId);
-            return;
+            return WorkflowBackgroundDeliveryRegistrationResult.Failed(Error(
+                "workflow_background_delivery_unsupported",
+                "Workflow background delivery registration is unavailable in this host."));
         }
 
         try
         {
-            await _workflowRunDeliveryRegistrationPort.RegisterAsync(registration, ct).ConfigureAwait(false);
+            var deliveryReceipt = await _workflowRunDeliveryRegistrationPort
+                .RegisterAsync(registration, ct)
+                .ConfigureAwait(false);
+            if (!IsDurableWorkflowRunDeliveryReceipt(deliveryReceipt))
+            {
+                return WorkflowBackgroundDeliveryRegistrationResult.Failed(Error(
+                    "workflow_background_delivery_registration_failed",
+                    "Workflow background delivery registration did not return a durable receipt."));
+            }
+
+            return WorkflowBackgroundDeliveryRegistrationResult.Success(deliveryReceipt);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -663,8 +697,17 @@ public sealed class AevatarInvocationDispatcher
                 "Workflow run background delivery registration failed after accepted receipt: actorId={ActorId} commandId={CommandId}",
                 receipt.ActorId,
                 receipt.CommandId);
+            return WorkflowBackgroundDeliveryRegistrationResult.Failed(Error(
+                "workflow_background_delivery_registration_failed",
+                $"Workflow background delivery registration failed after workflow start acceptance: {ex.Message}"));
         }
     }
+
+    private static bool IsDurableWorkflowRunDeliveryReceipt(WorkflowRunBackgroundDeliveryReceipt? receipt) =>
+        receipt is not null &&
+        !string.IsNullOrWhiteSpace(receipt.DeliveryActorId) &&
+        !string.IsNullOrWhiteSpace(receipt.WorkflowActorId) &&
+        !string.IsNullOrWhiteSpace(receipt.WorkflowCommandId);
 
     private static WorkflowRunBackgroundDeliveryRegistration? BuildWorkflowRunDeliveryRegistration(
         WorkflowChatRunAcceptedReceipt receipt,
@@ -1267,6 +1310,17 @@ public sealed class AevatarInvocationDispatcher
 
         public static WorkflowBackgroundDeliveryResolution Failed(InvocationToolError error) =>
             new(false, null, error);
+    }
+
+    private sealed record WorkflowBackgroundDeliveryRegistrationResult(
+        WorkflowRunBackgroundDeliveryReceipt? Receipt,
+        InvocationToolError? Error)
+    {
+        public static WorkflowBackgroundDeliveryRegistrationResult Success(WorkflowRunBackgroundDeliveryReceipt receipt) =>
+            new(receipt, null);
+
+        public static WorkflowBackgroundDeliveryRegistrationResult Failed(InvocationToolError error) =>
+            new(null, error);
     }
 
     private sealed record ActorTargetResolution(string ActorId, InvocationToolError? Error)

@@ -1,4 +1,6 @@
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
+using Google.Protobuf;
 using Google.Protobuf.Collections;
 
 namespace Aevatar.AI.ToolProviders.AevatarInvocation;
@@ -24,21 +26,28 @@ internal static class AevatarInvocationJson
         }, Options);
 
     public static string Serialize(InvocationToolResult result) =>
-        result.Error == null
-            ? JsonSerializer.Serialize(new
-            {
-                run_id = EmptyToNull(result.RunId),
-                status = EmptyToNull(result.Status),
-                stream_topic = EmptyToNull(result.StreamTopic),
-                result = TryParseJson(result.ResultJson),
-                actor_id = EmptyToNull(result.ActorId),
-                command_id = EmptyToNull(result.CommandId),
-                correlation_id = EmptyToNull(result.CorrelationId),
-                service_id = EmptyToNull(result.ServiceId),
-                endpoint_id = EmptyToNull(result.EndpointId),
-                wait = ToWaitText(result.Wait),
-            }, Options)
-            : Error(result.Error);
+        JsonSerializer.Serialize(new
+        {
+            run_id = EmptyToNull(result.RunId),
+            status = EmptyToNull(result.Status),
+            stream_topic = EmptyToNull(result.StreamTopic),
+            result = TryParseJson(result.ResultJson),
+            actor_id = EmptyToNull(result.ActorId),
+            command_id = EmptyToNull(result.CommandId),
+            correlation_id = EmptyToNull(result.CorrelationId),
+            service_id = EmptyToNull(result.ServiceId),
+            endpoint_id = EmptyToNull(result.EndpointId),
+            wait = ToWaitText(result.Wait),
+            workflow_run_delivery = ToWorkflowRunDeliveryJson(result.WorkflowRunDelivery),
+            error = result.Error == null
+                ? null
+                : new
+                {
+                    code = result.Error.Code,
+                    message = result.Error.Message,
+                    field = string.IsNullOrWhiteSpace(result.Error.Field) ? null : result.Error.Field,
+                },
+        }, Options);
 
     public static string Serialize(ObserveRunResult result) =>
         result.Error == null
@@ -87,6 +96,24 @@ internal static class AevatarInvocationJson
             InvocationWaitMode.Complete => "complete",
             _ => "stream",
         };
+
+    private static object? ToWorkflowRunDeliveryJson(WorkflowRunBackgroundDeliveryReceipt? receipt) =>
+        receipt is null || receipt.CalculateSize() == 0
+            ? null
+            : new
+            {
+                delivery_actor_id = EmptyToNull(receipt.DeliveryActorId),
+                workflow_actor_id = EmptyToNull(receipt.WorkflowActorId),
+                workflow_run_id = EmptyToNull(receipt.WorkflowRunId),
+                workflow_command_id = EmptyToNull(receipt.WorkflowCommandId),
+                workflow_correlation_id = EmptyToNull(receipt.WorkflowCorrelationId),
+                stream_topic = EmptyToNull(receipt.StreamTopic),
+                channel_platform = EmptyToNull(receipt.ChannelPlatform),
+                reply_message_id = EmptyToNull(receipt.ReplyMessageId),
+                platform_message_id = EmptyToNull(receipt.PlatformMessageId),
+                registration_scope_id = EmptyToNull(receipt.RegistrationScopeId),
+                durable_reply_credential_ref = EmptyToNull(receipt.DurableReplyCredentialRef),
+            };
 
     private static object? TryParseJson(string value)
     {
