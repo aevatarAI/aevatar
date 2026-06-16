@@ -648,13 +648,27 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             case WorkflowCompensationTransitionStatus.RejectedStaleOrDuplicate:
                 return true;
             case WorkflowCompensationTransitionStatus.CompensationDeadLettered:
+            {
+                var state = LoadState(ctx);
                 await CleanupRunAsync(
-                    LoadState(ctx),
+                    state,
                     ctx,
                     ct,
                     preserveTerminalFacts: true,
                     preserveCurrentStepInputVariable: true);
+                var deadLetterError = error ?? string.Empty;
+                await PublishWorkflowCompletedAsync(
+                    ctx,
+                    new WorkflowCompletedEvent
+                    {
+                        WorkflowName = _workflow.Name,
+                        RunId = NormalizeRunId(runId),
+                        Success = false,
+                        Error = deadLetterError,
+                    },
+                    ct);
                 return true;
+            }
             case WorkflowCompensationTransitionStatus.NoCompensableLedger:
                 return false;
             default:
@@ -693,8 +707,16 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             case WorkflowCompensationTransitionStatus.CompletedAll:
                 await PublishWorkflowCompletedAsync(ctx, terminalFailure, ct);
                 return;
-            case WorkflowCompensationTransitionStatus.RejectedStaleOrDuplicate:
             case WorkflowCompensationTransitionStatus.CompensationDeadLettered:
+                await CleanupRunAsync(
+                    state,
+                    ctx,
+                    ct,
+                    preserveTerminalFacts: true,
+                    preserveCurrentStepInputVariable: true);
+                await PublishWorkflowCompletedAsync(ctx, terminalFailure, ct);
+                return;
+            case WorkflowCompensationTransitionStatus.RejectedStaleOrDuplicate:
             default:
                 return;
         }
