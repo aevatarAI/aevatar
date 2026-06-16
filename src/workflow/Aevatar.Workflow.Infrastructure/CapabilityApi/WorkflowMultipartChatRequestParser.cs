@@ -137,6 +137,7 @@ internal sealed class WorkflowMultipartChatRequestParser
             { } value when value.StartsWith("image/", StringComparison.OrdinalIgnoreCase) => "image",
             { } value when value.StartsWith("audio/", StringComparison.OrdinalIgnoreCase) => "audio",
             { } value when value.StartsWith("video/", StringComparison.OrdinalIgnoreCase) => "video",
+            { } => "file",
             _ => string.Empty,
         };
 

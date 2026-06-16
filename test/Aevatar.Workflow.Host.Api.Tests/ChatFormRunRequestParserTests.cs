@@ -239,6 +239,44 @@ public sealed class ChatFormRunRequestParserTests
         part.FileRef!.MediaType.Should().Be("audio/mpeg");
     }
 
+    [Theory]
+    [InlineData("invoice.pdf", "application/pdf")]
+    [InlineData("notes.txt", "text/plain")]
+    [InlineData("readme.md", "text/markdown")]
+    [InlineData("table.csv", "text/csv")]
+    [InlineData("report.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")]
+    [InlineData("sheet.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")]
+    public async Task ParseAsync_ShouldIngestAllowedDocumentUploadAsFileInputPart(
+        string fileName,
+        string mediaType)
+    {
+        var ingressPort = new RecordingWorkflowFileIngressPort();
+        var parser = CreateParser(ingressPort);
+        var http = CreateMultipartHttpContext(
+            new Dictionary<string, string>
+            {
+                ["prompt"] = "summarize this",
+                ["workflow"] = "direct",
+            },
+            [CreateFormFile("file", fileName, mediaType, "hello")]);
+
+        var result = await parser.ParseAsync(http, CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        ingressPort.Requests.Should().ContainSingle();
+        ingressPort.Requests[0].FileName.Should().Be(fileName);
+        ingressPort.Requests[0].MediaType.Should().Be(mediaType);
+        result.Input.Should().NotBeNull();
+        var part = result.Input!.InputParts.Should().ContainSingle().Which;
+        part.Type.Should().Be("file");
+        part.MediaType.Should().Be(mediaType);
+        part.DataBase64.Should().BeNull();
+        part.InlineFile.Should().BeNull();
+        part.FileRef.Should().NotBeNull();
+        part.FileRef!.FileName.Should().Be(fileName);
+        part.FileRef.MediaType.Should().Be(mediaType);
+    }
+
     [Fact]
     public async Task ParseAsync_ShouldRejectFileLargerThanConfiguredLimit()
     {
