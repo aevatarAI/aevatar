@@ -70,7 +70,7 @@ public sealed class FeishuCardNotificationPort : IChannelInteractionNotification
         ArgumentNullException.ThrowIfNull(composer);
 
         if (request.InteractionSpec is { } interactionSpec)
-            return BuildInteractionCardJson(interactionSpec, composer);
+            return BuildInteractionCardJson(interactionSpec, composer, BuildWorkflowResumePayload(request));
 
         if (request.InteractionTemplateSpec is { } templateSpec)
             return BuildTemplateCardJson(templateSpec);
@@ -80,15 +80,24 @@ public sealed class FeishuCardNotificationPort : IChannelInteractionNotification
 
     private static string BuildInteractionCardJson(
         InteractionSpec interactionSpec,
-        LarkMessageComposer composer)
+        LarkMessageComposer composer,
+        WorkflowResumeActionPayload workflowResume)
     {
-        var content = InteractionSpecMapper.ToMessageContent(interactionSpec);
+        var content = InteractionSpecMapper.ToMessageContent(interactionSpec, workflowResume);
         var payload = composer.Compose(content, BuildComposeContext());
         if (!payload.IsInteractive)
             throw new InvalidOperationException("Interaction notification must render as an interactive Lark card.");
 
         return payload.ContentJson;
     }
+
+    private static WorkflowResumeActionPayload BuildWorkflowResumePayload(ChannelInteractionNotificationRequest request) =>
+        new()
+        {
+            ActorId = request.ActorId,
+            RunId = request.RunId,
+            StepId = request.StepId,
+        };
 
     private static string BuildTemplateCardJson(InteractionTemplateSpec templateSpec)
     {

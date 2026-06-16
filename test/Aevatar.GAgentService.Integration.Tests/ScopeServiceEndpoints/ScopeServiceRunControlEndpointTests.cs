@@ -50,11 +50,9 @@ namespace Aevatar.GAgentService.Integration.Tests;
 public sealed class ScopeServiceRunControlEndpointTests : ScopeServiceEndpointTestKit
 {
     [Fact]
-    public async Task ScopeResumeRunEndpoint_ShouldResolveDefaultServiceAndDispatch()
+    public async Task ScopeResumeRunEndpoint_ShouldResolveScopedRunAndDispatch()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
-        host.LifecycleQueryPort.Service = BuildService("scope-a", "default", "def-actor-1");
-        host.LifecycleQueryPort.Deployments = BuildDeployments("scope-a:default:default:default", "dep-1", "rev-1", "def-actor-1");
         host.RunBindingReader.BindingsByRunId["run-default-1"] =
         [
             new WorkflowActorBinding(
@@ -97,14 +95,6 @@ public sealed class ScopeServiceRunControlEndpointTests : ScopeServiceEndpointTe
     public async Task ScopeResumeRunEndpoint_ShouldReturnConflict_WhenRunIsAmbiguous()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
-        host.LifecycleQueryPort.Service = BuildService("scope-a", "default", "def-actor-1");
-        host.LifecycleQueryPort.Deployments = new ServiceDeploymentCatalogSnapshot(
-            "scope-a:default:default:default",
-            [
-                new ServiceDeploymentSnapshot("dep-1", "rev-1", "def-actor-1", "Active", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow),
-                new ServiceDeploymentSnapshot("dep-2", "rev-2", "def-actor-2", "Inactive", DateTimeOffset.UtcNow.AddHours(-1), DateTimeOffset.UtcNow),
-            ],
-            DateTimeOffset.UtcNow);
         host.RunBindingReader.BindingsByRunId["run-default-ambiguous"] =
         [
             new WorkflowActorBinding(
@@ -136,15 +126,53 @@ public sealed class ScopeServiceRunControlEndpointTests : ScopeServiceEndpointTe
 
         response.StatusCode.Should().Be(HttpStatusCode.Conflict);
         body.Should().NotBeNull();
-        body!["code"].Should().Be("SERVICE_RUN_AMBIGUOUS");
+        body!["code"].Should().Be("SCOPE_RUN_AMBIGUOUS");
     }
 
     [Fact]
-    public async Task ScopeSignalRunEndpoint_ShouldResolveDefaultServiceAndDispatch()
+    public async Task ScopeResumeRunEndpoint_ShouldHonorRequestedActorIdFilter()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
-        host.LifecycleQueryPort.Service = BuildService("scope-a", "default", "def-actor-1");
-        host.LifecycleQueryPort.Deployments = BuildDeployments("scope-a:default:default:default", "dep-1", "rev-1", "def-actor-1");
+        host.RunBindingReader.BindingsByRunId["run-default-filtered"] =
+        [
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                "run-actor-default-1",
+                "def-actor-1",
+                "run-default-filtered",
+                "main",
+                "yaml",
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                "scope-a"),
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                "run-actor-default-2",
+                "def-actor-2",
+                "run-default-filtered",
+                "main",
+                "yaml",
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                "scope-a"),
+        ];
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/runs/run-default-filtered:resume", new
+        {
+            stepId = "approval-1",
+            approved = true,
+            actorId = "run-actor-default-2",
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        response.Headers.Location.Should().NotBeNull();
+        host.ResumeDispatchService.LastCommand.Should().NotBeNull();
+        host.ResumeDispatchService.LastCommand!.ActorId.Should().Be("run-actor-default-2");
+        host.ResumeDispatchService.LastCommand.RunId.Should().Be("run-default-filtered");
+    }
+
+    [Fact]
+    public async Task ScopeSignalRunEndpoint_ShouldResolveScopedRunAndDispatch()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
         host.RunBindingReader.BindingsByRunId["run-default-2"] =
         [
             new WorkflowActorBinding(
@@ -177,14 +205,6 @@ public sealed class ScopeServiceRunControlEndpointTests : ScopeServiceEndpointTe
     public async Task ScopeSignalRunEndpoint_ShouldHonorRequestedActorIdFilter()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
-        host.LifecycleQueryPort.Service = BuildService("scope-a", "default", "def-actor-1");
-        host.LifecycleQueryPort.Deployments = new ServiceDeploymentCatalogSnapshot(
-            "scope-a:default:default:default",
-            [
-                new ServiceDeploymentSnapshot("dep-1", "rev-1", "def-actor-1", "Active", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow),
-                new ServiceDeploymentSnapshot("dep-2", "rev-2", "def-actor-2", "Inactive", DateTimeOffset.UtcNow.AddHours(-1), DateTimeOffset.UtcNow),
-            ],
-            DateTimeOffset.UtcNow);
         host.RunBindingReader.BindingsByRunId["run-default-2"] =
         [
             new WorkflowActorBinding(
@@ -220,11 +240,9 @@ public sealed class ScopeServiceRunControlEndpointTests : ScopeServiceEndpointTe
     }
 
     [Fact]
-    public async Task ScopeStopRunEndpoint_ShouldResolveDefaultServiceAndDispatch()
+    public async Task ScopeStopRunEndpoint_ShouldResolveScopedRunAndDispatch()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
-        host.LifecycleQueryPort.Service = BuildService("scope-a", "default", "def-actor-1");
-        host.LifecycleQueryPort.Deployments = BuildDeployments("scope-a:default:default:default", "dep-1", "rev-1", "def-actor-1");
         host.RunBindingReader.BindingsByRunId["run-default-3"] =
         [
             new WorkflowActorBinding(

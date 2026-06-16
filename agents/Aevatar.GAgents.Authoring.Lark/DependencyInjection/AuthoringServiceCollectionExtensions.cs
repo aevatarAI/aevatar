@@ -14,25 +14,21 @@ namespace Aevatar.GAgents.Authoring.Lark;
 /// </summary>
 /// <remarks>
 /// Both the package and the registration are intentionally Lark-specific (RFC §9.4 option a):
-/// <see cref="FeishuCardHumanInteractionPort"/> is the Lark interactive-card implementation of
-/// <see cref="IHumanInteractionPort"/>, and the AgentBuilder card flows are hard-coded to Lark
-/// `p2p` / `card_action` semantics. Hosts that compose this package opt into Lark behavior by
-/// name; hosts targeting other channels must not call <see cref="AddLarkAgentAuthoring"/>.
+/// the AgentBuilder card flows are hard-coded to Lark `p2p` / `card_action` semantics.
+/// Hosts that compose this package opt into Lark behavior by name; hosts targeting other
+/// channels must not call <see cref="AddLarkAgentAuthoring"/>.
 /// </remarks>
 public static class AuthoringServiceCollectionExtensions
 {
     private static readonly Func<IServiceProvider, object> AgentToolSourceFactory = CreateAgentBuilderToolSource;
 
     /// <summary>
-    /// Replaces the default <see cref="IHumanInteractionPort"/> with the Feishu-card
-    /// implementation and registers the AgentBuilder tool source so LLM turns can author
-    /// new agents through interactive Lark cards.
+    /// Registers the Lark-specific authoring, notification, and remote approval tools.
     /// </summary>
     public static IServiceCollection AddLarkAgentAuthoring(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        services.Replace(ServiceDescriptor.Singleton<IHumanInteractionPort, FeishuCardHumanInteractionPort>());
         services.Replace(ServiceDescriptor.Singleton<IChannelInteractionNotificationPort, FeishuCardNotificationPort>());
         services.Replace(ServiceDescriptor.Singleton<IRemoteToolApprovalNotificationPort, LarkRemoteToolApprovalNotificationPort>());
         services.TryAddSingleton<ScheduledAgentCreatorOptions>();

@@ -68,8 +68,8 @@ public sealed class UserAgentDeliveryTargetReaderTests
     {
         // Issue #466 review: when the credential document hasn't projected yet,
         // returning a delivery target with NyxApiKey="" would push the projection-lag
-        // failure mode onto FeishuCardHumanInteractionPort as a NyxID 401/403. The
-        // reader fails closed instead — caller surfaces "delivery target unavailable".
+        // failure mode onto outbound Lark senders as a NyxID 401/403. The reader
+        // fails closed instead — caller surfaces "delivery target unavailable".
         var documentReader = Substitute.For<IProjectionDocumentReader<UserAgentCatalogDocument, string>>();
         var credentialReader = Substitute.For<IProjectionDocumentReader<UserAgentCatalogNyxCredentialDocument, string>>();
         documentReader.GetAsync("agent-1", Arg.Any<CancellationToken>())

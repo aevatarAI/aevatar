@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
@@ -30,10 +31,14 @@ public sealed class WorkflowHumanInteractionProjector
         if (!ProjectionDispatchRouteFilter.ShouldDispatch(envelope))
             return;
 
-        if (envelope.Payload?.Is(WorkflowSuspendedEvent.Descriptor) != true)
+        var sourceEnvelope = CommittedStateEventEnvelope.TryCreateObservedEnvelope(envelope, out var observedEnvelope) &&
+                             observedEnvelope?.Payload != null
+            ? observedEnvelope
+            : envelope;
+        if (sourceEnvelope.Payload?.Is(WorkflowSuspendedEvent.Descriptor) != true)
             return;
 
-        var evt = envelope.Payload.Unpack<WorkflowSuspendedEvent>();
+        var evt = sourceEnvelope.Payload.Unpack<WorkflowSuspendedEvent>();
         if (evt.SuspensionType == "tool_approval")
             return;
 

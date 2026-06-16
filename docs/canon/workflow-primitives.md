@@ -700,7 +700,9 @@ steps:
 ### `human_approval`
 
 - 作用：暂停并等待人工批准/拒绝。
-- 常用参数：`prompt`、`timeout`、`on_reject`。
+- 常用参数：`prompt`、`timeout`、`timeout_default_decision`、`delivery_target_id`、`on_reject`。
+- `timeout_default_decision` 支持 `reject` / `approve`；缺省安全值为 `reject`。
+- `delivery_target_id` 是通用投递目标，不表示某个固定渠道。运行时通过 `WorkflowSuspendedEvent -> IHumanInteractionPort` 交给宿主/skill/agent 能力投递，Feishu/Lark、Web、Email 等只是边界实现。
 
 ```yaml
 steps:
@@ -708,7 +710,9 @@ steps:
     type: human_approval
     parameters:
       prompt: "Approve release?"
+      delivery_target_id: "${input.approver_delivery_target_id}"
       timeout: "3600"
+      timeout_default_decision: "reject"
       on_reject: "fail"
 ```
 
@@ -764,7 +768,8 @@ POST /api/workflows/signal
 - 长运行建议：对预计会 stall `3600-5400s` 的外部工作，优先采用 `emit/connector_call -> wait_signal` 或 `human_approval` continuation，而不是把普通 `llm_call/connector_call` 步骤 timeout 调大到超过 executor 的 `600s` 上限。
 - `human_approval.on_reject`：
   - `fail`：拒绝会终止流程；
-  - `skip`：拒绝后继续下一个步骤（输入保持原值）。
+  - `skip` / `continue`：拒绝后继续下一个步骤（输入保持原值）。
+- `human_approval.timeout_default_decision`：超时由 workflow actor 自身的 durable callback 触发，并按 `approve` / `reject` 自动完成；渠道/skill 只负责通知和把按钮回调转换为 resume，不拥有超时语义。
 - `wait_signal.timeout_ms`：超时会返回失败 `StepCompletedEvent`，上层可配 `on_error` 做降级。
 - UI 层建议把“待处理交互卡片”与执行日志放在一起，便于审计 run 的人工干预轨迹。
 

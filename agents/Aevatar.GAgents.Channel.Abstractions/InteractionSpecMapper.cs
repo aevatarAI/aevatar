@@ -10,7 +10,13 @@ public static class InteractionSpecMapper
     /// <summary>
     /// Converts a typed interaction contract into composer-ready message content.
     /// </summary>
-    public static MessageContent ToMessageContent(InteractionSpec spec)
+    public static MessageContent ToMessageContent(InteractionSpec spec) =>
+        ToMessageContent(spec, workflowResume: null);
+
+    /// <summary>
+    /// Converts a typed interaction contract into composer-ready message content with workflow resume context.
+    /// </summary>
+    public static MessageContent ToMessageContent(InteractionSpec spec, WorkflowResumeActionPayload? workflowResume)
     {
         ArgumentNullException.ThrowIfNull(spec);
 
@@ -22,7 +28,7 @@ public static class InteractionSpecMapper
 
         foreach (var action in spec.Actions)
         {
-            var mapped = MapAction(action);
+            var mapped = MapAction(action, workflowResume);
             if (mapped is not null)
                 content.Actions.Add(mapped);
         }
@@ -41,7 +47,7 @@ public static class InteractionSpecMapper
 
         foreach (var card in spec.Cards)
         {
-            var mapped = MapCard(card);
+            var mapped = MapCard(card, workflowResume);
             if (mapped is not null)
                 content.Cards.Add(mapped);
         }
@@ -74,7 +80,7 @@ public static class InteractionSpecMapper
             _ => MessageDisposition.Normal,
         };
 
-    private static ActionElement? MapAction(InteractionAction? action)
+    private static ActionElement? MapAction(InteractionAction? action, WorkflowResumeActionPayload? workflowResume)
     {
         if (action is null)
             return null;
@@ -100,7 +106,7 @@ public static class InteractionSpecMapper
             IsDanger = action.Style == InteractionActionStyle.Danger,
             IsDisabled = action.Disabled,
         };
-        ApplyApprovalDecision(action, element);
+        ApplyApprovalDecision(action, element, workflowResume);
 
         foreach (var option in action.Options)
         {
@@ -117,7 +123,10 @@ public static class InteractionSpecMapper
         return element;
     }
 
-    private static void ApplyApprovalDecision(InteractionAction action, ActionElement element)
+    private static void ApplyApprovalDecision(
+        InteractionAction action,
+        ActionElement element,
+        WorkflowResumeActionPayload? workflowResume)
     {
         var approved = action.ApprovalDecision switch
         {
@@ -128,10 +137,8 @@ public static class InteractionSpecMapper
         if (!approved.HasValue)
             return;
 
-        element.WorkflowResume = new WorkflowResumeActionPayload
-        {
-            Approved = approved.Value,
-        };
+        element.WorkflowResume = workflowResume?.Clone() ?? new WorkflowResumeActionPayload();
+        element.WorkflowResume.Approved = approved.Value;
     }
 
     private static ActionElementKind MapActionKind(InteractionActionKind kind, int optionCount) =>
@@ -145,7 +152,7 @@ public static class InteractionSpecMapper
             _ => optionCount > 0 ? ActionElementKind.Select : ActionElementKind.Button,
         };
 
-    private static CardBlock? MapCard(InteractionCard? card)
+    private static CardBlock? MapCard(InteractionCard? card, WorkflowResumeActionPayload? workflowResume)
     {
         if (card is null)
             return null;
@@ -162,7 +169,7 @@ public static class InteractionSpecMapper
         AppendFields(block, card.Fields);
         foreach (var action in card.Actions)
         {
-            var mapped = MapAction(action);
+            var mapped = MapAction(action, workflowResume);
             if (mapped is not null)
                 block.Actions.Add(mapped);
         }
