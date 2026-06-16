@@ -89,7 +89,7 @@ Introducing a separate coordinator would violate "Actor 即业务实体" and cre
 cross-actor consistency problem (who is authoritative for run termination?) that
 does not exist today. Compensation is a terminal phase of the run's own state
 machine:
-`WORKFLOW_SAGA_STATUS_UNSPECIFIED → COMPENSATING → COMPENSATED_FAILED | COMPENSATION_DEAD_LETTER`.
+`WORKFLOW_SAGA_STATUS_UNSPECIFIED → WORKFLOW_SAGA_STATUS_COMPENSATING → WORKFLOW_SAGA_STATUS_COMPENSATED_FAILED | WORKFLOW_SAGA_STATUS_COMPENSATION_DEAD_LETTER`.
 
 ### Q2. Choreography or orchestration?
 
@@ -265,10 +265,10 @@ message CompletedStepLedgerEntry {
 //
 enum WorkflowSagaStatus {
   WORKFLOW_SAGA_STATUS_UNSPECIFIED = 0;
-  RUNNING = 1;
-  COMPENSATING = 2;
-  COMPENSATED_FAILED = 3;
-  COMPENSATION_DEAD_LETTER = 4;
+  WORKFLOW_SAGA_STATUS_RUNNING = 1;
+  WORKFLOW_SAGA_STATUS_COMPENSATING = 2;
+  WORKFLOW_SAGA_STATUS_COMPENSATED_FAILED = 3;
+  WORKFLOW_SAGA_STATUS_COMPENSATION_DEAD_LETTER = 4;
 }
 ```
 
