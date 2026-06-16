@@ -80,6 +80,7 @@ message AgentRunGAgentState {
   repeated aevatar.gagents.channel.runtime.ConversationHistoryEntry produced_appended_history = 23;
   repeated aevatar.ai.AgentToolReceipt tool_receipts = 24;
   AgentRunLarkCardDeliveryState lark_card_delivery = 25;
+  AgentRunLarkCardDeliveryCompletion pending_card_delivery_completion = 26;
 }
 
 enum AgentRunLarkCardDeliveryPhase {
@@ -131,6 +132,30 @@ message AgentRunLarkCardDeliveryChangedEvent {
   optional string finalize_text = 17;
   optional string finalize_command_id = 18;
   repeated aevatar.gagents.channel.runtime.ConversationHistoryEntry appended_history = 19;
+}
+
+message AgentRunLarkCardDeliveryCompletion {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  string command_id = 4;
+  aevatar.gagents.channel.abstractions.ChatActivity activity = 5;
+  string card_message_id = 6;
+  string outbound_text = 7;
+  int64 completed_at_unix_ms = 8;
+  aevatar.gagents.channel.runtime.LlmReplyDeliveryFailedEvent delivery_failure = 9;
+  repeated aevatar.gagents.channel.runtime.ConversationHistoryEntry appended_history = 10;
+  AgentRunLarkCardDeliveryCompletionOutcome outcome = 11;
+}
+
+message AgentRunCardDeliveryCompletionPreparedEvent {
+  AgentRunLarkCardDeliveryCompletion completion = 1;
+}
+
+enum AgentRunLarkCardDeliveryCompletionOutcome {
+  AGENT_RUN_LARK_CARD_DELIVERY_COMPLETION_OUTCOME_UNSPECIFIED = 0;
+  AGENT_RUN_LARK_CARD_DELIVERY_COMPLETION_OUTCOME_COMPLETED = 1;
+  AGENT_RUN_LARK_CARD_DELIVERY_COMPLETION_OUTCOME_FAILED = 2;
 }
 
 enum AgentRunReplyStepKind {

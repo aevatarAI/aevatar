@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Text;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.Channel.Abstractions;
@@ -18,6 +19,8 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
 public sealed class AgentRunLarkCardDeliveryTests
 {
+    private const string ConversationActorId = "conversation-1";
+
     [Fact]
     public async Task CardChunkEnvelope_StartsCreateOnRunActorState()
     {
@@ -133,6 +136,132 @@ public sealed class AgentRunLarkCardDeliveryTests
         scheduler.Timeouts.Should().Contain(timeout => timeout.CallbackId.StartsWith(
             "agent-run-terminal-cleanup:run-1",
             StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task CompletionSendFailure_PersistsOutbox_AndRetryDeliversConversationFactWithoutReplyToken()
+    {
+        var runner = new RecordingCardRunner();
+        var scheduler = new RecordingCallbackScheduler();
+        var conversationStore = new InMemoryEventStore();
+        var conversationPublisher = new SelfHandlingConversationPublisher();
+        var conversation = await CreateConversationAgentAsync(
+            ConversationActorId,
+            conversationStore,
+            conversationPublisher);
+        SeedReplyLifecycle(conversation, "corr-card");
+        var publisher = new RecordingEventPublisher
+        {
+            ConversationTarget = conversation,
+            FailNextConversationCompletion = true,
+        };
+        var agent = CreateAgent(runner, publisher: publisher, scheduler: scheduler);
+
+        await StartVisibleCardAsync(agent, publisher, "partial");
+        await agent.HandleNextLlmStepAsync(CreateFinalReplyStep("final"));
+        await DispatchPendingSelfEventsAsync(agent, publisher);
+
+        agent.State.Status.Should().Be(AgentRunStatus.ReplyProduced);
+        agent.State.PendingCardDeliveryCompletion.Should().NotBeNull();
+        agent.State.PendingCardDeliveryCompletion.TargetActorId.Should().Be(ConversationActorId);
+        agent.State.PendingCardDeliveryCompletion.CommandId.Should().Be("llm:corr-card");
+        agent.State.PendingCardDeliveryCompletion.CardMessageId.Should().Be("om-card-ok");
+        agent.State.PendingCardDeliveryCompletion.OutboundText.Should().Be("final");
+        agent.State.PendingCardDeliveryCompletion.Outcome.Should()
+            .Be(AgentRunLarkCardDeliveryCompletionOutcome.Completed);
+        scheduler.Timeouts
+            .Where(timeout => timeout.TriggerEnvelope.Payload.Is(AgentRunOutputDispatchRetryRequested.Descriptor))
+            .Select(timeout => timeout.TriggerEnvelope.Payload.Unpack<AgentRunOutputDispatchRetryRequested>())
+            .Should().ContainSingle(retry => !retry.RequiresRuntimeReplyToken);
+
+        var retry = scheduler.Timeouts
+            .Where(timeout => timeout.TriggerEnvelope.Payload.Is(AgentRunOutputDispatchRetryRequested.Descriptor))
+            .Select(timeout => timeout.TriggerEnvelope.Payload.Unpack<AgentRunOutputDispatchRetryRequested>())
+            .Single();
+        retry.RequiresRuntimeReplyToken.Should().BeFalse();
+        await agent.HandleEventAsync(Envelope(agent.Id, retry));
+
+        agent.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
+        agent.State.PendingCardDeliveryCompletion.Should().BeNull();
+        var conversationEvents = await conversationStore.GetEventsAsync(ConversationActorId);
+        conversationEvents.Should().ContainSingle(e => e.EventData.Is(LlmReplyDeliveredEvent.Descriptor));
+        conversationEvents.Should().ContainSingle(e => e.EventData.Is(ConversationTurnCompletedEvent.Descriptor));
+        var completed = conversationEvents
+            .Single(e => e.EventData.Is(ConversationTurnCompletedEvent.Descriptor))
+            .EventData.Unpack<ConversationTurnCompletedEvent>();
+        completed.Outbound.Text.Should().Be("final");
+        completed.SentActivityId.Should().Be("lark-card-stream:om-card-ok");
+    }
+
+    [Fact]
+    public async Task PendingCompletionRetry_WithFailurePayload_PersistsConversationFailureAndIsIdempotent()
+    {
+        var conversationStore = new InMemoryEventStore();
+        var conversationPublisher = new SelfHandlingConversationPublisher();
+        var conversation = await CreateConversationAgentAsync(
+            ConversationActorId,
+            conversationStore,
+            conversationPublisher);
+        SeedReplyLifecycle(conversation, "corr-card");
+        var publisher = new RecordingEventPublisher
+        {
+            ConversationTarget = conversation,
+        };
+        var agent = CreateAgent(new RecordingCardRunner(), publisher: publisher);
+        SetState(agent, BuildPendingCompletionState(deliveryFailure: new LlmReplyDeliveryFailedEvent
+        {
+            ErrorCode = "card_finalize_failed",
+            ErrorMessage = "finalize rejected",
+        }));
+
+        var retry = new AgentRunOutputDispatchRetryRequested
+        {
+            RunId = "run-1",
+            CorrelationId = "corr-card",
+            TargetActorId = ConversationActorId,
+            Attempt = 1,
+            Generation = 1,
+            RequiresRuntimeReplyToken = true,
+        };
+        await agent.HandleEventAsync(Envelope(agent.Id, retry));
+        await agent.HandleEventAsync(Envelope(agent.Id, retry.Clone()));
+
+        agent.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
+        agent.State.PendingCardDeliveryCompletion.Should().BeNull();
+        var conversationEvents = await conversationStore.GetEventsAsync(ConversationActorId);
+        conversationEvents.Should().ContainSingle(e => e.EventData.Is(LlmReplyDeliveryFailedEvent.Descriptor));
+        conversationEvents.Should().ContainSingle(e => e.EventData.Is(ConversationTurnCompletedEvent.Descriptor));
+        var failed = conversationEvents
+            .Single(e => e.EventData.Is(LlmReplyDeliveryFailedEvent.Descriptor))
+            .EventData.Unpack<LlmReplyDeliveryFailedEvent>();
+        failed.ErrorCode.Should().Be("card_finalize_failed");
+        failed.RunId.Should().Be("run-1");
+    }
+
+    [Fact]
+    public async Task DuplicateTerminalPhase_WithPendingCompletion_ResendsFromOutboxAfterReactivation()
+    {
+        var conversationStore = new InMemoryEventStore();
+        var conversationPublisher = new SelfHandlingConversationPublisher();
+        var conversation = await CreateConversationAgentAsync(
+            ConversationActorId,
+            conversationStore,
+            conversationPublisher);
+        SeedReplyLifecycle(conversation, "corr-card");
+        var publisher = new RecordingEventPublisher
+        {
+            ConversationTarget = conversation,
+        };
+        var agent = CreateAgent(new RecordingCardRunner(), publisher: publisher);
+        SetState(agent, BuildPendingCompletionState());
+
+        await agent.HandleStartAsync(CreateReady("final"));
+
+        agent.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
+        agent.State.PendingCardDeliveryCompletion.Should().BeNull();
+        var conversationEvents = await conversationStore.GetEventsAsync(ConversationActorId);
+        conversationEvents.Should().ContainSingle(e => e.EventData.Is(LlmReplyDeliveredEvent.Descriptor));
+        conversationEvents.Should().ContainSingle(e => e.EventData.Is(ConversationTurnCompletedEvent.Descriptor));
     }
 
     [Fact]
@@ -463,6 +592,7 @@ public sealed class AgentRunLarkCardDeliveryTests
                 PendingFinalizeText = "final",
                 PendingFinalizeCommandId = "llm:corr-card",
             },
+            PendingCardDeliveryCompletion = BuildPendingCompletion(),
         };
         state.LarkCardDelivery.PendingAppendedHistory.Add(new ConversationHistoryEntry
         {
@@ -487,6 +617,9 @@ public sealed class AgentRunLarkCardDeliveryTests
         };
 
         AgentRunGAgentState.Parser.ParseFrom(state.ToByteArray()).Should().Be(state);
+        AgentRunLarkCardDeliveryCompletion.Parser.ParseFrom(
+                state.PendingCardDeliveryCompletion.ToByteArray())
+            .Should().Be(state.PendingCardDeliveryCompletion);
         AgentRunLarkCardDeliveryChangedEvent.Parser.ParseFrom(evt.ToByteArray()).Should().Be(evt);
     }
 
@@ -537,6 +670,116 @@ public sealed class AgentRunLarkCardDeliveryTests
             },
         });
         return agent;
+    }
+
+    private static AgentRunGAgentState BuildPendingCompletionState(
+        LlmReplyDeliveryFailedEvent? deliveryFailure = null) =>
+        new()
+        {
+            RunId = "run-1",
+            CorrelationId = "corr-card",
+            TargetActorId = ConversationActorId,
+            Status = AgentRunStatus.ReplyProduced,
+            GenerationAttempt = 1,
+            ProducedReplyText = deliveryFailure is null ? "final" : "partial",
+            ProducedOutbound = new MessageContent { Text = deliveryFailure is null ? "final" : "partial" },
+            ProducedTerminalState = LlmReplyTerminalState.Completed,
+            LarkCardDelivery = new AgentRunLarkCardDeliveryState
+            {
+                Phase = deliveryFailure is null
+                    ? AgentRunLarkCardDeliveryPhase.Completed
+                    : AgentRunLarkCardDeliveryPhase.Terminated,
+                CardId = "card-ok",
+                CardMessageId = "om-card-ok",
+                LastFlushedText = "partial",
+                Sequence = 2,
+                StreamingElementId = "streaming_main",
+                TerminalReason = deliveryFailure is null ? "completed" : "finalize_failed:card_finalize_failed",
+            },
+            PendingCardDeliveryCompletion = BuildPendingCompletion(deliveryFailure),
+            GenerationStep = new AgentRunReplyStepState
+            {
+                RunId = "run-1",
+                CorrelationId = "corr-card",
+                TargetActorId = ConversationActorId,
+                Attempt = 1,
+                NextStepIndex = 2,
+                MaxToolRounds = 4,
+                AccumulatedText = deliveryFailure is null ? "final" : "partial",
+                HasStreamedTextContent = true,
+            },
+        };
+
+    private static AgentRunLarkCardDeliveryCompletion BuildPendingCompletion(
+        LlmReplyDeliveryFailedEvent? deliveryFailure = null)
+    {
+        var completion = new AgentRunLarkCardDeliveryCompletion
+        {
+            RunId = "run-1",
+            CorrelationId = "corr-card",
+            TargetActorId = ConversationActorId,
+            CommandId = "llm:corr-card",
+            Activity = CreateActivity(string.Empty),
+            CardMessageId = "om-card-ok",
+            OutboundText = deliveryFailure is null ? "final" : "partial",
+            CompletedAtUnixMs = 123456,
+            Outcome = deliveryFailure is null
+                ? AgentRunLarkCardDeliveryCompletionOutcome.Completed
+                : AgentRunLarkCardDeliveryCompletionOutcome.Failed,
+        };
+        completion.AppendedHistory.Add(new ConversationHistoryEntry
+        {
+            Role = "assistant",
+            Content = completion.OutboundText,
+        });
+        if (deliveryFailure is not null)
+        {
+            completion.DeliveryFailure = deliveryFailure.Clone();
+            completion.DeliveryFailure.CorrelationId = string.Empty;
+            completion.DeliveryFailure.RunId = string.Empty;
+        }
+
+        return completion;
+    }
+
+    private static async Task<ConversationGAgent> CreateConversationAgentAsync(
+        string id,
+        IEventStore store,
+        SelfHandlingConversationPublisher publisher)
+    {
+        var services = new ServiceCollection()
+            .AddSingleton(store)
+            .AddSingleton<IActorDispatchPort, NoopActorDispatchPort>()
+            .AddSingleton<IActorRuntimeCallbackScheduler, NoopCallbackScheduler>()
+            .AddSingleton<IConversationTurnRunner>(new RecordingTurnRunner())
+            .AddSingleton<EventSourcingRuntimeOptions>()
+            .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
+            .BuildServiceProvider();
+
+        var agent = new ConversationGAgent
+        {
+            Services = services,
+            EventPublisher = publisher,
+            EventSourcingBehaviorFactory =
+                services.GetRequiredService<IEventSourcingBehaviorFactory<ConversationGAgentState>>(),
+        };
+        SetId(agent, id);
+        publisher.SelfTarget = agent;
+        await agent.ActivateAsync();
+        return agent;
+    }
+
+    private static void SeedReplyLifecycle(ConversationGAgent agent, string correlationId)
+    {
+        agent.State.ActiveReplyLifecycles.Add(new ConversationReplyLifecycleState
+        {
+            CorrelationId = correlationId,
+            Mode = ConversationReplyLifecycleMode.NyxRelayText,
+            Phase = ConversationReplyLifecyclePhase.TextStreaming,
+            PlatformMessageId = "relay-msg-" + correlationId,
+            LastFlushedText = "partial",
+            UpdatedAtUnixMs = 100,
+        });
     }
 
     private static async Task StartVisibleCardAsync(
@@ -790,6 +1033,10 @@ public sealed class AgentRunLarkCardDeliveryTests
 
         public AgentRunGAgent? SelfTarget { get; set; }
 
+        public ConversationGAgent? ConversationTarget { get; init; }
+
+        public bool FailNextConversationCompletion { get; set; }
+
         public List<(string TargetActorId, IMessage Event)> Sent { get; } = [];
 
         public Task PublishAsync<TEvent>(
@@ -811,6 +1058,19 @@ public sealed class AgentRunLarkCardDeliveryTests
         {
             var clone = (IMessage)evt.Descriptor.Parser.ParseFrom(evt.ToByteArray());
             Sent.Add((targetActorId, clone));
+            if (ConversationTarget is not null &&
+                string.Equals(targetActorId, ConversationTarget.Id, StringComparison.Ordinal) &&
+                clone is LarkCardDeliveryCompletedEvent)
+            {
+                if (FailNextConversationCompletion)
+                {
+                    FailNextConversationCompletion = false;
+                    throw new InvalidOperationException("Injected completion send failure.");
+                }
+
+                return ConversationTarget.HandleEventAsync(Envelope(targetActorId, clone), ct);
+            }
+
             if (SelfTarget is not null &&
                 string.Equals(targetActorId, SelfTarget.Id, StringComparison.Ordinal) &&
                 clone is ReplyOperationStepEvent or LarkCardOperationCompletedEvent)
@@ -823,6 +1083,161 @@ public sealed class AgentRunLarkCardDeliveryTests
 
         public bool TryDequeueSelfEvent(out IMessage evt) =>
             _pendingSelfEvents.TryDequeue(out evt!);
+    }
+
+    private sealed class SelfHandlingConversationPublisher : IEventPublisher
+    {
+        public ConversationGAgent? SelfTarget { get; set; }
+
+        public Task PublishAsync<TEvent>(
+            TEvent evt,
+            TopologyAudience audience = TopologyAudience.Children,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage =>
+            Task.CompletedTask;
+
+        public Task SendToAsync<TEvent>(
+            string targetActorId,
+            TEvent evt,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage =>
+            SelfTarget is not null &&
+            string.Equals(targetActorId, SelfTarget.Id, StringComparison.Ordinal)
+                ? SelfTarget.HandleEventAsync(Envelope(targetActorId, evt), ct)
+                : Task.CompletedTask;
+    }
+
+    private sealed class RecordingTurnRunner : IConversationTurnRunner
+    {
+        public Task<ConversationTurnResult> RunInboundAsync(
+            ChatActivity activity,
+            ConversationTurnRuntimeContext runtimeContext,
+            CancellationToken ct) =>
+            Task.FromResult(ConversationTurnResult.Ignored("not-used", activity.Id));
+
+        public Task<ConversationTurnResult> RunLlmReplyAsync(
+            LlmReplyReadyEvent reply,
+            ConversationTurnRuntimeContext runtimeContext,
+            CancellationToken ct) =>
+            Task.FromResult(ConversationTurnResult.Ignored("not-used", reply.CorrelationId));
+
+        public Task<ConversationTurnResult> RunContinueAsync(
+            ConversationContinueRequestedEvent command,
+            CancellationToken ct) =>
+            Task.FromResult(ConversationTurnResult.Ignored("not-used", command.CommandId));
+
+        public Task<ConversationStreamChunkResult> RunStreamChunkAsync(
+            LlmReplyStreamChunkEvent chunk,
+            string? currentPlatformMessageId,
+            ConversationTurnRuntimeContext runtimeContext,
+            CancellationToken ct) =>
+            Task.FromResult(ConversationStreamChunkResult.Succeeded(currentPlatformMessageId ?? "om"));
+
+        public Task OnReplyDeliveredAsync(ChatActivity activity, CancellationToken ct) => Task.CompletedTask;
+    }
+
+    private sealed class NoopActorDispatchPort : IActorDispatchPort
+    {
+        public Task<DispatchAdmission> DispatchAsync(
+            string actorId,
+            EventEnvelope envelope,
+            CancellationToken ct = default) =>
+            Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
+    }
+
+    private sealed class NoopCallbackScheduler : IActorRuntimeCallbackScheduler
+    {
+        public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
+            RuntimeCallbackTimeoutRequest request,
+            CancellationToken ct = default) =>
+            Task.FromResult(new RuntimeCallbackLease(
+                request.ActorId,
+                request.CallbackId,
+                1,
+                RuntimeCallbackBackend.InMemory));
+
+        public Task<RuntimeCallbackLease> ScheduleTimerAsync(
+            RuntimeCallbackTimerRequest request,
+            CancellationToken ct = default) =>
+            Task.FromResult(new RuntimeCallbackLease(
+                request.ActorId,
+                request.CallbackId,
+                1,
+                RuntimeCallbackBackend.InMemory));
+
+        public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task PurgeActorAsync(string actorId, CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class InMemoryEventStore : IEventStore
+    {
+        private readonly Dictionary<string, List<StateEvent>> _events = new(StringComparer.Ordinal);
+
+        public Task<EventStoreCommitResult> AppendAsync(
+            string agentId,
+            IEnumerable<StateEvent> events,
+            long expectedVersion,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!_events.TryGetValue(agentId, out var stream))
+            {
+                stream = [];
+                _events[agentId] = stream;
+            }
+
+            var currentVersion = stream.Count == 0 ? 0 : stream[^1].Version;
+            if (currentVersion != expectedVersion)
+                throw new EventStoreOptimisticConcurrencyException(agentId, expectedVersion, currentVersion);
+
+            var appended = events.Select(x => x.Clone()).ToList();
+            stream.AddRange(appended);
+            return Task.FromResult(new EventStoreCommitResult
+            {
+                AgentId = agentId,
+                LatestVersion = stream.Count == 0 ? 0 : stream[^1].Version,
+                CommittedEvents = { appended.Select(x => x.Clone()) },
+            });
+        }
+
+        public Task<IReadOnlyList<StateEvent>> GetEventsAsync(
+            string agentId,
+            long? fromVersion = null,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!_events.TryGetValue(agentId, out var stream))
+                return Task.FromResult<IReadOnlyList<StateEvent>>([]);
+
+            IReadOnlyList<StateEvent> result = fromVersion.HasValue
+                ? stream.Where(x => x.Version > fromVersion.Value).Select(x => x.Clone()).ToList()
+                : stream.Select(x => x.Clone()).ToList();
+            return Task.FromResult(result);
+        }
+
+        public Task<long> GetVersionAsync(string agentId, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!_events.TryGetValue(agentId, out var stream) || stream.Count == 0)
+                return Task.FromResult(0L);
+            return Task.FromResult(stream[^1].Version);
+        }
+
+        public Task<long> DeleteEventsUpToAsync(string agentId, long toVersion, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (toVersion <= 0 || !_events.TryGetValue(agentId, out var stream))
+                return Task.FromResult(0L);
+
+            var before = stream.Count;
+            stream.RemoveAll(x => x.Version <= toVersion);
+            return Task.FromResult((long)(before - stream.Count));
+        }
     }
 
     private sealed class RecordingCallbackScheduler : IActorRuntimeCallbackScheduler

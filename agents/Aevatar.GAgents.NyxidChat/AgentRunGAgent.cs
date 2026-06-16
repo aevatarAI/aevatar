@@ -90,6 +90,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             .On<AgentRunReplyGenerationRequestedEvent>(ApplyReplyGenerationRequested)
             .On<AgentRunReplyStepStateUpdatedEvent>(ApplyReplyStepStateUpdated)
             .On<AgentRunReplyProducedEvent>(ApplyReplyProduced)
+            .On<AgentRunCardDeliveryCompletionPreparedEvent>(ApplyCardDeliveryCompletionPrepared)
             .On<AgentRunReplyDispatchedEvent>(ApplyReplyDispatched)
             .On<AgentRunLarkCardDeliveryChangedEvent>(ApplyLarkCardDeliveryChanged)
             .On<AgentRunDroppedEvent>(ApplyDropped)
@@ -246,8 +247,11 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         if (!IsCurrentOutputDispatchRetry(command))
             return;
 
-        var request = BuildOutputDispatchRetryRequest(command);
-        if (command.RequiresRuntimeReplyToken)
+        var hasPendingCardCompletion = HasPendingCardDeliveryCompletion();
+        var request = hasPendingCardCompletion
+            ? BuildCardDeliveryCompletionRetryRequest()
+            : BuildOutputDispatchRetryRequest(command);
+        if (command.RequiresRuntimeReplyToken && !hasPendingCardCompletion)
         {
             _logger.LogWarning(
                 "Dropping durable output-dispatch retry without runtime reply_token: runId={RunId} correlation={CorrelationId}",
@@ -1313,6 +1317,44 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         await PersistDomainEventAsync(evt);
     }
 
+    private Task PersistReplyProducedWithCardCompletionAsync(
+        NeedsLlmReplyEvent request,
+        string runId,
+        string replyText,
+        MessageContent? outbound,
+        LlmReplyTerminalState terminalState,
+        string errorCode,
+        string errorSummary,
+        IReadOnlyList<ConversationHistoryEntry>? appendedHistory,
+        AgentRunLarkCardDeliveryCompletion completion)
+    {
+        var produced = new AgentRunReplyProducedEvent
+        {
+            RunId = runId,
+            CorrelationId = request.CorrelationId,
+            TargetActorId = request.TargetActorId,
+            TerminalState = terminalState,
+            ErrorCode = errorCode,
+            ErrorSummary = errorSummary,
+            ProducedAtUnixMs = completion.CompletedAtUnixMs > 0
+                ? completion.CompletedAtUnixMs
+                : _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+            ReplyText = replyText ?? string.Empty,
+        };
+        if (outbound is not null)
+            produced.Outbound = outbound.Clone();
+        produced.AppendedHistory.AddRange((appendedHistory ?? []).Select(entry => entry.Clone()));
+
+        return PersistDomainEventsAsync(
+        [
+            produced,
+            new AgentRunCardDeliveryCompletionPreparedEvent
+            {
+                Completion = completion.Clone(),
+            },
+        ]);
+    }
+
     private string RenderReplyWithReceipts(
         string replyText,
         IReadOnlyList<Aevatar.AI.Abstractions.AgentToolReceipt>? toolReceipts,
@@ -1591,7 +1633,8 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                         Attempt = State.GenerationAttempt,
                         Generation = Math.Max(1, State.GenerationAttempt),
                         RequestedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
-                        RequiresRuntimeReplyToken = IsRelayRequest(request),
+                        RequiresRuntimeReplyToken =
+                            IsRelayRequest(request) && !HasPendingCardDeliveryCompletion(),
                     }),
                 ct: CancellationToken.None);
             return true;
@@ -2039,6 +2082,26 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         next.TargetActorId = string.IsNullOrWhiteSpace(next.TargetActorId) ? evt.TargetActorId : next.TargetActorId;
         // Promote committed -> handed-off (ADR-0021 AgentRunGAgent-side terminal).
         next.Status = AgentRunStatus.ReplyHandedOff;
+        next.PendingCardDeliveryCompletion = null;
+        return next;
+    }
+
+    private static AgentRunGAgentState ApplyCardDeliveryCompletionPrepared(
+        AgentRunGAgentState current,
+        AgentRunCardDeliveryCompletionPreparedEvent evt)
+    {
+        var next = current.Clone();
+        if (evt.Completion is null)
+            return next;
+
+        next.RunId = string.IsNullOrWhiteSpace(next.RunId) ? evt.Completion.RunId : next.RunId;
+        next.CorrelationId = string.IsNullOrWhiteSpace(next.CorrelationId)
+            ? evt.Completion.CorrelationId
+            : next.CorrelationId;
+        next.TargetActorId = string.IsNullOrWhiteSpace(next.TargetActorId)
+            ? evt.Completion.TargetActorId
+            : next.TargetActorId;
+        next.PendingCardDeliveryCompletion = evt.Completion.Clone();
         return next;
     }
 

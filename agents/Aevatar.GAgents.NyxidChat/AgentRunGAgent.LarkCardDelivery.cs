@@ -212,6 +212,11 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
                        or AgentRunLarkCardDeliveryPhase.Aborted
                        or AgentRunLarkCardDeliveryPhase.Terminated)
         {
+            if (HasPendingCardDeliveryCompletion())
+            {
+                await DispatchPendingCardDeliveryCompletionAsync();
+                await TryFinalizeAfterDispatchAsync(BuildCardDeliveryCompletionRetryRequest(), runId);
+            }
             return true;
         }
 
@@ -704,44 +709,81 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
             Activity = eventActivity?.Clone() ?? new ChatActivity(),
         };
 
-        await PersistReplyProducedAsync(
+        var normalizedOutboundText = outboundText ?? string.Empty;
+        var completedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+        var completion = new AgentRunLarkCardDeliveryCompletion
+        {
+            CorrelationId = correlationId,
+            RunId = runId,
+            TargetActorId = request.TargetActorId,
+            CommandId = commandId,
+            Activity = CloneForDurableState(eventActivity) ?? new ChatActivity(),
+            CardMessageId = cardMessageId ?? string.Empty,
+            OutboundText = normalizedOutboundText,
+            CompletedAtUnixMs = completedAtUnixMs,
+            Outcome = deliveryFailure is null
+                ? AgentRunLarkCardDeliveryCompletionOutcome.Completed
+                : AgentRunLarkCardDeliveryCompletionOutcome.Failed,
+        };
+        completion.AppendedHistory.AddRange(appendedHistory.Select(entry => entry.Clone()));
+        if (deliveryFailure is not null)
+            completion.DeliveryFailure = deliveryFailure.Clone();
+
+        await PersistReplyProducedWithCardCompletionAsync(
             request,
             runId,
-            outboundText,
-            new MessageContent { Text = outboundText },
+            normalizedOutboundText,
+            new MessageContent { Text = normalizedOutboundText },
             LlmReplyTerminalState.Completed,
             deliveryFailure is null ? string.Empty : deliveryFailure.ErrorCode,
             deliveryFailure is null ? string.Empty : deliveryFailure.ErrorMessage,
             appendedHistory,
-            toolReceipts: null);
-
-        var completed = new LarkCardDeliveryCompletedEvent
-        {
-            CorrelationId = correlationId,
-            RunId = runId,
-            CommandId = commandId,
-            Activity = eventActivity?.Clone() ?? new ChatActivity(),
-            CardMessageId = cardMessageId ?? string.Empty,
-            OutboundText = outboundText ?? string.Empty,
-            CompletedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
-        };
-        completed.AppendedHistory.AddRange(appendedHistory.Select(entry => entry.Clone()));
-        if (deliveryFailure is not null)
-            completed.DeliveryFailure = deliveryFailure.Clone();
-
-        await DispatchCardDeliveryCompletedAsync(completed);
-        await TryFinalizeAfterDispatchAsync(request, runId);
-    }
-
-    private async Task DispatchCardDeliveryCompletedAsync(LarkCardDeliveryCompletedEvent evt)
-    {
-        var targetActorId = NormalizeOptional(State.TargetActorId);
-        if (targetActorId is null)
-            return;
+            completion);
 
         try
         {
-            await SendToAsync(targetActorId, evt, CancellationToken.None);
+            await DispatchPendingCardDeliveryCompletionAsync();
+        }
+        catch (AgentRunOutputDispatchException ex)
+        {
+            if (await TryHandleOutputDispatchFailureAsync(request, runId, ex))
+                return;
+
+            throw;
+        }
+        await TryFinalizeAfterDispatchAsync(request, runId);
+    }
+
+    private bool HasPendingCardDeliveryCompletion() =>
+        State.PendingCardDeliveryCompletion is
+        {
+            TargetActorId.Length: > 0,
+            CorrelationId.Length: > 0,
+        };
+
+    private NeedsLlmReplyEvent BuildCardDeliveryCompletionRetryRequest()
+    {
+        var completion = State.PendingCardDeliveryCompletion;
+        return new NeedsLlmReplyEvent
+        {
+            RunId = NormalizeOptional(completion?.RunId) ?? State.RunId ?? string.Empty,
+            CorrelationId = NormalizeOptional(completion?.CorrelationId) ?? State.CorrelationId ?? string.Empty,
+            TargetActorId = NormalizeOptional(completion?.TargetActorId) ?? State.TargetActorId ?? string.Empty,
+            Activity = completion?.Activity?.Clone() ?? new ChatActivity(),
+        };
+    }
+
+    private async Task DispatchPendingCardDeliveryCompletionAsync()
+    {
+        var completion = State.PendingCardDeliveryCompletion;
+        var targetActorId = NormalizeOptional(completion?.TargetActorId) ?? NormalizeOptional(State.TargetActorId);
+        if (targetActorId is null)
+            return;
+
+        var completed = ToLarkCardDeliveryCompletedEvent(completion);
+        try
+        {
+            await SendToAsync(targetActorId, completed, CancellationToken.None);
         }
         catch (Exception ex)
         {
@@ -749,6 +791,26 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
                 $"Failed to send Lark card delivery completion to conversation actor '{targetActorId}'.",
                 ex);
         }
+    }
+
+    private static LarkCardDeliveryCompletedEvent ToLarkCardDeliveryCompletedEvent(
+        AgentRunLarkCardDeliveryCompletion? completion)
+    {
+        var completed = new LarkCardDeliveryCompletedEvent
+        {
+            CorrelationId = completion?.CorrelationId ?? string.Empty,
+            RunId = completion?.RunId ?? string.Empty,
+            CommandId = completion?.CommandId ?? string.Empty,
+            Activity = completion?.Activity?.Clone() ?? new ChatActivity(),
+            CardMessageId = completion?.CardMessageId ?? string.Empty,
+            OutboundText = completion?.OutboundText ?? string.Empty,
+            CompletedAtUnixMs = completion?.CompletedAtUnixMs ?? 0,
+        };
+        completed.AppendedHistory.AddRange(
+            completion?.AppendedHistory.Select(entry => entry.Clone()) ?? []);
+        if (completion?.DeliveryFailure is not null)
+            completed.DeliveryFailure = completion.DeliveryFailure.Clone();
+        return completed;
     }
 
     private async Task DispatchTextFallbackChunkAsync(LlmReplyStreamChunkEvent chunk)
