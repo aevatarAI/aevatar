@@ -70,11 +70,14 @@ public sealed class NyxIdRealtimeProviderCredentialResolverTests
     }
 
     [Fact]
-    public void Broker_is_enabled_only_when_service_slug_configured()
+    public void Broker_is_enabled_by_default_with_conventional_slug()
     {
-        IsBrokerEnabled(BuildConfig(slug: null)).Should().BeFalse();
-        IsBrokerEnabled(BuildConfig(slug: "")).Should().BeFalse();
-        IsBrokerEnabled(BuildConfig(slug: "openai-realtime")).Should().BeTrue();
+        // Voice broker is ON by default even when the deployment config/secret is absent or empty,
+        // so a wiped config cannot disable voice. A configured slug still overrides the default.
+        IsBrokerEnabled(BuildConfig(slug: null)).Should().BeTrue();
+        IsBrokerEnabled(BuildConfig(slug: "")).Should().BeTrue();
+        BuildBrokerOptions(BuildConfig(slug: null)).ServiceSlug.Should().Be("openai-realtime");
+        BuildBrokerOptions(BuildConfig(slug: "custom-openai")).ServiceSlug.Should().Be("custom-openai");
     }
 
     [Fact]

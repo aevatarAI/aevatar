@@ -409,15 +409,26 @@ public static class ServiceCollectionExtensions
         return names.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
+    // Refactor (cluster-voice-nyxid-ephemeral-broker): the broker slug defaults to
+    // NyxIdRealtimeProviderCredentialOptions.DefaultServiceSlug so voice stays enabled even when the
+    // deployment config/secret is wiped on redeploy — config only overrides the slug, never disables it.
+    private static string ResolveNyxIdRealtimeServiceSlug(IConfiguration configuration)
+    {
+        var configured = configuration["Aevatar:VoicePresence:OpenAI:Nyxid:ServiceSlug"]?.Trim();
+        return string.IsNullOrWhiteSpace(configured)
+            ? NyxIdRealtimeProviderCredentialOptions.DefaultServiceSlug
+            : configured;
+    }
+
     private static bool IsNyxIdRealtimeBrokerEnabled(IConfiguration configuration) =>
-        !string.IsNullOrWhiteSpace(configuration["Aevatar:VoicePresence:OpenAI:Nyxid:ServiceSlug"]);
+        !string.IsNullOrWhiteSpace(ResolveNyxIdRealtimeServiceSlug(configuration));
 
     private static NyxIdRealtimeProviderCredentialOptions BuildNyxIdRealtimeCredentialOptions(
         IConfiguration configuration)
     {
         var options = new NyxIdRealtimeProviderCredentialOptions
         {
-            ServiceSlug = configuration["Aevatar:VoicePresence:OpenAI:Nyxid:ServiceSlug"]?.Trim() ?? string.Empty,
+            ServiceSlug = ResolveNyxIdRealtimeServiceSlug(configuration),
         };
 
         var mintPath = configuration["Aevatar:VoicePresence:OpenAI:Nyxid:MintPath"];
