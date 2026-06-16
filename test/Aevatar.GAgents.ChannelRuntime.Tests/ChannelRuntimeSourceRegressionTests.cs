@@ -163,15 +163,16 @@ public sealed class ChannelRuntimeSourceRegressionTests
     }
 
     [Fact]
-    public void Conversation_actor_must_not_switch_on_reply_operation_step_payload_cases()
+    public void Conversation_actor_must_not_switch_on_lark_card_reply_operation_step_payload_cases()
     {
         var actorSource = StripComments(ReadRepositoryFile(
             "agents/Aevatar.GAgents.Channel.Runtime/Conversation/ConversationGAgent.cs"));
 
-        actorSource.Should().NotContain("PayloadCase");
-        actorSource.Should().NotContain("PayloadOneofCase");
-        actorSource.Should().NotContain("ExecuteNyxRelayTextOperationStepAsync");
+        actorSource.Should().NotContain("PayloadOneofCase.LarkCard");
         actorSource.Should().NotContain("ExecuteLarkCardOperationStepAsync");
+        actorSource.Should().NotContain("HandleLlmReplyCardStreamChunkAsync");
+        actorSource.Should().NotContain("HandleLarkCardOperationCompletedAsync");
+        actorSource.Should().NotContain("HandleLarkCardOperationTimeoutFiredAsync");
     }
 
     [Fact]
