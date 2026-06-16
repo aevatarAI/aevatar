@@ -803,6 +803,44 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
+    public async Task GenerateReplyAsync_WhenSenderBoundMutationHasNoSenderToken_ShouldDenyBeforeApprovalAndExecution()
+    {
+        var tool = new ApprovalRequiredTool();
+        var approvalHandler = new CountingApprovalHandler();
+        var providerFactory = new ToolResultEchoingProviderFactory();
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            toolSources: [new SingleToolSource(tool)],
+            approvalHandler: approvalHandler);
+
+        var reply = await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-sender-bound-no-token-write",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-sender-bound-no-token" },
+                Content = new MessageContent { Text = "run tool" },
+            },
+            new Dictionary<string, string>(),
+            Control(token: "owner-token"),
+            ToolContext("bnd_sender"),
+            streamingSink: null,
+            CancellationToken.None);
+
+        providerFactory.Requests.Should().HaveCount(2);
+        var toolResult = providerFactory.Requests[1].Messages
+            .Should()
+            .ContainSingle(message => message.Role == "tool")
+            .Subject
+            .Content;
+        toolResult.Should().Contain("credential_denied");
+        toolResult.Should().Contain("Owner credentials were not used");
+        reply.Text.Should().Contain("credential_denied");
+        reply.Text.Should().Contain("Owner credentials were not used");
+        approvalHandler.RequestCount.Should().Be(0);
+        tool.ExecuteCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task GenerateReplyAsync_WithLocalSkillCatalog_AddsLocalSkillsWithoutRemoteFetcherWarning()
     {
         var logger = new ListLogger<NyxIdConversationReplyGenerator>();
@@ -1986,6 +2024,8 @@ public sealed class ConversationReplyGeneratorTests
     {
         public string Name => "tool-result-echoing";
 
+        public List<LLMRequest> Requests { get; } = [];
+
         public ILLMProvider GetProvider(string name) => this;
 
         public ILLMProvider GetDefault() => this;
@@ -1996,6 +2036,7 @@ public sealed class ConversationReplyGeneratorTests
             LLMRequest request,
             [EnumeratorCancellation] CancellationToken ct = default)
         {
+            Requests.Add(request);
             var toolResult = request.Messages.LastOrDefault(static message => message.Role == "tool")?.Content;
             if (toolResult is not null)
             {
