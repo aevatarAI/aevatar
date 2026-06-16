@@ -231,7 +231,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             plan.ToolContext,
             plan.LlmControl,
             workItem.StepState.Round,
-            workItem.StepState.FinalNoToolsStep);
+            workItem.StepState.FinalNoToolsStep,
+            toolReceipts: workItem.StepState.ToolReceipts);
         if (workItem.StepState.FinalNoToolsStep && llmRequest.Tools is { Count: > 0 })
         {
             // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
