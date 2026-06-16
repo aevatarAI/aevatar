@@ -31,6 +31,7 @@ import {
   type ScheduledDispatchListResult,
   type ScheduledDispatchMutationReceipt,
   type ScheduledDispatchPreview,
+  type ScheduledDispatchRunNowReceipt,
   type ScheduledDispatchSummary,
 } from "@/shared/api/scheduledDispatchApi";
 import { formatCompactDateTime } from "@/shared/datetime/dateTime";
@@ -79,6 +80,11 @@ type AutomationFormState = {
   readonly prompt: string;
   readonly timezone: string;
 };
+
+type ManualRunFeedback = Pick<
+  ScheduledDispatchRunNowReceipt,
+  "ackedAt" | "commandId" | "correlationId" | "scheduledFireAt"
+>;
 
 const scheduleListTake = 200;
 const scheduleListRetryLimit = 4;
@@ -581,12 +587,39 @@ function scheduleListRetryDelay(attemptIndex: number): number {
 
 function resolveScheduleStatus(
   schedule: ScheduledDispatchSummary,
-): "active" | "error" | "paused" {
+  manualRunFeedback?: ManualRunFeedback,
+): "active" | "error" | "paused" | "runRequested" {
+  if (manualRunFeedback) {
+    return "runRequested";
+  }
+
   if (trimText(schedule.lastError)) {
     return "error";
   }
 
   return schedule.enabled ? "active" : "paused";
+}
+
+function hasBackendObservedManualRun(
+  schedule: ScheduledDispatchSummary,
+  feedback: ManualRunFeedback,
+): boolean {
+  const commandId = trimText(feedback.commandId);
+  const correlationId = trimText(feedback.correlationId);
+  if (commandId && trimText(schedule.lastCommandId) === commandId) {
+    return true;
+  }
+  if (correlationId && trimText(schedule.lastCorrelationId) === correlationId) {
+    return true;
+  }
+
+  const lastFireAt = schedule.lastFireAt ? Date.parse(schedule.lastFireAt) : NaN;
+  const scheduledFireAt = feedback.scheduledFireAt
+    ? Date.parse(feedback.scheduledFireAt)
+    : NaN;
+  return Number.isFinite(lastFireAt) &&
+    Number.isFinite(scheduledFireAt) &&
+    lastFireAt >= scheduledFireAt;
 }
 
 const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
@@ -618,6 +651,8 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
   >([]);
   const [localScheduleEnabledOverrides, setLocalScheduleEnabledOverrides] =
     React.useState<ReadonlyMap<string, boolean>>(() => new Map());
+  const [manualRunFeedbackByScheduleId, setManualRunFeedbackByScheduleId] =
+    React.useState<ReadonlyMap<string, ManualRunFeedback>>(() => new Map());
   const [highlightedScheduleId, setHighlightedScheduleId] = React.useState("");
   const delayedScheduleRefreshRef = React.useRef<ReturnType<typeof setTimeout> | null>(
     null,
@@ -851,6 +886,39 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
     localScheduleEnabledOverrides,
     schedulesQuery.data?.items,
   ]);
+  React.useEffect(() => {
+    if (manualRunFeedbackByScheduleId.size === 0) {
+      return;
+    }
+
+    const backendSchedules = schedulesQuery.data?.items ?? [];
+    if (backendSchedules.length === 0) {
+      return;
+    }
+
+    const backendScheduleById = new Map(
+      backendSchedules.map((schedule) => [
+        trimText(schedule.scheduleId),
+        schedule,
+      ]),
+    );
+    setManualRunFeedbackByScheduleId((current) => {
+      let changed = false;
+      const next = new Map(current);
+      for (const [scheduleId, feedback] of current) {
+        const backendSchedule = backendScheduleById.get(scheduleId);
+        if (backendSchedule && hasBackendObservedManualRun(backendSchedule, feedback)) {
+          next.delete(scheduleId);
+          changed = true;
+        }
+      }
+
+      return changed ? next : current;
+    });
+  }, [
+    manualRunFeedbackByScheduleId,
+    schedulesQuery.data?.items,
+  ]);
 
   const updateScheduleEnabledLocally = React.useCallback(
     (scheduleId: string, enabled: boolean) => {
@@ -876,6 +944,37 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
             : schedule,
         ),
       );
+    },
+    [],
+  );
+  const showManualRunFeedback = React.useCallback(
+    (scheduleId: string, receipt: ScheduledDispatchRunNowReceipt) => {
+      const normalizedScheduleId =
+        trimText(scheduleId) || trimText(receipt.scheduleId);
+      if (!normalizedScheduleId) {
+        return;
+      }
+
+      setManualRunFeedbackByScheduleId((current) => {
+        const next = new Map(current);
+        next.set(normalizedScheduleId, {
+          ackedAt: receipt.ackedAt,
+          commandId: receipt.commandId,
+          correlationId: receipt.correlationId,
+          scheduledFireAt: receipt.scheduledFireAt,
+        });
+        return next;
+      });
+      setHighlightedScheduleId(normalizedScheduleId);
+      if (highlightScheduleRef.current) {
+        clearTimeout(highlightScheduleRef.current);
+      }
+      highlightScheduleRef.current = setTimeout(() => {
+        highlightScheduleRef.current = null;
+        setHighlightedScheduleId((current) =>
+          current === normalizedScheduleId ? "" : current,
+        );
+      }, createdScheduleHighlightMs);
     },
     [],
   );
@@ -1048,7 +1147,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
     },
   });
   const runNowMutation = useMutation({
-    mutationFn: scheduledDispatchApi.runNow,
+    mutationFn: (scheduleId: string) => scheduledDispatchApi.runNow(scheduleId),
     onError: (error) => {
       void message.error(
         intl.formatMessage(
@@ -1060,14 +1159,15 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
         ),
       );
     },
-    onSuccess: async () => {
+    onSuccess: (receipt, scheduleId) => {
       void message.success(
         intl.formatMessage({
           id: "teams.automations.messages.runNowSuccess",
           defaultMessage: "Run requested.",
         }),
       );
-      await invalidateSchedules();
+      showManualRunFeedback(scheduleId, receipt);
+      scheduleDelayedRefresh();
     },
   });
   const enableMutation = useMutation({
@@ -1297,8 +1397,11 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
     });
   }, [saveAutomation]);
 
-  const renderStatusPill = (schedule: ScheduledDispatchSummary) => {
-    const status = resolveScheduleStatus(schedule);
+  const renderStatusPill = (
+    schedule: ScheduledDispatchSummary,
+    manualRunFeedback?: ManualRunFeedback,
+  ) => {
+    const status = resolveScheduleStatus(schedule, manualRunFeedback);
     const statusStyle =
       status === "error"
         ? {
@@ -1306,6 +1409,12 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
             border: `1px solid ${token.colorErrorBorder}`,
             color: token.colorError,
           }
+        : status === "runRequested"
+          ? {
+              background: token.colorInfoBg,
+              border: `1px solid ${token.colorInfoBorder}`,
+              color: token.colorInfo,
+            }
         : status === "paused"
           ? {
               background: token.colorWarningBg,
@@ -1323,6 +1432,11 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
             id: "teams.automations.status.error",
             defaultMessage: "Error",
           })
+        : status === "runRequested"
+          ? intl.formatMessage({
+              id: "teams.automations.status.runRequested",
+              defaultMessage: "Run requested",
+            })
         : status === "paused"
           ? intl.formatMessage({
               id: "teams.automations.status.paused",
@@ -1649,13 +1763,16 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
           );
           const statusMutation =
             schedule.enabled ? disableMutation : enableMutation;
-          const status = resolveScheduleStatus(schedule);
+          const manualRunFeedback = manualRunFeedbackByScheduleId.get(scheduleId);
+          const status = resolveScheduleStatus(schedule, manualRunFeedback);
           const isHighlighted = highlightedScheduleId === scheduleId;
           const rowBorderColor =
             isHighlighted
               ? token.colorPrimaryBorder
               : status === "error"
                 ? token.colorErrorBorder
+                : status === "runRequested"
+                  ? token.colorInfoBorder
                 : status === "paused"
                   ? token.colorWarningBorder
                   : token.colorBorderSecondary;
@@ -1670,7 +1787,20 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
             isHighlighted ? token.colorPrimaryBorder : undefined;
 
           const scheduleSecondaryText =
-            schedule.nextFireAt
+            manualRunFeedback
+              ? intl.formatMessage(
+                  {
+                    id: "teams.automations.row.manualRunRequested",
+                    defaultMessage: "Run requested {time}",
+                  },
+                  {
+                    time: formatScheduleTime(
+                      manualRunFeedback.ackedAt || manualRunFeedback.scheduledFireAt,
+                      "--",
+                    ),
+                  },
+                )
+              : schedule.nextFireAt
               ? intl.formatMessage(
                   {
                     id: "teams.automations.row.nextRun",
@@ -1713,7 +1843,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
             >
               <div style={{ display: "grid", gap: 7, minWidth: 0 }}>
                 <div style={automationNameLineStyle}>
-                  {renderStatusPill(schedule)}
+                  {renderStatusPill(schedule, manualRunFeedback)}
                   <Typography.Text ellipsis strong>
                     {trimText(schedule.displayName) ||
                       intl.formatMessage({

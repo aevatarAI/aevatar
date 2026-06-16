@@ -2260,6 +2260,48 @@ describe("TeamDetailPage", () => {
     expect(message.success).toHaveBeenCalledWith("自动化已恢复。");
   });
 
+  it("shows manual run feedback immediately without resuming a paused automation", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?tab=automations",
+    );
+    (scheduledDispatchApi.listAll as jest.Mock).mockImplementation(async () => ({
+      items: [
+        mockCreateScheduledDispatchSummary({
+          enabled: false,
+          nextFireAt: null,
+        }),
+      ],
+      nextCursor: null,
+      totalCount: 1,
+    }));
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("Daily escalation digest")).toBeTruthy();
+    expect(screen.getAllByText("已暂停").length).toBeGreaterThan(0);
+    expect(scheduledDispatchApi.listAll).toHaveBeenCalledTimes(1);
+    fireEvent.click(await screen.findByRole("button", { name: "立即运行" }));
+
+    await waitFor(() => {
+      expect(scheduledDispatchApi.runNow).toHaveBeenCalledWith("sch-alpha");
+    });
+    expect(screen.getAllByText("已触发").length).toBeGreaterThan(0);
+    expect(screen.getByText(/已在 .* 请求运行/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "恢复" })).toBeTruthy();
+    expect(message.success).toHaveBeenCalledWith("已请求立即运行。");
+    expect(scheduledDispatchApi.listAll).toHaveBeenCalledTimes(1);
+
+    await waitFor(
+      () => {
+        expect(scheduledDispatchApi.listAll).toHaveBeenCalledTimes(2);
+      },
+      { timeout: 2_000 },
+    );
+    expect(screen.getAllByText("已触发").length).toBeGreaterThan(0);
+  });
+
   it("creates member recurring work with the published service identity", async () => {
     window.history.replaceState(
       {},
