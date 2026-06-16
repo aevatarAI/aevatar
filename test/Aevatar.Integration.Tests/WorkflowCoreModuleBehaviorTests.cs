@@ -1223,6 +1223,112 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
         }
 
         [Fact]
+        public async Task TransformModule_JsonParseParametersPath_ShouldParseSelectedJsonStringAsRootOutput()
+        {
+            var module = new TransformModule();
+            var ctx = CreateContext();
+
+            await module.HandleAsync(
+                Envelope(new StepRequestEvent
+                {
+                    StepId = "json-parse-path",
+                    StepType = "transform",
+                    Input = """
+                            {
+                              "output": {
+                                "stdout": "{\"route\":\"ROUTE_REJECTED\",\"report\":\"denied\"}"
+                              }
+                            }
+                            """,
+                    Parameters =
+                    {
+                        ["op"] = "json_parse",
+                        ["path"] = "output.stdout",
+                    },
+                }),
+                ctx,
+                CancellationToken.None);
+
+            var completion = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+            completion.Success.Should().BeTrue();
+
+            using var output = JsonDocument.Parse(completion.Output);
+            output.RootElement.ValueKind.Should().Be(JsonValueKind.Object);
+            output.RootElement.GetProperty("route").GetString().Should().Be("ROUTE_REJECTED");
+            output.RootElement.GetProperty("report").GetString().Should().Be("denied");
+        }
+
+        [Fact]
+        public async Task TransformModule_JsonParseParametersJsonPathAlias_ShouldParseSelectedJsonStringAsRootOutput()
+        {
+            var module = new TransformModule();
+            var ctx = CreateContext();
+
+            await module.HandleAsync(
+                Envelope(new StepRequestEvent
+                {
+                    StepId = "json-parse-json-path",
+                    StepType = "transform",
+                    Input = """
+                            {
+                              "output": {
+                                "stdout": "{\"route\":\"ROUTE_APPROVED\",\"report\":\"accepted\"}"
+                              }
+                            }
+                            """,
+                    Parameters =
+                    {
+                        ["op"] = "json_parse",
+                        ["json_path"] = "output.stdout",
+                    },
+                }),
+                ctx,
+                CancellationToken.None);
+
+            var completion = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+            completion.Success.Should().BeTrue();
+
+            using var output = JsonDocument.Parse(completion.Output);
+            output.RootElement.ValueKind.Should().Be(JsonValueKind.Object);
+            output.RootElement.GetProperty("route").GetString().Should().Be("ROUTE_APPROVED");
+            output.RootElement.GetProperty("report").GetString().Should().Be("accepted");
+        }
+
+        [Theory]
+        [InlineData("missing-path", """{"output":{"stdout":"{\"route\":\"ROUTE_REJECTED\"}"}}""", null, "path")]
+        [InlineData("missing-selected-node", """{"output":{}}""", "output.stdout", "output.stdout")]
+        [InlineData("selected-node-not-string", """{"output":{"stdout":{"route":"ROUTE_REJECTED"}}}""", "output.stdout", "string")]
+        [InlineData("invalid-json-string", """{"output":{"stdout":"not-json"}}""", "output.stdout", "JSON")]
+        public async Task TransformModule_JsonParseParametersFailures_ShouldPublishFailedCompletion(
+            string stepId,
+            string input,
+            string? path,
+            string expectedError)
+        {
+            var module = new TransformModule();
+            var ctx = CreateContext();
+            var request = new StepRequestEvent
+            {
+                StepId = stepId,
+                StepType = "transform",
+                Input = input,
+                Parameters = { ["op"] = "json_parse" },
+            };
+
+            if (path is not null)
+            {
+                request.Parameters["path"] = path;
+            }
+
+            await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+
+            var completion = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+            completion.StepId.Should().Be(stepId);
+            completion.Success.Should().BeFalse();
+            completion.Error.Should().Contain(expectedError);
+        }
+
+        [Fact]
         public async Task TransformModule_ShouldApplyTypedNumericAndGroupOperations()
         {
             var module = new TransformModule();
