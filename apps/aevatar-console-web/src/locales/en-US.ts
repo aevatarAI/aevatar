@@ -625,7 +625,7 @@ const enUSMessages = {
     'Published service is not visible yet.',
   'pages.teammemberinvoke.service.pending.description':
     'The member binding exists, but the service catalog has not exposed its callable endpoints yet.',
-  'pages.teammemberinvoke.title': 'Run member',
+  'pages.teammemberinvoke.title': 'Run workflow member',
   'pages.teammemberinvoke.revision.ready': 'Ready',
   'pages.teammemberinvoke.service.bound': 'Bound service',
   'pages.teammemberinvoke.unbound': 'This workflow member is not bound yet.',
@@ -636,7 +636,7 @@ const enUSMessages = {
   'pages.teammemberinvoke.workflow.only.description':
     "This page only runs workflow members. Use the member's own surface for other implementation kinds.",
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.description':
-    'This Phase 1 page only loads workflow members through a stable workflow reference. Add that backend/read-model reference before editing this member here.',
+    'You can build or paste the workflow here. Saving creates a reusable workflow draft until the member link is materialized.',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.title':
     'No workflow draft is linked to this member yet.',
   'teamMemberWorkflowStudio.common.close': 'Close',
@@ -646,16 +646,27 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.executionPanel.emptyEvidence':
     'Usage, snapshots, and raw observed events will appear here when the backend emits them.',
   'teamMemberWorkflowStudio.executionPanel.emptyLogs':
-    'Run logs will appear here after the workflow draft returns events.',
+    'Step outputs will appear here after the workflow draft runs.',
+  'teamMemberWorkflowStudio.executionPanel.emptyNodeInput':
+    'No user input provided.',
+  'teamMemberWorkflowStudio.executionPanel.emptyNodeOutput':
+    'No output captured.',
   'teamMemberWorkflowStudio.executionPanel.emptyOutput':
     'Output will appear after the draft run emits a result.',
   'teamMemberWorkflowStudio.executionPanel.evidence': 'Evidence frames',
   'teamMemberWorkflowStudio.executionPanel.events': 'Events',
   'teamMemberWorkflowStudio.executionPanel.items': 'items',
   'teamMemberWorkflowStudio.executionPanel.logs': 'Logs',
+  'teamMemberWorkflowStudio.executionPanel.node': 'Node',
+  'teamMemberWorkflowStudio.executionPanel.nodeInput': 'Input',
+  'teamMemberWorkflowStudio.executionPanel.nodeInteraction': 'Interaction',
+  'teamMemberWorkflowStudio.executionPanel.nodeOutput': 'Output',
+  'teamMemberWorkflowStudio.executionPanel.nodePrompt': 'Prompt',
+  'teamMemberWorkflowStudio.executionPanel.nodeRunCardAria':
+    '{stepId} node run',
   'teamMemberWorkflowStudio.executionPanel.output': 'Output',
   'teamMemberWorkflowStudio.executionPanel.rawFrames':
-    '{count} run event(s) received, but no step logs are available yet.',
+    '{count} run event(s) received, but no step output is available yet.',
   'teamMemberWorkflowStudio.executionPanel.resultFirst': 'Result',
   'teamMemberWorkflowStudio.executionPanel.runLog': 'Run log',
   'teamMemberWorkflowStudio.executionPanel.steps': 'Steps',
@@ -683,18 +694,30 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.header.addNode': 'Add node',
   'teamMemberWorkflowStudio.header.back': 'Back',
   'teamMemberWorkflowStudio.header.currentTeam': 'Current team',
+  'teamMemberWorkflowStudio.header.confirmDeleteConnection':
+    'Delete the selected connection? This cannot be undone.',
+  'teamMemberWorkflowStudio.header.confirmDeleteNode':
+    'Delete the selected node? This cannot be undone.',
   'teamMemberWorkflowStudio.header.deleteConnection': 'Delete connection',
   'teamMemberWorkflowStudio.header.deleteNode': 'Delete node',
+  'teamMemberWorkflowStudio.header.deleteSelectedConnection':
+    'Delete selected connection',
+  'teamMemberWorkflowStudio.header.deleteSelectedNode': 'Delete selected node',
   'teamMemberWorkflowStudio.header.editWorkflowName': 'Edit workflow name',
   'teamMemberWorkflowStudio.header.identityAria': 'Workflow identity',
   'teamMemberWorkflowStudio.header.inputSet': 'input set',
+  'teamMemberWorkflowStudio.header.more': 'More',
+  'teamMemberWorkflowStudio.header.moreActions': 'More workflow actions',
   'teamMemberWorkflowStudio.header.nodeActionsAria':
     'Workflow draft and node actions',
   'teamMemberWorkflowStudio.header.pasteYaml': 'Paste YAML',
   'teamMemberWorkflowStudio.header.primaryActionsAria':
     'Workflow primary actions',
+  'teamMemberWorkflowStudio.header.prepareDraftRun': 'Prepare draft run',
+  'teamMemberWorkflowStudio.header.publish': 'Publish',
   'teamMemberWorkflowStudio.header.runMessage': 'Run message',
-  'teamMemberWorkflowStudio.header.runOptionsAria': 'Run options',
+  'teamMemberWorkflowStudio.header.refreshPublishStatus': 'Refresh status',
+  'teamMemberWorkflowStudio.header.run': 'Run',
   'teamMemberWorkflowStudio.header.runActiveMember': 'Run draft',
   'teamMemberWorkflowStudio.header.runDraft': 'Run draft',
   'teamMemberWorkflowStudio.header.save': 'Save',
@@ -707,12 +730,20 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.header.publish.error': 'Error',
   'teamMemberWorkflowStudio.header.publish.published': 'Published',
   'teamMemberWorkflowStudio.header.publish.publishing': 'Publishing',
+  'teamMemberWorkflowStudio.header.publish.publishingStatus': 'Publishing',
   'teamMemberWorkflowStudio.header.publishMember': 'Publish member workflow',
   'teamMemberWorkflowStudio.header.publishMemberShort': 'Publish member',
   'teamMemberWorkflowStudio.header.teamBreadcrumb': 'Team',
   'teamMemberWorkflowStudio.header.unsavedChanges': 'Unsaved changes',
+  'teamMemberWorkflowStudio.header.viewYaml': 'View YAML',
+  'teamMemberWorkflowStudio.header.viewYamlUnavailable':
+    'Load the workflow draft before viewing YAML.',
   'teamMemberWorkflowStudio.header.viewsAria': 'Workflow views',
   'teamMemberWorkflowStudio.header.workflowTitleAria': 'Workflow title',
+  'teamMemberWorkflowStudio.header.yaml': 'YAML',
+  'teamMemberWorkflowStudio.header.yamlActions': 'YAML',
+  'teamMemberWorkflowStudio.header.yamlActionsTitle':
+    'View or import workflow YAML',
   'teamMemberWorkflowStudio.nodeDetail.advancedRawConfiguration':
     'Advanced raw configuration',
   'teamMemberWorkflowStudio.nodeDetail.advancedRawConfigurationDescription':
@@ -754,12 +785,18 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.nodeLibrary.title': 'Node library',
   'teamMemberWorkflowStudio.resize.executionPanel': 'Resize run console',
   'teamMemberWorkflowStudio.resize.sidePanel': 'Resize side panel',
-  'teamMemberWorkflowStudio.runOptionsPanel.messageLabel':
+  'teamMemberWorkflowStudio.draftRunPanel.closeAria':
+    'Close draft run panel',
+  'teamMemberWorkflowStudio.draftRunPanel.emptyInputHint':
+    'Leave blank to run this draft without user input.',
+  'teamMemberWorkflowStudio.draftRunPanel.messageLabel':
     'Draft run input',
-  'teamMemberWorkflowStudio.runOptionsPanel.messagePlaceholder':
+  'teamMemberWorkflowStudio.draftRunPanel.messagePlaceholder':
     'Optional input sent to this workflow draft run',
-  'teamMemberWorkflowStudio.runOptionsPanel.sectionAria': 'Run options panel',
-  'teamMemberWorkflowStudio.runOptionsPanel.title': 'Run options',
+  'teamMemberWorkflowStudio.draftRunPanel.sectionAria': 'Draft run panel',
+  'teamMemberWorkflowStudio.draftRunPanel.startDraftRun':
+    'Start draft run',
+  'teamMemberWorkflowStudio.draftRunPanel.title': 'Draft run',
   'teamMemberWorkflowStudio.runsPanel.description':
     'This tab only shows runs with an explicit link to the current workflow member.',
   'teamMemberWorkflowStudio.runsPanel.empty':
@@ -772,12 +809,56 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.runsPanel.sectionAria': 'Member runs',
   'teamMemberWorkflowStudio.runsPanel.title': 'Member runs',
   'teamMemberWorkflowStudio.runsPanel.unknownStatus': 'unknown',
-  'teamMemberWorkflowStudio.yamlModal.import': 'Import',
-  'teamMemberWorkflowStudio.yamlModal.placeholder':
+  'teamMemberWorkflowStudio.yamlImportPanel.cancel': 'Cancel',
+  'teamMemberWorkflowStudio.yamlImportPanel.closeAria':
+    'Close paste YAML panel',
+  'teamMemberWorkflowStudio.yamlImportPanel.import': 'Import',
+  'teamMemberWorkflowStudio.yamlImportPanel.placeholder':
     'name: Untitled workflow\nsteps:\n  - id: triage\n    type: llm_call',
-  'teamMemberWorkflowStudio.yamlModal.textareaAria': 'Workflow YAML',
-  'teamMemberWorkflowStudio.yamlModal.title': 'Paste workflow YAML',
+  'teamMemberWorkflowStudio.yamlImportPanel.sectionAria':
+    'Paste workflow YAML panel',
+  'teamMemberWorkflowStudio.yamlImportPanel.subtitle':
+    'Import into the current draft',
+  'teamMemberWorkflowStudio.yamlImportPanel.textareaAria': 'Workflow YAML',
+  'teamMemberWorkflowStudio.yamlImportPanel.title': 'Paste YAML',
+  'teamMemberWorkflowStudio.yamlPanel.closeAria': 'Close YAML panel',
+  'teamMemberWorkflowStudio.yamlPanel.copy': 'Copy',
+  'teamMemberWorkflowStudio.yamlPanel.copyFailed': 'Failed to copy YAML.',
+  'teamMemberWorkflowStudio.yamlPanel.copySuccess': 'YAML copied.',
+  'teamMemberWorkflowStudio.yamlPanel.empty':
+    'No YAML is available for this draft.',
+  'teamMemberWorkflowStudio.yamlPanel.retry': 'Retry',
+  'teamMemberWorkflowStudio.yamlPanel.sectionAria': 'Workflow YAML panel',
+  'teamMemberWorkflowStudio.yamlPanel.subtitle': 'Current draft source',
+  'teamMemberWorkflowStudio.yamlPanel.textareaAria': 'Current workflow YAML',
+  'teamMemberWorkflowStudio.yamlPanel.title': 'Workflow YAML',
   'pages.studio.studiomembercurrentrunpanel.details': 'Details',
+  'pages.studio.studiomemberinvokeinspector.copy':
+    'Endpoint, payload, run events, and recent history are available here without taking over the task page.',
+  'pages.studio.studiomemberinvokeinspector.current.run': 'Current run',
+  'pages.studio.studiomemberinvokeinspector.close':
+    'Close details',
+  'pages.studio.studiomemberinvokeinspector.drag.handle':
+    'Drag details panel',
+  'pages.studio.studiomemberinvokeinspector.endpoint': 'Endpoint',
+  'pages.studio.studiomemberinvokeinspector.endpoint.2': 'Endpoint',
+  'pages.studio.studiomemberinvokeinspector.history': 'History',
+  'pages.studio.studiomemberinvokeinspector.payload': 'Payload',
+  'pages.studio.studiomemberinvokeinspector.payload.base64': 'Payload base64',
+  'pages.studio.studiomemberinvokeinspector.payload.base64.2':
+    'Payload base64',
+  'pages.studio.studiomemberinvokeinspector.payload.type.url':
+    'Payload type URL',
+  'pages.studio.studiomemberinvokeinspector.payload.type.url.2':
+    'Payload type URL',
+  'pages.studio.studiomemberinvokeinspector.paste.encoded.protobuf.payload.when':
+    'Paste encoded protobuf payload when this type cannot be built from text.',
+  'pages.studio.studiomemberinvokeinspector.revision': 'Revision',
+  'pages.studio.studiomemberinvokeinspector.resize.handle':
+    'Resize details panel',
+  'pages.studio.studiomemberinvokeinspector.run': 'Run',
+  'pages.studio.studiomemberinvokeinspector.service.target': 'Service target',
+  'pages.studio.studiomemberinvokeinspector.title': 'Details',
   'pages.studio.studiomembercurrentrunpanel.diagnostics': 'Diagnostics',
   'pages.studio.studiomembercurrentrunpanel.open.diagnostics': 'Open diagnostics',
   'pages.studio.studiomembercurrentrunpanel.this.failed.only.the.invoke.run.open.diagnostics':
