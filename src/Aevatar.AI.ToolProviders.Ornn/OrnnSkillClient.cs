@@ -236,6 +236,55 @@ public sealed class OrnnSkillClient
         }
     }
 
+    public async Task<OrnnSkillPublishResponse> UpdateSkillAsync(
+        string accessToken,
+        string skillId,
+        byte[] zipBytes,
+        CancellationToken ct = default)
+    {
+        var path = $"/api/v1/skills/{Uri.EscapeDataString(skillId)}";
+        using var timeoutCts = new CancellationTokenSource(_perCallTimeout);
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+
+        try
+        {
+            var response = await _nyxApi.ProxyRequestBinaryAsync(
+                token: accessToken,
+                slug: _options.NyxIdSlug,
+                path: path,
+                method: "PUT",
+                body: zipBytes,
+                contentType: "application/zip",
+                extraHeaders: null,
+                ct: linkedCts.Token);
+
+            if (TryUnwrapNyxIdProxyError(response, out var proxyError))
+                return new OrnnSkillPublishResponse(false, response, proxyError.Detail);
+
+            return new OrnnSkillPublishResponse(true, response);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
+        {
+            _logger.LogWarning(
+                "Ornn skill update exceeded {TimeoutSeconds}s per-call budget for '{SkillId}'",
+                (int)_perCallTimeout.TotalSeconds,
+                skillId);
+            return new OrnnSkillPublishResponse(
+                false,
+                string.Empty,
+                $"Ornn skill update exceeded {(int)_perCallTimeout.TotalSeconds}s budget.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Ornn skill update failed for '{SkillId}'", skillId);
+            return new OrnnSkillPublishResponse(false, string.Empty, ex.Message);
+        }
+    }
+
     /// <summary>
     /// Detect the wrapped error envelope NyxIdApiClient.SendAsync emits when the upstream
     /// returns non-2xx (<c>{"error": true, "status": N, "body": "..."}</c>) so callers see a

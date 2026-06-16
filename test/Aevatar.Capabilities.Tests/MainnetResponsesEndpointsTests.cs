@@ -535,7 +535,7 @@ public sealed class MainnetResponsesEndpointsTests
 
         tools.Select(static tool => tool.Name)
             .Should()
-            .Equal("use_skill", "ornn_search_skills", "ornn_publish_skill");
+            .Equal("use_skill", "ornn_search_skills", "ornn_publish_skill", "ornn_update_skill");
     }
 
     [Fact]
