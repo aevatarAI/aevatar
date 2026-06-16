@@ -143,6 +143,7 @@ message AgentToolChannelContextPayload {
   string message_id = 4;
   string platform_message_id = 5;
   string delivery_target_id = 6;
+  string durable_reply_credential_ref = 7;
 }
 
 message AgentToolSenderBindingContextPayload {

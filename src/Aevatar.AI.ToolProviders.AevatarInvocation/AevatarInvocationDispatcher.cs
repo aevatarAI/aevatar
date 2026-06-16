@@ -680,7 +680,6 @@ public sealed class AevatarInvocationDispatcher
             return null;
 
         var platformMessageId = Normalize(context.Channel.PlatformMessageId) ??
-                                Normalize(TryGetExternalMetadata(context, "channel.platform_message_id")) ??
                                 string.Empty;
         var registrationScopeId = Normalize(context.Channel.RegistrationScopeId) ??
                                   Normalize(context.Caller.ScopeId) ??
@@ -711,9 +710,7 @@ public sealed class AevatarInvocationDispatcher
         if (Normalize(context.Channel.Platform) is null || Normalize(context.Channel.MessageId) is null)
             return WorkflowBackgroundDeliveryResolution.Disabled();
 
-        var credentialRef = Normalize(TryGetExternalMetadata(
-            context,
-            WorkflowRunBackgroundDeliveryMetadataKeys.DurableReplyCredentialRef));
+        var credentialRef = Normalize(context.Channel.DurableReplyCredentialRef);
         if (credentialRef is not null)
             return WorkflowBackgroundDeliveryResolution.Enabled(credentialRef);
 
@@ -721,9 +718,6 @@ public sealed class AevatarInvocationDispatcher
             "workflow_background_delivery_unsupported",
             "This channel session cannot deliver workflow terminal results in the background because no durable NyxID reply credential reference is available."));
     }
-
-    private static string? TryGetExternalMetadata(AgentToolExecutionContext context, string key) =>
-        context.ExternalMetadata.TryGetValue(key, out var value) ? value : null;
 
     private StaticGAgentStreamInvocationRequest BuildStaticInvocationRequest(
         TeamEntryMemberResolution resolution,

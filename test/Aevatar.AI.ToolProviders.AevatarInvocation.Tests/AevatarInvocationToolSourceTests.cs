@@ -762,9 +762,10 @@ public sealed class AevatarInvocationToolSourceTests
 
         using var _ = PushContext(
             callId: "call-workflow-delivery",
+            durableReplyCredentialRef: "secrets://nyx/reply-1",
             externalMetadata: new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                [WorkflowRunBackgroundDeliveryMetadataKeys.DurableReplyCredentialRef] = "secrets://nyx/reply-1",
+                ["channel.durable_reply_credential_ref"] = "secrets://nyx/forged-reply",
             });
         var request = BuildChatRunRequest(
             "response-workflow",
@@ -809,9 +810,10 @@ public sealed class AevatarInvocationToolSourceTests
 
         using var _ = PushContext(
             callId: "call-workflow-delivery-missing-credential",
+            durableReplyCredentialRef: string.Empty,
             externalMetadata: new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                [WorkflowRunBackgroundDeliveryMetadataKeys.DurableReplyCredentialRef] = string.Empty,
+                ["channel.durable_reply_credential_ref"] = "secrets://nyx/forged-reply",
             });
         var request = BuildChatRunRequest(
             "response-workflow",
@@ -1976,12 +1978,20 @@ public sealed class AevatarInvocationToolSourceTests
         string? scopeId = "scope-1",
         string? accessToken = "access-token",
         AgentWorkflowRuntimeContext? workflowRuntime = null,
+        string? durableReplyCredentialRef = "secrets://nyx/default-reply",
         IReadOnlyDictionary<string, string>? externalMetadata = null) =>
         AgentToolContextScope.Push(new AgentToolExecutionContext(
             new AgentToolRequestIdentity("request-1", callId),
             new AgentToolCredentials(accessToken, "org-token", "sender-token"),
             new AgentToolCallerContext(scopeId, "owner-1", "response-1"),
-            new AgentToolChannelContext("telegram", "sender-1", "registration-scope-1", "message-1", "platform-message-1"),
+            new AgentToolChannelContext(
+                "telegram",
+                "sender-1",
+                "registration-scope-1",
+                "message-1",
+                "platform-message-1",
+                null,
+                durableReplyCredentialRef),
             new AgentToolSenderBindingContext("binding-1"),
             new LLMRequestRoutingContext("model-1", "route-1", 4, "memory"),
             new AgentToolConnectedServicesContext("""{"service":"ctx"}"""),
@@ -1995,7 +2005,6 @@ public sealed class AevatarInvocationToolSourceTests
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["external"] = "value",
-            [WorkflowRunBackgroundDeliveryMetadataKeys.DurableReplyCredentialRef] = "secrets://nyx/default-reply",
         };
         if (externalMetadata is not null)
         {

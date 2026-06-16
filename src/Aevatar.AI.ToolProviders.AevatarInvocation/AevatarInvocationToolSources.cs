@@ -208,9 +208,7 @@ internal sealed class StartWorkflowTool : IAevatarInvocationTool
         var context = AgentToolRequestContext.Current ?? AgentToolExecutionContext.Empty;
         var platform = Normalize(context.Channel.Platform);
         var replyMessageId = Normalize(context.Channel.MessageId);
-        var durableReplyCredentialRef = Normalize(TryGetExternalMetadata(
-            context,
-            WorkflowRunBackgroundDeliveryMetadataKeys.DurableReplyCredentialRef));
+        var durableReplyCredentialRef = Normalize(context.Channel.DurableReplyCredentialRef);
         if (string.IsNullOrWhiteSpace(actorId) ||
             string.IsNullOrWhiteSpace(commandId) ||
             platform is null ||
@@ -230,18 +228,13 @@ internal sealed class StartWorkflowTool : IAevatarInvocationTool
             StreamTopic = streamTopic,
             ChannelPlatform = platform,
             ReplyMessageId = replyMessageId,
-            PlatformMessageId = Normalize(context.Channel.PlatformMessageId) ??
-                                Normalize(TryGetExternalMetadata(context, "channel.platform_message_id")) ??
-                                string.Empty,
+            PlatformMessageId = Normalize(context.Channel.PlatformMessageId) ?? string.Empty,
             RegistrationScopeId = Normalize(context.Channel.RegistrationScopeId) ??
                                   Normalize(context.Caller.ScopeId) ??
                                   string.Empty,
             DurableReplyCredentialRef = durableReplyCredentialRef,
         };
     }
-
-    private static string? TryGetExternalMetadata(AgentToolExecutionContext context, string key) =>
-        context.ExternalMetadata.TryGetValue(key, out var value) ? value : null;
 
     private static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

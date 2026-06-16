@@ -2,11 +2,6 @@ using Aevatar.AI.Abstractions;
 
 namespace Aevatar.AI.Abstractions.ToolProviders;
 
-public static class WorkflowRunBackgroundDeliveryMetadataKeys
-{
-    public const string DurableReplyCredentialRef = "channel.nyx_reply_credential_ref";
-}
-
 public interface IWorkflowRunBackgroundDeliveryRegistrationPort
 {
     Task<WorkflowRunBackgroundDeliveryReceipt> RegisterAsync(
