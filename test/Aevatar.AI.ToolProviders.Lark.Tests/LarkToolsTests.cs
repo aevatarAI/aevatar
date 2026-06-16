@@ -411,6 +411,53 @@ public class LarkToolsTests
     }
 
     [Fact]
+    public async Task LarkMessageResourceFetchAdapter_ShouldMapWorkflowRouteToBinaryDownload()
+    {
+        var client = new StubLarkNyxClient
+        {
+            MessageResourceResponse = new LarkMessageResourceDownloadResult(
+                Succeeded: true,
+                Content: Encoding.UTF8.GetBytes("downloaded"),
+                ContentType: "image/png",
+                FileName: "picture.png"),
+        };
+        var adapter = new LarkMessageResourceFetchAdapter(client);
+
+        var result = await adapter.FetchAsync(new WorkflowConnectedServiceResourceFetchRequest(
+            Route: new WorkflowConnectedServiceResourceFetchRoute("lark", "message_resource_download", "image"),
+            SourceMessageId: "om_123",
+            SourceResourceKey: "img_v3_456",
+            CallerCredential: new WorkflowCallerCredential("token-123")));
+
+        result.Succeeded.Should().BeTrue();
+        result.Content.ToArray().Should().Equal(Encoding.UTF8.GetBytes("downloaded"));
+        result.MediaType.Should().Be("image/png");
+        result.FileName.Should().Be("picture.png");
+        client.LastMessageResourceToken.Should().Be("token-123");
+        client.LastMessageResourceRequest.Should().Be(new LarkMessageResourceDownloadRequest(
+            "om_123",
+            "img_v3_456",
+            LarkMessageResourceKind.Image));
+    }
+
+    [Fact]
+    public async Task LarkMessageResourceFetchAdapter_ShouldFailClosedForWrongRoute()
+    {
+        var client = new StubLarkNyxClient();
+        var adapter = new LarkMessageResourceFetchAdapter(client);
+
+        Func<Task> act = () => adapter.FetchAsync(new WorkflowConnectedServiceResourceFetchRequest(
+            Route: new WorkflowConnectedServiceResourceFetchRoute("nyxid", "message_resource_download", "image"),
+            SourceMessageId: "om_123",
+            SourceResourceKey: "img_v3_456",
+            CallerCredential: new WorkflowCallerCredential("token-123"))).AsTask();
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*lark/message_resource_download/image*");
+        client.LastMessageResourceRequest.Should().BeNull();
+    }
+
+    [Fact]
     // Refactor (issue1378/first-slice):
     //   Old pattern: ResolveOrCurrent hid missing message_id by reacting to the current message.
     //   New principle: reaction tests require structured error and explicit external message_id.
@@ -2512,6 +2559,7 @@ public class LarkToolsTests
         public string? LastDocxCreateToken { get; private set; }
         public string? LastDriveMediaUploadToken { get; private set; }
         public string? LastApprovalFileUploadToken { get; private set; }
+        public string? LastMessageResourceToken { get; private set; }
         public LarkSendMessageRequest? LastSendRequest { get; private set; }
         public LarkReplyMessageRequest? LastReplyRequest { get; private set; }
         public LarkMessageReactionRequest? LastReactionRequest { get; private set; }
@@ -2572,6 +2620,7 @@ public class LarkToolsTests
             LarkMessageResourceDownloadRequest request,
             CancellationToken ct)
         {
+            LastMessageResourceToken = token;
             LastMessageResourceRequest = request;
             return Task.FromResult(MessageResourceResponse);
         }
