@@ -25,6 +25,7 @@ public static class ServiceCollectionExtensions
         if (configureReportExport != null)
             services.Configure(configureReportExport);
         services.AddOptions<FileSystemWorkflowFileIngressOptions>();
+        services.AddOptions<WorkflowConnectedServiceFileSubmitOptions>();
 
         // Replace the Noop fallback from Application layer with the real file export adapter.
         services.Replace(ServiceDescriptor.Singleton<IWorkflowRunReportExportPort, FileSystemWorkflowRunReportExporter>());
@@ -37,6 +38,7 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<FileSystemWorkflowFileIngressPort>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowToolSource, WorkflowDocumentExtractToolSource>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowToolSource, WorkflowConnectedServiceResourceFetchToolSource>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowToolSource, WorkflowFileSubmitToolSource>());
         services.TryAddSingleton<WorkflowRunActorPort>();
         services.TryAddSingleton<IWorkflowDefinitionProvisioningPort>(sp =>
             sp.GetRequiredService<WorkflowRunActorPort>());

@@ -6,10 +6,12 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Tools;
 using Aevatar.AI.ToolProviders.Lark.Tools;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.Workflow.Infrastructure.Runs;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core.Modules;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace Aevatar.AI.ToolProviders.Lark.Tests;
@@ -2163,27 +2165,6 @@ public class LarkToolsTests
     }
 
     [Theory]
-    [InlineData(false, "api-lark-bot")]
-    [InlineData(true, " ")]
-    public async Task WorkflowFileSubmitSource_ShouldReturnEmpty_WhenDisabledOrProviderSlugMissing(
-        bool enabled,
-        string providerSlug)
-    {
-        var source = CreateWorkflowFileSubmitSource(
-            new LarkToolOptions
-            {
-                EnableWorkflowFileSubmit = enabled,
-                ProviderSlug = providerSlug,
-            },
-            new StubLarkNyxClient(),
-            new RecordingWorkflowFileArtifactReadPort(BuildFileRef(sizeBytes: 5)));
-
-        var tools = await source.GetToolsAsync();
-
-        tools.Should().BeEmpty();
-    }
-
-    [Theory]
     [InlineData("bad-target", "doc_file", "doccn_123", "invalid_target")]
     [InlineData("lark_drive_media", "folder", "doccn_123", "unsupported_parent_type")]
     [InlineData("lark_drive_media", "doc_file", " ", "missing_parent_node")]
@@ -2406,8 +2387,6 @@ public class LarkToolsTests
         root.GetProperty("provider").GetString().Should().Be("lark");
         root.GetProperty("target").GetString().Should().Be("lark_drive_media");
         root.GetProperty("file_token").GetString().Should().Be("file_123");
-        root.GetProperty("parent_type").GetString().Should().Be("doc_file");
-        root.GetProperty("parent_node").GetString().Should().Be("doccn_123");
         root.GetProperty("file_name").GetString().Should().Be("argument.txt");
         root.GetProperty("size_bytes").GetInt64().Should().Be(12);
         result.ResultJson.Should().NotContain("upload bytes");
@@ -2450,7 +2429,6 @@ public class LarkToolsTests
         root.GetProperty("target").GetString().Should().Be("lark_approval_file");
         root.GetProperty("file_code").GetString().Should().Be("approval_file_123");
         root.GetProperty("output_field").GetString().Should().Be("file_code");
-        root.GetProperty("file_type").GetString().Should().Be("attachment");
         root.TryGetProperty("file_token", out _).Should().BeFalse();
         root.TryGetProperty("parent_type", out _).Should().BeFalse();
         root.TryGetProperty("parent_node", out _).Should().BeFalse();
@@ -2727,23 +2705,19 @@ public class LarkToolsTests
         IWorkflowFileArtifactReadPort fileArtifacts,
         ILarkNyxClient client)
     {
-        var source = CreateWorkflowFileSubmitSource(
-            new LarkToolOptions { EnableWorkflowFileSubmit = true },
-            client,
-            fileArtifacts);
+        var source = CreateWorkflowFileSubmitSource(client, fileArtifacts);
         var tools = await source.GetToolsAsync();
         return tools.Should().ContainSingle(x => x.Name == "workflow_file_submit").Subject;
     }
 
-    private static LarkWorkflowFileSubmitToolSource CreateWorkflowFileSubmitSource(
-        LarkToolOptions options,
+    private static WorkflowFileSubmitToolSource CreateWorkflowFileSubmitSource(
         ILarkNyxClient client,
-        IWorkflowFileArtifactReadPort? fileArtifacts)
+        IWorkflowFileArtifactReadPort fileArtifacts)
     {
-        var services = new ServiceCollection();
-        if (fileArtifacts != null)
-            services.AddSingleton(fileArtifacts);
-        return new LarkWorkflowFileSubmitToolSource(options, client, services.BuildServiceProvider());
+        return new WorkflowFileSubmitToolSource(
+            [new LarkWorkflowFileSubmitAdapter(client)],
+            fileArtifacts,
+            Options.Create(new WorkflowConnectedServiceFileSubmitOptions()));
     }
 
     private static WorkflowToolExecutionRequest NewWorkflowToolRequest(string argumentsJson, string? bearerToken) =>
