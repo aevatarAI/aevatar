@@ -4,6 +4,7 @@ using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.VoicePresence;
 using Aevatar.Foundation.VoicePresence.Abstractions;
+using Aevatar.Foundation.VoicePresence.Abstractions.Sessions;
 using Aevatar.Foundation.VoicePresence.Modules;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -418,6 +419,72 @@ public class VoicePresenceModuleTests
 
         invoker.Calls.ShouldBe(1);
         provider.ToolResults[0].ResultJson.ShouldBe("""{"service":true}""");
+    }
+
+    [Fact]
+    public async Task Function_call_should_send_result_to_live_relay_not_ephemeral_session()
+    {
+        var provider = new RecordingVoiceProvider();
+        var invoker = new RecordingVoiceToolInvoker("""{"services":["home-assistant"]}""");
+        var mediaPort = new RecordingToolResultMediaPort(deliver: true);
+        var services = new ServiceCollection()
+            .AddSingleton<IVoiceVolatileMediaStreamPort>(mediaPort)
+            .BuildServiceProvider();
+        var roleAgent = CreateRoleAgentWithActiveSession();
+        roleAgent.State.VoicePresence[DefaultModuleName].ActiveTransportLeaseId = "transport-1";
+        var module = CreateModule(provider, toolInvoker: invoker);
+        var ctx = new StubEventHandlerContext(services, roleAgent);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            FunctionCall = new VoiceFunctionCallRequested
+            {
+                CallId = "call-live",
+                ToolName = "nyxid_status",
+                ArgumentsJson = "{}",
+                ResponseId = 1,
+            },
+        }), ctx, CancellationToken.None);
+
+        // The result must land on the LIVE relay (the socket that emitted the call), not a throwaway session.
+        mediaPort.ToolResults.ShouldHaveSingleItem();
+        mediaPort.ToolResults[0].TransportLeaseId.ShouldBe("transport-1");
+        mediaPort.ToolResults[0].CallId.ShouldBe("call-live");
+        mediaPort.ToolResults[0].ResultJson.ShouldBe("""{"services":["home-assistant"]}""");
+        provider.ToolResults.ShouldBeEmpty();
+        provider.ConnectCalls.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task Function_call_falls_back_to_provider_session_when_no_live_relay()
+    {
+        var provider = new RecordingVoiceProvider();
+        var invoker = new RecordingVoiceToolInvoker("""{"ok":true}""");
+        var mediaPort = new RecordingToolResultMediaPort(deliver: false);
+        var services = new ServiceCollection()
+            .AddSingleton<IVoiceVolatileMediaStreamPort>(mediaPort)
+            .BuildServiceProvider();
+        var roleAgent = CreateRoleAgentWithActiveSession();
+        roleAgent.State.VoicePresence[DefaultModuleName].ActiveTransportLeaseId = "transport-1";
+        var module = CreateModule(provider, toolInvoker: invoker);
+        var ctx = new StubEventHandlerContext(services, roleAgent);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            FunctionCall = new VoiceFunctionCallRequested
+            {
+                CallId = "call-fallback",
+                ToolName = "nyxid_status",
+                ArgumentsJson = "{}",
+                ResponseId = 1,
+            },
+        }), ctx, CancellationToken.None);
+
+        // No live relay -> the result must fall back to a provider session, never silently dropped.
+        mediaPort.ToolResults.ShouldHaveSingleItem();
+        provider.ToolResults.ShouldHaveSingleItem();
+        provider.ToolResults[0].CallId.ShouldBe("call-fallback");
+        provider.ToolResults[0].ResultJson.ShouldBe("""{"ok":true}""");
     }
 
     [Fact]
@@ -2169,6 +2236,42 @@ public class VoicePresenceModuleTests
 
             public override ValueTask DisposeAsync() => ValueTask.CompletedTask;
         }
+    }
+
+    private sealed class RecordingToolResultMediaPort(bool deliver) : IVoiceVolatileMediaStreamPort
+    {
+        public bool SupportsRemoteAudio => true;
+
+        public List<(string TransportLeaseId, string CallId, string ResultJson)> ToolResults { get; } = [];
+
+        public Task<bool> TrySendToolResultAsync(
+            string transportLeaseId,
+            string callId,
+            string resultJson,
+            CancellationToken ct = default)
+        {
+            ToolResults.Add((transportLeaseId, callId, resultJson));
+            return Task.FromResult(deliver);
+        }
+
+        public Task<VoiceTransportLifetimeCompleted?> AttachAsync(
+            VoicePresenceSessionLeaseHandle handle,
+            IVoiceTransport transport,
+            CancellationToken ct = default) =>
+            Task.FromResult<VoiceTransportLifetimeCompleted?>(null);
+
+        public Task DetachAsync(
+            VoicePresenceSessionLeaseHandle handle,
+            IVoiceTransport? expectedTransport,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task CompleteTransportLifetimeAsync(
+            VoicePresenceSessionLeaseHandle handle,
+            VoiceTransportLifetimeCompleted? completed,
+            string reason,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
     }
 
     private sealed class RecordingProjectionSessionEventHub : IProjectionSessionEventHub<VoiceRealtimeFrame>

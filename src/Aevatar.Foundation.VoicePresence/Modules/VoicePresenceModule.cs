@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.VoicePresence.Abstractions;
+using Aevatar.Foundation.VoicePresence.Abstractions.Sessions;
 using Aevatar.Foundation.VoicePresence.Events;
 using Aevatar.Foundation.VoicePresence.Transport;
 using Google.Protobuf;
@@ -1028,6 +1029,13 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
     {
         var state = HydrateRuntimeStateFromActor(ctx);
 
+        _logger.LogDebug(
+            "Voice tool call {ToolName} callId={CallId} lease={TransportLeaseId} status={Status}",
+            request.ToolName,
+            request.CallId,
+            state.ActiveTransportLeaseId,
+            state.Status);
+
         // Refactor (cluster-voice-tool-caller-credential): the voice tool call runs on this actor turn,
         // which has no caller AsyncLocal context. Re-establish it from the per-session credential store so
         // the tool invoker (nyxid_proxy etc.) and the tool-result provider reconnect authenticate as the
@@ -1082,8 +1090,48 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
             }
         }
 
+        await DeliverToolResultAsync(state, request.CallId, resultJson, ctx, ct);
+    }
+
+    // Refactor (cluster-voice-tool-result-live-relay): the function_call is emitted by the LIVE realtime
+    // socket owned by the host's VoiceVolatileMediaStreamPort relay (keyed by the active transport lease),
+    // and that socket's audio is relayed to the caller. Deliver the tool result there so the
+    // function_call_output lands on the conversation that requested it and the spoken answer is heard.
+    // Only fall back to a throwaway provider session when no live relay is attached for this lease
+    // (e.g. a non-relayed transport or cross-host topology); otherwise the result would be added to a
+    // brand-new empty conversation whose audio goes nowhere, and the model would re-call the tool forever.
+    private async Task DeliverToolResultAsync(
+        VoicePresenceRuntimeState state,
+        string callId,
+        string resultJson,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        var transportLeaseId = state.ActiveTransportLeaseId;
+        if (!string.IsNullOrWhiteSpace(transportLeaseId))
+        {
+            var mediaPort = ctx.Services.GetService<IVoiceVolatileMediaStreamPort>();
+            if (mediaPort != null)
+            {
+                var delivered = await mediaPort.TrySendToolResultAsync(transportLeaseId, callId, resultJson, ct);
+                _logger.LogInformation(
+                    "Voice tool result callId={CallId} delivered via {DeliveryPath} lease={TransportLeaseId}",
+                    callId,
+                    delivered ? "live-relay" : "ephemeral-fallback",
+                    transportLeaseId);
+
+                if (delivered)
+                    return;
+
+                _logger.LogWarning(
+                    "No live voice relay for lease={TransportLeaseId}; tool result callId={CallId} fell back to a throwaway provider session (cross-host topology or detached transport).",
+                    transportLeaseId,
+                    callId);
+            }
+        }
+
         await using var providerSession = await ConnectProviderSessionAsync(state, ct);
-        await providerSession.SendToolResultAsync(request.CallId, resultJson, ct);
+        await providerSession.SendToolResultAsync(callId, resultJson, ct);
     }
 
     private static string? ResolveCallerToken(IEventHandlerContext ctx, VoicePresenceRuntimeState state)

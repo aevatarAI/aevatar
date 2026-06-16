@@ -118,6 +118,20 @@ public sealed class VoiceVolatileMediaStreamPort(
         await _leasePort.CompleteTransportLifetimeAsync(handle, transportLeaseId, reason, ct);
     }
 
+    public async Task<bool> TrySendToolResultAsync(
+        string transportLeaseId,
+        string callId,
+        string resultJson,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(transportLeaseId) ||
+            !_activeRelays.TryGetValue(transportLeaseId, out var relay))
+            return false;
+
+        await relay.SendToolResultAsync(callId, resultJson, ct);
+        return true;
+    }
+
     private Task StopRelayAsync(VoicePresenceSessionLeaseHandle handle, CancellationToken ct)
     {
         _ = ct;
@@ -256,6 +270,12 @@ public sealed class VoiceVolatileMediaStreamPort(
 
             return transport.SendAudioAsync(audioFrame.Pcm16, ct);
         }
+
+        // Forward a tool-call result onto this relay's LIVE provider session — the same socket that emitted
+        // the function call. SendToolResultAsync adds the function_call_output and triggers response.create
+        // against the correct conversation, and the model's spoken answer flows back through the audio sink.
+        public Task SendToolResultAsync(string callId, string resultJson, CancellationToken ct) =>
+            providerSession.SendToolResultAsync(callId, resultJson, ct);
 
         public async ValueTask DisposeAsync()
         {
