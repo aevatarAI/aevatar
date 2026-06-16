@@ -1,4 +1,5 @@
 using System.Net.WebSockets;
+using System.Text.Json;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
@@ -21,16 +22,89 @@ namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 public static class WorkflowCapabilityEndpoints
 {
     private const string WorkflowRuntimeDefaultsSectionName = "WorkflowRuntimeDefaults";
+    private static readonly WorkflowMultipartChatRequestParseError ChatPostUnsupportedMediaType = new(
+        StatusCodes.Status415UnsupportedMediaType,
+        "UNSUPPORTED_MEDIA_TYPE",
+        "Content-Type must be application/json or multipart/form-data.");
 
     public static IEndpointRouteBuilder MapWorkflowCapabilityEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api").WithTags("Chat");
+        group.MapPost("/chat", HandleChatPost)
+            .WithName("StartWorkflowChat");
+        group.MapGet(
+                "/ws/chat",
+                async (
+                    HttpContext http,
+                    [FromServices] IWorkflowChatRunInteractionPort chatRunService,
+                    [FromServices] ILoggerFactory loggerFactory,
+                    CancellationToken ct) =>
+                    await HandleChatWebSocket(http, chatRunService, loggerFactory, ct))
+            .WithName("StartWorkflowChatWebSocket");
         ChatQueryEndpoints.Map(group);
         group.MapPost("/workflow/runs/fork", HandleForkRun)
             .WithName("ForkWorkflowRun");
         WorkflowWebhookIngressEndpoints.Map(group);
 
         return app;
+    }
+
+    internal static async Task HandleChatPost(
+        HttpContext http,
+        [FromServices] IWorkflowChatRunInteractionPort chatRunService,
+        [FromServices] WorkflowMultipartChatRequestParser multipartParser,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(http);
+        ArgumentNullException.ThrowIfNull(chatRunService);
+        ArgumentNullException.ThrowIfNull(multipartParser);
+
+        var callerCredential = WorkflowCallerCredentialExtractor.Extract(http);
+        if (!callerCredential.Succeeded)
+        {
+            var (code, message) = ChatRunStartErrorMapper.ToCommandError(callerCredential.Error);
+            var statusCode = ChatRunStartErrorMapper.ToHttpStatusCode(callerCredential.Error);
+            await WriteJsonErrorResponseAsync(http, statusCode, code, message, ct);
+            return;
+        }
+
+        ChatInput input;
+        if (IsMultipartForm(http.Request.ContentType))
+        {
+            var parsed = await multipartParser.ParseAsync(http, ct);
+            if (!parsed.Succeeded)
+            {
+                await WriteJsonErrorResponseAsync(http, parsed.StatusCode, parsed.Code, parsed.Message, ct);
+                return;
+            }
+
+            input = parsed.Input!;
+        }
+        else
+        {
+            if (!IsJson(http.Request.ContentType))
+            {
+                var error = ChatPostUnsupportedMediaType;
+                await WriteJsonErrorResponseAsync(http, error.StatusCode, error.Code, error.Message, ct);
+                return;
+            }
+
+            var parsed = await ParseJsonChatInputAsync(http.Request, ct);
+            if (parsed == null)
+            {
+                await WriteJsonErrorResponseAsync(
+                    http,
+                    StatusCodes.Status400BadRequest,
+                    "INVALID_CHAT_INPUT",
+                    "Chat request body is invalid.",
+                    ct);
+                return;
+            }
+
+            input = parsed;
+        }
+
+        await HandleChat(http, input, chatRunService, ct);
     }
 
     public static IEndpointRouteBuilder MapWorkflowChatInteractionEndpoints(this IEndpointRouteBuilder app)
@@ -635,6 +709,30 @@ public static class WorkflowCapabilityEndpoints
             },
             cancellationToken: ct);
     }
+
+    private static async ValueTask<ChatInput?> ParseJsonChatInputAsync(
+        HttpRequest request,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await JsonSerializer.DeserializeAsync<ChatInput>(
+                request.Body,
+                ChatWebSocketProtocol.JsonOptions,
+                cancellationToken);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static bool IsMultipartForm(string? contentType) =>
+        contentType?.StartsWith("multipart/form-data", StringComparison.OrdinalIgnoreCase) == true;
+
+    private static bool IsJson(string? contentType) =>
+        string.IsNullOrWhiteSpace(contentType) ||
+        contentType.StartsWith("application/json", StringComparison.OrdinalIgnoreCase);
 
     private static async Task WriteStreamErrorFrameAsync(
         ChatSseResponseWriter writer,

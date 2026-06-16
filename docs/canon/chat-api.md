@@ -67,6 +67,85 @@ owner: eanzhao
 - 若同时传 `workflow` 与 `workflowYamls`，以 `workflowYamls` 为准。
 - `direct/auto/auto_review` 可显式传入，按注册表解析，不要求存在同名文件。
 
+### HTTP 请求 producer
+
+`POST /api/chat` 支持两种 Host/API 边界 producer；两者最终都会被规范化为同一个 `WorkflowChatRunRequest`，并进入同一条 CQRS command skeleton。Host 不直接编排 workflow run，也不因为表单上传创建第二套执行链路。
+
+#### JSON Chat Input
+
+`application/json` body 是 `ChatInput`：
+
+```json
+{
+  "prompt": "describe the release plan",
+  "workflow": "direct",
+  "sessionId": "session-1",
+  "scopeId": "scope-1"
+}
+```
+
+常用 source 字段：
+
+| Field | Meaning |
+|---|---|
+| `workflow` | 已注册 workflow 名称查找。 |
+| `workflowYamls` | inline YAML bundle，首项为入口。 |
+| `source.definitionActor.actorId` | 显式复用 workflow definition actor。 |
+| `source.inlineBundle` | typed inline YAML bundle。 |
+
+#### Multipart File Producer
+
+`multipart/form-data` 用于在 Host/API 边界上传一个文件并启动同一条 chat run 主链路。
+
+必需字段：
+
+| Field | Requirement |
+|---|---|
+| `file` | 必须且只能出现一个文件 part；字段名必须是 `file`，可通过 `WorkflowFormFileIngress:FileFieldName` 调整。 |
+
+可选字段：
+
+| Field | Meaning |
+|---|---|
+| `payload` | 可选 `ChatInput` JSON；不得包含 `inputParts[].inlineFile`、`inputParts[].fileRef` 或 `inputParts[].dataBase64`。 |
+| `prompt` | 覆盖或补充 payload 中的 prompt。 |
+| `workflow` | 覆盖或补充 payload 中的 workflow name。 |
+| `sessionId` | 覆盖或补充 payload 中的 session id。 |
+| `scopeId` | 覆盖或补充 payload 中的 workflow scope id，同时传给 file ingress owner scope。 |
+| `workflowYaml` | legacy single inline YAML field。 |
+| `workflowYamls` | inline YAML bundle；同名 form field 可重复。 |
+
+默认校验：
+
+| Option | Default |
+|---|---|
+| `WorkflowMultipartFileIngress:MaxFileBytes` | `10485760` |
+| `WorkflowMultipartFileIngress:AllowedMediaTypes` | `image/png`, `image/jpeg`, `image/webp`, `audio/mpeg`, `audio/wav`, `audio/wave`, `audio/x-wav`, `video/mp4` |
+
+成功路径：
+
+1. Host 先校验 caller credential；无效 bearer 不读取文件、不写 artifact store。
+2. Host 校验 multipart shape、文件数量、字段名、大小、media type。
+3. Host 调用 `IWorkflowFileIngressPort.IngestAsync(...)`，`SourceKind=FormUpload`。
+4. parser 把返回的 typed `WorkflowFileRef` 构造成既有 `ChatInputContentPart.fileRef`。
+5. `ChatRunRequestNormalizer` 继续生成 `WorkflowChatRunRequest`，后续 CQRS command skeleton 不区分 JSON producer 与 form producer。
+
+actor-facing command、state、readmodel、stream frame 与日志都不得携带上传文件 bytes/base64；它们只携带 `WorkflowFileRef` 或由它派生出的 URI/metadata。
+
+常见 Host/API 边界错误：
+
+| Code | HTTP status | Meaning |
+|---|---:|---|
+| `INVALID_CALLER_CREDENTIAL` | 400 | Authorization bearer 格式无效。 |
+| `INVALID_CHAT_INPUT` | 400 | JSON body 或 multipart payload 不是合法 `ChatInput`。 |
+| `INVALID_FILE_INPUT` | 400 | 文件缺失、多个文件、字段名不匹配、media type 不允许、大小超限或 payload 试图携带 actor-facing file payload。 |
+| `UNSUPPORTED_MEDIA_TYPE` | 415 | 请求不是 JSON，也不是 `multipart/form-data`。 |
+| `PROMPT_REQUIRED` | 400 | normalizer 无法从 prompt 或 input parts 得到有效输入。 |
+| `WORKFLOW_NOT_FOUND` | 404 | workflow 名称未命中。 |
+| `WORKFLOW_BINDING_MISMATCH` | 409 | 目标 actor workflow binding 与请求不一致。 |
+
+WebSocket 不接收 `multipart/form-data`。文件输入应先经 HTTP artifact ingress producer 生成 typed file ref，或由客户端使用已有 `fileRef` descriptor。
+
 ### 多模态文件输入
 
 `inputParts` 支持两类文件载体：
