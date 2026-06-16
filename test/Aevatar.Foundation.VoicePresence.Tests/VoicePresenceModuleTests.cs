@@ -397,6 +397,50 @@ public class VoicePresenceModuleTests
     }
 
     [Fact]
+    public async Task Active_tool_context_should_flow_to_catalog_invoker_and_provider_session_key()
+    {
+        var provider = new RecordingVoiceProvider();
+        var invoker = new RecordingVoiceToolInvoker("""{"ok":true}""");
+        var catalog = new StaticVoiceToolCatalog([
+            new VoiceToolDefinition
+            {
+                Name = "doorbell.open",
+                Description = "open",
+                ParametersSchema = "{}",
+            },
+        ]);
+        var module = CreateModule(provider, toolInvoker: invoker, toolCatalog: catalog);
+        var toolContext = new VoiceToolExecutionContext
+        {
+            CredentialRef = "voice-tool:ref-1",
+            ExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)),
+            CallerScopeId = "caller-scope-1",
+        };
+        var roleAgent = CreateRoleAgentWithActiveSession();
+        roleAgent.State.VoicePresence[DefaultModuleName].ActiveToolContext = toolContext.Clone();
+        var ctx = new StubEventHandlerContext(agent: roleAgent);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            FunctionCall = new VoiceFunctionCallRequested
+            {
+                CallId = "call-credential-ref",
+                ToolName = "doorbell.open",
+                ArgumentsJson = "{}",
+                ResponseId = 1,
+            },
+        }), ctx, CancellationToken.None);
+
+        invoker.LastToolContext.ShouldNotBeNull();
+        invoker.LastToolContext.ShouldNotBeSameAs(toolContext);
+        invoker.LastToolContext!.CredentialRef.ShouldBe("voice-tool:ref-1");
+        catalog.LastToolContext.ShouldNotBeNull();
+        catalog.LastToolContext!.CredentialRef.ShouldBe("voice-tool:ref-1");
+        provider.LastSessionKey.ToolContext.ShouldNotBeNull();
+        provider.LastSessionKey.ToolContext!.CredentialRef.ShouldBe("voice-tool:ref-1");
+    }
+
+    [Fact]
     public async Task Function_call_should_resolve_tool_invoker_from_services()
     {
         var provider = new RecordingVoiceProvider();
@@ -762,6 +806,12 @@ public class VoicePresenceModuleTests
         var module = CreateModule(new RecordingVoiceProvider());
         var roleAgent = new RecordingRoleAgent("voice-agent");
         var ctx = new StubEventHandlerContext(agent: roleAgent);
+        var toolContext = new VoiceToolExecutionContext
+        {
+            CredentialRef = "voice-tool:lease-ref",
+            ExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)),
+            CallerScopeId = "caller-scope-lease",
+        };
 
         await module.InitializeAsync(CancellationToken.None);
         await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
@@ -772,6 +822,7 @@ public class VoicePresenceModuleTests
                 SessionId = "lease-1",
                 OwnerId = "host-1",
                 ExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)),
+                ToolContext = toolContext.Clone(),
             },
         }), ctx, CancellationToken.None);
 
@@ -782,6 +833,8 @@ public class VoicePresenceModuleTests
         leasedState.TransportAttached.ShouldBeFalse();
         leasedState.PcmSampleRateHz.ShouldBe(24000);
         leasedState.RemoteAudioSupport.ShouldBe(VoiceRemoteAudioSupport.LocalOnly);
+        leasedState.ActiveToolContext.ShouldNotBeSameAs(toolContext);
+        leasedState.ActiveToolContext.CredentialRef.ShouldBe("voice-tool:lease-ref");
 
         await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
         {
@@ -797,6 +850,7 @@ public class VoicePresenceModuleTests
         releasedState.ActiveSessionId.ShouldBeEmpty();
         releasedState.ActiveLeaseOwnerId.ShouldBeEmpty();
         releasedState.LeaseExpiresAt.ShouldBeNull();
+        releasedState.ActiveToolContext.ShouldBeNull();
     }
 
     [Fact]
@@ -2346,6 +2400,7 @@ public class VoicePresenceModuleTests
 
         public bool Disposed { get; private set; }
         public VoiceSessionConfig? LastSession { get; private set; }
+        public VoiceProviderSessionKey LastSessionKey => _sessionKey;
         public bool ThrowOnInjectEvent { get; set; }
         public int InjectEventCalls { get; private set; }
 
@@ -2498,9 +2553,14 @@ public class VoicePresenceModuleTests
 
     private sealed class StaticVoiceToolCatalog(IReadOnlyList<VoiceToolDefinition> tools) : IVoiceToolCatalog
     {
-        public Task<IReadOnlyList<VoiceToolDefinition>> DiscoverAsync(CancellationToken ct = default)
+        public VoiceToolExecutionContext? LastToolContext { get; private set; }
+
+        public Task<IReadOnlyList<VoiceToolDefinition>> DiscoverAsync(
+            VoiceToolExecutionContext? toolContext = null,
+            CancellationToken ct = default)
         {
             _ = ct;
+            LastToolContext = toolContext?.Clone();
             return Task.FromResult(tools);
         }
     }
@@ -2661,23 +2721,34 @@ public class VoicePresenceModuleTests
         public int Calls { get; private set; }
         public string? LastToolName { get; private set; }
         public string? LastArgumentsJson { get; private set; }
+        public VoiceToolExecutionContext? LastToolContext { get; private set; }
 
-        public Task<string> ExecuteAsync(string toolName, string argumentsJson, CancellationToken ct = default)
+        public Task<string> ExecuteAsync(
+            string toolName,
+            string argumentsJson,
+            VoiceToolExecutionContext? toolContext = null,
+            CancellationToken ct = default)
         {
             _ = ct;
             Calls++;
             LastToolName = toolName;
             LastArgumentsJson = argumentsJson;
+            LastToolContext = toolContext?.Clone();
             return Task.FromResult(resultJson);
         }
     }
 
     private sealed class BlockingVoiceToolInvoker : IVoiceToolInvoker
     {
-        public async Task<string> ExecuteAsync(string toolName, string argumentsJson, CancellationToken ct = default)
+        public async Task<string> ExecuteAsync(
+            string toolName,
+            string argumentsJson,
+            VoiceToolExecutionContext? toolContext = null,
+            CancellationToken ct = default)
         {
             _ = toolName;
             _ = argumentsJson;
+            _ = toolContext;
 
             var gate = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
             using var registration = ct.Register(() => gate.TrySetCanceled(ct));
@@ -2687,10 +2758,15 @@ public class VoicePresenceModuleTests
 
     private sealed class ThrowingVoiceToolInvoker(string message) : IVoiceToolInvoker
     {
-        public Task<string> ExecuteAsync(string toolName, string argumentsJson, CancellationToken ct = default)
+        public Task<string> ExecuteAsync(
+            string toolName,
+            string argumentsJson,
+            VoiceToolExecutionContext? toolContext = null,
+            CancellationToken ct = default)
         {
             _ = toolName;
             _ = argumentsJson;
+            _ = toolContext;
             _ = ct;
             throw new InvalidOperationException(message);
         }
@@ -2698,8 +2774,11 @@ public class VoicePresenceModuleTests
 
     private sealed class ThrowingVoiceToolCatalog : IVoiceToolCatalog
     {
-        public Task<IReadOnlyList<VoiceToolDefinition>> DiscoverAsync(CancellationToken ct = default)
+        public Task<IReadOnlyList<VoiceToolDefinition>> DiscoverAsync(
+            VoiceToolExecutionContext? toolContext = null,
+            CancellationToken ct = default)
         {
+            _ = toolContext;
             _ = ct;
             throw new InvalidOperationException("catalog failed");
         }

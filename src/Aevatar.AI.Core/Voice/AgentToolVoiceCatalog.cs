@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -12,24 +13,40 @@ namespace Aevatar.AI.Core.Voice;
 public sealed class AgentToolVoiceCatalog : IVoiceToolCatalog
 {
     private readonly IEnumerable<IAgentToolSource> _toolSources;
+    private readonly ICredentialProvider? _credentialProvider;
     private readonly ILogger _logger;
     private volatile Lazy<Task<IReadOnlyList<VoiceToolDefinition>>>? _toolDefinitions;
 
     public AgentToolVoiceCatalog(
         IEnumerable<IAgentToolSource> toolSources,
+        ICredentialProvider? credentialProvider = null,
         ILogger<AgentToolVoiceCatalog>? logger = null)
     {
         _toolSources = toolSources ?? throw new ArgumentNullException(nameof(toolSources));
+        _credentialProvider = credentialProvider;
         _logger = logger ?? NullLogger<AgentToolVoiceCatalog>.Instance;
     }
 
-    public Task<IReadOnlyList<VoiceToolDefinition>> DiscoverAsync(CancellationToken ct = default)
+    public async Task<IReadOnlyList<VoiceToolDefinition>> DiscoverAsync(
+        VoiceToolExecutionContext? toolContext = null,
+        CancellationToken ct = default)
     {
+        if (toolContext is not null &&
+            VoiceToolExecutionContextMapper.IsUsableCredentialRef(toolContext, DateTimeOffset.UtcNow))
+        {
+            var agentToolContext = await ResolveToolContextAsync(toolContext, ct);
+            if (agentToolContext is null)
+                return [];
+
+            using var scope = AgentToolContextScope.Push(agentToolContext);
+            return await DiscoverAllToolsAsync(_toolSources, _logger, ct);
+        }
+
         while (true)
         {
             var current = _toolDefinitions;
             if (TryGetReusableTask(current, out var cached))
-                return cached;
+                return await cached;
 
             // Refactor (iter88/cluster-088):
             // Old: first-use discovery started before CompareExchange, multiplying source discovery
@@ -40,8 +57,26 @@ public sealed class AgentToolVoiceCatalog : IVoiceToolCatalog
                 LazyThreadSafetyMode.ExecutionAndPublication);
             var winner = Interlocked.CompareExchange(ref _toolDefinitions, candidate, current);
             if (ReferenceEquals(winner, current))
-                return candidate.Value;
+                return await candidate.Value;
         }
+    }
+
+    private async Task<AgentToolExecutionContext?> ResolveToolContextAsync(
+        VoiceToolExecutionContext toolContext,
+        CancellationToken ct)
+    {
+        if (_credentialProvider is null)
+            return null;
+
+        var credentialRef = VoiceToolExecutionContextMapper.Normalize(toolContext.CredentialRef);
+        if (credentialRef is null)
+            return null;
+
+        var nyxIdAccessToken = await _credentialProvider.ResolveAsync(credentialRef, ct);
+        if (string.IsNullOrWhiteSpace(nyxIdAccessToken))
+            return null;
+
+        return VoiceToolExecutionContextMapper.ToAgentToolContext(toolContext, nyxIdAccessToken);
     }
 
     private static bool TryGetReusableTask(

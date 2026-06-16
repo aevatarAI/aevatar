@@ -1,7 +1,9 @@
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Voice;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.AI.Core.Tests.Voice;
 
@@ -74,16 +76,20 @@ public class AgentToolVoiceInvokerTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_ShouldExposeCallerNyxIdTokenToTool_WhenCredentialScopeSet()
+    public async Task ExecuteAsync_ShouldResolveCredentialRefAndExposeCallerNyxIdTokenToTool()
     {
         var captured = new CapturingAgentTool("nyxid_proxy");
-        var invoker = new AgentToolVoiceInvoker([new StubToolSource(captured)]);
-
-        using (VoiceCallerCredentialScope.Push("caller-token-123"))
+        var credentials = new StubCredentialProvider(("voice-tool:ref-1", "caller-token-123"));
+        var invoker = new AgentToolVoiceInvoker([new StubToolSource(captured)], credentials);
+        var toolContext = new VoiceToolExecutionContext
         {
-            await invoker.ExecuteAsync("nyxid_proxy", "{}");
-        }
+            CredentialRef = "voice-tool:ref-1",
+            ExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)),
+        };
 
+        await invoker.ExecuteAsync("nyxid_proxy", "{}", toolContext);
+
+        credentials.RequestedRefs.Should().ContainSingle().Which.Should().Be("voice-tool:ref-1");
         captured.CapturedNyxIdAccessToken.Should().Be("caller-token-123");
     }
 
@@ -120,6 +126,23 @@ public class AgentToolVoiceInvokerTests
         {
             _ = ct;
             return Task.FromResult<IReadOnlyList<IAgentTool>>(tools);
+        }
+    }
+
+    private sealed class StubCredentialProvider(params (string Ref, string Token)[] credentials) : ICredentialProvider
+    {
+        private readonly Dictionary<string, string> _credentials = credentials.ToDictionary(
+            static credential => credential.Ref,
+            static credential => credential.Token,
+            StringComparer.Ordinal);
+
+        public List<string> RequestedRefs { get; } = [];
+
+        public Task<string?> ResolveAsync(string credentialRef, CancellationToken ct = default)
+        {
+            _ = ct;
+            RequestedRefs.Add(credentialRef);
+            return Task.FromResult(_credentials.GetValueOrDefault(credentialRef));
         }
     }
 

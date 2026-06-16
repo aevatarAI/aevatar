@@ -585,6 +585,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         state.ActiveSessionId = string.Empty;
         state.LeaseExpiresAt = null;
         state.ActiveLeaseOwnerId = string.Empty;
+        state.ActiveToolContext = null;
         await PersistRuntimeStateAsync(ctx, state, ct);
     }
 
@@ -748,6 +749,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         state.ActiveSessionId = request.SessionId;
         state.ActiveLeaseOwnerId = string.Empty;
         state.LeaseEpoch = NextLeaseEpoch(state);
+        state.ActiveToolContext = null;
         ClearTransportLeaseState(state);
         await PersistRuntimeStateAsync(ctx, state, ct);
         await using (await ConnectProviderSessionAsync(state, ct))
@@ -807,6 +809,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         state.RemoteSessionId = string.Empty;
         state.ActiveSessionId = string.Empty;
         state.ActiveLeaseOwnerId = string.Empty;
+        state.ActiveToolContext = null;
         ClearTransportLeaseState(state);
         state.ProviderResponseBindings.Clear();
         state.CancelledProviderResponseIds.Clear();
@@ -847,6 +850,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         state.ActiveLeaseOwnerId = request.OwnerId;
         state.LeaseExpiresAt = request.ExpiresAt?.Clone();
         state.LeaseEpoch = NextLeaseEpoch(state);
+        state.ActiveToolContext = request.ToolContext?.Clone();
         RefreshCapabilityFacts(state, ctx, request.SessionOverrides);
         await PersistRuntimeStateAsync(ctx, state, ct);
     }
@@ -867,6 +871,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         state.ActiveSessionId = string.Empty;
         state.LeaseExpiresAt = null;
         state.ActiveLeaseOwnerId = string.Empty;
+        state.ActiveToolContext = null;
         ClearTransportLeaseState(state);
         await PersistRuntimeStateAsync(ctx, state, ct);
     }
@@ -1026,7 +1031,8 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
             state.LeaseEpoch,
             state.LeaseExpiresAt?.Clone(),
             string.Empty,
-            Name);
+            Name,
+            state.ActiveToolContext?.Clone());
 
     private async Task ExecuteToolCallAsync(
         VoiceFunctionCallRequested request,
@@ -1043,13 +1049,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
             transportLeaseId,
             state.ActiveTransportLeaseId,
             state.Status);
-
-        // Refactor (cluster-voice-tool-caller-credential): the voice tool call runs on this actor turn,
-        // which has no caller AsyncLocal context. Re-establish it from the per-session credential store so
-        // the tool invoker (nyxid_proxy etc.) and the tool-result provider reconnect authenticate as the
-        // caller. Degrades to no-credential behavior when nothing is stashed.
-        var callerToken = ResolveCallerToken(ctx, state);
-        using var credentialScope = VoiceCallerCredentialScope.Push(callerToken);
 
         var invoker = _toolInvoker ?? ctx.Services.GetService<IVoiceToolInvoker>();
         var resultJson = "{}";
@@ -1075,6 +1074,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
                 resultJson = await invoker.ExecuteAsync(
                     request.ToolName,
                     string.IsNullOrWhiteSpace(request.ArgumentsJson) ? "{}" : request.ArgumentsJson,
+                    state.ActiveToolContext?.Clone(),
                     executionToken);
 
                 if (string.IsNullOrWhiteSpace(resultJson))
@@ -1163,15 +1163,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         await providerSession.SendToolResultAsync(callId, resultJson, ct);
     }
 
-    private static string? ResolveCallerToken(IEventHandlerContext ctx, VoicePresenceRuntimeState state)
-    {
-        var store = ctx.Services.GetService<IVoiceSessionCredentialStore>();
-        if (store == null || string.IsNullOrWhiteSpace(state.ActiveSessionId))
-            return null;
-
-        return store.TryGet(state.ActiveSessionId, out var token) ? token : null;
-    }
-
     private async Task<VoiceSessionConfig?> BuildEffectiveSessionConfigAsync(
         VoicePresenceRuntimeState state,
         CancellationToken ct)
@@ -1183,7 +1174,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         IReadOnlyList<VoiceToolDefinition> discoveredTools;
         try
         {
-            discoveredTools = await _toolCatalog.DiscoverAsync(ct);
+            discoveredTools = await _toolCatalog.DiscoverAsync(state.ActiveToolContext?.Clone(), ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {

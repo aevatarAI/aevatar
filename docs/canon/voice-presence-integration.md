@@ -80,7 +80,7 @@ touch the audio socket.
 | Plane | Route | Carrier | Notes |
 |---|---|---|---|
 | **Audio + control** | edge ⇄ aevatar ⇄ OpenAI | binary PCM16 (audio) + JSON `VoiceControlFrame` (control) over `/ws/voice`; relay WS to OpenAI | Hot path. Raw PCM never enters the actor inbox / `EventEnvelope` / projection / committed store (ADR-013 media red line). |
-| **Credential** | aevatar → NyxID → OpenAI | HTTPS mint, caller bearer flowed via AsyncLocal | Connect-time only. NyxID injects the real `sk-`; aevatar receives a short-lived `ek_` (~60s TTL) and dials OpenAI directly (ADR-0033). |
+| **Credential** | aevatar → NyxID → OpenAI | HTTPS mint; `/ws/voice` admission stores a short-TTL opaque `credential_ref` in typed `VoiceToolExecutionContext` | Connect-time/provider/tool use only. Actor state carries the ref and non-secret caller/channel fields; catalog, invoker, and provider reconnect resolve through `ICredentialProvider` at the use boundary. Raw bearers do not cross lease/proto/actor/readmodel boundaries. |
 | **Edge tools** | actor → NyxID proxy → node WS → edge HTTP → LAN | NyxID connected-service `x-aevatar-tool` operations | The LAN tool bridge. Edge publishes `/edge-tools/openapi.json`; only `EDGE_TOOLS_ALLOWLIST` operations are exposed (ADR-0031 short-term bridge). |
 | **Device events** | edge → aevatar `/api/device-events/{regId}` | HMAC-SHA256 signed callback body | Off-socket household-event ingress. The endpoint admits only fresh signed body timestamps and maps a stable delivery id into the envelope dedupe operation; the actor owns fencing / turn creation. |
 
@@ -172,7 +172,7 @@ sequenceDiagram
 | Media relay | `VoiceVolatileMediaStreamPort` (volatile, per-lease) | `VoiceSession` + WebRTC/WHIP transcode |
 | Brain state | `VoicePresenceModule` on a `RoleGAgent` actor | — (no `session.update`) |
 | Provider | `OpenAIRealtimeProvider` (direct WS) / MiniCPM | — |
-| Credentials | `NyxIdRealtimeProviderCredentialResolver` (ephemeral) | NyxID bearer only |
+| Credentials | `VoiceToolExecutionContext` + `ICredentialProvider` use-boundary resolution; `NyxIdRealtimeProviderCredentialResolver` mints provider ephemeral | NyxID bearer only |
 | Tools | `IVoiceToolInvoker` / `IAgentToolSource` (+ NyxID connected-service) | `/edge-tools` HTTP surface (LAN execution) |
 | Device events | `/api/device-events` HMAC ingress → actor | `AevatarDeviceEventClient` (HMAC sign) |
 

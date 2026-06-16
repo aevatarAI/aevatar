@@ -10,6 +10,7 @@ using Aevatar.AI.LLMProviders.MEAI;
 using Aevatar.AI.LLMProviders.NyxId;
 using Aevatar.AI.LLMProviders.Tornado;
 using Aevatar.AI.ToolProviders.MCP;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Ornn;
 using Aevatar.AI.ToolProviders.Scripting;
 using Aevatar.AI.ToolProviders.ServiceInvoke;
@@ -109,8 +110,14 @@ public static class ServiceCollectionExtensions
         // actors that implement the pending-approval continuation (RoleGAgent wires its
         // own). Surfaces without that capability fall back to MissingApprovalHandler and
         // fail closed instead of stranding a dead-letter approval (#2004).
-        services.TryAddSingleton<IVoiceToolInvoker, AgentToolVoiceInvoker>();
-        services.TryAddSingleton<IVoiceToolCatalog, AgentToolVoiceCatalog>();
+        services.TryAddSingleton<IVoiceToolInvoker>(sp => new AgentToolVoiceInvoker(
+            sp.GetServices<IAgentToolSource>(),
+            sp.GetService<Aevatar.Foundation.Abstractions.Credentials.ICredentialProvider>(),
+            sp.GetService<ILogger<AgentToolVoiceInvoker>>()));
+        services.TryAddSingleton<IVoiceToolCatalog>(sp => new AgentToolVoiceCatalog(
+            sp.GetServices<IAgentToolSource>(),
+            sp.GetService<Aevatar.Foundation.Abstractions.Credentials.ICredentialProvider>(),
+            sp.GetService<ILogger<AgentToolVoiceCatalog>>()));
         services.TryAddSingleton<IVoicePresenceCapabilityCommandPort, VoicePresenceCapabilityCommandPort>();
         services.TryAddSingleton<IWorkflowYamlValidator, WorkflowYamlValidatorImpl>();
         services.TryAddSingleton<IWorkflowDefinitionCommandAdapter>(sp =>
@@ -172,7 +179,11 @@ public static class ServiceCollectionExtensions
         if (nyxIdRealtimeCredentialOptions.Enabled)
         {
             services.TryAddSingleton(nyxIdRealtimeCredentialOptions);
-            services.TryAddSingleton<IRealtimeProviderCredentialResolver, NyxIdRealtimeProviderCredentialResolver>();
+            services.TryAddSingleton<IRealtimeProviderCredentialResolver>(sp => new NyxIdRealtimeProviderCredentialResolver(
+                sp.GetRequiredService<INyxIdApiClientFactory>(),
+                sp.GetRequiredService<NyxIdRealtimeProviderCredentialOptions>(),
+                sp.GetRequiredService<ILogger<NyxIdRealtimeProviderCredentialResolver>>(),
+                sp.GetService<Aevatar.Foundation.Abstractions.Credentials.ICredentialProvider>()));
         }
 
         services.TryAddSingleton<IVoicePresenceCapabilityQueryPort, VoicePresenceCapabilityQueryPort>();
@@ -180,7 +191,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IVoicePresenceSessionLeasePort, VoicePresenceSessionLeasePort>();
         services.TryAddSingleton<IVoicePresenceTransportAttachmentPort, VoicePresenceTransportAttachmentPort>();
         services.TryAddSingleton<IVoiceVolatileMediaStreamPort, VoiceVolatileMediaStreamPort>();
-        services.TryAddSingleton<IVoiceSessionCredentialStore, VoiceVolatileSessionCredentialStore>();
+        services.TryAddSingleton<IVoiceToolCredentialIssuer, VoiceToolCredentialIssuer>();
         services.TryAddSingleton<IRealtimeSession<VoiceRealtimeSessionRequest, VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeFrame, VoiceRealtimeSessionCompletion>, ActorOwnedVoiceRealtimeSession>();
         services.AddVoicePresenceCapabilityProjection();
         services.AddVoicePresenceCapabilityProjectionStore(configuration);
@@ -323,7 +334,8 @@ public static class ServiceCollectionExtensions
                 handle.LeaseEpoch,
                 Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(handle.ExpiresAtUtc.ToUniversalTime()),
                 handle.ActorId,
-                handle.ModuleName),
+                handle.ModuleName,
+                handle.ToolContext?.Clone()),
             providerConfig,
             eventSink,
             audioSink,
@@ -349,7 +361,7 @@ public static class ServiceCollectionExtensions
                 .Where(static name => !string.IsNullOrWhiteSpace(name)),
             StringComparer.OrdinalIgnoreCase);
 
-        foreach (var discoveredTool in await toolCatalog.DiscoverAsync(ct))
+        foreach (var discoveredTool in await toolCatalog.DiscoverAsync(toolContext: null, ct: ct))
         {
             var toolName = discoveredTool.Name?.Trim();
             if (string.IsNullOrWhiteSpace(toolName) || !knownNames.Add(toolName))
