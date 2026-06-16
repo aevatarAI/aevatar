@@ -8,7 +8,7 @@ describe("RunsMessagesView", () => {
     setLocale("en-US");
   });
 
-  it("renders message cards with role, status, and content", () => {
+  it("renders message cards with role, status, id, and content", () => {
     render(
       <RunsMessagesView
         messages={[
@@ -36,6 +36,7 @@ describe("RunsMessagesView", () => {
     expect(screen.getByText("Streaming reply chunk")).toBeInTheDocument();
     expect(screen.getByText("user")).toBeInTheDocument();
     expect(screen.getByText("Complete")).toBeInTheDocument();
+    expect(screen.getByText("msg-2")).toBeInTheDocument();
     expect(screen.getByText("Operator prompt")).toBeInTheDocument();
   });
 

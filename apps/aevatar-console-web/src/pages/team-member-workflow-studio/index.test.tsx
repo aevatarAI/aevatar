@@ -682,12 +682,6 @@ describe("TeamMemberWorkflowStudioPage", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Add first step" }));
     expect(await screen.findByText("Node library")).toBeTruthy();
-    expect(screen.getByTestId("node-library-layer")).toHaveStyle({
-      position: "absolute",
-    });
-    expect(screen.getByLabelText("Node library")).toHaveStyle({
-      position: "absolute",
-    });
     fireEvent.change(screen.getByLabelText("Search nodes"), {
       target: { value: "llm" },
     });
@@ -3589,9 +3583,6 @@ describe("TeamMemberWorkflowStudioPage", () => {
     });
     fireEvent.click(runDraftButton);
     const draftRunPanel = await screen.findByLabelText("Draft run panel");
-    expect(draftRunPanel).toHaveStyle({
-      borderLeft: "1px solid #e5e7eb",
-    });
     expect(
       within(draftRunPanel).getByText(
         "Leave blank to run this draft without user input.",

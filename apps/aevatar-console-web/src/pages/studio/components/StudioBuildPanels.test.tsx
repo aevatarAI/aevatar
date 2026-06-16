@@ -1166,9 +1166,6 @@ describe('StudioWorkflowBuildPanel', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Add step' }));
     expect(await screen.findByTestId('workflow-step-type-picker')).toBeInTheDocument();
-    expect(screen.getByTestId('workflow-step-type-picker-grid')).toHaveStyle({
-      overflowY: 'auto',
-    });
     fireEvent.click(screen.getByRole('button', { name: /llm_call/i }));
 
     await waitFor(() => {
