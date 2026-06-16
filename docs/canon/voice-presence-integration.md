@@ -121,6 +121,14 @@ The edge consumes a JSON projection of it (camelCase), hand-parsed by
   media relay is bound to that lease. Host/provider connect paths must carry
   the readmodel-observed positive `lease_epoch`; transport attach reuses that
   lease generation and does not create the next epoch.
+- **Credential ref lifetime** — `/ws/voice` admission mints at most one
+  `voice-tool:` ref for an attach attempt. Once the session is accepted, that
+  ref is owned by the accepted transport/session lease and is reused for the
+  session's provider reconnects, catalog discovery, and tool invocations.
+  Non-accepted startup releases the ref immediately; accepted sessions release
+  it in the same cleanup path that detaches the volatile media lease. Expired
+  refs are evicted on resolve/issue and never fall back to durable
+  `IAevatarSecretsStore` writes.
 
 ## Connect + turn sequence
 
@@ -141,7 +149,7 @@ sequenceDiagram
   H->>A: ExecuteAsync(Attach) preflight
   A-->>H: lease handle (else 404 / 503 / 409)
   H-->>VP: sessionAccepted (JSON control frame)
-  H->>N: mint ephemeral (caller bearer via AsyncLocal)
+  H->>N: mint ephemeral (resolve credential_ref at provider boundary)
   N->>O: POST /v1/realtime/client_secrets (NyxID injects sk-)
   O-->>N: ek_ (~60s TTL)
   N-->>H: ek_

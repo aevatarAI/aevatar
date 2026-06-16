@@ -164,6 +164,120 @@ public sealed class PolicyAwareVoiceEndpointsTests
             .Which.Should().BeSameAs(attachedTransports.Single());
     }
 
+    [Theory]
+    [InlineData("authorization")]
+    [InlineData("query")]
+    public async Task PolicyAwareVoice_WithCallerBearer_ShouldIssueToolCredentialAndReleaseOnSessionEnd(
+        string credentialSource)
+    {
+        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(
+            VoiceAttachTarget("voice-agent-lark", "voice_presence_openai"),
+            []));
+        var expiresAt = DateTimeOffset.UtcNow.AddMinutes(4);
+        var issuer = new RecordingVoiceToolCredentialIssuer(
+            new VoiceToolCredentialIssueResult("voice-tool:issued-1", expiresAt));
+        var session = new RecordingVoiceRealtimeSession();
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        var uri = "/ws/voice?channel=lark&registration_scope_id=bot-1&sender_id=sender-1" +
+                  "&message_id=message-1&platform_message_id=platform-message-1" +
+                  "&delivery_target_id=delivery-1&connected_services_context=%7B%22ok%22%3Atrue%7D" +
+                  "&nyxid_route_preference=direct&sender_binding_id=binding-1";
+        if (credentialSource == "query")
+            uri += "&access_token=%20caller-jwt%20";
+
+        using var app = CreatePolicyAwareApp(
+            policyPort,
+            new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent-lark"]),
+            session,
+            new RecordingVolatileMediaStreamPort(attachAsync: transport => transport.DisposeAsync().AsTask()),
+            toolCredentialIssuer: issuer);
+        var context = CreateVoiceContext(app, uri);
+        if (credentialSource == "authorization")
+            context.Request.Headers.Authorization = "Bearer  caller-jwt  ";
+        var wsFeature = new FakeHttpWebSocketFeature(socket);
+        context.Features.Set<IHttpWebSocketFeature>(wsFeature);
+
+        await GetEndpoint(app, "/ws/voice").RequestDelegate!(context);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        wsFeature.AcceptCalls.Should().Be(1);
+        issuer.Requests.Should().ContainSingle()
+            .Which.NyxIdAccessToken.Should().Be("caller-jwt");
+        issuer.ReleasedRefs.Should().ContainSingle().Which.Should().Be("voice-tool:issued-1");
+        var toolContext = session.Requests.Should().ContainSingle().Subject.ToolContext;
+        toolContext.Should().NotBeNull();
+        toolContext!.CredentialRef.Should().Be("voice-tool:issued-1");
+        toolContext.ExpiresAt.ToDateTimeOffset().Should().Be(expiresAt.ToUniversalTime());
+        toolContext.CallerScopeId.Should().Be("user-1");
+        toolContext.ChannelPlatform.Should().Be("lark");
+        toolContext.ChannelSenderId.Should().Be("sender-1");
+        toolContext.ChannelRegistrationScopeId.Should().Be("bot-1");
+        toolContext.ChannelMessageId.Should().Be("message-1");
+        toolContext.ChannelPlatformMessageId.Should().Be("platform-message-1");
+        toolContext.ChannelDeliveryTargetId.Should().Be("delivery-1");
+        toolContext.ConnectedServicesContextJson.Should().Be("""{"ok":true}""");
+        toolContext.NyxIdRoutePreference.Should().Be("direct");
+        toolContext.SenderBindingId.Should().Be("binding-1");
+    }
+
+    [Fact]
+    public async Task PolicyAwareVoice_WithCallerBearerAndMissingIssuer_ShouldReturn503BeforeUpgrade()
+    {
+        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(
+            VoiceAttachTarget("voice-agent-lark", "voice_presence_openai"),
+            []));
+        var session = new RecordingVoiceRealtimeSession();
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        using var app = CreatePolicyAwareApp(
+            policyPort,
+            new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent-lark"]),
+            session);
+        var context = CreateVoiceContext(app, "/ws/voice?channel=lark");
+        context.Request.Headers.Authorization = "Bearer caller-jwt";
+        var wsFeature = new FakeHttpWebSocketFeature(socket);
+        context.Features.Set<IHttpWebSocketFeature>(wsFeature);
+
+        await GetEndpoint(app, "/ws/voice").RequestDelegate!(context);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        (await ReadBodyAsync(context)).Should().Be("voice_credential_unavailable");
+        wsFeature.AcceptCalls.Should().Be(0);
+        session.Requests.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("null")]
+    [InlineData("throw")]
+    public async Task PolicyAwareVoice_WhenIssuerFails_ShouldReturn503BeforeUpgrade(string failureCase)
+    {
+        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(
+            VoiceAttachTarget("voice-agent-lark", "voice_presence_openai"),
+            []));
+        var issuer = failureCase == "throw"
+            ? new RecordingVoiceToolCredentialIssuer { ThrowOnIssue = true }
+            : new RecordingVoiceToolCredentialIssuer(null);
+        var session = new RecordingVoiceRealtimeSession();
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        using var app = CreatePolicyAwareApp(
+            policyPort,
+            new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent-lark"]),
+            session,
+            toolCredentialIssuer: issuer);
+        var context = CreateVoiceContext(app, "/ws/voice?channel=lark");
+        context.Request.Headers.Authorization = "Bearer caller-jwt";
+        var wsFeature = new FakeHttpWebSocketFeature(socket);
+        context.Features.Set<IHttpWebSocketFeature>(wsFeature);
+
+        await GetEndpoint(app, "/ws/voice").RequestDelegate!(context);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        (await ReadBodyAsync(context)).Should().Be("voice_credential_unavailable");
+        wsFeature.AcceptCalls.Should().Be(0);
+        session.Requests.Should().BeEmpty();
+        issuer.Requests.Should().ContainSingle();
+        issuer.ReleasedRefs.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task PolicyAwareVoice_WhenAttachedClientSendsInputImage_ShouldExposeImageTransportFrame()
     {
@@ -513,7 +627,8 @@ public sealed class PolicyAwareVoiceEndpointsTests
         RecordingVoiceRealtimeSession session,
         RecordingVolatileMediaStreamPort? mediaPort = null,
         Action<PolicyAwareVoiceEndpointOptions>? configureOptions = null,
-        IProjectionSessionEventHub<VoiceRealtimeFrame>? realtimeHub = null)
+        IProjectionSessionEventHub<VoiceRealtimeFrame>? realtimeHub = null,
+        IVoiceToolCredentialIssuer? toolCredentialIssuer = null)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -526,6 +641,8 @@ public sealed class PolicyAwareVoiceEndpointsTests
         builder.Services.AddSingleton<IUserAgentCatalogQueryPort>(catalog);
         builder.Services.AddSingleton<IRealtimeSession<VoiceRealtimeSessionRequest, VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeFrame, VoiceRealtimeSessionCompletion>>(session);
         builder.Services.AddSingleton<IVoiceVolatileMediaStreamPort>(mediaPort ?? new RecordingVolatileMediaStreamPort());
+        if (toolCredentialIssuer != null)
+            builder.Services.AddSingleton(toolCredentialIssuer);
         if (realtimeHub != null)
             builder.Services.AddSingleton(realtimeHub);
         var app = builder.Build();
@@ -699,6 +816,33 @@ public sealed class PolicyAwareVoiceEndpointsTests
             return Task.FromResult(
                 RealtimeSessionResult<VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeSessionCompletion>
                     .Success(accepted, VoiceRealtimeSessionCompletion.Accepted, completed: true));
+        }
+    }
+
+    private sealed class RecordingVoiceToolCredentialIssuer(
+        VoiceToolCredentialIssueResult? result = null) : IVoiceToolCredentialIssuer
+    {
+        public List<VoiceToolCredentialIssueRequest> Requests { get; } = [];
+        public List<string> ReleasedRefs { get; } = [];
+        public bool ThrowOnIssue { get; init; }
+
+        public Task<VoiceToolCredentialIssueResult?> IssueAsync(
+            VoiceToolCredentialIssueRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            if (ThrowOnIssue)
+                throw new InvalidOperationException("issuer failed");
+
+            return Task.FromResult(result);
+        }
+
+        public Task ReleaseAsync(string credentialRef, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ReleasedRefs.Add(credentialRef);
+            return Task.CompletedTask;
         }
     }
 

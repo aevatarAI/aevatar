@@ -23,7 +23,7 @@ namespace Aevatar.Bootstrap.Extensions.AI;
 public sealed class NyxIdRealtimeProviderCredentialResolver : IRealtimeProviderCredentialResolver
 {
     private readonly INyxIdApiClientFactory _clientFactory;
-    private readonly ICredentialProvider? _credentialProvider;
+    private readonly IReadOnlyList<ICredentialProvider> _credentialProviders;
     private readonly NyxIdRealtimeProviderCredentialOptions _options;
     private readonly ILogger<NyxIdRealtimeProviderCredentialResolver> _logger;
 
@@ -32,11 +32,24 @@ public sealed class NyxIdRealtimeProviderCredentialResolver : IRealtimeProviderC
         NyxIdRealtimeProviderCredentialOptions options,
         ILogger<NyxIdRealtimeProviderCredentialResolver> logger,
         ICredentialProvider? credentialProvider = null)
+        : this(
+            clientFactory,
+            options,
+            logger,
+            credentialProvider is null ? [] : [credentialProvider])
+    {
+    }
+
+    public NyxIdRealtimeProviderCredentialResolver(
+        INyxIdApiClientFactory clientFactory,
+        NyxIdRealtimeProviderCredentialOptions options,
+        ILogger<NyxIdRealtimeProviderCredentialResolver> logger,
+        IEnumerable<ICredentialProvider> credentialProviders)
     {
         _clientFactory = clientFactory ?? throw new ArgumentNullException(nameof(clientFactory));
-        _credentialProvider = credentialProvider;
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _credentialProviders = credentialProviders?.ToList() ?? [];
     }
 
     public async Task<string?> ResolveApiKeyAsync(
@@ -52,9 +65,9 @@ public sealed class NyxIdRealtimeProviderCredentialResolver : IRealtimeProviderC
         var callerToken = AgentToolRequestContext.NyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(callerToken) &&
             IsUsableCredentialRef(sessionKey.ToolContext) &&
-            _credentialProvider is not null)
+            _credentialProviders.Count > 0)
         {
-            callerToken = await _credentialProvider.ResolveAsync(sessionKey.ToolContext!.CredentialRef, ct);
+            callerToken = await ResolveCredentialRefAsync(sessionKey.ToolContext!.CredentialRef, ct);
         }
 
         if (string.IsNullOrWhiteSpace(callerToken))
@@ -107,6 +120,18 @@ public sealed class NyxIdRealtimeProviderCredentialResolver : IRealtimeProviderC
             sessionKey.SessionId,
             _options.ServiceSlug);
         return ephemeral;
+    }
+
+    private async Task<string?> ResolveCredentialRefAsync(string credentialRef, CancellationToken ct)
+    {
+        foreach (var credentialProvider in _credentialProviders)
+        {
+            var credential = await credentialProvider.ResolveAsync(credentialRef, ct);
+            if (!string.IsNullOrWhiteSpace(credential))
+                return credential;
+        }
+
+        return null;
     }
 
     private static bool IsUsableCredentialRef(VoiceToolExecutionContext? toolContext)

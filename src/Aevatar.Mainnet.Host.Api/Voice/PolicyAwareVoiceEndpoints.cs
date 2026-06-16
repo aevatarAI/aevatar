@@ -134,64 +134,91 @@ public static class PolicyAwareVoiceEndpoints
         if (!toolContextAdmission.Accepted)
             return;
 
-        var result = await voiceRealtimeSession.ExecuteAsync(
-            new VoiceRealtimeSessionRequest(
-                voiceTarget.ActorId.Trim(),
-                NormalizeOptional(voiceTarget.VoiceModuleName),
-                VoiceRealtimeSessionPurpose.Attach,
-                voiceTarget.SessionOverrides?.Clone(),
-                toolContextAdmission.ToolContext?.Clone()),
-            static (_, _) => ValueTask.CompletedTask,
-            ct: http.RequestAborted);
-
-        var accepted = await WriteNonAcceptedResolutionAsync(http, result);
-        if (accepted is null)
-            return;
-
-        var ws = await http.WebSockets.AcceptWebSocketAsync();
-        var transport = new WebSocketVoiceTransport(ws);
-        var attached = false;
-        IAsyncDisposable? realtimeSubscription = null;
         try
         {
-            realtimeSubscription = await VoiceRealtimeTransportControlBridge.SubscribeAsync(
-                http.RequestServices,
-                accepted,
-                transport,
-                http.RequestAborted);
+            var result = await voiceRealtimeSession.ExecuteAsync(
+                new VoiceRealtimeSessionRequest(
+                    voiceTarget.ActorId.Trim(),
+                    NormalizeOptional(voiceTarget.VoiceModuleName),
+                    VoiceRealtimeSessionPurpose.Attach,
+                    voiceTarget.SessionOverrides?.Clone(),
+                    toolContextAdmission.ToolContext?.Clone()),
+                static (_, _) => ValueTask.CompletedTask,
+                ct: http.RequestAborted);
+
+            var accepted = await WriteNonAcceptedResolutionAsync(http, result);
+            if (accepted is null)
+                return;
+
+            var ws = await http.WebSockets.AcceptWebSocketAsync();
+            var transport = new WebSocketVoiceTransport(ws);
+            var attached = false;
+            IAsyncDisposable? realtimeSubscription = null;
             try
             {
-                await VoiceRealtimeTransportControlBridge.SendSessionAcceptedAsync(
-                    transport,
+                realtimeSubscription = await VoiceRealtimeTransportControlBridge.SubscribeAsync(
+                    http.RequestServices,
                     accepted,
+                    transport,
                     http.RequestAborted);
+                try
+                {
+                    await VoiceRealtimeTransportControlBridge.SendSessionAcceptedAsync(
+                        transport,
+                        accepted,
+                        http.RequestAborted);
+                }
+                catch
+                {
+                    await CleanupAcceptedTransportAsync(http, mediaStreamPort, accepted.LeaseHandle, transport);
+                    throw;
+                }
+
+                await mediaStreamPort.AttachAsync(accepted.LeaseHandle, transport, http.RequestAborted);
+
+                attached = true;
+                await WaitUntilClosedAsync(transport, http.RequestAborted);
             }
-            catch
+            catch (VoiceVolatileMediaStreamUnavailableException)
             {
-                await CleanupAcceptedTransportAsync(http, mediaStreamPort, accepted.LeaseHandle, transport);
-                throw;
+                await TryCloseAsync(http, ws, RemoteAudioTransportUnavailableReason);
             }
+            catch (InvalidOperationException) when (!attached)
+            {
+                await TryCloseAsync(http, ws, "Voice transport already attached.");
+            }
+            finally
+            {
+                if (realtimeSubscription != null)
+                    await realtimeSubscription.DisposeAsync();
 
-            await mediaStreamPort.AttachAsync(accepted.LeaseHandle, transport, http.RequestAborted);
-
-            attached = true;
-            await WaitUntilClosedAsync(transport, http.RequestAborted);
-        }
-        catch (VoiceVolatileMediaStreamUnavailableException)
-        {
-            await TryCloseAsync(http, ws, RemoteAudioTransportUnavailableReason);
-        }
-        catch (InvalidOperationException) when (!attached)
-        {
-            await TryCloseAsync(http, ws, "Voice transport already attached.");
+                if (attached)
+                    await mediaStreamPort.DetachAsync(accepted.LeaseHandle, transport, http.RequestAborted);
+            }
         }
         finally
         {
-            if (realtimeSubscription != null)
-                await realtimeSubscription.DisposeAsync();
+            await ReleaseToolCredentialAsync(http, toolContextAdmission.ToolContext);
+        }
+    }
 
-            if (attached)
-                await mediaStreamPort.DetachAsync(accepted.LeaseHandle, transport, http.RequestAborted);
+    private static async Task ReleaseToolCredentialAsync(HttpContext http, VoiceToolExecutionContext? toolContext)
+    {
+        var credentialRef = NormalizeOptional(toolContext?.CredentialRef);
+        if (credentialRef is null)
+            return;
+
+        var issuer = http.RequestServices.GetService<IVoiceToolCredentialIssuer>();
+        if (issuer is null)
+            return;
+
+        try
+        {
+            await issuer.ReleaseAsync(credentialRef, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            GetLogger(http).LogWarning(ex, "Failed to release voice tool credential ref.");
         }
     }
 
@@ -215,32 +242,7 @@ public static class PolicyAwareVoiceEndpoints
             issued = await issuer.IssueAsync(
                 new VoiceToolCredentialIssueRequest(
                     callerBearer,
-                    expiresAtUtc,
-                    CallerScopeId: FirstNonEmpty(
-                        http.User.FindFirst(AevatarStandardClaimTypes.ScopeId)?.Value,
-                        http.User.FindFirst("uid")?.Value,
-                        http.User.FindFirst("sub")?.Value,
-                        http.User.FindFirst(ClaimTypes.NameIdentifier)?.Value),
-                    CallerSubject: FirstNonEmpty(
-                        http.User.FindFirst("sub")?.Value,
-                        http.User.FindFirst(ClaimTypes.NameIdentifier)?.Value),
-                    OwnerSubject: FirstNonEmpty(
-                        http.User.FindFirst("sub")?.Value,
-                        http.User.FindFirst(ClaimTypes.NameIdentifier)?.Value),
-                    ChannelPlatform: NormalizeOptional(http.Request.Query["channel"].ToString()) ?? OwnerScope.NyxIdPlatform,
-                    ChannelSenderId: FirstNonEmpty(
-                        http.Request.Query["sender_id"].ToString(),
-                        http.User.FindFirst("sender_id")?.Value),
-                    ChannelRegistrationScopeId: FirstNonEmpty(
-                        http.Request.Query["registration_scope_id"].ToString(),
-                        http.User.FindFirst("registration_scope_id")?.Value,
-                        http.User.FindFirst(AevatarStandardClaimTypes.ScopeId)?.Value),
-                    ChannelMessageId: NormalizeOptional(http.Request.Query["message_id"].ToString()),
-                    ChannelPlatformMessageId: NormalizeOptional(http.Request.Query["platform_message_id"].ToString()),
-                    ChannelDeliveryTargetId: NormalizeOptional(http.Request.Query["delivery_target_id"].ToString()),
-                    ConnectedServicesContextJson: NormalizeOptional(http.Request.Query["connected_services_context"].ToString()),
-                    NyxIdRoutePreference: NormalizeOptional(http.Request.Query["nyxid_route_preference"].ToString()),
-                    SenderBindingId: NormalizeOptional(http.Request.Query["sender_binding_id"].ToString())),
+                    expiresAtUtc),
                 http.RequestAborted);
         }
         catch (OperationCanceledException) when (http.RequestAborted.IsCancellationRequested)

@@ -13,7 +13,7 @@ namespace Aevatar.AI.Core.Voice;
 public sealed class AgentToolVoiceInvoker : IVoiceToolInvoker
 {
     private readonly IEnumerable<IAgentToolSource> _toolSources;
-    private readonly ICredentialProvider? _credentialProvider;
+    private readonly IReadOnlyList<ICredentialProvider> _credentialProviders;
     private readonly ILogger _logger;
     private volatile Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>>? _toolIndex;
 
@@ -21,9 +21,20 @@ public sealed class AgentToolVoiceInvoker : IVoiceToolInvoker
         IEnumerable<IAgentToolSource> toolSources,
         ICredentialProvider? credentialProvider = null,
         ILogger<AgentToolVoiceInvoker>? logger = null)
+        : this(
+            toolSources,
+            credentialProvider is null ? [] : [credentialProvider],
+            logger)
+    {
+    }
+
+    public AgentToolVoiceInvoker(
+        IEnumerable<IAgentToolSource> toolSources,
+        IEnumerable<ICredentialProvider> credentialProviders,
+        ILogger<AgentToolVoiceInvoker>? logger = null)
     {
         _toolSources = toolSources ?? throw new ArgumentNullException(nameof(toolSources));
-        _credentialProvider = credentialProvider;
+        _credentialProviders = credentialProviders?.ToList() ?? [];
         _logger = logger ?? NullLogger<AgentToolVoiceInvoker>.Instance;
     }
 
@@ -58,18 +69,30 @@ public sealed class AgentToolVoiceInvoker : IVoiceToolInvoker
         VoiceToolExecutionContext toolContext,
         CancellationToken ct)
     {
-        if (_credentialProvider is null)
+        if (_credentialProviders.Count == 0)
             return null;
 
         var credentialRef = VoiceToolExecutionContextMapper.Normalize(toolContext.CredentialRef);
         if (credentialRef is null)
             return null;
 
-        var nyxIdAccessToken = await _credentialProvider.ResolveAsync(credentialRef, ct);
+        var nyxIdAccessToken = await ResolveCredentialRefAsync(credentialRef, ct);
         if (string.IsNullOrWhiteSpace(nyxIdAccessToken))
             return null;
 
         return VoiceToolExecutionContextMapper.ToAgentToolContext(toolContext, nyxIdAccessToken);
+    }
+
+    private async Task<string?> ResolveCredentialRefAsync(string credentialRef, CancellationToken ct)
+    {
+        foreach (var credentialProvider in _credentialProviders)
+        {
+            var credential = await credentialProvider.ResolveAsync(credentialRef, ct);
+            if (!string.IsNullOrWhiteSpace(credential))
+                return credential;
+        }
+
+        return null;
     }
 
     private Task<IReadOnlyDictionary<string, IAgentTool>> GetOrDiscoverAsync(CancellationToken ct)

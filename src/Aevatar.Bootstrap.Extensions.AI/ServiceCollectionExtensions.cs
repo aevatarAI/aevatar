@@ -34,6 +34,7 @@ using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Foundation.VoicePresence;
@@ -112,11 +113,11 @@ public static class ServiceCollectionExtensions
         // fail closed instead of stranding a dead-letter approval (#2004).
         services.TryAddSingleton<IVoiceToolInvoker>(sp => new AgentToolVoiceInvoker(
             sp.GetServices<IAgentToolSource>(),
-            sp.GetService<Aevatar.Foundation.Abstractions.Credentials.ICredentialProvider>(),
+            ResolveVoiceCredentialProviders(sp),
             sp.GetService<ILogger<AgentToolVoiceInvoker>>()));
         services.TryAddSingleton<IVoiceToolCatalog>(sp => new AgentToolVoiceCatalog(
             sp.GetServices<IAgentToolSource>(),
-            sp.GetService<Aevatar.Foundation.Abstractions.Credentials.ICredentialProvider>(),
+            ResolveVoiceCredentialProviders(sp),
             sp.GetService<ILogger<AgentToolVoiceCatalog>>()));
         services.TryAddSingleton<IVoicePresenceCapabilityCommandPort, VoicePresenceCapabilityCommandPort>();
         services.TryAddSingleton<IWorkflowYamlValidator, WorkflowYamlValidatorImpl>();
@@ -183,7 +184,7 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<INyxIdApiClientFactory>(),
                 sp.GetRequiredService<NyxIdRealtimeProviderCredentialOptions>(),
                 sp.GetRequiredService<ILogger<NyxIdRealtimeProviderCredentialResolver>>(),
-                sp.GetService<Aevatar.Foundation.Abstractions.Credentials.ICredentialProvider>()));
+                ResolveVoiceCredentialProviders(sp)));
         }
 
         services.TryAddSingleton<IVoicePresenceCapabilityQueryPort, VoicePresenceCapabilityQueryPort>();
@@ -191,7 +192,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IVoicePresenceSessionLeasePort, VoicePresenceSessionLeasePort>();
         services.TryAddSingleton<IVoicePresenceTransportAttachmentPort, VoicePresenceTransportAttachmentPort>();
         services.TryAddSingleton<IVoiceVolatileMediaStreamPort, VoiceVolatileMediaStreamPort>();
-        services.TryAddSingleton<IVoiceToolCredentialIssuer, VoiceToolCredentialIssuer>();
+        services.TryAddSingleton(sp => new VoiceToolCredentialIssuer(sp.GetService<TimeProvider>()));
+        services.TryAddSingleton<IVoiceToolCredentialIssuer>(sp => sp.GetRequiredService<VoiceToolCredentialIssuer>());
         services.TryAddSingleton<IRealtimeSession<VoiceRealtimeSessionRequest, VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeFrame, VoiceRealtimeSessionCompletion>, ActorOwnedVoiceRealtimeSession>();
         services.AddVoicePresenceCapabilityProjection();
         services.AddVoicePresenceCapabilityProjectionStore(configuration);
@@ -199,6 +201,22 @@ public static class ServiceCollectionExtensions
             ServiceDescriptor.Singleton<IEventModuleFactory<IEventHandlerContext>, VoicePresenceModuleFactory>());
         foreach (var registration in registrations)
             services.AddSingleton(registration);
+    }
+
+    private static IReadOnlyList<ICredentialProvider> ResolveVoiceCredentialProviders(IServiceProvider services)
+    {
+        var providers = new List<ICredentialProvider>();
+        var voiceCredentialProvider = services.GetService<IVoiceToolCredentialIssuer>() as ICredentialProvider;
+        if (voiceCredentialProvider is not null)
+            providers.Add(voiceCredentialProvider);
+
+        foreach (var provider in services.GetServices<ICredentialProvider>())
+        {
+            if (!ReferenceEquals(provider, voiceCredentialProvider))
+                providers.Add(provider);
+        }
+
+        return providers;
     }
 
     private static IServiceCollection AddVoicePresenceCapabilityProjectionStore(
