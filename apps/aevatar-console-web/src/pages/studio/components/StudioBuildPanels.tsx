@@ -31,9 +31,9 @@ import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
 import { runtimeGAgentApi } from '@/shared/api/runtimeGAgentApi';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import {
-  buildRuntimeGAgentKindValue,
-  buildRuntimeGAgentKindLabel,
-  type RuntimeGAgentKindDescriptor,
+  buildRuntimeGAgentAssemblyQualifiedName,
+  buildRuntimeGAgentTypeLabel,
+  type RuntimeGAgentTypeDescriptor,
 } from '@/shared/models/runtime/gagents';
 import type { WorkflowPrimitiveDescriptor } from '@/shared/models/runtime/query';
 import {
@@ -587,6 +587,7 @@ function extractRunFinishedOutput(result: unknown): string {
   }
 
   const record = result as Record<string, unknown>;
+  // Refactor (iter98/cluster-790): Old: UI relied on generic/fallback result shapes after backend missed-live synthesis. New: typed GAgentDraftRunResultPayload exposes result.output.
   const candidate = record.output ?? record.Output ?? record.message ?? record.text;
   return typeof candidate === 'string' ? candidate : '';
 }
@@ -1197,13 +1198,13 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
   const selectedPrimitiveDescriptor = React.useMemo(
     () =>
       runtimePrimitives.find((primitive) => {
-        const selectedKindDescriptor = stepDraft?.type || selectedStep?.type || '';
-        if (primitive.name.trim().toLowerCase() === selectedKindDescriptor.trim().toLowerCase()) {
+        const selectedType = stepDraft?.type || selectedStep?.type || '';
+        if (primitive.name.trim().toLowerCase() === selectedType.trim().toLowerCase()) {
           return true;
         }
 
         return primitive.aliases.some(
-          (alias) => alias.trim().toLowerCase() === selectedKindDescriptor.trim().toLowerCase(),
+          (alias) => alias.trim().toLowerCase() === selectedType.trim().toLowerCase(),
         );
       }) ?? null,
     [runtimePrimitives, selectedStep?.type, stepDraft?.type],
@@ -3391,7 +3392,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
 };
 
 export type StudioGAgentBuildState = {
-  readonly agentKind: string;
+  readonly actorTypeName: string;
   readonly displayName: string;
   readonly initialPrompt: string;
   readonly persistenceMode: 'grain' | 'ephemeral';
@@ -3402,11 +3403,11 @@ export type StudioGAgentBuildState = {
 export type StudioGAgentBuildPanelProps = {
   readonly scopeId?: string;
   readonly currentMemberLabel: string;
-  readonly gAgentKinds: readonly RuntimeGAgentKindDescriptor[];
-  readonly gAgentKindsLoading: boolean;
-  readonly gAgentKindsError: unknown;
-  readonly selectedAgentKind: string;
-  readonly onSelectAgentKind: (value: string) => void;
+  readonly gAgentTypes: readonly RuntimeGAgentTypeDescriptor[];
+  readonly gAgentTypesLoading: boolean;
+  readonly gAgentTypesError: unknown;
+  readonly selectedGAgentTypeName: string;
+  readonly onSelectGAgentTypeName: (value: string) => void;
   readonly onBuildStateChange?: (state: StudioGAgentBuildState) => void;
   readonly onContinueToBind: (state: StudioGAgentBuildState) => void;
 };
@@ -3414,11 +3415,11 @@ export type StudioGAgentBuildPanelProps = {
 export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
   scopeId,
   currentMemberLabel,
-  gAgentKinds,
-  gAgentKindsLoading,
-  gAgentKindsError,
-  selectedAgentKind,
-  onSelectAgentKind,
+  gAgentTypes,
+  gAgentTypesLoading,
+  gAgentTypesError,
+  selectedGAgentTypeName,
+  onSelectGAgentTypeName,
   onBuildStateChange,
   onContinueToBind,
 }) => {
@@ -3436,16 +3437,16 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
   );
   const [runState, setRunState] = React.useState<DraftRunState>(IDLE_DRAFT_RUN_STATE);
   const abortControllerRef = React.useRef<AbortController | null>(null);
-  const selectedKindDescriptor = React.useMemo(
+  const selectedType = React.useMemo(
     () =>
-      gAgentKinds.find((descriptor) =>
-        buildRuntimeGAgentKindValue(descriptor) === selectedAgentKind,
+      gAgentTypes.find((descriptor) =>
+        buildRuntimeGAgentAssemblyQualifiedName(descriptor) === selectedGAgentTypeName,
       ) || null,
-    [gAgentKinds, selectedAgentKind],
+    [gAgentTypes, selectedGAgentTypeName],
   );
-  const selectedAgentKindValue =
-    selectedAgentKind ||
-    (gAgentKinds[0] ? buildRuntimeGAgentKindValue(gAgentKinds[0]) : '');
+  const selectedTypeName =
+    selectedGAgentTypeName ||
+    (gAgentTypes[0] ? buildRuntimeGAgentAssemblyQualifiedName(gAgentTypes[0]) : '');
   const toolTags = React.useMemo(
     () =>
       toolsDraft
@@ -3456,21 +3457,21 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
   );
   const currentBuildState = React.useMemo<StudioGAgentBuildState>(
     () => ({
-      agentKind: selectedAgentKindValue,
+      actorTypeName: selectedTypeName,
       displayName: displayName.trim(),
       initialPrompt: initialPrompt.trim(),
       persistenceMode,
       role: role.trim(),
       tools: toolTags,
     }),
-    [displayName, initialPrompt, persistenceMode, role, selectedAgentKindValue, toolTags],
+    [displayName, initialPrompt, persistenceMode, role, selectedTypeName, toolTags],
   );
 
   React.useEffect(() => {
-    if (!selectedAgentKind && selectedAgentKindValue) {
-      onSelectAgentKind(selectedAgentKindValue);
+    if (!selectedGAgentTypeName && selectedTypeName) {
+      onSelectGAgentTypeName(selectedTypeName);
     }
-  }, [onSelectAgentKind, selectedAgentKind, selectedAgentKindValue]);
+  }, [onSelectGAgentTypeName, selectedGAgentTypeName, selectedTypeName]);
 
   React.useEffect(() => {
     setDisplayName((current) => current || currentMemberLabel || 'Member GAgent');
@@ -3488,10 +3489,10 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
   );
 
   const handleRun = React.useCallback(async () => {
-    if (!scopeId || !selectedAgentKindValue.trim() || !runPrompt.trim()) {
+    if (!scopeId || !selectedTypeName.trim() || !runPrompt.trim()) {
       setRunState({
         ...IDLE_DRAFT_RUN_STATE,
-        error: 'Workspace, GAgent kind, and prompt are required before running.',
+        error: 'Workspace, GAgent type, and prompt are required before running.',
         status: 'error',
       });
       return;
@@ -3514,7 +3515,7 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
       const response = await runtimeGAgentApi.streamDraftRun(
         scopeId,
         {
-          agentKind: selectedAgentKindValue,
+          actorTypeName: selectedTypeName,
           prompt: runPrompt,
           timeoutMs: GAGENT_DRAFT_RUN_TIMEOUT_MS,
         },
@@ -3554,7 +3555,7 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
         abortControllerRef.current = null;
       }
     }
-  }, [runPrompt, scopeId, selectedAgentKindValue]);
+  }, [runPrompt, scopeId, selectedTypeName]);
 
   return (
     <div data-testid="studio-gagent-build-panel" style={buildWorkbenchGridStyle}>
@@ -3563,18 +3564,18 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
           <div style={{ display: 'grid', gap: 4 }}>
             <div style={sectionEyebrowStyle}>{t("pages.studio.studiobuildpanels.gagent.definition.2", "GAgent Definition")}</div>
             <div style={sectionDescriptionStyle}>
-              {t("pages.studio.studiobuildpanels.gagent.mode.build.member", "GAgent mode defines the current member's Agent kind, display name, role, initial Prompt, tools, and state persistence semantics in Build.")}</div>
+              {t("pages.studio.studiobuildpanels.gagent.mode.build.member", "GAgent mode defines the current member's Actor type, display name, role, initial Prompt, tools, and state persistence semantics in Build.")}</div>
           </div>
           <div style={{ alignItems: 'center', display: 'flex', gap: 8, justifyContent: 'space-between' }}>
             <Space wrap size={[8, 8]}>
               <Tag color="green">{t("pages.studio.studiobuildpanels.template.seeded.2", "template · seeded")}</Tag>
-              {selectedKindDescriptor ? (
-                <Tag>{buildRuntimeGAgentKindLabel(selectedKindDescriptor)}</Tag>
+              {selectedType ? (
+                <Tag>{buildRuntimeGAgentTypeLabel(selectedType)}</Tag>
               ) : null}
             </Space>
           </div>
-          {gAgentKindsError ? (
-            <Alert message={describeError(gAgentKindsError)} showIcon type="error" />
+          {gAgentTypesError ? (
+            <Alert message={describeError(gAgentTypesError)} showIcon type="error" />
           ) : null}
           <div
             style={{
@@ -3583,17 +3584,17 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
               gridTemplateColumns: '160px minmax(0, 1fr)',
             }}
           >
-            <div style={{ ...sectionEyebrowStyle, paddingTop: 10 }}>{t("pages.studio.studiobuildpanels.gagent.kind.2", "GAgent kind")}</div>
+            <div style={{ ...sectionEyebrowStyle, paddingTop: 10 }}>{t("pages.studio.studiobuildpanels.type.url.2", "Type URL")}</div>
             <Select
-              aria-label={t("pages.studio.studiobuildpanels.gagent.type.2", "GAgent kind")}
-              loading={gAgentKindsLoading}
-              value={selectedAgentKindValue || undefined}
-              onChange={onSelectAgentKind}
-              options={gAgentKinds.map((descriptor) => ({
-                label: buildRuntimeGAgentKindLabel(descriptor),
-                value: buildRuntimeGAgentKindValue(descriptor),
+              aria-label={t("pages.studio.studiobuildpanels.gagent.type.2", "GAgent type")}
+              loading={gAgentTypesLoading}
+              value={selectedTypeName || undefined}
+              onChange={onSelectGAgentTypeName}
+              options={gAgentTypes.map((descriptor) => ({
+                label: buildRuntimeGAgentTypeLabel(descriptor),
+                value: buildRuntimeGAgentAssemblyQualifiedName(descriptor),
               }))}
-              placeholder={t("pages.studio.studiobuildpanels.select.typed.gagent.2", "Select a GAgent kind")}
+              placeholder={t("pages.studio.studiobuildpanels.select.typed.gagent.2", "Select a typed GAgent")}
             />
 
             <div style={{ ...sectionEyebrowStyle, paddingTop: 10 }}>{t("pages.studio.studiobuildpanels.display.name.2", "Display name")}</div>
@@ -3657,7 +3658,7 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
             {t("pages.studio.studiobuildpanels.gagent.build.actor.service", "GAgent Build only defines Actor semantics. Publish the Service and Endpoint in Bind.")}</Typography.Text>
           <Button
             className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
-            disabled={!selectedAgentKindValue}
+            disabled={!selectedTypeName}
             type="primary"
             onClick={() => onContinueToBind(currentBuildState)}
           >
@@ -3675,7 +3676,7 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
             {t("pages.studio.studiobuildpanels.draft.input.3", "Draft input")}</span>
         </div>
         <div style={sectionDescriptionStyle}>
-          {t("pages.studio.studiobuildpanels.gagent.prompt.transcript", "Run the currently selected GAgent kind as a draft to verify that the prompt and transcript match expectations.")}</div>
+          {t("pages.studio.studiobuildpanels.gagent.prompt.transcript", "Run the currently selected GAgent type as a draft to verify that the prompt and transcript match expectations.")}</div>
         <Input.TextArea
           aria-label={t("pages.studio.studiobuildpanels.gagent.dry.run.input.2", "GAgent dry run input")}
           autoSize={{ minRows: 6, maxRows: 10 }}
@@ -3759,7 +3760,7 @@ export function getDefaultBuildModeCards(scriptsEnabled: boolean): readonly Stud
       key: 'gagent',
       label: 'GAgent',
       description:
-        t("pages.studio.studiobuildpanels.wire.typed.gagent.actor.with.2", "Wire a GAgent kind actor with long-lived state. Best when one member owns durable behavior."),
+        t("pages.studio.studiobuildpanels.wire.typed.gagent.actor.with.2", "Wire a typed GAgent actor with long-lived state. Best when one member owns durable behavior."),
       hint: 'When · State lives with one agent',
     },
   ];

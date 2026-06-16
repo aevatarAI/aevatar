@@ -26,27 +26,25 @@ describe("runtimeGAgentApi", () => {
     window.localStorage.clear();
   });
 
-  it("loads discovered GAgent kinds from the scope capability endpoint", async () => {
+  it("loads discovered GAgent types from the scope capability endpoint", async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
       status: 200,
       json: async () => [
         {
-          agentKind: "Tests.OrdersGAgent",
-          displayName: "Orders Assistant",
-          diagnosticClrTypeName: "Tests.OrdersGAgent, Tests",
-          endpoints: [],
+          typeName: "OrdersGAgent",
+          fullName: "Tests.OrdersGAgent",
+          assemblyName: "Tests",
         },
       ],
     } as Response);
     global.fetch = fetchMock as typeof global.fetch;
 
-    await expect(runtimeGAgentApi.listKinds()).resolves.toEqual([
+    await expect(runtimeGAgentApi.listTypes()).resolves.toEqual([
       {
-        agentKind: "Tests.OrdersGAgent",
-          displayName: "Orders Assistant",
-          diagnosticClrTypeName: "Tests.OrdersGAgent, Tests",
-          endpoints: [],
+        typeName: "OrdersGAgent",
+        fullName: "Tests.OrdersGAgent",
+        assemblyName: "Tests",
       },
     ]);
 
@@ -69,7 +67,7 @@ describe("runtimeGAgentApi", () => {
         stateVersion: 42,
         groups: [
           {
-            agentKind: "Tests.OrdersGAgent",
+            gAgentType: "Tests.OrdersGAgent",
             actorIds: ["orders-1", "orders-2"],
           },
         ],
@@ -79,7 +77,7 @@ describe("runtimeGAgentApi", () => {
 
     await expect(runtimeGAgentApi.listActors("scope-1")).resolves.toEqual([
       {
-        agentKind: "Tests.OrdersGAgent",
+        gAgentType: "Tests.OrdersGAgent",
         actorIds: ["orders-1", "orders-2"],
       },
     ]);
@@ -94,7 +92,7 @@ describe("runtimeGAgentApi", () => {
       status: 200,
       json: async () => [
         {
-          agentKind: "Tests.OrdersGAgent",
+          gAgentType: "Tests.OrdersGAgent",
           actorIds: ["orders-1"],
         },
       ],
@@ -127,7 +125,7 @@ describe("runtimeGAgentApi", () => {
       RequestInit | undefined,
     ];
     expect(input).toBe(
-      "/api/scopes/scope-1/gagent-actors/orders-3?agentKind=Tests.OrdersGAgent"
+      "/api/scopes/scope-1/gagent-actors/orders-3?gagentType=Tests.OrdersGAgent"
     );
     expect(init?.method).toBe("DELETE");
     expect(new Headers(init?.headers).get("Authorization")).toBe(
@@ -146,7 +144,7 @@ describe("runtimeGAgentApi", () => {
     await runtimeGAgentApi.streamDraftRun(
       "scope-1",
       {
-        agentKind: "Tests.OrdersGAgent",
+        actorTypeName: "Tests.OrdersGAgent, Tests",
         prompt: "hello agent",
         preferredActorId: "orders-1",
       },
@@ -164,12 +162,11 @@ describe("runtimeGAgentApi", () => {
       "Bearer access-token"
     );
     expect(JSON.parse(String(init?.body))).toEqual({
-      agentKind: "Tests.OrdersGAgent",
+      actorTypeName: "Tests.OrdersGAgent, Tests",
       prompt: "hello agent",
       preferredActorId: "orders-1",
       timeoutMs: undefined,
     });
-    expect(JSON.parse(String(init?.body))).not.toHaveProperty("actorTypeName");
     expect(init?.signal).toBe(controller.signal);
   });
 
@@ -215,7 +212,6 @@ describe("runtimeGAgentApi", () => {
             ScriptDefinitionActorId: "",
             ScriptSourceHash: "",
             StaticActorTypeName: "Tests.OrdersGAgent, Tests",
-            StaticAgentKind: "Tests.OrdersGAgent",
             StaticPreferredActorId: "orders-actor",
           },
         ],
@@ -240,7 +236,6 @@ describe("runtimeGAgentApi", () => {
           revisionId: "rev-2",
           implementationKind: "gagent",
           staticActorTypeName: "Tests.OrdersGAgent, Tests",
-          staticAgentKind: "Tests.OrdersGAgent",
           staticPreferredActorId: "orders-actor",
           isDefaultServing: true,
           isActiveServing: true,
@@ -265,8 +260,7 @@ describe("runtimeGAgentApi", () => {
         targetName: "Orders Assistant",
         expectedActorId: "orders-actor",
         gAgent: {
-          agentKind: "Tests.OrdersGAgent",
-          diagnosticClrTypeName: "Tests.OrdersGAgent, Tests",
+          actorTypeName: "Tests.OrdersGAgent, Tests",
           preferredActorId: "orders-actor",
         },
       }),
@@ -277,7 +271,7 @@ describe("runtimeGAgentApi", () => {
       runtimeGAgentApi.bindScopeGAgent({
         scopeId: "scope-1",
         displayName: "Orders Assistant",
-        agentKind: "Tests.OrdersGAgent",
+        actorTypeName: "Tests.OrdersGAgent, Tests",
         preferredActorId: "orders-actor",
         revisionId: "rev-3",
         endpoints: [
@@ -299,8 +293,7 @@ describe("runtimeGAgentApi", () => {
       targetName: "Orders Assistant",
       expectedActorId: "orders-actor",
       gAgent: {
-        agentKind: "Tests.OrdersGAgent",
-        diagnosticActorTypeName: "Tests.OrdersGAgent, Tests",
+        actorTypeName: "Tests.OrdersGAgent, Tests",
         preferredActorId: "orders-actor",
       },
     });
@@ -316,7 +309,7 @@ describe("runtimeGAgentApi", () => {
       displayName: "Orders Assistant",
       revisionId: "rev-3",
       gagent: {
-        agentKind: "Tests.OrdersGAgent",
+        actorTypeName: "Tests.OrdersGAgent, Tests",
         preferredActorId: "orders-actor",
         endpoints: [
           {

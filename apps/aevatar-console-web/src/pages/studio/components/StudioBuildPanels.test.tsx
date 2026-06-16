@@ -1606,19 +1606,18 @@ describe('StudioWorkflowBuildPanel', () => {
       <StudioGAgentBuildPanel
         scopeId="scope-1"
         currentMemberLabel="gagent-1"
-        gAgentKinds={[
+        gAgentTypes={[
           {
-            agentKind: 'aevatar.test.gagent',
-            displayName: 'Test GAgent',
-            diagnosticClrTypeName: 'aevatar.test.gagent',
-            endpoints: [],
+            assemblyName: 'Aevatar.GAgents',
+            fullName: 'Aevatar.GAgents.TestGAgent',
+            typeName: 'TestGAgent',
           },
         ]}
-        gAgentKindsError={null}
-        gAgentKindsLoading={false}
-        selectedAgentKind="aevatar.test.gagent"
+        gAgentTypesError={null}
+        gAgentTypesLoading={false}
+        selectedGAgentTypeName="Aevatar.GAgents.TestGAgent, Aevatar.GAgents"
         onContinueToBind={jest.fn()}
-        onSelectAgentKind={jest.fn()}
+        onSelectGAgentTypeName={jest.fn()}
       />,
     );
 

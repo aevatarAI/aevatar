@@ -859,7 +859,7 @@ describe("ChatPage", () => {
     await waitFor(() => {
       expect(studioApi.bindScopeGAgent).toHaveBeenCalledWith(
         expect.objectContaining({
-          agentKind: "nyxid.chat",
+          actorTypeName: "Aevatar.GAgents.NyxidChat.NyxIdChatGAgent",
           scopeId: "scope-a",
           serviceId: "nyxid-chat",
         })

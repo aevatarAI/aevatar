@@ -1,22 +1,11 @@
-export interface RuntimeGAgentEndpointDescriptor {
-  endpointId: string;
-  displayName: string;
-  kind: string;
-  requestTypeUrl: string;
-  responseTypeUrl: string;
-  description: string;
-  auto: boolean;
-}
-
-export interface RuntimeGAgentKindDescriptor {
-  agentKind: string;
-  displayName: string;
-  diagnosticClrTypeName: string;
-  endpoints: RuntimeGAgentEndpointDescriptor[];
+export interface RuntimeGAgentTypeDescriptor {
+  typeName: string;
+  fullName: string;
+  assemblyName: string;
 }
 
 export interface RuntimeGAgentActorGroup {
-  agentKind: string;
+  gAgentType: string;
   actorIds: string[];
 }
 
@@ -44,8 +33,7 @@ export interface RuntimeGAgentBindingResult {
   targetName: string;
   expectedActorId?: string;
   gAgent?: {
-    agentKind: string;
-    diagnosticActorTypeName: string;
+    actorTypeName: string;
     preferredActorId: string;
   } | null;
 }
@@ -75,7 +63,6 @@ export interface RuntimeGAgentBindingRevision {
   scriptDefinitionActorId: string;
   scriptSourceHash: string;
   staticActorTypeName: string;
-  staticAgentKind: string;
   staticPreferredActorId: string;
 }
 
@@ -153,7 +140,7 @@ export function formatRuntimeGAgentBindingImplementationKind(
   }
 }
 
-export function normalizeRuntimeGAgentKindName(value: string): string {
+export function normalizeRuntimeGAgentTypeName(value: string): string {
   return value
     .split(",")
     .map((segment) => segment.trim())
@@ -161,32 +148,39 @@ export function normalizeRuntimeGAgentKindName(value: string): string {
     .join(", ");
 }
 
-export function normalizeRuntimeGAgentKind(value: string): string {
-  return normalizeRuntimeGAgentKindName(value);
-}
-
-export function buildRuntimeGAgentKindValue(
-  descriptor: RuntimeGAgentKindDescriptor
+export function buildRuntimeGAgentAssemblyQualifiedName(
+  descriptor: RuntimeGAgentTypeDescriptor
 ): string {
-  return descriptor.agentKind.trim();
+  const fullName = descriptor.fullName.trim();
+  const assemblyName = descriptor.assemblyName.trim();
+  return assemblyName ? `${fullName}, ${assemblyName}` : fullName;
 }
 
-export function buildRuntimeGAgentKindLabel(
-  descriptor: RuntimeGAgentKindDescriptor
+export function buildRuntimeGAgentTypeLabel(
+  descriptor: RuntimeGAgentTypeDescriptor
 ): string {
-  return descriptor.displayName.trim() || descriptor.agentKind.trim();
+  const assemblyName = descriptor.assemblyName.trim();
+  return assemblyName
+    ? `${descriptor.typeName} (${assemblyName})`
+    : descriptor.typeName;
 }
 
-export function matchesRuntimeGAgentKindDescriptor(
-  agentKind: string,
-  descriptor: RuntimeGAgentKindDescriptor
+export function matchesRuntimeGAgentTypeDescriptor(
+  actorTypeName: string,
+  descriptor: RuntimeGAgentTypeDescriptor
 ): boolean {
-  const normalizedAgentKind = normalizeRuntimeGAgentKind(agentKind);
-  if (!normalizedAgentKind) {
+  const normalizedActorTypeName = normalizeRuntimeGAgentTypeName(actorTypeName);
+  if (!normalizedActorTypeName) {
     return false;
   }
 
-  return normalizeRuntimeGAgentKind(descriptor.agentKind) === normalizedAgentKind;
+  const descriptorKeys = new Set<string>([
+    normalizeRuntimeGAgentTypeName(descriptor.fullName),
+    normalizeRuntimeGAgentTypeName(
+      buildRuntimeGAgentAssemblyQualifiedName(descriptor)
+    ),
+  ]);
+  return descriptorKeys.has(normalizedActorTypeName);
 }
 
 export function describeRuntimeGAgentBindingRevisionTarget(
@@ -224,24 +218,32 @@ export function getRuntimeGAgentCurrentBindingRevision(
 }
 
 export function collectRuntimeGAgentActorIds(
-  agentKind: string,
+  actorTypeName: string,
   actorGroups: readonly RuntimeGAgentActorGroup[],
-  descriptor?: RuntimeGAgentKindDescriptor | null
+  descriptor?: RuntimeGAgentTypeDescriptor | null
 ): string[] {
   const keys = new Set<string>();
-  const normalizedAgentKind = normalizeRuntimeGAgentKind(agentKind);
+  const normalizedActorTypeName = normalizeRuntimeGAgentTypeName(actorTypeName);
 
-  if (normalizedAgentKind) {
-    keys.add(normalizedAgentKind);
+  if (normalizedActorTypeName) {
+    keys.add(normalizedActorTypeName);
+    keys.add(
+      normalizedActorTypeName.split(",")[0]?.trim() || normalizedActorTypeName
+    );
   }
 
   if (descriptor) {
-    keys.add(normalizeRuntimeGAgentKind(descriptor.agentKind));
+    keys.add(normalizeRuntimeGAgentTypeName(descriptor.fullName));
+    keys.add(
+      normalizeRuntimeGAgentTypeName(
+        buildRuntimeGAgentAssemblyQualifiedName(descriptor)
+      )
+    );
   }
 
   const actorIds = new Set<string>();
   actorGroups.forEach((group) => {
-    if (!keys.has(normalizeRuntimeGAgentKind(group.agentKind))) {
+    if (!keys.has(normalizeRuntimeGAgentTypeName(group.gAgentType))) {
       return;
     }
 

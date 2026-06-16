@@ -96,8 +96,8 @@ import { runtimeQueryApi } from '@/shared/api/runtimeQueryApi';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import { scopeRuntimeApi } from '@/shared/api/scopeRuntimeApi';
 import {
-  buildRuntimeGAgentKindValue,
-  matchesRuntimeGAgentKindDescriptor,
+  buildRuntimeGAgentAssemblyQualifiedName,
+  matchesRuntimeGAgentTypeDescriptor,
 } from '@/shared/models/runtime/gagents';
 import {
   getScopeServiceCurrentRevision,
@@ -2835,7 +2835,7 @@ const StudioPage: React.FC = () => {
         ? loadStoredScriptDraft(initialRouteState.scopeId || undefined, initialScriptId)
         : null;
     });
-  const [selectedAgentKind, setSelectedAgentKind] = useState('');
+  const [selectedGAgentTypeName, setSelectedGAgentTypeName] = useState('');
   const [gAgentBuildState, setGAgentBuildState] =
     useState<StudioGAgentBuildState | null>(null);
   const [selectedExecutionId, setSelectedExecutionId] = useState(
@@ -3174,11 +3174,11 @@ const StudioPage: React.FC = () => {
     enabled: studioHostReady && Boolean(selectedWorkflowId),
     queryFn: () => studioApi.getWorkflow(selectedWorkflowId, resolvedStudioScopeId),
   });
-  const gAgentKindsQuery = useQuery({
-    queryKey: ['studio-runtime-gagent-kinds'],
+  const gAgentTypesQuery = useQuery({
+    queryKey: ['studio-runtime-gagent-types'],
     enabled: studioHostReady,
     retry: false,
-    queryFn: () => runtimeGAgentApi.listKinds(),
+    queryFn: () => runtimeGAgentApi.listTypes(),
   });
   const runtimePrimitivesQuery = useQuery({
     queryKey: ['studio-runtime-primitives'],
@@ -3196,28 +3196,28 @@ const StudioPage: React.FC = () => {
   );
   useEffect(() => {
     if (
-      (gAgentKindsQuery.data ?? []).some((descriptor) =>
-        matchesRuntimeGAgentKindDescriptor(selectedAgentKind, descriptor),
+      (gAgentTypesQuery.data ?? []).some((descriptor) =>
+        matchesRuntimeGAgentTypeDescriptor(selectedGAgentTypeName, descriptor),
       )
     ) {
       return;
     }
 
-    const fallbackAgentKind =
-      (gAgentKindsQuery.data?.[0]
-        ? buildRuntimeGAgentKindValue(gAgentKindsQuery.data[0])
+    const fallbackTypeName =
+      (gAgentTypesQuery.data?.[0]
+        ? buildRuntimeGAgentAssemblyQualifiedName(gAgentTypesQuery.data[0])
         : '');
 
-    if (!fallbackAgentKind) {
+    if (!fallbackTypeName) {
       return;
     }
 
-    setSelectedAgentKind((current) =>
-      trimOptional(current) === fallbackAgentKind ? current : fallbackAgentKind,
+    setSelectedGAgentTypeName((current) =>
+      trimOptional(current) === fallbackTypeName ? current : fallbackTypeName,
     );
   }, [
-    gAgentKindsQuery.data,
-    selectedAgentKind,
+    gAgentTypesQuery.data,
+    selectedGAgentTypeName,
   ]);
   useEffect(() => {
     const serverMembers = studioMembersQuery.data?.members ?? [];
@@ -4648,10 +4648,10 @@ const StudioPage: React.FC = () => {
     }
 
     if (activeBuildMode === 'gagent') {
-      const agentKind =
-        trimOptional(gAgentBuildState?.agentKind) ||
-        trimOptional(selectedAgentKind);
-      if (!agentKind) {
+      const actorTypeName =
+        trimOptional(gAgentBuildState?.actorTypeName) ||
+        trimOptional(selectedGAgentTypeName);
+      if (!actorTypeName) {
         return null;
       }
 
@@ -4673,7 +4673,7 @@ const StudioPage: React.FC = () => {
         description:
           t("pages.studio.index.bind.the.selected.typed.gagent.2", "Bind the selected typed GAgent as this member service, then Studio can reveal the invoke URL and endpoint contract."),
         actionLabel: 'Bind GAgent member',
-        agentKind,
+        actorTypeName,
         endpoints: [
           {
             endpointId: 'run',
@@ -4700,7 +4700,7 @@ const StudioPage: React.FC = () => {
     routeSelectedBackendMemberId,
     scriptBuildState,
     selectedScriptId,
-    selectedAgentKind,
+    selectedGAgentTypeName,
     availableScopeScripts,
     isBindSurface,
     lastAppliedScriptBuildState,
@@ -4726,7 +4726,7 @@ const StudioPage: React.FC = () => {
     }
 
     if (buildPendingBindCandidate.kind === 'gagent') {
-      const agentKind = trimOptional(buildPendingBindCandidate.agentKind);
+      const actorTypeName = trimOptional(buildPendingBindCandidate.actorTypeName);
       const routeMemberId = trimOptional(routeSelectedBackendMemberId);
       if (routeMemberId) {
         const routeMember = studioScopeMembers.find(
@@ -4747,7 +4747,7 @@ const StudioPage: React.FC = () => {
           normalizeStudioMemberBindingImplementationKind(
             memberSummary?.implementationKind || revision?.implementationKind,
           ) === 'gagent' &&
-          (trimOptional(revision?.staticAgentKind) === agentKind ||
+          (trimOptional(revision?.staticActorTypeName) === actorTypeName ||
             normalizeComparableText(memberSummary?.displayName) ===
               normalizeComparableText(buildPendingBindCandidate.displayName)),
       )?.memberSummary;
@@ -4996,7 +4996,7 @@ const StudioPage: React.FC = () => {
           scopeId: resolvedStudioScopeId,
           memberId: resolvedBuildMemberId,
           displayName: buildPendingBindCandidate.displayName,
-          agentKind: buildPendingBindCandidate.agentKind,
+          actorTypeName: buildPendingBindCandidate.actorTypeName,
           endpoints: buildPendingBindCandidate.endpoints,
         });
         await queryClient.invalidateQueries({
@@ -5028,7 +5028,7 @@ const StudioPage: React.FC = () => {
         result = await studioApi.bindScopeGAgent({
           scopeId: resolvedStudioScopeId,
           displayName: buildPendingBindCandidate.displayName,
-          agentKind: buildPendingBindCandidate.agentKind,
+          actorTypeName: buildPendingBindCandidate.actorTypeName,
           endpoints: buildPendingBindCandidate.endpoints,
         });
       }
@@ -5053,7 +5053,7 @@ const StudioPage: React.FC = () => {
             ? buildPendingBindCandidate.scriptId
             : '',
           buildPendingBindCandidate.kind === 'gagent'
-            ? buildPendingBindCandidate.agentKind
+            ? buildPendingBindCandidate.actorTypeName
             : '',
           result?.displayName,
           result?.targetName,
@@ -7236,31 +7236,31 @@ const StudioPage: React.FC = () => {
     return trimOptional(matchedMember?.memberSummary?.memberId);
   }, [publishedScopeMembers, selectedScriptId]);
   const activeGAgentPublishedServiceId = useMemo(() => {
-    const agentKind = trimOptional(selectedAgentKind);
-    if (!agentKind) {
+    const actorTypeName = trimOptional(selectedGAgentTypeName);
+    if (!actorTypeName) {
       return '';
     }
 
     const matchedMember = publishedScopeMembers.find(
       ({ revision }) =>
         revision?.implementationKind === 'gagent' &&
-        trimOptional(revision.staticAgentKind) === agentKind,
+        trimOptional(revision.staticActorTypeName) === actorTypeName,
     );
     return trimOptional(matchedMember?.service.serviceId);
-  }, [publishedScopeMembers, selectedAgentKind]);
+  }, [publishedScopeMembers, selectedGAgentTypeName]);
   const activeGAgentPublishedMemberId = useMemo(() => {
-    const agentKind = trimOptional(selectedAgentKind);
-    if (!agentKind) {
+    const actorTypeName = trimOptional(selectedGAgentTypeName);
+    if (!actorTypeName) {
       return '';
     }
 
     const matchedMember = publishedScopeMembers.find(
       ({ revision }) =>
         revision?.implementationKind === 'gagent' &&
-        trimOptional(revision.staticAgentKind) === agentKind,
+        trimOptional(revision.staticActorTypeName) === actorTypeName,
     );
     return trimOptional(matchedMember?.memberSummary?.memberId);
-  }, [publishedScopeMembers, selectedAgentKind]);
+  }, [publishedScopeMembers, selectedGAgentTypeName]);
   const activeBuildPublishedServiceId =
     activeBuildMode === 'workflow'
       ? activeWorkflowPublishedServiceId
@@ -7981,14 +7981,14 @@ const StudioPage: React.FC = () => {
         workbenchPublishedServiceRevision?.implementationKind,
     );
     if (implementationKind === 'gagent') {
-      const agentKind =
+      const actorTypeName =
         trimOptional(
-          workbenchStudioMemberDetailQuery.data?.implementationRef?.agentKind,
+          workbenchStudioMemberDetailQuery.data?.implementationRef?.actorTypeName,
         ) ||
-        trimOptional(workbenchPublishedServiceRevision?.staticAgentKind);
-      if (agentKind) {
-        setSelectedAgentKind((current) =>
-          trimOptional(current) === agentKind ? current : agentKind,
+        trimOptional(workbenchPublishedServiceRevision?.staticActorTypeName);
+      if (actorTypeName) {
+        setSelectedGAgentTypeName((current) =>
+          trimOptional(current) === actorTypeName ? current : actorTypeName,
         );
       }
       if (buildSurface !== 'gagent') {
@@ -8033,11 +8033,11 @@ const StudioPage: React.FC = () => {
     studioSurface,
     workbenchPublishedServiceRevision?.implementationKind,
     workbenchPublishedServiceRevision?.scriptId,
-    workbenchPublishedServiceRevision?.staticAgentKind,
+    workbenchPublishedServiceRevision?.staticActorTypeName,
     workbenchStudioMember?.displayName,
     workbenchStudioMember?.implementationKind,
     workbenchStudioMember?.publishedServiceId,
-    workbenchStudioMemberDetailQuery.data?.implementationRef?.agentKind,
+    workbenchStudioMemberDetailQuery.data?.implementationRef?.actorTypeName,
     workbenchStudioMemberDetailQuery.data?.implementationRef?.implementationKind,
     workbenchStudioMemberDetailQuery.data?.implementationRef?.scriptId,
   ]);
@@ -8491,7 +8491,7 @@ const StudioPage: React.FC = () => {
               trimOptional(routeSelectedBackendMemberId) ||
               trimOptional(workbenchPublishedServiceRevision?.workflowName) ||
               trimOptional(workbenchPublishedServiceRevision?.scriptId) ||
-              trimOptional(workbenchPublishedServiceRevision?.staticAgentKind) ||
+              trimOptional(workbenchPublishedServiceRevision?.staticActorTypeName) ||
               trimOptional(workbenchPublishedService?.displayName) ||
               trimOptional(workbenchPublishedService?.serviceId) ||
               trimOptional(routeSelectedBackendMemberId) ||
@@ -8513,7 +8513,7 @@ const StudioPage: React.FC = () => {
           ? 'Workflow implementation'
           : selectedScriptId
             ? 'Script implementation'
-            : trimOptional(selectedAgentKind)
+            : trimOptional(selectedGAgentTypeName)
               ? 'GAgent implementation'
               : 'Member implementation';
   const currentMemberDescription = !hasSelectedMemberFocus
@@ -9423,12 +9423,12 @@ const StudioPage: React.FC = () => {
         if (selectedMemberImplementationKind === 'gagent') {
           const memberKey =
             selectedMemberId ? `member:${selectedMemberId}` : normalizedMemberKey;
-          const agentKind = trimOptional(
-            selectedPublishedMember?.revision?.staticAgentKind,
+          const actorTypeName = trimOptional(
+            selectedPublishedMember?.revision?.staticActorTypeName,
           );
-          if (agentKind) {
-            setSelectedAgentKind((current) =>
-              trimOptional(current) === agentKind ? current : agentKind,
+          if (actorTypeName) {
+            setSelectedGAgentTypeName((current) =>
+              trimOptional(current) === actorTypeName ? current : actorTypeName,
             );
           }
           setSelectedWorkflowId('');
@@ -9594,7 +9594,7 @@ const StudioPage: React.FC = () => {
                   primary:
                     trimOptional(serviceRevision.workflowName) ||
                     trimOptional(serviceRevision.scriptId) ||
-                    trimOptional(serviceRevision.staticAgentKind),
+                    trimOptional(serviceRevision.staticActorTypeName),
                   secondary:
                     trimOptional(serviceRevision.primaryActorId) ||
                     trimOptional(service.primaryActorId),
@@ -9810,7 +9810,7 @@ const StudioPage: React.FC = () => {
                 lastAppliedScriptBuildState.saveStatus === 'applied'))
           : false) ||
         workbenchPublishedService ||
-        (isBuildGAgentSurface && trimOptional(selectedAgentKind))
+        (isBuildGAgentSurface && trimOptional(selectedGAgentTypeName))
     );
   const selectedMemberCanInvoke =
     selectedMemberCanBind &&
@@ -10564,11 +10564,11 @@ const StudioPage: React.FC = () => {
     <StudioGAgentBuildPanel
       scopeId={resolvedStudioScopeId || undefined}
       currentMemberLabel={currentMemberLabel}
-      gAgentKinds={gAgentKindsQuery.data ?? []}
-      gAgentKindsLoading={gAgentKindsQuery.isLoading}
-      gAgentKindsError={gAgentKindsQuery.isError ? gAgentKindsQuery.error : null}
-      selectedAgentKind={selectedAgentKind}
-      onSelectAgentKind={setSelectedAgentKind}
+      gAgentTypes={gAgentTypesQuery.data ?? []}
+      gAgentTypesLoading={gAgentTypesQuery.isLoading}
+      gAgentTypesError={gAgentTypesQuery.isError ? gAgentTypesQuery.error : null}
+      selectedGAgentTypeName={selectedGAgentTypeName}
+      onSelectGAgentTypeName={setSelectedGAgentTypeName}
       onBuildStateChange={setGAgentBuildState}
       onContinueToBind={(nextBuildState) => {
         setGAgentBuildState(nextBuildState);

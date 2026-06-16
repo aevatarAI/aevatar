@@ -4,7 +4,8 @@ import { normalizeRunEndpointKind } from "./endpointKinds";
 
 export const scopeServiceAppId = "default";
 export const scopeServiceNamespace = "default";
-export const nyxIdChatAgentKind = "nyxid.chat";
+export const nyxIdChatActorTypeName =
+  "Aevatar.GAgents.NyxidChat.NyxIdChatGAgent";
 export const nyxIdChatServiceId = "nyxid-chat";
 export const nyxIdChatLabel = "NyxID Chat";
 export const nyxIdChatEndpointDescription =
@@ -144,7 +145,7 @@ export function createNyxIdChatBindingInput(
   scopeId: string
 ): StudioScopeGAgentBindingInput {
   return {
-    agentKind: nyxIdChatAgentKind,
+    actorTypeName: nyxIdChatActorTypeName,
     displayName: nyxIdChatLabel,
     endpoints: [
       {
