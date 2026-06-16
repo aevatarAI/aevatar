@@ -1,3 +1,4 @@
+using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.Foundation.Abstractions.Interactions;
@@ -5,6 +6,7 @@ using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Presentation.AGUIAdapter;
 using Aevatar.Workflow.Projection;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
@@ -46,6 +48,39 @@ public sealed class WorkflowInteractionNotificationProjectorTests
         call.InteractionSpec.Should().NotBeNull();
         call.InteractionSpec!.Title.Should().Be("Status");
         call.InteractionTemplateSpec.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldDeliverInteractionNotification_FromCommittedStatePublication()
+    {
+        var port = new RecordingNotificationPort();
+        var projector = new WorkflowInteractionNotificationProjector(port);
+
+        await projector.ProjectAsync(
+            BuildContext(),
+            BuildCommittedStateEnvelope(
+                "outer-notify-committed",
+                "evt-notify-committed",
+                new WorkflowInteractionNotificationEvent
+                {
+                    RunId = "run-committed",
+                    StepId = "notify-committed",
+                    DeliveryTargetId = "agent-delivery-committed",
+                    Interaction = new InteractionSpec
+                    {
+                        Title = "Committed status",
+                        Body = "Committed accepted",
+                    },
+                }),
+            CancellationToken.None);
+
+        port.Calls.Should().ContainSingle();
+        var call = port.Calls[0];
+        call.DeliveryTargetId.Should().Be("agent-delivery-committed");
+        call.RunId.Should().Be("run-committed");
+        call.StepId.Should().Be("notify-committed");
+        call.InteractionSpec.Should().NotBeNull();
+        call.InteractionSpec!.Title.Should().Be("Committed status");
     }
 
     [Fact]
@@ -131,6 +166,24 @@ public sealed class WorkflowInteractionNotificationProjectorTests
         SessionId = "cmd-1",
         RootActorId = "workflow-actor-1",
         ProjectionKind = "workflow-execution-session",
+    };
+
+    private static EventEnvelope BuildCommittedStateEnvelope(
+        string envelopeId,
+        string eventId,
+        IMessage payload) => new()
+    {
+        Id = envelopeId,
+        Route = EnvelopeRouteSemantics.CreateObserverPublication("workflow-notify-test"),
+        Payload = Any.Pack(new CommittedStateEventPublished
+        {
+            StateEvent = new StateEvent
+            {
+                EventId = eventId,
+                Version = 12,
+                EventData = Any.Pack(payload),
+            },
+        }),
     };
 
     private sealed class RecordingNotificationPort : IChannelInteractionNotificationPort

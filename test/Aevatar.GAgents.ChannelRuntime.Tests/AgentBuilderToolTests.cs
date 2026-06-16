@@ -14,9 +14,9 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Xunit;
+using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.GAgents.Authoring.Lark;
 using Aevatar.GAgents.Scheduled;
-using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.GAgents.Platform.Lark;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
@@ -1120,7 +1120,6 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(nyxClient);
         services.AddSingleton(Substitute.For<IUserAgentDeliveryTargetReader>());
         services.AddSingleton<LarkMessageComposer>();
-        services.TryAddSingleton<ILogger<FeishuCardHumanInteractionPort>>(NullLogger<FeishuCardHumanInteractionPort>.Instance);
         services.TryAddSingleton<ILogger<FeishuCardNotificationPort>>(NullLogger<FeishuCardNotificationPort>.Instance);
         services.AddSingleton(callerScopeResolver);
 
@@ -1130,7 +1129,7 @@ public sealed class AgentBuilderToolTests
         await using var provider = services.BuildServiceProvider();
         var source = provider.GetServices<IAgentToolSource>().Should().ContainSingle().Subject;
         source.Should().BeOfType<AgentBuilderToolSource>();
-        provider.GetRequiredService<IHumanInteractionPort>().Should().BeOfType<FeishuCardHumanInteractionPort>();
+        provider.GetService<IHumanInteractionPort>().Should().BeNull();
         provider.GetRequiredService<IChannelInteractionNotificationPort>().Should().BeOfType<FeishuCardNotificationPort>();
 
         var tools = await source.DiscoverToolsAsync();

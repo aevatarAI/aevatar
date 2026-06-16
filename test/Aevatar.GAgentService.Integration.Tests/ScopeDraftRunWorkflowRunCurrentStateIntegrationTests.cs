@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text.Json;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Core.Abstractions;
@@ -214,6 +215,10 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
                 ["Projection:Graph:Providers:InMemory:Enabled"] = "true",
                 ["Projection:Graph:Providers:Neo4j:Enabled"] = "false",
                 ["Projection:Policies:Environment"] = "Development",
+            });
+            builder.Services.AddNyxIdTools(options =>
+            {
+                options.BaseUrl = "https://nyx.example.test";
             });
             builder.AddAevatarDefaultHost(options =>
             {
