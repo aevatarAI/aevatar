@@ -384,4 +384,6 @@ message VoicePresenceCapabilityReadModel {
   google.protobuf.Timestamp lease_expires_at = 11;
   VoiceRemoteAudioSupport remote_audio_support = 12;
   string active_transport_lease_id = 13;
+  int64 lease_epoch = 14;
+  string active_lease_owner_id = 15;
 }

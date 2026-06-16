@@ -480,6 +480,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
 
         if (!MatchesLeaseOwner(state, request.OwnerId) ||
             !MatchesLeaseExpiry(state, request.LeaseExpiresAt) ||
+            !MatchesLeaseEpoch(state, request.LeaseEpoch) ||
             IsLeaseExpired(state.LeaseExpiresAt))
         {
             return;
@@ -494,7 +495,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         state.TransportAttached = true;
         state.ActiveLeaseOwnerId = request.OwnerId;
         state.ActiveTransportLeaseId = request.TransportLeaseId;
-        state.LeaseEpoch = request.LeaseEpoch > 0 ? request.LeaseEpoch : NextLeaseEpoch(state);
         RefreshCapabilityFacts(state, ctx);
 
         await PersistRuntimeStateAsync(ctx, state, ct);
@@ -659,7 +659,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
     }
 
     private static bool MatchesLeaseEpoch(VoicePresenceRuntimeState state, long leaseEpoch) =>
-        leaseEpoch <= 0 || state.LeaseEpoch == leaseEpoch;
+        leaseEpoch > 0 && state.LeaseEpoch == leaseEpoch;
 
     private static long NextLeaseEpoch(VoicePresenceRuntimeState state) =>
         state.LeaseEpoch <= 0 ? 1 : state.LeaseEpoch + 1;

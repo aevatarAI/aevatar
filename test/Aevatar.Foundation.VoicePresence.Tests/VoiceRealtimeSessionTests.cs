@@ -61,6 +61,7 @@ public class VoiceRealtimeSessionTests
         result.Receipt.ModuleName.ShouldBe("voice_presence_openai");
         result.Receipt.PcmSampleRateHz.ShouldBe(16000);
         result.Receipt.ObservedStateVersion.ShouldBe(5);
+        result.Receipt.LeaseHandle.LeaseEpoch.ShouldBe(7);
         acceptedCallbacks.ShouldHaveSingleItem().SessionId.ShouldBe(result.Receipt.SessionId);
         leasePort.AcquireRequests.ShouldHaveSingleItem().ModuleName.ShouldBe("voice_presence_openai");
     }
@@ -177,6 +178,7 @@ public class VoiceRealtimeSessionTests
         result.Receipt.ShouldNotBeNull();
         result.Receipt.SessionId.ShouldBe("session-1");
         result.Receipt.LeaseHandle.ActiveTransportLeaseId.ShouldBe("transport-1");
+        result.Receipt.LeaseHandle.LeaseEpoch.ShouldBe(7);
         leasePort.AcquireRequests.ShouldBeEmpty();
     }
 
@@ -210,6 +212,7 @@ public class VoiceRealtimeSessionTests
         detachResult.Receipt.ShouldNotBeNull();
         detachResult.Receipt.SessionId.ShouldBe("session-1");
         detachResult.Receipt.LeaseHandle.ActiveTransportLeaseId.ShouldBe("transport-1");
+        detachResult.Receipt.LeaseHandle.LeaseEpoch.ShouldBe(7);
         leasePort.AcquireRequests.ShouldBeEmpty();
     }
 
@@ -351,27 +354,34 @@ public class VoiceRealtimeSessionTests
             .ToList();
         signals.Count.ShouldBe(3);
         signals.ShouldContain(static signal =>
-            signal.SignalCase == VoiceModuleSignal.SignalOneofCase.TransportControlFrameReceived);
+            signal.SignalCase == VoiceModuleSignal.SignalOneofCase.TransportControlFrameReceived &&
+            signal.TransportControlFrameReceived.LeaseEpoch == 7);
         signals.ShouldContain(signal =>
             signal.SignalCase == VoiceModuleSignal.SignalOneofCase.InputImageReceived &&
             signal.InputImageReceived.TransportLeaseId == "transport-1" &&
+            signal.InputImageReceived.LeaseEpoch == 7 &&
             signal.InputImageReceived.InputImage.MediaType == "image/png" &&
             signal.InputImageReceived.InputImage.Data.ToByteArray().SequenceEqual(new byte[] { 5, 6, 7 }));
         signals.ShouldContain(static signal =>
-            signal.SignalCase == VoiceModuleSignal.SignalOneofCase.ProviderEventReceived);
+            signal.SignalCase == VoiceModuleSignal.SignalOneofCase.ProviderEventReceived &&
+            signal.ProviderEventReceived.LeaseEpoch == 7);
     }
 
     [Fact]
     public async Task VoicePresenceTransportAttachmentPort_should_dispatch_attach_signal_and_return_active_transport_lease_handle()
     {
         var dispatchPort = new RecordingDispatchPort();
-        var port = new VoicePresenceTransportAttachmentPort(dispatchPort);
+        var observationPort = new RecordingLeaseObservationPort();
+        var port = new VoicePresenceTransportAttachmentPort(dispatchPort, observationPort);
         var expiresAt = DateTimeOffset.UtcNow.AddMinutes(5);
         var handle = CreateLeaseHandle(expiresAt);
 
         var attached = await port.AttachAsync(handle, new PassiveVoiceTransport(), CancellationToken.None);
 
         attached.ActiveTransportLeaseId.ShouldNotBeNullOrWhiteSpace();
+        attached.LeaseEpoch.ShouldBe(7);
+        attached.ObservedStateVersion.ShouldBe(11);
+        observationPort.AttachRequests.ShouldHaveSingleItem().TransportLeaseId.ShouldBe(attached.ActiveTransportLeaseId);
         dispatchPort.Dispatches.ShouldHaveSingleItem().ActorId.ShouldBe("agent-1");
         var signal = dispatchPort.Dispatches[0].Envelope.Payload.Unpack<VoiceModuleSignal>();
         signal.ModuleName.ShouldBe("voice_presence");
@@ -380,13 +390,14 @@ public class VoiceRealtimeSessionTests
         signal.TransportAttachRequested.OwnerId.ShouldBe("host-1");
         signal.TransportAttachRequested.TransportLeaseId.ShouldBe(attached.ActiveTransportLeaseId);
         signal.TransportAttachRequested.LeaseExpiresAt.ToDateTimeOffset().ShouldBe(expiresAt.ToUniversalTime());
+        signal.TransportAttachRequested.LeaseEpoch.ShouldBe(7);
     }
 
     [Fact]
     public async Task VoicePresenceTransportAttachmentPort_should_dispatch_detach_signal_for_active_transport_lease()
     {
         var dispatchPort = new RecordingDispatchPort();
-        var port = new VoicePresenceTransportAttachmentPort(dispatchPort);
+        var port = new VoicePresenceTransportAttachmentPort(dispatchPort, new RecordingLeaseObservationPort());
         var expiresAt = DateTimeOffset.UtcNow.AddMinutes(5);
         var handle = CreateLeaseHandle(expiresAt, activeTransportLeaseId: "transport-1");
 
@@ -401,13 +412,14 @@ public class VoiceRealtimeSessionTests
         signal.TransportDetachRequested.TransportLeaseId.ShouldBe("transport-1");
         signal.TransportDetachRequested.Reason.ShouldBe("host_transport_detached");
         signal.TransportDetachRequested.LeaseExpiresAt.ToDateTimeOffset().ShouldBe(expiresAt.ToUniversalTime());
+        signal.TransportDetachRequested.LeaseEpoch.ShouldBe(7);
     }
 
     [Fact]
     public async Task VoicePresenceTransportAttachmentPort_should_not_dispatch_detach_without_active_transport_lease()
     {
         var dispatchPort = new RecordingDispatchPort();
-        var port = new VoicePresenceTransportAttachmentPort(dispatchPort);
+        var port = new VoicePresenceTransportAttachmentPort(dispatchPort, new RecordingLeaseObservationPort());
 
         await port.DetachAsync(CreateLeaseHandle(), null, CancellationToken.None);
 
@@ -418,7 +430,8 @@ public class VoiceRealtimeSessionTests
     public async Task VoicePresenceSessionLeasePort_should_dispatch_typed_lease_signal_and_return_accepted_handle()
     {
         var dispatchPort = new RecordingDispatchPort();
-        var leasePort = new VoicePresenceSessionLeasePort(dispatchPort);
+        var observationPort = new RecordingLeaseObservationPort();
+        var leasePort = new VoicePresenceSessionLeasePort(dispatchPort, observationPort);
         var expiresAt = DateTimeOffset.UtcNow.AddMinutes(5);
 
         var handle = await leasePort.AcquireAsync(new VoicePresenceSessionLeaseRequest(
@@ -431,8 +444,10 @@ public class VoiceRealtimeSessionTests
             VoiceRemoteAudioSupport.LocalOnly));
 
         handle.SessionId.ShouldBe("lease-1");
-        handle.ObservedStateVersion.ShouldBe(7);
+        handle.ObservedStateVersion.ShouldBe(8);
         handle.ExpiresAtUtc.ShouldBe(expiresAt.ToUniversalTime());
+        handle.LeaseEpoch.ShouldBe(7);
+        observationPort.SessionLeaseRequests.ShouldHaveSingleItem().ObservedStateVersion.ShouldBe(7);
         dispatchPort.Dispatches.ShouldHaveSingleItem().ActorId.ShouldBe("agent-1");
         var signal = dispatchPort.Dispatches[0].Envelope.Payload.Unpack<VoiceModuleSignal>();
         signal.ModuleName.ShouldBe("voice_presence");
@@ -444,7 +459,7 @@ public class VoiceRealtimeSessionTests
     public async Task VoicePresenceSessionLeasePort_should_dispatch_typed_release_signal()
     {
         var dispatchPort = new RecordingDispatchPort();
-        var leasePort = new VoicePresenceSessionLeasePort(dispatchPort);
+        var leasePort = new VoicePresenceSessionLeasePort(dispatchPort, new RecordingLeaseObservationPort());
         var handle = CreateLeaseHandle();
 
         await leasePort.ReleaseAsync(handle, "test-release");
@@ -459,7 +474,7 @@ public class VoiceRealtimeSessionTests
     public async Task VoicePresenceSessionLeasePort_should_dispatch_typed_lifetime_completed_signal()
     {
         var dispatchPort = new RecordingDispatchPort();
-        var leasePort = new VoicePresenceSessionLeasePort(dispatchPort);
+        var leasePort = new VoicePresenceSessionLeasePort(dispatchPort, new RecordingLeaseObservationPort());
         var expiresAt = DateTimeOffset.UtcNow.AddMinutes(5);
         var handle = CreateLeaseHandle(expiresAt, activeTransportLeaseId: "transport-1");
 
@@ -471,6 +486,127 @@ public class VoiceRealtimeSessionTests
         signal.TransportLifetimeCompleted.TransportLeaseId.ShouldBe("transport-1");
         signal.TransportLifetimeCompleted.Reason.ShouldBe("test-complete");
         signal.TransportLifetimeCompleted.LeaseExpiresAt.ToDateTimeOffset().ShouldBe(expiresAt.ToUniversalTime());
+        signal.TransportLifetimeCompleted.LeaseEpoch.ShouldBe(7);
+    }
+
+    [Fact]
+    public async Task VoicePresenceLeaseObservationPort_should_observe_positive_session_epoch()
+    {
+        var expiresAt = DateTimeOffset.UtcNow.AddMinutes(5);
+        var snapshot = CreateCapability(
+            "agent-1",
+            "voice_presence",
+            initialized: true,
+            activeSessionId: "lease-1",
+            remoteAudioSupport: VoiceRemoteAudioSupport.Supported) with
+        {
+            StateVersion = 8,
+            LeaseExpiresAt = expiresAt,
+            LeaseEpoch = 7,
+            ActiveLeaseOwnerId = "host-1",
+        };
+        var port = new VoicePresenceLeaseObservationPort(new FakeCapabilityQueryPort(snapshot));
+
+        var observed = await port.ObserveSessionLeaseAsync(new VoicePresenceSessionLeaseRequest(
+            "agent-1",
+            "voice_presence",
+            "lease-1",
+            "host-1",
+            expiresAt,
+            7,
+            VoiceRemoteAudioSupport.LocalOnly));
+
+        observed.LeaseEpoch.ShouldBe(7);
+        observed.StateVersion.ShouldBe(8);
+    }
+
+    [Fact]
+    public async Task VoicePresenceLeaseObservationPort_should_fail_closed_when_session_epoch_is_not_positive()
+    {
+        var expiresAt = DateTimeOffset.UtcNow.AddMinutes(5);
+        var snapshot = CreateCapability(
+            "agent-1",
+            "voice_presence",
+            initialized: true,
+            activeSessionId: "lease-1",
+            remoteAudioSupport: VoiceRemoteAudioSupport.Supported) with
+        {
+            StateVersion = 8,
+            LeaseExpiresAt = expiresAt,
+            LeaseEpoch = 0,
+            ActiveLeaseOwnerId = "host-1",
+        };
+        var port = new VoicePresenceLeaseObservationPort(
+            new FakeCapabilityQueryPort(snapshot),
+            TimeProvider.System,
+            TimeSpan.Zero,
+            TimeSpan.Zero);
+
+        await Should.ThrowAsync<TimeoutException>(() => port.ObserveSessionLeaseAsync(new VoicePresenceSessionLeaseRequest(
+            "agent-1",
+            "voice_presence",
+            "lease-1",
+            "host-1",
+            expiresAt,
+            7,
+            VoiceRemoteAudioSupport.LocalOnly)));
+    }
+
+    [Fact]
+    public async Task VoicePresenceLeaseObservationPort_should_observe_attach_with_exact_epoch()
+    {
+        var expiresAt = DateTimeOffset.UtcNow.AddMinutes(5);
+        var snapshot = CreateCapability(
+            "agent-1",
+            "voice_presence",
+            initialized: true,
+            activeSessionId: "lease-1",
+            activeTransportLeaseId: "transport-1",
+            transportAttached: true,
+            remoteAudioSupport: VoiceRemoteAudioSupport.Supported) with
+        {
+            StateVersion = 11,
+            LeaseExpiresAt = expiresAt,
+            LeaseEpoch = 7,
+            ActiveLeaseOwnerId = "host-1",
+        };
+        var port = new VoicePresenceLeaseObservationPort(new FakeCapabilityQueryPort(snapshot));
+
+        var observed = await port.ObserveTransportAttachAsync(
+            CreateLeaseHandle(expiresAt),
+            "transport-1");
+
+        observed.LeaseEpoch.ShouldBe(7);
+        observed.ActiveTransportLeaseId.ShouldBe("transport-1");
+    }
+
+    [Fact]
+    public async Task VoicePresenceLeaseObservationPort_should_fail_closed_when_attach_epoch_is_stale()
+    {
+        var expiresAt = DateTimeOffset.UtcNow.AddMinutes(5);
+        var snapshot = CreateCapability(
+            "agent-1",
+            "voice_presence",
+            initialized: true,
+            activeSessionId: "lease-1",
+            activeTransportLeaseId: "transport-1",
+            transportAttached: true,
+            remoteAudioSupport: VoiceRemoteAudioSupport.Supported) with
+        {
+            StateVersion = 11,
+            LeaseExpiresAt = expiresAt,
+            LeaseEpoch = 8,
+            ActiveLeaseOwnerId = "host-1",
+        };
+        var port = new VoicePresenceLeaseObservationPort(
+            new FakeCapabilityQueryPort(snapshot),
+            TimeProvider.System,
+            TimeSpan.Zero,
+            TimeSpan.Zero);
+
+        await Should.ThrowAsync<TimeoutException>(() => port.ObserveTransportAttachAsync(
+            CreateLeaseHandle(expiresAt),
+            "transport-1"));
     }
 
     [Fact]
@@ -487,6 +623,8 @@ public class VoiceRealtimeSessionTests
             Initialized = true,
             PcmSampleRateHz = 24000,
             RemoteAudioSupport = VoiceRemoteAudioSupport.LocalOnly,
+            LeaseEpoch = 7,
+            ActiveLeaseOwnerId = "host-1",
         };
         var queryPort = new VoicePresenceCapabilityQueryPort(new FakeCapabilityReader(readModel));
 
@@ -498,6 +636,8 @@ public class VoiceRealtimeSessionTests
         snapshot.StateVersion.ShouldBe(7);
         snapshot.Initialized.ShouldBeTrue();
         snapshot.PcmSampleRateHz.ShouldBe(24000);
+        snapshot.LeaseEpoch.ShouldBe(7);
+        snapshot.ActiveLeaseOwnerId.ShouldBe("host-1");
     }
 
     [Fact]
@@ -512,6 +652,8 @@ public class VoiceRealtimeSessionTests
                 Initialized = true,
                 LeaseExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(3)),
                 ActiveTransportLeaseId = "transport-1",
+                ActiveLeaseOwnerId = "host-1",
+                LeaseEpoch = 7,
             },
             8,
             null!,
@@ -526,6 +668,8 @@ public class VoiceRealtimeSessionTests
         readModel.PcmSampleRateHz.ShouldBe(24000);
         readModel.ActiveSessionId.ShouldBeEmpty();
         readModel.ActiveTransportLeaseId.ShouldBe("transport-1");
+        readModel.ActiveLeaseOwnerId.ShouldBe("host-1");
+        readModel.LeaseEpoch.ShouldBe(7);
         readModel.RemoteAudioSupport.ShouldBe(VoiceRemoteAudioSupport.LocalOnly);
     }
 
@@ -540,12 +684,16 @@ public class VoiceRealtimeSessionTests
             LastEventId = "event-3",
             ActiveSessionId = " ",
             ActiveTransportLeaseId = "transport-1",
+            ActiveLeaseOwnerId = "host-1",
+            LeaseEpoch = 7,
         });
 
         snapshot.UpdatedAt.ShouldBe(DateTimeOffset.MinValue);
         snapshot.PcmSampleRateHz.ShouldBe(24000);
         snapshot.ActiveSessionId.ShouldBeNull();
         snapshot.ActiveTransportLeaseId.ShouldBe("transport-1");
+        snapshot.ActiveLeaseOwnerId.ShouldBe("host-1");
+        snapshot.LeaseEpoch.ShouldBe(7);
         snapshot.LeaseExpiresAt.ShouldBeNull();
         snapshot.RemoteAudioSupport.ShouldBe(VoiceRemoteAudioSupport.LocalOnly);
     }
@@ -568,6 +716,8 @@ public class VoiceRealtimeSessionTests
                     PcmSampleRateHz = 16000,
                     ActiveSessionId = "lease-1",
                     ActiveTransportLeaseId = "transport-1",
+                    ActiveLeaseOwnerId = "host-1",
+                    LeaseEpoch = 7,
                     RemoteAudioSupport = VoiceRemoteAudioSupport.Supported,
                 },
             },
@@ -593,6 +743,8 @@ public class VoiceRealtimeSessionTests
         document.PcmSampleRateHz.ShouldBe(16000);
         document.ActiveSessionId.ShouldBe("lease-1");
         document.ActiveTransportLeaseId.ShouldBe("transport-1");
+        document.ActiveLeaseOwnerId.ShouldBe("host-1");
+        document.LeaseEpoch.ShouldBe(7);
         document.RemoteAudioSupport.ShouldBe(VoiceRemoteAudioSupport.Supported);
     }
 
@@ -679,7 +831,8 @@ public class VoiceRealtimeSessionTests
             10,
             expiresAt ?? DateTimeOffset.UtcNow.AddMinutes(5),
             VoiceRemoteAudioSupport.LocalOnly,
-            activeTransportLeaseId);
+            activeTransportLeaseId,
+            7);
 
     private static VoicePresenceModuleRegistration CreateRelayRegistration(
         RecordingRelayProviderSession providerSession) =>
@@ -693,7 +846,7 @@ public class VoiceRealtimeSessionTests
                         handle.SessionId,
                         handle.OwnerId,
                         handle.ActiveTransportLeaseId ?? string.Empty,
-                        0,
+                        handle.LeaseEpoch,
                         Timestamp.FromDateTimeOffset(handle.ExpiresAtUtc.ToUniversalTime()),
                         handle.ActorId,
                         handle.ModuleName),
@@ -722,7 +875,9 @@ public class VoiceRealtimeSessionTests
             activeSessionId,
             DateTimeOffset.UtcNow.AddMinutes(5),
             remoteAudioSupport,
-            activeTransportLeaseId);
+            activeTransportLeaseId,
+            7,
+            "host-1");
 
     private static string FindRepoRoot()
     {
@@ -755,6 +910,60 @@ public class VoiceRealtimeSessionTests
         }
     }
 
+    private sealed class RecordingLeaseObservationPort : IVoicePresenceLeaseObservationPort
+    {
+        public List<VoicePresenceSessionLeaseRequest> SessionLeaseRequests { get; } = [];
+
+        public List<(VoicePresenceSessionLeaseHandle Handle, string TransportLeaseId)> AttachRequests { get; } = [];
+
+        public Task<VoicePresenceCapabilitySnapshot> ObserveSessionLeaseAsync(
+            VoicePresenceSessionLeaseRequest request,
+            CancellationToken ct = default)
+        {
+            _ = ct;
+            SessionLeaseRequests.Add(request);
+            return Task.FromResult(new VoicePresenceCapabilitySnapshot(
+                request.ActorId,
+                request.ModuleName,
+                request.ObservedStateVersion + 1,
+                "event-observed",
+                DateTimeOffset.UtcNow,
+                true,
+                false,
+                24000,
+                request.SessionId,
+                request.ExpiresAtUtc,
+                VoiceRemoteAudioSupport.Supported,
+                null,
+                7,
+                request.OwnerId));
+        }
+
+        public Task<VoicePresenceCapabilitySnapshot> ObserveTransportAttachAsync(
+            VoicePresenceSessionLeaseHandle handle,
+            string transportLeaseId,
+            CancellationToken ct = default)
+        {
+            _ = ct;
+            AttachRequests.Add((handle, transportLeaseId));
+            return Task.FromResult(new VoicePresenceCapabilitySnapshot(
+                handle.ActorId,
+                handle.ModuleName,
+                handle.ObservedStateVersion + 1,
+                "event-attached",
+                DateTimeOffset.UtcNow,
+                true,
+                true,
+                24000,
+                handle.SessionId,
+                handle.ExpiresAtUtc,
+                handle.RemoteAudioSupport,
+                transportLeaseId,
+                handle.LeaseEpoch,
+                handle.OwnerId));
+        }
+    }
+
     private sealed class RecordingLeasePort : IVoicePresenceSessionLeasePort
     {
         public List<VoicePresenceSessionLeaseRequest> AcquireRequests { get; } = [];
@@ -775,7 +984,9 @@ public class VoiceRealtimeSessionTests
                 request.OwnerId,
                 request.ObservedStateVersion,
                 request.ExpiresAtUtc,
-                request.ObservedRemoteAudioSupport));
+                request.ObservedRemoteAudioSupport,
+                null,
+                7));
         }
 
         public Task ReleaseAsync(

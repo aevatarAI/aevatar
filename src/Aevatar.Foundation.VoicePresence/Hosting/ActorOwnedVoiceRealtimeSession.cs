@@ -59,7 +59,8 @@ public sealed class ActorOwnedVoiceRealtimeSession
                     capability.StateVersion,
                     capability.LeaseExpiresAt ?? _timeProvider.GetUtcNow(),
                     capability.RemoteAudioSupport,
-                    capability.ActiveTransportLeaseId));
+                    capability.ActiveTransportLeaseId,
+                    capability.LeaseEpoch));
             if (onAcceptedAsync != null)
                 await onAcceptedAsync(acceptedDetach, ct);
 
