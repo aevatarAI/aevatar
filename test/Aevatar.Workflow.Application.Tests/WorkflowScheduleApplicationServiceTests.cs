@@ -20,7 +20,10 @@ public sealed class WorkflowScheduleApplicationServiceTests
     [Fact]
     public async Task CreateAsync_ShouldNormalizeConfigurationAndDispatchConfigure()
     {
-        var actorPort = new FakeWorkflowScheduleActorPort();
+        var actorPort = new FakeWorkflowScheduleActorPort
+        {
+            ResolveActorId = string.Empty,
+        };
         var preparation = new FakeScheduledDispatchPreparationService();
         var service = CreateService(actorPort, new FakeWorkflowScheduleQueryPort(), preparation);
 
@@ -120,7 +123,10 @@ public sealed class WorkflowScheduleApplicationServiceTests
     [Fact]
     public async Task CreateAsync_ShouldMapWorkflowScheduleAuthToServiceInvocationAuth()
     {
-        var actorPort = new FakeWorkflowScheduleActorPort();
+        var actorPort = new FakeWorkflowScheduleActorPort
+        {
+            ResolveActorId = string.Empty,
+        };
         var service = CreateService(actorPort);
 
         await service.CreateAsync(new WorkflowScheduleConfiguration(
@@ -149,7 +155,10 @@ public sealed class WorkflowScheduleApplicationServiceTests
     [Fact]
     public async Task CreateAsync_ShouldMapTenantlessWorkflowScheduleAuthToEmptyTenant()
     {
-        var actorPort = new FakeWorkflowScheduleActorPort();
+        var actorPort = new FakeWorkflowScheduleActorPort
+        {
+            ResolveActorId = string.Empty,
+        };
         var service = CreateService(actorPort);
 
         await service.CreateAsync(CreateConfiguration("auth-schedule") with
@@ -345,6 +354,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
     {
         var actorPort = new FakeWorkflowScheduleActorPort
         {
+            ResolveActorId = string.Empty,
             AdmissionFactory = (actorId, envelope) => new DispatchAdmission(
                 Accepted: false,
                 CommandId: envelope.Id,
@@ -723,7 +733,10 @@ public sealed class WorkflowScheduleApplicationServiceTests
     [Fact]
     public async Task CreateAsync_ShouldKeepHeadersAsDispatchExtensionsOnly()
     {
-        var actorPort = new FakeWorkflowScheduleActorPort();
+        var actorPort = new FakeWorkflowScheduleActorPort
+        {
+            ResolveActorId = string.Empty,
+        };
         var preparation = new FakeScheduledDispatchPreparationService();
         var service = CreateService(actorPort, new FakeWorkflowScheduleQueryPort(), preparation);
 
