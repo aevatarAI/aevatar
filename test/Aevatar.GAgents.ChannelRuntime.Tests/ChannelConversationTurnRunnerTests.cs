@@ -169,6 +169,42 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunInboundAsync_ShouldNotExposeNyxAgentApiKeyIdAsWorkflowBackgroundDeliveryCredential()
+    {
+        var registration = BuildRegistrationEntry();
+        registration.NyxAgentApiKeyId = "nyx-agent-key-1";
+        registration.NyxReplyCredentialRef = "secrets://channel/nyxid/lark/reg-1/reply-api-key";
+        var registrationQueryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        var registrationByNyxIdentityPort = Substitute.For<IChannelBotRegistrationQueryByNyxIdentityPort>();
+        registrationByNyxIdentityPort.ListByNyxAgentApiKeyIdAsync("nyx-agent-key-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>([registration]));
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            registrationQueryByNyxIdentityPort: registrationByNyxIdentityPort);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "hello",
+                "msg-bg-delivery-1",
+                botId: "missing-reg",
+                transportExtras: new TransportExtras
+                {
+                    NyxPlatform = "lark",
+                    NyxAgentApiKeyId = "nyx-agent-key-1",
+                }),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest!.ToolContext);
+        toolContext.Channel.DurableReplyCredentialRef.Should().Be("secrets://channel/nyxid/lark/reg-1/reply-api-key");
+        toolContext.Channel.DurableReplyCredentialRef.Should().NotBe("nyx-agent-key-1");
+        toolContext.ExternalMetadata.Should().NotContainKey("channel.durable_reply_credential_ref");
+    }
+
+    [Fact]
     public async Task RunInboundAsync_ShouldIncludePlatformMessageIdInLlmMetadata_WhenAvailable()
     {
         var registrationQueryPort = BuildRegistrationQueryPort();

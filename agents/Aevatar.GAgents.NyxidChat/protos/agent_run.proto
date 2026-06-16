@@ -537,6 +537,113 @@ message ChannelWorkflowDraftRunFailedEvent {
   int64 failed_at_unix_ms = 6;
 }
 
+enum WorkflowRunDeliveryStatus {
+  WORKFLOW_RUN_DELIVERY_STATUS_UNSPECIFIED = 0;
+  WORKFLOW_RUN_DELIVERY_STATUS_STARTED = 1;
+  WORKFLOW_RUN_DELIVERY_STATUS_DELIVERED = 2;
+  WORKFLOW_RUN_DELIVERY_STATUS_FAILED = 3;
+}
+
+message WorkflowRunDeliveryGAgentState {
+  reserved 10;
+  reserved "bot_agent_key_id";
+  string delivery_id = 1;
+  string workflow_actor_id = 2;
+  string workflow_run_id = 3;
+  string workflow_command_id = 4;
+  string workflow_correlation_id = 5;
+  string stream_topic = 6;
+  string channel_platform = 7;
+  string reply_message_id = 8;
+  string platform_message_id = 9;
+  string registration_scope_id = 11;
+  WorkflowRunDeliveryStatus status = 12;
+  int64 started_at_unix_ms = 13;
+  int64 completed_at_unix_ms = 14;
+  int32 delivery_attempt = 15;
+  int64 last_attempt_at_unix_ms = 16;
+  string delivered_activity_id = 17;
+  string delivered_platform_message_id = 18;
+  string error_code = 19;
+  string error_summary = 20;
+  string terminal_status = 21;
+  string terminal_text = 22;
+  string terminal_error_code = 23;
+  int64 terminal_observed_at_unix_ms = 24;
+  string durable_reply_credential_ref = 25;
+}
+
+message WorkflowRunDeliveryStartRequested {
+  reserved 10;
+  reserved "bot_agent_key_id";
+  string delivery_id = 1;
+  string workflow_actor_id = 2;
+  string workflow_run_id = 3;
+  string workflow_command_id = 4;
+  string workflow_correlation_id = 5;
+  string stream_topic = 6;
+  string channel_platform = 7;
+  string reply_message_id = 8;
+  string platform_message_id = 9;
+  string registration_scope_id = 11;
+  string durable_reply_credential_ref = 12;
+}
+
+message WorkflowRunDeliveryStartedEvent {
+  reserved 10;
+  reserved "bot_agent_key_id";
+  string delivery_id = 1;
+  string workflow_actor_id = 2;
+  string workflow_run_id = 3;
+  string workflow_command_id = 4;
+  string workflow_correlation_id = 5;
+  string stream_topic = 6;
+  string channel_platform = 7;
+  string reply_message_id = 8;
+  string platform_message_id = 9;
+  string registration_scope_id = 11;
+  int64 started_at_unix_ms = 12;
+  string durable_reply_credential_ref = 13;
+}
+
+message WorkflowRunDeliveryTerminalFrameObserved {
+  string delivery_id = 1;
+  string workflow_actor_id = 2;
+  string workflow_command_id = 3;
+  string status = 4;
+  string text = 5;
+  string error_code = 6;
+  int64 observed_at_unix_ms = 7;
+}
+
+message WorkflowRunDeliverySucceededEvent {
+  string delivery_id = 1;
+  string workflow_actor_id = 2;
+  string workflow_command_id = 3;
+  string sent_activity_id = 4;
+  string platform_message_id = 5;
+  int32 attempt = 6;
+  int64 delivered_at_unix_ms = 7;
+  string terminal_status = 8;
+  string terminal_text = 9;
+  string terminal_error_code = 10;
+  int64 terminal_observed_at_unix_ms = 11;
+}
+
+message WorkflowRunDeliveryFailedEvent {
+  string delivery_id = 1;
+  string workflow_actor_id = 2;
+  string workflow_command_id = 3;
+  string error_code = 4;
+  string error_summary = 5;
+  int32 attempt = 6;
+  int64 failed_at_unix_ms = 7;
+  string terminal_status = 8;
+  string terminal_text = 9;
+  string terminal_error_code = 10;
+  int64 terminal_observed_at_unix_ms = 11;
+}
+
 message NyxIdChatConversationCreationCompensationRequested {
   string scope_id = 1;
   string actor_id = 2;

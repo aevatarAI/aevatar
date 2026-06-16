@@ -143,6 +143,7 @@ message AgentToolChannelContextPayload {
   string message_id = 4;
   string platform_message_id = 5;
   string delivery_target_id = 6;
+  string durable_reply_credential_ref = 7;
 }
 
 message AgentToolSenderBindingContextPayload {
@@ -207,6 +208,7 @@ message AgentToolReceipt {
   string error_message = 13;
   string result_json = 14;
   ManagedWorkflowHandoffReceipt managed_workflow_handoff = 15;
+  WorkflowRunBackgroundDeliveryReceipt workflow_run_delivery = 16;
 }
 
 message ManagedWorkflowHandoffReceipt {
@@ -216,6 +218,22 @@ message ManagedWorkflowHandoffReceipt {
   string invocation_id = 4;
   string child_run_id = 5;
   string stream_topic = 6;
+}
+
+message WorkflowRunBackgroundDeliveryReceipt {
+  reserved 10;
+  reserved "bot_agent_key_id";
+  string delivery_actor_id = 1;
+  string workflow_actor_id = 2;
+  string workflow_run_id = 3;
+  string workflow_command_id = 4;
+  string workflow_correlation_id = 5;
+  string stream_topic = 6;
+  string channel_platform = 7;
+  string reply_message_id = 8;
+  string platform_message_id = 9;
+  string registration_scope_id = 11;
+  string durable_reply_credential_ref = 12;
 }
 
 message ToolResultEvent {

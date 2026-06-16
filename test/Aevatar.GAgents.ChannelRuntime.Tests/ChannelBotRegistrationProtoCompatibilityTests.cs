@@ -22,6 +22,7 @@ public sealed class ChannelBotRegistrationProtoCompatibilityTests
         ChannelBotRegistrationEntry.Descriptor.FindFieldByName("nyx_agent_api_key_id")!.FieldNumber.Should().Be(10);
         ChannelBotRegistrationEntry.Descriptor.FindFieldByName("nyx_conversation_route_id")!.FieldNumber.Should().Be(11);
         ChannelBotRegistrationEntry.Descriptor.FindFieldByName("credential_ref").Should().BeNull();
+        ChannelBotRegistrationEntry.Descriptor.FindFieldByName("nyx_reply_credential_ref")!.FieldNumber.Should().Be(13);
     }
 
     [Fact]
@@ -36,6 +37,7 @@ public sealed class ChannelBotRegistrationProtoCompatibilityTests
         ChannelBotRegisterCommand.Descriptor.FindFieldByName("nyx_agent_api_key_id")!.FieldNumber.Should().Be(7);
         ChannelBotRegisterCommand.Descriptor.FindFieldByName("nyx_conversation_route_id")!.FieldNumber.Should().Be(8);
         ChannelBotRegisterCommand.Descriptor.FindFieldByName("credential_ref").Should().BeNull();
+        ChannelBotRegisterCommand.Descriptor.FindFieldByName("nyx_reply_credential_ref")!.FieldNumber.Should().Be(10);
     }
 
     [Fact]
@@ -54,6 +56,7 @@ public sealed class ChannelBotRegistrationProtoCompatibilityTests
         ChannelBotRegistrationDocument.Descriptor.FindFieldByName("nyx_agent_api_key_id")!.FieldNumber.Should().Be(11);
         ChannelBotRegistrationDocument.Descriptor.FindFieldByName("nyx_conversation_route_id")!.FieldNumber.Should().Be(12);
         ChannelBotRegistrationDocument.Descriptor.FindFieldByName("credential_ref").Should().BeNull();
+        ChannelBotRegistrationDocument.Descriptor.FindFieldByName("nyx_reply_credential_ref")!.FieldNumber.Should().Be(14);
     }
 
     [Fact]
