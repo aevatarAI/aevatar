@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Voice;
+using Aevatar.Foundation.VoicePresence.Abstractions;
 using FluentAssertions;
 
 namespace Aevatar.AI.Core.Tests.Voice;
@@ -70,6 +71,47 @@ public class AgentToolVoiceInvokerTests
 
         source.DiscoverCalls.Should().Be(1);
         results.Should().OnlyContain(result => result == """{"ok":true}""");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldExposeCallerNyxIdTokenToTool_WhenCredentialScopeSet()
+    {
+        var captured = new CapturingAgentTool("nyxid_proxy");
+        var invoker = new AgentToolVoiceInvoker([new StubToolSource(captured)]);
+
+        using (VoiceCallerCredentialScope.Push("caller-token-123"))
+        {
+            await invoker.ExecuteAsync("nyxid_proxy", "{}");
+        }
+
+        captured.CapturedNyxIdAccessToken.Should().Be("caller-token-123");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldNotSetCredentialContext_WhenNoScope()
+    {
+        var captured = new CapturingAgentTool("nyxid_proxy");
+        var invoker = new AgentToolVoiceInvoker([new StubToolSource(captured)]);
+
+        await invoker.ExecuteAsync("nyxid_proxy", "{}");
+
+        captured.CapturedNyxIdAccessToken.Should().BeNull();
+    }
+
+    private sealed class CapturingAgentTool(string name) : IAgentTool
+    {
+        public string Name { get; } = name;
+        public string Description => "capturing";
+        public string ParametersSchema => "{}";
+        public string? CapturedNyxIdAccessToken { get; private set; }
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            _ = argumentsJson;
+            _ = ct;
+            CapturedNyxIdAccessToken = AgentToolRequestContext.NyxIdAccessToken;
+            return Task.FromResult("{}");
+        }
     }
 
     private sealed class StubToolSource(params IAgentTool[] tools) : IAgentToolSource

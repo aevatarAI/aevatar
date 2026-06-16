@@ -32,9 +32,22 @@ public sealed class AgentToolVoiceInvoker : IVoiceToolInvoker
         if (!toolIndex.TryGetValue(toolName, out var tool))
             throw new InvalidOperationException($"Tool '{toolName}' not found");
 
-        return await tool.ExecuteAsync(
-            string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson,
-            ct);
+        var arguments = string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson;
+
+        // Refactor (cluster-voice-tool-caller-credential): voice tool calls arrive on an actor turn
+        // with no caller AsyncLocal context, so the caller's NyxID token is carried across that
+        // boundary via VoiceCallerCredentialScope and mapped here onto AgentToolContextScope — that's
+        // what lets NyxID-backed tools (nyxid_proxy, use_skill, ...) authenticate as the caller.
+        var callerToken = VoiceCallerCredentialScope.CurrentNyxIdAccessToken;
+        if (string.IsNullOrWhiteSpace(callerToken))
+            return await tool.ExecuteAsync(arguments, ct);
+
+        using var _ = AgentToolContextScope.Push(
+            AgentToolExecutionContext.Empty with
+            {
+                Credentials = new AgentToolCredentials(callerToken, null, null),
+            });
+        return await tool.ExecuteAsync(arguments, ct);
     }
 
     private Task<IReadOnlyDictionary<string, IAgentTool>> GetOrDiscoverAsync(CancellationToken ct)

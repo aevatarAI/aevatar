@@ -43,7 +43,11 @@ public sealed class NyxIdRealtimeProviderCredentialResolver : IRealtimeProviderC
         ArgumentNullException.ThrowIfNull(sessionKey);
         ArgumentNullException.ThrowIfNull(config);
 
+        // Primary source is AgentToolRequestContext (set on the /ws/voice connect and chat paths);
+        // the actor-side voice tool-result reconnect runs under VoiceCallerCredentialScope instead.
         var callerToken = AgentToolRequestContext.NyxIdAccessToken;
+        if (string.IsNullOrWhiteSpace(callerToken))
+            callerToken = VoiceCallerCredentialScope.CurrentNyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(callerToken))
         {
             // No per-request NyxID credential in context (e.g. a connect path that
