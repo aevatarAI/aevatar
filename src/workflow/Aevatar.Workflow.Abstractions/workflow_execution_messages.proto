@@ -22,6 +22,13 @@ enum WorkflowFileSourceKind {
   WORKFLOW_FILE_SOURCE_KIND_GENERATED = 5;
 }
 
+enum WorkflowSagaStatus {
+  WORKFLOW_SAGA_STATUS_UNSPECIFIED = 0;
+  WORKFLOW_SAGA_STATUS_COMPENSATING = 1;
+  WORKFLOW_SAGA_STATUS_COMPENSATED_FAILED = 2;
+  WORKFLOW_SAGA_STATUS_COMPENSATION_DEAD_LETTER = 3;
+}
+
 message WorkflowFileRef {
   string file_id = 1;
   string artifact_id = 2;
