@@ -11,7 +11,7 @@ public sealed class VoicePresenceEventPolicy
 {
     public TimeSpan StaleAfter { get; init; } = TimeSpan.FromSeconds(10);
 
-    public TimeSpan DedupeWindow { get; init; } = TimeSpan.FromSeconds(2);
+    public TimeSpan DedupeWindow { get; init; } = TimeSpan.FromSeconds(10);
 
     // Refactor (iter104/cluster-3): Old pattern: VoicePresenceEventPolicy kept module-local in-memory recent-event dedupe set. New principle: dedupe fence in VoicePresenceRuntimeState (actor-owned); policy is pure evaluator over passed-in actor state.
     public VoicePresenceEventPolicyVerdict Evaluate(
@@ -74,6 +74,13 @@ public sealed class VoicePresenceEventPolicy
     public static string BuildKey(EventEnvelope envelope)
     {
         ArgumentNullException.ThrowIfNull(envelope);
+
+        var operationId = envelope.Runtime?.Deduplication?.OperationId;
+        if (!string.IsNullOrWhiteSpace(operationId))
+            return $"operation:{operationId.Trim()}";
+
+        if (!string.IsNullOrWhiteSpace(envelope.Id))
+            return $"envelope:{envelope.Id.Trim()}";
 
         if (envelope.Payload == null)
             return "payload:null";

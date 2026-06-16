@@ -36,9 +36,28 @@ public interface IDeviceCallbackCommandService
 public sealed record DeviceCallbackDispatchCommand(
     string RegistrationId,
     DeviceInbound Inbound,
+    DeviceCallbackAdmission? Admission = null,
     string? CommandId = null,
     string? CorrelationId = null,
-    IReadOnlyDictionary<string, string>? Headers = null) : ICommandContextSeed;
+    IReadOnlyDictionary<string, string>? Headers = null) : ICommandContextSeed
+{
+    string? ICommandContextSeed.CommandId => FirstNonEmpty(CommandId, Admission?.MessageId, Inbound?.EventId);
+
+    string? ICommandContextSeed.CorrelationId => FirstNonEmpty(CorrelationId, CommandId, Admission?.MessageId, Inbound?.EventId);
+
+    IReadOnlyDictionary<string, string>? ICommandContextSeed.Headers => Headers;
+
+    private static string? FirstNonEmpty(params string?[] values)
+    {
+        foreach (var value in values)
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+                return value.Trim();
+        }
+
+        return null;
+    }
+}
 
 // Refactor (iter47/issue-873-device-endpoint-direct-runtime-dispatch):
 //   Old pattern: Device HTTP endpoint resolves/creates actors, builds EventEnvelope directly, and dispatches through runtime/dispatch ports.
@@ -260,10 +279,25 @@ internal sealed class DeviceCallbackCommandEnvelopeFactory
         return new EventEnvelope
         {
             Id = context.CommandId,
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Timestamp = Timestamp.FromDateTimeOffset(command.Admission?.OccurredAt ?? DateTimeOffset.UtcNow),
             Payload = Any.Pack(command.Inbound),
             Route = EnvelopeRouteSemantics.CreateDirect(PublisherActorId, context.TargetId),
+            Runtime = new EnvelopeRuntime
+            {
+                Deduplication = new DeliveryDeduplication
+                {
+                    OperationId = ResolveOperationId(command, context),
+                },
+            },
         };
+    }
+
+    private static string ResolveOperationId(DeviceCallbackDispatchCommand command, CommandContext context)
+    {
+        if (!string.IsNullOrWhiteSpace(command.Admission?.OperationId))
+            return command.Admission.OperationId;
+
+        return context.CommandId;
     }
 }
 
