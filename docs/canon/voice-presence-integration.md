@@ -82,7 +82,17 @@ touch the audio socket.
 | **Audio + control** | edge ⇄ aevatar ⇄ OpenAI | binary PCM16 (audio) + JSON `VoiceControlFrame` (control) over `/ws/voice`; relay WS to OpenAI | Hot path. Raw PCM never enters the actor inbox / `EventEnvelope` / projection / committed store (ADR-013 media red line). |
 | **Credential** | aevatar → NyxID → OpenAI | HTTPS mint, caller bearer flowed via AsyncLocal | Connect-time only. NyxID injects the real `sk-`; aevatar receives a short-lived `ek_` (~60s TTL) and dials OpenAI directly (ADR-0033). |
 | **Edge tools** | actor → NyxID proxy → node WS → edge HTTP → LAN | NyxID connected-service `x-aevatar-tool` operations | The LAN tool bridge. Edge publishes `/edge-tools/openapi.json`; only `EDGE_TOOLS_ALLOWLIST` operations are exposed (ADR-0031 short-term bridge). |
-| **Device events** | edge → aevatar `/api/device-events/{regId}` | HMAC-SHA256 signed body | Off-socket household-event ingress; the actor owns dedupe / fencing / turn creation. |
+| **Device events** | edge → aevatar `/api/device-events/{regId}` | HMAC-SHA256 signed callback body | Off-socket household-event ingress. The endpoint admits only fresh signed body timestamps and maps a stable delivery id into the envelope dedupe operation; the actor owns fencing / turn creation. |
+
+Device-event replay protection is enforced before dispatch. The endpoint trusts
+only the timestamp carried in the HMAC-covered callback body, with a default
+10-second freshness window aligned to voice event staleness. `X-NyxID-Timestamp`
+is diagnostic only and cannot refresh a captured body. The delivery id is
+`content.text.event_id` when present, otherwise a home-alert `correlation_key`;
+it becomes `Runtime.Deduplication.OperationId =
+device-event:{registrationId}:{deliveryId}`. If no active voice session exists,
+the event is still drop-and-log at the voice boundary; this integration does not
+add a durable spool.
 
 ## Wire contract
 

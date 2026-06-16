@@ -35,8 +35,8 @@ public class VoicePresenceEventPolicyTests
     {
         var policy = new VoicePresenceEventPolicy { DedupeWindow = TimeSpan.FromSeconds(2) };
         var now = DateTimeOffset.UtcNow;
-        var first = MakeEnvelope("Alice", now);
-        var second = MakeEnvelope("Alice", now.AddMilliseconds(500));
+        var first = MakeEnvelope("Alice", now, envelopeId: "event-1");
+        var second = MakeEnvelope("Alice", now.AddMilliseconds(500), envelopeId: "event-1");
         var fence = new List<VoicePresenceEventDedupeFenceEntry>();
 
         var verdict = policy.Evaluate(first, now, fence);
@@ -87,10 +87,10 @@ public class VoicePresenceEventPolicyTests
         var now = DateTimeOffset.UtcNow;
         var fence = new List<VoicePresenceEventDedupeFenceEntry>();
 
-        var verdict = policy.Evaluate(MakeEnvelope("Alice", now), now, fence);
+        var verdict = policy.Evaluate(MakeEnvelope("Alice", now, envelopeId: "event-a"), now, fence);
         verdict.Decision.ShouldBe(VoicePresenceEventPolicyDecision.Admit);
         fence = policy.BuildFence(fence, verdict, now).ToList();
-        policy.Evaluate(MakeEnvelope("Bob", now), now.AddMilliseconds(10), fence)
+        policy.Evaluate(MakeEnvelope("Bob", now, envelopeId: "event-b"), now.AddMilliseconds(10), fence)
             .Decision
             .ShouldBe(VoicePresenceEventPolicyDecision.Admit);
     }
@@ -100,8 +100,8 @@ public class VoicePresenceEventPolicyTests
     {
         var policy = new VoicePresenceEventPolicy { DedupeWindow = TimeSpan.FromSeconds(2) };
         var now = DateTimeOffset.UtcNow;
-        var first = MakeEnvelope("Alice", now);
-        var later = MakeEnvelope("Alice", now.AddSeconds(5));
+        var first = MakeEnvelope("Alice", now, envelopeId: "event-1");
+        var later = MakeEnvelope("Alice", now.AddSeconds(5), envelopeId: "event-1");
         var fence = new List<VoicePresenceEventDedupeFenceEntry>();
 
         var verdict = policy.Evaluate(first, now, fence);
@@ -131,15 +131,65 @@ public class VoicePresenceEventPolicyTests
             .ShouldBe(VoicePresenceEventPolicyDecision.DropDuplicate);
     }
 
-    private static EventEnvelope MakeEnvelope(string person, DateTimeOffset observedAt)
+    [Fact]
+    public void BuildKey_prefers_operation_id_then_envelope_id_then_payload()
     {
-        return new EventEnvelope
+        var operationEnvelope = MakeEnvelope("Alice", DateTimeOffset.UtcNow, operationId: "device-event:reg-1:evt-1");
+        var idEnvelope = MakeEnvelope("Alice", DateTimeOffset.UtcNow, envelopeId: "event-1");
+        var payloadEnvelope = MakeEnvelope("Alice", DateTimeOffset.UtcNow, envelopeId: string.Empty);
+
+        VoicePresenceEventPolicy.BuildKey(operationEnvelope)
+            .ShouldBe("operation:device-event:reg-1:evt-1");
+        VoicePresenceEventPolicy.BuildKey(idEnvelope)
+            .ShouldBe("envelope:event-1");
+        VoicePresenceEventPolicy.BuildKey(payloadEnvelope)
+            .ShouldStartWith("type.googleapis.com/google.protobuf.StringValue|");
+    }
+
+    [Fact]
+    public void Same_delivery_operation_id_is_dropped_for_entire_dedupe_window()
+    {
+        var policy = new VoicePresenceEventPolicy();
+        var now = DateTimeOffset.UtcNow;
+        var first = MakeEnvelope("Alice", now, operationId: "device-event:reg-1:evt-1");
+        var replay = MakeEnvelope("Bob", now.AddSeconds(9), operationId: "device-event:reg-1:evt-1");
+        var fence = new List<VoicePresenceEventDedupeFenceEntry>();
+
+        var verdict = policy.Evaluate(first, now, fence);
+        verdict.Decision.ShouldBe(VoicePresenceEventPolicyDecision.Admit);
+        fence = policy.BuildFence(fence, verdict, now).ToList();
+
+        policy.Evaluate(replay, now.AddSeconds(9), fence)
+            .Decision
+            .ShouldBe(VoicePresenceEventPolicyDecision.DropDuplicate);
+    }
+
+    private static EventEnvelope MakeEnvelope(
+        string person,
+        DateTimeOffset observedAt,
+        string? envelopeId = null,
+        string? operationId = null)
+    {
+        var envelope = new EventEnvelope
         {
-            Id = Guid.NewGuid().ToString("N"),
+            Id = envelopeId ?? Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTimeOffset(observedAt),
             Payload = Any.Pack(new StringValue { Value = person }),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("voice-agent", TopologyAudience.Self),
         };
+
+        if (!string.IsNullOrWhiteSpace(operationId))
+        {
+            envelope.Runtime = new EnvelopeRuntime
+            {
+                Deduplication = new DeliveryDeduplication
+                {
+                    OperationId = operationId,
+                },
+            };
+        }
+
+        return envelope;
     }
 
     private static string FindRepositoryFile(params string[] relativePath)
