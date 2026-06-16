@@ -237,6 +237,23 @@ public sealed class AgentRunLarkCardDeliveryTests
         agent.State.PendingCardDeliveryCompletion.Should().BeNull();
         var conversationEvents = await conversationStore.GetEventsAsync(ConversationActorId);
         conversationEvents.Should().ContainSingle(e => e.EventData.Is(LlmReplyDeliveryFailedEvent.Descriptor));
+        conversationEvents.Count(e => e.EventData.Is(DeliveryProducedEvent.Descriptor)).Should().Be(1);
+        var delivery = conversationEvents
+            .Single(e => e.EventData.Is(DeliveryProducedEvent.Descriptor))
+            .EventData.Unpack<DeliveryProducedEvent>();
+        delivery.DeliveryKind.Should().Be(DeliveryKind.StreamingCard);
+        delivery.Status.Should().Be(DeliveryStatus.FailedPostSend);
+        delivery.RequestId.Should().Be("llm:corr-card");
+        delivery.SourceEventId.Should().Be("corr-card");
+        delivery.LarkMessageId.Should().Be("lark-card-stream:om-card-ok");
+        delivery.CardId.Should().BeEmpty();
+        delivery.Target.Channel.Value.Should().Be("lark");
+        delivery.Target.ConversationKey.Should().Be("lark:group:oc-group-1");
+        delivery.Target.Platform.Should().Be("lark");
+        delivery.Target.ReceiveId.Should().Be("oc-group-1");
+        delivery.Target.ReceiveIdType.Should().Be("chat_id");
+        delivery.Target.ConversationId.Should().Be("oc-group-1");
+        delivery.Target.ReplyMessageId.Should().Be("relay-msg-1");
         conversationEvents.Should().ContainSingle(e => e.EventData.Is(ConversationTurnCompletedEvent.Descriptor));
         var failed = conversationEvents
             .Single(e => e.EventData.Is(LlmReplyDeliveryFailedEvent.Descriptor))

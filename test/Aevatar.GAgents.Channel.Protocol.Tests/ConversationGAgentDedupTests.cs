@@ -1097,6 +1097,22 @@ public sealed class ConversationGAgentDedupTests
 
         var events = await store.GetEventsAsync(agent.Id);
         events.Select(e => e.EventType).ShouldContain(s => s.Contains(nameof(LlmReplyDeliveryFailedEvent)));
+        events.Count(e => e.EventData.Is(DeliveryProducedEvent.Descriptor)).ShouldBe(1);
+        var delivery = events
+            .Single(e => e.EventData.Is(DeliveryProducedEvent.Descriptor))
+            .EventData.Unpack<DeliveryProducedEvent>();
+        delivery.DeliveryKind.ShouldBe(DeliveryKind.TextMessage);
+        delivery.Status.ShouldBe(DeliveryStatus.FailedPreSend);
+        delivery.RequestId.ShouldBe("llm:corr-delivery-failed");
+        delivery.SourceEventId.ShouldBe("corr-delivery-failed");
+        delivery.LarkMessageId.ShouldBeEmpty();
+        delivery.Target.Channel.Value.ShouldBe("slack");
+        delivery.Target.ConversationKey.ShouldBe("conv:slack:C1");
+        delivery.Target.Platform.ShouldBe("slack");
+        delivery.Target.ReceiveId.ShouldBeEmpty();
+        delivery.Target.ReceiveIdType.ShouldBeEmpty();
+        delivery.Target.ConversationId.ShouldBe("conv:slack:C1");
+        delivery.Target.ReplyMessageId.ShouldBeEmpty();
         events.Last().EventType.ShouldContain(nameof(ConversationContinueFailedEvent));
     }
 
