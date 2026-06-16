@@ -109,6 +109,7 @@ public class VoicePresenceModuleTests
             InputImageReceived = new VoiceInputImageReceived
             {
                 SessionId = "session-1",
+                LeaseEpoch = 7,
                 InputImage = new VoiceInputImage
                 {
                     MediaType = "image/png",
@@ -811,6 +812,7 @@ public class VoicePresenceModuleTests
             ActiveLeaseOwnerId = "host-1",
             LeaseExpiresAt = expiresAt.Clone(),
             Initialized = true,
+            LeaseEpoch = 7,
         };
         var ctx = new StubEventHandlerContext(agent: roleAgent);
 
@@ -823,6 +825,7 @@ public class VoicePresenceModuleTests
                 OwnerId = "host-1",
                 TransportLeaseId = "transport-1",
                 LeaseExpiresAt = expiresAt.Clone(),
+                LeaseEpoch = 7,
             },
         }), ctx, CancellationToken.None);
 
@@ -853,6 +856,7 @@ public class VoicePresenceModuleTests
             ActiveLeaseOwnerId = "host-1",
             LeaseExpiresAt = activeExpiry.Clone(),
             Initialized = true,
+            LeaseEpoch = 7,
         };
         var ctx = new StubEventHandlerContext(agent: roleAgent);
 
@@ -865,6 +869,7 @@ public class VoicePresenceModuleTests
                 OwnerId = "host-2",
                 TransportLeaseId = "transport-1",
                 LeaseExpiresAt = activeExpiry.Clone(),
+                LeaseEpoch = 7,
             },
         }), ctx, CancellationToken.None);
 
@@ -883,6 +888,42 @@ public class VoicePresenceModuleTests
                 OwnerId = "host-1",
                 TransportLeaseId = "transport-1",
                 LeaseExpiresAt = Timestamp.FromDateTimeOffset(now.AddSeconds(-1)),
+                LeaseEpoch = 7,
+            },
+        }), ctx, CancellationToken.None);
+
+        roleAgent.PersistedStates.ShouldBeEmpty();
+        roleAgent.State.VoicePresence["voice_presence"].TransportAttached.ShouldBeFalse();
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(6)]
+    public async Task Transport_attach_signal_should_reject_zero_or_stale_lease_epoch(long leaseEpoch)
+    {
+        var module = CreateModule(new RecordingVoiceProvider());
+        var roleAgent = new RecordingRoleAgent("voice-agent");
+        var expiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5));
+        roleAgent.State.VoicePresence["voice_presence"] = new VoicePresenceRuntimeState
+        {
+            ActiveSessionId = "lease-1",
+            ActiveLeaseOwnerId = "host-1",
+            LeaseExpiresAt = expiresAt.Clone(),
+            Initialized = true,
+            LeaseEpoch = 7,
+        };
+        var ctx = new StubEventHandlerContext(agent: roleAgent);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            TransportAttachRequested = new VoiceTransportAttachRequested
+            {
+                SessionId = "lease-1",
+                OwnerId = "host-1",
+                TransportLeaseId = "transport-1",
+                LeaseExpiresAt = expiresAt.Clone(),
+                LeaseEpoch = leaseEpoch,
             },
         }), ctx, CancellationToken.None);
 
@@ -901,6 +942,7 @@ public class VoicePresenceModuleTests
             ActiveLeaseOwnerId = "host-current",
             LeaseExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)),
             TransportAttached = true,
+            LeaseEpoch = 7,
             ActiveTransportLeaseId = "transport-current",
             Status = VoicePresenceRuntimeStatus.AudioDraining,
             CurrentResponseId = 4,
@@ -919,6 +961,7 @@ public class VoicePresenceModuleTests
                 OwnerId = "host-current",
                 TransportLeaseId = "transport-old",
                 LeaseExpiresAt = roleAgent.State.VoicePresence["voice_presence"].LeaseExpiresAt.Clone(),
+                LeaseEpoch = 7,
                 ControlFrame = new VoiceControlFrame
                 {
                     DrainAcknowledged = new VoiceDrainAcknowledged
@@ -969,6 +1012,7 @@ public class VoicePresenceModuleTests
                 OwnerId = "host-current",
                 TransportLeaseId = "transport-current",
                 LeaseExpiresAt = roleAgent.State.VoicePresence["voice_presence"].LeaseExpiresAt.Clone(),
+                LeaseEpoch = 7,
                 ControlFrame = new VoiceControlFrame
                 {
                     DrainAcknowledged = new VoiceDrainAcknowledged
@@ -996,6 +1040,7 @@ public class VoicePresenceModuleTests
             ActiveLeaseOwnerId = "host-current",
             LeaseExpiresAt = expiresAt.Clone(),
             TransportAttached = true,
+            LeaseEpoch = 7,
             ActiveTransportLeaseId = "transport-current",
             Status = VoicePresenceRuntimeStatus.Idle,
             CurrentResponseId = 0,
@@ -1014,6 +1059,7 @@ public class VoicePresenceModuleTests
                 OwnerId = "host-current",
                 TransportLeaseId = "transport-old",
                 LeaseExpiresAt = expiresAt.Clone(),
+                LeaseEpoch = 7,
                 ProviderEvent = new VoiceProviderEvent
                 {
                     ResponseStarted = new VoiceResponseStarted { ProviderResponseId = "provider-r1" },
@@ -1036,6 +1082,7 @@ public class VoicePresenceModuleTests
         {
             ActiveSessionId = "remote-current",
             RemoteSessionId = "remote-current",
+            LeaseEpoch = 7,
             Status = VoicePresenceRuntimeStatus.Idle,
             CurrentResponseId = 0,
             NextResponseId = 1,
@@ -1072,6 +1119,7 @@ public class VoicePresenceModuleTests
             ActiveLeaseOwnerId = "host-current",
             LeaseExpiresAt = expiresAt.Clone(),
             TransportAttached = true,
+            LeaseEpoch = 7,
             ActiveTransportLeaseId = "transport-current",
             Status = VoicePresenceRuntimeStatus.Idle,
             CurrentResponseId = 0,
@@ -1090,6 +1138,7 @@ public class VoicePresenceModuleTests
                 OwnerId = "host-current",
                 TransportLeaseId = "transport-current",
                 LeaseExpiresAt = expiresAt.Clone(),
+                LeaseEpoch = 7,
                 ProviderEvent = new VoiceProviderEvent
                 {
                     ResponseStarted = new VoiceResponseStarted { ProviderResponseId = "provider-r1" },
@@ -1111,6 +1160,7 @@ public class VoicePresenceModuleTests
         {
             ActiveSessionId = "remote-current",
             RemoteSessionId = "remote-current",
+            LeaseEpoch = 7,
             Status = VoicePresenceRuntimeStatus.Idle,
             CurrentResponseId = 0,
             NextResponseId = 1,
@@ -1125,6 +1175,7 @@ public class VoicePresenceModuleTests
             ProviderEventReceived = new VoiceProviderEventReceived
             {
                 SessionId = "remote-current",
+                LeaseEpoch = 7,
                 ProviderEvent = new VoiceProviderEvent
                 {
                     ResponseStarted = new VoiceResponseStarted { ProviderResponseId = "provider-r1" },
@@ -1149,6 +1200,7 @@ public class VoicePresenceModuleTests
             ActiveLeaseOwnerId = "host-current",
             LeaseExpiresAt = expiresAt.Clone(),
             TransportAttached = true,
+            LeaseEpoch = 7,
             ActiveTransportLeaseId = "transport-current",
             Status = VoicePresenceRuntimeStatus.Idle,
             CurrentResponseId = 0,
@@ -1167,6 +1219,7 @@ public class VoicePresenceModuleTests
                 OwnerId = "host-current",
                 TransportLeaseId = "transport-current",
                 LeaseExpiresAt = expiresAt.Clone(),
+                LeaseEpoch = 7,
                 Reason = "test-detach",
             },
         }), ctx, CancellationToken.None);
@@ -1188,6 +1241,7 @@ public class VoicePresenceModuleTests
             ActiveLeaseOwnerId = "host-current",
             LeaseExpiresAt = expiresAt.Clone(),
             TransportAttached = true,
+            LeaseEpoch = 7,
             ActiveTransportLeaseId = "transport-current",
             Status = VoicePresenceRuntimeStatus.Idle,
             CurrentResponseId = 0,
@@ -1206,6 +1260,7 @@ public class VoicePresenceModuleTests
                 OwnerId = "host-current",
                 TransportLeaseId = "transport-current",
                 LeaseExpiresAt = expiresAt.Clone(),
+                LeaseEpoch = 7,
                 Reason = "test-stop",
             },
         }), ctx, CancellationToken.None);
@@ -1227,6 +1282,7 @@ public class VoicePresenceModuleTests
             ActiveLeaseOwnerId = "host-current",
             LeaseExpiresAt = expiresAt.Clone(),
             TransportAttached = true,
+            LeaseEpoch = 7,
             ActiveTransportLeaseId = "transport-current",
             Status = VoicePresenceRuntimeStatus.Idle,
             CurrentResponseId = 0,
@@ -1245,6 +1301,7 @@ public class VoicePresenceModuleTests
                 OwnerId = "host-current",
                 TransportLeaseId = "transport-current",
                 LeaseExpiresAt = expiresAt.Clone(),
+                LeaseEpoch = 7,
                 Reason = "host_transport_completed",
             },
         }), ctx, CancellationToken.None);
@@ -1269,6 +1326,7 @@ public class VoicePresenceModuleTests
             ActiveLeaseOwnerId = "host-current",
             LeaseExpiresAt = expiresAt.Clone(),
             TransportAttached = true,
+            LeaseEpoch = 7,
             ActiveTransportLeaseId = "transport-current",
             Status = VoicePresenceRuntimeStatus.Idle,
             CurrentResponseId = 0,
@@ -1287,6 +1345,7 @@ public class VoicePresenceModuleTests
                 OwnerId = "host-current",
                 TransportLeaseId = "transport-stale",
                 LeaseExpiresAt = expiresAt.Clone(),
+                LeaseEpoch = 7,
                 Reason = "host_transport_completed",
             },
         }), ctx, CancellationToken.None);
@@ -1339,6 +1398,114 @@ public class VoicePresenceModuleTests
 
         roleAgent.State.VoicePresence["voice_presence"].CurrentResponseId.ShouldBe(0);
         provider.ConnectCalls.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task Provider_function_call_callback_with_zero_lease_epoch_should_not_execute_tool()
+    {
+        var provider = new RecordingVoiceProvider();
+        var invoker = new RecordingVoiceToolInvoker("""{"ok":true}""");
+        var module = CreateModule(provider, toolInvoker: invoker);
+        var roleAgent = CreateRoleAgentWithAttachedTransport();
+        var ctx = new StubEventHandlerContext(agent: roleAgent);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            ProviderEventReceived = new VoiceProviderEventReceived
+            {
+                SessionId = "lease-current",
+                OwnerId = "host-current",
+                TransportLeaseId = "transport-current",
+                LeaseExpiresAt = roleAgent.State.VoicePresence["voice_presence"].LeaseExpiresAt.Clone(),
+                LeaseEpoch = 0,
+                ProviderEvent = new VoiceProviderEvent
+                {
+                    FunctionCall = new VoiceFunctionCallRequested
+                    {
+                        CallId = "call-zero",
+                        ToolName = "doorbell.open",
+                        ArgumentsJson = "{}",
+                        ResponseId = 1,
+                    },
+                },
+            },
+        }), ctx, CancellationToken.None);
+
+        invoker.Calls.ShouldBe(0);
+        provider.ToolResults.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Provider_function_call_callback_with_active_lease_epoch_should_execute_tool()
+    {
+        var provider = new RecordingVoiceProvider();
+        var invoker = new RecordingVoiceToolInvoker("""{"ok":true}""");
+        var module = CreateModule(provider, toolInvoker: invoker);
+        var roleAgent = CreateRoleAgentWithAttachedTransport();
+        var ctx = new StubEventHandlerContext(agent: roleAgent);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            ProviderEventReceived = new VoiceProviderEventReceived
+            {
+                SessionId = "lease-current",
+                OwnerId = "host-current",
+                TransportLeaseId = "transport-current",
+                LeaseExpiresAt = roleAgent.State.VoicePresence["voice_presence"].LeaseExpiresAt.Clone(),
+                LeaseEpoch = 7,
+                ProviderEvent = new VoiceProviderEvent
+                {
+                    FunctionCall = new VoiceFunctionCallRequested
+                    {
+                        CallId = "call-active",
+                        ToolName = "doorbell.open",
+                        ArgumentsJson = "{}",
+                        ResponseId = 1,
+                    },
+                },
+            },
+        }), ctx, CancellationToken.None);
+
+        invoker.Calls.ShouldBe(1);
+        provider.ToolResults.ShouldHaveSingleItem().CallId.ShouldBe("call-active");
+    }
+
+    [Fact]
+    public async Task Provider_function_call_callback_with_stale_lease_epoch_should_not_execute_tool()
+    {
+        var provider = new RecordingVoiceProvider();
+        var invoker = new RecordingVoiceToolInvoker("""{"ok":true}""");
+        var module = CreateModule(provider, toolInvoker: invoker);
+        var roleAgent = CreateRoleAgentWithAttachedTransport();
+        var ctx = new StubEventHandlerContext(agent: roleAgent);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            ProviderEventReceived = new VoiceProviderEventReceived
+            {
+                SessionId = "lease-current",
+                OwnerId = "host-current",
+                TransportLeaseId = "transport-current",
+                LeaseExpiresAt = roleAgent.State.VoicePresence["voice_presence"].LeaseExpiresAt.Clone(),
+                LeaseEpoch = 6,
+                ProviderEvent = new VoiceProviderEvent
+                {
+                    FunctionCall = new VoiceFunctionCallRequested
+                    {
+                        CallId = "call-stale",
+                        ToolName = "doorbell.open",
+                        ArgumentsJson = "{}",
+                        ResponseId = 1,
+                    },
+                },
+            },
+        }), ctx, CancellationToken.None);
+
+        invoker.Calls.ShouldBe(0);
+        provider.ToolResults.ShouldBeEmpty();
     }
 
     [Fact]
@@ -2096,6 +2263,27 @@ public class VoicePresenceModuleTests
             Initialized = true,
             RemoteSessionId = "session-1",
             ActiveSessionId = "session-1",
+            LeaseEpoch = 7,
+            Status = VoicePresenceRuntimeStatus.Idle,
+            NextResponseId = 1,
+            LastDrainAckResponseId = -1,
+            LastDrainAckPlayoutSequence = -1,
+        };
+        return roleAgent;
+    }
+
+    private static RecordingRoleAgent CreateRoleAgentWithAttachedTransport()
+    {
+        var roleAgent = new RecordingRoleAgent("voice-agent");
+        roleAgent.State.VoicePresence[DefaultModuleName] = new VoicePresenceRuntimeState
+        {
+            Initialized = true,
+            ActiveSessionId = "lease-current",
+            ActiveLeaseOwnerId = "host-current",
+            LeaseExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)),
+            TransportAttached = true,
+            ActiveTransportLeaseId = "transport-current",
+            LeaseEpoch = 7,
             Status = VoicePresenceRuntimeStatus.Idle,
             NextResponseId = 1,
             LastDrainAckResponseId = -1,

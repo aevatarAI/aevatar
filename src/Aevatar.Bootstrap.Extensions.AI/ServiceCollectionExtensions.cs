@@ -176,6 +176,7 @@ public static class ServiceCollectionExtensions
         }
 
         services.TryAddSingleton<IVoicePresenceCapabilityQueryPort, VoicePresenceCapabilityQueryPort>();
+        services.TryAddSingleton<IVoicePresenceLeaseObservationPort, VoicePresenceLeaseObservationPort>();
         services.TryAddSingleton<IVoicePresenceSessionLeasePort, VoicePresenceSessionLeasePort>();
         services.TryAddSingleton<IVoicePresenceTransportAttachmentPort, VoicePresenceTransportAttachmentPort>();
         services.TryAddSingleton<IVoiceVolatileMediaStreamPort, VoiceVolatileMediaStreamPort>();
@@ -319,7 +320,7 @@ public static class ServiceCollectionExtensions
                 handle.SessionId,
                 handle.OwnerId,
                 handle.ActiveTransportLeaseId ?? string.Empty,
-                0,
+                handle.LeaseEpoch,
                 Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(handle.ExpiresAtUtc.ToUniversalTime()),
                 handle.ActorId,
                 handle.ModuleName),

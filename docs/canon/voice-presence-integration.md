@@ -108,7 +108,9 @@ The edge consumes a JSON projection of it (camelCase), hand-parsed by
   drops any local `function_call_output` (tools execute actor-side).
 - **Lease** — the host attaches a transport lease (`transport_lease_id`,
   `owner_id`, `lease_epoch`, `lease_expires_at`) the actor owns; the volatile
-  media relay is bound to that lease.
+  media relay is bound to that lease. Host/provider connect paths must carry
+  the readmodel-observed positive `lease_epoch`; transport attach reuses that
+  lease generation and does not create the next epoch.
 
 ## Connect + turn sequence
 
