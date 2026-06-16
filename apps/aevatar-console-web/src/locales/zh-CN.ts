@@ -618,6 +618,8 @@ const zhCNMessages = {
   'teams.automations.messages.createSuccess': '自动化已创建。',
   'teams.automations.messages.cronRequired': '请先填写 Cron 表达式。',
   'teams.automations.messages.deleteSuccess': '自动化已删除。',
+  'teams.automations.messages.disableSuccess': '自动化已暂停。',
+  'teams.automations.messages.enableSuccess': '自动化已恢复。',
   'teams.automations.messages.previewFailed': '预览失败：{message}',
   'teams.automations.messages.promptRequired': '保存前请先描述周期任务。',
   'teams.automations.messages.runNowFailed': '立即运行请求失败：{message}',

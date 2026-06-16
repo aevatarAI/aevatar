@@ -664,6 +664,8 @@ const enUSMessages = {
   'teams.automations.messages.createSuccess': 'Automation created.',
   'teams.automations.messages.cronRequired': 'Enter a cron expression first.',
   'teams.automations.messages.deleteSuccess': 'Automation deleted.',
+  'teams.automations.messages.disableSuccess': 'Automation paused.',
+  'teams.automations.messages.enableSuccess': 'Automation resumed.',
   'teams.automations.messages.previewFailed': 'Preview failed: {message}',
   'teams.automations.messages.promptRequired':
     'Describe the recurring work before saving it.',

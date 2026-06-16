@@ -616,6 +616,8 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
   const [pendingCreatedSchedules, setPendingCreatedSchedules] = React.useState<
     readonly ScheduledDispatchSummary[]
   >([]);
+  const [localScheduleEnabledOverrides, setLocalScheduleEnabledOverrides] =
+    React.useState<ReadonlyMap<string, boolean>>(() => new Map());
   const [highlightedScheduleId, setHighlightedScheduleId] = React.useState("");
   const delayedScheduleRefreshRef = React.useRef<ReturnType<typeof setTimeout> | null>(
     null,
@@ -676,10 +678,22 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
             !locallyDeletedScheduleIds.has(trimText(schedule.scheduleId)) &&
             serviceIdToMember.has(trimText(schedule.serviceId)),
         )
+        .map((schedule) => {
+          const scheduleId = trimText(schedule.scheduleId);
+          if (!localScheduleEnabledOverrides.has(scheduleId)) {
+            return schedule;
+          }
+
+          return {
+            ...schedule,
+            enabled: localScheduleEnabledOverrides.get(scheduleId) ?? schedule.enabled,
+          };
+        })
         .sort(sortByNextFire);
     },
     [
       locallyDeletedScheduleIds,
+      localScheduleEnabledOverrides,
       pendingCreatedSchedules,
       schedulesQuery.data?.items,
       serviceIdToMember,
@@ -804,6 +818,66 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
       removeScheduleFromCache(normalizedScheduleId);
     },
     [removeScheduleFromCache],
+  );
+  React.useEffect(() => {
+    if (localScheduleEnabledOverrides.size === 0) {
+      return;
+    }
+
+    const backendSchedules = schedulesQuery.data?.items ?? [];
+    if (backendSchedules.length === 0) {
+      return;
+    }
+
+    const backendEnabledByScheduleId = new Map(
+      backendSchedules.map((schedule) => [
+        trimText(schedule.scheduleId),
+        schedule.enabled,
+      ]),
+    );
+    setLocalScheduleEnabledOverrides((current) => {
+      let changed = false;
+      const next = new Map(current);
+      for (const [scheduleId, enabled] of current) {
+        if (backendEnabledByScheduleId.get(scheduleId) === enabled) {
+          next.delete(scheduleId);
+          changed = true;
+        }
+      }
+
+      return changed ? next : current;
+    });
+  }, [
+    localScheduleEnabledOverrides,
+    schedulesQuery.data?.items,
+  ]);
+
+  const updateScheduleEnabledLocally = React.useCallback(
+    (scheduleId: string, enabled: boolean) => {
+      const normalizedScheduleId = trimText(scheduleId);
+      if (!normalizedScheduleId) {
+        return;
+      }
+
+      const updatedAt = new Date().toISOString();
+      setLocalScheduleEnabledOverrides((current) => {
+        const next = new Map(current);
+        next.set(normalizedScheduleId, enabled);
+        return next;
+      });
+      setPendingCreatedSchedules((current) =>
+        current.map((schedule) =>
+          trimText(schedule.scheduleId) === normalizedScheduleId
+            ? {
+                ...schedule,
+                enabled,
+                updatedAt,
+              }
+            : schedule,
+        ),
+      );
+    },
+    [],
   );
   const showCreatedScheduleFeedback = React.useCallback(
     ({
@@ -1002,7 +1076,16 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
         scheduleId,
         "Enabled from Team Automations",
       ),
-    onSuccess: invalidateSchedules,
+    onSuccess: (_receipt, scheduleId) => {
+      updateScheduleEnabledLocally(scheduleId, true);
+      void message.success(
+        intl.formatMessage({
+          id: "teams.automations.messages.enableSuccess",
+          defaultMessage: "Automation resumed.",
+        }),
+      );
+      scheduleDelayedRefresh();
+    },
   });
   const disableMutation = useMutation({
     mutationFn: (scheduleId: string) =>
@@ -1010,7 +1093,16 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
         scheduleId,
         "Disabled from Team Automations",
       ),
-    onSuccess: invalidateSchedules,
+    onSuccess: (_receipt, scheduleId) => {
+      updateScheduleEnabledLocally(scheduleId, false);
+      void message.success(
+        intl.formatMessage({
+          id: "teams.automations.messages.disableSuccess",
+          defaultMessage: "Automation paused.",
+        }),
+      );
+      scheduleDelayedRefresh();
+    },
   });
   const deleteMutation = useMutation({
     mutationFn: (scheduleId: string) =>

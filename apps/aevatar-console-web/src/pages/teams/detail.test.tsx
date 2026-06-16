@@ -2100,7 +2100,7 @@ describe("TeamDetailPage", () => {
     expect(await screen.findByText("Daily escalation digest")).toBeTruthy();
     expect(screen.getByText("计划")).toBeTruthy();
     expect(screen.getAllByText("运行中").length).toBeGreaterThan(0);
-    expect(screen.getByText("已暂停")).toBeTruthy();
+    expect(screen.getAllByText("已暂停").length).toBeGreaterThan(0);
     expect(screen.getByText("需要关注")).toBeTruthy();
     expect(screen.getByText("工作日 · 09:00")).toBeTruthy();
     expect(screen.getAllByText("Team Alpha Operator").length).toBeGreaterThan(0);
@@ -2210,6 +2210,54 @@ describe("TeamDetailPage", () => {
     );
     expect(screen.queryByText("Daily escalation digest")).toBeNull();
     expect(message.success).toHaveBeenCalledWith("自动化已删除。");
+  });
+
+  it("updates automation enabled state immediately after pause and resume", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?tab=automations",
+    );
+    (scheduledDispatchApi.listAll as jest.Mock).mockImplementation(async () => ({
+      items: [mockCreateScheduledDispatchSummary()],
+      nextCursor: null,
+      totalCount: 1,
+    }));
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("Daily escalation digest")).toBeTruthy();
+    expect(scheduledDispatchApi.listAll).toHaveBeenCalledTimes(1);
+    fireEvent.click(await screen.findByRole("button", { name: "暂停" }));
+
+    await waitFor(() => {
+      expect(scheduledDispatchApi.disable).toHaveBeenCalledWith(
+        "sch-alpha",
+        "Disabled from Team Automations",
+      );
+    });
+    expect(screen.getAllByText("已暂停").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "恢复" })).toBeTruthy();
+    expect(message.success).toHaveBeenCalledWith("自动化已暂停。");
+    expect(scheduledDispatchApi.listAll).toHaveBeenCalledTimes(1);
+
+    await waitFor(
+      () => {
+        expect(scheduledDispatchApi.listAll).toHaveBeenCalledTimes(2);
+      },
+      { timeout: 2_000 },
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "恢复" }));
+
+    await waitFor(() => {
+      expect(scheduledDispatchApi.enable).toHaveBeenCalledWith(
+        "sch-alpha",
+        "Enabled from Team Automations",
+      );
+    });
+    expect(screen.getAllByText("运行中").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "暂停" })).toBeTruthy();
+    expect(message.success).toHaveBeenCalledWith("自动化已恢复。");
   });
 
   it("creates member recurring work with the published service identity", async () => {
