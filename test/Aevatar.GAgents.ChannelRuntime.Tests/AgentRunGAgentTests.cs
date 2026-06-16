@@ -3681,6 +3681,7 @@ public sealed class AgentRunGAgentTests
                 request.Activity.Clone(),
                 request.ReplyToken,
                 request.ReplyTokenExpiresAtUnixMs,
+                request.RunId,
                 TimeProvider.System,
                 cardMode: _relayOptions.StreamingCardKitEnabled);
         }

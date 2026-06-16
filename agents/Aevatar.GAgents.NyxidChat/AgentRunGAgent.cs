@@ -33,7 +33,7 @@ namespace Aevatar.GAgents.NyxidChat;
 //   Old pattern: process-local Channel/Task workers owned business IO via singleton executor.
 //   New principle: actor-owned operation state (operation_id/lease_epoch/step) + typed self-continuation events; provider IO is inline async, no in-process worker queue.
 [GAgent("nyxid.chat.agent-run")]
-public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
+public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 {
     internal const long MaxRunRequestAgeMs = 5 * 60 * 1000;
 
@@ -91,6 +91,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             .On<AgentRunReplyStepStateUpdatedEvent>(ApplyReplyStepStateUpdated)
             .On<AgentRunReplyProducedEvent>(ApplyReplyProduced)
             .On<AgentRunReplyDispatchedEvent>(ApplyReplyDispatched)
+            .On<AgentRunLarkCardDeliveryChangedEvent>(ApplyLarkCardDeliveryChanged)
             .On<AgentRunDroppedEvent>(ApplyDropped)
             .On<AgentRunDropNotificationDispatchedEvent>(ApplyDropNotificationDispatched)
             .On<AgentRunFailedEvent>(ApplyFailed)
@@ -1148,6 +1149,16 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             appendedHistory,
             toolReceipts);
 
+        if (await TryCompleteCardStreamedReplyAsync(
+                request,
+                runId,
+                renderedReplyText,
+                outboundIntent,
+                appendedHistory ?? []))
+        {
+            return;
+        }
+
         await DispatchReadyEventAsync(
             request,
             runId,
@@ -1177,6 +1188,16 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     private async Task ReDispatchProducedReplyAsync(NeedsLlmReplyEvent request, string runId)
     {
         var outbound = State.ProducedOutbound;
+        if (await TryCompleteCardStreamedReplyAsync(
+                request,
+                runId,
+                State.ProducedReplyText ?? string.Empty,
+                outbound,
+                State.ProducedAppendedHistory.ToArray()))
+        {
+            return;
+        }
+
         await DispatchReadyEventAsync(
             request,
             runId,

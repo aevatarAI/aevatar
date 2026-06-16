@@ -3,16 +3,16 @@ using Aevatar.GAgents.Channel.Abstractions;
 namespace Aevatar.GAgents.Channel.Runtime;
 
 /// <summary>
-/// Runs the CardKit-streaming variant of a bot turn inside <see cref="ConversationGAgent"/>.
+/// Runs the CardKit-streaming variant of a bot turn for the owning run actor.
 /// Parallel to <see cref="IConversationTurnRunner"/> but with three distinct operations
 /// (create-and-send, interim element stream, finalize) to match Lark CardKit's lifecycle.
-/// The grain owns the per-turn <c>LarkCardStreamingState</c>; this seam only does the
+/// The run actor owns the per-turn CardKit delivery state; this seam only does the
 /// outbound call and translates the response into a runner-shaped result.
 /// </summary>
 /// <remarks>
 /// All three operations are invoked under the actor's turn-serial invariant, so the runner
 /// implementation must be safe under that single-threaded contract. The
-/// <c>sequence</c> parameter is owned by the grain (pre-incremented before each call) and
+/// <c>sequence</c> parameter is owned by the run actor (pre-incremented before each call) and
 /// passed verbatim into the CardKit API.
 /// </remarks>
 public interface IConversationCardTurnRunner

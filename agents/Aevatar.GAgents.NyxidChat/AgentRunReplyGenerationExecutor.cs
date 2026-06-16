@@ -193,7 +193,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         //   Old pattern: AgentRunReplyGenerationExecutor performs LLM/tool IO and constructs the authoritative next AgentRunReplyStepState outside the run actor.
         //   New principle: Executor returns typed IO facts only; AgentRunGAgent applies deterministic step-state transition and persists state inside actor event handling.
         var request = workItem.Request.Clone();
-        using TurnStreamingReplySink? streamingSink = TryBuildStreamingSink(request, request.TargetActorId);
+        using TurnStreamingReplySink? streamingSink = TryBuildStreamingSink(request, workItem.RunActorId, request.TargetActorId);
         var streamingState = TryBuildStreamingReplyState(streamingSink);
         var generator = RequireStepGenerator();
         var stepMetadata = AgentRunReplyStepMappers.ToDictionary(workItem.StepState.ExternalMetadata);
@@ -494,7 +494,10 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         await _actorDispatchPort.DispatchAsync(runActorId, envelope, ct).ConfigureAwait(false);
     }
 
-    private TurnStreamingReplySink? TryBuildStreamingSink(NeedsLlmReplyEvent request, string targetActorId)
+    private TurnStreamingReplySink? TryBuildStreamingSink(
+        NeedsLlmReplyEvent request,
+        string runActorId,
+        string targetActorId)
     {
         if (_relayOptions is not { StreamingRepliesEnabled: true })
             return null;
@@ -510,14 +513,16 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             return null;
 
         var cardMode = _relayOptions.StreamingCardKitEnabled;
+        var streamingTargetActorId = cardMode ? runActorId : targetActorId;
         return new TurnStreamingReplySink(
             _actorDispatchPort,
-            targetActorId,
+            streamingTargetActorId,
             request.CorrelationId,
             request.RegistrationId,
             request.Activity.Clone(),
             request.ReplyToken,
             request.ReplyTokenExpiresAtUnixMs,
+            request.RunId,
             _timeProvider,
             _logger,
             cardMode);
