@@ -1788,6 +1788,10 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (!string.IsNullOrWhiteSpace(platformMessageId))
             metadata[ChannelMetadataKeys.PlatformMessageId] = platformMessageId;
 
+        var nyxAgentApiKeyId = NormalizeOptional(activity?.TransportExtras?.NyxAgentApiKeyId);
+        if (!string.IsNullOrWhiteSpace(nyxAgentApiKeyId))
+            metadata[WorkflowRunBackgroundDeliveryMetadataKeys.BotAgentKeyId] = nyxAgentApiKeyId;
+
         // Lark cross-app outbound delivery: agent-builder consumers prefer the tenant-stable
         // union_id / chat_id captured at ingress over the relay-app-scoped open_id, so a
         // mismatch between the relay-side Lark app and the customer's outbound Lark app does

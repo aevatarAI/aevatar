@@ -73,6 +73,7 @@ public sealed class AevatarInvocationDispatcher
     private readonly IServiceRunQueryPort _serviceRunQueryPort;
     private readonly IGAgentRunTerminalQueryPort _terminalQueryPort;
     private readonly IWorkflowExecutionQueryApplicationService _workflowQueryService;
+    private readonly IWorkflowRunBackgroundDeliveryRegistrationPort? _workflowRunDeliveryRegistrationPort;
     private readonly ILogger<AevatarInvocationDispatcher> _logger;
 
     public AevatarInvocationDispatcher(
@@ -84,6 +85,7 @@ public sealed class AevatarInvocationDispatcher
         IServiceRunQueryPort serviceRunQueryPort,
         IGAgentRunTerminalQueryPort terminalQueryPort,
         IWorkflowExecutionQueryApplicationService workflowQueryService,
+        IWorkflowRunBackgroundDeliveryRegistrationPort? workflowRunDeliveryRegistrationPort = null,
         ILogger<AevatarInvocationDispatcher>? logger = null)
     {
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
@@ -94,6 +96,7 @@ public sealed class AevatarInvocationDispatcher
         _serviceRunQueryPort = serviceRunQueryPort ?? throw new ArgumentNullException(nameof(serviceRunQueryPort));
         _terminalQueryPort = terminalQueryPort ?? throw new ArgumentNullException(nameof(terminalQueryPort));
         _workflowQueryService = workflowQueryService ?? throw new ArgumentNullException(nameof(workflowQueryService));
+        _workflowRunDeliveryRegistrationPort = workflowRunDeliveryRegistrationPort;
         _logger = logger ?? NullLogger<AevatarInvocationDispatcher>.Instance;
     }
 
@@ -311,13 +314,24 @@ public sealed class AevatarInvocationDispatcher
         }
 
         var receipt = result.Receipt;
+        var streamTopic = wait == InvocationWaitMode.Stream
+            ? AevatarInvocationStreamTopics.ForActorRun(receipt.ActorId, receipt.CommandId)
+            : string.Empty;
+        if (wait == InvocationWaitMode.Stream)
+        {
+            await TryRegisterWorkflowRunBackgroundDeliveryAsync(
+                    receipt,
+                    streamTopic,
+                    AgentToolRequestContext.Current,
+                    ct)
+                .ConfigureAwait(false);
+        }
+
         return ToChatRunRequest(chatRunRequest, new InvocationToolResult
         {
             RunId = receipt.CommandId,
             Status = wait == InvocationWaitMode.Ack ? "accepted" : "streaming",
-            StreamTopic = wait == InvocationWaitMode.Stream
-                ? AevatarInvocationStreamTopics.ForActorRun(receipt.ActorId, receipt.CommandId)
-                : string.Empty,
+            StreamTopic = streamTopic,
             ActorId = receipt.ActorId,
             CommandId = receipt.CommandId,
             CorrelationId = receipt.CorrelationId,
@@ -608,6 +622,76 @@ public sealed class AevatarInvocationDispatcher
             _logger.LogWarning(ex, "Detached team invocation failed after accepted receipt was returned.");
         }
     }
+
+    private async Task TryRegisterWorkflowRunBackgroundDeliveryAsync(
+        WorkflowChatRunAcceptedReceipt receipt,
+        string streamTopic,
+        AgentToolExecutionContext? context,
+        CancellationToken ct)
+    {
+        var registration = BuildWorkflowRunDeliveryRegistration(receipt, streamTopic, context);
+        if (registration is null)
+            return;
+
+        if (_workflowRunDeliveryRegistrationPort is null)
+        {
+            _logger.LogInformation(
+                "Workflow run background delivery registration skipped because no registration port is available: actorId={ActorId} commandId={CommandId}",
+                receipt.ActorId,
+                receipt.CommandId);
+            return;
+        }
+
+        try
+        {
+            await _workflowRunDeliveryRegistrationPort.RegisterAsync(registration, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Workflow run background delivery registration failed after accepted receipt: actorId={ActorId} commandId={CommandId}",
+                receipt.ActorId,
+                receipt.CommandId);
+        }
+    }
+
+    private static WorkflowRunBackgroundDeliveryRegistration? BuildWorkflowRunDeliveryRegistration(
+        WorkflowChatRunAcceptedReceipt receipt,
+        string streamTopic,
+        AgentToolExecutionContext? context)
+    {
+        context ??= AgentToolExecutionContext.Empty;
+        var platform = Normalize(context.Channel.Platform);
+        var replyMessageId = Normalize(context.Channel.MessageId);
+        var botAgentKeyId = Normalize(TryGetExternalMetadata(context, WorkflowRunBackgroundDeliveryMetadataKeys.BotAgentKeyId)) ??
+                            Normalize(TryGetExternalMetadata(context, "nyx_agent_api_key_id"));
+        if (platform is null || replyMessageId is null || botAgentKeyId is null)
+            return null;
+
+        var platformMessageId = Normalize(context.Channel.PlatformMessageId) ??
+                                Normalize(TryGetExternalMetadata(context, "channel.platform_message_id")) ??
+                                string.Empty;
+        var registrationScopeId = Normalize(context.Channel.RegistrationScopeId) ??
+                                  Normalize(context.Caller.ScopeId) ??
+                                  string.Empty;
+        var deliveryId = $"workflow-run-delivery:{SanitizeActorIdSegment(receipt.ActorId)}:{SanitizeActorIdSegment(receipt.CommandId)}";
+        return new WorkflowRunBackgroundDeliveryRegistration(
+            DeliveryId: deliveryId,
+            WorkflowActorId: receipt.ActorId,
+            WorkflowRunId: receipt.CommandId,
+            WorkflowCommandId: receipt.CommandId,
+            WorkflowCorrelationId: receipt.CorrelationId,
+            StreamTopic: streamTopic,
+            ChannelPlatform: platform,
+            ReplyMessageId: replyMessageId,
+            PlatformMessageId: platformMessageId,
+            BotAgentKeyId: botAgentKeyId,
+            RegistrationScopeId: registrationScopeId);
+    }
+
+    private static string? TryGetExternalMetadata(AgentToolExecutionContext context, string key) =>
+        context.ExternalMetadata.TryGetValue(key, out var value) ? value : null;
 
     private StaticGAgentStreamInvocationRequest BuildStaticInvocationRequest(
         TeamEntryMemberResolution resolution,
@@ -1100,6 +1184,15 @@ public sealed class AevatarInvocationDispatcher
 
     private static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static string SanitizeActorIdSegment(string? value)
+    {
+        var normalized = Normalize(value) ?? "missing";
+        var chars = normalized
+            .Select(static c => char.IsLetterOrDigit(c) || c is '-' or '_' or '.' ? c : '-')
+            .ToArray();
+        return new string(chars);
+    }
 
     private static string? EmptyToNull(string value) =>
         string.IsNullOrWhiteSpace(value) ? null : value;

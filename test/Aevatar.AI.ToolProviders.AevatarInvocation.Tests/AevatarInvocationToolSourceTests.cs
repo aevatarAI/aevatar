@@ -753,6 +753,53 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
+    public async Task StartWorkflowForChatRun_WaitStream_ShouldRegisterBackgroundDeliveryAndAckFast()
+    {
+        var harness = new Harness();
+        harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
+            .Success(new WorkflowChatRunAcceptedReceipt("workflow-actor", "wf-main", "wf-command", "wf-correlation"));
+        var dispatcher = harness.CreateDispatcher();
+
+        using var _ = PushContext(
+            callId: "call-workflow-delivery",
+            externalMetadata: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [WorkflowRunBackgroundDeliveryMetadataKeys.BotAgentKeyId] = "bot-agent-key-1",
+            });
+        var request = BuildChatRunRequest(
+            "response-workflow",
+            "call-workflow-delivery-tool",
+            "aevatar_start_workflow",
+            """
+            {
+              "workflow_id": "wf-main",
+              "inputs": { "prompt": "run workflow" },
+              "wait": "stream"
+            }
+            """);
+
+        var result = await dispatcher.StartWorkflowForChatRunAsync(request, request.ArgumentsJson);
+
+        result.WaitMode.Should().Be(ChatRunSubRunWaitMode.Stream);
+        result.Status.Should().Be("streaming");
+        result.CompletionObserved.Should().BeFalse();
+        result.CompletionResultJson.Should().BeEmpty();
+        harness.WorkflowRunDelivery.Registrations.Should().ContainSingle();
+        var registration = harness.WorkflowRunDelivery.Registrations.Single();
+        registration.DeliveryId.Should().Be("workflow-run-delivery:workflow-actor:wf-command");
+        registration.WorkflowActorId.Should().Be("workflow-actor");
+        registration.WorkflowRunId.Should().Be("wf-command");
+        registration.WorkflowCommandId.Should().Be("wf-command");
+        registration.WorkflowCorrelationId.Should().Be("wf-correlation");
+        registration.StreamTopic.Should().Be("aevatar://actors/workflow-actor/runs/wf-command");
+        registration.ChannelPlatform.Should().Be("telegram");
+        registration.ReplyMessageId.Should().Be("message-1");
+        registration.PlatformMessageId.Should().Be("platform-message-1");
+        registration.BotAgentKeyId.Should().Be("bot-agent-key-1");
+        registration.RegistrationScopeId.Should().Be("registration-scope-1");
+    }
+
+    [Fact]
     public async Task StartWorkflow_WhenServerSetCallerCredentialIsMalformed_ShouldReturnStructuredError()
     {
         var harness = new Harness();
@@ -1894,7 +1941,8 @@ public sealed class AevatarInvocationToolSourceTests
         string callId,
         string? scopeId = "scope-1",
         string? accessToken = "access-token",
-        AgentWorkflowRuntimeContext? workflowRuntime = null) =>
+        AgentWorkflowRuntimeContext? workflowRuntime = null,
+        IReadOnlyDictionary<string, string>? externalMetadata = null) =>
         AgentToolContextScope.Push(new AgentToolExecutionContext(
             new AgentToolRequestIdentity("request-1", callId),
             new AgentToolCredentials(accessToken, "org-token", "sender-token"),
@@ -1905,10 +1953,23 @@ public sealed class AevatarInvocationToolSourceTests
             new AgentToolConnectedServicesContext("""{"service":"ctx"}"""),
             workflowRuntime ?? AgentWorkflowRuntimeContext.Empty,
             AgentSkillRecoveryContext.Empty,
-            new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["external"] = "value",
-            }));
+            BuildExternalMetadata(externalMetadata)));
+
+    private static IReadOnlyDictionary<string, string> BuildExternalMetadata(
+        IReadOnlyDictionary<string, string>? externalMetadata)
+    {
+        var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["external"] = "value",
+        };
+        if (externalMetadata is not null)
+        {
+            foreach (var pair in externalMetadata)
+                metadata[pair.Key] = pair.Value;
+        }
+
+        return metadata;
+    }
 
     private static ChatRunToolCompletionRequest BuildChatRunRequest(
         string responseId,
@@ -1968,6 +2029,7 @@ public sealed class AevatarInvocationToolSourceTests
         public RecordingTeamEntryMemberResolver TeamResolver { get; } = new();
         public RecordingStaticGAgentInvocationPort TeamInvocation { get; } = new();
         public RecordingWorkflowDispatchService WorkflowDispatch { get; } = new();
+        public RecordingWorkflowRunBackgroundDeliveryRegistrationPort WorkflowRunDelivery { get; } = new();
         public RecordingServiceRunQueryPort ServiceRunQuery { get; } = new();
         public RecordingTerminalQueryPort TerminalQuery { get; } = new();
         public StubWorkflowExecutionQueryService WorkflowQuery { get; } = new();
@@ -1982,7 +2044,8 @@ public sealed class AevatarInvocationToolSourceTests
                 WorkflowDispatch,
                 ServiceRunQuery,
                 TerminalQuery,
-                WorkflowQuery);
+                WorkflowQuery,
+                WorkflowRunDelivery);
 
         public void RegisterDependencies(IServiceCollection services)
         {
@@ -1995,6 +2058,7 @@ public sealed class AevatarInvocationToolSourceTests
             services.AddSingleton<IGAgentRunTerminalQueryPort>(TerminalQuery);
             services.AddSingleton<IWorkflowExecutionQueryApplicationService>(WorkflowQuery);
             services.AddSingleton<IWorkflowRunBindingReader>(RunBindingReader);
+            services.AddSingleton<IWorkflowRunBackgroundDeliveryRegistrationPort>(WorkflowRunDelivery);
         }
 
         public async Task<IAgentTool> DiscoverToolAsync(string toolName)
@@ -2134,6 +2198,33 @@ public sealed class AevatarInvocationToolSourceTests
         {
             Command = command;
             return Task.FromResult(Result);
+        }
+    }
+
+    private sealed class RecordingWorkflowRunBackgroundDeliveryRegistrationPort
+        : IWorkflowRunBackgroundDeliveryRegistrationPort
+    {
+        public List<WorkflowRunBackgroundDeliveryRegistration> Registrations { get; } = [];
+
+        public Task<WorkflowRunBackgroundDeliveryReceipt> RegisterAsync(
+            WorkflowRunBackgroundDeliveryRegistration registration,
+            CancellationToken ct = default)
+        {
+            Registrations.Add(registration);
+            return Task.FromResult(new WorkflowRunBackgroundDeliveryReceipt
+            {
+                DeliveryActorId = registration.DeliveryId,
+                WorkflowActorId = registration.WorkflowActorId,
+                WorkflowRunId = registration.WorkflowRunId,
+                WorkflowCommandId = registration.WorkflowCommandId,
+                WorkflowCorrelationId = registration.WorkflowCorrelationId,
+                StreamTopic = registration.StreamTopic,
+                ChannelPlatform = registration.ChannelPlatform,
+                ReplyMessageId = registration.ReplyMessageId,
+                PlatformMessageId = registration.PlatformMessageId,
+                BotAgentKeyId = registration.BotAgentKeyId,
+                RegistrationScopeId = registration.RegistrationScopeId,
+            });
         }
     }
 

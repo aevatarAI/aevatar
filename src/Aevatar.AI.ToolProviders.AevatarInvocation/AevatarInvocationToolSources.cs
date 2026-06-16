@@ -128,7 +128,8 @@ internal sealed class StartWorkflowTool : IAevatarInvocationTool
 
     public string Description =>
         "Start an Aevatar workflow by workflow_id with typed inputs. " +
-        "When use_skill returns inline workflow_yamls, pass that bundle in workflow_yamls instead of treating the YAMLs as ordinary text.";
+        "When use_skill returns inline workflow_yamls, pass that bundle in workflow_yamls instead of treating the YAMLs as ordinary text. " +
+        "Use wait=stream for channel conversations so terminal completion can be delivered asynchronously to the same reply target.";
 
     public string ParametersSchema => AevatarInvocationToolSchemas.StartWorkflow;
 
@@ -139,15 +140,12 @@ internal sealed class StartWorkflowTool : IAevatarInvocationTool
 
     public AgentToolReceipt? CreateSuccessReceipt(string callId, string toolName, string resultJson)
     {
-        var workflowRuntime = AgentToolRequestContext.Current?.WorkflowRuntime ?? AgentWorkflowRuntimeContext.Empty;
-        if (!workflowRuntime.HasManagedParent)
-            return null;
-
         var invocation = ParseInvocationToolResult(resultJson);
-        if (invocation == null || !IsAcceptedManagedWorkflowStart(invocation))
+        if (invocation == null)
             return null;
 
-        return new AgentToolReceipt
+        var workflowRuntime = AgentToolRequestContext.Current?.WorkflowRuntime ?? AgentWorkflowRuntimeContext.Empty;
+        var receipt = new AgentToolReceipt
         {
             CallId = callId ?? string.Empty,
             ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
@@ -155,7 +153,10 @@ internal sealed class StartWorkflowTool : IAevatarInvocationTool
             ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
             SideEffectKind = SideEffectKind,
             ResultJson = resultJson ?? string.Empty,
-            ManagedWorkflowHandoff = new ManagedWorkflowHandoffReceipt
+        };
+        if (workflowRuntime.HasManagedParent && IsAcceptedManagedWorkflowStart(invocation))
+        {
+            receipt.ManagedWorkflowHandoff = new ManagedWorkflowHandoffReceipt
             {
                 ParentActorId = workflowRuntime.ParentActorId?.Trim() ?? string.Empty,
                 ParentRunId = workflowRuntime.ParentRunId?.Trim() ?? string.Empty,
@@ -163,8 +164,15 @@ internal sealed class StartWorkflowTool : IAevatarInvocationTool
                 InvocationId = invocation.RunId,
                 ChildRunId = invocation.RunId,
                 StreamTopic = invocation.StreamTopic,
-            },
-        };
+            };
+        }
+
+        if (invocation.WorkflowRunDelivery is not null)
+            receipt.WorkflowRunDelivery = invocation.WorkflowRunDelivery.Clone();
+
+        return receipt.ManagedWorkflowHandoff is not null || receipt.WorkflowRunDelivery is not null
+            ? receipt
+            : null;
     }
 
     private static ManagedWorkflowStartResult? ParseInvocationToolResult(string resultJson)
@@ -180,12 +188,76 @@ internal sealed class StartWorkflowTool : IAevatarInvocationTool
                 ReadString(root, "run_id"),
                 ReadString(root, "status"),
                 ReadString(root, "actor_id"),
-                ReadString(root, "stream_topic"));
+                ReadString(root, "stream_topic"),
+                TryBuildWorkflowRunDeliveryReceipt(root));
         }
         catch (JsonException)
         {
             return null;
         }
+    }
+
+    private static WorkflowRunBackgroundDeliveryReceipt? TryBuildWorkflowRunDeliveryReceipt(JsonElement root)
+    {
+        if (!string.Equals(ReadString(root, "wait"), "stream", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var actorId = ReadString(root, "actor_id");
+        var commandId = ReadString(root, "command_id");
+        var streamTopic = ReadString(root, "stream_topic");
+        var context = AgentToolRequestContext.Current ?? AgentToolExecutionContext.Empty;
+        var platform = Normalize(context.Channel.Platform);
+        var replyMessageId = Normalize(context.Channel.MessageId);
+        var botAgentKeyId = Normalize(TryGetExternalMetadata(context, WorkflowRunBackgroundDeliveryMetadataKeys.BotAgentKeyId)) ??
+                            Normalize(TryGetExternalMetadata(context, "nyx_agent_api_key_id"));
+        if (string.IsNullOrWhiteSpace(actorId) ||
+            string.IsNullOrWhiteSpace(commandId) ||
+            platform is null ||
+            replyMessageId is null ||
+            botAgentKeyId is null)
+        {
+            return null;
+        }
+
+        return new WorkflowRunBackgroundDeliveryReceipt
+        {
+            DeliveryActorId = WorkflowRunDeliveryId(actorId, commandId),
+            WorkflowActorId = actorId,
+            WorkflowRunId = commandId,
+            WorkflowCommandId = commandId,
+            WorkflowCorrelationId = ReadString(root, "correlation_id"),
+            StreamTopic = streamTopic,
+            ChannelPlatform = platform,
+            ReplyMessageId = replyMessageId,
+            PlatformMessageId = Normalize(context.Channel.PlatformMessageId) ??
+                                Normalize(TryGetExternalMetadata(context, "channel.platform_message_id")) ??
+                                string.Empty,
+            BotAgentKeyId = botAgentKeyId,
+            RegistrationScopeId = Normalize(context.Channel.RegistrationScopeId) ??
+                                  Normalize(context.Caller.ScopeId) ??
+                                  string.Empty,
+        };
+    }
+
+    private static string? TryGetExternalMetadata(AgentToolExecutionContext context, string key) =>
+        context.ExternalMetadata.TryGetValue(key, out var value) ? value : null;
+
+    private static string? Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static string WorkflowRunDeliveryId(string workflowActorId, string workflowCommandId)
+    {
+        var actor = SanitizeSegment(workflowActorId);
+        var command = SanitizeSegment(workflowCommandId);
+        return $"workflow-run-delivery:{actor}:{command}";
+    }
+
+    private static string SanitizeSegment(string value)
+    {
+        var chars = value.Trim()
+            .Select(static c => char.IsLetterOrDigit(c) || c is '-' or '_' or '.' ? c : '-')
+            .ToArray();
+        return new string(chars);
     }
 
     private static string ReadString(JsonElement root, string propertyName) =>
@@ -202,7 +274,8 @@ internal sealed class StartWorkflowTool : IAevatarInvocationTool
         string RunId,
         string Status,
         string ActorId,
-        string StreamTopic);
+        string StreamTopic,
+        WorkflowRunBackgroundDeliveryReceipt? WorkflowRunDelivery);
 }
 
 internal sealed class ObserveRunTool : IAevatarInvocationTool

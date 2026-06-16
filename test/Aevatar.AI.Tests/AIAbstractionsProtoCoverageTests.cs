@@ -482,7 +482,6 @@ public sealed class AIAbstractionsProtoCoverageTests
         ((int)AgentToolReceiptApprovalMode.NeverRequire).Should().Be(1);
         ((int)AgentToolReceiptApprovalMode.AlwaysRequire).Should().Be(2);
         ((int)AgentToolReceiptApprovalMode.Auto).Should().Be(3);
-
         AgentToolReceipt.Descriptor.Fields.InFieldNumberOrder()
             .Select(field => (field.FieldNumber, field.Name))
             .Should()
@@ -501,7 +500,8 @@ public sealed class AIAbstractionsProtoCoverageTests
                 (12, "error_code"),
                 (13, "error_message"),
                 (14, "result_json"),
-                (15, "managed_workflow_handoff"));
+                (15, "managed_workflow_handoff"),
+                (16, "workflow_run_delivery"));
 
         AgentToolReceipt.Descriptor.Fields.InFieldNumberOrder()
             .Select(field => field.Name)

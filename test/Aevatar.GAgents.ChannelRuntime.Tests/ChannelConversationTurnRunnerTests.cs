@@ -169,6 +169,40 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunInboundAsync_ShouldExposeNyxAgentApiKeyIdForWorkflowBackgroundDelivery()
+    {
+        var registration = BuildRegistrationEntry();
+        registration.NyxAgentApiKeyId = "nyx-agent-key-1";
+        var registrationQueryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        var registrationByNyxIdentityPort = Substitute.For<IChannelBotRegistrationQueryByNyxIdentityPort>();
+        registrationByNyxIdentityPort.ListByNyxAgentApiKeyIdAsync("nyx-agent-key-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>([registration]));
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            registrationQueryByNyxIdentityPort: registrationByNyxIdentityPort);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "hello",
+                "msg-bg-delivery-1",
+                botId: "missing-reg",
+                transportExtras: new TransportExtras
+                {
+                    NyxPlatform = "lark",
+                    NyxAgentApiKeyId = "nyx-agent-key-1",
+                }),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest!.ToolContext);
+        toolContext.ExternalMetadata.Should()
+            .Contain(WorkflowRunBackgroundDeliveryMetadataKeys.BotAgentKeyId, "nyx-agent-key-1");
+    }
+
+    [Fact]
     public async Task RunInboundAsync_ShouldIncludePlatformMessageIdInLlmMetadata_WhenAvailable()
     {
         var registrationQueryPort = BuildRegistrationQueryPort();

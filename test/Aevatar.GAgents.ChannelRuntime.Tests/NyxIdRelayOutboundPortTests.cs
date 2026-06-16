@@ -58,6 +58,31 @@ public sealed class NyxIdRelayOutboundPortTests
     }
 
     [Fact]
+    public async Task SendWithAgentKeyAsync_ShouldUseLongLivedAgentKeyAsBearer()
+    {
+        var handler = new RecordingJsonHandler();
+        var port = CreatePort(handler, new StubComposer("slack"));
+
+        var result = await port.SendWithAgentKeyAsync(
+            "slack",
+            BuildConversation(),
+            new MessageContent { Text = "workflow done" },
+            new OutboundDeliveryContext
+            {
+                ReplyMessageId = "msg-1",
+            },
+            "bot-agent-key-1",
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        handler.Requests.Should().ContainSingle();
+        handler.Requests[0].Path.Should().Be("/api/v1/channel-relay/reply");
+        handler.Requests[0].Authorization.Should().Be("Bearer bot-agent-key-1");
+        handler.Requests[0].Body.Should().Contain("\"message_id\":\"msg-1\"");
+        handler.Requests[0].Body.Should().Contain("\"text\":\"rendered:workflow done\"");
+    }
+
+    [Fact]
     public async Task SendAsync_LarkInteractiveContent_ShouldUseComposerPlainText()
     {
         var handler = new RecordingJsonHandler();
