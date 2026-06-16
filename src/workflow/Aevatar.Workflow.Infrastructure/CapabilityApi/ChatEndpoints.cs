@@ -22,6 +22,10 @@ namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 public static class WorkflowCapabilityEndpoints
 {
     private const string WorkflowRuntimeDefaultsSectionName = "WorkflowRuntimeDefaults";
+    private static readonly WorkflowMultipartChatRequestParseError ChatPostUnsupportedMediaType = new(
+        StatusCodes.Status415UnsupportedMediaType,
+        "UNSUPPORTED_MEDIA_TYPE",
+        "Content-Type must be application/json or multipart/form-data.");
 
     public static IEndpointRouteBuilder MapWorkflowCapabilityEndpoints(this IEndpointRouteBuilder app)
     {
@@ -80,7 +84,7 @@ public static class WorkflowCapabilityEndpoints
         {
             if (!IsJson(http.Request.ContentType))
             {
-                var error = WorkflowMultipartChatRequestParseError.UnsupportedMediaType;
+                var error = ChatPostUnsupportedMediaType;
                 await WriteJsonErrorResponseAsync(http, error.StatusCode, error.Code, error.Message, ct);
                 return;
             }

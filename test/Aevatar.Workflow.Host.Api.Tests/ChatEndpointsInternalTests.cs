@@ -810,6 +810,7 @@ public sealed class ChatEndpointsInternalTests
         var body = await ReadBodyAsync(http.Response);
         http.Response.StatusCode.Should().Be(StatusCodes.Status415UnsupportedMediaType);
         body.Should().Contain("UNSUPPORTED_MEDIA_TYPE");
+        body.Should().Contain("Content-Type must be application/json or multipart/form-data.");
     }
 
     [Fact]

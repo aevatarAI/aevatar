@@ -52,6 +52,60 @@ public sealed class ChatFormRunRequestParserTests
     }
 
     [Fact]
+    public async Task ParseAsync_ShouldMergePayloadAndLetScalarFieldsOverridePayloadValues()
+    {
+        var ingressPort = new RecordingWorkflowFileIngressPort();
+        var parser = CreateParser(ingressPort);
+        var http = CreateMultipartHttpContext(
+            new Dictionary<string, StringValues>
+            {
+                ["payload"] = """
+                {
+                  "prompt": "payload prompt",
+                  "workflow": "payload-workflow",
+                  "sessionId": "payload-session",
+                  "scopeId": "payload-scope",
+                  "workflowYaml": "payload-yaml",
+                  "workflowYamls": ["payload-root-yaml"],
+                  "inputParts": [
+                    {
+                      "type": "text",
+                      "text": "payload text"
+                    }
+                  ]
+                }
+                """,
+                ["prompt"] = "form prompt",
+                ["workflow"] = "form-workflow",
+                ["sessionId"] = "form-session",
+                ["scopeId"] = "form-scope",
+                ["workflowYaml"] = "form-yaml",
+                ["workflowYamls"] = new StringValues(["form-root-yaml", "form-helper-yaml"]),
+            },
+            [CreateFormFile("file", "cat.png", "image/png", "hello")]);
+
+        var result = await parser.ParseAsync(http, CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        result.Input.Should().NotBeNull();
+        result.Input!.Prompt.Should().Be("form prompt");
+        result.Input.Workflow.Should().Be("form-workflow");
+        result.Input.SessionId.Should().Be("form-session");
+        result.Input.ScopeId.Should().Be("form-scope");
+        result.Input.WorkflowYaml.Should().Be("form-yaml");
+        result.Input.WorkflowYamls.Should().Equal("form-root-yaml", "form-helper-yaml");
+        result.Input.InputParts.Should().HaveCount(2);
+        result.Input.InputParts![0].Type.Should().Be("text");
+        result.Input.InputParts[0].Text.Should().Be("payload text");
+        var uploadedPart = result.Input.InputParts[1];
+        uploadedPart.Type.Should().Be("image");
+        uploadedPart.FileRef.Should().NotBeNull();
+        uploadedPart.FileRef!.ArtifactId.Should().Be("workflow-file://file-1");
+        ingressPort.Requests.Should().ContainSingle();
+        ingressPort.Requests[0].OwnerScopeId.Should().Be("form-scope");
+    }
+
+    [Fact]
     public async Task ParseAsync_ShouldRejectRequestWithoutFile()
     {
         var ingressPort = new RecordingWorkflowFileIngressPort();
@@ -95,6 +149,53 @@ public sealed class ChatFormRunRequestParserTests
     }
 
     [Fact]
+    public async Task ParseAsync_ShouldRejectMismatchedFileFieldName()
+    {
+        var ingressPort = new RecordingWorkflowFileIngressPort();
+        var parser = CreateParser(ingressPort);
+        var http = CreateMultipartHttpContext(
+            new Dictionary<string, string>
+            {
+                ["prompt"] = "hello",
+            },
+            [CreateFormFile("upload", "cat.png", "image/png", "hello")]);
+
+        var result = await parser.ParseAsync(http, CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        result.Code.Should().Be("INVALID_FILE_INPUT");
+        ingressPort.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ParseAsync_ShouldAcceptConfiguredFileFieldName()
+    {
+        var ingressPort = new RecordingWorkflowFileIngressPort();
+        var parser = CreateParser(
+            ingressPort,
+            formOptions: new WorkflowFormFileIngressOptions
+            {
+                FileFieldName = "upload",
+            });
+        var http = CreateMultipartHttpContext(
+            new Dictionary<string, string>
+            {
+                ["prompt"] = "hello",
+            },
+            [CreateFormFile("upload", "cat.png", "image/png", "hello")]);
+
+        var result = await parser.ParseAsync(http, CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        ingressPort.Requests.Should().ContainSingle();
+        ingressPort.Requests[0].FileName.Should().Be("cat.png");
+        result.Input.Should().NotBeNull();
+        result.Input!.InputParts.Should().ContainSingle()
+            .Which.FileRef.Should().NotBeNull();
+    }
+
+    [Fact]
     public async Task ParseAsync_ShouldRejectUnsupportedMediaType()
     {
         var ingressPort = new RecordingWorkflowFileIngressPort();
@@ -112,6 +213,30 @@ public sealed class ChatFormRunRequestParserTests
         result.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
         result.Code.Should().Be("INVALID_FILE_INPUT");
         ingressPort.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ParseAsync_ShouldIngestAudioUploadAsAudioInputPart()
+    {
+        var ingressPort = new RecordingWorkflowFileIngressPort();
+        var parser = CreateParser(ingressPort);
+        var http = CreateMultipartHttpContext(
+            new Dictionary<string, string>
+            {
+                ["prompt"] = "transcribe this",
+            },
+            [CreateFormFile("file", "voice.mp3", "audio/mpeg", "hello")]);
+
+        var result = await parser.ParseAsync(http, CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        ingressPort.Requests.Should().ContainSingle();
+        ingressPort.Requests[0].MediaType.Should().Be("audio/mpeg");
+        result.Input.Should().NotBeNull();
+        var part = result.Input!.InputParts.Should().ContainSingle().Which;
+        part.Type.Should().Be("audio");
+        part.FileRef.Should().NotBeNull();
+        part.FileRef!.MediaType.Should().Be("audio/mpeg");
     }
 
     [Fact]
@@ -134,6 +259,26 @@ public sealed class ChatFormRunRequestParserTests
         result.Succeeded.Should().BeFalse();
         result.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
         result.Code.Should().Be("INVALID_FILE_INPUT");
+        ingressPort.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ParseAsync_ShouldRejectMalformedPayloadWithoutIngestingFile()
+    {
+        var ingressPort = new RecordingWorkflowFileIngressPort();
+        var parser = CreateParser(ingressPort);
+        var http = CreateMultipartHttpContext(
+            new Dictionary<string, string>
+            {
+                ["payload"] = """{ "prompt": """,
+            },
+            [CreateFormFile("file", "cat.png", "image/png", "hello")]);
+
+        var result = await parser.ParseAsync(http, CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        result.Code.Should().Be("INVALID_CHAT_INPUT");
         ingressPort.Requests.Should().BeEmpty();
     }
 
@@ -172,14 +317,28 @@ public sealed class ChatFormRunRequestParserTests
 
     private static WorkflowMultipartChatRequestParser CreateParser(
         IWorkflowFileIngressPort ingressPort,
-        WorkflowMultipartFileIngressOptions? options = null) =>
+        WorkflowMultipartFileIngressOptions? options = null,
+        WorkflowFormFileIngressOptions? formOptions = null) =>
         new(
             ingressPort,
             new ChatFormRunRequestParser(),
-            Options.Create(options ?? new WorkflowMultipartFileIngressOptions()));
+            Options.Create(options ?? new WorkflowMultipartFileIngressOptions()),
+            Options.Create(formOptions ?? new WorkflowFormFileIngressOptions()));
 
     private static DefaultHttpContext CreateMultipartHttpContext(
         IDictionary<string, string> fields,
+        IReadOnlyList<IFormFile> files)
+    {
+        var stringValues = fields.ToDictionary(
+            static pair => pair.Key,
+            static pair => new StringValues(pair.Value),
+            StringComparer.Ordinal);
+
+        return CreateMultipartHttpContext(stringValues, files);
+    }
+
+    private static DefaultHttpContext CreateMultipartHttpContext(
+        IDictionary<string, StringValues> fields,
         IReadOnlyList<IFormFile> files)
     {
         var http = new DefaultHttpContext();
@@ -187,15 +346,11 @@ public sealed class ChatFormRunRequestParserTests
         var formFiles = new FormFileCollection();
         foreach (var file in files)
             formFiles.Add(file);
-        http.Features.Set<IFormFeature>(new FormFeature(new FormCollection(ToFormFields(fields), formFiles)));
+        http.Features.Set<IFormFeature>(new FormFeature(new FormCollection(
+            new Dictionary<string, StringValues>(fields, StringComparer.Ordinal),
+            formFiles)));
         return http;
     }
-
-    private static Dictionary<string, StringValues> ToFormFields(IDictionary<string, string> fields) =>
-        fields.ToDictionary(
-            static pair => pair.Key,
-            static pair => new StringValues(pair.Value),
-            StringComparer.Ordinal);
 
     private static IFormFile CreateFormFile(
         string fieldName,
