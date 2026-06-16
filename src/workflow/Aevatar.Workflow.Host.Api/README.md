@@ -23,6 +23,11 @@
 
 ## `/api/chat` 入参速查
 
+`POST /api/chat` 支持两种 producer：
+
+- `application/json`：直接提交 `ChatInput` JSON。
+- `multipart/form-data`：提交一个名为 `file` 的文件，并可用 `payload` 字段携带 `ChatInput` JSON，或用 `prompt`、`workflow`、`sessionId`、`scopeId`、`workflowYaml`、`workflowYamls` 表单字段覆盖对应输入。
+
 | 场景 | 示例 |
 |------|------|
 | 按名称加载已注册 workflow（新建 Actor） | `{ "prompt": "...", "workflow": "publish_pipeline" }` |
@@ -32,6 +37,7 @@
 | inline 提交 workflow YAML bundle（新建 Actor） | `{ "prompt": "...", "workflowYamls": ["name: root\\nroles: ...\\nsteps: ..."] }` |
 | 指定 Actor + inline YAML bundle | `{ "prompt": "...", "source": { "kind": "inline_yaml_bundle", "inlineBundle": { "actorId": "actor-123", "yamlDocuments": [{ "yaml": "..." }] } } }` |
 | `workflow` + `workflowYamls` 同传 | 固定以 `workflowYamls` 路径为准，`workflow` 被忽略 |
+| 表单上传文件并启动 run | `multipart/form-data`：`file=@cat.png;type=image/png`、`prompt=describe this`、`workflow=direct` |
 
 常见错误码：
 
@@ -59,6 +65,7 @@
 - `resume/signal` 也复用同一条骨架，Host 只依赖对应的 `ICommandDispatchService<...>`，不再直接注入 `IActorRuntime/IActorDispatchPort`。
 - Webhook ingress 只在 Host/Adapter 处理 raw JSON、HMAC 与 binding mapping；应用层接收 typed `WorkflowExternalIngressContext`，防重放依赖 `IWorkflowWebhookReplayStore`，生产启用但缺少 durable store 时 fail closed。
 - Workflow file tools 只通过 workflow tool source 暴露：`document_extract` 读取 artifact store 中的 typed file ref 并返回 bounded text；`workflow_file_submit` 只提交到固定 Lark Drive media 或 Lark approval file upload 目标，结果只包含 `file_token`/`file_code` 等 typed facts，不回显 bytes/base64。
+- `multipart/form-data` 文件上传只在 Host/API 边界读取文件 bytes；Host 先校验 caller credential、表单 shape、文件大小与媒体类型，再通过 `IWorkflowFileIngressPort` 写入 artifact store。后续 `WorkflowChatRunRequest` 只携带 typed `WorkflowFileRef` input part，`SourceKind=FormUpload`，不把 bytes/base64 带入 actor-facing command、state、readmodel 或日志。
 - 命令最终会被包装成 `EventEnvelope`；目标 Actor 的获取/创建由 `IActorRuntime` 负责，envelope 投递由 `IActorDispatchPort` 完成，CQRS 侧由 `ActorCommandTargetDispatcher` 承接 target dispatch。
 - 这里的 `EventEnvelope` 是 runtime message envelope，不等于 Event Sourcing 的领域事件记录。
 - 命令主链路不额外经过 ingress queue/stream；stream 仅用于 actor envelope 的投影与实时输出。

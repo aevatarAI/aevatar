@@ -45,6 +45,12 @@ public static class WorkflowCapabilityServiceCollectionExtensions
         services.AddWorkflowScheduleExtensions();
         services.AddOptions<WorkflowWebhookIngressOptions>()
             .Bind(configuration.GetSection(WorkflowWebhookIngressOptions.SectionName));
+        services.AddOptions<WorkflowMultipartFileIngressOptions>()
+            .Bind(configuration.GetSection(WorkflowMultipartFileIngressOptions.SectionName));
+        services.AddOptions<WorkflowFormFileIngressOptions>()
+            .Bind(configuration.GetSection(WorkflowFormFileIngressOptions.SectionName));
+        services.TryAddSingleton<ChatFormRunRequestParser>();
+        services.TryAddSingleton<WorkflowMultipartChatRequestParser>();
         services.TryAddSingleton<WorkflowWebhookIngressRequestBuilder>();
         var webhookReplayRedisConnectionString = configuration[$"{WorkflowWebhookIngressOptions.SectionName}:RedisConnectionString"];
         if (!string.IsNullOrWhiteSpace(webhookReplayRedisConnectionString))
