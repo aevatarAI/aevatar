@@ -230,6 +230,68 @@ public sealed class SkillRunnerStreamingReplySinkTests
     }
 
     [Fact]
+    public async Task MidStreamEditCapReached_SealsMessage_FinalizePostsCompleteTextAsFreshMessage()
+    {
+        // Lark caps the total number of edits per message (lark_code=230072). The old code kept
+        // PUT-editing past the cap (a 155-edit storm in prod 2026-06-15) and the final edit threw,
+        // failing the run → MaxRetryAttempts re-fire → a brand-new digest message each loop = spam.
+        // New behaviour: seal on 230072, suppress further mid-stream edits, and deliver the
+        // complete text as ONE fresh POST at finalize so the run COMPLETES (no throw → no retry).
+        var editCapReached =
+            """{"code":230072,"msg":"The message has reached the number of times it can be edited."}""";
+        var handler = new SequencedHandler(
+            OkSendResponse,                                                          // initial POST -> om_initial
+            editCapReached,                                                          // first edit -> 230072 (cap)
+            """{"code":0,"msg":"success","data":{"message_id":"om_final"}}""");      // finalize -> fresh POST
+
+        var sink = CreateSink(handler);
+
+        await sink.OnDeltaAsync("chunk one", CancellationToken.None);                // POST om_initial
+        await sink.OnDeltaAsync("chunk one two", CancellationToken.None);           // PUT -> 230072 -> seal
+        await sink.OnDeltaAsync("chunk one two three", CancellationToken.None);     // sealed -> no request
+        await sink.FinalizeAsync("chunk one two three FINAL", CancellationToken.None); // fresh POST
+
+        handler.Requests.Should().HaveCount(3, "sealed mid-stream snapshot sends nothing; finalize posts a fresh message");
+        handler.Requests[0].Method.Should().Be(HttpMethod.Post);
+        handler.Requests[1].Method.Should().Be(HttpMethod.Put);
+        handler.Requests[2].Method.Should().Be(HttpMethod.Post);
+        handler.Requests[2].RequestUri!.AbsolutePath
+            .Should().Be("/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages", "the fresh delivery is a new message, not an edit");
+        using var body = JsonDocument.Parse(handler.Bodies[2]!);
+        var contentString = body.RootElement.GetProperty("content").GetString();
+        using var content = JsonDocument.Parse(contentString!);
+        content.RootElement.GetProperty("text").GetString().Should().Be("chunk one two three FINAL");
+    }
+
+    [Fact]
+    public async Task FinalEdit_EditCapReached_PostsCompleteTextAsFreshMessage_DoesNotThrow()
+    {
+        // Edit-cap (230072) at finalize must NOT throw (throwing failed the run → re-fire → spam).
+        // Distinct from FinalEdit_LarkRejection_ThrowsRejectionMessage: other final-edit codes
+        // (e.g. 230002 bot-not-in-chat) still throw — only the terminal edit-count cap falls back
+        // to a fresh POST so the user still gets the complete report.
+        var editCapReached =
+            """{"code":230072,"msg":"The message has reached the number of times it can be edited."}""";
+        var handler = new SequencedHandler(
+            OkSendResponse,                                                          // initial POST
+            editCapReached,                                                          // FINAL edit -> 230072
+            """{"code":0,"msg":"success","data":{"message_id":"om_final"}}""");      // fallback fresh POST
+
+        var sink = CreateSink(handler);
+
+        await sink.OnDeltaAsync("chunk one", CancellationToken.None);
+        await sink.FinalizeAsync("chunk one final", CancellationToken.None);         // edit 230072 -> fresh POST
+
+        handler.Requests.Should().HaveCount(3);
+        handler.Requests[1].Method.Should().Be(HttpMethod.Put);
+        handler.Requests[2].Method.Should().Be(HttpMethod.Post);
+        using var body = JsonDocument.Parse(handler.Bodies[2]!);
+        var contentString = body.RootElement.GetProperty("content").GetString();
+        using var content = JsonDocument.Parse(contentString!);
+        content.RootElement.GetProperty("text").GetString().Should().Be("chunk one final");
+    }
+
+    [Fact]
     public async Task TruncatesPayloadAtLarkBodyLimit_WithMarker()
     {
         var handler = new SequencedHandler(OkSendResponse);

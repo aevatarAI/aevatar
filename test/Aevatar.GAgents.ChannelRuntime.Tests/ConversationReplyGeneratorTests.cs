@@ -3,6 +3,8 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.AI.ToolProviders.Skills;
+using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgents.Channel.Abstractions;
 using FluentAssertions;
 using Xunit;
@@ -167,6 +169,51 @@ public sealed class ConversationReplyGeneratorTests
         providerFactory.Requests[2].Messages
             .Should()
             .NotContain(message => message.Content == "first user" || message.Content == "first assistant");
+    }
+
+    // Conversations poisoned before AgentRunGAgent stopped persisting reasoning-only
+    // turns still carry assistant entries with no wire-visible content. Replay must
+    // skip them: providers drop bare reasoning on assistant history messages, so such
+    // entries degenerate into empty assistant turns that corrupt every later request.
+    [Fact]
+    public async Task GenerateReplyAsync_WithEmptyAssistantHistoryEntries_SkipsThemOnReplay()
+    {
+        var providerFactory = new SequentialResponseProviderFactory("recovered assistant");
+        var generator = new NyxIdConversationReplyGenerator(providerFactory);
+
+        var poisonedHistory = new[]
+        {
+            new ConversationHistoryEntry { Role = "user", Content = "建一个定时任务" },
+            new ConversationHistoryEntry { Role = "assistant", ReasoningContent = "reasoning only, no answer" },
+            new ConversationHistoryEntry { Role = "user", Content = "怎么没反应" },
+            new ConversationHistoryEntry { Role = "assistant", Content = "我已经收到了" },
+        };
+
+        await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "lark-msg-poisoned",
+                ChannelId = new ChannelId { Value = "lark" },
+                Conversation = new ConversationReference { CanonicalKey = "lark:scope-a:chat-poisoned" },
+                Content = new MessageContent { Text = "帮我建一个定时任务，每天早上9点提醒我喝水" },
+            },
+            new Dictionary<string, string>(),
+            llmControl: null,
+            toolContext: null,
+            priorHistory: poisonedHistory,
+            streamingSink: null,
+            CancellationToken.None);
+
+        providerFactory.Requests.Should().NotBeEmpty();
+        var messages = providerFactory.Requests[0].Messages;
+        messages.Should().NotContain(
+            message => message.Role == "assistant" &&
+                       string.IsNullOrEmpty(message.Content) &&
+                       (message.ToolCalls == null || message.ToolCalls.Count == 0),
+            "assistant history entries without wire-visible content must be skipped on replay");
+        messages.Should().Contain(message => message.Role == "assistant" && message.Content == "我已经收到了");
+        messages.Should().Contain(message => message.Role == "user" && message.Content == "建一个定时任务");
+        messages.Should().Contain(message => message.Role == "user" && message.Content == "怎么没反应");
     }
 
     [Fact]
@@ -837,6 +884,61 @@ public sealed class ConversationReplyGeneratorTests
             "aevatar_observe_run",
         ]);
         request.Tools!.Select(static tool => tool.Name).Should().NotContain("aevatar_invoke_workflow");
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_WhenUseSkillMountsWorkflows_ShouldUseRegisteredScopedToolWithoutApprovalDenial()
+    {
+        var catalog = new LocalSkillCatalog();
+        catalog.Register(new SkillDefinition
+        {
+            Name = "demo-dinner-workflow-skill",
+            Description = "Dinner workflow demo",
+            Instructions = "Run the dinner workflow.",
+            Source = SkillSource.Local,
+            Workflows =
+            [
+                new SkillWorkflowDescriptor
+                {
+                    WorkflowId = "demo_dinner",
+                    WorkflowYamls = ["name: demo_dinner\nsteps: []\n"],
+                },
+            ],
+        });
+        var commandPort = new RecordingScopeWorkflowCommandPort();
+        var providerFactory = new UseSkillMountWorkflowProviderFactory();
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            toolSources:
+            [
+                new SingleToolSource(new UseSkillTool(catalog, scopeWorkflowCommandPort: commandPort)),
+            ],
+            localSkillCatalog: catalog);
+
+        var reply = await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-use-skill-mount-workflow",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-workflow-mount" },
+                Content = new MessageContent { Text = "跑一下demo-dinner-workflow-skill这个skill" },
+            },
+            new Dictionary<string, string>(),
+            Control(),
+            AgentToolExecutionContext.Empty with
+            {
+                Caller = new AgentToolCallerContext("scope-1", "scope-1", null),
+            },
+            streamingSink: null,
+            CancellationToken.None);
+
+        reply.Text.Should().Contain("## Mounted Workflows");
+        reply.Text.Should().Contain("\"accepted\": true");
+        reply.Text.Should().NotContain("approval-gated tools cannot run here");
+        reply.Text.Should().NotContain("scope workflow command port is not available in this host");
+        commandPort.Requests.Should().ContainSingle()
+            .Which.Should().Match<ScopeWorkflowUpsertRequest>(request =>
+                request.ScopeId == "scope-1" &&
+                request.WorkflowId == "demo_dinner");
     }
 
     [Fact]
@@ -1883,6 +1985,38 @@ public sealed class ConversationReplyGeneratorTests
         }
     }
 
+    private sealed class UseSkillMountWorkflowProviderFactory : ILLMProviderFactory, ILLMProvider
+    {
+        public string Name => "use-skill-mount-workflow";
+
+        public ILLMProvider GetProvider(string name) => this;
+
+        public ILLMProvider GetDefault() => this;
+
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            var toolResult = request.Messages.LastOrDefault(static message => message.Role == "tool")?.Content;
+            if (toolResult is not null)
+            {
+                yield return new LLMStreamChunk { DeltaContent = toolResult };
+                yield return new LLMStreamChunk { IsLast = true };
+                await Task.CompletedTask;
+                yield break;
+            }
+
+            yield return ToolChunk(
+                "call-use-skill",
+                "use_skill",
+                """{"skill":"demo-dinner-workflow-skill","mount_workflows":true}""");
+            yield return new LLMStreamChunk { IsLast = true };
+            await Task.CompletedTask;
+        }
+    }
+
     private sealed class ToolCallingPreambleProviderFactory : ILLMProviderFactory, ILLMProvider
     {
         public string Name => "tool-calling-preamble";
@@ -2083,6 +2217,29 @@ public sealed class ConversationReplyGeneratorTests
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
             Task.FromResult(result);
+    }
+
+    private sealed class RecordingScopeWorkflowCommandPort : IScopeWorkflowCommandPort
+    {
+        public List<ScopeWorkflowUpsertRequest> Requests { get; } = [];
+
+        public Task<ScopeWorkflowUpsertResult> UpsertAsync(
+            ScopeWorkflowUpsertRequest request,
+            CancellationToken ct = default)
+        {
+            Requests.Add(request);
+            return Task.FromResult(new ScopeWorkflowUpsertResult(
+                request.ScopeId,
+                request.WorkflowId,
+                $"service-key-{request.WorkflowId}",
+                $"revision-{request.WorkflowId}",
+                "definition-prefix",
+                $"actor-{request.WorkflowId}",
+                $"deployment-{request.WorkflowId}",
+                DateTimeOffset.UnixEpoch,
+                [new ScopeWorkflowCommandAcceptedHandle("create_revision", "target-actor", "cmd-1", "corr-1")],
+                $"/api/scopes/{request.ScopeId}/workflows/{request.WorkflowId}"));
+        }
     }
 
     private sealed class CountingToolSource(IAgentTool tool) : IAgentToolSource

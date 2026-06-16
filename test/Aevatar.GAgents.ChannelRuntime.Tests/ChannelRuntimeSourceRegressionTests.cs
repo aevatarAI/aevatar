@@ -162,6 +162,32 @@ public sealed class ChannelRuntimeSourceRegressionTests
             "production code, prompts, route contracts, type names, and field names must not hardcode concrete skill names; use generic skill discovery");
     }
 
+    [Fact]
+    public void Conversation_actor_must_not_switch_on_lark_card_reply_operation_step_payload_cases()
+    {
+        var actorSource = StripComments(ReadRepositoryFile(
+            "agents/Aevatar.GAgents.Channel.Runtime/Conversation/ConversationGAgent.cs"));
+
+        actorSource.Should().NotContain("PayloadOneofCase.LarkCard");
+        actorSource.Should().NotContain("ExecuteLarkCardOperationStepAsync");
+        actorSource.Should().NotContain("HandleLlmReplyCardStreamChunkAsync");
+        actorSource.Should().NotContain("HandleLarkCardOperationCompletedAsync");
+        actorSource.Should().NotContain("HandleLarkCardOperationTimeoutFiredAsync");
+    }
+
+    [Fact]
+    public void Reply_streaming_renderers_own_typed_step_payload_recognition()
+    {
+        var rendererSource = StripComments(ReadRepositoryFile(
+            "agents/Aevatar.GAgents.Channel.Runtime/Conversation/ReplyStreaming/NyxRelayTextReplyStreamRenderer.cs")) +
+                             StripComments(ReadRepositoryFile(
+                                 "agents/Aevatar.GAgents.Channel.Runtime/Conversation/ReplyStreaming/LarkCardReplyStreamRenderer.cs"));
+
+        rendererSource.Should().Contain("PayloadCase");
+        rendererSource.Should().Contain("PayloadOneofCase.NyxRelayText");
+        rendererSource.Should().Contain("PayloadOneofCase.LarkCard");
+    }
+
     private static string ReadRepositorySources(params string[] relativeDirectories)
     {
         var repositoryRoot = GetRepositoryRoot();

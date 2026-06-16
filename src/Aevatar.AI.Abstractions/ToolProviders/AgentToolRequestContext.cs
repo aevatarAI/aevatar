@@ -25,6 +25,7 @@ public static class AgentToolRequestContext
     public static string? ResponseId => s_context.Value?.Caller.ResponseId;
     public static string? RequestId => s_context.Value?.Request.RequestId;
     public static string? CallId => s_context.Value?.Request.CallId;
+    public static string? IdempotencyKey => s_context.Value?.Request.IdempotencyKey;
     public static string? SenderBindingId => s_context.Value?.SenderBinding.BindingId;
     public static string? ModelOverride => s_context.Value?.Routing.ModelOverride;
     public static string? NyxIdRoutePreference => s_context.Value?.Routing.NyxIdRoutePreference;

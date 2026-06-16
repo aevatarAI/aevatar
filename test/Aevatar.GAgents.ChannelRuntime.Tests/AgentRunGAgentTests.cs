@@ -251,6 +251,74 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
+    public async Task HandleNextLlmStepAsync_ReasoningOnlyResult_StaysInStepMessagesButOutOfDurableHistory()
+    {
+        // Reasoning-only results keep their intra-run record (step messages feed the
+        // retry request and diagnostics) but must not enter AppendedHistory: providers
+        // drop bare reasoning on assistant history messages, so a persisted
+        // reasoning-only entry replays as an empty assistant turn that poisons every
+        // later request in the conversation.
+        var actorRuntime = new DispatchingActorRuntime();
+        var executor = new PausedReplyGenerationExecutor();
+        var runtime = CreateRunAgentWithExecutor(
+            actorRuntime,
+            executor,
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions());
+        SetState(runtime, new AgentRunGAgentState
+        {
+            RunId = "run-reasoning-history",
+            CorrelationId = "corr-reasoning-history",
+            TargetActorId = "actor-1",
+            Status = AgentRunStatus.ReplyGenerationRequested,
+            GenerationAttempt = 1,
+            GenerationStep = new AgentRunReplyStepState
+            {
+                RunId = "run-reasoning-history",
+                CorrelationId = "corr-reasoning-history",
+                TargetActorId = "actor-1",
+                Attempt = 1,
+                NextStepIndex = 1,
+                MaxToolRounds = 4,
+            },
+        });
+
+        await runtime.HandleNextLlmStepAsync(new AgentRunNextLlmStepRequestedEvent
+        {
+            RunId = "run-reasoning-history",
+            CorrelationId = "corr-reasoning-history",
+            TargetActorId = "actor-1",
+            Attempt = 1,
+            StepIndex = 2,
+            Request = new NeedsLlmReplyEvent
+            {
+                CorrelationId = "corr-reasoning-history",
+                RunId = "run-reasoning-history",
+                TargetActorId = "actor-1",
+                RegistrationId = "reg-1",
+                Activity = BuildRelayActivity(),
+            },
+            LlmStepResult = new AgentRunLlmStepResult
+            {
+                AccumulatedText = string.Empty,
+                Content = string.Empty,
+                ReasoningContent = "internal chain of thought without an answer",
+                FinishReason = "stop",
+                HasStreamedTextContent = false,
+            },
+        });
+
+        var step = runtime.State.GenerationStep;
+        step.Should().NotBeNull();
+        step!.Messages.Should().Contain(
+            message => message.Role == "assistant" &&
+                       message.ReasoningContent == "internal chain of thought without an answer",
+            "the intra-run step record keeps the reasoning-only result");
+        step.AppendedHistory.Should().NotContain(
+            entry => entry.Role == "assistant",
+            "reasoning-only assistant turns must not be persisted into durable conversation history");
+    }
+
+    [Fact]
     public async Task HandleNextLlmStepAsync_ReasoningOnlyEmptyStep_OnFinalNoToolsStep_FailsWithEmptyReply()
     {
         // The reasoning-only retry is bounded: when the final no-tools step itself
@@ -1225,6 +1293,156 @@ public sealed class AgentRunGAgentTests
         providerFactory.Requests[1].ToolContext!.Credentials.SenderNyxIdAccessToken.Should().BeNull();
         providerFactory.Requests[1].LlmControl!.SenderNyxIdAccessToken.Should().BeNull();
         providerFactory.Requests[1].LlmControl!.NyxIdAccessToken.Should().Be("owner-token");
+        providerFactory.Requests[1].LlmControl!.ModelOverride.Should().BeNull();
+        providerFactory.Requests[1].LlmControl!.NyxIdRoutePreference.Should().BeNull();
+        providerFactory.Requests[1].ToolContext!.Routing.ModelOverride.Should().BeNull();
+        providerFactory.Requests[1].ToolContext!.Routing.NyxIdRoutePreference.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleStartAsync_WhenOwnerConfiguredRouteReturnsEmptyReply_RetriesWithServerDefaultRouting()
+    {
+        var targetActor = Substitute.For<IActor>();
+        targetActor.Id.Returns("conversation:c");
+        targetActor.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+        var providerFactory = new EmptyThenReplyProviderFactory();
+        var replyGenerator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            toolSources: [],
+            localSkillCatalog: new LocalSkillCatalog());
+        var actorRuntime = new DispatchingActorRuntime(("conversation:c", targetActor));
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            replyGenerator,
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true });
+
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-owner-empty-fallback",
+            TargetActorId = "conversation:c",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-owner-empty-fallback",
+            LlmControl = new LLMControlContext(
+                "owner-token",
+                "owner-token",
+                SenderNyxIdAccessToken: null,
+                "gpt-5.5",
+                "/api/v1/proxy/s/chrono-llm",
+                40,
+                null).ToPayload(),
+        });
+
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
+        runtime.State.ProducedReplyText.Should().Be("server default fallback reply");
+        providerFactory.Requests.Should().HaveCount(2);
+        providerFactory.Requests[0].LlmControl!.ModelOverride.Should().Be("gpt-5.5");
+        providerFactory.Requests[0].LlmControl!.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/chrono-llm");
+        providerFactory.Requests[1].Tools.Should().BeNull();
+        providerFactory.Requests[1].LlmControl!.NyxIdAccessToken.Should().Be("owner-token");
+        providerFactory.Requests[1].LlmControl!.ModelOverride.Should().BeNull();
+        providerFactory.Requests[1].LlmControl!.NyxIdRoutePreference.Should().BeNull();
+        providerFactory.Requests[1].LlmControl!.MaxToolRoundsOverride.Should().BeNull();
+        providerFactory.Requests[1].ToolContext!.Routing.ModelOverride.Should().BeNull();
+        providerFactory.Requests[1].ToolContext!.Routing.NyxIdRoutePreference.Should().BeNull();
+        providerFactory.Requests[1].ToolContext!.Routing.MaxToolRoundsOverride.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleStartAsync_WhenSenderHasLlmConfig_UsesSenderConfigBeforeBotOwnerConfig()
+    {
+        var targetActor = Substitute.For<IActor>();
+        targetActor.Id.Returns("conversation:c");
+        targetActor.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+        var providerFactory = new SingleReplyProviderFactory("sender-config reply");
+        var preferencesStore = new AgentRunStubPreferencesStore
+        {
+            ByBinding =
+            {
+                ["bnd-user-1"] = new NyxIdUserLlmPreferences(
+                    "sender-model",
+                    "/api/v1/proxy/s/sender",
+                    MaxToolRounds: 7),
+            },
+        };
+        var replyGenerator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            toolSources: [],
+            preferencesStore: preferencesStore);
+        var actorRuntime = new DispatchingActorRuntime(("conversation:c", targetActor));
+
+        var scopeResolver = Substitute.For<INyxIdRelayScopeResolver>();
+        scopeResolver.ResolveScopeIdByApiKeyAsync("api-key-bot", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<string?>("scope-bot-owner"));
+        var userConfigQueryPort = Substitute.For<IUserConfigQueryPort>();
+        userConfigQueryPort.GetAsync("scope-bot-owner", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new Aevatar.Studio.Application.Studio.Abstractions.UserConfig(
+                DefaultModel: "owner-model",
+                PreferredLlmRoute: "/api/v1/proxy/s/owner",
+                RuntimeMode: "local",
+                LocalRuntimeBaseUrl: "http://localhost",
+                RemoteRuntimeBaseUrl: "https://example.com",
+                GithubUsername: null,
+                MaxToolRounds: 11)));
+
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            replyGenerator,
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true },
+            scopeResolver,
+            userConfigQueryPort);
+
+        var activity = BuildRelayActivity();
+        activity.Bot = BotInstanceId.From("api-key-bot");
+        activity.TransportExtras = new TransportExtras
+        {
+            NyxUserAccessToken = "bot-owner-session-jwt",
+        };
+
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-sender-config-priority",
+            TargetActorId = "conversation:c",
+            RegistrationId = "reg-1",
+            Activity = activity,
+            ReplyToken = "relay-token-sender-config-priority",
+            ToolContext = (AgentToolExecutionContext.Empty with
+            {
+                SenderBinding = new AgentToolSenderBindingContext("bnd-user-1"),
+            }).ToPayload(),
+            LlmControl = new LLMControlContext(
+                NyxIdAccessToken: null,
+                NyxIdOrgToken: null,
+                SenderNyxIdAccessToken: "sender-session-jwt",
+                ModelOverride: null,
+                NyxIdRoutePreference: null,
+                MaxToolRoundsOverride: null,
+                UserMemoryPrompt: null).ToPayload(),
+            Metadata =
+            {
+                [ChannelMetadataKeys.Platform] = "lark",
+                [ChannelMetadataKeys.SenderId] = "ou_user_1",
+                [ChannelMetadataKeys.MessageId] = "msg-sender-config-priority",
+            },
+        });
+
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
+        runtime.State.ProducedReplyText.Should().Be("sender-config reply");
+        preferencesStore.Lookups.Should().HaveCount(2);
+        preferencesStore.Lookups.Should().OnlyContain(bindingId => bindingId == "bnd-user-1");
+        providerFactory.Requests.Should().ContainSingle();
+        var request = providerFactory.Requests[0];
+        request.LlmControl!.ModelOverride.Should().Be("sender-model");
+        request.LlmControl.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/sender");
+        request.LlmControl.MaxToolRoundsOverride.Should().Be(7);
+        request.LlmControl.NyxIdAccessToken.Should().Be("sender-session-jwt");
+        request.ToolContext!.Routing.ModelOverride.Should().Be("sender-model");
+        request.ToolContext.Routing.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/sender");
+        request.ToolContext.Credentials.NyxIdAccessToken.Should().Be("sender-session-jwt");
     }
 
     [Fact]
@@ -3463,6 +3681,7 @@ public sealed class AgentRunGAgentTests
                 request.Activity.Clone(),
                 request.ReplyToken,
                 request.ReplyTokenExpiresAtUnixMs,
+                request.RunId,
                 TimeProvider.System,
                 cardMode: _relayOptions.StreamingCardKitEnabled);
         }
@@ -3924,6 +4143,50 @@ public sealed class AgentRunGAgentTests
         }
     }
 
+    private sealed class AgentRunStubPreferencesStore : INyxIdUserLlmPreferencesStore
+    {
+        public Dictionary<string, NyxIdUserLlmPreferences> ByBinding { get; } = new(StringComparer.Ordinal);
+
+        public List<string?> Lookups { get; } = [];
+
+        public Task<NyxIdUserLlmPreferences> GetOwnerAsync(CancellationToken cancellationToken = default)
+        {
+            Lookups.Add(null);
+            return Task.FromResult(new NyxIdUserLlmPreferences(string.Empty, string.Empty));
+        }
+
+        public Task<NyxIdUserLlmPreferences> GetForBindingAsync(string bindingId, CancellationToken cancellationToken = default)
+        {
+            Lookups.Add(bindingId);
+            return Task.FromResult(ByBinding.TryGetValue(bindingId, out var prefs)
+                ? prefs
+                : new NyxIdUserLlmPreferences(string.Empty, string.Empty));
+        }
+    }
+
+    private sealed class SingleReplyProviderFactory(string replyText) : ILLMProviderFactory, ILLMProvider
+    {
+        public string Name => "single-reply";
+
+        public List<LLMRequest> Requests { get; } = [];
+
+        public ILLMProvider GetProvider(string name) => this;
+
+        public ILLMProvider GetDefault() => this;
+
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            Requests.Add(request);
+            yield return new LLMStreamChunk { DeltaContent = replyText };
+            await Task.CompletedTask;
+            yield return new LLMStreamChunk { IsLast = true };
+        }
+    }
+
     private sealed class ToolCallAttemptProviderFactory : ILLMProviderFactory, ILLMProvider
     {
         public string Name => "tool-call-attempt";
@@ -3982,6 +4245,36 @@ public sealed class AgentRunGAgentTests
             yield return new LLMStreamChunk { DeltaContent = "owner fallback reply" };
             await Task.CompletedTask;
             yield return new LLMStreamChunk { IsLast = true };
+        }
+    }
+
+    private sealed class EmptyThenReplyProviderFactory : ILLMProviderFactory, ILLMProvider
+    {
+        public string Name => "empty-then-reply";
+
+        public List<LLMRequest> Requests { get; } = [];
+
+        public ILLMProvider GetProvider(string name) => this;
+
+        public ILLMProvider GetDefault() => this;
+
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            Requests.Add(request);
+            if (Requests.Count == 1)
+            {
+                await Task.CompletedTask;
+                yield return new LLMStreamChunk { IsLast = true, FinishReason = "stop" };
+                yield break;
+            }
+
+            yield return new LLMStreamChunk { DeltaContent = "server default fallback reply" };
+            await Task.CompletedTask;
+            yield return new LLMStreamChunk { IsLast = true, FinishReason = "stop" };
         }
     }
 
@@ -4122,6 +4415,33 @@ public sealed class AgentRunGAgentTests
             });
 
             return await pendingReply.Task;
+        }
+    }
+
+    [Theory]
+    [InlineData(
+        "Upstream LLM route '/api/v1/proxy/s/chrono-llm' rejected the request with HTTP 401 for model 'gpt-5.5'. Your session may have expired — try signing in again. Upstream said: {\"error\":\"token_expired\",\"error_code\":2001}",
+        true)]
+    [InlineData("Upstream said: {\"error\":\"token_expired\"}", true)]
+    [InlineData("Reply generator returned an empty response (finishReason=length).", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void ResolveTerminalFailureReply_SurfacesReauthHintOnlyForExpiredSession(
+        string? errorSummary,
+        bool expectReauth)
+    {
+        const string generic = "Sorry, I wasn't able to generate a response. Please try again.";
+        var reply = AgentRunGAgent.ResolveTerminalFailureReply(errorSummary);
+
+        if (expectReauth)
+        {
+            reply.Should().NotBe(generic);
+            reply.Should().Contain("sign in to NyxID again");
+            reply.Should().Contain("重新登录");
+        }
+        else
+        {
+            reply.Should().Be(generic);
         }
     }
 }

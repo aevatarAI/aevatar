@@ -683,7 +683,7 @@ public sealed class StudioTeamEndpointTests
         public Task<StudioMemberBindingRevisionActionResponse> RetireBindingRevisionAsync(
             string scopeId, string memberId, string revisionId, CancellationToken ct = default) =>
             throw new NotImplementedException();
-        public Task<StudioMemberDetailResponse> UpdateAsync(
+        public Task<StudioMemberCommandResponse> UpdateAsync(
             string scopeId, string memberId, UpdateStudioMemberRequest request, CancellationToken ct = default) =>
             throw new NotImplementedException();
     }

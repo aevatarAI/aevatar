@@ -83,6 +83,20 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
+    public async Task Create_ShouldNotMapServiceInvalidOperationAsPayloadBadRequest()
+    {
+        var service = new RecordingScheduledDispatchApplicationService
+        {
+            CreateException = new InvalidOperationException("dispatch runtime failure"),
+        };
+
+        var act = () => CreateAsync(CreateEnvelopeRequest(scheduleId: "schedule-1"), service);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("dispatch runtime failure");
+    }
+
+    [Fact]
     public async Task Update_ShouldUseRouteScheduleIdAsFallbackAndMapBadRequest()
     {
         var service = new RecordingScheduledDispatchApplicationService
@@ -318,6 +332,37 @@ public sealed class ScheduledDispatchEndpointsTests
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
         service.Disabled.Should().ContainSingle().Which.Should().Be(("schedule-1", string.Empty));
+    }
+
+    [Fact]
+    public async Task Delete_ShouldAcceptReasonFromQueryAndMapNotFound()
+    {
+        var acceptedService = new RecordingScheduledDispatchApplicationService();
+        var notFoundService = new RecordingScheduledDispatchApplicationService
+        {
+            DeleteException = new ScheduledDispatchNotFoundException("missing"),
+        };
+
+        var accepted = await ScheduledDispatchEndpoints.Delete(
+            "schedule-1",
+            "cleanup",
+            null,
+            acceptedService);
+        var notFound = await ScheduledDispatchEndpoints.Delete(
+            "missing",
+            null,
+            new ScheduledDispatchStateChangeHttpRequest { Reason = "body" },
+            notFoundService);
+
+        var acceptedHttp = CreateHttpContext();
+        await accepted.ExecuteAsync(acceptedHttp);
+        var notFoundHttp = CreateHttpContext();
+        await notFound.ExecuteAsync(notFoundHttp);
+
+        acceptedHttp.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        notFoundHttp.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        acceptedService.Deleted.Should().ContainSingle().Which.Should().Be(("schedule-1", "cleanup"));
+        notFoundService.Deleted.Should().ContainSingle().Which.Should().Be(("missing", "body"));
     }
 
     [Fact]
@@ -986,6 +1031,7 @@ public sealed class ScheduledDispatchEndpointsTests
         public List<(string ScheduleId, ScheduledDispatchConfiguration Configuration)> Updated { get; } = [];
         public List<(string ScheduleId, string Reason)> Enabled { get; } = [];
         public List<(string ScheduleId, string Reason)> Disabled { get; } = [];
+        public List<(string ScheduleId, string Reason)> Deleted { get; } = [];
         public int? LastListTake { get; private set; }
         public string? LastListCursor { get; private set; }
         public bool? LastListIncludeTotalCount { get; private set; }
@@ -996,6 +1042,7 @@ public sealed class ScheduledDispatchEndpointsTests
         public Exception? UpdateException { get; set; }
         public Exception? EnableException { get; set; }
         public Exception? DisableException { get; set; }
+        public Exception? DeleteException { get; set; }
         public Exception? GetException { get; set; }
         public Exception? PreviewException { get; set; }
         public Exception? RunNowException { get; set; }
@@ -1079,6 +1126,25 @@ public sealed class ScheduledDispatchEndpointsTests
             Disabled.Add((scheduleId, reason));
             if (DisableException != null)
                 throw DisableException;
+
+            return Task.FromResult(new ScheduledDispatchMutationReceipt(
+                scheduleId,
+                $"actor:{scheduleId}",
+                Accepted: true,
+                CommandId: "cmd",
+                CorrelationId: "corr",
+                AckedAt: DateTimeOffset.UtcNow,
+                AckStage: "accepted"));
+        }
+
+        public Task<ScheduledDispatchMutationReceipt> DeleteAsync(
+            string scheduleId,
+            string reason,
+            CancellationToken ct = default)
+        {
+            Deleted.Add((scheduleId, reason));
+            if (DeleteException != null)
+                throw DeleteException;
 
             return Task.FromResult(new ScheduledDispatchMutationReceipt(
                 scheduleId,

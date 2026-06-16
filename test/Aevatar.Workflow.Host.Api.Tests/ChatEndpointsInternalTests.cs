@@ -797,7 +797,7 @@ public sealed class ChatEndpointsInternalTests
         var http = CreateHttpContext();
         var interactionService = new FakeCommandInteractionService
         {
-            ResultFactory = (_, _, _, _) => throw new InvalidOperationException("boom"),
+            ResultFactory = (_, _, _, _) => throw new InvalidOperationException("provider secret token leaked"),
         };
 
         await WorkflowCapabilityEndpoints.HandleChat(
@@ -809,6 +809,8 @@ public sealed class ChatEndpointsInternalTests
         var body = await ReadBodyAsync(http.Response);
         http.Response.StatusCode.Should().Be(StatusCodes.Status500InternalServerError);
         body.Should().Contain("EXECUTION_FAILED");
+        body.Should().Contain("Workflow execution failed.");
+        body.Should().NotContain("provider secret token leaked");
     }
 
     [Fact]
@@ -843,7 +845,38 @@ public sealed class ChatEndpointsInternalTests
         var body = await ReadBodyAsync(http.Response);
         http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
         body.Should().Contain("\"delta\": \"hello\"");
-        body.Should().Contain("Workflow execution failed: line1  line2");
+        body.Should().Contain("Workflow execution failed.");
+        body.Should().NotContain("line1");
+    }
+
+    [Fact]
+    public async Task HandleChat_ShouldWriteCompatibilityError_WhenTypeRegistryDescriptorIsMissing()
+    {
+        var http = CreateHttpContext();
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = async (_, _, onAcceptedAsync, ct) =>
+            {
+                var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
+                if (onAcceptedAsync != null)
+                    await onAcceptedAsync(receipt, ct);
+
+                throw new InvalidOperationException(
+                    "Type registry has no descriptor for type name 'aevatar.ai.InitializeRoleAgentEvent'");
+            },
+        };
+
+        await WorkflowCapabilityEndpoints.HandleChat(
+            http,
+            new ChatInput { Prompt = "hello" },
+            interactionService,
+            CancellationToken.None);
+
+        var body = await ReadBodyAsync(http.Response);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        body.Should().Contain("WORKFLOW_REVISION_INCOMPATIBLE");
+        body.Should().Contain("Re-publish or migrate the workflow/service revision");
+        body.Should().NotContain("EXECUTION_FAILED");
     }
 
     [Fact]
@@ -940,6 +973,44 @@ public sealed class ChatEndpointsInternalTests
         service.Commands.Single().EditedContent.Should().Be("approved edited");
         service.Commands.Single().Feedback.Should().Be("looks good");
         service.Commands.Single().Metadata.Should().ContainKey("source").WhoseValue.Should().Be("host");
+    }
+
+    [Fact]
+    public async Task HandleResume_ShouldDispatchNestedToolApproval()
+    {
+        var service = new RecordingDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>
+        {
+            Result = CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>.Success(
+                new WorkflowRunControlAcceptedReceipt("actor-1", "run-1", "cmd-1", "cmd-1")),
+        };
+
+        var result = await WorkflowCapabilityEndpoints.HandleResume(
+            new WorkflowResumeInput
+            {
+                ActorId = "actor-1",
+                RunId = "run-1",
+                StepId = "tool-step",
+                Approved = true,
+                ToolApproval = new WorkflowToolApprovalResumeInput
+                {
+                    ExecutionId = "exec-1",
+                    ToolCallId = "tool-call-1",
+                    ApprovalRequestId = "approval-1",
+                },
+            },
+            service,
+            ct: CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        service.Commands.Should().ContainSingle();
+        var command = service.Commands.Single();
+        command.ToolApproval.Should().NotBeNull();
+        command.ToolApproval!.ExecutionId.Should().Be("exec-1");
+        command.ToolApproval.ToolCallId.Should().Be("tool-call-1");
+        command.ToolApproval.ApprovalRequestId.Should().Be("approval-1");
     }
 
     [Fact]

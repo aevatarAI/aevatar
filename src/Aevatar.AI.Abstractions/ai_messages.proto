@@ -121,6 +121,7 @@ message AgentToolVisibilityScopePayload {
 message AgentToolRequestIdentityPayload {
   string request_id = 1;
   string call_id = 2;
+  string idempotency_key = 3;
 }
 
 message AgentToolCredentialsPayload {
@@ -274,6 +275,18 @@ message InitializeRoleAgentEvent {
   map<string, aevatar.voice.VoiceSessionDefaults> voice_session_defaults = 16;
   reserved 9;
   reserved "stream_buffer_capacity";
+}
+
+message VoicePresenceEnableRequested {
+  string module_name = 1;
+  aevatar.voice.VoiceSessionDefaults voice_session_defaults = 2;
+  aevatar.voice.VoiceRemoteAudioSupport remote_audio_support = 3;
+}
+
+message VoicePresenceEnabledEvent {
+  string module_name = 1;
+  aevatar.voice.VoiceSessionDefaults voice_session_defaults = 2;
+  aevatar.voice.VoicePresenceRuntimeState runtime_state = 3;
 }
 
 message AIAgentConfigOverrides {

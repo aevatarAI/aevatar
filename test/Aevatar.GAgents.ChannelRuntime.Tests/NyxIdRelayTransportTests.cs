@@ -1103,4 +1103,152 @@ public sealed class NyxIdRelayTransportTests
         parsed.Activity!.TransportExtras.NyxLarkUnionId.Should().BeEmpty();
         parsed.Activity.TransportExtras.NyxLarkChatId.Should().BeEmpty();
     }
+
+    [Fact]
+    public void Parse_ShouldExtractTextAndImage_FromLarkPostRichTextMessage()
+    {
+        // 图文夹杂: mixing text + an inline image in Lark produces a `post` (rich-text)
+        // message whose words and image_key both live inside the nested 2D `content`
+        // array. NyxID cannot normalize it (content_type=unknown, text=None,
+        // attachments=[]), forwarding only the verbatim post under raw_platform_data.
+        // The transport must recover both from raw or the turn is dropped as empty_text
+        // and the bot never replies.
+        var body = """
+            {
+              "message_id": "msg-lark-post-1",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "route-uuid", "platform_id": "oc_group_1", "type": "group" },
+              "sender": { "platform_id": "ou_user_1", "display_name": "User One" },
+              "content": { "type": "unknown" },
+              "raw_platform_data": {
+                "event": {
+                  "message": {
+                    "message_id": "om_post_1",
+                    "chat_id": "oc_group_1",
+                    "chat_type": "group",
+                    "message_type": "post",
+                    "content": "{\"title\":\"任务\",\"content\":[[{\"tag\":\"text\",\"text\":\"chronoai 全部仓库\"}],[{\"tag\":\"img\",\"image_key\":\"img_v3_post_1\"}],[{\"tag\":\"text\",\"text\":\"时区是新加坡的\"}]]}"
+                  }
+                }
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        parsed.Ignored.Should().BeFalse();
+        parsed.Activity!.Conversation.Scope.Should().Be(ConversationScope.Group);
+        parsed.Activity.Content.Text.Should().Contain("任务");
+        parsed.Activity.Content.Text.Should().Contain("chronoai 全部仓库");
+        parsed.Activity.Content.Text.Should().Contain("时区是新加坡的");
+        parsed.Activity.Content.Attachments.Should().ContainSingle();
+        var attachment = parsed.Activity.Content.Attachments.Single();
+        attachment.AttachmentId.Should().Be("img_v3_post_1");
+        attachment.Kind.Should().Be(AttachmentKind.Image);
+    }
+
+    [Fact]
+    public void Parse_ShouldAcceptLarkPostMessage_WithFormattedTextButNoImage()
+    {
+        // A rich-text post without an image (formatting / @ / links only) still arrives
+        // as text=None from NyxID, so it must not be silently dropped either.
+        var body = """
+            {
+              "message_id": "msg-lark-post-2",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "route-uuid", "platform_id": "oc_group_1", "type": "group" },
+              "sender": { "platform_id": "ou_user_1", "display_name": "User One" },
+              "content": { "type": "unknown" },
+              "raw_platform_data": {
+                "event": {
+                  "message": {
+                    "message_id": "om_post_2",
+                    "chat_id": "oc_group_1",
+                    "chat_type": "group",
+                    "message_type": "post",
+                    "content": "{\"content\":[[{\"tag\":\"at\",\"user_name\":\"小助手\"},{\"tag\":\"text\",\"text\":\" 请看 \"},{\"tag\":\"a\",\"text\":\"这个链接\",\"href\":\"https://example.test\"}]]}"
+                  }
+                }
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        parsed.Ignored.Should().BeFalse();
+        parsed.Activity!.Content.Text.Should().Be("@小助手 请看 这个链接");
+        parsed.Activity.Content.Attachments.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Parse_ShouldExtractMultipleImages_FromLarkPostRichTextMessage()
+    {
+        var body = """
+            {
+              "message_id": "msg-lark-post-3",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "route-uuid", "platform_id": "oc_group_1", "type": "group" },
+              "sender": { "platform_id": "ou_user_1", "display_name": "User One" },
+              "content": { "type": "unknown" },
+              "raw_platform_data": {
+                "event": {
+                  "message": {
+                    "message_id": "om_post_3",
+                    "chat_id": "oc_group_1",
+                    "chat_type": "group",
+                    "message_type": "post",
+                    "content": "{\"content\":[[{\"tag\":\"text\",\"text\":\"两张图\"}],[{\"tag\":\"img\",\"image_key\":\"img_a\"},{\"tag\":\"img\",\"image_key\":\"img_b\"}]]}"
+                  }
+                }
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        parsed.Activity!.Content.Text.Should().Be("两张图");
+        parsed.Activity.Content.Attachments.Should().HaveCount(2);
+        parsed.Activity.Content.Attachments.Select(a => a.AttachmentId)
+            .Should().BeEquivalentTo(new[] { "img_a", "img_b" });
+    }
+
+    [Fact]
+    public void Parse_ShouldStillIgnoreLarkPostMessage_WithNoTextOrImage()
+    {
+        // A degenerate post with no extractable text and no media (e.g. emotion-only)
+        // has nothing actionable; keep ignoring it rather than promoting a blank LLM turn.
+        var body = """
+            {
+              "message_id": "msg-lark-post-empty",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "route-uuid", "platform_id": "oc_group_1", "type": "group" },
+              "sender": { "platform_id": "ou_user_1", "display_name": "User One" },
+              "content": { "type": "unknown" },
+              "raw_platform_data": {
+                "event": {
+                  "message": {
+                    "message_id": "om_post_empty",
+                    "chat_id": "oc_group_1",
+                    "chat_type": "group",
+                    "message_type": "post",
+                    "content": "{\"content\":[[{\"tag\":\"emotion\",\"emoji_type\":\"SMILE\"}]]}"
+                  }
+                }
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Ignored.Should().BeTrue();
+        parsed.Success.Should().BeFalse();
+        parsed.ErrorCode.Should().Be("empty_text");
+    }
 }

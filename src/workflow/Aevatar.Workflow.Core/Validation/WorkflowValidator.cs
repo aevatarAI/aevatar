@@ -75,6 +75,9 @@ public static class WorkflowValidator
             if (!string.IsNullOrWhiteSpace(step.Next) && !stepIds.Contains(step.Next))
                 errors.Add($"步骤 '{step.Id}' 的 next 引用不存在的步骤 '{step.Next}'");
 
+            if (!string.IsNullOrWhiteSpace(step.Compensation) && !stepIds.Contains(step.Compensation))
+                errors.Add($"步骤 '{step.Id}' 的 compensation '{step.Compensation}' 引用不存在的步骤 '{step.Compensation}'");
+
             ValidateBranchTargets(step, stepIds, errors);
             ValidateTypeSpecificRules(step, availableWorkflowNames, knownCanonicalStepTypes, options, errors);
 

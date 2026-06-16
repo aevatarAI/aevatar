@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Platform.Lark;
 using Aevatar.GAgents.Scheduled;
@@ -9,7 +10,6 @@ namespace Aevatar.GAgents.Authoring.Lark;
 
 internal sealed class ScheduledAgentCreateRequestMapper
 {
-    private static readonly TimeZoneResolver ScheduleTimeZoneResolver = new();
     internal static readonly TimeSpan MinimumOneShotDelay = TimeSpan.FromSeconds(10);
     internal static readonly TimeSpan MaximumOneShotDelay = TimeSpan.FromDays(366);
 
@@ -91,11 +91,15 @@ internal sealed class ScheduledAgentCreateRequestMapper
             if (string.IsNullOrWhiteSpace(args.Str("schedule_timezone")))
                 return ScheduledAgentCreatePlanResult.Failed("schedule_timezone is required");
 
-            if (!ScheduleTimeZoneResolver.TryResolve(timezone, out var scheduleTimeZone, out var timezoneError))
+            if (!ScheduledDispatchCalculator.TryResolveTimeZone(timezone, out _, out var timezoneError))
                 return ScheduledAgentCreatePlanResult.Failed($"invalid_schedule_timezone: {timezoneError}");
 
-            if (!ChannelScheduleCalculator.TryGetNextOccurrence(cron, scheduleTimeZone, nowUtc, out _, out var cronError))
+            var validation = ScheduledDispatchCalculator.Validate(cron, timezone, nowUtc);
+            if (!validation.Succeeded)
+            {
+                var cronError = validation.Error;
                 return ScheduledAgentCreatePlanResult.Failed($"invalid_schedule_cron: {cronError}");
+            }
         }
 
         var scopeId = Normalize(AgentToolRequestContext.ScopeId ?? AgentToolRequestContext.ChannelRegistrationScopeId);
@@ -425,7 +429,17 @@ internal sealed class ScheduledAgentCreateRequestMapper
             };
         }
 
-        public bool HasProperty(string name) => Properties.ContainsKey(name);
+        // A JSON null or blank string is "not provided": tool-calling models routinely emit
+        // every schema field and clear the unused ones (e.g. delay_seconds=180 alongside
+        // run_at_utc=null or ""). Treating an empty unused key as provided made the one-shot
+        // "exactly one of delay_seconds or run_at_utc" guard reject valid reminders.
+        public bool HasProperty(string name) =>
+            Properties.TryGetValue(name, out var value) && value.ValueKind switch
+            {
+                JsonValueKind.Null => false,
+                JsonValueKind.String => !string.IsNullOrWhiteSpace(value.GetString()),
+                _ => true,
+            };
 
         public bool? Bool(string name)
         {

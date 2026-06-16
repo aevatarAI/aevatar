@@ -41,7 +41,7 @@ internal sealed class NyxIdProxyToolFailureCountingMiddleware : IToolCallMiddlew
         switch (classification)
         {
             case ResultClassification.Error:
-                _counter.RecordFailure();
+                _counter.RecordFailure(ExtractFailureSample(context.ArgumentsJson, context.Result));
                 break;
             case ResultClassification.Ok:
                 _counter.RecordSuccess();
@@ -98,6 +98,43 @@ internal sealed class NyxIdProxyToolFailureCountingMiddleware : IToolCallMiddlew
         }
     }
 
+    internal static SkillRunnerToolFailureSample ExtractFailureSample(
+        string? argumentsJson,
+        string? result)
+    {
+        var slug = ReadString(argumentsJson, "slug", "service");
+        var path = SanitizePath(ReadString(argumentsJson, "path"));
+        var method = ReadString(argumentsJson, "method");
+        var status = default(int?);
+        var detail = default(string?);
+
+        if (!string.IsNullOrWhiteSpace(result))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(result);
+                if (doc.RootElement.ValueKind == JsonValueKind.Object)
+                {
+                    status = ReadInt32(doc.RootElement, "status", "http_status", "httpStatus");
+                    detail =
+                        ReadErrorText(doc.RootElement, "message", "msg", "detail", "error_description", "error") ??
+                        ReadBodyDetail(doc.RootElement);
+                }
+            }
+            catch (JsonException)
+            {
+                detail = result;
+            }
+        }
+
+        return new SkillRunnerToolFailureSample(
+            NormalizeBlank(slug),
+            NormalizeBlank(method) ?? (string.IsNullOrWhiteSpace(path) ? null : "GET"),
+            NormalizeBlank(path),
+            status,
+            Truncate(NormalizeDiagnosticText(detail), 240));
+    }
+
     /// <summary>
     /// NyxID approval-required (7000) and approval-rejected (7001). Mirrors the existing
     /// <c>IsApprovalError</c> detection inside NyxIdProxyTool — when this fires, the proxy
@@ -125,6 +162,177 @@ internal sealed class NyxIdProxyToolFailureCountingMiddleware : IToolCallMiddlew
         // so checking `message` here would false-flag normal proxy responses. `msg` is
         // narrower and the only match for Lark's `{code: <int>, msg: "..."}` shape.
         return root.TryGetProperty("msg", out _);
+    }
+
+    private static string? ReadString(string? json, params string[] names)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return null;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                return null;
+
+            return ReadString(doc.RootElement, names);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static string? ReadString(JsonElement root, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (!root.TryGetProperty(name, out var prop) || prop.ValueKind != JsonValueKind.String)
+                continue;
+
+            var value = prop.GetString();
+            if (!string.IsNullOrWhiteSpace(value))
+                return value;
+        }
+
+        return null;
+    }
+
+    private static int? ReadInt32(JsonElement root, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (!root.TryGetProperty(name, out var prop))
+                continue;
+
+            if (prop.ValueKind == JsonValueKind.Number && prop.TryGetInt32(out var number))
+                return number;
+
+            if (prop.ValueKind == JsonValueKind.String &&
+                int.TryParse(prop.GetString(), out var parsed))
+            {
+                return parsed;
+            }
+        }
+
+        return null;
+    }
+
+    private static string? ReadErrorText(JsonElement root, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (!root.TryGetProperty(name, out var prop))
+                continue;
+
+            if (prop.ValueKind == JsonValueKind.String)
+            {
+                var value = prop.GetString();
+                if (!string.IsNullOrWhiteSpace(value) &&
+                    !string.Equals(value, "true", StringComparison.OrdinalIgnoreCase))
+                {
+                    return value;
+                }
+            }
+
+            if (name == "error" && prop.ValueKind is JsonValueKind.Object or JsonValueKind.Array)
+                return prop.GetRawText();
+        }
+
+        return null;
+    }
+
+    private static string? ReadBodyDetail(JsonElement root)
+    {
+        if (!root.TryGetProperty("body", out var bodyProp) || bodyProp.ValueKind != JsonValueKind.String)
+            return null;
+
+        var body = bodyProp.GetString();
+        if (string.IsNullOrWhiteSpace(body))
+            return null;
+
+        try
+        {
+            using var bodyDoc = JsonDocument.Parse(body);
+            if (bodyDoc.RootElement.ValueKind == JsonValueKind.Object)
+            {
+                return ReadErrorText(
+                    bodyDoc.RootElement,
+                    "message",
+                    "msg",
+                    "detail",
+                    "error_description",
+                    "error");
+            }
+        }
+        catch (JsonException)
+        {
+            // Plain-text upstream bodies are still useful diagnostics after trimming.
+        }
+
+        return body;
+    }
+
+    private static string? SanitizePath(string? path)
+    {
+        var normalized = NormalizeBlank(path);
+        if (normalized is null)
+            return null;
+
+        var marker = normalized.IndexOf('?');
+        if (marker < 0)
+            return Truncate(normalized, 240);
+
+        var basePath = normalized[..marker];
+        var query = normalized[(marker + 1)..];
+        var parts = query.Split('&', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(RedactQueryPart);
+        return Truncate($"{basePath}?{string.Join("&", parts)}", 240);
+    }
+
+    private static string RedactQueryPart(string part)
+    {
+        var equals = part.IndexOf('=');
+        if (equals <= 0)
+            return part;
+
+        var key = part[..equals];
+        if (LooksSensitiveQueryKey(key))
+            return $"{key}=<redacted>";
+
+        return part;
+    }
+
+    private static bool LooksSensitiveQueryKey(string key) =>
+        key.Contains("token", StringComparison.OrdinalIgnoreCase) ||
+        key.Contains("secret", StringComparison.OrdinalIgnoreCase) ||
+        key.Contains("key", StringComparison.OrdinalIgnoreCase) ||
+        key.Contains("password", StringComparison.OrdinalIgnoreCase) ||
+        key.Contains("signature", StringComparison.OrdinalIgnoreCase);
+
+    private static string? NormalizeBlank(string? value)
+    {
+        var trimmed = value?.Trim();
+        return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
+    }
+
+    private static string? NormalizeDiagnosticText(string? value)
+    {
+        var normalized = NormalizeBlank(value);
+        if (normalized is null)
+            return null;
+
+        return string.Join(
+            ' ',
+            normalized.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+    }
+
+    private static string? Truncate(string? value, int maxLength)
+    {
+        if (string.IsNullOrEmpty(value) || value.Length <= maxLength)
+            return value;
+
+        return value[..(maxLength - 3)] + "...";
     }
 
     private static bool IsTruthy(JsonElement value) => value.ValueKind switch

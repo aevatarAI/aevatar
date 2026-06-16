@@ -29,6 +29,12 @@ public sealed partial class ScheduledDispatchState
         set => LastFireAtUtcValue = value.HasValue ? ToTimestamp(value.Value) : null;
     }
 
+    public DateTimeOffset? DeletedAt
+    {
+        get => DeletedAtUtcValue == null ? null : DeletedAtUtcValue.ToDateTimeOffset();
+        set => DeletedAtUtcValue = value.HasValue ? ToTimestamp(value.Value) : null;
+    }
+
     private static Timestamp ToTimestamp(DateTimeOffset value) =>
         Timestamp.FromDateTimeOffset(value.ToUniversalTime());
 

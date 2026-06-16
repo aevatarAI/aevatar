@@ -130,12 +130,13 @@ public sealed class LocalSkillCatalogTests
         text.Should().Contain("## aevatar_start_workflow Handoff");
         text.Should().Contain("\"workflow_id\": \"summary-report\"");
         text.Should().Contain("\"workflow_yamls\"");
+        text.Should().Contain("after the workflow is mounted");
         text.IndexOf("## aevatar_start_workflow Handoff", StringComparison.Ordinal)
             .Should().BeLessThan(text.IndexOf("## Associated Files", StringComparison.Ordinal));
     }
 
     [Fact]
-    public async Task UseSkillTool_DoesNotMountWorkflowsByDefault()
+    public async Task UseSkillTool_MountsWorkflowsByDefault_WhenHostProvidesMountPort()
     {
         var catalog = new LocalSkillCatalog();
         var mountPort = new RecordingSkillWorkflowMountPort();
@@ -151,11 +152,16 @@ public sealed class LocalSkillCatalogTests
                 }
             ]));
 
+        using var _ = BeginMetadataScope(new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.ScopeId] = "scope-1",
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-a",
+        });
         var result = await tool.ExecuteAsync("""{"skill":"workflow-skill"}""");
 
         ExtractLoaded(result).Should().BeTrue();
-        mountPort.Requests.Should().BeEmpty();
-        ExtractWorkflowMount(result).Should().BeNull();
+        mountPort.Requests.Should().ContainSingle();
+        ExtractWorkflowMount(result).Should().NotBeNull();
     }
 
     [Fact]

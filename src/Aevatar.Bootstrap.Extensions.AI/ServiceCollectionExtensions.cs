@@ -2,6 +2,7 @@ using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Core;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Abstractions.Voice;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.Core.Voice;
 using Aevatar.AI.Core.LLMProviders;
@@ -110,6 +111,7 @@ public static class ServiceCollectionExtensions
         // fail closed instead of stranding a dead-letter approval (#2004).
         services.TryAddSingleton<IVoiceToolInvoker, AgentToolVoiceInvoker>();
         services.TryAddSingleton<IVoiceToolCatalog, AgentToolVoiceCatalog>();
+        services.TryAddSingleton<IVoicePresenceCapabilityCommandPort, VoicePresenceCapabilityCommandPort>();
         services.TryAddSingleton<IWorkflowYamlValidator, WorkflowYamlValidatorImpl>();
         services.TryAddSingleton<IWorkflowDefinitionCommandAdapter>(sp =>
             new LocalWorkflowDefinitionCommandAdapter(
@@ -162,6 +164,16 @@ public static class ServiceCollectionExtensions
         var registrations = BuildVoicePresenceModuleRegistrations(configuration, options);
         if (registrations.Count == 0)
             return;
+
+        // Refactor (cluster-voice-nyxid-ephemeral-broker): when the OpenAI realtime credential is
+        // brokered through NyxID, register the resolver so the provider mints a per-session ephemeral
+        // instead of reading a static OPENAI_API_KEY. Requires NyxID tools (INyxIdApiClientFactory) wired.
+        var nyxIdRealtimeCredentialOptions = BuildNyxIdRealtimeCredentialOptions(configuration);
+        if (nyxIdRealtimeCredentialOptions.Enabled)
+        {
+            services.TryAddSingleton(nyxIdRealtimeCredentialOptions);
+            services.TryAddSingleton<IRealtimeProviderCredentialResolver, NyxIdRealtimeProviderCredentialResolver>();
+        }
 
         services.TryAddSingleton<IVoicePresenceCapabilityQueryPort, VoicePresenceCapabilityQueryPort>();
         services.TryAddSingleton<IVoicePresenceSessionLeasePort, VoicePresenceSessionLeasePort>();
@@ -218,12 +230,13 @@ public static class ServiceCollectionExtensions
         var voiceOptions = options.VoicePresence;
         var openAIProviderConfig = BuildOpenAIVoiceProviderConfig(configuration, options);
         var miniCpmProviderConfig = BuildMiniCpmVoiceProviderConfig(configuration, options);
+        var nyxIdRealtimeBrokerEnabled = IsNyxIdRealtimeBrokerEnabled(configuration);
         var resolvedDefaultProvider = ResolveVoicePresenceDefaultProvider(
             voiceOptions.DefaultProvider,
             openAIProviderConfig,
             miniCpmProviderConfig);
 
-        if (IsOpenAIVoiceConfigured(openAIProviderConfig))
+        if (IsOpenAIVoiceConfigured(openAIProviderConfig) || nyxIdRealtimeBrokerEnabled)
         {
             registrations.Add(new VoicePresenceModuleRegistration(
                 BuildVoicePresenceModuleNames(
@@ -233,7 +246,8 @@ public static class ServiceCollectionExtensions
                 (serviceProvider, resolvedModuleName) => new VoicePresenceModule(
                     new OpenAIRealtimeProvider(
                         voiceOptions.OpenAIProviderOptions,
-                        serviceProvider.GetService<ILogger<OpenAIRealtimeProvider>>()),
+                        serviceProvider.GetService<ILogger<OpenAIRealtimeProvider>>(),
+                        serviceProvider.GetService<IRealtimeProviderCredentialResolver>()),
                     openAIProviderConfig.Clone(),
                     BuildOpenAIVoiceSessionConfig(configuration, options),
                     CloneVoicePresenceModuleOptions(voiceOptions.Module, resolvedModuleName),
@@ -244,7 +258,8 @@ public static class ServiceCollectionExtensions
                     handle,
                     new OpenAIRealtimeProvider(
                         voiceOptions.OpenAIProviderOptions,
-                        serviceProvider.GetService<ILogger<OpenAIRealtimeProvider>>()),
+                        serviceProvider.GetService<ILogger<OpenAIRealtimeProvider>>(),
+                        serviceProvider.GetService<IRealtimeProviderCredentialResolver>()),
                     openAIProviderConfig.Clone(),
                     BuildOpenAIVoiceSessionConfig(configuration, options),
                     serviceProvider.GetService<IVoiceToolCatalog>(),
@@ -392,6 +407,28 @@ public static class ServiceCollectionExtensions
             names.Add(providerName == "openai" ? "voice_presence_openai" : "voice_presence_minicpm");
 
         return names.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static bool IsNyxIdRealtimeBrokerEnabled(IConfiguration configuration) =>
+        !string.IsNullOrWhiteSpace(configuration["Aevatar:VoicePresence:OpenAI:Nyxid:ServiceSlug"]);
+
+    private static NyxIdRealtimeProviderCredentialOptions BuildNyxIdRealtimeCredentialOptions(
+        IConfiguration configuration)
+    {
+        var options = new NyxIdRealtimeProviderCredentialOptions
+        {
+            ServiceSlug = configuration["Aevatar:VoicePresence:OpenAI:Nyxid:ServiceSlug"]?.Trim() ?? string.Empty,
+        };
+
+        var mintPath = configuration["Aevatar:VoicePresence:OpenAI:Nyxid:MintPath"];
+        if (!string.IsNullOrWhiteSpace(mintPath))
+            options.MintPath = mintPath.Trim();
+
+        var model = configuration["Aevatar:VoicePresence:OpenAI:Nyxid:Model"];
+        if (!string.IsNullOrWhiteSpace(model))
+            options.Model = model.Trim();
+
+        return options;
     }
 
     private static VoiceProviderConfig BuildOpenAIVoiceProviderConfig(
@@ -594,7 +631,7 @@ public static class ServiceCollectionExtensions
         }
 
         if (nyxIdProviders.Count == 0)
-            return BuildPrimaryFactory(configuredProviders, defaultName, options);
+            return BuildPrimaryFactory(configuredProviders, defaultName, options, loggerFactory);
 
         var standardProviders = configuredProviders
             .Where(provider => !IsNyxIdProviderType(provider.ProviderType))
@@ -603,7 +640,7 @@ public static class ServiceCollectionExtensions
         if (standardProviders.Count == 0)
             return nyxIdFactory;
 
-        var primaryFactory = BuildPrimaryFactory(standardProviders, defaultName, options);
+        var primaryFactory = BuildPrimaryFactory(standardProviders, defaultName, options, loggerFactory);
         var extraProviders = nyxIdFactory
             .GetAvailableProviders()
             .Select(nyxIdFactory.GetProvider)
@@ -614,15 +651,16 @@ public static class ServiceCollectionExtensions
     private static ILLMProviderFactory BuildPrimaryFactory(
         IReadOnlyList<ConfiguredProvider> configuredProviders,
         string defaultName,
-        AevatarAIFeatureOptions options)
+        AevatarAIFeatureOptions options,
+        ILoggerFactory? loggerFactory = null)
     {
         var primaryDefaultName = ResolveDefaultProviderName(configuredProviders, defaultName);
-        var meaiFactory = BuildMeaiFactory(configuredProviders, primaryDefaultName);
+        var meaiFactory = BuildMeaiFactory(configuredProviders, primaryDefaultName, loggerFactory);
         if (!options.EnableMEAIToTornadoFailover)
             return meaiFactory;
 
         var tornadoDefaultName = ResolveTornadoDefaultProviderName(configuredProviders, primaryDefaultName, options);
-        var tornadoFactory = BuildTornadoFactory(configuredProviders, tornadoDefaultName);
+        var tornadoFactory = BuildTornadoFactory(configuredProviders, tornadoDefaultName, loggerFactory);
         return new FailoverLLMProviderFactory(
             meaiFactory,
             tornadoFactory,
@@ -669,16 +707,19 @@ public static class ServiceCollectionExtensions
 
     private static MEAILLMProviderFactory BuildMeaiFactory(
         IEnumerable<ConfiguredProvider> configuredProviders,
-        string defaultName)
+        string defaultName,
+        ILoggerFactory? loggerFactory = null)
     {
         var factory = new MEAILLMProviderFactory();
+        var providerLogger = loggerFactory?.CreateLogger<MEAILLMProvider>();
         foreach (var provider in configuredProviders)
         {
             factory.RegisterOpenAI(
                 provider.Name,
                 provider.Model,
                 provider.ApiKey,
-                string.IsNullOrWhiteSpace(provider.Endpoint) ? null : provider.Endpoint);
+                string.IsNullOrWhiteSpace(provider.Endpoint) ? null : provider.Endpoint,
+                providerLogger);
         }
 
         factory.SetDefault(defaultName);
@@ -687,16 +728,19 @@ public static class ServiceCollectionExtensions
 
     private static TornadoLLMProviderFactory BuildTornadoFactory(
         IEnumerable<ConfiguredProvider> configuredProviders,
-        string defaultName)
+        string defaultName,
+        ILoggerFactory? loggerFactory = null)
     {
         var factory = new TornadoLLMProviderFactory();
+        var providerLogger = loggerFactory?.CreateLogger<TornadoLLMProvider>();
         foreach (var provider in configuredProviders)
         {
             factory.RegisterOpenAICompatible(
                 provider.Name,
                 provider.ApiKey,
                 provider.Model,
-                string.IsNullOrWhiteSpace(provider.Endpoint) ? null : provider.Endpoint);
+                string.IsNullOrWhiteSpace(provider.Endpoint) ? null : provider.Endpoint,
+                providerLogger);
         }
 
         factory.SetDefault(defaultName);
@@ -709,8 +753,10 @@ public static class ServiceCollectionExtensions
         ILoggerFactory? loggerFactory = null)
     {
         var factory = new NyxIdLLMProviderFactory();
-        // Providers default to NullLogger when no logger is supplied, which silenced every
-        // upstream LLM warning (and the 2026-06-12 incident probes) in production.
+        // Without an explicit logger the provider chain (NyxIdLLMProvider and the
+        // MEAILLMProvider it delegates to) falls back to NullLogger, which silences
+        // upstream LLM error translations and the no-chunks streaming fallback in
+        // production. Always wire the host logger when one is available.
         var providerLogger = loggerFactory?.CreateLogger<NyxIdLLMProvider>();
         foreach (var provider in configuredProviders)
         {

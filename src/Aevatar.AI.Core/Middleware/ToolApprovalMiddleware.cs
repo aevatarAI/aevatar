@@ -34,6 +34,20 @@ public sealed class ToolApprovalMiddleware : IToolCallMiddleware
     public async Task InvokeAsync(ToolCallContext context, Func<Task> next)
     {
         var mode = context.Tool.ApprovalMode;
+        if (TryConsumeMatchingGrant(context))
+        {
+            await next();
+            return;
+        }
+
+        if (context.ApprovalGrant != null)
+        {
+            context.Terminate = true;
+            context.TerminationKind = ToolCallTerminationKind.ApprovalDenied;
+            context.TerminationReason = "Tool approval grant does not match the requested tool call.";
+            context.Result = $"Tool '{context.ToolName}' approval grant does not match the requested tool call.";
+            return;
+        }
 
         // NeverRequire → 直接执行
         if (mode == ToolApprovalMode.NeverRequire)
@@ -183,6 +197,22 @@ public sealed class ToolApprovalMiddleware : IToolCallMiddleware
     /// <summary>Request-scoped consecutive denial count carried by the caller.</summary>
     public const string DenialCountItemKey = "approval_denial_count";
 
+    private static bool TryConsumeMatchingGrant(ToolCallContext context)
+    {
+        var grant = context.ApprovalGrant;
+        if (grant == null)
+            return false;
+
+        var approvalRequestId = Normalize(grant.ApprovalRequestId);
+        var toolName = Normalize(grant.ToolName);
+        var toolCallId = Normalize(grant.ToolCallId);
+        if (approvalRequestId.Length == 0 || toolName.Length == 0 || toolCallId.Length == 0)
+            return false;
+
+        return string.Equals(toolName, Normalize(context.ToolName), StringComparison.Ordinal) &&
+               string.Equals(toolCallId, Normalize(context.ToolCallId), StringComparison.Ordinal);
+    }
+
     private static int GetRequestScopedDenialCount(ToolCallContext context)
     {
         if (!context.Items.TryGetValue(DenialCountItemKey, out var value))
@@ -197,6 +227,9 @@ public sealed class ToolApprovalMiddleware : IToolCallMiddleware
         };
     }
 
+    private static string Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
+
     private static string BuildApprovalPendingResult(ToolApprovalRequest request) =>
         System.Text.Json.JsonSerializer.Serialize(new
         {
@@ -204,7 +237,6 @@ public sealed class ToolApprovalMiddleware : IToolCallMiddleware
             request_id = request.RequestId,
             tool_name = request.ToolName,
             tool_call_id = request.ToolCallId,
-            arguments = request.ArgumentsJson,
             message = "This tool requires user approval before execution. Execution is paused; " +
                       "the approval request will be submitted for review and the run resumes only " +
                       "after it is approved. Do not claim the tool has executed.",

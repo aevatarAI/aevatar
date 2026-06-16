@@ -570,6 +570,7 @@ streaming_proxy_consumer_report="$(
     | awk -F: '
 BEGIN {
   allowed["src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs"] = 1;
+  allowed["src/Aevatar.Mainnet.Host.Api/Hosting/MainnetAgentProjectionDocumentStoresExtensions.cs"] = 1;
   allowed["tools/ci/architecture_guards.sh"] = 1;
   allowed["tools/ci/README.md"] = 1;
 }
@@ -907,6 +908,8 @@ bash "${SCRIPT_DIR}/proto_lint_guard.sh"
 bash "${SCRIPT_DIR}/channel_mega_interface_guard.sh"
 bash "${SCRIPT_DIR}/channel_native_sdk_import_guard.sh"
 bash "${SCRIPT_DIR}/channel_platform_project_reference_guard.sh"
+echo "Running catch exception observability guard..."
+bash "${SCRIPT_DIR}/catch_exception_observability_guard.sh"
 python3 "${REPO_ROOT}/tools/ci/guards/project_reference_layer_guard.py" \
   --root "${REPO_ROOT}" \
   --allowlist "${REPO_ROOT}/tools/ci/project_reference_layer_allowlist.tsv" \
@@ -1389,7 +1392,7 @@ if [ -n "${reducer_test_coverage_violations}" ]; then
 fi
 
 stateful_replay_contract_requirements=(
-  "WorkflowGAgent:test/Aevatar.Integration.Tests/WorkflowGAgentCoverageTests.cs"
+  "WorkflowGAgent:test/Aevatar.Integration.Tests/WorkflowGAgentReplayContractTests.cs"
   "RoleGAgent:test/Aevatar.AI.Tests/RoleGAgentReplayContractTests.cs"
 )
 
@@ -1420,6 +1423,9 @@ bash tools/ci/projection_route_mapping_guard.sh
 
 echo "Running closed-world workflow guards..."
 bash tools/ci/workflow_closed_world_guards.sh
+
+echo "Running workflow saga compensation guard..."
+bash tools/ci/workflow_saga_compensation_guard.sh
 
 echo "Running workflow run-id guard..."
 bash tools/ci/workflow_runid_guard.sh
@@ -1743,6 +1749,21 @@ if [ -n "${projection_provider_business_using_hits}" ]; then
   exit 1
 fi
 
+agent_projection_provider_hits="$(
+  rg -n "Aevatar\.CQRS\.Projection\.Providers\.(Elasticsearch|InMemory|Neo4j)|Projection\.Providers\.(Elasticsearch|InMemory|Neo4j)" \
+    agents \
+    -g '*.cs' \
+    -g '*.csproj' \
+    -g '!**/bin/**' \
+    -g '!**/obj/**' || true
+)"
+
+if [ -n "${agent_projection_provider_hits}" ]; then
+  echo "${agent_projection_provider_hits}"
+  echo "Agent projects must not reference concrete projection providers. Wire provider-specific document stores in the host composition root."
+  exit 1
+fi
+
 projection_provider_store_files=(
   "src/Aevatar.CQRS.Projection.Providers.InMemory/Stores/InMemoryProjectionDocumentStore.cs"
   "src/Aevatar.CQRS.Projection.Providers.Elasticsearch/Stores/ElasticsearchOptimisticWriter.cs"
@@ -1772,7 +1793,9 @@ command_side_readmodel_violations="$(
     src/workflow/Aevatar.Workflow.Application \
     src/workflow/Aevatar.Workflow.Host.Api \
     src/Aevatar.Mainnet.Host.Api \
-    -g '*.cs' || true
+    -g '*.cs' \
+    -g '!src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs' \
+    -g '!src/Aevatar.Mainnet.Host.Api/Hosting/MainnetAgentProjectionDocumentStoresExtensions.cs' || true
 )"
 
 if [ -n "${command_side_readmodel_violations}" ]; then

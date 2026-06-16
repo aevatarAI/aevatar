@@ -129,7 +129,8 @@ public static class AgentToolExecutionContextMapper
         var context = new AgentToolExecutionContext(
             new AgentToolRequestIdentity(
                 AgentToolExecutionContext.Normalize(payload.Request?.RequestId),
-                AgentToolExecutionContext.Normalize(payload.Request?.CallId)),
+                AgentToolExecutionContext.Normalize(payload.Request?.CallId),
+                AgentToolExecutionContext.Normalize(payload.Request?.IdempotencyKey)),
             new AgentToolCredentials(
                 AgentToolExecutionContext.Normalize(payload.Credentials?.NyxIdAccessToken),
                 AgentToolExecutionContext.Normalize(payload.Credentials?.NyxIdOrgToken),
@@ -168,6 +169,7 @@ public static class AgentToolExecutionContextMapper
             {
                 RequestId = context.Request.RequestId ?? string.Empty,
                 CallId = context.Request.CallId ?? string.Empty,
+                IdempotencyKey = context.Request.IdempotencyKey ?? string.Empty,
             },
             Credentials = new AgentToolCredentialsPayload
             {

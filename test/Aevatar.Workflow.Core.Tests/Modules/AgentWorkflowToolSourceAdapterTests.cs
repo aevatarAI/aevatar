@@ -25,7 +25,9 @@ public sealed class AgentWorkflowToolSourceAdapterTests
                 ExecutionId: "exec-1",
                 CallId: "call-1",
                 ScopeId: "scope-1",
-                CallerCredential: new WorkflowCallerCredential { BearerToken = "token-123" }),
+                CallerCredential: new WorkflowCallerCredential { BearerToken = "token-123" },
+                RuntimeContext: WorkflowToolRuntimeContext.Empty,
+                IdempotencyKey: "idem-agent-tool-1"),
             CancellationToken.None);
 
         result.ResultJson.Should().Be("""{"observed":true}""");
@@ -35,6 +37,7 @@ public sealed class AgentWorkflowToolSourceAdapterTests
         agentTool.ObservedOrgToken.Should().Be("token-123");
         agentTool.ObservedScopeId.Should().Be("scope-1");
         agentTool.ObservedCallId.Should().Be("call-1");
+        agentTool.ObservedIdempotencyKey.Should().Be("idem-agent-tool-1");
         agentTool.ObservedExternalMetadata.Should().NotContainKey("ExecutionId");
         AgentToolRequestContext.Current.Should().BeNull();
     }
@@ -96,7 +99,7 @@ public sealed class AgentWorkflowToolSourceAdapterTests
     }
 
     [Fact]
-    public async Task WorkflowTool_WhenApprovalPending_ShouldFailClosedWithoutReturningPendingPayload()
+    public async Task WorkflowTool_WhenApprovalPending_ShouldReturnTypedPendingOutcomeWithoutExecutingAgentTool()
     {
         var agentTool = new CapturingAgentTool(ToolApprovalMode.AlwaysRequire);
         var approvalHandler = new ScriptedApprovalHandler(ToolApprovalResult.Yielded("approval-1"));
@@ -105,22 +108,26 @@ public sealed class AgentWorkflowToolSourceAdapterTests
             approvalHandler: approvalHandler);
         var tool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
 
-        await FluentActions.Awaiting(() => tool.ExecuteAsync(
-                new WorkflowToolExecutionRequest(
-                    ArgumentsJson: "{}",
-                    RunId: "run-1",
-                    StepId: "step-1",
-                    ExecutionId: "exec-1",
-                    CallId: "call-1",
-                    ScopeId: "scope-1",
-                    CallerCredential: new WorkflowCallerCredential()),
-                CancellationToken.None))
-            .Should()
-            .ThrowAsync<InvalidOperationException>()
-            .WithMessage("*ApprovalPending*approval-1*");
+        var result = await tool.ExecuteAsync(
+            new WorkflowToolExecutionRequest(
+                ArgumentsJson: """{"danger":true}""",
+                RunId: "run-1",
+                StepId: "step-1",
+                ExecutionId: "exec-1",
+                CallId: "call-1",
+                ScopeId: "scope-1",
+                CallerCredential: new WorkflowCallerCredential()),
+            CancellationToken.None);
 
         agentTool.ExecuteCount.Should().Be(0);
         approvalHandler.Requests.Should().ContainSingle();
+        result.PendingApproval.Should().NotBeNull();
+        result.PendingApproval!.ApprovalRequestId.Should().Be(approvalHandler.Requests.Single().RequestId);
+        result.PendingApproval.ApprovalRequestId.Should().NotBeNullOrWhiteSpace();
+        result.PendingApproval.ToolName.Should().Be("capture_context");
+        result.PendingApproval.ToolCallId.Should().Be("call-1");
+        result.PendingApproval.ArgumentsJson.Should().Be("""{"danger":true}""");
+        result.ResultJson.Should().BeEmpty();
         AgentToolRequestContext.Current.Should().BeNull();
     }
 
@@ -305,6 +312,8 @@ public sealed class AgentWorkflowToolSourceAdapterTests
 
         public string? ObservedCallId { get; private set; }
 
+        public string? ObservedIdempotencyKey { get; private set; }
+
         public IReadOnlyDictionary<string, string> ObservedExternalMetadata { get; private set; } =
             new Dictionary<string, string>(StringComparer.Ordinal);
 
@@ -334,6 +343,7 @@ public sealed class AgentWorkflowToolSourceAdapterTests
             ObservedOrgToken = AgentToolRequestContext.NyxIdOrgToken;
             ObservedScopeId = AgentToolRequestContext.ScopeId;
             ObservedCallId = AgentToolRequestContext.CallId;
+            ObservedIdempotencyKey = AgentToolRequestContext.IdempotencyKey;
             ObservedExternalMetadata = AgentToolRequestContext.Current?.ExternalMetadata
                 ?? new Dictionary<string, string>(StringComparer.Ordinal);
             ObservedWorkflowRuntime = AgentToolRequestContext.Current?.WorkflowRuntime

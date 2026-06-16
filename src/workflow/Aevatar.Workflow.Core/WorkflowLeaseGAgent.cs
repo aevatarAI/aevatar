@@ -3,6 +3,7 @@ using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Primitives;
 using Google.Protobuf;
 using Microsoft.Extensions.Logging;
@@ -802,18 +803,11 @@ public sealed class WorkflowLeaseGAgent : GAgentBase<WorkflowLeaseState>
         if (lease == null)
             return;
 
-        try
-        {
-            await CancelDurableCallbackAsync(lease, ct);
-        }
-        catch (Exception ex)
-        {
-            Logger.LogDebug(
-                ex,
-                "Workflow lease {ActorId}: failed to cancel callback {CallbackId} generation={Generation}.",
-                Id,
-                lease.CallbackId,
-                lease.Generation);
-        }
+        await WorkflowRuntimeCallbackLeaseSupport.TryCancelAsync(
+            CancelDurableCallbackAsync,
+            Logger,
+            lease,
+            $"Workflow lease {Id} callback cleanup",
+            ct);
     }
 }

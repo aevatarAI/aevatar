@@ -7,6 +7,8 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core.Modules;
 using System.IO.Compression;
 using UglyToad.PdfPig;
+using ProtoWorkflowFileRef = Aevatar.Workflow.Abstractions.WorkflowFileRef;
+using ProtoWorkflowFileSourceKind = Aevatar.Workflow.Abstractions.WorkflowFileSourceKind;
 
 namespace Aevatar.Workflow.Infrastructure.Runs;
 
@@ -40,7 +42,7 @@ public sealed class WorkflowDocumentExtractToolSource(IWorkflowFileArtifactReadP
         {
             try
             {
-                var arguments = ParseArguments(request.ArgumentsJson);
+                var arguments = ParseArguments(request);
                 var artifact = await _fileArtifacts.OpenReadAsync(arguments.FileRef, ct)
                     .ConfigureAwait(false);
                 await using (artifact.Content.ConfigureAwait(false))
@@ -93,20 +95,19 @@ public sealed class WorkflowDocumentExtractToolSource(IWorkflowFileArtifactReadP
             }
         }
 
-        private static DocumentExtractArguments ParseArguments(string argumentsJson)
+        private static DocumentExtractArguments ParseArguments(WorkflowToolExecutionRequest request)
         {
-            if (string.IsNullOrWhiteSpace(argumentsJson))
-                throw new ArgumentException("document_extract arguments are required.");
-
+            var argumentsJson = string.IsNullOrWhiteSpace(request.ArgumentsJson)
+                ? "{}"
+                : request.ArgumentsJson;
             using var document = JsonDocument.Parse(argumentsJson);
             var root = document.RootElement;
             if (root.ValueKind != JsonValueKind.Object)
                 throw new ArgumentException("document_extract arguments must be a JSON object.");
-            if (!TryGetProperty(root, "fileRef", "file_ref", out var fileRefElement) ||
-                fileRefElement.ValueKind != JsonValueKind.Object)
-                throw new ArgumentException("document_extract requires a fileRef object.");
 
-            var fileRef = ParseFileRef(fileRefElement);
+            var fileRef = TryResolveExplicitFileRef(root, out var explicitFileRef)
+                ? explicitFileRef
+                : ResolveSingleInputFileRef(request.InputFileRefs);
             if (string.IsNullOrWhiteSpace(fileRef.FileId) &&
                 string.IsNullOrWhiteSpace(fileRef.ArtifactId))
                 throw new ArgumentException("document_extract fileRef requires fileId or artifactId.");
@@ -119,6 +120,58 @@ public sealed class WorkflowDocumentExtractToolSource(IWorkflowFileArtifactReadP
                     : throw new ArgumentException("document_extract maxChars must be an integer.");
             return new DocumentExtractArguments(fileRef, maxChars);
         }
+
+        private static bool TryResolveExplicitFileRef(
+            JsonElement root,
+            out WorkflowFileRef fileRef)
+        {
+            fileRef = new WorkflowFileRef();
+            if (!TryGetProperty(root, "fileRef", "file_ref", out var fileRefElement))
+                return false;
+            if (fileRefElement.ValueKind != JsonValueKind.Object)
+                throw new ArgumentException("document_extract fileRef must be an object.");
+
+            fileRef = ParseFileRef(fileRefElement);
+            return true;
+        }
+
+        private static WorkflowFileRef ResolveSingleInputFileRef(
+            IReadOnlyList<ProtoWorkflowFileRef> inputFileRefs)
+        {
+            if (inputFileRefs.Count == 1)
+                return ToApplicationFileRef(inputFileRefs[0]);
+
+            throw new ArgumentException(inputFileRefs.Count == 0
+                ? "document_extract requires a fileRef object or exactly one input file ref."
+                : "document_extract received multiple input file refs; provide fileRef explicitly.");
+        }
+
+        private static WorkflowFileRef ToApplicationFileRef(ProtoWorkflowFileRef source) =>
+            new()
+            {
+                FileId = Normalize(source.FileId),
+                ArtifactId = Normalize(source.ArtifactId),
+                SourceKind = source.SourceKind switch
+                {
+                    ProtoWorkflowFileSourceKind.ChatInput => WorkflowFileSourceKind.ChatInput,
+                    ProtoWorkflowFileSourceKind.FormUpload => WorkflowFileSourceKind.FormUpload,
+                    ProtoWorkflowFileSourceKind.ConnectedServiceResource =>
+                        WorkflowFileSourceKind.ConnectedServiceResource,
+                    ProtoWorkflowFileSourceKind.ExternalResource => WorkflowFileSourceKind.ExternalResource,
+                    ProtoWorkflowFileSourceKind.Generated => WorkflowFileSourceKind.Generated,
+                    _ => WorkflowFileSourceKind.Unspecified,
+                },
+                SourceMessageId = Normalize(source.SourceMessageId),
+                SourceResourceKey = Normalize(source.SourceResourceKey),
+                FileName = Normalize(source.FileName),
+                MediaType = Normalize(source.MediaType),
+                SizeBytes = source.SizeBytes,
+                Sha256 = Normalize(source.Sha256),
+                CreatedAtUnixMs = source.CreatedAtUnixMs,
+                ExpiresAtUnixMs = source.ExpiresAtUnixMs,
+                OwnerRunId = Normalize(source.OwnerRunId),
+                OwnerScopeId = Normalize(source.OwnerScopeId),
+            };
 
         private static WorkflowFileRef ParseFileRef(JsonElement fileRefElement)
         {

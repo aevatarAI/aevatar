@@ -81,6 +81,7 @@ public sealed class ScopeWorkflowAguiEventMapperTests
         aguiEvent.Usage.TotalTokens.Should().Be(0);
     }
     
+    [Fact]
     public async Task TypeRegistry_ShouldSerializeRawObservedInitializeRoleAgentEvent()
     {
         var http = new DefaultHttpContext

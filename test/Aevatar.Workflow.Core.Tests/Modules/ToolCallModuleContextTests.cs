@@ -149,7 +149,8 @@ public sealed class ToolCallModuleContextTests
             ctx,
             tool.Name,
             input: """{"operation":"read"}""",
-            executionId: "exec-1");
+            executionId: "exec-1",
+            idempotencyKey: "idem-tool-1");
 
         tool.LastRequest.Should().NotBeNull();
         tool.LastRequest!.ArgumentsJson.Should().Be("""{"operation":"read"}""");
@@ -157,6 +158,7 @@ public sealed class ToolCallModuleContextTests
         tool.LastRequest.StepId.Should().Be("call_proxy");
         tool.LastRequest.ExecutionId.Should().Be("exec-1");
         tool.LastRequest.CallId.Should().Be("workflow:run-1:call_proxy:exec-1");
+        tool.LastRequest.IdempotencyKey.Should().Be("idem-tool-1");
         tool.LastRequest.ScopeId.Should().Be("scope-1");
         tool.LastRequest.CallerCredential.BearerToken.Should().Be("typed-token");
         tool.LastRequest.RuntimeContext.ParentActorId.Should().Be("agent-1");
@@ -164,6 +166,27 @@ public sealed class ToolCallModuleContextTests
         tool.LastRequest.RuntimeContext.ParentStepId.Should().Be("call_proxy");
         tool.LastRequest.RuntimeContext.RootRunId.Should().Be("root-run");
         tool.LastRequest.RuntimeContext.Depth.Should().Be(2);
+        LastCompleted(ctx).Success.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ToolCallModule_ShouldPassCurrentStepInputFileRefsToDirectTool()
+    {
+        var tool = new CapturingWorkflowTool("document_extract");
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+        var fileRef = BuildWorkflowFileRef("file-step");
+
+        await ExecuteToolCallAsync(
+            module,
+            ctx,
+            tool.Name,
+            inputFileRefs: [fileRef]);
+
+        tool.LastRequest.Should().NotBeNull();
+        var requestFileRef = tool.LastRequest!.InputFileRefs.Should().ContainSingle().Subject;
+        requestFileRef.FileId.Should().Be("file-step");
+        requestFileRef.Should().NotBeSameAs(fileRef);
         LastCompleted(ctx).Success.Should().BeTrue();
     }
 
@@ -247,21 +270,37 @@ public sealed class ToolCallModuleContextTests
         string toolName,
         string stepId = "call_proxy",
         string input = "{}",
-        string executionId = "")
+        string executionId = "",
+        IReadOnlyList<WorkflowFileRef>? inputFileRefs = null,
+        string idempotencyKey = "")
     {
+        var request = new StepRequestEvent
+        {
+            StepId = stepId,
+            StepType = "tool_call",
+            RunId = ctx.RunId,
+            ExecutionId = executionId,
+            IdempotencyKey = idempotencyKey,
+            Input = input,
+            Parameters = { ["tool"] = toolName },
+        };
+        request.InputFileRefs.Add(inputFileRefs?.Select(static fileRef => fileRef.Clone()) ?? []);
+
         await module.HandleAsync(
-            Envelope(new StepRequestEvent
-            {
-                StepId = stepId,
-                StepType = "tool_call",
-                RunId = ctx.RunId,
-                ExecutionId = executionId,
-                Input = input,
-                Parameters = { ["tool"] = toolName },
-            }),
+            Envelope(request),
             ctx,
             CancellationToken.None);
     }
+
+    private static WorkflowFileRef BuildWorkflowFileRef(string fileId) =>
+        new()
+        {
+            FileId = fileId,
+            ArtifactId = $"artifact-{fileId}",
+            SourceKind = WorkflowFileSourceKind.ChatInput,
+            FileName = $"{fileId}.txt",
+            MediaType = "text/plain",
+        };
 
     private static StepCompletedEvent LastCompleted(RecordingWorkflowContext ctx) =>
         ctx.Published.Select(x => x.Event).OfType<StepCompletedEvent>().Last();
@@ -414,6 +453,32 @@ public sealed class ToolCallModuleContextTests
 
         public Task ClearExecutionStateAsync(string scopeKey, CancellationToken ct = default) =>
             ClearStateAsync(scopeKey, ct);
+
+        public Task<WorkflowCompensationTransitionResult> TryStartCompensationAsync(
+            WorkflowCompletedEvent terminalFailure,
+            CancellationToken ct = default)
+        {
+            _ = terminalFailure;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(NoCompensableLedger());
+        }
+
+        public Task<WorkflowCompensationTransitionResult> RecordCompensationStepCompletionAsync(
+            CompensationStepCompletedEvent completion,
+            CancellationToken ct = default)
+        {
+            _ = completion;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(NoCompensableLedger());
+        }
+
+        private static WorkflowCompensationTransitionResult NoCompensableLedger() =>
+            new(
+                WorkflowCompensationTransitionStatus.NoCompensableLedger,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty);
 
         public Task UpdateExecutionContextAsync(
             WorkflowRunExecutionContextDelta delta,

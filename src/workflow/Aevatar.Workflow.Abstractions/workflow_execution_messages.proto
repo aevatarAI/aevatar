@@ -103,6 +103,15 @@ message WorkflowRunForkSeed
   string start_at_step_id = 2;
   map<string, string> variables = 3;
   int32 attempt = 4;
+  WorkflowStepIdempotencyState start_step_idempotency = 5;
+}
+
+message WorkflowStepIdempotencyState
+{
+  string logical_run_id = 1;
+  string step_id = 2;
+  int32 logical_attempt = 3;
+  string idempotency_key = 4;
 }
 
 message WorkflowRunForkRequestedEvent
@@ -329,6 +338,7 @@ message StepRequestEvent
   string execution_id = 7;
   WorkflowStepParameters step_parameters = 8;
   repeated WorkflowFileRef input_file_refs = 9;
+  string idempotency_key = 10;
 }
 message WorkflowUsageMetrics {
   int32 prompt_tokens = 1;
@@ -491,7 +501,14 @@ message WorkflowToolApprovalSuspension
   string tool_name = 2;
   string tool_call_id = 3;
   string approval_request_id = 4;
-  string arguments_json = 5;
+  reserved 5;
+  reserved "arguments_json";
+}
+message WorkflowToolApprovalResume
+{
+  string execution_id = 1;
+  string tool_call_id = 2;
+  string approval_request_id = 3;
 }
 message WorkflowResumedEvent
 {
@@ -502,6 +519,7 @@ message WorkflowResumedEvent
   map<string, string> metadata = 5;
   string edited_content = 6;
   string feedback = 7;
+  WorkflowToolApprovalResume tool_approval = 8;
 }
 message WorkflowHumanApprovalResolvedEvent
 {
@@ -824,4 +842,37 @@ message StaleStepCompletionRejectedEvent
   string run_id = 2;
   string expected_execution_id = 3;
   string received_execution_id = 4;
+}
+
+message CompensationRequestEvent
+{
+  string run_id = 1;
+  string failed_step_id = 2;
+  string compensation_step_id = 3;
+  string idempotency_key = 4;
+  string captured_output = 5;
+  string execution_id = 6;
+}
+
+message CompensationStepCompletedEvent
+{
+  string run_id = 1;
+  string compensation_step_id = 2;
+  bool success = 3;
+  string error = 4;
+  string execution_id = 5;
+}
+
+message WorkflowCompensationCompletedEvent
+{
+  string run_id = 1;
+  int32 compensated_steps = 2;
+}
+
+message WorkflowCompensationFailedEvent
+{
+  string run_id = 1;
+  string failed_compensation_step_id = 2;
+  int32 remaining_uncompensated = 3;
+  string error = 4;
 }

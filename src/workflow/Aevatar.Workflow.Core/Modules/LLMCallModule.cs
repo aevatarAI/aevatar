@@ -612,21 +612,11 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
-        if (pending.WatchdogLease == null)
-            return;
-
-        try
-        {
-            await WorkflowRuntimeCallbackLeaseSupport.CancelAsync(ctx, pending.WatchdogLease, ct);
-        }
-        catch (Exception ex)
-        {
-            ctx.Logger.LogDebug(
-                ex,
-                "LLMCallModule: failed to cancel watchdog callback={CallbackId} generation={Generation}",
-                pending.WatchdogLease.CallbackId,
-                pending.WatchdogLease.Generation);
-        }
+        await WorkflowRuntimeCallbackLeaseSupport.TryCancelAsync(
+            ctx,
+            pending.WatchdogLease,
+            "LLMCallModule watchdog cleanup",
+            ct);
     }
 
     private static Task SaveStateAsync(

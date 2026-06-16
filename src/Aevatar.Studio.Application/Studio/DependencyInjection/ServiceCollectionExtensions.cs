@@ -33,6 +33,7 @@ public static class ServiceCollectionExtensions
         services.AddOptions<UserLlmSettingsOptions>();
         services.Replace(ServiceDescriptor.Singleton<ITeamEntryMemberResolver, StudioTeamEntryMemberResolver>());
         services.TryAddSingleton<UserLlmPreferenceWriter>();
+        services.TryAddSingleton<IChannelUserLlmPreferencePort, ChannelUserLlmPreferencePort>();
         services.TryAddSingleton<IUserConfigService, UserConfigService>();
         services.TryAddSingleton<IUserLlmPreferenceService, UserLlmPreferenceService>();
 

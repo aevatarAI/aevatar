@@ -1,5 +1,5 @@
+using Aevatar.AI.ToolProviders.NyxId.LlmCatalog;
 using Aevatar.Studio.Application.Studio.Abstractions;
-using Aevatar.Studio.Application.Studio.Services;
 using FluentAssertions;
 
 namespace Aevatar.Studio.Tests;

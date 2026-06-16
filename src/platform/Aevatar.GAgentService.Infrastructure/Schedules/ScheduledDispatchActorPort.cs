@@ -99,6 +99,16 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         return await DispatchAsync(actorId, new ScheduledDispatchDisableCommand { Reason = reason ?? string.Empty }, ct);
     }
 
+    public async Task<DispatchAdmission> DispatchDeleteAsync(
+        string actorId,
+        string reason,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
+        ct.ThrowIfCancellationRequested();
+        return await DispatchAsync(actorId, new ScheduledDispatchDeleteCommand { Reason = reason ?? string.Empty }, ct);
+    }
+
     public async Task<DispatchAdmission> DispatchRunNowAsync(
         string actorId,
         DateTimeOffset scheduledFireAt,
@@ -137,6 +147,7 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         kind switch
         {
             ScheduledDispatchScheduleKind.Workflow => ScheduledDispatchScheduleKindState.Workflow,
+            ScheduledDispatchScheduleKind.SkillRunner => ScheduledDispatchScheduleKindState.SkillRunner,
             _ => ScheduledDispatchScheduleKindState.Generic,
         };
 

@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgentService.Abstractions.Schedules;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
@@ -14,13 +15,19 @@ internal sealed class SkillRunnerCommandPort : ISkillRunnerCommandPort
 
     private readonly IActorRuntime _actorRuntime;
     private readonly IActorDispatchPort _actorDispatchPort;
+    private readonly ISkillRunnerCronSchedulePort _cronSchedulePort;
+    private readonly ISkillRunnerExecutionQueryPort _executionQueryPort;
 
     public SkillRunnerCommandPort(
         IActorRuntime actorRuntime,
-        IActorDispatchPort actorDispatchPort)
+        IActorDispatchPort actorDispatchPort,
+        ISkillRunnerCronSchedulePort cronSchedulePort,
+        ISkillRunnerExecutionQueryPort executionQueryPort)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
+        _cronSchedulePort = cronSchedulePort ?? throw new ArgumentNullException(nameof(cronSchedulePort));
+        _executionQueryPort = executionQueryPort ?? throw new ArgumentNullException(nameof(executionQueryPort));
     }
 
     public async Task InitializeAsync(
@@ -34,6 +41,7 @@ internal sealed class SkillRunnerCommandPort : ISkillRunnerCommandPort
 
         await EnsureSkillRunnerActorAsync(agentId, ct);
         await DispatchAsync(agentId, command, ct);
+        await _cronSchedulePort.EnsureAsync(agentId, command, ct);
 
         if (runImmediately)
         {
@@ -52,6 +60,7 @@ internal sealed class SkillRunnerCommandPort : ISkillRunnerCommandPort
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(agentId);
         await EnsureSkillRunnerActorAsync(agentId, ct);
+        await DisableCronScheduleIfPresentAsync(agentId, reason ?? string.Empty, ct);
         await DispatchAsync(agentId, new DisableSkillRunnerCommand { Reason = reason ?? string.Empty }, ct);
     }
 
@@ -60,6 +69,8 @@ internal sealed class SkillRunnerCommandPort : ISkillRunnerCommandPort
         ArgumentException.ThrowIfNullOrWhiteSpace(agentId);
         await EnsureSkillRunnerActorAsync(agentId, ct);
         await DispatchAsync(agentId, new EnableSkillRunnerCommand { Reason = reason ?? string.Empty }, ct);
+        if (await IsCronInitializedAsync(agentId, ct))
+            await _cronSchedulePort.EnableAsync(agentId, reason ?? string.Empty, ct);
     }
 
     public async Task<SkillRunnerExternalTriggerAdmissionReceipt> AdmitExternalTriggerAsync(
@@ -93,6 +104,23 @@ internal sealed class SkillRunnerCommandPort : ISkillRunnerCommandPort
     {
         _ = await _actorRuntime.GetAsync(agentId)
             ?? await _actorRuntime.CreateAsync<SkillRunnerGAgent>(agentId, ct);
+    }
+
+    private async Task<bool> IsCronInitializedAsync(string agentId, CancellationToken ct)
+    {
+        var document = await _executionQueryPort.GetAsync(agentId, ct);
+        return document?.ScheduleMode == SkillRunnerScheduleMode.Cron;
+    }
+
+    private async Task DisableCronScheduleIfPresentAsync(string agentId, string reason, CancellationToken ct)
+    {
+        try
+        {
+            await _cronSchedulePort.DisableAsync(agentId, reason, ct);
+        }
+        catch (ScheduledDispatchNotFoundException)
+        {
+        }
     }
 
     private async Task<DispatchAdmission> DispatchAsync<TCommand>(string agentId, TCommand command, CancellationToken ct)

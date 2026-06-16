@@ -122,7 +122,7 @@ public sealed class SkillWorkflowsWiringTests
         });
 
         var tool = new UseSkillTool(catalog);
-        var output = await tool.ExecuteAsync("""{"skill":"translator"}""");
+        var output = await tool.ExecuteAsync("""{"skill":"translator","mount_workflows":false}""");
         var text = ExtractText(output);
 
         text.Should().Contain("## aevatar_start_workflow Handoff");
@@ -242,11 +242,11 @@ public sealed class SkillWorkflowsWiringTests
         var commandPort = new RecordingScopeWorkflowCommandPort();
         var tool = new UseSkillTool(catalog, scopeWorkflowCommandPort: commandPort);
 
-        tool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
+        tool.ApprovalMode.Should().Be(ToolApprovalMode.NeverRequire);
         tool.RequiresApproval("""{"skill":"translator"}""").Should().BeFalse();
         tool.RequiresApproval("""{"skill":"translator","mount_workflows":false}""").Should().BeFalse();
 
-        var output = await tool.ExecuteAsync("""{"skill":"translator"}""");
+        var output = await tool.ExecuteAsync("""{"skill":"translator","mount_workflows":false}""");
 
         output.Should().Contain("## aevatar_start_workflow Handoff");
         output.Should().NotContain("## Mounted Workflows");
@@ -254,12 +254,12 @@ public sealed class SkillWorkflowsWiringTests
     }
 
     [Fact]
-    public void UseSkillTool_MountWorkflowsTrue_RequiresApproval()
+    public void UseSkillTool_MountWorkflowsTrue_DoesNotRequireApproval()
     {
         var tool = new UseSkillTool(new LocalSkillCatalog());
 
-        tool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
-        tool.RequiresApproval("""{"skill":"translator","mount_workflows":true}""").Should().BeTrue();
+        tool.ApprovalMode.Should().Be(ToolApprovalMode.NeverRequire);
+        tool.RequiresApproval("""{"skill":"translator","mount_workflows":true}""").Should().BeFalse();
     }
 
     [Fact]

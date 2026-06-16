@@ -52,6 +52,8 @@ public sealed class TurnStreamingReplySinkTests
         chunk.AccumulatedText.Should().Be("card text");
         chunk.ReplyToken.Should().Be("runtime-reply-token");
         chunk.ReplyTokenExpiresAtUnixMs.Should().Be(1770000000000);
+        chunk.RunId.Should().Be("run-1");
+        envelopes[0].Route.Direct.TargetActorId.Should().Be("target-actor");
     }
 
     [Fact]
@@ -140,6 +142,7 @@ public sealed class TurnStreamingReplySinkTests
             },
             replyToken: "runtime-reply-token",
             replyTokenExpiresAtUnixMs: 1770000000000,
+            runId: "run-1",
             timeProvider,
             NullLogger<TurnStreamingReplySink>.Instance,
             cardMode);

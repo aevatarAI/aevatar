@@ -64,6 +64,27 @@ public class LayerDependencyTests
     }
 
     [Fact]
+    public void NyxidChat_ShouldOnlyDependOnStudioApplicationAbstractions()
+    {
+        var root = FindRepositoryRoot();
+        var projectPath = Path.Combine(root, "agents", "Aevatar.GAgents.NyxidChat", "Aevatar.GAgents.NyxidChat.csproj");
+        var project = File.ReadAllText(projectPath);
+
+        Assert.Contains(
+            "Aevatar.Studio.Application.Abstractions.csproj",
+            project,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "Aevatar.Studio.Application.csproj",
+            project,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "Aevatar.Studio.Infrastructure.csproj",
+            project,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void WorkflowCore_ShouldNot_DependOn_AICore()
     {
         IArchRule rule = Types().That()

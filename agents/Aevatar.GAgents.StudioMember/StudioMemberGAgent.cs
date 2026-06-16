@@ -101,7 +101,13 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
             throw new InvalidOperationException("member not yet created.");
         }
 
-        await PersistDomainEventAsync(evt);
+        var renamed = evt.Clone();
+        if (string.IsNullOrEmpty(renamed.Description))
+            renamed.Description = State.Description;
+        if (renamed.UpdatedAtUtc == null)
+            renamed.UpdatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+
+        await PersistDomainEventAsync(renamed);
     }
 
     [EventHandler(EndpointName = "updateImplementation")]
@@ -434,9 +440,11 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
             DisplayName = evt.DisplayName,
             Description = evt.Description,
             ImplementationKind = evt.ImplementationKind,
-            ImplementationRef = null,
+            ImplementationRef = evt.ImplementationRef?.Clone(),
             PublishedServiceId = derivedPublishedServiceId,
-            LifecycleStage = StudioMemberLifecycleStage.Created,
+            LifecycleStage = HasResolvedImplementationRef(evt.ImplementationRef)
+                ? StudioMemberLifecycleStage.BuildReady
+                : StudioMemberLifecycleStage.Created,
             CreatedAtUtc = evt.CreatedAtUtc,
             UpdatedAtUtc = evt.CreatedAtUtc,
             LastBinding = null,

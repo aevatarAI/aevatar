@@ -214,6 +214,7 @@ message StudioMemberCreatedEvent {
   StudioMemberImplementationKind implementation_kind = 5;
   string published_service_id = 6;
   google.protobuf.Timestamp created_at_utc = 7;
+  StudioMemberImplementationRef implementation_ref = 8;
 }
 
 // Refactor (iter1345/cluster-519-draft-member-authority):

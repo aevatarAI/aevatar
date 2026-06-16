@@ -404,5 +404,4 @@ public sealed class WorkflowHostingExtensionsCoverageTests
             throw ex.InnerException;
         }
     }
-
 }

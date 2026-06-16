@@ -504,6 +504,28 @@ public class ContextCompressorTests
     }
 
     [Fact]
+    public void TruncateByImportance_ShouldRemoveOrphanToolResultsAfterProtectedBoundarySplit()
+    {
+        var messages = new List<ChatMessage>
+        {
+            ChatMessage.User("old setup"),
+            new()
+            {
+                Role = "assistant",
+                ToolCalls = [new ToolCall { Id = "tc-1", Name = "lookup", ArgumentsJson = "{}" }],
+            },
+            ChatMessage.Tool("tc-1", "tool result"),
+            ChatMessage.User("protected followup"),
+            ChatMessage.Assistant("protected answer"),
+        };
+
+        var removed = ContextCompressor.TruncateByImportance(messages, targetCount: 3, preserveRecentCount: 3);
+
+        removed.Should().BeGreaterThan(0);
+        messages.Should().NotContain(message => message.Role == "tool" && message.ToolCallId == "tc-1");
+    }
+
+    [Fact]
     public void TruncateByImportance_ShouldHandleAllSystemMessages()
     {
         var messages = new List<ChatMessage>

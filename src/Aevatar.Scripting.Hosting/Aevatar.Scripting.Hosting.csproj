@@ -12,7 +12,7 @@
     <ProjectReference Include="..\Aevatar.CQRS.Projection.Providers.Neo4j\Aevatar.CQRS.Projection.Providers.Neo4j.csproj" />
     <ProjectReference Include="..\Aevatar.CQRS.Projection.Runtime\Aevatar.CQRS.Projection.Runtime.csproj" />
     <ProjectReference Include="..\Aevatar.CQRS.Core\Aevatar.CQRS.Core.csproj" />
-    <ProjectReference Include="..\Aevatar.Hosting\Aevatar.Hosting.csproj" />
+    <ProjectReference Include="..\Aevatar.Capabilities\Aevatar.Capabilities.csproj" />
     <ProjectReference Include="..\Aevatar.Scripting.Application\Aevatar.Scripting.Application.csproj" />
     <ProjectReference Include="..\Aevatar.Scripting.Core\Aevatar.Scripting.Core.csproj" />
     <ProjectReference Include="..\Aevatar.Scripting.Infrastructure\Aevatar.Scripting.Infrastructure.csproj" />

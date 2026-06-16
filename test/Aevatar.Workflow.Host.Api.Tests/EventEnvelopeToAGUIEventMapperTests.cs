@@ -411,7 +411,6 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
                 ToolName = "dangerous_tool",
                 ToolCallId = "call-tool",
                 ApprovalRequestId = "approval-tool",
-                ArgumentsJson = """{"danger":true}""",
             },
         }));
 
@@ -424,7 +423,7 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
         payload.ToolName.Should().Be("dangerous_tool");
         payload.ToolCallId.Should().Be("call-tool");
         payload.ApprovalRequestId.Should().Be("approval-tool");
-        payload.ArgumentsJson.Should().Be("""{"danger":true}""");
+        payload.ArgumentsJson.Should().BeEmpty();
     }
 
     [Fact]
