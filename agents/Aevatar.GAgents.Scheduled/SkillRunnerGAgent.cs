@@ -17,6 +17,7 @@ using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Platform.Lark;
+using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -255,6 +256,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             .On<SkillRunnerExternalTriggerDispatchRequestedEvent>(ApplyExternalTriggerDispatchRequested)
             .On<SkillRunnerExternalTriggerRejectedEvent>(ApplyExternalTriggerRejected)
             .On<SkillRunnerExternalTriggerDuplicateIgnoredEvent>(ApplyExternalTriggerDuplicateIgnored)
+            .On<SkillRunnerCronOccurrenceDuplicateIgnoredEvent>(ApplyCronOccurrenceDuplicateIgnored)
             .On<SkillRunnerDisabledEvent>(ApplyDisabled)
             .On<SkillRunnerEnabledEvent>(ApplyEnabled)
             .OrCurrent();
@@ -393,6 +395,17 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     [EventHandler(AllowSelfHandling = true)]
     public async Task HandleTriggerAsync(TriggerSkillRunnerExecutionCommand command)
     {
+        var cronOccurrenceKey = ResolveCronOccurrenceKey(command);
+        if (ShouldSkipCronOccurrence(command, cronOccurrenceKey))
+        {
+            await PersistDomainEventAsync(new SkillRunnerCronOccurrenceDuplicateIgnoredEvent
+            {
+                CronOccurrenceKey = cronOccurrenceKey,
+                IgnoredAt = Timestamp.FromDateTimeOffset(_clock.UtcNow),
+            });
+            return;
+        }
+
         var externalIdentity = NormalizeExternalTriggerIdentity(command.ExternalTriggerIdentity, _clock.UtcNow);
         var hasExternalTrigger = IsValidExternalTriggerIdentity(externalIdentity);
         if (hasExternalTrigger && State.IsExternalTriggerTerminal(externalIdentity))
@@ -414,6 +427,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 RejectedAt = Timestamp.FromDateTimeOffset(_clock.UtcNow),
                 Reason = SkillRunnerDefaults.RejectionReasonRunnerDisabled,
                 ExternalTriggerIdentity = hasExternalTrigger ? externalIdentity : null,
+                CronOccurrenceKey = cronOccurrenceKey,
             });
             if (State.ScheduleMode == SkillRunnerScheduleMode.OneShot && !hasExternalTrigger)
                 await RetireOneShotAsync(_clock.UtcNow, SkillRunnerDefaults.OneShotRetirementReasonRejected, CancellationToken.None);
@@ -443,6 +457,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 WorkflowCommandId = result.WorkflowReceipt?.CommandId ?? string.Empty,
                 WorkflowCorrelationId = result.WorkflowReceipt?.CorrelationId ?? string.Empty,
                 ExternalTriggerIdentity = hasExternalTrigger ? externalIdentity : null,
+                CronOccurrenceKey = cronOccurrenceKey,
             });
 
             await CancelRetryLeaseAsync(CancellationToken.None);
@@ -483,6 +498,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 WorkflowId = executionFailure?.WorkflowId ?? string.Empty,
                 ErrorCode = executionFailure?.ErrorCode ?? SkillRunnerExecutionErrorCode.Unspecified,
                 ExternalTriggerIdentity = hasExternalTrigger ? externalIdentity : null,
+                CronOccurrenceKey = cronOccurrenceKey,
             });
 
             await TrySendFailureAsync(ex.Message, CancellationToken.None);
@@ -512,14 +528,68 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         await CancelRetryLeaseAsync(ct);
         var retryCommand = command.Clone();
         retryCommand.RetryAttempt = retryAttempt;
+        var cronOccurrenceKey = ResolveCronOccurrenceKey(command);
+        var options = string.IsNullOrWhiteSpace(cronOccurrenceKey)
+            ? null
+            : CreateCronOccurrencePropagationOptions(cronOccurrenceKey);
         _retryLease = await ScheduleSelfDurableTimeoutAsync(
             SkillRunnerDefaults.RetryCallbackId,
             SkillRunnerDefaults.RetryBackoff,
             retryCommand,
+            options,
             ct: ct);
         Logger.LogInformation(
             "Skill runner {ActorId} scheduled retry attempt {Attempt} in {Backoff}",
             Id, retryAttempt, SkillRunnerDefaults.RetryBackoff);
+    }
+
+    private bool ShouldSkipCronOccurrence(
+        TriggerSkillRunnerExecutionCommand command,
+        string cronOccurrenceKey) =>
+        command.RetryAttempt == 0 &&
+        !string.IsNullOrWhiteSpace(cronOccurrenceKey) &&
+        State.IsCronOccurrenceTerminal(cronOccurrenceKey);
+
+    private string ResolveCronOccurrenceKey(TriggerSkillRunnerExecutionCommand command)
+    {
+        if (!IsCronScheduleTrigger(command))
+            return string.Empty;
+
+        if (TryReadCronOccurrenceKeyFromBaggage(out var baggageKey))
+            return baggageKey;
+
+        return ActiveInboundEnvelope?.Id?.Trim() ?? string.Empty;
+    }
+
+    private bool TryReadCronOccurrenceKeyFromBaggage(out string cronOccurrenceKey)
+    {
+        cronOccurrenceKey = string.Empty;
+        if (ActiveInboundEnvelope?.Propagation?.Baggage is null)
+            return false;
+
+        if (!ActiveInboundEnvelope.Propagation.Baggage.TryGetValue(
+                ScheduledDispatchMetadataKeys.IdempotencyKey,
+                out var value))
+        {
+            return false;
+        }
+
+        cronOccurrenceKey = value?.Trim() ?? string.Empty;
+        return !string.IsNullOrEmpty(cronOccurrenceKey);
+    }
+
+    private static bool IsCronScheduleTrigger(TriggerSkillRunnerExecutionCommand command) =>
+        string.Equals(command.Reason?.Trim(), SkillRunnerDefaults.ScheduleTriggerReason, StringComparison.Ordinal) &&
+        !IsValidExternalTriggerIdentity(command.ExternalTriggerIdentity);
+
+    private static EventEnvelopePublishOptions CreateCronOccurrencePropagationOptions(string cronOccurrenceKey)
+    {
+        var options = new EventEnvelopePublishOptions
+        {
+            Propagation = new EventEnvelopePropagationOverrides(),
+        };
+        options.Propagation.Baggage[ScheduledDispatchMetadataKeys.IdempotencyKey] = cronOccurrenceKey.Trim();
+        return options;
     }
 
     private async Task CancelRetryLeaseAsync(CancellationToken ct)
@@ -1966,6 +2036,10 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             next.TrimExternalTriggerDeliveries(ToDateTimeOffset(evt.CompletedAt));
         }
 
+        MarkCronOccurrenceTerminal(
+            next,
+            evt.CronOccurrenceKey,
+            evt.CompletedAt ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow));
         return next;
     }
 
@@ -1995,6 +2069,10 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             next.TrimExternalTriggerDeliveries(ToDateTimeOffset(evt.FailedAt));
         }
 
+        MarkCronOccurrenceTerminal(
+            next,
+            evt.CronOccurrenceKey,
+            evt.FailedAt ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow));
         return next;
     }
 
@@ -2014,6 +2092,10 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             next.TrimExternalTriggerDeliveries(ToDateTimeOffset(evt.RejectedAt));
         }
 
+        MarkCronOccurrenceTerminal(
+            next,
+            evt.CronOccurrenceKey,
+            evt.RejectedAt ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow));
         return next;
     }
 
@@ -2087,6 +2169,30 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         }
 
         return next;
+    }
+
+    private static SkillRunnerState ApplyCronOccurrenceDuplicateIgnored(
+        SkillRunnerState current,
+        SkillRunnerCronOccurrenceDuplicateIgnoredEvent evt)
+    {
+        var next = current.Clone();
+        MarkCronOccurrenceTerminal(
+            next,
+            evt.CronOccurrenceKey,
+            evt.IgnoredAt ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow));
+        return next;
+    }
+
+    private static void MarkCronOccurrenceTerminal(
+        SkillRunnerState state,
+        string? cronOccurrenceKey,
+        Timestamp terminalAt)
+    {
+        if (string.IsNullOrWhiteSpace(cronOccurrenceKey))
+            return;
+
+        state.UpsertCronOccurrenceTerminal(cronOccurrenceKey, terminalAt);
+        state.TrimCronOccurrenceTerminals(ToDateTimeOffset(terminalAt));
     }
 
     private static SkillRunnerState ApplyDisabled(SkillRunnerState current, SkillRunnerDisabledEvent _)
