@@ -1,7 +1,11 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Device;
 using Aevatar.GAgents.Household;
 using FluentAssertions;
+using Microsoft.AspNetCore.Http;
 using NSubstitute;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
@@ -50,6 +54,95 @@ public sealed class DeviceCommandFacadeTests
             DeviceRegistrationGAgent.WellKnownId,
             Arg.Any<EventEnvelope>(),
             Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task DispatchCallbackAsync_WhenAdmissionUsesEventId_ShouldMapEnvelopeIdentityTimestampAndOperationId()
+    {
+        EventEnvelope? capturedEnvelope = null;
+        var targetActor = Substitute.For<IActor>();
+        targetActor.Id.Returns("household-scope-a");
+        var queryPort = Substitute.For<IDeviceRegistrationQueryPort>();
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        var dispatchPort = Substitute.For<IActorDispatchPort>();
+        queryPort.GetAsync("reg-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<DeviceRegistrationEntry?>(new DeviceRegistrationEntry
+            {
+                Id = "reg-1",
+                ScopeId = "scope-a",
+                HmacKey = "key-a",
+                DeviceEventTargetActorId = "household-scope-a",
+            }));
+        actorRuntime.GetAsync("household-scope-a")
+            .Returns(Task.FromResult<IActor?>(targetActor));
+        dispatchPort.DispatchAsync(
+                "household-scope-a",
+                Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope),
+                Arg.Any<CancellationToken>())
+            .Returns(ActorDispatchPortTestSupport.AcceptAsync);
+        var facade = DeviceCommandFacadeTestSupport.CreateCallbackFacade(queryPort, actorRuntime, dispatchPort);
+        var admission = CreateAdmission("reg-1", "nxmsg-1", eventId: "evt-3", correlationKey: "ha-corr-1");
+
+        var result = await facade.DispatchCallbackAsync(new DeviceCallbackDispatchCommand(
+            "reg-1",
+            new DeviceInbound
+            {
+                EventId = "evt-3",
+                EventType = "temperature_change",
+            },
+            admission));
+
+        result.Succeeded.Should().BeTrue();
+        result.Receipt!.CommandId.Should().Be("nxmsg-1");
+        capturedEnvelope.Should().NotBeNull();
+        capturedEnvelope!.Id.Should().Be("nxmsg-1");
+        capturedEnvelope.Timestamp.ToDateTimeOffset().Should().Be(admission.OccurredAt);
+        capturedEnvelope.Runtime.Deduplication.OperationId.Should().Be("device-event:reg-1:evt-3");
+    }
+
+    [Fact]
+    public async Task DispatchCallbackAsync_WhenEventIdMissing_ShouldUseHomeAlertCorrelationKeyForOperationId()
+    {
+        EventEnvelope? capturedEnvelope = null;
+        var targetActor = Substitute.For<IActor>();
+        targetActor.Id.Returns("household-scope-a");
+        var queryPort = Substitute.For<IDeviceRegistrationQueryPort>();
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        var dispatchPort = Substitute.For<IActorDispatchPort>();
+        queryPort.GetAsync("reg-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<DeviceRegistrationEntry?>(new DeviceRegistrationEntry
+            {
+                Id = "reg-1",
+                ScopeId = "scope-a",
+                HmacKey = "key-a",
+                DeviceEventTargetActorId = "household-scope-a",
+            }));
+        actorRuntime.GetAsync("household-scope-a")
+            .Returns(Task.FromResult<IActor?>(targetActor));
+        dispatchPort.DispatchAsync(
+                "household-scope-a",
+                Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope),
+                Arg.Any<CancellationToken>())
+            .Returns(ActorDispatchPortTestSupport.AcceptAsync);
+        var facade = DeviceCommandFacadeTestSupport.CreateCallbackFacade(queryPort, actorRuntime, dispatchPort);
+        var admission = CreateAdmission("reg-1", "nxmsg-2", eventId: "", correlationKey: "ha-corr-2");
+
+        var result = await facade.DispatchCallbackAsync(new DeviceCallbackDispatchCommand(
+            "reg-1",
+            new DeviceInbound
+            {
+                EventType = "alarm_triggered",
+                HomeAlert = new HomeAlertDeviceInboundPayload
+                {
+                    CorrelationKey = "ha-corr-2",
+                },
+            },
+            admission));
+
+        result.Succeeded.Should().BeTrue();
+        admission.DeliveryId.Should().Be("ha-corr-2");
+        capturedEnvelope.Should().NotBeNull();
+        capturedEnvelope!.Runtime.Deduplication.OperationId.Should().Be("device-event:reg-1:ha-corr-2");
     }
 
     [Fact]
@@ -150,5 +243,48 @@ public sealed class DeviceCommandFacadeTests
             "household-scope-a",
             Arg.Any<EventEnvelope>(),
             Arg.Any<CancellationToken>());
+    }
+
+    private static DeviceCallbackAdmission CreateAdmission(
+        string registrationId,
+        string messageId,
+        string eventId,
+        string correlationKey)
+    {
+        const string hmacKey = "key-a";
+        const string timestampValue = "2026-04-09T10:00:00Z";
+        var body = JsonSerializer.Serialize(new
+        {
+            message_id = messageId,
+            content = new
+            {
+                text = JsonSerializer.Serialize(new
+                {
+                    event_id = eventId,
+                    event_type = "alarm_triggered",
+                    correlation_key = correlationKey,
+                }),
+            },
+            timestamp = timestampValue,
+        });
+        var bodyBytes = Encoding.UTF8.GetBytes(body);
+        var context = new DefaultHttpContext();
+        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(hmacKey));
+        context.Request.Headers["X-NyxID-Signature"] = Convert.ToHexStringLower(
+            hmac.ComputeHash(DeviceEventEndpoints.BuildSignaturePayload(bodyBytes)));
+
+        var result = DeviceEventEndpoints.AdmitCallback(
+            context,
+            bodyBytes,
+            new DeviceRegistrationEntry
+            {
+                Id = registrationId,
+                HmacKey = hmacKey,
+            },
+            new DeviceEventOptions { CallbackFreshnessWindow = TimeSpan.FromSeconds(10) },
+            DateTimeOffset.Parse(timestampValue).AddSeconds(1));
+
+        result.Succeeded.Should().BeTrue();
+        return result.Admission!;
     }
 }
