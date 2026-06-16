@@ -202,6 +202,199 @@ public sealed class AgentRunLarkCardDeliveryTests
     }
 
     [Fact]
+    public async Task CreateTimeout_MarksCreationFailedWithoutFallback()
+    {
+        var scheduler = new RecordingCallbackScheduler();
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateAgent(new RecordingCardRunner(), publisher: publisher, scheduler: scheduler);
+
+        await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("pending create")));
+        var timeout = ScheduledTimeout(scheduler, LarkCardOperationPhase.Create);
+
+        await agent.HandleEventAsync(Envelope(agent.Id, timeout));
+
+        agent.State.LarkCardDelivery.Phase.Should().Be(AgentRunLarkCardDeliveryPhase.CreationFailed);
+        agent.State.LarkCardDelivery.TerminalReason.Should().Be("create_timeout");
+        agent.State.LarkCardDelivery.InFlightOperation.Should().Be(LarkCardOperationPhase.Unspecified);
+        publisher.Sent.Select(e => e.Event).OfType<LlmReplyStreamChunkEvent>().Should().BeEmpty();
+        publisher.Sent.Select(e => e.Event).OfType<LarkCardDeliveryCompletedEvent>().Should().BeEmpty();
+
+        var sentCount = publisher.Sent.Count;
+        await agent.HandleEventAsync(Envelope(agent.Id, timeout));
+        publisher.Sent.Should().HaveCount(sentCount);
+    }
+
+    [Fact]
+    public async Task StreamTimeout_RecoversStreamingStateAndDropsPendingFrame()
+    {
+        var scheduler = new RecordingCallbackScheduler();
+        var publisher = new RecordingEventPublisher();
+        var runner = new RecordingCardRunner();
+        var agent = CreateAgent(runner, publisher: publisher, scheduler: scheduler);
+        await StartVisibleCardAsync(agent, publisher, "first visible");
+
+        await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("timed out frame")));
+        var timeout = ScheduledTimeout(scheduler, LarkCardOperationPhase.Stream);
+
+        await agent.HandleEventAsync(Envelope(agent.Id, timeout));
+        await DispatchPendingSelfEventsAsync(agent, publisher);
+
+        agent.State.LarkCardDelivery.Phase.Should().Be(AgentRunLarkCardDeliveryPhase.Streaming);
+        agent.State.LarkCardDelivery.LastFlushedText.Should().Be("first visible");
+        agent.State.LarkCardDelivery.Sequence.Should().Be(1);
+        agent.State.LarkCardDelivery.InFlightOperation.Should().Be(LarkCardOperationPhase.Unspecified);
+        agent.State.LarkCardDelivery.PendingAccumulatedText.Should().BeEmpty();
+        runner.StreamCalls.Should().BeEmpty();
+        publisher.Sent.Select(e => e.Event).OfType<LarkCardDeliveryCompletedEvent>().Should().BeEmpty();
+        publisher.Sent.Select(e => e.Event).OfType<LlmReplyStreamChunkEvent>().Should().BeEmpty();
+
+        var sentCount = publisher.Sent.Count;
+        await agent.HandleEventAsync(Envelope(agent.Id, timeout));
+        publisher.Sent.Should().HaveCount(sentCount);
+    }
+
+    [Fact]
+    public async Task FinalizeTimeout_CompletesDeliveryWithFailureAndIsIdempotent()
+    {
+        var scheduler = new RecordingCallbackScheduler();
+        var publisher = new RecordingEventPublisher();
+        var runner = new RecordingCardRunner();
+        var agent = CreateAgent(runner, publisher: publisher, scheduler: scheduler);
+        await StartVisibleCardAsync(agent, publisher, "partial");
+
+        await agent.HandleNextLlmStepAsync(CreateFinalReplyStep("final"));
+        var timeout = ScheduledTimeout(scheduler, LarkCardOperationPhase.Finalize);
+
+        await agent.HandleEventAsync(Envelope(agent.Id, timeout));
+        await DispatchPendingSelfEventsAsync(agent, publisher);
+
+        agent.State.LarkCardDelivery.Phase.Should().Be(AgentRunLarkCardDeliveryPhase.Terminated);
+        agent.State.LarkCardDelivery.TerminalReason.Should().Be("finalize_timeout");
+        agent.State.LarkCardDelivery.InFlightOperation.Should().Be(LarkCardOperationPhase.Unspecified);
+        agent.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
+        runner.FinalizeCalls.Should().BeEmpty();
+        var completed = publisher.Sent.Select(e => e.Event).OfType<LarkCardDeliveryCompletedEvent>().Single();
+        completed.OutboundText.Should().Be("partial");
+        completed.CardMessageId.Should().Be("om-card-ok");
+        completed.DeliveryFailure.Should().NotBeNull();
+        completed.DeliveryFailure.ErrorCode.Should().Be("finalize_timeout");
+        publisher.Sent.Select(e => e.Event).OfType<LlmReplyStreamChunkEvent>().Should().BeEmpty();
+
+        var sentCount = publisher.Sent.Count;
+        await agent.HandleEventAsync(Envelope(agent.Id, timeout));
+        publisher.Sent.Should().HaveCount(sentCount);
+    }
+
+    [Fact]
+    public async Task CreatePostSendFailure_CompletesPartialCardWithoutTextFallback()
+    {
+        var runner = new RecordingCardRunner
+        {
+            CreateResult = ConversationCardCreateResult.PostSendFailed(
+                "card-orphan",
+                "om-orphan",
+                "first_stream_write_failed",
+                "first element write failed"),
+        };
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateAgent(runner, publisher: publisher);
+
+        await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("already visible as card")));
+        await DispatchPendingSelfEventsAsync(agent, publisher);
+
+        agent.State.LarkCardDelivery.Phase.Should().Be(AgentRunLarkCardDeliveryPhase.Terminated);
+        agent.State.LarkCardDelivery.TerminalReason.Should().Be("create_post_send_failed:first_stream_write_failed");
+        agent.State.LarkCardDelivery.CardId.Should().Be("card-orphan");
+        agent.State.LarkCardDelivery.CardMessageId.Should().Be("om-orphan");
+        agent.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
+        publisher.Sent.Select(e => e.Event).OfType<LlmReplyStreamChunkEvent>().Should().BeEmpty();
+        var completed = publisher.Sent.Select(e => e.Event).OfType<LarkCardDeliveryCompletedEvent>().Single();
+        completed.CardMessageId.Should().Be("om-orphan");
+        completed.OutboundText.Should().BeEmpty();
+        completed.DeliveryFailure.Should().BeNull();
+
+        var createCompleted = publisher.Sent
+            .Select(e => e.Event)
+            .OfType<LarkCardOperationCompletedEvent>()
+            .Single(e => e.Operation == LarkCardOperationPhase.Create);
+        var sentCount = publisher.Sent.Count;
+        await agent.HandleEventAsync(Envelope(agent.Id, createCompleted));
+        publisher.Sent.Should().HaveCount(sentCount);
+    }
+
+    [Fact]
+    public async Task RateLimitedStreamFailure_RecoversWithoutDeliveryOrFallback()
+    {
+        var runner = new RecordingCardRunner
+        {
+            StreamResult = ConversationCardStreamResult.Failed(
+                "rate_limit",
+                "stream rejected",
+                isRateLimited: true),
+        };
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateAgent(runner, publisher: publisher);
+        await StartVisibleCardAsync(agent, publisher, "first visible");
+
+        await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("rate limited frame")));
+        await DispatchPendingSelfEventsAsync(agent, publisher);
+
+        agent.State.LarkCardDelivery.Phase.Should().Be(AgentRunLarkCardDeliveryPhase.Streaming);
+        agent.State.LarkCardDelivery.LastFlushedText.Should().Be("first visible");
+        agent.State.LarkCardDelivery.Sequence.Should().Be(1);
+        agent.State.LarkCardDelivery.InFlightOperation.Should().Be(LarkCardOperationPhase.Unspecified);
+        agent.State.LarkCardDelivery.PendingAccumulatedText.Should().BeEmpty();
+        runner.StreamCalls.Should().ContainSingle(call => call.Text == "rate limited frame" && call.Sequence == 2);
+        publisher.Sent.Select(e => e.Event).OfType<LarkCardDeliveryCompletedEvent>().Should().BeEmpty();
+        publisher.Sent.Select(e => e.Event).OfType<LlmReplyStreamChunkEvent>().Should().BeEmpty();
+
+        var streamCompleted = publisher.Sent
+            .Select(e => e.Event)
+            .OfType<LarkCardOperationCompletedEvent>()
+            .Single(e => e.Operation == LarkCardOperationPhase.Stream);
+        var sentCount = publisher.Sent.Count;
+        await agent.HandleEventAsync(Envelope(agent.Id, streamCompleted));
+        publisher.Sent.Should().HaveCount(sentCount);
+    }
+
+    [Fact]
+    public async Task TableLimitStreamFailure_CompletesWithLastVisibleCardWithoutFallback()
+    {
+        var runner = new RecordingCardRunner
+        {
+            StreamResult = ConversationCardStreamResult.Failed(
+                "table_limit",
+                "table limit exceeded",
+                isTableLimitExceeded: true),
+        };
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateAgent(runner, publisher: publisher);
+        await StartVisibleCardAsync(agent, publisher, "first visible");
+
+        await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("hidden table-limit frame")));
+        await DispatchPendingSelfEventsAsync(agent, publisher);
+
+        agent.State.LarkCardDelivery.Phase.Should().Be(AgentRunLarkCardDeliveryPhase.Terminated);
+        agent.State.LarkCardDelivery.TerminalReason.Should().Be("stream_failed:table_limit");
+        agent.State.LarkCardDelivery.LastFlushedText.Should().Be("first visible");
+        agent.State.LarkCardDelivery.InFlightOperation.Should().Be(LarkCardOperationPhase.Unspecified);
+        agent.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
+        publisher.Sent.Select(e => e.Event).OfType<LlmReplyStreamChunkEvent>().Should().BeEmpty();
+        var completed = publisher.Sent.Select(e => e.Event).OfType<LarkCardDeliveryCompletedEvent>().Single();
+        completed.CardMessageId.Should().Be("om-card-ok");
+        completed.OutboundText.Should().Be("first visible");
+        completed.DeliveryFailure.Should().BeNull();
+
+        var streamCompleted = publisher.Sent
+            .Select(e => e.Event)
+            .OfType<LarkCardOperationCompletedEvent>()
+            .Single(e => e.Operation == LarkCardOperationPhase.Stream);
+        var sentCount = publisher.Sent.Count;
+        await agent.HandleEventAsync(Envelope(agent.Id, streamCompleted));
+        publisher.Sent.Should().HaveCount(sentCount);
+    }
+
+    [Fact]
     public async Task TimeoutPayloads_DoNotPersistRuntimeCredentials()
     {
         var scheduler = new RecordingCallbackScheduler();
@@ -346,6 +539,17 @@ public sealed class AgentRunLarkCardDeliveryTests
         return agent;
     }
 
+    private static async Task StartVisibleCardAsync(
+        AgentRunGAgent agent,
+        RecordingEventPublisher publisher,
+        string initialText)
+    {
+        await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk(initialText)));
+        await DispatchPendingSelfEventsAsync(agent, publisher);
+        agent.State.LarkCardDelivery.Phase.Should().Be(AgentRunLarkCardDeliveryPhase.Streaming);
+        agent.State.LarkCardDelivery.LastFlushedText.Should().Be(initialText);
+    }
+
     private static async Task DispatchPendingSelfEventsAsync(
         AgentRunGAgent agent,
         RecordingEventPublisher publisher)
@@ -365,6 +569,31 @@ public sealed class AgentRunLarkCardDeliveryTests
             await agent.HandleEventAsync(Envelope(agent.Id, evt));
         }
     }
+
+    private static AgentRunNextLlmStepRequestedEvent CreateFinalReplyStep(string finalText) =>
+        new()
+        {
+            RunId = "run-1",
+            CorrelationId = "corr-card",
+            TargetActorId = "conversation-1",
+            Attempt = 1,
+            StepIndex = 2,
+            Request = CreateReady(finalText),
+            LlmStepResult = new AgentRunLlmStepResult
+            {
+                AccumulatedText = finalText,
+                Content = finalText,
+                FinishReason = "stop",
+                HasStreamedTextContent = true,
+            },
+        };
+
+    private static LarkCardOperationTimeoutFiredEvent ScheduledTimeout(
+        RecordingCallbackScheduler scheduler,
+        LarkCardOperationPhase operation) =>
+        scheduler.Timeouts
+            .Select(timeout => timeout.TriggerEnvelope.Payload.Unpack<LarkCardOperationTimeoutFiredEvent>())
+            .Last(timeout => timeout.Operation == operation);
 
     private static NeedsLlmReplyEvent CreateReady(
         string finalText,
@@ -440,7 +669,9 @@ public sealed class AgentRunLarkCardDeliveryTests
                 {
                     LlmReplyCardStreamChunkEvent chunk => chunk.CorrelationId,
                     LarkCardOperationCompletedEvent completed => completed.CorrelationId,
+                    LarkCardOperationTimeoutFiredEvent timeout => timeout.CorrelationId,
                     ReplyOperationStepEvent step => step.CorrelationId,
+                    AgentRunNextLlmStepRequestedEvent nextLlm => nextLlm.CorrelationId,
                     _ => string.Empty,
                 },
             },
