@@ -595,6 +595,11 @@ jest.mock("@/shared/api/scheduledDispatchApi", () => ({
       nextCursor: null,
       totalCount: 0,
     })),
+    listAll: jest.fn(async () => ({
+      items: [],
+      nextCursor: null,
+      totalCount: 0,
+    })),
     create: jest.fn(async () => ({
       scheduleId: "sch-created",
       scheduleActorId: "schedule-actor-created",
@@ -941,6 +946,12 @@ describe("TeamDetailPage", () => {
     );
     (scheduledDispatchApi.list as jest.Mock).mockReset();
     (scheduledDispatchApi.list as jest.Mock).mockImplementation(async () => ({
+      items: [],
+      nextCursor: null,
+      totalCount: 0,
+    }));
+    (scheduledDispatchApi.listAll as jest.Mock).mockReset();
+    (scheduledDispatchApi.listAll as jest.Mock).mockImplementation(async () => ({
       items: [],
       nextCursor: null,
       totalCount: 0,
@@ -2059,6 +2070,10 @@ describe("TeamDetailPage", () => {
     expect(params.get("serviceId")).toBeNull();
     expect(await screen.findByRole("heading", { name: "自动化" })).toBeTruthy();
     expect(screen.getByText("给成员添加周期任务")).toBeTruthy();
+    expect(await screen.findByText("还没有周期任务")).toBeTruthy();
+    expect(
+      await screen.findByRole("button", { name: "创建第一个自动化" }),
+    ).toBeTruthy();
   });
 
   it("renders member-owned automations from the backend schedules API", async () => {
@@ -2067,7 +2082,7 @@ describe("TeamDetailPage", () => {
       "",
       "/scopes/scope-1/teams/t-alpha?tab=automations",
     );
-    (scheduledDispatchApi.list as jest.Mock).mockResolvedValueOnce({
+    (scheduledDispatchApi.listAll as jest.Mock).mockResolvedValueOnce({
       items: [
         mockCreateScheduledDispatchSummary(),
         mockCreateScheduledDispatchSummary({
@@ -2083,12 +2098,17 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     expect(await screen.findByText("Daily escalation digest")).toBeTruthy();
+    expect(screen.getByText("计划")).toBeTruthy();
+    expect(screen.getAllByText("运行中").length).toBeGreaterThan(0);
+    expect(screen.getByText("已暂停")).toBeTruthy();
+    expect(screen.getByText("需要关注")).toBeTruthy();
+    expect(screen.getByText("工作日 · 09:00")).toBeTruthy();
     expect(screen.getAllByText("Team Alpha Operator").length).toBeGreaterThan(0);
     expect(screen.getByText("通过 alpha-service 运行")).toBeTruthy();
     expect(screen.queryByText("Other team task")).toBeNull();
 
     await waitFor(() => {
-      expect(scheduledDispatchApi.list).toHaveBeenCalledWith({
+      expect(scheduledDispatchApi.listAll).toHaveBeenCalledWith({
         includeTotalCount: true,
         take: 200,
       });
@@ -2098,13 +2118,45 @@ describe("TeamDetailPage", () => {
     });
   });
 
+  it("keeps team automations visible when they are not on the first schedule page", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?tab=automations",
+    );
+    (scheduledDispatchApi.listAll as jest.Mock).mockResolvedValueOnce({
+      items: [
+        mockCreateScheduledDispatchSummary({
+          scheduleId: "sch-other-first-page",
+          displayName: "Other team first page task",
+          serviceId: "svc-other",
+        }),
+        mockCreateScheduledDispatchSummary({
+          scheduleId: "sch-alpha-second-page",
+          displayName: "Second page escalation digest",
+        }),
+      ],
+      nextCursor: null,
+      totalCount: 2,
+    });
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("Second page escalation digest")).toBeTruthy();
+    expect(screen.queryByText("Other team first page task")).toBeNull();
+    expect(scheduledDispatchApi.listAll).toHaveBeenCalledWith({
+      includeTotalCount: true,
+      take: 200,
+    });
+  });
+
   it("retries schedule list while the schedule read model catches up", async () => {
     window.history.replaceState(
       {},
       "",
       "/scopes/scope-1/teams/t-alpha?tab=automations",
     );
-    (scheduledDispatchApi.list as jest.Mock)
+    (scheduledDispatchApi.listAll as jest.Mock)
       .mockRejectedValueOnce(new Error("Projection is still materializing."))
       .mockResolvedValueOnce({
         items: [mockCreateScheduledDispatchSummary()],
@@ -2116,7 +2168,7 @@ describe("TeamDetailPage", () => {
 
     expect(await screen.findByText("Daily escalation digest")).toBeTruthy();
     await waitFor(() => {
-      expect(scheduledDispatchApi.list).toHaveBeenCalledTimes(2);
+      expect(scheduledDispatchApi.listAll).toHaveBeenCalledTimes(2);
     });
     expect(screen.queryByText("无法加载自动化")).toBeNull();
   });
@@ -2127,7 +2179,7 @@ describe("TeamDetailPage", () => {
       "",
       "/scopes/scope-1/teams/t-alpha?tab=automations",
     );
-    (scheduledDispatchApi.list as jest.Mock).mockImplementation(async () => ({
+    (scheduledDispatchApi.listAll as jest.Mock).mockImplementation(async () => ({
       items: [mockCreateScheduledDispatchSummary()],
       nextCursor: null,
       totalCount: 1,
@@ -2136,7 +2188,7 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     expect(await screen.findByText("Daily escalation digest")).toBeTruthy();
-    expect(scheduledDispatchApi.list).toHaveBeenCalledTimes(1);
+    expect(scheduledDispatchApi.listAll).toHaveBeenCalledTimes(1);
     fireEvent.click(await screen.findByRole("button", { name: "删除" }));
 
     await waitFor(() => {
@@ -2148,11 +2200,11 @@ describe("TeamDetailPage", () => {
     await waitFor(() => {
       expect(screen.queryByText("Daily escalation digest")).toBeNull();
     });
-    expect(scheduledDispatchApi.list).toHaveBeenCalledTimes(1);
+    expect(scheduledDispatchApi.listAll).toHaveBeenCalledTimes(1);
 
     await waitFor(
       () => {
-        expect(scheduledDispatchApi.list).toHaveBeenCalledTimes(2);
+        expect(scheduledDispatchApi.listAll).toHaveBeenCalledTimes(2);
       },
       { timeout: 2_000 },
     );
@@ -2166,7 +2218,7 @@ describe("TeamDetailPage", () => {
       "",
       "/scopes/scope-1/teams/t-alpha?memberId=member-team-alpha&tab=automations",
     );
-    (scheduledDispatchApi.list as jest.Mock)
+    (scheduledDispatchApi.listAll as jest.Mock)
       .mockResolvedValueOnce({
         items: [],
         nextCursor: null,
@@ -2181,6 +2233,11 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     fireEvent.click(await screen.findByRole("button", { name: "添加周期任务" }));
+    expect(await screen.findByText("1. 目标成员")).toBeTruthy();
+    expect(screen.getByText("2. 要执行的任务")).toBeTruthy();
+    expect(screen.getByText("3. 运行节奏")).toBeTruthy();
+    expect(screen.getByText("工作日 09:00 · Asia/Shanghai")).toBeTruthy();
+    expect(screen.getByText("先预览节奏，确认后续运行时间。")).toBeTruthy();
     fireEvent.change(await screen.findByLabelText("自动化名称"), {
       target: { value: "Daily escalation digest" },
     });
@@ -2193,7 +2250,7 @@ describe("TeamDetailPage", () => {
     fireEvent.change(screen.getByLabelText("时区"), {
       target: { value: "Asia/Shanghai" },
     });
-    expect(scheduledDispatchApi.list).toHaveBeenCalledTimes(1);
+    expect(scheduledDispatchApi.listAll).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole("button", { name: "创建自动化" }));
 
     await waitFor(() => {
@@ -2224,16 +2281,25 @@ describe("TeamDetailPage", () => {
     expect(JSON.stringify(payload)).not.toContain("member-team-alpha");
     expect(JSON.stringify(payload)).not.toContain("wf-team-alpha");
     expect(message.success).toHaveBeenCalledWith("自动化已创建。");
-    expect(scheduledDispatchApi.list).toHaveBeenCalledTimes(1);
-    expect(screen.queryByText("Daily escalation digest")).toBeNull();
+    expect(scheduledDispatchApi.listAll).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(screen.getAllByText("Daily escalation digest").length).toBeGreaterThan(
+        0,
+      );
+    });
+    expect(screen.getByText("正在等待计划同步")).toBeTruthy();
 
     await waitFor(
       () => {
-        expect(scheduledDispatchApi.list).toHaveBeenCalledTimes(2);
+        expect(scheduledDispatchApi.listAll).toHaveBeenCalledTimes(2);
       },
       { timeout: 2_000 },
     );
-    expect(await screen.findByText("Daily escalation digest")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getAllByText("Daily escalation digest").length).toBeGreaterThan(
+        0,
+      );
+    });
   });
 
   it("creates member recurring work with the default service revision when the active serving revision is missing", async () => {
@@ -2358,7 +2424,7 @@ describe("TeamDetailPage", () => {
       "",
       "/scopes/scope-1/teams/t-alpha?tab=automations",
     );
-    (scheduledDispatchApi.list as jest.Mock).mockResolvedValueOnce({
+    (scheduledDispatchApi.listAll as jest.Mock).mockResolvedValueOnce({
       items: [mockCreateScheduledDispatchSummary()],
       nextCursor: null,
       totalCount: 1,

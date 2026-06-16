@@ -119,6 +119,49 @@ describe("scheduledDispatchApi", () => {
     );
   });
 
+  it("lists every schedule page when requested", async () => {
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          items: [createSummary({ scheduleId: "sch-first" })],
+          nextCursor: "cursor-2",
+          totalCount: 2,
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          items: [createSummary({ scheduleId: "sch-second" })],
+          nextCursor: null,
+          totalCount: 2,
+        }),
+      } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      scheduledDispatchApi.listAll({
+        includeTotalCount: true,
+        take: 200,
+      }),
+    ).resolves.toEqual({
+      items: [
+        expect.objectContaining({ scheduleId: "sch-first" }),
+        expect.objectContaining({ scheduleId: "sch-second" }),
+      ],
+      nextCursor: null,
+      totalCount: 2,
+    });
+
+    expect(fetchMock.mock.calls.map(([input]) => input)).toEqual([
+      "/api/schedules?includeTotalCount=true&take=200",
+      "/api/schedules?cursor=cursor-2&includeTotalCount=true&take=200",
+    ]);
+  });
+
   it("posts workflow chat as base64 service invocation when creating a schedule with a revision", async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,

@@ -576,13 +576,32 @@ const enUSMessages = {
   'teams.automations.actions.pause': 'Pause',
   'teams.automations.actions.resume': 'Resume',
   'teams.automations.actions.runNow': 'Run now',
+  'teams.automations.columns.actions': 'Actions',
+  'teams.automations.columns.automation': 'Automation',
+  'teams.automations.columns.member': 'Member',
+  'teams.automations.columns.schedule': 'Schedule',
   'teams.automations.createPanel.description':
     'Pick a published member, describe the job, choose a cadence, and preview the next runs before creating it.',
   'teams.automations.createPanel.title': 'Give a member recurring work',
+  'teams.automations.cron.custom': 'Custom schedule',
+  'teams.automations.cron.daily': 'Daily · {time}',
+  'teams.automations.cron.dailyDetail': 'Every day at {time} · {timezone}',
+  'teams.automations.cron.hourly': 'Hourly · :{minute}',
+  'teams.automations.cron.hourlyDetail':
+    'Every hour at minute {minute} · {timezone}',
+  'teams.automations.cron.weekdays': 'Weekdays · {time}',
+  'teams.automations.cron.weekdaysDetail':
+    'Weekdays at {time} · {timezone}',
+  'teams.automations.cron.weekly': '{weekday} · {time}',
+  'teams.automations.cron.weeklyDetail':
+    '{weekday} at {time} · {timezone}',
   'teams.automations.description':
     'Recurring work belongs to a member. The team view shows every commitment so operators can see what will run next and what needs attention.',
+  'teams.automations.empty.createFirst': 'Create first automation',
   'teams.automations.empty.description':
     'Create an automation from a published member so this team has visible recurring commitments.',
+  'teams.automations.empty.publishHint':
+    'Publish a workflow member before scheduling recurring work.',
   'teams.automations.empty.title': 'No recurring work yet',
   'teams.automations.error.description':
     'Refresh the page or try again after the schedule service is available.',
@@ -592,6 +611,8 @@ const enUSMessages = {
   'teams.automations.form.create': 'Create automation',
   'teams.automations.form.cron': 'Cron expression',
   'teams.automations.form.cronAria': 'Cron expression',
+  'teams.automations.form.cronFiveFieldHint':
+    'Use a 5-field cron expression: minute hour day month weekday.',
   'teams.automations.form.defaultTitle': '{memberName} recurring work',
   'teams.automations.form.displayName': 'Name',
   'teams.automations.form.displayNameAria': 'Automation name',
@@ -611,6 +632,8 @@ const enUSMessages = {
   'teams.automations.form.preset.weekdaysMorning': 'Weekdays · 09:00',
   'teams.automations.form.preset.weeklyMonday': 'Monday · 09:00',
   'teams.automations.form.preview': 'Preview next runs',
+  'teams.automations.form.previewEmpty':
+    'Preview the cadence to confirm the next scheduled runs.',
   'teams.automations.form.previewHint':
     'Preview uses the schedule service before saving.',
   'teams.automations.form.prompt': 'Recurring prompt',
@@ -618,6 +641,16 @@ const enUSMessages = {
   'teams.automations.form.promptPlaceholder':
     'Summarize escalations, blocked accounts, and follow-up owners.',
   'teams.automations.form.save': 'Save changes',
+  'teams.automations.form.scheduleReadsAs': 'Schedule reads as',
+  'teams.automations.form.section.schedule': '3. Schedule',
+  'teams.automations.form.section.scheduleHint':
+    'Choose a common cadence or switch to custom cron for advanced schedules.',
+  'teams.automations.form.section.target': '1. Target member',
+  'teams.automations.form.section.targetHint':
+    "Recurring work runs through the selected member's published service.",
+  'teams.automations.form.section.work': '2. Work to run',
+  'teams.automations.form.section.workHint':
+    'Name the automation and write the prompt the member receives each time.',
   'teams.automations.form.timezone': 'Timezone',
   'teams.automations.form.timezoneAria': 'Timezone',
   'teams.automations.form.title': 'New member automation',
@@ -666,11 +699,15 @@ const enUSMessages = {
   'teams.automations.preview.weekly.title': 'Weekly release handoff',
   'teams.automations.previewOnly': 'Automation API wiring is coming next.',
   'teams.automations.row.nextRun': 'Next {time}',
+  'teams.automations.row.awaitingReadModel': 'Waiting for schedule sync',
   'teams.automations.row.noNextRun': 'No next run',
   'teams.automations.row.target': 'Workflow chat · {endpoint}',
   'teams.automations.status.active': 'Active',
   'teams.automations.status.error': 'Error',
   'teams.automations.status.paused': 'Paused',
+  'teams.automations.summary.active': 'Active',
+  'teams.automations.summary.needsAttention': 'Need attention',
+  'teams.automations.summary.paused': 'Paused',
   'teams.automations.title': 'Automations',
   'teams.automations.untitled': 'Untitled automation',
   'teams.automations.unavailable.title': 'Not ready for automation',
@@ -684,6 +721,13 @@ const enUSMessages = {
   'teams.automations.upcoming.title': 'Upcoming',
   'teams.automations.upcoming.today': 'Today · 09:00',
   'teams.automations.upcoming.tomorrow': 'Tomorrow · 18:00',
+  'teams.automations.weekdays.friday': 'Friday',
+  'teams.automations.weekdays.monday': 'Monday',
+  'teams.automations.weekdays.saturday': 'Saturday',
+  'teams.automations.weekdays.sunday': 'Sunday',
+  'teams.automations.weekdays.thursday': 'Thursday',
+  'teams.automations.weekdays.tuesday': 'Tuesday',
+  'teams.automations.weekdays.wednesday': 'Wednesday',
   'teams.members.columns.actions': 'Actions',
   'teams.members.columns.implementation': 'Implementation',
   'teams.members.columns.member': 'Member',

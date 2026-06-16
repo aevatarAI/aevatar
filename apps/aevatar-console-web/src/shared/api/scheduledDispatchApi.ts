@@ -410,17 +410,61 @@ function encodePreview(input: ScheduledDispatchPreviewInput) {
   };
 }
 
+function listScheduledDispatches(
+  query?: ScheduledDispatchListQuery,
+): Promise<ScheduledDispatchListResult> {
+  return requestJson(
+    withQuery("/api/schedules", {
+      cursor: query?.cursor,
+      includeTotalCount: query?.includeTotalCount,
+      take: query?.take,
+    }),
+    decodeScheduledDispatchListResult,
+  );
+}
+
+async function listAllScheduledDispatches(
+  query?: ScheduledDispatchListQuery,
+): Promise<ScheduledDispatchListResult> {
+  const items: ScheduledDispatchSummary[] = [];
+  const seenCursors = new Set<string>();
+  let cursor = query?.cursor;
+  let totalCount: number | null = null;
+
+  while (true) {
+    if (cursor) {
+      if (seenCursors.has(cursor)) {
+        throw new Error("Scheduled dispatch list returned a repeated cursor.");
+      }
+
+      seenCursors.add(cursor);
+    }
+
+    const result = await listScheduledDispatches({
+      ...query,
+      cursor,
+    });
+    items.push(...result.items);
+    if (result.totalCount !== null) {
+      totalCount = result.totalCount;
+    }
+
+    if (!result.nextCursor) {
+      return {
+        items,
+        nextCursor: null,
+        totalCount,
+      };
+    }
+
+    cursor = result.nextCursor;
+  }
+}
+
 export const scheduledDispatchApi = {
-  list(query?: ScheduledDispatchListQuery): Promise<ScheduledDispatchListResult> {
-    return requestJson(
-      withQuery("/api/schedules", {
-        cursor: query?.cursor,
-        includeTotalCount: query?.includeTotalCount,
-        take: query?.take,
-      }),
-      decodeScheduledDispatchListResult,
-    );
-  },
+  list: listScheduledDispatches,
+
+  listAll: listAllScheduledDispatches,
 
   get(scheduleId: string): Promise<ScheduledDispatchDetail> {
     return requestJson(
