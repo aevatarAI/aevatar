@@ -195,7 +195,8 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
     internal async Task HandleProviderEventAsync(
         VoiceProviderEvent providerEvent,
         IEventHandlerContext ctx,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? transportLeaseId = null)
     {
         var state = HydrateRuntimeStateFromActor(ctx);
         if (!TryNormalizeProviderEvent(state, providerEvent, out var normalizedEvent))
@@ -249,7 +250,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
                 stateChanged = true;
                 break;
             case VoiceProviderEvent.EventOneofCase.FunctionCall:
-                await ExecuteToolCallAsync(normalizedEvent.FunctionCall, ctx, ct);
+                await ExecuteToolCallAsync(normalizedEvent.FunctionCall, ctx, ct, transportLeaseId);
                 break;
             case VoiceProviderEvent.EventOneofCase.Disconnected:
                 state.AwaitingInjectedResponseStart = false;
@@ -446,7 +447,12 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         if (request.ProviderEvent == null)
             return;
 
-        await HandleProviderEventAsync(request.ProviderEvent, ctx, ct);
+        // The envelope carries the transport lease (== the VoiceVolatileMediaStreamPort relay key).
+        // Thread it through so a tool result reaches the LIVE relay session even when the actor's
+        // persisted state.ActiveTransportLeaseId is empty — which it is on the policy-aware /ws/voice
+        // relay path, where the FunctionCall is admitted via the RemoteSessionId fallback and the
+        // transport lease is never persisted into runtime state.
+        await HandleProviderEventAsync(request.ProviderEvent, ctx, ct, request.TransportLeaseId);
     }
 
     private async Task HandleInputImageReceivedAsync(
@@ -1025,14 +1031,16 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
     private async Task ExecuteToolCallAsync(
         VoiceFunctionCallRequested request,
         IEventHandlerContext ctx,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? transportLeaseId = null)
     {
         var state = HydrateRuntimeStateFromActor(ctx);
 
         _logger.LogDebug(
-            "Voice tool call {ToolName} callId={CallId} lease={TransportLeaseId} status={Status}",
+            "Voice tool call {ToolName} callId={CallId} envelopeLease={EnvelopeLease} stateLease={StateLease} status={Status}",
             request.ToolName,
             request.CallId,
+            transportLeaseId,
             state.ActiveTransportLeaseId,
             state.Status);
 
@@ -1090,24 +1098,33 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
             }
         }
 
-        await DeliverToolResultAsync(state, request.CallId, resultJson, ctx, ct);
+        await DeliverToolResultAsync(state, request.CallId, resultJson, transportLeaseId, ctx, ct);
     }
 
     // Refactor (cluster-voice-tool-result-live-relay): the function_call is emitted by the LIVE realtime
-    // socket owned by the host's VoiceVolatileMediaStreamPort relay (keyed by the active transport lease),
-    // and that socket's audio is relayed to the caller. Deliver the tool result there so the
+    // socket owned by the host's VoiceVolatileMediaStreamPort relay (keyed by the transport lease), and
+    // that socket's audio is relayed to the caller. Deliver the tool result there so the
     // function_call_output lands on the conversation that requested it and the spoken answer is heard.
-    // Only fall back to a throwaway provider session when no live relay is attached for this lease
-    // (e.g. a non-relayed transport or cross-host topology); otherwise the result would be added to a
-    // brand-new empty conversation whose audio goes nowhere, and the model would re-call the tool forever.
+    //
+    // The lease key MUST come from the incoming provider-event envelope (envelopeLeaseId): on the
+    // policy-aware /ws/voice relay path the FunctionCall is admitted via the RemoteSessionId fallback and
+    // the transport lease is never persisted into state.ActiveTransportLeaseId (it is empty there), while
+    // the envelope's TransportLeaseId is exactly the _activeRelays key. Fall back to state only for
+    // non-relay/legacy paths, and to a throwaway provider session only when no lease is available at all —
+    // otherwise the result would be added to a brand-new empty conversation whose audio goes nowhere, and
+    // the model would re-call the tool forever.
     private async Task DeliverToolResultAsync(
         VoicePresenceRuntimeState state,
         string callId,
         string resultJson,
+        string? envelopeLeaseId,
         IEventHandlerContext ctx,
         CancellationToken ct)
     {
-        var transportLeaseId = state.ActiveTransportLeaseId;
+        var transportLeaseId = !string.IsNullOrWhiteSpace(envelopeLeaseId)
+            ? envelopeLeaseId
+            : state.ActiveTransportLeaseId;
+
         if (!string.IsNullOrWhiteSpace(transportLeaseId))
         {
             var mediaPort = ctx.Services.GetService<IVoiceVolatileMediaStreamPort>();
@@ -1128,6 +1145,18 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
                     transportLeaseId,
                     callId);
             }
+            else
+            {
+                _logger.LogWarning(
+                    "IVoiceVolatileMediaStreamPort unavailable; tool result callId={CallId} fell back to a throwaway provider session.",
+                    callId);
+            }
+        }
+        else
+        {
+            _logger.LogWarning(
+                "Voice tool result callId={CallId} had no transport lease (envelope and state both empty); using a throwaway provider session — the model may not receive the result.",
+                callId);
         }
 
         await using var providerSession = await ConnectProviderSessionAsync(state, ct);
