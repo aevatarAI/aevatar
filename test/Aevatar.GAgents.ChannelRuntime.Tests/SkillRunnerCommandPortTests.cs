@@ -269,7 +269,7 @@ public sealed class SkillRunnerCommandPortTests
         await port.EnsureAsync(AgentId, command, CancellationToken.None);
 
         var configuration = scheduledDispatch.Ensured.Should().ContainSingle().Subject;
-        configuration.ScheduleId.Should().Be($"skill-runner:{AgentId}");
+        configuration.ScheduleId.Should().Be($"skill-runner.{AgentId}");
         configuration.CronExpression.Should().Be("0 9 * * *");
         configuration.Timezone.Should().Be("Asia/Singapore");
         configuration.Enabled.Should().BeTrue();
@@ -280,6 +280,20 @@ public sealed class SkillRunnerCommandPortTests
         configuration.Target.Envelope!.Route.Direct.TargetActorId.Should().Be(AgentId);
         var trigger = configuration.Target.Envelope.Payload.Unpack<TriggerSkillRunnerExecutionCommand>();
         trigger.Reason.Should().Be("schedule");
+    }
+
+    [Fact]
+    public void BuildScheduleId_ShouldStayWithinScheduledDispatchAllowedCharacters()
+    {
+        // Regression: scheduled dispatch reserves ':' as the actor-id namespace delimiter and
+        // its NormalizeScheduleId only allows [A-Za-z0-9._-]. A ':' here previously made every
+        // SkillRunner cron creation fail (ArgumentException -> initialize_failed). The unit test
+        // above mocks IScheduledDispatchApplicationService, so it cannot catch this on its own.
+        var scheduleId = SkillRunnerCronSchedulePort.BuildScheduleId(AgentId);
+
+        scheduleId.Should().Be($"skill-runner.{AgentId}");
+        scheduleId.Should().NotContain(":");
+        scheduleId.Should().MatchRegex("^[A-Za-z0-9._-]+$");
     }
 
     [Fact]
