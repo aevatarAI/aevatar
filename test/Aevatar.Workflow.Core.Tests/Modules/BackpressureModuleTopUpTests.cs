@@ -8,6 +8,7 @@ using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Text.Json;
 
 namespace Aevatar.Workflow.Core.Tests.Modules;
 
@@ -103,6 +104,155 @@ public sealed class BackpressureModuleTopUpTests
     }
 
     [Fact]
+    public async Task ForEachModule_ShouldDispatchOneChildPerInputFileRefInOrder()
+    {
+        var module = new ForEachModule();
+        var context = new RecordingWorkflowContext();
+        var first = BuildWorkflowFileRef("file-a");
+        var second = BuildWorkflowFileRef("file-b");
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "foreach-files",
+                StepType = "foreach",
+                RunId = "run-foreach-files",
+                Input = "ignored textual input",
+                Parameters =
+                {
+                    ["items_source"] = "input_file_refs",
+                    ["sub_step_type"] = "tool_call",
+                    ["max_concurrent_workers"] = "4",
+                },
+                InputFileRefs = { first, second },
+            }),
+            context,
+            CancellationToken.None);
+
+        var requests = context.Published.Select(x => x.Event).OfType<StepRequestEvent>().ToArray();
+        requests.Select(request => request.StepId).Should().Equal("foreach-files_item_0", "foreach-files_item_1");
+        requests.Select(request => request.InputFileRefs.Should().ContainSingle().Subject.FileId)
+            .Should().Equal("file-a", "file-b");
+        requests.Select(request => request.Input).Should().Equal("workflow-file://file-a", "workflow-file://file-b");
+    }
+
+    [Fact]
+    public async Task ForEachModule_ShouldPreserveQueuedInputFileRefWhenBackpressureTopsUp()
+    {
+        var module = new ForEachModule();
+        var context = new RecordingWorkflowContext();
+        var first = BuildWorkflowFileRef("file-a");
+        var second = BuildWorkflowFileRef("file-b");
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "foreach-files-floor",
+                StepType = "foreach",
+                RunId = "run-foreach-files-floor",
+                Parameters =
+                {
+                    ["items_source"] = "input_file_refs",
+                    ["sub_step_type"] = "tool_call",
+                    ["min_concurrent_workers"] = "1",
+                    ["max_concurrent_workers"] = "2",
+                },
+                InputFileRefs = { first, second },
+            }),
+            context,
+            CancellationToken.None);
+
+        context.Published.Select(x => x.Event).OfType<StepRequestEvent>().Should().ContainSingle()
+            .Which.InputFileRefs.Should().ContainSingle().Which.FileId.Should().Be("file-a");
+
+        context.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = "foreach-files-floor_item_0",
+                RunId = "run-foreach-files-floor",
+                Success = true,
+                Output = "first done",
+            }),
+            context,
+            CancellationToken.None);
+
+        var topUp = context.Published.Select(x => x.Event).OfType<StepRequestEvent>().Should().ContainSingle().Subject;
+        topUp.StepId.Should().Be("foreach-files-floor_item_1");
+        topUp.InputFileRefs.Should().ContainSingle().Which.FileId.Should().Be("file-b");
+        topUp.Input.Should().Be("workflow-file://file-b");
+    }
+
+    [Fact]
+    public async Task ForEachModule_ShouldPublishDescriptorOnlyFileResultsWithPerFileErrors()
+    {
+        var module = new ForEachModule();
+        var context = new RecordingWorkflowContext();
+        var first = BuildWorkflowFileRef("file-a");
+        var second = BuildWorkflowFileRef("file-b");
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "foreach-files-result",
+                StepType = "foreach",
+                RunId = "run-foreach-files-result",
+                Parameters =
+                {
+                    ["items_source"] = "input_file_refs",
+                    ["sub_step_type"] = "tool_call",
+                },
+                InputFileRefs = { first, second },
+            }),
+            context,
+            CancellationToken.None);
+
+        context.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = "foreach-files-result_item_1",
+                RunId = "run-foreach-files-result",
+                Success = false,
+                Error = "extract failed",
+            }),
+            context,
+            CancellationToken.None);
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = "foreach-files-result_item_0",
+                RunId = "run-foreach-files-result",
+                Success = true,
+                Output = "descriptor output",
+            }),
+            context,
+            CancellationToken.None);
+
+        var completed = context.Published.Select(x => x.Event).OfType<StepCompletedEvent>().Should().ContainSingle().Subject;
+        completed.StepId.Should().Be("foreach-files-result");
+        completed.Success.Should().BeFalse();
+        completed.Error.Should().Be("one or more foreach items failed");
+        completed.Output.Should().NotContain("data_base64");
+        completed.Output.Should().NotContain("base64");
+        using var doc = JsonDocument.Parse(completed.Output);
+        var items = doc.RootElement.EnumerateArray().ToArray();
+        items.Should().HaveCount(2);
+        items[0].GetProperty("index").GetInt32().Should().Be(0);
+        items[0].GetProperty("success").GetBoolean().Should().BeTrue();
+        items[0].GetProperty("file").GetProperty("fileId").GetString().Should().Be("file-a");
+        items[0].GetProperty("file").GetProperty("artifactId").GetString().Should().Be("workflow-file://file-a");
+        items[0].GetProperty("output").GetString().Should().Be("descriptor output");
+        items[1].GetProperty("index").GetInt32().Should().Be(1);
+        items[1].GetProperty("success").GetBoolean().Should().BeFalse();
+        items[1].GetProperty("file").GetProperty("fileId").GetString().Should().Be("file-b");
+        items[1].GetProperty("error").GetString().Should().Be("extract failed");
+    }
+
+    [Fact]
     public async Task MapReduceModule_ShouldHonorMinConcurrentWorkersAndTopUp()
     {
         var module = new MapReduceModule();
@@ -182,6 +332,22 @@ public sealed class BackpressureModuleTopUpTests
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
+        };
+
+    private static WorkflowFileRef BuildWorkflowFileRef(string fileId) =>
+        new()
+        {
+            FileId = fileId,
+            ArtifactId = $"workflow-file://{fileId}",
+            SourceKind = WorkflowFileSourceKind.FormUpload,
+            FileName = $"{fileId}.txt",
+            MediaType = "text/plain",
+            SizeBytes = 12,
+            Sha256 = $"sha-{fileId}",
+            CreatedAtUnixMs = 1710000000000,
+            ExpiresAtUnixMs = 1710003600000,
+            OwnerRunId = "run-owner",
+            OwnerScopeId = "scope-owner",
         };
 
     private sealed class RecordingWorkflowContext : IWorkflowExecutionContext

@@ -126,7 +126,7 @@ public sealed class ChatFormRunRequestParserTests
     }
 
     [Fact]
-    public async Task ParseAsync_ShouldRejectMultipleFiles()
+    public async Task ParseAsync_ShouldIngestMultipleSameFieldFilesInFormOrder()
     {
         var ingressPort = new RecordingWorkflowFileIngressPort();
         var parser = CreateParser(ingressPort);
@@ -142,10 +142,21 @@ public sealed class ChatFormRunRequestParserTests
 
         var result = await parser.ParseAsync(http, CancellationToken.None);
 
-        result.Succeeded.Should().BeFalse();
-        result.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
-        result.Code.Should().Be("INVALID_FILE_INPUT");
-        ingressPort.Requests.Should().BeEmpty();
+        result.Succeeded.Should().BeTrue();
+        ingressPort.Requests.Should().HaveCount(2);
+        ingressPort.Requests.Select(request => request.FileName).Should().Equal("cat.png", "dog.png");
+        ingressPort.Requests.Select(request => Encoding.UTF8.GetString(request.Content.ToArray()))
+            .Should().Equal("hello", "world");
+        result.Input.Should().NotBeNull();
+        result.Input!.InputParts.Should().HaveCount(2);
+        result.Input.InputParts!.Select(part => part.FileRef!.ArtifactId)
+            .Should().Equal("workflow-file://file-1", "workflow-file://file-2");
+        result.Input.InputParts!.Select(part => part.FileRef!.FileName)
+            .Should().Equal("cat.png", "dog.png");
+        result.Input.InputParts!.All(part =>
+            part.DataBase64 == null &&
+            part.InlineFile == null &&
+            part.FileRef != null).Should().BeTrue();
     }
 
     [Fact]
@@ -159,6 +170,29 @@ public sealed class ChatFormRunRequestParserTests
                 ["prompt"] = "hello",
             },
             [CreateFormFile("upload", "cat.png", "image/png", "hello")]);
+
+        var result = await parser.ParseAsync(http, CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        result.Code.Should().Be("INVALID_FILE_INPUT");
+        ingressPort.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ParseAsync_ShouldRejectWholeRequestWithoutIngesting_WhenAnyFileFieldNameDiffers()
+    {
+        var ingressPort = new RecordingWorkflowFileIngressPort();
+        var parser = CreateParser(ingressPort);
+        var http = CreateMultipartHttpContext(
+            new Dictionary<string, string>
+            {
+                ["prompt"] = "hello",
+            },
+            [
+                CreateFormFile("file", "cat.png", "image/png", "hello"),
+                CreateFormFile("upload", "dog.png", "image/png", "world"),
+            ]);
 
         var result = await parser.ParseAsync(http, CancellationToken.None);
 
@@ -301,6 +335,59 @@ public sealed class ChatFormRunRequestParserTests
     }
 
     [Fact]
+    public async Task ParseAsync_ShouldRejectWholeRequestWithoutIngesting_WhenAnyFileIsInvalid()
+    {
+        var ingressPort = new RecordingWorkflowFileIngressPort();
+        var parser = CreateParser(ingressPort, new WorkflowMultipartFileIngressOptions
+        {
+            MaxFileBytes = 8,
+        });
+        var http = CreateMultipartHttpContext(
+            new Dictionary<string, string>
+            {
+                ["prompt"] = "hello",
+            },
+            [
+                CreateFormFile("file", "cat.png", "image/png", "hello"),
+                CreateFormFile("file", "large.png", "image/png", "too-large"),
+            ]);
+
+        var result = await parser.ParseAsync(http, CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        result.Code.Should().Be("INVALID_FILE_INPUT");
+        ingressPort.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ParseAsync_ShouldRejectWholeRequest_WhenAnyFileIngressFails()
+    {
+        var ingressPort = new RecordingWorkflowFileIngressPort
+        {
+            FailOnRequestNumber = 2,
+        };
+        var parser = CreateParser(ingressPort);
+        var http = CreateMultipartHttpContext(
+            new Dictionary<string, string>
+            {
+                ["prompt"] = "hello",
+            },
+            [
+                CreateFormFile("file", "cat.png", "image/png", "hello"),
+                CreateFormFile("file", "dog.png", "image/png", "world"),
+            ]);
+
+        var result = await parser.ParseAsync(http, CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        result.Code.Should().Be("INVALID_FILE_INPUT");
+        result.Input.Should().BeNull();
+        ingressPort.Requests.Should().HaveCount(2);
+    }
+
+    [Fact]
     public async Task ParseAsync_ShouldRejectMalformedPayloadWithoutIngestingFile()
     {
         var ingressPort = new RecordingWorkflowFileIngressPort();
@@ -359,7 +446,6 @@ public sealed class ChatFormRunRequestParserTests
         WorkflowFormFileIngressOptions? formOptions = null) =>
         new(
             ingressPort,
-            new ChatFormRunRequestParser(),
             Options.Create(options ?? new WorkflowMultipartFileIngressOptions()),
             Options.Create(formOptions ?? new WorkflowFormFileIngressOptions()));
 
@@ -408,15 +494,21 @@ public sealed class ChatFormRunRequestParserTests
     {
         public List<WorkflowFileIngressRequest> Requests { get; } = [];
 
+        public int? FailOnRequestNumber { get; init; }
+
         public ValueTask<WorkflowFileIngressResult> IngestAsync(
             WorkflowFileIngressRequest request,
             CancellationToken cancellationToken = default)
         {
             Requests.Add(request);
+            var index = Requests.Count;
+            if (FailOnRequestNumber == index)
+                throw new IOException("file ingress failed");
+
             return ValueTask.FromResult(new WorkflowFileIngressResult(new ApplicationWorkflowFileRef
             {
-                FileId = "file-1",
-                ArtifactId = "workflow-file://file-1",
+                FileId = $"file-{index}",
+                ArtifactId = $"workflow-file://file-{index}",
                 SourceKind = request.SourceKind,
                 FileName = request.FileName,
                 MediaType = request.MediaType,

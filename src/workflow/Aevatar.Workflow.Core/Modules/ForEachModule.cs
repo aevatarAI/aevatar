@@ -7,6 +7,7 @@
 // but is a general-purpose primitive.
 // ─────────────────────────────────────────────────────────────
 
+using System.Text.Json;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
@@ -25,6 +26,7 @@ namespace Aevatar.Workflow.Core.Modules;
 public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
 {
     private const string ModuleStateKey = "foreach";
+    private const string InputFileRefsItemsSource = "input_file_refs";
 
     /// <summary>Module name.</summary>
     public string Name => "foreach";
@@ -57,10 +59,17 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
             var subStepType = WorkflowPrimitiveCatalog.ToCanonicalType(
                 WorkflowParameterValueParser.GetString(evt.Parameters, "parallel", "sub_step_type", "step"));
             var subTargetRole = WorkflowParameterValueParser.GetString(evt.Parameters, evt.TargetRole, "sub_target_role", "sub_role");
+            var itemsSource = WorkflowParameterValueParser.GetString(evt.Parameters, string.Empty, "items_source", "source");
+            var useInputFileRefs = string.Equals(itemsSource, InputFileRefsItemsSource, StringComparison.OrdinalIgnoreCase);
 
             // ─── Split input into items ───
-            var items = WorkflowParameterValueParser.SplitInputByDelimiterOrJsonArray(evt.Input, delimiter);
-            if (items.Length == 0 && evt.Parameters.TryGetValue("items", out var itemListRaw))
+            var fileItems = useInputFileRefs
+                ? evt.InputFileRefs.Select(static fileRef => fileRef.Clone()).ToArray()
+                : [];
+            var items = useInputFileRefs
+                ? fileItems.Select(ResolveFileItemInput).ToArray()
+                : WorkflowParameterValueParser.SplitInputByDelimiterOrJsonArray(evt.Input, delimiter);
+            if (!useInputFileRefs && items.Length == 0 && evt.Parameters.TryGetValue("items", out var itemListRaw))
                 items = WorkflowParameterValueParser.ParseStringList(itemListRaw).ToArray();
             if (items.Length == 0)
             {
@@ -77,6 +86,8 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
             state.Parents[parentKey] = new ForEachParentState
             {
                 Expected = items.Length,
+                ItemFileRefs = { fileItems },
+                ItemsSource = useInputFileRefs ? InputFileRefsItemsSource : string.Empty,
             };
 
             var maxConcurrent = BackpressureHelper.ResolveMaxConcurrent(evt.Parameters);
@@ -102,7 +113,13 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
                 }
 
                 var entry = BackpressureHelper.ToQueueEntry(
-                    $"{evt.StepId}_item_{i}", subStepType, runId, items[i].Trim(), subTargetRole ?? "", subParams);
+                    $"{evt.StepId}_item_{i}",
+                    subStepType,
+                    runId,
+                    items[i].Trim(),
+                    subTargetRole ?? "",
+                    subParams,
+                    useInputFileRefs ? [fileItems[i]] : null);
 
                 if (BackpressureHelper.TryAdmit(state.Backpressure, entry))
                 {
@@ -144,7 +161,11 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
             if (parentState.CollectedStepIds.Contains(evt.StepId))
                 return;
             parentState.CollectedStepIds.Add(evt.StepId);
-            parentState.Collected.Add(evt.ToForEachItemResult());
+            var itemIndex = ExtractDirectItemIndex(evt.StepId);
+            var fileRef = itemIndex >= 0 && itemIndex < parentState.ItemFileRefs.Count
+                ? parentState.ItemFileRefs[itemIndex]
+                : null;
+            parentState.Collected.Add(evt.ToForEachItemResult(itemIndex, fileRef));
             state.Parents[parentKey] = parentState;
             state.Backpressure = BackpressureHelper.EnsureInitialized(
                 state.Backpressure,
@@ -155,7 +176,12 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
             {
                 var results = parentState.Collected;
                 var allSuccess = results.All(r => r.Success);
-                var merged = string.Join("\n---\n", results.Select(r => r.Output));
+                var merged = IsInputFileRefsSource(parentState)
+                    ? BuildFileItemResultsJson(results)
+                    : string.Join("\n---\n", results.Select(r => r.Output));
+                var error = allSuccess
+                    ? string.Empty
+                    : "one or more foreach items failed";
 
                 ctx.Logger.LogInformation(
                     "ForEach {StepId}: all {Count} items completed, success={Success}",
@@ -168,7 +194,7 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
                 {
                     StepId = parent,
                     RunId = runId,
-                    Success = allSuccess, Output = merged,
+                    Success = allSuccess, Output = merged, Error = error,
                 }, TopologyAudience.Self, ct);
             }
             else
@@ -194,6 +220,66 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
             return null;
 
         return stepId[..idx];
+    }
+
+    private static int ExtractDirectItemIndex(string stepId)
+    {
+        var marker = "_item_";
+        var idx = stepId.LastIndexOf(marker, StringComparison.Ordinal);
+        if (idx <= 0) return -1;
+
+        var suffix = stepId[(idx + marker.Length)..];
+        return int.TryParse(suffix, out var index) ? index : -1;
+    }
+
+    private static bool IsInputFileRefsSource(ForEachParentState parentState) =>
+        string.Equals(parentState.ItemsSource, InputFileRefsItemsSource, StringComparison.OrdinalIgnoreCase);
+
+    private static string ResolveFileItemInput(WorkflowFileRef fileRef)
+    {
+        if (!string.IsNullOrWhiteSpace(fileRef.ArtifactId))
+            return fileRef.ArtifactId;
+
+        if (!string.IsNullOrWhiteSpace(fileRef.FileId))
+            return fileRef.FileId;
+
+        return fileRef.FileName;
+    }
+
+    private static string BuildFileItemResultsJson(IEnumerable<ForEachItemResult> results) =>
+        JsonSerializer.Serialize(
+            results
+                .OrderBy(static result => result.Index)
+                .Select(static result => new
+                {
+                    index = result.Index,
+                    file = ToFileDescriptor(result.FileRef),
+                    success = result.Success,
+                    output = result.Output,
+                    error = result.Error,
+                }));
+
+    private static object? ToFileDescriptor(WorkflowFileRef fileRef)
+    {
+        if (fileRef == null)
+            return null;
+
+        return new
+        {
+            fileId = fileRef.FileId,
+            artifactId = fileRef.ArtifactId,
+            sourceKind = fileRef.SourceKind.ToString(),
+            sourceMessageId = fileRef.SourceMessageId,
+            sourceResourceKey = fileRef.SourceResourceKey,
+            fileName = fileRef.FileName,
+            mediaType = fileRef.MediaType,
+            sizeBytes = fileRef.SizeBytes,
+            sha256 = fileRef.Sha256,
+            createdAtUnixMs = fileRef.CreatedAtUnixMs,
+            expiresAtUnixMs = fileRef.ExpiresAtUnixMs,
+            ownerRunId = fileRef.OwnerRunId,
+            ownerScopeId = fileRef.OwnerScopeId,
+        };
     }
 
     private static Task SaveStateAsync(

@@ -646,7 +646,6 @@ public sealed class ChatEndpointsInternalTests
         };
         var parser = new WorkflowMultipartChatRequestParser(
             ingressPort,
-            new ChatFormRunRequestParser(),
             Options.Create(new WorkflowMultipartFileIngressOptions()));
         var http = CreateHttpContext("Bearer trusted-token");
         http.Request.ContentType = "multipart/form-data; boundary=test";
@@ -687,7 +686,6 @@ public sealed class ChatEndpointsInternalTests
         var ingressPort = new RecordingWorkflowFileIngressPort();
         var parser = new WorkflowMultipartChatRequestParser(
             ingressPort,
-            new ChatFormRunRequestParser(),
             Options.Create(new WorkflowMultipartFileIngressOptions()));
         var http = CreateHttpContext("Bearer token 123");
         http.Request.ContentType = "multipart/form-data; boundary=test";
@@ -729,7 +727,6 @@ public sealed class ChatEndpointsInternalTests
         };
         var parser = new WorkflowMultipartChatRequestParser(
             new RecordingWorkflowFileIngressPort(),
-            new ChatFormRunRequestParser(),
             Options.Create(new WorkflowMultipartFileIngressOptions()));
         var http = CreateHttpContext("Bearer trusted-token");
         http.Request.ContentType = "application/json";
@@ -773,7 +770,6 @@ public sealed class ChatEndpointsInternalTests
         };
         var parser = new WorkflowMultipartChatRequestParser(
             new RecordingWorkflowFileIngressPort(),
-            new ChatFormRunRequestParser(),
             Options.Create(new WorkflowMultipartFileIngressOptions()));
         var http = CreateHttpContext("Bearer trusted-token");
         http.Request.ContentType = "application/json";
@@ -796,7 +792,6 @@ public sealed class ChatEndpointsInternalTests
     {
         var parser = new WorkflowMultipartChatRequestParser(
             new RecordingWorkflowFileIngressPort(),
-            new ChatFormRunRequestParser(),
             Options.Create(new WorkflowMultipartFileIngressOptions()));
         var http = CreateHttpContext();
         http.Request.ContentType = "text/plain";
