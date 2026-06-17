@@ -41,3 +41,11 @@ Issue 1917 left one dependency gap in the workflow file submit path: `WorkflowCo
 ## Deployment Dependency
 
 Real non-Lark target values must be supplied by verified Host deployment configuration, ConfigMap, or secret. The repository must not invent checked-in NyxID targets, use `.refactor-loop/host.env` as production configuration, or move generic target ownership into a provider adapter registry.
+
+## Issue 2221 Artifact Lifecycle Closure
+
+Workflow file artifacts now have an explicit cleanup lifecycle contract. The hot path remains split across narrow ingress/read/ownership ports; cleanup is exposed only through `IWorkflowFileArtifactCleanupPort`, which Host can trigger from a background service while the selected provider owns physical cleanup.
+
+The descriptor manifest is the artifact readability commit record. Filesystem content without a descriptor is staged/incomplete content, not a readable artifact; provider cleanup can remove stale staged directories and expired descriptor-committed artifacts based on durable descriptor/index state. Workflow run ownership remains actor-owned fact and must not be replaced by a process-local artifact registry or `actorId -> context` lookup.
+
+Host composition now treats production/external artifact backend selection as fail closed. `WorkflowFileArtifacts:Backend=External` requires explicit registrations for `IWorkflowFileIngressPort`, `IWorkflowFileArtifactReadPort`, `IWorkflowFileArtifactOwnershipPort`, and `IWorkflowFileArtifactCleanupPort`. Production policy rejects the implicit filesystem backend. Actor-facing workflow state, readmodels, logs, prompts, and tool results continue to carry only descriptor/ref data, never bytes, base64, multipart payloads, or provider raw responses.
