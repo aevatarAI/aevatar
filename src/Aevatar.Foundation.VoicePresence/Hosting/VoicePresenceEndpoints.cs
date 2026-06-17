@@ -102,7 +102,10 @@ public static class VoicePresenceEndpoints
                     await realtimeSubscription.DisposeAsync();
 
                 if (attached)
-                    await mediaPort.DetachAsync(detachHandle, transport, ctx.RequestAborted);
+                    // CancellationToken.None: ctx.RequestAborted is already cancelled on a normal close,
+                    // and the dispatch port throws on a cancelled token before producing the release —
+                    // so detach must run uncancelled or the lease never releases (TransportAttached sticks).
+                    await mediaPort.DetachAsync(detachHandle, transport, CancellationToken.None);
             }
         });
     }

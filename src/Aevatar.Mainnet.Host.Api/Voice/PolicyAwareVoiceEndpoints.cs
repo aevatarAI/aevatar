@@ -153,6 +153,10 @@ public static class PolicyAwareVoiceEndpoints
             var ws = await http.WebSockets.AcceptWebSocketAsync();
             var transport = new WebSocketVoiceTransport(ws);
             var attached = false;
+            // AcquireAsync returns a handle with an empty ActiveTransportLeaseId (the id is only known
+            // post-attach). Carry the resolved id so the close-time DetachAsync can stop the right relay
+            // and detach the transport — without it StopRelay/transport-detach are no-ops.
+            var detachHandle = accepted.LeaseHandle;
             IAsyncDisposable? realtimeSubscription = null;
             try
             {
@@ -174,11 +178,13 @@ public static class PolicyAwareVoiceEndpoints
                     throw;
                 }
 
-                await mediaStreamPort.AttachAsync(
+                var lifetimeCompleted = await mediaStreamPort.AttachAsync(
                     accepted.LeaseHandle,
                     transport,
                     toolContextAdmission.TransportBinding,
                     http.RequestAborted);
+                if (!string.IsNullOrWhiteSpace(lifetimeCompleted?.TransportLeaseId))
+                    detachHandle = detachHandle with { ActiveTransportLeaseId = lifetimeCompleted!.TransportLeaseId };
 
                 attached = true;
                 await WaitUntilClosedAsync(transport, http.RequestAborted);
@@ -201,7 +207,11 @@ public static class PolicyAwareVoiceEndpoints
                     await realtimeSubscription.DisposeAsync();
 
                 if (attached)
-                    await mediaStreamPort.DetachAsync(accepted.LeaseHandle, transport, http.RequestAborted);
+                    // CancellationToken.None: on a normal browser close http.RequestAborted is ALREADY
+                    // cancelled, and the dispatch port throws on a cancelled token before producing the
+                    // release signal — so the lease would never be released and TransportAttached would
+                    // stay stuck true (blocking the next session with 409). Detach must run uncancelled.
+                    await mediaStreamPort.DetachAsync(detachHandle, transport, CancellationToken.None);
             }
         }
         finally

@@ -8,6 +8,8 @@ public sealed class ActorOwnedVoiceRealtimeSession
     : IRealtimeSession<VoiceRealtimeSessionRequest, VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeFrame, VoiceRealtimeSessionCompletion>
 {
     internal static readonly TimeSpan DefaultLeaseTtl = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan TakeoverReadInterval = TimeSpan.FromMilliseconds(200);
+    private const int TakeoverReadMaxAttempts = 10;
     private const string HostOwnerId = "voice-presence.host";
 
     private readonly IVoicePresenceCapabilityQueryPort _capabilityQueryPort;
@@ -46,27 +48,59 @@ public sealed class ActorOwnedVoiceRealtimeSession
 
         if (capability.TransportAttached || IsActive(capability.LeaseExpiresAt, capability.ActiveSessionId))
         {
-            if (inbound.Purpose != VoiceRealtimeSessionPurpose.Detach)
-                return Failure(VoiceRealtimeSessionStartError.TransportAlreadyAttached);
+            if (inbound.Purpose == VoiceRealtimeSessionPurpose.Detach)
+            {
+                var acceptedDetach = BuildAccepted(
+                    capability,
+                    new VoicePresenceSessionLeaseHandle(
+                        capability.ActorId,
+                        capability.ModuleName,
+                        capability.ActiveSessionId ?? string.Empty,
+                        HostOwnerId,
+                        capability.StateVersion,
+                        capability.LeaseExpiresAt ?? _timeProvider.GetUtcNow(),
+                        capability.RemoteAudioSupport,
+                        capability.ActiveTransportLeaseId,
+                        capability.LeaseEpoch,
+                        inbound.ToolContext?.Clone()));
+                if (onAcceptedAsync != null)
+                    await onAcceptedAsync(acceptedDetach, ct);
 
-            var acceptedDetach = BuildAccepted(
-                capability,
-                new VoicePresenceSessionLeaseHandle(
+                return RealtimeSessionResult<VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeSessionCompletion>
+                    .Success(acceptedDetach, VoiceRealtimeSessionCompletion.Accepted, completed: true);
+            }
+
+            // Attach with an existing/stale transport: TAKE IT OVER instead of rejecting with 409.
+            // The lease release is SessionId-only (no expiry/owner/epoch gate), so this evicts even a
+            // TTL-expired or relay-dead lease that left TransportAttached stuck — a new Start must never
+            // be permanently blocked by a prior session's leftover state. AcquireAsync below bumps the
+            // lease epoch, so the new session strictly out-fences the old relay's late frames.
+            if (!string.IsNullOrWhiteSpace(capability.ActiveSessionId))
+            {
+                var evictHandle = new VoicePresenceSessionLeaseHandle(
                     capability.ActorId,
                     capability.ModuleName,
-                    capability.ActiveSessionId ?? string.Empty,
+                    capability.ActiveSessionId,
                     HostOwnerId,
                     capability.StateVersion,
                     capability.LeaseExpiresAt ?? _timeProvider.GetUtcNow(),
                     capability.RemoteAudioSupport,
                     capability.ActiveTransportLeaseId,
                     capability.LeaseEpoch,
-                    inbound.ToolContext?.Clone()));
-            if (onAcceptedAsync != null)
-                await onAcceptedAsync(acceptedDetach, ct);
+                    inbound.ToolContext?.Clone());
+                await _mediaStreamPort.DetachAsync(evictHandle, expectedTransport: null, ct);
+            }
 
-            return RealtimeSessionResult<VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeSessionCompletion>
-                .Success(acceptedDetach, VoiceRealtimeSessionCompletion.Accepted, completed: true);
+            // Bounded re-read until the evict is observed cleared, absorbing projection lag / a transient
+            // write-skip so a single attach doesn't bounce. Fail closed only if still attached after the
+            // budget (the next attach re-fences by epoch and succeeds).
+            capability = await AwaitClearedCapabilityAsync(inbound.ActorId, inbound.ModuleName, ct);
+            if (capability == null)
+                return Failure(VoiceRealtimeSessionStartError.NotFound);
+            if (!capability.Initialized)
+                return Failure(VoiceRealtimeSessionStartError.NotInitialized);
+            if (capability.TransportAttached || IsActive(capability.LeaseExpiresAt, capability.ActiveSessionId))
+                return Failure(VoiceRealtimeSessionStartError.TransportAlreadyAttached);
         }
 
         if (inbound.Purpose == VoiceRealtimeSessionPurpose.Detach)
@@ -120,4 +154,27 @@ public sealed class ActorOwnedVoiceRealtimeSession
         !string.IsNullOrWhiteSpace(activeSessionId) &&
         expiresAtUtc.HasValue &&
         expiresAtUtc.Value.ToUniversalTime() > UtcNow;
+
+    // After a takeover evict, poll the capability projection (bounded) until it observes the cleared
+    // state, so a single attach absorbs projection lag instead of fail-closing on a stale read. Returns
+    // the latest snapshot (the caller fail-closes if it is still attached after the budget).
+    private async Task<VoicePresenceCapabilitySnapshot?> AwaitClearedCapabilityAsync(
+        string actorId,
+        string? moduleName,
+        CancellationToken ct)
+    {
+        VoicePresenceCapabilitySnapshot? snapshot = null;
+        for (var attempt = 0; attempt < TakeoverReadMaxAttempts; attempt++)
+        {
+            snapshot = await _capabilityQueryPort.GetAsync(actorId, moduleName, ct);
+            if (snapshot == null)
+                return null;
+            if (!snapshot.TransportAttached && !IsActive(snapshot.LeaseExpiresAt, snapshot.ActiveSessionId))
+                return snapshot;
+            if (attempt < TakeoverReadMaxAttempts - 1)
+                await Task.Delay(TakeoverReadInterval, _timeProvider, ct);
+        }
+
+        return snapshot;
+    }
 }
