@@ -32,6 +32,13 @@ import {
   type StudioStepInspectorDraft,
 } from "@/shared/studio/document";
 import {
+  buildExecutionTrace,
+  decorateEdgesForExecution,
+  decorateNodesForExecution,
+  findExecutionLogIndexForStep,
+  type ExecutionTrace,
+} from "@/shared/studio/execution";
+import {
   buildStudioGraphElements,
   buildStudioWorkflowLayout,
   STUDIO_GRAPH_CATEGORIES,
@@ -85,6 +92,16 @@ type PublishedWorkflow = {
   readonly run: StudioMemberBindingRunStatusResponse | null;
   readonly savedDraft: SavedWorkflowDraft | null;
 };
+
+class PublishWorkflowStatusError extends Error {
+  readonly showAsError: boolean;
+
+  constructor(message: string, showAsError: boolean) {
+    super(message);
+    this.name = "PublishWorkflowStatusError";
+    this.showAsError = showAsError;
+  }
+}
 
 type CreatedWorkflowMember = {
   readonly memberId: string;
@@ -177,6 +194,8 @@ type TeamMemberWorkflowStudioState = {
   readonly executionError: string;
   readonly executionRunMessage: string;
   readonly executionStatus: WorkflowExecutionStatus;
+  readonly activeExecutionLogIndex: number | null;
+  readonly clearExecutionLogs: () => void;
   readonly graph: ReturnType<typeof buildStudioGraphElements>;
   readonly insertNode: (stepType: string) => void;
   readonly linkedWorkflowMissing: boolean;
@@ -202,6 +221,7 @@ type TeamMemberWorkflowStudioState = {
   readonly updateSelectedStepConfiguration: (parametersText: string) => void;
   readonly selectCanvas: () => void;
   readonly selectEdge: (edgeId: string) => void;
+  readonly selectExecutionLog: (index: number | null) => void;
   readonly selectNode: (nodeId: string) => void;
   readonly setExecutionRunMessage: (message: string) => void;
   readonly setWorkflowTitle: (title: string) => void;
@@ -942,12 +962,15 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const [executionDetail, setExecutionDetail] =
     React.useState<StudioExecutionDetail | null>(null);
   const [executionError, setExecutionError] = React.useState("");
+  const [activeExecutionLogIndex, setActiveExecutionLogIndex] =
+    React.useState<number | null>(null);
   const [executionRunMessage, setExecutionRunMessage] = React.useState("");
   const [pendingCreatedWorkflowMemberLink, setPendingCreatedWorkflowMemberLink] =
     React.useState<PendingCreatedWorkflowMemberLink | null>(null);
   const [publishBindingRun, setPublishBindingRun] =
     React.useState<StudioMemberBindingRunStatusResponse | null>(null);
   const [publishError, setPublishError] = React.useState("");
+  const [publishErrorVisible, setPublishErrorVisible] = React.useState(true);
   const [nodeLibraryOpen, setNodeLibraryOpen] = React.useState(false);
   const [draftRunPanelOpen, setDraftRunPanelOpen] = React.useState(false);
   const [yamlImportPanelOpen, setYamlImportPanelOpen] = React.useState(false);
@@ -1222,6 +1245,45 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const graph = React.useMemo(
     () => buildStudioGraphElements(editableDocument, editableLayout),
     [editableDocument, editableLayout],
+  );
+  const executionTrace = React.useMemo<ExecutionTrace | null>(
+    () => buildExecutionTrace(executionDetail),
+    [executionDetail],
+  );
+  React.useEffect(() => {
+    if (!executionTrace?.logs.length) {
+      setActiveExecutionLogIndex(null);
+      return;
+    }
+
+    setActiveExecutionLogIndex((currentIndex) => {
+      if (
+        typeof currentIndex === "number" &&
+        currentIndex >= 0 &&
+        currentIndex < executionTrace.logs.length
+      ) {
+        return currentIndex;
+      }
+
+      return executionTrace.defaultLogIndex;
+    });
+  }, [executionTrace]);
+  const graphWithExecution = React.useMemo(
+    () => ({
+      ...graph,
+      edges: decorateEdgesForExecution(
+        graph.edges,
+        graph.nodes,
+        executionTrace,
+        activeExecutionLogIndex,
+      ),
+      nodes: decorateNodesForExecution(
+        graph.nodes,
+        executionTrace,
+        activeExecutionLogIndex,
+      ),
+    }),
+    [activeExecutionLogIndex, executionTrace, graph],
   );
   const selectedStepDraft = React.useMemo(() => {
     const selectedStepId = readStepIdFromGraphNodeId(selectedNodeId);
@@ -1735,14 +1797,16 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         currentMember,
       );
       if (!dirty && hasCurrentCompletedMemberBinding(currentMember)) {
-        throw new Error(
+        throw new PublishWorkflowStatusError(
           "This member workflow is already published. Refresh status to check readiness.",
+          false,
         );
       }
 
       if (hasActiveMemberBindingRun(currentMember)) {
-        throw new Error(
+        throw new PublishWorkflowStatusError(
           "Publish is already in progress for this member. Refresh status before publishing again.",
+          false,
         );
       }
 
@@ -1816,12 +1880,16 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       };
     },
     onError: (error) => {
+      setPublishErrorVisible(
+        !(error instanceof PublishWorkflowStatusError && !error.showAsError),
+      );
       setPublishError(
         error instanceof Error ? error.message : "Failed to publish workflow member.",
       );
     },
     onMutate: () => {
       setPublishError("");
+      setPublishErrorVisible(true);
       setPublishBindingRun(null);
     },
     onSuccess: ({ run, savedDraft }) => {
@@ -1935,7 +2003,8 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         );
   const publishVisibleError =
     publishError &&
-    (publishBindingRunFailed ||
+    (publishErrorVisible ||
+      publishBindingRunFailed ||
       (!memberIsPublished && !publishStatusStillInProgress))
       ? publishError
       : "";
@@ -1957,6 +2026,8 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         ? "No stable workflow draft is linked to this member yet."
         : selectedStepConfigurationError
           ? selectedStepConfigurationError
+        : publishPending
+          ? "Publishing this member workflow."
         : publishStatusStillInProgress
           ? "Publish is still in progress. Use Refresh status before publishing again."
         : memberIsPublished
@@ -2420,6 +2491,21 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     },
     [editableDocument, selectedStepDraft],
   );
+  const selectExecutionLog = React.useCallback(
+    (index: number | null) => {
+      if (index === null) {
+        setActiveExecutionLogIndex(null);
+        return;
+      }
+
+      setActiveExecutionLogIndex(
+        index >= 0 && index < (executionTrace?.logs.length ?? 0)
+          ? index
+          : null,
+      );
+    },
+    [executionTrace?.logs.length],
+  );
 
   return {
     automationsHref,
@@ -2521,7 +2607,13 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     executionError,
     executionRunMessage,
     executionStatus,
-    graph,
+    activeExecutionLogIndex,
+    clearExecutionLogs: () => {
+      setExecutionDetail(null);
+      setExecutionError("");
+      setActiveExecutionLogIndex(null);
+    },
+    graph: graphWithExecution,
     insertNode,
     linkedWorkflowMissing,
     loading: Boolean(workflowLoading),
@@ -2612,6 +2704,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       setSelectedEdgeId("");
       setSelectedNodeId("");
       setSelectedStepConfigurationError("");
+      setActiveExecutionLogIndex(null);
       setDraftRunPanelOpen(false);
       setYamlImportPanelOpen(false);
       setYamlImportError("");
@@ -2621,15 +2714,23 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       setSelectedEdgeId(edgeId);
       setSelectedNodeId("");
       setSelectedStepConfigurationError("");
+      setActiveExecutionLogIndex(null);
       setDraftRunPanelOpen(false);
       setYamlImportPanelOpen(false);
       setYamlImportError("");
       setYamlPanelOpen(false);
     },
+    selectExecutionLog,
     selectNode: (nodeId: string) => {
       setSelectedEdgeId("");
       setSelectedNodeId(nodeId);
       setSelectedStepConfigurationError("");
+      const selectedStepId = readStepIdFromGraphNodeId(nodeId);
+      setActiveExecutionLogIndex(
+        selectedStepId
+          ? findExecutionLogIndexForStep(executionTrace, selectedStepId)
+          : null,
+      );
       setDraftRunPanelOpen(false);
       setYamlImportPanelOpen(false);
       setYamlImportError("");

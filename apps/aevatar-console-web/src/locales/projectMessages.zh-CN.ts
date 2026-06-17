@@ -4913,6 +4913,7 @@ const projectMessages = {
   "shared.ui.aevatarappflowguide.these.are.the.four.distinctions": "这是用户正确阅读控制台并有目的地选择正确页面所需的四个区别。",
   "shared.ui.aevatarappflowguide.you.are.here": "你在这里",
   "shared.ui.aevatarheaderselect.switch.the.active.service.route": "切换主用业务路由。",
+  "shared.ui.aevatarpageshells.back": "返回",
   "shared.ui.aevatarpageshells.show.help": "显示帮助",
   "shared.ui.errortext.the.current.context.is": "当前上下文暂时不可用，请稍后再试。",
   "shared.ui.errortext.the.current.service.is": "当前服务暂时不可用，请稍后再试。",

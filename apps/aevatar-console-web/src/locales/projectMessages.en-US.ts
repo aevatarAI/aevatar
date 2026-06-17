@@ -4913,6 +4913,7 @@ const projectMessages = {
   "shared.ui.aevatarappflowguide.these.are.the.four.distinctions": "These are the four distinctions users need in order to read the console correctly and choose the right page on purpose.",
   "shared.ui.aevatarappflowguide.you.are.here": "You are here",
   "shared.ui.aevatarheaderselect.switch.the.active.service.route": "Switch the active service route.",
+  "shared.ui.aevatarpageshells.back": "Back",
   "shared.ui.aevatarpageshells.show.help": "Show help",
   "shared.ui.errortext.the.current.context.is": "The current context is temporarily unavailable, please try again later.",
   "shared.ui.errortext.the.current.service.is": "The current service is temporarily unavailable, please try again later.",

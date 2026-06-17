@@ -439,9 +439,12 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
         />
       ) : null}
       <WorkflowStudioExecutionPanel
+        activeLogIndex={studio.activeExecutionLogIndex}
         detail={studio.executionDetail}
         error={studio.executionError}
         height={executionPanelHeight}
+        onClear={studio.clearExecutionLogs}
+        onSelectLog={studio.selectExecutionLog}
       />
     </main>
   );

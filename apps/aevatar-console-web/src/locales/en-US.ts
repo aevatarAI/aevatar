@@ -811,20 +811,33 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.executionPanel.consoleAria':
     'Draft run console',
   'teamMemberWorkflowStudio.executionPanel.duration': 'Duration',
+  'teamMemberWorkflowStudio.executionPanel.clear': 'Clear logs',
+  'teamMemberWorkflowStudio.executionPanel.copyAll': 'Copy all logs',
+  'teamMemberWorkflowStudio.executionPanel.copyAllDone': 'Copied all logs.',
+  'teamMemberWorkflowStudio.executionPanel.copySelected': 'Copy selected log',
+  'teamMemberWorkflowStudio.executionPanel.copySelectedDone':
+    'Copied selected log.',
   'teamMemberWorkflowStudio.executionPanel.emptyEvidence':
-    'Usage, snapshots, and raw observed events will appear here when the backend emits them.',
+    'Runtime events will appear here when the backend emits them.',
+  'teamMemberWorkflowStudio.executionPanel.emptyEventPayload':
+    'No event payload was captured.',
   'teamMemberWorkflowStudio.executionPanel.emptyLogs':
-    'Step outputs will appear here after the workflow draft runs.',
+    'Node logs will appear after the workflow draft runs.',
   'teamMemberWorkflowStudio.executionPanel.emptyNodeInput':
-    'No user input provided.',
+    'No input captured for this node.',
   'teamMemberWorkflowStudio.executionPanel.emptyNodeOutput':
-    'No output captured.',
+    'No output captured for this node.',
   'teamMemberWorkflowStudio.executionPanel.emptyOutput':
     'Output will appear after the draft run emits a result.',
+  'teamMemberWorkflowStudio.executionPanel.error': 'Error',
   'teamMemberWorkflowStudio.executionPanel.evidence': 'Evidence frames',
+  'teamMemberWorkflowStudio.executionPanel.eventCount': '{count} events',
+  'teamMemberWorkflowStudio.executionPanel.eventPayload': 'Event payload',
   'teamMemberWorkflowStudio.executionPanel.events': 'Events',
   'teamMemberWorkflowStudio.executionPanel.items': 'items',
+  'teamMemberWorkflowStudio.executionPanel.logDetails': 'Log details',
   'teamMemberWorkflowStudio.executionPanel.logs': 'Logs',
+  'teamMemberWorkflowStudio.executionPanel.logsOverview': 'Logs overview',
   'teamMemberWorkflowStudio.executionPanel.node': 'Node',
   'teamMemberWorkflowStudio.executionPanel.nodeInput': 'Input',
   'teamMemberWorkflowStudio.executionPanel.nodeInteraction': 'Interaction',
@@ -832,14 +845,24 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.executionPanel.nodePrompt': 'Prompt',
   'teamMemberWorkflowStudio.executionPanel.nodeRunCardAria':
     '{stepId} node run',
+  'teamMemberWorkflowStudio.executionPanel.nodes': 'Nodes',
   'teamMemberWorkflowStudio.executionPanel.output': 'Output',
+  'teamMemberWorkflowStudio.executionPanel.overview': 'Overview',
   'teamMemberWorkflowStudio.executionPanel.rawFrames':
-    '{count} run event(s) received, but no step output is available yet.',
+    '{count} run event(s) received, but no node output is available yet.',
   'teamMemberWorkflowStudio.executionPanel.resultFirst': 'Result',
   'teamMemberWorkflowStudio.executionPanel.runLog': 'Run log',
+  'teamMemberWorkflowStudio.executionPanel.selectLog':
+    'Select a log entry to inspect its input, output, and raw event data.',
   'teamMemberWorkflowStudio.executionPanel.steps': 'Steps',
+  'teamMemberWorkflowStudio.executionPanel.status.error': 'Error',
+  'teamMemberWorkflowStudio.executionPanel.status.recorded': 'Recorded',
+  'teamMemberWorkflowStudio.executionPanel.status.running': 'Running',
+  'teamMemberWorkflowStudio.executionPanel.status.success': 'Success',
+  'teamMemberWorkflowStudio.executionPanel.status.waiting': 'Waiting',
   'teamMemberWorkflowStudio.executionPanel.summary': 'Summary',
   'teamMemberWorkflowStudio.executionPanel.timeline': 'Timeline',
+  'teamMemberWorkflowStudio.executionPanel.tokens': 'Tokens',
   'teamMemberWorkflowStudio.executionsPanel.description':
     'This tab only shows executions that can be safely scoped to the current workflow member by stable workflow or service identifiers.',
   'teamMemberWorkflowStudio.executionsPanel.empty':

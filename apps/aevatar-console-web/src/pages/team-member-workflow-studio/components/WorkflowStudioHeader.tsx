@@ -1,5 +1,4 @@
 import {
-  ArrowLeftOutlined,
   ClockCircleOutlined,
   CloudUploadOutlined,
   CodeOutlined,
@@ -17,6 +16,7 @@ import { Breadcrumb, Button, Dropdown, Input, Tag, Tooltip } from "antd";
 import type { InputRef, MenuProps } from "antd";
 import React from "react";
 import { t } from "@/shared/i18n/messages";
+import { AevatarBackButton } from "@/shared/ui/aevatarPageShells";
 
 type WorkflowHeaderMenuItem = NonNullable<MenuProps["items"]>[number];
 
@@ -307,19 +307,11 @@ const HeaderIdentity: React.FC<HeaderIdentityProps> = ({
       className="workflow-studio-header__identity"
       data-testid="workflow-header-identity"
     >
-      <Tooltip title={t("teamMemberWorkflowStudio.header.back", "Back")}>
-        <Button
-          aria-label={t("teamMemberWorkflowStudio.header.back", "Back")}
-          className="workflow-studio-header__icon-button"
-          icon={<ArrowLeftOutlined />}
-          onClick={onNavigateBack}
-          size="small"
-          style={{
-            borderColor: "#d1d5db",
-            color: "#4b5563",
-          }}
-        />
-      </Tooltip>
+      <AevatarBackButton
+        ariaLabel={t("teamMemberWorkflowStudio.header.back", "Back")}
+        onBack={onNavigateBack}
+        title={t("teamMemberWorkflowStudio.header.back", "Back")}
+      />
       <div className="workflow-studio-header__breadcrumb">
         <Breadcrumb
           items={[
@@ -818,10 +810,10 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
     .filter(Boolean)
     .join(" · ");
   const showPublishAction =
+    publishPending ||
     (dirty && !publishDisabled) ||
     (!showRefreshPublishStatus &&
-      (publishPending ||
-        publishTone === "processing" ||
+      (publishTone === "processing" ||
         publishTone === "error" ||
         dirty ||
         !memberPublished ||

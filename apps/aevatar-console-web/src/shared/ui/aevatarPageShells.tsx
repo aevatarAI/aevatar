@@ -1,6 +1,7 @@
-import { InfoCircleOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, InfoCircleOutlined } from '@ant-design/icons';
 import { PageContainer, ProCard } from '@ant-design/pro-components';
 import {
+  Button,
   Drawer,
   Empty,
   Grid,
@@ -84,6 +85,14 @@ type AevatarStatusTagProps = {
   domain: AevatarStatusDomain;
   label?: string;
   status: string;
+};
+
+type AevatarBackButtonProps = {
+  ariaLabel?: string;
+  className?: string;
+  onBack: () => void;
+  style?: React.CSSProperties;
+  title?: React.ReactNode;
 };
 
 const pageContentViewportStyle: React.CSSProperties = {
@@ -199,6 +208,40 @@ const titleRowStyle: React.CSSProperties = {
   flexWrap: 'wrap',
   gap: 6,
   maxWidth: '100%',
+};
+
+const backButtonStyle: React.CSSProperties = {
+  alignItems: 'center',
+  display: 'inline-flex',
+  flex: '0 0 auto',
+  height: 32,
+  justifyContent: 'center',
+  width: 32,
+};
+
+export const AevatarBackButton: React.FC<AevatarBackButtonProps> = ({
+  ariaLabel,
+  className,
+  onBack,
+  style,
+  title,
+}) => {
+  const label = ariaLabel ?? t("shared.ui.aevatarpageshells.back", "Back");
+
+  return (
+    <Tooltip title={title ?? label}>
+      <Button
+        aria-label={label}
+        className={className}
+        data-aevatar-back-button="true"
+        icon={<ArrowLeftOutlined />}
+        onClick={onBack}
+        size="small"
+        style={{ ...backButtonStyle, ...style }}
+        type="text"
+      />
+    </Tooltip>
+  );
 };
 
 export const AevatarHelpTooltip: React.FC<{
