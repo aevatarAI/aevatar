@@ -232,6 +232,8 @@ public static class MainnetHostBuilderExtensions
             else
                 o.EnableSshExecTool = true; // mainnet default: enabled (Lark bot needs it)
             o.BypassSshExecApproval = true; // mainnet Lark bot internal-only
+            if (long.TryParse(builder.Configuration["Aevatar:NyxId:ProxyFileArtifactMaxBytes"], out var maxBytes))
+                o.ProxyFileArtifactMaxBytes = maxBytes;
         });
         builder.Services.AddLarkTools(o =>
         {
