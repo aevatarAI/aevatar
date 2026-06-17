@@ -298,6 +298,34 @@ public sealed class WorkflowRunGAgent
             nextExecutionId);
     }
 
+    async Task<WorkflowCompensationTransitionResult> IWorkflowExecutionStateHost.RecordCompensationPhaseDeadlineExceededAsync(
+        string runId,
+        string error,
+        CancellationToken ct)
+    {
+        var normalizedRunId = WorkflowRunIdNormalizer.Normalize(runId);
+        if (!IsCompensating(State) ||
+            !string.Equals(State.RunId, normalizedRunId, StringComparison.Ordinal))
+        {
+            return EmptyCompensationResult(WorkflowCompensationTransitionStatus.NoCompensableLedger);
+        }
+
+        var failedCompensationStepId = TryGetLedgerEntry(State.CompensationCursor, out var entry)
+            ? entry.CompensationStepId ?? string.Empty
+            : string.Empty;
+        await PersistDomainEventAsync(new WorkflowCompensationFailedEvent
+        {
+            RunId = State.RunId ?? string.Empty,
+            FailedCompensationStepId = failedCompensationStepId,
+            RemainingUncompensated = CalculateRemainingUncompensated(
+                State.CompensableLedger.Count,
+                State.CompensationCursor),
+            Error = error ?? string.Empty,
+        }, ct);
+
+        return EmptyCompensationResult(WorkflowCompensationTransitionStatus.CompensationDeadLettered);
+    }
+
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         RebuildCompiledWorkflowCache();

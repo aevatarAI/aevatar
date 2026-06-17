@@ -130,6 +130,12 @@ public sealed class WorkflowSagaContractTests
             RemainingUncompensated = 1,
             Error = "failed",
         });
+
+        AssertField<WorkflowCompensationPhaseDeadlineFiredEvent>("run_id", 1);
+        AssertRoundTrip(new WorkflowCompensationPhaseDeadlineFiredEvent
+        {
+            RunId = "run-1",
+        });
     }
 
     [Fact]
@@ -151,6 +157,8 @@ public sealed class WorkflowSagaContractTests
         AssertField<WorkflowRunState>("compensable_ledger", 25);
         AssertField<WorkflowRunState>("compensation_cursor", 26);
         AssertField<WorkflowRunState>("saga_status", 27);
+        AssertField<WorkflowExecutionKernelState>("compensation_phase_deadline_lease", 17);
+        AssertField<WorkflowExecutionKernelState>("compensation_phase_deadline_callback_id", 18);
         AssertRoundTrip(new CompletedStepLedgerEntry
         {
             StepId = "create_order",

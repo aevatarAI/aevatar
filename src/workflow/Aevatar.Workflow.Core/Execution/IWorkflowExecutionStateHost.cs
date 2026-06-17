@@ -66,6 +66,11 @@ internal interface IWorkflowExecutionStateHost
     Task<WorkflowCompensationTransitionResult> RecordCompensationStepCompletionAsync(
         CompensationStepCompletedEvent completion,
         CancellationToken ct = default);
+
+    Task<WorkflowCompensationTransitionResult> RecordCompensationPhaseDeadlineExceededAsync(
+        string runId,
+        string error,
+        CancellationToken ct = default);
 }
 
 internal interface IWorkflowExecutionStateHostAccessor

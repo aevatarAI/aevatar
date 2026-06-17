@@ -128,4 +128,42 @@ assert_fails_with \
   "Failed compensation completion must persist WorkflowCompensationFailedEvent" \
   bash "${log_drop_root}/tools/ci/workflow_saga_compensation_guard.sh"
 
+missing_default_timeout_root="$(copy_fixture missing-default-timeout)"
+python_replace \
+  "${missing_default_timeout_root}/src/workflow/Aevatar.Workflow.Core/Execution/WorkflowExecutionKernel.cs" \
+  "DefaultCompensationTimeoutMs" \
+  "DefaultSagaTimeoutMs"
+assert_fails_with \
+  "Compensation dispatch must define the 30s default timeout constant" \
+  bash "${missing_default_timeout_root}/tools/ci/workflow_saga_compensation_guard.sh"
+
+missing_phase_schedule_root="$(copy_fixture missing-phase-schedule)"
+python_replace \
+  "${missing_phase_schedule_root}/src/workflow/Aevatar.Workflow.Core/Execution/WorkflowExecutionKernel.cs" \
+  "await EnsureCompensationPhaseDeadlineAsync(state, ctx, ct);
+                await PublishCompensationRequestAsync(" \
+  "await Task.CompletedTask;
+                await PublishCompensationRequestAsync("
+assert_fails_with \
+  "Compensation phase start must schedule a durable phase deadline" \
+  bash "${missing_phase_schedule_root}/tools/ci/workflow_saga_compensation_guard.sh"
+
+missing_terminal_cancel_root="$(copy_fixture missing-terminal-cancel)"
+python_replace \
+  "${missing_terminal_cancel_root}/src/workflow/Aevatar.Workflow.Core/Execution/WorkflowExecutionKernel.cs" \
+  "var compensationPhaseDeadlineLease = state.CompensationPhaseDeadlineLease?.Clone();" \
+  "var compensationPhaseDeadlineLease = (WorkflowRuntimeCallbackLeaseState?)null;"
+assert_fails_with \
+  "Terminal run cleanup must capture the compensation phase deadline lease" \
+  bash "${missing_terminal_cancel_root}/tools/ci/workflow_saga_compensation_guard.sh"
+
+missing_deadline_deadletter_root="$(copy_fixture missing-deadline-deadletter)"
+python_replace \
+  "${missing_deadline_deadletter_root}/src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.cs" \
+  "async Task<WorkflowCompensationTransitionResult> IWorkflowExecutionStateHost.RecordCompensationPhaseDeadlineExceededAsync" \
+  "async Task<WorkflowCompensationTransitionResult> IWorkflowExecutionStateHost.RecordCompensationPhaseBudgetExceededAsync"
+assert_fails_with \
+  "Unable to locate saga compensation methods" \
+  bash "${missing_deadline_deadletter_root}/tools/ci/workflow_saga_compensation_guard.sh"
+
 echo "workflow saga compensation guard tests passed"
