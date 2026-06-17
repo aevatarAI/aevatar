@@ -5,6 +5,7 @@ using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
 using Aevatar.Workflow.Infrastructure.Runs;
 using FluentAssertions;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using ProtoWorkflowCallerCredential = Aevatar.Workflow.Abstractions.WorkflowCallerCredential;
@@ -25,6 +26,66 @@ public sealed class WorkflowFileSubmitToolTests
         services.Should().ContainSingle(x =>
             x.ServiceType == typeof(IWorkflowToolSource) &&
             x.ImplementationType == typeof(WorkflowFileSubmitToolSource));
+    }
+
+    [Fact]
+    public void AddWorkflowCapabilityServices_ShouldBindWorkflowFileSubmitTargetsFromStableSection()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(BuildWorkflowFileSubmitTargetConfiguration())
+            .Build();
+
+        services.AddWorkflowCapability(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        var options = provider.GetRequiredService<IOptions<WorkflowConnectedServiceFileSubmitOptions>>().Value;
+
+        var target = options.Targets.Should().ContainSingle().Subject;
+        target.Target.Should().Be("submit_invoice");
+        target.Provider.Should().Be("nyxid_connected_service");
+        target.OutputField.Should().Be("document_id");
+        target.MaxFileBytes.Should().Be(1024);
+        target.AllowedMediaTypes.Should().Equal("text/plain");
+        target.Arguments.Should().ContainKey("folder");
+        target.Arguments["folder"].Required.Should().BeTrue();
+        target.Arguments["folder"].AllowedValues.Should().Equal("reports");
+        target.Endpoint.Should().NotBeNull();
+        target.Endpoint!.ServiceSlug.Should().Be("storage");
+        target.Endpoint.Path.Should().Be("files/upload");
+        target.Endpoint.Method.Should().Be("POST");
+        target.Endpoint.FileFieldName.Should().Be("upload");
+        target.Endpoint.Headers.Should().ContainKey("X-Trace").WhoseValue.Should().Be("trace-1");
+        target.Endpoint.Body.Should().ContainKey("bucket").WhoseValue.Should().Be("reports");
+    }
+
+    [Theory]
+    [InlineData("Endpoint:ServiceSlug", "")]
+    [InlineData("Endpoint:Path", "")]
+    [InlineData("Endpoint:Path", "https://storage.example.test/files/upload")]
+    [InlineData("Endpoint:Method", "GET")]
+    [InlineData("Endpoint:FileFieldName", "")]
+    public void AddWorkflowCapabilityServices_ShouldValidateConfiguredWorkflowFileSubmitEndpointPolicy(
+        string setting,
+        string value)
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        var configurationValues = BuildWorkflowFileSubmitTargetConfiguration();
+        configurationValues[$"WorkflowConnectedServiceFileSubmit:Targets:0:{setting}"] = value;
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(configurationValues)
+            .Build();
+
+        services.AddWorkflowCapability(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        var act = () => provider.GetRequiredService<IOptions<WorkflowConnectedServiceFileSubmitOptions>>().Value;
+
+        act.Should()
+            .Throw<OptionsValidationException>()
+            .WithMessage("*WorkflowConnectedServiceFileSubmit:Targets[0].Endpoint*");
     }
 
     [Fact]
@@ -257,8 +318,27 @@ public sealed class WorkflowFileSubmitToolTests
             },
             Body: new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                ["bucket"] = "reports",
-            }));
+            ["bucket"] = "reports",
+        }));
+
+    private static Dictionary<string, string?> BuildWorkflowFileSubmitTargetConfiguration() =>
+        new()
+        {
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:Target"] = "submit_invoice",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:Provider"] = "nyxid_connected_service",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:OutputField"] = "document_id",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:MaxFileBytes"] = "1024",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:AllowedMediaTypes:0"] = "text/plain",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:Arguments:folder:Name"] = "folder",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:Arguments:folder:Required"] = "true",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:Arguments:folder:AllowedValues:0"] = "reports",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:Endpoint:ServiceSlug"] = "storage",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:Endpoint:Path"] = "files/upload",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:Endpoint:Method"] = "POST",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:Endpoint:FileFieldName"] = "upload",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:Endpoint:Headers:X-Trace"] = "trace-1",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:Endpoint:Body:bucket"] = "reports",
+        };
 
     private static async Task<IWorkflowTool> GetSubmitToolAsync(
         IReadOnlyList<IWorkflowConnectedServiceFileSubmitAdapter> adapters,

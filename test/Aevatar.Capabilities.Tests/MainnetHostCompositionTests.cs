@@ -32,6 +32,7 @@ using Aevatar.GAgents.Scheduled;
 using Aevatar.GAgents.StatusDashboard.Executors;
 using Aevatar.Mainnet.Host.Api.Hosting;
 using Aevatar.Scripting.Projection.ReadModels;
+using Aevatar.Workflow.Infrastructure.Runs;
 using Aevatar.Workflow.Projection.ReadModels;
 using FluentAssertions;
 using Google.Protobuf;
@@ -251,6 +252,57 @@ public sealed class MainnetHostCompositionTests
     }
 
     [Fact]
+    public void AddAevatarMainnetHost_ShouldBindWorkflowConnectedServiceFileSubmitSection()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder(BuildWorkflowFileSubmitTargetConfiguration());
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        var target = app.Services.GetRequiredService<IOptions<WorkflowConnectedServiceFileSubmitOptions>>()
+            .Value
+            .Targets
+            .Should()
+            .ContainSingle()
+            .Subject;
+
+        target.Target.Should().Be("submit_invoice");
+        target.Provider.Should().Be("nyxid_connected_service");
+        target.Endpoint.Should().NotBeNull();
+        target.Endpoint!.ServiceSlug.Should().Be("storage");
+        target.Endpoint.Path.Should().Be("files/upload");
+        target.Endpoint.Method.Should().Be("POST");
+        target.Endpoint.FileFieldName.Should().Be("upload");
+    }
+
+    [Fact]
+    public async Task AddAevatarMainnetHost_ShouldFailFastOnMalformedWorkflowFileSubmitEndpointPolicy()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var configurationValues = BuildWorkflowFileSubmitTargetConfiguration();
+        configurationValues["WorkflowConnectedServiceFileSubmit:Targets:0:Endpoint:Path"] = "https://storage.example.test/files/upload";
+        var builder = CreateBuilder(configurationValues);
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        await using var app = builder.Build();
+        var act = async () => await app.StartAsync();
+
+        await act.Should()
+            .ThrowAsync<OptionsValidationException>()
+            .WithMessage("*WorkflowConnectedServiceFileSubmit:Targets[0].Endpoint.Path*");
+    }
+
+    [Fact]
     public void AddAevatarMainnetHost_ShouldEnableFailFastDiValidation()
     {
         using var home = new TemporaryAevatarHomeScope();
@@ -433,6 +485,23 @@ public sealed class MainnetHostCompositionTests
         builder.Configuration.AddInMemoryCollection(values);
         return builder;
     }
+
+    private static Dictionary<string, string?> BuildWorkflowFileSubmitTargetConfiguration() =>
+        new()
+        {
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:Target"] = "submit_invoice",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:Provider"] = "nyxid_connected_service",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:OutputField"] = "document_id",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:MaxFileBytes"] = "1024",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:AllowedMediaTypes:0"] = "text/plain",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:Arguments:folder:Name"] = "folder",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:Arguments:folder:Required"] = "true",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:Arguments:folder:AllowedValues:0"] = "reports",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:Endpoint:ServiceSlug"] = "storage",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:Endpoint:Path"] = "files/upload",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:Endpoint:Method"] = "POST",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:Endpoint:FileFieldName"] = "upload",
+        };
 
     private static IEnumerable<ServiceDescriptor> HostedServiceDescriptors<THostedService>(IServiceCollection services)
         where THostedService : IHostedService
