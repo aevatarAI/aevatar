@@ -141,7 +141,7 @@ describe("teamRoutes", () => {
         scopeId: " scope-alpha ",
         teamId: " t-alpha ",
       }),
-    ).toBe("/scopes/scope-alpha/teams/t-alpha?memberId=m-alpha&tab=automations");
+    ).toBe("/scopes/scope-alpha/teams/t-alpha/members/m-alpha/automations");
     expect(
       buildTeamMemberAutomationsHref({
         scopeId: "scope-alpha",
@@ -210,6 +210,20 @@ describe("teamRoutes", () => {
       scopeId: "scope-alpha",
       teamId: "t-alpha",
       workflowId: "wf-alpha",
+    });
+  });
+
+  it("reads member-owned automation routes from the canonical member path", () => {
+    expect(
+      readTeamDetailRouteState(
+        "?tab=members",
+        "/scopes/scope-alpha/teams/t-alpha/members/member-alpha/automations",
+      ),
+    ).toMatchObject({
+      memberId: "member-alpha",
+      scopeId: "scope-alpha",
+      tab: "automations",
+      teamId: "t-alpha",
     });
   });
 

@@ -18,6 +18,7 @@ import {
 
 export type ScheduledDispatchTargetKind = "envelope" | "service_invocation";
 export type ScheduledDispatchScheduleKind = "generic" | "workflow";
+export const scheduledWorkflowPromptMaxLength = 4_000;
 
 export type ScheduledWorkflowChatTargetInput = {
   readonly identity: ServiceIdentity;
@@ -377,6 +378,11 @@ function encodeConfiguration(input: ScheduledDispatchConfigurationInput) {
     serviceId: input.workflowChatTarget.identity.serviceId.trim(),
   };
   const prompt = input.workflowChatTarget.prompt.trim();
+  if (prompt.length > scheduledWorkflowPromptMaxLength) {
+    throw new Error(
+      `Recurring prompt must be ${scheduledWorkflowPromptMaxLength} characters or fewer.`,
+    );
+  }
   const revisionId = trimOptional(input.workflowChatTarget.revisionId);
   const chatRequest = {
     prompt,
@@ -391,6 +397,7 @@ function encodeConfiguration(input: ScheduledDispatchConfigurationInput) {
     timezone: trimOptional(input.timezone),
     enabled: input.enabled ?? true,
     headers: input.headers ?? {},
+    scheduleKind: "workflow",
     serviceInvocation: {
       identity,
       endpointId: getChatEndpointId(),
@@ -519,14 +526,15 @@ export const scheduledDispatchApi = {
   },
 
   delete(scheduleId: string, reason = ""): Promise<ScheduledDispatchMutationReceipt> {
+    const normalizedReason = reason.trim();
     return requestJson(
       withQuery(`/api/schedules/${encodeURIComponent(scheduleId.trim())}`, {
-        reason,
+        reason: normalizedReason,
       }),
       decodeScheduledDispatchMutationReceipt,
       {
         method: "DELETE",
-        ...jsonBody({ reason }),
+        ...jsonBody({ reason: normalizedReason }),
       },
     );
   },

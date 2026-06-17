@@ -638,6 +638,7 @@ const enUSMessages = {
     'Preview uses the schedule service before saving.',
   'teams.automations.form.prompt': 'Recurring prompt',
   'teams.automations.form.promptAria': 'Recurring prompt',
+  'teams.automations.form.promptLimit': 'Up to {maxLength} characters.',
   'teams.automations.form.promptPlaceholder':
     'Summarize escalations, blocked accounts, and follow-up owners.',
   'teams.automations.form.save': 'Save changes',
@@ -667,6 +668,8 @@ const enUSMessages = {
   'teams.automations.messages.disableSuccess': 'Automation paused.',
   'teams.automations.messages.enableSuccess': 'Automation resumed.',
   'teams.automations.messages.previewFailed': 'Preview failed: {message}',
+  'teams.automations.messages.promptTooLong':
+    'Recurring prompt must be {maxLength} characters or fewer.',
   'teams.automations.messages.promptRequired':
     'Describe the recurring work before saving it.',
   'teams.automations.messages.runNowFailed': 'Run request failed: {message}',

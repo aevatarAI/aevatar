@@ -244,12 +244,7 @@ export function buildTeamMemberAutomationsHref(options: {
     });
   }
 
-  return buildTeamDetailHref({
-    memberId,
-    scopeId,
-    tab: 'automations',
-    teamId,
-  });
+  return `/scopes/${encodeURIComponent(scopeId)}/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(memberId)}/automations`;
 }
 
 export function readTeamDetailRouteState(
@@ -285,13 +280,19 @@ export function readTeamDetailRouteState(
     memberIdFromPath === 'new'
       ? ''
       : memberIdFromPath || trimOptional(params.get('memberId'));
+  const memberSurfaceFromPath =
+    membersIndex >= 0 && pathnameSegments[membersIndex + 2]
+      ? decodePathSegment(pathnameSegments[membersIndex + 2])
+      : '';
+  const pathTab =
+    memberSurfaceFromPath === 'automations' ? 'automations' : undefined;
 
   return {
     memberId,
     runId: trimOptional(params.get('runId')),
     scopeId: scopeIdFromPath || trimOptional(params.get('scopeId')),
     serviceId: trimOptional(params.get('serviceId')),
-    tab: parseTeamTab(params.get('tab'), defaultTab),
+    tab: parseTeamTab(pathTab ?? params.get('tab'), defaultTab),
     teamId: teamIdFromPath || trimOptional(params.get('teamId')),
     testTeam: ['1', 'true', 'yes'].includes(trimOptional(params.get('testTeam')).toLowerCase()),
     workflowId: trimOptional(params.get('workflowId')),

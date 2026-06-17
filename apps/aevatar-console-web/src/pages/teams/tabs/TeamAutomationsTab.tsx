@@ -27,6 +27,7 @@ import { useIntl } from "@umijs/max";
 import React from "react";
 import {
   scheduledDispatchApi,
+  scheduledWorkflowPromptMaxLength,
   type ScheduledDispatchConfigurationInput,
   type ScheduledDispatchListResult,
   type ScheduledDispatchMutationReceipt,
@@ -347,6 +348,25 @@ const modalSectionStyle: React.CSSProperties = {
 
 function trimText(value: string | null | undefined): string {
   return value?.trim() ?? "";
+}
+
+function buildServiceIdentityKey(identity: ServiceIdentity | null | undefined): string {
+  if (!identity) {
+    return "";
+  }
+
+  const parts = [
+    identity.tenantId,
+    identity.appId,
+    identity.namespace,
+    identity.serviceId,
+  ].map(trimText);
+
+  return parts.every(Boolean) ? parts.join(":") : "";
+}
+
+function buildScheduleServiceKey(schedule: ScheduledDispatchSummary): string {
+  return trimText(schedule.serviceKey);
 }
 
 function resolveDefaultTimezone(): string {
@@ -673,17 +693,22 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
     () => ["scheduled-dispatches", "team", scopeId, teamId] as const,
     [scopeId, teamId],
   );
-  const serviceIdToMember = React.useMemo(() => {
+  const serviceKeyToMember = React.useMemo(() => {
     const next = new Map<string, TeamAutomationMemberRow>();
     for (const member of automatableMembers) {
-      const serviceId = trimText(member.serviceId);
-      if (serviceId && serviceId !== "--") {
-        next.set(serviceId, member);
+      const serviceKey = buildServiceIdentityKey(member.serviceIdentity);
+      if (serviceKey) {
+        next.set(serviceKey, member);
       }
     }
 
     return next;
   }, [automatableMembers]);
+  const findMemberForSchedule = React.useCallback(
+    (schedule: ScheduledDispatchSummary): TeamAutomationMemberRow | undefined =>
+      serviceKeyToMember.get(buildScheduleServiceKey(schedule)),
+    [serviceKeyToMember],
+  );
   const schedulesQuery = useQuery({
     enabled: scopeId.length > 0 && teamId.length > 0,
     queryFn: () =>
@@ -711,7 +736,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
           (schedule) =>
             !schedule.deleted &&
             !locallyDeletedScheduleIds.has(trimText(schedule.scheduleId)) &&
-            serviceIdToMember.has(trimText(schedule.serviceId)),
+            Boolean(findMemberForSchedule(schedule)),
         )
         .map((schedule) => {
           const scheduleId = trimText(schedule.scheduleId);
@@ -731,7 +756,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
       localScheduleEnabledOverrides,
       pendingCreatedSchedules,
       schedulesQuery.data?.items,
-      serviceIdToMember,
+      findMemberForSchedule,
     ],
   );
   const activeFormMember =
@@ -739,6 +764,9 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
     selectedMember;
   const editingScheduleId = trimText(editingSchedule?.scheduleId);
   const isEditingAutomation = editingScheduleId.length > 0;
+  const trimmedPromptLength = formState.prompt.trim().length;
+  const promptTooLong =
+    trimmedPromptLength > scheduledWorkflowPromptMaxLength;
   const cronPresets = React.useMemo(
     () => [
       {
@@ -1241,7 +1269,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
   const openEdit = React.useCallback(
     (schedule: ScheduledDispatchSummary) => {
       const member =
-        serviceIdToMember.get(trimText(schedule.serviceId)) ?? selectedMember;
+        findMemberForSchedule(schedule) ?? selectedMember;
       const cronExpression = trimText(schedule.cronExpression);
       const preset =
         cronPresets.find((item) => item.cronExpression === cronExpression)?.value ??
@@ -1259,7 +1287,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
       setPreview(null);
       setCreateOpen(true);
     },
-    [cronPresets, selectedMember, serviceIdToMember],
+    [cronPresets, findMemberForSchedule, selectedMember],
   );
 
   const updateForm = React.useCallback(
@@ -1330,6 +1358,19 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
           id: "teams.automations.messages.promptRequired",
           defaultMessage: "Describe the recurring work before saving it.",
         }),
+      );
+      return;
+    }
+    if (prompt.length > scheduledWorkflowPromptMaxLength) {
+      void message.error(
+        intl.formatMessage(
+          {
+            id: "teams.automations.messages.promptTooLong",
+            defaultMessage:
+              "Recurring prompt must be {maxLength} characters or fewer.",
+          },
+          { maxLength: scheduledWorkflowPromptMaxLength },
+        ),
       );
       return;
     }
@@ -1750,7 +1791,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
           </Typography.Text>
         </div>
         {teamSchedules.map((schedule) => {
-          const member = serviceIdToMember.get(trimText(schedule.serviceId));
+          const member = findMemberForSchedule(schedule);
           const scheduleId = trimText(schedule.scheduleId);
           const scheduleCadence = describeCronExpression(
             schedule.cronExpression,
@@ -2119,7 +2160,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
             </Typography.Title>
             {upcomingSchedules.length > 0 ? (
               upcomingSchedules.map((schedule) => {
-                const member = serviceIdToMember.get(schedule.serviceId);
+                const member = findMemberForSchedule(schedule);
 
                 return (
                   <div key={schedule.scheduleId} style={upcomingRowStyle}>
@@ -2199,6 +2240,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
           disabled:
             !activeFormMember ||
             !formState.prompt.trim() ||
+            promptTooLong ||
             Boolean(formCronValidationMessage) ||
             !canCreateAutomation,
         }}
@@ -2336,14 +2378,29 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
                 })}
                 autoSize={{ minRows: 4, maxRows: 7 }}
                 disabled={formSubmitting}
+                maxLength={scheduledWorkflowPromptMaxLength}
                 onChange={(event) => updateForm({ prompt: event.target.value })}
                 placeholder={intl.formatMessage({
                   id: "teams.automations.form.promptPlaceholder",
                   defaultMessage:
                     "Summarize escalations, blocked accounts, and follow-up owners.",
                 })}
+                showCount
+                status={promptTooLong ? "error" : undefined}
                 value={formState.prompt}
               />
+              <Typography.Text
+                style={{ fontSize: 12 }}
+                type={promptTooLong ? "danger" : "secondary"}
+              >
+                {intl.formatMessage(
+                  {
+                    id: "teams.automations.form.promptLimit",
+                    defaultMessage: "Up to {maxLength} characters.",
+                  },
+                  { maxLength: scheduledWorkflowPromptMaxLength },
+                )}
+              </Typography.Text>
               {isEditingAutomation ? (
                 <Typography.Text style={{ fontSize: 12 }} type="secondary">
                   {intl.formatMessage({

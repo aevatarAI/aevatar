@@ -1520,17 +1520,15 @@ describe("TeamMemberWorkflowStudioPage", () => {
     });
     expect(recurringWorkLink).toHaveAttribute(
       "href",
-      "/scopes/scope-1/teams/t-alpha?memberId=m-alpha&tab=automations",
+      "/scopes/scope-1/teams/t-alpha/members/m-alpha/automations",
     );
 
     fireEvent.click(recurringWorkLink);
 
-    expect(window.location.pathname).toBe("/scopes/scope-1/teams/t-alpha");
-    const params = new URLSearchParams(window.location.search);
-    expect(params.get("memberId")).toBe("m-alpha");
-    expect(params.get("tab")).toBe("automations");
-    expect(params.get("workflowId")).toBeNull();
-    expect(params.get("serviceId")).toBeNull();
+    expect(window.location.pathname).toBe(
+      "/scopes/scope-1/teams/t-alpha/members/m-alpha/automations",
+    );
+    expect(window.location.search).toBe("");
     expect(studioApi.getWorkflow).toHaveBeenCalledWith("wf-alpha", "scope-1");
     expect(studioApi.getWorkflow).not.toHaveBeenCalledWith("m-alpha", "scope-1");
     expect(studioApi.getWorkflow).not.toHaveBeenCalledWith("svc-alpha", "scope-1");

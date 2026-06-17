@@ -2,6 +2,7 @@ import { persistAuthSession } from "@/shared/auth/session";
 import {
   decodeScheduledDispatchSummary,
   scheduledDispatchApi,
+  scheduledWorkflowPromptMaxLength,
 } from "./scheduledDispatchApi";
 import { encodeChatRequestEventBase64 } from "@/shared/runs/protobufPayload";
 
@@ -209,6 +210,7 @@ describe("scheduledDispatchApi", () => {
       headers: {
         source: "team-automations",
       },
+      scheduleKind: "workflow",
       serviceInvocation: {
         identity: {
           tenantId: "scope-1",
@@ -263,6 +265,7 @@ describe("scheduledDispatchApi", () => {
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const body = JSON.parse(String(init.body));
+    expect(body.scheduleKind).toBe("workflow");
     expect(body.serviceInvocation).toEqual({
       identity: {
         tenantId: "scope-1",
@@ -327,6 +330,7 @@ describe("scheduledDispatchApi", () => {
       headers: {
         source: "team-automations",
       },
+      scheduleKind: "workflow",
       serviceInvocation: {
         identity: {
           tenantId: "scope-1",
@@ -348,6 +352,31 @@ describe("scheduledDispatchApi", () => {
     expect(String(init.body)).not.toContain("memberId");
     expect(String(init.body)).not.toContain("workflowId");
     expect(String(init.body)).not.toContain("workflowChatTarget");
+  });
+
+  it("rejects oversized workflow prompts before storing the schedule payload", async () => {
+    const fetchMock = jest.fn();
+    global.fetch = fetchMock as typeof global.fetch;
+
+    expect(() =>
+      scheduledDispatchApi.create({
+        displayName: "Daily escalation digest",
+        cronExpression: "0 9 * * 1-5",
+        timezone: "Asia/Shanghai",
+        workflowChatTarget: {
+          identity: {
+            tenantId: "scope-1",
+            appId: "default",
+            namespace: "default",
+            serviceId: "svc-alpha",
+          },
+          prompt: "x".repeat(scheduledWorkflowPromptMaxLength + 1),
+        },
+      }),
+    ).toThrow(
+      `Recurring prompt must be ${scheduledWorkflowPromptMaxLength} characters or fewer.`,
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("previews cron fire times through the preview endpoint", async () => {
@@ -414,6 +443,34 @@ describe("scheduledDispatchApi", () => {
     ]);
     expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({
       reason: " pause for review ",
+    });
+  });
+
+  it("deletes a schedule through the backend schedule resource", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 202,
+      json: async () => createReceipt({ commandId: "cmd-delete" }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      scheduledDispatchApi.delete(" sch-alpha ", " remove obsolete cadence "),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        accepted: true,
+        commandId: "cmd-delete",
+        scheduleId: "sch-alpha",
+      }),
+    );
+
+    const [input, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(input).toBe(
+      "/api/schedules/sch-alpha?reason=remove+obsolete+cadence",
+    );
+    expect(init.method).toBe("DELETE");
+    expect(JSON.parse(String(init.body))).toEqual({
+      reason: "remove obsolete cadence",
     });
   });
 

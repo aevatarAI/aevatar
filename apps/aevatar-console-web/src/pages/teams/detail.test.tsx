@@ -174,7 +174,7 @@ function mockCreateServiceRevisionCatalog(overrides?: Record<string, any>) {
 function mockCreateServiceCatalog() {
   return [
     {
-      serviceKey: "scope-1:default",
+      serviceKey: "scope-1:default:default:default",
       tenantId: "scope-1",
       appId: "default",
       namespace: "default",
@@ -190,7 +190,7 @@ function mockCreateServiceCatalog() {
       updatedAt: "2026-04-09T09:00:00Z",
     },
     {
-      serviceKey: "scope-1:alpha-service",
+      serviceKey: "scope-1:default:default:alpha-service",
       tenantId: "scope-1",
       appId: "default",
       namespace: "default",
@@ -2062,12 +2062,10 @@ describe("TeamDetailPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
     fireEvent.click(await screen.findByRole("link", { name: "自动化" }));
 
-    expect(window.location.pathname).toBe("/scopes/scope-1/teams/t-alpha");
-    const params = new URLSearchParams(window.location.search);
-    expect(params.get("memberId")).toBe("member-team-alpha");
-    expect(params.get("tab")).toBe("automations");
-    expect(params.get("workflowId")).toBeNull();
-    expect(params.get("serviceId")).toBeNull();
+    expect(window.location.pathname).toBe(
+      "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/automations",
+    );
+    expect(window.location.search).toBe("");
     expect(await screen.findByRole("heading", { name: "自动化" })).toBeTruthy();
     expect(screen.getByText("给成员添加周期任务")).toBeTruthy();
     expect(await screen.findByText("还没有周期任务")).toBeTruthy();
@@ -2088,11 +2086,18 @@ describe("TeamDetailPage", () => {
         mockCreateScheduledDispatchSummary({
           scheduleId: "sch-other",
           displayName: "Other team task",
+          serviceKey: "scope-other:default:default:alpha-service",
+          serviceId: "alpha-service",
+        }),
+        mockCreateScheduledDispatchSummary({
+          scheduleId: "sch-other-service",
+          displayName: "Other service task",
+          serviceKey: "scope-1:default:default:svc-other",
           serviceId: "svc-other",
         }),
       ],
       nextCursor: null,
-      totalCount: 2,
+      totalCount: 3,
     });
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
@@ -2106,6 +2111,7 @@ describe("TeamDetailPage", () => {
     expect(screen.getAllByText("Team Alpha Operator").length).toBeGreaterThan(0);
     expect(screen.getByText("通过 alpha-service 运行")).toBeTruthy();
     expect(screen.queryByText("Other team task")).toBeNull();
+    expect(screen.queryByText("Other service task")).toBeNull();
 
     await waitFor(() => {
       expect(scheduledDispatchApi.listAll).toHaveBeenCalledWith({
@@ -2129,6 +2135,7 @@ describe("TeamDetailPage", () => {
         mockCreateScheduledDispatchSummary({
           scheduleId: "sch-other-first-page",
           displayName: "Other team first page task",
+          serviceKey: "scope-1:default:default:svc-other",
           serviceId: "svc-other",
         }),
         mockCreateScheduledDispatchSummary({
@@ -2392,6 +2399,43 @@ describe("TeamDetailPage", () => {
         0,
       );
     });
+  });
+
+  it("previews next runs from the automation form", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/automations",
+    );
+    (scheduledDispatchApi.preview as jest.Mock).mockResolvedValueOnce({
+      cronExpression: "0 9 * * 1-5",
+      timezone: "Asia/Shanghai",
+      nextFireTimes: ["2026-06-18T01:00:00Z"],
+    });
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    fireEvent.click(await screen.findByRole("button", { name: "添加周期任务" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "新建成员自动化",
+    });
+    fireEvent.change(within(dialog).getByLabelText("Cron 表达式"), {
+      target: { value: "0 9 * * 1-5" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("时区"), {
+      target: { value: "Asia/Shanghai" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "预览后续运行" }));
+
+    await waitFor(() => {
+      expect(scheduledDispatchApi.preview).toHaveBeenCalled();
+    });
+    expect((scheduledDispatchApi.preview as jest.Mock).mock.calls[0][0]).toEqual({
+      cronExpression: "0 9 * * 1-5",
+      timezone: "Asia/Shanghai",
+      count: 5,
+    });
+    expect(await within(dialog).findByText("06-18 01:00")).toBeTruthy();
   });
 
   it("creates member recurring work with the default service revision when the active serving revision is missing", async () => {
