@@ -45,10 +45,25 @@ public sealed class WorkflowHumanInteractionProjector
 
         var evt = sourceEnvelope.Payload.Unpack<WorkflowSuspendedEvent>();
         if (evt.SuspensionType == "tool_approval")
+        {
+            _logger.LogInformation(
+                "Skipping workflow human interaction suspension delivery: actor={ActorId}, run={RunId}, step={StepId}, reason=tool_approval",
+                context.RootActorId,
+                evt.RunId,
+                evt.StepId);
             return;
+        }
 
         if (string.IsNullOrWhiteSpace(evt.DeliveryTargetId))
+        {
+            _logger.LogWarning(
+                "Skipping workflow human interaction suspension delivery: actor={ActorId}, run={RunId}, step={StepId}, suspensionType={SuspensionType}, reason=missing_delivery_target_id",
+                context.RootActorId,
+                evt.RunId,
+                evt.StepId,
+                evt.SuspensionType);
             return;
+        }
 
         // Refactor (iter163/cluster-003-workflow-suspension-legacy-metadata):
         //   Old pattern: WorkflowSuspendedEvent.Metadata fallback for variable/secure/redacted_output reserved keys.
