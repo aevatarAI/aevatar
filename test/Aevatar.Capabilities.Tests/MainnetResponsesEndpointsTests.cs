@@ -1654,6 +1654,29 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
+    public async Task PostResponses_WithoutModel_ShouldApplyIngressDefault()
+    {
+        // With an ingress default configured (the production default is LlmDefaults.NyxIdRouteModel),
+        // a caller that omits `model` resolves to that default instead of failing model_required.
+        var provider = new RecordingLLMProvider();
+        await using var app = await CreateAppAsync(provider, ingressDefaultModel: LlmDefaults.NyxIdRouteModel);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
+        {
+            Content = JsonContent("""{"input":"ping","stream":false}"""),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "secret-token");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        body.Should().NotContain("model_required");
+        provider.StreamCallCount.Should().Be(1);
+    }
+
+    [Fact]
     public async Task GetModels_WithBearer_ShouldReturnAggregatorEntriesInOpenAiSpec()
     {
         var aggregator = new RecordingResponsesModelsAggregator
@@ -2571,12 +2594,17 @@ public sealed class MainnetResponsesEndpointsTests
         IResponsesModelsAggregator? modelsAggregator = null,
         IResponsesRouteResolver? routeResolver = null,
         IChatRoutePolicyQueryPort? chatRoutePolicyQueryPort = null,
-        ILlmSessionRunObservationService? observationService = null)
+        ILlmSessionRunObservationService? observationService = null,
+        string? ingressDefaultModel = null)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
             EnvironmentName = Environments.Development,
         });
+        // Tests opt out of the production ingress default (LlmDefaults.NyxIdRouteModel) by default
+        // so the "model is required" contract stays exercised; pass ingressDefaultModel to cover
+        // the default-applied path.
+        builder.Services.Configure<ResponsesIngressOptions>(o => o.DefaultModel = ingressDefaultModel);
         builder.WebHost.UseTestServer();
         builder.Services.AddSingleton(provider);
         builder.Services.AddSingleton<ILLMProviderFactory>(provider);

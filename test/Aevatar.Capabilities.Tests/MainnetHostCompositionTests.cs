@@ -13,6 +13,7 @@ using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.AI.ToolProviders.Telegram;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.AI.ToolProviders.Web;
+using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
 using Aevatar.Configuration;
@@ -39,6 +40,7 @@ using Aevatar.Workflow.Projection.ReadModels;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using System.Reflection;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.TestHost;
@@ -406,6 +408,23 @@ public sealed class MainnetHostCompositionTests
             .ContainSingle(static name => string.Equals(name, "voice_presence", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public void ConfigureMainnetAIFeatures_ShouldPreserveConfiguredVoiceDrainTimeout()
+    {
+        var options = new AevatarAIFeatureOptions();
+        options.VoicePresence.Module = new VoicePresenceModuleOptions
+        {
+            DrainTimeout = TimeSpan.FromSeconds(17),
+        };
+
+        InvokeConfigureMainnetAIFeatures(options);
+
+        options.VoicePresence.Module.DrainTimeout.Should().Be(TimeSpan.FromSeconds(17));
+        options.VoicePresence.Module.DirectExternalEventTypeUrls
+            .Should()
+            .ContainSingle("type.googleapis.com/aevatar.gagents.household.DeviceInbound");
+    }
+
     private static WebApplicationBuilder CreateBuilder(IReadOnlyDictionary<string, string?>? overrides = null)
     {
         var options = new WebApplicationOptions
@@ -432,6 +451,16 @@ public sealed class MainnetHostCompositionTests
 
         builder.Configuration.AddInMemoryCollection(values);
         return builder;
+    }
+
+    private static void InvokeConfigureMainnetAIFeatures(AevatarAIFeatureOptions options)
+    {
+        var method = typeof(MainnetHostBuilderExtensions).GetMethod(
+            "ConfigureMainnetAIFeatures",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        method.Should().NotBeNull();
+
+        method!.Invoke(null, [options]);
     }
 
     private static IEnumerable<ServiceDescriptor> HostedServiceDescriptors<THostedService>(IServiceCollection services)

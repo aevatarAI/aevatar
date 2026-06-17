@@ -51,12 +51,16 @@ import {
 } from '@/shared/studio/scriptPackage';
 import {
   createStepInspectorDraft,
-  readStepParameterValue,
-  resolveStepParameterName,
-  normalizeStepParametersForType,
-  parseInspectorParameters,
   type StudioStepInspectorDraft,
 } from '@/shared/studio/document';
+import {
+  buildNodeConfigFields,
+  findNodeConfigPrimitiveDescriptor,
+  formatNodeConfigFieldCopy,
+  updateNodeConfigFieldParametersText,
+  validateNodeConfigParametersText,
+  type NodeConfigField,
+} from '@/shared/studio/nodeConfigFields';
 import { scriptsApi } from '@/shared/studio/scriptsApi';
 import type {
   DraftRunResult,
@@ -591,214 +595,6 @@ function extractRunFinishedOutput(result: unknown): string {
   return typeof candidate === 'string' ? candidate : '';
 }
 
-function tryParseStepParameters(
-  value: string,
-): Record<string, unknown> | null {
-  try {
-    return parseInspectorParameters(value);
-  } catch {
-    return null;
-  }
-}
-
-function normalizePrimitiveParameterDescriptor(
-  stepType: string,
-  parameter: WorkflowPrimitiveDescriptor['parameters'][number],
-): WorkflowPrimitiveDescriptor['parameters'][number] {
-  const resolvedName = resolveStepParameterName(stepType, parameter.name);
-  if (resolvedName === parameter.name) {
-    return parameter;
-  }
-
-  return {
-    ...parameter,
-    name: resolvedName,
-  };
-}
-
-function isLLMPromptInstructionParameter(
-  stepType: string,
-  parameterName: string,
-): boolean {
-  return (
-    stepType.trim().toLowerCase() === 'llm_call' &&
-    resolveStepParameterName(stepType, parameterName) === 'prompt_prefix'
-  );
-}
-
-function getParameterDisplayLabel(
-  stepType: string,
-  parameter: WorkflowPrimitiveDescriptor['parameters'][number],
-): string {
-  return isLLMPromptInstructionParameter(stepType, parameter.name)
-    ? t("pages.studio.studiobuildpanels.prompt.instruction", "Prompt instruction")
-    : parameter.name;
-}
-
-function getParameterDisplayDescription(
-  stepType: string,
-  parameter: WorkflowPrimitiveDescriptor['parameters'][number],
-): string {
-  if (isLLMPromptInstructionParameter(stepType, parameter.name)) {
-    return t("pages.studio.studiobuildpanels.prompt.instruction.description", "Instruction added before each workflow run input reaches the LLM.");
-  }
-
-  return parameter.description || t("pages.studio.studiobuildpanels.type.parameter", "Type: {type}", { type: parameter.type });
-}
-
-function getParameterPlaceholder(
-  stepType: string,
-  parameter: WorkflowPrimitiveDescriptor['parameters'][number],
-): string {
-  if (isLLMPromptInstructionParameter(stepType, parameter.name)) {
-    return t("pages.studio.studiobuildpanels.prompt.instruction.placeholder", "e.g. Translate the user input to Japanese");
-  }
-
-  return parameter.default || parameter.type || t("pages.studio.studiobuildpanels.value.placeholder", "Value");
-}
-
-function shouldUseParameterDefault(
-  stepType: string,
-  parameter: WorkflowPrimitiveDescriptor['parameters'][number],
-): boolean {
-  return !isLLMPromptInstructionParameter(stepType, parameter.name);
-}
-
-function normalizeParameterEditorSourceValue(
-  stepType: string,
-  parameterName: string,
-  value: unknown,
-): unknown {
-  if (
-    isLLMPromptInstructionParameter(stepType, parameterName) &&
-    value !== null &&
-    typeof value === 'object'
-  ) {
-    return '';
-  }
-
-  return value;
-}
-
-function normalizePrimitiveParameterDescriptors(
-  stepType: string,
-  parameters: readonly WorkflowPrimitiveDescriptor['parameters'][number][],
-): WorkflowPrimitiveDescriptor['parameters'][number][] {
-  const nextParameters: WorkflowPrimitiveDescriptor['parameters'][number][] = [];
-  const seenParameterNames = new Set<string>();
-
-  for (const parameter of parameters) {
-    const normalizedParameter = normalizePrimitiveParameterDescriptor(
-      stepType,
-      parameter,
-    );
-    const normalizedName = normalizedParameter.name.trim().toLowerCase();
-    if (!normalizedName || seenParameterNames.has(normalizedName)) {
-      continue;
-    }
-
-    seenParameterNames.add(normalizedName);
-    nextParameters.push(normalizedParameter);
-  }
-
-  return nextParameters;
-}
-
-function formatParameterEditorValue(value: unknown): string {
-  if (value === null || value === undefined) {
-    return '';
-  }
-
-  if (typeof value === 'string') {
-    return value;
-  }
-
-  if (
-    typeof value === 'number' ||
-    typeof value === 'boolean'
-  ) {
-    return String(value);
-  }
-
-  return JSON.stringify(value, null, 2);
-}
-
-function coerceParameterEditorValue(
-  rawValue: string,
-  parameterType: string,
-): unknown {
-  const trimmed = rawValue.trim();
-  const normalizedType = parameterType.trim().toLowerCase();
-
-  if (!trimmed) {
-    return '';
-  }
-
-  if (
-    normalizedType === 'bool' ||
-    normalizedType === 'boolean'
-  ) {
-    return trimmed.toLowerCase() === 'true';
-  }
-
-  if (
-    normalizedType === 'number' ||
-    normalizedType === 'int' ||
-    normalizedType === 'int32' ||
-    normalizedType === 'int64' ||
-    normalizedType === 'float' ||
-    normalizedType === 'double'
-  ) {
-    const parsed = Number(trimmed);
-    return Number.isFinite(parsed) ? parsed : trimmed;
-  }
-
-  if (
-    (normalizedType === 'json' ||
-      normalizedType === 'object' ||
-      normalizedType === 'array' ||
-      normalizedType === 'map') &&
-    ((trimmed.startsWith('{') && trimmed.endsWith('}')) ||
-      (trimmed.startsWith('[') && trimmed.endsWith(']')))
-  ) {
-    try {
-      return JSON.parse(trimmed);
-    } catch {
-      return trimmed;
-    }
-  }
-
-  return trimmed;
-}
-
-function updateStepDraftParameterValue(
-  draft: StudioStepInspectorDraft,
-  parameterName: string,
-  parameterType: string,
-  rawValue: string,
-): StudioStepInspectorDraft {
-  const resolvedParameterName = resolveStepParameterName(draft.type, parameterName);
-  const nextParameters = normalizeStepParametersForType(
-    draft.type,
-    tryParseStepParameters(draft.parametersText) ?? {},
-  );
-  const trimmed = rawValue.trim();
-
-  if (!trimmed) {
-    delete nextParameters[resolvedParameterName];
-  } else {
-    nextParameters[resolvedParameterName] = coerceParameterEditorValue(
-      rawValue,
-      parameterType,
-    );
-  }
-
-  return {
-    ...draft,
-    parametersText: JSON.stringify(nextParameters, null, 2),
-  };
-}
-
 function areStepInspectorDraftsEqual(
   left: StudioStepInspectorDraft | null,
   right: StudioStepInspectorDraft | null,
@@ -1013,7 +809,10 @@ export type StudioWorkflowBuildPanelProps = {
   ) => void;
   readonly savePending: boolean;
   readonly canSaveWorkflow: boolean;
-  readonly saveNotice?: { readonly type: 'success' | 'error'; readonly message: string } | null;
+  readonly saveNotice?: {
+    readonly type: 'success' | 'info' | 'error';
+    readonly message: string;
+  } | null;
   readonly workflowGraph: {
     readonly steps: readonly StudioGraphStep[];
     readonly nodes: Node[];
@@ -1196,31 +995,28 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
   );
   const selectedPrimitiveDescriptor = React.useMemo(
     () =>
-      runtimePrimitives.find((primitive) => {
-        const selectedKindDescriptor = stepDraft?.type || selectedStep?.type || '';
-        if (primitive.name.trim().toLowerCase() === selectedKindDescriptor.trim().toLowerCase()) {
-          return true;
-        }
-
-        return primitive.aliases.some(
-          (alias) => alias.trim().toLowerCase() === selectedKindDescriptor.trim().toLowerCase(),
-        );
-      }) ?? null,
+      findNodeConfigPrimitiveDescriptor(
+        runtimePrimitives,
+        stepDraft?.type || selectedStep?.type || '',
+      ),
     [runtimePrimitives, selectedStep?.type, stepDraft?.type],
   );
-  const selectedPrimitiveParameters = React.useMemo(
-    () =>
-      normalizePrimitiveParameterDescriptors(
-        stepDraft?.type || selectedStep?.type || '',
-        selectedPrimitiveDescriptor?.parameters ?? [],
-      ),
-    [selectedPrimitiveDescriptor, selectedStep?.type, stepDraft?.type],
-  );
-  const parsedStepParameters = React.useMemo(
+  const stepParameterConfig = React.useMemo(
     () =>
       stepDraft
-        ? tryParseStepParameters(stepDraft.parametersText)
+        ? buildNodeConfigFields({
+            nodeType: stepDraft.type,
+            parametersText: stepDraft.parametersText,
+            primitiveDescriptor: selectedPrimitiveDescriptor,
+          })
         : null,
+    [selectedPrimitiveDescriptor, stepDraft],
+  );
+  const stepParameterDraftError = React.useMemo(
+    () =>
+      stepDraft
+        ? validateNodeConfigParametersText(stepDraft.parametersText)
+        : '',
     [stepDraft],
   );
 
@@ -1258,6 +1054,14 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
     }
 
     const currentStepDraft = stepDraftRef.current;
+    const currentParameterError = currentStepDraft
+      ? validateNodeConfigParametersText(currentStepDraft.parametersText)
+      : '';
+    if (currentParameterError) {
+      setStepMutationError(currentParameterError);
+      void message.error(currentParameterError);
+      return;
+    }
 
     if (!scopeId) {
       const visibleMessage = 'Resolve the current workspace before running the workflow draft.';
@@ -1382,6 +1186,15 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
       return;
     }
 
+    const currentParameterError = validateNodeConfigParametersText(
+      currentStepDraft.parametersText,
+    );
+    if (currentParameterError) {
+      setStepMutationError(currentParameterError);
+      void message.error(currentParameterError);
+      return;
+    }
+
     stepMutationPendingRef.current = true;
     setStepMutationPending('apply');
     setStepMutationError('');
@@ -1399,6 +1212,15 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
 
   const handleSaveDraft = React.useCallback(() => {
     const currentStepDraft = stepDraftRef.current;
+    const currentParameterError = currentStepDraft
+      ? validateNodeConfigParametersText(currentStepDraft.parametersText)
+      : '';
+    if (currentParameterError) {
+      setStepMutationError(currentParameterError);
+      void message.error(currentParameterError);
+      return;
+    }
+
     onSaveDraft(
       currentStepDraft &&
         selectedStepDraftSeed &&
@@ -1508,7 +1330,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
           <Space wrap size={[8, 8]}>
             <Button
               className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
-              disabled={!canSaveWorkflow}
+              disabled={!canSaveWorkflow || Boolean(stepParameterDraftError)}
               loading={savePending}
               onClick={handleSaveDraft}
             >
@@ -1525,7 +1347,13 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
           <Alert
             message={saveNotice.message}
             showIcon
-            type={saveNotice.type === 'success' ? 'success' : 'error'}
+            type={
+              saveNotice.type === 'success'
+                ? 'success'
+                : saveNotice.type === 'info'
+                  ? 'info'
+                  : 'error'
+            }
           />
         ) : null}
       </div>
@@ -1775,70 +1603,85 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                 </div>
                 <div style={{ ...workflowFieldStyle, gridColumn: '1 / -1' }}>
                   <div style={workflowSectionHeadingStyle}>{t("pages.studio.studiobuildpanels.parameters.2", "Parameters")}</div>
-                  {selectedPrimitiveParameters.length ? (
+                  {stepParameterConfig?.parseError ? (
+                    <Alert
+                      message={stepParameterConfig.parseError}
+                      showIcon
+                      type="error"
+                    />
+                  ) : null}
+                  {stepParameterConfig?.fields.length ? (
                     <div style={{ display: 'grid', gap: 10 }}>
-                      {selectedPrimitiveParameters.map((parameter) => {
-                        const parameterDisplayLabel = getParameterDisplayLabel(
-                          stepDraft.type,
-                          parameter,
+                      {stepParameterConfig.fields.map((field) => {
+                        const label = formatNodeConfigFieldCopy(field.label);
+                        const description = formatNodeConfigFieldCopy(
+                          field.description,
                         );
-                        const parameterAriaLabel = `Parameter ${parameterDisplayLabel}`;
-                        const parameterPlaceholder = getParameterPlaceholder(
-                          stepDraft.type,
-                          parameter,
+                        const placeholder = formatNodeConfigFieldCopy(
+                          field.placeholder,
                         );
-                        const parameterDescription = getParameterDisplayDescription(
-                          stepDraft.type,
-                          parameter,
-                        );
-                        const parameterValue = normalizeParameterEditorSourceValue(
-                          stepDraft.type,
-                          parameter.name,
-                          readStepParameterValue(
-                            parsedStepParameters,
-                            stepDraft.type,
-                            parameter.name,
-                          ),
-                        );
-                        const currentValue = formatParameterEditorValue(
-                          parameterValue ??
-                            (shouldUseParameterDefault(stepDraft.type, parameter)
-                              ? parameter.default
-                              : ''),
-                        );
-
+                        const parameterAriaLabel = `Parameter ${label}`;
+                        const inputId = `workflow-step-parameter-${field.name}`;
                         return (
                           <div
-                            key={parameter.name}
+                            key={field.name}
                             style={workflowFieldStyle}
                           >
                             <label
-                              htmlFor={`workflow-step-parameter-${parameter.name}`}
+                              htmlFor={inputId}
                               style={workflowFieldLabelStyle}
                             >
-                              {parameterDisplayLabel}
-                              {parameter.required ? ' *' : ''}
+                              {label}
+                              {field.required ? ' *' : ''}
                             </label>
-                            {parameter.enumValues.length > 0 ? (
+                            {field.kind === 'select' ? (
                               <Select
-                                allowClear={!parameter.required}
+                                allowClear={!field.required}
                                 aria-label={parameterAriaLabel}
-                                id={`workflow-step-parameter-${parameter.name}`}
-                                options={parameter.enumValues.map((value) => ({
-                                  label: value,
-                                  value,
+                                id={inputId}
+                                options={field.options.map((option) => ({
+                                  label: formatNodeConfigFieldCopy(option.label),
+                                  value: option.value,
                                 }))}
-                                placeholder={parameterPlaceholder}
-                                value={currentValue || undefined}
+                                placeholder={placeholder}
+                                value={field.value || undefined}
                                 onChange={(value) =>
                                   updateStepDraft((current) =>
                                     current
-                                      ? updateStepDraftParameterValue(
-                                          current,
-                                          parameter.name,
-                                          parameter.type,
-                                          String(value || ''),
-                                        )
+                                      ? {
+                                          ...current,
+                                          parametersText:
+                                            updateNodeConfigFieldParametersText({
+                                              field,
+                                              nodeType: current.type,
+                                              parametersText: current.parametersText,
+                                              rawValue: String(value || ''),
+                                            }),
+                                        }
+                                      : current,
+                                  )
+                                }
+                              />
+                            ) : field.kind === 'json' ? (
+                              <Input.TextArea
+                                aria-label={parameterAriaLabel}
+                                autoSize={{ minRows: 3, maxRows: 8 }}
+                                id={inputId}
+                                placeholder={placeholder}
+                                value={field.value}
+                                onChange={(event) =>
+                                  updateStepDraft((current) =>
+                                    current
+                                      ? {
+                                          ...current,
+                                          parametersText:
+                                            updateNodeConfigFieldParametersText({
+                                              field,
+                                              nodeType: current.type,
+                                              parametersText: current.parametersText,
+                                              rawValue: event.target.value,
+                                            }),
+                                        }
                                       : current,
                                   )
                                 }
@@ -1846,25 +1689,29 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                             ) : (
                               <Input
                                 aria-label={parameterAriaLabel}
-                                id={`workflow-step-parameter-${parameter.name}`}
-                                placeholder={parameterPlaceholder}
-                                value={currentValue}
+                                id={inputId}
+                                placeholder={placeholder}
+                                value={field.value}
                                 onChange={(event) =>
                                   updateStepDraft((current) =>
                                     current
-                                      ? updateStepDraftParameterValue(
-                                          current,
-                                          parameter.name,
-                                          parameter.type,
-                                          event.target.value,
-                                        )
+                                      ? {
+                                          ...current,
+                                          parametersText:
+                                            updateNodeConfigFieldParametersText({
+                                              field,
+                                              nodeType: current.type,
+                                              parametersText: current.parametersText,
+                                              rawValue: event.target.value,
+                                            }),
+                                        }
                                       : current,
                                   )
                                 }
                               />
                             )}
                             <div style={workflowInlineMetaStyle}>
-                              {parameterDescription}
+                              {description}
                             </div>
                           </div>
                         );
@@ -1937,7 +1784,12 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                   {t("pages.studio.studiobuildpanels.delete.step.2", "Delete step")}</Button>
                 <Button
                   className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
-                  disabled={!selectedStepId || !stepDraft || Boolean(stepMutationPending)}
+                  disabled={
+                    !selectedStepId ||
+                    !stepDraft ||
+                    Boolean(stepMutationPending) ||
+                    Boolean(stepParameterDraftError)
+                  }
                   loading={stepMutationPending === 'apply'}
                   type="primary"
                   onClick={() => void handleApplyStepChanges()}
@@ -2000,7 +1852,11 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
             icon={<PlayCircleOutlined />}
             loading={runState.status === 'running'}
             type="primary"
-            disabled={Boolean(dryRunBlockedReason?.trim()) || runState.status === 'running'}
+            disabled={
+              Boolean(dryRunBlockedReason?.trim()) ||
+              runState.status === 'running' ||
+              Boolean(stepParameterDraftError)
+            }
             onClick={() => void handleRun()}
           >
             {t("pages.studio.studiobuildpanels.run.4", "Run")}</Button>

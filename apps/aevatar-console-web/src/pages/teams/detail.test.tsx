@@ -7,6 +7,7 @@ import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { runtimeActorsApi } from "@/shared/api/runtimeActorsApi";
 import { runtimeGAgentApi } from "@/shared/api/runtimeGAgentApi";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
+import { scheduledDispatchApi } from "@/shared/api/scheduledDispatchApi";
 import { studioApi } from "@/shared/studio/api";
 import {
   createTestQueryClient,
@@ -170,6 +171,43 @@ function mockCreateServiceRevisionCatalog(overrides?: Record<string, any>) {
   };
 }
 
+function mockCreateServiceCatalog() {
+  return [
+    {
+      serviceKey: "scope-1:default:default:default",
+      tenantId: "scope-1",
+      appId: "default",
+      namespace: "default",
+      serviceId: "default",
+      displayName: "Support Runtime",
+      defaultServingRevisionId: "rev-2",
+      activeServingRevisionId: "rev-2",
+      deploymentId: "dep-2",
+      primaryActorId: "actor-intake",
+      deploymentStatus: "Active",
+      endpoints: [],
+      policyIds: [],
+      updatedAt: "2026-04-09T09:00:00Z",
+    },
+    {
+      serviceKey: "scope-1:default:default:alpha-service",
+      tenantId: "scope-1",
+      appId: "default",
+      namespace: "default",
+      serviceId: "alpha-service",
+      displayName: "Team Alpha Runtime",
+      defaultServingRevisionId: "rev-2",
+      activeServingRevisionId: "rev-2",
+      deploymentId: "dep-2",
+      primaryActorId: "actor-intake",
+      deploymentStatus: "Active",
+      endpoints: [],
+      policyIds: [],
+      updatedAt: "2026-04-09T09:00:00Z",
+    },
+  ];
+}
+
 function mockCreateMembersCatalog() {
   return {
     scopeId: "scope-1",
@@ -202,6 +240,11 @@ function mockCreateTeamMembersCatalog() {
         displayName: "Team Alpha Operator",
         description: "负责处理升级工单",
         implementationKind: "workflow",
+        implementationRef: {
+          implementationKind: "workflow",
+          workflowId: "wf-team-alpha",
+          workflowRevision: "rev-alpha",
+        },
         lifecycleStage: "bind_ready",
         publishedServiceId: "alpha-service",
         lastBoundRevisionId: "rev-alpha",
@@ -247,6 +290,37 @@ function mockCreateTeamSummary() {
     memberCount: 3,
     createdAt: "2026-05-01T08:00:00Z",
     updatedAt: "2026-05-01T08:05:00Z",
+  };
+}
+
+function mockCreateScheduledDispatchSummary(overrides?: Record<string, any>) {
+  return {
+    scheduleId: "sch-alpha",
+    displayName: "Daily escalation digest",
+    targetKind: "service_invocation",
+    targetActorId: "actor-alpha",
+    payloadTypeUrl: "type.googleapis.com/aevatar.ChatRequestEvent",
+    serviceKey: "scope-1:default:default:alpha-service",
+    serviceId: "alpha-service",
+    serviceEndpointId: "chat",
+    cronExpression: "0 9 * * 1-5",
+    timezone: "Asia/Shanghai",
+    enabled: true,
+    createdAt: "2026-06-10T08:00:00Z",
+    updatedAt: "2026-06-10T08:30:00Z",
+    nextFireAt: "2026-06-11T01:00:00Z",
+    lastFireAt: null,
+    lastTargetActorId: "",
+    lastCommandId: "",
+    lastCorrelationId: "",
+    lastError: "",
+    fireCount: 0,
+    failureCount: 0,
+    headers: {},
+    scheduleActorId: "schedule-actor-alpha",
+    scheduleKind: "workflow",
+    deleted: false,
+    ...overrides,
   };
 }
 
@@ -501,24 +575,7 @@ jest.mock("@/shared/api/runtimeActorsApi", () => ({
 
 jest.mock("@/shared/api/scopeRuntimeApi", () => ({
   scopeRuntimeApi: {
-    listServices: jest.fn(async () => [
-      {
-        serviceKey: "scope-1:default",
-        tenantId: "scope-1",
-        appId: "default",
-        namespace: "default",
-        serviceId: "default",
-        displayName: "Support Runtime",
-        defaultServingRevisionId: "rev-2",
-        activeServingRevisionId: "rev-2",
-        deploymentId: "dep-2",
-        primaryActorId: "actor-intake",
-        deploymentStatus: "Active",
-        endpoints: [],
-        policyIds: [],
-        updatedAt: "2026-04-09T09:00:00Z",
-      },
-    ]),
+    listServices: jest.fn(async () => mockCreateServiceCatalog()),
     getServiceRevisions: jest.fn(async () => mockCreateServiceRevisionCatalog()),
     listMemberRuns: jest.fn(async () => mockCreateRunsCatalog()),
     listServiceRuns: jest.fn(async () => mockCreateRunsCatalog()),
@@ -528,6 +585,82 @@ jest.mock("@/shared/api/scopeRuntimeApi", () => ({
     getServiceRunAudit: jest.fn(async (scopeId: string, _serviceId: string, runId: string) =>
       mockCreateRunAudit(scopeId, runId),
     ),
+  },
+}));
+
+jest.mock("@/shared/api/scheduledDispatchApi", () => ({
+  scheduledDispatchApi: {
+    list: jest.fn(async () => ({
+      items: [],
+      nextCursor: null,
+      totalCount: 0,
+    })),
+    listAll: jest.fn(async () => ({
+      items: [],
+      nextCursor: null,
+      totalCount: 0,
+    })),
+    create: jest.fn(async () => ({
+      scheduleId: "sch-created",
+      scheduleActorId: "schedule-actor-created",
+      accepted: true,
+      commandId: "cmd-created",
+      correlationId: "corr-created",
+      ackedAt: "2026-06-10T08:35:00Z",
+      ackStage: "accepted",
+    })),
+    update: jest.fn(async () => ({
+      scheduleId: "sch-alpha",
+      scheduleActorId: "schedule-actor-alpha",
+      accepted: true,
+      commandId: "cmd-update",
+      correlationId: "corr-update",
+      ackedAt: "2026-06-10T08:36:00Z",
+      ackStage: "accepted",
+    })),
+    preview: jest.fn(async () => ({
+      cronExpression: "0 9 * * 1-5",
+      timezone: "Asia/Shanghai",
+      nextFireTimes: ["2026-06-11T01:00:00Z"],
+    })),
+    runNow: jest.fn(async () => ({
+      scheduleId: "sch-alpha",
+      scheduleActorId: "schedule-actor-alpha",
+      scheduledFireAt: "2026-06-10T08:40:00Z",
+      idempotencyKey: "idem-alpha",
+      accepted: true,
+      commandId: "cmd-run",
+      correlationId: "corr-run",
+      ackedAt: "2026-06-10T08:40:00Z",
+      ackStage: "accepted",
+    })),
+    enable: jest.fn(async () => ({
+      scheduleId: "sch-alpha",
+      scheduleActorId: "schedule-actor-alpha",
+      accepted: true,
+      commandId: "cmd-enable",
+      correlationId: "corr-enable",
+      ackedAt: "2026-06-10T08:45:00Z",
+      ackStage: "accepted",
+    })),
+    disable: jest.fn(async () => ({
+      scheduleId: "sch-alpha",
+      scheduleActorId: "schedule-actor-alpha",
+      accepted: true,
+      commandId: "cmd-disable",
+      correlationId: "corr-disable",
+      ackedAt: "2026-06-10T08:45:00Z",
+      ackStage: "accepted",
+    })),
+    delete: jest.fn(async () => ({
+      scheduleId: "sch-alpha",
+      scheduleActorId: "schedule-actor-alpha",
+      accepted: true,
+      commandId: "cmd-delete",
+      correlationId: "corr-delete",
+      ackedAt: "2026-06-10T08:45:00Z",
+      ackStage: "accepted",
+    })),
   },
 }));
 
@@ -738,6 +871,16 @@ jest.mock("@/shared/studio/api", () => ({
       ...mockCreateTeamSummary(),
       entryMemberId: null,
     })),
+    updateMemberTeamAssignment: jest.fn(async (_input: {
+      scopeId: string;
+      memberId: string;
+      teamId: string | null;
+    }) => ({
+      ackedAt: "2026-04-27T08:11:00Z",
+      memberId: _input.memberId,
+      scopeId: _input.scopeId,
+      status: "accepted",
+    })),
     archiveTeam: jest.fn(async () => ({
       ...mockCreateTeamSummary(),
       lifecycleStage: "archived",
@@ -769,11 +912,16 @@ function createStudioApiStatusError(message: string, status: number): Error & { 
 describe("TeamDetailPage", () => {
   beforeEach(() => {
     setLocale("zh-CN", false);
-    window.history.replaceState({}, "", "/teams/scope-1/t-alpha");
+    window.history.replaceState({}, "", "/scopes/scope-1/teams/t-alpha");
+    window.sessionStorage.clear();
     (scopesApi.listWorkflows as jest.Mock).mockClear();
     (scopesApi.listScripts as jest.Mock).mockClear();
     (runtimeGAgentApi.listActors as jest.Mock).mockClear();
     (runtimeActorsApi.getActorGraphEnriched as jest.Mock).mockClear();
+    (scopeRuntimeApi.listServices as jest.Mock).mockReset();
+    (scopeRuntimeApi.listServices as jest.Mock).mockImplementation(
+      async () => mockCreateServiceCatalog(),
+    );
     (scopeRuntimeApi.getServiceRevisions as jest.Mock).mockReset();
     (scopeRuntimeApi.getServiceRevisions as jest.Mock).mockImplementation(
       async () => mockCreateServiceRevisionCatalog(),
@@ -796,6 +944,48 @@ describe("TeamDetailPage", () => {
       async (scopeId: string, _serviceId: string, runId: string) =>
         mockCreateRunAudit(scopeId, runId),
     );
+    (scheduledDispatchApi.list as jest.Mock).mockReset();
+    (scheduledDispatchApi.list as jest.Mock).mockImplementation(async () => ({
+      items: [],
+      nextCursor: null,
+      totalCount: 0,
+    }));
+    (scheduledDispatchApi.listAll as jest.Mock).mockReset();
+    (scheduledDispatchApi.listAll as jest.Mock).mockImplementation(async () => ({
+      items: [],
+      nextCursor: null,
+      totalCount: 0,
+    }));
+    (scheduledDispatchApi.create as jest.Mock).mockReset();
+    (scheduledDispatchApi.create as jest.Mock).mockImplementation(async () => ({
+      scheduleId: "sch-created",
+      scheduleActorId: "schedule-actor-created",
+      accepted: true,
+      commandId: "cmd-created",
+      correlationId: "corr-created",
+      ackedAt: "2026-06-10T08:35:00Z",
+      ackStage: "accepted",
+    }));
+    (scheduledDispatchApi.update as jest.Mock).mockReset();
+    (scheduledDispatchApi.update as jest.Mock).mockImplementation(async () => ({
+      scheduleId: "sch-alpha",
+      scheduleActorId: "schedule-actor-alpha",
+      accepted: true,
+      commandId: "cmd-update",
+      correlationId: "corr-update",
+      ackedAt: "2026-06-10T08:36:00Z",
+      ackStage: "accepted",
+    }));
+    (scheduledDispatchApi.preview as jest.Mock).mockReset();
+    (scheduledDispatchApi.preview as jest.Mock).mockImplementation(async () => ({
+      cronExpression: "0 9 * * 1-5",
+      timezone: "Asia/Shanghai",
+      nextFireTimes: ["2026-06-11T01:00:00Z"],
+    }));
+    (scheduledDispatchApi.runNow as jest.Mock).mockClear();
+    (scheduledDispatchApi.enable as jest.Mock).mockClear();
+    (scheduledDispatchApi.disable as jest.Mock).mockClear();
+    (scheduledDispatchApi.delete as jest.Mock).mockClear();
     (studioApi.listMembers as jest.Mock).mockReset();
     (studioApi.listMembers as jest.Mock).mockImplementation(
       async () => mockCreateMembersCatalog(),
@@ -822,6 +1012,15 @@ describe("TeamDetailPage", () => {
       ...mockCreateTeamSummary(),
       entryMemberId: null,
     }));
+    (studioApi.updateMemberTeamAssignment as jest.Mock).mockReset();
+    (studioApi.updateMemberTeamAssignment as jest.Mock).mockImplementation(
+      async (_input: { scopeId: string; memberId: string; teamId: string | null }) => ({
+        ackedAt: "2026-04-27T08:11:00Z",
+        memberId: _input.memberId,
+        scopeId: _input.scopeId,
+        status: "accepted",
+      }),
+    );
     (studioApi.archiveTeam as jest.Mock).mockReset();
     (studioApi.archiveTeam as jest.Mock).mockImplementation(async () => ({
       ...mockCreateTeamSummary(),
@@ -835,7 +1034,7 @@ describe("TeamDetailPage", () => {
   });
 
   it("renders no-team-selected state without detail data flows for scope-only links", async () => {
-    window.history.replaceState({}, "", "/teams/scope-1");
+    window.history.replaceState({}, "", "/scopes/scope-1/teams");
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
@@ -864,7 +1063,7 @@ describe("TeamDetailPage", () => {
     });
   });
 
-  it("renders the chinese team-first overview shell", async () => {
+  it("renders the chinese scoped team overview shell", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     expect(
@@ -874,8 +1073,8 @@ describe("TeamDetailPage", () => {
     ).toBeTruthy();
     expect(screen.getByRole("link", { name: "Aevatar" })).toBeTruthy();
     expect(screen.getByRole("link", { name: "团队" })).toBeTruthy();
-    expect(screen.getByText("工作区 ID")).toBeTruthy();
-    expect(screen.getByText("scope-1")).toBeTruthy();
+    expect(screen.queryByText("工作区 ID")).toBeNull();
+    expect(screen.queryByText("scope-1")).toBeNull();
     const currentPostureHeading = screen.getByText("启动状态");
     const compositionHeading = screen.getByText("团队构成");
     const configurationHeading = screen.getByText("配置明细");
@@ -938,7 +1137,7 @@ describe("TeamDetailPage", () => {
     window.history.replaceState(
       {},
       "",
-      "/teams/scope-1/t-alpha?runId=run-good",
+      "/scopes/scope-1/teams/t-alpha?runId=run-good",
     );
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
@@ -964,13 +1163,13 @@ describe("TeamDetailPage", () => {
     ).toBeTruthy();
   });
 
-  it("demotes machine-generated long scope ids into compact team metadata", async () => {
+  it("keeps machine-generated scope ids out of team metadata", async () => {
     const longScopeId = "1626c177-917b-4fcc-a5ee-aa74a171b0d6";
 
     window.history.replaceState(
       {},
       "",
-      `/teams/${longScopeId}/t-alpha`,
+      `/scopes/${longScopeId}/teams/t-alpha`,
     );
     (scopesApi.listWorkflows as jest.Mock).mockResolvedValueOnce([]);
     (studioApi.getScopeBinding as jest.Mock).mockResolvedValueOnce(null);
@@ -981,8 +1180,8 @@ describe("TeamDetailPage", () => {
       await screen.findByRole("heading", { level: 1, name: "当前团队" }),
     ).toBeTruthy();
     expect(screen.queryByText(`Team ${longScopeId}`)).toBeNull();
-    expect(screen.getByText("工作区 ID")).toBeTruthy();
-    expect(screen.getByText("1626c177...71b0d6")).toBeTruthy();
+    expect(screen.queryByText("工作区 ID")).toBeNull();
+    expect(screen.queryByText("1626c177...71b0d6")).toBeNull();
   });
 
   it("falls back to workflowName when Team display name is unavailable and the workflow display name is only the workflow id", async () => {
@@ -1042,7 +1241,7 @@ describe("TeamDetailPage", () => {
     ).toBeNull();
   });
 
-  it("keeps long raw identifiers compact inside overview configuration details", async () => {
+  it("keeps raw identifiers out of overview configuration details", async () => {
     const longRevisionId =
       "rev-20260414154556-4d89bc2a3bf347f8b3bde41d716964f3";
 
@@ -1063,7 +1262,8 @@ describe("TeamDetailPage", () => {
 
     await screen.findByText("配置明细");
 
-    expect(await screen.findByText("revisionId: rev-20260414…716964f3")).toBeTruthy();
+    expect(await screen.findByText("服务路由已配置。")).toBeTruthy();
+    expect(screen.queryByText("revisionId: rev-20260414…716964f3")).toBeNull();
     expect(screen.queryByText(`revisionId: ${longRevisionId}`)).toBeNull();
   });
 
@@ -1074,8 +1274,8 @@ describe("TeamDetailPage", () => {
     fireEvent.click(screen.getByRole("link", { name: "团队" }));
 
     await waitFor(() => {
-      expect(window.location.pathname).toBe("/teams");
-      expect(window.location.search).toContain("scopeId=scope-1");
+      expect(window.location.pathname).toBe("/scopes/scope-1/teams");
+      expect(window.location.search).not.toContain("scopeId=scope-1");
     });
   });
 
@@ -1086,8 +1286,8 @@ describe("TeamDetailPage", () => {
     fireEvent.click(screen.getByRole("link", { name: "Aevatar" }));
 
     await waitFor(() => {
-      expect(window.location.pathname).toBe("/teams");
-      expect(window.location.search).toContain("scopeId=scope-1");
+      expect(window.location.pathname).toBe("/scopes/scope-1/teams");
+      expect(window.location.search).not.toContain("scopeId=scope-1");
     });
   });
 
@@ -1095,6 +1295,12 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     await screen.findByRole("button", { name: "编辑团队" });
+    fireEvent.click(screen.getByRole("button", { name: "自动化" }));
+
+    expect(await screen.findByRole("heading", { name: "自动化" })).toBeTruthy();
+    expect(screen.getByText("给成员添加周期任务")).toBeTruthy();
+    expect(window.location.search).toContain("tab=automations");
+
     fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
 
     expect(await screen.findByText("Team Alpha Operator")).toBeTruthy();
@@ -1106,7 +1312,7 @@ describe("TeamDetailPage", () => {
     window.history.replaceState(
       {},
       "",
-      "/teams/scope-1/t-alpha?serviceId=default&tab=events",
+      "/scopes/scope-1/teams/t-alpha?serviceId=default&tab=events",
     );
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
@@ -1122,12 +1328,13 @@ describe("TeamDetailPage", () => {
     });
 
     await waitFor(() => {
-      expect(scopeRuntimeApi.listMemberRuns).toHaveBeenCalledWith(
+      expect(scopeRuntimeApi.listServiceRuns).toHaveBeenCalledWith(
         "scope-1",
-        "member-support",
+        "default",
         expect.objectContaining({ take: 12 }),
       );
     });
+    expect(scopeRuntimeApi.listMemberRuns).not.toHaveBeenCalled();
   });
 
   it("shows configuration details in the overview", async () => {
@@ -1151,14 +1358,19 @@ describe("TeamDetailPage", () => {
     expect(await screen.findByText("Team Alpha Operator")).toBeTruthy();
     expect(
       screen.getByText(
-        /设置入口决定团队测试从哪里开始，Build \/ 在 Studio 中编辑用于补齐成员实现和绑定/,
+        /只有已经绑定到发布服务的 Workflow 成员才可以调用/,
       ),
     ).toBeTruthy();
     expect(screen.getByText("负责处理升级工单")).toBeTruthy();
-    expect(screen.getByText("member-team-alpha")).toBeTruthy();
+    expect(screen.queryByText("member-team-alpha")).toBeNull();
     expect(screen.getByText("入口成员")).toBeTruthy();
-    expect(screen.getByRole("link", { name: "在 Studio 中编辑" })).toBeTruthy();
-    expect(screen.getByRole("link", { name: "构建" })).toBeTruthy();
+    expect(screen.getByText("已绑定服务")).toBeTruthy();
+    expect(screen.getByText("可以调用。")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "调用" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Workflow Studio" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "编辑工作流" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "调试工作流" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "移出团队" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Test member" })).toBeNull();
     expect(screen.queryByRole("link", { name: "View runs" })).toBeNull();
     expect(screen.queryByText("参与者结构")).toBeNull();
@@ -1166,11 +1378,38 @@ describe("TeamDetailPage", () => {
     expect(screen.queryByRole("button", { name: "打开 Services" })).toBeNull();
   });
 
+  it("shows the members table skeleton while the Team member roster loads", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?tab=members",
+    );
+    let resolveTeamMembers: (value: unknown) => void = () => undefined;
+    (studioApi.listTeamMembers as jest.Mock).mockImplementationOnce(
+      () =>
+        new Promise<unknown>((resolve) => {
+          resolveTeamMembers = resolve;
+        }),
+    );
+
+    const { unmount } = renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByTestId("team-members-skeleton")).toBeTruthy();
+    expect(screen.getAllByTestId("team-members-skeleton-row")).toHaveLength(3);
+    expect(screen.queryByText("这支团队还没有成员")).toBeNull();
+    expect(screen.queryByText("Team Alpha Operator")).toBeNull();
+
+    unmount();
+    await act(async () => {
+      resolveTeamMembers(mockCreateTeamMembersCatalog());
+    });
+  });
+
   it("marks the route-selected member in the members tab", async () => {
     window.history.replaceState(
       {},
       "",
-      "/teams/scope-1/t-alpha?memberId=member-team-alpha&tab=members",
+      "/scopes/scope-1/teams/t-alpha?memberId=member-team-alpha&tab=members",
     );
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
@@ -1183,25 +1422,27 @@ describe("TeamDetailPage", () => {
     window.history.replaceState(
       {},
       "",
-      "/teams/scope-1/t-alpha?memberId=member-team-alpha",
+      "/scopes/scope-1/teams/t-alpha?memberId=member-team-alpha",
     );
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     expect(await screen.findByText("当前成员")).toBeTruthy();
-    expect(screen.getAllByText("member-team-alpha").length).toBeGreaterThan(0);
-    expect(screen.getByText("memberId · member-team-alpha")).toBeTruthy();
+    expect((await screen.findAllByText("Team Alpha Operator")).length).toBeGreaterThan(0);
+    expect(screen.getByText("当前从团队成员中选中。")).toBeTruthy();
+    expect(screen.queryByText("member-team-alpha")).toBeNull();
+    expect(screen.queryByText("memberId · member-team-alpha")).toBeNull();
   });
 
   it("guides the user to test the Team when no run is visible yet", async () => {
-    (scopeRuntimeApi.listMemberRuns as jest.Mock).mockResolvedValueOnce({
+    (scopeRuntimeApi.listServiceRuns as jest.Mock).mockResolvedValueOnce({
       ...mockCreateRunsCatalog(),
       runs: [],
     });
     window.history.replaceState(
       {},
       "",
-      "/teams/scope-1/t-alpha?memberId=member-team-alpha",
+      "/scopes/scope-1/teams/t-alpha?memberId=member-team-alpha",
     );
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
@@ -1215,6 +1456,119 @@ describe("TeamDetailPage", () => {
     expect(screen.getByText("测试团队后会在这里显示最新运行。")).toBeTruthy();
     expect(screen.queryByText("暂无可见运行")).toBeNull();
     expect(screen.queryByText("暂无近期可见运行")).toBeNull();
+    expect(scopeRuntimeApi.listMemberRuns).not.toHaveBeenCalled();
+  });
+
+  it("does not query runs for member-like service ids that are missing from the service catalog", async () => {
+    (studioApi.getTeam as jest.Mock).mockResolvedValueOnce({
+      ...mockCreateTeamSummary(),
+      entryMemberId: "member-untitled-member1",
+    });
+    (studioApi.listTeamMembers as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-1",
+      members: [
+        {
+          memberId: "member-untitled-member1",
+          scopeId: "scope-1",
+          teamId: "t-alpha",
+          displayName: "Untitled Member",
+          description: "Service id points at a missing member-derived service",
+          implementationKind: "workflow",
+          lifecycleStage: "bind_ready",
+          publishedServiceId: "member-untitled-member1",
+          lastBoundRevisionId: "rev-missing",
+          createdAt: "2026-04-09T08:00:00Z",
+          updatedAt: "2026-04-09T09:00:00Z",
+        },
+      ],
+      nextPageToken: null,
+    });
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect((await screen.findAllByText("Untitled Member")).length).toBeGreaterThan(0);
+
+    await waitFor(() => {
+      expect(scopeRuntimeApi.listServices).toHaveBeenCalledWith("scope-1", {
+        appId: "default",
+      });
+    });
+    expect(scopeRuntimeApi.getServiceRevisions).not.toHaveBeenCalledWith(
+      "scope-1",
+      "member-untitled-member1",
+    );
+    expect(scopeRuntimeApi.listServiceRuns).not.toHaveBeenCalledWith(
+      "scope-1",
+      "member-untitled-member1",
+      expect.anything(),
+    );
+    expect(scopeRuntimeApi.listMemberRuns).not.toHaveBeenCalled();
+  });
+
+  it("does not sample runtime runs while browsing members with member-owned service ids", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?tab=members",
+    );
+    (studioApi.getTeam as jest.Mock).mockResolvedValueOnce({
+      ...mockCreateTeamSummary(),
+      displayName: "test09",
+      entryMemberId: "member-untitled-member1",
+      memberCount: 5,
+    });
+    (studioApi.listTeamMembers as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-1",
+      members: [
+        {
+          memberId: "member-untitled-member1",
+          scopeId: "scope-1",
+          teamId: "t-alpha",
+          displayName: "Untitled member1",
+          description: "Member page should only render roster facts",
+          implementationKind: "workflow",
+          lifecycleStage: "bind_ready",
+          publishedServiceId: "member-untitled-member1",
+          lastBoundRevisionId: "rev-member-1",
+          createdAt: "2026-04-09T08:00:00Z",
+          updatedAt: "2026-04-09T09:00:00Z",
+        },
+      ],
+      nextPageToken: null,
+    });
+    (scopeRuntimeApi.listServices as jest.Mock).mockResolvedValueOnce([
+      {
+        serviceKey: "scope-1:member-untitled-member1",
+        tenantId: "scope-1",
+        appId: "default",
+        namespace: "default",
+        serviceId: "member-untitled-member1",
+        displayName: "Untitled member1 runtime",
+        defaultServingRevisionId: "rev-member-1",
+        activeServingRevisionId: "rev-member-1",
+        deploymentId: "dep-member-1",
+        primaryActorId: "actor-member-1",
+        deploymentStatus: "Active",
+        endpoints: [],
+        policyIds: [],
+        updatedAt: "2026-04-09T09:00:00Z",
+      },
+    ]);
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("Untitled member1")).toBeTruthy();
+    expect(screen.queryByText("member-untitled-member1")).toBeNull();
+    expect(screen.queryByText("memb...ber1")).toBeNull();
+    expect(screen.getByText("已绑定服务")).toBeTruthy();
+
+    await waitFor(() => {
+      expect(studioApi.listTeamMembers).toHaveBeenCalledWith("scope-1", "t-alpha");
+    });
+    expect(scopeRuntimeApi.listServices).not.toHaveBeenCalled();
+    expect(scopeRuntimeApi.getServiceRevisions).not.toHaveBeenCalled();
+    expect(scopeRuntimeApi.listServiceRuns).not.toHaveBeenCalled();
+    expect(scopeRuntimeApi.listMemberRuns).not.toHaveBeenCalled();
   });
 
   it("shows the configured Team entry member without treating it as the service target", async () => {
@@ -1233,7 +1587,7 @@ describe("TeamDetailPage", () => {
 
     expect(await screen.findByText("入口成员")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "设为入口成员" })).toBeNull();
-    expect(screen.getByText("alph...vice")).toBeTruthy();
+    expect(screen.getByText("已绑定服务")).toBeTruthy();
   });
 
   it("sets a Team entry member from the members tab", async () => {
@@ -1332,7 +1686,7 @@ describe("TeamDetailPage", () => {
     window.history.replaceState(
       {},
       "",
-      "/teams/scope-1/t-alpha?memberId=member-support&testTeam=1",
+      "/scopes/scope-1/teams/t-alpha?memberId=member-support&testTeam=1",
     );
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
@@ -1340,14 +1694,15 @@ describe("TeamDetailPage", () => {
     const dialog = await screen.findByTestId("team-test-modal-body");
 
     expect(
-      within(dialog).getByText(
-        "当前页面选中的是 member-support，团队测试仍通过入口成员发起。",
-      ),
+      within(dialog).queryByText(/member-support/),
+    ).toBeNull();
+    expect(
+      within(dialog).getByText(/团队测试仍通过入口成员发起。/),
     ).toBeTruthy();
   });
 
   it("auto-opens Team Test from the Team Detail route intent", async () => {
-    window.history.replaceState({}, "", "/teams/scope-1/t-alpha?testTeam=1");
+    window.history.replaceState({}, "", "/scopes/scope-1/teams/t-alpha?testTeam=1");
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
@@ -1355,7 +1710,7 @@ describe("TeamDetailPage", () => {
     expect(screen.getByLabelText("测试 Prompt")).toBeTruthy();
   });
 
-  it("does not treat bind-ready members without a published service as Team entry candidates", async () => {
+  it("does not treat bind-ready members without a published service as Team Test candidates", async () => {
     (studioApi.getTeam as jest.Mock).mockImplementation(async () => ({
       ...mockCreateTeamSummary(),
       entryMemberId: null,
@@ -1379,6 +1734,35 @@ describe("TeamDetailPage", () => {
     ).toBeNull();
     expect(within(dialog).getByRole("link", { name: "先 Build / Bind" }))
       .toHaveAttribute("href", expect.stringContaining("member-unpublished"));
+  });
+
+  it("allows members without a published service to be configured as Team entry members", async () => {
+    (studioApi.getTeam as jest.Mock).mockImplementation(async () => ({
+      ...mockCreateTeamSummary(),
+      entryMemberId: null,
+    }));
+    (studioApi.listTeamMembers as jest.Mock).mockImplementation(
+      async () => mockCreateTeamMembersCatalogWithUnpublishedReadyMember(),
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    await screen.findByRole("button", { name: "编辑团队" });
+    fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
+    expect(await screen.findByText("Unpublished Ready Member")).toBeTruthy();
+
+    const setEntryButtons = await screen.findAllByRole("button", {
+      name: "设为入口成员",
+    });
+    fireEvent.click(setEntryButtons[1]);
+
+    await waitFor(() => {
+      expect(studioApi.setTeamEntryMember).toHaveBeenCalledWith(
+        "scope-1",
+        "t-alpha",
+        "member-unpublished",
+      );
+    });
   });
 
   it("sets a ready member as entry before testing when the Team has no entry", async () => {
@@ -1561,42 +1945,828 @@ describe("TeamDetailPage", () => {
     expect(screen.queryByText("后端暂不支持团队测试")).toBeNull();
   });
 
-  it("routes member build actions into Studio with Team context", async () => {
+  it("routes workflow member build actions into the new workflow studio", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     await screen.findByRole("button", { name: "编辑团队" });
     fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
-    fireEvent.click(await screen.findByRole("link", { name: "构建" }));
+    fireEvent.click(await screen.findByRole("link", { name: "Workflow Studio" }));
 
-    expect(window.location.pathname).toBe("/studio");
-    const params = new URLSearchParams(window.location.search);
-    expect(params.get("scopeId")).toBe("scope-1");
-    expect(params.get("teamId")).toBe("t-alpha");
-    expect(params.get("member")).toBe("member:member-team-alpha");
-    expect(params.get("step")).toBe("build");
-    expect(params.get("tab")).toBeNull();
-    expect(params.get("returnTo")).toBe(
-      "/teams/scope-1/t-alpha?memberId=member-team-alpha&tab=members",
+    expect(window.location.pathname).toBe(
+      "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/workflow",
+    );
+    expect(new URLSearchParams(window.location.search).get("workflowId")).toBe(
+      "wf-team-alpha",
     );
   });
 
-  it("opens Studio create-member mode from the Team members tab action", async () => {
+  it("uses the roster implementation workflow id instead of the route workflow hint", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?memberId=member-team-alpha&workflowId=wf-route-stale&tab=members",
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    fireEvent.click(await screen.findByRole("link", { name: "Workflow Studio" }));
+
+    expect(window.location.pathname).toBe(
+      "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/workflow",
+    );
+    expect(new URLSearchParams(window.location.search).get("workflowId")).toBe(
+      "wf-team-alpha",
+    );
+  });
+
+  it("does not recover workflow ids from session storage when the roster has no implementation workflow id", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?tab=members",
+    );
+    window.sessionStorage.setItem(
+      [
+        "aevatar.teamMemberDraftWorkflowHint.v1",
+        "scope-1",
+        "t-alpha",
+        "member-team-alpha",
+      ].join(":"),
+      "wf-team-alpha",
+    );
+    (studioApi.listTeamMembers as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-1",
+      members: [
+        {
+          memberId: "member-team-alpha",
+          scopeId: "scope-1",
+          teamId: "t-alpha",
+          displayName: "Team Alpha Operator",
+          description: "负责处理升级工单",
+          implementationKind: "workflow",
+          lifecycleStage: "bind_ready",
+          publishedServiceId: "alpha-service",
+          lastBoundRevisionId: "rev-alpha",
+          createdAt: "2026-04-09T08:00:00Z",
+          updatedAt: "2026-04-09T09:00:00Z",
+        },
+      ],
+      nextPageToken: null,
+    });
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    fireEvent.click(await screen.findByRole("link", { name: "Workflow Studio" }));
+
+    expect(window.location.pathname).toBe(
+      "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/workflow",
+    );
+    expect(new URLSearchParams(window.location.search).get("workflowId")).toBeNull();
+  });
+
+  it("does not reuse a route workflow hint for another Team member row", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?memberId=member-other&workflowId=wf-other&tab=members",
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    fireEvent.click(await screen.findByRole("link", { name: "Workflow Studio" }));
+
+    expect(window.location.pathname).toBe(
+      "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/workflow",
+    );
+    expect(new URLSearchParams(window.location.search).get("workflowId")).toBe(
+      "wf-team-alpha",
+    );
+  });
+
+  it("routes workflow member invoke actions into the member invoke page", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     await screen.findByRole("button", { name: "编辑团队" });
     fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
-    fireEvent.click(await screen.findByRole("link", { name: "创建成员" }));
+    fireEvent.click(await screen.findByRole("link", { name: "调用" }));
 
-    expect(window.location.pathname).toBe("/studio");
-    const params = new URLSearchParams(window.location.search);
-    expect(params.get("scopeId")).toBe("scope-1");
-    expect(params.get("teamId")).toBe("t-alpha");
-    expect(params.get("tab")).toBe("studio");
-    expect(params.get("intent")).toBe("create-member");
-    expect(params.get("returnTo")).toBe("/teams/scope-1/t-alpha?tab=members");
+    expect(window.location.pathname).toBe(
+      "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/invoke",
+    );
   });
 
-  it("opens Studio create-member mode from an empty Team roster", async () => {
+  it("routes workflow member automation actions into the Team automations tab", async () => {
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    await screen.findByRole("button", { name: "编辑团队" });
+    fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
+    fireEvent.click(await screen.findByRole("link", { name: "自动化" }));
+
+    expect(window.location.pathname).toBe(
+      "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/automations",
+    );
+    expect(window.location.search).toBe("");
+    expect(await screen.findByRole("heading", { name: "自动化" })).toBeTruthy();
+    expect(screen.getByText("给成员添加周期任务")).toBeTruthy();
+    expect(await screen.findByText("还没有周期任务")).toBeTruthy();
+    expect(
+      await screen.findByRole("button", { name: "创建第一个自动化" }),
+    ).toBeTruthy();
+  });
+
+  it("renders member-owned automations from the backend schedules API", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?tab=automations",
+    );
+    (scheduledDispatchApi.listAll as jest.Mock).mockResolvedValueOnce({
+      items: [
+        mockCreateScheduledDispatchSummary(),
+        mockCreateScheduledDispatchSummary({
+          scheduleId: "sch-other",
+          displayName: "Other team task",
+          serviceKey: "scope-other:default:default:alpha-service",
+          serviceId: "alpha-service",
+        }),
+        mockCreateScheduledDispatchSummary({
+          scheduleId: "sch-other-service",
+          displayName: "Other service task",
+          serviceKey: "scope-1:default:default:svc-other",
+          serviceId: "svc-other",
+        }),
+      ],
+      nextCursor: null,
+      totalCount: 3,
+    });
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("Daily escalation digest")).toBeTruthy();
+    expect(screen.getByText("计划")).toBeTruthy();
+    expect(screen.getAllByText("运行中").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("已暂停").length).toBeGreaterThan(0);
+    expect(screen.getByText("需要关注")).toBeTruthy();
+    expect(screen.getByText("工作日 · 09:00")).toBeTruthy();
+    expect(screen.getAllByText("Team Alpha Operator").length).toBeGreaterThan(0);
+    expect(screen.getByText("通过 alpha-service 运行")).toBeTruthy();
+    expect(screen.queryByText("Other team task")).toBeNull();
+    expect(screen.queryByText("Other service task")).toBeNull();
+
+    await waitFor(() => {
+      expect(scheduledDispatchApi.listAll).toHaveBeenCalledWith({
+        includeTotalCount: true,
+        take: 200,
+      });
+      expect(scopeRuntimeApi.listServices).toHaveBeenCalledWith("scope-1", {
+        appId: "default",
+      });
+    });
+  });
+
+  it("keeps team automations visible when they are not on the first schedule page", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?tab=automations",
+    );
+    (scheduledDispatchApi.listAll as jest.Mock).mockResolvedValueOnce({
+      items: [
+        mockCreateScheduledDispatchSummary({
+          scheduleId: "sch-other-first-page",
+          displayName: "Other team first page task",
+          serviceKey: "scope-1:default:default:svc-other",
+          serviceId: "svc-other",
+        }),
+        mockCreateScheduledDispatchSummary({
+          scheduleId: "sch-alpha-second-page",
+          displayName: "Second page escalation digest",
+        }),
+      ],
+      nextCursor: null,
+      totalCount: 2,
+    });
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("Second page escalation digest")).toBeTruthy();
+    expect(screen.queryByText("Other team first page task")).toBeNull();
+    expect(scheduledDispatchApi.listAll).toHaveBeenCalledWith({
+      includeTotalCount: true,
+      take: 200,
+    });
+  });
+
+  it("retries schedule list while the schedule read model catches up", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?tab=automations",
+    );
+    (scheduledDispatchApi.listAll as jest.Mock)
+      .mockRejectedValueOnce(new Error("Projection is still materializing."))
+      .mockResolvedValueOnce({
+        items: [mockCreateScheduledDispatchSummary()],
+        nextCursor: null,
+        totalCount: 1,
+      });
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("Daily escalation digest")).toBeTruthy();
+    await waitFor(() => {
+      expect(scheduledDispatchApi.listAll).toHaveBeenCalledTimes(2);
+    });
+    expect(screen.queryByText("无法加载自动化")).toBeNull();
+  });
+
+  it("hides a deleted automation immediately and refreshes after the read model catches up", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?tab=automations",
+    );
+    (scheduledDispatchApi.listAll as jest.Mock).mockImplementation(async () => ({
+      items: [mockCreateScheduledDispatchSummary()],
+      nextCursor: null,
+      totalCount: 1,
+    }));
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("Daily escalation digest")).toBeTruthy();
+    expect(scheduledDispatchApi.listAll).toHaveBeenCalledTimes(1);
+    fireEvent.click(await screen.findByRole("button", { name: "删除" }));
+
+    await waitFor(() => {
+      expect(scheduledDispatchApi.delete).toHaveBeenCalledWith(
+        "sch-alpha",
+        "Deleted from Team Automations",
+      );
+    });
+    await waitFor(() => {
+      expect(screen.queryByText("Daily escalation digest")).toBeNull();
+    });
+    expect(scheduledDispatchApi.listAll).toHaveBeenCalledTimes(1);
+
+    await waitFor(
+      () => {
+        expect(scheduledDispatchApi.listAll).toHaveBeenCalledTimes(2);
+      },
+      { timeout: 2_000 },
+    );
+    expect(screen.queryByText("Daily escalation digest")).toBeNull();
+    expect(message.success).toHaveBeenCalledWith("自动化已删除。");
+  });
+
+  it("updates automation enabled state immediately after pause and resume", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?tab=automations",
+    );
+    (scheduledDispatchApi.listAll as jest.Mock).mockImplementation(async () => ({
+      items: [mockCreateScheduledDispatchSummary()],
+      nextCursor: null,
+      totalCount: 1,
+    }));
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("Daily escalation digest")).toBeTruthy();
+    expect(scheduledDispatchApi.listAll).toHaveBeenCalledTimes(1);
+    fireEvent.click(await screen.findByRole("button", { name: "暂停" }));
+
+    await waitFor(() => {
+      expect(scheduledDispatchApi.disable).toHaveBeenCalledWith(
+        "sch-alpha",
+        "Disabled from Team Automations",
+      );
+    });
+    expect(screen.getAllByText("已暂停").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "恢复" })).toBeTruthy();
+    expect(message.success).toHaveBeenCalledWith("自动化已暂停。");
+    expect(scheduledDispatchApi.listAll).toHaveBeenCalledTimes(1);
+
+    await waitFor(
+      () => {
+        expect(scheduledDispatchApi.listAll).toHaveBeenCalledTimes(2);
+      },
+      { timeout: 2_000 },
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "恢复" }));
+
+    await waitFor(() => {
+      expect(scheduledDispatchApi.enable).toHaveBeenCalledWith(
+        "sch-alpha",
+        "Enabled from Team Automations",
+      );
+    });
+    expect(screen.getAllByText("运行中").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "暂停" })).toBeTruthy();
+    expect(message.success).toHaveBeenCalledWith("自动化已恢复。");
+  });
+
+  it("shows manual run feedback immediately without resuming a paused automation", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?tab=automations",
+    );
+    (scheduledDispatchApi.listAll as jest.Mock).mockImplementation(async () => ({
+      items: [
+        mockCreateScheduledDispatchSummary({
+          enabled: false,
+          nextFireAt: null,
+        }),
+      ],
+      nextCursor: null,
+      totalCount: 1,
+    }));
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("Daily escalation digest")).toBeTruthy();
+    expect(screen.getAllByText("已暂停").length).toBeGreaterThan(0);
+    expect(scheduledDispatchApi.listAll).toHaveBeenCalledTimes(1);
+    fireEvent.click(await screen.findByRole("button", { name: "立即运行" }));
+
+    await waitFor(() => {
+      expect(scheduledDispatchApi.runNow).toHaveBeenCalledWith("sch-alpha");
+    });
+    expect(screen.getAllByText("已触发").length).toBeGreaterThan(0);
+    expect(screen.getByText(/已在 .* 请求运行/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "恢复" })).toBeTruthy();
+    expect(message.success).toHaveBeenCalledWith("已请求立即运行。");
+    expect(scheduledDispatchApi.listAll).toHaveBeenCalledTimes(1);
+
+    await waitFor(
+      () => {
+        expect(scheduledDispatchApi.listAll).toHaveBeenCalledTimes(2);
+      },
+      { timeout: 2_000 },
+    );
+    expect(screen.getAllByText("已触发").length).toBeGreaterThan(0);
+  });
+
+  it("creates member recurring work with the published service identity", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?memberId=member-team-alpha&tab=automations",
+    );
+    (scheduledDispatchApi.listAll as jest.Mock)
+      .mockResolvedValueOnce({
+        items: [],
+        nextCursor: null,
+        totalCount: 0,
+      })
+      .mockResolvedValue({
+        items: [mockCreateScheduledDispatchSummary()],
+        nextCursor: null,
+        totalCount: 1,
+      });
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    fireEvent.click(await screen.findByRole("button", { name: "添加周期任务" }));
+    expect(await screen.findByText("1. 目标成员")).toBeTruthy();
+    expect(screen.getByText("2. 要执行的任务")).toBeTruthy();
+    expect(screen.getByText("3. 运行节奏")).toBeTruthy();
+    const defaultTimezone =
+      Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    expect(screen.getByText(`工作日 09:00 · ${defaultTimezone}`)).toBeTruthy();
+    expect(screen.getByText("先预览节奏，确认后续触发。")).toBeTruthy();
+    fireEvent.change(await screen.findByLabelText("自动化名称"), {
+      target: { value: "Daily escalation digest" },
+    });
+    fireEvent.change(screen.getByLabelText("周期 Prompt"), {
+      target: { value: "Summarize escalations and follow-up owners." },
+    });
+    fireEvent.change(screen.getByLabelText("Cron 表达式"), {
+      target: { value: "0 9 * * 1-5" },
+    });
+    fireEvent.change(screen.getByLabelText("时区"), {
+      target: { value: "Asia/Shanghai" },
+    });
+    expect(scheduledDispatchApi.listAll).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "创建自动化" }));
+
+    await waitFor(() => {
+      expect(scheduledDispatchApi.create).toHaveBeenCalled();
+    });
+    const payload = (scheduledDispatchApi.create as jest.Mock).mock.calls[0][0];
+    expect(payload).toEqual(
+      expect.objectContaining({
+        displayName: "Daily escalation digest",
+        cronExpression: "0 9 * * 1-5",
+        timezone: "Asia/Shanghai",
+        enabled: true,
+        headers: {
+          source: "team-automations",
+        },
+        workflowChatTarget: {
+          identity: {
+            tenantId: "scope-1",
+            appId: "default",
+            namespace: "default",
+            serviceId: "alpha-service",
+          },
+          prompt: "Summarize escalations and follow-up owners.",
+          revisionId: "rev-2",
+        },
+      }),
+    );
+    expect(JSON.stringify(payload)).not.toContain("member-team-alpha");
+    expect(JSON.stringify(payload)).not.toContain("wf-team-alpha");
+    expect(message.success).toHaveBeenCalledWith("自动化已创建。");
+    expect(scheduledDispatchApi.listAll).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(screen.getAllByText("Daily escalation digest").length).toBeGreaterThan(
+        0,
+      );
+    });
+    expect(screen.getByText("正在等待计划同步")).toBeTruthy();
+
+    await waitFor(
+      () => {
+        expect(scheduledDispatchApi.listAll).toHaveBeenCalledTimes(2);
+      },
+      { timeout: 2_000 },
+    );
+    await waitFor(() => {
+      expect(screen.getAllByText("Daily escalation digest").length).toBeGreaterThan(
+        0,
+      );
+    });
+  });
+
+  it("previews next runs from the automation form", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/automations",
+    );
+    (scheduledDispatchApi.preview as jest.Mock).mockResolvedValueOnce({
+      cronExpression: "0 9 * * 1-5",
+      timezone: "Asia/Shanghai",
+      nextFireTimes: ["2026-06-18T01:00:00Z"],
+    });
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    fireEvent.click(await screen.findByRole("button", { name: "添加周期任务" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "新建成员自动化",
+    });
+    fireEvent.change(within(dialog).getByLabelText("Cron 表达式"), {
+      target: { value: "0 9 * * 1-5" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("时区"), {
+      target: { value: "Asia/Shanghai" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "预览后续运行" }));
+
+    await waitFor(() => {
+      expect(scheduledDispatchApi.preview).toHaveBeenCalled();
+    });
+    expect((scheduledDispatchApi.preview as jest.Mock).mock.calls[0][0]).toEqual({
+      cronExpression: "0 9 * * 1-5",
+      timezone: "Asia/Shanghai",
+      count: 5,
+    });
+    expect(await within(dialog).findByText("06-18 01:00")).toBeTruthy();
+  });
+
+  it("creates member recurring work with the default service revision when the active serving revision is missing", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?memberId=member-team-alpha&tab=automations",
+    );
+    (scopeRuntimeApi.listServices as jest.Mock).mockResolvedValueOnce(
+      mockCreateServiceCatalog().map((service) =>
+        service.serviceId === "alpha-service"
+          ? {
+              ...service,
+              activeServingRevisionId: "",
+            }
+          : service,
+      ),
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    fireEvent.click(await screen.findByRole("button", { name: "添加周期任务" }));
+    expect(
+      await screen.findByText("目标服务为 alpha-service。"),
+    ).toBeTruthy();
+    fireEvent.change(await screen.findByLabelText("自动化名称"), {
+      target: { value: "Daily escalation digest" },
+    });
+    fireEvent.change(screen.getByLabelText("周期 Prompt"), {
+      target: { value: "Summarize escalations and follow-up owners." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "创建自动化" }));
+
+    await waitFor(() => {
+      expect(scheduledDispatchApi.create).toHaveBeenCalled();
+    });
+    const payload = (scheduledDispatchApi.create as jest.Mock).mock.calls[0][0];
+    expect(payload.workflowChatTarget).toEqual(
+      expect.objectContaining({
+        revisionId: "rev-2",
+      }),
+    );
+    expect(message.success).toHaveBeenCalledWith("自动化已创建。");
+  });
+
+  it("creates member recurring work without a revision when no serving revision is available", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?memberId=member-team-alpha&tab=automations",
+    );
+    (scopeRuntimeApi.listServices as jest.Mock).mockResolvedValueOnce(
+      mockCreateServiceCatalog().map((service) =>
+        service.serviceId === "alpha-service"
+          ? {
+              ...service,
+              activeServingRevisionId: "",
+              defaultServingRevisionId: "",
+            }
+          : service,
+      ),
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    fireEvent.click(await screen.findByRole("button", { name: "添加周期任务" }));
+    expect(
+      await screen.findByText("目标服务为 alpha-service。"),
+    ).toBeTruthy();
+    fireEvent.change(await screen.findByLabelText("周期 Prompt"), {
+      target: { value: "Summarize escalations and follow-up owners." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "创建自动化" }));
+
+    await waitFor(() => {
+      expect(scheduledDispatchApi.create).toHaveBeenCalled();
+    });
+    const payload = (scheduledDispatchApi.create as jest.Mock).mock.calls[0][0];
+    expect(payload.workflowChatTarget).toEqual({
+      identity: {
+        tenantId: "scope-1",
+        appId: "default",
+        namespace: "default",
+        serviceId: "alpha-service",
+      },
+      prompt: "Summarize escalations and follow-up owners.",
+    });
+    expect(message.success).toHaveBeenCalledWith("自动化已创建。");
+  });
+
+  it("keeps schedule create failures inside the automations flow", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?memberId=member-team-alpha&tab=automations",
+    );
+    (scheduledDispatchApi.create as jest.Mock).mockRejectedValueOnce(
+      new Error(
+        "One or more validation errors occurred.: $.serviceInvocation.payload.value: The JSON value could not be converted to Google.Protobuf.ByteString.",
+      ),
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    fireEvent.click(await screen.findByRole("button", { name: "添加周期任务" }));
+    fireEvent.change(await screen.findByLabelText("周期 Prompt"), {
+      target: { value: "Summarize escalations and follow-up owners." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "创建自动化" }));
+
+    await waitFor(() => {
+      expect(message.error).toHaveBeenCalledWith(
+        "自动化未创建：One or more validation errors occurred.: $.serviceInvocation.payload.value: The JSON value could not be converted to Google.Protobuf.ByteString.",
+      );
+    });
+    expect(message.success).not.toHaveBeenCalledWith("自动化已创建。");
+  });
+
+  it("edits member recurring work with the published service identity", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?tab=automations",
+    );
+    (scheduledDispatchApi.listAll as jest.Mock).mockResolvedValueOnce({
+      items: [mockCreateScheduledDispatchSummary()],
+      nextCursor: null,
+      totalCount: 1,
+    });
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("Daily escalation digest")).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
+
+    const editDialog = await screen.findByRole("dialog", { name: "编辑自动化" });
+    expect(within(editDialog).getByLabelText("自动化名称")).toHaveValue(
+      "Daily escalation digest",
+    );
+    expect(within(editDialog).getByLabelText("Cron 表达式")).toHaveValue(
+      "0 9 * * 1-5",
+    );
+    expect(within(editDialog).getByLabelText("时区")).toHaveValue("Asia/Shanghai");
+    expect(within(editDialog).getByText("目标服务为 alpha-service。")).toBeTruthy();
+    expect(
+      within(editDialog).getByText("请重新填写周期 Prompt 后再保存修改。"),
+    ).toBeTruthy();
+
+    fireEvent.change(within(editDialog).getByLabelText("自动化名称"), {
+      target: { value: "Daily escalation digest - edited" },
+    });
+    fireEvent.change(within(editDialog).getByLabelText("周期 Prompt"), {
+      target: { value: "Summarize edited escalations and owners." },
+    });
+    fireEvent.change(within(editDialog).getByLabelText("Cron 表达式"), {
+      target: { value: "0 10 * * 1-5" },
+    });
+    fireEvent.click(within(editDialog).getByRole("button", { name: "保存修改" }));
+
+    await waitFor(() => {
+      expect(scheduledDispatchApi.update).toHaveBeenCalled();
+    });
+    expect(scheduledDispatchApi.update).toHaveBeenCalledWith(
+      "sch-alpha",
+      expect.objectContaining({
+        displayName: "Daily escalation digest - edited",
+        cronExpression: "0 10 * * 1-5",
+        timezone: "Asia/Shanghai",
+        enabled: true,
+        headers: {
+          source: "team-automations",
+        },
+        workflowChatTarget: {
+          identity: {
+            tenantId: "scope-1",
+            appId: "default",
+            namespace: "default",
+            serviceId: "alpha-service",
+          },
+          prompt: "Summarize edited escalations and owners.",
+          revisionId: "rev-2",
+        },
+      }),
+    );
+    const [, payload] = (scheduledDispatchApi.update as jest.Mock).mock.calls[0];
+    expect(JSON.stringify(payload)).not.toContain("member-team-alpha");
+    expect(JSON.stringify(payload)).not.toContain("wf-team-alpha");
+    expect(message.success).toHaveBeenCalledWith("自动化已更新。");
+  });
+
+  it("keeps invoke disabled for workflow members that are not bound yet", async () => {
+    (studioApi.listTeamMembers as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-1",
+      members: [
+        {
+          memberId: "member-draft-workflow",
+          scopeId: "scope-1",
+          teamId: "t-alpha",
+          displayName: "Draft Workflow",
+          description: "Created but not bound yet",
+          implementationKind: "workflow",
+          lifecycleStage: "created",
+          publishedServiceId: "",
+          lastBoundRevisionId: "",
+          createdAt: "2026-04-09T08:00:00Z",
+          updatedAt: "2026-04-09T09:00:00Z",
+        },
+      ],
+      nextPageToken: null,
+    });
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    await screen.findByRole("button", { name: "编辑团队" });
+    fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
+
+    expect(await screen.findByText("Draft Workflow")).toBeTruthy();
+    expect(screen.getByText("尚未绑定")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Workflow Studio" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "调用" })).toBeDisabled();
+    expect(
+      screen
+        .getAllByRole("button", { name: "自动化" })
+        .some((button) => button.hasAttribute("disabled")),
+    ).toBe(true);
+    expect(screen.queryByRole("link", { name: "调用" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "自动化" })).toBeNull();
+  });
+
+  it("allows non-workflow bind-ready members to become Team entry members", async () => {
+    (studioApi.listTeamMembers as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-1",
+      members: [
+        {
+          memberId: "member-agent-alpha",
+          scopeId: "scope-1",
+          teamId: "t-alpha",
+          displayName: "Agent Alpha",
+          description: "Agent member",
+          implementationKind: "gagent",
+          lifecycleStage: "bind_ready",
+          publishedServiceId: "agent-service",
+          lastBoundRevisionId: "rev-agent",
+          createdAt: "2026-04-09T08:00:00Z",
+          updatedAt: "2026-04-09T09:00:00Z",
+        },
+      ],
+      nextPageToken: null,
+    });
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    await screen.findByRole("button", { name: "编辑团队" });
+    fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
+
+    expect(await screen.findByText("Agent Alpha")).toBeTruthy();
+    expect(screen.getByText("已绑定服务")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "调用" })).toBeDisabled();
+    expect(screen.queryByRole("link", { name: "调用" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Workflow Studio" })).toBeDisabled();
+    fireEvent.click(await screen.findByRole("button", { name: "设为入口成员" }));
+
+    await waitFor(() => {
+      expect(studioApi.setTeamEntryMember).toHaveBeenCalledWith(
+        "scope-1",
+        "t-alpha",
+        "member-agent-alpha",
+      );
+    });
+  });
+
+  it("starts Team Test through a non-workflow bind-ready entry member", async () => {
+    (studioApi.getTeam as jest.Mock).mockResolvedValue({
+      ...mockCreateTeamSummary(),
+      entryMemberId: "member-agent-alpha",
+    });
+    (studioApi.listTeamMembers as jest.Mock).mockResolvedValue({
+      scopeId: "scope-1",
+      members: [
+        {
+          memberId: "member-agent-alpha",
+          scopeId: "scope-1",
+          teamId: "t-alpha",
+          displayName: "Agent Alpha",
+          description: "Agent member",
+          implementationKind: "gagent",
+          lifecycleStage: "bind_ready",
+          publishedServiceId: "agent-service",
+          lastBoundRevisionId: "rev-agent",
+          createdAt: "2026-04-09T08:00:00Z",
+          updatedAt: "2026-04-09T09:00:00Z",
+        },
+      ],
+      nextPageToken: null,
+    });
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    const dialog = await openTeamTestDialog();
+    fireEvent.change(within(dialog).getByLabelText("测试 Prompt"), {
+      target: { value: "Can an agent entry handle this?" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "开始测试" }));
+
+    await waitFor(() => {
+      expect(runtimeRunsApi.streamTeamChat).toHaveBeenCalledWith(
+        "scope-1",
+        "t-alpha",
+        expect.objectContaining({
+          prompt: "Can an agent entry handle this?",
+        }),
+        expect.any(AbortSignal),
+      );
+    });
+    expect(within(dialog).queryByRole("button", { name: "仅支持 Workflow" })).toBeNull();
+    expect(await screen.findByText("Team response")).toBeTruthy();
+  });
+
+  it("routes create-member actions into the workflow member studio", async () => {
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    await screen.findByRole("button", { name: "编辑团队" });
+    fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
+    fireEvent.click(await screen.findByRole("link", { name: "创建工作流成员" }));
+
+    expect(window.location.pathname).toBe(
+      "/scopes/scope-1/teams/t-alpha/members/new/workflow",
+    );
+  });
+
+  it("routes empty-roster create-member actions into the workflow member studio", async () => {
     (studioApi.listTeamMembers as jest.Mock).mockResolvedValueOnce({
       scopeId: "scope-1",
       members: [],
@@ -1607,15 +2777,11 @@ describe("TeamDetailPage", () => {
 
     await screen.findByRole("button", { name: "编辑团队" });
     fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
-    fireEvent.click(await screen.findByRole("link", { name: "创建第一个成员" }));
+    fireEvent.click(await screen.findByRole("link", { name: "创建第一个工作流成员" }));
 
-    expect(window.location.pathname).toBe("/studio");
-    const params = new URLSearchParams(window.location.search);
-    expect(params.get("scopeId")).toBe("scope-1");
-    expect(params.get("teamId")).toBe("t-alpha");
-    expect(params.get("tab")).toBe("studio");
-    expect(params.get("intent")).toBe("create-member");
-    expect(params.get("returnTo")).toBe("/teams/scope-1/t-alpha?tab=members");
+    expect(window.location.pathname).toBe(
+      "/scopes/scope-1/teams/t-alpha/members/new/workflow",
+    );
   });
 
   it("does not assign an unrelated scope service to a Team with no members", async () => {
@@ -1655,7 +2821,7 @@ describe("TeamDetailPage", () => {
     ).toBeTruthy();
     expect(await screen.findByText("暂无团队构成")).toBeTruthy();
     expect(screen.getByText("服务待配置")).toBeTruthy();
-    expect(screen.getByText("当前还没有匹配到主服务入口")).toBeTruthy();
+    expect(screen.getAllByText("当前还没有匹配到主服务入口").length).toBeGreaterThan(0);
     expect(screen.queryByText("gagent-1")).toBeNull();
     expect(scopeRuntimeApi.getServiceRevisions).not.toHaveBeenCalled();
     expect(scopeRuntimeApi.listServiceRuns).not.toHaveBeenCalled();
@@ -1665,16 +2831,16 @@ describe("TeamDetailPage", () => {
     window.history.replaceState(
       {},
       "",
-      "/teams/scope-1/t-alpha?tab=members",
+      "/scopes/scope-1/teams/t-alpha?tab=members",
     );
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     expect(await screen.findByText("Team Alpha Operator")).toBeTruthy();
-    expect(await screen.findByText("Team Alpha Operator")).toBeTruthy();
     expect(screen.getByText("负责处理升级工单")).toBeTruthy();
-    expect(screen.getByText("member-team-alpha")).toBeTruthy();
-    expect(screen.getByText("alph...vice")).toBeTruthy();
+    expect(screen.queryByText("member-team-alpha")).toBeNull();
+    expect(screen.queryByText("alph...vice")).toBeNull();
+    expect(screen.getByText("已绑定服务")).toBeTruthy();
 
     await waitFor(() => {
       expect(studioApi.listTeamMembers).toHaveBeenCalledWith("scope-1", "t-alpha");
@@ -1685,7 +2851,7 @@ describe("TeamDetailPage", () => {
     window.history.replaceState(
       {},
       "",
-      "/teams/scope-1/t-alpha",
+      "/scopes/scope-1/teams/t-alpha",
     );
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
@@ -1715,7 +2881,7 @@ describe("TeamDetailPage", () => {
     window.history.replaceState(
       {},
       "",
-      "/teams/scope-1/t-alpha",
+      "/scopes/scope-1/teams/t-alpha",
     );
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
@@ -1754,7 +2920,7 @@ describe("TeamDetailPage", () => {
     window.history.replaceState(
       {},
       "",
-      "/teams/scope-1/t-alpha",
+      "/scopes/scope-1/teams/t-alpha",
     );
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
@@ -1782,7 +2948,7 @@ describe("TeamDetailPage", () => {
     window.history.replaceState(
       {},
       "",
-      "/teams/scope-1/t-alpha",
+      "/scopes/scope-1/teams/t-alpha",
     );
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
@@ -1820,7 +2986,7 @@ describe("TeamDetailPage", () => {
     window.history.replaceState(
       {},
       "",
-      "/teams/scope-1/t-alpha",
+      "/scopes/scope-1/teams/t-alpha",
     );
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
@@ -1838,7 +3004,7 @@ describe("TeamDetailPage", () => {
     window.history.replaceState(
       {},
       "",
-      "/teams/scope-1/t-alpha",
+      "/scopes/scope-1/teams/t-alpha",
     );
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
@@ -1860,7 +3026,7 @@ describe("TeamDetailPage", () => {
 
   it("treats a just-created Team 404 as projection syncing and retries", async () => {
     jest.useFakeTimers();
-    window.history.replaceState({}, "", "/teams/scope-1/t-alpha?tab=members");
+    window.history.replaceState({}, "", "/scopes/scope-1/teams/t-alpha?tab=members");
     (studioApi.getTeam as jest.Mock)
       .mockRejectedValueOnce(createStudioApiStatusError("Not Found", 404))
       .mockResolvedValueOnce(mockCreateTeamSummary());
@@ -1893,7 +3059,7 @@ describe("TeamDetailPage", () => {
     window.history.replaceState(
       {},
       "",
-      "/teams/scope-1/t-alpha?workflowId=workflow-1&serviceId=stale-service&runId=stale-run",
+      "/scopes/scope-1/teams/t-alpha?workflowId=workflow-1&serviceId=stale-service&runId=stale-run",
     );
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
@@ -1911,7 +3077,7 @@ describe("TeamDetailPage", () => {
     window.history.replaceState(
       {},
       "",
-      "/teams/scope-1/t-alpha?workflowId=workflow-missing",
+      "/scopes/scope-1/teams/t-alpha?workflowId=workflow-missing",
     );
 
     renderWithQueryClient(React.createElement(TeamDetailPage));

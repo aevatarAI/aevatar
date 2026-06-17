@@ -476,10 +476,8 @@ describe("RunsPage", () => {
       await screen.findByRole("button", { name: "Back to advanced team editing" })
     );
 
-    expect(window.location.pathname).toBe("/teams");
-    const params = new URLSearchParams(window.location.search);
-    expect(params.get("scopeId")).toBe("scope-1");
-    expect(params.get("tab")).toBeNull();
+    expect(window.location.pathname).toBe("/scopes/scope-1/teams");
+    expect(window.location.search).toBe("");
   });
 
   it("returns to the originating studio route when a return target is provided", async () => {

@@ -164,6 +164,42 @@ public class VoiceRealtimeSessionTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_attach_should_take_over_existing_session_then_acquire_new_lease()
+    {
+        // A prior session left the transport attached (e.g. close raced the lease release, or the
+        // lease went stale). A fresh attach must EVICT the old session and acquire a new lease,
+        // not reject with TransportAlreadyAttached (the Start-immediately-closes / 409 bug).
+        var attached = CreateCapability(
+            "agent-1",
+            "voice_presence",
+            initialized: true,
+            activeSessionId: "old-session",
+            activeTransportLeaseId: "old-transport",
+            transportAttached: true,
+            remoteAudioSupport: VoiceRemoteAudioSupport.Supported);
+        var cleared = CreateCapability(
+            "agent-1",
+            "voice_presence",
+            initialized: true,
+            transportAttached: false,
+            remoteAudioSupport: VoiceRemoteAudioSupport.Supported);
+        var leasePort = new RecordingLeasePort();
+        var mediaPort = new RecordingMediaStreamPort(supportsRemoteAudio: true);
+        var session = CreateSession(
+            new SequencedCapabilityQueryPort(attached, cleared),
+            leasePort,
+            mediaPort);
+
+        var result = await session.ExecuteAsync(
+            new VoiceRealtimeSessionRequest("agent-1"),
+            static (_, _) => ValueTask.CompletedTask);
+
+        result.Succeeded.ShouldBeTrue();
+        mediaPort.DetachedHandles.ShouldHaveSingleItem().SessionId.ShouldBe("old-session");
+        leasePort.AcquireRequests.ShouldHaveSingleItem();
+    }
+
+    [Fact]
     public async Task ExecuteAsync_should_accept_detach_when_active_transport_exists_without_acquiring_new_lease()
     {
         var capability = CreateCapability(
@@ -1096,6 +1132,26 @@ public class VoiceRealtimeSessionTests
         }
     }
 
+    // Returns each snapshot in order on successive GetAsync calls, clamping to the last once exhausted.
+    // Used to simulate the takeover re-read seeing the projection transition attached -> cleared.
+    private sealed class SequencedCapabilityQueryPort(params VoicePresenceCapabilitySnapshot?[] snapshots)
+        : IVoicePresenceCapabilityQueryPort
+    {
+        public int Calls { get; private set; }
+
+        public Task<VoicePresenceCapabilitySnapshot?> GetAsync(
+            string actorId,
+            string? moduleName,
+            CancellationToken ct = default)
+        {
+            _ = actorId;
+            _ = moduleName;
+            var index = Math.Min(Calls, snapshots.Length - 1);
+            Calls++;
+            return Task.FromResult(snapshots[index]);
+        }
+    }
+
     private sealed class RecordingLeaseObservationPort : IVoicePresenceLeaseObservationPort
     {
         public List<VoicePresenceSessionLeaseRequest> SessionLeaseRequests { get; } = [];
@@ -1225,6 +1281,8 @@ public class VoiceRealtimeSessionTests
     {
         public bool SupportsRemoteAudio { get; } = supportsRemoteAudio;
 
+        public List<VoicePresenceSessionLeaseHandle> DetachedHandles { get; } = [];
+
         public Task<bool> TrySendToolResultAsync(
             string transportLeaseId,
             string callId,
@@ -1251,8 +1309,11 @@ public class VoiceRealtimeSessionTests
         public Task DetachAsync(
             VoicePresenceSessionLeaseHandle handle,
             IVoiceTransport? expectedTransport,
-            CancellationToken ct = default) =>
-            Task.CompletedTask;
+            CancellationToken ct = default)
+        {
+            DetachedHandles.Add(handle);
+            return Task.CompletedTask;
+        }
 
         public Task CompleteTransportLifetimeAsync(
             VoicePresenceSessionLeaseHandle handle,

@@ -10,7 +10,6 @@ import {
   studioInvokeColors,
   trimOptional,
   trimPreview,
-  truncateMiddle,
 } from './studioInvokeUi';
 import { t } from "@/shared/i18n/messages";
 
@@ -21,7 +20,6 @@ type StudioMemberInvokeHistoryPanelProps = {
   readonly getEntryOutputText?: (entryId: string) => string;
   readonly onCopyInput: (entryId: string) => void;
   readonly onCopyOutput: (entryId: string) => void;
-  readonly onCopyRunId: (entryId: string) => void;
   readonly onRetryAsNewRun: (entryId: string) => void;
   readonly onSelectEntry: (entryId: string) => void;
 };
@@ -163,7 +161,6 @@ const StudioMemberInvokeHistoryPanel: React.FC<
   getEntryOutputText,
   onCopyInput,
   onCopyOutput,
-  onCopyRunId,
   onRetryAsNewRun,
   onSelectEntry,
   selectedHistoryId,
@@ -188,8 +185,6 @@ const StudioMemberInvokeHistoryPanel: React.FC<
       ) : (
         entries.map((entry) => {
           const isSelected = selectedHistoryId === entry.id;
-          const runId =
-            trimOptional(entry.runId) || trimOptional(entry.snapshot.result.runId);
           const hasInput = Boolean(trimOptional(entry.prompt));
           const hasOutput = Boolean(
             trimOptional(getEntryOutputText?.(entry.id)),
@@ -242,12 +237,6 @@ const StudioMemberInvokeHistoryPanel: React.FC<
                   <span>{entry.eventCount} {t("pages.studio.studiomemberinvokehistorypanel.events.2", "events")}</span>
                   <span>·</span>
                   <span>{entry.endpointLabel || 'chat'}</span>
-                  {runId ? (
-                    <>
-                      <span>·</span>
-                      <span>{t("pages.studio.studiomemberinvokehistorypanel.run.2", "Run")}{truncateMiddle(runId, 6, 4)}</span>
-                    </>
-                  ) : null}
                 </div>
               </button>
               {isSelected ? (
@@ -280,16 +269,6 @@ const StudioMemberInvokeHistoryPanel: React.FC<
                       }}
                     >
                       {t("pages.studio.studiomemberinvokehistorypanel.copy.output.2", "Copy output")}</Button>
-                    <Button
-                      disabled={!runId}
-                      icon={<CopyOutlined />}
-                      size="small"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onCopyRunId(entry.id);
-                      }}
-                    >
-                      {t("pages.studio.studiomemberinvokehistorypanel.copy.run.id.2", "Copy run id")}</Button>
                     <Button
                       icon={<ReloadOutlined />}
                       size="small"

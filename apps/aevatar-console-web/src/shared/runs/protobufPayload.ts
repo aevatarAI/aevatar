@@ -2,6 +2,9 @@ const STRING_VALUE_TYPE_URL =
   "type.googleapis.com/google.protobuf.StringValue";
 const APP_SCRIPT_COMMAND_TYPE_URL =
   "type.googleapis.com/aevatar.tools.cli.hosting.AppScriptCommand";
+const CHAT_REQUEST_EVENT_TYPE_URL =
+  "type.googleapis.com/aevatar.ai.ChatRequestEvent";
+const CHAT_ENDPOINT_ID = "chat";
 const TYPE_URL_PREFIX = "type.googleapis.com/";
 
 function encodeVarint(value: number): number[] {
@@ -63,6 +66,26 @@ export function getAppScriptCommandTypeUrl(): string {
 
 export function getAppScriptCommandEndpointId(): string {
   return APP_SCRIPT_COMMAND_TYPE_URL.replace(TYPE_URL_PREFIX, "");
+}
+
+export function getChatRequestEventTypeUrl(): string {
+  return CHAT_REQUEST_EVENT_TYPE_URL;
+}
+
+export function getChatEndpointId(): string {
+  return CHAT_ENDPOINT_ID;
+}
+
+export function encodeChatRequestEventBase64(value: {
+  readonly prompt: string;
+  readonly sessionId?: string;
+  readonly scopeId?: string;
+}): string {
+  const bytes: number[] = [];
+  appendStringField(bytes, 1, value.prompt);
+  appendStringField(bytes, 2, value.sessionId?.trim() ?? "");
+  appendStringField(bytes, 5, value.scopeId?.trim() ?? "");
+  return bytesToBase64(Uint8Array.from(bytes));
 }
 
 export function isAutoEncodableTextPayloadTypeUrl(typeUrl: string): boolean {

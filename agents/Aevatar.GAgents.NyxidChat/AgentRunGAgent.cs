@@ -700,6 +700,41 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     // refused to fire, and every run terminated as the generic apology). Any completed
     // empty step gets exactly one no-tools retry (FinalNoToolsStep guarantees the
     // retry itself terminates) before failing as empty_reply.
+    private const int EmptyRetryRecentMessagesFloor = 6;
+
+    private static bool IsSystemRole(string role) =>
+        string.Equals(role, "system", StringComparison.OrdinalIgnoreCase);
+
+    // Empty-reply one-shot recovery retry: a first attempt that produced nothing was often caused by
+    // a conversation history too large for the model. The retry runs on a minimal context so it can
+    // still answer. Keep every system message (anchored instructions) plus the most-recent
+    // keepRecent non-system messages, preserving order, dropping the older middle. Returns the number
+    // of messages dropped (for logging).
+    private static int TrimMessagesToRecentFloor(
+        Google.Protobuf.Collections.RepeatedField<AgentRunChatMessage> messages,
+        int keepRecent)
+    {
+        var nonSystemCount = messages.Count(m => !IsSystemRole(m.Role));
+        if (nonSystemCount <= keepRecent)
+            return 0;
+
+        var dropAllowance = nonSystemCount - keepRecent;
+        var dropped = dropAllowance;
+        var kept = new List<AgentRunChatMessage>(messages.Count);
+        foreach (var message in messages)
+        {
+            if (!IsSystemRole(message.Role) && dropAllowance > 0)
+            {
+                dropAllowance--;
+                continue;
+            }
+            kept.Add(message);
+        }
+        messages.Clear();
+        messages.AddRange(kept);
+        return dropped;
+    }
+
     private static bool ShouldRecoverEmptyLlmStep(AgentRunReplyStepState stepState)
     {
         if (stepState.FinalNoToolsStep)
@@ -722,7 +757,8 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     private async Task<AgentRunReplyStepState> AdvanceToFinalNoToolsStepAsync(
         AgentRunReplyStepState stepState,
         AgentRunChatMessage? llmVisibleNudge = null,
-        bool useOwnerFallbackRouting = false)
+        bool useOwnerFallbackRouting = false,
+        bool trimHistoryToRecent = false)
     {
         var next = stepState.Clone();
         next.FinalNoToolsStep = true;
@@ -732,6 +768,14 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             next.LlmControl = ResolveOwnerFallbackControl(stepState).ToPayload();
             next.ToolContext = ResolveOwnerFallbackToolContext(stepState).ToPayload();
             StripServerDefaultFallbackMetadata(next.ExternalMetadata);
+        }
+        if (trimHistoryToRecent)
+        {
+            var dropped = TrimMessagesToRecentFloor(next.Messages, EmptyRetryRecentMessagesFloor);
+            if (dropped > 0)
+                _logger.LogWarning(
+                    "Empty reply recovery: trimmed {Dropped} oldest history messages to the recent floor before retry: runId={RunId} correlation={CorrelationId}",
+                    dropped, next.RunId, next.CorrelationId);
         }
         // The nudge is LLM-visible plumbing for the retry step only: it is deliberately
         // NOT mirrored into AppendedHistory, so it never lands in the durable
@@ -832,7 +876,8 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 stepState = await AdvanceToFinalNoToolsStepAsync(
                     stepState,
                     BuildEmptyStepRecoveryNudge(),
-                    useOwnerFallbackRouting: true);
+                    useOwnerFallbackRouting: true,
+                    trimHistoryToRecent: true);
                 await DispatchLlmStepExecutorAsync(request, stepState);
                 return;
             }

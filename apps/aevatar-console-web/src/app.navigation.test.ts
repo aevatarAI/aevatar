@@ -13,7 +13,7 @@ describe("app navigation groups", () => {
     jest.resetModules();
   });
 
-  it("uses the Team-first group model by default", () => {
+  it("uses the scoped Team group model by default", () => {
     const groups = loadNavigationGroups();
 
     expect(groups.map((group) => group.label)).toEqual([
