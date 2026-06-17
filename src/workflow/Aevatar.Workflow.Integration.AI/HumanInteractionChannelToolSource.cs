@@ -2,10 +2,13 @@ using System.Text.Json;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.Foundation.Abstractions.Interactions;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Integration.AI;
 
-public sealed class HumanInteractionChannelToolSource(IChannelInteractionNotificationPort notificationPort) : IAgentToolSource
+public sealed class HumanInteractionChannelToolSource(
+    IChannelInteractionNotificationPort notificationPort,
+    ILogger<HumanInteractionChannelToolSource> logger) : IAgentToolSource
 {
     public const string DeliveryCapability = "human_interaction.delivery";
     public const string ResolutionCapability = "human_interaction.resolution_update";
@@ -13,11 +16,13 @@ public sealed class HumanInteractionChannelToolSource(IChannelInteractionNotific
     public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
         Task.FromResult<IReadOnlyList<IAgentTool>>(
         [
-            new DeliveryTool(notificationPort),
-            new ResolutionTool(notificationPort),
+            new DeliveryTool(notificationPort, logger),
+            new ResolutionTool(notificationPort, logger),
         ]);
 
-    private sealed class DeliveryTool(IChannelInteractionNotificationPort notificationPort) : IAgentTool, IAgentToolCapabilityDescriptor
+    private sealed class DeliveryTool(
+        IChannelInteractionNotificationPort notificationPort,
+        ILogger logger) : IAgentTool, IAgentToolCapabilityDescriptor
     {
         public string Name => "human_interaction_channel_delivery";
 
@@ -35,22 +40,40 @@ public sealed class HumanInteractionChannelToolSource(IChannelInteractionNotific
             var interaction = envelope.Interaction ??
                               throw new InvalidOperationException("Human interaction payload is required.");
 
-            await notificationPort.DeliverAsync(
-                new ChannelInteractionNotificationRequest
-                {
-                    ActorId = interaction.ActorId,
-                    RunId = interaction.RunId,
-                    StepId = interaction.StepId,
-                    DeliveryTargetId = envelope.DeliveryTargetId ?? string.Empty,
-                    InteractionSpec = interaction.InteractionSpec?.Clone() ?? BuildInteractionSpec(interaction),
-                },
-                ct);
+            var request = new ChannelInteractionNotificationRequest
+            {
+                ActorId = interaction.ActorId,
+                RunId = interaction.RunId,
+                StepId = interaction.StepId,
+                DeliveryTargetId = envelope.DeliveryTargetId ?? string.Empty,
+                InteractionSpec = interaction.InteractionSpec?.Clone() ?? BuildInteractionSpec(interaction),
+            };
+
+            logger.LogInformation(
+                "Delivering human interaction through channel notification port: actor={ActorId}, run={RunId}, step={StepId}, deliveryTargetId={DeliveryTargetId}, title={Title}, actions={ActionCount}",
+                request.ActorId,
+                request.RunId,
+                request.StepId,
+                request.DeliveryTargetId,
+                request.InteractionSpec.Title,
+                request.InteractionSpec.Actions.Count);
+
+            await notificationPort.DeliverAsync(request, ct);
+
+            logger.LogInformation(
+                "Delivered human interaction through channel notification port: actor={ActorId}, run={RunId}, step={StepId}, deliveryTargetId={DeliveryTargetId}",
+                request.ActorId,
+                request.RunId,
+                request.StepId,
+                request.DeliveryTargetId);
 
             return SuccessJson;
         }
     }
 
-    private sealed class ResolutionTool(IChannelInteractionNotificationPort notificationPort) : IAgentTool, IAgentToolCapabilityDescriptor
+    private sealed class ResolutionTool(
+        IChannelInteractionNotificationPort notificationPort,
+        ILogger logger) : IAgentTool, IAgentToolCapabilityDescriptor
     {
         public string Name => "human_interaction_channel_resolution_update";
 
@@ -68,16 +91,32 @@ public sealed class HumanInteractionChannelToolSource(IChannelInteractionNotific
             var resolution = envelope.Resolution ??
                              throw new InvalidOperationException("Human approval resolution is required.");
 
-            await notificationPort.DeliverAsync(
-                new ChannelInteractionNotificationRequest
-                {
-                    ActorId = resolution.ActorId,
-                    RunId = resolution.RunId,
-                    StepId = resolution.StepId,
-                    DeliveryTargetId = envelope.DeliveryTargetId ?? string.Empty,
-                    InteractionSpec = BuildResolutionSpec(resolution),
-                },
-                ct);
+            var request = new ChannelInteractionNotificationRequest
+            {
+                ActorId = resolution.ActorId,
+                RunId = resolution.RunId,
+                StepId = resolution.StepId,
+                DeliveryTargetId = envelope.DeliveryTargetId ?? string.Empty,
+                InteractionSpec = BuildResolutionSpec(resolution),
+            };
+
+            logger.LogInformation(
+                "Delivering human approval resolution through channel notification port: actor={ActorId}, run={RunId}, step={StepId}, deliveryTargetId={DeliveryTargetId}, approved={Approved}, timedOut={TimedOut}",
+                request.ActorId,
+                request.RunId,
+                request.StepId,
+                request.DeliveryTargetId,
+                resolution.Approved,
+                resolution.TimedOut);
+
+            await notificationPort.DeliverAsync(request, ct);
+
+            logger.LogInformation(
+                "Delivered human approval resolution through channel notification port: actor={ActorId}, run={RunId}, step={StepId}, deliveryTargetId={DeliveryTargetId}",
+                request.ActorId,
+                request.RunId,
+                request.StepId,
+                request.DeliveryTargetId);
 
             return SuccessJson;
         }
