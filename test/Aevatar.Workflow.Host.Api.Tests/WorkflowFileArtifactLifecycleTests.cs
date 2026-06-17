@@ -208,6 +208,46 @@ public sealed class WorkflowFileArtifactLifecycleTests
         cleanupPort.CleanupRequests.Should().ContainSingle();
     }
 
+    [Fact]
+    public async Task WorkflowFileArtifactCleanupHostedService_ShouldNotTriggerCleanupWhenDisabled()
+    {
+        var cleanupPort = new RecordingWorkflowFileArtifactPort();
+        var service = new WorkflowFileArtifactCleanupHostedService(
+            cleanupPort,
+            Options.Create(new WorkflowFileArtifactOptions
+            {
+                CleanupEnabled = false,
+                CleanupOnStart = true,
+                CleanupInterval = TimeSpan.Zero,
+            }),
+            NullLogger<WorkflowFileArtifactCleanupHostedService>.Instance);
+
+        await service.StartAsync(CancellationToken.None);
+        await service.StopAsync(CancellationToken.None);
+
+        cleanupPort.CleanupRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task WorkflowFileArtifactCleanupHostedService_ShouldNotTriggerStartupCleanupWhenCleanupOnStartIsDisabled()
+    {
+        var cleanupPort = new RecordingWorkflowFileArtifactPort();
+        var service = new WorkflowFileArtifactCleanupHostedService(
+            cleanupPort,
+            Options.Create(new WorkflowFileArtifactOptions
+            {
+                CleanupEnabled = true,
+                CleanupOnStart = false,
+                CleanupInterval = TimeSpan.Zero,
+            }),
+            NullLogger<WorkflowFileArtifactCleanupHostedService>.Instance);
+
+        await service.StartAsync(CancellationToken.None);
+        await service.StopAsync(CancellationToken.None);
+
+        cleanupPort.CleanupRequests.Should().BeEmpty();
+    }
+
     private static IDisposable ClearRuntimeEnvironment()
     {
         var previousDotnet = Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT");
