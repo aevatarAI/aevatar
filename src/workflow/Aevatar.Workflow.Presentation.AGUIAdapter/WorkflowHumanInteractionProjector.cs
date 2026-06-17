@@ -7,6 +7,7 @@ using Aevatar.Foundation.Abstractions.Interactions;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Projection;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Presentation.AGUIAdapter;
 
@@ -14,10 +15,14 @@ public sealed class WorkflowHumanInteractionProjector
     : IProjectionProjector<WorkflowExecutionProjectionContext>
 {
     private readonly IHumanInteractionPort _humanInteractionPort;
+    private readonly ILogger<WorkflowHumanInteractionProjector> _logger;
 
-    public WorkflowHumanInteractionProjector(IHumanInteractionPort humanInteractionPort)
+    public WorkflowHumanInteractionProjector(
+        IHumanInteractionPort humanInteractionPort,
+        ILogger<WorkflowHumanInteractionProjector> logger)
     {
         _humanInteractionPort = humanInteractionPort ?? throw new ArgumentNullException(nameof(humanInteractionPort));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     public async ValueTask ProjectAsync(
@@ -64,10 +69,27 @@ public sealed class WorkflowHumanInteractionProjector
             Annotations = annotations,
         };
 
+        _logger.LogInformation(
+            "Delivering workflow human interaction suspension: actor={ActorId}, run={RunId}, step={StepId}, suspensionType={SuspensionType}, deliveryTargetId={DeliveryTargetId}, options={OptionsCount}, timeoutSeconds={TimeoutSeconds}",
+            request.ActorId,
+            request.RunId,
+            request.StepId,
+            request.SuspensionType,
+            evt.DeliveryTargetId,
+            request.Options.Count,
+            request.TimeoutSeconds);
+
         await _humanInteractionPort.DeliverSuspensionAsync(
             request,
             evt.DeliveryTargetId,
             ct);
+
+        _logger.LogInformation(
+            "Delivered workflow human interaction suspension to port: actor={ActorId}, run={RunId}, step={StepId}, deliveryTargetId={DeliveryTargetId}",
+            request.ActorId,
+            request.RunId,
+            request.StepId,
+            evt.DeliveryTargetId);
     }
 
     private static string ResolvePrompt(WorkflowSuspendedEvent evt)
