@@ -749,20 +749,33 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.executionPanel.consoleAria':
     '草稿运行控制台',
   'teamMemberWorkflowStudio.executionPanel.duration': '耗时',
+  'teamMemberWorkflowStudio.executionPanel.clear': '清空日志',
+  'teamMemberWorkflowStudio.executionPanel.copyAll': '复制全部日志',
+  'teamMemberWorkflowStudio.executionPanel.copyAllDone': '已复制全部日志。',
+  'teamMemberWorkflowStudio.executionPanel.copySelected': '复制选中日志',
+  'teamMemberWorkflowStudio.executionPanel.copySelectedDone':
+    '已复制选中日志。',
   'teamMemberWorkflowStudio.executionPanel.emptyEvidence':
-    '后端返回 Usage、Snapshot 或原始观察事件后，这里会展示对应证据。',
+    '后端返回运行事件后，这里会展示对应记录。',
+  'teamMemberWorkflowStudio.executionPanel.emptyEventPayload':
+    '没有捕获到事件载荷。',
   'teamMemberWorkflowStudio.executionPanel.emptyLogs':
-    'Workflow 草稿运行后，这里会展示每个步骤的输出。',
+    'Workflow 草稿运行后，这里会展示节点日志。',
   'teamMemberWorkflowStudio.executionPanel.emptyNodeInput':
-    '未提供用户输入。',
+    '这个节点没有捕获到输入。',
   'teamMemberWorkflowStudio.executionPanel.emptyNodeOutput':
-    '未捕获输出。',
+    '这个节点没有捕获到输出。',
   'teamMemberWorkflowStudio.executionPanel.emptyOutput':
     '草稿运行返回结果后，这里会展示输出。',
+  'teamMemberWorkflowStudio.executionPanel.error': '错误',
   'teamMemberWorkflowStudio.executionPanel.evidence': '证据帧',
+  'teamMemberWorkflowStudio.executionPanel.eventCount': '{count} 个事件',
+  'teamMemberWorkflowStudio.executionPanel.eventPayload': '事件载荷',
   'teamMemberWorkflowStudio.executionPanel.events': '事件',
   'teamMemberWorkflowStudio.executionPanel.items': '条',
+  'teamMemberWorkflowStudio.executionPanel.logDetails': '日志详情',
   'teamMemberWorkflowStudio.executionPanel.logs': '日志',
+  'teamMemberWorkflowStudio.executionPanel.logsOverview': '日志概览',
   'teamMemberWorkflowStudio.executionPanel.node': '节点',
   'teamMemberWorkflowStudio.executionPanel.nodeInput': '输入',
   'teamMemberWorkflowStudio.executionPanel.nodeInteraction': '交互',
@@ -770,14 +783,24 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.executionPanel.nodePrompt': '提示',
   'teamMemberWorkflowStudio.executionPanel.nodeRunCardAria':
     '{stepId} 节点运行',
+  'teamMemberWorkflowStudio.executionPanel.nodes': '节点',
   'teamMemberWorkflowStudio.executionPanel.output': '输出',
+  'teamMemberWorkflowStudio.executionPanel.overview': '概览',
   'teamMemberWorkflowStudio.executionPanel.rawFrames':
-    '已收到 {count} 个运行事件，但暂时还没有步骤输出。',
+    '已收到 {count} 个运行事件，但暂时还没有节点输出。',
   'teamMemberWorkflowStudio.executionPanel.resultFirst': '结果',
   'teamMemberWorkflowStudio.executionPanel.runLog': '运行日志',
+  'teamMemberWorkflowStudio.executionPanel.selectLog':
+    '选择一条日志查看它的输入、输出和原始事件数据。',
   'teamMemberWorkflowStudio.executionPanel.steps': '步骤',
+  'teamMemberWorkflowStudio.executionPanel.status.error': '错误',
+  'teamMemberWorkflowStudio.executionPanel.status.recorded': '已记录',
+  'teamMemberWorkflowStudio.executionPanel.status.running': '运行中',
+  'teamMemberWorkflowStudio.executionPanel.status.success': '成功',
+  'teamMemberWorkflowStudio.executionPanel.status.waiting': '等待',
   'teamMemberWorkflowStudio.executionPanel.summary': '摘要',
   'teamMemberWorkflowStudio.executionPanel.timeline': '时间线',
+  'teamMemberWorkflowStudio.executionPanel.tokens': 'Token',
   'teamMemberWorkflowStudio.executionsPanel.description':
     '这个 tab 只展示能通过稳定 Workflow 或 Service 标识安全归属到当前 Workflow 成员的执行记录。',
   'teamMemberWorkflowStudio.executionsPanel.empty':

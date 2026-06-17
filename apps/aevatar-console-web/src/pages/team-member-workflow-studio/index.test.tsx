@@ -15,7 +15,11 @@ import { StudioApiError, studioApi } from "@/shared/studio/api";
 jest.mock("@/shared/graphs/GraphCanvas", () => ({
   __esModule: true,
   default: (props: {
-    nodes?: Array<{ id?: string; position?: { x: number; y: number } }>;
+    nodes?: Array<{
+      data?: { executionFocused?: boolean; executionStatus?: string };
+      id?: string;
+      position?: { x: number; y: number };
+    }>;
     edges?: Array<{ id?: string }>;
     onCanvasSelect?: () => void;
     onConnectNodes?: (sourceNodeId: string, targetNodeId: string) => void;
@@ -40,6 +44,8 @@ jest.mock("@/shared/graphs/GraphCanvas", () => ({
           "button",
           {
             key: node.id,
+            "data-execution-focused": node.data?.executionFocused ? "true" : "false",
+            "data-execution-status": node.data?.executionStatus ?? "idle",
             onClick: () => props.onNodeSelect?.(String(node.id ?? "")),
             type: "button",
           },
@@ -3687,9 +3693,11 @@ describe("TeamMemberWorkflowStudioPage", () => {
       "href",
       "/scopes/scope-1/teams/t-alpha?memberId=member-alpha&workflowId=workflow-alpha&tab=members",
     );
-    expect(
-      within(headerIdentity).getByRole("button", { name: "Back" }),
-    ).toBeTruthy();
+    const globalBackButton = within(headerIdentity).getByRole("button", {
+      name: "Back",
+    });
+    expect(globalBackButton).toBeTruthy();
+    expect(globalBackButton).toHaveAttribute("data-aevatar-back-button", "true");
     expect(within(headerIdentity).getByText("Draft")).toBeTruthy();
     expect(
       within(headerIdentity).getByRole("button", { name: "Edit workflow name" }),
@@ -3809,51 +3817,116 @@ describe("TeamMemberWorkflowStudioPage", () => {
     });
     expect(runtimeRunsApi.streamChat).not.toHaveBeenCalled();
     await waitFor(() => {
-      expect(screen.getAllByText("Workflow complete").length).toBeGreaterThan(0);
+      expect(consolePanel).toHaveTextContent("succeeded");
     });
-    expect(resultPanel).toHaveTextContent("Workflow complete");
-    expect(within(consolePanel).getByLabelText("Output")).toHaveTextContent(
-      "Workflow complete",
+    expect(within(consolePanel).getByLabelText("Logs overview")).toBeTruthy();
+    expect(within(consolePanel).getByLabelText("Log details")).toBeTruthy();
+    expect(consolePanel).toHaveTextContent(/Tokens\s*42/);
+    expect(within(consolePanel).getByText("Overview")).toBeTruthy();
+    expect(within(consolePanel).getByRole("radio", { name: "Nodes" })).toBeTruthy();
+    expect(within(consolePanel).getByRole("radio", { name: "Events" })).toBeTruthy();
+
+    const triageLogRow = within(consolePanel).getByTestId(
+      "workflow-execution-log-row-node-triage",
     );
-    expect(within(consolePanel).getByText("Run log")).toBeTruthy();
-    const triageRunCard = within(consolePanel).getByLabelText("triage node run");
-    expect(within(triageRunCard).getByText("Input")).toBeTruthy();
-    expect(within(triageRunCard).getByText("Output")).toBeTruthy();
-    expect(triageRunCard).toHaveTextContent("Run the workflow");
-    expect(triageRunCard).toHaveTextContent("Workflow complete");
-    expect(triageRunCard).toHaveTextContent("triage");
-    expect(triageRunCard).toHaveTextContent("completed");
-    const approvalRunCard = within(consolePanel).getByLabelText("approve node run");
-    expect(within(approvalRunCard).getByText("Prompt")).toBeTruthy();
-    expect(approvalRunCard).toHaveTextContent("Need approval before deployment");
-    expect(approvalRunCard).toHaveTextContent("human approval");
-    expect(approvalRunCard).toHaveTextContent("pending");
-    expect(consolePanel).not.toHaveTextContent("Run started");
-    expect(consolePanel).not.toHaveTextContent("triage started");
-    expect(consolePanel).not.toHaveTextContent("Run finished");
+    expect(triageLogRow).toHaveTextContent("triage");
+    expect(triageLogRow).toHaveTextContent("Success");
+    expect(triageLogRow).not.toHaveTextContent("Run the workflow");
+    expect(triageLogRow).not.toHaveTextContent("Workflow complete");
+    fireEvent.click(triageLogRow);
+
+    expect(
+      within(consolePanel).getByRole("button", { name: "Input" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(
+      within(consolePanel).getByRole("button", { name: "Output" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    const logDetails = within(consolePanel).getByLabelText("Log details");
+    expect(logDetails).toHaveTextContent("Input");
+    expect(logDetails).toHaveTextContent("Output");
+    expect(logDetails).not.toHaveTextContent(
+      "aevatar.step.completed",
+    );
+    expect(logDetails).toHaveTextContent("Run the workflow");
+    expect(logDetails).toHaveTextContent("Workflow complete");
+    expect(
+      within(consolePanel).queryByRole("button", { name: "Copy selected log" }),
+    ).toBeNull();
+    expect(screen.getByRole("button", { name: "node:step:triage" })).toHaveAttribute(
+      "data-execution-focused",
+      "true",
+    );
+
+    fireEvent.keyDown(within(consolePanel).getByLabelText("Logs overview"), {
+      key: "ArrowDown",
+    });
+    expect(screen.getByRole("button", { name: "node:step:triage" })).toHaveAttribute(
+      "data-execution-focused",
+      "false",
+    );
+    expect(within(consolePanel).getByLabelText("Log details")).toHaveTextContent(
+      "approve",
+    );
+
+    fireEvent.click(within(consolePanel).getByRole("radio", { name: "Events" }));
+    expect(within(consolePanel).getByLabelText("Log details")).toHaveTextContent(
+      "RUN_STARTED",
+    );
+    expect(
+      within(consolePanel).getByRole("button", { name: "Copy selected log" }),
+    ).toBeTruthy();
+    const runStartedEventRow = within(consolePanel).getByTestId(
+      "workflow-execution-log-row-run-0",
+    );
+    expect(runStartedEventRow).toHaveTextContent("Recorded");
+    expect(runStartedEventRow).not.toHaveTextContent("Running");
+    fireEvent.click(within(consolePanel).getByRole("radio", { name: "Nodes" }));
+    expect(
+      within(consolePanel).queryByRole("button", { name: "Copy selected log" }),
+    ).toBeNull();
+
+    const approvalLogRow = within(consolePanel).getByTestId(
+      "workflow-execution-log-row-node-approve",
+    );
+    expect(approvalLogRow).toHaveTextContent("approve");
+    expect(approvalLogRow).toHaveTextContent("Waiting");
+    expect(approvalLogRow).not.toHaveTextContent("Need approval before deployment");
+    fireEvent.click(approvalLogRow);
+    expect(within(consolePanel).getByLabelText("Log details")).toHaveTextContent(
+      "Need approval before deployment",
+    );
+    expect(within(consolePanel).getByLabelText("Log details")).toHaveTextContent(
+      "human approval",
+    );
     expect(consolePanel).not.toHaveTextContent("aevatar.usage");
     expect(consolePanel).not.toHaveTextContent("STATE_SNAPSHOT");
     expect(consolePanel).not.toHaveTextContent("stateVersion");
     expect(consolePanel).not.toHaveTextContent("raw-observation-1");
-    fireEvent.click(
-      within(consolePanel).getByRole("radio", { name: "Evidence frames" }),
+    fireEvent.click(within(consolePanel).getByRole("radio", { name: "Events" }));
+    expect(within(consolePanel).getByText("aevatar.usage")).toBeTruthy();
+    expect(within(consolePanel).getByText("STATE_SNAPSHOT")).toBeTruthy();
+    const rawObservedEventRow = within(consolePanel)
+      .getByText("aevatar.observed.raw")
+      .closest("button");
+    expect(rawObservedEventRow).not.toBeNull();
+    expect(rawObservedEventRow).toHaveTextContent("Recorded");
+    expect(rawObservedEventRow).not.toHaveTextContent("Running");
+    expect(consolePanel).not.toHaveTextContent("raw-observation-1");
+    fireEvent.click(within(consolePanel).getByText("aevatar.observed.raw"));
+    expect(within(consolePanel).getByLabelText("Log details")).not.toHaveTextContent(
+      "Running",
     );
-    const consoleEvidenceMarkers = [
-      "aevatar.usage",
-      "STATE_SNAPSHOT",
-      "stateVersion",
-      "42",
-      "aevatar.observed.raw",
+    expect(within(consolePanel).getByLabelText("Log details")).toHaveTextContent(
       "raw-observation-1",
-    ];
-    const consoleText = consolePanel.textContent ?? "";
-    expect(
-      consoleEvidenceMarkers.filter((marker) => consoleText.includes(marker)),
-    ).toEqual(consoleEvidenceMarkers);
+    );
     expect(screen.queryByTestId("member-run-summary")).toBeNull();
     expect(screen.queryByText("run-1")).toBeNull();
     expect(resultPanel).not.toHaveTextContent("Member run");
     expect(resultPanel).not.toHaveTextContent(/persisted workflow state/i);
+    fireEvent.click(
+      within(consolePanel).getByRole("button", { name: "Clear logs" }),
+    );
+    expect(screen.queryByLabelText("Draft run console")).toBeNull();
     expect(studioApi.startExecution).not.toHaveBeenCalled();
     expect(studioApi.saveWorkflow).not.toHaveBeenCalled();
     expect(studioApi.bindMemberWorkflow).not.toHaveBeenCalled();
@@ -4041,8 +4114,11 @@ describe("TeamMemberWorkflowStudioPage", () => {
       });
       await flushAsyncWork();
     });
-    expect(consolePanel).toHaveTextContent("1 run event(s) received");
-    expect(within(consolePanel).queryByLabelText("triage node run")).toBeNull();
+    expect(consolePanel).toHaveTextContent("Run started");
+    expect(consolePanel).toHaveTextContent("RUN_STARTED");
+    expect(
+      within(consolePanel).queryByTestId("workflow-execution-log-row-node-triage"),
+    ).toBeNull();
 
     await act(async () => {
       stream.emit({
@@ -4058,12 +4134,20 @@ describe("TeamMemberWorkflowStudioPage", () => {
       });
       await flushAsyncWork();
     });
-    const runningTriageCard = within(consolePanel).getByLabelText("triage node run");
-    expect(runningTriageCard).toHaveTextContent("started");
-    expect(runningTriageCard).toHaveTextContent("Run the workflow");
-    expect(runningTriageCard).toHaveTextContent("No output captured.");
+    const runningTriageRow = within(consolePanel).getByTestId(
+      "workflow-execution-log-row-node-triage",
+    );
+    expect(runningTriageRow).toHaveTextContent("Running");
+    expect(runningTriageRow).not.toHaveTextContent("Run the workflow");
+    fireEvent.click(runningTriageRow);
+    expect(within(consolePanel).getByLabelText("Log details")).toHaveTextContent(
+      "Run the workflow",
+    );
+    expect(within(consolePanel).getByLabelText("Log details")).toHaveTextContent(
+      "No output captured for this node.",
+    );
     expect(consolePanel).toHaveTextContent(/Events\s*2/);
-    expect(consolePanel).toHaveTextContent(/Logs\s*1/);
+    expect(consolePanel).toHaveTextContent(/Steps\s*1/);
 
     await act(async () => {
       stream.emit({
@@ -4078,9 +4162,14 @@ describe("TeamMemberWorkflowStudioPage", () => {
       });
       await flushAsyncWork();
     });
-    const completedTriageCard = within(consolePanel).getByLabelText("triage node run");
-    expect(completedTriageCard).toHaveTextContent("completed");
-    expect(completedTriageCard).toHaveTextContent("Workflow complete");
+    const completedTriageRow = within(consolePanel).getByTestId(
+      "workflow-execution-log-row-node-triage",
+    );
+    expect(completedTriageRow).toHaveTextContent("Success");
+    expect(completedTriageRow).not.toHaveTextContent("Workflow complete");
+    expect(within(consolePanel).getByLabelText("Log details")).toHaveTextContent(
+      "Workflow complete",
+    );
 
     await act(async () => {
       stream.emit({
@@ -4163,7 +4252,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
       "member-run-result-panel",
     );
     await waitFor(() => {
-      expect(resultPanel).toHaveTextContent(
+      expect(within(resultPanel).getByLabelText("Log details")).toHaveTextContent(
         "Authenticated member does not match requested member.",
       );
     });
@@ -4249,9 +4338,16 @@ describe("TeamMemberWorkflowStudioPage", () => {
       );
     });
     const consolePanel = screen.getByLabelText("Draft run console");
-    const triageRunCard = within(consolePanel).getByLabelText("triage node run");
-    expect(triageRunCard).toHaveTextContent("No user input provided.");
-    expect(triageRunCard).not.toHaveTextContent("Run Workflow Alpha");
+    const triageLogRow = within(consolePanel).getByTestId(
+      "workflow-execution-log-row-node-triage",
+    );
+    fireEvent.click(triageLogRow);
+    expect(within(consolePanel).getByLabelText("Log details")).toHaveTextContent(
+      "No input captured for this node.",
+    );
+    expect(within(consolePanel).getByLabelText("Log details")).not.toHaveTextContent(
+      "Run Workflow Alpha",
+    );
     expect(runtimeRunsApi.streamChat).not.toHaveBeenCalled();
   });
 
@@ -5010,6 +5106,103 @@ describe("TeamMemberWorkflowStudioPage", () => {
       });
       jest.useRealTimers();
     }
+  });
+
+  it("keeps the publish action loading during automatic polling and surfaces polling failures", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/member-alpha/workflow?workflowId=workflow-alpha",
+    );
+    (studioApi.getMember as jest.Mock).mockResolvedValue({
+      implementationRef: {
+        implementationKind: "workflow",
+        workflowId: "workflow-alpha",
+      },
+      summary: {
+        createdAt: "2026-06-08T00:00:00Z",
+        description: "",
+        displayName: "Workflow Alpha",
+        implementationKind: "workflow",
+        lastBoundRevisionId: null,
+        lifecycleStage: "build_ready",
+        memberId: "member-alpha",
+        publishedServiceId: "",
+        scopeId: "scope-1",
+        teamId: "t-alpha",
+        updatedAt: "2026-06-08T00:00:00Z",
+      },
+    });
+    (studioApi.getWorkflow as jest.Mock).mockResolvedValue({
+      directoryId: "scope:scope-1",
+      directoryLabel: "scope-1",
+      draftExists: true,
+      fileName: "workflow-alpha.yaml",
+      filePath: "scope://scope-1/workflow-alpha.yaml",
+      findings: [],
+      layout: null,
+      name: "Workflow Alpha",
+      workflowId: "workflow-alpha",
+      yaml: "name: Workflow Alpha\nsteps: []\n",
+      document: mockWorkflowDocument,
+      updatedAtUtc: "2026-06-08T00:00:00Z",
+    });
+    (studioApi.bindMemberWorkflow as jest.Mock).mockResolvedValue({
+      bindingRunId: "binding-run-polling",
+      memberId: "member-alpha",
+      scopeId: "scope-1",
+      status: "accepted",
+    });
+    (studioApi.getMemberBindingRun as jest.Mock)
+      .mockRejectedValueOnce(
+        new StudioApiError("Binding run is not materialized.", 404),
+      )
+      .mockResolvedValueOnce({
+        bindingRunId: "binding-run-polling",
+        memberId: "member-alpha",
+        scopeId: "scope-1",
+        status: "accepted",
+        stateVersion: 1,
+        updatedAt: "2026-06-08T00:00:02Z",
+      })
+      .mockRejectedValueOnce(new StudioApiError("Bad Gateway", 502));
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
+    });
+    clickPublishAction();
+
+    await waitFor(() => {
+      expect(studioApi.getMemberBindingRun).toHaveBeenCalled();
+      expect(screen.getByRole("button", { name: "Publish" })).toBeDisabled();
+      expect(screen.getByText("Publishing")).toBeTruthy();
+      expect(screen.getAllByTitle(/Publishing this member workflow/).length).toBeGreaterThan(0);
+      expect(screen.queryByRole("button", { name: "Refresh status" })).toBeNull();
+    });
+
+    await waitFor(
+      () => {
+        expect(studioApi.getMemberBindingRun).toHaveBeenCalledTimes(2);
+        expect(screen.getByRole("button", { name: "Publish" })).toBeDisabled();
+      },
+      { timeout: 2_000 },
+    );
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Refresh status" })).toBeNull();
+    });
+
+    await waitFor(
+      () => {
+        expect(studioApi.getMemberBindingRun).toHaveBeenCalledTimes(3);
+        expect(screen.getByText("Error")).toBeTruthy();
+        expect(screen.getByTitle(/Bad Gateway/)).toBeTruthy();
+      },
+      { timeout: 2_000 },
+    );
+    expect(screen.queryByText("Publishing")).toBeNull();
+    expect(screen.getByRole("button", { name: "Refresh status" })).toBeEnabled();
   });
 
   it("blocks duplicate publish for an already published workflow member and refreshes status through reads", async () => {
