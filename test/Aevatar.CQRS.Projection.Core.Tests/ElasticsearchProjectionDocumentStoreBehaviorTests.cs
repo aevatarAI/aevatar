@@ -2,14 +2,42 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
+using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
 namespace Aevatar.CQRS.Projection.Core.Tests;
 
 public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
 {
+    [Fact]
+    public void AddElasticsearchDocumentProjectionStore_ShouldRegisterStartupInitializerHostedService()
+    {
+        var services = new ServiceCollection();
+
+        services.AddElasticsearchDocumentProjectionStore<TestStoreReadModel, string>(
+            _ => new ElasticsearchProjectionDocumentStoreOptions
+            {
+                AutoCreateIndex = true,
+                Endpoints = ["http://localhost:9200"],
+            },
+            _ => new DocumentIndexMetadata(
+                IndexName: "projection-core-tests",
+                Mappings: new Dictionary<string, object?>(),
+                Settings: new Dictionary<string, object?>(),
+                Aliases: new Dictionary<string, object?>()),
+            keySelector: model => model.Id,
+            keyFormatter: key => key);
+
+        services.Should().ContainSingle(descriptor =>
+            descriptor.ServiceType == typeof(IHostedService) &&
+            descriptor.ImplementationType == typeof(ElasticsearchIndexStartupInitializer<TestStoreReadModel, string>) &&
+            descriptor.Lifetime == ServiceLifetime.Singleton);
+    }
+
     [Fact]
     public async Task GetAsync_WhenIndexMissingAndAutoCreateDisabled_ShouldThrowByDefault()
     {
@@ -1065,6 +1093,41 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         handler.CapturedRequests
             .Any(r => r.PathAndQuery == "/_aliases" && r.Method == "POST")
             .Should().BeFalse("ambiguous alias backing must not be swapped automatically");
+    }
+
+    [Fact]
+    public async Task CheckIndexConsistencyAsync_WhenAliasHasMultipleBackings_ShouldReportDriftWithoutLifecycleMutation()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(req =>
+        {
+            var alias = Uri.UnescapeDataString(req.RequestUri!.AbsolutePath.Substring("/_alias/".Length));
+            return CreateJsonResponse(HttpStatusCode.OK,
+                $"{{\"{alias}-v00000000\":{{\"aliases\":{{\"{alias}\":{{}}}}}},\"{alias}-v11111111\":{{\"aliases\":{{\"{alias}\":{{}}}}}}}}");
+        });
+
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true },
+            handler);
+
+        var result = await store.CheckIndexConsistencyAsync();
+
+        result.Status.Should().Be(ProjectionIndexConsistencyStatus.Drifted);
+        result.Provider.Should().Be("Elasticsearch");
+        result.IndexAlias.Should().Be("aevatar-projection-core-tests");
+        result.CurrentPhysicalIndex.Should().Be(
+            "aevatar-projection-core-tests-v00000000,aevatar-projection-core-tests-v11111111");
+        result.ExpectedPhysicalIndex.Should().StartWith("aevatar-projection-core-tests-v");
+        result.Message.Should().Contain("multiple physical indices");
+        handler.CapturedRequests.Should().ContainSingle(r =>
+            r.Method == "GET" &&
+            r.PathAndQuery.StartsWith("/_alias/", StringComparison.Ordinal));
+        handler.CapturedRequests
+            .Any(r => r.Method is "PUT" or "POST" or "DELETE")
+            .Should().BeFalse("the consistency probe must not mutate indices or aliases");
+        handler.CapturedRequests
+            .Any(r => r.PathAndQuery.Contains("_search", StringComparison.Ordinal))
+            .Should().BeFalse("the consistency probe must not query read models");
     }
 
     [Fact]
