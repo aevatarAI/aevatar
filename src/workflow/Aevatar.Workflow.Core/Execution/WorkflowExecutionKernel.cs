@@ -764,7 +764,9 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         return ctx.PublishAsync(new CompensationRequestEvent
         {
             RunId = NormalizeRunId(runId),
-            FailedStepId = failedStepId ?? string.Empty,
+            FailedStepId = string.IsNullOrWhiteSpace(result.FailedStepId)
+                ? failedStepId ?? string.Empty
+                : result.FailedStepId,
             CompensationStepId = result.NextCompensationStepId,
             IdempotencyKey = result.IdempotencyKey ?? string.Empty,
             CapturedOutput = result.CapturedOutput ?? string.Empty,

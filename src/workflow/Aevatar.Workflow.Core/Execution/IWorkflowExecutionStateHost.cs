@@ -16,6 +16,7 @@ internal enum WorkflowCompensationTransitionStatus
 internal readonly record struct WorkflowCompensationTransitionResult(
     WorkflowCompensationTransitionStatus Status,
     string NextCompensationStepId,   // empty when no next request should be sent
+    string FailedStepId,
     string IdempotencyKey,
     string CapturedOutput,
     string ExecutionId);

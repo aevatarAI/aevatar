@@ -30,12 +30,31 @@ internal sealed class FeishuCardOutboundMessageSender
         string platformSubject,
         CancellationToken cancellationToken)
     {
+        _logger.LogInformation(
+            "Resolving Lark delivery target: deliveryTargetId={DeliveryTargetId}, platformSubject={PlatformSubject}",
+            deliveryTargetId,
+            platformSubject);
+
         var target = await _deliveryTargetReader.GetAsync(deliveryTargetId, cancellationToken);
         if (target == null)
+        {
+            _logger.LogWarning(
+                "Lark delivery target resolution failed: deliveryTargetId={DeliveryTargetId}, platformSubject={PlatformSubject}",
+                deliveryTargetId,
+                platformSubject);
             throw new InvalidOperationException($"Agent delivery target not found: {deliveryTargetId}");
+        }
 
         if (!string.Equals(target.Platform, "lark", StringComparison.OrdinalIgnoreCase))
             throw new NotSupportedException($"Unsupported {platformSubject} platform: {target.Platform}");
+
+        _logger.LogInformation(
+            "Resolved Lark delivery target: deliveryTargetId={DeliveryTargetId}, platform={Platform}, conversationId={ConversationId}, nyxProviderSlug={NyxProviderSlug}, hasNyxApiKey={HasNyxApiKey}",
+            deliveryTargetId,
+            target.Platform,
+            target.ConversationId,
+            target.NyxProviderSlug,
+            !string.IsNullOrWhiteSpace(target.NyxApiKey));
 
         return target;
     }
@@ -89,6 +108,14 @@ internal sealed class FeishuCardOutboundMessageSender
                 deliveryTarget.ReceiveIdType);
         }
 
+        _logger.LogInformation(
+            "Sending Lark outbound message: agent={AgentId}, messageType={MessageType}, receiveId={ReceiveId}, receiveIdType={ReceiveIdType}, nyxProviderSlug={NyxProviderSlug}",
+            target.AgentId,
+            messageType,
+            deliveryTarget.ReceiveId,
+            deliveryTarget.ReceiveIdType,
+            target.NyxProviderSlug);
+
         var outcome = await TrySendWithFallbackAsync(
             target,
             messageType,
@@ -98,7 +125,27 @@ internal sealed class FeishuCardOutboundMessageSender
             cancellationToken);
 
         if (!outcome.Succeeded)
+        {
+            _logger.LogWarning(
+                "Lark outbound message rejected: agent={AgentId}, messageType={MessageType}, receiveId={ReceiveId}, receiveIdType={ReceiveIdType}, usedFallback={UsedFallback}, larkCode={LarkCode}, detail={Detail}",
+                target.AgentId,
+                messageType,
+                outcome.AttemptedTarget.ReceiveId,
+                outcome.AttemptedTarget.ReceiveIdType,
+                outcome.UsedFallback,
+                outcome.LarkCode,
+                outcome.Detail);
             throw new InvalidOperationException(BuildLarkRejectionMessage(failurePrefix, outcome.LarkCode, outcome.Detail));
+        }
+
+        _logger.LogInformation(
+            "Sent Lark outbound message: agent={AgentId}, messageType={MessageType}, messageId={MessageId}, receiveId={ReceiveId}, receiveIdType={ReceiveIdType}, usedFallback={UsedFallback}",
+            target.AgentId,
+            messageType,
+            outcome.MessageId,
+            outcome.AttemptedTarget.ReceiveId,
+            outcome.AttemptedTarget.ReceiveIdType,
+            outcome.UsedFallback);
     }
 
     private async Task<LarkSendNewMessageResult> TrySendWithFallbackAsync(

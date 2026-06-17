@@ -1487,6 +1487,7 @@ public class RuntimeCallbackEventizationTests
                 string.Empty,
                 string.Empty,
                 string.Empty,
+                string.Empty,
                 string.Empty);
 
         public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;

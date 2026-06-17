@@ -1262,6 +1262,7 @@ public sealed class WorkflowRuntimeModuleBranchTests
                 string.Empty,
                 string.Empty,
                 string.Empty,
+                string.Empty,
                 string.Empty);
 
         public Task UpdateExecutionContextAsync(

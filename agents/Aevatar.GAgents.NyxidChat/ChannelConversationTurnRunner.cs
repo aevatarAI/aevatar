@@ -68,6 +68,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ExternalSubjectRef? Subject,
         BindingId? BindingId);
 
+    private sealed record LarkSubjectContactIds(string? UserId, string? EmployeeId);
+
     private readonly IServiceProvider _toolServiceProvider;
     private readonly IChannelBotRegistrationQueryPort _registrationQueryPort;
     private readonly IChannelBotRegistrationQueryByNyxIdentityPort? _registrationQueryByNyxIdentityPort;
@@ -1309,6 +1311,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             var metadata = await BuildAgentBuilderMetadataAsync(
                     activity,
                     inboundEvent,
+                    runtimeContext,
                     ct);
             using (AgentToolContextScope.Push(BuildAgentBuilderToolContext(
                        inboundEvent,
@@ -1768,6 +1771,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private async Task<IReadOnlyDictionary<string, string>> BuildReplyMetadataAsync(
         ChannelInboundEvent inboundEvent,
         ChatActivity? activity,
+        ConversationTurnRuntimeContext runtimeContext,
         CancellationToken ct)
     {
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -1823,7 +1827,132 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (!string.IsNullOrWhiteSpace(larkOperatorUnionId))
             metadata[ChannelMetadataKeys.LarkOperatorUnionId] = larkOperatorUnionId;
 
+        if (await TryResolveLarkSubjectContactIdsAsync(inboundEvent, activity, runtimeContext, larkUnionId, ct)
+                .ConfigureAwait(false) is { } subjectContactIds)
+        {
+            if (!string.IsNullOrWhiteSpace(subjectContactIds.UserId))
+                metadata[ChannelMetadataKeys.LarkSubjectUserId] = subjectContactIds.UserId;
+            if (!string.IsNullOrWhiteSpace(subjectContactIds.EmployeeId))
+                metadata[ChannelMetadataKeys.LarkSubjectEmployeeId] = subjectContactIds.EmployeeId;
+        }
+
         return metadata;
+    }
+
+    private async Task<LarkSubjectContactIds?> TryResolveLarkSubjectContactIdsAsync(
+        ChannelInboundEvent inboundEvent,
+        ChatActivity? activity,
+        ConversationTurnRuntimeContext runtimeContext,
+        string? larkUnionId,
+        CancellationToken ct)
+    {
+        if (activity?.Type != ActivityType.Message)
+            return null;
+
+        if (!IsLarkPlatform(inboundEvent.Platform))
+            return null;
+
+        var accessToken = activity is null
+            ? NormalizeOptional(runtimeContext.NyxUserAccessToken)
+            : ResolveUserAccessToken(activity, runtimeContext);
+        var providerSlug = NormalizeOptional(inboundEvent.NyxProviderSlug);
+        var scopeId = NormalizeOptional(inboundEvent.RegistrationScopeId);
+        if (string.IsNullOrWhiteSpace(accessToken) ||
+            string.IsNullOrWhiteSpace(providerSlug) ||
+            string.IsNullOrWhiteSpace(scopeId))
+        {
+            return null;
+        }
+
+        var lookupId = NormalizeOptional(larkUnionId);
+        var userIdType = "union_id";
+        if (string.IsNullOrWhiteSpace(lookupId))
+        {
+            lookupId = NormalizeOptional(inboundEvent.SenderId);
+            userIdType = "open_id";
+        }
+
+        if (string.IsNullOrWhiteSpace(lookupId))
+            return null;
+
+        try
+        {
+            var response = await _nyxClient.ProxyRequestAsync(
+                    accessToken!,
+                    providerSlug!,
+                    $"/open-apis/contact/v3/users/{Uri.EscapeDataString(lookupId!)}?user_id_type={userIdType}",
+                    "GET",
+                    body: null,
+                    extraHeaders: null,
+                    ct)
+                .ConfigureAwait(false);
+
+            if (LarkProxyResponse.TryGetError(response, out _, out _))
+                return null;
+
+            return TryParseLarkSubjectContactIds(response, out var contactIds) ? contactIds : null;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Lark subject contact lookup failed open: provider={ProviderSlug}, userIdType={UserIdType}",
+                providerSlug,
+                userIdType);
+            return null;
+        }
+    }
+
+    private static bool TryParseLarkSubjectContactIds(string? response, out LarkSubjectContactIds contactIds)
+    {
+        contactIds = new LarkSubjectContactIds(null, null);
+        if (string.IsNullOrWhiteSpace(response))
+            return false;
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("data", out var data) ||
+                data.ValueKind != JsonValueKind.Object ||
+                !data.TryGetProperty("user", out var user) ||
+                user.ValueKind != JsonValueKind.Object)
+            {
+                return false;
+            }
+
+            var userId = TryReadString(user, "user_id");
+            var employeeId = TryReadString(user, "employee_id");
+            if (string.IsNullOrWhiteSpace(userId) && string.IsNullOrWhiteSpace(employeeId))
+                return false;
+
+            contactIds = new LarkSubjectContactIds(userId, employeeId);
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsLarkPlatform(string? platform) =>
+        string.Equals(platform, "lark", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(platform, "feishu", StringComparison.OrdinalIgnoreCase);
+
+    private static string? TryReadString(JsonElement container, string propertyName)
+    {
+        if (!container.TryGetProperty(propertyName, out var property) ||
+            property.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+
+        return NormalizeOptional(property.GetString());
     }
 
     private static AgentToolExecutionContext BuildAgentBuilderToolContext(
@@ -1857,10 +1986,11 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private async Task<IReadOnlyDictionary<string, string>> BuildAgentBuilderMetadataAsync(
         ChatActivity activity,
         ChannelInboundEvent inboundEvent,
+        ConversationTurnRuntimeContext runtimeContext,
         CancellationToken ct)
     {
         var metadata = new Dictionary<string, string>(
-            await BuildReplyMetadataAsync(inboundEvent, activity, ct),
+            await BuildReplyMetadataAsync(inboundEvent, activity, runtimeContext, ct),
             StringComparer.Ordinal)
         {
             [ChannelMetadataKeys.ChatType] = ResolveConversationChatType(activity.Conversation),
@@ -2041,7 +2171,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             request.ReplyTokenExpiresAtUnixMs = token.ExpiresAtUtc.ToUnixTimeMilliseconds();
         }
 
-        var replyMetadata = await BuildReplyMetadataAsync(inboundEvent, activity, ct);
+        var replyMetadata = await BuildReplyMetadataAsync(inboundEvent, activity, runtimeContext, ct);
         foreach (var pair in replyMetadata)
             request.Metadata[pair.Key] = pair.Value;
 

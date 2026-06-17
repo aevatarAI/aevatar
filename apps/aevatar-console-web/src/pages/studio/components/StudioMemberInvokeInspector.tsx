@@ -48,10 +48,7 @@ type DesktopInteraction = {
 };
 
 type StudioMemberInvokeInspectorProps = {
-  readonly activeRunCompletedAt: number | null;
-  readonly activeRunTab: 'output' | 'timeline' | 'events' | 'metadata';
   readonly chatMessages: readonly StudioInvokeChatMessage[];
-  readonly currentRawOutput: string;
   readonly currentRunHasData: boolean;
   readonly currentRunRequest: CurrentRunRequest | null;
   readonly endpointLabel: string;
@@ -67,9 +64,6 @@ type StudioMemberInvokeInspectorProps = {
   readonly onPayloadTypeUrlChange: (value: string) => void;
   readonly onRetryCurrentRunAsNewRun: () => void;
   readonly onRetryAsNewRun: (entryId: string) => void;
-  readonly onRunTabChange: (
-    tab: 'output' | 'timeline' | 'events' | 'metadata',
-  ) => void;
   readonly onSelectEntry: (entryId: string) => void;
   readonly open: boolean;
   readonly payloadBase64: string;
@@ -290,10 +284,7 @@ const desktopResizeRailStyle: React.CSSProperties = {
 const StudioMemberInvokeInspector: React.FC<
   StudioMemberInvokeInspectorProps
 > = ({
-  activeRunCompletedAt,
-  activeRunTab,
   chatMessages,
-  currentRawOutput,
   currentRunHasData,
   currentRunRequest,
   endpointLabel,
@@ -309,7 +300,6 @@ const StudioMemberInvokeInspector: React.FC<
   onPayloadTypeUrlChange,
   onRetryCurrentRunAsNewRun,
   onRetryAsNewRun,
-  onRunTabChange,
   onSelectEntry,
   open,
   payloadBase64,
@@ -611,10 +601,7 @@ const StudioMemberInvokeInspector: React.FC<
         />
       ) : activeTab === 'run' ? (
         <StudioMemberCurrentRunPanel
-          activeRunCompletedAt={activeRunCompletedAt}
-          activeTab={activeRunTab}
           chatMessages={chatMessages}
-          currentRawOutput={currentRawOutput}
           currentRunHasData={currentRunHasData}
           currentRunRequest={currentRunRequest}
           endpointLabel={endpointLabel}
@@ -624,7 +611,6 @@ const StudioMemberInvokeInspector: React.FC<
           transcriptViewportRef={transcriptViewportRef}
           onCopyError={onCopyError}
           onRetryAsNewRun={onRetryCurrentRunAsNewRun}
-          onTabChange={onRunTabChange}
         />
       ) : activeTab === 'payload' ? (
         <div style={inspectorTabBodyStyle}>

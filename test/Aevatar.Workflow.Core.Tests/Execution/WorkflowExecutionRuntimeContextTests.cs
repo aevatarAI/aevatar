@@ -430,6 +430,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
                 string.Empty,
                 string.Empty,
                 string.Empty,
+                string.Empty,
                 string.Empty);
     }
 
@@ -544,6 +545,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
         private static WorkflowCompensationTransitionResult NoCompensableLedger() =>
             new(
                 WorkflowCompensationTransitionStatus.NoCompensableLedger,
+                string.Empty,
                 string.Empty,
                 string.Empty,
                 string.Empty,
