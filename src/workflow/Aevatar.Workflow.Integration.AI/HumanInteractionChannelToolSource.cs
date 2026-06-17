@@ -3,21 +3,25 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.Foundation.Abstractions.Interactions;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.Workflow.Integration.AI;
 
 public sealed class HumanInteractionChannelToolSource(
     IChannelInteractionNotificationPort notificationPort,
-    ILogger<HumanInteractionChannelToolSource> logger) : IAgentToolSource
+    ILogger<HumanInteractionChannelToolSource>? logger = null) : IAgentToolSource
 {
+    private readonly ILogger<HumanInteractionChannelToolSource> _logger =
+        logger ?? NullLogger<HumanInteractionChannelToolSource>.Instance;
+
     public const string DeliveryCapability = "human_interaction.delivery";
     public const string ResolutionCapability = "human_interaction.resolution_update";
 
     public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
         Task.FromResult<IReadOnlyList<IAgentTool>>(
         [
-            new DeliveryTool(notificationPort, logger),
-            new ResolutionTool(notificationPort, logger),
+            new DeliveryTool(notificationPort, _logger),
+            new ResolutionTool(notificationPort, _logger),
         ]);
 
     private sealed class DeliveryTool(
