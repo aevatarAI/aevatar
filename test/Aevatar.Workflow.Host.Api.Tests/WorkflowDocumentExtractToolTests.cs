@@ -950,6 +950,41 @@ public sealed class WorkflowDocumentExtractToolTests
     }
 
     [Fact]
+    public async Task WorkflowDocumentExtractTool_ShouldRejectSpreadsheetMediaType()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-document-extract-spreadsheet-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var port = CreateFileArtifactPort(root);
+            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+                new byte[] { 80, 75, 3, 4 },
+                ApplicationWorkflowFileSourceKind.ChatInput,
+                FileName: "budget.xlsx",
+                MediaType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"));
+            var tool = await GetDocumentExtractToolAsync(port);
+
+            var output = await tool.ExecuteAsync(new WorkflowToolExecutionRequest(
+                BuildDocumentExtractArguments(result.FileRef),
+                "run-1",
+                "extract",
+                "exec-1",
+                "call-1",
+                "scope-1",
+                new ProtoWorkflowCallerCredential()));
+
+            using var document = JsonDocument.Parse(output.ResultJson);
+            document.RootElement.GetProperty("error").GetString().Should().Be("unsupported_media_type");
+            document.RootElement.GetProperty("detail").GetString().Should().Contain("spreadsheetml.sheet");
+            output.ResultJson.Contains("base64", StringComparison.OrdinalIgnoreCase).Should().BeFalse();
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task WorkflowDocumentExtractTool_ShouldReturnUnavailableWhenProviderDoesNotSupportImageInput()
     {
         var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-document-extract-image-text-provider-tests", Guid.NewGuid().ToString("N"));

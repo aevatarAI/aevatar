@@ -95,6 +95,9 @@ public sealed class WorkflowInfrastructureCoverageTests
         }
 
         toolNames.Should().Contain("document_extract");
+        toolNames.Should().Contain("spreadsheet_extract");
+        provider.GetRequiredService<IOptions<WorkflowSpreadsheetExtractOptions>>()
+            .Value.MaxRowsPerSheet.Should().Be(50);
         services.Should().Contain(x =>
             x.ServiceType == typeof(WorkflowRunActorPort) &&
             x.ImplementationType == typeof(WorkflowRunActorPort));

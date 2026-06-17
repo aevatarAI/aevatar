@@ -36,6 +36,13 @@ public static class ServiceCollectionExtensions
         }
 
         submitOptions.ValidateOnStart();
+        var spreadsheetOptions = services.AddOptions<WorkflowSpreadsheetExtractOptions>();
+        if (configuration != null)
+        {
+            spreadsheetOptions.Bind(
+                configuration.GetSection(WorkflowSpreadsheetExtractOptions.SectionName));
+        }
+
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IValidateOptions<WorkflowConnectedServiceFileSubmitOptions>,
             WorkflowConnectedServiceFileSubmitOptionsValidator>());
@@ -50,6 +57,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IWorkflowFileArtifactOwnershipPort>(sp =>
             sp.GetRequiredService<FileSystemWorkflowFileIngressPort>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowToolSource, WorkflowDocumentExtractToolSource>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowToolSource, WorkflowSpreadsheetExtractToolSource>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowToolSource, WorkflowConnectedServiceResourceFetchToolSource>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowToolSource, WorkflowFileSubmitToolSource>());
         services.TryAddSingleton<WorkflowRunActorPort>();
