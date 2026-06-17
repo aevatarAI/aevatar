@@ -168,6 +168,70 @@ internal sealed class ElasticsearchIndexLifecycleManager : IDisposable
         await CreateFreshAliasedAsync(aliasName, expectedPhysical, metadata, ct);
     }
 
+    /// <summary>
+    /// Data-safe schema-drift self-heal, intended to run once at host startup (NOT on the
+    /// write path, which keeps the fail-loud <see cref="ReconcileAsync"/> contract). Identical
+    /// to <see cref="ReconcileAsync"/> EXCEPT the drift case: instead of throwing, it reindexes
+    /// the existing docs forward from the current physical into the expected fingerprinted
+    /// physical and atomically repoints the alias. The old physical is retained (alias
+    /// <c>remove</c>, not <c>remove_index</c>) as a rollback artifact — cleanup is a separate
+    /// operational GC. Reindex uses <c>op_type=create</c> and hard-fails on per-doc failures or
+    /// timeout (see <see cref="ReindexAsync"/>), so the alias is never swapped onto a
+    /// partially-copied physical. It NEVER falls back to an empty create on a populated alias:
+    /// the projector has no event-log replay, so an empty repoint would be silent data loss.
+    /// </summary>
+    public async Task ReconcileWithReindexAsync(string aliasName, DocumentIndexMetadata metadata, CancellationToken ct)
+    {
+        if (!_autoCreate)
+            return;
+
+        var fingerprint = ElasticsearchProjectionSchemaFingerprint.Compute(metadata);
+        var expectedPhysical = $"{aliasName}-v{fingerprint}";
+
+        var currentAliasTarget = await TryResolveAliasTargetAsync(aliasName, ct);
+        if (currentAliasTarget is not null)
+        {
+            if (string.Equals(currentAliasTarget, expectedPhysical, StringComparison.Ordinal))
+                return;
+
+            // Drift: the alias points to an older physical. Copy data forward, then atomic swap.
+            // If the expected physical already exists (a prior pod/deploy created+filled it),
+            // skip the reindex and only repoint.
+            var expectedExists = await IndexExistsAsync(expectedPhysical, ct);
+            if (!expectedExists)
+            {
+                await CreatePhysicalAsync(expectedPhysical, metadata, ct);
+                await ReindexAsync(sourceIndex: currentAliasTarget, destIndex: expectedPhysical, ct);
+            }
+
+            await ExecuteAliasActionsAsync(
+                new object[]
+                {
+                    new Dictionary<string, object?> { ["add"] = new Dictionary<string, object?> { ["index"] = expectedPhysical, ["alias"] = aliasName } },
+                    RemoveAliasAction(currentAliasTarget, aliasName),
+                },
+                description: $"reindex-heal schema drift: repoint alias '{aliasName}' {currentAliasTarget} → {expectedPhysical}",
+                ct);
+
+            _logger.LogInformation(
+                "Projection index lifecycle: reindex-healed schema drift alias={Alias} old={OldPhysical} new={NewPhysical} reindexed={Reindexed}",
+                aliasName, currentAliasTarget, expectedPhysical, !expectedExists);
+            return;
+        }
+
+        var bareExists = await IndexExistsAsync(aliasName, ct);
+        if (bareExists)
+        {
+            await WrapBareIndexAsync(aliasName, expectedPhysical, metadata, ct);
+            return;
+        }
+
+        await CreateFreshAliasedAsync(aliasName, expectedPhysical, metadata, ct);
+    }
+
+    private static Dictionary<string, object?> RemoveAliasAction(string physical, string alias) =>
+        new() { ["remove"] = new Dictionary<string, object?> { ["index"] = physical, ["alias"] = alias } };
+
     private async Task<string?> TryResolveAliasTargetAsync(string aliasName, CancellationToken ct)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, $"_alias/{Uri.EscapeDataString(aliasName)}");

@@ -19,12 +19,15 @@ import type {
   StudioMemberBindingRunStatus,
   StudioMemberBindingRunStatusResponse,
   StudioMemberBindingViewResponse,
+  StudioMemberCommandResponse,
+  StudioMemberCommandStatus,
   StudioMemberDetail,
   StudioMemberImplementationKind,
   StudioMemberImplementationRef,
   StudioMemberLifecycleStage,
   StudioMemberRoster,
   StudioMemberSummary,
+  StudioMemberWorkflowBindingInput,
   StudioParseYamlResult,
   StudioRoleCatalogImportResult,
   StudioRoleCatalog,
@@ -53,9 +56,11 @@ import type {
   StudioUserConfigRuntime,
   StudioUserLlmSettings,
   StudioWorkflowDraft,
+  StudioWorkflowDraftCreateAcceptedReceipt,
   StudioWorkflowDraftSummary,
   StudioWorkflowDocument,
   StudioWorkflowFile,
+  StudioWorkflowSaveResult,
   StudioWorkflowSummary,
   StudioWorkspaceSettings,
 } from "./models";
@@ -171,6 +176,8 @@ function toCommittedWorkflowSummary(
   workflow: ScopeWorkflowSummary
 ): StudioWorkflowSummary {
   return {
+    activeRevisionId: trimOptional(workflow.activeRevisionId) ?? null,
+    serviceKey: trimOptional(workflow.serviceKey) ?? null,
     workflowId: workflow.workflowId,
     name: resolveScopeWorkflowName(workflow),
     description: "",
@@ -217,6 +224,59 @@ function toWorkflowFile(
     document: null,
     draftExists,
     findings: [],
+  };
+}
+
+function decodeStudioWorkflowDraft(
+  value: unknown,
+  label = "StudioWorkflowDraft"
+): StudioWorkflowDraft {
+  const record = expectRecord(value, label);
+  return {
+    workflowId: readString(record, "workflowId", `${label}.workflowId`),
+    name: readString(record, "name", `${label}.name`),
+    fileName: readString(record, "fileName", `${label}.fileName`),
+    filePath: readString(record, "filePath", `${label}.filePath`),
+    directoryId: readString(record, "directoryId", `${label}.directoryId`),
+    directoryLabel: readString(
+      record,
+      "directoryLabel",
+      `${label}.directoryLabel`
+    ),
+    yaml: readString(record, "yaml", `${label}.yaml`),
+    layout: record.layout,
+    updatedAtUtc: readString(record, "updatedAtUtc", `${label}.updatedAtUtc`),
+  };
+}
+
+function decodeStudioWorkflowDraftCreateAcceptedReceipt(
+  value: unknown,
+  label = "StudioWorkflowDraftCreateAcceptedReceipt"
+): StudioWorkflowDraftCreateAcceptedReceipt {
+  const record = expectRecord(value, label);
+  const readiness = expectRecord(record.readiness, `${label}.readiness`);
+  const accepted = readBoolean(record, "accepted", `${label}.accepted`);
+  if (!accepted) {
+    throw new Error(`${label}.accepted must be true.`);
+  }
+
+  return {
+    accepted,
+    workflowId: readString(record, "workflowId", `${label}.workflowId`),
+    commandId: readString(record, "commandId", `${label}.commandId`),
+    ackStage: readString(record, "ackStage", `${label}.ackStage`),
+    actorId: readString(record, "actorId", `${label}.actorId`),
+    workspaceId: readString(record, "workspaceId", `${label}.workspaceId`),
+    expectedVersion:
+      record.expectedVersion === null || record.expectedVersion === undefined
+        ? null
+        : readNumber(record, "expectedVersion", `${label}.expectedVersion`),
+    ackedAtUtc: readString(record, "ackedAtUtc", `${label}.ackedAtUtc`),
+    readiness: {
+      readable: readBoolean(readiness, "readable", `${label}.readiness.readable`),
+      stage: readString(readiness, "stage", `${label}.readiness.stage`),
+      message: readString(readiness, "message", `${label}.readiness.message`),
+    },
   };
 }
 
@@ -1093,6 +1153,13 @@ function decodeStudioMemberSummary(value: unknown): StudioMemberSummary {
       "implementationKind",
       "ImplementationKind",
     ]),
+    ...(record.implementationRef == null && record.ImplementationRef == null
+      ? {}
+      : {
+          implementationRef: decodeStudioMemberImplementationRef(
+            record.implementationRef ?? record.ImplementationRef
+          ),
+        }),
     lifecycleStage: readStudioMemberLifecycle(record, [
       "lifecycleStage",
       "LifecycleStage",
@@ -1336,6 +1403,29 @@ function normalizeStudioMemberBindingRunStatus(
   }) as StudioMemberBindingRunStatus;
 }
 
+function normalizeStudioMemberCommandStatus(
+  value: string | number | null | undefined
+): StudioMemberCommandStatus {
+  if (value == null) {
+    return "unknown";
+  }
+
+  const normalized = normalizeEnumValue(value, "status", {
+    "0": "unknown",
+    "1": "accepted",
+    "2": "no_change",
+    accepted: "accepted",
+    no_change: "no_change",
+    nochange: "no_change",
+    unchanged: "no_change",
+    unknown: "unknown",
+  });
+
+  return normalized === "accepted" || normalized === "no_change"
+    ? normalized
+    : "unknown";
+}
+
 function decodeStudioMemberBindingFailure(
   value: unknown
 ): StudioMemberBindingFailure {
@@ -1427,6 +1517,33 @@ function decodeStudioMemberBindingAcceptedResponse(
   };
 }
 
+function decodeStudioMemberCommandResponse(
+  value: unknown
+): StudioMemberCommandResponse {
+  const record = expectRecord(value, "StudioMemberCommandResponse");
+  return {
+    status: normalizeStudioMemberCommandStatus(
+      readOptionalScalar(record, ["status", "Status"])
+    ),
+    scopeId: readString(
+      record,
+      ["scopeId", "ScopeId"],
+      "StudioMemberCommandResponse.scopeId"
+    ),
+    memberId: readString(
+      record,
+      ["memberId", "MemberId"],
+      "StudioMemberCommandResponse.memberId"
+    ),
+    ackedAt:
+      readNullableString(
+        record,
+        ["ackedAt", "AckedAt"],
+        "StudioMemberCommandResponse.ackedAt"
+      ) ?? null,
+  };
+}
+
 function decodeStudioMemberBindingViewResponse(
   value: unknown
 ): StudioMemberBindingViewResponse {
@@ -1474,6 +1591,33 @@ function decodeStudioMemberDetail(value: unknown): StudioMemberDetail {
           ),
     ...(currentBindingRun === undefined ? {} : { currentBindingRun }),
   };
+}
+
+function synthesizeStudioMemberCommandResponseFromDetail(
+  detail: StudioMemberDetail
+): StudioMemberCommandResponse {
+  return {
+    status: "accepted",
+    scopeId: detail.summary.scopeId,
+    memberId: detail.summary.memberId,
+    ackedAt: null,
+  };
+}
+
+function decodeCompatibleStudioMemberPatchResponse(
+  value: unknown
+): StudioMemberCommandResponse {
+  try {
+    return decodeStudioMemberCommandResponse(value);
+  } catch (commandResponseError) {
+    try {
+      return synthesizeStudioMemberCommandResponseFromDetail(
+        decodeStudioMemberDetail(value)
+      );
+    } catch {
+      throw commandResponseError;
+    }
+  }
 }
 
 export const studioApi = {
@@ -1609,7 +1753,6 @@ export const studioApi = {
     displayName: string;
     implementationKind: StudioMemberImplementationKind;
     description?: string | null;
-    memberId?: string | null;
     teamId?: string | null;
   }): Promise<StudioMemberSummary> {
     return requestDecodedJson(
@@ -1623,10 +1766,98 @@ export const studioApi = {
             displayName: input.displayName.trim(),
             implementationKind: input.implementationKind,
             description: trimOptional(input.description),
-            memberId: trimOptional(input.memberId),
             teamId: trimOptional(input.teamId),
           })
         ),
+      }
+    );
+  },
+
+  createMemberWithId(input: {
+    scopeId: string;
+    memberId: string;
+    displayName: string;
+    implementationKind: StudioMemberImplementationKind;
+    description?: string | null;
+    teamId?: string | null;
+  }): Promise<StudioMemberSummary> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members`,
+      decodeStudioMemberSummary,
+      {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(
+          compactObject({
+            displayName: input.displayName.trim(),
+            implementationKind: input.implementationKind,
+            description: trimOptional(input.description),
+            memberId: input.memberId.trim(),
+            teamId: trimOptional(input.teamId),
+          })
+        ),
+      }
+    );
+  },
+
+  updateMemberTeamAssignment(input: {
+    scopeId: string;
+    memberId: string;
+    teamId: string | null;
+  }): Promise<StudioMemberCommandResponse> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}`,
+      decodeCompatibleStudioMemberPatchResponse,
+      {
+        method: "PATCH",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          teamId: input.teamId === null ? null : input.teamId.trim(),
+        }),
+      }
+    );
+  },
+
+  updateMemberDisplayName(input: {
+    scopeId: string;
+    memberId: string;
+    displayName: string;
+  }): Promise<StudioMemberCommandResponse> {
+    const displayName = input.displayName.trim();
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}`,
+      decodeCompatibleStudioMemberPatchResponse,
+      {
+        method: "PATCH",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          displayName,
+        }),
+      }
+    );
+  },
+
+  updateMemberImplementationRef(input: {
+    scopeId: string;
+    memberId: string;
+    implementationRef: StudioMemberImplementationRef;
+  }): Promise<StudioMemberCommandResponse> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}`,
+      decodeCompatibleStudioMemberPatchResponse,
+      {
+        method: "PATCH",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          implementationRef: compactObject({
+            implementationKind: input.implementationRef.implementationKind,
+            workflowId: trimOptional(input.implementationRef.workflowId),
+            workflowRevision: trimOptional(input.implementationRef.workflowRevision),
+            scriptId: trimOptional(input.implementationRef.scriptId),
+            scriptRevision: trimOptional(input.implementationRef.scriptRevision),
+            agentKind: trimOptional(input.implementationRef.agentKind),
+          }),
+        }),
       }
     );
   },
@@ -1656,10 +1887,18 @@ export const studioApi = {
     );
   },
 
+  async getWorkflowDraftFile(
+    workflowId: string,
+    scopeId?: string | null
+  ): Promise<StudioWorkflowFile> {
+    const draft = await this.getWorkflowDraft(workflowId, scopeId);
+    return toWorkflowFile(draft, true);
+  },
+
   createWorkflowDraft(
     input: Omit<StudioSaveWorkflowInput, "workflowId">
-  ): Promise<StudioWorkflowDraft> {
-    return requestJson(withOptionalScopeId("/api/workspace/workflow-drafts", input.scopeId), {
+  ): Promise<StudioWorkflowSaveResult> {
+    return studioHostFetch(withOptionalScopeId("/api/workspace/workflow-drafts", input.scopeId), {
       method: "POST",
       headers: JSON_HEADERS,
       body: JSON.stringify(
@@ -1671,6 +1910,23 @@ export const studioApi = {
           layout: input.layout,
         })
       ),
+    }).then(async (response) => {
+      if (!response.ok) {
+        throw await createStudioApiError(response);
+      }
+
+      const payload = await response.json();
+      if (response.status === 202) {
+        return {
+          kind: "accepted",
+          receipt: decodeStudioWorkflowDraftCreateAcceptedReceipt(payload),
+        };
+      }
+
+      return {
+        kind: "materialized",
+        workflow: toWorkflowFile(decodeStudioWorkflowDraft(payload), true),
+      };
     });
   },
 
@@ -1739,6 +1995,8 @@ export const studioApi = {
           existing
             ? {
                 ...draft,
+                activeRevisionId: existing.activeRevisionId ?? null,
+                serviceKey: existing.serviceKey ?? null,
                 updatedAtUtc: selectLatestTimestamp(
                   draft.updatedAtUtc,
                   existing.updatedAtUtc
@@ -1781,25 +2039,30 @@ export const studioApi = {
     );
   },
 
-  saveWorkflow(input: StudioSaveWorkflowInput): Promise<StudioWorkflowFile> {
+  async saveWorkflow(input: StudioSaveWorkflowInput): Promise<StudioWorkflowSaveResult> {
     const normalizedWorkflowId = trimOptional(input.workflowId);
     const shouldUpdate =
       Boolean(normalizedWorkflowId) &&
       (input.draftExists ?? Boolean(normalizedWorkflowId));
-    const request = shouldUpdate && normalizedWorkflowId
-      ? this.updateWorkflowDraft({
-          ...input,
-          workflowId: normalizedWorkflowId,
-        })
-      : this.createWorkflowDraft({
-          scopeId: input.scopeId,
-          directoryId: input.directoryId,
-          workflowName: input.workflowName,
-          fileName: input.fileName,
-          yaml: input.yaml,
-          layout: input.layout,
-        });
-    return request.then((draft) => toWorkflowFile(draft, true));
+    if (shouldUpdate && normalizedWorkflowId) {
+      const draft = await this.updateWorkflowDraft({
+        ...input,
+        workflowId: normalizedWorkflowId,
+      });
+      return {
+        kind: "materialized",
+        workflow: toWorkflowFile(draft, true),
+      };
+    }
+
+    return this.createWorkflowDraft({
+      scopeId: input.scopeId,
+      directoryId: input.directoryId,
+      workflowName: input.workflowName,
+      fileName: input.fileName,
+      yaml: input.yaml,
+      layout: input.layout,
+    });
   },
 
   deleteWorkflow(
@@ -1961,13 +2224,14 @@ export const studioApi = {
     );
   },
 
-  bindMemberWorkflow(input: {
-    scopeId: string;
-    memberId: string;
-    displayName?: string | null;
-    workflowYamls: readonly string[];
-    revisionId?: string | null;
-  }): Promise<StudioMemberBindingAcceptedResponse> {
+  bindMemberWorkflow(
+    input: StudioMemberWorkflowBindingInput
+  ): Promise<StudioMemberBindingAcceptedResponse> {
+    const workflowId = trimOptional(input.workflowId);
+    if (!workflowId) {
+      throw new Error("Workflow member binding requires a stable workflow id.");
+    }
+
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}/binding`,
       decodeStudioMemberBindingAcceptedResponse,
@@ -1979,6 +2243,7 @@ export const studioApi = {
             implementationKind: "workflow",
             displayName: trimOptional(input.displayName),
             workflow: {
+              workflowId,
               workflowYamls: input.workflowYamls,
             },
             revisionId: trimOptional(input.revisionId),

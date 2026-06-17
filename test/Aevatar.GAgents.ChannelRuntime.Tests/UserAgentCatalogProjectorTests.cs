@@ -3,6 +3,7 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgents.Channel.Abstractions;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Xunit;
@@ -80,12 +81,12 @@ public sealed class UserAgentCatalogProjectorTests
         document.CreatedAt.Should().Be(createdAt.ToDateTimeOffset());
         document.UpdatedAt.Should().Be(_clock.UtcNow);
         // Typed Lark target round-trips through the projection so catalog-backed senders
-        // (FeishuCardHumanInteractionPort) read it via UserAgentCatalogQueryPort.ToEntry
-        // instead of falling back to conversation_id prefix inference. The fallback pair
-        // (PR #412) MUST mirror through the projection too — without it the runtime
-        // `230002 bot not in chat` retry on FeishuCardHumanInteractionPort /
-        // SkillRunnerGAgent would never have a fallback typed pair to retry against, even
-        // though the actor-side state captured one at create time.
+        // read it via UserAgentCatalogQueryPort.ToEntry instead of falling back to
+        // conversation_id prefix inference. The fallback pair (PR #412) MUST mirror
+        // through the projection too — without it the runtime `230002 bot not in chat`
+        // retry on outbound Lark card senders / SkillRunnerGAgent would never have a
+        // fallback typed pair to retry against, even though the actor-side state captured
+        // one at create time.
         document.LarkReceiveId.Should().Be("oc_dm_chat_1");
         document.LarkReceiveIdType.Should().Be("chat_id");
         document.LarkReceiveIdFallback.Should().Be("on_user_1");
@@ -166,7 +167,33 @@ public sealed class UserAgentCatalogProjectorTests
             LastRunAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 4, 14, 8, 0, 0, TimeSpan.Zero)),
             ErrorCount = 2,
             LastError = "tool failed",
+            LastSuccessfulDelivery = new DeliveryLedgerEntry
+            {
+                DeliveryKind = DeliveryKind.TextMessage,
+                Status = DeliveryStatus.Succeeded,
+                Target = new DeliveryTarget
+                {
+                    Channel = ChannelId.From("lark"),
+                    ConversationKey = "oc_chat_1",
+                },
+                LarkMessageId = "om_success",
+                RequestId = "request-success",
+                ProducedAtVersion = 3,
+            },
         };
+        state.RecentDeliveries.Add(new DeliveryLedgerEntry
+        {
+            DeliveryKind = DeliveryKind.TextMessage,
+            Status = DeliveryStatus.FailedPreSend,
+            Target = new DeliveryTarget
+            {
+                Channel = ChannelId.From("lark"),
+                ConversationKey = "oc_chat_1",
+            },
+            RequestId = "request-failed",
+            ProducedAtVersion = 2,
+        });
+        state.RecentDeliveries.Add(state.LastSuccessfulDelivery.Clone());
 
         await projector.ProjectAsync(
             new UserAgentCatalogMaterializationContext
@@ -185,14 +212,18 @@ public sealed class UserAgentCatalogProjectorTests
         document.ErrorCount.Should().Be(2);
         document.StateVersion.Should().Be(4);
         document.LastEventId.Should().Be("runner-event-4");
+        document.RecentDeliveries.Select(delivery => delivery.RequestId)
+            .Should().Equal("request-failed", "request-success");
+        document.LastSuccessfulDelivery.Should().NotBeNull();
+        document.LastSuccessfulDelivery!.LarkMessageId.Should().Be("om_success");
     }
 
     [Fact]
     public void ToEntry_ShouldRoundTripTypedLarkReceiveTarget_FromDocumentToEntry()
     {
-        // FeishuCardHumanInteractionPort consumes UserAgentCatalogEntry via this conversion;
-        // dropping the typed fields would silently regress workflow / social_media DM delivery
-        // back to the prefix-inference path even after the projection captured them. The
+        // Outbound Lark senders consume UserAgentCatalogEntry via this conversion; dropping
+        // the typed fields would silently regress workflow / social_media DM delivery back
+        // to the prefix-inference path even after the projection captured them. The
         // fallback pair (PR #412) is part of the same contract — the catalog-backed
         // `230002 bot not in chat` retry depends on `LarkReceiveIdFallback` /
         // `LarkReceiveIdTypeFallback` surviving the document → entry mapping.

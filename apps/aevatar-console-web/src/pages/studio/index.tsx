@@ -116,9 +116,11 @@ import type {
   StudioMemberSummary,
   StudioTeamSummary,
   StudioValidationFinding,
+  StudioWorkflowDraftCreateAcceptedReceipt,
   StudioWorkflowDocument,
   StudioWorkflowFile,
   StudioWorkflowDirectory,
+  StudioWorkflowSaveResult,
 } from '@/shared/studio/models';
 import {
   formatStudioMemberLifecycleStage,
@@ -198,7 +200,7 @@ type BuildSurface = 'editor' | 'scripts' | 'gagent';
 type StudioSurface = 'build' | 'bind' | 'invoke' | 'observe';
 
 type DraftSaveNotice = {
-  readonly type: 'success' | 'error';
+  readonly type: 'success' | 'info' | 'error';
   readonly message: string;
 };
 
@@ -236,6 +238,9 @@ type StudioBindingRunOutcome =
     };
 
 const MEMBER_BINDING_RUN_POLL_ATTEMPTS = 8;
+const WORKFLOW_DRAFT_MATERIALIZATION_ATTEMPTS = 10;
+const WORKFLOW_DRAFT_MATERIALIZATION_DELAY_MS = 900;
+const SAVED_WORKFLOW_QUERY_STALE_MS = 30_000;
 
 // Refactor (iter160/cluster-1200): member binding run waiting uses shared
 //   probeAsyncOperation normalized states instead of duplicated page-local
@@ -659,10 +664,76 @@ function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? '';
 }
 
+function normalizeWorkflowSaveResult(
+  result: StudioWorkflowSaveResult | StudioWorkflowFile,
+): StudioWorkflowSaveResult {
+  if ('kind' in result) {
+    return result;
+  }
+
+  return {
+    kind: 'materialized',
+    workflow: result,
+  };
+}
+
+function describeWorkflowDraftAcceptedReceipt(
+  receipt: StudioWorkflowDraftCreateAcceptedReceipt,
+): string {
+  return (
+    trimOptional(receipt.readiness.message) ||
+    `Workflow draft ${receipt.workflowId} was accepted. Studio is waiting for the scoped workspace projection.`
+  );
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
     globalThis.setTimeout(resolve, ms);
   });
+}
+
+function waitForWorkflowDraftMaterializationTick(): Promise<void> {
+  const testEnvironment =
+    typeof process !== 'undefined' && process.env.NODE_ENV === 'test';
+  return delay(testEnvironment ? 0 : WORKFLOW_DRAFT_MATERIALIZATION_DELAY_MS);
+}
+
+async function waitForWorkflowDraftMaterialized(input: {
+  readonly receipt: StudioWorkflowDraftCreateAcceptedReceipt;
+  readonly scopeId: string;
+}): Promise<StudioWorkflowFile> {
+  let lastNotFound: unknown = null;
+
+  for (
+    let attempt = 0;
+    attempt < WORKFLOW_DRAFT_MATERIALIZATION_ATTEMPTS;
+    attempt += 1
+  ) {
+    try {
+      return await studioApi.getWorkflowDraftFile(
+        input.receipt.workflowId,
+        input.scopeId,
+      );
+    } catch (error) {
+      if (!isStudioApiStatus(error, 404)) {
+        throw error;
+      }
+
+      lastNotFound = error;
+      if (attempt < WORKFLOW_DRAFT_MATERIALIZATION_ATTEMPTS - 1) {
+        await waitForWorkflowDraftMaterializationTick();
+      }
+    }
+  }
+
+  throw lastNotFound instanceof Error
+    ? new Error(
+        `Workflow draft ${input.receipt.workflowId} was accepted but is not readable yet. Retry saving in a moment.`,
+        { cause: lastNotFound },
+      )
+    : new Error(
+        `Workflow draft ${input.receipt.workflowId} was accepted but is not readable yet. Retry saving in a moment.`,
+      );
 }
 
 function normalizeComparableText(value: string | null | undefined): string {
@@ -758,6 +829,69 @@ function resolveWorkflowIdFromRouteValue(
   }
 
   return options?.allowDirectIdFallback ? normalizedRouteValue : '';
+}
+
+function resolveWorkflowIdFromMemberWorkflowReference(
+  input: {
+    readonly workflowId?: string | null;
+    readonly memberId?: string | null;
+    readonly displayName?: string | null;
+  },
+  workflows: ReadonlyArray<{
+    readonly workflowId: string;
+    readonly name: string;
+    readonly fileName: string;
+    readonly description?: string;
+  }>,
+  workflowFile?: Pick<StudioWorkflowFile, 'workflowId' | 'name' | 'fileName'> | null,
+): string {
+  const typedWorkflowId = trimOptional(input.workflowId);
+  const memberId = trimOptional(input.memberId);
+  if (typedWorkflowId) {
+    const resolvedWorkflowId = resolveWorkflowIdFromRouteValue(typedWorkflowId, workflows, {
+      allowDirectIdFallback: false,
+      workflowFile,
+    });
+    if (resolvedWorkflowId) {
+      return resolvedWorkflowId;
+    }
+
+    return !memberId ||
+      normalizeComparableText(typedWorkflowId) === normalizeComparableText(memberId)
+      ? resolveWorkflowIdFromRouteValue(typedWorkflowId, workflows, {
+          allowDirectIdFallback: true,
+          workflowFile,
+        })
+      : '';
+  }
+
+  if (memberId) {
+    const resolvedByMemberId = resolveWorkflowIdFromRouteValue(memberId, workflows, {
+      allowDirectIdFallback: false,
+      workflowFile,
+    });
+    if (resolvedByMemberId) {
+      return resolvedByMemberId;
+    }
+  }
+
+  const displayName = trimOptional(input.displayName);
+  if (displayName) {
+    const resolvedByDisplayName = resolveWorkflowIdFromRouteValue(displayName, workflows, {
+      allowDirectIdFallback: false,
+      workflowFile,
+    });
+    if (resolvedByDisplayName) {
+      return resolvedByDisplayName;
+    }
+  }
+
+  return memberId
+    ? resolveWorkflowIdFromRouteValue(memberId, workflows, {
+        allowDirectIdFallback: true,
+        workflowFile,
+      })
+    : '';
 }
 
 function describeSavedWorkflowLocation(
@@ -1549,40 +1683,6 @@ function resolveLifecycleScriptId(
   return '';
 }
 
-function resolveLifecycleWorkflowId(
-  memberKey: string,
-  publishedMembers: readonly PublishedStudioMemberRecord[],
-  studioScopeMembers: readonly StudioMemberSummary[],
-): string {
-  const workflowRouteValue = readWorkflowMemberRouteValueFromMemberKey(memberKey);
-  if (workflowRouteValue) {
-    return workflowRouteValue;
-  }
-
-  const publishedWorkflowId = trimOptional(
-    findPublishedStudioMemberByMemberKey(memberKey, publishedMembers)?.matchedWorkflow
-      ?.workflowId,
-  );
-  if (publishedWorkflowId) {
-    return publishedWorkflowId;
-  }
-
-  const memberSummary = resolveStudioMemberSummaryFromMemberKey(
-    memberKey,
-    publishedMembers,
-    studioScopeMembers,
-  );
-  if (
-    normalizeStudioMemberBindingImplementationKind(
-      memberSummary?.implementationKind,
-    ) === 'workflow'
-  ) {
-    return trimOptional(memberSummary?.displayName);
-  }
-
-  return '';
-}
-
 function resolveWorkflowIdForMemberSummary(
   memberSummary: StudioMemberSummary | null | undefined,
   workflows: ReadonlyArray<{
@@ -1601,15 +1701,30 @@ function resolveWorkflowIdForMemberSummary(
     return '';
   }
 
-  const implementationRef = trimOptional(memberSummary?.displayName);
-  if (!implementationRef) {
-    return '';
-  }
+  return resolveWorkflowIdFromMemberWorkflowReference({
+    memberId: memberSummary?.memberId,
+    displayName: memberSummary?.displayName,
+  }, workflows, workflowFile);
+}
 
-  return resolveWorkflowIdFromRouteValue(implementationRef, workflows, {
-    allowDirectIdFallback: true,
-    workflowFile,
-  });
+function resolveWorkflowIdForMemberDetail(
+  input: {
+    readonly implementationRefWorkflowId?: string | null;
+    readonly memberSummary?: StudioMemberSummary | null;
+  },
+  workflows: ReadonlyArray<{
+    readonly workflowId: string;
+    readonly name: string;
+    readonly fileName: string;
+    readonly description?: string;
+  }>,
+  workflowFile?: Pick<StudioWorkflowFile, 'workflowId' | 'name' | 'fileName'> | null,
+): string {
+  return resolveWorkflowIdFromMemberWorkflowReference({
+    workflowId: input.implementationRefWorkflowId,
+    memberId: input.memberSummary?.memberId,
+    displayName: input.memberSummary?.displayName,
+  }, workflows, workflowFile);
 }
 
 function resolveLifecycleBuildSurface(input: {
@@ -3173,6 +3288,7 @@ const StudioPage: React.FC = () => {
     queryKey: ['studio-workflow', workflowWorkspaceContextKey, selectedWorkflowId],
     enabled: studioHostReady && Boolean(selectedWorkflowId),
     queryFn: () => studioApi.getWorkflow(selectedWorkflowId, resolvedStudioScopeId),
+    staleTime: SAVED_WORKFLOW_QUERY_STALE_MS,
   });
   const gAgentKindsQuery = useQuery({
     queryKey: ['studio-runtime-gagent-kinds'],
@@ -4909,10 +5025,18 @@ const StudioPage: React.FC = () => {
     let memberBindingRunOutcome: StudioBindingRunOutcome | null = null;
     if (buildPendingBindCandidate.kind === 'workflow') {
       if (resolvedBuildMemberId) {
+        const workflowIdForBinding = trimOptional(
+          selectedWorkflowId || activeWorkflowFile?.workflowId,
+        );
+        if (!workflowIdForBinding) {
+          throw new Error('Resolve a stable workflow draft id before binding this member.');
+        }
+
         const receipt = await studioApi.bindMemberWorkflow({
           scopeId: resolvedStudioScopeId,
           memberId: resolvedBuildMemberId,
           displayName: buildPendingBindCandidate.displayName,
+          workflowId: workflowIdForBinding,
           workflowYamls: await buildWorkflowYamlBundle(),
         });
         await queryClient.invalidateQueries({
@@ -5399,6 +5523,40 @@ const StudioPage: React.FC = () => {
       workflowWorkspaceContextKey,
     ],
   );
+
+  const waitForAcceptedWorkflowDraft = useCallback(
+    async (
+      receipt: StudioWorkflowDraftCreateAcceptedReceipt,
+    ): Promise<StudioWorkflowFile> => {
+      if (!resolvedStudioScopeId) {
+        throw new Error(
+          `Workflow draft ${receipt.workflowId} was accepted without a workspace scope.`,
+        );
+      }
+
+      const noticeMessage = describeWorkflowDraftAcceptedReceipt(receipt);
+      setSaveNotice({
+        type: 'info',
+        message: noticeMessage,
+      });
+      void message.info(noticeMessage);
+
+      const materializedWorkflow = await waitForWorkflowDraftMaterialized({
+        receipt,
+        scopeId: resolvedStudioScopeId,
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ['studio-workspace-workflows', workflowWorkspaceContextKey],
+      });
+      return materializedWorkflow;
+    },
+    [
+      queryClient,
+      resolvedStudioScopeId,
+      workflowWorkspaceContextKey,
+    ],
+  );
+
   const confirmScriptsStudioLeave = useCallback(async () => {
     if (!isBuildScriptsSurface) {
       return true;
@@ -5515,16 +5673,22 @@ const StudioPage: React.FC = () => {
         return;
       }
 
-      const savedWorkflow = await studioApi.saveWorkflow({
-        workflowId: activeWorkflowFile?.workflowId || undefined,
-        draftExists: activeWorkflowFile?.draftExists,
-        scopeId: resolvedStudioScopeId || undefined,
-        directoryId,
-        workflowName,
-        fileName: draftFileName,
-        yaml: savePayload.yaml,
-        layout: savePayload.layout,
-      });
+      const saveResult = normalizeWorkflowSaveResult(
+        await studioApi.saveWorkflow({
+          workflowId: activeWorkflowFile?.workflowId || undefined,
+          draftExists: activeWorkflowFile?.draftExists,
+          scopeId: resolvedStudioScopeId || undefined,
+          directoryId,
+          workflowName,
+          fileName: draftFileName,
+          yaml: savePayload.yaml,
+          layout: savePayload.layout,
+        }),
+      );
+      const savedWorkflow =
+        saveResult.kind === 'accepted'
+          ? await waitForAcceptedWorkflowDraft(saveResult.receipt)
+          : saveResult.workflow;
 
       await applySavedWorkflowSelection(savedWorkflow, {
         document: savePayload.document,
@@ -5705,7 +5869,7 @@ const StudioPage: React.FC = () => {
           setInventoryBusyKey('create');
           setInventoryBusyAction('create');
           try {
-            createdScriptMember = await studioApi.createMember({
+            createdScriptMember = await studioApi.createMemberWithId({
               scopeId: resolvedStudioScopeId,
               memberId: scriptId,
               displayName: scriptDisplayName,
@@ -5916,14 +6080,20 @@ const StudioPage: React.FC = () => {
     setInventoryBusyAction('create');
 
     try {
-      const savedWorkflow = await studioApi.saveWorkflow({
-        scopeId: resolvedStudioScopeId || undefined,
-        directoryId,
-        workflowName,
-        fileName: buildWorkflowFileName(workflowName),
-        yaml: buildBlankDraftYaml(workflowName),
-        layout: buildStudioWorkflowLayout(workflowName, []),
-      });
+      const saveResult = normalizeWorkflowSaveResult(
+        await studioApi.saveWorkflow({
+          scopeId: resolvedStudioScopeId || undefined,
+          directoryId,
+          workflowName,
+          fileName: buildWorkflowFileName(workflowName),
+          yaml: buildBlankDraftYaml(workflowName),
+          layout: buildStudioWorkflowLayout(workflowName, []),
+        }),
+      );
+      const savedWorkflow =
+        saveResult.kind === 'accepted'
+          ? await waitForAcceptedWorkflowDraft(saveResult.receipt)
+          : saveResult.workflow;
 
       await applySavedWorkflowSelection(savedWorkflow);
       setCreateMemberModalOpen(false);
@@ -6104,21 +6274,27 @@ const StudioPage: React.FC = () => {
           ),
           availableStepTypes,
         });
-        const savedWorkflow = await studioApi.saveWorkflow({
-          workflowId,
-          scopeId: resolvedStudioScopeId || undefined,
-          directoryId:
-            (isSelectedWorkflow ? draftDirectoryId : '') ||
-            fallbackWorkflowFile.directoryId ||
-            currentWorkflowSummary?.directoryId ||
-            inventoryDirectoryId,
-          workflowName: nextWorkflowName,
-          fileName: buildWorkflowFileName(nextWorkflowName),
-          yaml: serialized.yaml,
-          layout:
-            (isSelectedWorkflow ? draftWorkflowLayout : null) ||
-            fallbackWorkflowFile.layout,
-        });
+        const saveResult = normalizeWorkflowSaveResult(
+          await studioApi.saveWorkflow({
+            workflowId,
+            scopeId: resolvedStudioScopeId || undefined,
+            directoryId:
+              (isSelectedWorkflow ? draftDirectoryId : '') ||
+              fallbackWorkflowFile.directoryId ||
+              currentWorkflowSummary?.directoryId ||
+              inventoryDirectoryId,
+            workflowName: nextWorkflowName,
+            fileName: buildWorkflowFileName(nextWorkflowName),
+            yaml: serialized.yaml,
+            layout:
+              (isSelectedWorkflow ? draftWorkflowLayout : null) ||
+              fallbackWorkflowFile.layout,
+          }),
+        );
+        const savedWorkflow =
+          saveResult.kind === 'accepted'
+            ? await waitForAcceptedWorkflowDraft(saveResult.receipt)
+            : saveResult.workflow;
 
         if (isSelectedWorkflow) {
           setEditableWorkflowDocument(
@@ -7670,17 +7846,13 @@ const StudioPage: React.FC = () => {
       return;
     }
 
-    const workflowLookupValue =
-      trimOptional(memberImplementationRef?.workflowId) ||
-      trimOptional(memberSummary?.displayName) ||
-      trimOptional(memberSummary?.memberId);
-    const workflowId = resolveWorkflowIdFromRouteValue(
-      workflowLookupValue,
-      visibleWorkflowSummaries,
+    const workflowId = resolveWorkflowIdForMemberDetail(
       {
-        allowDirectIdFallback: true,
-        workflowFile: activeWorkflowFile,
+        implementationRefWorkflowId: memberImplementationRef?.workflowId,
+        memberSummary,
       },
+      visibleWorkflowSummaries,
+      activeWorkflowFile,
     );
     if (!workflowId) {
       return;
@@ -8092,19 +8264,28 @@ const StudioPage: React.FC = () => {
           setSelectedScriptId('');
           setTemplateWorkflow('');
         } else {
-          const lifecycleWorkflowId = resolveLifecycleWorkflowId(
+          const lifecycleMemberSummary = resolveStudioMemberSummaryFromMemberKey(
             lifecycleMemberKey,
             publishedScopeMembers,
             studioScopeMembers,
           );
-          const resolvedLifecycleWorkflowId = resolveWorkflowIdFromRouteValue(
-            lifecycleWorkflowId,
-            visibleWorkflowSummaries,
-            {
-              allowDirectIdFallback: true,
-              workflowFile: activeWorkflowFile,
-            },
+          const lifecycleWorkflowRouteValue = readWorkflowMemberRouteValueFromMemberKey(
+            lifecycleMemberKey,
           );
+          const resolvedLifecycleWorkflowId = lifecycleWorkflowRouteValue
+            ? resolveWorkflowIdFromRouteValue(
+                lifecycleWorkflowRouteValue,
+                visibleWorkflowSummaries,
+                {
+                  allowDirectIdFallback: true,
+                  workflowFile: activeWorkflowFile,
+                },
+              )
+            : resolveWorkflowIdForMemberSummary(
+                lifecycleMemberSummary,
+                visibleWorkflowSummaries,
+                activeWorkflowFile,
+              );
           if (resolvedLifecycleWorkflowId) {
             setSelectedWorkflowId(resolvedLifecycleWorkflowId);
             setSelectedScriptId('');
@@ -8902,22 +9083,15 @@ const StudioPage: React.FC = () => {
   const selectedInventoryIsEntryMember =
     Boolean(selectedInventoryEntryMemberId) &&
     selectedInventoryEntryMemberId === studioTeamEntryMemberId;
-  const selectedInventoryEntryMemberSummary =
-    workbenchStudioMember?.memberId === selectedInventoryEntryMemberId
-      ? workbenchStudioMember
-      : workbenchStudioMemberSummary?.memberId === selectedInventoryEntryMemberId
-        ? workbenchStudioMemberSummary
-        : null;
-  const selectedInventoryEntryMemberReady =
-    normalizeStudioMemberLifecycleStage(
-      selectedInventoryEntryMemberSummary?.lifecycleStage,
-    ) === 'bind_ready' &&
-    Boolean(trimOptional(selectedInventoryEntryMemberSummary?.publishedServiceId));
+  const selectedInventoryEntryMemberResolved =
+    Boolean(selectedInventoryEntryMemberId) &&
+    trimOptional(workbenchStudioMemberSummary?.memberId) ===
+      selectedInventoryEntryMemberId;
   const canSetSelectedInventoryEntryMember = Boolean(
     resolvedStudioScopeId &&
       resolvedStudioTeamId &&
       selectedInventoryEntryMemberId &&
-      selectedInventoryEntryMemberReady,
+      selectedInventoryEntryMemberResolved,
   );
   const handleSetSelectedInventoryEntryMember = useCallback(async () => {
     if (
@@ -8965,7 +9139,6 @@ const StudioPage: React.FC = () => {
     resolvedStudioScopeId,
     resolvedStudioTeamId,
     selectedInventoryEntryMemberId,
-    selectedInventoryEntryMemberReady,
     selectedInventoryIsEntryMember,
     studioTeamSummaryQueryKey,
   ]);
@@ -9197,13 +9370,10 @@ const StudioPage: React.FC = () => {
             trimOptional(selectedMemberSummary?.memberId);
 
           if (memberImplementationKind === 'workflow') {
-            const workflowId = resolveWorkflowIdFromRouteValue(
-              memberImplementationName,
+            const workflowId = resolveWorkflowIdForMemberSummary(
+              selectedMemberSummary,
               visibleWorkflowSummaries,
-              {
-                allowDirectIdFallback: true,
-                workflowFile: activeWorkflowFile,
-              },
+              activeWorkflowFile,
             );
             if (workflowId) {
               const selectedWorkflowSummary = visibleWorkflowSummaries.find(

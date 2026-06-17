@@ -363,6 +363,13 @@ public class VoicePresenceWhipEndpointsTests
     {
         public bool SupportsRemoteAudio => true;
 
+        public Task<bool> TrySendToolResultAsync(
+            string transportLeaseId,
+            string callId,
+            string resultJson,
+            CancellationToken ct = default) =>
+            Task.FromResult(false);
+
         public int AttachCalls { get; private set; }
 
         public int DetachCalls { get; private set; }
@@ -375,8 +382,16 @@ public class VoicePresenceWhipEndpointsTests
             VoicePresenceSessionLeaseHandle handle,
             IVoiceTransport transport,
             CancellationToken ct = default)
+            => await AttachAsync(handle, transport, null, ct);
+
+        public async Task<VoiceTransportLifetimeCompleted?> AttachAsync(
+            VoicePresenceSessionLeaseHandle handle,
+            IVoiceTransport transport,
+            VoiceToolCredentialTransportBinding? toolCredentialBinding,
+            CancellationToken ct = default)
         {
             _ = handle;
+            _ = toolCredentialBinding;
             AttachCalls++;
             if (attachAsync != null)
                 await attachAsync(transport, ct);

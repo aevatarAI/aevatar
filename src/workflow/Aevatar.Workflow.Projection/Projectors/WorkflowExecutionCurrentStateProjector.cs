@@ -54,6 +54,10 @@ public sealed class WorkflowExecutionCurrentStateProjector
             Input = state.Input ?? string.Empty,
             FinalOutput = state.FinalOutput ?? string.Empty,
             FinalError = state.FinalError ?? string.Empty,
+            SagaStatus = state.SagaStatus,
+            DeadLetterFailedCompensationStepId = state.DeadLetterFailedCompensationStepId ?? string.Empty,
+            DeadLetterRemainingUncompensated = state.DeadLetterRemainingUncompensated,
+            DeadLetterError = state.DeadLetterError ?? string.Empty,
             ExecutionStateCount = state.ExecutionStates.Count,
             Success = ResolveSuccess(state.Status),
             StateVersion = stateEvent.Version,
@@ -70,7 +74,25 @@ public sealed class WorkflowExecutionCurrentStateProjector
                 StringComparer.Ordinal),
             ForkSeedCompletedStepIds = seedSnapshot.CompletedStepIds.ToList(),
             ForkSeedLastFailedStepId = seedSnapshot.LastFailedStepId,
+            ForkSeedIdempotencies = seedSnapshot.IdempotencyByStepId.ToDictionary(
+                x => x.Key,
+                x => MapStepIdempotency(x.Value),
+                StringComparer.Ordinal),
             InputFileRefs = seedSnapshot.InputFileRefs.Select(MapInputFileRef).ToList(),
+        };
+    }
+
+    private static WorkflowStepIdempotencyReadModel MapStepIdempotency(
+        WorkflowStepIdempotencyState source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        return new WorkflowStepIdempotencyReadModel
+        {
+            LogicalRunId = source.LogicalRunId ?? string.Empty,
+            StepId = source.StepId ?? string.Empty,
+            LogicalAttempt = source.LogicalAttempt,
+            IdempotencyKey = source.IdempotencyKey ?? string.Empty,
         };
     }
 

@@ -148,6 +148,17 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             StartAtStepId = Normalize(source.StartAtStepId),
             Attempt = Math.Max(0, source.Attempt),
         };
+        if (source.StartStepIdempotency != null)
+        {
+            payload.StartStepIdempotency = new Aevatar.Workflow.Abstractions.WorkflowStepIdempotencyState
+            {
+                LogicalRunId = Normalize(source.StartStepIdempotency.LogicalRunId),
+                StepId = Normalize(source.StartStepIdempotency.StepId),
+                LogicalAttempt = Math.Max(0, source.StartStepIdempotency.LogicalAttempt),
+                IdempotencyKey = Normalize(source.StartStepIdempotency.IdempotencyKey),
+            };
+        }
+
         AppendVariables(payload.Variables, source.Variables);
         return payload;
     }

@@ -23,7 +23,7 @@ describe("MainLayout", () => {
 
   it("clears stale Studio host styling on non-Studio routes", async () => {
     document.body.classList.add(STUDIO_HOST_BODY_CLASS);
-    window.history.replaceState({}, "", "/teams");
+    window.history.replaceState({}, "", "/scopes");
 
     renderMainLayout();
 
@@ -33,7 +33,7 @@ describe("MainLayout", () => {
   });
 
   it("tracks Studio route transitions while the shell stays mounted", async () => {
-    window.history.replaceState({}, "", "/teams");
+    window.history.replaceState({}, "", "/scopes");
 
     renderMainLayout();
 
@@ -50,7 +50,7 @@ describe("MainLayout", () => {
     });
 
     act(() => {
-      history.push("/teams");
+      history.push("/scopes");
     });
 
     await waitFor(() => {

@@ -23,6 +23,19 @@ enum WorkflowFileSourceKind {
   WORKFLOW_FILE_SOURCE_KIND_GENERATED = 5;
 }
 
+enum WorkflowSagaStatus {
+  WORKFLOW_SAGA_STATUS_UNSPECIFIED = 0;
+  WORKFLOW_SAGA_STATUS_COMPENSATING = 1;
+  WORKFLOW_SAGA_STATUS_COMPENSATED_FAILED = 2;
+  WORKFLOW_SAGA_STATUS_COMPENSATION_DEAD_LETTER = 3;
+}
+
+enum WorkflowStepFailureOutcome {
+  WORKFLOW_STEP_FAILURE_OUTCOME_UNSPECIFIED = 0;
+  WORKFLOW_STEP_FAILURE_OUTCOME_CALLEE_CONFIRMED = 1;
+  WORKFLOW_STEP_FAILURE_OUTCOME_OUTCOME_UNCERTAIN = 2;
+}
+
 message WorkflowFileRef {
   string file_id = 1;
   string artifact_id = 2;
@@ -104,6 +117,15 @@ message WorkflowRunForkSeed
   string start_at_step_id = 2;
   map<string, string> variables = 3;
   int32 attempt = 4;
+  WorkflowStepIdempotencyState start_step_idempotency = 5;
+}
+
+message WorkflowStepIdempotencyState
+{
+  string logical_run_id = 1;
+  string step_id = 2;
+  int32 logical_attempt = 3;
+  string idempotency_key = 4;
 }
 
 message WorkflowRunForkRequestedEvent
@@ -308,6 +330,22 @@ message TransformOperationSpec {
   TransformAggregateKind aggregate = 5;
 }
 
+enum WorkflowHumanApprovalTimeoutDefaultDecision {
+  WORKFLOW_HUMAN_APPROVAL_TIMEOUT_DEFAULT_DECISION_UNSPECIFIED = 0;
+  WORKFLOW_HUMAN_APPROVAL_TIMEOUT_DEFAULT_DECISION_REJECT = 1;
+  WORKFLOW_HUMAN_APPROVAL_TIMEOUT_DEFAULT_DECISION_APPROVE = 2;
+}
+
+enum WorkflowHumanApprovalResolutionSource {
+  WORKFLOW_HUMAN_APPROVAL_RESOLUTION_SOURCE_UNSPECIFIED = 0;
+  WORKFLOW_HUMAN_APPROVAL_RESOLUTION_SOURCE_USER = 1;
+  WORKFLOW_HUMAN_APPROVAL_RESOLUTION_SOURCE_TIMEOUT = 2;
+}
+
+message WorkflowHumanApprovalOptions {
+  WorkflowHumanApprovalTimeoutDefaultDecision timeout_default_decision = 1;
+}
+
 message WorkflowStepParameters
 {
   map<string, string> parameters = 1;
@@ -318,6 +356,7 @@ message WorkflowStepParameters
   string delivery_target_id = 6;
   TransformOperationSpec transform_operation = 7;
   WorkflowAgentToolScope agent_tool_scope = 8;
+  WorkflowHumanApprovalOptions human_approval = 9;
 }
 message StepRequestEvent
 {
@@ -330,6 +369,7 @@ message StepRequestEvent
   string execution_id = 7;
   WorkflowStepParameters step_parameters = 8;
   repeated WorkflowFileRef input_file_refs = 9;
+  string idempotency_key = 10;
 }
 message WorkflowUsageMetrics {
   int32 prompt_tokens = 1;
@@ -364,7 +404,8 @@ message StepCompletedEvent {
   string execution_id = 12;
   WorkflowUsageMetrics usage = 13;
   VoteAgreementDecision vote_agreement_decision = 14;
-  WorkflowFileItemResultSet file_item_results = 15;
+  WorkflowStepFailureOutcome failure_outcome = 15;
+  WorkflowFileItemResultSet file_item_results = 16;
 }
 message SubWorkflowInvokeRequestedEvent
 {
@@ -533,6 +574,7 @@ message WorkflowHumanApprovalResolvedEvent
   string resolved_content = 6;
   string edited_content = 7;
   string feedback = 8;
+  WorkflowHumanApprovalResolutionSource resolution_source = 9;
 }
 message SecureValueCapturedEvent { string run_id = 1; string step_id = 2; string variable = 3; string value = 4; }
 message WorkflowRunStoppedEvent { string run_id = 1; string reason = 2; }
@@ -802,6 +844,7 @@ message ReplaceWorkflowDefinitionAndExecuteEvent { string workflow_yaml = 1; str
 message WaitingForSignalEvent { string step_id = 1; string signal_name = 2; string prompt = 3; int32 timeout_ms = 4; string run_id = 5; }
 message SignalReceivedEvent   { string signal_name = 1; string payload = 2; string run_id = 3; string step_id = 4; }
 message WaitSignalTimeoutFiredEvent { string run_id = 1; string step_id = 2; string signal_name = 3; int32 timeout_ms = 4; }
+message WorkflowHumanApprovalTimeoutFiredEvent { string run_id = 1; string step_id = 2; int32 timeout_seconds = 3; }
 message WorkflowStepTimeoutFiredEvent { string run_id = 1; string step_id = 2; int32 timeout_ms = 3; }
 message WorkflowStepRetryBackoffFiredEvent { string run_id = 1; string step_id = 2; int32 delay_ms = 3; int32 next_attempt = 4; }
 message DelayStepTimeoutFiredEvent { string run_id = 1; string step_id = 2; int32 duration_ms = 3; }
@@ -846,6 +889,15 @@ message StaleStepCompletionRejectedEvent
   string received_execution_id = 4;
 }
 
+message CompensableStepDispatchedEvent
+{
+  string run_id = 1;
+  string step_id = 2;
+  string compensation_step_id = 3;
+  string idempotency_key = 4;
+  int64 dispatched_at_unix_ms = 5;
+}
+
 message CompensationRequestEvent
 {
   string run_id = 1;
@@ -853,6 +905,7 @@ message CompensationRequestEvent
   string compensation_step_id = 3;
   string idempotency_key = 4;
   string captured_output = 5;
+  string execution_id = 6;
 }
 
 message CompensationStepCompletedEvent
@@ -861,6 +914,7 @@ message CompensationStepCompletedEvent
   string compensation_step_id = 2;
   bool success = 3;
   string error = 4;
+  string execution_id = 5;
 }
 
 message WorkflowCompensationCompletedEvent

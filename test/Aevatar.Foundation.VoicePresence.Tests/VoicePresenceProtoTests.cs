@@ -81,16 +81,32 @@ public class VoicePresenceProtoTests
     [Fact]
     public void VoiceCapabilityAndLeaseMessages_ShouldRoundtripAndExposeReflection()
     {
+        var toolContext = new VoiceToolExecutionContext
+        {
+            CredentialRef = "voice-tool:ref-1",
+            ExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)),
+            CallerScopeId = "scope-1",
+            CallerSubject = "caller-1",
+            OwnerSubject = "owner-1",
+            ChannelPlatform = "nyxid",
+        };
+        toolContext.AllowedToolNames.Add("doorbell.open");
         var leaseRequested = new VoicePresenceSessionLeaseRequested
         {
             SessionId = "lease-1",
             OwnerId = "host-1",
             ExpiresAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            ToolContext = toolContext.Clone(),
         };
         var signal = new VoiceModuleSignal
         {
             ModuleName = "voice_presence",
             SessionLeaseRequested = leaseRequested,
+        };
+        var runtimeState = new VoicePresenceRuntimeState
+        {
+            ActiveSessionId = "lease-1",
+            ActiveToolContext = toolContext.Clone(),
         };
         var capability = new VoicePresenceCapabilityReadModel
         {
@@ -107,13 +123,25 @@ public class VoicePresenceProtoTests
         };
 
         VoiceModuleSignal.Parser.ParseFrom(signal.ToByteArray()).ShouldBe(signal);
+        VoicePresenceRuntimeState.Parser.ParseFrom(runtimeState.ToByteArray()).ShouldBe(runtimeState);
         VoicePresenceCapabilityReadModel.Parser.ParseFrom(capability.ToByteArray()).ShouldBe(capability);
         signal.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.SessionLeaseRequested);
+        signal.SessionLeaseRequested.ToolContext.CredentialRef.ShouldBe("voice-tool:ref-1");
+        runtimeState.ActiveToolContext.CredentialRef.ShouldBe("voice-tool:ref-1");
         capability.RemoteAudioSupport.ShouldBe(VoiceRemoteAudioSupport.LocalOnly);
         VoicePresenceReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(VoicePresenceCapabilityReadModel));
         VoicePresenceReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(VoicePresenceSessionLeaseRequested));
+        VoicePresenceReflection.Descriptor.MessageTypes.Select(x => x.Name)
+            .ShouldContain(nameof(VoiceToolExecutionContext));
+        VoiceToolExecutionContext.Descriptor.Fields.InDeclarationOrder()
+            .Select(static field => field.Name)
+            .ShouldNotContain("nyx_id_access_token");
+        VoicePresenceSessionLeaseRequested.Descriptor.Fields["tool_context"].MessageType.Name
+            .ShouldBe(nameof(VoiceToolExecutionContext));
+        VoicePresenceRuntimeState.Descriptor.Fields["active_tool_context"].MessageType.Name
+            .ShouldBe(nameof(VoiceToolExecutionContext));
     }
 
     [Fact]
@@ -199,6 +227,79 @@ public class VoicePresenceProtoTests
     }
 
     [Fact]
+    public void VoiceModuleSignal_should_roundtrip_transport_lease_renew_requested()
+    {
+        var renewExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5));
+        var renew = new VoiceTransportLeaseRenewRequested
+        {
+            SessionId = "lease-1",
+            OwnerId = "host-1",
+            TransportLeaseId = "transport-1",
+            LeaseEpoch = 12,
+            RenewExpiresAt = renewExpiresAt,
+        };
+        var signal = new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            TransportLeaseRenewRequested = renew,
+        };
+
+        var parsed = VoiceModuleSignal.Parser.ParseFrom(signal.ToByteArray());
+        var signalOneof = VoiceModuleSignal.Descriptor.Oneofs
+            .Single(static oneof => oneof.Name == "signal");
+        var renewField = signalOneof.Fields
+            .Single(static field => field.Name == "transport_lease_renew_requested");
+
+        parsed.ShouldBe(signal);
+        parsed.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.TransportLeaseRenewRequested);
+        parsed.TransportLeaseRenewRequested.ShouldBe(renew);
+        renewField.FieldNumber.ShouldBe(18);
+        renewField.MessageType.Name.ShouldBe(nameof(VoiceTransportLeaseRenewRequested));
+        VoiceTransportLeaseRenewRequested.Descriptor.Fields.InDeclarationOrder()
+            .Select(static field => field.Name)
+            .ShouldNotContain("previous_lease_expires_at");
+    }
+
+    [Fact]
+    public void VoiceModuleSignal_should_roundtrip_drain_timeout_expired_with_tag_19()
+    {
+        var timeout = new VoiceDrainTimeoutExpired
+        {
+            SessionId = "lease-1",
+            OwnerId = "host-1",
+            TransportLeaseId = "transport-1",
+            LeaseEpoch = 14,
+            ResponseId = 5,
+        };
+        var signal = new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            DrainTimeoutExpired = timeout,
+        };
+
+        var parsed = VoiceModuleSignal.Parser.ParseFrom(signal.ToByteArray());
+        var signalOneof = VoiceModuleSignal.Descriptor.Oneofs
+            .Single(static oneof => oneof.Name == "signal");
+        var timeoutField = signalOneof.Fields
+            .Single(static field => field.Name == "drain_timeout_expired");
+
+        parsed.ShouldBe(signal);
+        parsed.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.DrainTimeoutExpired);
+        parsed.DrainTimeoutExpired.ShouldBe(timeout);
+        timeoutField.FieldNumber.ShouldBe(19);
+        timeoutField.MessageType.Name.ShouldBe(nameof(VoiceDrainTimeoutExpired));
+        VoiceDrainTimeoutExpired.Descriptor.Fields.InDeclarationOrder()
+            .Select(static field => field.Name)
+            .ShouldBe([
+                "session_id",
+                "owner_id",
+                "transport_lease_id",
+                "lease_epoch",
+                "response_id",
+            ]);
+    }
+
+    [Fact]
     public void VoicePresenceSessionDispatch_should_wrap_transport_control_self_signal()
     {
         var control = new VoiceTransportControlFrameReceived
@@ -254,5 +355,49 @@ public class VoicePresenceProtoTests
         signal.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.InputImageReceived);
         signal.InputImageReceived.ShouldBe(image);
         signal.InputImageReceived.ShouldNotBeSameAs(image);
+    }
+
+    [Fact]
+    public void VoicePresenceSessionDispatch_should_wrap_transport_lease_renew_direct_signal()
+    {
+        var renew = new VoiceTransportLeaseRenewRequested
+        {
+            SessionId = "lease-1",
+            OwnerId = "host-1",
+            TransportLeaseId = "transport-1",
+            LeaseEpoch = 13,
+            RenewExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)),
+        };
+
+        var envelope = VoicePresenceSessionDispatch.BuildDirectEnvelope("voice-agent", "voice_presence", renew);
+        var signal = envelope.Payload.Unpack<VoiceModuleSignal>();
+
+        envelope.Route.ShouldBe(EnvelopeRouteSemantics.CreateDirect(VoicePresenceSessionDispatch.HostPublisherId, "voice-agent"));
+        signal.ModuleName.ShouldBe("voice_presence");
+        signal.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.TransportLeaseRenewRequested);
+        signal.TransportLeaseRenewRequested.ShouldBe(renew);
+        signal.TransportLeaseRenewRequested.ShouldNotBeSameAs(renew);
+    }
+
+    [Fact]
+    public void VoicePresenceSessionDispatch_should_wrap_drain_timeout_direct_signal()
+    {
+        var timeout = new VoiceDrainTimeoutExpired
+        {
+            SessionId = "lease-1",
+            OwnerId = "host-1",
+            TransportLeaseId = "transport-1",
+            LeaseEpoch = 14,
+            ResponseId = 5,
+        };
+
+        var envelope = VoicePresenceSessionDispatch.BuildDirectEnvelope("voice-agent", "voice_presence", timeout);
+        var signal = envelope.Payload.Unpack<VoiceModuleSignal>();
+
+        envelope.Route.ShouldBe(EnvelopeRouteSemantics.CreateDirect(VoicePresenceSessionDispatch.HostPublisherId, "voice-agent"));
+        signal.ModuleName.ShouldBe("voice_presence");
+        signal.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.DrainTimeoutExpired);
+        signal.DrainTimeoutExpired.ShouldBe(timeout);
+        signal.DrainTimeoutExpired.ShouldNotBeSameAs(timeout);
     }
 }

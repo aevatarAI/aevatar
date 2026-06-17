@@ -11,7 +11,9 @@ public sealed class VoiceVolatileMediaStreamPort(
     IVoicePresenceSessionLeasePort leasePort,
     IEnumerable<VoicePresenceModuleRegistration> moduleRegistrations,
     IServiceProvider serviceProvider,
-    IActorDispatchPort dispatchPort)
+    IActorDispatchPort dispatchPort,
+    IVoiceVolatileToolCredentialPort? toolCredentialPort = null,
+    TimeProvider? timeProvider = null)
     : IVoiceVolatileMediaStreamPort
 {
     private const string DetachedReason = "host_transport_detached";
@@ -22,6 +24,8 @@ public sealed class VoiceVolatileMediaStreamPort(
         leasePort ?? throw new ArgumentNullException(nameof(leasePort));
     private readonly IActorDispatchPort _dispatchPort =
         dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
+    private readonly IVoiceVolatileToolCredentialPort? _toolCredentialPort = toolCredentialPort;
+    private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
     private readonly IServiceProvider _serviceProvider =
         serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
     private readonly IReadOnlyDictionary<string, VoicePresenceModuleRegistration> _registrationsByName =
@@ -33,6 +37,13 @@ public sealed class VoiceVolatileMediaStreamPort(
     public async Task<VoiceTransportLifetimeCompleted?> AttachAsync(
         VoicePresenceSessionLeaseHandle handle,
         IVoiceTransport transport,
+        CancellationToken ct = default) =>
+        await AttachAsync(handle, transport, null, ct);
+
+    public async Task<VoiceTransportLifetimeCompleted?> AttachAsync(
+        VoicePresenceSessionLeaseHandle handle,
+        IVoiceTransport transport,
+        VoiceToolCredentialTransportBinding? toolCredentialBinding,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(handle);
@@ -47,6 +58,8 @@ public sealed class VoiceVolatileMediaStreamPort(
             attachedHandle = await _transportAttachmentPort.AttachAsync(handle, transport, ct);
             if (string.IsNullOrWhiteSpace(attachedHandle.ActiveTransportLeaseId))
                 throw new VoiceVolatileMediaStreamUnavailableException();
+
+            await BindToolCredentialAsync(attachedHandle, toolCredentialBinding, ct);
 
             VoiceVolatileMediaRelay? relay = null;
             var providerSession = await registration.ConnectProviderSessionAsync(
@@ -75,7 +88,7 @@ public sealed class VoiceVolatileMediaStreamPort(
                 throw new InvalidOperationException("Voice transport already attached.");
             }
 
-            relay.Start();
+            relay.Start(ct => RunLeaseRenewalAsync(attachedHandle, relay, ct));
             return BuildLifetimeCompleted(attachedHandle, "transport_relay_completed");
         }
         catch
@@ -94,9 +107,16 @@ public sealed class VoiceVolatileMediaStreamPort(
     {
         ArgumentNullException.ThrowIfNull(handle);
 
-        await StopRelayAsync(handle, ct);
-        await _transportAttachmentPort.DetachAsync(handle, expectedTransport, ct);
-        await _leasePort.ReleaseAsync(handle, DetachedReason, ct);
+        try
+        {
+            await StopRelayAsync(handle, ct);
+            await _transportAttachmentPort.DetachAsync(handle, expectedTransport, ct);
+            await _leasePort.ReleaseAsync(handle, DetachedReason, ct);
+        }
+        finally
+        {
+            await ReleaseToolCredentialAsync(handle, CancellationToken.None);
+        }
     }
 
     public async Task CompleteTransportLifetimeAsync(
@@ -114,8 +134,29 @@ public sealed class VoiceVolatileMediaStreamPort(
         if (string.IsNullOrWhiteSpace(transportLeaseId))
             return;
 
-        await StopRelayAsync(transportLeaseId);
-        await _leasePort.CompleteTransportLifetimeAsync(handle, transportLeaseId, reason, ct);
+        try
+        {
+            await StopRelayAsync(transportLeaseId);
+            await _leasePort.CompleteTransportLifetimeAsync(handle, transportLeaseId, reason, ct);
+        }
+        finally
+        {
+            await ReleaseToolCredentialAsync(transportLeaseId, CancellationToken.None);
+        }
+    }
+
+    public async Task<bool> TrySendToolResultAsync(
+        string transportLeaseId,
+        string callId,
+        string resultJson,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(transportLeaseId) ||
+            !_activeRelays.TryGetValue(transportLeaseId, out var relay))
+            return false;
+
+        await relay.SendToolResultAsync(callId, resultJson, ct);
+        return true;
     }
 
     private Task StopRelayAsync(VoicePresenceSessionLeaseHandle handle, CancellationToken ct)
@@ -132,8 +173,15 @@ public sealed class VoiceVolatileMediaStreamPort(
         IVoiceTransport transport,
         CancellationToken ct)
     {
-        await _transportAttachmentPort.DetachAsync(attachedHandle, transport, ct);
-        await _leasePort.ReleaseAsync(attachedHandle, DetachedReason, ct);
+        try
+        {
+            await _transportAttachmentPort.DetachAsync(attachedHandle, transport, ct);
+            await _leasePort.ReleaseAsync(attachedHandle, DetachedReason, ct);
+        }
+        finally
+        {
+            await ReleaseToolCredentialAsync(attachedHandle, CancellationToken.None);
+        }
     }
 
     private async Task StopRelayAsync(string transportLeaseId)
@@ -141,6 +189,81 @@ public sealed class VoiceVolatileMediaStreamPort(
         if (_activeRelays.TryRemove(transportLeaseId, out var relay))
             await relay.DisposeAsync();
     }
+
+    private async Task RunLeaseRenewalAsync(
+        VoicePresenceSessionLeaseHandle handle,
+        VoiceVolatileMediaRelay relay,
+        CancellationToken ct)
+    {
+        var renewalInterval = ActorOwnedVoiceRealtimeSession.DefaultLeaseTtl / 2;
+        while (!ct.IsCancellationRequested)
+        {
+            await Task.Delay(renewalInterval, _timeProvider, ct);
+            if (!IsActiveRelay(handle.ActiveTransportLeaseId, relay))
+                return;
+
+            await DispatchLeaseRenewalAsync(handle, ct);
+        }
+    }
+
+    private bool IsActiveRelay(string? transportLeaseId, VoiceVolatileMediaRelay relay) =>
+        !string.IsNullOrWhiteSpace(transportLeaseId) &&
+        _activeRelays.TryGetValue(transportLeaseId, out var activeRelay) &&
+        ReferenceEquals(activeRelay, relay);
+
+    private Task DispatchLeaseRenewalAsync(VoicePresenceSessionLeaseHandle handle, CancellationToken ct) =>
+        _dispatchPort.DispatchAsync(
+            handle.ActorId,
+            VoicePresenceSessionDispatch.BuildDirectEnvelope(
+                handle.ActorId,
+                handle.ModuleName,
+                new VoiceTransportLeaseRenewRequested
+                {
+                    SessionId = handle.SessionId,
+                    OwnerId = handle.OwnerId,
+                    TransportLeaseId = handle.ActiveTransportLeaseId ?? string.Empty,
+                    LeaseEpoch = handle.LeaseEpoch,
+                    RenewExpiresAt = Timestamp.FromDateTimeOffset(
+                        _timeProvider.GetUtcNow().Add(ActorOwnedVoiceRealtimeSession.DefaultLeaseTtl)),
+                }),
+            ct);
+
+    private async Task BindToolCredentialAsync(
+        VoicePresenceSessionLeaseHandle handle,
+        VoiceToolCredentialTransportBinding? credentialBinding,
+        CancellationToken ct)
+    {
+        if (_toolCredentialPort is null)
+            return;
+
+        var credentialRef = Normalize(handle.ToolContext?.CredentialRef);
+        var transportLeaseId = Normalize(handle.ActiveTransportLeaseId);
+        if (credentialRef is null || transportLeaseId is null)
+            return;
+
+        if (credentialBinding is null ||
+            !string.Equals(credentialRef, Normalize(credentialBinding.CredentialRef), StringComparison.Ordinal))
+        {
+            throw new VoiceVolatileToolCredentialUnavailableException();
+        }
+
+        var bound = await _toolCredentialPort.BindTransportLeaseAsync(credentialBinding, transportLeaseId, ct);
+        if (!bound)
+            throw new VoiceVolatileToolCredentialUnavailableException();
+    }
+
+    private Task ReleaseToolCredentialAsync(
+        VoicePresenceSessionLeaseHandle handle,
+        CancellationToken ct)
+    {
+        var transportLeaseId = Normalize(handle.ActiveTransportLeaseId);
+        return transportLeaseId is null
+            ? Task.CompletedTask
+            : ReleaseToolCredentialAsync(transportLeaseId, ct);
+    }
+
+    private Task ReleaseToolCredentialAsync(string transportLeaseId, CancellationToken ct) =>
+        _toolCredentialPort?.ReleaseTransportLeaseAsync(transportLeaseId, ct) ?? Task.CompletedTask;
 
     private Task DispatchProviderEventAsync(
         VoiceProviderSessionKey sessionKey,
@@ -161,6 +284,7 @@ public sealed class VoiceVolatileMediaStreamPort(
                     OwnerId = sessionKey.OwnerId,
                     TransportLeaseId = sessionKey.TransportLeaseId,
                     LeaseExpiresAt = sessionKey.LeaseExpiresAt?.Clone(),
+                    LeaseEpoch = sessionKey.LeaseEpoch,
                     ProviderEvent = providerEvent.Clone(),
                 }),
             ct);
@@ -181,6 +305,7 @@ public sealed class VoiceVolatileMediaStreamPort(
                     OwnerId = handle.OwnerId,
                     TransportLeaseId = handle.ActiveTransportLeaseId ?? string.Empty,
                     LeaseExpiresAt = Timestamp.FromDateTimeOffset(handle.ExpiresAtUtc.ToUniversalTime()),
+                    LeaseEpoch = handle.LeaseEpoch,
                     ControlFrame = controlFrame.Clone(),
                 }),
             ct);
@@ -200,6 +325,7 @@ public sealed class VoiceVolatileMediaStreamPort(
                     OwnerId = handle.OwnerId,
                     TransportLeaseId = handle.ActiveTransportLeaseId ?? string.Empty,
                     LeaseExpiresAt = Timestamp.FromDateTimeOffset(handle.ExpiresAtUtc.ToUniversalTime()),
+                    LeaseEpoch = handle.LeaseEpoch,
                     InputImage = inputImage.Clone(),
                 }),
             ct);
@@ -213,8 +339,15 @@ public sealed class VoiceVolatileMediaStreamPort(
             OwnerId = handle.OwnerId,
             TransportLeaseId = handle.ActiveTransportLeaseId ?? string.Empty,
             LeaseExpiresAt = Timestamp.FromDateTimeOffset(handle.ExpiresAtUtc.ToUniversalTime()),
+            LeaseEpoch = handle.LeaseEpoch,
             Reason = reason,
         };
+
+    private static string? Normalize(string? value)
+    {
+        var normalized = value?.Trim();
+        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
+    }
 
     private static IReadOnlyDictionary<string, VoicePresenceModuleRegistration> BuildRegistrationMap(
         IEnumerable<VoicePresenceModuleRegistration> moduleRegistrations)
@@ -244,9 +377,13 @@ public sealed class VoiceVolatileMediaStreamPort(
         private Task? _relayTask;
         private bool _disposed;
 
-        public void Start()
+        private Task? _renewalTask;
+
+        public void Start(Func<CancellationToken, Task> renewalLoop)
         {
-            _relayTask = RunAsync(_relayCancellation.Token);
+            var ct = _relayCancellation.Token;
+            _relayTask = RunAsync(ct);
+            _renewalTask = renewalLoop(ct);
         }
 
         public Task SendProviderAudioAsync(VoiceProviderAudioFrame audioFrame, CancellationToken ct)
@@ -257,6 +394,12 @@ public sealed class VoiceVolatileMediaStreamPort(
             return transport.SendAudioAsync(audioFrame.Pcm16, ct);
         }
 
+        // Forward a tool-call result onto this relay's LIVE provider session — the same socket that emitted
+        // the function call. SendToolResultAsync adds the function_call_output and triggers response.create
+        // against the correct conversation, and the model's spoken answer flows back through the audio sink.
+        public Task SendToolResultAsync(string callId, string resultJson, CancellationToken ct) =>
+            providerSession.SendToolResultAsync(callId, resultJson, ct);
+
         public async ValueTask DisposeAsync()
         {
             if (_disposed)
@@ -265,6 +408,7 @@ public sealed class VoiceVolatileMediaStreamPort(
             _disposed = true;
             _relayCancellation.Cancel();
             await AwaitRelayAsync(_relayTask);
+            await AwaitRelayAsync(_renewalTask);
             _relayCancellation.Dispose();
         }
 

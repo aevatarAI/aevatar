@@ -30,6 +30,6 @@
   </ItemGroup>
   <ItemGroup>
     <Protobuf Include="workflow_actor_binding_document.proto" GrpcServices="None" />
-    <Protobuf Include="workflow_projection_transport.proto" GrpcServices="None" />
+    <Protobuf Include="workflow_projection_transport.proto" GrpcServices="None" AdditionalImportDirs="..\Aevatar.Workflow.Abstractions;..\..\Aevatar.Foundation.Abstractions" />
   </ItemGroup>
 </Project>

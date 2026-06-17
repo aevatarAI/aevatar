@@ -38,6 +38,10 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
             AddElasticsearchStores(services, configuration);
             services.TryAddEnumerable(
                 ServiceDescriptor.Singleton<IHostedService, AevatarOAuthClientEsAclStartupGuard>());
+            // Self-heal projection-index schema drift at startup (reindex + atomic alias swap)
+            // so a deploy that bumps a read-model schema doesn't 500 reads (e.g. /ws/voice).
+            services.TryAddEnumerable(
+                ServiceDescriptor.Singleton<IHostedService, ElasticsearchProjectionIndexReconcileHostedService>());
         }
         else
         {
@@ -50,6 +54,7 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
     private static void AddElasticsearchStores(IServiceCollection services, IConfiguration configuration)
     {
         TryAddElasticsearchStore<ChannelBotRegistrationDocument>(services, configuration, static document => document.Id);
+        TryAddElasticsearchStore<ConversationDeliveryCurrentStateDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<ProjectionScopeStatusDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<ExternalIdentityBindingDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<AevatarOAuthClientDocument>(services, configuration, static document => document.Id);
@@ -66,6 +71,7 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
     private static void AddInMemoryStores(IServiceCollection services)
     {
         TryAddInMemoryStore<ChannelBotRegistrationDocument>(services, static document => document.Id);
+        TryAddInMemoryStore<ConversationDeliveryCurrentStateDocument>(services, static document => document.Id);
         TryAddInMemoryStore<ProjectionScopeStatusDocument>(services, static document => document.Id);
         TryAddInMemoryStore<ExternalIdentityBindingDocument>(services, static document => document.Id);
         TryAddInMemoryStore<AevatarOAuthClientDocument>(services, static document => document.Id);

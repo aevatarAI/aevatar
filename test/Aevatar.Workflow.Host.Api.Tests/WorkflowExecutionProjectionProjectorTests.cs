@@ -898,6 +898,10 @@ public sealed class WorkflowExecutionProjectionProjectorTests
                     Input = "hello",
                     FinalOutput = "done",
                     FinalError = "err",
+                    SagaStatus = WorkflowSagaStatus.CompensationDeadLetter,
+                    DeadLetterFailedCompensationStepId = "refund_payment",
+                    DeadLetterRemainingUncompensated = 2,
+                    DeadLetterError = "refund failed",
                     ExecutionStates =
                     {
                         ["workflow_execution_kernel"] = Any.Pack(new WorkflowExecutionKernelState
@@ -916,6 +920,11 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         document.WorkflowName.Should().Be("wf-current");
         document.ScopeId.Should().Be("scope-current");
         document.Status.Should().Be(status);
+        document.SagaStatus.Should().Be(WorkflowSagaStatus.CompensationDeadLetter);
+        document.DeadLetterFailedCompensationStepId.Should().Be("refund_payment");
+        document.DeadLetterRemainingUncompensated.Should().Be(2);
+        document.DeadLetterError.Should().Be("refund failed");
+        document.StateVersion.Should().Be(1);
         document.Compiled.Should().BeTrue();
         document.ExecutionStateCount.Should().Be(1);
         document.Success.Should().Be(expectedSuccess);
@@ -1042,6 +1051,10 @@ public sealed class WorkflowExecutionProjectionProjectorTests
             WorkflowName = string.Empty,
             CommandId = "cmd-4",
             Status = "running",
+            SagaStatus = WorkflowSagaStatus.CompensationDeadLetter,
+            DeadLetterFailedCompensationStepId = "refund_payment",
+            DeadLetterRemainingUncompensated = 2,
+            DeadLetterError = "refund failed",
             FinalOutput = string.Empty,
             FinalError = string.Empty,
             StateVersion = 30,
@@ -1169,6 +1182,10 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         snapshot.CompletionStatus.Should().Be(Aevatar.Workflow.Application.Abstractions.Queries.WorkflowRunCompletionStatus.Running);
         snapshot.LastSuccess.Should().BeNull();
         snapshot.LastOutput.Should().BeEmpty();
+        snapshot.SagaStatus.Should().Be(WorkflowSagaStatus.CompensationDeadLetter);
+        snapshot.DeadLetterFailedCompensationStepId.Should().Be("refund_payment");
+        snapshot.DeadLetterRemainingUncompensated.Should().Be(2);
+        snapshot.DeadLetterError.Should().Be("refund failed");
         snapshot.TotalSteps.Should().Be(0);
         snapshot.RoleReplyCount.Should().Be(0);
 

@@ -485,6 +485,15 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
                         continue;
                     }
 
+                    // Surface server-side rejections (e.g. response.create while a response is already
+                    // active -> conversation_already_has_active_response) at Warning so the live tool-result
+                    // round trip is observable without raising provider verbosity.
+                    if (sessionEvent is OpenAIRealtimeErrorEvent errorEvent)
+                        _logger.LogWarning(
+                            "OpenAI realtime error code={ErrorCode} message={ErrorMessage}",
+                            errorEvent.Code,
+                            errorEvent.Message);
+
                     var providerEvent = MapSessionEvent(sessionEvent);
                     if (providerEvent != null)
                         await EmitAsync(providerEvent, ct);

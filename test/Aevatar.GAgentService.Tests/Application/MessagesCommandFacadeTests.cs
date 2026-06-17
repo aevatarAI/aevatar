@@ -10,6 +10,7 @@ using Aevatar.GAgentService.Application.Responses;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgentService.Tests.Application;
 
@@ -45,6 +46,20 @@ public sealed class MessagesCommandFacadeTests
         toolContext.Caller.ResponseId.Should().Be(command.ResponseId);
         toolContext.Credentials.NyxIdAccessToken.Should().Be("token");
         toolContext.Routing.NyxIdRoutePreference.Should().Be("route-value");
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldApplyConfiguredDefaultModel_WhenCallerOmitsModel()
+    {
+        var dispatch = new RecordingActorDispatchPort();
+        var facade = CreateFacade(dispatchPort: dispatch, defaultIngressModel: "chrono-llm-public/gpt-5.5");
+
+        var result = await facade.CreateAsync(BuildRequest("  "), CallerScopeContext("token"));
+
+        result.Error.Should().BeNull();
+        var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
+        command.Model.Should().Be("gpt-5.5");
+        command.RoutePreference.Should().Be("route-value");
     }
 
     [Fact]
@@ -273,7 +288,8 @@ public sealed class MessagesCommandFacadeTests
         IResponsesChatRouteDecisionPort? chatRouteDecisionPort = null,
         RecordingActorDispatchPort? dispatchPort = null,
         IResponsesToolClassificationService? toolClassificationService = null,
-        ILlmSessionRunObservationService? observationService = null)
+        ILlmSessionRunObservationService? observationService = null,
+        string? defaultIngressModel = null)
     {
         var effectiveSessionPort = sessionPort ?? new RecordingSessionPort();
         return new MessagesCommandFacade(
@@ -285,7 +301,10 @@ public sealed class MessagesCommandFacadeTests
             toolClassificationService ?? new StaticResponsesToolClassificationService(),
             new StaticResponsesDirectToolPlanService(),
             observationService ?? StaticLlmSessionRunObservationService.Completed("ok"),
-            NullLogger<MessagesCommandFacade>.Instance);
+            NullLogger<MessagesCommandFacade>.Instance,
+            defaultIngressModel is null
+                ? null
+                : Options.Create(new ResponsesIngressOptions { DefaultModel = defaultIngressModel }));
     }
 
     private static ResponsesCallerScopeResolutionContext CallerScopeContext(string bearerToken) =>

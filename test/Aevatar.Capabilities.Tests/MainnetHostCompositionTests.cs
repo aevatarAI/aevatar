@@ -13,6 +13,7 @@ using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.AI.ToolProviders.Telegram;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.AI.ToolProviders.Web;
+using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
 using Aevatar.Configuration;
@@ -24,6 +25,7 @@ using Aevatar.Foundation.Runtime.Hosting.Maintenance;
 using Aevatar.Foundation.VoicePresence;
 using Aevatar.Foundation.VoicePresence.Modules;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgents.Authoring.Lark;
 using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
@@ -31,12 +33,15 @@ using Aevatar.GAgents.Device;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.GAgents.StatusDashboard.Executors;
 using Aevatar.Mainnet.Host.Api.Hosting;
+using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.Scripting.Projection.ReadModels;
 using Aevatar.Workflow.Infrastructure.Runs;
+using Aevatar.Workflow.Integration.AI;
 using Aevatar.Workflow.Projection.ReadModels;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using System.Reflection;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.TestHost;
@@ -130,6 +135,13 @@ public sealed class MainnetHostCompositionTests
         toolSources.Should().Contain(source => source is TelegramAgentToolSource);
         toolSources.Should().Contain(source => source is SkillsAgentToolSource);
         toolSources.Should().Contain(source => source is OrnnAgentToolSource);
+        toolSources.Should().Contain(source => source is HumanInteractionChannelToolSource);
+        app.Services.GetRequiredService<IHumanInteractionPort>()
+            .Should()
+            .BeOfType<SkillBackedHumanInteractionPort>();
+        app.Services.GetRequiredService<IChannelInteractionNotificationPort>()
+            .Should()
+            .BeOfType<FeishuCardNotificationPort>();
         // Yield capability follows the actor, never the container (#2004): a DI-global
         // yielding handler hands "I will resume you" to surfaces with no pending-approval
         // continuation, stranding dead-letter approvals. RoleGAgent wires its own handler;
@@ -458,6 +470,23 @@ public sealed class MainnetHostCompositionTests
             .ContainSingle(static name => string.Equals(name, "voice_presence", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public void ConfigureMainnetAIFeatures_ShouldPreserveConfiguredVoiceDrainTimeout()
+    {
+        var options = new AevatarAIFeatureOptions();
+        options.VoicePresence.Module = new VoicePresenceModuleOptions
+        {
+            DrainTimeout = TimeSpan.FromSeconds(17),
+        };
+
+        InvokeConfigureMainnetAIFeatures(options);
+
+        options.VoicePresence.Module.DrainTimeout.Should().Be(TimeSpan.FromSeconds(17));
+        options.VoicePresence.Module.DirectExternalEventTypeUrls
+            .Should()
+            .ContainSingle("type.googleapis.com/aevatar.gagents.household.DeviceInbound");
+    }
+
     private static WebApplicationBuilder CreateBuilder(IReadOnlyDictionary<string, string?>? overrides = null)
     {
         var options = new WebApplicationOptions
@@ -502,6 +531,16 @@ public sealed class MainnetHostCompositionTests
             ["WorkflowConnectedServiceFileSubmit:Targets:0:Endpoint:Method"] = "POST",
             ["WorkflowConnectedServiceFileSubmit:Targets:0:Endpoint:FileFieldName"] = "upload",
         };
+
+    private static void InvokeConfigureMainnetAIFeatures(AevatarAIFeatureOptions options)
+    {
+        var method = typeof(MainnetHostBuilderExtensions).GetMethod(
+            "ConfigureMainnetAIFeatures",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        method.Should().NotBeNull();
+
+        method!.Invoke(null, [options]);
+    }
 
     private static IEnumerable<ServiceDescriptor> HostedServiceDescriptors<THostedService>(IServiceCollection services)
         where THostedService : IHostedService

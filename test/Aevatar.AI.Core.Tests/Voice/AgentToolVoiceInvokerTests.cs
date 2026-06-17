@@ -1,6 +1,9 @@
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Voice;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.VoicePresence.Abstractions;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.AI.Core.Tests.Voice;
 
@@ -72,12 +75,134 @@ public class AgentToolVoiceInvokerTests
         results.Should().OnlyContain(result => result == """{"ok":true}""");
     }
 
+    [Fact]
+    public async Task ExecuteAsync_ShouldResolveCredentialRefAndExposeCallerNyxIdTokenToTool()
+    {
+        var captured = new CapturingAgentTool("nyxid_proxy");
+        var credentials = new StubCredentialProvider(("voice-tool:ref-1", "caller-token-123"));
+        var invoker = new AgentToolVoiceInvoker([new StubToolSource(captured)], credentials);
+        var toolContext = new VoiceToolExecutionContext
+        {
+            CredentialRef = "voice-tool:ref-1",
+            ExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)),
+        };
+
+        await invoker.ExecuteAsync("nyxid_proxy", "{}", toolContext);
+
+        credentials.RequestedRefs.Should().ContainSingle().Which.Should().Be("voice-tool:ref-1");
+        captured.CapturedNyxIdAccessToken.Should().Be("caller-token-123");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithCredentialRef_ShouldMapVoiceBusinessContextAndRejectHiddenTool()
+    {
+        var allowed = new CapturingAgentTool("door.open");
+        var hidden = new CapturingAgentTool("lights.toggle");
+        var credentials = new StubCredentialProvider(("voice-tool:ref-2", "caller-token-456"));
+        var invoker = new AgentToolVoiceInvoker([new StubToolSource(allowed, hidden)], credentials);
+        var toolContext = CreateFullToolContext("voice-tool:ref-2");
+
+        await invoker.ExecuteAsync("door.open", "{}", toolContext);
+        var hiddenAct = () => invoker.ExecuteAsync("lights.toggle", "{}", toolContext);
+
+        allowed.CapturedContext.Should().NotBeNull();
+        var captured = allowed.CapturedContext!;
+        captured.Credentials.NyxIdAccessToken.Should().Be("caller-token-456");
+        captured.Caller.ScopeId.Should().Be("caller-scope-1");
+        captured.Caller.OwnerSubject.Should().Be("owner-subject-1");
+        captured.Caller.ResponseId.Should().Be("response-1");
+        captured.Channel.Platform.Should().Be("lark");
+        captured.Channel.SenderId.Should().Be("sender-1");
+        captured.Channel.RegistrationScopeId.Should().Be("registration-scope-1");
+        captured.Channel.MessageId.Should().Be("message-1");
+        captured.Channel.PlatformMessageId.Should().Be("platform-message-1");
+        captured.Channel.DeliveryTargetId.Should().Be("delivery-1");
+        captured.SenderBinding.BindingId.Should().Be("sender-binding-1");
+        captured.Routing.NyxIdRoutePreference.Should().Be("direct");
+        captured.ConnectedServices.ContextJson.Should().Be("""{"service":"ctx"}""");
+        captured.ToolVisibility.IsRestricted.Should().BeTrue();
+        captured.ToolVisibility.Allows("door.open").Should().BeTrue();
+        captured.ToolVisibility.Allows("lights.toggle").Should().BeFalse();
+        await hiddenAct.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Tool 'lights.toggle' not found");
+        hidden.CapturedContext.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldNotSetCredentialContext_WhenNoScope()
+    {
+        var captured = new CapturingAgentTool("nyxid_proxy");
+        var invoker = new AgentToolVoiceInvoker([new StubToolSource(captured)]);
+
+        await invoker.ExecuteAsync("nyxid_proxy", "{}");
+
+        captured.CapturedNyxIdAccessToken.Should().BeNull();
+    }
+
+    private static VoiceToolExecutionContext CreateFullToolContext(string credentialRef)
+    {
+        var toolContext = new VoiceToolExecutionContext
+        {
+            CredentialRef = credentialRef,
+            ExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)),
+            CallerScopeId = " caller-scope-1 ",
+            OwnerSubject = " owner-subject-1 ",
+            ResponseId = " response-1 ",
+            ChannelPlatform = " lark ",
+            ChannelSenderId = " sender-1 ",
+            ChannelRegistrationScopeId = " registration-scope-1 ",
+            ChannelMessageId = " message-1 ",
+            ChannelPlatformMessageId = " platform-message-1 ",
+            ChannelDeliveryTargetId = " delivery-1 ",
+            SenderBindingId = " sender-binding-1 ",
+            NyxIdRoutePreference = " direct ",
+            ConnectedServicesContextJson = """ {"service":"ctx"} """,
+        };
+        toolContext.AllowedToolNames.Add(" door.open ");
+        return toolContext;
+    }
+
+    private sealed class CapturingAgentTool(string name) : IAgentTool
+    {
+        public string Name { get; } = name;
+        public string Description => "capturing";
+        public string ParametersSchema => "{}";
+        public string? CapturedNyxIdAccessToken { get; private set; }
+        public AgentToolExecutionContext? CapturedContext { get; private set; }
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            _ = argumentsJson;
+            _ = ct;
+            CapturedNyxIdAccessToken = AgentToolRequestContext.NyxIdAccessToken;
+            CapturedContext = AgentToolRequestContext.Current;
+            return Task.FromResult("{}");
+        }
+    }
+
     private sealed class StubToolSource(params IAgentTool[] tools) : IAgentToolSource
     {
         public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
         {
             _ = ct;
             return Task.FromResult<IReadOnlyList<IAgentTool>>(tools);
+        }
+    }
+
+    private sealed class StubCredentialProvider(params (string Ref, string Token)[] credentials) : ICredentialProvider
+    {
+        private readonly Dictionary<string, string> _credentials = credentials.ToDictionary(
+            static credential => credential.Ref,
+            static credential => credential.Token,
+            StringComparer.Ordinal);
+
+        public List<string> RequestedRefs { get; } = [];
+
+        public Task<string?> ResolveAsync(string credentialRef, CancellationToken ct = default)
+        {
+            _ = ct;
+            RequestedRefs.Add(credentialRef);
+            return Task.FromResult(_credentials.GetValueOrDefault(credentialRef));
         }
     }
 

@@ -449,7 +449,12 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
                     ["input"] = "seed-input",
                     ["step-a"] = "alpha",
                 },
-                Attempt: 2));
+                Attempt: 2,
+                StartStepIdempotency: new WorkflowStepIdempotencyView(
+                    "source-run",
+                    "step-b",
+                    3,
+                    "source-run:step-b:3")));
 
         var envelope = factory.CreateEnvelope(command, new CommandContext(
             "actor-1",
@@ -461,6 +466,11 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         request.ForkSeed.SourceRunId.Should().Be("source-run");
         request.ForkSeed.StartAtStepId.Should().Be("step-b");
         request.ForkSeed.Attempt.Should().Be(2);
+        request.ForkSeed.StartStepIdempotency.Should().NotBeNull();
+        request.ForkSeed.StartStepIdempotency.LogicalRunId.Should().Be("source-run");
+        request.ForkSeed.StartStepIdempotency.StepId.Should().Be("step-b");
+        request.ForkSeed.StartStepIdempotency.LogicalAttempt.Should().Be(3);
+        request.ForkSeed.StartStepIdempotency.IdempotencyKey.Should().Be("source-run:step-b:3");
         request.ForkSeed.Variables.Should().Contain("input", "seed-input");
         request.ForkSeed.Variables.Should().Contain("step-a", "alpha");
     }

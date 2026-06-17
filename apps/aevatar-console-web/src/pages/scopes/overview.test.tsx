@@ -4,7 +4,7 @@ import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
 import ScopeOverviewPage from "./overview";
 
 describe("ScopeOverviewPage", () => {
-  it("redirects legacy overview links to the teams home route and keeps query context", async () => {
+  it("redirects legacy overview links to the scoped teams route and keeps non-scope query context", async () => {
     window.history.replaceState(
       {},
       "",
@@ -14,11 +14,11 @@ describe("ScopeOverviewPage", () => {
     renderWithQueryClient(React.createElement(ScopeOverviewPage));
 
     await waitFor(() => {
-      expect(window.location.pathname).toBe("/teams");
+      expect(window.location.pathname).toBe("/scopes/scope-a/teams");
     });
 
     const params = new URLSearchParams(window.location.search);
-    expect(params.get("scopeId")).toBe("scope-a");
+    expect(params.get("scopeId")).toBeNull();
     expect(params.get("workflowId")).toBe("workflow-alpha");
   });
 });

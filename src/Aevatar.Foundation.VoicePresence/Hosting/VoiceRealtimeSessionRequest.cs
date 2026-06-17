@@ -7,7 +7,8 @@ public sealed record VoiceRealtimeSessionRequest(
     string ActorId,
     string? ModuleName = null,
     VoiceRealtimeSessionPurpose Purpose = VoiceRealtimeSessionPurpose.Attach,
-    VoiceSessionOverrides? SessionOverrides = null);
+    VoiceSessionOverrides? SessionOverrides = null,
+    VoiceToolExecutionContext? ToolContext = null);
 
 public enum VoiceRealtimeSessionPurpose
 {

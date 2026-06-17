@@ -51,6 +51,7 @@ export type ResponseErrorPayload = {
   readonly code?: string;
   readonly detail?: string;
   readonly error?: string;
+  readonly errors?: unknown;
   readonly message?: string;
   readonly status?: number;
   readonly title?: string;
@@ -82,6 +83,11 @@ function readResponseErrorFromPayload(
     return `${title}: ${detail}`;
   }
 
+  const validationErrors = readValidationErrors(payload.errors);
+  if (validationErrors) {
+    return title ? `${title}: ${validationErrors}` : validationErrors;
+  }
+
   if (detail) {
     return detail;
   }
@@ -100,6 +106,35 @@ function readResponseErrorFromPayload(
   }
 
   return "";
+}
+
+function readValidationErrors(value: unknown): string | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const messages: string[] = [];
+  for (const [field, fieldErrors] of Object.entries(value)) {
+    const normalizedField = normalizeWhitespace(field);
+    if (Array.isArray(fieldErrors)) {
+      for (const entry of fieldErrors) {
+        const message = readJsonErrorText(entry);
+        if (!message) {
+          continue;
+        }
+
+        messages.push(normalizedField ? `${normalizedField}: ${message}` : message);
+      }
+      continue;
+    }
+
+    const message = readJsonErrorText(fieldErrors);
+    if (message) {
+      messages.push(normalizedField ? `${normalizedField}: ${message}` : message);
+    }
+  }
+
+  return messages.length > 0 ? messages.join("; ") : null;
 }
 
 export async function readResponseErrorDetails(

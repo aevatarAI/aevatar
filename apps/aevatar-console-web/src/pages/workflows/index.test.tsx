@@ -107,7 +107,7 @@ describe("WorkflowsPage", () => {
       );
     });
 
-    fireEvent.click(document.querySelector(".ant-drawer-close") as HTMLElement);
+    fireEvent.click(screen.getByRole("button", { name: /close/i }));
 
     await waitFor(() => {
       expect(window.location.search).toBe("");

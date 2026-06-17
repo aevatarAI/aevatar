@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.Abstractions.EventSourcing;
+using Aevatar.GAgents.Channel.Abstractions;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgents.Scheduled;
@@ -46,7 +47,8 @@ public sealed class UserAgentCatalogCommittedStateProjectionActivationPlanProvid
         payload.Is(SkillRunnerExecutionRejectedEvent.Descriptor) ||
         payload.Is(SkillRunnerOneShotRetiredEvent.Descriptor) ||
         payload.Is(SkillRunnerDisabledEvent.Descriptor) ||
-        payload.Is(SkillRunnerEnabledEvent.Descriptor);
+        payload.Is(SkillRunnerEnabledEvent.Descriptor) ||
+        payload.Is(DeliveryProducedEvent.Descriptor);
 
     private static ProjectionActivationPlan DurablePlan(string rootActorId) =>
         new()

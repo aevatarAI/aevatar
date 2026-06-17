@@ -10,6 +10,7 @@ using Aevatar.AI.LLMProviders.MEAI;
 using Aevatar.AI.LLMProviders.NyxId;
 using Aevatar.AI.LLMProviders.Tornado;
 using Aevatar.AI.ToolProviders.MCP;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Ornn;
 using Aevatar.AI.ToolProviders.Scripting;
 using Aevatar.AI.ToolProviders.ServiceInvoke;
@@ -33,6 +34,7 @@ using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Foundation.VoicePresence;
@@ -71,7 +73,7 @@ public sealed class AevatarAIFeatureOptions
     public string? ApiKey { get; set; }
     public NyxIdLlmEndpointSpec? NyxIdLlmEndpoint { get; set; }
     public string DefaultProvider { get; set; } = "openai";
-    public string OpenAIModel { get; set; } = "gpt-5.4";
+    public string OpenAIModel { get; set; } = LlmDefaults.Model;
     public string DeepSeekModel { get; set; } = "deepseek-chat";
     public List<string> SkillDirectories { get; } = [];
     public bool EnableServiceInvokeTools { get; set; }
@@ -109,8 +111,14 @@ public static class ServiceCollectionExtensions
         // actors that implement the pending-approval continuation (RoleGAgent wires its
         // own). Surfaces without that capability fall back to MissingApprovalHandler and
         // fail closed instead of stranding a dead-letter approval (#2004).
-        services.TryAddSingleton<IVoiceToolInvoker, AgentToolVoiceInvoker>();
-        services.TryAddSingleton<IVoiceToolCatalog, AgentToolVoiceCatalog>();
+        services.TryAddSingleton<IVoiceToolInvoker>(sp => new AgentToolVoiceInvoker(
+            sp.GetServices<IAgentToolSource>(),
+            ResolveVoiceCredentialProviders(sp),
+            sp.GetService<ILogger<AgentToolVoiceInvoker>>()));
+        services.TryAddSingleton<IVoiceToolCatalog>(sp => new AgentToolVoiceCatalog(
+            sp.GetServices<IAgentToolSource>(),
+            ResolveVoiceCredentialProviders(sp),
+            sp.GetService<ILogger<AgentToolVoiceCatalog>>()));
         services.TryAddSingleton<IVoicePresenceCapabilityCommandPort, VoicePresenceCapabilityCommandPort>();
         services.TryAddSingleton<IWorkflowYamlValidator, WorkflowYamlValidatorImpl>();
         services.TryAddSingleton<IWorkflowDefinitionCommandAdapter>(sp =>
@@ -172,12 +180,20 @@ public static class ServiceCollectionExtensions
         if (nyxIdRealtimeCredentialOptions.Enabled)
         {
             services.TryAddSingleton(nyxIdRealtimeCredentialOptions);
-            services.TryAddSingleton<IRealtimeProviderCredentialResolver, NyxIdRealtimeProviderCredentialResolver>();
+            services.TryAddSingleton<IRealtimeProviderCredentialResolver>(sp => new NyxIdRealtimeProviderCredentialResolver(
+                sp.GetRequiredService<INyxIdApiClientFactory>(),
+                sp.GetRequiredService<NyxIdRealtimeProviderCredentialOptions>(),
+                sp.GetRequiredService<ILogger<NyxIdRealtimeProviderCredentialResolver>>(),
+                ResolveVoiceCredentialProviders(sp)));
         }
 
         services.TryAddSingleton<IVoicePresenceCapabilityQueryPort, VoicePresenceCapabilityQueryPort>();
+        services.TryAddSingleton<IVoicePresenceLeaseObservationPort, VoicePresenceLeaseObservationPort>();
         services.TryAddSingleton<IVoicePresenceSessionLeasePort, VoicePresenceSessionLeasePort>();
         services.TryAddSingleton<IVoicePresenceTransportAttachmentPort, VoicePresenceTransportAttachmentPort>();
+        services.TryAddSingleton(sp => new VoiceVolatileToolCredentialPort(sp.GetService<TimeProvider>()));
+        services.TryAddSingleton<IVoiceVolatileToolCredentialPort>(sp => sp.GetRequiredService<VoiceVolatileToolCredentialPort>());
+        services.TryAddSingleton<IVoiceToolCredentialIssuer>(sp => sp.GetRequiredService<VoiceVolatileToolCredentialPort>());
         services.TryAddSingleton<IVoiceVolatileMediaStreamPort, VoiceVolatileMediaStreamPort>();
         services.TryAddSingleton<IRealtimeSession<VoiceRealtimeSessionRequest, VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeFrame, VoiceRealtimeSessionCompletion>, ActorOwnedVoiceRealtimeSession>();
         services.AddVoicePresenceCapabilityProjection();
@@ -186,6 +202,22 @@ public static class ServiceCollectionExtensions
             ServiceDescriptor.Singleton<IEventModuleFactory<IEventHandlerContext>, VoicePresenceModuleFactory>());
         foreach (var registration in registrations)
             services.AddSingleton(registration);
+    }
+
+    private static IReadOnlyList<ICredentialProvider> ResolveVoiceCredentialProviders(IServiceProvider services)
+    {
+        var providers = new List<ICredentialProvider>();
+        var voiceCredentialProvider = services.GetService<IVoiceToolCredentialIssuer>() as ICredentialProvider;
+        if (voiceCredentialProvider is not null)
+            providers.Add(voiceCredentialProvider);
+
+        foreach (var provider in services.GetServices<ICredentialProvider>())
+        {
+            if (!ReferenceEquals(provider, voiceCredentialProvider))
+                providers.Add(provider);
+        }
+
+        return providers;
     }
 
     private static IServiceCollection AddVoicePresenceCapabilityProjectionStore(
@@ -318,10 +350,11 @@ public static class ServiceCollectionExtensions
                 handle.SessionId,
                 handle.OwnerId,
                 handle.ActiveTransportLeaseId ?? string.Empty,
-                0,
+                handle.LeaseEpoch,
                 Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(handle.ExpiresAtUtc.ToUniversalTime()),
                 handle.ActorId,
-                handle.ModuleName),
+                handle.ModuleName,
+                handle.ToolContext?.Clone()),
             providerConfig,
             eventSink,
             audioSink,
@@ -347,7 +380,7 @@ public static class ServiceCollectionExtensions
                 .Where(static name => !string.IsNullOrWhiteSpace(name)),
             StringComparer.OrdinalIgnoreCase);
 
-        foreach (var discoveredTool in await toolCatalog.DiscoverAsync(ct))
+        foreach (var discoveredTool in await toolCatalog.DiscoverAsync(toolContext: null, ct: ct))
         {
             var toolName = discoveredTool.Name?.Trim();
             if (string.IsNullOrWhiteSpace(toolName) || !knownNames.Add(toolName))
@@ -409,15 +442,26 @@ public static class ServiceCollectionExtensions
         return names.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
+    // Refactor (cluster-voice-nyxid-ephemeral-broker): the broker slug defaults to
+    // NyxIdRealtimeProviderCredentialOptions.DefaultServiceSlug so voice stays enabled even when the
+    // deployment config/secret is wiped on redeploy — config only overrides the slug, never disables it.
+    private static string ResolveNyxIdRealtimeServiceSlug(IConfiguration configuration)
+    {
+        var configured = configuration["Aevatar:VoicePresence:OpenAI:Nyxid:ServiceSlug"]?.Trim();
+        return string.IsNullOrWhiteSpace(configured)
+            ? NyxIdRealtimeProviderCredentialOptions.DefaultServiceSlug
+            : configured;
+    }
+
     private static bool IsNyxIdRealtimeBrokerEnabled(IConfiguration configuration) =>
-        !string.IsNullOrWhiteSpace(configuration["Aevatar:VoicePresence:OpenAI:Nyxid:ServiceSlug"]);
+        !string.IsNullOrWhiteSpace(ResolveNyxIdRealtimeServiceSlug(configuration));
 
     private static NyxIdRealtimeProviderCredentialOptions BuildNyxIdRealtimeCredentialOptions(
         IConfiguration configuration)
     {
         var options = new NyxIdRealtimeProviderCredentialOptions
         {
-            ServiceSlug = configuration["Aevatar:VoicePresence:OpenAI:Nyxid:ServiceSlug"]?.Trim() ?? string.Empty,
+            ServiceSlug = ResolveNyxIdRealtimeServiceSlug(configuration),
         };
 
         var mintPath = configuration["Aevatar:VoicePresence:OpenAI:Nyxid:MintPath"];
@@ -510,6 +554,7 @@ public static class ServiceCollectionExtensions
             StaleAfter = options.StaleAfter,
             DedupeWindow = options.DedupeWindow,
             ToolExecutionTimeout = options.ToolExecutionTimeout,
+            DrainTimeout = options.DrainTimeout,
             PendingInjectionCapacity = options.PendingInjectionCapacity,
             TimeProvider = options.TimeProvider,
             DirectExternalEventTypeUrls = options.DirectExternalEventTypeUrls,
@@ -774,6 +819,7 @@ public static class ServiceCollectionExtensions
                 // NyxID gateway token comes exclusively from per-request metadata
                 // (the caller's Bearer token). No local secrets fallback.
                 static () => null,
+                provider.DefaultRoutePreference,
                 providerLogger);
         }
 
@@ -789,8 +835,9 @@ public static class ServiceCollectionExtensions
         if (string.IsNullOrWhiteSpace(gatewayEndpoint))
             return null;
 
-        var model = configuration["Aevatar:NyxId:DefaultModel"] ?? options.OpenAIModel;
-        return new ConfiguredProvider("nyxid", "nyxid", model, gatewayEndpoint, string.Empty);
+        var model = ResolveNyxIdDefaultModel(configuration, options);
+        var defaultRoute = ResolveNyxIdDefaultRoute(configuration);
+        return new ConfiguredProvider("nyxid", "nyxid", model, gatewayEndpoint, string.Empty, defaultRoute);
     }
 
     private static Func<IAevatarSecretsStore> CreateSecretsStoreAccessor(
@@ -875,7 +922,11 @@ public static class ServiceCollectionExtensions
                 ? semantic.Endpoint
                 : endpoint.Trim();
 
-            configured.Add(new ConfiguredProvider(name.Trim(), semantic.ProviderType, resolvedModel, resolvedEndpoint, apiKey.Trim()));
+            var defaultRoute = IsNyxIdProviderType(semantic.ProviderType)
+                ? ResolveNyxIdDefaultRoute(configuration)
+                : null;
+            configured.Add(new ConfiguredProvider(
+                name.Trim(), semantic.ProviderType, resolvedModel, resolvedEndpoint, apiKey.Trim(), defaultRoute));
         }
 
         return configured;
@@ -984,7 +1035,7 @@ public static class ServiceCollectionExtensions
         return providerKind switch
         {
             ProviderKind.DeepSeek => new ProviderSemantic("deepseek", options.DeepSeekModel, "https://api.deepseek.com/v1"),
-            ProviderKind.NyxId => new ProviderSemantic("nyxid", options.OpenAIModel, ResolveNyxIdGatewayEndpoint(configuration, options)),
+            ProviderKind.NyxId => new ProviderSemantic("nyxid", ResolveNyxIdDefaultModel(configuration, options), ResolveNyxIdGatewayEndpoint(configuration, options)),
             _ => new ProviderSemantic("openai", options.OpenAIModel, null),
         };
     }
@@ -1032,12 +1083,27 @@ public static class ServiceCollectionExtensions
         NyxId,
     }
 
+    // The default route/model literals live once in LlmDefaults (Aevatar.AI.Abstractions) so the
+    // NyxID server-default path and the OpenAI-compatible Responses ingress default share one
+    // source and cannot drift. Every nyxid registration path resolves its default through these
+    // helpers, which apply per-deployment config overrides on top.
+    private static string ResolveNyxIdDefaultRoute(IConfiguration configuration) =>
+        configuration["Aevatar:NyxId:DefaultRoute"] is { Length: > 0 } route
+            ? route
+            : LlmDefaults.NyxIdRoute;
+
+    private static string ResolveNyxIdDefaultModel(IConfiguration configuration, AevatarAIFeatureOptions options) =>
+        configuration["Aevatar:NyxId:DefaultModel"] is { Length: > 0 } model
+            ? model
+            : options.OpenAIModel;
+
     private sealed record ConfiguredProvider(
         string Name,
         string ProviderType,
         string Model,
         string? Endpoint,
-        string ApiKey);
+        string ApiKey,
+        string? DefaultRoutePreference = null);
 
     private static bool IsNyxIdProviderType(string providerType) =>
         providerType.Contains("nyxid", StringComparison.OrdinalIgnoreCase);

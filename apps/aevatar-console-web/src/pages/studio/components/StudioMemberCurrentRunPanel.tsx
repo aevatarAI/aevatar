@@ -21,7 +21,6 @@ import {
   monoFontFamily,
   studioInvokeColors,
   trimOptional,
-  truncateMiddle,
 } from './studioInvokeUi';
 import { t } from "@/shared/i18n/messages";
 
@@ -38,13 +37,12 @@ type StudioMemberCurrentRunPanelProps = {
   readonly currentRunRequest: CurrentRunRequest | null;
   readonly endpointLabel: string;
   readonly invokeResult: InvokeResultState;
-  readonly memberId: string;
-  readonly publishedContext: string;
-  readonly revisionId: string;
   readonly runElapsedLabel: string;
   readonly runViewMode: RunViewMode;
+  readonly showDebugTabs?: boolean;
   readonly transcriptViewportRef: React.RefObject<HTMLDivElement | null>;
   readonly onCopyError: () => void;
+  readonly onOpenInspector?: () => void;
   readonly onRetryAsNewRun: () => void;
   readonly onTabChange: (tab: RunOutputTab) => void;
 };
@@ -97,15 +95,10 @@ function getRunMarker(input: {
   }
 
   if (input.status === 'running') {
-    return 'Running run';
+    return 'Running';
   }
 
-  return 'Latest run';
-}
-
-function getShortRunId(runId: string): string {
-  const normalized = trimOptional(runId);
-  return normalized ? truncateMiddle(normalized, 6, 4) : 'pending';
+  return 'Latest response';
 }
 
 function buildStatusSummary(input: {
@@ -115,9 +108,7 @@ function buildStatusSummary(input: {
 }): string {
   return `${getStatusLabel(input.invokeResult.status)} · ${
     input.runElapsedLabel
-  } · ${input.endpointLabel || 'chat'} · Run ${getShortRunId(
-    input.invokeResult.runId,
-  )}`;
+  } · ${input.endpointLabel || 'chat'}`;
 }
 
 function readEventString(event: unknown, key: string): string {
@@ -240,7 +231,7 @@ const tabPaneStyle: React.CSSProperties = {
 
 const outputPaneStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 12,
+  gap: 10,
   minWidth: 0,
 };
 
@@ -252,6 +243,13 @@ const sectionStyle: React.CSSProperties = {
   gap: 8,
   minWidth: 0,
   padding: '12px 14px',
+};
+
+const responseSectionStyle: React.CSSProperties = {
+  ...sectionStyle,
+  background: studioInvokeColors.panel,
+  borderColor: studioInvokeColors.borderStrong,
+  padding: '16px 18px',
 };
 
 const sectionLabelStyle: React.CSSProperties = {
@@ -275,6 +273,9 @@ const bodyTextStyle: React.CSSProperties = {
 
 const emptyStateStyle: React.CSSProperties = {
   alignItems: 'center',
+  background: studioInvokeColors.surface,
+  border: `1px dashed ${studioInvokeColors.borderStrong}`,
+  borderRadius: 8,
   color: studioInvokeColors.muted,
   display: 'flex',
   flex: 1,
@@ -501,14 +502,13 @@ const StudioMemberCurrentRunPanel: React.FC<
   currentRunRequest,
   endpointLabel,
   invokeResult,
-  memberId,
   onCopyError,
+  onOpenInspector,
   onRetryAsNewRun,
   onTabChange,
-  publishedContext,
-  revisionId,
   runElapsedLabel,
   runViewMode,
+  showDebugTabs = true,
   transcriptViewportRef,
 }) => {
   const outputText = getOutputText({ chatMessages, invokeResult });
@@ -621,7 +621,7 @@ const StudioMemberCurrentRunPanel: React.FC<
   const tabItems = [
     {
       key: 'output' as const,
-      label: t("pages.studio.studiomembercurrentrunpanel.output", "Output"),
+      label: t("pages.studio.studiomembercurrentrunpanel.output", "Response"),
     },
     {
       key: 'timeline' as const,
@@ -633,7 +633,7 @@ const StudioMemberCurrentRunPanel: React.FC<
     },
     {
       key: 'metadata' as const,
-      label: t("pages.studio.studiomembercurrentrunpanel.metadata", "Metadata"),
+      label: t("pages.studio.studiomembercurrentrunpanel.details", "Details"),
     },
   ];
 
@@ -652,10 +652,10 @@ const StudioMemberCurrentRunPanel: React.FC<
       return (
           <div style={outputPaneStyle}>
             <div style={sectionStyle}>
-              <span style={sectionLabelStyle}>{t("pages.studio.studiomembercurrentrunpanel.input", "Input")}</span>
+              <span style={sectionLabelStyle}>{t("pages.studio.studiomembercurrentrunpanel.input", "Request")}</span>
             <p style={bodyTextStyle}>
               {inputText ||
-                t("pages.studio.studiomembercurrentrunpanel.no.prompt.captured", "No prompt captured.")}
+                t("pages.studio.studiomembercurrentrunpanel.no.prompt.captured", "No request captured.")}
             </p>
             </div>
           <div style={isCancelled ? warningCardStyle : errorCardStyle}>
@@ -690,7 +690,7 @@ const StudioMemberCurrentRunPanel: React.FC<
           ) : null}
           {outputText ? (
             <div style={sectionStyle}>
-              <span style={sectionLabelStyle}>{t("pages.studio.studiomembercurrentrunpanel.output", "Output")}</span>
+              <span style={sectionLabelStyle}>{t("pages.studio.studiomembercurrentrunpanel.output", "Response")}</span>
               <p style={bodyTextStyle}>{outputText}</p>
             </div>
           ) : null}
@@ -698,16 +698,18 @@ const StudioMemberCurrentRunPanel: React.FC<
             <span style={sectionLabelStyle}>{t("pages.studio.studiomembercurrentrunpanel.recovery.path", "Recovery path")}</span>
             <Typography.Text style={helperTextStyle}>
               {isCancelled
-                ? t("pages.studio.studiomembercurrentrunpanel.this.stopped.run.stays.in.history", "This stopped run stays in history. Retry as a new run when you want fresh output, or switch to Observe to inspect the latest backend events.")
-                : t("pages.studio.studiomembercurrentrunpanel.this.failed.only.the.invoke.run", "This failed only the Invoke run. Retry with a smaller prompt, inspect Events for backend signals, or return to Build/Bind if the member contract needs changes.")}
+                ? t("pages.studio.studiomembercurrentrunpanel.this.stopped.run.stays.in.history", "This stopped run stays in history. Retry as a new run when you want a fresh response, or open Details for backend events.")
+                : t("pages.studio.studiomembercurrentrunpanel.this.failed.only.the.invoke.run", "This run failed. Retry with a smaller request, open Details for backend signals, or return to Build/Bind if the member contract needs changes.")}
             </Typography.Text>
           </div>
           <div style={errorActionsStyle}>
             <Button
               icon={<UnorderedListOutlined />}
-              onClick={() => onTabChange('events')}
+              onClick={() =>
+                onOpenInspector ? onOpenInspector() : onTabChange('events')
+              }
             >
-              {t("pages.studio.studiomembercurrentrunpanel.view.events", "View events")}</Button>
+              {t("pages.studio.studiomembercurrentrunpanel.view.events", "Open Details")}</Button>
             <Button icon={<CopyOutlined />} onClick={onCopyError}>
               {t("pages.studio.studiomembercurrentrunpanel.copy.error", "Copy error")}</Button>
             <Button icon={<ReloadOutlined />} onClick={onRetryAsNewRun}>
@@ -724,33 +726,33 @@ const StudioMemberCurrentRunPanel: React.FC<
         style={outputPaneStyle}
       >
         <div style={sectionStyle}>
-          <span style={sectionLabelStyle}>{t("pages.studio.studiomembercurrentrunpanel.status.summary", "Status summary")}</span>
+          <span style={sectionLabelStyle}>{t("pages.studio.studiomembercurrentrunpanel.status.summary", "Run status")}</span>
           <div style={summaryStyle}>{statusSummary}</div>
         </div>
         <div style={sectionStyle}>
-          <span style={sectionLabelStyle}>{t("pages.studio.studiomembercurrentrunpanel.input.2", "Input")}</span>
+          <span style={sectionLabelStyle}>{t("pages.studio.studiomembercurrentrunpanel.input.2", "Request")}</span>
           <p style={bodyTextStyle}>
             {inputText ||
-              t("pages.studio.studiomembercurrentrunpanel.no.prompt.captured", "No prompt captured.")}
+              t("pages.studio.studiomembercurrentrunpanel.no.prompt.captured", "No request captured.")}
           </p>
         </div>
-        <div style={sectionStyle}>
-          <span style={sectionLabelStyle}>{t("pages.studio.studiomembercurrentrunpanel.output.2", "Output")}</span>
+        <div style={responseSectionStyle}>
+          <span style={sectionLabelStyle}>{t("pages.studio.studiomembercurrentrunpanel.output.2", "Response")}</span>
           {invokeResult.status === 'running' && !outputText ? (
             <Typography.Text style={helperTextStyle} type="secondary">
-              {t("pages.studio.studiomembercurrentrunpanel.waiting.for.output", "Waiting for output...")}</Typography.Text>
+              {t("pages.studio.studiomembercurrentrunpanel.waiting.for.output", "Waiting for a response...")}</Typography.Text>
           ) : outputText ? (
             <p style={bodyTextStyle}>{outputText}</p>
           ) : invokeResult.status === 'success' ? (
             <div style={helperTextStyle}>
-              <div>{t("pages.studio.studiomembercurrentrunpanel.no.displayable.content.returned", "No displayable content returned.")}</div>
+              <div>{t("pages.studio.studiomembercurrentrunpanel.no.displayable.content.returned", "No readable response returned.")}</div>
               <div>
-                {t("pages.studio.studiomembercurrentrunpanel.the.run.ended.successfully", "The Run ended successfully but no user-visible Output was returned.")}</div>
-              <div>{t("pages.studio.studiomembercurrentrunpanel.you.can.view.events", "You can view Events or Metadata to troubleshoot the cause.")}</div>
+                {t("pages.studio.studiomembercurrentrunpanel.the.run.ended.successfully", "The run ended successfully, but it did not return user-visible content.")}</div>
+              <div>{t("pages.studio.studiomembercurrentrunpanel.you.can.view.events", "Open Details when you need event or payload evidence.")}</div>
             </div>
           ) : (
             <Typography.Text style={helperTextStyle} type="secondary">
-              {t("pages.studio.studiomembercurrentrunpanel.waiting.for.output.2", "Waiting for output...")}</Typography.Text>
+              {t("pages.studio.studiomembercurrentrunpanel.waiting.for.output.2", "Waiting for a response...")}</Typography.Text>
           )}
         </div>
         {observeHandoffText ? (
@@ -824,35 +826,15 @@ const StudioMemberCurrentRunPanel: React.FC<
   const renderMetadata = () => (
     <div style={outputPaneStyle}>
       <div style={sectionStyle}>
-        <span style={sectionLabelStyle}>{t("pages.studio.studiomembercurrentrunpanel.technical.fields", "Technical fields")}</span>
+        <span style={sectionLabelStyle}>{t("pages.studio.studiomembercurrentrunpanel.run.details", "Run details")}</span>
         <div style={metadataGridStyle}>
           <MetadataItem
-            label={t("pages.studio.studiomembercurrentrunpanel.full.run.id", "Full Run ID")}
-            value={<MetadataValue value={invokeResult.runId} />}
-          />
-          <MetadataItem
-            label={t("pages.studio.studiomembercurrentrunpanel.command.id", "Command ID")}
-            value={<MetadataValue value={invokeResult.commandId} />}
-          />
-          <MetadataItem
-            label={t("pages.studio.studiomembercurrentrunpanel.actor.id", "Actor ID")}
-            value={<MetadataValue value={invokeResult.actorId} />}
-          />
-          <MetadataItem
-            label={t("pages.studio.studiomembercurrentrunpanel.member.id", "Member ID")}
-            value={<MetadataValue value={memberId} />}
+            label={t("pages.studio.studiomembercurrentrunpanel.status", "Status")}
+            value={<MetadataValue value={getStatusLabel(invokeResult.status)} />}
           />
           <MetadataItem
             label={t("pages.studio.studiomembercurrentrunpanel.endpoint", "Endpoint")}
             value={<MetadataValue value={endpointLabel} />}
-          />
-          <MetadataItem
-            label={t("pages.studio.studiomembercurrentrunpanel.revision", "Revision")}
-            value={<MetadataValue value={revisionId} />}
-          />
-          <MetadataItem
-            label={t("pages.studio.studiomembercurrentrunpanel.published.context", "Published context")}
-            value={<MetadataValue value={publishedContext} />}
           />
           <MetadataItem
             label={t("pages.studio.studiomembercurrentrunpanel.started.at", "Started at")}
@@ -877,7 +859,7 @@ const StudioMemberCurrentRunPanel: React.FC<
         </div>
       </div>
       <details style={sectionStyle}>
-        <summary style={contractValueStyle}>{t("pages.studio.studiomembercurrentrunpanel.advanced.details", "Advanced details")}</summary>
+        <summary style={contractValueStyle}>{t("pages.studio.studiomembercurrentrunpanel.event.payload", "Event payload")}</summary>
         <pre style={rawOutputStyle}>
           {currentRawOutput ||
             t("pages.studio.studiomembercurrentrunpanel.no.raw.json", "No raw JSON.")}
@@ -915,31 +897,37 @@ const StudioMemberCurrentRunPanel: React.FC<
           </span>
         ) : null}
       </div>
-      <div style={tabsStyle}>
-        <div aria-label={t("pages.studio.studiomembercurrentrunpanel.run.output.views", "Run output views")} role="tablist" style={tabListStyle}>
-          {tabItems.map((item) => {
-            const selected = item.key === activeTab;
-            return (
-              <button
-                key={item.key}
-                aria-selected={selected}
-                role="tab"
-                style={{
-                  ...tabButtonStyle,
-                  ...(selected ? activeTabButtonStyle : null),
-                }}
-                type="button"
-                onClick={() => onTabChange(item.key)}
-              >
-                {item.label}
-              </button>
-            );
-          })}
+      {showDebugTabs ? (
+        <div style={tabsStyle}>
+          <div aria-label={t("pages.studio.studiomembercurrentrunpanel.run.output.views", "Run detail views")} role="tablist" style={tabListStyle}>
+            {tabItems.map((item) => {
+              const selected = item.key === activeTab;
+              return (
+                <button
+                  key={item.key}
+                  aria-selected={selected}
+                  role="tab"
+                  style={{
+                    ...tabButtonStyle,
+                    ...(selected ? activeTabButtonStyle : null),
+                  }}
+                  type="button"
+                  onClick={() => onTabChange(item.key)}
+                >
+                  {item.label}
+                </button>
+              );
+            })}
+          </div>
+          <div role="tabpanel" style={tabPaneStyle}>
+            {renderActivePane()}
+          </div>
         </div>
-        <div role="tabpanel" style={tabPaneStyle}>
-          {renderActivePane()}
+      ) : (
+        <div role="region" style={tabPaneStyle}>
+          {renderOutput()}
         </div>
-      </div>
+      )}
     </div>
   );
 };

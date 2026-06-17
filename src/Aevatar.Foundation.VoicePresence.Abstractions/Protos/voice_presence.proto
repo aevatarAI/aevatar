@@ -74,6 +74,25 @@ message VoiceToolDefinition {
   string parameters_schema = 3;
 }
 
+message VoiceToolExecutionContext {
+  string credential_ref = 1;
+  google.protobuf.Timestamp expires_at = 2;
+  string caller_scope_id = 3;
+  string caller_subject = 4;
+  string owner_subject = 5;
+  string response_id = 6;
+  string channel_platform = 7;
+  string channel_sender_id = 8;
+  string channel_registration_scope_id = 9;
+  string channel_message_id = 10;
+  string channel_platform_message_id = 11;
+  string channel_delivery_target_id = 12;
+  string connected_services_context_json = 13;
+  repeated string allowed_tool_names = 14;
+  string nyx_id_route_preference = 15;
+  string sender_binding_id = 16;
+}
+
 message VoiceConversationEventInjection {
   string envelope_id = 1;
   string publisher_actor_id = 2;
@@ -123,6 +142,7 @@ message VoicePresenceRuntimeState {
   repeated VoicePresenceEventDedupeFenceEntry event_dedupe_fence = 20;
   int64 lease_epoch = 21;
   VoiceSessionConfig active_session_config = 22;
+  VoiceToolExecutionContext active_tool_context = 23;
 }
 
 message VoicePresenceRuntimeStateChangedEvent {
@@ -144,6 +164,7 @@ message VoicePresenceSessionLeaseRequested {
   string owner_id = 2;
   google.protobuf.Timestamp expires_at = 3;
   VoiceSessionOverrides session_overrides = 4;
+  VoiceToolExecutionContext tool_context = 5;
 }
 
 message VoicePresenceSessionLeaseReleased {
@@ -283,6 +304,14 @@ message VoiceTransportAttachRequested {
   int64 lease_epoch = 6;
 }
 
+message VoiceTransportLeaseRenewRequested {
+  string session_id = 1;
+  string owner_id = 2;
+  string transport_lease_id = 3;
+  int64 lease_epoch = 4;
+  google.protobuf.Timestamp renew_expires_at = 5;
+}
+
 message VoiceTransportDetachRequested {
   string session_id = 1;
   string transport_lease_id = 2;
@@ -317,6 +346,14 @@ message VoiceTransportLifetimeCompleted {
   string owner_id = 4;
   google.protobuf.Timestamp lease_expires_at = 5;
   int64 lease_epoch = 6;
+}
+
+message VoiceDrainTimeoutExpired {
+  string session_id = 1;
+  string owner_id = 2;
+  string transport_lease_id = 3;
+  int64 lease_epoch = 4;
+  int32 response_id = 5;
 }
 
 message VoiceProviderEventReceived {
@@ -367,6 +404,8 @@ message VoiceModuleSignal {
     VoiceProviderEventReceived provider_event_received = 14;
     VoiceTransportLifetimeCompleted transport_lifetime_completed = 16;
     VoiceInputImageReceived input_image_received = 17;
+    VoiceTransportLeaseRenewRequested transport_lease_renew_requested = 18;
+    VoiceDrainTimeoutExpired drain_timeout_expired = 19;
   }
 }
 
@@ -384,4 +423,6 @@ message VoicePresenceCapabilityReadModel {
   google.protobuf.Timestamp lease_expires_at = 11;
   VoiceRemoteAudioSupport remote_audio_support = 12;
   string active_transport_lease_id = 13;
+  int64 lease_epoch = 14;
+  string active_lease_owner_id = 15;
 }

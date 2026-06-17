@@ -25,7 +25,9 @@ public sealed class AgentWorkflowToolSourceAdapterTests
                 ExecutionId: "exec-1",
                 CallId: "call-1",
                 ScopeId: "scope-1",
-                CallerCredential: new WorkflowCallerCredential { BearerToken = "token-123" }),
+                CallerCredential: new WorkflowCallerCredential { BearerToken = "token-123" },
+                RuntimeContext: WorkflowToolRuntimeContext.Empty,
+                IdempotencyKey: "idem-agent-tool-1"),
             CancellationToken.None);
 
         result.ResultJson.Should().Be("""{"observed":true}""");
@@ -35,6 +37,7 @@ public sealed class AgentWorkflowToolSourceAdapterTests
         agentTool.ObservedOrgToken.Should().Be("token-123");
         agentTool.ObservedScopeId.Should().Be("scope-1");
         agentTool.ObservedCallId.Should().Be("call-1");
+        agentTool.ObservedIdempotencyKey.Should().Be("idem-agent-tool-1");
         agentTool.ObservedExternalMetadata.Should().NotContainKey("ExecutionId");
         AgentToolRequestContext.Current.Should().BeNull();
     }
@@ -309,6 +312,8 @@ public sealed class AgentWorkflowToolSourceAdapterTests
 
         public string? ObservedCallId { get; private set; }
 
+        public string? ObservedIdempotencyKey { get; private set; }
+
         public IReadOnlyDictionary<string, string> ObservedExternalMetadata { get; private set; } =
             new Dictionary<string, string>(StringComparer.Ordinal);
 
@@ -338,6 +343,7 @@ public sealed class AgentWorkflowToolSourceAdapterTests
             ObservedOrgToken = AgentToolRequestContext.NyxIdOrgToken;
             ObservedScopeId = AgentToolRequestContext.ScopeId;
             ObservedCallId = AgentToolRequestContext.CallId;
+            ObservedIdempotencyKey = AgentToolRequestContext.IdempotencyKey;
             ObservedExternalMetadata = AgentToolRequestContext.Current?.ExternalMetadata
                 ?? new Dictionary<string, string>(StringComparer.Ordinal);
             ObservedWorkflowRuntime = AgentToolRequestContext.Current?.WorkflowRuntime

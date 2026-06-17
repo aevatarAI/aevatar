@@ -11,6 +11,7 @@ using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgentService.Application.Responses;
 
@@ -27,10 +28,15 @@ public sealed class ChatCompletionsCommandFacade(
     IResponsesDirectToolPlanService directToolPlanService,
     ILlmSessionRunObservationService observationService,
     ILogger<ChatCompletionsCommandFacade> logger,
-    TimeSpan? observationTimeout = null) : IChatCompletionsCommandFacade
+    TimeSpan? observationTimeout = null,
+    IOptions<ResponsesIngressOptions>? ingressOptions = null) : IChatCompletionsCommandFacade
 {
     private static readonly TimeSpan DefaultObservationTimeout = TimeSpan.FromSeconds(30);
     private readonly TimeSpan _observationTimeout = observationTimeout ?? DefaultObservationTimeout;
+
+    // Default model applied when a direct caller omits `model`; null preserves the
+    // "model is required" contract (see ResponsesIngressOptions).
+    private readonly string? _defaultIngressModel = ingressOptions?.Value?.NormalizedDefaultModel;
     public async Task<ChatCompletionsCreateCommandResult> CreateAsync(
         ChatCompletionsCommandRequest request,
         ResponsesCallerScopeResolutionContext callerScopeContext,
@@ -39,7 +45,7 @@ public sealed class ChatCompletionsCommandFacade(
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(callerScopeContext);
 
-        var normalizedResult = Normalize(request);
+        var normalizedResult = Normalize(request, _defaultIngressModel);
         if (!normalizedResult.Succeeded)
         {
             return ChatCompletionsCreateCommandResult.FromError(
@@ -151,9 +157,13 @@ public sealed class ChatCompletionsCommandFacade(
     // Refactor (iter344/cluster-001):
     //   Old pattern: /v1/chat/completions validated model and generation controls inside the Host request stack.
     //   New principle: Application owns command normalization before caller, routing, session, and dispatch work starts.
-    private static ChatCompletionsRequestNormalizationResult Normalize(ChatCompletionsCommandRequest request)
+    private static ChatCompletionsRequestNormalizationResult Normalize(
+        ChatCompletionsCommandRequest request,
+        string? defaultModel)
     {
         var model = request.Model?.Trim();
+        if (string.IsNullOrWhiteSpace(model))
+            model = defaultModel?.Trim();
         if (string.IsNullOrWhiteSpace(model))
             return ChatCompletionsRequestNormalizationResult.Failed("model_required", "model is required.");
 

@@ -50,6 +50,7 @@ using Aevatar.Mainnet.Host.Api.Status;
 using Aevatar.Mainnet.Host.Api.Voice;
 using Aevatar.Studio.Hosting;
 using Aevatar.Workflow.Extensions.Hosting;
+using Aevatar.Workflow.Integration.AI;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
@@ -169,6 +170,11 @@ public static class MainnetHostBuilderExtensions
             builder.Configuration.GetSection(ResponsesNyxIdIdentityAssertionOptions.SectionName));
         builder.Services.TryAddSingleton<NyxIdIdentityAssertionValidator>();
         builder.Services.TryAddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
+        // Default model for direct OpenAI-compatible ingress (/v1/responses, /v1/messages,
+        // /v1/chat/completions) when the caller omits `model`. The slug/model value is a
+        // host fact supplied by configuration; an explicit caller model always wins.
+        builder.Services.Configure<ResponsesIngressOptions>(
+            builder.Configuration.GetSection(ResponsesIngressOptions.SectionName));
         builder.Services.TryAddSingleton<IResponsesCommandFacade, ResponsesCommandFacade>();
         builder.Services.TryAddSingleton<IMessagesCommandFacade, MessagesCommandFacade>();
         builder.Services.TryAddSingleton<IChatCompletionsCommandFacade, ChatCompletionsCommandFacade>();
@@ -207,6 +213,8 @@ public static class MainnetHostBuilderExtensions
         // layer between Studio and the AI/agent packages that consume the port.
         builder.Services.TryAddSingleton<IOwnerLlmConfigSource, StudioUserConfigOwnerLlmConfigSource>();
         builder.Services.AddLarkAgentAuthoring();
+        builder.Services.AddSkillBackedHumanInteractionDelivery();
+        builder.Services.AddChannelBackedHumanInteractionTools();
         builder.Services.AddNyxIdRelayChannel();
         builder.Services.AddLarkPlatform();
         builder.Services.AddTelegramPlatform();
@@ -422,6 +430,7 @@ public static class MainnetHostBuilderExtensions
             StaleAfter = options.StaleAfter,
             DedupeWindow = options.DedupeWindow,
             ToolExecutionTimeout = options.ToolExecutionTimeout,
+            DrainTimeout = options.DrainTimeout,
             PendingInjectionCapacity = options.PendingInjectionCapacity,
             TimeProvider = options.TimeProvider,
             DirectExternalEventTypeUrls = directEventTypeUrls,

@@ -32,6 +32,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.Text.Json;
 
@@ -912,71 +913,111 @@ public static class ScopeServiceEndpoints
             options,
             ct);
 
-    private static Task<IResult> HandleResumeDefaultRunAsync(
+    private static async Task<IResult> HandleResumeDefaultRunAsync(
         HttpContext http,
         string scopeId,
         string runId,
         ResumeScopeServiceRunHttpRequest request,
-        [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
         [FromServices] IWorkflowRunBindingReader workflowRunBindingReader,
         [FromServices] ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError> resumeService,
-        [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
-        CancellationToken ct) =>
-        HandleResumeRunAsync(
+        CancellationToken ct)
+    {
+        var resolution = await ResolveScopedWorkflowRunAsync(
             http,
             scopeId,
-            ResolveDefaultScopeServiceId(options.Value),
             runId,
-            request,
-            lifecycleQueryPort,
+            request.ActorId,
             workflowRunBindingReader,
-            resumeService,
-            options,
             ct);
+        if (resolution.Failure != null)
+            return resolution.Failure;
 
-    private static Task<IResult> HandleSignalDefaultRunAsync(
+        return await WorkflowCapabilityEndpoints.HandleResume(
+            new WorkflowResumeInput
+            {
+                ActorId = resolution.Binding!.ActorId,
+                RunId = resolution.Binding.RunId,
+                StepId = request.StepId ?? string.Empty,
+                CommandId = request.CommandId,
+                Approved = request.Approved,
+                UserInput = request.UserInput,
+                Metadata = request.Metadata,
+                ToolApproval = request.ToolApproval == null
+                    ? null
+                    : new WorkflowToolApprovalResumeInput
+                    {
+                        ExecutionId = request.ToolApproval.ExecutionId ?? string.Empty,
+                        ToolCallId = request.ToolApproval.ToolCallId ?? string.Empty,
+                        ApprovalRequestId = request.ToolApproval.ApprovalRequestId ?? string.Empty,
+                    },
+            },
+            resumeService,
+            ct);
+    }
+
+    private static async Task<IResult> HandleSignalDefaultRunAsync(
         HttpContext http,
         string scopeId,
         string runId,
         SignalScopeServiceRunHttpRequest request,
-        [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
         [FromServices] IWorkflowRunBindingReader workflowRunBindingReader,
         [FromServices] ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError> signalService,
-        [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
-        CancellationToken ct) =>
-        HandleSignalRunAsync(
+        CancellationToken ct)
+    {
+        var resolution = await ResolveScopedWorkflowRunAsync(
             http,
             scopeId,
-            ResolveDefaultScopeServiceId(options.Value),
             runId,
-            request,
-            lifecycleQueryPort,
+            request.ActorId,
             workflowRunBindingReader,
-            signalService,
-            options,
             ct);
+        if (resolution.Failure != null)
+            return resolution.Failure;
 
-    private static Task<IResult> HandleStopDefaultRunAsync(
+        return await WorkflowCapabilityEndpoints.HandleSignal(
+            new WorkflowSignalInput
+            {
+                ActorId = resolution.Binding!.ActorId,
+                RunId = resolution.Binding.RunId,
+                SignalName = request.SignalName ?? string.Empty,
+                StepId = request.StepId,
+                CommandId = request.CommandId,
+                Payload = request.Payload,
+            },
+            signalService,
+            ct);
+    }
+
+    private static async Task<IResult> HandleStopDefaultRunAsync(
         HttpContext http,
         string scopeId,
         string runId,
         StopScopeServiceRunHttpRequest request,
-        [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
         [FromServices] IWorkflowRunBindingReader workflowRunBindingReader,
         [FromServices] ICommandDispatchService<WorkflowStopCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError> stopService,
-        [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
-        CancellationToken ct) =>
-        HandleStopRunAsync(
+        CancellationToken ct)
+    {
+        var resolution = await ResolveScopedWorkflowRunAsync(
             http,
             scopeId,
-            ResolveDefaultScopeServiceId(options.Value),
             runId,
-            request,
-            lifecycleQueryPort,
+            request.ActorId,
             workflowRunBindingReader,
-            stopService,
-            options,
             ct);
+        if (resolution.Failure != null)
+            return resolution.Failure;
+
+        return await WorkflowCapabilityEndpoints.HandleStop(
+            new WorkflowStopInput
+            {
+                ActorId = resolution.Binding!.ActorId,
+                RunId = resolution.Binding.RunId,
+                CommandId = request.CommandId,
+                Reason = request.Reason,
+            },
+            stopService,
+            ct);
+    }
 
     private static async Task<IResult> HandleListMemberRunsAsync(
         HttpContext http,
@@ -2329,6 +2370,57 @@ public static class ScopeServiceEndpoints
         return new ScopeServiceResolution(identity, service, deployments, null);
     }
 
+    private static async Task<ScopeWorkflowRunResolution> ResolveScopedWorkflowRunAsync(
+        HttpContext http,
+        string scopeId,
+        string runId,
+        string? requestedActorId,
+        IWorkflowRunBindingReader workflowRunBindingReader,
+        CancellationToken ct)
+    {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return new ScopeWorkflowRunResolution(null, denied);
+
+        var normalizedRunId = ScopeWorkflowCapabilityOptions.NormalizeRequired(runId, nameof(runId));
+        var matches = (await workflowRunBindingReader.ListByRunIdAsync(normalizedRunId, ct: ct))
+            .Where(binding =>
+                binding.ActorKind == WorkflowActorKind.Run &&
+                string.Equals(binding.ScopeId, scopeId, StringComparison.Ordinal))
+            .ToList();
+
+        var normalizedActorId = NormalizeOptional(requestedActorId);
+        if (!string.IsNullOrWhiteSpace(normalizedActorId))
+        {
+            matches = matches
+                .Where(binding => string.Equals(binding.ActorId, normalizedActorId, StringComparison.Ordinal))
+                .ToList();
+        }
+
+        if (matches.Count == 0)
+        {
+            return new ScopeWorkflowRunResolution(
+                null,
+                Results.NotFound(new
+                {
+                    code = "SCOPE_RUN_NOT_FOUND",
+                    message = $"Run '{normalizedRunId}' was not found in scope '{scopeId}'.",
+                }));
+        }
+
+        if (matches.Count > 1)
+        {
+            return new ScopeWorkflowRunResolution(
+                null,
+                Results.Conflict(new
+                {
+                    code = "SCOPE_RUN_AMBIGUOUS",
+                    message = $"Run '{normalizedRunId}' is ambiguous in scope '{scopeId}'.",
+                }));
+        }
+
+        return new ScopeWorkflowRunResolution(matches[0], null);
+    }
+
     private static async Task<ScopeServiceRunResolution> ResolveScopeServiceRunAsync(
         HttpContext http,
         ScopeWorkflowCapabilityOptions options,
@@ -3148,9 +3240,11 @@ const response = await fetch("{{invokePath}}", {
                     NyxIdRoutePreference = route,
                 };
             }
-            catch
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                // Best-effort; fall back to provider defaults if config unavailable.
+                var loggerFactory = http.RequestServices.GetService<ILoggerFactory>();
+                var logger = loggerFactory?.CreateLogger("Aevatar.GAgentService.ScopeServiceEndpoints");
+                logger?.LogWarning(ex, "Failed to resolve scoped user LLM configuration; falling back to provider defaults.");
             }
         }
 
@@ -3547,6 +3641,10 @@ const response = await fetch("{{invokePath}}", {
         ServiceIdentity? Identity,
         ServiceCatalogSnapshot? Service,
         ServiceDeploymentCatalogSnapshot? Deployments,
+        WorkflowActorBinding? Binding,
+        IResult? Failure);
+
+    private sealed record ScopeWorkflowRunResolution(
         WorkflowActorBinding? Binding,
         IResult? Failure);
 

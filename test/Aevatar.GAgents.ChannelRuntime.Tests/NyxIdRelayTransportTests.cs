@@ -1251,4 +1251,143 @@ public sealed class NyxIdRelayTransportTests
         parsed.Success.Should().BeFalse();
         parsed.ErrorCode.Should().Be("empty_text");
     }
+
+    [Fact]
+    public void Parse_ShouldPopulateMentions_FromLarkGroupMessageRawPlatformData()
+    {
+        // Group admission needs to know whether the bot was @-mentioned. NyxID forwards the
+        // verbatim Lark event but never lifts event.message.mentions[] into the normalized
+        // payload, so the transport must surface each mention's open_id into ChatActivity.mentions
+        // for the runtime gate to match against the bot's own open_id.
+        var body = """
+            {
+              "message_id": "msg-mention-1",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "route-uuid", "platform_id": "oc_group_1", "type": "group" },
+              "sender": { "platform_id": "ou_user_1", "display_name": "User One" },
+              "content": { "type": "text", "text": "@_user_1 在吗" },
+              "raw_platform_data": {
+                "event": {
+                  "message": {
+                    "message_id": "om_group_mention_1",
+                    "chat_id": "oc_group_1",
+                    "chat_type": "group",
+                    "mentions": [
+                      { "key": "@_user_1", "id": { "open_id": "ou_bot_1", "union_id": "on_bot_1" }, "name": "Aevatar" }
+                    ]
+                  }
+                }
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        parsed.Activity!.Mentions.Should().ContainSingle();
+        var mention = parsed.Activity.Mentions.Single();
+        mention.CanonicalId.Should().Be("ou_bot_1");
+        mention.DisplayName.Should().Be("Aevatar");
+    }
+
+    [Fact]
+    public void Parse_ShouldPopulateReplyToActivityId_FromReplyToPlatformMessageId()
+    {
+        // A group reply that does not re-@ the bot is still "addressed to the bot" when its
+        // parent is one of the bot's own messages. NyxID normalizes Lark's event.message.parent_id
+        // into reply_to_platform_message_id; the transport must expose it on ChatActivity so the
+        // runtime can match it against the conversation's bot-sent message ids.
+        var body = """
+            {
+              "message_id": "msg-reply-1",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "route-uuid", "platform_id": "oc_group_1", "type": "group" },
+              "sender": { "platform_id": "ou_user_1", "display_name": "User One" },
+              "content": { "type": "text", "text": "好的" },
+              "reply_to_platform_message_id": "om_bot_parent_1",
+              "raw_platform_data": {
+                "event": {
+                  "message": {
+                    "message_id": "om_reply_1",
+                    "chat_id": "oc_group_1",
+                    "chat_type": "group"
+                  }
+                }
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        parsed.Activity!.ReplyToActivityId.Should().Be("om_bot_parent_1");
+    }
+
+    [Fact]
+    public void Parse_ShouldExtractAllMentions_FromLarkGroupMessageWithMultipleAtMentions()
+    {
+        var body = """
+            {
+              "message_id": "msg-mention-many",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "route-uuid", "platform_id": "oc_group_1", "type": "group" },
+              "sender": { "platform_id": "ou_user_1", "display_name": "User One" },
+              "content": { "type": "text", "text": "@_user_1 @_user_2 看一下" },
+              "raw_platform_data": {
+                "event": {
+                  "message": {
+                    "message_id": "om_group_mention_many",
+                    "chat_id": "oc_group_1",
+                    "chat_type": "group",
+                    "mentions": [
+                      { "key": "@_user_1", "id": { "open_id": "ou_bot_1" }, "name": "Aevatar" },
+                      { "key": "@_user_2", "id": { "open_id": "ou_human_2" }, "name": "Bob" }
+                    ]
+                  }
+                }
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        parsed.Activity!.Mentions.Select(m => m.CanonicalId)
+            .Should().BeEquivalentTo(new[] { "ou_bot_1", "ou_human_2" });
+    }
+
+    [Fact]
+    public void Parse_ShouldLeaveMentionsEmpty_WhenLarkGroupMessageHasNoAtMention()
+    {
+        // The gate's whole purpose: a plain group message (no @-mention) yields no mentions, so
+        // the runtime can ignore it. Pin that the transport does not invent mentions.
+        var body = """
+            {
+              "message_id": "msg-no-mention",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "route-uuid", "platform_id": "oc_group_1", "type": "group" },
+              "sender": { "platform_id": "ou_user_1", "display_name": "User One" },
+              "content": { "type": "text", "text": "今天天气不错" },
+              "raw_platform_data": {
+                "event": {
+                  "message": {
+                    "message_id": "om_group_plain_1",
+                    "chat_id": "oc_group_1",
+                    "chat_type": "group"
+                  }
+                }
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        parsed.Activity!.Mentions.Should().BeEmpty();
+        parsed.Activity.ReplyToActivityId.Should().BeEmpty();
+    }
 }

@@ -22,11 +22,12 @@ public static class ToolCallMiddlewareChainFactory
         AgentHookPipeline? hooks)
     {
         var effectiveToolMiddlewares = new List<IToolCallMiddleware>();
+        effectiveToolMiddlewares.Add(new ToolCallCredentialPolicyMiddleware());
         effectiveToolMiddlewares.Add(new ToolApprovalMiddleware(
             approvalHandler ?? MissingApprovalHandler.Instance,
             hooks));
         effectiveToolMiddlewares.AddRange(toolMiddlewares.Where(static middleware =>
-            middleware is not ToolApprovalMiddleware));
+            middleware is not ToolApprovalMiddleware and not ToolCallCredentialPolicyMiddleware));
         return effectiveToolMiddlewares;
     }
 }

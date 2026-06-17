@@ -9,6 +9,7 @@ using Aevatar.GAgents.Authoring.Lark;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Platform.Lark;
 using Aevatar.GAgents.Scheduled;
+using Aevatar.Workflow.Integration.AI;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
@@ -123,6 +124,89 @@ public sealed class FeishuCardNotificationPortTests
     }
 
     [Fact]
+    public async Task SkillBackedDelivery_WithChannelToolSource_ShouldSendWorkflowApprovalLarkCardWithResumeIdentity()
+    {
+        var registry = BuildRegistry("agent-approval-1");
+        var handler = new RecordingHandler("""{"data":{"message_id":"om_approval_1"}}""");
+        var feishuPort = new FeishuCardNotificationPort(
+            registry,
+            CreateNyxClient(handler),
+            new LarkMessageComposer(),
+            NullLogger<FeishuCardNotificationPort>.Instance);
+        var port = new SkillBackedHumanInteractionPort([new HumanInteractionChannelToolSource(feishuPort)]);
+
+        await port.DeliverSuspensionAsync(
+            new HumanInteractionRequest
+            {
+                ActorId = "workflow-actor-approval-1",
+                RunId = "run-approval-1",
+                StepId = "approval-step-1",
+                SuspensionType = "human_approval",
+                Prompt = "Approve release?",
+                Options = ["approve", "reject"],
+                TimeoutSeconds = 300,
+            },
+            "agent-approval-1",
+            CancellationToken.None);
+
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.RequestUri!.ToString()
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages?receive_id_type=chat_id");
+        using var body = JsonDocument.Parse(handler.LastBody!);
+        body.RootElement.GetProperty("receive_id").GetString().Should().Be("oc_chat_1");
+        body.RootElement.GetProperty("msg_type").GetString().Should().Be("interactive");
+
+        using var content = JsonDocument.Parse(body.RootElement.GetProperty("content").GetString()!);
+        var approveValue = FindCallbackValue(content.RootElement, "approve");
+        approveValue.GetProperty("actor_id").GetString().Should().Be("workflow-actor-approval-1");
+        approveValue.GetProperty("run_id").GetString().Should().Be("run-approval-1");
+        approveValue.GetProperty("step_id").GetString().Should().Be("approval-step-1");
+        approveValue.GetProperty("approved").GetBoolean().Should().BeTrue();
+
+        var rejectValue = FindCallbackValue(content.RootElement, "reject");
+        rejectValue.GetProperty("actor_id").GetString().Should().Be("workflow-actor-approval-1");
+        rejectValue.GetProperty("run_id").GetString().Should().Be("run-approval-1");
+        rejectValue.GetProperty("step_id").GetString().Should().Be("approval-step-1");
+        rejectValue.GetProperty("approved").GetBoolean().Should().BeFalse();
+    }
+
+    [Fact]
+    public void BuildCardJson_WhenApprovalInteractionSpecPresent_ShouldIncludeWorkflowResumeIdentity()
+    {
+        var cardJson = FeishuCardNotificationPort.BuildCardJson(
+            new ChannelInteractionNotificationRequest
+            {
+                ActorId = "workflow-actor-1",
+                RunId = "run-1",
+                StepId = "approval-1",
+                DeliveryTargetId = "agent-1",
+                InteractionSpec = new InteractionSpec
+                {
+                    Title = "Approval required",
+                    Body = "Approve?",
+                    Actions =
+                    {
+                        new InteractionAction
+                        {
+                            Kind = InteractionActionKind.FormSubmit,
+                            ActionId = "approve",
+                            Label = "Approve",
+                            ApprovalDecision = InteractionApprovalDecision.Approve,
+                        },
+                    },
+                },
+            });
+
+        using var document = JsonDocument.Parse(cardJson);
+        var approveValue = FindCallbackValue(document.RootElement, "approve");
+
+        approveValue.GetProperty("actor_id").GetString().Should().Be("workflow-actor-1");
+        approveValue.GetProperty("run_id").GetString().Should().Be("run-1");
+        approveValue.GetProperty("step_id").GetString().Should().Be("approval-1");
+        approveValue.GetProperty("approved").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
     public void BuildCardJson_WhenTemplateSpecPresent_ShouldRenderLarkTemplateContent()
     {
         var template = new InteractionTemplateSpec { TemplateId = "tpl-1" };
@@ -228,6 +312,48 @@ public sealed class FeishuCardNotificationPortTests
             .WithMessage("*payload is required*");
         await bothAct.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*exactly one typed payload*");
+    }
+
+    private static JsonElement FindCallbackValue(JsonElement element, string actionId)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            if (element.TryGetProperty("type", out var type) &&
+                type.GetString() == "callback" &&
+                element.TryGetProperty("value", out var value) &&
+                value.TryGetProperty("action_id", out var callbackActionId) &&
+                callbackActionId.GetString() == actionId)
+            {
+                return value;
+            }
+
+            foreach (var property in element.EnumerateObject())
+                if (TryFindCallbackValue(property.Value, actionId, out var match))
+                    return match;
+        }
+
+        if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+                if (TryFindCallbackValue(item, actionId, out var match))
+                    return match;
+        }
+
+        throw new InvalidOperationException($"Callback value '{actionId}' was not found.");
+    }
+
+    private static bool TryFindCallbackValue(JsonElement element, string actionId, out JsonElement match)
+    {
+        try
+        {
+            match = FindCallbackValue(element, actionId);
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            match = default;
+            return false;
+        }
     }
 
     private static FeishuCardNotificationPort CreatePort(IUserAgentDeliveryTargetReader registry) =>

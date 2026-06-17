@@ -323,6 +323,43 @@ internal sealed class TestAgent(string id, string? runId = null) : IAgent, IWork
         return Task.CompletedTask;
     }
 
+    Task<WorkflowCompensationTransitionResult> IWorkflowExecutionStateHost.TryStartCompensationAsync(
+        WorkflowCompletedEvent terminalFailure,
+        StepCompletedEvent? terminalStep,
+        CancellationToken ct)
+    {
+        _ = terminalFailure;
+        _ = terminalStep;
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(NoCompensableLedger());
+    }
+
+    Task IWorkflowExecutionStateHost.RecordCompensableStepDispatchAsync(
+        CompensableStepDispatchedEvent evt,
+        CancellationToken ct)
+    {
+        _ = evt;
+        ct.ThrowIfCancellationRequested();
+        return Task.CompletedTask;
+    }
+
+    public Task<WorkflowCompensationTransitionResult> RecordCompensationStepCompletionAsync(
+        CompensationStepCompletedEvent completion,
+        CancellationToken ct = default)
+    {
+        _ = completion;
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(NoCompensableLedger());
+    }
+
+    private static WorkflowCompensationTransitionResult NoCompensableLedger() =>
+        new(
+            WorkflowCompensationTransitionStatus.NoCompensableLedger,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty);
+
     public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
 
     public Task<string> GetDescriptionAsync() => Task.FromResult("stub");
@@ -386,6 +423,43 @@ internal sealed class TestWorkflowRunAgent(string id, string runId) : IAgent, IW
         _executionStates.Remove(scopeKey);
         return Task.CompletedTask;
     }
+
+    Task<WorkflowCompensationTransitionResult> IWorkflowExecutionStateHost.TryStartCompensationAsync(
+        WorkflowCompletedEvent terminalFailure,
+        StepCompletedEvent? terminalStep,
+        CancellationToken ct)
+    {
+        _ = terminalFailure;
+        _ = terminalStep;
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(NoCompensableLedger());
+    }
+
+    Task IWorkflowExecutionStateHost.RecordCompensableStepDispatchAsync(
+        CompensableStepDispatchedEvent evt,
+        CancellationToken ct)
+    {
+        _ = evt;
+        ct.ThrowIfCancellationRequested();
+        return Task.CompletedTask;
+    }
+
+    public Task<WorkflowCompensationTransitionResult> RecordCompensationStepCompletionAsync(
+        CompensationStepCompletedEvent completion,
+        CancellationToken ct = default)
+    {
+        _ = completion;
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(NoCompensableLedger());
+    }
+
+    private static WorkflowCompensationTransitionResult NoCompensableLedger() =>
+        new(
+            WorkflowCompensationTransitionStatus.NoCompensableLedger,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty);
 
     public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
 

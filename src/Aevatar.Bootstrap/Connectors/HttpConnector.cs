@@ -146,6 +146,7 @@ public sealed class HttpConnector : IConnector
                 await _authorizationProvider.ApplyAsync(msg, timeoutCts.Token);
 
             ApplyRequestAuthorization(msg, request.HttpAuthorization);
+            ApplyIdempotencyKey(msg, request.IdempotencyKey);
 
             if (request.Parameters.TryGetValue("content_type", out var contentType) &&
                 !string.IsNullOrWhiteSpace(contentType))
@@ -279,11 +280,16 @@ public sealed class HttpConnector : IConnector
                 }
             }
         }
-        catch
+        catch (JsonException)
         {
-            // Ignore parsing failures and fallback to raw body preview.
+            return RawBodyPreview(body);
         }
 
+        return RawBodyPreview(body);
+    }
+
+    private static string RawBodyPreview(string body)
+    {
         var trimmed = body.Trim();
         return trimmed.Length <= 200 ? trimmed : $"{trimmed[..200]}...";
     }
@@ -379,5 +385,18 @@ public sealed class HttpConnector : IConnector
             return;
 
         request.Headers.Authorization = parsed;
+    }
+
+    private static void ApplyIdempotencyKey(
+        HttpRequestMessage request,
+        string? idempotencyKey)
+    {
+        if (string.IsNullOrWhiteSpace(idempotencyKey) ||
+            request.Headers.Contains("Idempotency-Key"))
+        {
+            return;
+        }
+
+        request.Headers.TryAddWithoutValidation("Idempotency-Key", idempotencyKey.Trim());
     }
 }

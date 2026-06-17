@@ -37,6 +37,8 @@ public sealed class StepDefinition
 
     public WorkflowAgentToolScopeDefinition? AgentToolScope { get; init; }
 
+    public HumanApprovalOptionsDefinition? HumanApprovalOptions { get; init; }
+
     /// <summary>
     /// 下一步骤 ID，用于线性流程控制。
     /// </summary>
@@ -81,6 +83,11 @@ public sealed class StepDefinition
 /// <summary>
 /// 步骤级重试策略。
 /// </summary>
+public sealed class HumanApprovalOptionsDefinition
+{
+    public string? TimeoutDefaultDecision { get; init; }
+}
+
 public sealed class StepRetryPolicy
 {
     /// <summary>最大尝试次数（含首次）。最小 1，最大 10。</summary>

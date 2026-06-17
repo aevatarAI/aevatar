@@ -49,7 +49,12 @@ internal sealed class SkillRunnerCronSchedulePort : ISkillRunnerCronSchedulePort
     internal static string BuildScheduleId(string agentId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(agentId);
-        return $"skill-runner:{agentId.Trim()}";
+        // Scheduled dispatch reserves ':' as the actor-id namespace delimiter
+        // (ScheduledDispatchActorId formats "scheduled-dispatch:<scheduleId>") so its
+        // NormalizeScheduleId rejects schedule ids containing ':'. Use '.' to keep the
+        // schedule id within the allowed [A-Za-z0-9._-] set; a ':' here made every
+        // SkillRunner cron creation fail with ArgumentException -> initialize_failed.
+        return $"skill-runner.{agentId.Trim()}";
     }
 
     private static ScheduledDispatchConfiguration CreateConfiguration(

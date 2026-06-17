@@ -357,7 +357,7 @@ public sealed class AIAbstractionsProtoCoverageTests
                     new AgentToolRequestIdentity("req-1", "call-1"),
                     AgentToolCredentials.Empty,
                     new AgentToolCallerContext("scope-a", "owner-a", "response-a"),
-                    new AgentToolChannelContext("telegram", "sender-a", "registration-a", "message-a", "platform-message-a", "delivery-target-a"),
+                    new AgentToolChannelContext("telegram", "sender-a", "registration-a", "message-a", "platform-message-a", "delivery-target-a", "secrets://nyx/reply-a"),
                     new AgentToolSenderBindingContext("binding-a"),
                     new LLMRequestRoutingContext("model-a", "route-a", 4, "remember-a"),
                     new AgentToolConnectedServicesContext("""{"service":"telegram"}"""),
@@ -482,7 +482,6 @@ public sealed class AIAbstractionsProtoCoverageTests
         ((int)AgentToolReceiptApprovalMode.NeverRequire).Should().Be(1);
         ((int)AgentToolReceiptApprovalMode.AlwaysRequire).Should().Be(2);
         ((int)AgentToolReceiptApprovalMode.Auto).Should().Be(3);
-
         AgentToolReceipt.Descriptor.Fields.InFieldNumberOrder()
             .Select(field => (field.FieldNumber, field.Name))
             .Should()
@@ -501,7 +500,8 @@ public sealed class AIAbstractionsProtoCoverageTests
                 (12, "error_code"),
                 (13, "error_message"),
                 (14, "result_json"),
-                (15, "managed_workflow_handoff"));
+                (15, "managed_workflow_handoff"),
+                (16, "workflow_run_delivery"));
 
         AgentToolReceipt.Descriptor.Fields.InFieldNumberOrder()
             .Select(field => field.Name)
@@ -546,7 +546,7 @@ public sealed class AIAbstractionsProtoCoverageTests
                 Request = new AgentToolRequestIdentity("req-typed", "call-typed"),
                 Credentials = new AgentToolCredentials("token-should-only-appear-in-this-explicit-roundtrip", null, null),
                 Caller = new AgentToolCallerContext("scope-typed", "owner-typed", "response-typed"),
-                Channel = new AgentToolChannelContext("lark", "sender-1", "registration-1", "message-1", "platform-message-1", "delivery-target-1"),
+                Channel = new AgentToolChannelContext("lark", "sender-1", "registration-1", "message-1", "platform-message-1", "delivery-target-1", "secrets://nyx/reply-1"),
                 SenderBinding = new AgentToolSenderBindingContext("binding-1"),
                 Routing = new LLMRequestRoutingContext("model-typed", "route-typed", 4, "memory-typed"),
                 ConnectedServices = new AgentToolConnectedServicesContext("{\"service\":\"ok\"}"),

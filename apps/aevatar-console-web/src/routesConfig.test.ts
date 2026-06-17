@@ -42,25 +42,65 @@ describe("console routes", () => {
     jest.resetModules();
   });
 
-  it("keeps Team-first navigation as the default route model", () => {
+  it("keeps scoped Team navigation as the default resource route model", () => {
     const routes = loadRoutes();
 
-    expect(findRoute(routes, "/teams").hideInMenu).toBe(false);
+    expect(findRoute(routes, "/scopes").hideInMenu).toBe(false);
     expect(findRoute(routes, "/studio").hideInMenu).toBe(true);
     expect(findRoute(routes, "/chat").hideInMenu).toBe(true);
     expect(findRoute(routes, "/runtime/runs").hideInMenu).toBeUndefined();
     expect(findRoute(routes, "/runtime/runs").menuGroupKey).toBe("platform");
     expect(findRoute(routes, "/scopes/overview").hideInMenu).toBe(true);
-    expect(findRoute(routes, "/teams").name).toBe("My Teams");
-    expect(findRoute(routes, "/teams").component).toBe("./teams");
-    expect(findRoute(routes, "/teams/new").name).toBe("Create Team");
-    expect(findRoute(routes, "/teams/new").hideInMenu).toBe(true);
-    expect(findRoute(routes, "/teams/:scopeId").component).toBe("./teams/detail");
+    expect(findRoute(routes, "/scopes").name).toBe("My Teams");
+    expect(findRoute(routes, "/scopes").component).toBe("./teams");
+    expect(hasRoute(routes, "/teams")).toBe(false);
+    expect(hasRoute(routes, "/teams/new")).toBe(false);
+    expect(hasRoute(routes, "/teams/:scopeId")).toBe(false);
+    expect(hasRoute(routes, "/teams/:scopeId/:teamId")).toBe(false);
+    expect(hasRoute(routes, "/teams/:scopeId/:teamId/members/new/workflow")).toBe(false);
+    expect(hasRoute(routes, "/teams/:scopeId/:teamId/members/:memberId/workflow")).toBe(false);
+    expect(hasRoute(routes, "/teams/:scopeId/:teamId/members/:memberId/invoke")).toBe(false);
+    expect(findRoute(routes, "/scopes/:scopeId/teams").component).toBe("./teams");
+    expect(findRoute(routes, "/scopes/:scopeId/teams").parentKeys).toEqual([
+      "/scopes",
+    ]);
+    expect(findRoute(routes, "/scopes/:scopeId/teams/new").component).toBe(
+      "./teams/new",
+    );
+    expect(findRoute(routes, "/scopes/:scopeId/teams/new").parentKeys).toEqual([
+      "/scopes",
+    ]);
+    expect(findRoute(routes, "/scopes/:scopeId/teams/:teamId").component).toBe(
+      "./teams/detail",
+    );
+    expect(findRoute(routes, "/scopes/:scopeId/teams/:teamId").parentKeys).toEqual([
+      "/scopes",
+    ]);
+    expect(findRoute(routes, "/scopes/:scopeId/teams/:teamId/members/new/workflow").component).toBe(
+      "./team-member-workflow-studio",
+    );
+    expect(findRoute(routes, "/scopes/:scopeId/teams/:teamId/members/:memberId/workflow").component).toBe(
+      "./team-member-workflow-studio",
+    );
+    expect(findRoute(routes, "/scopes/:scopeId/teams/:teamId/members/:memberId/invoke").component).toBe(
+      "./team-member-invoke",
+    );
+    expect(findRoute(routes, "/scopes/:scopeId/teams/:teamId/members/:memberId/automations").component).toBe(
+      "./teams/detail",
+    );
+    expect(
+      findRouteIndex(routes, "/scopes/:scopeId/teams/:teamId/members/new/workflow"),
+    ).toBeLessThan(findRouteIndex(routes, "/scopes/:scopeId/teams/:teamId"));
+    expect(
+      findRouteIndex(routes, "/scopes/:scopeId/teams/:teamId/members/:memberId/workflow"),
+    ).toBeLessThan(findRouteIndex(routes, "/scopes/:scopeId/teams/:teamId"));
+    expect(
+      findRouteIndex(routes, "/scopes/:scopeId/teams/:teamId/members/:memberId/automations"),
+    ).toBeLessThan(findRouteIndex(routes, "/scopes/:scopeId/teams/:teamId"));
     expect(findRoute(routes, "/runtime/gagents").name).toBe("Members");
     expect(findRoute(routes, "/scopes/assets").name).toBeUndefined();
     expect(findRoute(routes, "/scopes/invoke").name).toBeUndefined();
     expect(findRoute(routes, "/scopes/overview").component).toBe("./scopes/overview");
-    expect(findRoute(routes, "/scopes").redirect).toBe("/teams");
     expect(hasRoute(routes, "/workflows")).toBe(true);
     expect(findRoute(routes, "/workflows").redirect).toBe("/runtime/workflows");
     expect(hasRoute(routes, "/primitives")).toBe(true);
