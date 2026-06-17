@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Xml;
 using System.Xml.Linq;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core.Modules;
 using System.IO.Compression;
@@ -12,18 +13,29 @@ using ProtoWorkflowFileSourceKind = Aevatar.Workflow.Abstractions.WorkflowFileSo
 
 namespace Aevatar.Workflow.Infrastructure.Runs;
 
-public sealed class WorkflowDocumentExtractToolSource(IWorkflowFileArtifactReadPort fileArtifacts) : IWorkflowToolSource
+public sealed class WorkflowDocumentExtractToolSource(
+    IWorkflowFileArtifactReadPort fileArtifacts,
+    ILLMProvider? llmProvider = null,
+    ILLMProviderFactory? llmProviderFactory = null) : IWorkflowToolSource
 {
     private readonly IWorkflowFileArtifactReadPort _fileArtifacts =
         fileArtifacts ?? throw new ArgumentNullException(nameof(fileArtifacts));
+    private readonly ILLMProvider? _llmProvider = llmProvider;
+    private readonly ILLMProviderFactory? _llmProviderFactory = llmProviderFactory;
 
     public Task<IReadOnlyList<IWorkflowTool>> GetToolsAsync(CancellationToken ct = default) =>
-        Task.FromResult<IReadOnlyList<IWorkflowTool>>([new DocumentExtractTool(_fileArtifacts)]);
+        Task.FromResult<IReadOnlyList<IWorkflowTool>>([
+            new DocumentExtractTool(_fileArtifacts, _llmProvider, _llmProviderFactory),
+        ]);
 
-    private sealed class DocumentExtractTool(IWorkflowFileArtifactReadPort fileArtifacts) : IWorkflowTool
+    private sealed class DocumentExtractTool(
+        IWorkflowFileArtifactReadPort fileArtifacts,
+        ILLMProvider? llmProvider,
+        ILLMProviderFactory? llmProviderFactory) : IWorkflowTool
     {
         private const int DefaultMaxChars = 20_000;
         private const int HardMaxChars = 100_000;
+        private const int MaxImageBytes = 5 * 1024 * 1024;
 
         private static readonly JsonSerializerOptions JsonOptions = new()
         {
@@ -33,6 +45,8 @@ public sealed class WorkflowDocumentExtractToolSource(IWorkflowFileArtifactReadP
         };
 
         private readonly IWorkflowFileArtifactReadPort _fileArtifacts = fileArtifacts;
+        private readonly ILLMProvider? _llmProvider = llmProvider;
+        private readonly ILLMProviderFactory? _llmProviderFactory = llmProviderFactory;
 
         public string Name => "document_extract";
 
@@ -58,6 +72,16 @@ public sealed class WorkflowDocumentExtractToolSource(IWorkflowFileArtifactReadP
                             $"document_extract does not support media type '{mediaType}'.");
 
                     var maxChars = NormalizeMaxChars(arguments.MaxChars);
+                    if (IsSupportedImageMediaType(mediaType))
+                    {
+                        return await ExtractImageTextAsync(
+                            artifact.Content,
+                            descriptor,
+                            mediaType,
+                            maxChars,
+                            ct).ConfigureAwait(false);
+                    }
+
                     var extracted = mediaType switch
                     {
                         "application/pdf" => ExtractPdfText(artifact.Content, maxChars),
@@ -93,6 +117,77 @@ public sealed class WorkflowDocumentExtractToolSource(IWorkflowFileArtifactReadP
             {
                 return Error("artifact_unavailable", SafeArtifactDetail(ex));
             }
+        }
+
+        private async Task<WorkflowToolExecutionResult> ExtractImageTextAsync(
+            Stream content,
+            WorkflowFileRef descriptor,
+            string mediaType,
+            int maxChars,
+            CancellationToken ct)
+        {
+            ILLMProvider? imageProvider;
+            try
+            {
+                imageProvider = ResolveImageProvider();
+            }
+            catch (Exception) when (!ct.IsCancellationRequested)
+            {
+                return Error("image_extraction_failed", "Image extraction provider failed.");
+            }
+
+            if (imageProvider == null || !imageProvider.Capabilities.SupportsInput(ContentPartKind.Image))
+            {
+                return Error(
+                    "image_provider_unavailable",
+                    "document_extract image extraction requires a configured LLM provider with image input support.");
+            }
+
+            if (descriptor.SizeBytes > MaxImageBytes)
+                return Error("image_too_large", $"document_extract image input exceeds {MaxImageBytes} bytes.");
+
+            byte[] imageBytes;
+            try
+            {
+                imageBytes = await ReadCappedImageBytesAsync(content, MaxImageBytes, ct).ConfigureAwait(false);
+            }
+            catch (ImageTooLargeException)
+            {
+                return Error("image_too_large", $"document_extract image input exceeds {MaxImageBytes} bytes.");
+            }
+
+            try
+            {
+                var extracted = await ExtractImageTextWithProviderAsync(
+                    imageProvider,
+                    imageBytes,
+                    descriptor,
+                    mediaType,
+                    maxChars,
+                    ct).ConfigureAwait(false);
+
+                return WorkflowToolExecutionResult.Success(JsonSerializer.Serialize(
+                    new DocumentExtractResult(
+                        ExtractionKind: ResolveExtractionKind(mediaType),
+                        MediaType: mediaType,
+                        File: ToResultFileRef(descriptor),
+                        Text: extracted.Text,
+                        Truncated: extracted.Truncated,
+                        ExtractedChars: extracted.Text.Length),
+                    JsonOptions));
+            }
+            catch (Exception) when (!ct.IsCancellationRequested)
+            {
+                return Error("image_extraction_failed", "Image extraction provider failed.");
+            }
+        }
+
+        private ILLMProvider? ResolveImageProvider()
+        {
+            if (_llmProvider != null)
+                return _llmProvider;
+
+            return _llmProviderFactory?.GetDefault();
         }
 
         private static DocumentExtractArguments ParseArguments(WorkflowToolExecutionRequest request)
@@ -293,6 +388,67 @@ public sealed class WorkflowDocumentExtractToolSource(IWorkflowFileArtifactReadP
             return new ExtractedText(new string(buffer, 0, length), truncated);
         }
 
+        private async Task<ExtractedText> ExtractImageTextWithProviderAsync(
+            ILLMProvider imageProvider,
+            byte[] imageBytes,
+            WorkflowFileRef descriptor,
+            string mediaType,
+            int maxChars,
+            CancellationToken ct)
+        {
+            var request = new LLMRequest
+            {
+                Messages =
+                [
+                    ChatMessage.System("Extract readable text from the image. Return only the extracted text."),
+                    ChatMessage.User(
+                    [
+                        ContentPart.ImagePart(
+                            Convert.ToBase64String(imageBytes),
+                            mediaType,
+                            descriptor.FileName),
+                    ]),
+                ],
+                RequestId = $"document_extract:{descriptor.FileId ?? descriptor.ArtifactId ?? "image"}",
+            };
+
+            var builder = new StringBuilder(capacity: Math.Min(maxChars, 4096));
+            var truncated = false;
+            await foreach (var chunk in imageProvider.ChatStreamAsync(request, ct).WithCancellation(ct)
+                               .ConfigureAwait(false))
+            {
+                if (string.IsNullOrEmpty(chunk.DeltaContent))
+                    continue;
+
+                AppendBounded(builder, chunk.DeltaContent, maxChars, ref truncated);
+            }
+
+            return new ExtractedText(builder.ToString(), truncated);
+        }
+
+        private static async Task<byte[]> ReadCappedImageBytesAsync(
+            Stream content,
+            int maxBytes,
+            CancellationToken ct)
+        {
+            using var buffer = new MemoryStream(capacity: Math.Min(maxBytes, 81920));
+            var chunk = new byte[81920];
+            while (true)
+            {
+                var read = await content.ReadAsync(chunk.AsMemory(0, chunk.Length), ct)
+                    .ConfigureAwait(false);
+                if (read == 0)
+                    break;
+
+                if (buffer.Length + read > maxBytes)
+                    throw new ImageTooLargeException();
+
+                buffer.Write(chunk, 0, read);
+            }
+
+            return buffer.ToArray();
+        }
+
         private static ExtractedText ExtractPdfText(Stream content, int maxChars)
         {
             var builder = new StringBuilder(capacity: Math.Min(maxChars, 4096));
@@ -382,11 +538,15 @@ public sealed class WorkflowDocumentExtractToolSource(IWorkflowFileArtifactReadP
             return normalized.ToLowerInvariant();
         }
 
+        private static bool IsSupportedImageMediaType(string mediaType) =>
+            mediaType is "image/png" or "image/jpeg";
+
         private static string ResolveExtractionKind(string mediaType) =>
             mediaType switch
             {
                 "application/pdf" => "pdf_text",
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => "docx_text",
+                "image/png" or "image/jpeg" => "image_text",
                 _ => "utf8_text",
             };
 
@@ -434,8 +594,12 @@ public sealed class WorkflowDocumentExtractToolSource(IWorkflowFileArtifactReadP
             "text/csv",
             "application/pdf",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "image/png",
+            "image/jpeg",
         };
     }
+
+    private sealed class ImageTooLargeException : Exception;
 
     private sealed record DocumentExtractArguments(WorkflowFileRef FileRef, int? MaxChars = null);
 

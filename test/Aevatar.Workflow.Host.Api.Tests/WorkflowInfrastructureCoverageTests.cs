@@ -886,8 +886,8 @@ public sealed class WorkflowInfrastructureCoverageTests
             var result = await port.IngestAsync(new WorkflowFileIngressRequest(
                 new byte[] { 1, 2, 3 },
                 ApplicationWorkflowFileSourceKind.ChatInput,
-                FileName: "image.png",
-                MediaType: "image/png"));
+                FileName: "image.webp",
+                MediaType: "image/webp"));
             var tool = await GetDocumentExtractToolAsync(port);
 
             var output = await tool.ExecuteAsync(new WorkflowToolExecutionRequest(
@@ -901,7 +901,7 @@ public sealed class WorkflowInfrastructureCoverageTests
 
             using var document = JsonDocument.Parse(output.ResultJson);
             document.RootElement.GetProperty("error").GetString().Should().Be("unsupported_media_type");
-            document.RootElement.GetProperty("detail").GetString().Should().Contain("image/png");
+            document.RootElement.GetProperty("detail").GetString().Should().Contain("image/webp");
         }
         finally
         {
