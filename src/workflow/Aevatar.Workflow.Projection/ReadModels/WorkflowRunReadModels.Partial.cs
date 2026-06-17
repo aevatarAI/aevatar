@@ -208,6 +208,16 @@ public sealed partial class WorkflowExecutionCurrentStateDocument : IProjectionR
     }
 }
 
+public sealed partial class WorkflowExternalApprovalContinuationDocument
+    : IProjectionReadModel<WorkflowExternalApprovalContinuationDocument>
+{
+    public DateTimeOffset UpdatedAt
+    {
+        get => UpdatedAtUtcValue == null ? default : UpdatedAtUtcValue.ToDateTimeOffset();
+        set => UpdatedAtUtcValue = Timestamp.FromDateTimeOffset(value.ToUniversalTime());
+    }
+}
+
 public sealed partial class WorkflowExecutionInputFileRefReadModel
 {
     public WorkflowFileSourceKind SourceKind

@@ -39,6 +39,8 @@ public sealed class StepDefinition
 
     public HumanApprovalOptionsDefinition? HumanApprovalOptions { get; init; }
 
+    public ExternalApprovalWaitOptionsDefinition? ExternalApprovalOptions { get; init; }
+
     /// <summary>
     /// 下一步骤 ID，用于线性流程控制。
     /// </summary>
@@ -86,6 +88,21 @@ public sealed class StepDefinition
 public sealed class HumanApprovalOptionsDefinition
 {
     public string? TimeoutDefaultDecision { get; init; }
+}
+
+public sealed class ExternalApprovalWaitOptionsDefinition
+{
+    public string? SourceId { get; init; }
+
+    public string? ExternalIdKind { get; init; }
+
+    public string? ExternalId { get; init; }
+
+    public string? SignalName { get; init; }
+
+    public string? CallbackIdempotencyKey { get; init; }
+
+    public string? RequestId { get; init; }
 }
 
 public sealed class StepRetryPolicy

@@ -66,6 +66,23 @@ message WorkflowExecutionCurrentStateDocument {
   string dead_letter_error = 29;
 }
 
+message WorkflowExternalApprovalContinuationDocument {
+  string id = 1;
+  int64 state_version = 2;
+  string last_event_id = 3;
+  google.protobuf.Timestamp updated_at_utc_value = 4;
+  string actor_id = 5;
+  string run_id = 6;
+  string step_id = 7;
+  string signal_name = 8;
+  string source_id = 9;
+  string external_id_kind = 10;
+  string external_id = 11;
+  string callback_idempotency_key = 12;
+  string request_id = 13;
+  bool active = 14;
+}
+
 message WorkflowStepIdempotencyReadModel {
   string logical_run_id = 1;
   string step_id = 2;

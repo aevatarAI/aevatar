@@ -167,6 +167,7 @@ public sealed class WorkflowParser
             Presentation = presentation,
             AgentToolScope = agentToolScope,
             HumanApprovalOptions = MapHumanApprovalOptions(canonicalType, parameters),
+            ExternalApprovalOptions = MapExternalApprovalOptions(canonicalType, parameters),
             Next = s.Next,
             Compensation = NormalizeText(s.Compensation),
             Children = s.Children?.Select(MapStep).ToList(),
@@ -986,6 +987,38 @@ public sealed class WorkflowParser
         return string.IsNullOrWhiteSpace(decision)
             ? null
             : new HumanApprovalOptionsDefinition { TimeoutDefaultDecision = decision };
+    }
+
+    private static ExternalApprovalWaitOptionsDefinition? MapExternalApprovalOptions(
+        string canonicalType,
+        IReadOnlyDictionary<string, string> parameters)
+    {
+        if (!string.Equals(canonicalType, "wait_signal", StringComparison.Ordinal))
+            return null;
+
+        var sourceId = GetParameter(parameters, "external_approval.source_id", "approval_source_id", "source_id").Trim();
+        var externalIdKind = GetParameter(parameters, "external_approval.external_id_kind", "external_id_kind").Trim();
+        var externalId = GetParameter(parameters, "external_approval.external_id", "external_id").Trim();
+        if (string.IsNullOrWhiteSpace(sourceId) ||
+            string.IsNullOrWhiteSpace(externalIdKind) ||
+            string.IsNullOrWhiteSpace(externalId))
+        {
+            return null;
+        }
+
+        return new ExternalApprovalWaitOptionsDefinition
+        {
+            SourceId = sourceId,
+            ExternalIdKind = externalIdKind,
+            ExternalId = externalId,
+            SignalName = GetParameter(parameters, "external_approval.signal_name", "signal_name", "signal").Trim(),
+            CallbackIdempotencyKey = GetParameter(
+                parameters,
+                "external_approval.callback_idempotency_key",
+                "callback_idempotency_key",
+                "idempotency_key").Trim(),
+            RequestId = GetParameter(parameters, "external_approval.request_id", "request_id").Trim(),
+        };
     }
 
     private static TransformOperationKind ParseTransformOperationKind(string? value) =>

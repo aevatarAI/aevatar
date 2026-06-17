@@ -144,6 +144,171 @@ public sealed class WaitSignalModuleTests
         context.Published.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task HandleAsync_WhenExternalApprovalWaitStarts_ShouldSavePendingThenPublishRegisteredFact()
+    {
+        var module = new WaitSignalModule();
+        var context = new RecordingEventHandlerContext(
+            new EmptyServiceProvider(),
+            new StubAgent("workflow-approval"),
+            NullLogger.Instance);
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "wait-approval",
+                StepType = "wait_signal",
+                RunId = "run-approval",
+                Input = "fallback",
+                StepParameters = new WorkflowStepParameters
+                {
+                    ExternalApproval = new WorkflowExternalApprovalWaitOptions
+                    {
+                        SourceId = "NyxID",
+                        ExternalIdKind = "Instance_Code",
+                        ExternalId = "APP-42",
+                        SignalName = "approval-terminal",
+                        CallbackIdempotencyKey = "idem-42",
+                        RequestId = "request-42",
+                    },
+                },
+            }),
+            context,
+            CancellationToken.None);
+
+        var state = context.LoadState<WaitSignalModuleState>("wait_signal");
+        var pending = state.Pending.Values.Should().ContainSingle().Subject;
+        pending.SignalName.Should().Be("approval-terminal");
+        pending.ExternalApproval.Should().NotBeNull();
+        pending.ExternalApproval.SourceId.Should().Be("NyxID");
+        pending.ExternalApproval.ExternalIdKind.Should().Be("Instance_Code");
+        pending.ExternalApproval.ExternalId.Should().Be("APP-42");
+
+        var registered = context.Published.Select(item => item.Event)
+            .OfType<WorkflowExternalApprovalContinuationRegisteredEvent>()
+            .Should()
+            .ContainSingle()
+            .Subject;
+        registered.RunId.Should().Be("run-approval");
+        registered.StepId.Should().Be("wait-approval");
+        registered.SignalName.Should().Be("approval-terminal");
+        registered.CallbackIdempotencyKey.Should().Be("idem-42");
+        registered.RequestId.Should().Be("request-42");
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenExternalApprovalSignalCompletes_ShouldPublishClearedFactOnce()
+    {
+        var module = new WaitSignalModule();
+        var context = new RecordingEventHandlerContext(
+            new EmptyServiceProvider(),
+            new StubAgent("workflow-approval"),
+            NullLogger.Instance);
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "wait-approval",
+                StepType = "wait_signal",
+                RunId = "run-approval",
+                StepParameters = new WorkflowStepParameters
+                {
+                    ExternalApproval = new WorkflowExternalApprovalWaitOptions
+                    {
+                        SourceId = "nyxid",
+                        ExternalIdKind = "instance_code",
+                        ExternalId = "app-42",
+                        SignalName = "approval-terminal",
+                        CallbackIdempotencyKey = "idem-42",
+                        RequestId = "request-42",
+                    },
+                },
+            }),
+            context,
+            CancellationToken.None);
+        context.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new SignalReceivedEvent
+            {
+                RunId = "run-approval",
+                StepId = "wait-approval",
+                SignalName = "approval-terminal",
+                Payload = "approved",
+            }),
+            context,
+            CancellationToken.None);
+
+        context.Published.Select(item => item.Event)
+            .OfType<StepCompletedEvent>()
+            .Should()
+            .ContainSingle()
+            .Subject
+            .Output.Should().Be("approved");
+
+        var cleared = context.Published.Select(item => item.Event)
+            .OfType<WorkflowExternalApprovalContinuationClearedEvent>()
+            .Should()
+            .ContainSingle()
+            .Subject;
+        cleared.RunId.Should().Be("run-approval");
+        cleared.StepId.Should().Be("wait-approval");
+        cleared.SignalName.Should().Be("approval-terminal");
+        cleared.CallbackIdempotencyKey.Should().Be("idem-42");
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenExternalApprovalWaiterIsReplaced_ShouldClearOldBinding()
+    {
+        var module = new WaitSignalModule();
+        var context = new RecordingEventHandlerContext(
+            new EmptyServiceProvider(),
+            new StubAgent("workflow-approval"),
+            NullLogger.Instance);
+
+        await module.HandleAsync(
+            Envelope(ExternalApprovalRequest("app-old", "idem-old")),
+            context,
+            CancellationToken.None);
+        context.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(ExternalApprovalRequest("app-new", "idem-new")),
+            context,
+            CancellationToken.None);
+
+        var facts = context.Published.Select(item => item.Event).ToList();
+        facts.OfType<WorkflowExternalApprovalContinuationClearedEvent>()
+            .Should()
+            .ContainSingle()
+            .Subject
+            .ExternalId.Should().Be("app-old");
+        facts.OfType<WorkflowExternalApprovalContinuationRegisteredEvent>()
+            .Should()
+            .ContainSingle()
+            .Subject
+            .ExternalId.Should().Be("app-new");
+    }
+
+    private static StepRequestEvent ExternalApprovalRequest(string externalId, string idempotencyKey) =>
+        new()
+        {
+            StepId = "wait-approval",
+            StepType = "wait_signal",
+            RunId = "run-approval",
+            StepParameters = new WorkflowStepParameters
+            {
+                ExternalApproval = new WorkflowExternalApprovalWaitOptions
+                {
+                    SourceId = "nyxid",
+                    ExternalIdKind = "instance_code",
+                    ExternalId = externalId,
+                    SignalName = "approval-terminal",
+                    CallbackIdempotencyKey = idempotencyKey,
+                },
+            },
+        };
+
     private static EventEnvelope Envelope(IMessage evt)
     {
         return new EventEnvelope
