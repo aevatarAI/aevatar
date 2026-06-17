@@ -179,6 +179,105 @@ public sealed class NyxIdProxyToolFileArtifactTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WithFileArtifactResponseMode_ShouldReturnStructuredErrorWhenAccessTokenIsMissing()
+    {
+        var handler = new ProxyRecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("""{"ok":true}""", Encoding.UTF8, "application/json"),
+        });
+        var ingress = new RecordingNyxIdProxyFileArtifactIngress();
+        var tool = CreateTool(handler, ingress);
+        var previous = AgentToolRequestContext.Current;
+        try
+        {
+            AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
+            {
+                Caller = new AgentToolCallerContext("scope-a", null, null),
+                WorkflowRuntime = new AgentWorkflowRuntimeContext(
+                    "workflow-run-actor",
+                    "run-a",
+                    "step-a",
+                    "run-a",
+                    1),
+            };
+
+            var result = await tool.ExecuteAsync(
+                """{"slug":"storage","path":"/reports/1","response_mode":"file_artifact"}""");
+
+            AssertFileArtifactError(
+                result,
+                "missing_nyxid_access_token",
+                "No NyxID access token available. User must be authenticated.");
+            handler.Requests.Should().BeEmpty();
+            ingress.Requests.Should().BeEmpty();
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = previous;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithFileArtifactResponseMode_ShouldRequireSlugBeforeProxyCall()
+    {
+        var handler = new ProxyRecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("""{"ok":true}""", Encoding.UTF8, "application/json"),
+        });
+        var ingress = new RecordingNyxIdProxyFileArtifactIngress();
+        var tool = CreateTool(handler, ingress);
+        var previous = AgentToolRequestContext.Current;
+        try
+        {
+            AgentToolRequestContext.Current = BuildContext();
+
+            var result = await tool.ExecuteAsync(
+                """{"path":"/reports/1","response_mode":"file_artifact"}""");
+
+            AssertFileArtifactError(
+                result,
+                "file_artifact_requires_slug",
+                "response_mode=file_artifact requires slug.");
+            handler.Requests.Should().BeEmpty();
+            ingress.Requests.Should().BeEmpty();
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = previous;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithFileArtifactResponseMode_ShouldRequirePathBeforeProxyCall()
+    {
+        var handler = new ProxyRecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("""{"ok":true}""", Encoding.UTF8, "application/json"),
+        });
+        var ingress = new RecordingNyxIdProxyFileArtifactIngress();
+        var tool = CreateTool(handler, ingress);
+        var previous = AgentToolRequestContext.Current;
+        try
+        {
+            AgentToolRequestContext.Current = BuildContext();
+
+            var result = await tool.ExecuteAsync(
+                """{"slug":"storage","response_mode":"file_artifact"}""");
+
+            AssertFileArtifactError(
+                result,
+                "file_artifact_requires_path",
+                "response_mode=file_artifact requires path.");
+            handler.Requests.Should().BeEmpty();
+            ingress.Requests.Should().BeEmpty();
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = previous;
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WithFileArtifactResponseMode_ShouldRequireManagedWorkflowContextAndIngress()
     {
         var toolWithoutIngress = CreateTool(new ProxyRecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
@@ -225,6 +324,150 @@ public sealed class NyxIdProxyToolFileArtifactTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WithFileArtifactResponseMode_ShouldMapTooLargeDownloadToStructuredError()
+    {
+        var handler = new ProxyRecordingHandler(_ =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent([1, 2, 3, 4]),
+            };
+            response.Content.Headers.ContentType = MediaTypeHeaderValue.Parse("application/octet-stream");
+            response.Content.Headers.ContentLength = 4;
+            return response;
+        });
+        var ingress = new RecordingNyxIdProxyFileArtifactIngress();
+        var tool = CreateTool(handler, ingress, fileArtifactMaxBytes: 3);
+        var previous = AgentToolRequestContext.Current;
+        try
+        {
+            AgentToolRequestContext.Current = BuildContext();
+
+            var result = await tool.ExecuteAsync(
+                """{"slug":"storage","path":"/reports/1","response_mode":"file_artifact"}""");
+
+            AssertFileArtifactError(
+                result,
+                "file_artifact_too_large",
+                "content_length_exceeds_max_bytes",
+                expectedHttpStatus: 200,
+                expectedSourceContentType: "application/octet-stream");
+            handler.Requests.Should().ContainSingle();
+            ingress.Requests.Should().BeEmpty();
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = previous;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithFileArtifactResponseMode_ShouldMapProviderFailureToStructuredError()
+    {
+        var handler = new ProxyRecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.Forbidden)
+        {
+            Content = new StringContent("""{"error":"missing scope"}""", Encoding.UTF8, "application/json"),
+        });
+        var ingress = new RecordingNyxIdProxyFileArtifactIngress();
+        var tool = CreateTool(handler, ingress);
+        var previous = AgentToolRequestContext.Current;
+        try
+        {
+            AgentToolRequestContext.Current = BuildContext();
+
+            var result = await tool.ExecuteAsync(
+                """{"slug":"storage","path":"/reports/1","response_mode":"file_artifact"}""");
+
+            AssertFileArtifactError(
+                result,
+                "provider_binary_download_failed",
+                "NyxID binary proxy request failed.",
+                expectedHttpStatus: 403,
+                expectedSourceContentType: "application/json; charset=utf-8");
+            handler.Requests.Should().ContainSingle();
+            ingress.Requests.Should().BeEmpty();
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = previous;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithFileArtifactResponseMode_ShouldRejectEmptySuccessfulBinaryResponse()
+    {
+        var handler = new ProxyRecordingHandler(_ =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent([]),
+            };
+            response.Content.Headers.ContentType = MediaTypeHeaderValue.Parse("application/octet-stream");
+            return response;
+        });
+        var ingress = new RecordingNyxIdProxyFileArtifactIngress();
+        var tool = CreateTool(handler, ingress);
+        var previous = AgentToolRequestContext.Current;
+        try
+        {
+            AgentToolRequestContext.Current = BuildContext();
+
+            var result = await tool.ExecuteAsync(
+                """{"slug":"storage","path":"/reports/1","response_mode":"file_artifact"}""");
+
+            AssertFileArtifactError(
+                result,
+                "empty_file_artifact",
+                "NyxID binary proxy response was empty.",
+                expectedHttpStatus: 200,
+                expectedSourceContentType: "application/octet-stream");
+            handler.Requests.Should().ContainSingle();
+            ingress.Requests.Should().BeEmpty();
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = previous;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithFileArtifactResponseMode_ShouldReturnStructuredErrorWhenIngressThrows()
+    {
+        var handler = new ProxyRecordingHandler(_ =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(Encoding.UTF8.GetBytes("downloaded bytes")),
+            };
+            response.Content.Headers.ContentType = MediaTypeHeaderValue.Parse("text/csv");
+            return response;
+        });
+        var ingress = new RecordingNyxIdProxyFileArtifactIngress(new InvalidOperationException("store failed"));
+        var tool = CreateTool(handler, ingress);
+        var previous = AgentToolRequestContext.Current;
+        try
+        {
+            AgentToolRequestContext.Current = BuildContext();
+
+            var result = await tool.ExecuteAsync(
+                """{"slug":"storage","path":"/reports/1","response_mode":"file_artifact"}""");
+
+            AssertFileArtifactError(
+                result,
+                "artifact_ingress_failed",
+                "Downloaded resource could not be stored.",
+                expectedHttpStatus: 200,
+                expectedSourceContentType: "text/csv");
+            handler.Requests.Should().ContainSingle();
+            ingress.Requests.Should().ContainSingle();
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = previous;
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WithInvalidResponseMode_ShouldFailClosedWithoutProxyCall()
     {
         var handler = new ProxyRecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
@@ -253,12 +496,37 @@ public sealed class NyxIdProxyToolFileArtifactTests
 
     private static NyxIdProxyTool CreateTool(
         ProxyRecordingHandler handler,
-        INyxIdProxyFileArtifactIngress? ingress = null)
+        INyxIdProxyFileArtifactIngress? ingress = null,
+        long fileArtifactMaxBytes = NyxIdToolOptions.DefaultProxyFileArtifactMaxBytes)
     {
         var client = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
             new HttpClient(handler));
-        return new NyxIdProxyTool(client, null, ingress);
+        return new NyxIdProxyTool(client, null, ingress, fileArtifactMaxBytes);
+    }
+
+    private static void AssertFileArtifactError(
+        string result,
+        string expectedError,
+        string expectedDetail,
+        int? expectedHttpStatus = null,
+        string? expectedSourceContentType = null)
+    {
+        using var document = JsonDocument.Parse(result);
+        var root = document.RootElement;
+        root.GetProperty("success").GetBoolean().Should().BeFalse();
+        root.GetProperty("response_mode").GetString().Should().Be("file_artifact");
+        root.GetProperty("error").GetString().Should().Be(expectedError);
+        root.GetProperty("detail").GetString().Should().Be(expectedDetail);
+        if (expectedHttpStatus.HasValue)
+            root.GetProperty("http_status").GetInt32().Should().Be(expectedHttpStatus.Value);
+        else
+            root.TryGetProperty("http_status", out _).Should().BeFalse();
+
+        if (expectedSourceContentType != null)
+            root.GetProperty("source_content_type").GetString().Should().Be(expectedSourceContentType);
+        else
+            root.TryGetProperty("source_content_type", out _).Should().BeFalse();
     }
 
     private static AgentToolExecutionContext BuildContext(
@@ -281,6 +549,13 @@ public sealed class NyxIdProxyToolFileArtifactTests
 
     private sealed class RecordingNyxIdProxyFileArtifactIngress : INyxIdProxyFileArtifactIngress
     {
+        private readonly Exception? _exception;
+
+        public RecordingNyxIdProxyFileArtifactIngress(Exception? exception = null)
+        {
+            _exception = exception;
+        }
+
         public List<WorkflowFileIngressRequest> Requests { get; } = [];
 
         public ValueTask<WorkflowFileIngressResult> IngestAsync(
@@ -288,6 +563,9 @@ public sealed class NyxIdProxyToolFileArtifactTests
             CancellationToken cancellationToken = default)
         {
             Requests.Add(request);
+            if (_exception != null)
+                throw _exception;
+
             return ValueTask.FromResult(new WorkflowFileIngressResult(new WorkflowFileRef
             {
                 FileId = "file-1",

@@ -186,7 +186,7 @@ public sealed class NyxIdProxyTool : IAgentTool
         if (!string.Equals(method.Trim(), "GET", StringComparison.OrdinalIgnoreCase))
             return FileArtifactError("file_artifact_requires_get", "response_mode=file_artifact only supports GET.");
 
-        if (HasRequestBody(args, body))
+        if (HasRequestBody(args))
             return FileArtifactError("file_artifact_disallows_body", "response_mode=file_artifact does not accept a request body.");
 
         if (_fileArtifactIngress == null)
@@ -496,7 +496,7 @@ public sealed class NyxIdProxyTool : IAgentTool
         return null;
     }
 
-    private static bool HasRequestBody(ToolArgs args, string? body) =>
+    private static bool HasRequestBody(ToolArgs args) =>
         args.Has("body");
 
     private static long NormalizeMaxBytes(long maxBytes) =>
