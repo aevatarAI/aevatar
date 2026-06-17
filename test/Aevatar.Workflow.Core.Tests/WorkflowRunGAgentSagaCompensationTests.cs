@@ -473,6 +473,24 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
     }
 
     [Fact]
+    public async Task CompensationStepWithTooSmallTimeout_ShouldClampScheduledTimeout()
+    {
+        var harness = await CreateStartedRunAsync(TinyTimeoutCompensationWorkflowYaml());
+        await CompleteStepAsync(harness, "create_order", "order-output");
+        await FailStepAsync(harness, "ship_order", "ship failed");
+
+        var request = CompensationRequests(harness.Publisher).Should().ContainSingle().Subject;
+        request.CompensationStepId.Should().Be("cancel_order");
+
+        SingleScheduledStepTimeout(harness, "cancel_order", 100);
+        harness.CallbackScheduler.ScheduledCallbacks
+            .Where(x => x.Event is WorkflowStepTimeoutFiredEvent timeout &&
+                        timeout.StepId == "cancel_order")
+            .Should()
+            .ContainSingle();
+    }
+
+    [Fact]
     public async Task CompensationPhaseDeadline_ShouldForceDeadLetterAndNotifyCaller()
     {
         var harness = await CreateStartedRunAsync(SagaWorkflowYaml());
@@ -631,6 +649,30 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
         mismatchedRunResult.Status.Should().Be(WorkflowCompensationTransitionStatus.NoCompensableLedger);
         CommittedEvents<WorkflowCompensationFailedEvent>(compensatingHarness.CommittedPublisher).Should().BeEmpty();
         compensatingHarness.Agent.State.SagaStatus.Should().Be(WorkflowSagaStatus.Compensating);
+    }
+
+    [Fact]
+    public async Task CompensationPhaseDeadlineHostGuard_WhenCursorHasNoLedgerEntry_ShouldDeadLetterWithoutFailedStepId()
+    {
+        var harness = await CreateStartedRunAsync(NoTimeoutCompensationWorkflowYaml());
+        await CompleteStepAsync(harness, "create_order", "order-output");
+        await FailStepAsync(harness, "ship_order", "ship failed");
+        harness.Agent.State.CompensationCursor = 9;
+        var host = (IWorkflowExecutionStateHost)harness.Agent;
+
+        var result = await host.RecordCompensationPhaseDeadlineExceededAsync(
+            harness.RunId,
+            "deadline",
+            CancellationToken.None);
+
+        result.Status.Should().Be(WorkflowCompensationTransitionStatus.CompensationDeadLettered);
+        var failed = CommittedEvents<WorkflowCompensationFailedEvent>(harness.CommittedPublisher)
+            .Should()
+            .ContainSingle()
+            .Subject;
+        failed.FailedCompensationStepId.Should().BeEmpty();
+        failed.RemainingUncompensated.Should().Be(1);
+        failed.Error.Should().Be("deadline");
     }
 
     [Fact]
@@ -1035,6 +1077,22 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
           - id: cancel_order
             type: connector_call
             timeout_ms: 750
+        """;
+
+    private static string TinyTimeoutCompensationWorkflowYaml() =>
+        """
+        name: wf_2097
+        roles: []
+        steps:
+          - id: create_order
+            type: transform
+            next: ship_order
+            compensation: cancel_order
+          - id: ship_order
+            type: transform
+          - id: cancel_order
+            type: connector_call
+            timeout_ms: 1
         """;
 
     private static string NoCompensationWorkflowYaml() =>
