@@ -34,6 +34,13 @@ public static class ServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IWorkflowConnectedServiceFileSubmitAdapter,
             NyxIdWorkflowConnectedServiceFileSubmitAdapter>());
+        if (services.Any(static descriptor => descriptor.ServiceType == typeof(IWorkflowFileIngressPort)))
+        {
+            services.TryAddSingleton<INyxIdProxyFileArtifactIngress>(sp =>
+                new NyxIdProxyWorkflowFileArtifactIngress(
+                    sp.GetRequiredService<IWorkflowFileIngressPort>()));
+        }
+
         services.TryAddEnumerable(
             ServiceDescriptor.Transient<IAgentToolSource, NyxIdAgentToolSource>());
 
