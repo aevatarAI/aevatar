@@ -312,6 +312,8 @@ message WorkflowExecutionKernelState
   repeated WorkflowFileRef current_step_input_file_refs = 14;
   map<string, WorkflowStepIdempotencyState> idempotency_by_step_id = 15;
   map<string, string> compensation_execution_ids_by_step_id = 16;
+  WorkflowRuntimeCallbackLeaseState compensation_phase_deadline_lease = 17;
+  string compensation_phase_deadline_callback_id = 18;
 }
 
 message WorkflowUsageMetricsState

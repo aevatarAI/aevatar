@@ -352,6 +352,17 @@ internal sealed class TestAgent(string id, string? runId = null) : IAgent, IWork
         return Task.FromResult(NoCompensableLedger());
     }
 
+    public Task<WorkflowCompensationTransitionResult> RecordCompensationPhaseDeadlineExceededAsync(
+        string runId,
+        string error,
+        CancellationToken ct = default)
+    {
+        _ = runId;
+        _ = error;
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(NoCompensableLedger());
+    }
+
     private static WorkflowCompensationTransitionResult NoCompensableLedger() =>
         new(
             WorkflowCompensationTransitionStatus.NoCompensableLedger,
@@ -449,6 +460,17 @@ internal sealed class TestWorkflowRunAgent(string id, string runId) : IAgent, IW
         CancellationToken ct = default)
     {
         _ = completion;
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(NoCompensableLedger());
+    }
+
+    public Task<WorkflowCompensationTransitionResult> RecordCompensationPhaseDeadlineExceededAsync(
+        string runId,
+        string error,
+        CancellationToken ct = default)
+    {
+        _ = runId;
+        _ = error;
         ct.ThrowIfCancellationRequested();
         return Task.FromResult(NoCompensableLedger());
     }

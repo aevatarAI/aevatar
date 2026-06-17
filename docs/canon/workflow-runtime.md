@@ -313,7 +313,9 @@ Workflow step 可以通过 `compensation` 声明一个已存在的 step id。静
 
 成功完成会把匹配的 `PROVISIONAL` ledger 项确认成 `CONFIRMED` 并补齐 captured output；没有 provisional 项的 legacy success 仍追加一条 `CONFIRMED` ledger。失败完成通过 typed `WorkflowStepFailureOutcome` 对账：`CALLEE_CONFIRMED`（含默认 `UNSPECIFIED`）删除匹配 provisional，表示 callee 已确认没有可补偿副作用；`OUTCOME_UNCERTAIN` 保留 provisional，timeout / force-fail / stop-to-failure 这类中断按“副作用可能已发生”处理。
 
-当后续 step 发生终止失败且 ledger 非空时，run 不直接提交 `WorkflowCompletedEvent(success=false)`。`WorkflowExecutionKernel` 先请求 run actor 开启补偿相位，run actor 按 ledger 反向顺序提交 `CompensationRequestEvent`，再通过 self continuation 派发对应补偿 step。`PROVISIONAL` 和 `CONFIRMED` 项使用同一条 LIFO compensation walk；provisional 的 captured output 可为空，补偿 idempotency key 保持稳定，撤销未生效副作用必须是安全 no-op。补偿 step 完成后以 `CompensationStepCompletedEvent` 回到 run actor，由 actor 校验 `run_id + compensation_step_id + execution_id`，拒绝陈旧或重复完成事件。
+当后续 step 发生终止失败且 ledger 非空时，run 不直接提交 `WorkflowCompletedEvent(success=false)`。`WorkflowExecutionKernel` 先请求 run actor 开启补偿相位，run actor 按 ledger 反向顺序提交 `CompensationRequestEvent`，再通过 self continuation 派发对应补偿 step。`PROVISIONAL` 和 `CONFIRMED` 项使用同一条 LIFO compensation walk；provisional 的 captured output 可为空，补偿 idempotency key 保持稳定，撤销未生效副作用必须是安全 no-op。补偿 step 派发使用补偿专用默认超时：若补偿 step 没有显式 `timeout_ms`，kernel 使用 `DefaultCompensationTimeoutMs = 30000`，再沿用 step timeout 的 `100..600000` ms clamp；forward step 省略 `timeout_ms` 的语义保持不变。补偿 step 完成后以 `CompensationStepCompletedEvent` 回到 run actor，由 actor 校验 `run_id + compensation_step_id + execution_id`，拒绝陈旧或重复完成事件。
+
+补偿相位本身也有 actor-owned durable deadline。第一次进入补偿相位或 crash/reactivation 后重发当前 `CompensationRequestEvent` 时，`WorkflowExecutionKernel` 通过 `ScheduleSelfDurableTimeoutAsync` 安排 `WorkflowCompensationPhaseDeadlineFiredEvent`，相对超时为 `CompensationPhaseDeadlineMs = 300000`。deadline fired 后若 run 仍处于当前补偿相位且 callback lease 匹配，kernel 只向 `WorkflowRunGAgent` 报告 deadline exceeded；仍由 run actor 依据权威 `compensation_cursor` 提交 `WorkflowCompensationFailedEvent`，进入 `COMPENSATION_DEAD_LETTER` 并复用失败 `WorkflowCompletedEvent` 通知 caller。补偿正常完成或 dead-letter 终态会清理并取消 phase deadline lease；终态后迟到的 deadline fired event 会被忽略。
 
 Saga 状态由强类型枚举 `WorkflowSagaStatus`（`workflow_execution_messages.proto`）表达，生命周期为：
 
@@ -327,7 +329,7 @@ WORKFLOW_SAGA_STATUS_UNSPECIFIED -> WORKFLOW_SAGA_STATUS_COMPENSATING -> WORKFLO
 - `COMPENSATED_FAILED`：所有补偿按反向顺序成功，随后发布失败的 `WorkflowCompletedEvent`，表示原业务 run 失败但补偿已完成。
 - `COMPENSATION_DEAD_LETTER`：某个补偿 step 失败或补偿耗尽，run actor 提交 `WorkflowCompensationFailedEvent`，记录失败补偿 step、剩余未补偿数量和错误；此状态不再走 on_error fallback，也不会静默丢弃。
 
-补偿相位继续遵守 actor 化执行约束：补偿推进只通过 self message 进入 actor inbox，不在 callback 线程或 helper 内 inline 推进；crash/reactivation 时，actor 根据已提交 `CompensationRequestEvent` 和当前 cursor 重发当前 self continuation，不重复提交领域事件。
+补偿相位继续遵守 actor 化执行约束：补偿推进只通过 self message 进入 actor inbox，不在 callback 线程或 helper 内 inline 推进；deadline 是 durable self event，不使用 wall-clock 字段或 query-time 检查；crash/reactivation 时，actor 根据已提交 `CompensationRequestEvent` 和当前 cursor 重发当前 self continuation，不重复提交领域事件。
 
 ## Host Boundary For GitHub / Router / Closure
 
