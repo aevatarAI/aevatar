@@ -23,6 +23,10 @@ No new public `WorkflowFileBatch*` execution proto was introduced. Durable execu
 
 Ingress remains a Host/Infrastructure concern. Once file descriptors enter the run, partial success and failure are represented by actor/module-owned execution state and completion events, not by request-time fallback queries or process-local registries.
 
+Issue 2223 added a separate workflow-owned `spreadsheet_extract` tool source for workbook previews. It reuses the existing workflow file artifact read port and only accepts `.xlsx` descriptors with media type `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`. Legacy `.xls`, macro/binary workbooks, ODS, octet-stream uploads, encrypted packages, macro packages, external-link packages, malformed workbooks, and configured limit overruns fail closed with safe error JSON.
+
+The spreadsheet result is a bounded preview contract: descriptor-only file ref, explicit limits, workbook sheet count/truncation, and per-sheet row/cell preview. Workbook bytes, base64, provider payloads, package part names, raw XML, and unbounded table dumps are not emitted to step output. `document_extract` remains limited to text/document/image extraction and rejects spreadsheet media types. No spreadsheet readmodel, proto result, actor state shape, or package dependency was added for this phase.
+
 ## Context
 
 Issue 1917 left one dependency gap in the workflow file submit path: `WorkflowConnectedServiceFileSubmitOptions.Targets` already existed as the typed policy shape, but Workflow/Mainnet composition did not bind a stable configuration section or fail fast when a generic connected-service endpoint policy was malformed.
