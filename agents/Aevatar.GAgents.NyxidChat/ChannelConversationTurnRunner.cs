@@ -88,6 +88,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private readonly ChannelWorkflowDraftRunAdmission? _workflowDraftRunAdmission;
     private readonly IRemoteToolApprovalPort? _remoteToolApprovalPort;
     private readonly ILogger<ChannelConversationTurnRunner> _logger;
+    private readonly ILarkBotIdentityResolver? _botIdentityResolver;
 
     public ChannelConversationTurnRunner(
         IServiceProvider services,
@@ -109,7 +110,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ChannelPlatformReplyService? replyService = null,
         ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>? workflowResumeService = null,
         ChannelWorkflowDraftRunAdmission? workflowDraftRunAdmission = null,
-        IRemoteToolApprovalPort? remoteToolApprovalPort = null)
+        IRemoteToolApprovalPort? remoteToolApprovalPort = null,
+        ILarkBotIdentityResolver? botIdentityResolver = null)
     {
         _toolServiceProvider = services ?? throw new ArgumentNullException(nameof(services));
         _registrationQueryPort = registrationQueryPort ?? throw new ArgumentNullException(nameof(registrationQueryPort));
@@ -131,6 +133,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         _workflowDraftRunAdmission = workflowDraftRunAdmission;
         _remoteToolApprovalPort = remoteToolApprovalPort;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _botIdentityResolver = botIdentityResolver;
     }
 
     public async Task<ConversationTurnResult> RunInboundAsync(
@@ -143,6 +146,13 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         var registration = await ResolveRegistrationAsync(activity, ct);
         if (registration is null)
             return ConversationTurnResult.PermanentFailure("registration_not_found", "Channel registration not found.");
+
+        // Group/channel chats deliver every message once the bot holds the broad read scope, so a
+        // turn only "addresses" the bot when it @-mentions the bot, replies to one of the bot's own
+        // messages, or is a slash command. Decided before the typing reaction so unaddressed group
+        // chatter produces neither a reaction nor a reply.
+        if (await ShouldIgnoreUnaddressedGroupMessageAsync(activity, registration, runtimeContext, ct))
+            return ConversationTurnResult.Ignored("group_message_not_addressed", activity.Id);
 
         // Capture the typing-reaction Task instead of `_ =`-discarding it. The direct-reply
         // AgentBuilder path can complete fast enough that the clear fires before Lark has
@@ -2355,6 +2365,72 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         return string.Equals(platform, "feishu", StringComparison.OrdinalIgnoreCase)
             ? "lark"
             : platform;
+    }
+
+    // Group-chat admission: returns true when an inbound group/channel/thread message does NOT
+    // address the bot and should be dropped silently. The gate is opt-in — it stays inert until an
+    // ILarkBotIdentityResolver is wired, so a missing DI registration degrades to the legacy
+    // "engage everything" behavior rather than going silent. Slash commands and replies-to-the-bot
+    // are free signals checked before any network call; only a message that @-mentions someone
+    // forces an on-demand bot/v3/info resolve to learn whether that mention is the bot.
+    private async Task<bool> ShouldIgnoreUnaddressedGroupMessageAsync(
+        ChatActivity activity,
+        ChannelBotRegistrationEntry registration,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct)
+    {
+        if (_botIdentityResolver is null)
+            return false;
+
+        // Card actions (button clicks) are explicit interactions; never gate them. DMs are 1:1 and
+        // always addressed. Only Lark group-like message activities are subject to the gate.
+        if (activity.Type != ActivityType.Message)
+            return false;
+
+        if (!IsLarkActivity(activity, registration))
+            return false;
+
+        if (!IsGroupLikeScope(activity.Conversation?.Scope))
+            return false;
+
+        if (LooksLikeSlashCommand(activity.Content?.Text))
+            return false;
+
+        if (runtimeContext.IsReplyToBot)
+            return false;
+
+        // With no @-mention at all the message cannot name the bot, so ignore without a network
+        // call. Otherwise resolve the bot's own open_id and engage only if it is among the mentions.
+        if (activity.Mentions.Count == 0)
+            return true;
+
+        var accessToken = ResolveUserAccessToken(activity, runtimeContext);
+        var providerSlug = NormalizeOptional(registration.NyxProviderSlug);
+        if (string.IsNullOrWhiteSpace(accessToken) || string.IsNullOrWhiteSpace(providerSlug))
+            return false; // identity unknowable -> fail open (engage)
+
+        var botOpenId = await _botIdentityResolver.ResolveBotOpenIdAsync(providerSlug!, accessToken!, ct);
+        if (string.IsNullOrWhiteSpace(botOpenId))
+            return false; // resolution failed -> fail open (engage)
+
+        var botMentioned = activity.Mentions.Any(mention =>
+            string.Equals(mention.CanonicalId, botOpenId, StringComparison.Ordinal));
+        return !botMentioned;
+    }
+
+    private static bool IsGroupLikeScope(ConversationScope? scope) =>
+        scope is ConversationScope.Group or ConversationScope.Channel or ConversationScope.Thread;
+
+    private static bool LooksLikeSlashCommand(string? text) =>
+        !string.IsNullOrWhiteSpace(text) && text.TrimStart().StartsWith('/');
+
+    private static bool IsLarkActivity(ChatActivity activity, ChannelBotRegistrationEntry registration)
+    {
+        var platform = NormalizeOptional(activity.TransportExtras?.NyxPlatform)
+            ?? NormalizeOptional(registration.Platform)
+            ?? NormalizeOptional(activity.ChannelId?.Value);
+        return string.Equals(platform, "lark", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(platform, "feishu", StringComparison.OrdinalIgnoreCase);
     }
 
     // Lark reaction emoji_type for "hands typing on keyboard" — added immediately on inbound

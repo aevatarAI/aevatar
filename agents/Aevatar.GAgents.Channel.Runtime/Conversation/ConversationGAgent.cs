@@ -278,7 +278,15 @@ public sealed partial class ConversationGAgent :
         }
 
         var runner = ResolveRunner();
-        var result = await runner.RunInboundAsync(activity, runtimeContext, CancellationToken.None);
+        // Tell the runner's group-chat gate when this inbound replies to one of the bot's own
+        // messages, so a thread reply addresses the bot without a re-@-mention.
+        var inboundContext = runtimeContext with
+        {
+            IsReplyToBot = ConversationBotMessageLedger.IsReplyToBotMessage(
+                State.BotSentPlatformMessageIds,
+                activity.ReplyToActivityId),
+        };
+        var result = await runner.RunInboundAsync(activity, inboundContext, CancellationToken.None);
 
         var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         if (result.RetainedHistoryClearRequested)
@@ -1042,6 +1050,9 @@ public sealed partial class ConversationGAgent :
                 RunId = evt.RunId ?? string.Empty,
                 AckedAtUnixMs = nowMs,
                 ChannelMessageId = completed.SentActivityId,
+                // Bare Lark message id of the bot's streamed card — recorded so a later reply to it
+                // is recognized as addressing the bot (channel_message_id is path-prefixed here).
+                BotPlatformMessageId = evt.CardMessageId ?? string.Empty,
             };
             await PersistReplyReadyEventsWithLocalRetryAsync(
                 evt.CorrelationId,
@@ -2780,6 +2791,9 @@ public sealed partial class ConversationGAgent :
                 ChannelMessageId = evt.ChannelMessageId ?? string.Empty,
             },
         };
+        // Track the bot's own sent message id so a later group reply targeting it counts as
+        // addressing the bot. No-op when empty (e.g. non-card delivery paths).
+        ConversationBotMessageLedger.RecordBotSentMessageId(next.BotSentPlatformMessageIds, evt.BotPlatformMessageId);
         if (evt.AckedAtUnixMs > 0)
             next.LastUpdatedUnixMs = evt.AckedAtUnixMs;
         return next;
