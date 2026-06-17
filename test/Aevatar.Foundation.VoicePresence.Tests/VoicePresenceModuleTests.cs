@@ -1099,7 +1099,12 @@ public class VoicePresenceModuleTests
         state.Status = VoicePresenceRuntimeStatus.AudioDraining;
         state.CurrentResponseId = 4;
         state.NextResponseId = 5;
-        var module = CreateModule(new RecordingVoiceProvider());
+        var module = CreateModule(
+            new RecordingVoiceProvider(),
+            options: new VoicePresenceModuleOptions
+            {
+                TimeProvider = new ManualTimeProvider(now),
+            });
         var ctx = new StubEventHandlerContext(agent: roleAgent);
 
         await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
@@ -1135,7 +1140,12 @@ public class VoicePresenceModuleTests
         var now = new DateTimeOffset(2026, 6, 17, 8, 0, 0, TimeSpan.Zero);
         var oldExpiry = Timestamp.FromDateTimeOffset(now.AddMinutes(5));
         var roleAgent = CreateRoleAgentWithAttachedTransport(now.AddMinutes(10));
-        var module = CreateModule(new RecordingVoiceProvider());
+        var module = CreateModule(
+            new RecordingVoiceProvider(),
+            options: new VoicePresenceModuleOptions
+            {
+                TimeProvider = new ManualTimeProvider(now),
+            });
         var ctx = new StubEventHandlerContext(agent: roleAgent);
 
         await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
@@ -1168,7 +1178,12 @@ public class VoicePresenceModuleTests
         var oldExpiry = Timestamp.FromDateTimeOffset(now.AddMinutes(5));
         var provider = new RecordingVoiceProvider();
         var roleAgent = CreateRoleAgentWithAttachedTransport(now.AddMinutes(10));
-        var module = CreateModule(provider);
+        var module = CreateModule(
+            provider,
+            options: new VoicePresenceModuleOptions
+            {
+                TimeProvider = new ManualTimeProvider(now),
+            });
         var ctx = new StubEventHandlerContext(agent: roleAgent);
 
         await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
