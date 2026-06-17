@@ -236,6 +236,361 @@ public sealed class WorkflowDocumentExtractToolTests
     }
 
     [Fact]
+    public async Task WorkflowDocumentExtractTool_ShouldAcceptSchemaBoundArrayItems()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-document-extract-schema-array-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var port = CreateFileArtifactPort(root);
+            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+                System.Text.Encoding.UTF8.GetBytes("line items include sku A1 and B2"),
+                ApplicationWorkflowFileSourceKind.ChatInput,
+                FileName: "invoice.txt",
+                MediaType: "text/plain"));
+            var llmProvider = new RecordingImageLlmProvider([
+                """{"line_items":[{"sku":"A1","quantity":2},{"sku":"B2","quantity":1}]}""",
+            ]);
+            var tool = await GetDocumentExtractToolAsync(port, llmProvider);
+
+            var output = await tool.ExecuteAsync(new WorkflowToolExecutionRequest(
+                BuildSchemaBoundDocumentExtractArguments(
+                    result.FileRef,
+                    """
+                    {
+                      "name": "invoice_items",
+                      "schema": {
+                        "type": "object",
+                        "properties": {
+                          "line_items": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "sku": { "type": "string" },
+                                "quantity": { "type": "integer" }
+                              },
+                              "required": ["sku", "quantity"],
+                              "additionalProperties": false
+                            }
+                          }
+                        },
+                        "required": ["line_items"],
+                        "additionalProperties": false
+                      }
+                    }
+                    """),
+                "run-1",
+                "extract",
+                "exec-1",
+                "call-1",
+                "scope-1",
+                new ProtoWorkflowCallerCredential()));
+
+            using var document = JsonDocument.Parse(output.ResultJson);
+            var structured = document.RootElement.GetProperty("structured_result");
+            var lineItems = structured.GetProperty("line_items").EnumerateArray().ToArray();
+            lineItems.Should().HaveCount(2);
+            lineItems[0].GetProperty("sku").GetString().Should().Be("A1");
+            lineItems[0].GetProperty("quantity").GetInt32().Should().Be(2);
+            lineItems[1].GetProperty("sku").GetString().Should().Be("B2");
+            lineItems[1].GetProperty("quantity").GetInt32().Should().Be(1);
+            llmProvider.Requests.Should().ContainSingle();
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WorkflowDocumentExtractTool_ShouldRejectSchemaBoundArrayItemsWithWrongType()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-document-extract-schema-array-reject-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var port = CreateFileArtifactPort(root);
+            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+                System.Text.Encoding.UTF8.GetBytes("line items include sku A1"),
+                ApplicationWorkflowFileSourceKind.ChatInput,
+                FileName: "invoice.txt",
+                MediaType: "text/plain"));
+            var llmProvider = new RecordingImageLlmProvider([
+                """{"line_items":[{"sku":"A1","quantity":"2"}]}""",
+            ]);
+            var tool = await GetDocumentExtractToolAsync(port, llmProvider);
+
+            var output = await tool.ExecuteAsync(new WorkflowToolExecutionRequest(
+                BuildSchemaBoundDocumentExtractArguments(
+                    result.FileRef,
+                    """
+                    {
+                      "name": "invoice_items",
+                      "schema": {
+                        "type": "object",
+                        "properties": {
+                          "line_items": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "sku": { "type": "string" },
+                                "quantity": { "type": "integer" }
+                              },
+                              "required": ["sku", "quantity"],
+                              "additionalProperties": false
+                            }
+                          }
+                        },
+                        "required": ["line_items"],
+                        "additionalProperties": false
+                      }
+                    }
+                    """),
+                "run-1",
+                "extract",
+                "exec-1",
+                "call-1",
+                "scope-1",
+                new ProtoWorkflowCallerCredential()));
+
+            using var document = JsonDocument.Parse(output.ResultJson);
+            document.RootElement.GetProperty("error").GetString().Should().Be("schema_bound_validation_failed");
+            document.RootElement.GetProperty("detail").GetString()
+                .Should().Be("Schema-bound extraction result failed validation.");
+            llmProvider.Requests.Should().ContainSingle();
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WorkflowDocumentExtractTool_ShouldAcceptSchemaBoundEnumValues()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-document-extract-schema-enum-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var port = CreateFileArtifactPort(root);
+            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+                System.Text.Encoding.UTF8.GetBytes("receipt status approved"),
+                ApplicationWorkflowFileSourceKind.ChatInput,
+                FileName: "receipt.txt",
+                MediaType: "text/plain"));
+            var llmProvider = new RecordingImageLlmProvider(["""{"status":"approved"}"""]);
+            var tool = await GetDocumentExtractToolAsync(port, llmProvider);
+
+            var output = await tool.ExecuteAsync(new WorkflowToolExecutionRequest(
+                BuildSchemaBoundDocumentExtractArguments(
+                    result.FileRef,
+                    """
+                    {
+                      "name": "receipt_status",
+                      "schema": {
+                        "type": "object",
+                        "properties": {
+                          "status": {
+                            "type": "string",
+                            "enum": ["approved", "rejected", "pending"]
+                          }
+                        },
+                        "required": ["status"],
+                        "additionalProperties": false
+                      }
+                    }
+                    """),
+                "run-1",
+                "extract",
+                "exec-1",
+                "call-1",
+                "scope-1",
+                new ProtoWorkflowCallerCredential()));
+
+            using var document = JsonDocument.Parse(output.ResultJson);
+            document.RootElement.GetProperty("structured_result")
+                .GetProperty("status")
+                .GetString()
+                .Should().Be("approved");
+            llmProvider.Requests.Should().ContainSingle();
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WorkflowDocumentExtractTool_ShouldRejectSchemaBoundEnumValuesOutsideContract()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-document-extract-schema-enum-reject-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var port = CreateFileArtifactPort(root);
+            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+                System.Text.Encoding.UTF8.GetBytes("receipt status escalated"),
+                ApplicationWorkflowFileSourceKind.ChatInput,
+                FileName: "receipt.txt",
+                MediaType: "text/plain"));
+            var llmProvider = new RecordingImageLlmProvider(["""{"status":"escalated"}"""]);
+            var tool = await GetDocumentExtractToolAsync(port, llmProvider);
+
+            var output = await tool.ExecuteAsync(new WorkflowToolExecutionRequest(
+                BuildSchemaBoundDocumentExtractArguments(
+                    result.FileRef,
+                    """
+                    {
+                      "name": "receipt_status",
+                      "schema": {
+                        "type": "object",
+                        "properties": {
+                          "status": {
+                            "type": "string",
+                            "enum": ["approved", "rejected", "pending"]
+                          }
+                        },
+                        "required": ["status"],
+                        "additionalProperties": false
+                      }
+                    }
+                    """),
+                "run-1",
+                "extract",
+                "exec-1",
+                "call-1",
+                "scope-1",
+                new ProtoWorkflowCallerCredential()));
+
+            using var document = JsonDocument.Parse(output.ResultJson);
+            document.RootElement.GetProperty("error").GetString().Should().Be("schema_bound_validation_failed");
+            document.RootElement.GetProperty("detail").GetString()
+                .Should().Be("Schema-bound extraction result failed validation.");
+            llmProvider.Requests.Should().ContainSingle();
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WorkflowDocumentExtractTool_ShouldAcceptSchemaBoundPrimitiveAndNullableTypes()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-document-extract-schema-primitive-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var port = CreateFileArtifactPort(root);
+            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+                System.Text.Encoding.UTF8.GetBytes("receipt paid with optional memo missing"),
+                ApplicationWorkflowFileSourceKind.ChatInput,
+                FileName: "receipt.txt",
+                MediaType: "text/plain"));
+            var llmProvider = new RecordingImageLlmProvider([
+                """{"approved":true,"line_count":3,"optional_note":null,"void_marker":null}""",
+            ]);
+            var tool = await GetDocumentExtractToolAsync(port, llmProvider);
+
+            var output = await tool.ExecuteAsync(new WorkflowToolExecutionRequest(
+                BuildSchemaBoundDocumentExtractArguments(
+                    result.FileRef,
+                    """
+                    {
+                      "name": "receipt_flags",
+                      "schema": {
+                        "type": "object",
+                        "properties": {
+                          "approved": { "type": "boolean" },
+                          "line_count": { "type": "integer" },
+                          "optional_note": { "type": ["string", "null"] },
+                          "void_marker": { "type": "null" }
+                        },
+                        "required": ["approved", "line_count", "optional_note", "void_marker"],
+                        "additionalProperties": false
+                      }
+                    }
+                    """),
+                "run-1",
+                "extract",
+                "exec-1",
+                "call-1",
+                "scope-1",
+                new ProtoWorkflowCallerCredential()));
+
+            using var document = JsonDocument.Parse(output.ResultJson);
+            var structured = document.RootElement.GetProperty("structured_result");
+            structured.GetProperty("approved").GetBoolean().Should().BeTrue();
+            structured.GetProperty("line_count").GetInt32().Should().Be(3);
+            structured.GetProperty("optional_note").ValueKind.Should().Be(JsonValueKind.Null);
+            structured.GetProperty("void_marker").ValueKind.Should().Be(JsonValueKind.Null);
+            llmProvider.Requests.Should().ContainSingle();
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WorkflowDocumentExtractTool_ShouldRejectSchemaBoundPrimitiveTypeMismatch()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-document-extract-schema-primitive-reject-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var port = CreateFileArtifactPort(root);
+            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+                System.Text.Encoding.UTF8.GetBytes("receipt has three lines"),
+                ApplicationWorkflowFileSourceKind.ChatInput,
+                FileName: "receipt.txt",
+                MediaType: "text/plain"));
+            var llmProvider = new RecordingImageLlmProvider([
+                """{"approved":true,"line_count":3.5,"optional_note":5,"void_marker":null}""",
+            ]);
+            var tool = await GetDocumentExtractToolAsync(port, llmProvider);
+
+            var output = await tool.ExecuteAsync(new WorkflowToolExecutionRequest(
+                BuildSchemaBoundDocumentExtractArguments(
+                    result.FileRef,
+                    """
+                    {
+                      "name": "receipt_flags",
+                      "schema": {
+                        "type": "object",
+                        "properties": {
+                          "approved": { "type": "boolean" },
+                          "line_count": { "type": "integer" },
+                          "optional_note": { "type": ["string", "null"] },
+                          "void_marker": { "type": "null" }
+                        },
+                        "required": ["approved", "line_count", "optional_note", "void_marker"],
+                        "additionalProperties": false
+                      }
+                    }
+                    """),
+                "run-1",
+                "extract",
+                "exec-1",
+                "call-1",
+                "scope-1",
+                new ProtoWorkflowCallerCredential()));
+
+            using var document = JsonDocument.Parse(output.ResultJson);
+            document.RootElement.GetProperty("error").GetString().Should().Be("schema_bound_validation_failed");
+            document.RootElement.GetProperty("detail").GetString()
+                .Should().Be("Schema-bound extraction result failed validation.");
+            llmProvider.Requests.Should().ContainSingle();
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task WorkflowDocumentExtractTool_ShouldRejectInvalidSchemaBoundContract()
     {
         var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-document-extract-schema-contract-tests", Guid.NewGuid().ToString("N"));
