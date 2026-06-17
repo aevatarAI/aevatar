@@ -40,7 +40,7 @@ public sealed class WorkspaceControllerWorkflowDraftCreateTests
         receipt.WorkspaceId.Should().Be("studio-workspace:scope-1");
         receipt.ActorId.Should().Be("studio-workspace:scope-1");
         receipt.CommandId.Should().NotBeNullOrWhiteSpace();
-        receipt.ExpectedVersion.Should().Be(11);
+        receipt.ExpectedVersion.Should().BeNull();
         receipt.Readiness.Readable.Should().BeFalse();
         receipt.Readiness.Stage.Should().Be("projection_pending");
         receipt.Readiness.Message.Should().Contain("Poll the workflow draft by id");
