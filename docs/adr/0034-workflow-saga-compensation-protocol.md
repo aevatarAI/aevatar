@@ -88,7 +88,9 @@ state already holds the execution context, variables, and sub-workflow bindings.
 Introducing a separate coordinator would violate "Actor 即业务实体" and create a
 cross-actor consistency problem (who is authoritative for run termination?) that
 does not exist today. Compensation is a terminal phase of the run's own state
-machine: `running → compensating → compensated_failed | compensation_dead_letter`.
+machine. Ordinary run execution is represented by run `status`; `saga_status`
+stays `UNSPECIFIED` until a terminal failure enters compensation, then moves
+`COMPENSATING → COMPENSATED_FAILED | COMPENSATION_DEAD_LETTER`.
 
 ### Q2. Choreography or orchestration?
 
@@ -243,6 +245,9 @@ steps:
   exist).
 - A compensation target step is not auto-inserted into the forward path; it runs
   only during the reverse walk.
+- `CompletedStepLedgerEntry.committed_at_unix_ms` was removed because ledger
+  order is the durable ordering fact; field number `5` and name
+  `committed_at_unix_ms` are reserved.
 
 ### Proto — state (`workflow_state.proto`)
 
@@ -250,18 +255,33 @@ steps:
 // One entry per successfully-committed step that declared a compensation,
 // in commit order. The reverse walk consumes this back-to-front.
 message CompletedStepLedgerEntry {
+  reserved 5;
+  reserved "committed_at_unix_ms";
   string step_id            = 1;
   string compensation_step_id = 2;
   string idempotency_key    = 3;
   string captured_output    = 4;   // the step output the compensation may need
-  int64  committed_at_unix_ms = 5;
+  CompensableLedgerEntryStatus ledger_status = 6;
 }
 
 // Added to WorkflowRunState (run-owned, durable):
-//   repeated CompletedStepLedgerEntry compensable_ledger = N;
-//   int32  compensation_cursor = N+1;   // index into ledger, walked downward
-//   string saga_status = N+2;           // running | compensating | compensated_failed | compensation_dead_letter
+//   repeated CompletedStepLedgerEntry compensable_ledger = 25;
+//   int32 compensation_cursor = 26;     // index into ledger, walked downward
+//   WorkflowSagaStatus saga_status = 27;
+//   string compensation_execution_id = 28;
+//   string dead_letter_failed_compensation_step_id = 29;
+//   int32 dead_letter_remaining_uncompensated = 30;
+//   string dead_letter_error = 31;
+//   string compensation_origin_failed_step_id = 32;
+//   bool terminal_workflow_completion_recorded = 33;
 ```
+
+`compensation_origin_failed_step_id` preserves the original terminal failure
+that triggered compensation. Later compensation requests must reuse it rather
+than deriving from the current compensation cursor. The terminal completion flag
+is the idempotency guard for redelivered `WorkflowCompletedEvent`; saga
+dead-letter state alone does not mean the final workflow completion fact has
+already been recorded.
 
 ### Proto — events (`workflow_execution_messages.proto`)
 
@@ -272,6 +292,16 @@ message CompensationRequestEvent {
   string compensation_step_id = 3;  // the compensation to run now (reverse cursor)
   string idempotency_key     = 4;
   string captured_output     = 5;
+  string execution_id         = 6;
+}
+
+message SubWorkflowInvocationCompletedEvent {
+  string invocation_id = 1;
+  string child_run_id = 2;
+  bool success = 3;
+  string output = 4;
+  string error = 5;
+  bool compensated = 6; // child run failed after completing its own compensation
 }
 
 message CompensationStepCompletedEvent {
@@ -279,6 +309,7 @@ message CompensationStepCompletedEvent {
   string compensation_step_id = 2;
   bool   success             = 3;
   string error               = 4;
+  string execution_id         = 5;
 }
 
 message WorkflowCompensationCompletedEvent {
@@ -293,6 +324,13 @@ message WorkflowCompensationFailedEvent {
   string error               = 4;
 }
 ```
+
+`SubWorkflowInvocationCompletedEvent.compensated` is child-outcome-only. It is
+`true` only when the child workflow terminally failed after reaching
+`WORKFLOW_SAGA_STATUS_COMPENSATED_FAILED` or an equivalent actor-owned fact.
+Ordinary child failure, stop, cleanup, dispatch failure, and historical
+completion remain `false`. Parent `StepCompletedEvent` remains unchanged in
+saga v1.
 
 ### Side-effect idempotency
 
@@ -382,3 +420,9 @@ current operational vocabulary lives in `docs/canon/workflow-runtime.md`.
 ## Update — 2026-06-16 (saga v1.1, #2125)
 
 Saga v1.1 adds provisional ledger accounting for in-flight side-effecting steps. `tool_call`, `connector_call`, and `secure_connector_call` steps that declare `compensation` now persist a run-owned `CompensableStepDispatchedEvent` before dispatch, creating a `PROVISIONAL` ledger entry. Success confirms it as `CONFIRMED` and fills captured output; `WorkflowStepFailureOutcome.CALLEE_CONFIRMED` drops the provisional entry; `OUTCOME_UNCERTAIN` keeps it and enters the existing reverse compensation walk. The #2126 phase deadline/budget must count provisional `OUTCOME_UNCERTAIN` entries the same as confirmed entries; dropped `CALLEE_CONFIRMED` entries do not count.
+
+## Update — 2026-06-17 (saga v1.1, #2126)
+
+Saga v1.1 bounds compensation with two actor-owned durable mechanisms. Compensation dispatch now has a compensation-only default step timeout: when a compensation step omits `timeout_ms`, `WorkflowExecutionKernel` uses `DefaultCompensationTimeoutMs = 30000` and the existing `100..600000` ms clamp, while forward dispatch with no timeout remains unchanged. Compensation phase start and reactivation also schedule a durable self timeout, `WorkflowCompensationPhaseDeadlineFiredEvent`, after `CompensationPhaseDeadlineMs = 300000`.
+
+When the phase deadline fires and the callback lease still matches an active compensating run, the kernel reports the exceeded deadline through the narrow state-host boundary. `WorkflowRunGAgent` remains the single writer for saga facts: it computes the failed compensation step and remaining uncompensated count from `compensation_cursor`, persists `WorkflowCompensationFailedEvent`, and the kernel reuses the existing failed `WorkflowCompletedEvent` caller notification path. Terminal compensation paths clear and cancel the phase-deadline lease; stale deadline events after terminal completion are ignored. No wall-clock timestamp or attempt-budget field is added to `WorkflowRunState`.

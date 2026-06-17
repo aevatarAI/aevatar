@@ -1,4 +1,5 @@
 using Aevatar.Foundation.VoicePresence.Abstractions.Sessions;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Foundation.VoicePresence.Hosting;
 
@@ -11,9 +12,12 @@ public sealed class VoicePresenceLeaseObservationPort : IVoicePresenceLeaseObser
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _observationTimeout;
     private readonly TimeSpan _observationInterval;
+    private readonly ILogger<VoicePresenceLeaseObservationPort>? _logger;
 
-    public VoicePresenceLeaseObservationPort(IVoicePresenceCapabilityQueryPort queryPort)
-        : this(queryPort, null, DefaultObservationTimeout, ObservationInterval)
+    public VoicePresenceLeaseObservationPort(
+        IVoicePresenceCapabilityQueryPort queryPort,
+        ILogger<VoicePresenceLeaseObservationPort>? logger = null)
+        : this(queryPort, null, DefaultObservationTimeout, ObservationInterval, logger)
     {
     }
 
@@ -21,12 +25,14 @@ public sealed class VoicePresenceLeaseObservationPort : IVoicePresenceLeaseObser
         IVoicePresenceCapabilityQueryPort queryPort,
         TimeProvider? timeProvider,
         TimeSpan observationTimeout,
-        TimeSpan observationInterval)
+        TimeSpan observationInterval,
+        ILogger<VoicePresenceLeaseObservationPort>? logger = null)
     {
         _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
         _timeProvider = timeProvider ?? TimeProvider.System;
         _observationTimeout = observationTimeout;
         _observationInterval = observationInterval;
+        _logger = logger;
     }
 
     public Task<VoicePresenceCapabilitySnapshot> ObserveSessionLeaseAsync(
@@ -85,6 +91,15 @@ public sealed class VoicePresenceLeaseObservationPort : IVoicePresenceLeaseObser
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
+            // The grain accepted the lease/attach, but the read-model projection never reflected it
+            // within the budget. A sustained spike of this warning means the capability projection
+            // write path is broken (e.g. a stuck Garnet OCC / version gap), distinct from transient lag.
+            _logger?.LogWarning(
+                "voice lease observation timed out after {TimeoutSeconds}s for actor {ActorId}/{ModuleName}: {FailureMessage} — capability projection did not reflect the grain state (lag or stuck read model)",
+                _observationTimeout.TotalSeconds,
+                actorId,
+                moduleName,
+                failureMessage);
             throw new TimeoutException(failureMessage);
         }
     }

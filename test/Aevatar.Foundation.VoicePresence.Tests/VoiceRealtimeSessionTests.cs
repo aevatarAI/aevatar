@@ -143,8 +143,11 @@ public class VoiceRealtimeSessionTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_should_return_transport_attached_for_attach_when_active_transport_exists()
+    public async Task ExecuteAsync_attach_should_acquire_when_projection_shows_attached_with_no_active_session()
     {
+        // Degenerate/corrupt projection: TransportAttached=true but no ActiveSessionId. There is no owner
+        // to evict, so the takeover must NOT fail-close — it falls through and lets the grain arbitrate
+        // the new lease. A stale projection flag must never permanently block Start (the 409 bug).
         var capability = CreateCapability(
             "agent-1",
             "voice_presence",
@@ -152,23 +155,27 @@ public class VoiceRealtimeSessionTests
             transportAttached: true,
             remoteAudioSupport: VoiceRemoteAudioSupport.Supported);
         var leasePort = new RecordingLeasePort();
-        var session = CreateSession(new FakeCapabilityQueryPort(capability), leasePort);
+        var mediaPort = new RecordingMediaStreamPort(supportsRemoteAudio: true);
+        var session = CreateSession(new FakeCapabilityQueryPort(capability), leasePort, mediaPort);
 
         var result = await session.ExecuteAsync(
             new VoiceRealtimeSessionRequest("agent-1"),
             static (_, _) => ValueTask.CompletedTask);
 
-        result.Succeeded.ShouldBeFalse();
-        result.Error.ShouldBe(VoiceRealtimeSessionStartError.TransportAlreadyAttached);
-        leasePort.AcquireRequests.ShouldBeEmpty();
+        result.Succeeded.ShouldBeTrue();
+        leasePort.AcquireRequests.ShouldHaveSingleItem();
+        mediaPort.DetachedHandles.ShouldBeEmpty();
     }
 
     [Fact]
-    public async Task ExecuteAsync_attach_should_take_over_existing_session_then_acquire_new_lease()
+    public async Task ExecuteAsync_attach_should_take_over_existing_session_even_when_projection_never_clears()
     {
-        // A prior session left the transport attached (e.g. close raced the lease release, or the
-        // lease went stale). A fresh attach must EVICT the old session and acquire a new lease,
-        // not reject with TransportAlreadyAttached (the Start-immediately-closes / 409 bug).
+        // A prior session left the transport attached (close raced the lease release, or the lease went
+        // stale). The capability projection is STALE — it still shows attached on every read and never
+        // clears (the Garnet write-skip / version-gap case). A fresh attach must EVICT the old session
+        // and acquire a new lease; it must NOT re-read the projection and fail-close on the stale value
+        // (the Start-immediately-closes / persistent-409 bug). The grain — not the projection — is the
+        // authority for the new lease.
         var attached = CreateCapability(
             "agent-1",
             "voice_presence",
@@ -177,16 +184,10 @@ public class VoiceRealtimeSessionTests
             activeTransportLeaseId: "old-transport",
             transportAttached: true,
             remoteAudioSupport: VoiceRemoteAudioSupport.Supported);
-        var cleared = CreateCapability(
-            "agent-1",
-            "voice_presence",
-            initialized: true,
-            transportAttached: false,
-            remoteAudioSupport: VoiceRemoteAudioSupport.Supported);
         var leasePort = new RecordingLeasePort();
         var mediaPort = new RecordingMediaStreamPort(supportsRemoteAudio: true);
         var session = CreateSession(
-            new SequencedCapabilityQueryPort(attached, cleared),
+            new FakeCapabilityQueryPort(attached),
             leasePort,
             mediaPort);
 
@@ -229,8 +230,11 @@ public class VoiceRealtimeSessionTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_should_treat_live_active_lease_as_attached_before_transport_materializes()
+    public async Task ExecuteAsync_should_take_over_live_active_lease_before_transport_materializes()
     {
+        // A live lease that has not yet materialized a transport still counts as "attached" for the
+        // gate, so a fresh attach must take it over (evict + acquire), not fail-close. A subsequent
+        // Detach for that session is still accepted without acquiring a new lease.
         var capability = CreateCapability(
             "agent-1",
             "voice_presence",
@@ -240,7 +244,8 @@ public class VoiceRealtimeSessionTests
             transportAttached: false,
             remoteAudioSupport: VoiceRemoteAudioSupport.Supported);
         var leasePort = new RecordingLeasePort();
-        var session = CreateSession(new FakeCapabilityQueryPort(capability), leasePort);
+        var mediaPort = new RecordingMediaStreamPort(supportsRemoteAudio: true);
+        var session = CreateSession(new FakeCapabilityQueryPort(capability), leasePort, mediaPort);
 
         var attachResult = await session.ExecuteAsync(
             new VoiceRealtimeSessionRequest("agent-1"),
@@ -252,14 +257,14 @@ public class VoiceRealtimeSessionTests
                 VoiceRealtimeSessionPurpose.Detach),
             static (_, _) => ValueTask.CompletedTask);
 
-        attachResult.Succeeded.ShouldBeFalse();
-        attachResult.Error.ShouldBe(VoiceRealtimeSessionStartError.TransportAlreadyAttached);
+        attachResult.Succeeded.ShouldBeTrue();
+        mediaPort.DetachedHandles.ShouldHaveSingleItem().SessionId.ShouldBe("session-1");
+        leasePort.AcquireRequests.ShouldHaveSingleItem();
         detachResult.Succeeded.ShouldBeTrue();
         detachResult.Receipt.ShouldNotBeNull();
         detachResult.Receipt.SessionId.ShouldBe("session-1");
         detachResult.Receipt.LeaseHandle.ActiveTransportLeaseId.ShouldBe("transport-1");
         detachResult.Receipt.LeaseHandle.LeaseEpoch.ShouldBe(7);
-        leasePort.AcquireRequests.ShouldBeEmpty();
     }
 
     [Fact]
@@ -1129,26 +1134,6 @@ public class VoiceRealtimeSessionTests
             return Task.FromResult(snapshots.FirstOrDefault(snapshot =>
                 string.Equals(snapshot.ActorId, actorId, StringComparison.Ordinal) &&
                 string.Equals(snapshot.ModuleName, resolvedModuleName, StringComparison.OrdinalIgnoreCase)));
-        }
-    }
-
-    // Returns each snapshot in order on successive GetAsync calls, clamping to the last once exhausted.
-    // Used to simulate the takeover re-read seeing the projection transition attached -> cleared.
-    private sealed class SequencedCapabilityQueryPort(params VoicePresenceCapabilitySnapshot?[] snapshots)
-        : IVoicePresenceCapabilityQueryPort
-    {
-        public int Calls { get; private set; }
-
-        public Task<VoicePresenceCapabilitySnapshot?> GetAsync(
-            string actorId,
-            string? moduleName,
-            CancellationToken ct = default)
-        {
-            _ = actorId;
-            _ = moduleName;
-            var index = Math.Min(Calls, snapshots.Length - 1);
-            Calls++;
-            return Task.FromResult(snapshots[index]);
         }
     }
 

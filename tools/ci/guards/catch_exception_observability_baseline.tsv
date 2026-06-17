@@ -42,10 +42,6 @@ src/Aevatar.Foundation.Core/Pipeline/StaticHandlerAdapter.cs	50	broad catch retu
 src/Aevatar.Foundation.Core/Pipeline/StaticHandlerAdapter.cs	67	broad catch returns null without visible failure signal
 src/Aevatar.Foundation.Runtime/Streaming/InMemoryStreamProvider.cs	162	empty broad catch block
 src/Aevatar.Foundation.Runtime/Streaming/InMemoryStreamProvider.cs	178	empty broad catch block
-src/Aevatar.Foundation.VoicePresence/Hosting/VoicePresenceEndpoints.cs	321	empty broad catch block
-src/Aevatar.Foundation.VoicePresence/Hosting/VoicePresenceEndpoints.cs	340	empty broad catch block
-src/Aevatar.Foundation.VoicePresence/Hosting/VoicePresenceEndpoints.cs	366	empty broad catch block
-src/Aevatar.Foundation.VoicePresence/Hosting/VoicePresenceEndpoints.cs	394	empty broad catch block
 src/Aevatar.Foundation.VoicePresence/Hosting/VoiceRealtimeTransportControlBridge.cs	76	empty broad catch block
 src/Aevatar.Foundation.VoicePresence/Transport/WebRtcVoiceTransport.cs	111	empty broad catch block
 src/Aevatar.Foundation.VoicePresence/Transport/WebRtcVoiceTransport.cs	127	empty broad catch block

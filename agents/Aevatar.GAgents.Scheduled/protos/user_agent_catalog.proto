@@ -68,6 +68,9 @@ message UserAgentCatalogEntry {
   aevatar.OwnerScope owner_scope = 26;
   SkillRunnerOutputFormat output_format = 27;
   ScheduledAgentSharingGrant sharing_grant = 28;
+  // Delivery target platform selected by the creator.
+  // This is distinct from owner_scope.platform, which identifies the caller surface.
+  string target_platform = 29;
 }
 
 message UserAgentCatalogState {
@@ -108,6 +111,9 @@ message UserAgentCatalogUpsertCommand {
   // Caller scope captured at create time. Required for new writes.
   aevatar.OwnerScope owner_scope = 18;
   SkillRunnerOutputFormat output_format = 19;
+  // Delivery target platform selected by the creator.
+  // This is distinct from owner_scope.platform, which identifies the caller surface.
+  string target_platform = 20;
 }
 
 message UserAgentCatalogTombstoneCommand {
@@ -197,6 +203,9 @@ message UserAgentCatalogDocument {
   ScheduledAgentSharingGrant sharing_grant = 34;
   string visible_sharing_audience_key = 35;
   string trigger_sharing_audience_key = 36;
+  // Delivery target platform selected by the creator.
+  // This is distinct from owner_scope.platform, which identifies the caller surface.
+  string target_platform = 37;
 }
 
 // Runtime-only Nyx credential read model for delivery-target execution paths.

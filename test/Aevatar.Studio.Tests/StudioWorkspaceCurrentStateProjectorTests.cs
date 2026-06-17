@@ -2,19 +2,27 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Studio.Projection.Metadata;
 using Aevatar.Studio.Projection.Orchestration;
 using Aevatar.Studio.Projection.Projectors;
 using Aevatar.Studio.Projection.ReadModels;
 using Aevatar.Studio.Workspace;
 using FluentAssertions;
 using Google.Protobuf;
+using Google.Protobuf.Reflection;
 using Google.Protobuf.WellKnownTypes;
+using System.Text.Json;
 
 namespace Aevatar.Studio.Tests;
 
 public sealed class StudioWorkspaceCurrentStateProjectorTests
 {
     private const string RootActorId = "studio-workspace-scope-1";
+    private static readonly JsonFormatter ReadModelFormatter = new(
+        JsonFormatter.Settings.Default
+            .WithPreserveProtoFieldNames(true)
+            .WithFormatDefaultValues(true));
+    private static readonly JsonParser StateRootParser = new(JsonParser.Settings.Default.WithIgnoreUnknownFields(true));
 
     [Fact]
     public async Task ProjectAsync_ShouldUpsertDocument_WhenCommittedWorkspaceStateArrives()
@@ -53,8 +61,119 @@ public sealed class StudioWorkspaceCurrentStateProjectorTests
         written.StateVersion.Should().Be(7);
         written.LastEventId.Should().Be("evt-7");
         written.UpdatedAt.Should().NotBeNull();
-        written.StateRoot.Is(StudioWorkspaceState.Descriptor).Should().BeTrue();
-        written.StateRoot.Unpack<StudioWorkspaceState>().Settings.RuntimeBaseUrl.Should().Be("http://127.0.0.1:5100");
+        var parsedState = StateRootParser.Parse<StudioWorkspaceState>(written.StateRootJson);
+        parsedState.Settings.RuntimeBaseUrl.Should().Be("http://127.0.0.1:5100");
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldStoreWorkspaceStateAsOpaqueJsonString_ForElasticsearch()
+    {
+        var dispatcher = new RecordingWriteDispatcher();
+        var projector = new StudioWorkspaceCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-05-19T08:00:00Z")));
+        var state = new StudioWorkspaceState
+        {
+            WorkspaceId = RootActorId,
+            ScopeId = "scope-1",
+        };
+        state.Drafts.Add("wf-alpha", new StudioWorkflowDraft
+        {
+            WorkflowId = "wf-alpha",
+            Name = "workflow alpha",
+            FileName = "workflow-alpha.yaml",
+            DirectoryId = "dir-1",
+            DirectoryLabel = "Drafts",
+            Yaml = """
+                   name: workflow-alpha
+                   steps:
+                     - id: step-1
+                       config:
+                         model:
+                           provider:
+                             nested:
+                               arbitrary: value
+                   """,
+            Version = 4,
+        });
+
+        await projector.ProjectAsync(
+            NewContext(),
+            WrapCommitted(
+                new StudioWorkflowDraftSaved
+                {
+                    WorkspaceId = RootActorId,
+                    ScopeId = "scope-1",
+                    Draft = state.Drafts["wf-alpha"],
+                },
+                state,
+                version: 9,
+                eventId: "evt-9"));
+
+        var written = dispatcher.Upserts.Should().ContainSingle().Subject;
+        written.StateRootJson.Should().Contain("\"drafts\"");
+        written.StateRootJson.Should().Contain("nested");
+        written.DraftSummaries.Should().ContainSingle().Which.Should().BeEquivalentTo(new StudioWorkspaceDraftSummary
+        {
+            WorkflowId = "wf-alpha",
+            Name = "workflow alpha",
+            FileName = "workflow-alpha.yaml",
+            DirectoryId = "dir-1",
+            Version = 4,
+        });
+        StudioWorkspaceCurrentStateDocument.Descriptor.Fields.InDeclarationOrder()
+            .Select(field => field.Name)
+            .Should().NotContain("state_root");
+        StudioWorkspaceCurrentStateDocument.Descriptor.Fields.InDeclarationOrder()
+            .Single(field => field.Name == "state_root_json")
+            .FieldType.Should().Be(FieldType.String);
+        StudioWorkspaceCurrentStateDocument.Descriptor.Fields.InDeclarationOrder()
+            .Single(field => field.Name == "draft_summaries")
+            .MessageType.Should().Be(StudioWorkspaceDraftSummary.Descriptor);
+
+        using var serialized = JsonDocument.Parse(ReadModelFormatter.Format(written));
+        serialized.RootElement.TryGetProperty("state_root_json", out var stateRootJsonElement).Should().BeTrue();
+        stateRootJsonElement.ValueKind.Should().Be(JsonValueKind.String);
+        serialized.RootElement.TryGetProperty("draft_summaries", out var draftSummariesElement).Should().BeTrue();
+        draftSummariesElement.ValueKind.Should().Be(JsonValueKind.Array);
+        draftSummariesElement[0].TryGetProperty("workflow_id", out _).Should().BeTrue();
+        draftSummariesElement[0].TryGetProperty("name", out _).Should().BeTrue();
+        draftSummariesElement[0].TryGetProperty("yaml", out _).Should().BeFalse();
+        serialized.RootElement.TryGetProperty("state_root", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Metadata_ShouldDisableDynamicMappingAndKeepStateRootJsonNonIndexed()
+    {
+        var metadata = new StudioWorkspaceCurrentStateDocumentMetadataProvider().Metadata;
+
+        metadata.Mappings["dynamic"].Should().Be(false);
+        var properties = metadata.Mappings["properties"].Should()
+            .BeAssignableTo<IReadOnlyDictionary<string, object?>>()
+            .Subject;
+        properties.Should().ContainKey("id");
+        properties.Should().ContainKey("actor_id");
+        properties.Should().ContainKey("state_version");
+        properties.Should().ContainKey("last_event_id");
+        properties.Should().ContainKey("updated_at");
+        properties.Should().NotContainKey("state_root");
+
+        var stateRootJsonMapping = properties["state_root_json"].Should()
+            .BeAssignableTo<IReadOnlyDictionary<string, object?>>()
+            .Subject;
+        stateRootJsonMapping["type"].Should().Be("text");
+        stateRootJsonMapping["index"].Should().Be(false);
+
+        var draftSummariesMapping = properties["draft_summaries"].Should()
+            .BeAssignableTo<IReadOnlyDictionary<string, object?>>()
+            .Subject;
+        draftSummariesMapping["type"].Should().Be("nested");
+        draftSummariesMapping["dynamic"].Should().Be(false);
+        var draftSummaryProperties = draftSummariesMapping["properties"].Should()
+            .BeAssignableTo<IReadOnlyDictionary<string, object?>>()
+            .Subject;
+        draftSummaryProperties.Should().ContainKeys("workflow_id", "name", "file_name", "directory_id", "version");
+        draftSummaryProperties.Should().NotContainKey("yaml");
     }
 
     [Fact]

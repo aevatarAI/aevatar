@@ -37,6 +37,7 @@ public sealed class UserAgentCatalogReadModelEntry
     public SkillRunnerOutputFormat OutputFormat { get; init; } = SkillRunnerOutputFormat.Auto;
     public OwnerScope? OwnerScope { get; init; }
     public ScheduledAgentSharingGrant? SharingGrant { get; init; }
+    public string TargetPlatform { get; init; } = string.Empty;
     public long CatalogAuthorityStateVersion { get; init; }
     public string CatalogLastEventId { get; init; } = string.Empty;
     public long? RunnerAuthorityStateVersion { get; init; }
