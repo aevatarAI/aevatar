@@ -26,14 +26,10 @@ import {
 import { t } from "@/shared/i18n/messages";
 
 type RunViewMode = 'latest' | 'historical';
-type RunOutputTab = 'output' | 'timeline' | 'events' | 'metadata';
 type CurrentRunPresentation = 'default' | 'member-run';
 
 type StudioMemberCurrentRunPanelProps = {
-  readonly activeTab?: RunOutputTab;
-  readonly activeRunCompletedAt?: number | null;
   readonly chatMessages: readonly StudioInvokeChatMessage[];
-  readonly currentRawOutput?: string;
   readonly currentRunHasData: boolean;
   readonly currentRunRequest: CurrentRunRequest | null;
   readonly endpointLabel: string;
@@ -41,13 +37,10 @@ type StudioMemberCurrentRunPanelProps = {
   readonly runElapsedLabel: string;
   readonly runViewMode: RunViewMode;
   readonly presentation?: CurrentRunPresentation;
-  readonly showDebugTabs?: boolean;
   readonly transcriptViewportRef: React.RefObject<HTMLDivElement | null>;
   readonly onCopyError: () => void;
   readonly onOpenDiagnostics?: () => void;
-  readonly onOpenInspector?: () => void;
   readonly onRetryAsNewRun: () => void;
-  readonly onTabChange?: (tab: RunOutputTab) => void;
 };
 
 function getOutputText(input: {
@@ -645,7 +638,6 @@ const StudioMemberCurrentRunPanel: React.FC<
   invokeResult,
   onCopyError,
   onOpenDiagnostics,
-  onOpenInspector,
   onRetryAsNewRun,
   presentation = 'default',
   runElapsedLabel,
@@ -674,7 +666,9 @@ const StudioMemberCurrentRunPanel: React.FC<
     runViewMode,
     status: invokeResult.status,
   });
-  const openDiagnostics = onOpenDiagnostics ?? onOpenInspector ?? (() => {});
+  const shouldShowObserveHandoff =
+    runViewMode === 'latest' && Boolean(observeHandoffText);
+  const openDiagnostics = onOpenDiagnostics ?? (() => {});
 
   const renderMemberRunInputReceipt = () =>
     inputText ? (
@@ -784,7 +778,7 @@ const StudioMemberCurrentRunPanel: React.FC<
                   )
                 : t(
                     "pages.studio.studiomembercurrentrunpanel.this.failed.only.the.invoke.run.open.diagnostics",
-                    "This failed only the Invoke run. Retry with a smaller prompt, open diagnostics for backend signals, or return to Build/Bind if the member contract needs changes.",
+                    "This run failed. Retry with a smaller request, open diagnostics for backend signals, or edit the member contract from its owning member surface.",
                   )}
             </Typography.Text>
           </div>
@@ -1000,7 +994,7 @@ const StudioMemberCurrentRunPanel: React.FC<
                   )
                 : t(
                     "pages.studio.studiomembercurrentrunpanel.this.failed.only.the.invoke.run.open.diagnostics",
-                    "This failed only the Invoke run. Retry with a smaller prompt, open diagnostics for backend signals, or return to Build/Bind if the member contract needs changes.",
+                    "This run failed. Retry with a smaller request, open diagnostics for backend signals, or edit the member contract from its owning member surface.",
                   )}
             </Typography.Text>
           </div>
@@ -1106,25 +1100,28 @@ const StudioMemberCurrentRunPanel: React.FC<
             </Typography.Text>
           )}
         </div>
-        {presentation !== 'member-run' && observeHandoffText ? (
-          <div
-            data-testid="studio-invoke-observe-handoff"
-            style={recoveryPathStyle}
-          >
-            <span style={sectionLabelStyle}>
-              {t(
-                "pages.studio.studiomembercurrentrunpanel.observe.handoff",
-                "Observe handoff",
-              )}
-            </span>
-            <Typography.Text style={helperTextStyle}>
-              {observeHandoffText}
-            </Typography.Text>
-          </div>
-        ) : null}
+        {renderObserveHandoff()}
       </div>
     );
   };
+
+  const renderObserveHandoff = () =>
+    shouldShowObserveHandoff ? (
+      <div
+        data-testid="studio-invoke-observe-handoff"
+        style={recoveryPathStyle}
+      >
+        <span style={sectionLabelStyle}>
+          {t(
+            "pages.studio.studiomembercurrentrunpanel.observe.handoff",
+            "Observe handoff",
+          )}
+        </span>
+        <Typography.Text style={helperTextStyle}>
+          {observeHandoffText}
+        </Typography.Text>
+      </div>
+    ) : null;
 
   if (presentation === 'member-run') {
     return (
@@ -1161,6 +1158,7 @@ const StudioMemberCurrentRunPanel: React.FC<
           </div>
         </div>
         {renderMemberRunOutput()}
+        {renderObserveHandoff()}
       </div>
     );
   }

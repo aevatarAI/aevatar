@@ -815,7 +815,7 @@ const zhCNMessages = {
   'pages.studio.studiomembercurrentrunpanel.diagnostics': '诊断',
   'pages.studio.studiomembercurrentrunpanel.open.diagnostics': '打开诊断',
   'pages.studio.studiomembercurrentrunpanel.this.failed.only.the.invoke.run.open.diagnostics':
-    '本次失败只影响 Invoke 运行。可以用更小的提示词重试、打开诊断查看后端信号，或在成员契约需要调整时返回 Build/Bind。',
+    '本次运行失败。可以使用更小的请求重试、打开诊断查看后端信号，或从该成员所属页面编辑成员契约。',
   'pages.studio.studiomemberinvokepanel.endpoint': '端点',
   'pages.studio.studiomemberinvokepanel.inspector': '详情',
   'pages.studio.studiomemberinvokepanel.lifecycle': '生命周期',

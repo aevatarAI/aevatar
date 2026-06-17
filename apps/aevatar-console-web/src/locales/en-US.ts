@@ -862,7 +862,7 @@ const enUSMessages = {
   'pages.studio.studiomembercurrentrunpanel.diagnostics': 'Diagnostics',
   'pages.studio.studiomembercurrentrunpanel.open.diagnostics': 'Open diagnostics',
   'pages.studio.studiomembercurrentrunpanel.this.failed.only.the.invoke.run.open.diagnostics':
-    'This failed only the Invoke run. Retry with a smaller prompt, open diagnostics for backend signals, or return to Build/Bind if the member contract needs changes.',
+    'This run failed. Retry with a smaller request, open diagnostics for backend signals, or edit the member contract from its owning member surface.',
   'pages.studio.studiomemberinvokepanel.endpoint': 'Endpoint',
   'pages.studio.studiomemberinvokepanel.inspector': 'Details',
   'pages.studio.studiomemberinvokepanel.lifecycle': 'Lifecycle',

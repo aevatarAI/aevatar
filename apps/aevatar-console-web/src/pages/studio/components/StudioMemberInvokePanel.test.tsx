@@ -290,6 +290,14 @@ describe('StudioMemberInvokePanel', () => {
   });
 
   it('uses the member-run surface as an isolated SaaS run page', async () => {
+    (runtimeRunsApi.streamChat as jest.Mock).mockResolvedValue({});
+    (parseBackendSSEStream as jest.Mock).mockImplementation(async function* () {
+      yield {
+        result: 'Member-run answer',
+        type: AGUIEventType.RUN_FINISHED,
+      };
+    });
+
     render(
       React.createElement(StudioMemberInvokePanel, {
         memberId: 'member-with-a-very-long-stable-identifier-1234567890',
@@ -388,6 +396,18 @@ describe('StudioMemberInvokePanel', () => {
     expect(screen.queryByText('New run')).toBeNull();
     expect(screen.queryByText('Run result')).toBeNull();
     expect(screen.queryByText('Observe handoff')).toBeNull();
+
+    fireEvent.change(screen.getByLabelText('Run input'), {
+      target: {
+        value: 'Summarize the team member status.',
+      },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Start run' }));
+
+    expect(await screen.findByText('Member-run answer')).toBeTruthy();
+    expect(screen.getByTestId('studio-invoke-observe-handoff')).toHaveTextContent(
+      'This run is ready for Observe. Switch to Observe when you need backend events, audit frames, or the runtime trail for this member.',
+    );
   });
 
   it('locks the member-run input and keeps the submitted task visible while a run is in progress', async () => {
@@ -612,7 +632,7 @@ describe('StudioMemberInvokePanel', () => {
     expect(await screen.findByText('Run failed')).toBeTruthy();
     expect(screen.getByText('GAgent draft-run timed out.')).toBeTruthy();
     expect(screen.getByTestId('studio-invoke-recovery-path')).toHaveTextContent(
-      'This failed only the Invoke run. Retry with a smaller prompt, open diagnostics for backend signals, or return to Build/Bind if the member contract needs changes.',
+      'This run failed. Retry with a smaller request, open diagnostics for backend signals, or edit the member contract from its owning member surface.',
     );
     expect(screen.getByRole('button', { name: 'Open diagnostics' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Retry as new run' })).toBeTruthy();
