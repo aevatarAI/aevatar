@@ -10,6 +10,7 @@ using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core.Composition;
+using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Modules;
 using FluentAssertions;
 using Google.Protobuf;
@@ -51,7 +52,7 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
                 IdempotencyKey = request.IdempotencyKey,
                 CapturedOutput = string.Empty,
                 LedgerStatus = CompensableLedgerEntryStatus.Provisional,
-            }, options => options.Excluding(x => x.CommittedAtUnixMs));
+            });
 
         var compensation = CompensationRequests(harness.Publisher).Should().ContainSingle().Subject;
         compensation.CompensationStepId.Should().Be("cancel_order");
@@ -109,7 +110,7 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
                 IdempotencyKey = request.IdempotencyKey,
                 CapturedOutput = """{"orderId":"order-1"}""",
                 LedgerStatus = CompensableLedgerEntryStatus.Confirmed,
-            }, options => options.Excluding(x => x.CommittedAtUnixMs));
+            });
     }
 
     [Fact]
@@ -127,7 +128,7 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
                 IdempotencyKey = $"{harness.RunId}:create_order:1",
                 CapturedOutput = "order-output",
                 LedgerStatus = CompensableLedgerEntryStatus.Confirmed,
-            }, options => options.Excluding(x => x.CommittedAtUnixMs));
+            });
     }
 
     [Fact]
@@ -172,6 +173,50 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
             .ContainSingle()
             .Which.RunId.Should().Be(harness.RunId);
         harness.Agent.State.SagaStatus.Should().Be(WorkflowSagaStatus.CompensatedFailed);
+    }
+
+    [Fact]
+    public async Task TerminalFailure_WithMultipleCompensations_ShouldPreserveOriginalFailedStepId()
+    {
+        var harness = await CreateStartedRunAsync(SagaWorkflowYaml());
+
+        await CompleteStepAsync(harness, "create_order", "order-output");
+        await CompleteStepAsync(harness, "charge_payment", "charge-output");
+        await FailStepAsync(harness, "ship_order", "ship failed");
+
+        var firstRequest = CompensationRequests(harness.Publisher).Should().ContainSingle().Subject;
+        firstRequest.FailedStepId.Should().Be("ship_order");
+        harness.Agent.State.CompensationOriginFailedStepId.Should().Be("ship_order");
+
+        await CompleteCompensationAsync(harness, firstRequest);
+
+        var secondRequest = CompensationRequests(harness.Publisher).Last();
+        secondRequest.CompensationStepId.Should().Be("cancel_order");
+        secondRequest.FailedStepId.Should().Be("ship_order");
+        harness.Agent.State.CompensationOriginFailedStepId.Should().Be("ship_order");
+    }
+
+    [Fact]
+    public async Task WorkflowCompletionRedelivery_WhenRunIsTerminal_ShouldNotDuplicateTerminalFacts()
+    {
+        var harness = await CreateStartedRunAsync(NoCompensationWorkflowYaml());
+
+        await FailStepAsync(harness, "failed_step", "boom");
+        var terminal = CommittedEvents<WorkflowCompletedEvent>(harness.CommittedPublisher)
+            .Should()
+            .ContainSingle(x => !x.Success)
+            .Subject;
+        var committedEventCount = harness.CommittedPublisher.Events.Count;
+        var publishedEventCount = harness.Publisher.Published.Count;
+
+        await harness.Agent.HandleEventAsync(SelfEnvelope(harness.RunId, terminal.Clone()));
+
+        CommittedEvents<WorkflowCompletedEvent>(harness.CommittedPublisher)
+            .Where(x => !x.Success)
+            .Should()
+            .ContainSingle();
+        harness.CommittedPublisher.Events.Should().HaveCount(committedEventCount);
+        harness.Publisher.Published.Should().HaveCount(publishedEventCount);
     }
 
     [Fact]
@@ -408,6 +453,331 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
     }
 
     [Fact]
+    public async Task CompensationStepWithoutTimeout_ShouldUseDefaultTimeoutAndDeadLetter()
+    {
+        var harness = await CreateStartedRunAsync(NoTimeoutCompensationWorkflowYaml());
+        await CompleteStepAsync(harness, "create_order", "order-output");
+        await FailStepAsync(harness, "ship_order", "ship failed");
+
+        var request = CompensationRequests(harness.Publisher).Should().ContainSingle().Subject;
+        request.CompensationStepId.Should().Be("cancel_order");
+        var timeout = SingleScheduledStepTimeout(harness, "cancel_order", 30_000);
+
+        await harness.Agent.HandleEventAsync(SelfEnvelope(
+            harness.RunId,
+            new WorkflowStepTimeoutFiredEvent
+            {
+                RunId = harness.RunId,
+                StepId = "cancel_order",
+                TimeoutMs = 30_000,
+            },
+            MetadataFor(timeout)));
+
+        var failed = CommittedEvents<WorkflowCompensationFailedEvent>(harness.CommittedPublisher)
+            .Should()
+            .ContainSingle()
+            .Subject;
+        failed.FailedCompensationStepId.Should().Be("cancel_order");
+        failed.RemainingUncompensated.Should().Be(1);
+        failed.Error.Should().Be("TIMEOUT after 30000ms");
+        harness.Agent.State.SagaStatus.Should().Be(WorkflowSagaStatus.CompensationDeadLetter);
+        AssertDeadLetterCompletionPublished(harness, "TIMEOUT after 30000ms");
+    }
+
+    [Fact]
+    public async Task CompensationStepWithExplicitTimeout_ShouldUseConfiguredTimeoutAndDeadLetter()
+    {
+        var harness = await CreateStartedRunAsync(ExplicitTimeoutCompensationWorkflowYaml());
+        await CompleteStepAsync(harness, "create_order", "order-output");
+        await FailStepAsync(harness, "ship_order", "ship failed");
+
+        var request = CompensationRequests(harness.Publisher).Should().ContainSingle().Subject;
+        request.CompensationStepId.Should().Be("cancel_order");
+        var timeout = SingleScheduledStepTimeout(harness, "cancel_order", 750);
+
+        await harness.Agent.HandleEventAsync(SelfEnvelope(
+            harness.RunId,
+            new WorkflowStepTimeoutFiredEvent
+            {
+                RunId = harness.RunId,
+                StepId = "cancel_order",
+                TimeoutMs = 750,
+            },
+            MetadataFor(timeout)));
+
+        var failed = CommittedEvents<WorkflowCompensationFailedEvent>(harness.CommittedPublisher)
+            .Should()
+            .ContainSingle()
+            .Subject;
+        failed.FailedCompensationStepId.Should().Be("cancel_order");
+        failed.RemainingUncompensated.Should().Be(1);
+        failed.Error.Should().Be("TIMEOUT after 750ms");
+        harness.Agent.State.SagaStatus.Should().Be(WorkflowSagaStatus.CompensationDeadLetter);
+        AssertDeadLetterCompletionPublished(harness, "TIMEOUT after 750ms");
+    }
+
+    [Fact]
+    public async Task CompensationStepWithTooSmallTimeout_ShouldClampScheduledTimeout()
+    {
+        var harness = await CreateStartedRunAsync(TinyTimeoutCompensationWorkflowYaml());
+        await CompleteStepAsync(harness, "create_order", "order-output");
+        await FailStepAsync(harness, "ship_order", "ship failed");
+
+        var request = CompensationRequests(harness.Publisher).Should().ContainSingle().Subject;
+        request.CompensationStepId.Should().Be("cancel_order");
+
+        SingleScheduledStepTimeout(harness, "cancel_order", 100);
+        harness.CallbackScheduler.ScheduledCallbacks
+            .Where(x => x.Event is WorkflowStepTimeoutFiredEvent timeout &&
+                        timeout.StepId == "cancel_order")
+            .Should()
+            .ContainSingle();
+    }
+
+    [Fact]
+    public async Task CompensationPhaseDeadline_ShouldForceDeadLetterAndNotifyCaller()
+    {
+        var harness = await CreateStartedRunAsync(SagaWorkflowYaml());
+        await CompleteStepAsync(harness, "create_order", "order-output");
+        await CompleteStepAsync(harness, "charge_payment", "charge-output");
+        await FailStepAsync(harness, "ship_order", "ship failed");
+
+        var deadline = SingleCompensationPhaseDeadline(harness);
+        await harness.Agent.HandleEventAsync(SelfEnvelope(
+            harness.RunId,
+            new WorkflowCompensationPhaseDeadlineFiredEvent
+            {
+                RunId = harness.RunId,
+            },
+            MetadataFor(deadline)));
+
+        var failed = CommittedEvents<WorkflowCompensationFailedEvent>(harness.CommittedPublisher)
+            .Should()
+            .ContainSingle()
+            .Subject;
+        failed.FailedCompensationStepId.Should().Be("refund_payment");
+        failed.RemainingUncompensated.Should().Be(2);
+        failed.Error.Should().Be("compensation phase deadline exceeded after 300000ms");
+        harness.Agent.State.SagaStatus.Should().Be(WorkflowSagaStatus.CompensationDeadLetter);
+        AssertDeadLetterCompletionPublished(harness, "compensation phase deadline exceeded after 300000ms");
+    }
+
+    [Fact]
+    public async Task CompensationPhaseDeadlineWithStaleLeaseMetadata_ShouldBeIgnored()
+    {
+        var harness = await CreateStartedRunAsync(SagaWorkflowYaml());
+        await CompleteStepAsync(harness, "create_order", "order-output");
+        await CompleteStepAsync(harness, "charge_payment", "charge-output");
+        await FailStepAsync(harness, "ship_order", "ship failed");
+
+        var deadline = SingleCompensationPhaseDeadline(harness);
+        await harness.Agent.HandleEventAsync(SelfEnvelope(
+            harness.RunId,
+            new WorkflowCompensationPhaseDeadlineFiredEvent
+            {
+                RunId = harness.RunId,
+            },
+            new EnvelopeCallbackContext
+            {
+                CallbackId = deadline.CallbackId,
+                Generation = deadline.Generation + 1,
+                SlotEpoch = deadline.SlotEpoch,
+                FiredAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            }));
+
+        CommittedEvents<WorkflowCompensationFailedEvent>(harness.CommittedPublisher).Should().BeEmpty();
+        CommittedEvents<WorkflowCompletedEvent>(harness.CommittedPublisher)
+            .Where(x => !x.Success)
+            .Should()
+            .BeEmpty();
+        harness.Agent.State.SagaStatus.Should().Be(WorkflowSagaStatus.Compensating);
+        CompensationRequests(harness.Publisher)
+            .Should()
+            .ContainSingle(x => x.CompensationStepId == "refund_payment");
+    }
+
+    [Fact]
+    public async Task CompensationPhaseDeadline_ShouldBeScheduledOnceAcrossMultipleRequests()
+    {
+        var harness = await CreateStartedRunAsync(SagaWorkflowYaml());
+        await CompleteStepAsync(harness, "create_order", "order-output");
+        await CompleteStepAsync(harness, "charge_payment", "charge-output");
+        await FailStepAsync(harness, "ship_order", "ship failed");
+
+        var deadline = SingleCompensationPhaseDeadline(harness);
+        var firstRequest = CompensationRequests(harness.Publisher).Single();
+
+        await CompleteCompensationAsync(harness, firstRequest);
+
+        harness.CallbackScheduler.ScheduledCallbacks
+            .Where(x => x.Event is WorkflowCompensationPhaseDeadlineFiredEvent)
+            .Should()
+            .ContainSingle()
+            .Which.CallbackId.Should().Be(deadline.CallbackId);
+        CompensationRequests(harness.Publisher)
+            .Last()
+            .CompensationStepId.Should().Be("cancel_order");
+    }
+
+    [Fact]
+    public async Task CompensationDeadlineAfterTimedOutCompensation_ShouldStayTerminalAndCanceled()
+    {
+        var harness = await CreateStartedRunAsync(NoTimeoutCompensationWorkflowYaml());
+        await CompleteStepAsync(harness, "create_order", "order-output");
+        await FailStepAsync(harness, "ship_order", "ship failed");
+
+        var deadline = SingleCompensationPhaseDeadline(harness);
+        var timeout = SingleScheduledStepTimeout(harness, "cancel_order", 30_000);
+        await harness.Agent.HandleEventAsync(SelfEnvelope(
+            harness.RunId,
+            new WorkflowStepTimeoutFiredEvent
+            {
+                RunId = harness.RunId,
+                StepId = "cancel_order",
+                TimeoutMs = 30_000,
+            },
+            MetadataFor(timeout)));
+
+        var terminalCount = CommittedEvents<WorkflowCompletedEvent>(harness.CommittedPublisher)
+            .Count(x => !x.Success);
+        terminalCount.Should().Be(1);
+        harness.CallbackScheduler.CanceledCallbacks
+            .Should()
+            .ContainSingle(x =>
+                x.CallbackId == deadline.CallbackId &&
+                x.Generation == deadline.Generation);
+
+        await harness.Agent.HandleEventAsync(SelfEnvelope(
+            harness.RunId,
+            new WorkflowCompensationPhaseDeadlineFiredEvent
+            {
+                RunId = harness.RunId,
+            },
+            MetadataFor(deadline)));
+
+        CommittedEvents<WorkflowCompletedEvent>(harness.CommittedPublisher)
+            .Count(x => !x.Success)
+            .Should()
+            .Be(terminalCount);
+        CommittedEvents<WorkflowCompensationFailedEvent>(harness.CommittedPublisher)
+            .Should()
+            .ContainSingle()
+            .Which.Error.Should().Be("TIMEOUT after 30000ms");
+    }
+
+    [Fact]
+    public async Task CompensationPhaseDeadlineHostGuard_ShouldRejectNonCompensatingOrMismatchedRun()
+    {
+        var activeHarness = await CreateStartedRunAsync(SagaWorkflowYaml());
+        var activeHost = (IWorkflowExecutionStateHost)activeHarness.Agent;
+
+        var activeResult = await activeHost.RecordCompensationPhaseDeadlineExceededAsync(
+            activeHarness.RunId,
+            "deadline",
+            CancellationToken.None);
+
+        activeResult.Status.Should().Be(WorkflowCompensationTransitionStatus.NoCompensableLedger);
+        CommittedEvents<WorkflowCompensationFailedEvent>(activeHarness.CommittedPublisher).Should().BeEmpty();
+
+        var compensatingHarness = await CreateStartedRunAsync(SagaWorkflowYaml());
+        await CompleteStepAsync(compensatingHarness, "create_order", "order-output");
+        await CompleteStepAsync(compensatingHarness, "charge_payment", "charge-output");
+        await FailStepAsync(compensatingHarness, "ship_order", "ship failed");
+        var compensatingHost = (IWorkflowExecutionStateHost)compensatingHarness.Agent;
+
+        var mismatchedRunResult = await compensatingHost.RecordCompensationPhaseDeadlineExceededAsync(
+            "run-other",
+            "deadline",
+            CancellationToken.None);
+
+        mismatchedRunResult.Status.Should().Be(WorkflowCompensationTransitionStatus.NoCompensableLedger);
+        CommittedEvents<WorkflowCompensationFailedEvent>(compensatingHarness.CommittedPublisher).Should().BeEmpty();
+        compensatingHarness.Agent.State.SagaStatus.Should().Be(WorkflowSagaStatus.Compensating);
+    }
+
+    [Fact]
+    public async Task CompensationPhaseDeadlineHostGuard_WhenCursorHasNoLedgerEntry_ShouldDeadLetterWithoutFailedStepId()
+    {
+        var harness = await CreateStartedRunAsync(NoTimeoutCompensationWorkflowYaml());
+        await CompleteStepAsync(harness, "create_order", "order-output");
+        await FailStepAsync(harness, "ship_order", "ship failed");
+        harness.Agent.State.CompensationCursor = 9;
+        var host = (IWorkflowExecutionStateHost)harness.Agent;
+
+        var result = await host.RecordCompensationPhaseDeadlineExceededAsync(
+            harness.RunId,
+            "deadline",
+            CancellationToken.None);
+
+        result.Status.Should().Be(WorkflowCompensationTransitionStatus.CompensationDeadLettered);
+        var failed = CommittedEvents<WorkflowCompensationFailedEvent>(harness.CommittedPublisher)
+            .Should()
+            .ContainSingle()
+            .Subject;
+        failed.FailedCompensationStepId.Should().BeEmpty();
+        failed.RemainingUncompensated.Should().Be(1);
+        failed.Error.Should().Be("deadline");
+    }
+
+    [Fact]
+    public async Task CompensationPhaseDeadlineAfterTerminal_ShouldBeIgnored()
+    {
+        var harness = await CreateStartedRunAsync(SagaWorkflowYaml());
+        await CompleteStepAsync(harness, "create_order", "order-output");
+        await CompleteStepAsync(harness, "charge_payment", "charge-output");
+        await FailStepAsync(harness, "ship_order", "ship failed");
+
+        var deadline = SingleCompensationPhaseDeadline(harness);
+        var firstRequest = CompensationRequests(harness.Publisher).Single();
+        await CompleteCompensationAsync(harness, firstRequest);
+        var secondRequest = CompensationRequests(harness.Publisher).Last();
+        await CompleteCompensationAsync(harness, secondRequest);
+
+        var terminalCount = CommittedEvents<WorkflowCompletedEvent>(harness.CommittedPublisher)
+            .Count(x => !x.Success);
+        terminalCount.Should().Be(1);
+
+        await harness.Agent.HandleEventAsync(SelfEnvelope(
+            harness.RunId,
+            new WorkflowCompensationPhaseDeadlineFiredEvent
+            {
+                RunId = harness.RunId,
+            },
+            MetadataFor(deadline)));
+
+        CommittedEvents<WorkflowCompletedEvent>(harness.CommittedPublisher)
+            .Count(x => !x.Success)
+            .Should()
+            .Be(terminalCount);
+        CommittedEvents<WorkflowCompensationFailedEvent>(harness.CommittedPublisher).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task SuccessfulCompensation_ShouldCancelPhaseDeadlineLease()
+    {
+        var harness = await CreateStartedRunAsync(SagaWorkflowYaml());
+        await CompleteStepAsync(harness, "create_order", "order-output");
+        await CompleteStepAsync(harness, "charge_payment", "charge-output");
+        await FailStepAsync(harness, "ship_order", "ship failed");
+
+        var deadline = SingleCompensationPhaseDeadline(harness);
+        var firstRequest = CompensationRequests(harness.Publisher).Single();
+        await CompleteCompensationAsync(harness, firstRequest);
+        var secondRequest = CompensationRequests(harness.Publisher).Last();
+        await CompleteCompensationAsync(harness, secondRequest);
+
+        harness.CallbackScheduler.CanceledCallbacks
+            .Should()
+            .ContainSingle(x =>
+                x.CallbackId == deadline.CallbackId &&
+                x.Generation == deadline.Generation);
+        CommittedEvents<WorkflowCompensationCompletedEvent>(harness.CommittedPublisher)
+            .Should()
+            .ContainSingle()
+            .Which.CompensatedSteps.Should().Be(2);
+    }
+
+    [Fact]
     public async Task FailedCompensation_WithOnErrorFallback_ShouldDeadLetterWithoutFallback()
     {
         var harness = await CreateStartedRunAsync(CompensationOnErrorWorkflowYaml());
@@ -439,6 +809,55 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
         failed.RemainingUncompensated.Should().Be(1);
         failed.Error.Should().Be("cancel failed");
         harness.Agent.State.SagaStatus.Should().Be(WorkflowSagaStatus.CompensationDeadLetter);
+    }
+
+    [Fact]
+    public async Task ManagedWorkflowCallChild_WhenCompensationCompletes_ShouldSendCompensatedChildCompletionToParent()
+    {
+        const string parentActorId = "parent-run-actor";
+        const string parentRunId = "parent-run";
+        const string parentStepId = "call_child";
+        const string invocationId = "invoke-child-1";
+        var childRunId = "child-run-" + Guid.NewGuid().ToString("N");
+        var harness = await CreateRunAsync(childRunId, SagaWorkflowYaml());
+
+        await harness.Agent.HandleEventAsync(EnvelopeFrom(parentActorId, new StartWorkflowEvent
+        {
+            WorkflowName = "wf_2097",
+            RunId = childRunId,
+            Input = "hello",
+            WorkflowRuntime = new WorkflowToolRuntimeContextPayload
+            {
+                ParentActorId = parentActorId,
+                ParentRunId = parentRunId,
+                ParentStepId = parentStepId,
+                RootRunId = parentRunId,
+                Depth = 1,
+            },
+            Parameters =
+            {
+                ["workflow_call.invocation_id"] = invocationId,
+            },
+        }));
+
+        await CompleteStepAsync(harness, "create_order", "order-output");
+        await CompleteStepAsync(harness, "charge_payment", "charge-output");
+        await FailStepAsync(harness, "ship_order", "ship failed");
+        var firstRequest = CompensationRequests(harness.Publisher).Single();
+        await CompleteCompensationAsync(harness, firstRequest);
+        var secondRequest = CompensationRequests(harness.Publisher).Last();
+        await CompleteCompensationAsync(harness, secondRequest);
+
+        PublishedEvents<WorkflowCompletedEvent>(harness.Publisher)
+            .Where(x => x.Audience == TopologyAudience.Parent)
+            .Should()
+            .BeEmpty();
+        var sent = harness.Publisher.Sent.Should().ContainSingle(x => x.TargetActorId == parentActorId).Subject;
+        var completed = sent.Event.Should().BeOfType<SubWorkflowInvocationCompletedEvent>().Subject;
+        completed.InvocationId.Should().Be(invocationId);
+        completed.ChildRunId.Should().Be(childRunId);
+        completed.Success.Should().BeFalse();
+        completed.Compensated.Should().BeTrue();
     }
 
     private static async Task CompleteStepAsync(RunHarness harness, string stepId, string output)
@@ -605,6 +1024,25 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
     private static IReadOnlyList<ScheduledCallback> ScheduledTimeouts(RecordingEventPublisher publisher) =>
         publisher.CallbackScheduler.ScheduledCallbacks.ToArray();
 
+    private static ScheduledCallback SingleScheduledStepTimeout(
+        RunHarness harness,
+        string stepId,
+        int timeoutMs) =>
+        harness.CallbackScheduler.ScheduledCallbacks
+            .Where(x => x.Event is WorkflowStepTimeoutFiredEvent timeout &&
+                        timeout.StepId == stepId &&
+                        timeout.TimeoutMs == timeoutMs)
+            .Should()
+            .ContainSingle()
+            .Subject;
+
+    private static ScheduledCallback SingleCompensationPhaseDeadline(RunHarness harness) =>
+        harness.CallbackScheduler.ScheduledCallbacks
+            .Where(x => x.Event is WorkflowCompensationPhaseDeadlineFiredEvent)
+            .Should()
+            .ContainSingle()
+            .Subject;
+
     private static IReadOnlyList<(TEvent Event, TopologyAudience Audience)> PublishedEvents<TEvent>(
         RecordingEventPublisher publisher)
         where TEvent : class, IMessage<TEvent>, new() =>
@@ -703,6 +1141,53 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
             type: transform
         """;
 
+    private static string NoTimeoutCompensationWorkflowYaml() =>
+        """
+        name: wf_2097
+        roles: []
+        steps:
+          - id: create_order
+            type: transform
+            next: ship_order
+            compensation: cancel_order
+          - id: ship_order
+            type: transform
+          - id: cancel_order
+            type: connector_call
+        """;
+
+    private static string ExplicitTimeoutCompensationWorkflowYaml() =>
+        """
+        name: wf_2097
+        roles: []
+        steps:
+          - id: create_order
+            type: transform
+            next: ship_order
+            compensation: cancel_order
+          - id: ship_order
+            type: transform
+          - id: cancel_order
+            type: connector_call
+            timeout_ms: 750
+        """;
+
+    private static string TinyTimeoutCompensationWorkflowYaml() =>
+        """
+        name: wf_2097
+        roles: []
+        steps:
+          - id: create_order
+            type: transform
+            next: ship_order
+            compensation: cancel_order
+          - id: ship_order
+            type: transform
+          - id: cancel_order
+            type: connector_call
+            timeout_ms: 1
+        """;
+
     private static string NoCompensationWorkflowYaml() =>
         """
         name: wf_2097
@@ -793,6 +1278,8 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
     {
         public List<(IMessage Event, TopologyAudience Audience)> Published { get; } = [];
 
+        public List<(string TargetActorId, IMessage Event)> Sent { get; } = [];
+
         public bool AutoReplaySelfPublished { get; init; } = true;
 
         public WorkflowRunGAgent Agent { get; set; } = null!;
@@ -821,8 +1308,12 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
             CancellationToken ct,
             EventEnvelope? sourceEnvelope,
             EventEnvelopePublishOptions? options)
-            where T : IMessage =>
-            Task.CompletedTask;
+            where T : IMessage
+        {
+            ct.ThrowIfCancellationRequested();
+            Sent.Add((targetActorId, evt.Descriptor.Parser.ParseFrom(evt.ToByteArray())));
+            return Task.CompletedTask;
+        }
     }
 
     private sealed record ScheduledCallback(
@@ -830,6 +1321,11 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
         long Generation,
         int SlotEpoch,
         IMessage Event);
+
+    private sealed record CanceledCallback(
+        string ActorId,
+        string CallbackId,
+        long Generation);
 
     private sealed class RecordingCommittedStatePublicationHook : ICommittedStatePublicationHook
     {
@@ -927,6 +1423,7 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
     private sealed class RecordingRuntimeCallbackScheduler : IActorRuntimeCallbackScheduler
     {
         public List<ScheduledCallback> ScheduledCallbacks { get; } = [];
+        public List<CanceledCallback> CanceledCallbacks { get; } = [];
 
         public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
             RuntimeCallbackTimeoutRequest request,
@@ -935,8 +1432,18 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
             ct.ThrowIfCancellationRequested();
             var generation = ScheduledCallbacks.Count(x => x.CallbackId == request.CallbackId) + 1;
             var slotEpoch = request.TriggerEnvelope.Runtime?.Callback?.SlotEpoch ?? 0;
-            var evt = request.TriggerEnvelope.Payload?.Unpack<WorkflowStepTimeoutFiredEvent>()
-                      ?? throw new InvalidOperationException("Expected scheduled timeout payload.");
+            var payload = request.TriggerEnvelope.Payload
+                          ?? throw new InvalidOperationException("Expected scheduled timeout payload.");
+            IMessage evt;
+            if (payload.Is(WorkflowStepTimeoutFiredEvent.Descriptor))
+                evt = payload.Unpack<WorkflowStepTimeoutFiredEvent>();
+            else if (payload.Is(WorkflowStepRetryBackoffFiredEvent.Descriptor))
+                evt = payload.Unpack<WorkflowStepRetryBackoffFiredEvent>();
+            else if (payload.Is(WorkflowCompensationPhaseDeadlineFiredEvent.Descriptor))
+                evt = payload.Unpack<WorkflowCompensationPhaseDeadlineFiredEvent>();
+            else
+                throw new InvalidOperationException($"Unexpected scheduled timeout payload: {payload.TypeUrl}");
+
             ScheduledCallbacks.Add(new ScheduledCallback(request.CallbackId, generation, slotEpoch, evt));
             var lease = new RuntimeCallbackLease(
                 request.ActorId,
@@ -954,8 +1461,15 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
             CancellationToken ct = default) =>
             throw new NotSupportedException("Saga compensation tests do not use durable timers.");
 
-        public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default) =>
-            Task.CompletedTask;
+        public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            CanceledCallbacks.Add(new CanceledCallback(
+                lease.ActorId,
+                lease.CallbackId,
+                lease.Generation));
+            return Task.CompletedTask;
+        }
 
         public Task PurgeActorAsync(string actorId, CancellationToken ct = default) =>
             Task.CompletedTask;

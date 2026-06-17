@@ -9,6 +9,8 @@ namespace Aevatar.AI.ToolProviders.AgentCatalog;
 /// </summary>
 public static class ServiceCollectionExtensions
 {
+    private static readonly Func<IServiceProvider, object> ToolSourceFactory = CreateToolSource;
+
     /// <summary>
     /// Registers the agent-delivery-target tool source so LLM turns can resolve the
     /// catalog of user-owned agents available as delivery targets.
@@ -17,8 +19,21 @@ public static class ServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAgentToolSource, AgentDeliveryTargetToolSource>());
+        if (!services.Any(IsToolSourceRegistration))
+            services.Add(ServiceDescriptor.Singleton(typeof(IAgentToolSource), ToolSourceFactory));
 
         return services;
     }
+
+    private static bool IsToolSourceRegistration(ServiceDescriptor descriptor) =>
+        descriptor.ServiceType == typeof(IAgentToolSource) &&
+        (descriptor.ImplementationType == typeof(AgentDeliveryTargetToolSource) ||
+         descriptor.ImplementationFactory == ToolSourceFactory);
+
+    private static object CreateToolSource(IServiceProvider sp) =>
+        new AgentDeliveryTargetToolSource(
+            sp.GetRequiredService<Aevatar.GAgents.Scheduled.IUserAgentCatalogQueryPort>(),
+            sp.GetRequiredService<Aevatar.GAgents.Scheduled.IUserAgentCatalogCommandPort>(),
+            sp.GetRequiredService<Aevatar.GAgents.Scheduled.ICallerScopeResolver>(),
+            sp.GetService<Aevatar.GAgents.Scheduled.IScheduledAgentApiKeyIssuer>());
 }

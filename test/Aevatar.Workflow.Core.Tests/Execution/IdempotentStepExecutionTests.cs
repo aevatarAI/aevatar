@@ -1178,9 +1178,21 @@ public sealed class IdempotentStepExecutionTests
             return Task.FromResult(NoCompensableLedger());
         }
 
+        public Task<WorkflowCompensationTransitionResult> RecordCompensationPhaseDeadlineExceededAsync(
+            string runId,
+            string error,
+            CancellationToken ct = default)
+        {
+            _ = runId;
+            _ = error;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(NoCompensableLedger());
+        }
+
         private static WorkflowCompensationTransitionResult NoCompensableLedger() =>
             new(
                 WorkflowCompensationTransitionStatus.NoCompensableLedger,
+                string.Empty,
                 string.Empty,
                 string.Empty,
                 string.Empty,

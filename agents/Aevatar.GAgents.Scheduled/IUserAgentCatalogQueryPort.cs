@@ -19,6 +19,13 @@ public interface IUserAgentCatalogQueryPort
 {
     Task<UserAgentCatalogReadModelEntry?> GetForCallerAsync(string agentId, OwnerScope caller, CancellationToken ct = default);
 
+    /// <summary>
+    /// Returns whether the catalog id is occupied by any non-tombstoned row. This is a
+    /// narrow create-admission check: callers get only availability, never another
+    /// owner's catalog data.
+    /// </summary>
+    Task<bool> ExistsActiveAsync(string agentId, CancellationToken ct = default);
+
     Task<IReadOnlyList<UserAgentCatalogReadModelEntry>> QueryByCallerAsync(OwnerScope caller, CancellationToken ct = default);
 
     /// <summary>

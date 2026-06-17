@@ -27,11 +27,15 @@ public sealed class EditorControllerSerializationTests
     {
         typeof(ParseYamlHttpResponse).GetProperty(nameof(ParseYamlHttpResponse.Document))!
             .ShouldUseWorkflowDocumentInputConverter();
+        typeof(SerializeYamlHttpResponse).GetProperty(nameof(SerializeYamlHttpResponse.Document))!
+            .ShouldUseWorkflowDocumentInputConverter();
         typeof(SerializeYamlHttpRequest).GetProperty(nameof(SerializeYamlHttpRequest.Document))!
             .ShouldUseWorkflowDocumentInputConverter();
         typeof(ValidateWorkflowHttpRequest).GetProperty(nameof(ValidateWorkflowHttpRequest.Document))!
             .ShouldUseWorkflowDocumentInputConverter();
         typeof(NormalizeWorkflowHttpRequest).GetProperty(nameof(NormalizeWorkflowHttpRequest.Document))!
+            .ShouldUseWorkflowDocumentInputConverter();
+        typeof(NormalizeWorkflowHttpResponse).GetProperty(nameof(NormalizeWorkflowHttpResponse.Document))!
             .ShouldUseWorkflowDocumentInputConverter();
 
         typeof(SerializeYamlHttpRequest).Assembly
@@ -59,6 +63,53 @@ public sealed class EditorControllerSerializationTests
         body.Should().Contain("- one");
         body.Should().Contain("nested:");
         body.Should().Contain("inner: value");
+    }
+
+    [Theory]
+    [InlineData("/api/editor/serialize-yaml")]
+    [InlineData("/api/editor/normalize")]
+    public async Task DocumentEditorResponses_ShouldReturnPlainJsonStepParameters(string path)
+    {
+        using var host = await StartHostAsync();
+        var client = host.GetTestClient();
+
+        using var response = await client.PostAsJsonAsync(path, BuildPlainParameterRequest());
+
+        var body = await response.Content.ReadAsStringAsync();
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        body.Should().Contain("\"target\":\"result\"");
+        body.Should().Contain("\"value\":\"$input\"");
+        body.Should().Contain("\"enabled\":\"true\"");
+        body.Should().Contain("\"limit\":\"3\"");
+        body.Should().Contain("\"items\":[\"one\",\"2\",null]");
+        body.Should().Contain("\"nested\":{\"inner\":\"value\"}");
+        body.Should().NotContain("\"target\":{}");
+        body.Should().NotContain("\"value\":{}");
+    }
+
+    [Fact]
+    public async Task SerializeYaml_ShouldPreserveResponseDocumentScalarsOnSecondRoundTrip()
+    {
+        using var host = await StartHostAsync();
+        var client = host.GetTestClient();
+
+        using var firstResponse = await client.PostAsJsonAsync("/api/editor/serialize-yaml", BuildPlainParameterRequest());
+        var firstJson = await firstResponse.Content.ReadAsStringAsync();
+        using var firstDocument = JsonDocument.Parse(firstJson);
+        var document = firstDocument.RootElement.GetProperty("document").Clone();
+
+        using var secondResponse = await client.PostAsJsonAsync("/api/editor/serialize-yaml", new
+        {
+            document,
+            availableStepTypes = new[] { "assign" },
+        });
+
+        var body = await secondResponse.Content.ReadAsStringAsync();
+        secondResponse.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        body.Should().Contain("target: result");
+        body.Should().Contain("value: $input");
+        body.Should().NotContain("target: {}");
+        body.Should().NotContain("value: {}");
     }
 
     [Theory]

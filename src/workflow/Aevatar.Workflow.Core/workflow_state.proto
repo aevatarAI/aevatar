@@ -162,6 +162,8 @@ message WorkflowRunState
   string dead_letter_failed_compensation_step_id = 29;
   int32 dead_letter_remaining_uncompensated = 30;
   string dead_letter_error = 31;
+  string compensation_origin_failed_step_id = 32;
+  bool terminal_workflow_completion_recorded = 33;
 }
 
 message WorkflowRunExecutionContextState
@@ -312,6 +314,8 @@ message WorkflowExecutionKernelState
   repeated WorkflowFileRef current_step_input_file_refs = 14;
   map<string, WorkflowStepIdempotencyState> idempotency_by_step_id = 15;
   map<string, string> compensation_execution_ids_by_step_id = 16;
+  WorkflowRuntimeCallbackLeaseState compensation_phase_deadline_lease = 17;
+  string compensation_phase_deadline_callback_id = 18;
 }
 
 message WorkflowUsageMetricsState
@@ -674,10 +678,11 @@ message BackpressureQueueState
 
 message CompletedStepLedgerEntry
 {
+  reserved 5;
+  reserved "committed_at_unix_ms";
   string step_id = 1;
   string compensation_step_id = 2;
   string idempotency_key = 3;
   string captured_output = 4;
-  int64 committed_at_unix_ms = 5;
   CompensableLedgerEntryStatus ledger_status = 6;
 }
