@@ -1,0 +1,428 @@
+openapi: 3.1.0
+info:
+  title: Approval Quota Ledger Connected-Service Profile
+  version: 0.1.0
+  description: >
+    External quota ledger profile for approval workflows. The ledger authority is
+    an external backend or a channel-native account system; Aevatar consumes this
+    contract through NyxID proxy or connected-service tools and does not own the
+    balance facts.
+servers:
+  - url: https://quota-ledger.example.com
+    description: Placeholder external ledger origin registered behind NyxID.
+tags:
+  - name: balances
+    description: Quota balance lookup and reservation operations.
+paths:
+  /balances:
+    get:
+      tags:
+        - balances
+      operationId: listQuotaBalances
+      summary: List quota balances for a subject.
+      description: >
+        Returns the external ledger's current balance facts for one subject.
+        This operation is read-only and must not reserve, deduct, or release
+        quota.
+      x-aevatar-tool:
+        enabled: true
+        name: quota_list_balances
+        readOnly: true
+        destructive: false
+        approval: auto
+      parameters:
+        - $ref: '#/components/parameters/SubjectId'
+        - $ref: '#/components/parameters/QuotaType'
+        - $ref: '#/components/parameters/Unit'
+      responses:
+        '200':
+          description: Current balances for the requested subject.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BalanceListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /balances/reserve:
+    post:
+      tags:
+        - balances
+      operationId: reserveQuota
+      summary: Reserve quota before an approval side effect.
+      description: >
+        Places a temporary hold against available quota. The same
+        idempotency_key must return the same reservation result.
+      x-aevatar-tool:
+        enabled: true
+        name: quota_reserve
+        readOnly: false
+        destructive: false
+        approval: always
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReserveQuotaRequest'
+      responses:
+        '200':
+          description: Existing reservation returned for a repeated idempotency key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReserveQuotaResponse'
+        '201':
+          description: New reservation created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReserveQuotaResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /balances/deduct:
+    post:
+      tags:
+        - balances
+      operationId: deductReservedQuota
+      summary: Convert a reservation into a final quota deduction.
+      description: >
+        Finalizes a previously reserved amount after the business approval has
+        completed. The same idempotency_key must return the same transaction
+        result.
+      x-aevatar-tool:
+        enabled: true
+        name: quota_deduct
+        readOnly: false
+        destructive: true
+        approval: always
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeductQuotaRequest'
+      responses:
+        '200':
+          description: Existing or newly finalized deduction.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeductQuotaResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /balances/release:
+    post:
+      tags:
+        - balances
+      operationId: releaseReservedQuota
+      summary: Release a reservation that will not be deducted.
+      description: >
+        Releases a previously reserved amount when approval is rejected,
+        cancelled, expired, or fails before the final deduction.
+      x-aevatar-tool:
+        enabled: true
+        name: quota_release
+        readOnly: false
+        destructive: false
+        approval: always
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReleaseQuotaRequest'
+      responses:
+        '200':
+          description: Existing or newly released reservation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReleaseQuotaResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+components:
+  parameters:
+    SubjectId:
+      name: subject_id
+      in: query
+      required: true
+      description: External ledger subject, such as an employee, account, or channel user id.
+      schema:
+        $ref: '#/components/schemas/SubjectId'
+    QuotaType:
+      name: quota_type
+      in: query
+      required: false
+      description: Optional quota bucket filter.
+      schema:
+        $ref: '#/components/schemas/QuotaType'
+    Unit:
+      name: unit
+      in: query
+      required: false
+      description: Optional unit filter.
+      schema:
+        $ref: '#/components/schemas/QuotaUnit'
+  responses:
+    BadRequest:
+      description: The request is malformed or violates the ledger contract.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: The external ledger rejected the credential supplied by NyxID.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: The requested subject or reservation was not found.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Conflict:
+      description: The operation conflicts with current ledger state.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+  schemas:
+    SubjectId:
+      type: string
+      minLength: 1
+      maxLength: 256
+      description: Stable subject identifier in the external ledger.
+      examples:
+        - employee:12345
+    QuotaType:
+      type: string
+      minLength: 1
+      maxLength: 128
+      pattern: '^[A-Za-z0-9._:-]+$'
+      description: Ledger-owned quota bucket name.
+      examples:
+        - annual_leave
+    QuotaUnit:
+      type: string
+      minLength: 1
+      maxLength: 64
+      pattern: '^[A-Za-z0-9._:-]+$'
+      description: Unit used by the ledger for this quota bucket.
+      examples:
+        - day
+        - hour
+    Amount:
+      type: number
+      format: double
+      minimum: 0
+      description: Non-negative quota amount in the declared unit.
+      examples:
+        - 1
+        - 0.5
+    IdempotencyKey:
+      type: string
+      minLength: 8
+      maxLength: 256
+      description: Caller-supplied stable key for one logical reserve, deduct, or release action.
+      examples:
+        - approval-run-123-step-reserve
+    ReservationId:
+      type: string
+      minLength: 1
+      maxLength: 256
+      description: Ledger-issued reservation identifier.
+      examples:
+        - rsv_12345
+    LedgerTransactionId:
+      type: string
+      minLength: 1
+      maxLength: 256
+      description: Ledger-issued transaction identifier for a finalized mutation.
+      examples:
+        - txn_12345
+    Timestamp:
+      type: string
+      format: date-time
+      description: RFC 3339 timestamp from the external ledger.
+    Balance:
+      type: object
+      additionalProperties: false
+      required:
+        - subject_id
+        - quota_type
+        - unit
+        - available
+        - effective_at
+      properties:
+        subject_id:
+          $ref: '#/components/schemas/SubjectId'
+        quota_type:
+          $ref: '#/components/schemas/QuotaType'
+        unit:
+          $ref: '#/components/schemas/QuotaUnit'
+        available:
+          $ref: '#/components/schemas/Amount'
+        effective_at:
+          $ref: '#/components/schemas/Timestamp'
+    BalanceListResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - balances
+        - effective_at
+      properties:
+        balances:
+          type: array
+          minItems: 0
+          items:
+            $ref: '#/components/schemas/Balance'
+        effective_at:
+          $ref: '#/components/schemas/Timestamp'
+    ReserveQuotaRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - subject_id
+        - quota_type
+        - unit
+        - amount
+        - idempotency_key
+        - expires_at
+      properties:
+        subject_id:
+          $ref: '#/components/schemas/SubjectId'
+        quota_type:
+          $ref: '#/components/schemas/QuotaType'
+        unit:
+          $ref: '#/components/schemas/QuotaUnit'
+        amount:
+          $ref: '#/components/schemas/Amount'
+        idempotency_key:
+          $ref: '#/components/schemas/IdempotencyKey'
+        expires_at:
+          $ref: '#/components/schemas/Timestamp'
+    ReserveQuotaResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - subject_id
+        - quota_type
+        - unit
+        - amount
+        - reservation_id
+        - available
+        - effective_at
+        - expires_at
+      properties:
+        subject_id:
+          $ref: '#/components/schemas/SubjectId'
+        quota_type:
+          $ref: '#/components/schemas/QuotaType'
+        unit:
+          $ref: '#/components/schemas/QuotaUnit'
+        amount:
+          $ref: '#/components/schemas/Amount'
+        reservation_id:
+          $ref: '#/components/schemas/ReservationId'
+        available:
+          $ref: '#/components/schemas/Amount'
+        effective_at:
+          $ref: '#/components/schemas/Timestamp'
+        expires_at:
+          $ref: '#/components/schemas/Timestamp'
+    DeductQuotaRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - reservation_id
+        - amount
+        - idempotency_key
+      properties:
+        reservation_id:
+          $ref: '#/components/schemas/ReservationId'
+        amount:
+          $ref: '#/components/schemas/Amount'
+        idempotency_key:
+          $ref: '#/components/schemas/IdempotencyKey'
+    DeductQuotaResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - reservation_id
+        - amount
+        - ledger_transaction_id
+        - effective_at
+      properties:
+        reservation_id:
+          $ref: '#/components/schemas/ReservationId'
+        amount:
+          $ref: '#/components/schemas/Amount'
+        ledger_transaction_id:
+          $ref: '#/components/schemas/LedgerTransactionId'
+        effective_at:
+          $ref: '#/components/schemas/Timestamp'
+    ReleaseQuotaRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - reservation_id
+        - idempotency_key
+      properties:
+        reservation_id:
+          $ref: '#/components/schemas/ReservationId'
+        idempotency_key:
+          $ref: '#/components/schemas/IdempotencyKey'
+    ReleaseQuotaResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - reservation_id
+        - amount
+        - ledger_transaction_id
+        - effective_at
+      properties:
+        reservation_id:
+          $ref: '#/components/schemas/ReservationId'
+        amount:
+          $ref: '#/components/schemas/Amount'
+        ledger_transaction_id:
+          $ref: '#/components/schemas/LedgerTransactionId'
+        effective_at:
+          $ref: '#/components/schemas/Timestamp'
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          minLength: 1
+          maxLength: 128
+        message:
+          type: string
+          minLength: 1
+          maxLength: 1024
