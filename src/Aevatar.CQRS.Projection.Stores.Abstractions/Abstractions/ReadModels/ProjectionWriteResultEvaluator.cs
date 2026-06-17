@@ -28,9 +28,6 @@ public static class ProjectionWriteResultEvaluator
                 : ProjectionWriteResult.Conflict();
         }
 
-        if (incoming.StateVersion > existing.StateVersion + 1)
-            return ProjectionWriteResult.Gap();
-
         return ProjectionWriteResult.Applied();
     }
 }
