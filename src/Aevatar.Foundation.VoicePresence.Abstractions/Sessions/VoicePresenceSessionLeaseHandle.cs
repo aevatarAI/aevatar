@@ -12,4 +12,5 @@ public sealed record VoicePresenceSessionLeaseHandle(
     DateTimeOffset ExpiresAtUtc,
     VoiceRemoteAudioSupport RemoteAudioSupport,
     string? ActiveTransportLeaseId = null,
-    long LeaseEpoch = 0);
+    long LeaseEpoch = 0,
+    VoiceToolExecutionContext? ToolContext = null);

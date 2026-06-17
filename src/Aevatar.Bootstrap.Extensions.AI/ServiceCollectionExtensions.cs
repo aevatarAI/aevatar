@@ -10,6 +10,7 @@ using Aevatar.AI.LLMProviders.MEAI;
 using Aevatar.AI.LLMProviders.NyxId;
 using Aevatar.AI.LLMProviders.Tornado;
 using Aevatar.AI.ToolProviders.MCP;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Ornn;
 using Aevatar.AI.ToolProviders.Scripting;
 using Aevatar.AI.ToolProviders.ServiceInvoke;
@@ -33,6 +34,7 @@ using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Foundation.VoicePresence;
@@ -109,8 +111,14 @@ public static class ServiceCollectionExtensions
         // actors that implement the pending-approval continuation (RoleGAgent wires its
         // own). Surfaces without that capability fall back to MissingApprovalHandler and
         // fail closed instead of stranding a dead-letter approval (#2004).
-        services.TryAddSingleton<IVoiceToolInvoker, AgentToolVoiceInvoker>();
-        services.TryAddSingleton<IVoiceToolCatalog, AgentToolVoiceCatalog>();
+        services.TryAddSingleton<IVoiceToolInvoker>(sp => new AgentToolVoiceInvoker(
+            sp.GetServices<IAgentToolSource>(),
+            ResolveVoiceCredentialProviders(sp),
+            sp.GetService<ILogger<AgentToolVoiceInvoker>>()));
+        services.TryAddSingleton<IVoiceToolCatalog>(sp => new AgentToolVoiceCatalog(
+            sp.GetServices<IAgentToolSource>(),
+            ResolveVoiceCredentialProviders(sp),
+            sp.GetService<ILogger<AgentToolVoiceCatalog>>()));
         services.TryAddSingleton<IVoicePresenceCapabilityCommandPort, VoicePresenceCapabilityCommandPort>();
         services.TryAddSingleton<IWorkflowYamlValidator, WorkflowYamlValidatorImpl>();
         services.TryAddSingleton<IWorkflowDefinitionCommandAdapter>(sp =>
@@ -172,15 +180,21 @@ public static class ServiceCollectionExtensions
         if (nyxIdRealtimeCredentialOptions.Enabled)
         {
             services.TryAddSingleton(nyxIdRealtimeCredentialOptions);
-            services.TryAddSingleton<IRealtimeProviderCredentialResolver, NyxIdRealtimeProviderCredentialResolver>();
+            services.TryAddSingleton<IRealtimeProviderCredentialResolver>(sp => new NyxIdRealtimeProviderCredentialResolver(
+                sp.GetRequiredService<INyxIdApiClientFactory>(),
+                sp.GetRequiredService<NyxIdRealtimeProviderCredentialOptions>(),
+                sp.GetRequiredService<ILogger<NyxIdRealtimeProviderCredentialResolver>>(),
+                ResolveVoiceCredentialProviders(sp)));
         }
 
         services.TryAddSingleton<IVoicePresenceCapabilityQueryPort, VoicePresenceCapabilityQueryPort>();
         services.TryAddSingleton<IVoicePresenceLeaseObservationPort, VoicePresenceLeaseObservationPort>();
         services.TryAddSingleton<IVoicePresenceSessionLeasePort, VoicePresenceSessionLeasePort>();
         services.TryAddSingleton<IVoicePresenceTransportAttachmentPort, VoicePresenceTransportAttachmentPort>();
+        services.TryAddSingleton(sp => new VoiceVolatileToolCredentialPort(sp.GetService<TimeProvider>()));
+        services.TryAddSingleton<IVoiceVolatileToolCredentialPort>(sp => sp.GetRequiredService<VoiceVolatileToolCredentialPort>());
+        services.TryAddSingleton<IVoiceToolCredentialIssuer>(sp => sp.GetRequiredService<VoiceVolatileToolCredentialPort>());
         services.TryAddSingleton<IVoiceVolatileMediaStreamPort, VoiceVolatileMediaStreamPort>();
-        services.TryAddSingleton<IVoiceSessionCredentialStore, VoiceVolatileSessionCredentialStore>();
         services.TryAddSingleton<IRealtimeSession<VoiceRealtimeSessionRequest, VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeFrame, VoiceRealtimeSessionCompletion>, ActorOwnedVoiceRealtimeSession>();
         services.AddVoicePresenceCapabilityProjection();
         services.AddVoicePresenceCapabilityProjectionStore(configuration);
@@ -188,6 +202,22 @@ public static class ServiceCollectionExtensions
             ServiceDescriptor.Singleton<IEventModuleFactory<IEventHandlerContext>, VoicePresenceModuleFactory>());
         foreach (var registration in registrations)
             services.AddSingleton(registration);
+    }
+
+    private static IReadOnlyList<ICredentialProvider> ResolveVoiceCredentialProviders(IServiceProvider services)
+    {
+        var providers = new List<ICredentialProvider>();
+        var voiceCredentialProvider = services.GetService<IVoiceToolCredentialIssuer>() as ICredentialProvider;
+        if (voiceCredentialProvider is not null)
+            providers.Add(voiceCredentialProvider);
+
+        foreach (var provider in services.GetServices<ICredentialProvider>())
+        {
+            if (!ReferenceEquals(provider, voiceCredentialProvider))
+                providers.Add(provider);
+        }
+
+        return providers;
     }
 
     private static IServiceCollection AddVoicePresenceCapabilityProjectionStore(
@@ -323,7 +353,8 @@ public static class ServiceCollectionExtensions
                 handle.LeaseEpoch,
                 Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(handle.ExpiresAtUtc.ToUniversalTime()),
                 handle.ActorId,
-                handle.ModuleName),
+                handle.ModuleName,
+                handle.ToolContext?.Clone()),
             providerConfig,
             eventSink,
             audioSink,
@@ -349,7 +380,7 @@ public static class ServiceCollectionExtensions
                 .Where(static name => !string.IsNullOrWhiteSpace(name)),
             StringComparer.OrdinalIgnoreCase);
 
-        foreach (var discoveredTool in await toolCatalog.DiscoverAsync(ct))
+        foreach (var discoveredTool in await toolCatalog.DiscoverAsync(toolContext: null, ct: ct))
         {
             var toolName = discoveredTool.Name?.Trim();
             if (string.IsNullOrWhiteSpace(toolName) || !knownNames.Add(toolName))

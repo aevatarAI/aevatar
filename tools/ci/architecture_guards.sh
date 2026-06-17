@@ -121,6 +121,49 @@ check_channel_inbound_no_runtime_credential() {
 
 check_channel_inbound_no_runtime_credential
 
+check_voice_tool_credential_ref_boundary() {
+  local report
+
+  set +e
+  report="$(
+    rg -n "IVoiceSessionCredentialStore|VoiceVolatileSessionCredentialStore|VoiceCallerCredentialScope|google\.protobuf\.Any[[:space:]]+tool_context" \
+      src test docs \
+      -g '!**/bin/**' \
+      -g '!**/obj/**' \
+      -g '!*.g.cs' \
+      -g '!*.Designer.cs' \
+      | awk -F: '
+{
+  file = $1;
+  line_no = $2;
+  text = substr($0, length(file) + length(line_no) + 3);
+
+  if (file == "tools/ci/architecture_guards.sh")
+    next;
+
+  if (text ~ /ShouldNotContain\("nyx_id_access_token"\)/)
+    next;
+
+  print $0;
+}'
+  )"
+  local status=$?
+  set -e
+
+  if [[ ${status} -ne 0 && ${status} -ne 1 ]]; then
+    echo "Voice tool credential boundary guard execution failed."
+    exit "${status}"
+  fi
+
+  if [ -n "${report}" ]; then
+    echo "${report}"
+    echo "Voice tool caller credentials must use typed VoiceToolExecutionContext. Process-local session token stores, VoiceCallerCredentialScope, and raw-bearing Any tool_context are forbidden."
+    exit 1
+  fi
+}
+
+check_voice_tool_credential_ref_boundary
+
 check_workflow_core_interaction_boundary() {
   local workflow_core_dir="src/workflow/Aevatar.Workflow.Core"
   local report
