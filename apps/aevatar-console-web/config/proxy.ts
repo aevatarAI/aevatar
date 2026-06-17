@@ -70,6 +70,8 @@ const studioScopeProxyEntries = {
     buildProxyTarget(studioApiTarget),
   '^/api/scopes/[^/]+/scripts/draft-run$':
     buildProxyTarget(studioApiTarget),
+  '^/api/scopes/[^/]+/workflow/draft-run$':
+    buildProxyTarget(studioApiTarget),
   '^/api/scripts/validate$': buildProxyTarget(studioApiTarget),
   '^/api/scripts/generator$': buildProxyTarget(studioApiTarget),
   '^/api/workflows/generator$': buildProxyTarget(studioApiTarget),

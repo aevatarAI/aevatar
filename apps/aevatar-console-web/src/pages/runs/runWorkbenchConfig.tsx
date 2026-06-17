@@ -904,7 +904,12 @@ export function describeRunReturnTarget(returnTo?: string | null): string {
   }
 
   const pathname = normalized.split("#")[0].split("?")[0];
-  if (pathname === "/teams" || pathname.startsWith("/teams/")) {
+  if (
+    pathname === "/teams" ||
+    pathname.startsWith("/teams/") ||
+    pathname === "/scopes" ||
+    /^\/scopes\/[^/]+\/teams(?:\/|$)/.test(pathname)
+  ) {
     return t("pages.runs.runworkbenchconfig.copy.2", "Back to advanced team editing");
   }
 

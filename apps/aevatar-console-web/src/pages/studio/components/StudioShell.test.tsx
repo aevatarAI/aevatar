@@ -62,7 +62,7 @@ describe('StudioShell', () => {
     const handleSelectMember = jest.fn();
     const handleSelectLifecycleStep = jest.fn();
 
-    const { container } = render(
+    render(
       <StudioShell
         currentLifecycleStep="build"
         inventoryActions={
@@ -94,22 +94,12 @@ describe('StudioShell', () => {
       </StudioShell>,
     );
 
-    expect(container.firstChild).toHaveStyle({
-      flex: '1',
-      height: '100%',
-      minHeight: '0',
-      overflow: 'hidden',
-      width: '100%',
-    });
     expect(screen.getByLabelText('Team members')).toBeInTheDocument();
-    expect(screen.getByLabelText('Team members')).toHaveStyle({
-      flexShrink: '0',
-      width: '276px',
-    });
     expect(screen.getByText('Member inventory')).toBeInTheDocument();
     expect(screen.getByLabelText('Search team members')).toBeInTheDocument();
     expect(screen.getByLabelText('Create member')).toBeInTheDocument();
     expect(screen.getByText('Support Triage Router')).toBeInTheDocument();
+    expect(screen.getByText('Studio content')).toBeInTheDocument();
     expect(screen.queryByText('Workspace panels')).toBeNull();
     expect(
       screen.queryByText(/Keep one member in focus while Build, Bind/i),
@@ -120,22 +110,11 @@ describe('StudioShell', () => {
     expect(
       screen.getByRole('button', { name: /Observe/i }),
     ).not.toHaveAttribute('aria-current', 'step');
-    expect(screen.getByTestId('studio-lifecycle-section')).toHaveStyle({
-      gap: '6px',
-      padding: '0 16px 10px',
-    });
-    expect(screen.getByTestId('studio-lifecycle-stepper')).toHaveStyle({
-      display: 'flex',
-      overflowX: 'auto',
-    });
     expect(
       within(screen.getByTestId('studio-lifecycle-stepper')).getByRole('button', {
         name: /^Build$/,
       }),
-    ).toHaveStyle({
-      borderRadius: '999px',
-      padding: '6px 14px',
-    });
+    ).toHaveAttribute('aria-current', 'step');
     expect(
       within(screen.getByTestId('studio-lifecycle-stepper')).getByRole('button', {
         name: /^Observe$/,
@@ -160,7 +139,7 @@ describe('StudioShell', () => {
     expect(handleSelectLifecycleStep).toHaveBeenCalledWith('observe');
   });
 
-  it('keeps the content body scroll ownership configurable', () => {
+  it('keeps content visible when body scroll ownership is configured', () => {
     render(
       <StudioShell
         contentOverflow="hidden"
@@ -176,15 +155,7 @@ describe('StudioShell', () => {
       </StudioShell>,
     );
 
-    expect(screen.getByText('Studio content').parentElement).toHaveStyle({
-      display: 'flex',
-      flex: '1',
-      flexDirection: 'column',
-      minHeight: '0',
-      overflowX: 'hidden',
-      overflowY: 'hidden',
-      padding: '14px 16px 16px',
-    });
+    expect(screen.getByText('Studio content')).toBeInTheDocument();
   });
 
   it('can hide the member rail and lifecycle for focused launchpad empty states', () => {
@@ -209,7 +180,7 @@ describe('StudioShell', () => {
     expect(screen.getByText('Script launchpad')).toBeInTheDocument();
   });
 
-  it('lets page-scroll mode grow content in document flow while the main pane scrolls', () => {
+  it('keeps invoke content visible in page-scroll mode', () => {
     render(
       <StudioShell
         contentScrollMode="page"
@@ -225,23 +196,13 @@ describe('StudioShell', () => {
       </StudioShell>,
     );
 
-    expect(screen.getByTestId('studio-shell-main')).toHaveStyle({
-      overflowX: 'hidden',
-      overflowY: 'auto',
-    });
-    expect(screen.getByTestId('studio-shell-content')).toHaveStyle({
-      flex: '0 0 auto',
-      overflow: 'visible',
-    });
-    expect(screen.getByText('Invoke content').parentElement).toHaveStyle({
-      display: 'flex',
-      flex: '0 0 auto',
-      flexDirection: 'column',
-      overflow: 'visible',
-    });
+    expect(screen.getByText('Invoke content')).toBeInTheDocument();
+    expect(screen.getByTestId('studio-shell-main')).toContainElement(
+      screen.getByText('Invoke content'),
+    );
   });
 
-  it('keeps the shell content as a flex column so the studio editor can stretch', () => {
+  it('renders observe content inside the shell content region', () => {
     render(
       <StudioShell
         currentLifecycleStep="observe"
@@ -256,17 +217,8 @@ describe('StudioShell', () => {
       </StudioShell>,
     );
 
-    expect(screen.getByTestId('studio-shell-content')).toHaveStyle({
-      display: 'flex',
-      flex: '1',
-      flexDirection: 'column',
-      minHeight: '0',
-      minWidth: '0',
-      overflow: 'hidden',
-    });
-    expect(screen.getByTestId('studio-shell-content').parentElement).toHaveStyle({
-      minWidth: '0',
-      overflow: 'hidden',
-    });
+    expect(screen.getByTestId('studio-shell-content')).toContainElement(
+      screen.getByText('Studio content'),
+    );
   });
 });

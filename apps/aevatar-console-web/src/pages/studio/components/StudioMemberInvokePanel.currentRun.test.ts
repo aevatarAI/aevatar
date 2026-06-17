@@ -100,7 +100,7 @@ describe('StudioMemberInvokePanel current run model', () => {
         status: 'success',
       }),
     ).toBe(
-      'This run is ready for Observe. Switch to Observe to inspect backend events, audit frames, and the runtime trail for this member.',
+      'This run is ready for Observe. Switch to Observe when you need backend events, audit frames, or the runtime trail for this member.',
     );
     expect(
       getStudioInvokeObserveHandoffText({
@@ -109,7 +109,7 @@ describe('StudioMemberInvokePanel current run model', () => {
         status: 'running',
       }),
     ).toBe(
-      'Observe will follow the latest run context after backend events arrive. Keep Invoke open while this stream updates.',
+      'Observe will follow the latest run context after backend events arrive. Keep this page open while the response updates.',
     );
     expect(
       getStudioInvokeObserveHandoffText({
@@ -137,7 +137,7 @@ describe('StudioMemberInvokePanel current run model', () => {
         status: 'success',
       }),
     ).toBe(
-      'Invoke receipt was captured. Switch to Observe to watch backend events and read-model materialization catch up for this member.',
+      'The workflow run was accepted. Switch to Observe to watch backend events and read-model materialization catch up for this member.',
     );
   });
 });

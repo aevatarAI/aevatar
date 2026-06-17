@@ -8,16 +8,19 @@ import {
 } from "@/shared/agui/runtimeEventSemantics";
 import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
+import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { formatCompactDateTime } from "@/shared/datetime/dateTime";
 import {
   getLocationSnapshot,
   history,
   subscribeToLocationChanges,
 } from "@/shared/navigation/history";
-import { buildScopeHref } from "@/shared/navigation/scopeRoutes";
+import { buildTeamWorkspaceRoute } from "@/shared/navigation/scopeRoutes";
 import {
   buildTeamDetailHref,
-  buildTeamStudioHref,
+  buildTeamMemberAutomationsHref,
+  buildTeamMemberInvokeHref,
+  buildTeamMemberWorkflowStudioHref,
   readTeamDetailRouteState,
   type TeamDetailTab,
 } from "@/shared/navigation/teamRoutes";
@@ -25,8 +28,7 @@ import { isStudioApiStatus, studioApi } from "@/shared/studio/api";
 import {
   formatStudioMemberLifecycleStage,
 } from "@/shared/studio/models";
-import type { StudioTeamSummary } from "@/shared/studio/models";
-import { AevatarCompactText } from "@/shared/ui/compactText";
+import type { StudioMemberRoster, StudioTeamSummary } from "@/shared/studio/models";
 import { describeError } from "@/shared/ui/errorText";
 import {
   TeamActionRail,
@@ -45,6 +47,7 @@ import {
   type TeamTestErrorDescription,
 } from "./components/teamTestErrors";
 import TeamMembersTab from "./tabs/TeamMembersTab";
+import TeamAutomationsTab from "./tabs/TeamAutomationsTab";
 import TeamOverviewTab from "./tabs/TeamOverviewTab";
 import { resolveWorkflowOperationalUnit } from "./workflowOperationalUnits";
 import { useTeamRuntimeLens } from "./runtime/useTeamRuntimeLens";
@@ -131,33 +134,16 @@ function resolveTeamHeading(input: {
   };
 }
 
-function compactId(value: string | null | undefined): string {
-  const normalized = trimText(value);
-  if (!normalized) {
-    return "n/a";
-  }
-
-  const segment = normalized.split("/").pop() || normalized;
-  const compacted = segment.split(":").pop() || segment;
-  return compacted.length > 24
-    ? `${compacted.slice(0, 12)}…${compacted.slice(-8)}`
-    : compacted;
-}
-
-function compactOptionalId(value: string | null | undefined): string {
-  const normalized = trimText(value);
-  if (!normalized || normalized === "--") {
-    return "--";
-  }
-
-  return compactId(normalized);
-}
-
 function formatTeamTabLabel(
   tab: TeamDetailTab,
   intl: ReturnType<typeof useIntl>,
 ): string {
   switch (tab) {
+    case "automations":
+      return intl.formatMessage({
+        defaultMessage: "Automations",
+        id: "teams.detail.tabs.automations",
+      });
     case "members":
       return intl.formatMessage({ id: "teams.detail.tabs.members" });
     default:
@@ -404,7 +390,7 @@ const TeamDetailPage: React.FC = () => {
     hasTeamIdentity && cachedTeamSummary?.teamId === selectedTeamId,
   );
   const teamsListHref = React.useMemo(
-    () => buildScopeHref("/teams", { scopeId }),
+    () => buildTeamWorkspaceRoute(scopeId),
     [scopeId],
   );
   const [preferredMemberId, setPreferredMemberId] = React.useState(routeState.memberId);
@@ -502,16 +488,38 @@ const TeamDetailPage: React.FC = () => {
     ((teamMembersQuery.failureCount > 0 &&
       isProjectionSyncing404(teamMembersQuery.failureReason)) ||
       (teamMembersQuery.isError && isProjectionSyncing404(teamMembersQuery.error)));
-  const teamMemberServiceIds = React.useMemo(
-    () =>
-      (teamMembersQuery.data?.members ?? [])
+  const teamRuntimeServiceIds = React.useMemo(() => {
+    if (activeTab !== "overview") {
+      return [];
+    }
+
+    const members = teamMembersQuery.data?.members ?? [];
+    const entryMemberId = trimText(teamSummaryQuery.data?.entryMemberId);
+    if (entryMemberId) {
+      const entryMember = members.find(
+        (member) => trimText(member.memberId) === entryMemberId,
+      );
+      const entryServiceId = trimText(entryMember?.publishedServiceId);
+      return entryServiceId ? [entryServiceId] : [];
+    }
+
+    if (teamSummaryQuery.isError) {
+      return members
         .map((member) => trimText(member.publishedServiceId))
-        .filter(Boolean),
-    [teamMembersQuery.data?.members],
-  );
+        .filter(Boolean);
+    }
+
+    return [];
+  }, [
+    activeTab,
+    teamMembersQuery.data?.members,
+    teamSummaryQuery.data?.entryMemberId,
+    teamSummaryQuery.isError,
+  ]);
   const hasExplicitRuntimeFocus = Boolean(
     trimText(preferredMemberId) || trimText(preferredServiceId) || trimText(preferredRunId),
   );
+  const shouldLoadTeamRuntimeLens = hasTeamIdentity && activeTab === "overview";
   const {
     lens,
     runsQuery,
@@ -521,12 +529,48 @@ const TeamDetailPage: React.FC = () => {
     workflowsQuery,
   } = useTeamRuntimeLens(scopeId, {
     allowScopeServiceFallback: false,
-    enabled: hasTeamIdentity,
+    enabled: shouldLoadTeamRuntimeLens,
     preferredMemberId,
     preferredRunId,
     preferredServiceId,
-    teamMemberServiceIds,
+    teamMemberServiceIds: teamRuntimeServiceIds,
   });
+  const automationsServicesQuery = useQuery({
+    enabled: hasTeamIdentity && activeTab === "automations",
+    queryFn: () =>
+      scopeRuntimeApi.listServices(scopeId, {
+        appId: "default",
+      }),
+    queryKey: ["teams", "services", scopeId],
+    retry: false,
+  });
+  const automationServiceRuntimeByServiceId = React.useMemo(() => {
+    const services =
+      activeTab === "automations"
+        ? automationsServicesQuery.data ?? servicesQuery.data ?? []
+        : servicesQuery.data ?? [];
+    return new Map(
+      services
+        .map((service) => [
+          trimText(service.serviceId),
+          {
+            activeServingRevisionId: service.activeServingRevisionId,
+            defaultServingRevisionId: service.defaultServingRevisionId,
+            identity: {
+              appId: service.appId,
+              namespace: service.namespace,
+              serviceId: service.serviceId,
+              tenantId: service.tenantId,
+            },
+          },
+        ] as const)
+        .filter(([serviceId]) => serviceId.length > 0),
+    );
+  }, [
+    activeTab,
+    automationsServicesQuery.data,
+    servicesQuery.data,
+  ]);
 
   React.useEffect(() => {
     if (!teamEditorOpen || !teamSummaryQuery.data) {
@@ -688,40 +732,9 @@ const TeamDetailPage: React.FC = () => {
     ? formatTeamLifecycleLabel(teamSummaryQuery.data.lifecycleStage)
     : "";
   const teamSummaryDescription = trimText(teamSummaryQuery.data?.description);
-  const teamMetaScopeId = teamHeading.metaScopeId || (selectedTeamId ? scopeId : "");
   const teamTitleMeta =
-    selectedTeamId || teamMetaScopeId || teamSummaryQuery.data ? (
+    teamSummaryQuery.data || teamSummaryDescription ? (
       <Space size={[10, 6]} wrap>
-        {selectedTeamId ? (
-          <Space size={6} wrap>
-            <span style={{ textTransform: "none" }}>
-              {intl.formatMessage({ id: "teams.detail.meta.teamId" })}
-            </span>
-            <AevatarCompactText
-              color="inherit"
-              head={8}
-              maxWidth={320}
-              monospace
-              tail={6}
-              value={selectedTeamId}
-            />
-          </Space>
-        ) : null}
-        {teamMetaScopeId ? (
-          <Space size={6} wrap>
-            <span style={{ textTransform: "none" }}>
-              {intl.formatMessage({ id: "teams.detail.meta.scopeId" })}
-            </span>
-            <AevatarCompactText
-              color="inherit"
-              head={8}
-              maxWidth={320}
-              monospace
-              tail={6}
-              value={teamMetaScopeId}
-            />
-          </Space>
-        ) : null}
         {teamSummaryQuery.data ? (
           <span>
             {intl.formatMessage(
@@ -756,57 +769,99 @@ const TeamDetailPage: React.FC = () => {
     [entryMemberId, teamMembersQuery.data?.members],
   );
   const entryMemberLabel =
-    trimText(entryMemberSummary?.displayName) || entryMemberId;
+    trimText(entryMemberSummary?.displayName) ||
+    (entryMemberId
+      ? intl.formatMessage({ id: "teams.members.unnamed" })
+      : "");
   const teamRosterRows = React.useMemo(
     () =>
-      (teamMembersQuery.data?.members ?? []).map((member) => ({
-        buildStudioHref: buildTeamStudioHref({
-          memberId: member.memberId,
-          mode: "build-member",
-          returnTo: buildTeamReturnHref(member.memberId),
-          scopeId,
-          teamId: selectedTeamId,
-        }),
-        description: trimText(member.description),
-        canInvokeAsEntry:
+      (teamMembersQuery.data?.members ?? []).map((member) => {
+        const isWorkflowMember =
+          trimText(member.implementationKind).toLowerCase() === "workflow";
+        const publishedServiceId = trimText(member.publishedServiceId);
+        const isBoundMember =
           normalizeStatus(member.lifecycleStage) === "bind_ready" &&
-          trimText(member.publishedServiceId).length > 0,
-        editStudioHref: buildTeamStudioHref({
+          publishedServiceId.length > 0;
+        const automationServiceRuntime =
+          automationServiceRuntimeByServiceId.get(publishedServiceId);
+        const memberDraftWorkflowId =
+          trimText(member.implementationRef?.implementationKind).toLowerCase() ===
+          "workflow"
+            ? trimText(member.implementationRef?.workflowId)
+            : "";
+        const workflowStudioHref = buildTeamMemberWorkflowStudioHref({
           memberId: member.memberId,
           mode: "edit-member",
-          returnTo: buildTeamReturnHref(member.memberId),
           scopeId,
           teamId: selectedTeamId,
-        }),
-        implementationKind: formatCompositionKind(member.implementationKind),
-        key: member.memberId,
-        lifecycleLabel: formatStudioMemberLifecycleStage(member.lifecycleStage),
-        lifecycleStyle: resolveStatusPillStyle(token, member.lifecycleStage),
-        isEntryMember: trimText(member.memberId) === entryMemberId,
-        isSelectedMember: trimText(member.memberId) === selectedRosterMemberId,
-        memberId: member.memberId,
-        name: trimText(member.displayName) || member.memberId,
-        serviceId: trimText(member.publishedServiceId) || "--",
-      })),
+          workflowId: memberDraftWorkflowId || undefined,
+        });
+        const memberInvokeHref = buildTeamMemberInvokeHref({
+          memberId: member.memberId,
+          scopeId,
+          teamId: selectedTeamId,
+        });
+        const memberAutomationsHref = buildTeamMemberAutomationsHref({
+          memberId: member.memberId,
+          scopeId,
+          teamId: selectedTeamId,
+        });
+
+        return {
+          buildStudioHref: isWorkflowMember ? workflowStudioHref : "",
+          description: trimText(member.description),
+          canInvokeAsEntry: isBoundMember,
+          canInvokeMember: isWorkflowMember && isBoundMember,
+          canSetAsEntry: Boolean(trimText(member.memberId)),
+          editStudioHref: isWorkflowMember ? workflowStudioHref : "",
+          automationsHref: memberAutomationsHref,
+          implementationKind: formatCompositionKind(member.implementationKind),
+          invokeHref: isWorkflowMember ? memberInvokeHref : "",
+          isServiceBound: isBoundMember,
+          key: member.memberId,
+          lifecycleLabel: formatStudioMemberLifecycleStage(member.lifecycleStage),
+          lifecycleStyle: resolveStatusPillStyle(token, member.lifecycleStage),
+          isEntryMember: trimText(member.memberId) === entryMemberId,
+          isSelectedMember: trimText(member.memberId) === selectedRosterMemberId,
+          memberId: member.memberId,
+          name:
+            trimText(member.displayName) ||
+            intl.formatMessage({ id: "teams.members.unnamed" }),
+          serviceId: publishedServiceId || "--",
+          serviceIdentity: automationServiceRuntime?.identity,
+          serviceRevisionId:
+            trimText(automationServiceRuntime?.activeServingRevisionId) ||
+            trimText(automationServiceRuntime?.defaultServingRevisionId),
+          studioHref: isWorkflowMember ? workflowStudioHref : "",
+          canAutomateMember: isWorkflowMember && isBoundMember,
+          automationDisabledReason: !isWorkflowMember
+            ? t("teams.automations.member.workflowOnly", "Only workflow members can have recurring work.")
+            : !isBoundMember
+              ? t("teams.automations.member.publishFirst", "Publish this member before adding recurring work.")
+              : "",
+          workflowSupported: isWorkflowMember,
+        };
+      }),
     [
-      buildTeamReturnHref,
       entryMemberId,
       selectedRosterMemberId,
       scopeId,
       selectedTeamId,
+      routeState.memberId,
+      routeState.workflowId,
+      automationServiceRuntimeByServiceId,
       teamMembersQuery.data?.members,
       token,
     ],
   );
   const createMemberHref = React.useMemo(
     () =>
-      buildTeamStudioHref({
+      buildTeamMemberWorkflowStudioHref({
         mode: "create-member",
-        returnTo: buildTeamReturnHref(),
         scopeId,
         teamId: selectedTeamId,
       }),
-    [buildTeamReturnHref, scopeId, selectedTeamId],
+    [scopeId, selectedTeamId],
   );
   const latestVisibleUpdate =
     teamSummaryQuery.data?.updatedAt ||
@@ -817,7 +872,7 @@ const TeamDetailPage: React.FC = () => {
     ? t("pages.teams.detail.team", "From Team update time")
     : lens.currentRun?.lastUpdatedAt
       ? trimText(lens.currentRun?.runId)
-      ? t("pages.teams.detail.run", "From run {value1}", { value1: compactId(lens.currentRun?.runId) })
+      ? t("pages.teams.detail.run", "From latest run")
       : t("pages.teams.detail.copy.15", "From latest visible run")
       : activeWorkflowSummary?.updatedAt
         ? t("pages.teams.detail.workflow", "From workflow update time")
@@ -857,18 +912,19 @@ const TeamDetailPage: React.FC = () => {
   const currentMemberLabel =
     trimText(preferredMemberSummary?.displayName) ||
     teamRosterRows.find((row) => row.memberId === currentMemberId)?.name ||
-    currentMemberId ||
     "--";
   const currentMemberCardCaption = currentMemberId
-    ? `memberId · ${compactOptionalId(currentMemberId)}`
+    ? t("teams.detail.overview.member.selectedCaption", "Selected from this team's members.")
     : t("pages.teams.detail.copy.18", "No member selected yet");
   const currentMemberCardTooltip = currentMemberId
-    ? `memberId · ${currentMemberId}`
+    ? currentMemberCardCaption
     : t("pages.teams.detail.copy.19", "No member selected yet");
   const currentServiceFriendly =
     currentServiceDisplayName !== "--"
       ? currentServiceDisplayName
-      : runtimeServiceId || "--";
+      : runtimeServiceId
+        ? t("teams.detail.overview.service.boundFallback", "Bound service")
+        : "--";
   const hasRunnableTeamEntry =
     Boolean(entryMemberId) ||
     Boolean(currentMemberId) ||
@@ -901,20 +957,20 @@ const TeamDetailPage: React.FC = () => {
     ? t("pages.teams.detail.copy.25", "Run ·{value1}", { value1: currentRunFriendly })
     : t("pages.teams.detail.copy.26", "Next steps · Test team");
   const currentServiceCardCaption = runtimeServiceId
-    ? `serviceId · ${compactOptionalId(runtimeServiceId)}`
+    ? t("teams.detail.overview.service.boundCaption", "Traffic is routed through the bound service.")
     : currentServiceKey !== "--" && currentServiceKey !== currentServiceFriendly
-      ? `serviceKey · ${compactId(currentServiceKey)}`
-      : t("pages.teams.detail.copy.27", "There are currently no more service IDs");
+      ? t("teams.detail.overview.service.configuredCaption", "Service routing is configured.")
+      : t("pages.teams.detail.copy.27", "No service is visible yet.");
   const currentServiceCardTooltip = runtimeServiceId
-    ? `serviceId · ${runtimeServiceId}`
+    ? currentServiceCardCaption
     : currentServiceKey !== "--" && currentServiceKey !== currentServiceFriendly
-      ? `serviceKey · ${currentServiceKey}`
-      : t("pages.teams.detail.copy.28", "There are currently no more service IDs");
+      ? t("teams.detail.overview.service.configuredCaption", "Service routing is configured.")
+      : t("pages.teams.detail.copy.28", "No service is visible yet.");
   const currentRunCardCaption = hasVisibleRun
-    ? `runId · ${compactId(activeRunId)}`
+    ? t("teams.detail.overview.run.visibleCaption", "Latest run is available.")
     : t("pages.teams.detail.copy.29", "The latest runs will be displayed here after the testing team.");
   const currentRunCardTooltip = hasVisibleRun
-    ? `runId · ${activeRunId}`
+    ? currentRunCardCaption
     : t("pages.teams.detail.copy.30", "The latest runs will be displayed here after the testing team.");
   const teamStartupGuidance = hasVisibleRun
     ? t("pages.teams.detail.copy.31", "The recent runs are visible and you can continue to test the team or adjust the member configuration.")
@@ -929,7 +985,9 @@ const TeamDetailPage: React.FC = () => {
     () => [
       {
         label: t("pages.teams.detail.copy.34", "team process"),
-        note: `workflowId: ${activeWorkflowId || "--"}`,
+        note: activeWorkflowId
+          ? t("teams.detail.overview.configuration.workflowLinked", "Workflow draft is linked.")
+          : t("teams.detail.overview.configuration.workflowPending", "Workflow draft is not linked yet."),
         value: workflowNameValue !== "--" ? workflowNameValue : teamTitle,
       },
       {
@@ -942,14 +1000,17 @@ const TeamDetailPage: React.FC = () => {
       },
       {
         label: t("pages.teams.detail.copy.38", "Main service entrance"),
-        note: `serviceId: ${compactOptionalId(runtimeServiceId)} · serviceKey: ${compactOptionalId(currentServiceKey)}`,
-        noteTooltip: `serviceId: ${runtimeServiceId || "--"} · serviceKey: ${currentServiceKey}`,
+        note: runtimeServiceId || currentServiceKey !== "--"
+          ? t("teams.detail.overview.service.configuredCaption", "Service routing is configured.")
+          : t("pages.teams.detail.copy.37", "Currently, the main service entrance has not been matched."),
         value: currentServiceFriendly,
       },
       {
         label: t("pages.teams.detail.copy.39", "Version ID"),
-        note: `revisionId: ${compactOptionalId(currentRevisionId)}`,
-        noteTooltip: `revisionId: ${currentRevisionId}`,
+        note:
+          currentRevisionId !== "--"
+            ? t("teams.detail.overview.configuration.versionAvailable", "Current serving version is available.")
+            : t("teams.detail.overview.configuration.versionPending", "Serving version is pending."),
         value: currentVersionFriendly,
       },
     ],
@@ -971,7 +1032,11 @@ const TeamDetailPage: React.FC = () => {
         key: row.key,
         kind: row.implementationKind,
         name: row.name,
-        summary: row.description || t("pages.teams.detail.copy.40", "Service entry {value1}", { value1: compactOptionalId(row.serviceId) }),
+        summary:
+          row.description ||
+          (row.isServiceBound
+            ? t("teams.detail.overview.composition.memberReady", "Bound and ready to receive traffic.")
+            : t("teams.detail.overview.composition.memberDraft", "Not bound yet.")),
       }));
     }
 
@@ -1021,6 +1086,7 @@ const TeamDetailPage: React.FC = () => {
   );
   const tabOptions: TeamTabOption[] = [
     { label: t("pages.teams.detail.copy.45", "Overview"), value: "overview" },
+    { label: t("teams.detail.tabs.automations", "Automations"), value: "automations" },
     { label: t("pages.teams.detail.copy.46", "team member"), value: "members" },
   ];
 
@@ -1031,18 +1097,21 @@ const TeamDetailPage: React.FC = () => {
 
   const pushTeamTab = React.useCallback(
     (tab: TeamDetailTab) => {
+      const includeRuntimeContext = tab === "overview";
       setActiveTab(tab);
       history.push(
         buildTeamDetailHref({
           memberId: currentMemberId || undefined,
           scopeId,
           teamId: selectedTeamId || undefined,
-          workflowId: activeWorkflowId || undefined,
-          serviceId: runtimeServiceId,
+          workflowId: includeRuntimeContext ? activeWorkflowId || undefined : undefined,
+          serviceId: includeRuntimeContext ? runtimeServiceId : undefined,
           runId:
-            preferredRunId ||
-            lens.currentRun?.runId ||
-            undefined,
+            includeRuntimeContext
+              ? preferredRunId ||
+                lens.currentRun?.runId ||
+                undefined
+              : undefined,
           tab,
         }),
       );
@@ -1430,14 +1499,13 @@ const TeamDetailPage: React.FC = () => {
     }
   }, [
     queryClient,
-    entryMemberId,
     intl,
-    isTeamArchived,
     refreshTeamAuthority,
     scopeId,
     selectedTeamId,
     teamSummaryQueryKey,
   ]);
+
   const teamTestPanel = (
     <TeamTestPanel
       createMemberHref={createMemberHref}
@@ -1461,7 +1529,6 @@ const TeamDetailPage: React.FC = () => {
       rosterRows={teamRosterRows}
       rosterSyncing={isTeamMembersProjectionSyncing}
       status={teamTestStatus}
-      teamId={selectedTeamId}
     />
   );
 
@@ -1528,14 +1595,42 @@ const TeamDetailPage: React.FC = () => {
         rosterError={teamMembersQuery.isError && !isTeamMembersProjectionSyncing}
         rosterLoading={teamMembersQuery.isLoading}
         rosterSyncing={isTeamMembersProjectionSyncing}
-        rosterRows={teamRosterRows}
-        rosterTeamId={selectedTeamId}
+      rosterRows={teamRosterRows}
+      />
+    );
+  };
+
+  const renderAutomationsTab = () => {
+    return (
+      <TeamAutomationsTab
+        members={teamRosterRows.map((row) => ({
+          automationsHref: row.automationsHref,
+          canAutomateMember: row.canAutomateMember,
+          disabledReason: row.automationDisabledReason,
+          implementationKind: row.implementationKind,
+          isSelectedMember: row.isSelectedMember,
+          key: row.key,
+          lifecycleLabel: row.lifecycleLabel,
+          lifecycleStyle: row.lifecycleStyle,
+          memberId: row.memberId,
+          name: row.name,
+          serviceId: row.serviceId,
+          serviceIdentity: row.serviceIdentity,
+          serviceRevisionId: row.serviceRevisionId,
+          workflowSupported: row.workflowSupported,
+        }))}
+        scopeId={scopeId}
+        serviceIdentitiesLoading={automationsServicesQuery.isLoading}
+        teamId={selectedTeamId}
       />
     );
   };
 
   let tabContent: React.ReactNode;
   switch (activeTab) {
+    case "automations":
+      tabContent = renderAutomationsTab();
+      break;
     case "members":
       tabContent = renderMembersTab();
       break;

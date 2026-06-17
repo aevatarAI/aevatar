@@ -32,7 +32,7 @@ describe("resolveResponsiveComposerWidth", () => {
       describeRunReturnTarget("/runtime/explorer/detail?actorId=actor-1")
     ).toBe("Back to Actor Explorer");
     expect(describeRunReturnTarget("/studio?tab=studio")).toBe("Back to Studio");
-    expect(describeRunReturnTarget("/teams/scope-a/team-a")).toBe(
+    expect(describeRunReturnTarget("/scopes/scope-a/teams/team-a")).toBe(
       "Back to advanced team editing"
     );
     expect(describeRunReturnTarget()).toBe("Back to advanced team editing");

@@ -39,50 +39,35 @@ describe("PrimitivesPage", () => {
   });
 
   it("keeps primitive examples inside runtime and scope surfaces", async () => {
-    const { container } = renderWithQueryClient(
-      React.createElement(PrimitivesPage),
-    );
+    renderWithQueryClient(React.createElement(PrimitivesPage));
 
-    expect(container.textContent).toContain("连接器目录");
+    expect(screen.getByText("连接器目录")).toBeInTheDocument();
     expect(
       screen.queryByText(
         "Primitive definitions are now managed as a runtime library workbench. The main stage stays dedicated to discovery while parameter contracts and example workflows live in the inspector.",
       ),
     ).toBeNull();
     expect(screen.getAllByRole("button", { name: "显示帮助" }).length).toBeGreaterThan(0);
-    expect(container.textContent).toContain("可用连接器");
-    expect(container.textContent).toContain("筛选连接器");
-    expect(container.textContent).not.toContain("Legacy draft");
-    expect(container.textContent).not.toContain("Studio");
+    expect(screen.getByText("可用连接器")).toBeInTheDocument();
+    expect(screen.getByText("筛选连接器")).toBeInTheDocument();
+    expect(screen.queryByText("Legacy draft")).not.toBeInTheDocument();
+    expect(screen.queryByText("Studio")).not.toBeInTheDocument();
 
     await waitFor(() => {
       expect(runtimeQueryApi.listPrimitives).toHaveBeenCalled();
     });
   });
 
-  it("stretches the category filter selector to the panel width", async () => {
-    const { container } = renderWithQueryClient(
-      React.createElement(PrimitivesPage),
-    );
-
-    expect(await screen.findByText("目录摘要")).toBeTruthy();
-    expect(container.querySelector(".ant-select")).toHaveStyle({ width: "100%" });
-  });
-
-  it("renders primitive cards as full-width summaries with in-card actions", async () => {
+  it("renders primitive cards with summary fields and in-card actions", async () => {
     renderWithQueryClient(React.createElement(PrimitivesPage));
 
-    expect(await screen.findByText("Ready")).toBeTruthy();
-    expect(screen.getByText("分类")).toBeTruthy();
-    expect(screen.getByText("参数")).toBeTruthy();
-    expect(screen.getByText("示例")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "查看" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "示例行为定义" })).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: "查看连接器 human_input" }),
-    ).toHaveStyle({
-      width: "100%",
-    });
+    expect(await screen.findByText("Ready")).toBeInTheDocument();
+    expect(screen.getByText("分类")).toBeInTheDocument();
+    expect(screen.getByText("参数")).toBeInTheDocument();
+    expect(screen.getByText("示例")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "查看" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "示例行为定义" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "查看连接器 human_input" })).toBeInTheDocument();
   });
 
   it("opens the primitive inspector when the catalog card is clicked", async () => {

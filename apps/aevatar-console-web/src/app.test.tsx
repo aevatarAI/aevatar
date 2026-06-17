@@ -14,18 +14,18 @@ jest.mock("./shared/navigation/history", () => ({
 describe("ProtectedRouteRedirectGate", () => {
   beforeEach(() => {
     mockedHistoryReplace.mockReset();
-    window.history.replaceState({}, "", "/teams");
+    window.history.replaceState({}, "", "/scopes");
   });
 
   it("redirects protected routes into the login flow after mount", async () => {
     render(
       React.createElement(ProtectedRouteRedirectGate, {
-        pathname: "/teams",
+        pathname: "/scopes",
       }),
     );
 
     await waitFor(() => {
-      expect(mockedHistoryReplace).toHaveBeenCalledWith("/login?redirect=%2Fteams");
+      expect(mockedHistoryReplace).toHaveBeenCalledWith("/login?redirect=%2Fscopes");
     });
   });
 });

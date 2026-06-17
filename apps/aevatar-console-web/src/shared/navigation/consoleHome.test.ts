@@ -14,7 +14,7 @@ describe("consoleHome", () => {
   it("uses the teams home route by default", () => {
     const module = loadModule();
 
-    expect(module.getConsoleHomeRoute()).toBe("/teams");
-    expect(module.CONSOLE_HOME_ROUTE).toBe("/teams");
+    expect(module.getConsoleHomeRoute()).toBe("/scopes");
+    expect(module.CONSOLE_HOME_ROUTE).toBe("/scopes");
   });
 });
