@@ -181,9 +181,9 @@ WebSocket 不接收 `multipart/form-data`。文件输入应先经 HTTP artifact 
 - `sourceKind` 可省略；显式传入时必须是 `chat_input`、`form_upload`、`connected_service_resource`、`external_resource`、`generated` 或 `unspecified`。
 - 时间戳必须为非负 Unix milliseconds；同时存在 `createdAtUnixMs` 与 `expiresAtUnixMs` 时，过期时间不得早于创建时间。
 - public `fileRef` 不接受 `sizeBytes`。文件大小事实只能由 ingress/artifact descriptor 或 decoded bytes 产生，不能由客户端在 reusable file ref 上声明。
-- 当前文件链路支持 chat/API inline bytes 暂存、Lark resource 下载、command-level `fileRef` 替换、descriptor-only projection readmodel 物化、`document_extract` 文档抽取，以及 workflow-only Lark 文件提交。
+- 当前文件链路支持 chat/API inline bytes 暂存、Lark resource 下载、command-level `fileRef` 替换、descriptor-only projection readmodel 物化、`document_extract` 文档抽取，以及 workflow-only 文件提交。
 - `document_extract` 只能读取 workflow artifact store 中的文件引用，返回 descriptor + bounded extracted text；支持 UTF-8 text/json/markdown/csv、PDF text、DOCX text，以及 `image/png` / `image/jpeg` 图片文字抽取。图片路径默认最多读取 5 MiB，只通过已配置且支持 image input 的 `ILLMProvider.ChatStreamAsync` 聚合文本 delta；未配置或不支持时返回 `image_provider_unavailable`，图片超限返回 `image_too_large`，provider 异常返回 `image_extraction_failed`。`image/webp` 当前仍不属于 `document_extract` 支持类型。结果不返回 bytes/base64。显式 arguments `fileRef` 优先；未传 `fileRef` 时，只允许从当前 step 的 typed input file refs 中选择唯一一项，0 个或多个输入文件都 fail closed。
-- `workflow_file_submit` 是 workflow-only tool source，当前只支持两个固定 Lark 目标：`lark_drive_media` 返回 `file_token`，`lark_approval_file` 返回审批附件 `file_code`。文件内容只在 adapter 边界从 artifact store 流式读出，不进入 actor state/readmodel/prompt/result JSON。
+- `workflow_file_submit` 是 workflow-only tool source。Lark adapter 提供固定目标：`lark_drive_media` 返回 `file_token`，`lark_approval_file` 返回审批附件 `file_code`；generic connected-service submit 目标只通过 Host 拥有的 `WorkflowConnectedServiceFileSubmit:Targets` 配置进入同一个 tool source。Host 启动时会校验 generic target 的 endpoint policy；service/path/method/header/body/file-field 等策略不能由 workflow 参数覆盖。真实非 Lark 目标值必须来自部署配置、ConfigMap 或 secret；provider adapter 不持有 generic target registry，`.refactor-loop/host.env` 也不是生产配置来源。文件内容只在 adapter 边界从 artifact store 流式读出，不进入 actor state/readmodel/prompt/result JSON。
 
 ## 3. 自动编排能力（按 prompt 决策）
 

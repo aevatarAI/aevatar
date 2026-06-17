@@ -9,9 +9,11 @@ using Aevatar.Workflow.Infrastructure.Reporting;
 using Aevatar.Workflow.Infrastructure.Runs;
 using Aevatar.Workflow.Infrastructure.Workflows;
 using Aevatar.Workflow.Projection.Workflows;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.Workflow.Infrastructure.DependencyInjection;
 
@@ -19,13 +21,24 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddWorkflowInfrastructure(
         this IServiceCollection services,
-        Action<WorkflowRunReportExportOptions>? configureReportExport = null)
+        Action<WorkflowRunReportExportOptions>? configureReportExport = null,
+        IConfiguration? configuration = null)
     {
         services.AddOptions<WorkflowRunReportExportOptions>();
         if (configureReportExport != null)
             services.Configure(configureReportExport);
         services.AddOptions<FileSystemWorkflowFileIngressOptions>();
-        services.AddOptions<WorkflowConnectedServiceFileSubmitOptions>();
+        var submitOptions = services.AddOptions<WorkflowConnectedServiceFileSubmitOptions>();
+        if (configuration != null)
+        {
+            submitOptions.Bind(
+                configuration.GetSection(WorkflowConnectedServiceFileSubmitOptions.SectionName));
+        }
+
+        submitOptions.ValidateOnStart();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IValidateOptions<WorkflowConnectedServiceFileSubmitOptions>,
+            WorkflowConnectedServiceFileSubmitOptionsValidator>());
 
         // Replace the Noop fallback from Application layer with the real file export adapter.
         services.Replace(ServiceDescriptor.Singleton<IWorkflowRunReportExportPort, FileSystemWorkflowRunReportExporter>());

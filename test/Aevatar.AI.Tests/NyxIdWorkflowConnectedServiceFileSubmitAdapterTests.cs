@@ -34,6 +34,26 @@ public sealed class NyxIdWorkflowConnectedServiceFileSubmitAdapterTests
     }
 
     [Fact]
+    public void RegisteredAdapter_ShouldNotOwnGenericWorkflowFileSubmitTargets()
+    {
+        var services = new ServiceCollection();
+
+        services.AddNyxIdTools(options =>
+        {
+            options.BaseUrl = "https://nyx.example.com";
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var adapter = provider.GetServices<IWorkflowConnectedServiceFileSubmitAdapter>()
+            .Should()
+            .ContainSingle()
+            .Subject;
+
+        adapter.Provider.Should().Be(NyxIdWorkflowConnectedServiceFileSubmitAdapter.ProviderName);
+        adapter.Targets.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task SubmitAsync_ShouldUseConfiguredEndpointAndReturnSanitizedOutputCode()
     {
         var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
