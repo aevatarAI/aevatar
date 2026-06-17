@@ -90,13 +90,7 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
         accepted.ExpectedVersion.Should().Be(11);
         accepted.Readiness.Readable.Should().BeFalse();
         accepted.Readiness.Stage.Should().Be("projection_pending");
-        accepted.Name.Should().Be("workflow-1");
-        accepted.FileName.Should().Be("workflow-1.yaml");
-        accepted.FilePath.Should().Be("scope://scope-1/workflow-1.yaml");
-        accepted.DirectoryId.Should().Be("scope:scope-1");
-        accepted.DirectoryLabel.Should().Be("scope-1");
-        accepted.Yaml.Should().Be("name: workflow-1\nsteps: []");
-        accepted.Layout.Should().BeNull();
+        accepted.Readiness.Message.Should().Contain("Poll the workflow draft by id");
         Guid.TryParse(accepted.WorkflowId, out _).Should().BeTrue();
         accepted.WorkflowId.Should().NotBe("workflow-1");
     }
@@ -120,8 +114,6 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
 
         Guid.TryParse(accepted.WorkflowId, out _).Should().BeTrue();
         accepted.WorkflowId.Should().NotBe("wf-alpha");
-        accepted.Name.Should().Be("wf-alpha");
-        accepted.FileName.Should().Be("wf-alpha.yaml");
         accepted.Readiness.Readable.Should().BeFalse();
         workspacePort.SavedDrafts.Should().ContainSingle()
             .Which.WorkflowId.Should().Be(accepted.WorkflowId);

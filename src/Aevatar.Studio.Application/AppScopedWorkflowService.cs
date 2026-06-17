@@ -67,9 +67,8 @@ public sealed class AppScopedWorkflowService
         SaveWorkflowDraftRequest request,
         CancellationToken ct = default)
     {
-        var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
-        var (draft, receipt) = await SaveDraftCommandAsync(normalizedScopeId, workflowId: null, request, ct);
-        return ToDraftCreateAcceptedResponse(normalizedScopeId, draft, receipt);
+        var (draft, receipt) = await SaveDraftCommandAsync(scopeId, workflowId: null, request, ct);
+        return ToDraftCreateAcceptedResponse(draft.WorkflowId, receipt);
     }
 
     public async Task<WorkflowDraftResponse> UpdateDraftAsync(
@@ -346,23 +345,12 @@ public sealed class AppScopedWorkflowService
         return draft.WorkflowId;
     }
 
-    private WorkflowDraftCreateAcceptedResponse ToDraftCreateAcceptedResponse(
-        string scopeId,
-        StudioWorkflowDraftRecord draft,
-        StudioWorkspaceCommandReceipt receipt)
-    {
-        var scopeDirectory = CreateScopeDirectory(scopeId);
-        return new WorkflowDraftCreateAcceptedResponse(
+    private static WorkflowDraftCreateAcceptedResponse ToDraftCreateAcceptedResponse(
+        string workflowId,
+        StudioWorkspaceCommandReceipt receipt) =>
+        new(
             Accepted: true,
-            WorkflowId: draft.WorkflowId,
-            Name: ResolveDraftWorkflowName(draft, _yamlDocumentService.Parse(draft.Yaml)),
-            FileName: string.IsNullOrWhiteSpace(draft.FileName) ? $"{draft.WorkflowId}.yaml" : draft.FileName,
-            FilePath: string.IsNullOrWhiteSpace(draft.FilePath) ? $"{scopeDirectory.Path}/{draft.WorkflowId}.yaml" : draft.FilePath,
-            DirectoryId: scopeDirectory.DirectoryId,
-            DirectoryLabel: scopeDirectory.Label,
-            Yaml: draft.Yaml,
-            Layout: null,
-            UpdatedAtUtc: draft.UpdatedAtUtc,
+            WorkflowId: workflowId,
             CommandId: receipt.CommandId,
             AckStage: "accepted",
             ActorId: receipt.ActorId,
@@ -372,8 +360,7 @@ public sealed class AppScopedWorkflowService
             Readiness: new WorkflowDraftReadinessResponse(
                 Readable: false,
                 Stage: "projection_pending",
-                Message: "The workflow draft create command was accepted. The scoped workspace read model may not be immediately readable."));
-    }
+                Message: "The workflow draft create command was accepted. Poll the workflow draft by id until the scoped workspace read model observes it."));
 
     private static string CreateWorkflowDraftId() =>
         Guid.NewGuid().ToString("N");
