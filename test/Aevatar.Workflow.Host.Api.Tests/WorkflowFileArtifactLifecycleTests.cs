@@ -79,6 +79,38 @@ public sealed class WorkflowFileArtifactLifecycleTests
     }
 
     [Fact]
+    public void AddWorkflowInfrastructure_ShouldFailClosedForProductionDotnetEnvironmentWhenArtifactBackendIsImplicit()
+    {
+        using (SetRuntimeEnvironment(dotnetEnvironment: "Production", aspNetCoreEnvironment: null))
+        {
+            var services = new ServiceCollection();
+            services.AddLogging();
+            var configuration = new ConfigurationBuilder().Build();
+
+            var act = () => services.AddWorkflowInfrastructure(configuration: configuration);
+
+            act.Should().Throw<InvalidOperationException>()
+                .WithMessage("*WorkflowFileArtifacts:Backend*External*Production*");
+        }
+    }
+
+    [Fact]
+    public void AddWorkflowInfrastructure_ShouldFailClosedForProductionAspNetCoreEnvironmentWhenArtifactBackendIsImplicit()
+    {
+        using (SetRuntimeEnvironment(dotnetEnvironment: null, aspNetCoreEnvironment: "Production"))
+        {
+            var services = new ServiceCollection();
+            services.AddLogging();
+            var configuration = new ConfigurationBuilder().Build();
+
+            var act = () => services.AddWorkflowInfrastructure(configuration: configuration);
+
+            act.Should().Throw<InvalidOperationException>()
+                .WithMessage("*WorkflowFileArtifacts:Backend*External*Production*");
+        }
+    }
+
+    [Fact]
     public void AddWorkflowInfrastructure_ShouldFailClosedForExternalArtifactBackendWithoutAllPorts()
     {
         var services = new ServiceCollection();
@@ -254,6 +286,15 @@ public sealed class WorkflowFileArtifactLifecycleTests
         var previousAspnet = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
         Environment.SetEnvironmentVariable("DOTNET_ENVIRONMENT", null);
         Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", null);
+        return new RestoreEnvironment(previousDotnet, previousAspnet);
+    }
+
+    private static IDisposable SetRuntimeEnvironment(string? dotnetEnvironment, string? aspNetCoreEnvironment)
+    {
+        var previousDotnet = Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT");
+        var previousAspnet = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
+        Environment.SetEnvironmentVariable("DOTNET_ENVIRONMENT", dotnetEnvironment);
+        Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", aspNetCoreEnvironment);
         return new RestoreEnvironment(previousDotnet, previousAspnet);
     }
 
