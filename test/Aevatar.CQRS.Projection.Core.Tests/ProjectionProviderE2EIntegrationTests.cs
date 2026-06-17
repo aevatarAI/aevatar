@@ -58,7 +58,7 @@ public sealed class ProjectionProviderE2EIntegrationTests
     }
 
     [ElasticsearchIntegrationFact]
-    public async Task ElasticsearchStore_WhenAliasPointsAtDynamicMappingPhysical_ShouldFailLoud()
+    public async Task ElasticsearchStore_WhenAliasPointsAtOldFingerprintPhysical_ShouldReindexAndSwapAlias()
     {
         var endpoint = GetRequiredEnvironmentVariable("AEVATAR_TEST_ELASTICSEARCH_ENDPOINT");
         var indexScope = "projection-provider-drift-" + Guid.NewGuid().ToString("N");
@@ -81,6 +81,18 @@ public sealed class ProjectionProviderE2EIntegrationTests
                             value = new { type = "text" },
                         },
                     },
+                });
+
+            var oldDocumentId = Guid.NewGuid().ToString("N");
+            await PutJsonAsync(
+                httpClient,
+                $"{oldPhysical}/_doc/{oldDocumentId}?refresh=true",
+                new
+                {
+                    id = oldDocumentId,
+                    actor_id = "actor-old",
+                    value = "old-value",
+                    updated_at_epoch_ms = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                 });
             await PostJsonAsync(
                 httpClient,
@@ -117,17 +129,23 @@ public sealed class ProjectionProviderE2EIntegrationTests
                 UpdatedAtEpochMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             };
 
-            // Refactor (iter98/cluster-743): Old pattern: a drifted live ES mapping
-            // could be masked by query-time actual mapping reads or lifecycle repair.
-            // New principle: alias+fingerprint lifecycle is the truth source and
-            // provider writes fail before dynamic-mapping drift silently breaks queries.
-            var act = () => store.UpsertAsync(readModel);
+            await store.UpsertAsync(readModel);
 
-            await act.Should().ThrowAsync<InvalidOperationException>()
-                .WithMessage("*schema drift detected*");
+            var fetchedOld = await store.GetAsync(oldDocumentId);
+            fetchedOld.Should().NotBeNull();
+            fetchedOld!.Value.Should().Be("old-value");
+
+            var fetchedNew = await store.GetAsync(readModel.Id);
+            fetchedNew.Should().NotBeNull();
+            fetchedNew!.Value.Should().Be("dynamic-mapping-drift");
+
+            var aliasTarget = await GetSingleAliasTargetAsync(httpClient, aliasName);
+            aliasTarget.Should().NotBe(oldPhysical);
+            aliasTarget.Should().StartWith($"{aliasName}-v");
         }
         finally
         {
+            await DeleteAliasTargetIfExistsAsync(httpClient, aliasName);
             await DeleteIfExistsAsync(httpClient, oldPhysical);
         }
     }
@@ -154,6 +172,30 @@ public sealed class ProjectionProviderE2EIntegrationTests
             path,
             new StringContent(json, Encoding.UTF8, "application/json"));
         await EnsureSuccessAsync(response, $"POST {path}");
+    }
+
+    private static async Task<string?> GetSingleAliasTargetAsync(HttpClient httpClient, string aliasName)
+    {
+        using var response = await httpClient.GetAsync($"_alias/{aliasName}");
+        await EnsureSuccessAsync(response, $"GET _alias/{aliasName}");
+        var body = await response.Content.ReadAsStringAsync();
+        using var document = JsonDocument.Parse(body);
+        return document.RootElement.EnumerateObject().Single().Name;
+    }
+
+    private static async Task DeleteAliasTargetIfExistsAsync(HttpClient httpClient, string aliasName)
+    {
+        using var response = await httpClient.GetAsync($"_alias/{aliasName}");
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            return;
+
+        await EnsureSuccessAsync(response, $"GET _alias/{aliasName}");
+        var body = await response.Content.ReadAsStringAsync();
+        using var document = JsonDocument.Parse(body);
+        foreach (var target in document.RootElement.EnumerateObject().Select(item => item.Name).ToArray())
+        {
+            await DeleteIfExistsAsync(httpClient, target);
+        }
     }
 
     private static async Task DeleteIfExistsAsync(HttpClient httpClient, string path)

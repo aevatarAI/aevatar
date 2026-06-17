@@ -33,8 +33,10 @@ Elasticsearch Document Provider。
 - `DocumentIndexMetadata` 中显式声明的 mapping 优先，provider 不覆盖自定义 `text`、analyzer、object、nested 或其他业务 mapping
 - `google.protobuf.Any`、`google.protobuf.Struct`、map、repeated message 与 repeated scalar 字段默认保持开放，不由通用 helper 递归展开
 - schema-drift 权威源只有 alias + augmented mapping fingerprint：alias 必须指向 `{alias}-v{fingerprint}` 物理索引
-- alias 指向不同 fingerprint 时视为配置错误，provider 在 projection 写入/读取入口 fail loud；不会读取 live ES mapping 作为第二真相，也不会在 query-time 做 mapping repair、双读 fallback 或自动 reindex
-- `AutoCreateIndex=true` 只会在缺失 index 或 legacy bare index 包装时按当前契约创建新 physical index；如果 drift 需要保留数据，应通过显式 projection 重放、外部重建或运维迁移流程恢复数据
+- alias 指向单一旧 fingerprint physical index 时，provider lifecycle 会创建 expected physical index、从旧 physical `_reindex`、确认没有 failures / timeout 后，用一次 `_aliases` 原子 remove old / add new
+- alias 多 backing、source 缺失、不兼容 mapping、reindex failure / timeout 或 partial copy 时继续 fail closed，不会切 alias，也不会继续读写 read model document
+- `GetAsync`、`QueryAsync` 与 consistency probe 只做 alias fingerprint 诊断；它们不会读取 live ES mapping 作为第二真相，也不会在 query-time 做 mapping repair、双读 fallback 或 reindex
+- `AutoCreateIndex=true` 会在缺失 index、legacy bare index 包装、写侧 first-touch 或 provider-local startup initializer 中复用同一个 lifecycle ensure；read-first 静态 alias 的迁移由 startup initializer 触发，动态 index scope 仍由写侧 first-touch 触发
 
 参考：
 

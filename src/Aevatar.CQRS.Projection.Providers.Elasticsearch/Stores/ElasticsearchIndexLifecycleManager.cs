@@ -14,16 +14,16 @@ namespace Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 ///
 /// 1. Alias exists and points at <c>{alias}-v{fingerprint}</c> matching the
 ///    augmented metadata fingerprint → no-op.
-/// 2. Alias exists but points at a different physical → fail loud. The
-///    alias+fingerprint lifecycle is the only schema-drift authority, so
-///    projection must refuse to write instead of repairing drift through a
-///    query-time or projection-turn mapping reader.
-/// 3. No alias exists but a bare index with the alias name does — this is a
+/// 2. Alias exists and has exactly one backing physical, but the physical
+///    suffix differs from the current fingerprint. Create the expected
+///    physical, reindex from the old physical, then atomically remove the
+///    old alias target and add the expected target.
+/// 3. No alias exists but a bare index with the alias name does - this is a
 ///    pre-aliased prod index from before the lifecycle landed. Create the
 ///    new physical with expected mapping, reindex from the bare index, then
 ///    run an atomic <c>_aliases</c> call that adds the alias to the new
 ///    physical and removes the bare index (<c>remove_index</c> action).
-///    One ES call, single-shot bare → aliased migration.
+///    One ES call, single-shot bare-to-aliased migration.
 /// 4. Nothing exists: greenfield. Create the new physical with the alias
 ///    wired in via the index <c>aliases</c> payload key.
 ///
@@ -92,9 +92,10 @@ internal sealed class ElasticsearchIndexLifecycleManager : IDisposable
         var fingerprint = ElasticsearchProjectionSchemaFingerprint.Compute(metadata);
         var expectedPhysical = $"{aliasName}-v{fingerprint}";
 
-        var currentAliasTarget = await TryResolveAliasTargetAsync(aliasName, ct);
-        if (currentAliasTarget is not null)
+        var aliasResolution = await ResolveAliasAsync(aliasName, ct);
+        if (aliasResolution.Targets.Count == 1)
         {
+            var currentAliasTarget = aliasResolution.Targets[0];
             if (string.Equals(currentAliasTarget, expectedPhysical, StringComparison.Ordinal))
             {
                 return new ProjectionIndexConsistencyResult(
@@ -113,6 +114,17 @@ internal sealed class ElasticsearchIndexLifecycleManager : IDisposable
                 currentAliasTarget,
                 ProjectionIndexConsistencyStatus.Drifted,
                 "Projection index schema drift detected: alias points to a physical index with a different schema fingerprint.");
+        }
+
+        if (aliasResolution.Targets.Count > 1)
+        {
+            return new ProjectionIndexConsistencyResult(
+                "Elasticsearch",
+                aliasName,
+                expectedPhysical,
+                string.Join(",", aliasResolution.Targets),
+                ProjectionIndexConsistencyStatus.Drifted,
+                "Projection index schema drift detected: alias points to multiple physical indices.");
         }
 
         var bareExists = await IndexExistsAsync(aliasName, ct);
@@ -141,21 +153,25 @@ internal sealed class ElasticsearchIndexLifecycleManager : IDisposable
         var fingerprint = ElasticsearchProjectionSchemaFingerprint.Compute(metadata);
         var expectedPhysical = $"{aliasName}-v{fingerprint}";
 
-        var currentAliasTarget = await TryResolveAliasTargetAsync(aliasName, ct);
-        if (currentAliasTarget is not null)
+        var aliasResolution = await ResolveAliasAsync(aliasName, ct);
+        if (aliasResolution.Targets.Count == 1)
         {
+            var currentAliasTarget = aliasResolution.Targets[0];
             if (string.Equals(currentAliasTarget, expectedPhysical, StringComparison.Ordinal))
                 return;
 
-            // Refactor (iter98/cluster-743): Old pattern: fingerprint drift triggered
-            // an in-place lifecycle migration and reindex. New principle: alias +
-            // fingerprint is the sole schema-drift truth source; a mismatched
-            // physical means configuration drift and projection refuses to proceed.
+            await MigrateAliasFingerprintAsync(aliasName, currentAliasTarget, expectedPhysical, metadata, ct);
+            return;
+        }
+
+        if (aliasResolution.Targets.Count > 1)
+        {
             throw new ProjectionIndexSchemaDriftException(
                 "Elasticsearch",
                 aliasName,
-                currentAliasTarget,
-                expectedPhysical);
+                string.Join(",", aliasResolution.Targets),
+                expectedPhysical,
+                "Elasticsearch projection index schema drift detected: alias points to multiple physical indices.");
         }
 
         var bareExists = await IndexExistsAsync(aliasName, ct);
@@ -168,12 +184,12 @@ internal sealed class ElasticsearchIndexLifecycleManager : IDisposable
         await CreateFreshAliasedAsync(aliasName, expectedPhysical, metadata, ct);
     }
 
-    private async Task<string?> TryResolveAliasTargetAsync(string aliasName, CancellationToken ct)
+    private async Task<AliasResolution> ResolveAliasAsync(string aliasName, CancellationToken ct)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, $"_alias/{Uri.EscapeDataString(aliasName)}");
         using var response = await _httpClient.SendAsync(request, ct);
         if (response.StatusCode == HttpStatusCode.NotFound)
-            return null;
+            return AliasResolution.Missing;
 
         await EnsureSuccessAsync(response, $"resolve alias '{aliasName}'", ct);
         var body = await response.Content.ReadAsStringAsync(ct);
@@ -187,8 +203,9 @@ internal sealed class ElasticsearchIndexLifecycleManager : IDisposable
         // the bare-index / greenfield branches instead of throwing on
         // unexpected payloads.
         if (doc.RootElement.ValueKind != JsonValueKind.Object)
-            return null;
+            return AliasResolution.Missing;
 
+        var targets = new List<string>();
         foreach (var physical in doc.RootElement.EnumerateObject())
         {
             if (physical.Value.ValueKind != JsonValueKind.Object)
@@ -198,10 +215,12 @@ internal sealed class ElasticsearchIndexLifecycleManager : IDisposable
             if (aliases.ValueKind != JsonValueKind.Object)
                 continue;
             if (aliases.TryGetProperty(aliasName, out _))
-                return physical.Name;
+                targets.Add(physical.Name);
         }
 
-        return null;
+        return targets.Count == 0
+            ? AliasResolution.Missing
+            : new AliasResolution(targets);
     }
 
     private async Task<bool> IndexExistsAsync(string indexOrAliasName, CancellationToken ct)
@@ -252,6 +271,28 @@ internal sealed class ElasticsearchIndexLifecycleManager : IDisposable
             aliasName, newPhysical);
     }
 
+    private async Task MigrateAliasFingerprintAsync(
+        string aliasName,
+        string oldPhysical,
+        string newPhysical,
+        DocumentIndexMetadata metadata,
+        CancellationToken ct)
+    {
+        await CreatePhysicalAsync(newPhysical, metadata, ct);
+        await ReindexAsync(sourceIndex: oldPhysical, destIndex: newPhysical, ct);
+        await ExecuteAliasActionsAsync(
+            new object[]
+            {
+                new Dictionary<string, object?> { ["remove"] = new Dictionary<string, object?> { ["index"] = oldPhysical, ["alias"] = aliasName } },
+                new Dictionary<string, object?> { ["add"] = new Dictionary<string, object?> { ["index"] = newPhysical, ["alias"] = aliasName } },
+            },
+            description: $"migrate alias '{aliasName}' from physical '{oldPhysical}' to '{newPhysical}'",
+            ct);
+        _logger.LogInformation(
+            "Projection index lifecycle: migrated alias fingerprint alias={Alias} oldPhysical={OldPhysical} newPhysical={NewPhysical}",
+            aliasName, oldPhysical, newPhysical);
+    }
+
     private async Task CreatePhysicalAsync(string physical, DocumentIndexMetadata metadata, CancellationToken ct)
     {
         var payload = ElasticsearchProjectionDocumentStorePayloadSupport.BuildIndexInitializationPayload(metadata);
@@ -291,7 +332,7 @@ internal sealed class ElasticsearchIndexLifecycleManager : IDisposable
         };
 
         using var response = await _httpClient.SendAsync(request, ct);
-        await EnsureSuccessAsync(response, $"reindex '{sourceIndex}' → '{destIndex}'", ct);
+        await EnsureSuccessAsync(response, $"reindex '{sourceIndex}' to '{destIndex}'", ct);
 
         var body = await response.Content.ReadAsStringAsync(ct);
         using var doc = JsonDocument.Parse(body);
@@ -342,4 +383,9 @@ internal sealed class ElasticsearchIndexLifecycleManager : IDisposable
     }
 
     public void Dispose() => _initLock.Dispose();
+
+    private sealed record AliasResolution(IReadOnlyList<string> Targets)
+    {
+        public static AliasResolution Missing { get; } = new(Array.Empty<string>());
+    }
 }

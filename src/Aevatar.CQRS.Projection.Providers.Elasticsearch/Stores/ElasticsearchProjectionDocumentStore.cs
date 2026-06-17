@@ -279,6 +279,14 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
         return await _indexManager.CheckConsistencyAsync(_indexName, _indexMetadata, ct);
     }
 
+    internal Task EnsureStaticIndexLifecycleAsync(CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        return _supportsDynamicIndexing
+            ? Task.CompletedTask
+            : _indexManager.EnsureIndexAsync(_indexName, _indexMetadata, ct);
+    }
+
     private async Task EnsureReadIndexConsistentAsync(CancellationToken ct)
     {
         if (!_autoCreateIndex)
