@@ -127,7 +127,7 @@ public sealed class UserAgentCatalogProjector
             document.OwnerScope = entryScope;
 
         if (entry.SharingGrant is not null &&
-            UserAgentCatalogGAgent.TryBuildAudienceKey(entryScope, out var audienceKey))
+            UserAgentCatalogSharingAudience.TryBuildKey(entryScope, out var audienceKey))
         {
             document.VisibleSharingAudienceKey = audienceKey;
             if (entry.SharingGrant.AllowTrigger)

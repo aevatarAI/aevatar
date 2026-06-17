@@ -177,7 +177,7 @@ public sealed class AgentBuilderTool : IAgentTool
         if (string.IsNullOrWhiteSpace(agentId))
             return """{"error":"agent_id is required for share_agent"}""";
 
-        if (!UserAgentCatalogQueryPort.TryBuildSharingAudienceKey(caller, out var audienceKey))
+        if (!UserAgentCatalogSharingAudience.TryBuildKey(caller, out var audienceKey))
             return JsonSerializer.Serialize(new { error = "share_agent requires a channel registration scope" });
 
         var entry = await QueryCatalogAgentForCallerAsync(queryPort, agentId.Trim(), caller, ct);

@@ -174,7 +174,7 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
                 return byAgentId.Values.ToArray();
         }
 
-        if (TryBuildSharingAudienceKey(caller, out var audienceKey))
+        if (UserAgentCatalogSharingAudience.TryBuildKey(caller, out var audienceKey))
         {
             foreach (var entry in await QueryByFiltersAsync(BuildSharingAudienceFilters(
                          nameof(UserAgentCatalogDocument.VisibleSharingAudienceKey),
@@ -307,7 +307,7 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
         OwnerScope caller,
         bool requireTrigger)
     {
-        if (!TryBuildSharingAudienceKey(caller, out var callerAudienceKey))
+        if (!UserAgentCatalogSharingAudience.TryBuildKey(caller, out var callerAudienceKey))
             return false;
 
         var grant = document.SharingGrant;
@@ -324,20 +324,6 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
             ? document.TriggerSharingAudienceKey
             : document.VisibleSharingAudienceKey;
         return string.Equals(materializedKey, callerAudienceKey, StringComparison.Ordinal);
-    }
-
-    public static bool TryBuildSharingAudienceKey(OwnerScope caller, out string audienceKey)
-    {
-        if (caller.IsNyxIdNative ||
-            string.IsNullOrWhiteSpace(caller.Platform) ||
-            string.IsNullOrWhiteSpace(caller.RegistrationScopeId))
-        {
-            audienceKey = string.Empty;
-            return false;
-        }
-
-        audienceKey = $"{caller.Platform.Trim().ToLowerInvariant()}:{caller.RegistrationScopeId.Trim()}";
-        return true;
     }
 
     /// <summary>

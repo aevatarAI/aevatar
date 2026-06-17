@@ -131,7 +131,7 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             return;
         }
 
-        if (!TryBuildAudienceKey(entry.OwnerScope, out var audienceKey))
+        if (!UserAgentCatalogSharingAudience.TryBuildKey(entry.OwnerScope, out var audienceKey))
         {
             Logger.LogWarning("Cannot share user agent catalog entry without a channel owner registration scope: {AgentId}", command.AgentId);
             return;
@@ -291,20 +291,5 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         return !string.IsNullOrWhiteSpace(normalizedIncoming)
             ? normalizedIncoming
             : (existing ?? string.Empty);
-    }
-
-    internal static bool TryBuildAudienceKey(OwnerScope? ownerScope, out string audienceKey)
-    {
-        if (ownerScope is null ||
-            ownerScope.IsNyxIdNative ||
-            string.IsNullOrWhiteSpace(ownerScope.Platform) ||
-            string.IsNullOrWhiteSpace(ownerScope.RegistrationScopeId))
-        {
-            audienceKey = string.Empty;
-            return false;
-        }
-
-        audienceKey = $"{ownerScope.Platform.Trim().ToLowerInvariant()}:{ownerScope.RegistrationScopeId.Trim()}";
-        return true;
     }
 }
