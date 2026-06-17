@@ -579,6 +579,73 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(studioApi.bindMemberWorkflow).not.toHaveBeenCalled();
   });
 
+  it("runs the current unsaved new workflow draft without creating a member first", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/new/workflow",
+    );
+    (runtimeRunsApi.streamDraftRun as jest.Mock).mockResolvedValue(
+      createSseResponse(),
+    );
+    (parseBackendSSEStream as jest.Mock).mockReturnValue(createWorkflowInvokeEvents());
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    const runDraftButton = await screen.findByRole("button", { name: "Run" });
+    expect(runDraftButton).toBeEnabled();
+    fireEvent.click(runDraftButton);
+    const draftRunPanel = await screen.findByLabelText("Draft run panel");
+    expect(
+      within(draftRunPanel).getByRole("button", { name: "Start draft run" }),
+    ).toBeDisabled();
+    expect(
+      within(draftRunPanel).getByRole("button", { name: "Start draft run" }),
+    ).toHaveAttribute(
+      "title",
+      "Add at least one step before running this workflow draft.",
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Add first step" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Insert LLM call node" }),
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
+    });
+    expect(screen.getByText("Unsaved changes")).toBeTruthy();
+
+    fireEvent.change(within(draftRunPanel).getByRole("textbox"), {
+      target: { value: "Run the unsaved workflow" },
+    });
+    await waitFor(() => {
+      expect(
+        within(draftRunPanel).getByRole("button", { name: "Start draft run" }),
+      ).toBeEnabled();
+    });
+    fireEvent.click(
+      within(draftRunPanel).getByRole("button", { name: "Start draft run" }),
+    );
+
+    await waitFor(() => {
+      expect(runtimeRunsApi.streamDraftRun).toHaveBeenCalledWith(
+        "scope-1",
+        expect.objectContaining({
+          prompt: "Run the unsaved workflow",
+          workflowYamls: [
+            expect.stringContaining("name: Untitled member"),
+          ],
+        }),
+        expect.any(AbortSignal),
+      );
+    });
+    expect(studioApi.saveWorkflow).not.toHaveBeenCalled();
+    expect(studioApi.createMember).not.toHaveBeenCalled();
+    expect(studioApi.updateMemberImplementationRef).not.toHaveBeenCalled();
+    expect(studioApi.bindMemberWorkflow).not.toHaveBeenCalled();
+    expect(runtimeRunsApi.streamChat).not.toHaveBeenCalled();
+  });
+
   it("opens the node library, inserts a first step, and saves a new linked workflow member", async () => {
     window.history.replaceState(
       {},

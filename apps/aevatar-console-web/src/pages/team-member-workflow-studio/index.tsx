@@ -243,7 +243,7 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
         canSave={studio.canSave}
         canViewYaml={studio.canViewYaml}
         dirty={studio.dirty}
-        activeMemberRunPlaceholderReason={studio.activeMemberRunPlaceholderReason}
+        currentDraftRunPlaceholderReason={studio.currentDraftRunPlaceholderReason}
         onOpenAutomations={studio.navigateToAutomations}
         onPublishMember={studio.publishMember}
         onRefreshPublishStatus={studio.refreshPublishStatus}
@@ -367,13 +367,13 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
           />
         ) : null}
         <WorkflowStudioDraftRunPanel
-          canRun={studio.canRunActiveMember}
-          disabledReason={studio.activeMemberRunPlaceholderReason}
+          canRun={studio.canRunCurrentDraft}
+          disabledReason={studio.currentDraftRunPlaceholderReason}
           onClose={studio.selectCanvas}
-          onRun={studio.runActiveMember}
+          onRun={studio.runCurrentDraft}
           onRunMessageChange={studio.setExecutionRunMessage}
           open={studio.draftRunPanelOpen}
-          pending={studio.activeMemberRunPending}
+          pending={studio.currentDraftRunPending}
           runMessage={studio.executionRunMessage}
           width={sidePanelWidth}
         />
