@@ -289,7 +289,7 @@ describe('StudioMemberInvokePanel', () => {
     expect(screen.getByRole('button', { name: 'Run workflow' })).toBeDisabled();
   });
 
-  it('uses the member-run summary variant without duplicating service implementation facts', async () => {
+  it('uses the member-run surface as an isolated SaaS run page', async () => {
     render(
       React.createElement(StudioMemberInvokePanel, {
         memberId: 'member-with-a-very-long-stable-identifier-1234567890',
@@ -363,6 +363,112 @@ describe('StudioMemberInvokePanel', () => {
     expect(targetSummary).not.toHaveTextContent('Service: workspace-demo-service');
     expect(targetSummary).not.toHaveTextContent('Workflow');
     expect(targetSummary).not.toHaveTextContent('Team: team-1');
+    expect(screen.getByText('New run')).toBeTruthy();
+    expect(
+      screen.getByText(
+        'Provide the input for one isolated execution against this member.',
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText('Task for this run')).toBeTruthy();
+    expect(screen.getByLabelText('Run input')).toBeTruthy();
+    expect(screen.queryByLabelText('Workflow request input')).toBeNull();
+    expect(
+      screen.getByText(
+        'Each run is isolated. Previous runs are not sent as context.',
+      ),
+    ).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Start run' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Run workflow' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Technical details' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Details' })).toBeNull();
+    expect(screen.getByText('Run result')).toBeTruthy();
+    expect(screen.getByText('No run result yet')).toBeTruthy();
+    expect(screen.getByText('Start a run to see the result here.')).toBeTruthy();
+    expect(screen.queryByText('Observe handoff')).toBeNull();
+  });
+
+  it('locks the member-run input and keeps the submitted task visible while a run is in progress', async () => {
+    (runtimeRunsApi.streamChat as jest.Mock).mockResolvedValue({});
+    (parseBackendSSEStream as jest.Mock).mockImplementation(
+      async function* (_response, options?: { signal?: AbortSignal }) {
+        await new Promise<void>((resolve) => {
+          if (options?.signal?.aborted) {
+            resolve();
+            return;
+          }
+
+          options?.signal?.addEventListener('abort', () => resolve(), {
+            once: true,
+          });
+        });
+      },
+    );
+
+    render(
+      React.createElement(StudioMemberInvokePanel, {
+        memberId: 'member-run-chat',
+        scopeId: 'scope-1',
+        services: [
+          {
+            deploymentStatus: 'Active',
+            displayName: 'member-run-chat',
+            endpoints: [
+              {
+                description: 'Chat with the member.',
+                displayName: 'Chat',
+                endpointId: 'chat',
+                kind: 'chat',
+                requestTypeUrl: '',
+                responseTypeUrl: '',
+              },
+            ],
+            kind: 'service',
+            namespace: 'default',
+            primaryActorId: 'actor-member-run-chat',
+            serviceId: 'member-run-chat',
+          },
+        ],
+        targetSummaryVariant: 'member-run',
+      }),
+    );
+
+    const runInput = await screen.findByLabelText('Run input');
+    fireEvent.change(runInput, {
+      target: {
+        value: 'Summarize the latest support case for billing.',
+      },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Start run' }));
+
+    await waitFor(() => {
+      expect(runtimeRunsApi.streamChat).toHaveBeenCalledWith(
+        'scope-1',
+        {
+          prompt: 'Summarize the latest support case for billing.',
+        },
+        expect.any(AbortSignal),
+        {
+          serviceId: 'member-run-chat',
+        },
+      );
+    });
+
+    const lockedRunInput = screen.getByLabelText('Run input');
+    expect(lockedRunInput).toHaveValue(
+      'Summarize the latest support case for billing.',
+    );
+    expect(lockedRunInput).toHaveAttribute('readonly');
+    expect(screen.getByText('In progress')).toBeTruthy();
+    expect(
+      screen.getByText(
+        'This submitted input is locked while the run is in progress.',
+      ),
+    ).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Stop run' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Clear' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Start run' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop run' }));
   });
 
   it('prefers final run output over intermediate assistant text for chat invoke results', async () => {

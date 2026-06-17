@@ -40,6 +40,7 @@ type StudioInvokeDiagnosticsDrawerProps = {
   readonly payloadTypeUrl: string;
   readonly runElapsedLabel: string;
   readonly runViewMode: StudioInvokeRunViewMode;
+  readonly title?: React.ReactNode;
   readonly onClose: () => void;
   readonly onPayloadBase64Change: (value: string) => void;
   readonly onPayloadTypeUrlChange: (value: string) => void;
@@ -306,6 +307,7 @@ const StudioInvokeDiagnosticsDrawer: React.FC<
   payloadTypeUrl,
   runElapsedLabel,
   runViewMode,
+  title,
 }) => {
   const startedAtLabel = currentRunRequest?.startedAt
     ? formatHistoryTimestamp(currentRunRequest.startedAt)
@@ -479,10 +481,13 @@ const StudioInvokeDiagnosticsDrawer: React.FC<
               'Latest run detail',
             )
       }
-      title={t(
-        'pages.studio.studioinvokediagnosticsdrawer.run.diagnostics',
-        'Run diagnostics',
-      )}
+      title={
+        title ??
+        t(
+          'pages.studio.studioinvokediagnosticsdrawer.run.diagnostics',
+          'Run diagnostics',
+        )
+      }
       onClose={onClose}
     >
       <div data-testid="studio-invoke-diagnostics-drawer">

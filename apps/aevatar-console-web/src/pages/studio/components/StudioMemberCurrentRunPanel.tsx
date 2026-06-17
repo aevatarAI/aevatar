@@ -22,6 +22,7 @@ import { t } from "@/shared/i18n/messages";
 
 type RunViewMode = 'latest' | 'historical';
 type RunOutputTab = 'output' | 'timeline' | 'events' | 'metadata';
+type CurrentRunPresentation = 'default' | 'member-run';
 
 type StudioMemberCurrentRunPanelProps = {
   readonly activeTab?: RunOutputTab;
@@ -34,6 +35,7 @@ type StudioMemberCurrentRunPanelProps = {
   readonly invokeResult: InvokeResultState;
   readonly runElapsedLabel: string;
   readonly runViewMode: RunViewMode;
+  readonly presentation?: CurrentRunPresentation;
   readonly showDebugTabs?: boolean;
   readonly transcriptViewportRef: React.RefObject<HTMLDivElement | null>;
   readonly onCopyError: () => void;
@@ -79,11 +81,12 @@ function getStatusLabel(status: InvokeResultState['status']): string {
 
 function getRunMarker(input: {
   readonly currentRunHasData: boolean;
+  readonly presentation: CurrentRunPresentation;
   readonly runViewMode: RunViewMode;
   readonly status: InvokeResultState['status'];
 }): string {
   if (!input.currentRunHasData) {
-    return 'No run';
+    return input.presentation === 'member-run' ? 'No result' : 'No run';
   }
 
   if (input.runViewMode === 'historical') {
@@ -94,7 +97,9 @@ function getRunMarker(input: {
     return 'Running';
   }
 
-  return 'Latest response';
+  return input.presentation === 'member-run'
+    ? 'Latest result'
+    : 'Latest response';
 }
 
 function buildStatusSummary(input: {
@@ -295,6 +300,7 @@ const StudioMemberCurrentRunPanel: React.FC<
   onOpenDiagnostics,
   onOpenInspector,
   onRetryAsNewRun,
+  presentation = 'default',
   runElapsedLabel,
   runViewMode,
   transcriptViewportRef,
@@ -308,6 +314,7 @@ const StudioMemberCurrentRunPanel: React.FC<
   });
   const marker = getRunMarker({
     currentRunHasData,
+    presentation,
     runViewMode,
     status: invokeResult.status,
   });
@@ -325,9 +332,29 @@ const StudioMemberCurrentRunPanel: React.FC<
   const renderOutput = () => {
     if (!currentRunHasData) {
       return (
-          <div style={emptyStateStyle}>
-            <div style={emptyTitleStyle}>{t("pages.studio.studiomembercurrentrunpanel.no.run.yet", "No run yet")}</div>
-          <div>{t("pages.studio.studiomembercurrentrunpanel.send.prompt.above.to.create", "Send a request above to create the first run.")}</div>
+        <div style={emptyStateStyle}>
+          <div style={emptyTitleStyle}>
+            {presentation === 'member-run'
+              ? t(
+                  "pages.studio.studiomembercurrentrunpanel.no.run.result.yet",
+                  "No run result yet",
+                )
+              : t(
+                  "pages.studio.studiomembercurrentrunpanel.no.run.yet",
+                  "No run yet",
+                )}
+          </div>
+          <div>
+            {presentation === 'member-run'
+              ? t(
+                  "pages.studio.studiomembercurrentrunpanel.start.run.to.see.result",
+                  "Start a run to see the result here.",
+                )
+              : t(
+                  "pages.studio.studiomembercurrentrunpanel.send.prompt.above.to.create",
+                  "Send a request above to create the first run.",
+                )}
+          </div>
         </div>
       );
     }
@@ -337,10 +364,15 @@ const StudioMemberCurrentRunPanel: React.FC<
       return (
         <div style={outputPaneStyle}>
           <div style={sectionStyle}>
-            <span style={sectionLabelStyle}>{t("pages.studio.studiomembercurrentrunpanel.input", "Request")}</span>
+            <span style={sectionLabelStyle}>
+              {t("pages.studio.studiomembercurrentrunpanel.input", "Request")}
+            </span>
             <p style={bodyTextStyle}>
               {inputText ||
-                t("pages.studio.studiomembercurrentrunpanel.no.prompt.captured", "No request captured.")}
+                t(
+                  "pages.studio.studiomembercurrentrunpanel.no.prompt.captured",
+                  "No request captured.",
+                )}
             </p>
           </div>
           <div style={isCancelled ? warningCardStyle : errorCardStyle}>
@@ -352,14 +384,26 @@ const StudioMemberCurrentRunPanel: React.FC<
             <div style={{ minWidth: 0 }}>
               <div style={errorTitleStyle}>
                 {isCancelled
-                  ? t("pages.studio.studiomembercurrentrunpanel.run.stopped", "Run stopped")
-                  : t("pages.studio.studiomembercurrentrunpanel.run.failed", "Run failed")}
+                  ? t(
+                      "pages.studio.studiomembercurrentrunpanel.run.stopped",
+                      "Run stopped",
+                    )
+                  : t(
+                      "pages.studio.studiomembercurrentrunpanel.run.failed",
+                      "Run failed",
+                    )}
               </div>
               <p style={errorDescriptionStyle}>
                 {errorDescription ||
                   (isCancelled
-                    ? t("pages.studio.studiomembercurrentrunpanel.the.run.has.stopped", "The run has stopped and only partial output may currently be displayed.")
-                    : t("pages.studio.studiomembercurrentrunpanel.run.failed.without.message", "This run failed without an additional error message."))}
+                    ? t(
+                        "pages.studio.studiomembercurrentrunpanel.the.run.has.stopped",
+                        "The run has stopped and only partial output may currently be displayed.",
+                      )
+                    : t(
+                        "pages.studio.studiomembercurrentrunpanel.run.failed.without.message",
+                        "This run failed without an additional error message.",
+                      ))}
               </p>
             </div>
           </div>
@@ -367,33 +411,78 @@ const StudioMemberCurrentRunPanel: React.FC<
             <div style={warningCardStyle}>
               <ExclamationCircleFilled style={warningIconStyle} />
               <div style={{ minWidth: 0 }}>
-                <div style={errorTitleStyle}>{t("pages.studio.studiomembercurrentrunpanel.partial.output", "Partial output")}</div>
+                <div style={errorTitleStyle}>
+                  {t(
+                    "pages.studio.studiomembercurrentrunpanel.partial.output",
+                    "Partial output",
+                  )}
+                </div>
                 <p style={errorDescriptionStyle}>
-                  {t("pages.studio.studiomembercurrentrunpanel.the.run.has.stopped.2", "The run has stopped and only partial output may currently be displayed.")}</p>
+                  {t(
+                    "pages.studio.studiomembercurrentrunpanel.the.run.has.stopped.2",
+                    "The run has stopped and only partial output may currently be displayed.",
+                  )}
+                </p>
               </div>
             </div>
           ) : null}
           {outputText ? (
             <div style={sectionStyle}>
-              <span style={sectionLabelStyle}>{t("pages.studio.studiomembercurrentrunpanel.output", "Response")}</span>
+              <span style={sectionLabelStyle}>
+                {presentation === 'member-run'
+                  ? t(
+                      "pages.studio.studiomembercurrentrunpanel.result",
+                      "Result",
+                    )
+                  : t(
+                      "pages.studio.studiomembercurrentrunpanel.output",
+                      "Response",
+                    )}
+              </span>
               <p style={bodyTextStyle}>{outputText}</p>
             </div>
           ) : null}
-          <div data-testid="studio-invoke-recovery-path" style={recoveryPathStyle}>
-            <span style={sectionLabelStyle}>{t("pages.studio.studiomembercurrentrunpanel.recovery.path", "Recovery path")}</span>
+          <div
+            data-testid="studio-invoke-recovery-path"
+            style={recoveryPathStyle}
+          >
+            <span style={sectionLabelStyle}>
+              {t(
+                "pages.studio.studiomembercurrentrunpanel.recovery.path",
+                "Recovery path",
+              )}
+            </span>
             <Typography.Text style={helperTextStyle}>
               {isCancelled
-                ? t("pages.studio.studiomembercurrentrunpanel.this.stopped.run.stays.in.history", "This stopped run stays in history. Retry as a new run when you want fresh output, or switch to Observe to inspect the latest backend events.")
-                : t("pages.studio.studiomembercurrentrunpanel.this.failed.only.the.invoke.run.open.diagnostics", "This failed only the Invoke run. Retry with a smaller prompt, open diagnostics for backend signals, or return to Build/Bind if the member contract needs changes.")}
+                ? t(
+                    "pages.studio.studiomembercurrentrunpanel.this.stopped.run.stays.in.history",
+                    "This stopped run stays in history. Retry as a new run when you want fresh output, or switch to Observe to inspect the latest backend events.",
+                  )
+                : t(
+                    "pages.studio.studiomembercurrentrunpanel.this.failed.only.the.invoke.run.open.diagnostics",
+                    "This failed only the Invoke run. Retry with a smaller prompt, open diagnostics for backend signals, or return to Build/Bind if the member contract needs changes.",
+                  )}
             </Typography.Text>
           </div>
           <div style={errorActionsStyle}>
             <Button icon={<UnorderedListOutlined />} onClick={openDiagnostics}>
-              {t("pages.studio.studiomembercurrentrunpanel.open.diagnostics", "Open diagnostics")}</Button>
+              {t(
+                "pages.studio.studiomembercurrentrunpanel.open.diagnostics",
+                "Open diagnostics",
+              )}
+            </Button>
             <Button icon={<CopyOutlined />} onClick={onCopyError}>
-              {t("pages.studio.studiomembercurrentrunpanel.copy.error", "Copy error")}</Button>
+              {t(
+                "pages.studio.studiomembercurrentrunpanel.copy.error",
+                "Copy error",
+              )}
+            </Button>
             <Button icon={<ReloadOutlined />} onClick={onRetryAsNewRun}>
-              {t("pages.studio.studiomembercurrentrunpanel.retry.as.new.run", "Retry as new run")}</Button>
+              {t(
+                "pages.studio.studiomembercurrentrunpanel.retry.as.new.run",
+                "Retry as new run",
+              )}
+            </Button>
           </div>
         </div>
       );
@@ -406,41 +495,88 @@ const StudioMemberCurrentRunPanel: React.FC<
         style={outputPaneStyle}
       >
         <div style={sectionStyle}>
-          <span style={sectionLabelStyle}>{t("pages.studio.studiomembercurrentrunpanel.status.summary", "Run status")}</span>
+          <span style={sectionLabelStyle}>
+            {t(
+              "pages.studio.studiomembercurrentrunpanel.status.summary",
+              "Run status",
+            )}
+          </span>
           <div style={summaryStyle}>{statusSummary}</div>
         </div>
         <div style={sectionStyle}>
-          <span style={sectionLabelStyle}>{t("pages.studio.studiomembercurrentrunpanel.input.2", "Request")}</span>
+          <span style={sectionLabelStyle}>
+            {t("pages.studio.studiomembercurrentrunpanel.input.2", "Request")}
+          </span>
           <p style={bodyTextStyle}>
             {inputText ||
-              t("pages.studio.studiomembercurrentrunpanel.no.prompt.captured", "No request captured.")}
+              t(
+                "pages.studio.studiomembercurrentrunpanel.no.prompt.captured",
+                "No request captured.",
+              )}
           </p>
         </div>
         <div style={responseSectionStyle}>
-          <span style={sectionLabelStyle}>{t("pages.studio.studiomembercurrentrunpanel.output.2", "Response")}</span>
+          <span style={sectionLabelStyle}>
+            {presentation === 'member-run'
+              ? t(
+                  "pages.studio.studiomembercurrentrunpanel.result.2",
+                  "Result",
+                )
+              : t(
+                  "pages.studio.studiomembercurrentrunpanel.output.2",
+                  "Response",
+                )}
+          </span>
           {invokeResult.status === 'running' && !outputText ? (
             <Typography.Text style={helperTextStyle} type="secondary">
-              {t("pages.studio.studiomembercurrentrunpanel.waiting.for.output", "Waiting for a response...")}</Typography.Text>
+              {t(
+                "pages.studio.studiomembercurrentrunpanel.waiting.for.output",
+                "Waiting for a response...",
+              )}
+            </Typography.Text>
           ) : outputText ? (
             <p style={bodyTextStyle}>{outputText}</p>
           ) : invokeResult.status === 'success' ? (
             <div style={helperTextStyle}>
-              <div>{t("pages.studio.studiomembercurrentrunpanel.no.displayable.content.returned", "No readable response returned.")}</div>
               <div>
-                {t("pages.studio.studiomembercurrentrunpanel.the.run.ended.successfully", "The run ended successfully, but it did not return user-visible content.")}</div>
-              <div>{t("pages.studio.studiomembercurrentrunpanel.you.can.view.events", "Open diagnostics when you need event or payload evidence.")}</div>
+                {t(
+                  "pages.studio.studiomembercurrentrunpanel.no.displayable.content.returned",
+                  "No readable response returned.",
+                )}
+              </div>
+              <div>
+                {t(
+                  "pages.studio.studiomembercurrentrunpanel.the.run.ended.successfully",
+                  "The run ended successfully, but it did not return user-visible content.",
+                )}
+              </div>
+              <div>
+                {t(
+                  "pages.studio.studiomembercurrentrunpanel.you.can.view.events",
+                  "Open diagnostics when you need event or payload evidence.",
+                )}
+              </div>
             </div>
           ) : (
             <Typography.Text style={helperTextStyle} type="secondary">
-              {t("pages.studio.studiomembercurrentrunpanel.waiting.for.output.2", "Waiting for a response...")}</Typography.Text>
+              {t(
+                "pages.studio.studiomembercurrentrunpanel.waiting.for.output.2",
+                "Waiting for a response...",
+              )}
+            </Typography.Text>
           )}
         </div>
-        {observeHandoffText ? (
+        {presentation !== 'member-run' && observeHandoffText ? (
           <div
             data-testid="studio-invoke-observe-handoff"
             style={recoveryPathStyle}
           >
-            <span style={sectionLabelStyle}>{t("pages.studio.studiomembercurrentrunpanel.observe.handoff", "Observe handoff")}</span>
+            <span style={sectionLabelStyle}>
+              {t(
+                "pages.studio.studiomembercurrentrunpanel.observe.handoff",
+                "Observe handoff",
+              )}
+            </span>
             <Typography.Text style={helperTextStyle}>
               {observeHandoffText}
             </Typography.Text>
