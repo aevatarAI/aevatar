@@ -173,6 +173,19 @@ public interface IWorkflowExternalApprovalContinuationLookupPort
         CancellationToken ct = default);
 }
 
+public interface IWorkflowWebhookReplayAdmissionPort
+{
+    bool IsAvailable { get; }
+
+    ValueTask<WorkflowWebhookReplayAdmission> AdmitAsync(
+        WorkflowWebhookReplayAdmissionRequest request,
+        CancellationToken ct = default);
+
+    ValueTask ReleaseAsync(
+        WorkflowWebhookReplayAdmissionRequest request,
+        CancellationToken ct = default);
+}
+
 public interface IWorkflowDefinitionProvisioningPort
 {
     Task<WorkflowDefinitionProvisioningReceipt> EnsureDefinitionAsync(

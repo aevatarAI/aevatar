@@ -4,6 +4,10 @@ using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using FluentAssertions;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -16,10 +20,10 @@ public sealed class WorkflowExternalApprovalCallbackEndpointsTests
     [Fact]
     public async Task HandleAsync_WhenLookupMisses_ShouldReturnTooEarlyWithoutReplayAdmissionOrDispatch()
     {
-        var replay = new RecordingReplayStore();
+        var replay = new RecordingReplayAdmissionPort();
         var dispatch = new RecordingSignalDispatch();
         var lookup = new RecordingLookupPort { Result = null };
-        var http = CreateHttpContext(replay);
+        var http = CreateHttpContext();
         var body = Body("APPROVED");
         http.Request.Body = new MemoryStream(body);
         Sign(http, "secret", body);
@@ -28,6 +32,7 @@ public sealed class WorkflowExternalApprovalCallbackEndpointsTests
             http,
             "nyx",
             lookup,
+            replay,
             dispatch,
             Options.Create(CreateOptions()),
             NullLoggerFactory.Instance,
@@ -44,10 +49,10 @@ public sealed class WorkflowExternalApprovalCallbackEndpointsTests
     [Fact]
     public async Task HandleAsync_WhenLookupFails_ShouldReturnServiceUnavailableWithoutReplayAdmissionOrDispatch()
     {
-        var replay = new RecordingReplayStore();
+        var replay = new RecordingReplayAdmissionPort();
         var dispatch = new RecordingSignalDispatch();
         var lookup = new RecordingLookupPort { ThrowOnLookup = true };
-        var http = CreateHttpContext(replay);
+        var http = CreateHttpContext();
         var body = Body("APPROVED");
         http.Request.Body = new MemoryStream(body);
         Sign(http, "secret", body);
@@ -56,6 +61,7 @@ public sealed class WorkflowExternalApprovalCallbackEndpointsTests
             http,
             "nyx",
             lookup,
+            replay,
             dispatch,
             Options.Create(CreateOptions()),
             NullLoggerFactory.Instance,
@@ -78,14 +84,14 @@ public sealed class WorkflowExternalApprovalCallbackEndpointsTests
         string rawStatus,
         string normalizedStatus)
     {
-        var replay = new RecordingReplayStore();
+        var replay = new RecordingReplayAdmissionPort();
         var dispatch = new RecordingSignalDispatch
         {
             Result = CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>.Success(
                 new WorkflowRunControlAcceptedReceipt("actor-run-1", "run-1", "accepted-cmd", "accepted-corr")),
         };
         var lookup = new RecordingLookupPort { Result = ActiveContinuation() };
-        var http = CreateHttpContext(replay);
+        var http = CreateHttpContext();
         var body = Body(rawStatus);
         http.Request.Body = new MemoryStream(body);
         http.Request.ContentType = "application/json";
@@ -95,6 +101,7 @@ public sealed class WorkflowExternalApprovalCallbackEndpointsTests
             http,
             "nyx",
             lookup,
+            replay,
             dispatch,
             Options.Create(CreateOptions()),
             NullLoggerFactory.Instance,
@@ -105,7 +112,8 @@ public sealed class WorkflowExternalApprovalCallbackEndpointsTests
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
         responseBody.Should().Contain(normalizedStatus);
-        lookup.Requests.Should().ContainSingle().Subject.Should().Be(("nyxid", "instance_code", "app-42"));
+        lookup.Requests.Should().ContainSingle();
+        lookup.Requests.Single().Should().Be(("nyxid", "instance_code", "app-42"));
         replay.Requests.Should().ContainSingle();
         replay.Requests[0].RouteKey.Should().Be("external-approval");
         replay.Requests[0].SourceId.Should().Be("nyxid");
@@ -122,15 +130,17 @@ public sealed class WorkflowExternalApprovalCallbackEndpointsTests
         command.CorrelationId.Should().Be(replay.Requests[0].CorrelationId);
         command.Payload.Should().Be(normalizedStatus);
         command.ExternalApproval.Should().NotBeNull();
-        command.ExternalApproval!.TerminalStatus.Should().Be(normalizedStatus);
-        command.ExternalApproval.ProviderDeliveryEvidence["delivery_id"].Should().Be("delivery-1");
-        command.ExternalApproval.CallbackIdempotencyKey.Should().Be("idem-42");
+        var externalApproval = command.ExternalApproval!;
+        externalApproval.TerminalStatus.Should().Be(normalizedStatus);
+        externalApproval.ProviderDeliveryEvidence.Should().NotBeNull();
+        externalApproval.ProviderDeliveryEvidence!["delivery_id"].Should().Be("delivery-1");
+        externalApproval.CallbackIdempotencyKey.Should().Be("idem-42");
     }
 
     [Fact]
     public async Task HandleAsync_WhenDuplicateSameTerminal_ShouldReturnAcceptedWithoutRedispatch()
     {
-        var replay = new RecordingReplayStore
+        var replay = new RecordingReplayAdmissionPort
         {
             Result = new WorkflowWebhookReplayAdmission(
                 WorkflowWebhookReplayAdmissionStatus.DuplicateInProgress,
@@ -139,7 +149,7 @@ public sealed class WorkflowExternalApprovalCallbackEndpointsTests
         };
         var dispatch = new RecordingSignalDispatch();
         var lookup = new RecordingLookupPort { Result = ActiveContinuation() };
-        var http = CreateHttpContext(replay);
+        var http = CreateHttpContext();
         var body = Body("APPROVED");
         http.Request.Body = new MemoryStream(body);
         Sign(http, "secret", body);
@@ -148,6 +158,7 @@ public sealed class WorkflowExternalApprovalCallbackEndpointsTests
             http,
             "nyx",
             lookup,
+            replay,
             dispatch,
             Options.Create(CreateOptions()),
             NullLoggerFactory.Instance,
@@ -164,13 +175,13 @@ public sealed class WorkflowExternalApprovalCallbackEndpointsTests
     [Fact]
     public async Task HandleAsync_WhenTerminalConflicts_ShouldReturnConflictWithoutDispatch()
     {
-        var replay = new RecordingReplayStore
+        var replay = new RecordingReplayAdmissionPort
         {
             Result = new WorkflowWebhookReplayAdmission(WorkflowWebhookReplayAdmissionStatus.PayloadConflict),
         };
         var dispatch = new RecordingSignalDispatch();
         var lookup = new RecordingLookupPort { Result = ActiveContinuation() };
-        var http = CreateHttpContext(replay);
+        var http = CreateHttpContext();
         var body = Body("REJECTED");
         http.Request.Body = new MemoryStream(body);
         Sign(http, "secret", body);
@@ -179,6 +190,7 @@ public sealed class WorkflowExternalApprovalCallbackEndpointsTests
             http,
             "nyx",
             lookup,
+            replay,
             dispatch,
             Options.Create(CreateOptions()),
             NullLoggerFactory.Instance,
@@ -193,10 +205,10 @@ public sealed class WorkflowExternalApprovalCallbackEndpointsTests
     [Fact]
     public async Task HandleAsync_WhenReplayAdmissionFails_ShouldReturnServiceUnavailableWithoutDispatch()
     {
-        var replay = new RecordingReplayStore { ThrowOnAdmit = true };
+        var replay = new RecordingReplayAdmissionPort { ThrowOnAdmit = true };
         var dispatch = new RecordingSignalDispatch();
         var lookup = new RecordingLookupPort { Result = ActiveContinuation() };
-        var http = CreateHttpContext(replay);
+        var http = CreateHttpContext();
         var body = Body("APPROVED");
         http.Request.Body = new MemoryStream(body);
         Sign(http, "secret", body);
@@ -205,6 +217,7 @@ public sealed class WorkflowExternalApprovalCallbackEndpointsTests
             http,
             "nyx",
             lookup,
+            replay,
             dispatch,
             Options.Create(CreateOptions()),
             NullLoggerFactory.Instance,
@@ -214,6 +227,248 @@ public sealed class WorkflowExternalApprovalCallbackEndpointsTests
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
         http.Response.Headers.RetryAfter.ToString().Should().Be("7");
+        dispatch.Commands.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenCallbacksDisabled_ShouldReturnNotFoundWithoutLookupReplayOrDispatch()
+    {
+        var replay = new RecordingReplayAdmissionPort();
+        var dispatch = new RecordingSignalDispatch();
+        var lookup = new RecordingLookupPort { Result = ActiveContinuation() };
+        var http = CreateHttpContext();
+        var body = Body("APPROVED");
+        http.Request.Body = new MemoryStream(body);
+        Sign(http, "secret", body);
+        var options = CreateOptions();
+        options.Enabled = false;
+
+        var result = await WorkflowExternalApprovalCallbackEndpoints.HandleAsync(
+            http,
+            "nyx",
+            lookup,
+            replay,
+            dispatch,
+            Options.Create(options),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        lookup.Requests.Should().BeEmpty();
+        replay.Requests.Should().BeEmpty();
+        dispatch.Commands.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenRouteUnknown_ShouldReturnNotFoundWithoutLookupReplayOrDispatch()
+    {
+        var replay = new RecordingReplayAdmissionPort();
+        var dispatch = new RecordingSignalDispatch();
+        var lookup = new RecordingLookupPort { Result = ActiveContinuation() };
+        var http = CreateHttpContext();
+        var body = Body("APPROVED");
+        http.Request.Body = new MemoryStream(body);
+        Sign(http, "secret", body);
+
+        var result = await WorkflowExternalApprovalCallbackEndpoints.HandleAsync(
+            http,
+            "missing",
+            lookup,
+            replay,
+            dispatch,
+            Options.Create(CreateOptions()),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        lookup.Requests.Should().BeEmpty();
+        replay.Requests.Should().BeEmpty();
+        dispatch.Commands.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("invalid")]
+    [InlineData("expired")]
+    public async Task HandleAsync_WhenHmacInvalid_ShouldReturnUnauthorizedWithoutLookupReplayOrDispatch(
+        string authCase)
+    {
+        var replay = new RecordingReplayAdmissionPort();
+        var dispatch = new RecordingSignalDispatch();
+        var lookup = new RecordingLookupPort { Result = ActiveContinuation() };
+        var http = CreateHttpContext();
+        var body = Body("APPROVED");
+        http.Request.Body = new MemoryStream(body);
+        if (authCase == "invalid")
+            Sign(http, "wrong-secret", body);
+        if (authCase == "expired")
+            Sign(http, "secret", body, DateTimeOffset.UtcNow.AddMinutes(-10));
+
+        var result = await WorkflowExternalApprovalCallbackEndpoints.HandleAsync(
+            http,
+            "nyx",
+            lookup,
+            replay,
+            dispatch,
+            Options.Create(CreateOptions()),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
+        lookup.Requests.Should().BeEmpty();
+        replay.Requests.Should().BeEmpty();
+        dispatch.Commands.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenTerminalPayloadMalformed_ShouldReturnBadRequestWithoutLookupReplayOrDispatch()
+    {
+        var replay = new RecordingReplayAdmissionPort();
+        var dispatch = new RecordingSignalDispatch();
+        var lookup = new RecordingLookupPort { Result = ActiveContinuation() };
+        var http = CreateHttpContext();
+        var body = Encoding.UTF8.GetBytes("""{"instanceCode":"APP-42","requestId":"request-42","deliveryId":"delivery-1"}""");
+        http.Request.Body = new MemoryStream(body);
+        Sign(http, "secret", body);
+
+        var result = await WorkflowExternalApprovalCallbackEndpoints.HandleAsync(
+            http,
+            "nyx",
+            lookup,
+            replay,
+            dispatch,
+            Options.Create(CreateOptions()),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        lookup.Requests.Should().BeEmpty();
+        replay.Requests.Should().BeEmpty();
+        dispatch.Commands.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenReplayStoreMissing_ShouldReturnServiceUnavailableWithoutReplayOrDispatch()
+    {
+        var replay = new RecordingReplayAdmissionPort { IsAvailable = false };
+        var dispatch = new RecordingSignalDispatch();
+        var lookup = new RecordingLookupPort { Result = ActiveContinuation() };
+        var http = CreateHttpContext();
+        var body = Body("APPROVED");
+        http.Request.Body = new MemoryStream(body);
+        Sign(http, "secret", body);
+
+        var result = await WorkflowExternalApprovalCallbackEndpoints.HandleAsync(
+            http,
+            "nyx",
+            lookup,
+            replay,
+            dispatch,
+            Options.Create(CreateOptions()),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        http.Response.Headers.RetryAfter.ToString().Should().Be("7");
+        lookup.Requests.Should().ContainSingle();
+        dispatch.Commands.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenDispatchFails_ShouldReleaseReplayAdmissionAndMapFailure()
+    {
+        var replay = new RecordingReplayAdmissionPort();
+        var dispatch = new RecordingSignalDispatch
+        {
+            Result = CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>.Failure(
+                WorkflowRunControlStartError.InvalidSignalName("actor-run-1", "run-1", string.Empty)),
+        };
+        var lookup = new RecordingLookupPort { Result = ActiveContinuation() };
+        var http = CreateHttpContext();
+        var body = Body("APPROVED");
+        http.Request.Body = new MemoryStream(body);
+        Sign(http, "secret", body);
+
+        var result = await WorkflowExternalApprovalCallbackEndpoints.HandleAsync(
+            http,
+            "nyx",
+            lookup,
+            replay,
+            dispatch,
+            Options.Create(CreateOptions()),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        replay.Requests.Should().ContainSingle();
+        replay.Released.Should().ContainSingle();
+        replay.Released.Single().Should().Be(replay.Requests[0]);
+        dispatch.Commands.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenDispatchThrows_ShouldReleaseReplayAdmissionAndReturnServerError()
+    {
+        var replay = new RecordingReplayAdmissionPort();
+        var dispatch = new RecordingSignalDispatch { ThrowOnDispatch = true };
+        var lookup = new RecordingLookupPort { Result = ActiveContinuation() };
+        var http = CreateHttpContext();
+        var body = Body("APPROVED");
+        http.Request.Body = new MemoryStream(body);
+        Sign(http, "secret", body);
+
+        var result = await WorkflowExternalApprovalCallbackEndpoints.HandleAsync(
+            http,
+            "nyx",
+            lookup,
+            replay,
+            dispatch,
+            Options.Create(CreateOptions()),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status500InternalServerError);
+        replay.Requests.Should().ContainSingle();
+        replay.Released.Should().ContainSingle();
+        replay.Released.Single().Should().Be(replay.Requests[0]);
+        dispatch.Commands.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task MappedEndpoint_WhenReplayStoreNotConfigured_ShouldReturnServiceUnavailable()
+    {
+        var lookup = new RecordingLookupPort { Result = ActiveContinuation() };
+        var dispatch = new RecordingSignalDispatch();
+        await using var app = await CreateMappedAppAsync(lookup, dispatch);
+        using var client = CreateClient(app);
+        var body = Body("APPROVED");
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/workflow-external-approvals/nyx")
+        {
+            Content = new ByteArrayContent(body),
+        };
+        request.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+        Sign(request, "secret", body);
+
+        using var response = await client.SendAsync(request);
+
+        response.StatusCode.Should().Be(System.Net.HttpStatusCode.ServiceUnavailable);
+        response.Headers.RetryAfter.Should().NotBeNull();
+        response.Headers.RetryAfter!.Delta.Should().Be(TimeSpan.FromSeconds(7));
+        lookup.Requests.Should().ContainSingle();
         dispatch.Commands.Should().BeEmpty();
     }
 
@@ -257,10 +512,9 @@ public sealed class WorkflowExternalApprovalCallbackEndpointsTests
     private static byte[] Body(string status) =>
         Encoding.UTF8.GetBytes($$"""{"instanceCode":"APP-42","requestId":"request-42","status":"{{status}}","deliveryId":"delivery-1"}""");
 
-    private static DefaultHttpContext CreateHttpContext(IWorkflowWebhookReplayStore replayStore)
+    private static DefaultHttpContext CreateHttpContext()
     {
         var services = new ServiceCollection();
-        services.AddSingleton(replayStore);
         services.AddSingleton<Microsoft.Extensions.Logging.ILoggerFactory>(NullLoggerFactory.Instance);
         var http = new DefaultHttpContext
         {
@@ -270,13 +524,58 @@ public sealed class WorkflowExternalApprovalCallbackEndpointsTests
         return http;
     }
 
-    private static void Sign(HttpContext http, string secret, byte[] body)
+    private static void Sign(HttpContext http, string secret, byte[] body, DateTimeOffset? timestamp = null)
     {
-        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
+        var timestampValue = (timestamp ?? DateTimeOffset.UtcNow).ToUnixTimeSeconds().ToString();
         using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
-        var signaturePayload = Encoding.UTF8.GetBytes(timestamp + ".").Concat(body).ToArray();
-        http.Request.Headers["X-Aevatar-Timestamp"] = timestamp;
+        var signaturePayload = Encoding.UTF8.GetBytes(timestampValue + ".").Concat(body).ToArray();
+        http.Request.Headers["X-Aevatar-Timestamp"] = timestampValue;
         http.Request.Headers["X-Aevatar-Signature"] = "sha256=" + Convert.ToHexString(hmac.ComputeHash(signaturePayload)).ToLowerInvariant();
+    }
+
+    private static void Sign(HttpRequestMessage request, string secret, byte[] body, DateTimeOffset? timestamp = null)
+    {
+        var timestampValue = (timestamp ?? DateTimeOffset.UtcNow).ToUnixTimeSeconds().ToString();
+        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
+        var signaturePayload = Encoding.UTF8.GetBytes(timestampValue + ".").Concat(body).ToArray();
+        request.Headers.Add("X-Aevatar-Timestamp", timestampValue);
+        request.Headers.Add("X-Aevatar-Signature", "sha256=" + Convert.ToHexString(hmac.ComputeHash(signaturePayload)).ToLowerInvariant());
+    }
+
+    private static async Task<WebApplication> CreateMappedAppAsync(
+        IWorkflowExternalApprovalContinuationLookupPort lookup,
+        ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError> dispatch)
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = [] });
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        builder.Services.AddLogging();
+        builder.Services.AddOptions();
+        builder.Services.AddSingleton(lookup);
+        builder.Services.AddSingleton<IWorkflowWebhookReplayAdmissionPort, WorkflowWebhookReplayAdmissionPort>();
+        builder.Services.AddSingleton(dispatch);
+        builder.Services.Configure<WorkflowExternalApprovalCallbackOptions>(options =>
+        {
+            var configured = CreateOptions();
+            options.Enabled = configured.Enabled;
+            options.RetryAfterSeconds = configured.RetryAfterSeconds;
+            options.Bindings.AddRange(configured.Bindings);
+        });
+        var app = builder.Build();
+        WorkflowExternalApprovalCallbackEndpoints.Map(app.MapGroup("/api"));
+        await app.StartAsync();
+        return app;
+    }
+
+    private static HttpClient CreateClient(WebApplication app)
+    {
+        var address = app.Services
+            .GetRequiredService<IServer>()
+            .Features
+            .Get<IServerAddressesFeature>()!
+            .Addresses
+            .Single();
+
+        return new HttpClient { BaseAddress = new Uri(address) };
     }
 
     private static async Task<string> ReadBodyAsync(HttpResponse response)
@@ -317,20 +616,27 @@ public sealed class WorkflowExternalApprovalCallbackEndpointsTests
             CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>.Success(
                 new WorkflowRunControlAcceptedReceipt("actor-run-1", "run-1", "cmd-accepted", "corr-accepted"));
 
+        public bool ThrowOnDispatch { get; set; }
+
         public Task<CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>> DispatchAsync(
             WorkflowSignalCommand command,
             CancellationToken ct = default)
         {
             Commands.Add(command);
+            if (ThrowOnDispatch)
+                throw new InvalidOperationException("dispatch unavailable");
+
             return Task.FromResult(Result);
         }
     }
 
-    private sealed class RecordingReplayStore : IWorkflowWebhookReplayStore
+    private sealed class RecordingReplayAdmissionPort : IWorkflowWebhookReplayAdmissionPort
     {
         public List<WorkflowWebhookReplayAdmissionRequest> Requests { get; } = [];
 
         public List<WorkflowWebhookReplayAdmissionRequest> Released { get; } = [];
+
+        public bool IsAvailable { get; init; } = true;
 
         public bool ThrowOnAdmit { get; set; }
 

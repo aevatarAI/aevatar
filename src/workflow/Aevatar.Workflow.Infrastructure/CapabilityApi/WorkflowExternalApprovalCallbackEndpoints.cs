@@ -6,7 +6,6 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -27,6 +26,7 @@ internal static class WorkflowExternalApprovalCallbackEndpoints
         HttpContext http,
         string routeKey,
         IWorkflowExternalApprovalContinuationLookupPort lookupPort,
+        IWorkflowWebhookReplayAdmissionPort replayAdmissionPort,
         ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError> signalService,
         IOptions<WorkflowExternalApprovalCallbackOptions> options,
         ILoggerFactory loggerFactory,
@@ -35,6 +35,7 @@ internal static class WorkflowExternalApprovalCallbackEndpoints
         using var scope = ApiRequestScope.BeginHttp();
         ArgumentNullException.ThrowIfNull(http);
         ArgumentNullException.ThrowIfNull(lookupPort);
+        ArgumentNullException.ThrowIfNull(replayAdmissionPort);
         ArgumentNullException.ThrowIfNull(signalService);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(loggerFactory);
@@ -104,8 +105,7 @@ internal static class WorkflowExternalApprovalCallbackEndpoints
                 Status425TooEarly);
         }
 
-        var replayStore = http.RequestServices.GetService<IWorkflowWebhookReplayStore>();
-        if (replayStore == null)
+        if (!replayAdmissionPort.IsAvailable)
         {
             scope.MarkResult(StatusCodes.Status503ServiceUnavailable);
             return RetryableJson(
@@ -138,7 +138,7 @@ internal static class WorkflowExternalApprovalCallbackEndpoints
         WorkflowWebhookReplayAdmission replayAdmission;
         try
         {
-            replayAdmission = await replayStore.AdmitAsync(admission, ct);
+            replayAdmission = await replayAdmissionPort.AdmitAsync(admission, ct);
         }
         catch (OperationCanceledException)
         {
@@ -164,7 +164,7 @@ internal static class WorkflowExternalApprovalCallbackEndpoints
                     build,
                     continuation,
                     admission,
-                    replayStore,
+                    replayAdmissionPort,
                     signalService,
                     logger,
                     scope,
@@ -205,7 +205,7 @@ internal static class WorkflowExternalApprovalCallbackEndpoints
         ExternalApprovalCallbackBuildResult build,
         WorkflowExternalApprovalContinuation continuation,
         WorkflowWebhookReplayAdmissionRequest admission,
-        IWorkflowWebhookReplayStore replayStore,
+        IWorkflowWebhookReplayAdmissionPort replayAdmissionPort,
         ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError> signalService,
         ILogger logger,
         ApiRequestScope scope,
@@ -228,7 +228,7 @@ internal static class WorkflowExternalApprovalCallbackEndpoints
 
             if (!dispatch.Succeeded || dispatch.Receipt == null)
             {
-                await ReleaseAdmissionAsync(admission, replayStore, logger);
+                await ReleaseAdmissionAsync(admission, replayAdmissionPort, logger);
                 return MapDispatchFailure(dispatch.Error, scope);
             }
 
@@ -253,12 +253,12 @@ internal static class WorkflowExternalApprovalCallbackEndpoints
         }
         catch (OperationCanceledException)
         {
-            await ReleaseAdmissionAsync(admission, replayStore, logger);
+            await ReleaseAdmissionAsync(admission, replayAdmissionPort, logger);
             return Results.StatusCode(499);
         }
         catch (Exception ex)
         {
-            await ReleaseAdmissionAsync(admission, replayStore, logger);
+            await ReleaseAdmissionAsync(admission, replayAdmissionPort, logger);
             scope.MarkError();
             logger.LogError(ex, "Workflow external approval signal dispatch failed.");
             return Results.Json(
@@ -527,12 +527,12 @@ internal static class WorkflowExternalApprovalCallbackEndpoints
 
     private static async Task ReleaseAdmissionAsync(
         WorkflowWebhookReplayAdmissionRequest admission,
-        IWorkflowWebhookReplayStore replayStore,
+        IWorkflowWebhookReplayAdmissionPort replayAdmissionPort,
         ILogger logger)
     {
         try
         {
-            await replayStore.ReleaseAsync(admission, CancellationToken.None);
+            await replayAdmissionPort.ReleaseAsync(admission, CancellationToken.None);
         }
         catch (Exception ex)
         {

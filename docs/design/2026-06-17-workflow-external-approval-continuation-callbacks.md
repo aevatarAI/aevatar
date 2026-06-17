@@ -1,3 +1,9 @@
+---
+title: "Workflow External Approval Continuation Callbacks"
+status: accepted
+owner: workflow
+---
+
 # Workflow External Approval Continuation Callbacks
 
 External approval callbacks are continuation callbacks for an active `wait_signal` step. They are not start-run webhooks and do not execute provider side effects directly.
