@@ -28,6 +28,7 @@ jest.mock("../studio/components/StudioMemberInvokePanel", () => ({
   default: (props: {
     initialServiceId?: string;
     memberId?: string;
+    presentation?: string;
     runtimeTarget?: string;
     scopeId?: string;
     selectedMemberLabel?: string;
@@ -43,6 +44,7 @@ jest.mock("../studio/components/StudioMemberInvokePanel", () => ({
       React.createElement("span", { key: "team" }, `team:${props.teamId}`),
       React.createElement("span", { key: "service" }, `service:${props.initialServiceId}`),
       React.createElement("span", { key: "label" }, `label:${props.selectedMemberLabel}`),
+      React.createElement("span", { key: "presentation" }, `presentation:${props.presentation}`),
       React.createElement("span", { key: "variant" }, `variant:${props.targetSummaryVariant}`),
       React.createElement(
         "span",
@@ -201,7 +203,10 @@ describe("TeamMemberInvokePage", () => {
       "services:svc-alpha",
     );
     expect(screen.getByTestId("member-invoke-panel")).toHaveTextContent(
-      "variant:member-run",
+      "presentation:member-run",
+    );
+    expect(screen.getByTestId("member-invoke-panel")).toHaveTextContent(
+      "variant:undefined",
     );
     expect(screen.queryByRole("button", { name: "Team members" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Workflow Studio" })).toBeNull();

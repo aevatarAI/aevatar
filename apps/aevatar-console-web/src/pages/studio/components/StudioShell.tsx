@@ -545,7 +545,10 @@ const StudioShell: React.FC<StudioShellProps> = ({
             <span style={railPillStyle}>{members.length}</span>
             <InlineInfoButton
               ariaLabel={t("pages.studio.studioshell.open.team.members.help", "Open team members help")}
-              content={t("pages.studio.studioshell.keep.one.member.in", "Keep one member in focus while Build, Bind, Invoke, and Observe gradually converge into the same workbench.")}
+              content={t(
+                "pages.studio.studioshell.keep.one.member.in",
+                "Keep one member in focus while its draft, published service, and run evidence stay visible in the same workbench.",
+              )}
             />
           </div>
           <div style={{ display: 'grid', gap: 8 }}>
@@ -797,8 +800,11 @@ const StudioShell: React.FC<StudioShellProps> = ({
               >
                 {t("pages.studio.studioshell.member.lifecycle.3", "Member lifecycle")}</Typography.Text>
               <InlineInfoButton
-                ariaLabel="Open lifecycle help"
-                content="Keep the selected member in one shell while Build, Bind, Invoke, and Observe stay aligned to the same workbench."
+                ariaLabel={t("pages.studio.studioshell.open.lifecycle.help", "Open lifecycle help")}
+                content={t(
+                  "pages.studio.studioshell.keep.the.selected.member",
+                  "Keep the selected member in one shell while authoring context, callable service state, and run evidence stay aligned.",
+                )}
               />
             </div>
             <nav

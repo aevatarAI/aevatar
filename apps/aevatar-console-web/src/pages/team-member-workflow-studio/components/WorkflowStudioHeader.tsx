@@ -36,7 +36,7 @@ type WorkflowStudioHeaderProps = {
   readonly canSave: boolean;
   readonly canViewYaml: boolean;
   readonly dirty: boolean;
-  readonly activeMemberRunPlaceholderReason?: string;
+  readonly currentDraftRunPlaceholderReason?: string;
   readonly onPublishMember: () => void;
   readonly onOpenAutomations: () => void;
   readonly onRefreshPublishStatus: () => void;
@@ -437,7 +437,7 @@ const HeaderIdentity: React.FC<HeaderIdentityProps> = ({
 };
 
 type HeaderActionsProps = {
-  readonly activeMemberRunPlaceholderReason?: string;
+  readonly currentDraftRunPlaceholderReason?: string;
   readonly automationsHref: string;
   readonly automationsPlaceholderReason?: string;
   readonly canOpenAutomations: boolean;
@@ -468,7 +468,7 @@ type HeaderActionsProps = {
 };
 
 const HeaderActions: React.FC<HeaderActionsProps> = ({
-  activeMemberRunPlaceholderReason,
+  currentDraftRunPlaceholderReason,
   automationsHref,
   automationsPlaceholderReason,
   canOpenAutomations,
@@ -564,7 +564,7 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
                 "teamMemberWorkflowStudio.header.prepareDraftRun",
                 "Prepare draft run",
               )
-            : activeMemberRunPlaceholderReason
+            : currentDraftRunPlaceholderReason
         }
       >
         <span className="workflow-studio-header__action-label">
@@ -784,7 +784,7 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
   canSave,
   canViewYaml,
   dirty,
-  activeMemberRunPlaceholderReason,
+  currentDraftRunPlaceholderReason,
   onPublishMember,
   onOpenAutomations,
   onRefreshPublishStatus,
@@ -849,7 +849,7 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
           workflowTitle={workflowTitle}
         />
         <HeaderActions
-          activeMemberRunPlaceholderReason={activeMemberRunPlaceholderReason}
+          currentDraftRunPlaceholderReason={currentDraftRunPlaceholderReason}
           automationsHref={automationsHref}
           automationsPlaceholderReason={automationsPlaceholderReason}
           canOpenAutomations={canOpenAutomations}
