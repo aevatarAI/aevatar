@@ -134,6 +134,18 @@ Workflow runtime owns the canonical connected-service resource fetch use case. T
 - Downloaded bytes must enter workflow storage only through `IWorkflowFileIngressPort` with `WorkflowFileSourceKind.ConnectedServiceResource`; workflow commands, actor state, readmodels, logs, and tool results must not carry raw bytes or base64.
 - The tool result is a sanitized `WorkflowFileRef` plus route facts. It does not expose provider response bodies, base64, or downloaded content.
 
+### NyxID Proxy File Artifacts
+
+`nyxid_proxy(response_mode=file_artifact)` is the only v1 public NyxID proxy binary download mode for workflow-managed runs. Missing `response_mode` and explicit `text` keep the existing string proxy behavior.
+
+运行边界：
+
+- `NyxIdProxyTool` owns response-mode parsing. Invalid modes fail closed; v1 does not expose `file_artifact_put`、`nyxid_binary_download`、provider-specific global download tools、`binary_base64` or `data_uri`.
+- `response_mode=file_artifact` requires `GET`, no request body, a managed workflow runtime parent from typed `AgentToolRequestContext.Current.WorkflowRuntime`, a caller scope, and a host-registered `INyxIdProxyFileArtifactIngress`.
+- The binary response is downloaded through `NyxIdApiClient.ProxyGetBinaryResponseAsync` with `ProxyFileArtifactMaxBytes` defaulting to 25 MiB and capped at 100 MiB. Content-length and streaming reads are bounded before workflow ingress.
+- Persistence only goes through `IWorkflowFileIngressPort` with `WorkflowFileSourceKind.ConnectedServiceResource`; `nyxid_proxy` does not stage process-local handles or persist raw bytes itself.
+- Success and failure results are structured JSON with `success`、`response_mode`、bounded source diagnostics, and a sanitized `WorkflowFileRef` projection on success. Results must not include raw bytes, base64, data URI, provider response bodies, or durable byte state.
+
 ### Workflow File Artifact Lifecycle
 
 Workflow file artifacts use narrow ports with separate responsibilities:

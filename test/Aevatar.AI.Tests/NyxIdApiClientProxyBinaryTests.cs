@@ -163,6 +163,55 @@ public sealed class NyxIdApiClientProxyBinaryTests
     }
 
     [Fact]
+    public async Task ProxyGetBinaryResponseAsync_ShouldFailBeforeBufferingWhenContentLengthExceedsMaxBytes()
+    {
+        var handler = new CapturingHandler(
+            responseBody: [1, 2, 3, 4],
+            contentType: "application/octet-stream",
+            contentLength: 4);
+        var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            new HttpClient(handler));
+
+        var response = await client.ProxyGetBinaryResponseAsync(
+            token: "token",
+            slug: "storage",
+            path: "files/export",
+            extraHeaders: null,
+            maxBytes: 3,
+            ct: CancellationToken.None);
+
+        response.Succeeded.Should().BeFalse();
+        response.Content.Should().BeEmpty();
+        response.Detail.Should().Be("content_length_exceeds_max_bytes");
+        response.HttpStatus.Should().Be(200);
+    }
+
+    [Fact]
+    public async Task ProxyGetBinaryResponseAsync_ShouldFailWhenDownloadedContentExceedsMaxBytes()
+    {
+        var handler = new CapturingHandler(
+            responseBody: [1, 2, 3, 4],
+            contentType: "application/octet-stream");
+        var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            new HttpClient(handler));
+
+        var response = await client.ProxyGetBinaryResponseAsync(
+            token: "token",
+            slug: "storage",
+            path: "files/export",
+            extraHeaders: null,
+            maxBytes: 3,
+            ct: CancellationToken.None);
+
+        response.Succeeded.Should().BeFalse();
+        response.Content.Should().BeEmpty();
+        response.Detail.Should().Be("content_exceeds_max_bytes");
+        response.HttpStatus.Should().Be(200);
+    }
+
+    [Fact]
     public async Task ProxyGetBinaryResponseAsync_ShouldReturnFailureWithoutBytesOnNonSuccess()
     {
         var handler = new CapturingHandler(
@@ -219,6 +268,7 @@ public sealed class NyxIdApiClientProxyBinaryTests
         private readonly string? _contentType;
         private readonly string? _contentDisposition;
         private readonly HttpStatusCode _statusCode;
+        private readonly long? _contentLength;
 
         public CapturingHandler(
             string responseBody,
@@ -231,12 +281,14 @@ public sealed class NyxIdApiClientProxyBinaryTests
             byte[] responseBody,
             string? contentType = null,
             string? contentDisposition = null,
-            HttpStatusCode statusCode = HttpStatusCode.OK)
+            HttpStatusCode statusCode = HttpStatusCode.OK,
+            long? contentLength = null)
         {
             _responseBody = responseBody;
             _contentType = contentType;
             _contentDisposition = contentDisposition;
             _statusCode = statusCode;
+            _contentLength = contentLength;
         }
 
         public List<CapturedRequest> Requests { get; } = [];
@@ -261,12 +313,16 @@ public sealed class NyxIdApiClientProxyBinaryTests
 
             var response = new HttpResponseMessage(_statusCode)
             {
-                Content = new ByteArrayContent(_responseBody),
+                Content = _contentLength.HasValue
+                    ? new ByteArrayContent(_responseBody)
+                    : new UnknownLengthByteArrayContent(_responseBody),
             };
             if (!string.IsNullOrWhiteSpace(_contentType))
                 response.Content.Headers.ContentType = MediaTypeHeaderValue.Parse(_contentType);
             if (!string.IsNullOrWhiteSpace(_contentDisposition))
                 response.Content.Headers.ContentDisposition = ContentDispositionHeaderValue.Parse(_contentDisposition);
+            if (_contentLength.HasValue)
+                response.Content.Headers.ContentLength = _contentLength.Value;
 
             return response;
         }
@@ -280,4 +336,18 @@ public sealed class NyxIdApiClientProxyBinaryTests
         string? ContentTypeHeader,
         byte[] Body,
         IReadOnlyDictionary<string, string[]> Headers);
+
+    private sealed class UnknownLengthByteArrayContent(byte[] content) : HttpContent
+    {
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context)
+        {
+            return stream.WriteAsync(content).AsTask();
+        }
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 0;
+            return false;
+        }
+    }
 }
