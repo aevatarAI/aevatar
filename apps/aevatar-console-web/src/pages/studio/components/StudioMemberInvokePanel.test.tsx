@@ -5,7 +5,7 @@ import {
   screen,
   waitFor,
 } from '@testing-library/react';
-import { Grid, message } from 'antd';
+import { message } from 'antd';
 import React from 'react';
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
@@ -18,17 +18,6 @@ jest.mock('antd', () => {
   const actual = jest.requireActual('antd');
   return {
     ...actual,
-    Grid: {
-      ...actual.Grid,
-      useBreakpoint: jest.fn(() => ({
-        lg: true,
-        md: true,
-        sm: true,
-        xl: true,
-        xs: false,
-        xxl: false,
-      })),
-    },
     message: {
       ...actual.message,
       info: jest.fn(),
@@ -66,24 +55,6 @@ describe('StudioMemberInvokePanel', () => {
     jest.clearAllMocks();
     Element.prototype.scrollTo = jest.fn();
     Element.prototype.scrollIntoView = jest.fn();
-    Object.defineProperty(window, 'innerHeight', {
-      configurable: true,
-      value: 768,
-      writable: true,
-    });
-    Object.defineProperty(window, 'innerWidth', {
-      configurable: true,
-      value: 1024,
-      writable: true,
-    });
-    (Grid.useBreakpoint as jest.Mock).mockReturnValue({
-      lg: true,
-      md: true,
-      sm: true,
-      xl: true,
-      xs: false,
-      xxl: false,
-    });
     Object.defineProperty(window.navigator, 'clipboard', {
       configurable: true,
       value: { writeText: jest.fn().mockResolvedValue(undefined) },
@@ -123,20 +94,7 @@ describe('StudioMemberInvokePanel', () => {
     );
   });
 
-  function dispatchWindowPointerEvent(
-    type: 'pointercancel' | 'pointermove' | 'pointerup',
-    init: MouseEventInit = {},
-  ): void {
-    window.dispatchEvent(
-      new MouseEvent(type, {
-        bubbles: true,
-        cancelable: true,
-        ...init,
-      }),
-    );
-  }
-
-  it('renders the workflow run surface with a compact summary and closed details', async () => {
+  it('renders the invoke workbench skeleton with a compact contract and a persistent console', async () => {
     render(
       React.createElement(StudioMemberInvokePanel, {
         memberId: 'default',
@@ -209,36 +167,40 @@ describe('StudioMemberInvokePanel', () => {
     expect(screen.queryByText('缺少提示词')).toBeNull();
     expect(screen.getByText('Response')).toBeTruthy();
     expect(screen.queryByText('Conversation')).toBeNull();
-    expect(screen.queryByText('Output')).toBeNull();
+    expect(screen.getByText('No run yet')).toBeTruthy();
     expect(screen.queryByText('Timeline')).toBeNull();
     expect(screen.queryByText('Events')).toBeNull();
-    expect(screen.queryByRole('tab', { name: 'Details' })).toBeNull();
-    expect(screen.queryByText('Advanced typed payload')).toBeNull();
+    expect(screen.queryByText('Run diagnostics')).toBeNull();
+    expect(screen.queryByRole('tablist')).toBeNull();
     expect(screen.queryByLabelText('Payload base64')).toBeNull();
     expect(screen.getByRole('button', { name: 'Details' })).toBeTruthy();
     expect(screen.getByTestId('studio-invoke-playground-actions')).toBeTruthy();
     const invokeWorkspace = screen.getByTestId('studio-invoke-workspace');
-    const mainConsole = screen.getByTestId('studio-invoke-main-console');
+    const mainDebugArea = screen.getByTestId('studio-invoke-main-debug-area');
     const invokeComposerDock = screen.getByTestId(
       'studio-invoke-composer-dock',
     );
     const runOutputSection = screen.getByTestId(
       'studio-invoke-run-output-section',
     );
+    const historyPanel = screen.getByTestId('studio-invoke-history-panel');
     const currentRunViewport = screen.getByTestId(
       'studio-invoke-current-run-viewport',
     );
     expect(invokeWorkspace).toContainElement(targetSummary);
-    expect(invokeWorkspace).toContainElement(mainConsole);
+    expect(invokeWorkspace).toContainElement(mainDebugArea);
     expect(invokeWorkspace).toContainElement(invokeComposerDock);
-    expect(mainConsole).toContainElement(invokeComposerDock);
+    expect(invokeWorkspace.children[1]).toBe(invokeComposerDock);
+    expect(mainDebugArea).not.toContainElement(invokeComposerDock);
     expect(invokeComposerDock).toContainElement(
       screen.getByLabelText('Workflow request input'),
     );
-    expect(mainConsole.style.overflow).toBe('visible');
-    expect(mainConsole.style.minHeight).toBe('0');
+    expect(mainDebugArea.style.overflow).toBe('visible');
+    expect(mainDebugArea.style.minHeight).toBe('0');
     expect(runOutputSection.style.flex).toBe('0 0 auto');
     expect(runOutputSection.style.minHeight).toBe('0');
+    expect(historyPanel.style.flex).toBe('0 0 auto');
+    expect(historyPanel.style.minHeight).toBe('0');
     expect(currentRunViewport.style.overflow).toBe('visible');
     expect(invokeComposerDock.style.flex).toBe('0 0 auto');
     expect(screen.getByRole('button', { name: 'Run workflow' })).toBeTruthy();
@@ -247,73 +209,13 @@ describe('StudioMemberInvokePanel', () => {
     expect(
       screen.getByText('Send a request above to create the first run.'),
     ).toBeTruthy();
-    expect(screen.queryByText('Run history (0)')).toBeNull();
-    expect(screen.queryByText('No runs yet')).toBeNull();
+    expect(screen.getByText('Run history (0)')).toBeTruthy();
+    expect(screen.getAllByText('No runs yet').length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText('运行详情')).toBeNull();
     expect(screen.queryByText('最新输出')).toBeNull();
     expect(screen.queryByText('调用契约')).toBeNull();
+    expect(screen.queryByText('Run diagnostics')).toBeNull();
     expect(screen.queryByTestId('studio-invoke-selected-run-detail')).toBeNull();
-    expect(screen.queryByTestId('studio-invoke-inspector')).toBeNull();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
-    const inspector = await screen.findByTestId('studio-invoke-inspector');
-    expect(inspector).toBeTruthy();
-    expect(inspector.style.position).toBe('fixed');
-    expect(inspector.style.width).toBe('420px');
-    expect(inspector.style.left).toBe('572px');
-    expect(inspector.style.top).toBe('96px');
-    expect(screen.getAllByText('Details').length).toBeGreaterThanOrEqual(1);
-    const dragHandle = screen.getByTestId('studio-invoke-inspector-drag-handle');
-    const initialDetailsLeft = inspector.style.left;
-    const initialDetailsTop = inspector.style.top;
-    fireEvent.pointerDown(dragHandle, { clientX: 800, clientY: 120 });
-    await waitFor(() => {
-      expect(document.body.style.cursor).toBe('grabbing');
-    });
-    dispatchWindowPointerEvent('pointermove', { clientX: 780, clientY: 150 });
-    await waitFor(() => {
-      expect(inspector.style.left).not.toBe(initialDetailsLeft);
-      expect(inspector.style.top).not.toBe(initialDetailsTop);
-    });
-    expect(Number.parseFloat(inspector.style.left)).toBeGreaterThanOrEqual(16);
-    expect(Number.parseFloat(inspector.style.left)).toBeLessThanOrEqual(
-      1024 - 420 - 16,
-    );
-    expect(Number.parseFloat(inspector.style.top)).toBeGreaterThanOrEqual(16);
-    expect(Number.parseFloat(inspector.style.top)).toBeLessThanOrEqual(
-      768 - 220 - 16,
-    );
-    dispatchWindowPointerEvent('pointerup');
-    await waitFor(() => {
-      expect(document.body.style.cursor).toBe('');
-    });
-    const resizeHandle = screen.getByTestId(
-      'studio-invoke-inspector-resize-handle',
-    );
-    fireEvent.pointerDown(resizeHandle, { clientX: 552, clientY: 180 });
-    await waitFor(() => {
-      expect(document.body.style.cursor).toBe('ew-resize');
-    });
-    dispatchWindowPointerEvent('pointermove', {
-      clientX: -1000,
-      clientY: 180,
-    });
-    await waitFor(() => {
-      expect(inspector.style.width).toBe('500px');
-    });
-    dispatchWindowPointerEvent('pointerup');
-    fireEvent.pointerDown(resizeHandle, { clientX: 472, clientY: 180 });
-    dispatchWindowPointerEvent('pointermove', { clientX: 700, clientY: 180 });
-    await waitFor(() => {
-      expect(inspector.style.width).toBe('360px');
-    });
-    dispatchWindowPointerEvent('pointerup');
-    fireEvent.click(screen.getByText('Payload'));
-    expect(screen.getByLabelText('Payload type URL')).toHaveValue(
-      'type.googleapis.com/google.protobuf.StringValue',
-    );
-    fireEvent.click(screen.getByText('History'));
-    expect(screen.getByText('Run history (0)')).toBeTruthy();
   });
 
   it('keeps prompt validation local and does not create a failed run for empty chat input', async () => {
@@ -355,8 +257,8 @@ describe('StudioMemberInvokePanel', () => {
     expect(
       screen.getByText('Send a request above to create the first run.'),
     ).toBeTruthy();
-    expect(screen.queryByText('Run history (0)')).toBeNull();
-    expect(screen.queryByText('No runs yet')).toBeNull();
+    expect(screen.getByText('Run history (0)')).toBeTruthy();
+    expect(screen.getAllByText('No runs yet').length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText('Run failed')).toBeNull();
   });
 
@@ -387,7 +289,15 @@ describe('StudioMemberInvokePanel', () => {
     expect(screen.getByRole('button', { name: 'Run workflow' })).toBeDisabled();
   });
 
-  it('uses the member-run summary variant without duplicating service implementation facts', async () => {
+  it('uses the member-run surface as an isolated SaaS run page', async () => {
+    (runtimeRunsApi.streamChat as jest.Mock).mockResolvedValue({});
+    (parseBackendSSEStream as jest.Mock).mockImplementation(async function* () {
+      yield {
+        result: 'Member-run answer',
+        type: AGUIEventType.RUN_FINISHED,
+      };
+    });
+
     render(
       React.createElement(StudioMemberInvokePanel, {
         memberId: 'member-with-a-very-long-stable-identifier-1234567890',
@@ -461,6 +371,130 @@ describe('StudioMemberInvokePanel', () => {
     expect(targetSummary).not.toHaveTextContent('Service: workspace-demo-service');
     expect(targetSummary).not.toHaveTextContent('Workflow');
     expect(targetSummary).not.toHaveTextContent('Team: team-1');
+    expect(screen.getByTestId('studio-invoke-member-run-workbench')).toBeTruthy();
+    expect(screen.getByText('Launch run')).toBeTruthy();
+    expect(
+      screen.getByText(
+        'One input creates one isolated run.',
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText('Run launcher')).toBeTruthy();
+    expect(screen.getByLabelText('Run input')).toBeTruthy();
+    expect(screen.queryByLabelText('Workflow request input')).toBeNull();
+    expect(
+      screen.getByText(
+        'Each run is isolated. Previous runs are not sent as context.',
+      ),
+    ).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Start run' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Run workflow' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Technical details' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Details' })).toBeNull();
+    expect(screen.getByText('Current run')).toBeTruthy();
+    expect(screen.getByText('No run result yet')).toBeTruthy();
+    expect(screen.getByText('Start a run to see the result here.')).toBeTruthy();
+    expect(screen.queryByText('New run')).toBeNull();
+    expect(screen.queryByText('Run result')).toBeNull();
+    expect(screen.queryByText('Observe handoff')).toBeNull();
+
+    fireEvent.change(screen.getByLabelText('Run input'), {
+      target: {
+        value: 'Summarize the team member status.',
+      },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Start run' }));
+
+    expect(await screen.findByText('Member-run answer')).toBeTruthy();
+    expect(screen.getByTestId('studio-invoke-observe-handoff')).toHaveTextContent(
+      'This run is ready for Observe. Switch to Observe when you need backend events, audit frames, or the runtime trail for this member.',
+    );
+  });
+
+  it('locks the member-run input and keeps the submitted task visible while a run is in progress', async () => {
+    (runtimeRunsApi.streamChat as jest.Mock).mockResolvedValue({});
+    (parseBackendSSEStream as jest.Mock).mockImplementation(
+      async function* (_response, options?: { signal?: AbortSignal }) {
+        await new Promise<void>((resolve) => {
+          if (options?.signal?.aborted) {
+            resolve();
+            return;
+          }
+
+          options?.signal?.addEventListener('abort', () => resolve(), {
+            once: true,
+          });
+        });
+      },
+    );
+
+    render(
+      React.createElement(StudioMemberInvokePanel, {
+        memberId: 'member-run-chat',
+        scopeId: 'scope-1',
+        services: [
+          {
+            deploymentStatus: 'Active',
+            displayName: 'member-run-chat',
+            endpoints: [
+              {
+                description: 'Chat with the member.',
+                displayName: 'Chat',
+                endpointId: 'chat',
+                kind: 'chat',
+                requestTypeUrl: '',
+                responseTypeUrl: '',
+              },
+            ],
+            kind: 'service',
+            namespace: 'default',
+            primaryActorId: 'actor-member-run-chat',
+            serviceId: 'member-run-chat',
+          },
+        ],
+        targetSummaryVariant: 'member-run',
+      }),
+    );
+
+    const runInput = await screen.findByLabelText('Run input');
+    fireEvent.change(runInput, {
+      target: {
+        value: 'Summarize the latest support case for billing.',
+      },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Start run' }));
+
+    await waitFor(() => {
+      expect(runtimeRunsApi.streamChat).toHaveBeenCalledWith(
+        'scope-1',
+        {
+          prompt: 'Summarize the latest support case for billing.',
+        },
+        expect.any(AbortSignal),
+        {
+          serviceId: 'member-run-chat',
+        },
+      );
+    });
+
+    expect(screen.queryByRole('textbox', { name: 'Run input' })).toBeNull();
+    const submittedReceipt = screen.getByTestId(
+      'studio-invoke-submitted-input-receipt',
+    );
+    expect(submittedReceipt).toHaveTextContent('Submitted input');
+    expect(submittedReceipt).toHaveTextContent(
+      'Summarize the latest support case for billing.',
+    );
+    expect(screen.getByText('In progress')).toBeTruthy();
+    expect(
+      screen.getByText(
+        'This submitted input is locked while the run is in progress.',
+      ),
+    ).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Stop run' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Clear' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Start run' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop run' }));
   });
 
   it('prefers final run output over intermediate assistant text for chat invoke results', async () => {
@@ -598,8 +632,9 @@ describe('StudioMemberInvokePanel', () => {
     expect(await screen.findByText('Run failed')).toBeTruthy();
     expect(screen.getByText('GAgent draft-run timed out.')).toBeTruthy();
     expect(screen.getByTestId('studio-invoke-recovery-path')).toHaveTextContent(
-      'This run failed. Retry with a smaller request, open Details for backend signals, or return to Build/Bind if the member contract needs changes.',
+      'This run failed. Retry with a smaller request, open diagnostics for backend signals, or edit the member contract from its owning member surface.',
     );
+    expect(screen.getByRole('button', { name: 'Open diagnostics' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Retry as new run' })).toBeTruthy();
   });
 
@@ -667,7 +702,6 @@ describe('StudioMemberInvokePanel', () => {
     ).toBeTruthy();
     expect(screen.queryByTestId('studio-invoke-selected-run-detail')).toBeNull();
     expect(screen.queryByText('Member ID')).toBeNull();
-    expect(screen.queryByRole('button', { name: /Details|详情|展开/ })).toBeNull();
   });
 
   it('wires selected failed history run actions with disabled unavailable copies', () => {
@@ -1011,10 +1045,13 @@ describe('StudioMemberInvokePanel', () => {
       );
     });
 
-    expect(screen.queryByText('Run history (1)')).toBeNull();
+    expect(await screen.findByText('Run history (1)')).toBeTruthy();
     expect(screen.getByTestId('studio-invoke-observe-handoff')).toHaveTextContent(
       'The workflow run was accepted. Switch to Observe to watch backend events and read-model materialization catch up for this member.',
     );
+    expect(
+      screen.getByTestId('studio-invoke-history-scroll').style.overflow,
+    ).toBe('visible');
     expect(
       screen.getAllByText('Route this escalation to billing review.').length,
     ).toBeGreaterThanOrEqual(1);
@@ -1028,31 +1065,30 @@ describe('StudioMemberInvokePanel', () => {
     expect(screen.getByRole('button', { name: 'Details' })).toBeTruthy();
     expect(screen.queryByText('运行详情')).toBeNull();
     expect(screen.queryByText('最新输出')).toBeNull();
+    expect(screen.queryByRole('tablist')).toBeNull();
+    expect(screen.queryByText('Run details')).toBeNull();
+    expect(screen.queryByText('Event payload')).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Details' }));
-    expect(await screen.findByTestId('studio-invoke-inspector')).toBeTruthy();
-    fireEvent.click(screen.getByText('Run'));
-    fireEvent.click(screen.getByRole('tab', { name: 'Details' }));
+    expect(
+      await screen.findByTestId('studio-invoke-diagnostics-drawer'),
+    ).toBeTruthy();
     expect(screen.getByText('Run details')).toBeTruthy();
     expect(screen.getByText('Status')).toBeTruthy();
     expect(screen.getAllByText('Succeeded').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText('Endpoint').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('Endpoint')).toBeTruthy();
     expect(screen.getAllByText('Submit').length).toBeGreaterThanOrEqual(1);
-    expect(screen.queryByText('Full Run ID')).toBeNull();
-    expect(screen.queryByText('run-1')).toBeNull();
-    expect(screen.queryByText('Command ID')).toBeNull();
-    expect(screen.queryByText('cmd-1')).toBeNull();
-    expect(screen.queryByText('Actor ID')).toBeNull();
-    expect(screen.queryByText('actor-1')).toBeNull();
+    expect(screen.getByText('Run ID')).toBeTruthy();
+    expect(screen.getByText('run-1')).toBeTruthy();
+    expect(screen.getByText('Command ID')).toBeTruthy();
+    expect(screen.getByText('cmd-1')).toBeTruthy();
+    expect(screen.getByText('Actor ID')).toBeTruthy();
+    expect(screen.getByText('actor-1')).toBeTruthy();
     expect(screen.queryByText('Member ID')).toBeNull();
     expect(screen.getByText('Event payload')).toBeTruthy();
     expect(screen.queryByTestId('studio-invoke-selected-run-detail')).toBeNull();
 
-    fireEvent.click(screen.getByText('History'));
-    expect(screen.getByText('Run history (1)')).toBeTruthy();
-    expect(
-      screen.getByTestId('studio-invoke-history-scroll').style.overflow,
-    ).toBe('visible');
+    fireEvent.click(screen.getByLabelText('Close'));
     fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
     expect(
       screen.getByText('Send a request above to create the first run.'),
@@ -1065,10 +1101,9 @@ describe('StudioMemberInvokePanel', () => {
       }),
     );
     expect(historyScroll).toBeTruthy();
-    expect(screen.getByText('Historical run · Read-only')).toBeTruthy();
-    expect(screen.getByTestId('studio-invoke-observe-handoff')).toHaveTextContent(
-      'Historical runs are read-only. Retry as a new run when you need a fresh Observe handoff.',
-    );
+    expect(screen.queryByText('Historical run · Read-only')).toBeNull();
+    expect(screen.queryByTestId('studio-invoke-observe-handoff')).toBeNull();
+    expect(screen.getByTestId('studio-invoke-diagnostics-drawer')).toBeTruthy();
     expect(screen.getByTestId('studio-invoke-composer-guidance')).toHaveTextContent(
       'Historical run is read-only. Sending this request starts a new run and fresh Observe handoff.',
     );
@@ -1109,6 +1144,16 @@ describe('StudioMemberInvokePanel', () => {
     expect(screen.getByLabelText('Workflow request input')).toHaveValue(
       'Overwrite prompt',
     );
+
+    fireEvent.click(screen.getByLabelText('Close'));
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+    expect(await screen.findByText('Latest run detail')).toBeTruthy();
+    expect(screen.queryByText('Historical run detail')).toBeNull();
+    expect(screen.queryByText('History detail')).toBeNull();
+    expect(
+      screen.getAllByText('No run is selected yet.').length,
+    ).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText('run-1')).toBeNull();
   });
 
   it('routes structured endpoint invokes through the member endpoint when member target is explicit', async () => {
@@ -1215,10 +1260,14 @@ describe('StudioMemberInvokePanel', () => {
       }),
     );
 
-    expect(screen.queryByText('Advanced typed payload')).toBeNull();
+    expect(
+      await screen.findByRole('button', { name: 'Details' }),
+    ).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Details' }));
-    expect(await screen.findByTestId('studio-invoke-inspector')).toBeTruthy();
-    fireEvent.click(screen.getByText('Payload'));
+    expect(
+      await screen.findByTestId('studio-invoke-diagnostics-drawer'),
+    ).toBeTruthy();
+    expect(screen.getByText('Advanced typed payload')).toBeTruthy();
     await waitFor(() => {
       expect(screen.getByLabelText('Payload type URL')).toHaveValue(
         'type.googleapis.com/example.ContractSubmit',
@@ -1238,7 +1287,7 @@ describe('StudioMemberInvokePanel', () => {
       ),
     ).toBeTruthy();
     expect(runtimeRunsApi.invokeEndpoint).not.toHaveBeenCalled();
-    expect(screen.queryByText('Run history (0)')).toBeNull();
+    expect(screen.getByText('Run history (0)')).toBeTruthy();
 
     fireEvent.change(screen.getByLabelText('Payload base64'), {
       target: {
@@ -1311,7 +1360,7 @@ describe('StudioMemberInvokePanel', () => {
       whiteSpace: 'pre-wrap',
       wordBreak: 'break-word',
     });
-    expect(screen.getByRole('button', { name: 'Open Details' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Open diagnostics' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Copy error' })).toBeTruthy();
     expect(
       screen.getByRole('button', { name: 'Retry as new run' }),
@@ -1363,14 +1412,15 @@ describe('StudioMemberInvokePanel', () => {
       expect(runtimeRunsApi.invokeEndpoint).toHaveBeenCalled();
     });
 
-    expect(screen.queryByText('Run history (1)')).toBeNull();
+    expect(screen.getByText('Run history (1)')).toBeTruthy();
+    expect(screen.queryByText('Run details')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Details' }));
-    expect(await screen.findByTestId('studio-invoke-inspector')).toBeTruthy();
-    fireEvent.click(screen.getByText('Run'));
-    fireEvent.click(screen.getByRole('tab', { name: 'Details' }));
+    expect(
+      await screen.findByTestId('studio-invoke-diagnostics-drawer'),
+    ).toBeTruthy();
     expect(screen.getByText('Run details')).toBeTruthy();
-    expect(screen.queryByText('Command ID')).toBeNull();
-    expect(screen.queryByText('cmd-only')).toBeNull();
+    expect(screen.getByText('Command ID')).toBeTruthy();
+    expect(screen.getByText('cmd-only')).toBeTruthy();
     expect(screen.queryByRole('button', { name: '打开运行记录' })).toBeNull();
   });
 
