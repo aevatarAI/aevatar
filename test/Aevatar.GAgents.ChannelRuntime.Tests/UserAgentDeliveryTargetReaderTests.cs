@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
 using NSubstitute;
@@ -37,6 +38,46 @@ public sealed class UserAgentDeliveryTargetReaderTests
         target!.NyxApiKey.Should().Be("live-key");
         target.ConversationId.Should().Be("oc_chat_1");
         target.OutputFormat.Should().Be(SkillRunnerOutputFormat.Text);
+    }
+
+    [Fact]
+    public async Task GetAsync_ResolvesExplicitDeliveryTargetAlias_ForWorkflowDelivery()
+    {
+        var documentReader = Substitute.For<IProjectionDocumentReader<UserAgentCatalogDocument, string>>();
+        var credentialReader = Substitute.For<IProjectionDocumentReader<UserAgentCatalogNyxCredentialDocument, string>>();
+
+        documentReader.GetAsync("aelf-twitter-approval", Arg.Any<CancellationToken>())
+            .Returns(new UserAgentCatalogDocument
+            {
+                Id = "aelf-twitter-approval",
+                ConversationId = "oc_9f1b8d3835674963417954fad20f8a3c",
+                NyxProviderSlug = "api-lark-bot-2",
+                LarkReceiveId = "oc_9f1b8d3835674963417954fad20f8a3c",
+                LarkReceiveIdType = "chat_id",
+                AgentType = "delivery_target",
+                TemplateName = "explicit_delivery_target",
+                OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
+            });
+        credentialReader.GetAsync("aelf-twitter-approval", Arg.Any<CancellationToken>())
+            .Returns(new UserAgentCatalogNyxCredentialDocument
+            {
+                Id = "aelf-twitter-approval",
+                NyxApiKey = "secret-created-key",
+            });
+
+        var reader = new UserAgentDeliveryTargetReader(documentReader, credentialReader);
+
+        var target = await reader.GetAsync("aelf-twitter-approval", CancellationToken.None);
+
+        target.Should().NotBeNull();
+        target!.AgentId.Should().Be("aelf-twitter-approval");
+        target.Platform.Should().Be("lark");
+        target.ConversationId.Should().Be("oc_9f1b8d3835674963417954fad20f8a3c");
+        target.NyxProviderSlug.Should().Be("api-lark-bot-2");
+        target.NyxApiKey.Should().Be("secret-created-key");
+        target.LarkReceiveId.Should().Be("oc_9f1b8d3835674963417954fad20f8a3c");
+        target.LarkReceiveIdType.Should().Be("chat_id");
+        target.AgentType.Should().Be("delivery_target");
     }
 
     [Fact]
