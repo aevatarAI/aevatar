@@ -2160,11 +2160,13 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     route.scopeId &&
       editableDocument &&
       workflowHasSteps &&
+      !selectedStepConfigurationError &&
       !currentDraftRunMutation.isPending,
   );
   const canOpenDraftRunPanel = Boolean(
     route.scopeId &&
       editableDocument &&
+      !selectedStepConfigurationError &&
       !workflowLoading,
   );
   const currentDraftRunPlaceholderReason =
@@ -2174,6 +2176,8 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         ? "Resolve the current workspace before running the draft."
         : currentDraftRunMutation.isPending
           ? "Workflow draft run is already starting."
+          : selectedStepConfigurationError
+            ? selectedStepConfigurationError
           : !workflowHasSteps
             ? "Add at least one step before running this workflow draft."
             : linkedWorkflowMissing
@@ -2497,6 +2501,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         !route.scopeId ||
         !editableDocument ||
         !workflowHasSteps ||
+        selectedStepConfigurationError ||
         currentDraftRunMutation.isPending
       ) {
         return;
@@ -2528,6 +2533,10 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     nodeLibraryOpen,
     openNodeLibrary: () => setNodeLibraryOpen(true),
     openDraftRunPanel: () => {
+      if (!canOpenDraftRunPanel) {
+        return;
+      }
+
       setSelectedEdgeId("");
       setSelectedNodeId("");
       setSelectedStepConfigurationError("");
