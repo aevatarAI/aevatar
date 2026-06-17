@@ -69,6 +69,12 @@ export default [
     parentKeys: ["/scopes"],
   },
   {
+    path: "/scopes/:scopeId/teams/:teamId/members/:memberId/automations",
+    component: "./teams/detail",
+    hideInMenu: true,
+    parentKeys: ["/scopes"],
+  },
+  {
     path: "/scopes/:scopeId/teams/:teamId",
     name: "Team Details",
     component: "./teams/detail",

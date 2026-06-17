@@ -228,6 +228,9 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
       }}
     >
       <WorkflowStudioHeader
+        automationsHref={studio.automationsHref}
+        automationsPlaceholderReason={studio.automationsPlaceholderReason}
+        canOpenAutomations={studio.canOpenAutomations}
         memberPublished={studio.memberPublished}
         publishDisabled={studio.publishDisabled}
         publishNotice={studio.publishNotice}
@@ -241,6 +244,7 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
         canViewYaml={studio.canViewYaml}
         dirty={studio.dirty}
         activeMemberRunPlaceholderReason={studio.activeMemberRunPlaceholderReason}
+        onOpenAutomations={studio.navigateToAutomations}
         onPublishMember={studio.publishMember}
         onRefreshPublishStatus={studio.refreshPublishStatus}
         onAddNode={studio.openNodeLibrary}

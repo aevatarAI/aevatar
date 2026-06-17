@@ -249,6 +249,7 @@ const enUSMessages = {
   'teams.detail.status.kind.workflow': 'Workflow',
   'teams.detail.status.unknown': 'Unknown status',
   'teams.detail.tabList.label': 'Team detail tabs',
+  'teams.detail.tabs.automations': 'Automations',
   'teams.detail.tabs.members': 'Team members',
   'teams.detail.tabs.overview': 'Overview',
   'teams.detail.test.actions.retry': 'Retry',
@@ -559,6 +560,7 @@ const enUSMessages = {
   'teams.members.actions.createFirstWorkflow': 'Create first workflow member',
   'teams.members.actions.createWorkflowMember': 'Create workflow member',
   'teams.members.actions.editInStudio': 'Edit in Studio',
+  'teams.members.actions.automate': 'Automate',
   'teams.members.actions.invokeRequiresBinding':
     'Bind this workflow member before invoking it.',
   'teams.members.actions.invokeWorkflow': 'Invoke',
@@ -567,6 +569,172 @@ const enUSMessages = {
   'teams.members.actions.workflowOnlyTitle':
     'This console currently supports workflow members only.',
   'teams.members.actions.workflowStudio': 'Workflow Studio',
+  'teams.automations.actions.addRecurringWork': 'Add recurring work',
+  'teams.automations.actions.create': 'New automation',
+  'teams.automations.actions.delete': 'Delete',
+  'teams.automations.actions.edit': 'Edit',
+  'teams.automations.actions.pause': 'Pause',
+  'teams.automations.actions.resume': 'Resume',
+  'teams.automations.actions.runNow': 'Run now',
+  'teams.automations.columns.actions': 'Actions',
+  'teams.automations.columns.automation': 'Automation',
+  'teams.automations.columns.member': 'Member',
+  'teams.automations.columns.schedule': 'Schedule',
+  'teams.automations.createPanel.description':
+    'Pick a published member, describe the job, choose a cadence, and preview the next runs before creating it.',
+  'teams.automations.createPanel.title': 'Give a member recurring work',
+  'teams.automations.cron.custom': 'Custom schedule',
+  'teams.automations.cron.daily': 'Daily · {time}',
+  'teams.automations.cron.dailyDetail': 'Every day at {time} · {timezone}',
+  'teams.automations.cron.hourly': 'Hourly · :{minute}',
+  'teams.automations.cron.hourlyDetail':
+    'Every hour at minute {minute} · {timezone}',
+  'teams.automations.cron.weekdays': 'Weekdays · {time}',
+  'teams.automations.cron.weekdaysDetail':
+    'Weekdays at {time} · {timezone}',
+  'teams.automations.cron.weekly': '{weekday} · {time}',
+  'teams.automations.cron.weeklyDetail':
+    '{weekday} at {time} · {timezone}',
+  'teams.automations.description':
+    'Recurring work belongs to a member. The team view shows every commitment so operators can see what will run next and what needs attention.',
+  'teams.automations.empty.createFirst': 'Create first automation',
+  'teams.automations.empty.description':
+    'Create an automation from a published member so this team has visible recurring commitments.',
+  'teams.automations.empty.publishHint':
+    'Publish a workflow member before scheduling recurring work.',
+  'teams.automations.empty.title': 'No recurring work yet',
+  'teams.automations.error.description':
+    'Refresh the page or try again after the schedule service is available.',
+  'teams.automations.error.title': 'Automations could not load',
+  'teams.automations.form.cadence': 'Cadence',
+  'teams.automations.form.cadenceAria': 'Automation cadence',
+  'teams.automations.form.create': 'Create automation',
+  'teams.automations.form.cron': 'Cron expression',
+  'teams.automations.form.cronAria': 'Cron expression',
+  'teams.automations.form.cronFiveFieldHint':
+    'Use a 5-field cron expression: minute hour day month weekday.',
+  'teams.automations.form.defaultTitle': '{memberName} recurring work',
+  'teams.automations.form.displayName': 'Name',
+  'teams.automations.form.displayNameAria': 'Automation name',
+  'teams.automations.form.displayNamePlaceholder': 'Daily escalation digest',
+  'teams.automations.form.editPromptHint':
+    'Re-enter the recurring prompt to save changes.',
+  'teams.automations.form.editTitle': 'Edit automation',
+  'teams.automations.form.enabled': 'Enabled',
+  'teams.automations.form.identityMissing':
+    "Waiting for this member's published service identity.",
+  'teams.automations.form.identityReady': 'Targets published service {serviceId}.',
+  'teams.automations.form.member': 'Member',
+  'teams.automations.form.memberAria': 'Automation member',
+  'teams.automations.form.preset.custom': 'Custom cron',
+  'teams.automations.form.preset.dailyMorning': 'Daily · 09:00',
+  'teams.automations.form.preset.hourly': 'Hourly',
+  'teams.automations.form.preset.weekdaysMorning': 'Weekdays · 09:00',
+  'teams.automations.form.preset.weeklyMonday': 'Monday · 09:00',
+  'teams.automations.form.preview': 'Preview next runs',
+  'teams.automations.form.previewEmpty':
+    'Preview the cadence to confirm the next scheduled runs.',
+  'teams.automations.form.previewHint':
+    'Preview uses the schedule service before saving.',
+  'teams.automations.form.prompt': 'Recurring prompt',
+  'teams.automations.form.promptAria': 'Recurring prompt',
+  'teams.automations.form.promptLimit': 'Up to {maxLength} characters.',
+  'teams.automations.form.promptPlaceholder':
+    'Summarize escalations, blocked accounts, and follow-up owners.',
+  'teams.automations.form.save': 'Save changes',
+  'teams.automations.form.scheduleReadsAs': 'Schedule reads as',
+  'teams.automations.form.section.schedule': '3. Schedule',
+  'teams.automations.form.section.scheduleHint':
+    'Choose a common cadence or switch to custom cron for advanced schedules.',
+  'teams.automations.form.section.target': '1. Target member',
+  'teams.automations.form.section.targetHint':
+    "Recurring work runs through the selected member's published service.",
+  'teams.automations.form.section.work': '2. Work to run',
+  'teams.automations.form.section.workHint':
+    'Name the automation and write the prompt the member receives each time.',
+  'teams.automations.form.timezone': 'Timezone',
+  'teams.automations.form.timezoneAria': 'Timezone',
+  'teams.automations.form.title': 'New member automation',
+  'teams.automations.member.publishFirst':
+    'Publish this member before adding recurring work.',
+  'teams.automations.member.unknown': 'Unknown member',
+  'teams.automations.member.workflowOnly':
+    'Only workflow members can have recurring work.',
+  'teams.automations.messages.createFailed':
+    'Automation was not created: {message}',
+  'teams.automations.messages.createSuccess': 'Automation created.',
+  'teams.automations.messages.cronRequired': 'Enter a cron expression first.',
+  'teams.automations.messages.deleteSuccess': 'Automation deleted.',
+  'teams.automations.messages.disableSuccess': 'Automation paused.',
+  'teams.automations.messages.enableSuccess': 'Automation resumed.',
+  'teams.automations.messages.previewFailed': 'Preview failed: {message}',
+  'teams.automations.messages.promptTooLong':
+    'Recurring prompt must be {maxLength} characters or fewer.',
+  'teams.automations.messages.promptRequired':
+    'Describe the recurring work before saving it.',
+  'teams.automations.messages.runNowFailed': 'Run request failed: {message}',
+  'teams.automations.messages.runNowSuccess': 'Run requested.',
+  'teams.automations.messages.serviceIdentityLoading':
+    'Service identity is still loading.',
+  'teams.automations.messages.serviceIdentityMissing':
+    'The selected member does not have a service identity yet.',
+  'teams.automations.messages.updateFailed':
+    'Automation was not updated: {message}',
+  'teams.automations.messages.updateSuccess': 'Automation updated.',
+  'teams.automations.noPublishedMember.description':
+    'Automations need a member with a published service identity before they can run.',
+  'teams.automations.noPublishedMember.title': 'Publish a member first',
+  'teams.automations.preview.daily.cadence': 'Every weekday · 09:00',
+  'teams.automations.preview.daily.member': 'Support Analyst',
+  'teams.automations.preview.daily.nextRun': 'Next run today',
+  'teams.automations.preview.daily.prompt':
+    'Summarize escalations, blocked accounts, and follow-up owners.',
+  'teams.automations.preview.daily.title': 'Daily customer escalation digest',
+  'teams.automations.preview.runsThroughMember':
+    'Runs through the member service',
+  'teams.automations.preview.runsThroughService':
+    'Runs through {serviceId}',
+  'teams.automations.preview.status.active': 'Active',
+  'teams.automations.preview.status.attention': 'Needs attention',
+  'teams.automations.preview.weekly.cadence': 'Friday · 16:30',
+  'teams.automations.preview.weekly.member': 'Release Manager',
+  'teams.automations.preview.weekly.nextRun': 'Needs channel permission',
+  'teams.automations.preview.weekly.prompt':
+    'Prepare release handoff notes and flag deploy risks.',
+  'teams.automations.preview.weekly.title': 'Weekly release handoff',
+  'teams.automations.previewOnly': 'Automation API wiring is coming next.',
+  'teams.automations.row.nextRun': 'Next {time}',
+  'teams.automations.row.awaitingReadModel': 'Waiting for schedule sync',
+  'teams.automations.row.manualRunRequested': 'Run requested {time}',
+  'teams.automations.row.noNextRun': 'No next run',
+  'teams.automations.row.target': 'Workflow chat · {endpoint}',
+  'teams.automations.status.active': 'Active',
+  'teams.automations.status.error': 'Error',
+  'teams.automations.status.paused': 'Paused',
+  'teams.automations.status.runRequested': 'Run requested',
+  'teams.automations.summary.active': 'Active',
+  'teams.automations.summary.needsAttention': 'Need attention',
+  'teams.automations.summary.paused': 'Paused',
+  'teams.automations.title': 'Automations',
+  'teams.automations.untitled': 'Untitled automation',
+  'teams.automations.unavailable.title': 'Not ready for automation',
+  'teams.automations.upcoming.attention.caption':
+    'Weekly release handoff needs attention',
+  'teams.automations.upcoming.empty': 'No upcoming runs are visible yet.',
+  'teams.automations.upcoming.friday': 'Friday · 16:30',
+  'teams.automations.upcoming.memberCaption': '{memberName} recurring work',
+  'teams.automations.upcoming.scheduled.caption':
+    'Scheduled teammate commitment',
+  'teams.automations.upcoming.title': 'Upcoming',
+  'teams.automations.upcoming.today': 'Today · 09:00',
+  'teams.automations.upcoming.tomorrow': 'Tomorrow · 18:00',
+  'teams.automations.weekdays.friday': 'Friday',
+  'teams.automations.weekdays.monday': 'Monday',
+  'teams.automations.weekdays.saturday': 'Saturday',
+  'teams.automations.weekdays.sunday': 'Sunday',
+  'teams.automations.weekdays.thursday': 'Thursday',
+  'teams.automations.weekdays.tuesday': 'Tuesday',
+  'teams.automations.weekdays.wednesday': 'Wednesday',
   'teams.members.columns.actions': 'Actions',
   'teams.members.columns.implementation': 'Implementation',
   'teams.members.columns.member': 'Member',
@@ -692,6 +860,10 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.header.activation.publishing': 'Publishing',
   'teamMemberWorkflowStudio.header.activation.ready': 'Ready',
   'teamMemberWorkflowStudio.header.addNode': 'Add node',
+  'teamMemberWorkflowStudio.header.automations.publishFirst':
+    'Publish this member before adding recurring work.',
+  'teamMemberWorkflowStudio.header.automations.saveFirst':
+    'Save this member before adding recurring work.',
   'teamMemberWorkflowStudio.header.back': 'Back',
   'teamMemberWorkflowStudio.header.currentTeam': 'Current team',
   'teamMemberWorkflowStudio.header.confirmDeleteConnection':
@@ -710,6 +882,8 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.header.moreActions': 'More workflow actions',
   'teamMemberWorkflowStudio.header.nodeActionsAria':
     'Workflow draft and node actions',
+  'teamMemberWorkflowStudio.header.openAutomations':
+    'Open recurring work for this member',
   'teamMemberWorkflowStudio.header.pasteYaml': 'Paste YAML',
   'teamMemberWorkflowStudio.header.primaryActionsAria':
     'Workflow primary actions',
@@ -720,6 +894,7 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.header.run': 'Run',
   'teamMemberWorkflowStudio.header.runActiveMember': 'Run draft',
   'teamMemberWorkflowStudio.header.runDraft': 'Run draft',
+  'teamMemberWorkflowStudio.header.recurringWork': 'Recurring work',
   'teamMemberWorkflowStudio.header.save': 'Save',
   'teamMemberWorkflowStudio.header.saveDraft': 'Save draft',
   'teamMemberWorkflowStudio.header.tabs.editor': 'Editor',
@@ -859,83 +1034,8 @@ const enUSMessages = {
   'pages.studio.studiomemberinvokeinspector.run': 'Run',
   'pages.studio.studiomemberinvokeinspector.service.target': 'Service target',
   'pages.studio.studiomemberinvokeinspector.title': 'Details',
-  'pages.studio.studiomembercurrentrunpanel.diagnostics': 'Diagnostics',
-  'pages.studio.studiomembercurrentrunpanel.open.diagnostics': 'Open diagnostics',
-  'pages.studio.studiomembercurrentrunpanel.this.failed.only.the.invoke.run.open.diagnostics':
-    'This run failed. Retry with a smaller request, open diagnostics for backend signals, or edit the member contract from its owning member surface.',
   'pages.studio.studiomemberinvokepanel.endpoint': 'Endpoint',
   'pages.studio.studiomemberinvokepanel.inspector': 'Details',
-  'pages.studio.studiomemberinvokepanel.lifecycle': 'Lifecycle',
-  'pages.studio.studiomemberinvokepanel.member': 'Member',
-  'pages.studio.studiomemberinvokepanel.service': 'Service',
-  'pages.studio.studiomemberinvokepanel.status': 'Status',
-  'pages.studio.studiomemberinvokepanel.team': 'Team',
-  'pages.studio.studioinvokediagnosticsdrawer.actor.id': 'Actor ID',
-  'pages.studio.studioinvokediagnosticsdrawer.agent.message': 'Agent message',
-  'pages.studio.studioinvokediagnosticsdrawer.command.id': 'Command ID',
-  'pages.studio.studioinvokediagnosticsdrawer.completed': 'Completed',
-  'pages.studio.studioinvokediagnosticsdrawer.created': 'Created',
-  'pages.studio.studioinvokediagnosticsdrawer.duration': 'Duration',
-  'pages.studio.studioinvokediagnosticsdrawer.endpoint': 'Endpoint',
-  'pages.studio.studioinvokediagnosticsdrawer.endpoint.2': 'Endpoint',
-  'pages.studio.studioinvokediagnosticsdrawer.event.count': 'Event count',
-  'pages.studio.studioinvokediagnosticsdrawer.event.payload': 'Event payload',
-  'pages.studio.studioinvokediagnosticsdrawer.events': 'Events',
-  'pages.studio.studioinvokediagnosticsdrawer.events.count':
-    'Events ({count})',
-  'pages.studio.studioinvokediagnosticsdrawer.finished.at': 'Finished at',
-  'pages.studio.studioinvokediagnosticsdrawer.historical.run.detail':
-    'Historical run detail',
-  'pages.studio.studioinvokediagnosticsdrawer.history.detail': 'History detail',
-  'pages.studio.studioinvokediagnosticsdrawer.latest.run.detail':
-    'Latest run detail',
-  'pages.studio.studioinvokediagnosticsdrawer.no.displayable.output':
-    'No displayable output.',
-  'pages.studio.studioinvokediagnosticsdrawer.no.extra.error.text':
-    'No extra error text',
-  'pages.studio.studioinvokediagnosticsdrawer.no.raw.json': 'No raw JSON.',
-  'pages.studio.studioinvokediagnosticsdrawer.no.run.selected':
-    'No run is selected yet.',
-  'pages.studio.studioinvokediagnosticsdrawer.no.run.yet': 'No run yet.',
-  'pages.studio.studioinvokediagnosticsdrawer.output': 'Output',
-  'pages.studio.studioinvokediagnosticsdrawer.participant.joined':
-    'Participant joined',
-  'pages.studio.studioinvokediagnosticsdrawer.participant.left':
-    'Participant left',
-  'pages.studio.studioinvokediagnosticsdrawer.payload.base64':
-    'Payload base64',
-  'pages.studio.studioinvokediagnosticsdrawer.payload.help':
-    'Paste encoded protobuf payload when this type cannot be built from text.',
-  'pages.studio.studioinvokediagnosticsdrawer.payload.type.url':
-    'Payload type URL',
-  'pages.studio.studioinvokediagnosticsdrawer.pending.start.timestamp':
-    'Pending start timestamp',
-  'pages.studio.studioinvokediagnosticsdrawer.historical.payload.read.only':
-    'Historical run payload is read-only. Retry as a new run before changing payload fields.',
-  'pages.studio.studioinvokediagnosticsdrawer.run.details': 'Run details',
-  'pages.studio.studioinvokediagnosticsdrawer.run.diagnostics':
-    'Run diagnostics',
-  'pages.studio.studioinvokediagnosticsdrawer.run.failed': 'Run failed',
-  'pages.studio.studioinvokediagnosticsdrawer.run.failed.2': 'Run failed',
-  'pages.studio.studioinvokediagnosticsdrawer.run.finished': 'Run finished',
-  'pages.studio.studioinvokediagnosticsdrawer.run.finished.2': 'Run finished',
-  'pages.studio.studioinvokediagnosticsdrawer.run.has.no.structured.events':
-    'Currently Run has no structured events.',
-  'pages.studio.studioinvokediagnosticsdrawer.run.id': 'Run ID',
-  'pages.studio.studioinvokediagnosticsdrawer.run.in.progress':
-    'Run in progress',
-  'pages.studio.studioinvokediagnosticsdrawer.run.started': 'Run started',
-  'pages.studio.studioinvokediagnosticsdrawer.run.started.2': 'Run started',
-  'pages.studio.studioinvokediagnosticsdrawer.run.stopped': 'Run stopped',
-  'pages.studio.studioinvokediagnosticsdrawer.started.at': 'Started at',
-  'pages.studio.studioinvokediagnosticsdrawer.status': 'Status',
-  'pages.studio.studioinvokediagnosticsdrawer.status.2': 'Status',
-  'pages.studio.studioinvokediagnosticsdrawer.summary': 'Summary',
-  'pages.studio.studioinvokediagnosticsdrawer.timeline': 'Timeline',
-  'pages.studio.studioinvokediagnosticsdrawer.typed.payload':
-    'Advanced typed payload',
-  'pages.studio.studioinvokediagnosticsdrawer.waiting.for.output':
-    'Waiting for output',
 };
 
 export default enUSMessages;
