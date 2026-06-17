@@ -125,7 +125,7 @@ public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext
             ApplyTypedInteraction(suspended, request);
             ApplyTypedDeliveryTarget(suspended, deliveryTargetId);
 
-            await ctx.PublishAsync(suspended, TopologyAudience.ParentAndChildren, ct);
+            await ctx.PublishAsync(suspended, TopologyAudience.Self, ct);
             return;
         }
 
