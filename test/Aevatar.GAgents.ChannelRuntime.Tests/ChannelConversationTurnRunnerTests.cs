@@ -375,7 +375,9 @@ public sealed class ChannelConversationTurnRunnerTests
     {
         var registrationQueryPort = BuildRegistrationQueryPort();
         var adapter = new RecordingPlatformAdapter();
-        var runner = CreateRunner(registrationQueryPort, adapter);
+        var nyxHandler = new RecordingJsonHandler(
+            """{"code":0,"data":{"user":{"user_id":"lark-user-1","employee_id":"emp-1"}}}""");
+        var runner = CreateRunner(registrationQueryPort, adapter, nyxHandler: nyxHandler);
 
         var result = await runner.RunInboundAsync(
             BuildInboundActivity(
@@ -384,7 +386,7 @@ public sealed class ChannelConversationTurnRunnerTests
                 transportExtras: new TransportExtras
                 {
                     NyxPlatform = "lark",
-                    NyxPlatformMessageId = "om_123",
+                    NyxUserAccessToken = "user-token-1",
                     NyxLarkUnionId = "on_union_1",
                     NyxLarkChatId = "oc_chat_1",
                 }),
@@ -392,9 +394,53 @@ public sealed class ChannelConversationTurnRunnerTests
 
         result.Success.Should().BeTrue();
         result.LlmReplyRequest.Should().NotBeNull();
-        result.LlmReplyRequest!.Metadata[ChannelMetadataKeys.PlatformMessageId].Should().Be("om_123");
-        result.LlmReplyRequest.Metadata[ChannelMetadataKeys.LarkUnionId].Should().Be("on_union_1");
+        result.LlmReplyRequest!.Metadata[ChannelMetadataKeys.LarkUnionId].Should().Be("on_union_1");
         result.LlmReplyRequest.Metadata[ChannelMetadataKeys.LarkChatId].Should().Be("oc_chat_1");
+        result.LlmReplyRequest.Metadata[ChannelMetadataKeys.LarkSubjectUserId].Should().Be("lark-user-1");
+        result.LlmReplyRequest.Metadata[ChannelMetadataKeys.LarkSubjectEmployeeId].Should().Be("emp-1");
+
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest.ToolContext);
+        toolContext.ExternalMetadata[ChannelMetadataKeys.LarkSubjectUserId].Should().Be("lark-user-1");
+        toolContext.ExternalMetadata[ChannelMetadataKeys.LarkSubjectEmployeeId].Should().Be("emp-1");
+        nyxHandler.Requests.Should().ContainSingle();
+        nyxHandler.Requests[0].Method.Should().Be("GET");
+        nyxHandler.Requests[0].Path.Should().Be(
+            "/api/v1/proxy/s/api-lark-bot/open-apis/contact/v3/users/on_union_1?user_id_type=union_id");
+        nyxHandler.Requests[0].Authorization.Should().Be("Bearer user-token-1");
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldResolveLarkSubjectIdsByOpenId_WhenUnionIdIsUnavailable()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var nyxHandler = new RecordingJsonHandler(
+            """{"code":0,"data":{"user":{"user_id":"lark-user-open","employee_id":"emp-open"}}}""");
+        var runner = CreateRunner(registrationQueryPort, adapter, nyxHandler: nyxHandler);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "hello",
+                "msg-lark-subject-open-id",
+                transportExtras: new TransportExtras
+                {
+                    NyxPlatform = "lark",
+                    NyxUserAccessToken = "user-token-1",
+                }),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.Metadata.Should().NotContainKey(ChannelMetadataKeys.LarkUnionId);
+        result.LlmReplyRequest.Metadata[ChannelMetadataKeys.LarkSubjectUserId].Should().Be("lark-user-open");
+        result.LlmReplyRequest.Metadata[ChannelMetadataKeys.LarkSubjectEmployeeId].Should().Be("emp-open");
+
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest.ToolContext);
+        toolContext.ExternalMetadata[ChannelMetadataKeys.LarkSubjectUserId].Should().Be("lark-user-open");
+        toolContext.ExternalMetadata[ChannelMetadataKeys.LarkSubjectEmployeeId].Should().Be("emp-open");
+        nyxHandler.Requests.Should().ContainSingle();
+        nyxHandler.Requests[0].Path.Should().Be(
+            "/api/v1/proxy/s/api-lark-bot/open-apis/contact/v3/users/ou_user_1?user_id_type=open_id");
     }
 
     [Fact]
@@ -424,6 +470,105 @@ public sealed class ChannelConversationTurnRunnerTests
         result.LlmReplyRequest.Metadata[ChannelMetadataKeys.LarkOperatorUserId].Should().NotBe("nyx-user-1");
         result.LlmReplyRequest.Metadata[ChannelMetadataKeys.LarkOperatorOpenId].Should().Be("ou_open_operator_1");
         result.LlmReplyRequest.Metadata[ChannelMetadataKeys.LarkOperatorUnionId].Should().Be("on_operator_1");
+        result.LlmReplyRequest.Metadata.Should().NotContainKey(ChannelMetadataKeys.LarkSubjectUserId);
+        result.LlmReplyRequest.Metadata.Should().NotContainKey(ChannelMetadataKeys.LarkSubjectEmployeeId);
+    }
+
+    [Theory]
+    [InlineData(null, "api-lark-bot", "scope-1", """{"code":0,"data":{"user":{"user_id":"lark-user-1","employee_id":"emp-1"}}}""")]
+    [InlineData("user-token-1", "", "scope-1", """{"code":0,"data":{"user":{"user_id":"lark-user-1","employee_id":"emp-1"}}}""")]
+    [InlineData("user-token-1", "api-lark-bot", "", """{"code":0,"data":{"user":{"user_id":"lark-user-1","employee_id":"emp-1"}}}""")]
+    [InlineData("user-token-1", "api-lark-bot", "scope-1", """{"error":true,"message":"proxy unavailable"}""")]
+    [InlineData("user-token-1", "api-lark-bot", "scope-1", """{"code":99991663,"msg":"permission denied"}""")]
+    [InlineData("user-token-1", "api-lark-bot", "scope-1", "not-json")]
+    [InlineData("user-token-1", "api-lark-bot", "scope-1", """{"code":0,"data":{"user":{}}}""")]
+    public async Task RunInboundAsync_ShouldFailOpen_WhenLarkSubjectLookupCannotResolve(
+        string? userAccessToken,
+        string providerSlug,
+        string scopeId,
+        string proxyBody)
+    {
+        var registration = BuildRegistrationEntry();
+        registration.NyxProviderSlug = providerSlug;
+        registration.ScopeId = scopeId;
+        var registrationQueryPort = BuildRegistrationQueryPort(registration);
+        var adapter = new RecordingPlatformAdapter();
+        var nyxHandler = new RecordingJsonHandler(proxyBody);
+        var runner = CreateRunner(registrationQueryPort, adapter, nyxHandler: nyxHandler);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "hello",
+                $"msg-lark-subject-fail-open-{Guid.NewGuid():N}",
+                transportExtras: new TransportExtras
+                {
+                    NyxPlatform = "lark",
+                    NyxUserAccessToken = userAccessToken ?? string.Empty,
+                    NyxLarkUnionId = "on_union_1",
+                }),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.Metadata.Should().NotContainKey(ChannelMetadataKeys.LarkSubjectUserId);
+        result.LlmReplyRequest.Metadata.Should().NotContainKey(ChannelMetadataKeys.LarkSubjectEmployeeId);
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest.ToolContext);
+        toolContext.ExternalMetadata.Should().NotContainKey(ChannelMetadataKeys.LarkSubjectUserId);
+        toolContext.ExternalMetadata.Should().NotContainKey(ChannelMetadataKeys.LarkSubjectEmployeeId);
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldFailOpen_WhenLarkSubjectLookupThrows()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var nyxHandler = new ThrowingJsonHandler(new HttpRequestException("proxy unavailable"));
+        var runner = CreateRunner(registrationQueryPort, adapter, nyxHandler: nyxHandler);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "hello",
+                "msg-lark-subject-proxy-throws",
+                transportExtras: new TransportExtras
+                {
+                    NyxPlatform = "lark",
+                    NyxUserAccessToken = "user-token-1",
+                    NyxLarkUnionId = "on_union_1",
+                }),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.Metadata.Should().NotContainKey(ChannelMetadataKeys.LarkSubjectUserId);
+        result.LlmReplyRequest.Metadata.Should().NotContainKey(ChannelMetadataKeys.LarkSubjectEmployeeId);
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest.ToolContext);
+        toolContext.ExternalMetadata.Should().NotContainKey(ChannelMetadataKeys.LarkSubjectUserId);
+        toolContext.ExternalMetadata.Should().NotContainKey(ChannelMetadataKeys.LarkSubjectEmployeeId);
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldPropagateCancellation_WhenLarkSubjectLookupIsCanceled()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var nyxHandler = new RecordingJsonHandler(
+            """{"code":0,"data":{"user":{"user_id":"lark-user-1","employee_id":"emp-1"}}}""");
+        var runner = CreateRunner(registrationQueryPort, adapter, nyxHandler: nyxHandler);
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        var activity = BuildInboundActivity(
+            "hello",
+            "msg-lark-subject-canceled",
+            transportExtras: new TransportExtras
+            {
+                NyxPlatform = "lark",
+                NyxUserAccessToken = "user-token-1",
+                NyxLarkUnionId = "on_union_1",
+            });
+
+        var exception = await Record.ExceptionAsync(() => runner.RunInboundAsync(activity, cts.Token));
+        exception.Should().BeAssignableTo<OperationCanceledException>();
     }
 
     [Fact]
@@ -541,10 +686,10 @@ public sealed class ChannelConversationTurnRunnerTests
             CancellationToken.None);
 
         result.Success.Should().BeTrue();
-        nyxHandler.Requests.Should().ContainSingle();
-        nyxHandler.Requests[0].Path.Should().Be("/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_123/reactions");
-        nyxHandler.Requests[0].Authorization.Should().Be("Bearer user-token-1");
-        nyxHandler.Requests[0].Body.Should().Contain("\"emoji_type\":\"Typing\"");
+        var reactionRequest = nyxHandler.Requests.Should().Contain(request =>
+            request.Path == "/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_123/reactions").Subject;
+        reactionRequest.Authorization.Should().Be("Bearer user-token-1");
+        reactionRequest.Body.Should().Contain("\"emoji_type\":\"Typing\"");
     }
 
     [Fact]
@@ -552,7 +697,10 @@ public sealed class ChannelConversationTurnRunnerTests
     {
         var registrationQueryPort = BuildRegistrationQueryPort();
         var adapter = new RecordingPlatformAdapter();
-        var nyxHandler = new BlockingJsonHandler("""{"code":0,"data":{}}""");
+        var nyxHandler = new TypingReactionGateHandler(
+            expectedTotalCallCount: 2,
+            """{"code":0,"data":{}}""",
+            """{"code":0,"data":{}}""");
         var runner = CreateRunner(registrationQueryPort, adapter, nyxHandler: nyxHandler);
 
         var runTask = runner.RunInboundAsync(
@@ -567,14 +715,15 @@ public sealed class ChannelConversationTurnRunnerTests
                 }),
             CancellationToken.None);
 
-        await nyxHandler.Started.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        await nyxHandler.TypingPostStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
         runTask.IsCompleted.Should().BeTrue();
 
         var result = await runTask;
         result.Success.Should().BeTrue();
         result.LlmReplyRequest.Should().NotBeNull();
 
-        nyxHandler.Release.TrySetResult();
+        nyxHandler.ReleaseTypingPost.TrySetResult();
+        await nyxHandler.Completed.Task.WaitAsync(TimeSpan.FromSeconds(1));
     }
 
     [Fact]
@@ -597,7 +746,9 @@ public sealed class ChannelConversationTurnRunnerTests
             CancellationToken.None);
 
         result.Success.Should().BeTrue();
-        nyxHandler.Requests.Should().BeEmpty();
+        nyxHandler.Requests.Should().ContainSingle();
+        nyxHandler.Requests[0].Path.Should().Be(
+            "/api/v1/proxy/s/api-lark-bot/open-apis/contact/v3/users/ou_user_1?user_id_type=open_id");
     }
 
     [Fact]
@@ -2003,6 +2154,8 @@ public sealed class ChannelConversationTurnRunnerTests
         var registrationQueryPort = BuildRegistrationQueryPort();
         var adapter = new RecordingPlatformAdapter();
         var relayHandler = new RecordingJsonHandler("""{"message_id":"relay-agent-builder-reply"}""");
+        var nyxHandler = new RecordingJsonHandler(
+            """{"code":0,"data":{"user":{"user_id":"lark-user-direct","employee_id":"emp-direct"}}}""");
         var callerScopeResolver = new CapturingCallerScopeResolver();
         var services = new ServiceCollection()
             .AddSingleton(Substitute.For<IUserAgentCatalogQueryPort>())
@@ -2021,7 +2174,8 @@ public sealed class ChannelConversationTurnRunnerTests
             registrationQueryPort,
             adapter,
             services,
-            relayHandler: relayHandler);
+            relayHandler: relayHandler,
+            nyxHandler: nyxHandler);
 
         var result = await runner.RunInboundAsync(
             BuildInboundActivity(
@@ -2038,6 +2192,7 @@ public sealed class ChannelConversationTurnRunnerTests
                 {
                     NyxPlatform = "lark",
                     NyxUserAccessToken = string.Empty,
+                    NyxLarkUnionId = "on_union_direct",
                 }),
             RelayRuntimeContext(
                 "corr-runtime-token-1",
@@ -2060,6 +2215,14 @@ public sealed class ChannelConversationTurnRunnerTests
             .Should().Be("runtime-user-token-1");
         callerScopeResolver.CapturedMetadata[ChannelMetadataKeys.MessageId]
             .Should().Be("msg-runtime-token-agent-builder-1");
+        callerScopeResolver.CapturedMetadata[ChannelMetadataKeys.LarkSubjectUserId]
+            .Should().Be("lark-user-direct");
+        callerScopeResolver.CapturedMetadata[ChannelMetadataKeys.LarkSubjectEmployeeId]
+            .Should().Be("emp-direct");
+        nyxHandler.Requests.Should().ContainSingle();
+        nyxHandler.Requests[0].Path.Should().Be(
+            "/api/v1/proxy/s/api-lark-bot/open-apis/contact/v3/users/on_union_direct?user_id_type=union_id");
+        nyxHandler.Requests[0].Authorization.Should().Be("Bearer runtime-user-token-1");
         AgentToolRequestContext.Current.Should().BeNull();
     }
 
@@ -3909,7 +4072,11 @@ public sealed class ChannelConversationTurnRunnerTests
 
     private static IChannelBotRegistrationQueryPort BuildRegistrationQueryPort()
     {
-        var registration = BuildRegistrationEntry();
+        return BuildRegistrationQueryPort(BuildRegistrationEntry());
+    }
+
+    private static IChannelBotRegistrationQueryPort BuildRegistrationQueryPort(ChannelBotRegistrationEntry registration)
+    {
         var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
         queryPort.GetAsync(registration.Id, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(registration));
@@ -4039,17 +4206,23 @@ public sealed class ChannelConversationTurnRunnerTests
             var current = AgentToolRequestContext.Current;
             CapturedMetadata = current is null
                 ? null
-                : new Dictionary<string, string>(StringComparer.Ordinal)
-                {
-                    [LLMRequestMetadataKeys.NyxIdAccessToken] = current.Credentials.NyxIdAccessToken ?? string.Empty,
-                    [LLMRequestMetadataKeys.NyxIdOrgToken] = current.Credentials.NyxIdOrgToken ?? string.Empty,
-                    [ChannelMetadataKeys.MessageId] = current.Channel.MessageId ?? string.Empty,
-                };
+                : CaptureMetadata(current);
             return Task.FromResult<OwnerScope?>(OwnerScope.ForChannel(
                 "nyx-user-1",
                 "lark",
                 "scope-1",
                 "ou_user_1"));
+        }
+
+        private static IReadOnlyDictionary<string, string> CaptureMetadata(AgentToolExecutionContext current)
+        {
+            var captured = new Dictionary<string, string>(current.ExternalMetadata, StringComparer.Ordinal)
+            {
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = current.Credentials.NyxIdAccessToken ?? string.Empty,
+                [LLMRequestMetadataKeys.NyxIdOrgToken] = current.Credentials.NyxIdOrgToken ?? string.Empty,
+                [ChannelMetadataKeys.MessageId] = current.Channel.MessageId ?? string.Empty,
+            };
+            return captured;
         }
     }
 
@@ -4176,6 +4349,14 @@ public sealed class ChannelConversationTurnRunnerTests
             await Release.Task.WaitAsync(cancellationToken);
             return await base.SendAsync(request, cancellationToken);
         }
+    }
+
+    private sealed class ThrowingJsonHandler(Exception exception) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            Task.FromException<HttpResponseMessage>(exception);
     }
 
     // Parks the FIRST request (the typing POST that fires from RunInboundAsync) on a
