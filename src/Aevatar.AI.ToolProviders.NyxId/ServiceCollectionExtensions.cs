@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -30,6 +31,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<INyxIdApiClientFactory, HttpClientFactoryNyxIdApiClientFactory>();
         services.AddHttpClient(ConnectedServiceSpecCache.HttpClientName, _ => { });
         services.TryAddSingleton<IConnectedServiceSpecSource, ConnectedServiceSpecCache>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IWorkflowConnectedServiceFileSubmitAdapter,
+            NyxIdWorkflowConnectedServiceFileSubmitAdapter>());
         services.TryAddEnumerable(
             ServiceDescriptor.Transient<IAgentToolSource, NyxIdAgentToolSource>());
 
