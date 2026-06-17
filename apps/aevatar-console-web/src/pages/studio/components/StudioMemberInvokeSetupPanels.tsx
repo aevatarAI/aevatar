@@ -46,9 +46,9 @@ const dockComposerStyle: React.CSSProperties = {
 };
 
 const memberRunComposerStyle: React.CSSProperties = {
-  background: studioInvokeColors.panel,
+  background: 'transparent',
   display: 'grid',
-  gap: 12,
+  gap: 8,
   minWidth: 0,
 };
 
@@ -74,18 +74,27 @@ const dockComposerSecondaryButtonStyle: React.CSSProperties = {
 };
 
 const memberRunInputStyle: React.CSSProperties = {
-  borderRadius: 8,
+  background: '#fbfcfe',
+  borderColor: '#d8dee9',
+  borderRadius: 10,
   fontSize: 14,
   lineHeight: 1.7,
+  minHeight: 64,
   padding: '12px 14px',
 };
 
-const memberRunLockedInputStyle: React.CSSProperties = {
-  background: studioInvokeColors.surfaceActive,
-  borderColor: studioInvokeColors.borderStrong,
-  boxShadow: 'inset 0 0 0 1px rgba(22, 119, 255, 0.06)',
-  color: studioInvokeColors.textSoft,
-  cursor: 'default',
+const memberRunLauncherRowStyle: React.CSSProperties = {
+  alignItems: 'stretch',
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 10,
+  minWidth: 0,
+};
+
+const memberRunLauncherInputStyle: React.CSSProperties = {
+  ...memberRunInputStyle,
+  flex: '1 1 460px',
+  minWidth: 260,
 };
 
 const memberRunActionsStyle: React.CSSProperties = {
@@ -96,11 +105,19 @@ const memberRunActionsStyle: React.CSSProperties = {
   justifyContent: 'flex-end',
 };
 
+const memberRunInlineActionsStyle: React.CSSProperties = {
+  ...memberRunActionsStyle,
+  alignContent: 'stretch',
+  flex: '0 0 auto',
+};
+
 const memberRunPrimaryButtonStyle: React.CSSProperties = {
-  minWidth: 112,
+  minHeight: 42,
+  minWidth: 128,
 };
 
 const memberRunSecondaryButtonStyle: React.CSSProperties = {
+  minHeight: 42,
   minWidth: 92,
 };
 
@@ -113,7 +130,7 @@ const promptLabelRowStyle: React.CSSProperties = {
 };
 
 const promptKickerStyle: React.CSSProperties = {
-  color: studioInvokeColors.accent,
+  color: '#475569',
   fontSize: 10.5,
   fontWeight: 800,
   letterSpacing: 0,
@@ -128,10 +145,10 @@ const promptDockHintStyle: React.CSSProperties = {
 };
 
 const memberRunStatePillStyle: React.CSSProperties = {
-  background: studioInvokeColors.assistantSoft,
-  border: `1px solid ${studioInvokeColors.borderStrong}`,
+  background: '#ecfdf5',
+  border: '1px solid #bbf7d0',
   borderRadius: 999,
-  color: '#1d4ed8',
+  color: '#047857',
   flex: '0 0 auto',
   fontSize: 11,
   fontWeight: 700,
@@ -140,11 +157,43 @@ const memberRunStatePillStyle: React.CSSProperties = {
   whiteSpace: 'nowrap',
 };
 
+const submittedReceiptStyle: React.CSSProperties = {
+  alignItems: 'flex-start',
+  background: '#f8fafc',
+  border: '1px solid #dbe3ee',
+  borderRadius: 10,
+  display: 'grid',
+  flex: '1 1 460px',
+  gap: 4,
+  minHeight: 42,
+  minWidth: 260,
+  padding: '10px 12px',
+};
+
+const submittedReceiptLabelStyle: React.CSSProperties = {
+  color: '#64748b',
+  fontSize: 11,
+  fontWeight: 800,
+  letterSpacing: 0,
+  lineHeight: '14px',
+  textTransform: 'uppercase',
+};
+
+const submittedReceiptTextStyle: React.CSSProperties = {
+  color: '#0f172a',
+  fontSize: 13,
+  lineHeight: '18px',
+  maxHeight: 54,
+  overflow: 'hidden',
+  overflowWrap: 'anywhere',
+  wordBreak: 'break-word',
+};
+
 const composerGuidanceStyle: React.CSSProperties = {
-  background: studioInvokeColors.surfaceActive,
-  border: `1px solid ${studioInvokeColors.borderStrong}`,
+  background: '#f8fafc',
+  border: '1px solid #dbe3ee',
   borderRadius: 8,
-  color: studioInvokeColors.textSoft,
+  color: '#475569',
   display: 'grid',
   gap: 2,
   minWidth: 0,
@@ -211,8 +260,8 @@ export const StudioMemberInvokeComposerPanel: React.FC<
   );
   const promptLabel = isMemberRunLayout
     ? t(
-        "pages.studio.studiomemberinvokesetuppanels.task.for.this.run",
-        "Task for this run",
+        "pages.studio.studiomemberinvokesetuppanels.run.launcher",
+        "Run launcher",
       )
     : t("pages.studio.studiomemberinvokesetuppanels.prompt.3", "Request");
   const inputAriaLabel = isMemberRunLayout
@@ -224,12 +273,6 @@ export const StudioMemberInvokeComposerPanel: React.FC<
         "pages.studio.studiomemberinvokesetuppanels.copy",
         "Workflow request input",
       );
-  const memberRunInputStyleForState = inputLocked
-    ? {
-        ...memberRunInputStyle,
-        ...memberRunLockedInputStyle,
-      }
-    : memberRunInputStyle;
   const content = (
     <div
       style={
@@ -259,7 +302,65 @@ export const StudioMemberInvokeComposerPanel: React.FC<
             </span>
           ) : null}
         </div>
-        {isDockLayout ? (
+        {isMemberRunLayout ? (
+          <div style={memberRunLauncherRowStyle}>
+            {inputLocked ? (
+              <div
+                aria-label={inputAriaLabel}
+                data-testid="studio-invoke-submitted-input-receipt"
+                role="group"
+                style={submittedReceiptStyle}
+              >
+                <span style={submittedReceiptLabelStyle}>
+                  {t(
+                    "pages.studio.studiomemberinvokesetuppanels.submitted.input",
+                    "Submitted input",
+                  )}
+                </span>
+                <span style={submittedReceiptTextStyle}>
+                  {displayedPrompt ||
+                    t(
+                      "pages.studio.studiomemberinvokesetuppanels.no.input.captured",
+                      "No input captured.",
+                    )}
+                </span>
+              </div>
+            ) : (
+              <Input.TextArea
+                aria-label={inputAriaLabel}
+                autoSize={{ minRows: 2, maxRows: 5 }}
+                placeholder={promptPlaceholder}
+                style={memberRunLauncherInputStyle}
+                value={displayedPrompt}
+                onChange={(event) => onPromptChange(event.target.value)}
+              />
+            )}
+            <div
+              data-testid="studio-invoke-playground-actions"
+              style={memberRunInlineActionsStyle}
+            >
+              <Button
+                danger={isRunning}
+                disabled={!isRunning && !canInvoke}
+                icon={primaryButtonIcon}
+                onClick={isRunning ? onAbort : onInvoke}
+                size="large"
+                style={memberRunPrimaryButtonStyle}
+                type="primary"
+              >
+                {primaryButtonLabel}
+              </Button>
+              <Button
+                disabled={isRunning}
+                icon={<ClearOutlined />}
+                onClick={onClear}
+                style={memberRunSecondaryButtonStyle}
+              >
+                {t("pages.studio.studiomemberinvokesetuppanels.clear.4", "Clear")}
+              </Button>
+            </div>
+          </div>
+        ) : isDockLayout ? (
           <div
             data-testid="studio-invoke-playground-actions"
             style={dockComposerRowStyle}
@@ -303,14 +404,12 @@ export const StudioMemberInvokeComposerPanel: React.FC<
             }
             autoSize={
               isMemberRunLayout
-                ? { minRows: 5, maxRows: 10 }
+                ? { minRows: 3, maxRows: 6 }
                 : { minRows: 4, maxRows: 8 }
             }
             placeholder={promptPlaceholder}
             readOnly={inputLocked}
-            style={
-              isMemberRunLayout ? memberRunInputStyleForState : undefined
-            }
+            style={isMemberRunLayout ? memberRunInputStyle : undefined}
             value={displayedPrompt}
             onChange={(event) => onPromptChange(event.target.value)}
           />
@@ -379,7 +478,7 @@ export const StudioMemberInvokeComposerPanel: React.FC<
         )}
       </div>
 
-      {isDockLayout ? null : (
+      {isDockLayout || isMemberRunLayout ? null : (
         <div
           data-testid="studio-invoke-playground-actions"
           style={

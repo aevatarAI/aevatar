@@ -363,13 +363,14 @@ describe('StudioMemberInvokePanel', () => {
     expect(targetSummary).not.toHaveTextContent('Service: workspace-demo-service');
     expect(targetSummary).not.toHaveTextContent('Workflow');
     expect(targetSummary).not.toHaveTextContent('Team: team-1');
-    expect(screen.getByText('New run')).toBeTruthy();
+    expect(screen.getByTestId('studio-invoke-member-run-workbench')).toBeTruthy();
+    expect(screen.getByText('Launch run')).toBeTruthy();
     expect(
       screen.getByText(
-        'Provide the input for one isolated execution against this member.',
+        'One input creates one isolated run.',
       ),
     ).toBeTruthy();
-    expect(screen.getByText('Task for this run')).toBeTruthy();
+    expect(screen.getByText('Run launcher')).toBeTruthy();
     expect(screen.getByLabelText('Run input')).toBeTruthy();
     expect(screen.queryByLabelText('Workflow request input')).toBeNull();
     expect(
@@ -381,9 +382,11 @@ describe('StudioMemberInvokePanel', () => {
     expect(screen.queryByRole('button', { name: 'Run workflow' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Technical details' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Details' })).toBeNull();
-    expect(screen.getByText('Run result')).toBeTruthy();
+    expect(screen.getByText('Current run')).toBeTruthy();
     expect(screen.getByText('No run result yet')).toBeTruthy();
     expect(screen.getByText('Start a run to see the result here.')).toBeTruthy();
+    expect(screen.queryByText('New run')).toBeNull();
+    expect(screen.queryByText('Run result')).toBeNull();
     expect(screen.queryByText('Observe handoff')).toBeNull();
   });
 
@@ -453,11 +456,14 @@ describe('StudioMemberInvokePanel', () => {
       );
     });
 
-    const lockedRunInput = screen.getByLabelText('Run input');
-    expect(lockedRunInput).toHaveValue(
+    expect(screen.queryByRole('textbox', { name: 'Run input' })).toBeNull();
+    const submittedReceipt = screen.getByTestId(
+      'studio-invoke-submitted-input-receipt',
+    );
+    expect(submittedReceipt).toHaveTextContent('Submitted input');
+    expect(submittedReceipt).toHaveTextContent(
       'Summarize the latest support case for billing.',
     );
-    expect(lockedRunInput).toHaveAttribute('readonly');
     expect(screen.getByText('In progress')).toBeTruthy();
     expect(
       screen.getByText(

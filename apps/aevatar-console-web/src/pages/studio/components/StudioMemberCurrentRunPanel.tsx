@@ -14,6 +14,11 @@ import {
   type StudioInvokeChatMessage,
 } from './StudioMemberInvokePanel.currentRun';
 import {
+  parseMarkdownBlocks,
+  tokenizeInlineContent,
+  type MarkdownBlock,
+} from '@/pages/chat/chatContent';
+import {
   helperTextStyle,
   studioInvokeColors,
   trimOptional,
@@ -112,6 +117,193 @@ function buildStatusSummary(input: {
   } · ${input.endpointLabel || 'chat'}`;
 }
 
+function renderInlineContent(text: string, keyPrefix: string): React.ReactNode {
+  return tokenizeInlineContent(text).map((token, index) => {
+    const key = `${keyPrefix}-${index}`;
+    if (token.kind === 'code') {
+      return (
+        <code
+          key={key}
+          style={{
+            background: 'rgba(15, 23, 42, 0.06)',
+            borderRadius: 6,
+            padding: '1px 5px',
+          }}
+        >
+          {token.text}
+        </code>
+      );
+    }
+
+    if (token.kind === 'link') {
+      return (
+        <a
+          key={key}
+          href={token.href}
+          rel="noreferrer"
+          target="_blank"
+        >
+          {token.text}
+        </a>
+      );
+    }
+
+    return token.bold ? <strong key={key}>{token.text}</strong> : token.text;
+  });
+}
+
+function renderMarkdownLines(
+  lines: readonly string[],
+  keyPrefix: string,
+): React.ReactNode {
+  return lines.map((line, index) => (
+    <React.Fragment key={`${keyPrefix}-${index}`}>
+      {index > 0 ? <br /> : null}
+      {renderInlineContent(line, `${keyPrefix}-inline-${index}`)}
+    </React.Fragment>
+  ));
+}
+
+function renderMarkdownBlock(
+  block: MarkdownBlock,
+  index: number,
+): React.ReactNode {
+  switch (block.kind) {
+    case 'heading':
+      return (
+        <div key={index} style={markdownHeadingStyle(block.level)}>
+          {renderInlineContent(block.text, `heading-${index}`)}
+        </div>
+      );
+    case 'unordered-list':
+      return (
+        <ul key={index} style={markdownListStyle}>
+          {block.items.map((item, itemIndex) => (
+            <li key={`${index}-${itemIndex}`}>
+              {renderInlineContent(item, `ul-${index}-${itemIndex}`)}
+            </li>
+          ))}
+        </ul>
+      );
+    case 'ordered-list':
+      return (
+        <ol key={index} style={markdownListStyle}>
+          {block.items.map((item, itemIndex) => (
+            <li key={`${index}-${itemIndex}`}>
+              {renderInlineContent(item, `ol-${index}-${itemIndex}`)}
+            </li>
+          ))}
+        </ol>
+      );
+    case 'blockquote':
+      return (
+        <blockquote
+          key={index}
+          style={{
+            borderLeft: '3px solid #cbd5e1',
+            color: '#475569',
+            margin: '0 0 12px',
+            padding: '2px 0 2px 12px',
+          }}
+        >
+          {renderMarkdownLines(block.lines, `quote-${index}`)}
+        </blockquote>
+      );
+    case 'code':
+      return (
+        <pre key={index} style={markdownCodeStyle}>
+          {block.code}
+        </pre>
+      );
+    case 'thematic-break':
+      return (
+        <div
+          key={index}
+          style={{ borderTop: '1px solid #dbe3ee', margin: '14px 0' }}
+        />
+      );
+    case 'paragraph':
+    default:
+      return (
+        <div key={index} style={markdownParagraphStyle}>
+          {renderMarkdownLines(block.lines, `paragraph-${index}`)}
+        </div>
+      );
+  }
+}
+
+function splitMarkdownTableRow(line: string): string[] {
+  return line
+    .trim()
+    .replace(/^\|/, '')
+    .replace(/\|$/, '')
+    .split('|')
+    .map((cell) => cell.trim());
+}
+
+function isMarkdownTableSeparator(line: string): boolean {
+  return /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line);
+}
+
+function renderMarkdownTable(lines: readonly string[], index: number) {
+  const header = splitMarkdownTableRow(lines[0]);
+  const rows = lines.slice(2).map(splitMarkdownTableRow);
+
+  return (
+    <div key={`table-${index}`} style={markdownTableWrapperStyle}>
+      <table style={markdownTableStyle}>
+        <thead>
+          <tr>
+            {header.map((cell, cellIndex) => (
+              <th key={cellIndex} style={markdownTableHeaderCellStyle}>
+                {renderInlineContent(cell, `table-${index}-head-${cellIndex}`)}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, rowIndex) => (
+            <tr key={rowIndex}>
+              {header.map((_, cellIndex) => (
+                <td key={cellIndex} style={markdownTableCellStyle}>
+                  {renderInlineContent(
+                    row[cellIndex] || '',
+                    `table-${index}-${rowIndex}-${cellIndex}`,
+                  )}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function renderRunOutputContent(text: string): React.ReactNode {
+  const blocks = parseMarkdownBlocks(text);
+  if (blocks.length === 0) {
+    return null;
+  }
+
+  return (
+    <div style={renderedOutputStyle}>
+      {blocks.map((block, index) => {
+        if (
+          block.kind === 'paragraph' &&
+          block.lines.length >= 3 &&
+          block.lines[0].includes('|') &&
+          isMarkdownTableSeparator(block.lines[1])
+        ) {
+          return renderMarkdownTable(block.lines, index);
+        }
+
+        return renderMarkdownBlock(block, index);
+      })}
+    </div>
+  );
+}
+
 const panelStyle: React.CSSProperties = {
   display: 'flex',
   flex: '0 0 auto',
@@ -133,10 +325,10 @@ const headerStyle: React.CSSProperties = {
 };
 
 const markerStyle: React.CSSProperties = {
-  background: studioInvokeColors.surfaceActive,
-  border: `1px solid ${studioInvokeColors.borderStrong}`,
+  background: '#eef6ff',
+  border: '1px solid #bfdbfe',
   borderRadius: 999,
-  color: studioInvokeColors.textSoft,
+  color: '#1d4ed8',
   display: 'inline-flex',
   fontSize: 12,
   fontWeight: 800,
@@ -145,7 +337,7 @@ const markerStyle: React.CSSProperties = {
 };
 
 const summaryStyle: React.CSSProperties = {
-  color: studioInvokeColors.textSoft,
+  color: '#334155',
   fontSize: 13,
   fontWeight: 700,
   lineHeight: '20px',
@@ -154,14 +346,14 @@ const summaryStyle: React.CSSProperties = {
 
 const outputPaneStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 10,
+  gap: 12,
   minWidth: 0,
 };
 
 const sectionStyle: React.CSSProperties = {
-  background: studioInvokeColors.surface,
-  border: `1px solid ${studioInvokeColors.border}`,
-  borderRadius: 8,
+  background: '#f8fafc',
+  border: '1px solid #dbe3ee',
+  borderRadius: 10,
   display: 'grid',
   gap: 8,
   minWidth: 0,
@@ -170,9 +362,11 @@ const sectionStyle: React.CSSProperties = {
 
 const responseSectionStyle: React.CSSProperties = {
   ...sectionStyle,
-  background: studioInvokeColors.panel,
-  borderColor: studioInvokeColors.borderStrong,
-  padding: '16px 18px',
+  background: '#ffffff',
+  borderColor: '#cbd5e1',
+  boxShadow: 'inset 0 1px 0 rgba(15, 23, 42, 0.03)',
+  minHeight: 150,
+  padding: '18px 20px',
 };
 
 const sectionLabelStyle: React.CSSProperties = {
@@ -194,12 +388,80 @@ const bodyTextStyle: React.CSSProperties = {
   wordBreak: 'break-word',
 };
 
+const renderedOutputStyle: React.CSSProperties = {
+  color: '#0f172a',
+  fontSize: 14,
+  lineHeight: 1.75,
+  minWidth: 0,
+  overflowWrap: 'anywhere',
+  wordBreak: 'break-word',
+};
+
+const markdownHeadingStyle = (level: number): React.CSSProperties => ({
+  color: '#0f172a',
+  fontSize: Math.max(18 - (level - 1) * 1.5, 14),
+  fontWeight: 800,
+  lineHeight: 1.35,
+  margin: level <= 3 ? '18px 0 8px' : '14px 0 6px',
+});
+
+const markdownListStyle: React.CSSProperties = {
+  margin: '0 0 12px',
+  paddingLeft: 22,
+};
+
+const markdownParagraphStyle: React.CSSProperties = {
+  margin: '0 0 12px',
+};
+
+const markdownCodeStyle: React.CSSProperties = {
+  background: '#f8fafc',
+  border: '1px solid #dbe3ee',
+  borderRadius: 10,
+  fontFamily:
+    "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace",
+  fontSize: 13,
+  margin: '8px 0 12px',
+  overflowX: 'auto',
+  padding: '12px 14px',
+  whiteSpace: 'pre-wrap',
+};
+
+const markdownTableWrapperStyle: React.CSSProperties = {
+  border: '1px solid #dbe3ee',
+  borderRadius: 10,
+  margin: '8px 0 14px',
+  overflowX: 'auto',
+};
+
+const markdownTableStyle: React.CSSProperties = {
+  borderCollapse: 'collapse',
+  fontSize: 13,
+  minWidth: '100%',
+};
+
+const markdownTableHeaderCellStyle: React.CSSProperties = {
+  background: '#f8fafc',
+  borderBottom: '1px solid #dbe3ee',
+  color: '#475569',
+  fontWeight: 800,
+  padding: '10px 12px',
+  textAlign: 'left',
+  whiteSpace: 'nowrap',
+};
+
+const markdownTableCellStyle: React.CSSProperties = {
+  borderTop: '1px solid #eef2f7',
+  padding: '10px 12px',
+  verticalAlign: 'top',
+};
+
 const emptyStateStyle: React.CSSProperties = {
   alignItems: 'center',
-  background: studioInvokeColors.surface,
-  border: `1px dashed ${studioInvokeColors.borderStrong}`,
-  borderRadius: 8,
-  color: studioInvokeColors.muted,
+  background: 'linear-gradient(180deg, #ffffff 0%, #f8fafc 100%)',
+  border: '1px dashed #cbd5e1',
+  borderRadius: 12,
+  color: '#64748b',
   display: 'flex',
   flex: 1,
   flexDirection: 'column',
@@ -207,17 +469,17 @@ const emptyStateStyle: React.CSSProperties = {
   gap: 6,
   justifyContent: 'center',
   lineHeight: 1.7,
-  minHeight: 180,
+  minHeight: 280,
   minWidth: 0,
   padding: 18,
   textAlign: 'center',
 };
 
 const emptyTitleStyle: React.CSSProperties = {
-  color: studioInvokeColors.text,
-  fontSize: 15,
+  color: '#0f172a',
+  fontSize: 18,
   fontWeight: 800,
-  lineHeight: '22px',
+  lineHeight: '26px',
 };
 
 const errorActionsStyle: React.CSSProperties = {
@@ -228,10 +490,10 @@ const errorActionsStyle: React.CSSProperties = {
 };
 
 const recoveryPathStyle: React.CSSProperties = {
-  background: studioInvokeColors.surfaceActive,
-  border: `1px solid ${studioInvokeColors.borderStrong}`,
-  borderRadius: 8,
-  color: studioInvokeColors.textSoft,
+  background: '#f8fafc',
+  border: '1px solid #dbe3ee',
+  borderRadius: 10,
+  color: '#475569',
   display: 'grid',
   gap: 4,
   minWidth: 0,
@@ -288,6 +550,91 @@ const errorDescriptionStyle: React.CSSProperties = {
   wordBreak: 'break-word',
 };
 
+const memberRunPanelStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 12,
+  minHeight: 0,
+  minWidth: 0,
+};
+
+const memberRunHeaderStyle: React.CSSProperties = {
+  alignItems: 'center',
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 10,
+  justifyContent: 'space-between',
+  minWidth: 0,
+};
+
+const memberRunTitleStyle: React.CSSProperties = {
+  color: '#0f172a',
+  fontSize: 18,
+  fontWeight: 800,
+  lineHeight: '26px',
+};
+
+const memberRunStatusClusterStyle: React.CSSProperties = {
+  alignItems: 'center',
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 8,
+  justifyContent: 'flex-end',
+  minWidth: 0,
+};
+
+const memberRunInputReceiptStyle: React.CSSProperties = {
+  alignItems: 'flex-start',
+  background: '#f8fafc',
+  border: '1px solid #e2e8f0',
+  borderRadius: 10,
+  display: 'grid',
+  gap: 5,
+  minWidth: 0,
+  padding: '10px 12px',
+};
+
+const memberRunInputLabelStyle: React.CSSProperties = {
+  color: '#64748b',
+  fontSize: 11,
+  fontWeight: 800,
+  letterSpacing: 0,
+  lineHeight: '14px',
+  textTransform: 'uppercase',
+};
+
+const memberRunInputTextStyle: React.CSSProperties = {
+  ...bodyTextStyle,
+  color: '#334155',
+  fontSize: 13,
+  lineHeight: '19px',
+  maxHeight: 76,
+  overflow: 'hidden',
+};
+
+const memberRunCanvasStyle: React.CSSProperties = {
+  background: '#ffffff',
+  border: '1px solid #e2e8f0',
+  borderRadius: 12,
+  boxShadow: 'inset 0 1px 0 rgba(15, 23, 42, 0.03)',
+  display: 'grid',
+  gap: 12,
+  minHeight: 280,
+  minWidth: 0,
+  padding: '20px 22px',
+};
+
+const memberRunEmptyCanvasStyle: React.CSSProperties = {
+  ...emptyStateStyle,
+  background: '#ffffff',
+  border: '1px dashed #cbd5e1',
+  minHeight: 300,
+};
+
+const memberRunCanvasLabelStyle: React.CSSProperties = {
+  ...sectionLabelStyle,
+  color: '#475569',
+};
+
 const StudioMemberCurrentRunPanel: React.FC<
   StudioMemberCurrentRunPanelProps
 > = ({
@@ -328,6 +675,199 @@ const StudioMemberCurrentRunPanel: React.FC<
     status: invokeResult.status,
   });
   const openDiagnostics = onOpenDiagnostics ?? onOpenInspector ?? (() => {});
+
+  const renderMemberRunInputReceipt = () =>
+    inputText ? (
+      <div style={memberRunInputReceiptStyle}>
+        <span style={memberRunInputLabelStyle}>
+          {t(
+            "pages.studio.studiomembercurrentrunpanel.submitted.input",
+            "Submitted input",
+          )}
+        </span>
+        <p style={memberRunInputTextStyle}>{inputText}</p>
+      </div>
+    ) : null;
+
+  const renderMemberRunOutput = () => {
+    if (!currentRunHasData) {
+      return (
+        <div style={memberRunEmptyCanvasStyle}>
+          <div style={emptyTitleStyle}>
+            {t(
+              "pages.studio.studiomembercurrentrunpanel.no.run.result.yet",
+              "No run result yet",
+            )}
+          </div>
+          <div>
+            {t(
+              "pages.studio.studiomembercurrentrunpanel.start.run.to.see.result",
+              "Start a run to see the result here.",
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    if (invokeResult.status === 'error' || invokeResult.status === 'cancelled') {
+      const isCancelled = invokeResult.status === 'cancelled';
+      return (
+        <div style={outputPaneStyle}>
+          {renderMemberRunInputReceipt()}
+          <div style={isCancelled ? warningCardStyle : errorCardStyle}>
+            {isCancelled ? (
+              <ExclamationCircleFilled style={warningIconStyle} />
+            ) : (
+              <CloseCircleFilled style={errorIconStyle} />
+            )}
+            <div style={{ minWidth: 0 }}>
+              <div style={errorTitleStyle}>
+                {isCancelled
+                  ? t(
+                      "pages.studio.studiomembercurrentrunpanel.run.stopped",
+                      "Run stopped",
+                    )
+                  : t(
+                      "pages.studio.studiomembercurrentrunpanel.run.failed",
+                      "Run failed",
+                    )}
+              </div>
+              <p style={errorDescriptionStyle}>
+                {errorDescription ||
+                  (isCancelled
+                    ? t(
+                        "pages.studio.studiomembercurrentrunpanel.the.run.has.stopped",
+                        "The run has stopped and only partial output may currently be displayed.",
+                      )
+                    : t(
+                        "pages.studio.studiomembercurrentrunpanel.run.failed.without.message",
+                        "This run failed without an additional error message.",
+                      ))}
+              </p>
+            </div>
+          </div>
+          {outputText ? (
+            <div
+              data-testid="studio-invoke-chat-transcript"
+              ref={transcriptViewportRef}
+              style={memberRunCanvasStyle}
+            >
+              <span style={memberRunCanvasLabelStyle}>
+                {isCancelled
+                  ? t(
+                      "pages.studio.studiomembercurrentrunpanel.partial.output",
+                      "Partial output",
+                    )
+                  : t(
+                      "pages.studio.studiomembercurrentrunpanel.result",
+                      "Result",
+                    )}
+              </span>
+              {renderRunOutputContent(outputText)}
+            </div>
+          ) : null}
+          <div
+            data-testid="studio-invoke-recovery-path"
+            style={recoveryPathStyle}
+          >
+            <span style={sectionLabelStyle}>
+              {t(
+                "pages.studio.studiomembercurrentrunpanel.recovery.path",
+                "Recovery path",
+              )}
+            </span>
+            <Typography.Text style={helperTextStyle}>
+              {isCancelled
+                ? t(
+                    "pages.studio.studiomembercurrentrunpanel.this.stopped.run.stays.in.history",
+                    "This stopped run stays in history. Retry as a new run when you want fresh output, or switch to Observe to inspect the latest backend events.",
+                  )
+                : t(
+                    "pages.studio.studiomembercurrentrunpanel.this.failed.only.the.invoke.run.open.diagnostics",
+                    "This failed only the Invoke run. Retry with a smaller prompt, open diagnostics for backend signals, or return to Build/Bind if the member contract needs changes.",
+                  )}
+            </Typography.Text>
+          </div>
+          <div style={errorActionsStyle}>
+            <Button icon={<UnorderedListOutlined />} onClick={openDiagnostics}>
+              {t(
+                "pages.studio.studiomembercurrentrunpanel.open.diagnostics",
+                "Open diagnostics",
+              )}
+            </Button>
+            <Button icon={<CopyOutlined />} onClick={onCopyError}>
+              {t(
+                "pages.studio.studiomembercurrentrunpanel.copy.error",
+                "Copy error",
+              )}
+            </Button>
+            <Button icon={<ReloadOutlined />} onClick={onRetryAsNewRun}>
+              {t(
+                "pages.studio.studiomembercurrentrunpanel.retry.as.new.run",
+                "Retry as new run",
+              )}
+            </Button>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div style={outputPaneStyle}>
+        {renderMemberRunInputReceipt()}
+        <div
+          data-testid="studio-invoke-chat-transcript"
+          ref={transcriptViewportRef}
+          style={memberRunCanvasStyle}
+        >
+          <span style={memberRunCanvasLabelStyle}>
+            {t(
+              "pages.studio.studiomembercurrentrunpanel.current.result",
+              "Current result",
+            )}
+          </span>
+          {invokeResult.status === 'running' && !outputText ? (
+            <Typography.Text style={helperTextStyle} type="secondary">
+              {t(
+                "pages.studio.studiomembercurrentrunpanel.waiting.for.output",
+                "Waiting for a response...",
+              )}
+            </Typography.Text>
+          ) : outputText ? (
+            renderRunOutputContent(outputText)
+          ) : invokeResult.status === 'success' ? (
+            <div style={helperTextStyle}>
+              <div>
+                {t(
+                  "pages.studio.studiomembercurrentrunpanel.no.displayable.content.returned",
+                  "No readable response returned.",
+                )}
+              </div>
+              <div>
+                {t(
+                  "pages.studio.studiomembercurrentrunpanel.the.run.ended.successfully",
+                  "The run ended successfully, but it did not return user-visible content.",
+                )}
+              </div>
+              <div>
+                {t(
+                  "pages.studio.studiomembercurrentrunpanel.you.can.view.events",
+                  "Open diagnostics when you need event or payload evidence.",
+                )}
+              </div>
+            </div>
+          ) : (
+            <Typography.Text style={helperTextStyle} type="secondary">
+              {t(
+                "pages.studio.studiomembercurrentrunpanel.waiting.for.output.2",
+                "Waiting for a response...",
+              )}
+            </Typography.Text>
+          )}
+        </div>
+      </div>
+    );
+  };
 
   const renderOutput = () => {
     if (!currentRunHasData) {
@@ -439,7 +979,7 @@ const StudioMemberCurrentRunPanel: React.FC<
                       "Response",
                     )}
               </span>
-              <p style={bodyTextStyle}>{outputText}</p>
+              {renderRunOutputContent(outputText)}
             </div>
           ) : null}
           <div
@@ -535,7 +1075,7 @@ const StudioMemberCurrentRunPanel: React.FC<
               )}
             </Typography.Text>
           ) : outputText ? (
-            <p style={bodyTextStyle}>{outputText}</p>
+            renderRunOutputContent(outputText)
           ) : invokeResult.status === 'success' ? (
             <div style={helperTextStyle}>
               <div>
@@ -585,6 +1125,45 @@ const StudioMemberCurrentRunPanel: React.FC<
       </div>
     );
   };
+
+  if (presentation === 'member-run') {
+    return (
+      <div style={memberRunPanelStyle}>
+        <div style={memberRunHeaderStyle}>
+          <div style={memberRunTitleStyle}>
+            {t(
+              "pages.studio.studiomembercurrentrunpanel.current.run",
+              "Current run",
+            )}
+          </div>
+          <div style={memberRunStatusClusterStyle}>
+            <span style={markerStyle}>{marker}</span>
+            {currentRunHasData ? (
+              <>
+                <span
+                  data-testid="studio-invoke-run-status-summary"
+                  style={summaryStyle}
+                >
+                  {statusSummary}
+                </span>
+                <Button
+                  icon={<UnorderedListOutlined />}
+                  size="small"
+                  onClick={openDiagnostics}
+                >
+                  {t(
+                    "pages.studio.studiomembercurrentrunpanel.diagnostics",
+                    "Diagnostics",
+                  )}
+                </Button>
+              </>
+            ) : null}
+          </div>
+        </div>
+        {renderMemberRunOutput()}
+      </div>
+    );
+  }
 
   return (
     <div style={panelStyle}>

@@ -17,6 +17,7 @@ type StudioMemberInvokeHistoryPanelProps = {
   readonly entries: readonly InvokeHistoryEntry[];
   readonly selectedHistoryId: string;
   readonly style?: React.CSSProperties;
+  readonly variant?: 'default' | 'ledger';
   readonly getEntryOutputText?: (entryId: string) => string;
   readonly onCopyInput: (entryId: string) => void;
   readonly onCopyOutput: (entryId: string) => void;
@@ -165,25 +166,78 @@ const StudioMemberInvokeHistoryPanel: React.FC<
   onSelectEntry,
   selectedHistoryId,
   style,
-}) => (
-  <details
-    aria-label={t("pages.studio.studiomemberinvokehistorypanel.run.history.3", "Run history")}
-    data-testid="studio-invoke-history-panel"
-    style={{ ...historyPanelStyle, ...style }}
-  >
-    <summary style={historySummaryStyle}>
-      <span style={historyTitleStyle}>{t("pages.studio.studiomemberinvokehistorypanel.run.history.4", "Run history (")}{entries.length})</span>
-      {entries.length === 0 ? (
-        <Typography.Text style={helperTextStyle} type="secondary">
-          {t("pages.studio.studiomemberinvokehistorypanel.no.runs.yet.3", "No runs yet")}</Typography.Text>
-      ) : null}
-    </summary>
-    <div data-testid="studio-invoke-history-scroll" style={historyBodyStyle}>
-      {entries.length === 0 ? (
-        <Typography.Text style={helperTextStyle} type="secondary">
-          {t("pages.studio.studiomemberinvokehistorypanel.no.runs.yet.4", "No runs yet")}</Typography.Text>
-      ) : (
-        entries.map((entry) => {
+  variant = 'default',
+}) => {
+  const isLedger = variant === 'ledger';
+
+  return (
+    <details
+      aria-label={t("pages.studio.studiomemberinvokehistorypanel.run.history.3", "Run history")}
+      data-testid="studio-invoke-history-panel"
+      style={{
+        ...historyPanelStyle,
+        ...(isLedger
+          ? {
+              background: 'transparent',
+              border: 0,
+              borderRadius: 0,
+            }
+          : {}),
+        ...style,
+      }}
+    >
+      <summary
+        style={{
+          ...historySummaryStyle,
+          ...(isLedger
+            ? {
+                minHeight: 32,
+                padding: '0 2px 8px',
+              }
+            : {}),
+        }}
+      >
+        <span style={historyTitleStyle}>
+          {isLedger
+            ? t(
+                "pages.studio.studiomemberinvokehistorypanel.recent.runs",
+                "Recent runs (",
+              )
+            : t("pages.studio.studiomemberinvokehistorypanel.run.history.4", "Run history (")}
+          {entries.length})
+        </span>
+        {entries.length === 0 ? (
+          <Typography.Text style={helperTextStyle} type="secondary">
+            {t("pages.studio.studiomemberinvokehistorypanel.no.runs.yet.3", "No runs yet")}</Typography.Text>
+        ) : null}
+      </summary>
+      <div
+        data-testid="studio-invoke-history-scroll"
+        style={{
+          ...historyBodyStyle,
+          ...(isLedger
+            ? {
+                background: studioInvokeColors.panel,
+                border: `1px solid ${studioInvokeColors.border}`,
+                borderRadius: 12,
+                gap: 0,
+                overflow: 'hidden',
+                padding: 0,
+              }
+            : {}),
+        }}
+      >
+        {entries.length === 0 ? (
+          <Typography.Text
+            style={{
+              ...helperTextStyle,
+              ...(isLedger ? { padding: '10px 12px' } : {}),
+            }}
+            type="secondary"
+          >
+            {t("pages.studio.studiomemberinvokehistorypanel.no.runs.yet.4", "No runs yet")}</Typography.Text>
+        ) : (
+          entries.map((entry, index) => {
           const isSelected = selectedHistoryId === entry.id;
           const hasInput = Boolean(trimOptional(entry.prompt));
           const hasOutput = Boolean(
@@ -201,6 +255,17 @@ const StudioMemberInvokeHistoryPanel: React.FC<
                 borderColor: isSelected
                   ? studioInvokeColors.activeBorder
                   : studioInvokeColors.border,
+                ...(isLedger
+                  ? {
+                      border: 0,
+                      borderRadius: 0,
+                      borderTop:
+                        index === 0
+                          ? 0
+                          : `1px solid ${studioInvokeColors.border}`,
+                      padding: '10px 12px',
+                    }
+                  : {}),
               }}
             >
               <button
@@ -287,6 +352,7 @@ const StudioMemberInvokeHistoryPanel: React.FC<
       )}
     </div>
   </details>
-);
+  );
+};
 
 export default StudioMemberInvokeHistoryPanel;
