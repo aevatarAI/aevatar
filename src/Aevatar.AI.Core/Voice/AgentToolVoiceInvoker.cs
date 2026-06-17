@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -12,18 +13,36 @@ namespace Aevatar.AI.Core.Voice;
 public sealed class AgentToolVoiceInvoker : IVoiceToolInvoker
 {
     private readonly IEnumerable<IAgentToolSource> _toolSources;
+    private readonly IReadOnlyList<ICredentialProvider> _credentialProviders;
     private readonly ILogger _logger;
     private volatile Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>>? _toolIndex;
 
     public AgentToolVoiceInvoker(
         IEnumerable<IAgentToolSource> toolSources,
+        ICredentialProvider? credentialProvider = null,
+        ILogger<AgentToolVoiceInvoker>? logger = null)
+        : this(
+            toolSources,
+            credentialProvider is null ? [] : [credentialProvider],
+            logger)
+    {
+    }
+
+    public AgentToolVoiceInvoker(
+        IEnumerable<IAgentToolSource> toolSources,
+        IEnumerable<ICredentialProvider> credentialProviders,
         ILogger<AgentToolVoiceInvoker>? logger = null)
     {
         _toolSources = toolSources ?? throw new ArgumentNullException(nameof(toolSources));
+        _credentialProviders = credentialProviders?.ToList() ?? [];
         _logger = logger ?? NullLogger<AgentToolVoiceInvoker>.Instance;
     }
 
-    public async Task<string> ExecuteAsync(string toolName, string argumentsJson, CancellationToken ct = default)
+    public async Task<string> ExecuteAsync(
+        string toolName,
+        string argumentsJson,
+        VoiceToolExecutionContext? toolContext = null,
+        CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(toolName))
             throw new ArgumentException("Tool name is required.", nameof(toolName));
@@ -34,20 +53,48 @@ public sealed class AgentToolVoiceInvoker : IVoiceToolInvoker
 
         var arguments = string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson;
 
-        // Refactor (cluster-voice-tool-caller-credential): voice tool calls arrive on an actor turn
-        // with no caller AsyncLocal context, so the caller's NyxID token is carried across that
-        // boundary via VoiceCallerCredentialScope and mapped here onto AgentToolContextScope — that's
-        // what lets NyxID-backed tools (nyxid_proxy, use_skill, ...) authenticate as the caller.
-        var callerToken = VoiceCallerCredentialScope.CurrentNyxIdAccessToken;
-        if (string.IsNullOrWhiteSpace(callerToken))
+        if (toolContext is null ||
+            !VoiceToolExecutionContextMapper.IsUsableCredentialRef(toolContext, DateTimeOffset.UtcNow))
             return await tool.ExecuteAsync(arguments, ct);
 
-        using var _ = AgentToolContextScope.Push(
-            AgentToolExecutionContext.Empty with
-            {
-                Credentials = new AgentToolCredentials(callerToken, null, null),
-            });
+        var agentToolContext = await ResolveToolContextAsync(toolContext, ct);
+        if (agentToolContext is null)
+            return await tool.ExecuteAsync(arguments, ct);
+        if (!agentToolContext.ToolVisibility.Allows(toolName))
+            throw new InvalidOperationException($"Tool '{toolName}' not found");
+
+        using var scope = AgentToolContextScope.Push(agentToolContext);
         return await tool.ExecuteAsync(arguments, ct);
+    }
+
+    private async Task<AgentToolExecutionContext?> ResolveToolContextAsync(
+        VoiceToolExecutionContext toolContext,
+        CancellationToken ct)
+    {
+        if (_credentialProviders.Count == 0)
+            return null;
+
+        var credentialRef = VoiceToolExecutionContextMapper.Normalize(toolContext.CredentialRef);
+        if (credentialRef is null)
+            return null;
+
+        var nyxIdAccessToken = await ResolveCredentialRefAsync(credentialRef, ct);
+        if (string.IsNullOrWhiteSpace(nyxIdAccessToken))
+            return null;
+
+        return VoiceToolExecutionContextMapper.ToAgentToolContext(toolContext, nyxIdAccessToken);
+    }
+
+    private async Task<string?> ResolveCredentialRefAsync(string credentialRef, CancellationToken ct)
+    {
+        foreach (var credentialProvider in _credentialProviders)
+        {
+            var credential = await credentialProvider.ResolveAsync(credentialRef, ct);
+            if (!string.IsNullOrWhiteSpace(credential))
+                return credential;
+        }
+
+        return null;
     }
 
     private Task<IReadOnlyDictionary<string, IAgentTool>> GetOrDiscoverAsync(CancellationToken ct)

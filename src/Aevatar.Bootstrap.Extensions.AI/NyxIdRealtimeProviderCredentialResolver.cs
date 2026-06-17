@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Microsoft.Extensions.Logging;
 
@@ -22,17 +23,33 @@ namespace Aevatar.Bootstrap.Extensions.AI;
 public sealed class NyxIdRealtimeProviderCredentialResolver : IRealtimeProviderCredentialResolver
 {
     private readonly INyxIdApiClientFactory _clientFactory;
+    private readonly IReadOnlyList<ICredentialProvider> _credentialProviders;
     private readonly NyxIdRealtimeProviderCredentialOptions _options;
     private readonly ILogger<NyxIdRealtimeProviderCredentialResolver> _logger;
 
     public NyxIdRealtimeProviderCredentialResolver(
         INyxIdApiClientFactory clientFactory,
         NyxIdRealtimeProviderCredentialOptions options,
-        ILogger<NyxIdRealtimeProviderCredentialResolver> logger)
+        ILogger<NyxIdRealtimeProviderCredentialResolver> logger,
+        ICredentialProvider? credentialProvider = null)
+        : this(
+            clientFactory,
+            options,
+            logger,
+            credentialProvider is null ? [] : [credentialProvider])
+    {
+    }
+
+    public NyxIdRealtimeProviderCredentialResolver(
+        INyxIdApiClientFactory clientFactory,
+        NyxIdRealtimeProviderCredentialOptions options,
+        ILogger<NyxIdRealtimeProviderCredentialResolver> logger,
+        IEnumerable<ICredentialProvider> credentialProviders)
     {
         _clientFactory = clientFactory ?? throw new ArgumentNullException(nameof(clientFactory));
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _credentialProviders = credentialProviders?.ToList() ?? [];
     }
 
     public async Task<string?> ResolveApiKeyAsync(
@@ -43,11 +60,16 @@ public sealed class NyxIdRealtimeProviderCredentialResolver : IRealtimeProviderC
         ArgumentNullException.ThrowIfNull(sessionKey);
         ArgumentNullException.ThrowIfNull(config);
 
-        // Primary source is AgentToolRequestContext (set on the /ws/voice connect and chat paths);
-        // the actor-side voice tool-result reconnect runs under VoiceCallerCredentialScope instead.
+        // Primary source is AgentToolRequestContext (set on same-call chat paths); actor-side
+        // voice reconnects carry only a typed credential_ref on the session key.
         var callerToken = AgentToolRequestContext.NyxIdAccessToken;
-        if (string.IsNullOrWhiteSpace(callerToken))
-            callerToken = VoiceCallerCredentialScope.CurrentNyxIdAccessToken;
+        if (string.IsNullOrWhiteSpace(callerToken) &&
+            IsUsableCredentialRef(sessionKey.ToolContext) &&
+            _credentialProviders.Count > 0)
+        {
+            callerToken = await ResolveCredentialRefAsync(sessionKey.ToolContext!.CredentialRef, ct);
+        }
+
         if (string.IsNullOrWhiteSpace(callerToken))
         {
             // No per-request NyxID credential in context (e.g. a connect path that
@@ -98,6 +120,27 @@ public sealed class NyxIdRealtimeProviderCredentialResolver : IRealtimeProviderC
             sessionKey.SessionId,
             _options.ServiceSlug);
         return ephemeral;
+    }
+
+    private async Task<string?> ResolveCredentialRefAsync(string credentialRef, CancellationToken ct)
+    {
+        foreach (var credentialProvider in _credentialProviders)
+        {
+            var credential = await credentialProvider.ResolveAsync(credentialRef, ct);
+            if (!string.IsNullOrWhiteSpace(credential))
+                return credential;
+        }
+
+        return null;
+    }
+
+    private static bool IsUsableCredentialRef(VoiceToolExecutionContext? toolContext)
+    {
+        if (string.IsNullOrWhiteSpace(toolContext?.CredentialRef))
+            return false;
+
+        var expiresAt = toolContext.ExpiresAt?.ToDateTimeOffset();
+        return expiresAt is not null && expiresAt.Value.ToUniversalTime() > DateTimeOffset.UtcNow;
     }
 
     // OpenAI GA POST /v1/realtime/client_secrets returns { "value": "ek_...", "expires_at": ... };

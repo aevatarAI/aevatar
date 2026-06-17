@@ -382,8 +382,16 @@ public class VoicePresenceWhipEndpointsTests
             VoicePresenceSessionLeaseHandle handle,
             IVoiceTransport transport,
             CancellationToken ct = default)
+            => await AttachAsync(handle, transport, null, ct);
+
+        public async Task<VoiceTransportLifetimeCompleted?> AttachAsync(
+            VoicePresenceSessionLeaseHandle handle,
+            IVoiceTransport transport,
+            VoiceToolCredentialTransportBinding? toolCredentialBinding,
+            CancellationToken ct = default)
         {
             _ = handle;
+            _ = toolCredentialBinding;
             AttachCalls++;
             if (attachAsync != null)
                 await attachAsync(transport, ct);

@@ -43,8 +43,13 @@ public class VoiceRealtimeSessionTests
         var acceptedCallbacks = new List<VoiceRealtimeSessionAccepted>();
         var session = CreateSession(new FakeCapabilityQueryPort(capability), leasePort);
 
+        var toolContext = CreateToolContext("voice-tool:lease-ref-1");
+
         var result = await session.ExecuteAsync(
-            new VoiceRealtimeSessionRequest("agent-1", "voice_presence_openai"),
+            new VoiceRealtimeSessionRequest(
+                "agent-1",
+                "voice_presence_openai",
+                ToolContext: toolContext),
             static (_, _) => ValueTask.CompletedTask,
             (accepted, _) =>
             {
@@ -63,7 +68,12 @@ public class VoiceRealtimeSessionTests
         result.Receipt.ObservedStateVersion.ShouldBe(5);
         result.Receipt.LeaseHandle.LeaseEpoch.ShouldBe(7);
         acceptedCallbacks.ShouldHaveSingleItem().SessionId.ShouldBe(result.Receipt.SessionId);
-        leasePort.AcquireRequests.ShouldHaveSingleItem().ModuleName.ShouldBe("voice_presence_openai");
+        var acquireRequest = leasePort.AcquireRequests.ShouldHaveSingleItem();
+        acquireRequest.ModuleName.ShouldBe("voice_presence_openai");
+        acquireRequest.ToolContext.ShouldNotBeSameAs(toolContext);
+        acquireRequest.ToolContext!.CredentialRef.ShouldBe("voice-tool:lease-ref-1");
+        result.Receipt.LeaseHandle.ToolContext.ShouldNotBeSameAs(toolContext);
+        result.Receipt.LeaseHandle.ToolContext!.CredentialRef.ShouldBe("voice-tool:lease-ref-1");
     }
 
     [Theory]
@@ -368,6 +378,94 @@ public class VoiceRealtimeSessionTests
     }
 
     [Fact]
+    public async Task VoiceVolatileMediaStreamPort_should_bind_tool_credential_to_transport_lease_and_evict_on_detach()
+    {
+        var leasePort = new RecordingLeasePort();
+        var attachmentPort = new RecordingAttachmentPort();
+        var dispatchPort = new RecordingDispatchPort();
+        var providerSession = new RecordingRelayProviderSession();
+        var credentialPort = new VoiceVolatileToolCredentialPort();
+        var issued = await credentialPort.IssueAsync(new VoiceToolCredentialIssueRequest(
+            " caller-token ",
+            DateTimeOffset.UtcNow.AddMinutes(5)));
+        var port = new VoiceVolatileMediaStreamPort(
+            attachmentPort,
+            leasePort,
+            [CreateRelayRegistration(providerSession)],
+            new ServiceCollection().BuildServiceProvider(),
+            dispatchPort,
+            credentialPort);
+        var handle = CreateLeaseHandle(activeTransportLeaseId: "transport-1") with
+        {
+            ToolContext = CreateToolContext(issued!.CredentialRef),
+        };
+        var transport = new PassiveVoiceTransport();
+
+        (await ((Aevatar.Foundation.Abstractions.Credentials.ICredentialProvider)credentialPort)
+            .ResolveAsync(issued.CredentialRef)).ShouldBeNull();
+
+        await port.AttachAsync(handle, transport, issued.TransportBinding, CancellationToken.None);
+
+        (await ((Aevatar.Foundation.Abstractions.Credentials.ICredentialProvider)credentialPort)
+            .ResolveAsync(issued.CredentialRef)).ShouldBe("caller-token");
+
+        await port.DetachAsync(handle, transport, CancellationToken.None);
+
+        (await ((Aevatar.Foundation.Abstractions.Credentials.ICredentialProvider)credentialPort)
+            .ResolveAsync(issued.CredentialRef)).ShouldBeNull();
+    }
+
+    [Theory]
+    [InlineData("missing-binding")]
+    [InlineData("mismatched-binding")]
+    [InlineData("bind-failed")]
+    public async Task VoiceVolatileMediaStreamPort_should_fail_closed_when_tool_credential_binding_is_unavailable(
+        string failureCase)
+    {
+        var leasePort = new RecordingLeasePort();
+        var attachmentPort = new RecordingAttachmentPort();
+        var dispatchPort = new RecordingDispatchPort();
+        var providerSession = new RecordingRelayProviderSession();
+        var credentialPort = new RecordingToolCredentialPort(bindResult: failureCase != "bind-failed");
+        var port = new VoiceVolatileMediaStreamPort(
+            attachmentPort,
+            leasePort,
+            [CreateRelayRegistration(providerSession)],
+            new ServiceCollection().BuildServiceProvider(),
+            dispatchPort,
+            credentialPort);
+        var handle = CreateLeaseHandle(activeTransportLeaseId: "transport-1") with
+        {
+            ToolContext = CreateToolContext("voice-tool:expected"),
+        };
+        var binding = failureCase switch
+        {
+            "missing-binding" => null,
+            "mismatched-binding" => new VoiceToolCredentialTransportBinding(
+                "voice-tool:other",
+                "caller-token",
+                DateTimeOffset.UtcNow.AddMinutes(5)),
+            "bind-failed" => new VoiceToolCredentialTransportBinding(
+                "voice-tool:expected",
+                "caller-token",
+                DateTimeOffset.UtcNow.AddMinutes(5)),
+            _ => throw new ArgumentOutOfRangeException(nameof(failureCase), failureCase, null),
+        };
+
+        var ex = await Should.ThrowAsync<VoiceVolatileToolCredentialUnavailableException>(
+            () => port.AttachAsync(handle, new PassiveVoiceTransport(), binding, CancellationToken.None));
+
+        ex.Message.ShouldBe(VoiceVolatileToolCredentialUnavailableException.Reason);
+        attachmentPort.AttachedHandles.ShouldHaveSingleItem().ActiveTransportLeaseId.ShouldBe("transport-1");
+        attachmentPort.DetachedHandles.ShouldHaveSingleItem().ActiveTransportLeaseId.ShouldBe("transport-1");
+        leasePort.ReleaseRequests.ShouldHaveSingleItem().Handle.ActiveTransportLeaseId.ShouldBe("transport-1");
+        providerSession.AudioFrames.ShouldBeEmpty();
+        dispatchPort.Dispatches.ShouldBeEmpty();
+        credentialPort.BindRequests.Count.ShouldBe(failureCase == "bind-failed" ? 1 : 0);
+        credentialPort.ReleaseTransportLeaseIds.ShouldHaveSingleItem().ShouldBe("transport-1");
+    }
+
+    [Fact]
     public async Task VoicePresenceTransportAttachmentPort_should_dispatch_attach_signal_and_return_active_transport_lease_handle()
     {
         var dispatchPort = new RecordingDispatchPort();
@@ -433,6 +531,7 @@ public class VoiceRealtimeSessionTests
         var observationPort = new RecordingLeaseObservationPort();
         var leasePort = new VoicePresenceSessionLeasePort(dispatchPort, observationPort);
         var expiresAt = DateTimeOffset.UtcNow.AddMinutes(5);
+        var toolContext = CreateToolContext("voice-tool:dispatch-ref-1");
 
         var handle = await leasePort.AcquireAsync(new VoicePresenceSessionLeaseRequest(
             "agent-1",
@@ -441,18 +540,23 @@ public class VoiceRealtimeSessionTests
             "host-1",
             expiresAt,
             7,
-            VoiceRemoteAudioSupport.LocalOnly));
+            VoiceRemoteAudioSupport.LocalOnly,
+            ToolContext: toolContext));
 
         handle.SessionId.ShouldBe("lease-1");
         handle.ObservedStateVersion.ShouldBe(8);
         handle.ExpiresAtUtc.ShouldBe(expiresAt.ToUniversalTime());
         handle.LeaseEpoch.ShouldBe(7);
+        handle.ToolContext.ShouldNotBeSameAs(toolContext);
+        handle.ToolContext!.CredentialRef.ShouldBe("voice-tool:dispatch-ref-1");
         observationPort.SessionLeaseRequests.ShouldHaveSingleItem().ObservedStateVersion.ShouldBe(7);
         dispatchPort.Dispatches.ShouldHaveSingleItem().ActorId.ShouldBe("agent-1");
         var signal = dispatchPort.Dispatches[0].Envelope.Payload.Unpack<VoiceModuleSignal>();
         signal.ModuleName.ShouldBe("voice_presence");
         signal.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.SessionLeaseRequested);
         signal.SessionLeaseRequested.SessionId.ShouldBe("lease-1");
+        signal.SessionLeaseRequested.ToolContext.ShouldNotBeSameAs(toolContext);
+        signal.SessionLeaseRequested.ToolContext.CredentialRef.ShouldBe("voice-tool:dispatch-ref-1");
     }
 
     [Fact]
@@ -834,6 +938,15 @@ public class VoiceRealtimeSessionTests
             activeTransportLeaseId,
             7);
 
+    private static VoiceToolExecutionContext CreateToolContext(string credentialRef) =>
+        new()
+        {
+            CredentialRef = credentialRef,
+            ExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)),
+            CallerScopeId = "caller-scope-1",
+            OwnerSubject = "owner-subject-1",
+        };
+
     private static VoicePresenceModuleRegistration CreateRelayRegistration(
         RecordingRelayProviderSession providerSession) =>
         new(
@@ -986,7 +1099,8 @@ public class VoiceRealtimeSessionTests
                 request.ExpiresAtUtc,
                 request.ObservedRemoteAudioSupport,
                 null,
-                7));
+                7,
+                request.ToolContext?.Clone()));
         }
 
         public Task ReleaseAsync(
@@ -1049,7 +1163,17 @@ public class VoiceRealtimeSessionTests
             VoicePresenceSessionLeaseHandle handle,
             IVoiceTransport transport,
             CancellationToken ct = default) =>
-            Task.FromResult<VoiceTransportLifetimeCompleted?>(null);
+            AttachAsync(handle, transport, null, ct);
+
+        public Task<VoiceTransportLifetimeCompleted?> AttachAsync(
+            VoicePresenceSessionLeaseHandle handle,
+            IVoiceTransport transport,
+            VoiceToolCredentialTransportBinding? toolCredentialBinding,
+            CancellationToken ct = default)
+        {
+            _ = toolCredentialBinding;
+            return Task.FromResult<VoiceTransportLifetimeCompleted?>(null);
+        }
 
         public Task DetachAsync(
             VoicePresenceSessionLeaseHandle handle,
@@ -1063,6 +1187,48 @@ public class VoiceRealtimeSessionTests
             string reason,
             CancellationToken ct = default) =>
             Task.CompletedTask;
+    }
+
+    private sealed class RecordingToolCredentialPort(bool bindResult) : IVoiceVolatileToolCredentialPort
+    {
+        public List<(VoiceToolCredentialTransportBinding Binding, string TransportLeaseId)> BindRequests { get; } = [];
+
+        public List<string> ReleaseTransportLeaseIds { get; } = [];
+
+        public Task<VoiceToolCredentialIssueResult?> IssueAsync(
+            VoiceToolCredentialIssueRequest request,
+            CancellationToken ct = default)
+        {
+            _ = request;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<VoiceToolCredentialIssueResult?>(null);
+        }
+
+        public Task ReleaseAsync(string credentialRef, CancellationToken ct = default)
+        {
+            _ = credentialRef;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task<bool> BindTransportLeaseAsync(
+            VoiceToolCredentialTransportBinding credentialBinding,
+            string transportLeaseId,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            BindRequests.Add((credentialBinding, transportLeaseId));
+            return Task.FromResult(bindResult);
+        }
+
+        public Task ReleaseTransportLeaseAsync(
+            string transportLeaseId,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ReleaseTransportLeaseIds.Add(transportLeaseId);
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class RecordingDispatchPort : IActorDispatchPort
