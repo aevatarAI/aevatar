@@ -500,6 +500,7 @@ public sealed class ToolCallModuleContextTests
                 string.Empty,
                 string.Empty,
                 string.Empty,
+                string.Empty,
                 string.Empty);
 
         public Task UpdateExecutionContextAsync(
