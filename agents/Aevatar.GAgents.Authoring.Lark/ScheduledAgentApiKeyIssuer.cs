@@ -2,11 +2,12 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.GAgents.Scheduled;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.Authoring.Lark;
 
-internal sealed class ScheduledAgentApiKeyIssuer
+internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -585,50 +586,4 @@ internal sealed record ScheduledAgentSkillPreflightResult(
         string hint,
         int? httpStatus) =>
         new(false, error, detail, hint, httpStatus);
-}
-
-internal sealed record ScheduledAgentServiceSlugs(
-    string PrimaryOutboundSlug,
-    string? FailureNotificationSlug,
-    IReadOnlyList<string> RequiredServiceSlugs,
-    bool RequiresOrnnService = true);
-
-internal sealed record ScheduledAgentApiKeyIssueResult(
-    bool Success,
-    string? ApiKeyId,
-    string? FullKey,
-    string? Error,
-    string? Detail = null,
-    string? Hint = null,
-    int? HttpStatus = null,
-    string? ServiceSlug = null,
-    string? SkillRef = null)
-{
-    private static readonly JsonSerializerOptions ErrorJsonOptions = new(JsonSerializerDefaults.Web)
-    {
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-    };
-
-    public static ScheduledAgentApiKeyIssueResult Succeeded(string apiKeyId, string fullKey) =>
-        new(true, apiKeyId, fullKey, null);
-
-    public static ScheduledAgentApiKeyIssueResult Failed(
-        string error,
-        string? detail = null,
-        string? hint = null,
-        int? httpStatus = null,
-        string? serviceSlug = null,
-        string? skillRef = null) =>
-        new(false, null, null, error, detail, hint, httpStatus, serviceSlug, skillRef);
-
-    public string ToErrorJson() =>
-        JsonSerializer.Serialize(new
-        {
-            error = Error ?? "api_key_issue_failed",
-            detail = Detail,
-            hint = Hint,
-            http_status = HttpStatus,
-            service_slug = ServiceSlug,
-            skill_ref = SkillRef,
-        }, ErrorJsonOptions);
 }

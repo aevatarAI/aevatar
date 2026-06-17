@@ -87,6 +87,31 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleUpsertAsync_RejectsCrossOwnerOverwrite()
+    {
+        var firstOwner = OwnerScope.ForNyxIdNative("user-1");
+        var secondOwner = OwnerScope.ForNyxIdNative("user-2");
+        await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
+        {
+            AgentId = "approvals",
+            ConversationId = "first-conversation",
+            OwnerScope = firstOwner,
+        });
+
+        await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
+        {
+            AgentId = "approvals",
+            ConversationId = "second-conversation",
+            OwnerScope = secondOwner,
+        });
+
+        _agent.State.Entries.Should().ContainSingle();
+        var entry = _agent.State.Entries[0];
+        entry.ConversationId.Should().Be("first-conversation");
+        entry.OwnerScope!.MatchesStrictly(firstOwner).Should().BeTrue();
+    }
+
+    [Fact]
     public async Task HandleUpsertAsync_WithoutOwnerScope_PersistsLegacyOwnershipFields()
     {
         await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand

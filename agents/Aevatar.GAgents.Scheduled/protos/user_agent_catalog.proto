@@ -67,6 +67,9 @@ message UserAgentCatalogEntry {
   // legacy state (issue #466 migration plan).
   aevatar.OwnerScope owner_scope = 26;
   SkillRunnerOutputFormat output_format = 27;
+  // Delivery target platform selected by the creator.
+  // This is distinct from owner_scope.platform, which identifies the caller surface.
+  string target_platform = 28;
 }
 
 message UserAgentCatalogState {
@@ -100,6 +103,9 @@ message UserAgentCatalogUpsertCommand {
   // Caller scope captured at create time. Required for new writes.
   aevatar.OwnerScope owner_scope = 18;
   SkillRunnerOutputFormat output_format = 19;
+  // Delivery target platform selected by the creator.
+  // This is distinct from owner_scope.platform, which identifies the caller surface.
+  string target_platform = 20;
 }
 
 message UserAgentCatalogTombstoneCommand {
@@ -166,6 +172,9 @@ message UserAgentCatalogDocument {
   reserved 29, 30, 31, 32;
   reserved "catalog_source_version", "catalog_last_event_id", "runner_source_version", "runner_last_event_id";
   SkillRunnerOutputFormat output_format = 33;
+  // Delivery target platform selected by the creator.
+  // This is distinct from owner_scope.platform, which identifies the caller surface.
+  string target_platform = 34;
 }
 
 // Runtime-only Nyx credential read model for delivery-target execution paths.

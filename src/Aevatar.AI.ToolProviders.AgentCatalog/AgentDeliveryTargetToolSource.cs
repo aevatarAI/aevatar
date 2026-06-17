@@ -11,21 +11,24 @@ public sealed class AgentDeliveryTargetToolSource : IAgentToolSource
     private readonly IUserAgentCatalogQueryPort _queryPort;
     private readonly IUserAgentCatalogCommandPort _commandPort;
     private readonly ICallerScopeResolver _callerScopeResolver;
+    private readonly IScheduledAgentApiKeyIssuer? _apiKeyIssuer;
 
     public AgentDeliveryTargetToolSource(
         IUserAgentCatalogQueryPort queryPort,
         IUserAgentCatalogCommandPort commandPort,
-        ICallerScopeResolver callerScopeResolver)
+        ICallerScopeResolver callerScopeResolver,
+        IScheduledAgentApiKeyIssuer? apiKeyIssuer = null)
     {
         _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
         _commandPort = commandPort ?? throw new ArgumentNullException(nameof(commandPort));
         _callerScopeResolver = callerScopeResolver ?? throw new ArgumentNullException(nameof(callerScopeResolver));
+        _apiKeyIssuer = apiKeyIssuer;
     }
 
     public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-        IReadOnlyList<IAgentTool> tools = [new AgentDeliveryTargetTool(_queryPort, _commandPort, _callerScopeResolver)];
+        IReadOnlyList<IAgentTool> tools = [new AgentDeliveryTargetTool(_queryPort, _commandPort, _callerScopeResolver, _apiKeyIssuer)];
         return Task.FromResult(tools);
     }
 }

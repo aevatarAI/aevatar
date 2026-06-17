@@ -1,3 +1,4 @@
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
@@ -34,6 +35,14 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         }
 
         var existing = State.Entries.FirstOrDefault(x => string.Equals(x.AgentId, command.AgentId, StringComparison.Ordinal));
+        if (existing is { Tombstoned: false } && !SameOwner(existing, command))
+        {
+            Logger.LogWarning(
+                "Cannot upsert user agent catalog entry owned by another caller: {AgentId}",
+                command.AgentId.Trim());
+            return;
+        }
+
         var now = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
         var entry = new UserAgentCatalogEntry
         {
@@ -56,6 +65,7 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             LarkReceiveIdType = MergeNonEmpty(command.LarkReceiveIdType, existing?.LarkReceiveIdType),
             LarkReceiveIdFallback = MergeNonEmpty(command.LarkReceiveIdFallback, existing?.LarkReceiveIdFallback),
             LarkReceiveIdTypeFallback = MergeNonEmpty(command.LarkReceiveIdTypeFallback, existing?.LarkReceiveIdTypeFallback),
+            TargetPlatform = MergeNonEmpty(command.TargetPlatform, existing?.TargetPlatform),
             OutputFormat = command.OutputFormat == SkillRunnerOutputFormat.Auto
                 ? existing?.OutputFormat ?? SkillRunnerOutputFormat.Auto
                 : command.OutputFormat,
@@ -87,6 +97,23 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         {
             Entry = entry,
         });
+    }
+
+    private static bool SameOwner(UserAgentCatalogEntry existing, UserAgentCatalogUpsertCommand command)
+    {
+        var existingScope = existing.OwnerScope ?? OwnerScope.FromLegacyFields(
+#pragma warning disable CS0612 // legacy field read for cross-owner overwrite guard
+            existing.OwnerNyxUserId,
+            existing.Platform);
+#pragma warning restore CS0612
+
+        var commandScope = command.OwnerScope ?? OwnerScope.FromLegacyFields(
+#pragma warning disable CS0612 // legacy command shape remains supported
+            command.OwnerNyxUserId,
+            command.Platform);
+#pragma warning restore CS0612
+
+        return existingScope is null || commandScope is null || existingScope.MatchesStrictly(commandScope);
     }
 
     [EventHandler]
