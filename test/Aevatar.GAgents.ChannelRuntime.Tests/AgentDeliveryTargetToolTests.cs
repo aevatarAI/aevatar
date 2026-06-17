@@ -152,7 +152,7 @@ public sealed class AgentDeliveryTargetToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_Create_MintsCredential_And_UpsertsCatalogAlias()
+    public async Task ExecuteAsync_Create_MintsCredential_And_UpsertsCatalog()
     {
         var caller = OwnerScope.ForNyxIdNative("user-1");
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
@@ -272,6 +272,50 @@ public sealed class AgentDeliveryTargetToolTests
             captured.NyxProviderSlug.Should().Be("api-email-outbound");
             captured.LarkReceiveId.Should().BeEmpty();
             captured.LarkReceiveIdType.Should().BeEmpty();
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_Create_Rejects_Global_DeliveryTargetId_Collision_BeforeMintingCredential()
+    {
+        var caller = OwnerScope.ForNyxIdNative("user-2");
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.ExistsActiveAsync("approvals", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(true));
+
+        var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        var issuer = new RecordingApiKeyIssuer();
+        var resolver = Substitute.For<ICallerScopeResolver>();
+        resolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(caller));
+
+        var tool = new AgentDeliveryTargetTool(queryPort, commandPort, resolver, issuer);
+
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        });
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "create",
+                  "delivery_target_id": "approvals",
+                  "platform": "email",
+                  "conversation_id": "approvals@example.com",
+                  "nyx_provider_slug": "api-email-outbound"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("error").GetString().Should().Be("delivery_target_already_exists");
+            doc.RootElement.GetProperty("delivery_target_id").GetString().Should().Be("approvals");
+            issuer.Issues.Should().BeEmpty();
+            await commandPort.DidNotReceive().UpsertAsync(Arg.Any<UserAgentCatalogUpsertCommand>(), Arg.Any<CancellationToken>());
         }
         finally
         {

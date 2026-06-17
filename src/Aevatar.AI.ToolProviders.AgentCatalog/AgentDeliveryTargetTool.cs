@@ -68,7 +68,7 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
             },
             "delivery_target_id": {
               "type": "string",
-              "description": "Stable delivery target alias. Required for create; accepted as an alias for agent_id in upsert/delete."
+              "description": "Stable delivery target ID. Required for create; accepted as an alias for agent_id in upsert/delete."
             },
             "platform": {
               "type": "string",
@@ -166,14 +166,13 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
 
         var targetPlatform = platform.value!;
 
-        var existingForCaller = await queryPort.GetForCallerAsync(deliveryTargetId.value!, caller, ct);
-        if (existingForCaller is not null)
+        if (await queryPort.ExistsActiveAsync(deliveryTargetId.value!, ct))
         {
             return JsonSerializer.Serialize(new
             {
                 error = "delivery_target_already_exists",
-                delivery_target_id = existingForCaller.AgentId,
-                hint = "Use action=upsert to rebind an existing delivery target.",
+                delivery_target_id = deliveryTargetId.value,
+                hint = "Use a different delivery_target_id. Existing delivery target ids are globally reserved.",
             });
         }
 

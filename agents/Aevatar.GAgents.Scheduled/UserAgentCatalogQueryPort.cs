@@ -72,6 +72,14 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
         return ToEntry(document);
     }
 
+    public async Task<bool> ExistsActiveAsync(string agentId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(agentId)) return false;
+
+        var document = await _documentReader.GetAsync(agentId.Trim(), ct);
+        return document is { Tombstoned: false };
+    }
+
     /// <summary>
     /// Hard cap on the cumulative count returned to a single caller. Bounds the
     /// in-memory accumulation so a misbehaving / pathological tenant cannot drag

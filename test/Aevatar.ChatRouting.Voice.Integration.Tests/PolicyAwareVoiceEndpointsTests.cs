@@ -787,6 +787,12 @@ public sealed class PolicyAwareVoiceEndpointsTests
                 : null);
         }
 
+        public Task<bool> ExistsActiveAsync(string agentId, CancellationToken ct = default)
+        {
+            _ = ct;
+            return Task.FromResult(_allowedActorIds.Contains(agentId));
+        }
+
         public Task<IReadOnlyList<UserAgentCatalogReadModelEntry>> QueryByCallerAsync(
             ScheduledOwnerScope caller,
             CancellationToken ct = default) =>
