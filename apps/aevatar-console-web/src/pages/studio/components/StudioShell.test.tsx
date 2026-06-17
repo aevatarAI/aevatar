@@ -125,7 +125,9 @@ describe('StudioShell', () => {
       screen.getByRole('button', { name: 'Open team members help' }),
     );
     expect(
-      await screen.findByText(/Keep one member in focus while Build, Bind/i),
+      await screen.findByText(
+        /Keep one member in focus while its draft, published service, and run evidence/i,
+      ),
     ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /risk-review/i }));
