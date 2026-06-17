@@ -339,6 +339,16 @@ message WorkflowUsageMetrics {
   double cost = 5;
   int64 latency_ms = 6;
 }
+message WorkflowFileItemResult {
+  int32 index = 1;
+  WorkflowFileRef file_ref = 2;
+  bool success = 3;
+  string output = 4;
+  string error = 5;
+}
+message WorkflowFileItemResultSet {
+  repeated WorkflowFileItemResult results = 1;
+}
 message StepCompletedEvent {
   string step_id = 1;
   bool success = 2;
@@ -354,6 +364,7 @@ message StepCompletedEvent {
   string execution_id = 12;
   WorkflowUsageMetrics usage = 13;
   VoteAgreementDecision vote_agreement_decision = 14;
+  WorkflowFileItemResultSet file_item_results = 15;
 }
 message SubWorkflowInvokeRequestedEvent
 {
