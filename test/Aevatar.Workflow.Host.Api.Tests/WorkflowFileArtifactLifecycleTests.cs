@@ -115,13 +115,7 @@ public sealed class WorkflowFileArtifactLifecycleTests
     {
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddSingleton<RecordingWorkflowFileArtifactPort>();
-        services.AddSingleton<IWorkflowFileIngressPort>(sp =>
-            sp.GetRequiredService<RecordingWorkflowFileArtifactPort>());
-        services.AddSingleton<IWorkflowFileArtifactReadPort>(sp =>
-            sp.GetRequiredService<RecordingWorkflowFileArtifactPort>());
-        services.AddSingleton<IWorkflowFileArtifactOwnershipPort>(sp =>
-            sp.GetRequiredService<RecordingWorkflowFileArtifactPort>());
+        RegisterRecordingArtifactPorts(services, includeCleanup: false);
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
@@ -140,15 +134,7 @@ public sealed class WorkflowFileArtifactLifecycleTests
     {
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddSingleton<RecordingWorkflowFileArtifactPort>();
-        services.AddSingleton<IWorkflowFileIngressPort>(sp =>
-            sp.GetRequiredService<RecordingWorkflowFileArtifactPort>());
-        services.AddSingleton<IWorkflowFileArtifactReadPort>(sp =>
-            sp.GetRequiredService<RecordingWorkflowFileArtifactPort>());
-        services.AddSingleton<IWorkflowFileArtifactOwnershipPort>(sp =>
-            sp.GetRequiredService<RecordingWorkflowFileArtifactPort>());
-        services.AddSingleton<IWorkflowFileArtifactCleanupPort>(sp =>
-            sp.GetRequiredService<RecordingWorkflowFileArtifactPort>());
+        RegisterRecordingArtifactPorts(services);
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
@@ -167,6 +153,52 @@ public sealed class WorkflowFileArtifactLifecycleTests
         services.Should().Contain(x =>
             x.ServiceType == typeof(IHostedService) &&
             x.ImplementationType == typeof(WorkflowFileArtifactCleanupHostedService));
+    }
+
+    [Fact]
+    public void AddWorkflowInfrastructure_ShouldUseExplicitExternalArtifactPortsInProduction()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        RegisterRecordingArtifactPorts(services);
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["WorkflowFileArtifacts:Policies:Environment"] = "Production",
+                ["WorkflowFileArtifacts:Backend"] = "External",
+            })
+            .Build();
+
+        services.AddWorkflowInfrastructure(configuration: configuration);
+
+        using var provider = services.BuildServiceProvider();
+        var artifactPort = provider.GetRequiredService<RecordingWorkflowFileArtifactPort>();
+        provider.GetService<FileSystemWorkflowFileIngressPort>().Should().BeNull();
+        provider.GetRequiredService<IWorkflowFileIngressPort>().Should().BeSameAs(artifactPort);
+        provider.GetRequiredService<IWorkflowFileArtifactReadPort>().Should().BeSameAs(artifactPort);
+        provider.GetRequiredService<IWorkflowFileArtifactOwnershipPort>().Should().BeSameAs(artifactPort);
+        provider.GetRequiredService<IWorkflowFileArtifactCleanupPort>().Should().BeSameAs(artifactPort);
+    }
+
+    [Fact]
+    public void AddWorkflowInfrastructure_ShouldRejectUnknownArtifactBackend()
+    {
+        using (ClearRuntimeEnvironment())
+        {
+            var services = new ServiceCollection();
+            services.AddLogging();
+            var configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["WorkflowFileArtifacts:Backend"] = "Unknown",
+                })
+                .Build();
+
+            var act = () => services.AddWorkflowInfrastructure(configuration: configuration);
+
+            act.Should().Throw<InvalidOperationException>()
+                .WithMessage("*WorkflowFileArtifacts:Backend*FileSystem*External*");
+        }
     }
 
     [Fact]
@@ -333,6 +365,24 @@ public sealed class WorkflowFileArtifactLifecycleTests
                 CleanupInterval = cleanupInterval,
             }),
             NullLogger<WorkflowFileArtifactCleanupHostedService>.Instance);
+
+    private static void RegisterRecordingArtifactPorts(
+        IServiceCollection services,
+        bool includeCleanup = true)
+    {
+        services.AddSingleton<RecordingWorkflowFileArtifactPort>();
+        services.AddSingleton<IWorkflowFileIngressPort>(sp =>
+            sp.GetRequiredService<RecordingWorkflowFileArtifactPort>());
+        services.AddSingleton<IWorkflowFileArtifactReadPort>(sp =>
+            sp.GetRequiredService<RecordingWorkflowFileArtifactPort>());
+        services.AddSingleton<IWorkflowFileArtifactOwnershipPort>(sp =>
+            sp.GetRequiredService<RecordingWorkflowFileArtifactPort>());
+        if (includeCleanup)
+        {
+            services.AddSingleton<IWorkflowFileArtifactCleanupPort>(sp =>
+                sp.GetRequiredService<RecordingWorkflowFileArtifactPort>());
+        }
+    }
 
     private sealed class RecordingWorkflowFileArtifactPort(bool completeCleanupWhenCanceled = false) :
         IWorkflowFileIngressPort,
