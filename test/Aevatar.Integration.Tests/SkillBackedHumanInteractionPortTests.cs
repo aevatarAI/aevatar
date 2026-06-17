@@ -5,6 +5,7 @@ using Aevatar.Foundation.Abstractions.Interactions;
 using Aevatar.Workflow.Integration.AI;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace Aevatar.Integration.Tests;
@@ -109,7 +110,9 @@ public sealed class SkillBackedHumanInteractionPortTests
     public async Task HumanInteractionChannelToolSource_ShouldExposeGenericCapabilitiesAndDelegateToChannelPort()
     {
         var notificationPort = new RecordingNotificationPort();
-        var source = new HumanInteractionChannelToolSource(notificationPort);
+        var source = new HumanInteractionChannelToolSource(
+            notificationPort,
+            NullLogger<HumanInteractionChannelToolSource>.Instance);
         var tools = await source.DiscoverToolsAsync();
         var port = new SkillBackedHumanInteractionPort([source]);
 
