@@ -1243,6 +1243,22 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     },
     [queryClient, route.scopeId],
   );
+  const invalidateSavedWorkflowDraft = React.useCallback(
+    (saved: SavedWorkflowDraft) => {
+      const savedWorkflowId = trimOptional(saved.workflow.workflowId);
+      if (!route.scopeId || !savedWorkflowId) {
+        return;
+      }
+
+      void queryClient.invalidateQueries({
+        queryKey: getTeamMemberWorkflowStudioWorkflowQueryKey(
+          route.scopeId,
+          savedWorkflowId,
+        ),
+      });
+    },
+    [queryClient, route.scopeId],
+  );
   const markSavedDraft = React.useCallback(
     (saved: SavedWorkflowDraft) => {
       cacheSavedWorkflowDraft(saved);
@@ -1432,6 +1448,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     onSuccess: ({ memberId, savedDraft, workflowId }) => {
       setPendingCreatedWorkflowMemberLink(null);
       cacheSavedWorkflowDraft(savedDraft);
+      invalidateSavedWorkflowDraft(savedDraft);
       applySavedDraft(savedDraft);
       void refreshTeamMemberSurfaces(route.scopeId, route.teamId);
       void message.success("Workflow member created.");
