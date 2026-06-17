@@ -38,6 +38,10 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
             AddElasticsearchStores(services, configuration);
             services.TryAddEnumerable(
                 ServiceDescriptor.Singleton<IHostedService, AevatarOAuthClientEsAclStartupGuard>());
+            // Self-heal projection-index schema drift at startup (reindex + atomic alias swap)
+            // so a deploy that bumps a read-model schema doesn't 500 reads (e.g. /ws/voice).
+            services.TryAddEnumerable(
+                ServiceDescriptor.Singleton<IHostedService, ElasticsearchProjectionIndexReconcileHostedService>());
         }
         else
         {
