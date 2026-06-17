@@ -40,6 +40,8 @@ public sealed class AgentDeliveryTargetToolTests
             .Should()
             .Contain("create");
         tool.Description.Should().Contain("without creating a scheduled runner");
+        tool.Description.Should().Contain("different platform conversation");
+        tool.Description.Should().NotContain("different Lark conversation");
         tool.Description.Should().NotContain("agent_builder tool's job");
     }
 
@@ -213,10 +215,63 @@ public sealed class AgentDeliveryTargetToolTests
             captured.ApiKeyId.Should().Be("key-aelf-twitter-approval");
             captured.AgentType.Should().Be("delivery_target");
             captured.TemplateName.Should().Be("explicit_delivery_target");
-            captured.LarkReceiveId.Should().Be("oc_9f1b8d3835674963417954fad20f8a3c");
-            captured.LarkReceiveIdType.Should().Be("chat_id");
+            captured.TargetPlatform.Should().Be("lark");
+            captured.LarkReceiveId.Should().BeEmpty();
+            captured.LarkReceiveIdType.Should().BeEmpty();
             captured.OwnerScope.Should().NotBeNull();
             captured.OwnerScope!.MatchesStrictly(caller).Should().BeTrue();
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_Create_Accepts_NonLark_TargetPlatform_WithoutLarkFields()
+    {
+        var caller = OwnerScope.ForNyxIdNative("user-1");
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetForCallerAsync("email-approval", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(null));
+
+        UserAgentCatalogUpsertCommand? captured = null;
+        var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        commandPort.UpsertAsync(Arg.Do<UserAgentCatalogUpsertCommand>(command => captured = command), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        var resolver = Substitute.For<ICallerScopeResolver>();
+        resolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(caller));
+
+        var tool = new AgentDeliveryTargetTool(queryPort, commandPort, resolver, new RecordingApiKeyIssuer());
+
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        });
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "create",
+                  "delivery_target_id": "email-approval",
+                  "platform": "email",
+                  "conversation_id": "approvals@example.com",
+                  "nyx_provider_slug": "api-email-outbound"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+            doc.RootElement.GetProperty("platform").GetString().Should().Be("email");
+
+            captured.Should().NotBeNull();
+            captured!.TargetPlatform.Should().Be("email");
+            captured.ConversationId.Should().Be("approvals@example.com");
+            captured.NyxProviderSlug.Should().Be("api-email-outbound");
+            captured.LarkReceiveId.Should().BeEmpty();
+            captured.LarkReceiveIdType.Should().BeEmpty();
         }
         finally
         {
@@ -330,6 +385,7 @@ public sealed class AgentDeliveryTargetToolTests
                     NyxProviderSlug = "api-lark-bot-2",
                     LarkReceiveId = "oc_9f1b8d3835674963417954fad20f8a3c",
                     LarkReceiveIdType = "chat_id",
+                    TargetPlatform = "lark",
                     OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
                     AgentType = "delivery_target",
                 },
@@ -362,6 +418,53 @@ public sealed class AgentDeliveryTargetToolTests
             target.GetProperty("nyx_provider_slug").GetString().Should().Be("api-lark-bot-2");
             result.Should().NotContain("secret");
             result.Should().NotContain("nyx_api_key");
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_List_Uses_TargetPlatform_As_DeliveryPlatform()
+    {
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.QueryByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogReadModelEntry>>(
+                [
+                new UserAgentCatalogReadModelEntry
+                {
+                    AgentId = "email-approval",
+                    ConversationId = "approvals@example.com",
+                    NyxProviderSlug = "api-email-outbound",
+                    TargetPlatform = "email",
+                    OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
+                    AgentType = "delivery_target",
+                },
+            ]));
+
+        var resolver = Substitute.For<ICallerScopeResolver>();
+        resolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>());
+        services.AddSingleton(resolver);
+        var tool = CreateTool(services);
+
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        });
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"action":"list"}""");
+
+            using var doc = JsonDocument.Parse(result);
+            var target = doc.RootElement.GetProperty("delivery_targets")[0];
+            target.GetProperty("delivery_target_id").GetString().Should().Be("email-approval");
+            target.GetProperty("platform").GetString().Should().Be("email");
         }
         finally
         {

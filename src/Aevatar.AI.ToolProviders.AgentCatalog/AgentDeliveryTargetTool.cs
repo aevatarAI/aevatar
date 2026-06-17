@@ -47,7 +47,7 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         "Manage agent delivery targets for workflow human interaction cards and outbound channel delivery. " +
         "Actions: list, create, upsert (rebind existing only), delete. " +
         "Use create to mint server-side credentials for a stable delivery_target_id without creating a scheduled runner. " +
-        "Use upsert to rebind an existing agent_id/delivery_target_id to a different Lark conversation or Nyx provider slug. " +
+        "Use upsert to rebind an existing agent_id/delivery_target_id to a different platform conversation or outbound provider slug. " +
         "Operations are scoped to the caller's own delivery targets.";
 
     // Note (issue #466): no `owner_nyx_user_id` and no `nyx_api_key` parameters. Owner
@@ -72,15 +72,15 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
             },
             "platform": {
               "type": "string",
-              "description": "Target platform (default: lark)"
+              "description": "Delivery platform for the target"
             },
             "conversation_id": {
               "type": "string",
-              "description": "Conversation/chat ID on the target platform"
+              "description": "Platform conversation or recipient ID"
             },
             "nyx_provider_slug": {
               "type": "string",
-              "description": "Nyx proxy service slug, e.g. api-lark-bot"
+              "description": "Outbound provider service slug for this target"
             },
             "confirm": {
               "type": "boolean",
@@ -160,16 +160,11 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         if (nyxProviderSlug.error != null)
             return nyxProviderSlug.error;
 
-        var platform = (GetStr(args, "platform") ?? "lark").Trim();
-        if (!string.Equals(platform, "lark", StringComparison.OrdinalIgnoreCase))
-        {
-            return JsonSerializer.Serialize(new
-            {
-                error = "unsupported_delivery_platform",
-                platform,
-                hint = "Only lark delivery targets can be created by this tool.",
-            });
-        }
+        var platform = GetRequired(args, "'platform' is required for create", "platform");
+        if (platform.error != null)
+            return platform.error;
+
+        var targetPlatform = platform.value!;
 
         var existingForCaller = await queryPort.GetForCallerAsync(deliveryTargetId.value!, caller, ct);
         if (existingForCaller is not null)
@@ -214,7 +209,6 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
 
         try
         {
-            var receiveIdType = ResolveLarkReceiveIdType(conversationId.value);
             await commandPort.UpsertAsync(
                 new UserAgentCatalogUpsertCommand
                 {
@@ -226,8 +220,7 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
                     AgentType = "delivery_target",
                     TemplateName = "explicit_delivery_target",
                     ScopeId = keyScopeId,
-                    LarkReceiveId = conversationId.value!,
-                    LarkReceiveIdType = receiveIdType,
+                    TargetPlatform = targetPlatform,
                     OwnerScope = caller.Clone(),
                 },
                 ct);
@@ -243,7 +236,7 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
             status = "accepted",
             agent_id = deliveryTargetId.value,
             delivery_target_id = deliveryTargetId.value,
-            platform = "lark",
+            platform = targetPlatform,
             conversation_id = conversationId.value,
             nyx_provider_slug = nyxProviderSlug.value,
             api_key_id = key.ApiKeyId,
@@ -438,27 +431,6 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         return (null, JsonSerializer.Serialize(new { error = errorMessage }));
     }
 
-    private static string ResolveLarkReceiveIdType(string? conversationId)
-    {
-        var trimmed = conversationId?.Trim();
-        if (string.IsNullOrEmpty(trimmed))
-            return "chat_id";
-        if (trimmed.StartsWith("ou_", StringComparison.Ordinal))
-            return "open_id";
-        if (trimmed.StartsWith("on_", StringComparison.Ordinal))
-            return "union_id";
-        return "chat_id";
-    }
-
-    private static string ResolveDeliveryPlatform(UserAgentCatalogReadModelEntry entry)
-    {
-        if (!string.IsNullOrWhiteSpace(entry.LarkReceiveId) ||
-            !string.IsNullOrWhiteSpace(entry.LarkReceiveIdType) ||
-            entry.NyxProviderSlug?.Contains("lark", StringComparison.OrdinalIgnoreCase) == true)
-        {
-            return "lark";
-        }
-
-        return entry.OwnerScope?.Platform ?? string.Empty;
-    }
+    private static string ResolveDeliveryPlatform(UserAgentCatalogReadModelEntry entry) =>
+        entry.TargetPlatform ?? string.Empty;
 }

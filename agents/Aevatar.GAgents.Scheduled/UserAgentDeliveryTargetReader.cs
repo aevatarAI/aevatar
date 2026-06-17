@@ -77,13 +77,6 @@ public sealed class UserAgentDeliveryTargetReader : IUserAgentDeliveryTargetRead
             return document.Platform;
 #pragma warning restore CS0612
 
-        if (!string.IsNullOrWhiteSpace(document.LarkReceiveId) ||
-            !string.IsNullOrWhiteSpace(document.LarkReceiveIdType) ||
-            document.NyxProviderSlug?.Contains("lark", StringComparison.OrdinalIgnoreCase) == true)
-        {
-            return "lark";
-        }
-
-        return document.OwnerScope?.Platform ?? string.Empty;
+        return document.TargetPlatform ?? string.Empty;
     }
 }
