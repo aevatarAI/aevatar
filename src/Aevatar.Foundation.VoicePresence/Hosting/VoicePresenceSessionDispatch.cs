@@ -75,6 +75,9 @@ internal static class VoicePresenceSessionDispatch
             case VoiceTransportAttachRequested attachRequested:
                 signal.TransportAttachRequested = attachRequested.Clone();
                 break;
+            case VoiceTransportLeaseRenewRequested renewRequested:
+                signal.TransportLeaseRenewRequested = renewRequested.Clone();
+                break;
             case VoiceTransportDetachRequested detachRequested:
                 signal.TransportDetachRequested = detachRequested.Clone();
                 break;
