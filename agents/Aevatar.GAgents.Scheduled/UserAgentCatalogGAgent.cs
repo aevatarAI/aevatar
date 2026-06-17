@@ -1,3 +1,4 @@
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
@@ -22,6 +23,8 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             .On<UserAgentCatalogUpsertedEvent>(ApplyUpserted)
             .On<UserAgentCatalogTombstonedEvent>(ApplyTombstoned)
             .On<UserAgentCatalogTombstonesCompactedEvent>(ApplyTombstonesCompacted)
+            .On<UserAgentCatalogSharedEvent>(ApplyShared)
+            .On<UserAgentCatalogUnsharedEvent>(ApplyUnshared)
             .OrCurrent();
 
     [EventHandler]
@@ -56,6 +59,7 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             LarkReceiveIdType = MergeNonEmpty(command.LarkReceiveIdType, existing?.LarkReceiveIdType),
             LarkReceiveIdFallback = MergeNonEmpty(command.LarkReceiveIdFallback, existing?.LarkReceiveIdFallback),
             LarkReceiveIdTypeFallback = MergeNonEmpty(command.LarkReceiveIdTypeFallback, existing?.LarkReceiveIdTypeFallback),
+            SharingGrant = existing?.SharingGrant?.Clone(),
             OutputFormat = command.OutputFormat == SkillRunnerOutputFormat.Auto
                 ? existing?.OutputFormat ?? SkillRunnerOutputFormat.Auto
                 : command.OutputFormat,
@@ -108,6 +112,66 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         {
             AgentId = command.AgentId.Trim(),
             TombstoneStateVersion = NextCommittedVersion(),
+        });
+    }
+
+    [EventHandler]
+    public async Task HandleShareAsync(UserAgentCatalogShareCommand command)
+    {
+        if (string.IsNullOrWhiteSpace(command.AgentId))
+        {
+            Logger.LogWarning("Cannot share user agent catalog entry with empty agent id");
+            return;
+        }
+
+        var entry = FindOwnedLiveEntry(command.AgentId, command.OwnerScope);
+        if (entry is null)
+        {
+            Logger.LogWarning("Cannot share missing or non-owned user agent catalog entry: {AgentId}", command.AgentId);
+            return;
+        }
+
+        if (!TryBuildAudienceKey(entry.OwnerScope, out var audienceKey))
+        {
+            Logger.LogWarning("Cannot share user agent catalog entry without a channel owner registration scope: {AgentId}", command.AgentId);
+            return;
+        }
+
+        await PersistDomainEventAsync(new UserAgentCatalogSharedEvent
+        {
+            AgentId = entry.AgentId,
+            SharingGrant = new ScheduledAgentSharingGrant
+            {
+                SharedWithRegistrationScope = entry.OwnerScope.RegistrationScopeId.Trim(),
+                AllowTrigger = command.AllowTrigger,
+                GrantedBy = command.OwnerScope.SenderId ?? string.Empty,
+                GrantedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+        });
+    }
+
+    [EventHandler]
+    public async Task HandleUnshareAsync(UserAgentCatalogUnshareCommand command)
+    {
+        if (string.IsNullOrWhiteSpace(command.AgentId))
+        {
+            Logger.LogWarning("Cannot unshare user agent catalog entry with empty agent id");
+            return;
+        }
+
+        var entry = FindOwnedLiveEntry(command.AgentId, command.OwnerScope);
+        if (entry is null)
+        {
+            Logger.LogWarning("Cannot unshare missing or non-owned user agent catalog entry: {AgentId}", command.AgentId);
+            return;
+        }
+
+        if (entry.SharingGrant is null)
+            return;
+
+        await PersistDomainEventAsync(new UserAgentCatalogUnsharedEvent
+        {
+            AgentId = entry.AgentId,
         });
     }
 
@@ -181,6 +245,42 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         return next;
     }
 
+    private static UserAgentCatalogState ApplyShared(UserAgentCatalogState current, UserAgentCatalogSharedEvent evt)
+    {
+        var next = current.Clone();
+        var existing = next.Entries.FirstOrDefault(x => string.Equals(x.AgentId, evt.AgentId, StringComparison.Ordinal));
+        if (existing is null || existing.Tombstoned)
+            return next;
+
+        existing.SharingGrant = evt.SharingGrant?.Clone();
+        existing.UpdatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+        return next;
+    }
+
+    private static UserAgentCatalogState ApplyUnshared(UserAgentCatalogState current, UserAgentCatalogUnsharedEvent evt)
+    {
+        var next = current.Clone();
+        var existing = next.Entries.FirstOrDefault(x => string.Equals(x.AgentId, evt.AgentId, StringComparison.Ordinal));
+        if (existing is null)
+            return next;
+
+        existing.SharingGrant = null;
+        existing.UpdatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+        return next;
+    }
+
+    private UserAgentCatalogEntry? FindOwnedLiveEntry(string agentId, OwnerScope? ownerScope)
+    {
+        if (ownerScope is null)
+            return null;
+
+        var normalizedAgentId = agentId.Trim();
+        return State.Entries.FirstOrDefault(entry =>
+            !entry.Tombstoned &&
+            string.Equals(entry.AgentId, normalizedAgentId, StringComparison.Ordinal) &&
+            ownerScope.MatchesStrictly(entry.OwnerScope));
+    }
+
     private long NextCommittedVersion() =>
         (EventSourcing ?? throw new InvalidOperationException("Event sourcing must be configured before computing the next committed version."))
         .CurrentVersion + 1;
@@ -191,5 +291,20 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         return !string.IsNullOrWhiteSpace(normalizedIncoming)
             ? normalizedIncoming
             : (existing ?? string.Empty);
+    }
+
+    internal static bool TryBuildAudienceKey(OwnerScope? ownerScope, out string audienceKey)
+    {
+        if (ownerScope is null ||
+            ownerScope.IsNyxIdNative ||
+            string.IsNullOrWhiteSpace(ownerScope.Platform) ||
+            string.IsNullOrWhiteSpace(ownerScope.RegistrationScopeId))
+        {
+            audienceKey = string.Empty;
+            return false;
+        }
+
+        audienceKey = $"{ownerScope.Platform.Trim().ToLowerInvariant()}:{ownerScope.RegistrationScopeId.Trim()}";
+        return true;
     }
 }

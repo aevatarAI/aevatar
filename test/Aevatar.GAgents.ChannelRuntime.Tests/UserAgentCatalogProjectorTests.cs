@@ -130,6 +130,69 @@ public sealed class UserAgentCatalogProjectorTests
     }
 
     [Fact]
+    public async Task ProjectAsync_WithSharingGrant_MaterializesAudienceKeys()
+    {
+        var ownerScope = OwnerScope.ForChannel("user-A", "lark", "bot-1", "alice");
+        var state = new UserAgentCatalogState
+        {
+            Entries =
+            {
+                new UserAgentCatalogEntry
+                {
+                    AgentId = "shared-agent",
+                    ConversationId = "oc_chat_1",
+                    AgentType = "skill_runner",
+                    OwnerScope = ownerScope,
+                    SharingGrant = new ScheduledAgentSharingGrant
+                    {
+                        SharedWithRegistrationScope = "bot-1",
+                        AllowTrigger = true,
+                        GrantedBy = "alice",
+                        GrantedAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 6, 17, 10, 0, 0, TimeSpan.Zero)),
+                    },
+                },
+            },
+        };
+
+        await _projector.ProjectAsync(_context, BuildCommittedEnvelope("evt-shared", 5, state), CancellationToken.None);
+
+        var document = _dispatcher.Upserts.Should().ContainSingle().Subject;
+        document.SharingGrant.Should().NotBeNull();
+        document.SharingGrant!.SharedWithRegistrationScope.Should().Be("bot-1");
+        document.SharingGrant.AllowTrigger.Should().BeTrue();
+        document.VisibleSharingAudienceKey.Should().Be("lark:bot-1");
+        document.TriggerSharingAudienceKey.Should().Be("lark:bot-1");
+    }
+
+    [Fact]
+    public async Task ProjectAsync_WithViewOnlySharingGrant_DoesNotMaterializeTriggerAudience()
+    {
+        var ownerScope = OwnerScope.ForChannel("user-A", "lark", "bot-1", "alice");
+        var state = new UserAgentCatalogState
+        {
+            Entries =
+            {
+                new UserAgentCatalogEntry
+                {
+                    AgentId = "view-only-agent",
+                    OwnerScope = ownerScope,
+                    SharingGrant = new ScheduledAgentSharingGrant
+                    {
+                        SharedWithRegistrationScope = "bot-1",
+                        AllowTrigger = false,
+                    },
+                },
+            },
+        };
+
+        await _projector.ProjectAsync(_context, BuildCommittedEnvelope("evt-view-only", 5, state), CancellationToken.None);
+
+        var document = _dispatcher.Upserts.Should().ContainSingle().Subject;
+        document.VisibleSharingAudienceKey.Should().Be("lark:bot-1");
+        document.TriggerSharingAudienceKey.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ProjectAsync_WithSkillRunnerCommittedState_DoesNotWriteCatalogDocument()
     {
         var state = new SkillRunnerState

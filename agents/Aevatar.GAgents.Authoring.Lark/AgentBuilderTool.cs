@@ -49,7 +49,7 @@ public sealed class AgentBuilderTool : IAgentTool
 
     public string Description =>
         "List and manage the caller's persistent automation agents. " +
-        "Actions: list_agents, agent_status, run_agent, disable_agent, enable_agent, delete_agent. " +
+        "Actions: list_agents, agent_status, run_agent, share_agent, unshare_agent, disable_agent, enable_agent, delete_agent. " +
         "Agent creation is handled by scheduled_agent_creator.";
 
     // Note (issue #466): no `owner_nyx_user_id` parameter is exposed. The tool always
@@ -63,7 +63,7 @@ public sealed class AgentBuilderTool : IAgentTool
           "properties": {
             "action": {
               "type": "string",
-              "enum": ["list_agents", "agent_status", "run_agent", "disable_agent", "enable_agent", "delete_agent"]
+              "enum": ["list_agents", "agent_status", "run_agent", "share_agent", "unshare_agent", "disable_agent", "enable_agent", "delete_agent"]
             },
             "agent_id": {
               "type": "string",
@@ -76,6 +76,10 @@ public sealed class AgentBuilderTool : IAgentTool
             "revision_feedback": {
               "type": "string",
               "description": "Optional revision guidance to include in the next run."
+            },
+            "allow_trigger": {
+              "type": "boolean",
+              "description": "When true, shared channel members can also run the agent. Used only by share_agent."
             }
           },
           "required": ["action"]
@@ -125,6 +129,8 @@ public sealed class AgentBuilderTool : IAgentTool
             "list_agents" => await ListAgentsAsync(_queryPort, _executionQueryPort, caller, ct),
             "agent_status" => await GetAgentStatusAsync(args, _queryPort, _executionQueryPort, caller, ct),
             "run_agent" => await RunAgentAsync(args, _queryPort, _skillRunnerPort, caller, ct),
+            "share_agent" => await ShareAgentAsync(args, _queryPort, _catalogCommandPort, caller, ct),
+            "unshare_agent" => await UnshareAgentAsync(args, _queryPort, _catalogCommandPort, caller, ct),
             "disable_agent" => await DisableAgentAsync(args, _queryPort, _skillRunnerPort, caller, ct),
             "enable_agent" => await EnableAgentAsync(args, _queryPort, _skillRunnerPort, caller, ct),
             "delete_agent" => await DeleteAgentAsync(args, _queryPort, _executionQueryPort, _catalogCommandPort, _skillRunnerPort, _nyxClientFactory, token, caller, ct),
@@ -158,6 +164,63 @@ public sealed class AgentBuilderTool : IAgentTool
             return JsonSerializer.Serialize(new { error = $"Agent '{agentId}' not found" });
 
         return SerializeAgentStatus(entry);
+    }
+
+    private async Task<string> ShareAgentAsync(
+        BuilderArgs args,
+        IUserAgentCatalogQueryPort queryPort,
+        IUserAgentCatalogCommandPort catalogCommandPort,
+        OwnerScope caller,
+        CancellationToken ct)
+    {
+        var agentId = args.Str("agent_id");
+        if (string.IsNullOrWhiteSpace(agentId))
+            return """{"error":"agent_id is required for share_agent"}""";
+
+        if (!UserAgentCatalogQueryPort.TryBuildSharingAudienceKey(caller, out var audienceKey))
+            return JsonSerializer.Serialize(new { error = "share_agent requires a channel registration scope" });
+
+        var entry = await QueryCatalogAgentForCallerAsync(queryPort, agentId.Trim(), caller, ct);
+        if (entry is null)
+            return JsonSerializer.Serialize(new { error = $"Agent '{agentId}' not found" });
+
+        var allowTrigger = args.Bool("allow_trigger") == true;
+        await catalogCommandPort.ShareAsync(entry.AgentId, caller, allowTrigger, ct);
+
+        return JsonSerializer.Serialize(new
+        {
+            status = "accepted",
+            agent_id = entry.AgentId,
+            shared_with_registration_scope = caller.RegistrationScopeId,
+            sharing_audience_key = audienceKey,
+            allow_trigger = allowTrigger,
+            note = "Share update accepted. Shared visibility is available after the catalog projection catches up.",
+        });
+    }
+
+    private async Task<string> UnshareAgentAsync(
+        BuilderArgs args,
+        IUserAgentCatalogQueryPort queryPort,
+        IUserAgentCatalogCommandPort catalogCommandPort,
+        OwnerScope caller,
+        CancellationToken ct)
+    {
+        var agentId = args.Str("agent_id");
+        if (string.IsNullOrWhiteSpace(agentId))
+            return """{"error":"agent_id is required for unshare_agent"}""";
+
+        var entry = await QueryCatalogAgentForCallerAsync(queryPort, agentId.Trim(), caller, ct);
+        if (entry is null)
+            return JsonSerializer.Serialize(new { error = $"Agent '{agentId}' not found" });
+
+        await catalogCommandPort.UnshareAsync(entry.AgentId, caller, ct);
+
+        return JsonSerializer.Serialize(new
+        {
+            status = "accepted",
+            agent_id = entry.AgentId,
+            note = "Unshare update accepted. Shared visibility is removed after the catalog projection catches up.",
+        });
     }
 
     private async Task<string> DeleteAgentAsync(
@@ -235,7 +298,7 @@ public sealed class AgentBuilderTool : IAgentTool
         if (string.IsNullOrWhiteSpace(agentId))
             return """{"error":"agent_id is required for run_agent"}""";
 
-        var entry = await QueryCatalogAgentForCallerAsync(queryPort, agentId.Trim(), caller, ct);
+        var entry = await QueryTriggerableCatalogAgentForCallerAsync(queryPort, agentId.Trim(), caller, ct);
         if (entry is null)
             return JsonSerializer.Serialize(new { error = $"Agent '{agentId}' not found" });
 
@@ -243,8 +306,8 @@ public sealed class AgentBuilderTool : IAgentTool
             return JsonSerializer.Serialize(new { error = $"Agent '{entry.AgentId}' does not support run_agent" });
 
         var revisionFeedback = NormalizeOptional(args.Str("revision_feedback"));
-        // run_agent is the owner's management-plane trigger: the caller already passed the
-        // owner-scope check above, so it dispatches TriggerAsync directly. It must NOT go
+        // run_agent is a catalog-admitted management-plane trigger: owners and trigger-granted
+        // channel peers dispatch TriggerAsync directly. It must NOT go
         // through the external-trigger admission protocol (#1790): admission requires a
         // pre-registered ExternalTriggerSource on the runner, and agents created via
         // scheduled_agent_creator register none — routing the owner's own /run-agent through
@@ -340,7 +403,7 @@ public sealed class AgentBuilderTool : IAgentTool
         OwnerScope caller,
         CancellationToken ct)
     {
-        var entries = await queryPort.QueryByCallerAsync(caller, ct);
+        var entries = await queryPort.QueryVisibleByCallerAsync(caller, ct);
         var executions = await TryQueryExecutionsByAgentIdsAsync(
             executionQueryPort,
             entries.Select(static entry => entry.AgentId).ToArray(),
@@ -395,6 +458,13 @@ public sealed class AgentBuilderTool : IAgentTool
         CancellationToken ct) =>
         queryPort.GetForCallerAsync(agentId, caller, ct);
 
+    private static Task<UserAgentCatalogReadModelEntry?> QueryTriggerableCatalogAgentForCallerAsync(
+        IUserAgentCatalogQueryPort queryPort,
+        string agentId,
+        OwnerScope caller,
+        CancellationToken ct) =>
+        queryPort.GetTriggerableForCallerAsync(agentId, caller, ct);
+
     private async Task<UserAgentCatalogReadModelEntry?> QueryAgentForCallerAsync(
         IUserAgentCatalogQueryPort queryPort,
         ISkillRunnerExecutionQueryPort executionQueryPort,
@@ -402,7 +472,7 @@ public sealed class AgentBuilderTool : IAgentTool
         OwnerScope caller,
         CancellationToken ct)
     {
-        var entry = await queryPort.GetForCallerAsync(agentId, caller, ct);
+        var entry = await queryPort.GetVisibleForCallerAsync(agentId, caller, ct);
         if (entry is null)
             return null;
 
@@ -495,6 +565,7 @@ public sealed class AgentBuilderTool : IAgentTool
             LarkReceiveIdTypeFallback = catalog.LarkReceiveIdTypeFallback,
             OutputFormat = catalog.OutputFormat,
             OwnerScope = catalog.OwnerScope,
+            SharingGrant = catalog.SharingGrant,
             CatalogAuthorityStateVersion = catalog.CatalogAuthorityStateVersion,
             CatalogLastEventId = catalog.CatalogLastEventId,
             RunnerAuthorityStateVersion = execution.StateVersion,

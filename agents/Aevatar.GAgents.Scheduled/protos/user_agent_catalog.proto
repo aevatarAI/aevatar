@@ -67,10 +67,18 @@ message UserAgentCatalogEntry {
   // legacy state (issue #466 migration plan).
   aevatar.OwnerScope owner_scope = 26;
   SkillRunnerOutputFormat output_format = 27;
+  ScheduledAgentSharingGrant sharing_grant = 28;
 }
 
 message UserAgentCatalogState {
   repeated UserAgentCatalogEntry entries = 1;
+}
+
+message ScheduledAgentSharingGrant {
+  string shared_with_registration_scope = 1;
+  bool allow_trigger = 2;
+  string granted_by = 3;
+  google.protobuf.Timestamp granted_at = 4;
 }
 
 message UserAgentCatalogUpsertCommand {
@@ -110,6 +118,17 @@ message UserAgentCatalogCompactTombstonesCommand {
   int64 safe_state_version = 1;
 }
 
+message UserAgentCatalogShareCommand {
+  string agent_id = 1;
+  aevatar.OwnerScope owner_scope = 2;
+  bool allow_trigger = 3;
+}
+
+message UserAgentCatalogUnshareCommand {
+  string agent_id = 1;
+  aevatar.OwnerScope owner_scope = 2;
+}
+
 message UserAgentCatalogUpsertedEvent {
   UserAgentCatalogEntry entry = 1;
 }
@@ -122,6 +141,15 @@ message UserAgentCatalogTombstonedEvent {
 message UserAgentCatalogTombstonesCompactedEvent {
   repeated string agent_ids = 1;
   int64 safe_state_version = 2;
+}
+
+message UserAgentCatalogSharedEvent {
+  string agent_id = 1;
+  ScheduledAgentSharingGrant sharing_grant = 2;
+}
+
+message UserAgentCatalogUnsharedEvent {
+  string agent_id = 1;
 }
 
 message UserAgentCatalogDocument {
@@ -166,6 +194,9 @@ message UserAgentCatalogDocument {
   reserved 29, 30, 31, 32;
   reserved "catalog_source_version", "catalog_last_event_id", "runner_source_version", "runner_last_event_id";
   SkillRunnerOutputFormat output_format = 33;
+  ScheduledAgentSharingGrant sharing_grant = 34;
+  string visible_sharing_audience_key = 35;
+  string trigger_sharing_audience_key = 36;
 }
 
 // Runtime-only Nyx credential read model for delivery-target execution paths.
