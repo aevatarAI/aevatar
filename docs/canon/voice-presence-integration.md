@@ -210,9 +210,19 @@ sequenceDiagram
 ## Open work
 
 Hardening and contract-completeness follow-ups are tracked under **milestone 23
-"Voice Realtime"**. The current wave covers: the inert `lease_epoch` fence, the
-non-renewed session lease, the missing drain-ack timeout, relay-session reuse
-for barge-in latency, the route-scoped voice tool execution context that
-unblocks per-caller edge tools, the typed `VoiceFunctionCallOutput` control
-frame, device-event replay protection, dev-bypass hardening, and cross-repo
-contract versioning. See the milestone for the live list.
+"Voice Realtime"** (issues #2150–#2161):
+
+- #2150 — thread real `lease_epoch` into provider sessions (inert fence)
+- #2151 — renew the session lease while the relay is attached
+- #2152 — bound `AudioDraining` with a server-side drain-ack timeout
+- #2153 — reuse the live relay provider session for upstream sends (barge-in latency)
+- #2154 — don't block first-audio on connect-time tool discovery
+- #2155 — route-scoped voice tool execution context (unblocks per-caller edge tools)
+- #2156 — typed `VoiceFunctionCallOutput` control frame
+- #2157 — replay protection for the device-event HMAC ingress
+- #2158 — harden / gate the `/ws/voice` dev-bypass route
+- #2159 — `/ws/voice` reconnect/reattach contract + wire dead attach timeouts
+- #2160 — version the wire contract + ship a shared frame/vocabulary descriptor
+- #2161 — operator setup guide for aevatar-mode voice
+
+See the milestone for the live list.
