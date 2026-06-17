@@ -16,6 +16,7 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
     : IProjectionDocumentReader<TReadModel, TKey>,
       IProjectionDocumentWriter<TReadModel>,
       IProjectionIndexConsistencyProbe<TReadModel>,
+      IProjectionIndexReconcileTarget,
       IDisposable
     where TReadModel : class, IProjectionReadModel<TReadModel>, new()
 {
@@ -277,6 +278,20 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
         ct.ThrowIfCancellationRequested();
         ThrowIfDynamicReadModelQueriesUnsupported("index consistency probe");
         return await _indexManager.CheckConsistencyAsync(_indexName, _indexMetadata, ct);
+    }
+
+    /// <inheritdoc />
+    public string IndexAlias => _indexName;
+
+    /// <inheritdoc />
+    public async Task ReconcileIndexAsync(CancellationToken ct = default)
+    {
+        // No-op when auto-create is off (operator owns the lifecycle) or when the store uses
+        // dynamic per-document indexing (no single static physical to reconcile).
+        if (!_autoCreateIndex || _supportsDynamicIndexing)
+            return;
+
+        await _indexManager.ReconcileWithReindexAsync(_indexName, _indexMetadata, ct);
     }
 
     private async Task EnsureReadIndexConsistentAsync(CancellationToken ct)
