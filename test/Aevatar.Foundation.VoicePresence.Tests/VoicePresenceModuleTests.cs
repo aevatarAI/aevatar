@@ -296,6 +296,226 @@ public class VoicePresenceModuleTests
     }
 
     [Fact]
+    public async Task Response_done_on_active_lease_should_schedule_epoch_fenced_drain_timeout()
+    {
+        var module = CreateModule(
+            new RecordingVoiceProvider(),
+            options: new VoicePresenceModuleOptions
+            {
+                DrainTimeout = TimeSpan.FromSeconds(7),
+            });
+        var roleAgent = CreateRoleAgentWithAttachedTransport();
+        var ctx = new StubEventHandlerContext(agent: roleAgent);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = DefaultModuleName,
+            ProviderEventReceived = new VoiceProviderEventReceived
+            {
+                SessionId = "lease-current",
+                OwnerId = "host-current",
+                TransportLeaseId = "transport-current",
+                LeaseEpoch = 7,
+                ProviderEvent = new VoiceProviderEvent
+                {
+                    ResponseStarted = new VoiceResponseStarted
+                    {
+                        ProviderResponseId = "provider-r1",
+                    },
+                },
+            },
+        }), ctx, CancellationToken.None);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = DefaultModuleName,
+            ProviderEventReceived = new VoiceProviderEventReceived
+            {
+                SessionId = "lease-current",
+                OwnerId = "host-current",
+                TransportLeaseId = "transport-current",
+                LeaseEpoch = 7,
+                ProviderEvent = new VoiceProviderEvent
+                {
+                    ResponseDone = new VoiceResponseDone
+                    {
+                        ProviderResponseId = "provider-r1",
+                    },
+                },
+            },
+        }), ctx, CancellationToken.None);
+
+        var scheduled = ctx.ScheduledTimeouts.ShouldHaveSingleItem();
+        scheduled.CallbackId.ShouldBe("voice_presence:voice-drain-timeout:7:1");
+        scheduled.DueTime.ShouldBe(TimeSpan.FromSeconds(7));
+        var signal = scheduled.Event.ShouldBeOfType<VoiceModuleSignal>();
+        signal.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.DrainTimeoutExpired);
+        signal.DrainTimeoutExpired.SessionId.ShouldBe("lease-current");
+        signal.DrainTimeoutExpired.OwnerId.ShouldBe("host-current");
+        signal.DrainTimeoutExpired.TransportLeaseId.ShouldBe("transport-current");
+        signal.DrainTimeoutExpired.LeaseEpoch.ShouldBe(7);
+        signal.DrainTimeoutExpired.ResponseId.ShouldBe(1);
+        RoleVoiceState(ctx).Status.ShouldBe(VoicePresenceRuntimeStatus.AudioDraining);
+    }
+
+    [Fact]
+    public async Task Drain_timeout_should_release_audio_draining_and_flush_pending_injection()
+    {
+        var provider = new RecordingVoiceProvider();
+        var module = CreateModule(provider);
+        var roleAgent = CreateRoleAgentWithAttachedTransport();
+        roleAgent.State.VoicePresence[DefaultModuleName].Status = VoicePresenceRuntimeStatus.AudioDraining;
+        roleAgent.State.VoicePresence[DefaultModuleName].CurrentResponseId = 4;
+        roleAgent.State.VoicePresence[DefaultModuleName].NextResponseId = 5;
+        roleAgent.State.VoicePresence[DefaultModuleName].PendingInjections.Add(new VoicePendingEventInjection
+        {
+            EnvelopeId = "external-timeout",
+            PublisherActorId = "external-agent",
+            EventType = StringValue.Descriptor.FullName,
+            Payload = Any.Pack(new StringValue { Value = "safety event" }),
+            ObservedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        var ctx = new StubEventHandlerContext(agent: roleAgent);
+
+        await module.InitializeAsync(CancellationToken.None);
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = DefaultModuleName,
+            DrainTimeoutExpired = new VoiceDrainTimeoutExpired
+            {
+                SessionId = "lease-current",
+                OwnerId = "host-current",
+                TransportLeaseId = "transport-current",
+                LeaseEpoch = 7,
+                ResponseId = 4,
+            },
+        }), ctx, CancellationToken.None);
+
+        provider.InjectedEvents.ShouldHaveSingleItem().EnvelopeId.ShouldBe("external-timeout");
+        var persisted = roleAgent.PersistedStates.ShouldHaveSingleItem().State;
+        persisted.Status.ShouldBe(VoicePresenceRuntimeStatus.Idle);
+        persisted.LastDrainAckResponseId.ShouldBe(4);
+        persisted.LastDrainAckPlayoutSequence.ShouldBe(-1);
+        persisted.PendingInjections.ShouldBeEmpty();
+        persisted.AwaitingInjectedResponseStart.ShouldBeTrue();
+    }
+
+    [Theory]
+    [InlineData("response")]
+    [InlineData("epoch")]
+    [InlineData("zero-epoch")]
+    [InlineData("transport")]
+    public async Task Drain_timeout_should_ignore_stale_or_unfenced_signals(string mismatch)
+    {
+        var module = CreateModule(new RecordingVoiceProvider());
+        var roleAgent = CreateRoleAgentWithAttachedTransport();
+        roleAgent.State.VoicePresence[DefaultModuleName].Status = VoicePresenceRuntimeStatus.AudioDraining;
+        roleAgent.State.VoicePresence[DefaultModuleName].CurrentResponseId = 4;
+        roleAgent.State.VoicePresence[DefaultModuleName].NextResponseId = 5;
+        var ctx = new StubEventHandlerContext(agent: roleAgent);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = DefaultModuleName,
+            DrainTimeoutExpired = new VoiceDrainTimeoutExpired
+            {
+                SessionId = "lease-current",
+                OwnerId = "host-current",
+                TransportLeaseId = mismatch == "transport" ? "transport-stale" : "transport-current",
+                LeaseEpoch = mismatch switch
+                {
+                    "epoch" => 6,
+                    "zero-epoch" => 0,
+                    _ => 7,
+                },
+                ResponseId = mismatch == "response" ? 3 : 4,
+            },
+        }), ctx, CancellationToken.None);
+
+        roleAgent.PersistedStates.ShouldBeEmpty();
+        var state = roleAgent.State.VoicePresence[DefaultModuleName];
+        state.Status.ShouldBe(VoicePresenceRuntimeStatus.AudioDraining);
+        state.LastDrainAckResponseId.ShouldBe(-1);
+    }
+
+    [Fact]
+    public async Task Drain_ack_after_timeout_should_be_idempotent_and_not_set_playout_sentinel()
+    {
+        var module = CreateModule(new RecordingVoiceProvider());
+        var roleAgent = CreateRoleAgentWithAttachedTransport();
+        roleAgent.State.VoicePresence[DefaultModuleName].Status = VoicePresenceRuntimeStatus.AudioDraining;
+        roleAgent.State.VoicePresence[DefaultModuleName].CurrentResponseId = 4;
+        roleAgent.State.VoicePresence[DefaultModuleName].NextResponseId = 5;
+        var ctx = new StubEventHandlerContext(agent: roleAgent);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = DefaultModuleName,
+            DrainTimeoutExpired = new VoiceDrainTimeoutExpired
+            {
+                SessionId = "lease-current",
+                OwnerId = "host-current",
+                TransportLeaseId = "transport-current",
+                LeaseEpoch = 7,
+                ResponseId = 4,
+            },
+        }), ctx, CancellationToken.None);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceControlFrame
+        {
+            DrainAcknowledged = new VoiceDrainAcknowledged
+            {
+                ResponseId = 4,
+                PlayoutSequence = 99,
+            },
+        }), ctx, CancellationToken.None);
+
+        var state = roleAgent.PersistedStates.Last().State;
+        state.Status.ShouldBe(VoicePresenceRuntimeStatus.Idle);
+        state.LastDrainAckResponseId.ShouldBe(4);
+        state.LastDrainAckPlayoutSequence.ShouldBe(-1);
+    }
+
+    [Fact]
+    public async Task Drain_timeout_after_ack_should_be_idempotent_noop()
+    {
+        var module = CreateModule(new RecordingVoiceProvider());
+        var roleAgent = CreateRoleAgentWithAttachedTransport();
+        roleAgent.State.VoicePresence[DefaultModuleName].Status = VoicePresenceRuntimeStatus.AudioDraining;
+        roleAgent.State.VoicePresence[DefaultModuleName].CurrentResponseId = 4;
+        roleAgent.State.VoicePresence[DefaultModuleName].NextResponseId = 5;
+        var ctx = new StubEventHandlerContext(agent: roleAgent);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceControlFrame
+        {
+            DrainAcknowledged = new VoiceDrainAcknowledged
+            {
+                ResponseId = 4,
+                PlayoutSequence = 88,
+            },
+        }), ctx, CancellationToken.None);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = DefaultModuleName,
+            DrainTimeoutExpired = new VoiceDrainTimeoutExpired
+            {
+                SessionId = "lease-current",
+                OwnerId = "host-current",
+                TransportLeaseId = "transport-current",
+                LeaseEpoch = 7,
+                ResponseId = 4,
+            },
+        }), ctx, CancellationToken.None);
+
+        roleAgent.PersistedStates.Count.ShouldBe(1);
+        var state = roleAgent.PersistedStates.Single().State;
+        state.Status.ShouldBe(VoicePresenceRuntimeStatus.Idle);
+        state.LastDrainAckResponseId.ShouldBe(4);
+        state.LastDrainAckPlayoutSequence.ShouldBe(88);
+    }
+
+    [Fact]
     public async Task Response_cancelled_should_return_to_idle()
     {
         var module = CreateModule(new RecordingVoiceProvider());
@@ -2802,6 +3022,8 @@ public class VoicePresenceModuleTests
 
         public List<IMessage> PublishedEvents { get; } = [];
 
+        public List<ScheduledSelfTimeout> ScheduledTimeouts { get; } = [];
+
         public Task PublishAsync<TEvent>(
             TEvent evt,
             TopologyAudience audience = TopologyAudience.Children,
@@ -2835,8 +3057,16 @@ public class VoicePresenceModuleTests
             TimeSpan dueTime,
             IMessage evt,
             EventEnvelopePublishOptions? options = null,
-            CancellationToken ct = default) =>
-            throw new NotSupportedException();
+            CancellationToken ct = default)
+        {
+            _ = options;
+            ct.ThrowIfCancellationRequested();
+            ScheduledTimeouts.Add(new ScheduledSelfTimeout(
+                callbackId,
+                dueTime,
+                evt.Descriptor.Parser.ParseFrom(evt.ToByteArray())));
+            return Task.FromResult(new RuntimeCallbackLease(AgentId, callbackId, ScheduledTimeouts.Count, RuntimeCallbackBackend.InMemory));
+        }
 
         public Task<RuntimeCallbackLease> ScheduleSelfDurableTimerAsync(
             string callbackId,
@@ -2850,6 +3080,8 @@ public class VoicePresenceModuleTests
         public Task CancelDurableCallbackAsync(RuntimeCallbackLease lease, CancellationToken ct = default) =>
             throw new NotSupportedException();
     }
+
+    private sealed record ScheduledSelfTimeout(string CallbackId, TimeSpan DueTime, IMessage Event);
 
     private sealed class StubAgent : IAgent
     {

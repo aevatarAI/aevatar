@@ -261,6 +261,45 @@ public class VoicePresenceProtoTests
     }
 
     [Fact]
+    public void VoiceModuleSignal_should_roundtrip_drain_timeout_expired_with_tag_19()
+    {
+        var timeout = new VoiceDrainTimeoutExpired
+        {
+            SessionId = "lease-1",
+            OwnerId = "host-1",
+            TransportLeaseId = "transport-1",
+            LeaseEpoch = 14,
+            ResponseId = 5,
+        };
+        var signal = new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            DrainTimeoutExpired = timeout,
+        };
+
+        var parsed = VoiceModuleSignal.Parser.ParseFrom(signal.ToByteArray());
+        var signalOneof = VoiceModuleSignal.Descriptor.Oneofs
+            .Single(static oneof => oneof.Name == "signal");
+        var timeoutField = signalOneof.Fields
+            .Single(static field => field.Name == "drain_timeout_expired");
+
+        parsed.ShouldBe(signal);
+        parsed.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.DrainTimeoutExpired);
+        parsed.DrainTimeoutExpired.ShouldBe(timeout);
+        timeoutField.FieldNumber.ShouldBe(19);
+        timeoutField.MessageType.Name.ShouldBe(nameof(VoiceDrainTimeoutExpired));
+        VoiceDrainTimeoutExpired.Descriptor.Fields.InDeclarationOrder()
+            .Select(static field => field.Name)
+            .ShouldBe([
+                "session_id",
+                "owner_id",
+                "transport_lease_id",
+                "lease_epoch",
+                "response_id",
+            ]);
+    }
+
+    [Fact]
     public void VoicePresenceSessionDispatch_should_wrap_transport_control_self_signal()
     {
         var control = new VoiceTransportControlFrameReceived
@@ -338,5 +377,27 @@ public class VoicePresenceProtoTests
         signal.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.TransportLeaseRenewRequested);
         signal.TransportLeaseRenewRequested.ShouldBe(renew);
         signal.TransportLeaseRenewRequested.ShouldNotBeSameAs(renew);
+    }
+
+    [Fact]
+    public void VoicePresenceSessionDispatch_should_wrap_drain_timeout_direct_signal()
+    {
+        var timeout = new VoiceDrainTimeoutExpired
+        {
+            SessionId = "lease-1",
+            OwnerId = "host-1",
+            TransportLeaseId = "transport-1",
+            LeaseEpoch = 14,
+            ResponseId = 5,
+        };
+
+        var envelope = VoicePresenceSessionDispatch.BuildDirectEnvelope("voice-agent", "voice_presence", timeout);
+        var signal = envelope.Payload.Unpack<VoiceModuleSignal>();
+
+        envelope.Route.ShouldBe(EnvelopeRouteSemantics.CreateDirect(VoicePresenceSessionDispatch.HostPublisherId, "voice-agent"));
+        signal.ModuleName.ShouldBe("voice_presence");
+        signal.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.DrainTimeoutExpired);
+        signal.DrainTimeoutExpired.ShouldBe(timeout);
+        signal.DrainTimeoutExpired.ShouldNotBeSameAs(timeout);
     }
 }

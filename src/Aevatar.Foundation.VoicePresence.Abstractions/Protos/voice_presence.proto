@@ -348,6 +348,14 @@ message VoiceTransportLifetimeCompleted {
   int64 lease_epoch = 6;
 }
 
+message VoiceDrainTimeoutExpired {
+  string session_id = 1;
+  string owner_id = 2;
+  string transport_lease_id = 3;
+  int64 lease_epoch = 4;
+  int32 response_id = 5;
+}
+
 message VoiceProviderEventReceived {
   string session_id = 1;
   string transport_lease_id = 2;
@@ -397,6 +405,7 @@ message VoiceModuleSignal {
     VoiceTransportLifetimeCompleted transport_lifetime_completed = 16;
     VoiceInputImageReceived input_image_received = 17;
     VoiceTransportLeaseRenewRequested transport_lease_renew_requested = 18;
+    VoiceDrainTimeoutExpired drain_timeout_expired = 19;
   }
 }
 

@@ -150,6 +150,9 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
             case VoiceModuleSignal.SignalOneofCase.TransportLeaseRenewRequested:
                 await HandleTransportLeaseRenewRequestedAsync(signal.TransportLeaseRenewRequested, ctx, ct);
                 break;
+            case VoiceModuleSignal.SignalOneofCase.DrainTimeoutExpired:
+                await HandleDrainTimeoutExpiredAsync(signal.DrainTimeoutExpired, ctx, ct);
+                break;
             case VoiceModuleSignal.SignalOneofCase.TransportDetachRequested:
                 await HandleTransportDetachRequestedAsync(signal.TransportDetachRequested, ctx, ct);
                 break;
@@ -214,10 +217,19 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
                 stateChanged = true;
                 break;
             case VoiceProviderEvent.EventOneofCase.ResponseDone:
+            {
+                var previousStatus = state.Status;
                 ApplyResponseDone(state, normalizedEvent.ResponseDone.ResponseId);
+                if (previousStatus != VoicePresenceRuntimeStatus.AudioDraining &&
+                    state.Status == VoicePresenceRuntimeStatus.AudioDraining)
+                {
+                    await ScheduleDrainTimeoutAsync(state, normalizedEvent.ResponseDone.ResponseId, ctx, ct);
+                }
+
                 RetireProviderResponse(state, normalizedEvent.ResponseDone.ProviderResponseId);
                 stateChanged = true;
                 break;
+            }
             case VoiceProviderEvent.EventOneofCase.ResponseCancelled:
                 state.AwaitingInjectedResponseStart = false;
                 ApplyResponseCancelled(state, normalizedEvent.ResponseCancelled.ResponseId);
@@ -509,6 +521,36 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         await PersistRuntimeStateAsync(ctx, state, ct);
     }
 
+    private async Task ScheduleDrainTimeoutAsync(
+        VoicePresenceRuntimeState state,
+        int responseId,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        if (_options.DrainTimeout <= TimeSpan.Zero)
+            return;
+
+        if (responseId <= 0 || state.LeaseEpoch <= 0)
+            return;
+
+        await ctx.ScheduleSelfDurableTimeoutAsync(
+            BuildDrainTimeoutCallbackId(state.LeaseEpoch, responseId),
+            _options.DrainTimeout,
+            new VoiceModuleSignal
+            {
+                ModuleName = Name,
+                DrainTimeoutExpired = new VoiceDrainTimeoutExpired
+                {
+                    SessionId = state.ActiveSessionId ?? string.Empty,
+                    OwnerId = state.ActiveLeaseOwnerId ?? string.Empty,
+                    TransportLeaseId = state.ActiveTransportLeaseId ?? string.Empty,
+                    LeaseEpoch = state.LeaseEpoch,
+                    ResponseId = responseId,
+                },
+            },
+            ct: ct);
+    }
+
     private async Task HandleTransportLeaseRenewRequestedAsync(
         VoiceTransportLeaseRenewRequested request,
         IEventHandlerContext ctx,
@@ -533,6 +575,33 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         }
 
         state.LeaseExpiresAt = request.RenewExpiresAt.Clone();
+        await PersistRuntimeStateAsync(ctx, state, ct);
+    }
+
+    private async Task HandleDrainTimeoutExpiredAsync(
+        VoiceDrainTimeoutExpired request,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        var state = HydrateRuntimeStateFromActor(ctx);
+        if (request == null ||
+            state.Status != VoicePresenceRuntimeStatus.AudioDraining ||
+            request.ResponseId != state.CurrentResponseId ||
+            request.LeaseEpoch <= 0 ||
+            state.LeaseEpoch != request.LeaseEpoch ||
+            !string.Equals(state.ActiveSessionId, request.SessionId, StringComparison.Ordinal) ||
+            !string.Equals(state.ActiveLeaseOwnerId ?? string.Empty, request.OwnerId, StringComparison.Ordinal) ||
+            !string.Equals(
+                state.ActiveTransportLeaseId ?? string.Empty,
+                request.TransportLeaseId,
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        state.LastDrainAckResponseId = request.ResponseId;
+        state.Status = VoicePresenceRuntimeStatus.Idle;
+        await FlushPendingEventInjectionsAsync(state, ct);
         await PersistRuntimeStateAsync(ctx, state, ct);
     }
 
@@ -714,6 +783,9 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
     private bool IsLeaseExpired(Timestamp? leaseExpiresAt) =>
         leaseExpiresAt != null &&
         leaseExpiresAt.ToDateTimeOffset() <= _options.TimeProvider.GetUtcNow();
+
+    private string BuildDrainTimeoutCallbackId(long leaseEpoch, int responseId) =>
+        $"{Name}:voice-drain-timeout:{leaseEpoch}:{responseId}";
 
     private static void ClearTransportLeaseState(VoicePresenceRuntimeState state)
     {
@@ -1732,6 +1804,8 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         long playoutSequence)
     {
         if (responseId != state.CurrentResponseId)
+            return;
+        if (state.LastDrainAckResponseId >= responseId)
             return;
 
         state.LastDrainAckResponseId = responseId;

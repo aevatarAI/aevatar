@@ -78,6 +78,9 @@ internal static class VoicePresenceSessionDispatch
             case VoiceTransportLeaseRenewRequested renewRequested:
                 signal.TransportLeaseRenewRequested = renewRequested.Clone();
                 break;
+            case VoiceDrainTimeoutExpired drainTimeoutExpired:
+                signal.DrainTimeoutExpired = drainTimeoutExpired.Clone();
+                break;
             case VoiceTransportDetachRequested detachRequested:
                 signal.TransportDetachRequested = detachRequested.Clone();
                 break;
