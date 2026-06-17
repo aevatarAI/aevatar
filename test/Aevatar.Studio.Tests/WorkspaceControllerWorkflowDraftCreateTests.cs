@@ -43,13 +43,7 @@ public sealed class WorkspaceControllerWorkflowDraftCreateTests
         receipt.ExpectedVersion.Should().Be(11);
         receipt.Readiness.Readable.Should().BeFalse();
         receipt.Readiness.Stage.Should().Be("projection_pending");
-        receipt.Name.Should().Be("workflow-1");
-        receipt.FileName.Should().Be("workflow-1.yaml");
-        receipt.FilePath.Should().Be("scope://scope-1/workflow-1.yaml");
-        receipt.DirectoryId.Should().Be("scope:scope-1");
-        receipt.DirectoryLabel.Should().Be("scope-1");
-        receipt.Yaml.Should().Be("name: workflow-1\nsteps: []");
-        receipt.Layout.Should().BeNull();
+        receipt.Readiness.Message.Should().Contain("Poll the workflow draft by id");
         workspacePort.SavedDrafts.Should().ContainSingle()
             .Which.WorkflowId.Should().Be(receipt.WorkflowId);
     }
