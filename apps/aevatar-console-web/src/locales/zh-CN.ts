@@ -592,7 +592,7 @@ const zhCNMessages = {
   'teams.automations.form.preset.weekdaysMorning': '工作日 · 09:00',
   'teams.automations.form.preset.weeklyMonday': '周一 · 09:00',
   'teams.automations.form.preview': '预览后续运行',
-  'teams.automations.form.previewEmpty': '先预览节奏，确认后续运行时间。',
+  'teams.automations.form.previewEmpty': '先预览节奏，确认后续触发。',
   'teams.automations.form.previewHint': '保存前通过定时任务服务预览。',
   'teams.automations.form.prompt': '周期 Prompt',
   'teams.automations.form.promptAria': '周期 Prompt',

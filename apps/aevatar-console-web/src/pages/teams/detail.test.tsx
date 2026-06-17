@@ -2326,8 +2326,10 @@ describe("TeamDetailPage", () => {
     expect(await screen.findByText("1. 目标成员")).toBeTruthy();
     expect(screen.getByText("2. 要执行的任务")).toBeTruthy();
     expect(screen.getByText("3. 运行节奏")).toBeTruthy();
-    expect(screen.getByText("工作日 09:00 · Asia/Shanghai")).toBeTruthy();
-    expect(screen.getByText("先预览节奏，确认后续运行时间。")).toBeTruthy();
+    const defaultTimezone =
+      Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    expect(screen.getByText(`工作日 09:00 · ${defaultTimezone}`)).toBeTruthy();
+    expect(screen.getByText("先预览节奏，确认后续触发。")).toBeTruthy();
     fireEvent.change(await screen.findByLabelText("自动化名称"), {
       target: { value: "Daily escalation digest" },
     });
