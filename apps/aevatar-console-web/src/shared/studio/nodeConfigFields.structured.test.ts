@@ -263,6 +263,40 @@ describe('studio node configuration semantics', () => {
     });
   });
 
+  it('rejects invalid guard check enum values instead of treating objects as select choices', () => {
+    const objectValueResult = applyStudioNodeConfigurationValuesWithValidation(
+      'guard',
+      { check: {}, on_fail: 'fail' },
+      {
+        check: '{}',
+        onFail: 'fail',
+      },
+    );
+
+    expect(objectValueResult.valid).toBe(false);
+    expect(objectValueResult.errors[0]).toContain('Check must be one of');
+    expect(objectValueResult.parameters).toEqual({
+      check: {},
+      on_fail: 'fail',
+    });
+
+    const unknownValueResult = applyStudioNodeConfigurationValuesWithValidation(
+      'guard',
+      { check: 'not_empty', on_fail: 'fail' },
+      {
+        check: 'unknown_check',
+        onFail: 'fail',
+      },
+    );
+
+    expect(unknownValueResult.valid).toBe(false);
+    expect(unknownValueResult.errors[0]).toContain('not_empty');
+    expect(unknownValueResult.parameters).toEqual({
+      check: 'not_empty',
+      on_fail: 'fail',
+    });
+  });
+
   it('keeps raw configuration as an explicit advanced JSON path', () => {
     expect(formatRawStudioNodeConfiguration({ op: 'trim' })).toBe(
       '{\n  "op": "trim"\n}',

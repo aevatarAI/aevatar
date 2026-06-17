@@ -3750,6 +3750,84 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(studioApi.bindMemberWorkflow).not.toHaveBeenCalled();
   });
 
+  it("blocks draft run locally when guard check is structured", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/member-alpha/workflow?workflowId=workflow-alpha",
+    );
+    (studioApi.getMember as jest.Mock).mockResolvedValue({
+      implementationRef: {
+        implementationKind: "workflow",
+        workflowId: "workflow-alpha",
+      },
+      summary: {
+        createdAt: "2026-06-08T00:00:00Z",
+        description: "",
+        displayName: "Workflow Alpha",
+        implementationKind: "workflow",
+        lastBoundRevisionId: null,
+        lifecycleStage: "bind_ready",
+        memberId: "member-alpha",
+        publishedServiceId: "service-alpha",
+        scopeId: "scope-1",
+        teamId: "t-alpha",
+        updatedAt: "2026-06-08T00:00:00Z",
+      },
+    });
+    (studioApi.getWorkflow as jest.Mock).mockResolvedValue({
+      directoryId: "scope:scope-1",
+      directoryLabel: "scope-1",
+      draftExists: true,
+      fileName: "workflow-alpha.yaml",
+      filePath: "scope://scope-1/workflow-alpha.yaml",
+      findings: [],
+      layout: null,
+      name: "Workflow Alpha",
+      workflowId: "workflow-alpha",
+      yaml: "name: Workflow Alpha\nsteps:\n  - id: guard\n    type: guard\n    parameters:\n      check: {}\n",
+      document: {
+        ...mockWorkflowDocument,
+        steps: [
+          {
+            id: "guard",
+            type: "guard",
+            targetRole: "",
+            parameters: { check: {}, on_fail: "fail" },
+            next: null,
+            branches: {},
+          },
+        ],
+      },
+      updatedAtUtc: "2026-06-08T00:00:00Z",
+    });
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    const runDraftButton = await screen.findByRole("button", {
+      name: "Run",
+    });
+    await waitFor(() => {
+      expect(runDraftButton).toBeEnabled();
+    });
+    fireEvent.click(runDraftButton);
+    const draftRunPanel = await screen.findByLabelText("Draft run panel");
+    fireEvent.click(
+      within(draftRunPanel).getByRole("button", { name: "Start draft run" }),
+    );
+
+    await waitFor(() => {
+      expect(studioApi.serializeYaml).not.toHaveBeenCalled();
+      expect(runtimeRunsApi.streamDraftRun).not.toHaveBeenCalled();
+      expect(screen.getByText(/Fix the workflow configuration/)).toBeTruthy();
+    });
+    expect(screen.getByText(/Node "guard" \(Guard, #1\) -> Check/)).toBeTruthy();
+    expect(screen.getByText(/Choose a supported guard check/)).toBeTruthy();
+    expect(screen.getByTestId("member-run-result-panel")).toHaveTextContent(
+      "Node \"guard\"",
+    );
+  });
+
   it("keeps the header action bar stable while save, YAML, and contextual delete states change", async () => {
     window.history.replaceState(
       {},

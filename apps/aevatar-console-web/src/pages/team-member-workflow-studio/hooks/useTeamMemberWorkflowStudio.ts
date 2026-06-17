@@ -43,6 +43,7 @@ import type {
   StudioExecutionFrame,
   StudioMemberBindingRunStatusResponse,
   StudioMemberDetail,
+  StudioValidationFinding,
   StudioWorkflowDraftCreateAcceptedReceipt,
   StudioWorkflowDocument,
   StudioWorkflowFile,
@@ -220,9 +221,306 @@ const CREATED_MEMBER_MATERIALIZATION_DELAY_MS = 450;
 const WORKFLOW_DRAFT_MATERIALIZATION_ATTEMPTS = 10;
 const WORKFLOW_DRAFT_MATERIALIZATION_DELAY_MS = 900;
 const SAVED_WORKFLOW_QUERY_STALE_MS = 30_000;
+const SUPPORTED_GUARD_CHECK_TYPES = [
+  "not_empty",
+  "json_valid",
+  "regex",
+  "max_length",
+  "contains",
+] as const;
+const SUPPORTED_GUARD_CHECK_TYPES_TEXT = SUPPORTED_GUARD_CHECK_TYPES.join("|");
 
 function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? "";
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function buildBlockingValidationFinding(input: {
+  readonly code: string;
+  readonly message: string;
+  readonly path: string;
+}): StudioValidationFinding {
+  return {
+    code: input.code,
+    level: 2,
+    message: input.message,
+    path: input.path,
+  };
+}
+
+function isSupportedGuardCheckType(
+  value: string,
+): value is (typeof SUPPORTED_GUARD_CHECK_TYPES)[number] {
+  return SUPPORTED_GUARD_CHECK_TYPES.includes(
+    value.toLowerCase() as (typeof SUPPORTED_GUARD_CHECK_TYPES)[number],
+  );
+}
+
+function readGuardParameter(
+  parameters: Record<string, unknown>,
+  parameterName: string,
+): unknown {
+  if (Object.prototype.hasOwnProperty.call(parameters, parameterName)) {
+    return parameters[parameterName];
+  }
+
+  const matchingKey = Object.keys(parameters).find(
+    (key) => key.toLowerCase() === parameterName.toLowerCase(),
+  );
+
+  return matchingKey ? parameters[matchingKey] : undefined;
+}
+
+function hasNonBlankGuardStringParameter(
+  parameters: Record<string, unknown>,
+  parameterName: string,
+): boolean {
+  const value = readGuardParameter(parameters, parameterName);
+
+  return typeof value === "string" && trimOptional(value).length > 0;
+}
+
+function hasPositiveIntegerGuardParameter(
+  parameters: Record<string, unknown>,
+  parameterName: string,
+): boolean {
+  const value = readGuardParameter(parameters, parameterName);
+  if (typeof value === "number") {
+    return Number.isInteger(value) && value > 0;
+  }
+
+  if (typeof value !== "string") {
+    return false;
+  }
+
+  const normalized = trimOptional(value);
+
+  return /^[1-9]\d*$/.test(normalized);
+}
+
+function formatValidationFieldName(value: string): string {
+  const normalized = trimOptional(value);
+  if (!normalized) {
+    return "Configuration";
+  }
+
+  const labels: Record<string, string> = {
+    check: "Check",
+    keyword: "Keyword",
+    max: "Max length",
+    on_fail: "On failure",
+    pattern: "Pattern",
+  };
+
+  return (
+    labels[normalized] ||
+    normalized
+      .split(/[_\-\s]+/)
+      .filter(Boolean)
+      .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+      .join(" ") ||
+    "Configuration"
+  );
+}
+
+function formatStudioStepType(value: string | null | undefined): string {
+  const normalized = trimOptional(value);
+  if (!normalized) {
+    return "step";
+  }
+
+  return normalized
+    .split(/[_\-\s]+/)
+    .filter(Boolean)
+    .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+    .join(" ");
+}
+
+function collectLocalWorkflowGuardFindings(
+  document: StudioWorkflowDocument,
+): StudioValidationFinding[] {
+  const findings: StudioValidationFinding[] = [];
+  const steps = Array.isArray(document.steps) ? document.steps : [];
+
+  steps.forEach((step, stepIndex) => {
+    if (trimOptional(step.type).toLowerCase() !== "guard") {
+      return;
+    }
+
+    const parameters = isPlainRecord(step.parameters) ? step.parameters : {};
+    const checkRaw = readGuardParameter(parameters, "check");
+    const checkPath = `/steps/${stepIndex}/parameters/check`;
+    if (checkRaw == null) {
+      return;
+    }
+
+    if (typeof checkRaw !== "string") {
+      findings.push(
+        buildBlockingValidationFinding({
+          code: "invalid_guard_check",
+          message: `Guard check must be one of ${SUPPORTED_GUARD_CHECK_TYPES_TEXT}.`,
+          path: checkPath,
+        }),
+      );
+      return;
+    }
+
+    const trimmedCheck = trimOptional(checkRaw);
+    const check = trimmedCheck.toLowerCase();
+    if (!check) {
+      findings.push(
+        buildBlockingValidationFinding({
+          code: "invalid_guard_check",
+          message: `Guard check cannot be blank; supported checks are ${SUPPORTED_GUARD_CHECK_TYPES_TEXT}.`,
+          path: checkPath,
+        }),
+      );
+      return;
+    }
+
+    if (checkRaw !== trimmedCheck) {
+      findings.push(
+        buildBlockingValidationFinding({
+          code: "invalid_guard_check",
+          message: `Guard check cannot include leading or trailing whitespace; supported checks are ${SUPPORTED_GUARD_CHECK_TYPES_TEXT}.`,
+          path: checkPath,
+        }),
+      );
+      return;
+    }
+
+    if (!isSupportedGuardCheckType(check)) {
+      findings.push(
+        buildBlockingValidationFinding({
+          code: "unknown_guard_check",
+          message: `Unknown guard check type: ${check}. Supported checks are ${SUPPORTED_GUARD_CHECK_TYPES_TEXT}.`,
+          path: checkPath,
+        }),
+      );
+      return;
+    }
+
+    if (
+      check === "regex" &&
+      !hasNonBlankGuardStringParameter(parameters, "pattern")
+    ) {
+      findings.push(
+        buildBlockingValidationFinding({
+          code: "missing_guard_regex_pattern",
+          message: "Guard regex check requires a non-empty pattern parameter.",
+          path: `/steps/${stepIndex}/parameters/pattern`,
+        }),
+      );
+    }
+
+    if (
+      check === "max_length" &&
+      !hasPositiveIntegerGuardParameter(parameters, "max")
+    ) {
+      findings.push(
+        buildBlockingValidationFinding({
+          code: "invalid_guard_max_length",
+          message: "Guard max_length check requires a positive integer max parameter.",
+          path: `/steps/${stepIndex}/parameters/max`,
+        }),
+      );
+    }
+
+    if (
+      check === "contains" &&
+      !hasNonBlankGuardStringParameter(parameters, "keyword")
+    ) {
+      findings.push(
+        buildBlockingValidationFinding({
+          code: "missing_guard_contains_keyword",
+          message: "Guard contains check requires a non-empty keyword parameter.",
+          path: `/steps/${stepIndex}/parameters/keyword`,
+        }),
+      );
+    }
+  });
+
+  return findings;
+}
+
+function readValidationFindingStepIndex(path: string | null | undefined): number | null {
+  const match = trimOptional(path).match(/^\/steps\/(\d+)(?:\/|$)/);
+
+  return match ? Number(match[1]) : null;
+}
+
+function readValidationFindingFieldName(path: string | null | undefined): string {
+  const segments = trimOptional(path).split("/").filter(Boolean);
+  const parametersIndex = segments.indexOf("parameters");
+  if (parametersIndex >= 0 && segments[parametersIndex + 1]) {
+    return formatValidationFieldName(segments[parametersIndex + 1]);
+  }
+
+  return formatValidationFieldName(segments.at(-1) ?? "");
+}
+
+function formatValidationFindingLocation(
+  finding: StudioValidationFinding,
+  document: StudioWorkflowDocument,
+): string {
+  const stepIndex = readValidationFindingStepIndex(finding.path);
+  if (stepIndex == null) {
+    return readValidationFindingFieldName(finding.path);
+  }
+
+  const step = Array.isArray(document.steps) ? document.steps[stepIndex] : null;
+  const stepId = trimOptional(step?.id) || `step ${stepIndex + 1}`;
+  const stepType = formatStudioStepType(step?.type || step?.originalType);
+  const fieldName = readValidationFindingFieldName(finding.path);
+
+  return `Node "${stepId}" (${stepType}, #${stepIndex + 1}) -> ${fieldName}`;
+}
+
+function simplifyValidationFindingMessage(
+  finding: StudioValidationFinding,
+): string {
+  const message = trimOptional(finding.message);
+  if (!message) {
+    return "Invalid configuration.";
+  }
+
+  if (
+    finding.code === "invalid_guard_check" ||
+    finding.code === "unknown_guard_check"
+  ) {
+    return `Choose a supported guard check: ${SUPPORTED_GUARD_CHECK_TYPES.join(", ")}.`;
+  }
+
+  return message;
+}
+
+function isBlockingValidationFinding(finding: StudioValidationFinding): boolean {
+  const level = finding.level;
+
+  return level === 2 || String(level).toLowerCase() === "error";
+}
+
+function buildValidationFindingsError(
+  findings: readonly StudioValidationFinding[],
+  document: StudioWorkflowDocument,
+): string {
+  const messages = findings
+    .filter(isBlockingValidationFinding)
+    .map((finding) => {
+      const location = formatValidationFindingLocation(finding, document);
+      const detail = simplifyValidationFindingMessage(finding);
+
+      return `- ${location}: ${detail}`;
+    })
+    .filter(Boolean);
+
+  return [
+    "Fix the workflow configuration before starting a draft run:",
+    ...messages,
+  ].join("\n");
 }
 
 function normalizeWorkflowSaveResult(
@@ -1629,6 +1927,11 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
 
       const normalizedTitle = trimOptional(title) || "Workflow draft";
       const userRunMessage = trimOptional(runMessage);
+      const localValidationFindings = collectLocalWorkflowGuardFindings(document);
+      if (localValidationFindings.some(isBlockingValidationFinding)) {
+        throw new Error(buildValidationFindingsError(localValidationFindings, document));
+      }
+
       const serialized = await studioApi.serializeYaml({
         document: {
           ...document,
@@ -1636,6 +1939,10 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         },
         availableStepTypes: AVAILABLE_STEP_TYPES,
       });
+      if (serialized.findings.some(isBlockingValidationFinding)) {
+        throw new Error(buildValidationFindingsError(serialized.findings, document));
+      }
+
       const startedAtUtc = new Date().toISOString();
       const executionId = `draft-run:${memberId}:${Date.now().toString(36)}`;
       const frames: StudioExecutionFrame[] = [];

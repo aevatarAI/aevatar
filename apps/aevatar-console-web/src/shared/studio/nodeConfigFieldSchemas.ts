@@ -1569,6 +1569,22 @@ function readFieldValueFromInput(
       }
       return { include: true, value: parsed };
     }
+    case 'select': {
+      const options = field.options ?? [];
+      if (
+        options.length > 0 &&
+        !options.some((option) => option.value === trimmed)
+      ) {
+        return {
+          error: `${field.label.defaultMessage} must be one of: ${options
+            .map((option) => option.value)
+            .join(', ')}.`,
+          include: false,
+        };
+      }
+
+      return { include: true, value: trimmed };
+    }
     default:
       return { include: true, value };
   }
