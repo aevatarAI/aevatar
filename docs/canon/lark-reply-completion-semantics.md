@@ -35,6 +35,12 @@ ConversationGAgent ──► IChannelLlmReplyRunDispatcher ──► AgentRunGAg
 
 > 注：`REPLY_HANDED_OFF` 不直接证明 `chain.delivered` — 还需 `last_reply_delivery.delivered != null`。本表把它列在 finalized 列是因为 finalized 是 AgentRunGAgent 视角的终态。
 
+## 2.1 用户可见投递 Ledger
+
+`last_reply_delivery` 只描述最近 reply 的链路快照，不是跨请求查询事实源。每一次用户可见出站投递必须由权威 actor 提交共享 `DeliveryProducedEvent`：`ConversationGAgent` 在 text/card 发送成功、pre-send 失败、post-send 失败边界提交；`AgentRunGAgent` 在 streaming card 终态批次里提交并维护 run 自身 ledger。
+
+Conversation state 维护 bounded `recent_deliveries` 与 `last_successful_delivery`。读侧通过 `ConversationDeliveryCurrentStateDocument` 覆盖复制这些字段，并由 `ConversationDeliveryQueryPort` 读取 current-state read model；不得在 query path 读取 event store、重放事件或启动 projection priming 来推断投递完成态。
+
 ## 3. 时序图：Happy Path（streaming）
 
 ```mermaid

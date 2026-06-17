@@ -6,6 +6,7 @@ option csharp_namespace = "Aevatar.GAgents.Channel.Runtime";
 
 import "chat_activity.proto";
 import "conversation_events.proto";
+import "delivery_ledger.proto";
 
 message ConversationGAgentState {
   aevatar.gagents.channel.abstractions.ConversationReference conversation = 1;
@@ -35,6 +36,8 @@ message ConversationGAgentState {
   // a group reply that targets one of the bot's own messages counts as addressing the bot without a
   // re-@-mention. Bounded + evicted by ConversationBotMessageLedger.
   repeated string bot_sent_platform_message_ids = 15;
+  repeated aevatar.gagents.channel.abstractions.DeliveryLedgerEntry recent_deliveries = 16;
+  aevatar.gagents.channel.abstractions.DeliveryLedgerEntry last_successful_delivery = 17;
 }
 
 // Refactor (iter80/cluster-081-channel-reply-lifecycle-event-state-schema):

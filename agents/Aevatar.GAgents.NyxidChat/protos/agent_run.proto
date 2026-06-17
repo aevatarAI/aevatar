@@ -6,6 +6,7 @@ option csharp_namespace = "Aevatar.GAgents.NyxidChat";
 
 import "chat_activity.proto";
 import "conversation_events.proto";
+import "delivery_ledger.proto";
 import "ai_messages.proto";
 
 enum AgentRunStatus {
@@ -81,6 +82,8 @@ message AgentRunGAgentState {
   repeated aevatar.ai.AgentToolReceipt tool_receipts = 24;
   AgentRunLarkCardDeliveryState lark_card_delivery = 25;
   AgentRunLarkCardDeliveryCompletion pending_card_delivery_completion = 26;
+  repeated aevatar.gagents.channel.abstractions.DeliveryLedgerEntry recent_deliveries = 27;
+  aevatar.gagents.channel.abstractions.DeliveryLedgerEntry last_successful_delivery = 28;
 }
 
 enum AgentRunLarkCardDeliveryPhase {
