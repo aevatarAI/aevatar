@@ -2,9 +2,11 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
+using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.CQRS.Projection.Core.Tests;
 
@@ -1172,6 +1174,36 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         handler.CapturedRequests.Should().NotContain(r => r.PathAndQuery.Contains("/_reindex"));
         handler.CapturedRequests.Should().Contain(r =>
             r.Method == "PUT" && r.PathAndQuery.Contains("aevatar-projection-core-tests-v"));
+    }
+
+    [Fact]
+    public void AddElasticsearchDocumentProjectionStore_ForMultipleReadModels_ShouldEnumerateDistinctReconcileTargets()
+    {
+        var services = new ServiceCollection();
+        RegisterStore<TestStoreReadModel>(services, "alias-a");
+        RegisterStore<TestRecursiveWellKnownReadModel>(services, "alias-b");
+
+        // Must not throw "indistinguishable ... IProjectionIndexReconcileTarget" at ValidateOnBuild —
+        // the regression that crash-looped the host when this used TryAddEnumerable with a factory.
+        using var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true });
+
+        var targets = provider.GetServices<IProjectionIndexReconcileTarget>().ToList();
+        targets.Should().HaveCount(2);
+        targets.Select(t => t.IndexAlias).Should().OnlyHaveUniqueItems();
+
+        static void RegisterStore<TReadModel>(IServiceCollection services, string indexName)
+            where TReadModel : class, IProjectionReadModel<TReadModel>, new()
+        {
+            services.AddElasticsearchDocumentProjectionStore<TReadModel, string>(
+                optionsFactory: _ => new ElasticsearchProjectionDocumentStoreOptions { Endpoints = ["http://localhost:9200"] },
+                metadataFactory: _ => new DocumentIndexMetadata(
+                    IndexName: indexName,
+                    Mappings: new Dictionary<string, object?>(),
+                    Settings: new Dictionary<string, object?>(),
+                    Aliases: new Dictionary<string, object?>()),
+                keySelector: static _ => string.Empty, // never invoked: this test only resolves, never upserts
+                keyFormatter: static key => key);
+        }
     }
 
     private static ElasticsearchProjectionDocumentStore<TestStoreReadModel, string> CreateStore(
