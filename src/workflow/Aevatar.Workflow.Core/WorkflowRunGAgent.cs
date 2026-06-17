@@ -753,7 +753,8 @@ public sealed class WorkflowRunGAgent
 
         var stateBeforeCompletion = State.Clone();
         await PersistDomainEventAsync(evt);
-        await PublishAsync(evt.Clone(), TopologyAudience.Parent);
+        if (!ShouldSuppressGenericParentCompletion(stateBeforeCompletion))
+            await PublishAsync(evt.Clone(), TopologyAudience.Parent);
         await PersistForkRequestOnTerminalFailureAsync(evt, stateBeforeCompletion, CancellationToken.None);
         await _subWorkflowOrchestrator.CancelPendingDefinitionResolutionTimeoutsAsync(stateBeforeCompletion, CancellationToken.None);
         await _subWorkflowOrchestrator.CleanupPendingInvocationsForRunAsync(evt.RunId, stateBeforeCompletion, CancellationToken.None);
@@ -788,6 +789,19 @@ public sealed class WorkflowRunGAgent
         }, TopologyAudience.Parent);
 
         await PublishManagedParentInvocationCompletionAsync(evt, stateBeforeCompletion, CancellationToken.None);
+    }
+
+    private static bool ShouldSuppressGenericParentCompletion(WorkflowRunState stateBeforeCompletion) =>
+        IsManagedChildWorkflowCall(stateBeforeCompletion);
+
+    private static bool IsManagedChildWorkflowCall(WorkflowRunState stateBeforeCompletion)
+    {
+        var runtime = stateBeforeCompletion.ExecutionContext?.WorkflowRuntime;
+        return runtime != null &&
+               !string.IsNullOrWhiteSpace(runtime.ParentActorId) &&
+               !string.IsNullOrWhiteSpace(runtime.ParentRunId) &&
+               !string.IsNullOrWhiteSpace(runtime.ParentStepId) &&
+               !string.IsNullOrWhiteSpace(TryResolveWorkflowCallInvocationId(stateBeforeCompletion));
     }
 
     [EventHandler]
