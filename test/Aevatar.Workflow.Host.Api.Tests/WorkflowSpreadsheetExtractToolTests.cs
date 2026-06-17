@@ -187,6 +187,40 @@ public sealed class WorkflowSpreadsheetExtractToolTests
         document.RootElement.GetProperty("detail").GetString().Should().Contain((workbookBytes.Length - 1).ToString());
     }
 
+    [Fact]
+    public async Task WorkflowSpreadsheetExtractTool_ShouldRejectUnderreportedStreamOverConfiguredByteLimit()
+    {
+        var workbookBytes = BuildWorkbook(("Sheet1", new[] { new[] { "stream too large" } }));
+        var fileRef = new ApplicationWorkflowFileRef
+        {
+            FileId = "underreported-workbook",
+            SourceKind = ApplicationWorkflowFileSourceKind.ChatInput,
+            FileName = "underreported.xlsx",
+            MediaType = XlsxMediaType,
+            SizeBytes = 0,
+        };
+        var tool = await GetSpreadsheetExtractToolAsync(
+            new StaticWorkflowFileArtifactReadPort(fileRef, new MemoryStream(workbookBytes)),
+            new WorkflowSpreadsheetExtractOptions
+            {
+                MaxWorkbookBytes = workbookBytes.Length - 1,
+            });
+
+        var output = await tool.ExecuteAsync(new WorkflowToolExecutionRequest(
+            BuildSpreadsheetExtractArguments(fileRef),
+            "run-1",
+            "extract",
+            "exec-1",
+            "call-1",
+            "scope-1",
+            new ProtoWorkflowCallerCredential()));
+
+        using var document = JsonDocument.Parse(output.ResultJson);
+        document.RootElement.GetProperty("error").GetString().Should().Be("workbook_too_large");
+        document.RootElement.GetProperty("detail").GetString().Should().Contain((workbookBytes.Length - 1).ToString());
+        output.ResultJson.Should().NotContain("stream too large");
+    }
+
     [Theory]
     [InlineData("legacy.xls")]
     [InlineData("macro.xlsm")]
@@ -356,6 +390,51 @@ public sealed class WorkflowSpreadsheetExtractToolTests
         cell.GetProperty("truncated").GetBoolean().Should().BeTrue();
         output.ResultJson.Should().NotContain("hidden-column");
         output.ResultJson.Should().NotContain("hidden-row");
+    }
+
+    [Fact]
+    public async Task WorkflowSpreadsheetExtractTool_ShouldTruncateWorkbookSheetsWithinPreviewLimits()
+    {
+        var workbookBytes = BuildWorkbook([
+            ("Visible", new[] { new[] { "visible-sheet" } }),
+            ("Hidden", new[] { new[] { "hidden-sheet" } }),
+        ]);
+        var fileRef = new ApplicationWorkflowFileRef
+        {
+            FileId = "sheet-limited-workbook",
+            SourceKind = ApplicationWorkflowFileSourceKind.ChatInput,
+            FileName = "sheet-limited.xlsx",
+            MediaType = XlsxMediaType,
+            SizeBytes = workbookBytes.Length,
+        };
+        var tool = await GetSpreadsheetExtractToolAsync(
+            new StaticWorkflowFileArtifactReadPort(fileRef, new MemoryStream(workbookBytes)),
+            new WorkflowSpreadsheetExtractOptions
+            {
+                MaxSheets = 1,
+            });
+
+        var output = await tool.ExecuteAsync(new WorkflowToolExecutionRequest(
+            BuildSpreadsheetExtractArguments(fileRef),
+            "run-1",
+            "extract",
+            "exec-1",
+            "call-1",
+            "scope-1",
+            new ProtoWorkflowCallerCredential()));
+
+        using var document = JsonDocument.Parse(output.ResultJson);
+        var rootElement = document.RootElement;
+        rootElement.GetProperty("truncated").GetBoolean().Should().BeTrue();
+        rootElement.GetProperty("workbook").GetProperty("sheet_count").GetInt32().Should().Be(2);
+        rootElement.GetProperty("workbook").GetProperty("truncated").GetBoolean().Should().BeTrue();
+        rootElement.GetProperty("sheets").EnumerateArray().Should().ContainSingle();
+        var sheet = rootElement.GetProperty("sheets")[0];
+        sheet.GetProperty("name").GetString().Should().Be("Visible");
+        sheet.GetProperty("rows")[0].GetProperty("cells")[0].GetProperty("value").GetString()
+            .Should().Be("visible-sheet");
+        output.ResultJson.Should().NotContain("Hidden");
+        output.ResultJson.Should().NotContain("hidden-sheet");
     }
 
     private static FileSystemWorkflowFileIngressPort CreateFileArtifactPort(string root) =>
