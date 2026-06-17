@@ -73,6 +73,7 @@ public sealed partial class ConversationGAgent :
     private const int PendingRelayAdmissionsCap = 1000;
     private const int RetainedHistoryMessagesCap = 100;
     private const int RecentAttachmentActivityCap = 5;
+    private const int RecentDeliveriesCap = 100;
     private const int MaxNyxRelayInterimUpdateRetryCount = 2;
     private static readonly TimeSpan RecentAttachmentActivityWindow = TimeSpan.FromMinutes(10);
     private const int RuntimeCredentialLocalOccRetryCount = 3;
@@ -105,6 +106,7 @@ public sealed partial class ConversationGAgent :
             .On<NyxRelayCallbackAdmittedEvent>(ApplyNyxRelayCallbackAdmitted)
             .On<LlmReplyDeliveredEvent>(ApplyLastReplyDelivered)
             .On<LlmReplyDeliveryFailedEvent>(ApplyLastReplyDeliveryFailed)
+            .On<DeliveryProducedEvent>(ApplyDeliveryProduced)
             .On<ConversationReplyLifecycleChangedEvent>(ApplyReplyLifecycleChanged)
             .On<ConversationReplyLifecycleClearedEvent>(ApplyReplyLifecycleCleared)
             .On<ConversationRetainedHistoryClearedEvent>(ApplyRetainedHistoryCleared)
@@ -942,10 +944,20 @@ public sealed partial class ConversationGAgent :
                 AckedAtUnixMs = nowMs,
                 ChannelMessageId = result.OutboundDelivery?.ReplyMessageId ?? string.Empty,
             };
+            var deliveryProduced = BuildDeliveryProducedEvent(
+                DeliveryKind.TextMessage,
+                DeliveryStatus.Succeeded,
+                referenceActivity,
+                evt.RunId,
+                evt.CorrelationId,
+                commandId,
+                sourceEventId: evt.CorrelationId,
+                larkMessageId: result.OutboundDelivery?.ReplyMessageId,
+                cardId: string.Empty);
             await PersistReplyReadyEventsWithLocalRetryAsync(
                 evt.CorrelationId,
                 "completed",
-                [delivered, completed],
+                [delivered, deliveryProduced, completed],
                 CancellationToken.None);
             await ClearReplyLifecyclesAsync(evt.CorrelationId, pendingRequest?.Activity ?? evt.Activity, "llm_reply_completed");
             Logger.LogInformation(
@@ -978,10 +990,20 @@ public sealed partial class ConversationGAgent :
             ErrorCode = result.ErrorCode ?? string.Empty,
             ErrorMessage = result.ErrorSummary ?? string.Empty,
         };
+        var failedDeliveryProduced = BuildDeliveryProducedEvent(
+            DeliveryKind.TextMessage,
+            DeliveryStatus.FailedPreSend,
+            referenceActivity,
+            evt.RunId,
+            evt.CorrelationId,
+            commandId,
+            sourceEventId: evt.CorrelationId,
+            larkMessageId: string.Empty,
+            cardId: string.Empty);
         await PersistReplyReadyEventsWithLocalRetryAsync(
             evt.CorrelationId,
             "failed",
-            [deliveryFailed, failed],
+            [deliveryFailed, failedDeliveryProduced, failed],
             CancellationToken.None);
         if (failed.RetryPolicyCase == ConversationContinueFailedEvent.RetryPolicyOneofCase.NotRetryable)
             await ClearReplyLifecyclesAsync(evt.CorrelationId, pendingRequest?.Activity ?? evt.Activity, "llm_reply_failed_not_retryable");
@@ -1054,10 +1076,21 @@ public sealed partial class ConversationGAgent :
                 // is recognized as addressing the bot (channel_message_id is path-prefixed here).
                 BotPlatformMessageId = evt.CardMessageId ?? string.Empty,
             };
+            var deliveryProduced = BuildDeliveryProducedEvent(
+                DeliveryKind.StreamingCard,
+                DeliveryStatus.Succeeded,
+                activity,
+                evt.RunId,
+                evt.CorrelationId,
+                commandId,
+                sourceEventId: evt.CorrelationId,
+                larkMessageId: completed.SentActivityId,
+                cardId: string.Empty,
+                conversation: completed.Conversation);
             await PersistReplyReadyEventsWithLocalRetryAsync(
                 evt.CorrelationId,
                 "lark-card-completed",
-                [delivered, completed],
+                [delivered, deliveryProduced, completed],
                 CancellationToken.None);
             if (evt.Activity is not null)
                 _ = ObserveReplyDeliveredAsync(ResolveRunner(), evt.Activity);
@@ -1071,10 +1104,21 @@ public sealed partial class ConversationGAgent :
                 deliveryFailed.RunId = evt.RunId ?? string.Empty;
             if (deliveryFailed.FailedAtUnixMs <= 0)
                 deliveryFailed.FailedAtUnixMs = nowMs;
+            var deliveryProduced = BuildDeliveryProducedEvent(
+                DeliveryKind.StreamingCard,
+                DeliveryStatus.FailedPostSend,
+                activity,
+                deliveryFailed.RunId,
+                evt.CorrelationId,
+                commandId,
+                sourceEventId: evt.CorrelationId,
+                larkMessageId: completed.SentActivityId,
+                cardId: string.Empty,
+                conversation: completed.Conversation);
             await PersistReplyReadyEventsWithLocalRetryAsync(
                 evt.CorrelationId,
                 "lark-card-failed",
-                [deliveryFailed, completed],
+                [deliveryFailed, deliveryProduced, completed],
                 CancellationToken.None);
         }
 
@@ -1157,6 +1201,7 @@ public sealed partial class ConversationGAgent :
             try
             {
                 var absorbed = false;
+                AssignDeliveryProducedVersions(events);
                 await PersistDomainEventsAsync(
                     events,
                     ex =>
@@ -2039,7 +2084,19 @@ public sealed partial class ConversationGAgent :
             AckedAtUnixMs = nowMs,
             ChannelMessageId = $"nyx-relay-stream:{platformMessageId}",
         };
-        await PersistDomainEventAsync(delivered);
+        var deliveryProduced = BuildDeliveryProducedEvent(
+            DeliveryKind.TextMessage,
+            DeliveryStatus.Succeeded,
+            referenceActivity ?? evt.Activity,
+            evt.RunId,
+            evt.CorrelationId,
+            commandId,
+            sourceEventId: evt.CorrelationId,
+            larkMessageId: delivered.ChannelMessageId,
+            cardId: string.Empty,
+            conversation: completed.Conversation);
+        deliveryProduced.ProducedAtVersion = NextCommittedVersion(1);
+        await PersistDomainEventsAsync([delivered, deliveryProduced]);
         if (referenceActivity is not null)
             _ = ObserveReplyDeliveredAsync(ResolveRunner(), referenceActivity);
         await ClearReplyLifecyclesAsync(evt.CorrelationId, referenceActivity, "streamed_completion");
@@ -2094,7 +2151,18 @@ public sealed partial class ConversationGAgent :
                 CompletedAtUnixMs = nowMs,
                 OutboundDelivery = ToOutboundDeliveryReceipt(result.OutboundDelivery),
             };
-            await PersistDomainEventAsync(completed);
+            var deliveryProduced = BuildDeliveryProducedEvent(
+                DeliveryKind.TextMessage,
+                DeliveryStatus.Succeeded,
+                null,
+                runId: string.Empty,
+                turnId: cmd.CorrelationId,
+                requestId: cmd.CommandId,
+                sourceEventId: cmd.CausationId,
+                larkMessageId: result.OutboundDelivery?.ReplyMessageId,
+                cardId: string.Empty,
+                conversation: cmd.Conversation);
+            await PersistDomainEventsAsync([deliveryProduced, completed]);
             Logger.LogInformation(
                 "Completed continue command: cmd={CommandId} sent={SentId} conversation={Key}",
                 cmd.CommandId, result.SentActivityId, cmd.Conversation?.CanonicalKey);
@@ -2438,6 +2506,64 @@ public sealed partial class ConversationGAgent :
             evt.ReplyToken,
             evt.ReplyTokenExpiresAtUnixMs,
             evt.Activity?.TransportExtras?.NyxUserAccessToken);
+    }
+
+    private DeliveryProducedEvent BuildDeliveryProducedEvent(
+        DeliveryKind kind,
+        DeliveryStatus status,
+        ChatActivity? activity,
+        string? runId,
+        string? turnId,
+        string? requestId,
+        string? sourceEventId,
+        string? larkMessageId,
+        string? cardId,
+        ConversationReference? conversation = null)
+    {
+        var resolvedConversation = conversation ?? activity?.Conversation ?? State.Conversation;
+        return new DeliveryProducedEvent
+        {
+            RunId = NormalizeOptional(runId) ?? string.Empty,
+            TurnId = NormalizeOptional(turnId) ?? string.Empty,
+            DeliveryKind = kind,
+            Target = BuildDeliveryTarget(activity, resolvedConversation),
+            Status = status,
+            LarkMessageId = NormalizeOptional(larkMessageId) ?? string.Empty,
+            CardId = NormalizeOptional(cardId) ?? string.Empty,
+            RequestId = NormalizeOptional(requestId) ?? string.Empty,
+            SourceEventId = NormalizeOptional(sourceEventId) ?? string.Empty,
+            ProducedAtVersion = NextCommittedVersion(),
+        };
+    }
+
+    private static DeliveryTarget BuildDeliveryTarget(
+        ChatActivity? activity,
+        ConversationReference? conversation)
+    {
+        var extras = activity?.TransportExtras;
+        var outbound = activity?.OutboundDelivery;
+        return new DeliveryTarget
+        {
+            Channel = conversation?.Channel?.Clone() ?? activity?.ChannelId?.Clone() ?? new ChannelId(),
+            ConversationKey = conversation?.CanonicalKey ?? string.Empty,
+            Platform = NormalizeOptional(extras?.NyxPlatform) ?? conversation?.Channel?.Value ?? activity?.ChannelId?.Value ?? string.Empty,
+            ReceiveId = NormalizeOptional(extras?.NyxLarkChatId) ??
+                        NormalizeOptional(extras?.NyxLarkUnionId) ??
+                        NormalizeOptional(outbound?.ReplyMessageId) ??
+                        string.Empty,
+            ReceiveIdType = ResolveReceiveIdType(extras),
+            ConversationId = NormalizeOptional(extras?.NyxConversationId) ?? conversation?.CanonicalKey ?? string.Empty,
+            ReplyMessageId = outbound?.ReplyMessageId ?? string.Empty,
+        };
+    }
+
+    private static string ResolveReceiveIdType(TransportExtras? extras)
+    {
+        if (!string.IsNullOrWhiteSpace(extras?.NyxLarkChatId))
+            return "chat_id";
+        if (!string.IsNullOrWhiteSpace(extras?.NyxLarkUnionId))
+            return "union_id";
+        return string.Empty;
     }
 
     // Refactor (iter17/cluster-038): Old pattern: transient relay credentials could ride inside persisted ChatActivity clones. New principle: durable admission/retry/LLM state stores only non-secret relay facts; same-activation credentials stay in runtime context.
@@ -2817,6 +2943,17 @@ public sealed partial class ConversationGAgent :
         };
         if (evt.FailedAtUnixMs > 0)
             next.LastUpdatedUnixMs = evt.FailedAtUnixMs;
+        return next;
+    }
+
+    private static ConversationGAgentState ApplyDeliveryProduced(
+        ConversationGAgentState current,
+        DeliveryProducedEvent evt)
+    {
+        var next = current.Clone();
+        AppendDelivery(next, evt);
+        if (evt.Target?.ConversationKey is { Length: > 0 } && next.Conversation != null)
+            next.Conversation.CanonicalKey = evt.Target.ConversationKey;
         return next;
     }
 
@@ -3374,9 +3511,52 @@ public sealed partial class ConversationGAgent :
     private static bool IsToolResultMessage(ConversationHistoryEntry entry) =>
         string.Equals(entry.Role, "tool", StringComparison.Ordinal);
 
+    private static void AppendDelivery(ConversationGAgentState state, DeliveryProducedEvent produced)
+    {
+        var entry = ToDeliveryLedgerEntry(produced);
+        state.RecentDeliveries.Add(entry);
+        while (state.RecentDeliveries.Count > RecentDeliveriesCap)
+            state.RecentDeliveries.RemoveAt(0);
+
+        if (entry.Status == DeliveryStatus.Succeeded)
+            state.LastSuccessfulDelivery = entry.Clone();
+    }
+
+    private static DeliveryLedgerEntry ToDeliveryLedgerEntry(DeliveryProducedEvent produced) =>
+        new()
+        {
+            DeliveryKind = produced.DeliveryKind,
+            Status = produced.Status,
+            Target = produced.Target?.Clone() ?? new DeliveryTarget(),
+            LarkMessageId = produced.LarkMessageId ?? string.Empty,
+            CardId = produced.CardId ?? string.Empty,
+            RequestId = produced.RequestId ?? string.Empty,
+            SourceEventId = produced.SourceEventId ?? string.Empty,
+            ProducedAtVersion = produced.ProducedAtVersion,
+        };
+
     private static string? NormalizeOptional(string? value)
     {
         var normalized = value?.Trim();
         return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
+    }
+
+    private long NextCommittedVersion() =>
+        (EventSourcing ?? throw new InvalidOperationException("Event sourcing must be configured before computing the next committed version."))
+        .CurrentVersion + 1;
+
+    private long NextCommittedVersion(int batchOffset) =>
+        (EventSourcing ?? throw new InvalidOperationException("Event sourcing must be configured before computing the next committed version."))
+        .CurrentVersion + batchOffset + 1;
+
+    private void AssignDeliveryProducedVersions(IReadOnlyList<IMessage> events)
+    {
+        var currentVersion = (EventSourcing ?? throw new InvalidOperationException("Event sourcing must be configured before assigning delivery event versions."))
+            .CurrentVersion;
+        for (var i = 0; i < events.Count; i++)
+        {
+            if (events[i] is DeliveryProducedEvent delivery)
+                delivery.ProducedAtVersion = currentVersion + i + 1;
+        }
     }
 }

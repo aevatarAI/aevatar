@@ -31,6 +31,12 @@ owner: eanzhao
 
 delivery ledger 保存在 runner state 的 `recent_external_trigger_deliveries`。默认只承诺 retained window 内去重：terminal delivery 保留最多 `1000` 条或 `30 days`；non-terminal delivery 不被窗口裁剪。
 
+## Outbound Delivery Facts
+
+外部触发 admission ledger 只描述 inbound delivery。runner 执行后对用户可见的 outbound delivery 是独立事实：`SkillRunnerGAgent` 在 actor turn 内提交共享 `DeliveryProducedEvent`，并把最近结果维护到 `recent_deliveries`，把最近一次成功维护到 `last_successful_delivery`。
+
+这些字段随 `SkillRunnerExecutionDocument` current-state read model 覆盖复制。查询侧只能读取该 read model；不得扫描 tool result、重放 event store 或在 query path 启动 projection priming 来推断是否已经回复用户。交互式 tool middleware 只收集当前 actor turn 内的 typed delivery signal，不持有跨 run bool 事实源。
+
 ## Wake And Recovery
 
 accepted delivery 先提交 `SkillRunnerExternalTriggerAdmittedEvent`，再通过 self-message 请求执行，随后提交 `SkillRunnerExternalTriggerDispatchRequestedEvent`。runner activation 会扫描未 terminal 的 admitted / dispatch-requested delivery，并按 bounded dispatch attempts 恢复 self-dispatch；超过上限后提交 terminal rejected event，避免无限恢复循环。

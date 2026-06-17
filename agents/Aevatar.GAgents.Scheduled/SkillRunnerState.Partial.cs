@@ -1,9 +1,12 @@
+using Aevatar.GAgents.Channel.Abstractions;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgents.Scheduled;
 
 public sealed partial class SkillRunnerState
 {
+    internal const int RecentDeliveriesCap = 100;
+
     public ExternalTriggerSource? FindExternalTriggerSource(string? sourceId)
     {
         var normalized = sourceId?.Trim();
@@ -109,6 +112,19 @@ public sealed partial class SkillRunnerState
         RecentExternalTriggerDeliveries.AddRange(kept);
     }
 
+    internal void AppendDelivery(DeliveryProducedEvent produced)
+    {
+        ArgumentNullException.ThrowIfNull(produced);
+
+        var entry = ToLedgerEntry(produced);
+        RecentDeliveries.Add(entry);
+        while (RecentDeliveries.Count > RecentDeliveriesCap)
+            RecentDeliveries.RemoveAt(0);
+
+        if (entry.Status == DeliveryStatus.Succeeded)
+            LastSuccessfulDelivery = entry.Clone();
+    }
+
     internal void UpsertCronOccurrenceTerminal(string? cronOccurrenceKey, Timestamp terminalAt)
     {
         ArgumentNullException.ThrowIfNull(terminalAt);
@@ -203,4 +219,17 @@ public sealed partial class SkillRunnerState
 
     private static string NormalizeCronOccurrenceKey(string? cronOccurrenceKey) =>
         cronOccurrenceKey?.Trim() ?? string.Empty;
+
+    private static DeliveryLedgerEntry ToLedgerEntry(DeliveryProducedEvent produced) =>
+        new()
+        {
+            DeliveryKind = produced.DeliveryKind,
+            Status = produced.Status,
+            Target = produced.Target?.Clone() ?? new DeliveryTarget(),
+            LarkMessageId = produced.LarkMessageId ?? string.Empty,
+            CardId = produced.CardId ?? string.Empty,
+            RequestId = produced.RequestId ?? string.Empty,
+            SourceEventId = produced.SourceEventId ?? string.Empty,
+            ProducedAtVersion = produced.ProducedAtVersion,
+        };
 }

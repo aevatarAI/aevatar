@@ -2,6 +2,7 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 using FluentAssertions;
 using NSubstitute;
 using Xunit;
+using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Device;
 
@@ -184,5 +185,51 @@ public sealed class RegistrationQueryPortTests
         result.Should().NotBeNull();
         result!.Id.Should().Be("bot-1");
         await publicQueryPort.Received(1).GetAsync("bot-1", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ConversationDeliveryQueryPort_GetAsync_ReadsCurrentStateDocumentByActorId()
+    {
+        var reader = Substitute.For<IProjectionDocumentReader<ConversationDeliveryCurrentStateDocument, string>>();
+        reader.GetAsync("conversation-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ConversationDeliveryCurrentStateDocument?>(new ConversationDeliveryCurrentStateDocument
+            {
+                Id = "conversation-1",
+                ActorId = "conversation-1",
+                LastSuccessfulDelivery = new DeliveryLedgerEntry
+                {
+                    DeliveryKind = DeliveryKind.TextMessage,
+                    Status = DeliveryStatus.Succeeded,
+                    Target = new DeliveryTarget
+                    {
+                        Channel = ChannelId.From("lark"),
+                        ConversationKey = "lark:tenant:thread",
+                    },
+                    LarkMessageId = "om_1",
+                    RequestId = "request-1",
+                },
+            }));
+
+        var queryPort = new ConversationDeliveryQueryPort(reader);
+        var result = await queryPort.GetAsync(" conversation-1 ");
+
+        result.Should().NotBeNull();
+        result!.ActorId.Should().Be("conversation-1");
+        result.LastSuccessfulDelivery.Should().NotBeNull();
+        result.LastSuccessfulDelivery!.LarkMessageId.Should().Be("om_1");
+        await reader.Received(1).GetAsync("conversation-1", Arg.Any<CancellationToken>());
+        await reader.DidNotReceive().QueryAsync(Arg.Any<ProjectionDocumentQuery>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ConversationDeliveryQueryPort_GetAsync_BlankActorId_ReturnsNullWithoutRead()
+    {
+        var reader = Substitute.For<IProjectionDocumentReader<ConversationDeliveryCurrentStateDocument, string>>();
+        var queryPort = new ConversationDeliveryQueryPort(reader);
+
+        var result = await queryPort.GetAsync(" ");
+
+        result.Should().BeNull();
+        await reader.DidNotReceive().GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 }

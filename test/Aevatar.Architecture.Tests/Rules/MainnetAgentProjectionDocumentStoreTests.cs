@@ -34,6 +34,7 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
 
         using var provider = services.BuildServiceProvider();
         AssertProviderStore<ChannelBotRegistrationDocument, InMemoryProjectionDocumentStore<ChannelBotRegistrationDocument, string>>(provider);
+        AssertProviderStore<ConversationDeliveryCurrentStateDocument, InMemoryProjectionDocumentStore<ConversationDeliveryCurrentStateDocument, string>>(provider);
         AssertProviderStore<ProjectionScopeStatusDocument, InMemoryProjectionDocumentStore<ProjectionScopeStatusDocument, string>>(provider);
         AssertProviderStore<ExternalIdentityBindingDocument, InMemoryProjectionDocumentStore<ExternalIdentityBindingDocument, string>>(provider);
         AssertProviderStore<AevatarOAuthClientDocument, InMemoryProjectionDocumentStore<AevatarOAuthClientDocument, string>>(provider);
@@ -59,6 +60,7 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
 
         using var provider = services.BuildServiceProvider();
         AssertProviderStore<ChannelBotRegistrationDocument, ElasticsearchProjectionDocumentStore<ChannelBotRegistrationDocument, string>>(provider);
+        AssertProviderStore<ConversationDeliveryCurrentStateDocument, ElasticsearchProjectionDocumentStore<ConversationDeliveryCurrentStateDocument, string>>(provider);
         AssertProviderStore<ProjectionScopeStatusDocument, ElasticsearchProjectionDocumentStore<ProjectionScopeStatusDocument, string>>(provider);
         AssertProviderStore<ExternalIdentityBindingDocument, ElasticsearchProjectionDocumentStore<ExternalIdentityBindingDocument, string>>(provider);
         AssertProviderStore<AevatarOAuthClientDocument, ElasticsearchProjectionDocumentStore<AevatarOAuthClientDocument, string>>(provider);
@@ -89,6 +91,7 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
 
         using var provider = services.BuildServiceProvider();
         AssertProviderStore<ChannelBotRegistrationDocument, InMemoryProjectionDocumentStore<ChannelBotRegistrationDocument, string>>(provider);
+        AssertProviderStore<ConversationDeliveryCurrentStateDocument, InMemoryProjectionDocumentStore<ConversationDeliveryCurrentStateDocument, string>>(provider);
         AssertProviderStore<ProjectionScopeStatusDocument, InMemoryProjectionDocumentStore<ProjectionScopeStatusDocument, string>>(provider);
         AssertProviderStore<StreamingProxyRoomParticipantsSnapshot, InMemoryProjectionDocumentStore<StreamingProxyRoomParticipantsSnapshot, string>>(provider);
         Assert.Single(

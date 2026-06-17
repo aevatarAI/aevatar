@@ -6,6 +6,7 @@ option csharp_namespace = "Aevatar.GAgents.Scheduled";
 
 import "google/protobuf/timestamp.proto";
 import "agent_messages.proto";
+import "delivery_ledger.proto";
 
 // ─── Skill Runner (persistent scheduled agent) ───
 
@@ -179,6 +180,8 @@ message SkillRunnerState {
   string retirement_reason = 28;
   string one_shot_message = 29;
   repeated SkillRunnerCronOccurrenceTerminalRecord recent_cron_occurrence_terminals = 30;
+  repeated aevatar.gagents.channel.abstractions.DeliveryLedgerEntry recent_deliveries = 31;
+  aevatar.gagents.channel.abstractions.DeliveryLedgerEntry last_successful_delivery = 32;
 }
 
 message SkillRunnerExecutionDocument {
@@ -201,6 +204,8 @@ message SkillRunnerExecutionDocument {
   google.protobuf.Timestamp run_at_utc = 17;
   google.protobuf.Timestamp retired_at_utc = 18;
   string retirement_reason = 19;
+  repeated aevatar.gagents.channel.abstractions.DeliveryLedgerEntry recent_deliveries = 20;
+  aevatar.gagents.channel.abstractions.DeliveryLedgerEntry last_successful_delivery = 21;
 }
 
 message InitializeSkillRunnerCommand {
