@@ -128,7 +128,12 @@ public sealed record NyxRelayReplyTokenContext(
 //   New principle: ConversationGAgent passes non-persisted credentials explicitly through per-turn runtime context.
 public sealed record ConversationTurnRuntimeContext(
     NyxRelayReplyTokenContext? NyxRelayReplyToken,
-    string? NyxUserAccessToken = null)
+    string? NyxUserAccessToken = null,
+    // True when this inbound activity replies to one of the bot's own prior messages. Computed by
+    // ConversationGAgent (the owner of the bot-sent message ledger) and consumed by the channel
+    // runner's group-chat admission gate so a thread reply counts as addressing the bot without a
+    // re-@-mention. One-way: the runner never writes it back.
+    bool IsReplyToBot = false)
 {
     public static ConversationTurnRuntimeContext Empty { get; } = new(NyxRelayReplyToken: null);
 }
