@@ -69,8 +69,9 @@ public static class WorkflowCapabilityServiceCollectionExtensions
             options.WorkflowDirectories.Add(AevatarPaths.Workflows);
             options.DuplicatePolicy = WorkflowDefinitionDuplicatePolicy.Override;
         });
-        services.AddWorkflowInfrastructure(options =>
-            configuration.GetSection("WorkflowRunReportExport").Bind(options));
+        services.AddWorkflowInfrastructure(
+            options => configuration.GetSection("WorkflowRunReportExport").Bind(options),
+            configuration);
         services.TryAddSingleton<WorkflowCapabilityRegistrationsMarker>();
         return services;
     }

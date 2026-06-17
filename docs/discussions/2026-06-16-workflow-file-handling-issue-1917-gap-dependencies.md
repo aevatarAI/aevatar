@@ -1,7 +1,8 @@
 ---
-title: Workflow File Handling Issue 1917 Gap Dependencies
-status: discussion
-owner: workflow
+title: "Workflow File Handling Issue 1917 Gap Dependencies"
+status: draft
+owner: eanzhao
+last_updated: 2026-06-17
 ---
 
 # Workflow File Handling Issue 1917 Gap Dependencies
@@ -21,3 +22,18 @@ For workflow execution, per-file fan-out is expressed through `foreach` with `it
 No new public `WorkflowFileBatch*` execution proto was introduced. Durable execution facts were added to `workflow_state.proto`: foreach item index/file/error, foreach parent item file refs/source, and backpressure queued input file refs. The stable completion contract for per-file foreach aggregation is the typed `WorkflowFileItemResultSet` field on `StepCompletedEvent`.
 
 Ingress remains a Host/Infrastructure concern. Once file descriptors enter the run, partial success and failure are represented by actor/module-owned execution state and completion events, not by request-time fallback queries or process-local registries.
+
+## Context
+
+Issue 1917 left one dependency gap in the workflow file submit path: `WorkflowConnectedServiceFileSubmitOptions.Targets` already existed as the typed policy shape, but Workflow/Mainnet composition did not bind a stable configuration section or fail fast when a generic connected-service endpoint policy was malformed.
+
+## Current Boundary
+
+- `WorkflowFileSubmitToolSource` remains the only workflow submit runtime. It resolves Lark adapter targets and Host-configured generic connected-service targets into the same `workflow_file_submit` tool.
+- Generic connected-service submit targets are bound from `WorkflowConnectedServiceFileSubmit:Targets` by shared Workflow capability composition.
+- Endpoint policy is Host-owned. Workflow arguments can select a registered target and provide target-specific allowed arguments, but cannot override service slug, downstream path, HTTP method, headers, body fields, or multipart file-field name.
+- Malformed generic endpoint policy fails during options validation. Host startup therefore rejects invalid deployment configuration before a workflow run can use it.
+
+## Deployment Dependency
+
+Real non-Lark target values must be supplied by verified Host deployment configuration, ConfigMap, or secret. The repository must not invent checked-in NyxID targets, use `.refactor-loop/host.env` as production configuration, or move generic target ownership into a provider adapter registry.
