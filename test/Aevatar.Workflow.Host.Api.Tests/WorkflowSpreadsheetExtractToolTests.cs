@@ -116,6 +116,119 @@ public sealed class WorkflowSpreadsheetExtractToolTests
         }
     }
 
+    [Fact]
+    public async Task WorkflowSpreadsheetExtractTool_ShouldFailClosedWhenNoInputFileRefsAreAvailable()
+    {
+        var tool = await GetSpreadsheetExtractToolAsync(new StaticWorkflowFileArtifactReadPort(
+            new ApplicationWorkflowFileRef
+            {
+                FileId = "unread-workbook",
+                SourceKind = ApplicationWorkflowFileSourceKind.ChatInput,
+                FileName = "unread.xlsx",
+                MediaType = XlsxMediaType,
+                SizeBytes = 13,
+            },
+            new MemoryStream(Encoding.UTF8.GetBytes("hidden workbook"))));
+
+        var output = await tool.ExecuteAsync(new WorkflowToolExecutionRequest(
+            "{}",
+            "run-1",
+            "extract",
+            "exec-1",
+            "call-1",
+            "scope-1",
+            new ProtoWorkflowCallerCredential()));
+
+        using var document = JsonDocument.Parse(output.ResultJson);
+        document.RootElement.GetProperty("error").GetString().Should().Be("invalid_arguments");
+        document.RootElement.GetProperty("detail").GetString()
+            .Should().Contain("requires a fileRef object or exactly one input file ref");
+        output.ResultJson.Should().NotContain("hidden workbook");
+        output.ResultJson.Should().NotContain("xl/");
+    }
+
+    [Fact]
+    public async Task WorkflowSpreadsheetExtractTool_ShouldFailClosedWhenInputFileRefsAreAmbiguous()
+    {
+        var tool = await GetSpreadsheetExtractToolAsync(new StaticWorkflowFileArtifactReadPort(
+            new ApplicationWorkflowFileRef
+            {
+                FileId = "unread-workbook",
+                SourceKind = ApplicationWorkflowFileSourceKind.ChatInput,
+                FileName = "unread.xlsx",
+                MediaType = XlsxMediaType,
+                SizeBytes = 13,
+            },
+            new MemoryStream(Encoding.UTF8.GetBytes("hidden workbook"))));
+        var firstFileRef = new ApplicationWorkflowFileRef
+        {
+            FileId = "first-workbook",
+            SourceKind = ApplicationWorkflowFileSourceKind.ChatInput,
+            FileName = "first.xlsx",
+            MediaType = XlsxMediaType,
+            SizeBytes = 1,
+        };
+        var secondFileRef = new ApplicationWorkflowFileRef
+        {
+            FileId = "second-workbook",
+            SourceKind = ApplicationWorkflowFileSourceKind.ChatInput,
+            FileName = "second.xlsx",
+            MediaType = XlsxMediaType,
+            SizeBytes = 1,
+        };
+
+        var output = await tool.ExecuteAsync(new WorkflowToolExecutionRequest(
+            "{}",
+            "run-1",
+            "extract",
+            "exec-1",
+            "call-1",
+            "scope-1",
+            new ProtoWorkflowCallerCredential(),
+            InputFileRefs: [
+                ToProtoWorkflowFileRef(firstFileRef),
+                ToProtoWorkflowFileRef(secondFileRef),
+            ]));
+
+        using var document = JsonDocument.Parse(output.ResultJson);
+        document.RootElement.GetProperty("error").GetString().Should().Be("invalid_arguments");
+        document.RootElement.GetProperty("detail").GetString()
+            .Should().Contain("received multiple input file refs; provide fileRef explicitly");
+        output.ResultJson.Should().NotContain("hidden workbook");
+        output.ResultJson.Should().NotContain("xl/");
+    }
+
+    [Fact]
+    public async Task WorkflowSpreadsheetExtractTool_ShouldRejectEmptyExplicitFileRef()
+    {
+        var tool = await GetSpreadsheetExtractToolAsync(new StaticWorkflowFileArtifactReadPort(
+            new ApplicationWorkflowFileRef
+            {
+                FileId = "unread-workbook",
+                SourceKind = ApplicationWorkflowFileSourceKind.ChatInput,
+                FileName = "unread.xlsx",
+                MediaType = XlsxMediaType,
+                SizeBytes = 13,
+            },
+            new MemoryStream(Encoding.UTF8.GetBytes("hidden workbook"))));
+
+        var output = await tool.ExecuteAsync(new WorkflowToolExecutionRequest(
+            """{"file_ref":{}}""",
+            "run-1",
+            "extract",
+            "exec-1",
+            "call-1",
+            "scope-1",
+            new ProtoWorkflowCallerCredential()));
+
+        using var document = JsonDocument.Parse(output.ResultJson);
+        document.RootElement.GetProperty("error").GetString().Should().Be("invalid_arguments");
+        document.RootElement.GetProperty("detail").GetString()
+            .Should().Contain("fileRef requires fileId or artifactId");
+        output.ResultJson.Should().NotContain("hidden workbook");
+        output.ResultJson.Should().NotContain("xl/");
+    }
+
     [Theory]
     [InlineData("application/vnd.ms-excel", "legacy.xls", "unsupported_media_type")]
     [InlineData("application/vnd.ms-excel.sheet.macroEnabled.12", "macro.xlsm", "unsupported_media_type")]
