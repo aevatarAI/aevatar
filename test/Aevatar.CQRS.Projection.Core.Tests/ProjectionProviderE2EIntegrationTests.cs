@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using FluentAssertions;
 using System.Net.Http.Json;
 using System.Text;
@@ -128,6 +129,8 @@ public sealed class ProjectionProviderE2EIntegrationTests
                 Value = "dynamic-mapping-drift",
                 UpdatedAtEpochMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             };
+
+            await ((IProjectionIndexReconcileTarget)store).ReconcileIndexAsync();
 
             await store.UpsertAsync(readModel);
 
