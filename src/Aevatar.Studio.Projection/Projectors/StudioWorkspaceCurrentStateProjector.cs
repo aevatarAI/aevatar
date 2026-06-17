@@ -5,6 +5,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Studio.Workspace;
 using Aevatar.Studio.Projection.Orchestration;
 using Aevatar.Studio.Projection.ReadModels;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Studio.Projection.Projectors;
@@ -15,6 +16,11 @@ namespace Aevatar.Studio.Projection.Projectors;
 public sealed class StudioWorkspaceCurrentStateProjector
     : ICurrentStateProjectionMaterializer<StudioMaterializationContext>
 {
+    private static readonly JsonFormatter StateRootFormatter = new(
+        JsonFormatter.Settings.Default
+            .WithPreserveProtoFieldNames(true)
+            .WithFormatDefaultValues(true));
+
     private readonly IProjectionWriteDispatcher<StudioWorkspaceCurrentStateDocument> _writeDispatcher;
     private readonly IProjectionClock _clock;
 
@@ -53,7 +59,7 @@ public sealed class StudioWorkspaceCurrentStateProjector
             StateVersion = stateEvent.Version,
             LastEventId = stateEvent.EventId ?? string.Empty,
             UpdatedAt = Timestamp.FromDateTimeOffset(updatedAt),
-            StateRoot = Any.Pack(state),
+            StateRootJson = StateRootFormatter.Format(state),
         }, ct);
     }
 }

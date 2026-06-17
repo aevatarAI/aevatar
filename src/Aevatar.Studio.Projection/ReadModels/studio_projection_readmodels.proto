@@ -231,5 +231,10 @@ message StudioWorkspaceCurrentStateDocument {
   int64 state_version = 3;
   string last_event_id = 4;
   google.protobuf.Timestamp updated_at = 5;
-  google.protobuf.Any state_root = 10;
+  reserved 10;
+  reserved "state_root";
+
+  // Opaque protobuf JSON for StudioWorkspaceState. Stored as a scalar readmodel
+  // field so Elasticsearch never dynamically maps draft YAML/step/config trees.
+  string state_root_json = 11;
 }
