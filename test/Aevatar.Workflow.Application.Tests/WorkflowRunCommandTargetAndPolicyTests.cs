@@ -500,6 +500,11 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
         public Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowActorCurrentStatesAsync(int take = 200, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
+        public Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowActorCurrentStatesAsync(
+            WorkflowActorCurrentStateListQuery query,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
         public Task<WorkflowActorProjectionState?> GetWorkflowActorProjectionStateAsync(string actorId, CancellationToken ct = default) =>
             throw new NotSupportedException();
     }

@@ -102,6 +102,14 @@ public sealed record WorkflowSignalCommand(
     string? StepId = null,
     string? CorrelationId = null) : WorkflowRunControlCommandBase(ActorId, RunId, CommandId, CorrelationId);
 
+public sealed record WorkflowRetryCompensationCommand(
+    string ActorId,
+    string RunId,
+    string FailedCompensationStepId,
+    string? CommandId,
+    string? Reason = null,
+    string? CorrelationId = null) : WorkflowRunControlCommandBase(ActorId, RunId, CommandId, CorrelationId);
+
 public sealed record WorkflowStopCommand(
     string ActorId,
     string RunId,

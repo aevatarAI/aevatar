@@ -898,6 +898,15 @@ message CompensationRequestEvent
   string execution_id = 6;
 }
 
+message WorkflowCompensationRetryRequestedEvent
+{
+  string run_id = 1;
+  string failed_compensation_step_id = 2;
+  string reason = 3;
+  string command_id = 4;
+  string correlation_id = 5;
+}
+
 message CompensationStepCompletedEvent
 {
   string run_id = 1;

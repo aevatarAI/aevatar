@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using Aevatar.Capabilities;
+using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Aevatar.Workflow.Projection.ReadModels;
@@ -576,6 +577,14 @@ public sealed class ChatQueryEndpointsTests
         {
             Calls.Add($"GetWorkflowActorCurrentState:{actorId}");
             return Task.FromResult(Snapshot);
+        }
+
+        public Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowActorCurrentStatesAsync(
+            WorkflowActorCurrentStateListQuery query,
+            CancellationToken ct = default)
+        {
+            Calls.Add($"ListWorkflowActorCurrentStatesQuery:{query.Take}:{query.SagaStatus}:{query.ScopeId}:{string.Join(",", query.DefinitionActorIds)}");
+            return Task.FromResult<IReadOnlyList<WorkflowActorSnapshot>>([]);
         }
 
         public Task<WorkflowRunReport?> GetWorkflowRunReportArtifactAsync(string actorId, CancellationToken ct = default)

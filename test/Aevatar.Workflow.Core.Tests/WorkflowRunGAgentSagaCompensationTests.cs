@@ -860,6 +860,107 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
         completed.Compensated.Should().BeTrue();
     }
 
+    [Fact]
+    public async Task RetryCompensation_FromMatchingDeadLetter_ShouldPersistRetryAndRepublishCurrentCompensation()
+    {
+        var harness = await CreateStartedRunAsync(SagaWorkflowYaml());
+        await CompleteStepAsync(harness, "create_order", "order-output");
+        await CompleteStepAsync(harness, "charge_payment", "charge-output");
+        await FailStepAsync(harness, "ship_order", "ship failed");
+        var failedRequest = CompensationRequests(harness.Publisher).Single();
+        await FailCompensationAsync(harness, failedRequest, "refund failed");
+        harness.Agent.State.SagaStatus.Should().Be(WorkflowSagaStatus.CompensationDeadLetter);
+        harness.Publisher.Published.Clear();
+        harness.CommittedPublisher.Events.Clear();
+
+        await harness.Agent.HandleEventAsync(SelfEnvelope(harness.RunId, new WorkflowCompensationRetryRequestedEvent
+        {
+            RunId = harness.RunId,
+            FailedCompensationStepId = "refund_payment",
+            Reason = "operator retry",
+            CommandId = "cmd-retry",
+            CorrelationId = "corr-retry",
+        }));
+
+        harness.Agent.State.SagaStatus.Should().Be(WorkflowSagaStatus.Compensating);
+        harness.Agent.State.DeadLetterFailedCompensationStepId.Should().BeEmpty();
+        harness.Agent.State.DeadLetterRemainingUncompensated.Should().Be(0);
+        harness.Agent.State.DeadLetterError.Should().BeEmpty();
+        var retry = CommittedEvents<WorkflowCompensationRetryRequestedEvent>(harness.CommittedPublisher)
+            .Should()
+            .ContainSingle()
+            .Subject;
+        retry.RunId.Should().Be(harness.RunId);
+        retry.FailedCompensationStepId.Should().Be("refund_payment");
+        retry.Reason.Should().Be("operator retry");
+        retry.CommandId.Should().Be("cmd-retry");
+        retry.CorrelationId.Should().Be("corr-retry");
+        var republished = PublishedEvents<CompensationRequestEvent>(harness.Publisher)
+            .Should()
+            .ContainSingle()
+            .Subject;
+        republished.Audience.Should().Be(TopologyAudience.Self);
+        republished.Event.CompensationStepId.Should().Be("refund_payment");
+        republished.Event.CapturedOutput.Should().Be("charge-output");
+        republished.Event.IdempotencyKey.Should().Be($"{harness.RunId}:charge_payment:1");
+        republished.Event.ExecutionId.Should().NotBe(failedRequest.ExecutionId);
+        CommittedEvents<CompensationRequestEvent>(harness.CommittedPublisher)
+            .Should()
+            .ContainSingle()
+            .Which.ExecutionId.Should().Be(republished.Event.ExecutionId);
+    }
+
+    [Fact]
+    public async Task RetryCompensation_OutsideDeadLetter_ShouldRejectWithoutPublishing()
+    {
+        var harness = await CreateStartedRunAsync(SagaWorkflowYaml());
+        await CompleteStepAsync(harness, "create_order", "order-output");
+        await CompleteStepAsync(harness, "charge_payment", "charge-output");
+        await FailStepAsync(harness, "ship_order", "ship failed");
+        harness.Agent.State.SagaStatus.Should().Be(WorkflowSagaStatus.Compensating);
+        harness.Publisher.Published.Clear();
+        harness.CommittedPublisher.Events.Clear();
+
+        await harness.Agent.HandleEventAsync(SelfEnvelope(harness.RunId, new WorkflowCompensationRetryRequestedEvent
+        {
+            RunId = harness.RunId,
+            FailedCompensationStepId = "refund_payment",
+            Reason = "too early",
+        }));
+
+        harness.Agent.State.SagaStatus.Should().Be(WorkflowSagaStatus.Compensating);
+        CommittedEvents<WorkflowCompensationRetryRequestedEvent>(harness.CommittedPublisher).Should().BeEmpty();
+        CommittedEvents<CompensationRequestEvent>(harness.CommittedPublisher).Should().BeEmpty();
+        PublishedEvents<CompensationRequestEvent>(harness.Publisher).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RetryCompensation_WithMismatchedFailedStep_ShouldRejectWithoutPublishing()
+    {
+        var harness = await CreateStartedRunAsync(SagaWorkflowYaml());
+        await CompleteStepAsync(harness, "create_order", "order-output");
+        await CompleteStepAsync(harness, "charge_payment", "charge-output");
+        await FailStepAsync(harness, "ship_order", "ship failed");
+        var failedRequest = CompensationRequests(harness.Publisher).Single();
+        await FailCompensationAsync(harness, failedRequest, "refund failed");
+        harness.Agent.State.SagaStatus.Should().Be(WorkflowSagaStatus.CompensationDeadLetter);
+        harness.Publisher.Published.Clear();
+        harness.CommittedPublisher.Events.Clear();
+
+        await harness.Agent.HandleEventAsync(SelfEnvelope(harness.RunId, new WorkflowCompensationRetryRequestedEvent
+        {
+            RunId = harness.RunId,
+            FailedCompensationStepId = "cancel_order",
+            Reason = "wrong step",
+        }));
+
+        harness.Agent.State.SagaStatus.Should().Be(WorkflowSagaStatus.CompensationDeadLetter);
+        harness.Agent.State.DeadLetterFailedCompensationStepId.Should().Be("refund_payment");
+        CommittedEvents<WorkflowCompensationRetryRequestedEvent>(harness.CommittedPublisher).Should().BeEmpty();
+        CommittedEvents<CompensationRequestEvent>(harness.CommittedPublisher).Should().BeEmpty();
+        PublishedEvents<CompensationRequestEvent>(harness.Publisher).Should().BeEmpty();
+    }
+
     private static async Task CompleteStepAsync(RunHarness harness, string stepId, string output)
     {
         var request = harness.Publisher.Published
