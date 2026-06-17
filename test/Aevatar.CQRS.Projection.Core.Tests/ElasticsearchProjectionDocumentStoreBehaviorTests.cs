@@ -638,6 +638,43 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
     }
 
     [Fact]
+    public async Task UpsertAsync_WhenIncomingAuthoritativeVersionSkipsAhead_ShouldApply()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"_seq_no":7,"_primary_term":3,"_source":{"id":"actor-gap","actor_id":"actor-gap","state_version":"1","last_event_id":"evt-1","updated_at_utc_value":"2026-06-17T00:00:00Z","value":"v1"}}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"result":"updated"}"""));
+
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions
+            {
+                AutoCreateIndex = false,
+            },
+            handler);
+
+        var result = await store.UpsertAsync(new TestStoreReadModel
+        {
+            Id = "actor-gap",
+            ActorId = "actor-gap",
+            StateVersion = 4,
+            LastEventId = "evt-4",
+            UpdatedAt = DateTimeOffset.Parse("2026-06-17T00:00:04Z"),
+            Value = "v4",
+        });
+
+        result.Disposition.Should().Be(ProjectionWriteDisposition.Applied);
+        handler.CapturedRequests.Should().HaveCount(2);
+        handler.CapturedRequests[1].PathAndQuery.Should().Contain("if_seq_no=7");
+        handler.CapturedRequests[1].PathAndQuery.Should().Contain("if_primary_term=3");
+        handler.CapturedRequests[1].Body.Should().Contain("\"state_version\":\"4\"");
+        handler.CapturedRequests[1].Body.Should().Contain("\"last_event_id\":\"evt-4\"");
+        handler.CapturedRequests[1].Body.Should().Contain("\"value\":\"v4\"");
+    }
+
+    [Fact]
     public async Task UpsertAsync_WhenReadModelUsesDynamicIndexScope_ShouldTargetScopeSpecificIndices()
     {
         var handler = new ScriptedHttpMessageHandler();

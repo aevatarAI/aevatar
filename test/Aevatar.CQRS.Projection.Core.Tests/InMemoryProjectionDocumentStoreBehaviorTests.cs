@@ -102,4 +102,37 @@ public sealed class InMemoryProjectionDocumentStoreBehaviorTests
         first.Disposition.Should().Be(ProjectionWriteDisposition.Applied);
         second.Disposition.Should().Be(ProjectionWriteDisposition.Duplicate);
     }
+
+    [Fact]
+    public async Task UpsertAsync_WhenIncomingAuthoritativeVersionSkipsAhead_ShouldApply()
+    {
+        var store = new InMemoryProjectionDocumentStore<TestStoreReadModel, string>(
+            keySelector: model => model.Id);
+        await store.UpsertAsync(new TestStoreReadModel
+        {
+            Id = "actor-gap",
+            ActorId = "actor-gap",
+            StateVersion = 1,
+            LastEventId = "evt-1",
+            UpdatedAt = DateTimeOffset.Parse("2026-06-17T00:00:00Z"),
+            Value = "v1",
+        });
+
+        var result = await store.UpsertAsync(new TestStoreReadModel
+        {
+            Id = "actor-gap",
+            ActorId = "actor-gap",
+            StateVersion = 4,
+            LastEventId = "evt-4",
+            UpdatedAt = DateTimeOffset.Parse("2026-06-17T00:00:04Z"),
+            Value = "v4",
+        });
+
+        result.Disposition.Should().Be(ProjectionWriteDisposition.Applied);
+        var stored = await store.GetAsync("actor-gap");
+        stored.Should().NotBeNull();
+        stored!.StateVersion.Should().Be(4);
+        stored.LastEventId.Should().Be("evt-4");
+        stored.Value.Should().Be("v4");
+    }
 }
