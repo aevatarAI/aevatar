@@ -7,7 +7,7 @@ namespace Aevatar.Foundation.VoicePresence.Hosting;
 public sealed class ActorOwnedVoiceRealtimeSession
     : IRealtimeSession<VoiceRealtimeSessionRequest, VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeFrame, VoiceRealtimeSessionCompletion>
 {
-    private static readonly TimeSpan DefaultLeaseTtl = TimeSpan.FromMinutes(5);
+    internal static readonly TimeSpan DefaultLeaseTtl = TimeSpan.FromMinutes(5);
     private const string HostOwnerId = "voice-presence.host";
 
     private readonly IVoicePresenceCapabilityQueryPort _capabilityQueryPort;

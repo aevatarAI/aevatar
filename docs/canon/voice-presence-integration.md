@@ -120,7 +120,11 @@ The edge consumes a JSON projection of it (camelCase), hand-parsed by
   `owner_id`, `lease_epoch`, `lease_expires_at`) the actor owns; the volatile
   media relay is bound to that lease. Host/provider connect paths must carry
   the readmodel-observed positive `lease_epoch`; transport attach reuses that
-  lease generation and does not create the next epoch.
+  lease generation and does not create the next epoch. While the relay remains
+  live it sends typed actor renewal signals that extend the actor-owned lease
+  deadline. `owner_id`, `transport_lease_id`, and `lease_epoch` form the identity
+  fence; `lease_expires_at` / `renew_expires_at` are freshness deadlines and do
+  not independently identify a lease generation.
 - **Credential ref lifetime** — `/ws/voice` admission mints at most one
   `voice-tool:` ref for an attach attempt and hands a non-protobuf transport
   binding to the host attach path. The raw caller bearer becomes resolvable
