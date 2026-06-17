@@ -5,6 +5,7 @@ using Aevatar.Foundation.Abstractions.Interactions;
 using Aevatar.Workflow.Integration.AI;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
@@ -35,6 +36,8 @@ public sealed class SkillBackedHumanInteractionPortTests
     {
         var services = new ServiceCollection();
         services.AddSingleton<IChannelInteractionNotificationPort>(new RecordingNotificationPort());
+        services.AddSingleton<ILogger<HumanInteractionChannelToolSource>>(
+            NullLogger<HumanInteractionChannelToolSource>.Instance);
 
         services.AddChannelBackedHumanInteractionTools();
 

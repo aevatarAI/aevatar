@@ -380,6 +380,65 @@ public static class WorkflowCapabilityEndpoints
         }
     }
 
+    public static async Task<IResult> HandleRetryCompensation(
+        WorkflowRetryCompensationInput input,
+        [FromServices] ICommandDispatchService<WorkflowRetryCompensationCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError> retryService,
+        CancellationToken ct = default)
+    {
+        using var scope = ApiRequestScope.BeginHttp();
+        ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(retryService);
+
+        try
+        {
+            var actorId = (input.ActorId ?? string.Empty).Trim();
+            var runId = (input.RunId ?? string.Empty).Trim();
+            var failedCompensationStepId = (input.FailedCompensationStepId ?? string.Empty).Trim();
+            var commandId = NormalizeOptional(input.CommandId);
+            var reason = NormalizeOptional(input.Reason);
+            if (string.IsNullOrWhiteSpace(actorId) ||
+                string.IsNullOrWhiteSpace(runId) ||
+                string.IsNullOrWhiteSpace(failedCompensationStepId))
+            {
+                scope.MarkResult(StatusCodes.Status400BadRequest);
+                return Results.BadRequest(new { error = "actorId, runId and failedCompensationStepId are required." });
+            }
+
+            var dispatch = await retryService.DispatchAsync(
+                new WorkflowRetryCompensationCommand(
+                    actorId,
+                    runId,
+                    failedCompensationStepId,
+                    commandId,
+                    reason),
+                ct);
+            if (!dispatch.Succeeded || dispatch.Receipt == null)
+                return MapRunControlDispatchFailure(dispatch.Error, scope);
+
+            var statusUrl = BuildWorkflowRunStatusUrl(dispatch.Receipt);
+            return Results.Accepted(statusUrl, new
+            {
+                accepted = true,
+                actorId = dispatch.Receipt.ActorId,
+                runId = dispatch.Receipt.RunId,
+                failedCompensationStepId,
+                reason,
+                acceptedCommandId = dispatch.Receipt.CommandId,
+                correlationId = dispatch.Receipt.CorrelationId,
+                statusUrl,
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            return Results.StatusCode(499);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            scope.MarkError();
+            throw;
+        }
+    }
+
     public static async Task<IResult> HandleForkRun(
         WorkflowForkRunInput input,
         [FromServices] ICommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError> forkDispatchService,

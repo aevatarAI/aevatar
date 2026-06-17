@@ -28,6 +28,7 @@ using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.AGUI.Contracts;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
@@ -256,6 +257,7 @@ public abstract class ScopeServiceEndpointTestKit
             RecordingResumeDispatchService resumeDispatchService,
             RecordingSignalDispatchService signalDispatchService,
             RecordingStopDispatchService stopDispatchService,
+            RecordingRetryCompensationDispatchService retryCompensationDispatchService,
             RecordingServiceRunRegistrationPort serviceRunRegistrationPort,
             FakeServiceRunQueryPort serviceRunQueryPort)
         {
@@ -280,6 +282,7 @@ public abstract class ScopeServiceEndpointTestKit
             ResumeDispatchService = resumeDispatchService;
             SignalDispatchService = signalDispatchService;
             StopDispatchService = stopDispatchService;
+            RetryCompensationDispatchService = retryCompensationDispatchService;
             ServiceRunRegistrationPort = serviceRunRegistrationPort;
             ServiceRunQueryPort = serviceRunQueryPort;
         }
@@ -332,6 +335,8 @@ public abstract class ScopeServiceEndpointTestKit
 
         public RecordingStopDispatchService StopDispatchService { get; }
 
+        public RecordingRetryCompensationDispatchService RetryCompensationDispatchService { get; }
+
         public RecordingServiceRunRegistrationPort ServiceRunRegistrationPort { get; }
 
         public FakeServiceRunQueryPort ServiceRunQueryPort { get; }
@@ -369,6 +374,7 @@ public abstract class ScopeServiceEndpointTestKit
             var resumeDispatchService = new RecordingResumeDispatchService();
             var signalDispatchService = new RecordingSignalDispatchService();
             var stopDispatchService = new RecordingStopDispatchService();
+            var retryCompensationDispatchService = new RecordingRetryCompensationDispatchService();
             var actorRuntime = new NoOpActorRuntime();
             var eventSubscriptionProvider = new NoOpActorEventSubscriptionProvider();
             var serviceRunQueryPort = new FakeServiceRunQueryPort
@@ -410,6 +416,7 @@ public abstract class ScopeServiceEndpointTestKit
             builder.Services.AddSingleton<ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>(resumeDispatchService);
             builder.Services.AddSingleton<ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>(signalDispatchService);
             builder.Services.AddSingleton<ICommandDispatchService<WorkflowStopCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>(stopDispatchService);
+            builder.Services.AddSingleton<ICommandDispatchService<WorkflowRetryCompensationCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>(retryCompensationDispatchService);
             builder.Services.AddSingleton<IActorRuntime>(actorRuntime);
             builder.Services.AddSingleton<IActorEventSubscriptionProvider>(eventSubscriptionProvider);
             builder.Services.AddSingleton<IServiceRunRegistrationPort>(serviceRunRegistrationPort);
@@ -527,6 +534,7 @@ public abstract class ScopeServiceEndpointTestKit
                 resumeDispatchService,
                 signalDispatchService,
                 stopDispatchService,
+                retryCompensationDispatchService,
                 serviceRunRegistrationPort,
                 serviceRunQueryPort);
         }
@@ -1229,6 +1237,11 @@ public abstract class ScopeServiceEndpointTestKit
             return Task.FromResult<WorkflowActorSnapshot?>(snapshot);
         }
 
+        public Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowActorCurrentStatesAsync(
+            WorkflowActorCurrentStateListQuery query,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<WorkflowActorSnapshot>>([]);
+
         public Task<WorkflowRunReport?> GetWorkflowRunReportArtifactAsync(string actorId, CancellationToken ct = default)
         {
             ReportCalls.Add(actorId);
@@ -1644,6 +1657,21 @@ public abstract class ScopeServiceEndpointTestKit
             LastCommand = command;
             return Task.FromResult(CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>.Success(
                 new WorkflowRunControlAcceptedReceipt(command.ActorId, command.RunId, "cmd-stop", "corr-stop")));
+        }
+    }
+
+    protected sealed class RecordingRetryCompensationDispatchService
+        : ICommandDispatchService<WorkflowRetryCompensationCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>
+    {
+        public WorkflowRetryCompensationCommand? LastCommand { get; private set; }
+
+        public Task<CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>> DispatchAsync(
+            WorkflowRetryCompensationCommand command,
+            CancellationToken ct = default)
+        {
+            LastCommand = command;
+            return Task.FromResult(CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>.Success(
+                new WorkflowRunControlAcceptedReceipt(command.ActorId, command.RunId, "cmd-retry-compensation", "corr-retry-compensation")));
         }
     }
 

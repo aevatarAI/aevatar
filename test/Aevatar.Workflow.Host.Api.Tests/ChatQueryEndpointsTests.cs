@@ -1,6 +1,8 @@
 using System.Text;
 using System.Text.Json;
 using Aevatar.Capabilities;
+using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Aevatar.Workflow.Projection.ReadModels;
@@ -247,6 +249,41 @@ public sealed class ChatQueryEndpointsTests
         var http = await ExecuteWithContextAsync(result);
         http.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
         service.Calls.Should().ContainSingle().Which.Should().Be("GetWorkflowActorCurrentState:actor-1");
+    }
+
+    [Fact]
+    public async Task GetWorkflowActorCurrentStateRoute_ShouldSerializeCompensationDeadLetter()
+    {
+        var service = new FakeWorkflowExecutionQueryApplicationService
+        {
+            Snapshot = new WorkflowActorSnapshot
+            {
+                ActorId = "run-dead-letter",
+                WorkflowName = "refund_order",
+                CompletionStatus = WorkflowRunCompletionStatus.Failed,
+                StateVersion = 42,
+                SagaStatus = WorkflowSagaStatus.CompensationDeadLetter,
+                DeadLetterFailedCompensationStepId = "refund_payment",
+                DeadLetterRemainingUncompensated = 2,
+                DeadLetterError = "refund provider rejected compensation",
+            },
+        };
+        await using var app = await CreateRouteAppAsync(service);
+        using var client = CreateClient(app);
+
+        var response = await client.GetAsync("/api/workflow-actors/run-dead-letter/current-state");
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.EnsureSuccessStatusCode();
+        using var json = JsonDocument.Parse(body);
+        var root = json.RootElement;
+        root.GetProperty("sagaStatus").GetString().Should().Be("CompensationDeadLetter");
+        var deadLetter = root.GetProperty("deadLetter");
+        deadLetter.GetProperty("failedCompensationStepId").GetString().Should().Be("refund_payment");
+        deadLetter.GetProperty("remainingUncompensated").GetInt32().Should().Be(2);
+        deadLetter.GetProperty("error").GetString().Should().Be("refund provider rejected compensation");
+        service.Calls.Should().ContainSingle()
+            .Which.Should().Be("GetWorkflowActorCurrentState:run-dead-letter");
     }
 
     [Fact]
@@ -576,6 +613,14 @@ public sealed class ChatQueryEndpointsTests
         {
             Calls.Add($"GetWorkflowActorCurrentState:{actorId}");
             return Task.FromResult(Snapshot);
+        }
+
+        public Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowActorCurrentStatesAsync(
+            WorkflowActorCurrentStateListQuery query,
+            CancellationToken ct = default)
+        {
+            Calls.Add($"ListWorkflowActorCurrentStatesQuery:{query.Take}:{query.SagaStatus}:{query.ScopeId}:{string.Join(",", query.DefinitionActorIds)}");
+            return Task.FromResult<IReadOnlyList<WorkflowActorSnapshot>>([]);
         }
 
         public Task<WorkflowRunReport?> GetWorkflowRunReportArtifactAsync(string actorId, CancellationToken ct = default)

@@ -12,6 +12,7 @@ using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.AGUI.Contracts;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
@@ -2536,6 +2537,11 @@ public sealed class AevatarInvocationToolSourceTests
             LastCurrentStateActorId = actorId;
             return Task.FromResult(Snapshot);
         }
+
+        public Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowActorCurrentStatesAsync(
+            WorkflowActorCurrentStateListQuery query,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<WorkflowActorSnapshot>>([]);
 
         public Task<WorkflowRunReport?> GetWorkflowRunReportArtifactAsync(string actorId, CancellationToken ct = default)
         {

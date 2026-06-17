@@ -35,6 +35,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.Text.Json;
+using WorkflowSagaStatus = Aevatar.Workflow.Abstractions.WorkflowSagaStatus;
 
 namespace Aevatar.GAgentService.Hosting.Endpoints;
 
@@ -74,10 +75,12 @@ public static class ScopeServiceEndpoints
         group.MapPost("/{scopeId}/members/{memberId}/runs/{runId}:resume", HandleResumeMemberRunAsync);
         group.MapPost("/{scopeId}/members/{memberId}/runs/{runId}:signal", HandleSignalMemberRunAsync);
         group.MapPost("/{scopeId}/members/{memberId}/runs/{runId}:stop", HandleStopMemberRunAsync);
+        group.MapPost("/{scopeId}/members/{memberId}/runs/{runId}:retry-compensation", HandleRetryCompensationMemberRunAsync);
         group.MapGet("/{scopeId}/runs/{runId}/audit", HandleGetDefaultRunAuditAsync);
         group.MapPost("/{scopeId}/runs/{runId}:resume", HandleResumeDefaultRunAsync);
         group.MapPost("/{scopeId}/runs/{runId}:signal", HandleSignalDefaultRunAsync);
         group.MapPost("/{scopeId}/runs/{runId}:stop", HandleStopDefaultRunAsync);
+        group.MapPost("/{scopeId}/runs/{runId}:retry-compensation", HandleRetryCompensationDefaultRunAsync);
         group.MapGet("/{scopeId}/services", HandleListScopeServicesAsync);
         group.MapPost("/{scopeId}/services/{serviceId}/invoke/{endpointId}:stream", HandleInvokeStreamAsync);
         group.MapPost("/{scopeId}/services/{serviceId}/invoke/{endpointId}", HandleInvokeAsync);
@@ -90,6 +93,7 @@ public static class ScopeServiceEndpoints
         group.MapPost("/{scopeId}/services/{serviceId}/runs/{runId}:resume", HandleResumeRunAsync);
         group.MapPost("/{scopeId}/services/{serviceId}/runs/{runId}:signal", HandleSignalRunAsync);
         group.MapPost("/{scopeId}/services/{serviceId}/runs/{runId}:stop", HandleStopRunAsync);
+        group.MapPost("/{scopeId}/services/{serviceId}/runs/{runId}:retry-compensation", HandleRetryCompensationRunAsync);
         group.MapPost("/{scopeId}/services/{serviceId}/bindings", HandleCreateBindingAsync);
         group.MapPut("/{scopeId}/services/{serviceId}/bindings/{bindingId}", HandleUpdateBindingAsync);
         group.MapPost("/{scopeId}/services/{serviceId}/bindings/{bindingId}:retire", HandleRetireBindingAsync);
@@ -1019,6 +1023,38 @@ public static class ScopeServiceEndpoints
             ct);
     }
 
+    private static async Task<IResult> HandleRetryCompensationDefaultRunAsync(
+        HttpContext http,
+        string scopeId,
+        string runId,
+        RetryCompensationScopeServiceRunHttpRequest request,
+        [FromServices] IWorkflowRunBindingReader workflowRunBindingReader,
+        [FromServices] ICommandDispatchService<WorkflowRetryCompensationCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError> retryService,
+        CancellationToken ct)
+    {
+        var resolution = await ResolveScopedWorkflowRunAsync(
+            http,
+            scopeId,
+            runId,
+            request.ActorId,
+            workflowRunBindingReader,
+            ct);
+        if (resolution.Failure != null)
+            return resolution.Failure;
+
+        return await WorkflowCapabilityEndpoints.HandleRetryCompensation(
+            new WorkflowRetryCompensationInput
+            {
+                ActorId = resolution.Binding!.ActorId,
+                RunId = resolution.Binding.RunId,
+                FailedCompensationStepId = request.FailedCompensationStepId ?? string.Empty,
+                CommandId = request.CommandId,
+                Reason = request.Reason,
+            },
+            retryService,
+            ct);
+    }
+
     private static async Task<IResult> HandleListMemberRunsAsync(
         HttpContext http,
         string scopeId,
@@ -1354,6 +1390,52 @@ public static class ScopeServiceEndpoints
             return Results.BadRequest(new
             {
                 code = "INVALID_MEMBER_RUN_STOP_REQUEST",
+                message = ex.Message,
+            });
+        }
+    }
+
+    private static async Task<IResult> HandleRetryCompensationMemberRunAsync(
+        HttpContext http,
+        string scopeId,
+        string memberId,
+        string runId,
+        RetryCompensationScopeServiceRunHttpRequest request,
+        [FromServices] IMemberPublishedServiceResolver memberPublishedServiceResolver,
+        [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
+        [FromServices] IWorkflowRunBindingReader workflowRunBindingReader,
+        [FromServices] ICommandDispatchService<WorkflowRetryCompensationCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError> retryService,
+        [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
+        CancellationToken ct)
+    {
+        try
+        {
+            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+                return denied;
+
+            if (AevatarMemberAccessGuard.TryCreateMemberAccessDeniedResult(http, memberId, out var memberDenied))
+                return memberDenied;
+
+            var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
+                new MemberPublishedServiceResolveRequest(scopeId, memberId),
+                ct);
+            return await HandleRetryCompensationRunAsync(
+                http,
+                memberResolution.ScopeId,
+                memberResolution.PublishedServiceId,
+                runId,
+                request,
+                lifecycleQueryPort,
+                workflowRunBindingReader,
+                retryService,
+                options,
+                ct);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new
+            {
+                code = "INVALID_MEMBER_RUN_RETRY_COMPENSATION_REQUEST",
                 message = ex.Message,
             });
         }
@@ -2215,6 +2297,44 @@ public static class ScopeServiceEndpoints
             ct);
     }
 
+    private static async Task<IResult> HandleRetryCompensationRunAsync(
+        HttpContext http,
+        string scopeId,
+        string serviceId,
+        string runId,
+        RetryCompensationScopeServiceRunHttpRequest request,
+        [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
+        [FromServices] IWorkflowRunBindingReader workflowRunBindingReader,
+        [FromServices] ICommandDispatchService<WorkflowRetryCompensationCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError> retryService,
+        [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
+        CancellationToken ct)
+    {
+        var resolution = await ResolveScopeServiceRunAsync(
+            http,
+            options.Value,
+            scopeId,
+            serviceId,
+            runId,
+            request.ActorId,
+            lifecycleQueryPort,
+            workflowRunBindingReader,
+            ct);
+        if (resolution.Failure != null)
+            return resolution.Failure;
+
+        return await WorkflowCapabilityEndpoints.HandleRetryCompensation(
+            new WorkflowRetryCompensationInput
+            {
+                ActorId = resolution.Binding!.ActorId,
+                RunId = resolution.Binding.RunId,
+                FailedCompensationStepId = request.FailedCompensationStepId ?? string.Empty,
+                CommandId = request.CommandId,
+                Reason = request.Reason,
+            },
+            retryService,
+            ct);
+    }
+
     private static async Task<IResult> HandleCreateBindingAsync(
         HttpContext http,
         string scopeId,
@@ -2856,6 +2976,8 @@ const response = await fetch("{{invokePath}}", {
             snapshot?.RoleReplyCount ?? 0,
             snapshot?.LastOutput ?? string.Empty,
             snapshot?.LastError ?? string.Empty,
+            snapshot?.SagaStatus ?? WorkflowSagaStatus.Unspecified,
+            BuildScopeServiceRunDeadLetter(snapshot),
             ServiceImplementationKind.Workflow.ToString(),
             ServiceRunStatus.Accepted.ToString(),
             string.Empty,
@@ -2902,6 +3024,8 @@ const response = await fetch("{{invokePath}}", {
             workflowSnapshot?.RoleReplyCount ?? 0,
             workflowSnapshot?.LastOutput ?? (registryBackedSummary ? snapshot.LastOutput : string.Empty),
             workflowSnapshot?.LastError ?? (registryBackedSummary ? snapshot.LastError : string.Empty),
+            workflowSnapshot?.SagaStatus ?? WorkflowSagaStatus.Unspecified,
+            BuildScopeServiceRunDeadLetter(workflowSnapshot),
             snapshot.ImplementationKind.ToString(),
             snapshot.Status.ToString(),
             snapshot.CommandId,
@@ -2955,7 +3079,21 @@ const response = await fetch("{{invokePath}}", {
             summary.CompletedSteps,
             summary.RoleReplyCount,
             summary.LastOutput,
-            summary.LastError);
+            summary.LastError,
+            summary.SagaStatus,
+            summary.DeadLetter);
+    }
+
+    private static ScopeServiceRunDeadLetterHttpResponse? BuildScopeServiceRunDeadLetter(
+        WorkflowActorSnapshot? snapshot)
+    {
+        if (snapshot?.SagaStatus != WorkflowSagaStatus.CompensationDeadLetter)
+            return null;
+
+        return new ScopeServiceRunDeadLetterHttpResponse(
+            snapshot.DeadLetterFailedCompensationStepId,
+            snapshot.DeadLetterRemainingUncompensated,
+            snapshot.DeadLetterError);
     }
 
     private static ServiceDeploymentSnapshot? ResolveRunDeployment(
@@ -3611,6 +3749,12 @@ const response = await fetch("{{invokePath}}", {
         string? CommandId = null,
         string? ActorId = null);
 
+    public sealed record RetryCompensationScopeServiceRunHttpRequest(
+        string? FailedCompensationStepId,
+        string? Reason = null,
+        string? CommandId = null,
+        string? ActorId = null);
+
     public sealed record BoundScopeServiceHttpRequest(
         string ServiceId,
         string? EndpointId = null);
@@ -3809,6 +3953,8 @@ const response = await fetch("{{invokePath}}", {
         int RoleReplyCount,
         string LastOutput,
         string LastError,
+        WorkflowSagaStatus SagaStatus,
+        ScopeServiceRunDeadLetterHttpResponse? DeadLetter,
         string ImplementationKind,
         string Status,
         string CommandId,
@@ -3838,7 +3984,14 @@ const response = await fetch("{{invokePath}}", {
         int CompletedSteps,
         int RoleReplyCount,
         string LastOutput,
-        string LastError);
+        string LastError,
+        WorkflowSagaStatus SagaStatus,
+        ScopeServiceRunDeadLetterHttpResponse? DeadLetter);
+
+    public sealed record ScopeServiceRunDeadLetterHttpResponse(
+        string FailedCompensationStepId,
+        int RemainingUncompensated,
+        string Error);
 
     public sealed record ScopeServiceRunAuditHttpResponse(
         ScopeServiceRunSummaryHttpResponse Summary,

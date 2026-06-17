@@ -37,7 +37,9 @@ public sealed class WorkflowExecutionRunEventProjector
         if (string.IsNullOrWhiteSpace(streamCommandId))
             return EmptyEntries;
 
-        IReadOnlyList<WorkflowRunEventEnvelope> runEvents = _mapper.Map(envelope);
+        IReadOnlyList<WorkflowRunEventEnvelope> runEvents = _mapper.Map(envelope)
+            .Where(runEvent => ShouldPublishRunEvent(context, envelope, runEvent))
+            .ToArray();
         if (runEvents.Count == 0)
             return EmptyEntries;
 
@@ -101,4 +103,25 @@ public sealed class WorkflowExecutionRunEventProjector
 
     private static string NormalizeWorkflowName(string? workflowName) =>
         string.IsNullOrWhiteSpace(workflowName) ? "unknown" : workflowName.Trim();
+
+    private static bool ShouldPublishRunEvent(
+        WorkflowExecutionProjectionContext context,
+        EventEnvelope envelope,
+        WorkflowRunEventEnvelope runEvent)
+    {
+        if (!IsTerminalRunEvent(runEvent))
+            return true;
+
+        var publisherActorId = envelope.Route?.PublisherActorId ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(publisherActorId))
+            return true;
+
+        return string.Equals(publisherActorId, context.RootActorId, StringComparison.Ordinal);
+    }
+
+    private static bool IsTerminalRunEvent(WorkflowRunEventEnvelope runEvent) =>
+        runEvent.EventCase is
+            WorkflowRunEventEnvelope.EventOneofCase.RunFinished or
+            WorkflowRunEventEnvelope.EventOneofCase.RunError or
+            WorkflowRunEventEnvelope.EventOneofCase.RunStopped;
 }

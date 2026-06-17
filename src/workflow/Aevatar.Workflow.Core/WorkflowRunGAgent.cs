@@ -883,6 +883,77 @@ public sealed class WorkflowRunGAgent
             CancellationToken.None);
     }
 
+    [EventHandler(AllowSelfHandling = true)]
+    public async Task HandleWorkflowCompensationRetryRequestedAsync(WorkflowCompensationRetryRequestedEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+
+        var runId = WorkflowRunIdNormalizer.Normalize(evt.RunId);
+        var failedStepId = evt.FailedCompensationStepId?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(runId) ||
+            string.IsNullOrWhiteSpace(failedStepId))
+        {
+            Logger.LogWarning(
+                "Reject retry compensation request with missing run or failed step: run={RunId} step={StepId}.",
+                evt.RunId,
+                evt.FailedCompensationStepId);
+            return;
+        }
+
+        if (!string.Equals(State.RunId, runId, StringComparison.Ordinal) ||
+            State.SagaStatus != WorkflowSagaStatus.CompensationDeadLetter)
+        {
+            Logger.LogWarning(
+                "Reject retry compensation request outside dead-letter state: run={RunId} status={SagaStatus}.",
+                runId,
+                State.SagaStatus);
+            return;
+        }
+
+        if (!string.Equals(State.DeadLetterFailedCompensationStepId ?? string.Empty, failedStepId, StringComparison.Ordinal))
+        {
+            Logger.LogWarning(
+                "Reject retry compensation request for mismatched failed step: run={RunId} expected={ExpectedStepId} requested={RequestedStepId}.",
+                runId,
+                State.DeadLetterFailedCompensationStepId,
+                failedStepId);
+            return;
+        }
+
+        if (!TryGetLedgerEntry(State.CompensationCursor, out var entry) ||
+            !string.Equals(entry.CompensationStepId ?? string.Empty, failedStepId, StringComparison.Ordinal))
+        {
+            Logger.LogWarning(
+                "Reject retry compensation request because failed compensation step does not match the dead-letter cursor: run={RunId} step={StepId}.",
+                runId,
+                failedStepId);
+            return;
+        }
+
+        var executionId = Guid.NewGuid().ToString("N");
+        var retryRequested = new WorkflowCompensationRetryRequestedEvent
+        {
+            RunId = runId,
+            FailedCompensationStepId = failedStepId,
+            Reason = evt.Reason ?? string.Empty,
+            CommandId = evt.CommandId ?? ActiveInboundEnvelope?.Id ?? string.Empty,
+            CorrelationId = evt.CorrelationId ?? ActiveInboundEnvelope?.Propagation?.CorrelationId ?? string.Empty,
+        };
+        var compensationRequest = new CompensationRequestEvent
+        {
+            RunId = runId,
+            FailedStepId = ResolveLastFailedStepId(State),
+            CompensationStepId = entry.CompensationStepId ?? string.Empty,
+            IdempotencyKey = entry.IdempotencyKey ?? string.Empty,
+            CapturedOutput = entry.CapturedOutput ?? string.Empty,
+            ExecutionId = executionId,
+        };
+
+        await PersistDomainEventAsync(retryRequested);
+        await PersistDomainEventAsync(compensationRequest);
+        await PublishAsync(compensationRequest, TopologyAudience.Self);
+    }
+
     [AllEventHandler(Priority = 40, AllowSelfHandling = true)]
     public async Task HandleWorkflowArtifactObservationEnvelope(EventEnvelope envelope)
     {
@@ -1068,6 +1139,7 @@ public sealed class WorkflowRunGAgent
             .On<CompensationStepCompletedEvent>(ApplyCompensationStepCompleted)
             .On<WorkflowCompensationCompletedEvent>(ApplyWorkflowCompensationCompleted)
             .On<WorkflowCompensationFailedEvent>(ApplyWorkflowCompensationFailed)
+            .On<WorkflowCompensationRetryRequestedEvent>(ApplyWorkflowCompensationRetryRequested)
             .On<WorkflowStoppedEvent>(ApplyWorkflowStopped)
             .On<WorkflowCompletedEvent>(ApplyWorkflowCompleted)
             .On<WorkflowRunStoppedEvent>(ApplyWorkflowRunStopped)
@@ -1449,6 +1521,25 @@ public sealed class WorkflowRunGAgent
         next.DeadLetterFailedCompensationStepId = evt.FailedCompensationStepId ?? string.Empty;
         next.DeadLetterRemainingUncompensated = Math.Max(0, evt.RemainingUncompensated);
         next.DeadLetterError = evt.Error ?? string.Empty;
+        return next;
+    }
+
+    private static WorkflowRunState ApplyWorkflowCompensationRetryRequested(
+        WorkflowRunState current,
+        WorkflowCompensationRetryRequestedEvent evt)
+    {
+        var next = current.Clone();
+        if (next.SagaStatus != WorkflowSagaStatus.CompensationDeadLetter)
+            return next;
+
+        var failedStepId = evt.FailedCompensationStepId?.Trim() ?? string.Empty;
+        if (!string.Equals(next.DeadLetterFailedCompensationStepId ?? string.Empty, failedStepId, StringComparison.Ordinal))
+            return next;
+
+        next.SagaStatus = WorkflowSagaStatus.Compensating;
+        next.DeadLetterFailedCompensationStepId = string.Empty;
+        next.DeadLetterRemainingUncompensated = 0;
+        next.DeadLetterError = string.Empty;
         return next;
     }
 

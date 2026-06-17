@@ -18,7 +18,9 @@ public sealed class WorkflowHumanInteractionProjectorTests
     public async Task ProjectAsync_ShouldDeliverSuspension_WhenDeliveryTargetIsPresent()
     {
         var port = new RecordingHumanInteractionPort();
-        var projector = new WorkflowHumanInteractionProjector(port, NullLogger<WorkflowHumanInteractionProjector>.Instance);
+        var projector = new WorkflowHumanInteractionProjector(
+            port,
+            NullLogger<WorkflowHumanInteractionProjector>.Instance);
 
         await projector.ProjectAsync(
             BuildContext(),
@@ -79,7 +81,9 @@ public sealed class WorkflowHumanInteractionProjectorTests
     public async Task ProjectAsync_ShouldDerivePromptAndOptionsFromTypedInteraction()
     {
         var port = new RecordingHumanInteractionPort();
-        var projector = new WorkflowHumanInteractionProjector(port, NullLogger<WorkflowHumanInteractionProjector>.Instance);
+        var projector = new WorkflowHumanInteractionProjector(
+            port,
+            NullLogger<WorkflowHumanInteractionProjector>.Instance);
 
         await projector.ProjectAsync(
             BuildContext(),
@@ -130,7 +134,9 @@ public sealed class WorkflowHumanInteractionProjectorTests
     public async Task ProjectAsync_ShouldDeliverSuspension_FromCommittedStatePublication()
     {
         var port = new RecordingHumanInteractionPort();
-        var projector = new WorkflowHumanInteractionProjector(port, NullLogger<WorkflowHumanInteractionProjector>.Instance);
+        var projector = new WorkflowHumanInteractionProjector(
+            port,
+            NullLogger<WorkflowHumanInteractionProjector>.Instance);
 
         await projector.ProjectAsync(
             BuildContext(),
@@ -160,7 +166,9 @@ public sealed class WorkflowHumanInteractionProjectorTests
     public async Task ProjectAsync_ShouldIgnoreLegacySecureInputMetadataReservedKeys()
     {
         var port = new RecordingHumanInteractionPort();
-        var projector = new WorkflowHumanInteractionProjector(port, NullLogger<WorkflowHumanInteractionProjector>.Instance);
+        var projector = new WorkflowHumanInteractionProjector(
+            port,
+            NullLogger<WorkflowHumanInteractionProjector>.Instance);
 
         await projector.ProjectAsync(
             BuildContext(),
@@ -200,7 +208,9 @@ public sealed class WorkflowHumanInteractionProjectorTests
     public async Task ProjectAsync_ShouldIgnoreSuspension_WhenDeliveryTargetMissing()
     {
         var port = new RecordingHumanInteractionPort();
-        var projector = new WorkflowHumanInteractionProjector(port, NullLogger<WorkflowHumanInteractionProjector>.Instance);
+        var projector = new WorkflowHumanInteractionProjector(
+            port,
+            NullLogger<WorkflowHumanInteractionProjector>.Instance);
 
         await projector.ProjectAsync(
             BuildContext(),
@@ -225,7 +235,9 @@ public sealed class WorkflowHumanInteractionProjectorTests
     public async Task ProjectAsync_ShouldNotDeliverActionableRequest_ForToolApprovalSuspension()
     {
         var port = new RecordingHumanInteractionPort();
-        var projector = new WorkflowHumanInteractionProjector(port, NullLogger<WorkflowHumanInteractionProjector>.Instance);
+        var projector = new WorkflowHumanInteractionProjector(
+            port,
+            NullLogger<WorkflowHumanInteractionProjector>.Instance);
 
         await projector.ProjectAsync(
             BuildContext(),
@@ -257,7 +269,9 @@ public sealed class WorkflowHumanInteractionProjectorTests
     public async Task ProjectAsync_ShouldIgnoreNonProjectionRoute()
     {
         var port = new RecordingHumanInteractionPort();
-        var projector = new WorkflowHumanInteractionProjector(port, NullLogger<WorkflowHumanInteractionProjector>.Instance);
+        var projector = new WorkflowHumanInteractionProjector(
+            port,
+            NullLogger<WorkflowHumanInteractionProjector>.Instance);
 
         await projector.ProjectAsync(
             BuildContext(),
