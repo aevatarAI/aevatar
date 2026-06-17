@@ -3,6 +3,7 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgents.Channel.Abstractions;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Xunit;
@@ -166,7 +167,33 @@ public sealed class UserAgentCatalogProjectorTests
             LastRunAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 4, 14, 8, 0, 0, TimeSpan.Zero)),
             ErrorCount = 2,
             LastError = "tool failed",
+            LastSuccessfulDelivery = new DeliveryLedgerEntry
+            {
+                DeliveryKind = DeliveryKind.TextMessage,
+                Status = DeliveryStatus.Succeeded,
+                Target = new DeliveryTarget
+                {
+                    Channel = ChannelId.From("lark"),
+                    ConversationKey = "oc_chat_1",
+                },
+                LarkMessageId = "om_success",
+                RequestId = "request-success",
+                ProducedAtVersion = 3,
+            },
         };
+        state.RecentDeliveries.Add(new DeliveryLedgerEntry
+        {
+            DeliveryKind = DeliveryKind.TextMessage,
+            Status = DeliveryStatus.FailedPreSend,
+            Target = new DeliveryTarget
+            {
+                Channel = ChannelId.From("lark"),
+                ConversationKey = "oc_chat_1",
+            },
+            RequestId = "request-failed",
+            ProducedAtVersion = 2,
+        });
+        state.RecentDeliveries.Add(state.LastSuccessfulDelivery.Clone());
 
         await projector.ProjectAsync(
             new UserAgentCatalogMaterializationContext
@@ -185,6 +212,10 @@ public sealed class UserAgentCatalogProjectorTests
         document.ErrorCount.Should().Be(2);
         document.StateVersion.Should().Be(4);
         document.LastEventId.Should().Be("runner-event-4");
+        document.RecentDeliveries.Select(delivery => delivery.RequestId)
+            .Should().Equal("request-failed", "request-success");
+        document.LastSuccessfulDelivery.Should().NotBeNull();
+        document.LastSuccessfulDelivery!.LarkMessageId.Should().Be("om_success");
     }
 
     [Fact]

@@ -36,6 +36,7 @@ namespace Aevatar.GAgents.NyxidChat;
 public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 {
     internal const long MaxRunRequestAgeMs = 5 * 60 * 1000;
+    private const int RecentDeliveriesCap = 100;
 
     /// <summary>
     /// Hard upper bound on a single LLM reply turn. Mirrors
@@ -93,6 +94,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             .On<AgentRunCardDeliveryCompletionPreparedEvent>(ApplyCardDeliveryCompletionPrepared)
             .On<AgentRunReplyDispatchedEvent>(ApplyReplyDispatched)
             .On<AgentRunLarkCardDeliveryChangedEvent>(ApplyLarkCardDeliveryChanged)
+            .On<DeliveryProducedEvent>(ApplyDeliveryProduced)
             .On<AgentRunDroppedEvent>(ApplyDropped)
             .On<AgentRunDropNotificationDispatchedEvent>(ApplyDropNotificationDispatched)
             .On<AgentRunFailedEvent>(ApplyFailed)
@@ -1345,9 +1347,17 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             produced.Outbound = outbound.Clone();
         produced.AppendedHistory.AddRange((appendedHistory ?? []).Select(entry => entry.Clone()));
 
+        var deliveryProduced = BuildDeliveryProducedEvent(
+            DeliveryKind.StreamingCard,
+            ResolveCardDeliveryStatus(completion, State.LarkCardDelivery?.TerminalReason),
+            completion,
+            request.Activity,
+            cardId: State.LarkCardDelivery?.CardId);
+
         return PersistDomainEventsAsync(
         [
             produced,
+            deliveryProduced,
             new AgentRunCardDeliveryCompletionPreparedEvent
             {
                 Completion = completion.Clone(),
@@ -2105,6 +2115,15 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         return next;
     }
 
+    private static AgentRunGAgentState ApplyDeliveryProduced(
+        AgentRunGAgentState current,
+        DeliveryProducedEvent evt)
+    {
+        var next = current.Clone();
+        AppendDelivery(next, evt);
+        return next;
+    }
+
     private static AgentRunGAgentState ApplyDropped(AgentRunGAgentState current, AgentRunDroppedEvent evt)
     {
         var next = current.Clone();
@@ -2168,6 +2187,102 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         var trimmed = value?.Trim();
         return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
     }
+
+    private DeliveryProducedEvent BuildDeliveryProducedEvent(
+        DeliveryKind kind,
+        DeliveryStatus status,
+        AgentRunLarkCardDeliveryCompletion completion,
+        ChatActivity? activity,
+        string? cardId)
+    {
+        return new DeliveryProducedEvent
+        {
+            RunId = NormalizeOptional(completion.RunId) ?? NormalizeOptional(State.RunId) ?? string.Empty,
+            TurnId = NormalizeOptional(completion.CorrelationId) ?? NormalizeOptional(State.CorrelationId) ?? string.Empty,
+            DeliveryKind = kind,
+            Target = BuildDeliveryTarget(activity, completion),
+            Status = status,
+            LarkMessageId = NormalizeOptional(completion.CardMessageId) ?? string.Empty,
+            CardId = NormalizeOptional(cardId) ?? string.Empty,
+            RequestId = NormalizeOptional(completion.CommandId) ?? string.Empty,
+            SourceEventId = NormalizeOptional(completion.CorrelationId) ?? string.Empty,
+            ProducedAtVersion = NextCommittedVersion(),
+        };
+    }
+
+    private static DeliveryTarget BuildDeliveryTarget(
+        ChatActivity? activity,
+        AgentRunLarkCardDeliveryCompletion completion)
+    {
+        var extras = activity?.TransportExtras;
+        var conversation = activity?.Conversation;
+        return new DeliveryTarget
+        {
+            Channel = conversation?.Channel?.Clone() ?? activity?.ChannelId?.Clone() ?? new ChannelId(),
+            ConversationKey = conversation?.CanonicalKey ?? string.Empty,
+            Platform = NormalizeOptional(extras?.NyxPlatform) ?? conversation?.Channel?.Value ?? activity?.ChannelId?.Value ?? string.Empty,
+            ReceiveId = NormalizeOptional(extras?.NyxLarkChatId) ??
+                        NormalizeOptional(extras?.NyxLarkUnionId) ??
+                        string.Empty,
+            ReceiveIdType = ResolveReceiveIdType(extras),
+            ConversationId = NormalizeOptional(extras?.NyxConversationId) ?? conversation?.CanonicalKey ?? string.Empty,
+            ReplyMessageId = NormalizeOptional(completion.CardMessageId) ?? string.Empty,
+        };
+    }
+
+    private static string ResolveReceiveIdType(TransportExtras? extras)
+    {
+        if (!string.IsNullOrWhiteSpace(extras?.NyxLarkChatId))
+            return "chat_id";
+        if (!string.IsNullOrWhiteSpace(extras?.NyxLarkUnionId))
+            return "union_id";
+        return string.Empty;
+    }
+
+    private static DeliveryStatus ResolveCardDeliveryStatus(
+        AgentRunLarkCardDeliveryCompletion completion,
+        string? terminalReason)
+    {
+        if (completion.Outcome != AgentRunLarkCardDeliveryCompletionOutcome.Completed ||
+            completion.DeliveryFailure is not null)
+        {
+            return DeliveryStatus.FailedPostSend;
+        }
+
+        var reason = NormalizeOptional(terminalReason);
+        return reason is not null &&
+               !string.Equals(reason, "completed", StringComparison.Ordinal)
+            ? DeliveryStatus.FailedPostSend
+            : DeliveryStatus.Succeeded;
+    }
+
+    private static void AppendDelivery(AgentRunGAgentState state, DeliveryProducedEvent produced)
+    {
+        var entry = ToDeliveryLedgerEntry(produced);
+        state.RecentDeliveries.Add(entry);
+        while (state.RecentDeliveries.Count > RecentDeliveriesCap)
+            state.RecentDeliveries.RemoveAt(0);
+
+        if (entry.Status == DeliveryStatus.Succeeded)
+            state.LastSuccessfulDelivery = entry.Clone();
+    }
+
+    private static DeliveryLedgerEntry ToDeliveryLedgerEntry(DeliveryProducedEvent produced) =>
+        new()
+        {
+            DeliveryKind = produced.DeliveryKind,
+            Status = produced.Status,
+            Target = produced.Target?.Clone() ?? new DeliveryTarget(),
+            LarkMessageId = produced.LarkMessageId ?? string.Empty,
+            CardId = produced.CardId ?? string.Empty,
+            RequestId = produced.RequestId ?? string.Empty,
+            SourceEventId = produced.SourceEventId ?? string.Empty,
+            ProducedAtVersion = produced.ProducedAtVersion,
+        };
+
+    private long NextCommittedVersion() =>
+        (EventSourcing ?? throw new InvalidOperationException("Event sourcing must be configured before computing the next committed version."))
+        .CurrentVersion + 1;
 
     private static string ResolveRunId(NeedsLlmReplyEvent request) =>
         AgentRunId.Parse(request.RunId).Value;
