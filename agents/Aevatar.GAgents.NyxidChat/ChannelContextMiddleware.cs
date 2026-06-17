@@ -99,6 +99,8 @@ internal sealed class ChannelContextMiddleware : ILLMCallMiddleware
                 $"operator_user_id: {Resolve(metadata, ChannelMetadataKeys.LarkOperatorUserId)}",
                 $"operator_open_id: {Resolve(metadata, ChannelMetadataKeys.LarkOperatorOpenId)}",
                 $"operator_union_id: {Resolve(metadata, ChannelMetadataKeys.LarkOperatorUnionId)}",
+                $"subject_user_id: {Resolve(metadata, ChannelMetadataKeys.LarkSubjectUserId)}",
+                $"subject_employee_id: {Resolve(metadata, ChannelMetadataKeys.LarkSubjectEmployeeId)}",
                 "</channel-context>",
             ]);
     }
