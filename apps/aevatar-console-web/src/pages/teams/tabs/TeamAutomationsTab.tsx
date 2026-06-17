@@ -7,6 +7,7 @@ import {
   PauseCircleOutlined,
   PlayCircleOutlined,
   PlusOutlined,
+  ThunderboltOutlined,
 } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -1959,7 +1960,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
                   onClick: () => openEdit(schedule),
                 })}
                 {renderAutomationActionButton({
-                  icon: <PlayCircleOutlined />,
+                  icon: <ThunderboltOutlined />,
                   label: intl.formatMessage({
                     id: "teams.automations.actions.runNow",
                     defaultMessage: "Run now",
