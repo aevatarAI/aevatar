@@ -546,6 +546,96 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_ShareAgent_NyxIdNativeCaller_ReturnsChannelScopeErrorWithoutDispatch()
+    {
+        var caller = OwnerScope.ForNyxIdNative("user-A");
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(Substitute.For<ISkillRunnerExecutionQueryPort>());
+        services.AddSingleton(Substitute.For<ISkillRunnerCommandPort>());
+        services.AddSingleton(catalogCommandPort);
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory());
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(caller));
+        services.AddSingleton(callerScopeResolver);
+        var tool = CreateTool(services);
+
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        });
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"action":"share_agent","agent_id":"skill-runner-1","allow_trigger":true}""");
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("error").GetString()
+                .Should().Be("share_agent requires a channel registration scope");
+            await queryPort.DidNotReceive().GetForCallerAsync(
+                Arg.Any<string>(),
+                Arg.Any<OwnerScope>(),
+                Arg.Any<CancellationToken>());
+            await catalogCommandPort.DidNotReceive().ShareAsync(
+                Arg.Any<string>(),
+                Arg.Any<OwnerScope>(),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShareAgent_ChannelCallerWithBlankRegistrationScope_ReturnsChannelScopeErrorWithoutDispatch()
+    {
+        var caller = OwnerScope.ForChannel("user-A", "lark", " ", "alice");
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(Substitute.For<ISkillRunnerExecutionQueryPort>());
+        services.AddSingleton(Substitute.For<ISkillRunnerCommandPort>());
+        services.AddSingleton(catalogCommandPort);
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory());
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(caller));
+        services.AddSingleton(callerScopeResolver);
+        var tool = CreateTool(services);
+
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        });
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"action":"share_agent","agent_id":"skill-runner-1","allow_trigger":true}""");
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("error").GetString()
+                .Should().Be("share_agent requires a channel registration scope");
+            await queryPort.DidNotReceive().GetForCallerAsync(
+                Arg.Any<string>(),
+                Arg.Any<OwnerScope>(),
+                Arg.Any<CancellationToken>());
+            await catalogCommandPort.DidNotReceive().ShareAsync(
+                Arg.Any<string>(),
+                Arg.Any<OwnerScope>(),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_UnshareAgent_IsOwnerOnly_AndDispatchesCatalogUnshare()
     {
         var owner = OwnerScope.ForChannel("user-A", "lark", "scope-1", "alice");
