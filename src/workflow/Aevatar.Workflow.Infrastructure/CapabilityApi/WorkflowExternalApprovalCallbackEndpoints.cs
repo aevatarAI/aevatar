@@ -41,121 +41,59 @@ internal static class WorkflowExternalApprovalCallbackEndpoints
         ArgumentNullException.ThrowIfNull(loggerFactory);
 
         var logger = loggerFactory.CreateLogger("Aevatar.Workflow.Host.Api.ExternalApprovalCallback");
-        if (!options.Value.Enabled)
-        {
-            scope.MarkResult(StatusCodes.Status404NotFound);
-            return Results.Json(
-                new { code = "EXTERNAL_APPROVAL_CALLBACK_DISABLED", message = "Workflow external approval callbacks are disabled." },
-                statusCode: StatusCodes.Status404NotFound);
-        }
+        var settings = options.Value;
+        if (!settings.Enabled)
+            return CallbackDisabled(scope);
 
-        byte[] rawBody;
-        try
-        {
-            rawBody = await ReadBodyAsync(http.Request, ct);
-        }
-        catch (OperationCanceledException)
-        {
-            return Results.StatusCode(499);
-        }
+        var body = await TryReadBodyAsync(http.Request, ct);
+        if (body.Result != null)
+            return body.Result;
 
         var receivedAt = DateTimeOffset.UtcNow;
-        var build = BuildRequest(http.Request, routeKey, rawBody, receivedAt, options.Value);
+        var build = BuildRequest(http.Request, routeKey, body.RawBody, receivedAt, settings);
         if (!build.Succeeded)
-        {
-            scope.MarkResult(build.StatusCode);
-            return Results.Json(
-                new { code = build.ErrorCode, message = build.ErrorMessage },
-                statusCode: build.StatusCode);
-        }
+            return BuildRequestFailure(scope, build);
 
-        WorkflowExternalApprovalContinuation? continuation;
-        try
-        {
-            continuation = await lookupPort.FindActiveAsync(
-                build.SourceId,
-                build.ExternalIdKind,
-                build.ExternalId,
-                ct);
-        }
-        catch (OperationCanceledException)
-        {
-            return Results.StatusCode(499);
-        }
-        catch (Exception ex)
-        {
-            scope.MarkResult(StatusCodes.Status503ServiceUnavailable);
-            logger.LogError(ex, "Workflow external approval continuation lookup failed.");
-            return RetryableJson(
-                http,
-                options.Value,
-                "EXTERNAL_APPROVAL_LOOKUP_UNAVAILABLE",
-                "Workflow external approval continuation lookup is unavailable.",
-                StatusCodes.Status503ServiceUnavailable);
-        }
+        var lookup = await LookupContinuationAsync(http, build, lookupPort, settings, logger, scope, ct);
+        if (lookup.Result != null)
+            return lookup.Result;
 
-        if (continuation == null)
-        {
-            scope.MarkResult(Status425TooEarly);
-            return RetryableJson(
-                http,
-                options.Value,
-                "EXTERNAL_APPROVAL_CONTINUATION_NOT_VISIBLE",
-                "Workflow external approval continuation is not visible yet.",
-                Status425TooEarly);
-        }
+        var replayUnavailable = EnsureReplayStoreAvailable(http, replayAdmissionPort, settings, scope);
+        if (replayUnavailable != null)
+            return replayUnavailable;
 
-        if (!replayAdmissionPort.IsAvailable)
-        {
-            scope.MarkResult(StatusCodes.Status503ServiceUnavailable);
-            return RetryableJson(
-                http,
-                options.Value,
-                "EXTERNAL_APPROVAL_REPLAY_STORE_UNAVAILABLE",
-                "Workflow external approval replay store is unavailable.",
-                StatusCodes.Status503ServiceUnavailable);
-        }
+        var admission = BuildReplayAdmission(build, receivedAt);
+        var replay = await AdmitReplayAsync(http, admission, replayAdmissionPort, settings, logger, scope, ct);
+        if (replay.Result != null)
+            return replay.Result;
 
-        var commandId = BuildSeed(
-            "external-approval",
-            build.SourceId,
-            build.ExternalIdKind,
-            build.ExternalId,
-            build.TerminalStatus);
-        var canonicalExternalApprovalId = BuildCanonicalExternalApprovalId(
-            build.SourceId,
-            build.ExternalIdKind,
-            build.ExternalId);
-        var admission = new WorkflowWebhookReplayAdmissionRequest(
-            ReplayRouteKey,
-            build.SourceId,
-            canonicalExternalApprovalId,
-            build.TerminalStatus,
-            receivedAt,
-            commandId,
-            commandId);
+        return await MapReplayAdmissionAsync(
+            http,
+            build,
+            lookup.Continuation!,
+            admission,
+            replay.Admission!,
+            replayAdmissionPort,
+            signalService,
+            logger,
+            scope,
+            settings,
+            ct);
+    }
 
-        WorkflowWebhookReplayAdmission replayAdmission;
-        try
-        {
-            replayAdmission = await replayAdmissionPort.AdmitAsync(admission, ct);
-        }
-        catch (OperationCanceledException)
-        {
-            return Results.StatusCode(499);
-        }
-        catch (Exception ex)
-        {
-            scope.MarkResult(StatusCodes.Status503ServiceUnavailable);
-            logger.LogError(ex, "Workflow external approval replay admission failed.");
-            return RetryableJson(
-                http,
-                options.Value,
-                "EXTERNAL_APPROVAL_REPLAY_ADMISSION_FAILED",
-                "Workflow external approval replay admission failed.",
-                StatusCodes.Status503ServiceUnavailable);
-        }
-
+    private static async Task<IResult> MapReplayAdmissionAsync(
+        HttpContext http,
+        ExternalApprovalCallbackBuildResult build,
+        WorkflowExternalApprovalContinuation continuation,
+        WorkflowWebhookReplayAdmissionRequest admission,
+        WorkflowWebhookReplayAdmission replayAdmission,
+        IWorkflowWebhookReplayAdmissionPort replayAdmissionPort,
+        ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError> signalService,
+        ILogger logger,
+        ApiRequestScope scope,
+        WorkflowExternalApprovalCallbackOptions options,
+        CancellationToken ct)
+    {
         switch (replayAdmission.Status)
         {
             case WorkflowWebhookReplayAdmissionStatus.Admitted:
@@ -171,33 +109,205 @@ internal static class WorkflowExternalApprovalCallbackEndpoints
                     ct);
             case WorkflowWebhookReplayAdmissionStatus.DuplicateCompleted:
             case WorkflowWebhookReplayAdmissionStatus.DuplicateInProgress:
-                scope.MarkResult(StatusCodes.Status202Accepted);
-                return Results.Accepted(
-                    value: new
-                    {
-                        accepted = true,
-                        duplicate = true,
-                        sourceId = build.SourceId,
-                        externalIdKind = build.ExternalIdKind,
-                        externalId = build.ExternalId,
-                        terminalStatus = build.TerminalStatus,
-                        commandId = replayAdmission.ExistingCommandId,
-                        correlationId = replayAdmission.ExistingCorrelationId,
-                    });
+                return DuplicateAdmission(build, replayAdmission, scope);
             case WorkflowWebhookReplayAdmissionStatus.PayloadConflict:
-                scope.MarkResult(StatusCodes.Status409Conflict);
-                return Results.Json(
-                    new { code = "EXTERNAL_APPROVAL_TERMINAL_CONFLICT", message = "External approval terminal status conflicts with a previously admitted terminal status." },
-                    statusCode: StatusCodes.Status409Conflict);
+                return ConflictingAdmission(scope);
             default:
                 scope.MarkResult(StatusCodes.Status503ServiceUnavailable);
                 return RetryableJson(
                     http,
-                    options.Value,
+                    options,
                     "EXTERNAL_APPROVAL_REPLAY_ADMISSION_FAILED",
                     "Workflow external approval replay admission failed.",
                     StatusCodes.Status503ServiceUnavailable);
         }
+    }
+
+    private static IResult CallbackDisabled(ApiRequestScope scope)
+    {
+        scope.MarkResult(StatusCodes.Status404NotFound);
+        return Results.Json(
+            new { code = "EXTERNAL_APPROVAL_CALLBACK_DISABLED", message = "Workflow external approval callbacks are disabled." },
+            statusCode: StatusCodes.Status404NotFound);
+    }
+
+    private static IResult BuildRequestFailure(
+        ApiRequestScope scope,
+        ExternalApprovalCallbackBuildResult build)
+    {
+        scope.MarkResult(build.StatusCode);
+        return Results.Json(
+            new { code = build.ErrorCode, message = build.ErrorMessage },
+            statusCode: build.StatusCode);
+    }
+
+    private static async Task<RequestBodyReadResult> TryReadBodyAsync(
+        HttpRequest request,
+        CancellationToken ct)
+    {
+        try
+        {
+            return new RequestBodyReadResult(await ReadBodyAsync(request, ct), null);
+        }
+        catch (OperationCanceledException)
+        {
+            return new RequestBodyReadResult([], Results.StatusCode(499));
+        }
+    }
+
+    private static async Task<ContinuationLookupResult> LookupContinuationAsync(
+        HttpContext http,
+        ExternalApprovalCallbackBuildResult build,
+        IWorkflowExternalApprovalContinuationLookupPort lookupPort,
+        WorkflowExternalApprovalCallbackOptions options,
+        ILogger logger,
+        ApiRequestScope scope,
+        CancellationToken ct)
+    {
+        try
+        {
+            var continuation = await lookupPort.FindActiveAsync(
+                build.SourceId,
+                build.ExternalIdKind,
+                build.ExternalId,
+                ct);
+            return continuation == null
+                ? new ContinuationLookupResult(null, ContinuationNotVisible(http, options, scope))
+                : new ContinuationLookupResult(continuation, null);
+        }
+        catch (OperationCanceledException)
+        {
+            return new ContinuationLookupResult(null, Results.StatusCode(499));
+        }
+        catch (Exception ex)
+        {
+            scope.MarkResult(StatusCodes.Status503ServiceUnavailable);
+            logger.LogError(ex, "Workflow external approval continuation lookup failed.");
+            return new ContinuationLookupResult(
+                null,
+                RetryableJson(
+                    http,
+                    options,
+                    "EXTERNAL_APPROVAL_LOOKUP_UNAVAILABLE",
+                    "Workflow external approval continuation lookup is unavailable.",
+                    StatusCodes.Status503ServiceUnavailable));
+        }
+    }
+
+    private static IResult ContinuationNotVisible(
+        HttpContext http,
+        WorkflowExternalApprovalCallbackOptions options,
+        ApiRequestScope scope)
+    {
+        scope.MarkResult(Status425TooEarly);
+        return RetryableJson(
+            http,
+            options,
+            "EXTERNAL_APPROVAL_CONTINUATION_NOT_VISIBLE",
+            "Workflow external approval continuation is not visible yet.",
+            Status425TooEarly);
+    }
+
+    private static IResult? EnsureReplayStoreAvailable(
+        HttpContext http,
+        IWorkflowWebhookReplayAdmissionPort replayAdmissionPort,
+        WorkflowExternalApprovalCallbackOptions options,
+        ApiRequestScope scope)
+    {
+        if (replayAdmissionPort.IsAvailable)
+            return null;
+
+        scope.MarkResult(StatusCodes.Status503ServiceUnavailable);
+        return RetryableJson(
+            http,
+            options,
+            "EXTERNAL_APPROVAL_REPLAY_STORE_UNAVAILABLE",
+            "Workflow external approval replay store is unavailable.",
+            StatusCodes.Status503ServiceUnavailable);
+    }
+
+    private static WorkflowWebhookReplayAdmissionRequest BuildReplayAdmission(
+        ExternalApprovalCallbackBuildResult build,
+        DateTimeOffset receivedAt)
+    {
+        var commandId = BuildSeed(
+            "external-approval",
+            build.SourceId,
+            build.ExternalIdKind,
+            build.ExternalId,
+            build.TerminalStatus);
+        var canonicalExternalApprovalId = BuildCanonicalExternalApprovalId(
+            build.SourceId,
+            build.ExternalIdKind,
+            build.ExternalId);
+        return new WorkflowWebhookReplayAdmissionRequest(
+            ReplayRouteKey,
+            build.SourceId,
+            canonicalExternalApprovalId,
+            build.TerminalStatus,
+            receivedAt,
+            commandId,
+            commandId);
+    }
+
+    private static async Task<ReplayAdmissionResult> AdmitReplayAsync(
+        HttpContext http,
+        WorkflowWebhookReplayAdmissionRequest admission,
+        IWorkflowWebhookReplayAdmissionPort replayAdmissionPort,
+        WorkflowExternalApprovalCallbackOptions options,
+        ILogger logger,
+        ApiRequestScope scope,
+        CancellationToken ct)
+    {
+        try
+        {
+            return new ReplayAdmissionResult(await replayAdmissionPort.AdmitAsync(admission, ct), null);
+        }
+        catch (OperationCanceledException)
+        {
+            return new ReplayAdmissionResult(null, Results.StatusCode(499));
+        }
+        catch (Exception ex)
+        {
+            scope.MarkResult(StatusCodes.Status503ServiceUnavailable);
+            logger.LogError(ex, "Workflow external approval replay admission failed.");
+            return new ReplayAdmissionResult(
+                null,
+                RetryableJson(
+                    http,
+                    options,
+                    "EXTERNAL_APPROVAL_REPLAY_ADMISSION_FAILED",
+                    "Workflow external approval replay admission failed.",
+                    StatusCodes.Status503ServiceUnavailable));
+        }
+    }
+
+    private static IResult DuplicateAdmission(
+        ExternalApprovalCallbackBuildResult build,
+        WorkflowWebhookReplayAdmission replayAdmission,
+        ApiRequestScope scope)
+    {
+        scope.MarkResult(StatusCodes.Status202Accepted);
+        return Results.Accepted(
+            value: new
+            {
+                accepted = true,
+                duplicate = true,
+                sourceId = build.SourceId,
+                externalIdKind = build.ExternalIdKind,
+                externalId = build.ExternalId,
+                terminalStatus = build.TerminalStatus,
+                commandId = replayAdmission.ExistingCommandId,
+                correlationId = replayAdmission.ExistingCorrelationId,
+            });
+    }
+
+    private static IResult ConflictingAdmission(ApiRequestScope scope)
+    {
+        scope.MarkResult(StatusCodes.Status409Conflict);
+        return Results.Json(
+            new { code = "EXTERNAL_APPROVAL_TERMINAL_CONFLICT", message = "External approval terminal status conflicts with a previously admitted terminal status." },
+            statusCode: StatusCodes.Status409Conflict);
     }
 
     private static async Task<IResult> DispatchAsync(
@@ -648,4 +758,14 @@ internal static class WorkflowExternalApprovalCallbackEndpoints
                 message,
                 statusCode);
     }
+
+    private sealed record RequestBodyReadResult(byte[] RawBody, IResult? Result);
+
+    private sealed record ContinuationLookupResult(
+        WorkflowExternalApprovalContinuation? Continuation,
+        IResult? Result);
+
+    private sealed record ReplayAdmissionResult(
+        WorkflowWebhookReplayAdmission? Admission,
+        IResult? Result);
 }

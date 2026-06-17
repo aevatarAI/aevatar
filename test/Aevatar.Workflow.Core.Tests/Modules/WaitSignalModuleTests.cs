@@ -3,6 +3,7 @@ using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Execution;
+using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Modules;
 using FluentAssertions;
 using Google.Protobuf;
@@ -194,6 +195,14 @@ public sealed class WaitSignalModuleTests
         registered.SignalName.Should().Be("approval-terminal");
         registered.CallbackIdempotencyKey.Should().Be("idem-42");
         registered.RequestId.Should().Be("request-42");
+        WorkflowArtifactFactBuilder.TryBuild(
+                Envelope(registered),
+                "workflow-approval",
+                "run-approval",
+                out var committedFact)
+            .Should()
+            .BeTrue();
+        committedFact.Should().BeOfType<WorkflowExternalApprovalContinuationRegisteredEvent>();
     }
 
     [Fact]
@@ -258,6 +267,86 @@ public sealed class WaitSignalModuleTests
     }
 
     [Fact]
+    public async Task HandleAsync_WhenExternalApprovalWaitTimesOut_ShouldFailStepAndPublishClearedFactOnce()
+    {
+        var module = new WaitSignalModule();
+        var context = new RecordingEventHandlerContext(
+            new EmptyServiceProvider(),
+            new StubAgent("workflow-approval"),
+            NullLogger.Instance);
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "wait-approval",
+                StepType = "wait_signal",
+                RunId = "run-approval",
+                StepParameters = new WorkflowStepParameters
+                {
+                    Parameters = { ["timeout_ms"] = "5000" },
+                    ExternalApproval = new WorkflowExternalApprovalWaitOptions
+                    {
+                        SourceId = "nyxid",
+                        ExternalIdKind = "instance_code",
+                        ExternalId = "app-42",
+                        SignalName = "approval-terminal",
+                        CallbackIdempotencyKey = "idem-42",
+                        RequestId = "request-42",
+                    },
+                },
+            }),
+            context,
+            CancellationToken.None);
+        var scheduled = context.Scheduled.Should().ContainSingle().Subject;
+        context.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(
+                new WaitSignalTimeoutFiredEvent
+                {
+                    RunId = "run-approval",
+                    StepId = "wait-approval",
+                    SignalName = "approval-terminal",
+                    TimeoutMs = 5000,
+                },
+                scheduled),
+            context,
+            CancellationToken.None);
+
+        var failed = context.Published.Select(item => item.Event)
+            .OfType<StepCompletedEvent>()
+            .Should()
+            .ContainSingle()
+            .Subject;
+        failed.RunId.Should().Be("run-approval");
+        failed.StepId.Should().Be("wait-approval");
+        failed.Success.Should().BeFalse();
+        failed.Error.Should().Contain("approval-terminal");
+
+        var cleared = context.Published.Select(item => item.Event)
+            .OfType<WorkflowExternalApprovalContinuationClearedEvent>()
+            .Should()
+            .ContainSingle()
+            .Subject;
+        cleared.RunId.Should().Be("run-approval");
+        cleared.StepId.Should().Be("wait-approval");
+        cleared.SignalName.Should().Be("approval-terminal");
+        cleared.SourceId.Should().Be("nyxid");
+        cleared.ExternalIdKind.Should().Be("instance_code");
+        cleared.ExternalId.Should().Be("app-42");
+        cleared.CallbackIdempotencyKey.Should().Be("idem-42");
+        cleared.RequestId.Should().Be("request-42");
+        WorkflowArtifactFactBuilder.TryBuild(
+                Envelope(cleared),
+                "workflow-approval",
+                "run-approval",
+                out var committedFact)
+            .Should()
+            .BeTrue();
+        committedFact.Should().BeOfType<WorkflowExternalApprovalContinuationClearedEvent>();
+    }
+
+    [Fact]
     public async Task HandleAsync_WhenExternalApprovalWaiterIsReplaced_ShouldClearOldBinding()
     {
         var module = new WaitSignalModule();
@@ -309,15 +398,31 @@ public sealed class WaitSignalModuleTests
             },
         };
 
-    private static EventEnvelope Envelope(IMessage evt)
+    private static EventEnvelope Envelope(IMessage evt, RuntimeCallbackLease? lease = null)
     {
-        return new EventEnvelope
+        var envelope = new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
         };
+
+        if (lease != null)
+        {
+            envelope.Runtime = new EnvelopeRuntime
+            {
+                Callback = new EnvelopeCallbackContext
+                {
+                    CallbackId = lease.CallbackId,
+                    Generation = lease.Generation,
+                    FiredAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    SlotEpoch = lease.SlotEpoch,
+                },
+            };
+        }
+
+        return envelope;
     }
 
     private sealed class RecordingEventHandlerContext : IWorkflowExecutionContext
@@ -333,6 +438,7 @@ public sealed class WaitSignalModuleTests
         }
 
         public List<(IMessage Event, TopologyAudience Direction)> Published { get; } = [];
+        public List<RuntimeCallbackLease> Scheduled { get; } = [];
         public EventEnvelope InboundEnvelope { get; }
         public string AgentId => Agent.Id;
         public IAgent Agent { get; }
@@ -409,8 +515,16 @@ public sealed class WaitSignalModuleTests
             TimeSpan dueTime,
             IMessage evt,
             EventEnvelopePublishOptions? options = null,
-            CancellationToken ct = default) =>
-            Task.FromResult(new RuntimeCallbackLease(AgentId, callbackId, 1, RuntimeCallbackBackend.InMemory));
+            CancellationToken ct = default)
+        {
+            _ = dueTime;
+            _ = evt;
+            _ = options;
+            _ = ct;
+            var lease = new RuntimeCallbackLease(AgentId, callbackId, Scheduled.Count + 1, RuntimeCallbackBackend.InMemory);
+            Scheduled.Add(lease);
+            return Task.FromResult(lease);
+        }
 
         public Task CancelDurableCallbackAsync(RuntimeCallbackLease lease, CancellationToken ct = default) =>
             Task.CompletedTask;
