@@ -7,8 +7,9 @@
 ## 快速结论
 
 - `/api/chat`（SSE）与 `/api/ws/chat`（WebSocket）能力一致，仅传输协议不同。
-- `/api/chat` 支持 `application/json` 与 `multipart/form-data`；multipart producer 只负责把单个 `file` 表单文件写入 artifact store，并把返回的 typed `WorkflowFileRef` 注入既有 input part。
+- `/api/chat` 支持 `application/json` 与 `multipart/form-data`；multipart producer 复用 workflow infrastructure 的共享 parser 校验表单与 pending files，再把 `file` 表单文件写入 artifact store，并把返回的 typed `WorkflowFileRef` 注入既有 input part。
 - multipart 默认允许 image/audio/video 与 PDF、DOCX、CSV、plain text、markdown、XLSX；非 image/audio/video 的允许类型统一进入 `inputParts[].type = "file"`。
+- scope service stream 入口只在解析出 workflow service 目标后才会把 pending files 写入 artifact store；static / scripting 目标收到 multipart 文件会 fail closed，不通过公开 JSON `inputParts`、headers 或 metadata 偷渡文件语义。
 - 支持 typed `source`、`workflowYamls`、`workflow` 与 `default(auto)` 的运行选择；`default(auto)` 仅在未提供 source/workflow/workflowYamls 时触发。
 - `workflow` 用于已注册 workflow 名称查找（内建 + 文件加载）；`workflowYamls` 仅用于 inline YAML bundle（首项入口）。
 - 当 `workflow` 与 `workflowYamls` 同时出现时，固定使用 `workflowYamls`。

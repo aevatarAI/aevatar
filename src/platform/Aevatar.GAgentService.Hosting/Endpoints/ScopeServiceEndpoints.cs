@@ -32,6 +32,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.Text.Json;
 
@@ -47,6 +48,7 @@ public static class ScopeServiceEndpoints
     {
         WriteIndented = true,
     };
+    private static readonly JsonSerializerOptions ScopeRequestJsonOptions = new(JsonSerializerDefaults.Web);
 
     public static IEndpointRouteBuilder MapScopeServiceEndpoints(this IEndpointRouteBuilder app)
     {
@@ -593,12 +595,13 @@ public static class ScopeServiceEndpoints
     private static async Task HandleInvokeDefaultChatStreamAsync(
         HttpContext http,
         string scopeId,
-        StreamScopeServiceHttpRequest request,
         [FromServices] ServiceInvocationResolutionService resolutionService,
         [FromServices] ServiceInvokeReadinessErrorMapper readinessErrorMapper,
         [FromServices] IInvokeAdmissionAuthorizer admissionAuthorizer,
         [FromServices] IServiceRunRegistrationPort serviceRunRegistrationPort,
         [FromServices] IWorkflowChatRunInteractionPort chatRunService,
+        [FromServices] WorkflowMultipartFileInputParser multipartFileInputParser,
+        [FromServices] IWorkflowFileIngressPort workflowFileIngressPort,
         [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus> scriptServiceRunService,
         [FromServices] IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
@@ -613,13 +616,14 @@ public static class ScopeServiceEndpoints
             scopeId,
             serviceId,
             "chat",
-            request,
+            multipartFileInputParser,
             appId: null,
             resolutionService,
             readinessErrorMapper,
             admissionAuthorizer,
             serviceRunRegistrationPort,
             chatRunService,
+            workflowFileIngressPort,
             scriptServiceRunService,
             staticGAgentStreamInvocationPort,
             options,
@@ -656,13 +660,14 @@ public static class ScopeServiceEndpoints
         string scopeId,
         string memberId,
         string endpointId,
-        StreamScopeServiceHttpRequest request,
         [FromServices] IMemberPublishedServiceResolver memberPublishedServiceResolver,
         [FromServices] ServiceInvocationResolutionService resolutionService,
         [FromServices] ServiceInvokeReadinessErrorMapper readinessErrorMapper,
         [FromServices] IInvokeAdmissionAuthorizer admissionAuthorizer,
         [FromServices] IServiceRunRegistrationPort serviceRunRegistrationPort,
         [FromServices] IWorkflowChatRunInteractionPort chatRunService,
+        [FromServices] WorkflowMultipartFileInputParser multipartFileInputParser,
+        [FromServices] IWorkflowFileIngressPort workflowFileIngressPort,
         [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus> scriptServiceRunService,
         [FromServices] IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
@@ -681,13 +686,14 @@ public static class ScopeServiceEndpoints
                 memberResolution.ScopeId,
                 memberResolution.PublishedServiceId,
                 endpointId,
-                request,
+                multipartFileInputParser,
                 null,
                 resolutionService,
                 readinessErrorMapper,
                 admissionAuthorizer,
                 serviceRunRegistrationPort,
                 chatRunService,
+                workflowFileIngressPort,
                 scriptServiceRunService,
                 staticGAgentStreamInvocationPort,
                 options,
@@ -752,13 +758,14 @@ public static class ScopeServiceEndpoints
         string scopeId,
         string teamId,
         string endpointId,
-        StreamScopeServiceHttpRequest request,
         [FromServices] ITeamEntryMemberResolver teamEntryMemberResolver,
         [FromServices] ServiceInvocationResolutionService resolutionService,
         [FromServices] ServiceInvokeReadinessErrorMapper readinessErrorMapper,
         [FromServices] IInvokeAdmissionAuthorizer admissionAuthorizer,
         [FromServices] IServiceRunRegistrationPort serviceRunRegistrationPort,
         [FromServices] IWorkflowChatRunInteractionPort chatRunService,
+        [FromServices] WorkflowMultipartFileInputParser multipartFileInputParser,
+        [FromServices] IWorkflowFileIngressPort workflowFileIngressPort,
         [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus> scriptServiceRunService,
         [FromServices] IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
@@ -775,13 +782,14 @@ public static class ScopeServiceEndpoints
                 teamResolution.ScopeId,
                 teamResolution.PublishedServiceId,
                 endpointId,
-                request,
+                multipartFileInputParser,
                 null,
                 resolutionService,
                 readinessErrorMapper,
                 admissionAuthorizer,
                 serviceRunRegistrationPort,
                 chatRunService,
+                workflowFileIngressPort,
                 scriptServiceRunService,
                 staticGAgentStreamInvocationPort,
                 options,
@@ -1504,13 +1512,14 @@ public static class ScopeServiceEndpoints
         string scopeId,
         string serviceId,
         string endpointId,
-        StreamScopeServiceHttpRequest request,
+        WorkflowMultipartFileInputParser multipartFileInputParser,
         string? appId,
         [FromServices] ServiceInvocationResolutionService resolutionService,
         [FromServices] ServiceInvokeReadinessErrorMapper readinessErrorMapper,
         [FromServices] IInvokeAdmissionAuthorizer admissionAuthorizer,
         [FromServices] IServiceRunRegistrationPort serviceRunRegistrationPort,
         [FromServices] IWorkflowChatRunInteractionPort chatRunService,
+        [FromServices] IWorkflowFileIngressPort workflowFileIngressPort,
         [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus> scriptServiceRunService,
         [FromServices] IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
@@ -1521,6 +1530,19 @@ public static class ScopeServiceEndpoints
             if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
                 return;
 
+            var requestInput = await ParseScopeStreamRequestAsync(http, multipartFileInputParser, ct);
+            if (requestInput.Failure != null)
+            {
+                await WriteJsonErrorResponseAsync(
+                    http,
+                    requestInput.Failure.Value.StatusCode,
+                    requestInput.Failure.Value.Code,
+                    requestInput.Failure.Value.Message,
+                    ct);
+                return;
+            }
+
+            var request = requestInput.Request!;
             var normalizedPrompt = request.Prompt?.Trim() ?? string.Empty;
             var scopedHeaders = BuildScopedHeaders(request.Headers);
             var callerCredential = WorkflowCallerCredentialExtractor.Extract(http);
@@ -1553,12 +1575,23 @@ public static class ScopeServiceEndpoints
             {
                 case ServiceImplementationKind.Workflow:
                     EnsureWorkflowStreamTarget(target, invocationRequest);
+                    var inputParts = MapInputParts(request.InputParts);
+                    if (requestInput.MultipartForm is { HasFiles: true } multipartForm)
+                    {
+                        var uploadedParts = await IngestMultipartInputPartsAsync(
+                            multipartForm,
+                            workflowFileIngressPort,
+                            scopeId,
+                            ct);
+                        inputParts = AppendInputParts(inputParts, uploadedParts);
+                    }
+
                     await WorkflowCapabilityEndpoints.HandleChat(
                         http,
                         new ChatInput
                         {
                             Prompt = normalizedPrompt,
-                            InputParts = MapInputParts(request.InputParts),
+                            InputParts = inputParts,
                             Source = new WorkflowChatSourceInput
                             {
                                 Kind = "definition_actor",
@@ -1591,6 +1624,7 @@ public static class ScopeServiceEndpoints
                     break;
 
                 case ServiceImplementationKind.Static:
+                    EnsureNoMultipartFilesForNonWorkflowStream(requestInput);
                     await HandleStaticGAgentChatStreamAsync(
                         http,
                         normalizedPrompt,
@@ -1605,6 +1639,7 @@ public static class ScopeServiceEndpoints
                     break;
 
                 case ServiceImplementationKind.Scripting:
+                    EnsureNoMultipartFilesForNonWorkflowStream(requestInput);
                     await HandleScriptingServiceChatStreamAsync(
                         http,
                         target,
@@ -3148,9 +3183,11 @@ const response = await fetch("{{invokePath}}", {
                     NyxIdRoutePreference = route,
                 };
             }
-            catch
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                // Best-effort; fall back to provider defaults if config unavailable.
+                http.RequestServices.GetService<ILoggerFactory>()
+                    ?.CreateLogger("Aevatar.GAgentService.Hosting.Endpoints.ScopeServiceEndpoints")
+                    .LogWarning(ex, "Failed to read scoped user LLM configuration; provider defaults will be used.");
             }
         }
 
@@ -3170,6 +3207,67 @@ const response = await fetch("{{invokePath}}", {
         }
     }
 
+    private static async ValueTask<ScopeStreamRequestInput> ParseScopeStreamRequestAsync(
+        HttpContext http,
+        WorkflowMultipartFileInputParser multipartFileInputParser,
+        CancellationToken ct)
+    {
+        if (WorkflowMultipartFileInputParser.IsMultipartForm(http.Request.ContentType))
+        {
+            var multipartResult = await multipartFileInputParser.ParseAsync(http, ct);
+            if (!multipartResult.Succeeded)
+                return ScopeStreamRequestInput.Failed(ToScopeStreamRequestError(multipartResult.Error!.Value));
+
+            var request = ParseScopeStreamPayload(multipartResult.RawPayloadJson);
+            if (request == null)
+                return ScopeStreamRequestInput.Failed(ScopeStreamRequestParseError.InvalidRequest);
+
+            return ScopeStreamRequestInput.Success(request, multipartResult.Form);
+        }
+
+        if (!IsJsonContentType(http.Request.ContentType))
+            return ScopeStreamRequestInput.Failed(ScopeStreamRequestParseError.UnsupportedMediaType);
+
+        StreamScopeServiceHttpRequest? parsed;
+        try
+        {
+            parsed = await JsonSerializer.DeserializeAsync<StreamScopeServiceHttpRequest>(
+                http.Request.Body,
+                ScopeRequestJsonOptions,
+                ct);
+        }
+        catch (JsonException)
+        {
+            return ScopeStreamRequestInput.Failed(ScopeStreamRequestParseError.InvalidRequest);
+        }
+
+        return parsed == null
+            ? ScopeStreamRequestInput.Failed(ScopeStreamRequestParseError.InvalidRequest)
+            : ScopeStreamRequestInput.Success(parsed, null);
+    }
+
+    private static StreamScopeServiceHttpRequest? ParseScopeStreamPayload(string? payload)
+    {
+        if (string.IsNullOrWhiteSpace(payload))
+            return new StreamScopeServiceHttpRequest(null);
+
+        try
+        {
+            return JsonSerializer.Deserialize<StreamScopeServiceHttpRequest>(payload, ScopeRequestJsonOptions);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static bool IsJsonContentType(string? contentType) =>
+        contentType?.StartsWith("application/json", StringComparison.OrdinalIgnoreCase) == true;
+
+    private static ScopeStreamRequestParseError ToScopeStreamRequestError(
+        WorkflowMultipartFileInputParseError error) =>
+        new(error.StatusCode, error.Code, error.Message);
+
     private static IReadOnlyList<ChatInputContentPart>? MapInputParts(
         IReadOnlyList<StreamContentPartHttpRequest>? parts)
     {
@@ -3187,6 +3285,63 @@ const response = await fetch("{{invokePath}}", {
                 Uri = p.Uri,
                 Name = p.Name,
             }).ToList();
+    }
+
+    private static IReadOnlyList<ChatInputContentPart>? AppendInputParts(
+        IReadOnlyList<ChatInputContentPart>? existing,
+        IReadOnlyList<ChatInputContentPart> appended)
+    {
+        if (appended.Count == 0)
+            return existing;
+
+        if (existing is not { Count: > 0 })
+            return appended;
+
+        var inputParts = new List<ChatInputContentPart>(existing.Count + appended.Count);
+        inputParts.AddRange(existing);
+        inputParts.AddRange(appended);
+        return inputParts;
+    }
+
+    private static async ValueTask<IReadOnlyList<ChatInputContentPart>> IngestMultipartInputPartsAsync(
+        WorkflowMultipartFileInputForm form,
+        IWorkflowFileIngressPort workflowFileIngressPort,
+        string scopeId,
+        CancellationToken ct)
+    {
+        var inputParts = new List<ChatInputContentPart>(form.PendingFiles.Count);
+        foreach (var file in form.PendingFiles)
+        {
+            WorkflowFileIngressResult ingressResult;
+            try
+            {
+                ingressResult = await workflowFileIngressPort.IngestAsync(
+                    WorkflowMultipartFileInputParser.BuildIngressRequest(file, scopeId),
+                    ct);
+            }
+            catch (ArgumentException ex)
+            {
+                throw new InvalidOperationException("Multipart chat file input is invalid.", ex);
+            }
+            catch (InvalidOperationException ex)
+            {
+                throw new InvalidOperationException("Multipart chat file input is invalid.", ex);
+            }
+            catch (IOException ex)
+            {
+                throw new InvalidOperationException("Multipart chat file input is invalid.", ex);
+            }
+
+            inputParts.Add(WorkflowMultipartFileInputParser.BuildInputPart(file, ingressResult.FileRef));
+        }
+
+        return inputParts;
+    }
+
+    private static void EnsureNoMultipartFilesForNonWorkflowStream(ScopeStreamRequestInput requestInput)
+    {
+        if (requestInput.MultipartForm?.HasFiles == true)
+            throw new InvalidOperationException("Multipart file input is only supported for workflow services.");
     }
 
     private static IReadOnlyList<GAgentDraftRunInputPart>? MapGAgentDraftRunInputParts(
@@ -3549,6 +3704,36 @@ const response = await fetch("{{invokePath}}", {
         ServiceDeploymentCatalogSnapshot? Deployments,
         WorkflowActorBinding? Binding,
         IResult? Failure);
+
+    private sealed record ScopeStreamRequestInput(
+        StreamScopeServiceHttpRequest? Request,
+        WorkflowMultipartFileInputForm? MultipartForm,
+        ScopeStreamRequestParseError? Failure)
+    {
+        public static ScopeStreamRequestInput Success(
+            StreamScopeServiceHttpRequest request,
+            WorkflowMultipartFileInputForm? multipartForm) =>
+            new(request, multipartForm, null);
+
+        public static ScopeStreamRequestInput Failed(ScopeStreamRequestParseError error) =>
+            new(null, null, error);
+    }
+
+    private readonly record struct ScopeStreamRequestParseError(
+        int StatusCode,
+        string Code,
+        string Message)
+    {
+        public static readonly ScopeStreamRequestParseError UnsupportedMediaType = new(
+            StatusCodes.Status415UnsupportedMediaType,
+            "UNSUPPORTED_MEDIA_TYPE",
+            "Content-Type must be application/json or multipart/form-data.");
+
+        public static readonly ScopeStreamRequestParseError InvalidRequest = new(
+            StatusCodes.Status400BadRequest,
+            "INVALID_SERVICE_STREAM_REQUEST",
+            "Service stream request body is invalid.");
+    }
 
     public sealed record ScopeBindingStatusHttpResponse(
         bool Available,

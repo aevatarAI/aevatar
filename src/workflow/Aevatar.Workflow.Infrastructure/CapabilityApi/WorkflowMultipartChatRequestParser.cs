@@ -1,25 +1,28 @@
 using System.Text.Json;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.Options;
-using Microsoft.Extensions.Primitives;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
 internal sealed class WorkflowMultipartChatRequestParser
 {
+    private readonly WorkflowMultipartFileInputParser _fileInputParser;
     private readonly IWorkflowFileIngressPort _fileIngressPort;
-    private readonly IOptions<WorkflowMultipartFileIngressOptions> _multipartOptions;
-    private readonly IOptions<WorkflowFormFileIngressOptions> _formOptions;
+
+    public WorkflowMultipartChatRequestParser(
+        WorkflowMultipartFileInputParser fileInputParser,
+        IWorkflowFileIngressPort fileIngressPort)
+    {
+        _fileInputParser = fileInputParser;
+        _fileIngressPort = fileIngressPort;
+    }
 
     public WorkflowMultipartChatRequestParser(
         IWorkflowFileIngressPort fileIngressPort,
-        IOptions<WorkflowMultipartFileIngressOptions> multipartOptions,
-        IOptions<WorkflowFormFileIngressOptions>? formOptions = null)
+        Microsoft.Extensions.Options.IOptions<WorkflowMultipartFileIngressOptions> multipartOptions,
+        Microsoft.Extensions.Options.IOptions<WorkflowFormFileIngressOptions>? formOptions = null)
+        : this(new WorkflowMultipartFileInputParser(multipartOptions, formOptions), fileIngressPort)
     {
-        _fileIngressPort = fileIngressPort;
-        _multipartOptions = multipartOptions;
-        _formOptions = formOptions ?? Options.Create(new WorkflowFormFileIngressOptions());
     }
 
     public async ValueTask<WorkflowMultipartChatRequestParseResult> ParseAsync(
@@ -28,27 +31,16 @@ internal sealed class WorkflowMultipartChatRequestParser
     {
         ArgumentNullException.ThrowIfNull(http);
 
-        if (!IsMultipartForm(http.Request.ContentType))
+        var multipartResult = await _fileInputParser.ParseAsync(http, cancellationToken);
+        if (!multipartResult.Succeeded)
+            return WorkflowMultipartChatRequestParseResult.Failed(ToChatError(multipartResult.Error!.Value));
+
+        var form = multipartResult.Form!;
+        if (!form.HasFiles)
             return WorkflowMultipartChatRequestParseResult.Failed(
-                WorkflowMultipartChatRequestParseError.UnsupportedMediaType);
+                WorkflowMultipartChatRequestParseError.InvalidFileInput);
 
-        IFormCollection form;
-        try
-        {
-            form = await http.Request.ReadFormAsync(cancellationToken);
-        }
-        catch (InvalidDataException)
-        {
-            return WorkflowMultipartChatRequestParseResult.Failed(
-                WorkflowMultipartChatRequestParseError.InvalidRequest);
-        }
-
-        var formOptions = _formOptions.Value;
-        var filesResult = ResolveFiles(form, formOptions.FileFieldName);
-        if (!filesResult.Succeeded)
-            return WorkflowMultipartChatRequestParseResult.Failed(filesResult.Error!.Value);
-
-        var payloadResult = ParsePayload(form, formOptions.PayloadFieldName);
+        var payloadResult = ParsePayload(form.RawPayloadJson);
         if (!payloadResult.Succeeded)
             return WorkflowMultipartChatRequestParseResult.Failed(payloadResult.Error!.Value);
 
@@ -56,42 +48,15 @@ internal sealed class WorkflowMultipartChatRequestParser
         if (ContainsActorFacingFilePayload(source))
             return WorkflowMultipartChatRequestParseResult.Failed(WorkflowMultipartChatRequestParseError.InvalidFileInput);
 
-        var files = filesResult.Files!;
-        var inputPartTypes = new string[files.Count];
-        for (var i = 0; i < files.Count; i++)
-        {
-            var file = files[i];
-            if (!TryResolveInputPartType(file.ContentType, out var inputPartType))
-                return WorkflowMultipartChatRequestParseResult.Failed(
-                    WorkflowMultipartChatRequestParseError.InvalidFileInput);
-
-            var validationError = ValidateFile(file);
-            if (validationError != null)
-                return WorkflowMultipartChatRequestParseResult.Failed(validationError.Value);
-
-            inputPartTypes[i] = inputPartType;
-        }
-
-        var ownerScopeId = ResolveScalar(form, "scopeId");
+        var ownerScopeId = form.ResolveScalar("scopeId");
         var inputParts = new List<ChatInputContentPart>(source.InputParts ?? []);
-        for (var i = 0; i < files.Count; i++)
+        foreach (var file in form.PendingFiles)
         {
-            var file = files[i];
-            var content = await ReadFileContentAsync(file, cancellationToken);
-            if (content.Length == 0)
-                return WorkflowMultipartChatRequestParseResult.Failed(
-                    WorkflowMultipartChatRequestParseError.InvalidFileInput);
-
             WorkflowFileIngressResult ingressResult;
             try
             {
                 ingressResult = await _fileIngressPort.IngestAsync(
-                    new WorkflowFileIngressRequest(
-                        content,
-                        WorkflowFileSourceKind.FormUpload,
-                        FileName: Normalize(file.FileName),
-                        MediaType: Normalize(file.ContentType),
-                        OwnerScopeId: ownerScopeId),
+                    WorkflowMultipartFileInputParser.BuildIngressRequest(file, ownerScopeId),
                     cancellationToken);
             }
             catch (ArgumentException)
@@ -110,100 +75,23 @@ internal sealed class WorkflowMultipartChatRequestParser
                     WorkflowMultipartChatRequestParseError.InvalidFileInput);
             }
 
-            var uploadedFileRef = ToInputFileRef(ingressResult.FileRef);
-            inputParts.Add(new ChatInputContentPart
-            {
-                Type = inputPartTypes[i],
-                MediaType = uploadedFileRef.MediaType,
-                Uri = uploadedFileRef.ArtifactId ?? uploadedFileRef.Uri,
-                Name = uploadedFileRef.FileName ?? uploadedFileRef.Name,
-                FileRef = uploadedFileRef,
-            });
+            inputParts.Add(WorkflowMultipartFileInputParser.BuildInputPart(file, ingressResult.FileRef));
         }
 
         return WorkflowMultipartChatRequestParseResult.Success(source with
         {
-            Prompt = ResolveScalar(form, "prompt") ?? source.Prompt,
-            Workflow = ResolveScalar(form, "workflow") ?? source.Workflow,
-            SessionId = ResolveScalar(form, "sessionId") ?? source.SessionId,
+            Prompt = form.ResolveScalar("prompt") ?? source.Prompt,
+            Workflow = form.ResolveScalar("workflow") ?? source.Workflow,
+            SessionId = form.ResolveScalar("sessionId") ?? source.SessionId,
             ScopeId = ownerScopeId ?? source.ScopeId,
-            WorkflowYaml = ResolveScalar(form, "workflowYaml") ?? source.WorkflowYaml,
-            WorkflowYamls = ResolveWorkflowYamls(form) ?? source.WorkflowYamls,
+            WorkflowYaml = form.ResolveScalar("workflowYaml") ?? source.WorkflowYaml,
+            WorkflowYamls = form.ResolveRepeatedScalars("workflowYamls") ?? source.WorkflowYamls,
             InputParts = inputParts,
         });
     }
 
-    private WorkflowMultipartChatRequestParseError? ValidateFile(IFormFile file)
+    private static PayloadParseResult ParsePayload(string? payload)
     {
-        if (file.Length <= 0)
-            return WorkflowMultipartChatRequestParseError.InvalidFileInput;
-
-        var options = _multipartOptions.Value;
-        if (options.MaxFileBytes <= 0 || file.Length > options.MaxFileBytes)
-            return WorkflowMultipartChatRequestParseError.InvalidFileInput;
-
-        var mediaType = Normalize(file.ContentType);
-        if (mediaType == null || !IsAllowedMediaType(mediaType, options.AllowedMediaTypes))
-            return WorkflowMultipartChatRequestParseError.InvalidFileInput;
-
-        return null;
-    }
-
-    private static FileListResult ResolveFiles(IFormCollection form, string fileFieldName)
-    {
-        var expectedName = Normalize(fileFieldName) ?? "file";
-        if (form.Files.Count == 0)
-            return FileListResult.Failed(WorkflowMultipartChatRequestParseError.InvalidFileInput);
-
-        var files = new List<IFormFile>(form.Files.Count);
-        foreach (var file in form.Files)
-        {
-            if (!string.Equals(file.Name, expectedName, StringComparison.Ordinal))
-                return FileListResult.Failed(WorkflowMultipartChatRequestParseError.InvalidFileInput);
-
-            files.Add(file);
-        }
-
-        return FileListResult.Success(files);
-    }
-
-    private static async ValueTask<byte[]> ReadFileContentAsync(
-        IFormFile file,
-        CancellationToken cancellationToken)
-    {
-        await using var source = file.OpenReadStream();
-        using var target = new MemoryStream((int)Math.Min(file.Length, int.MaxValue));
-        await source.CopyToAsync(target, cancellationToken);
-        return target.ToArray();
-    }
-
-    private static bool IsMultipartForm(string? contentType) =>
-        contentType?.StartsWith("multipart/form-data", StringComparison.OrdinalIgnoreCase) == true;
-
-    private static bool TryResolveInputPartType(string? mediaType, out string type)
-    {
-        var normalized = Normalize(mediaType);
-        type = normalized switch
-        {
-            { } value when value.StartsWith("image/", StringComparison.OrdinalIgnoreCase) => "image",
-            { } value when value.StartsWith("audio/", StringComparison.OrdinalIgnoreCase) => "audio",
-            { } value when value.StartsWith("video/", StringComparison.OrdinalIgnoreCase) => "video",
-            { } => "file",
-            _ => string.Empty,
-        };
-
-        return type.Length > 0;
-    }
-
-    private static bool IsAllowedMediaType(string mediaType, IEnumerable<string> allowedMediaTypes) =>
-        allowedMediaTypes.Any(allowed =>
-            string.Equals(Normalize(allowed), mediaType, StringComparison.OrdinalIgnoreCase));
-
-    private static PayloadParseResult ParsePayload(
-        IFormCollection form,
-        string payloadFieldName)
-    {
-        var payload = ResolveScalar(form, payloadFieldName);
         if (payload == null)
             return PayloadParseResult.Success(null);
 
@@ -224,59 +112,8 @@ internal sealed class WorkflowMultipartChatRequestParser
             part.InlineFile != null ||
             part.FileRef != null) == true;
 
-    private static IReadOnlyList<string>? ResolveWorkflowYamls(IFormCollection form)
-    {
-        if (!form.TryGetValue("workflowYamls", out var values) || values.Count == 0)
-            return null;
-
-        var normalized = values
-            .Select(static value => string.IsNullOrWhiteSpace(value) ? null : value)
-            .Where(static value => value != null)
-            .Cast<string>()
-            .ToArray();
-
-        return normalized.Length == 0 ? null : normalized;
-    }
-
-    private static ChatInputFileRef ToInputFileRef(WorkflowFileRef fileRef) =>
-        new()
-        {
-            FileId = fileRef.FileId,
-            ArtifactId = fileRef.ArtifactId,
-            SourceKind = "form_upload",
-            SourceMessageId = fileRef.SourceMessageId,
-            SourceResourceKey = fileRef.SourceResourceKey,
-            FileName = fileRef.FileName,
-            MediaType = fileRef.MediaType,
-            CreatedAtUnixMs = fileRef.CreatedAtUnixMs,
-            ExpiresAtUnixMs = fileRef.ExpiresAtUnixMs,
-            Sha256 = fileRef.Sha256,
-            OwnerRunId = fileRef.OwnerRunId,
-            OwnerScopeId = fileRef.OwnerScopeId,
-        };
-
-    private static string? ResolveScalar(IFormCollection form, string key)
-    {
-        if (!form.TryGetValue(key, out StringValues values) || values.Count == 0)
-            return null;
-
-        var value = values[0];
-        return Normalize(value);
-    }
-
-    private static string? Normalize(string? value) =>
-        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-
-    private readonly record struct FileListResult(
-        IReadOnlyList<IFormFile>? Files,
-        WorkflowMultipartChatRequestParseError? Error)
-    {
-        public bool Succeeded => Error == null && Files is { Count: > 0 };
-
-        public static FileListResult Success(IReadOnlyList<IFormFile> files) => new(files, null);
-
-        public static FileListResult Failed(WorkflowMultipartChatRequestParseError error) => new(null, error);
-    }
+    private static WorkflowMultipartChatRequestParseError ToChatError(WorkflowMultipartFileInputParseError error) =>
+        new(error.StatusCode, error.Code, error.Message);
 
     private readonly record struct PayloadParseResult(ChatInput? Input, WorkflowMultipartChatRequestParseError? Error)
     {
