@@ -167,7 +167,7 @@ public sealed class AppScopedWorkflowService
         var receipt = await workspaceCommandPort.SaveDraftAsync(
             normalizedScopeId,
             stored,
-            workspace.StateVersion,
+            expectedVersion: null,
             ct);
 
         return (stored, receipt);
@@ -192,7 +192,7 @@ public sealed class AppScopedWorkflowService
             throw new WorkflowDraftNotFoundException(normalizedWorkflowId);
         }
 
-        await workspaceCommandPort.DeleteDraftAsync(normalizedScopeId, normalizedWorkflowId, workspace.StateVersion, ct);
+        await workspaceCommandPort.DeleteDraftAsync(normalizedScopeId, normalizedWorkflowId, expectedVersion: null, ct);
     }
 
     // Refactor (iter56/cluster-929-studio-workflow-obsolete-shims):
