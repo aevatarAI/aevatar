@@ -1,3 +1,5 @@
+using Aevatar.Foundation.Abstractions;
+
 namespace Aevatar.GAgents.Scheduled;
 
 /// <summary>
@@ -23,5 +25,16 @@ public interface IUserAgentCatalogCommandPort
 
     Task TombstoneAsync(
         string agentId,
+        CancellationToken ct = default);
+
+    Task ShareAsync(
+        string agentId,
+        OwnerScope ownerScope,
+        bool allowTrigger,
+        CancellationToken ct = default);
+
+    Task UnshareAsync(
+        string agentId,
+        OwnerScope ownerScope,
         CancellationToken ct = default);
 }

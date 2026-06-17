@@ -133,7 +133,11 @@ public sealed class FeishuCardNotificationPortTests
             CreateNyxClient(handler),
             new LarkMessageComposer(),
             NullLogger<FeishuCardNotificationPort>.Instance);
-        var port = new SkillBackedHumanInteractionPort([new HumanInteractionChannelToolSource(feishuPort)]);
+        var port = new SkillBackedHumanInteractionPort([
+            new HumanInteractionChannelToolSource(
+                feishuPort,
+                NullLogger<HumanInteractionChannelToolSource>.Instance),
+        ]);
 
         await port.DeliverSuspensionAsync(
             new HumanInteractionRequest

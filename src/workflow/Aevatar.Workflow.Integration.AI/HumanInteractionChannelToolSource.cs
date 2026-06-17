@@ -2,19 +2,30 @@ using System.Text.Json;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.Foundation.Abstractions.Interactions;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Integration.AI;
 
-public sealed class HumanInteractionChannelToolSource(IChannelInteractionNotificationPort notificationPort) : IAgentToolSource
+public sealed class HumanInteractionChannelToolSource : IAgentToolSource
 {
+    private readonly IChannelInteractionNotificationPort _notificationPort;
+
+    public HumanInteractionChannelToolSource(
+        IChannelInteractionNotificationPort notificationPort,
+        ILogger<HumanInteractionChannelToolSource>? logger = null)
+    {
+        _notificationPort = notificationPort;
+        _ = logger;
+    }
+
     public const string DeliveryCapability = "human_interaction.delivery";
     public const string ResolutionCapability = "human_interaction.resolution_update";
 
     public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
         Task.FromResult<IReadOnlyList<IAgentTool>>(
         [
-            new DeliveryTool(notificationPort),
-            new ResolutionTool(notificationPort),
+            new DeliveryTool(_notificationPort),
+            new ResolutionTool(_notificationPort),
         ]);
 
     private sealed class DeliveryTool(IChannelInteractionNotificationPort notificationPort) : IAgentTool, IAgentToolCapabilityDescriptor
