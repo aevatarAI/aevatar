@@ -103,6 +103,51 @@ public sealed class UserAgentCatalogCommandPortTests
     }
 
     [Fact]
+    public async Task ShareAsync_DispatchesCommand_AndCompletes()
+    {
+        var fixture = new Fixture();
+        var owner = OwnerScope.ForChannel("user-A", "lark", "bot-1", "alice");
+
+        await fixture.Port.ShareAsync("agent-shared", owner, allowTrigger: true, CancellationToken.None);
+
+        fixture.Captured.Should().ContainSingle();
+        var command = fixture.Captured[0].Payload.Unpack<UserAgentCatalogShareCommand>();
+        command.AgentId.Should().Be("agent-shared");
+        command.OwnerScope.Should().NotBeNull();
+        command.OwnerScope!.MatchesStrictly(owner).Should().BeTrue();
+        command.AllowTrigger.Should().BeTrue();
+        fixture.Captured[0].Route.PublisherActorId.Should().Be(ExpectedPublisher);
+        fixture.Captured[0].Route.Direct.TargetActorId.Should().Be(CatalogActorId);
+        await fixture.Dispatch.Received(1).DispatchAsync(CatalogActorId, Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task UnshareAsync_DispatchesCommand_AndCompletes()
+    {
+        var fixture = new Fixture();
+        var owner = OwnerScope.ForChannel("user-A", "lark", "bot-1", "alice");
+
+        await fixture.Port.UnshareAsync("agent-shared", owner, CancellationToken.None);
+
+        fixture.Captured.Should().ContainSingle();
+        var command = fixture.Captured[0].Payload.Unpack<UserAgentCatalogUnshareCommand>();
+        command.AgentId.Should().Be("agent-shared");
+        command.OwnerScope.Should().NotBeNull();
+        command.OwnerScope!.MatchesStrictly(owner).Should().BeTrue();
+        fixture.Captured[0].Route.PublisherActorId.Should().Be(ExpectedPublisher);
+        fixture.Captured[0].Route.Direct.TargetActorId.Should().Be(CatalogActorId);
+        await fixture.Dispatch.Received(1).DispatchAsync(CatalogActorId, Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ShareAsync_WithNullOwnerScope_Throws()
+    {
+        var fixture = new Fixture();
+        var act = () => fixture.Port.ShareAsync("agent-shared", null!, allowTrigger: true, CancellationToken.None);
+        await act.Should().ThrowAsync<ArgumentNullException>();
+    }
+
+    [Fact]
     public async Task UpsertAsync_EnsuresCatalogActorLifecycle_WhenActorMissing()
     {
         var fixture = new Fixture();

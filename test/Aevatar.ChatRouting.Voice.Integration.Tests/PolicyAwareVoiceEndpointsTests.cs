@@ -787,6 +787,18 @@ public sealed class PolicyAwareVoiceEndpointsTests
                 : null);
         }
 
+        public Task<UserAgentCatalogReadModelEntry?> GetVisibleForCallerAsync(
+            string agentId,
+            ScheduledOwnerScope caller,
+            CancellationToken ct = default) =>
+            GetForCallerAsync(agentId, caller, ct);
+
+        public Task<UserAgentCatalogReadModelEntry?> GetTriggerableForCallerAsync(
+            string agentId,
+            ScheduledOwnerScope caller,
+            CancellationToken ct = default) =>
+            GetForCallerAsync(agentId, caller, ct);
+
         public Task<bool> ExistsActiveAsync(string agentId, CancellationToken ct = default)
         {
             _ = ct;
@@ -797,6 +809,11 @@ public sealed class PolicyAwareVoiceEndpointsTests
             ScheduledOwnerScope caller,
             CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<UserAgentCatalogReadModelEntry>>([]);
+
+        public Task<IReadOnlyList<UserAgentCatalogReadModelEntry>> QueryVisibleByCallerAsync(
+            ScheduledOwnerScope caller,
+            CancellationToken ct = default) =>
+            QueryByCallerAsync(caller, ct);
 
         public Task<long?> GetStateVersionForCallerAsync(
             string agentId,

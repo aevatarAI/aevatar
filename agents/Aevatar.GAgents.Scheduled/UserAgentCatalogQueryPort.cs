@@ -7,12 +7,12 @@ namespace Aevatar.GAgents.Scheduled;
 /// <summary>
 /// Caller-scoped projection-backed query port for user-agent catalog entries.
 ///
-/// All reads filter by the caller's <see cref="OwnerScope"/> using strict full-tuple
-/// equality, **pushed into the projection store** as four <see cref="ProjectionDocumentFilter"/>
-/// Eq predicates (issue #466 §C). No application-layer <c>.Where(...)</c> on un-scoped
-/// data: the projection reader returns only documents that already match the caller's
-/// scope, so a misconfigured tenant cannot probe counts/cardinality of other tenants
-/// via Take.
+/// Owner-only reads filter by the caller's <see cref="OwnerScope"/> using strict full-tuple
+/// equality, **pushed into the projection store** as <see cref="ProjectionDocumentFilter"/>
+/// Eq predicates (issue #466 §C). Shared visible/triggerable reads use a scalar sharing
+/// audience Eq predicate and then re-check the typed grant before returning a row. No
+/// application-layer sweep over unscoped data: the projection reader returns only owner
+/// rows or rows indexed to the caller's sharing audience.
 ///
 /// Stored documents that pre-date the <c>owner_scope</c> field are re-projected with
 /// the new sub-message populated by the projector's lazy backfill from the legacy
@@ -21,7 +21,7 @@ namespace Aevatar.GAgents.Scheduled;
 /// remain invisible to caller-scoped queries until the next state event triggers a
 /// re-project; that's a transient migration cost, not an authorization gap.
 ///
-/// "Not found" and "exists but caller does not own it" both return <c>null</c> — same
+/// "Not found" and "exists but caller does not own or have a grant for it" both return <c>null</c> - same
 /// semantic, no existence disclosure for non-owners. State version reads inherit the
 /// same scoping so a non-owner cannot probe version progression either.
 /// </summary>
@@ -70,6 +70,37 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
         }
 
         return ToEntry(document);
+    }
+
+    public async Task<UserAgentCatalogReadModelEntry?> GetVisibleForCallerAsync(
+        string agentId,
+        OwnerScope caller,
+        CancellationToken ct = default) =>
+        await GetForCallerWithAccessAsync(agentId, caller, requireTrigger: false, ct);
+
+    public async Task<UserAgentCatalogReadModelEntry?> GetTriggerableForCallerAsync(
+        string agentId,
+        OwnerScope caller,
+        CancellationToken ct = default) =>
+        await GetForCallerWithAccessAsync(agentId, caller, requireTrigger: true, ct);
+
+    private async Task<UserAgentCatalogReadModelEntry?> GetForCallerWithAccessAsync(
+        string agentId,
+        OwnerScope caller,
+        bool requireTrigger,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(agentId)) return null;
+        ArgumentNullException.ThrowIfNull(caller);
+
+        var document = await _documentReader.GetAsync(agentId, ct);
+        if (document == null || document.Tombstoned)
+            return null;
+
+        if (DocumentMatchesCaller(document, caller) || DocumentGrantsSharedAccess(document, caller, requireTrigger))
+            return ToEntry(document);
+
+        return null;
     }
 
     public async Task<bool> ExistsActiveAsync(string agentId, CancellationToken ct = default)
@@ -139,6 +170,33 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
         return entries;
     }
 
+    public async Task<IReadOnlyList<UserAgentCatalogReadModelEntry>> QueryVisibleByCallerAsync(OwnerScope caller, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+
+        var byAgentId = new Dictionary<string, UserAgentCatalogReadModelEntry>(StringComparer.Ordinal);
+        foreach (var entry in await QueryByFiltersAsync(BuildOwnerScopeFilters(caller), caller, requireTrigger: false, ct))
+        {
+            byAgentId[entry.AgentId] = entry;
+            if (byAgentId.Count >= MaxCallerCatalogEntries)
+                return byAgentId.Values.ToArray();
+        }
+
+        if (UserAgentCatalogSharingAudience.TryBuildKey(caller, out var audienceKey))
+        {
+            foreach (var entry in await QueryByFiltersAsync(BuildSharingAudienceFilters(
+                         nameof(UserAgentCatalogDocument.VisibleSharingAudienceKey),
+                         audienceKey), caller, requireTrigger: false, ct))
+            {
+                byAgentId.TryAdd(entry.AgentId, entry);
+                if (byAgentId.Count >= MaxCallerCatalogEntries)
+                    return byAgentId.Values.ToArray();
+            }
+        }
+
+        return byAgentId.Values.ToArray();
+    }
+
     public async Task<long?> GetStateVersionForCallerAsync(string agentId, OwnerScope caller, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(agentId)) return null;
@@ -204,6 +262,78 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
         return filters;
     }
 
+    private async Task<IReadOnlyList<UserAgentCatalogReadModelEntry>> QueryByFiltersAsync(
+        IReadOnlyList<ProjectionDocumentFilter> filters,
+        OwnerScope caller,
+        bool requireTrigger,
+        CancellationToken ct)
+    {
+        var entries = new List<UserAgentCatalogReadModelEntry>();
+        string? cursor = null;
+        do
+        {
+            var query = new ProjectionDocumentQuery
+            {
+                Take = 200,
+                Filters = filters,
+                Cursor = cursor,
+            };
+
+            var page = await _documentReader.QueryAsync(query, ct);
+            foreach (var doc in page.Items)
+            {
+                if (doc.Tombstoned) continue;
+                if (!DocumentMatchesCaller(doc, caller) && !DocumentGrantsSharedAccess(doc, caller, requireTrigger))
+                    continue;
+
+                entries.Add(ToEntry(doc));
+                if (entries.Count >= MaxCallerCatalogEntries)
+                    return entries;
+            }
+
+            cursor = page.NextCursor;
+        }
+        while (!string.IsNullOrEmpty(cursor));
+
+        return entries;
+    }
+
+    private static IReadOnlyList<ProjectionDocumentFilter> BuildSharingAudienceFilters(
+        string fieldPath,
+        string audienceKey) =>
+        [
+            new()
+            {
+                FieldPath = fieldPath,
+                Operator = ProjectionDocumentFilterOperator.Eq,
+                Value = ProjectionDocumentValue.FromString(audienceKey),
+            },
+        ];
+
+    private static bool DocumentGrantsSharedAccess(
+        UserAgentCatalogDocument document,
+        OwnerScope caller,
+        bool requireTrigger)
+    {
+        if (!UserAgentCatalogSharingAudience.TryBuildKey(caller, out var callerAudienceKey))
+            return false;
+
+        var grant = document.SharingGrant;
+        if (grant is null)
+            return false;
+
+        if (requireTrigger && !grant.AllowTrigger)
+            return false;
+
+        if (!string.Equals(grant.SharedWithRegistrationScope, caller.RegistrationScopeId, StringComparison.Ordinal))
+            return false;
+
+        var materializedKey = requireTrigger
+            ? document.TriggerSharingAudienceKey
+            : document.VisibleSharingAudienceKey;
+        return string.Equals(materializedKey, callerAudienceKey, StringComparison.Ordinal);
+    }
+
     /// <summary>
     /// Strict full-tuple equality on the caller's <see cref="OwnerScope"/> against the
     /// document's projected scope. Falls back to lazy backfill from the legacy scattered
@@ -256,6 +386,7 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
             LarkReceiveIdTypeFallback = document.LarkReceiveIdTypeFallback ?? string.Empty,
             OutputFormat = document.OutputFormat,
             OwnerScope = documentScope,
+            SharingGrant = document.SharingGrant?.Clone(),
             TargetPlatform = document.TargetPlatform ?? string.Empty,
             CatalogAuthorityStateVersion = document.StateVersion,
             CatalogLastEventId = document.LastEventId ?? string.Empty,

@@ -101,6 +101,7 @@ public sealed class UserAgentCatalogProjector
         document.LarkReceiveIdFallback = entry.LarkReceiveIdFallback ?? string.Empty;
         document.LarkReceiveIdTypeFallback = entry.LarkReceiveIdTypeFallback ?? string.Empty;
         document.OutputFormat = entry.OutputFormat;
+        document.SharingGrant = entry.SharingGrant?.Clone();
         document.TargetPlatform = entry.TargetPlatform ?? string.Empty;
 
         // Project owner_scope verbatim from the upserted entry. Per issue #466 the entry
@@ -125,6 +126,14 @@ public sealed class UserAgentCatalogProjector
 #pragma warning restore CS0612
         if (entryScope is not null)
             document.OwnerScope = entryScope;
+
+        if (entry.SharingGrant is not null &&
+            UserAgentCatalogSharingAudience.TryBuildKey(entryScope, out var audienceKey))
+        {
+            document.VisibleSharingAudienceKey = audienceKey;
+            if (entry.SharingGrant.AllowTrigger)
+                document.TriggerSharingAudienceKey = audienceKey;
+        }
 
         document.StateVersion = stateEvent.Version;
         document.LastEventId = stateEvent.EventId ?? string.Empty;
