@@ -1,6 +1,7 @@
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.Abstractions.Sessions;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Foundation.VoicePresence.Hosting;
 
@@ -8,25 +9,26 @@ public sealed class ActorOwnedVoiceRealtimeSession
     : IRealtimeSession<VoiceRealtimeSessionRequest, VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeFrame, VoiceRealtimeSessionCompletion>
 {
     internal static readonly TimeSpan DefaultLeaseTtl = TimeSpan.FromMinutes(5);
-    private static readonly TimeSpan TakeoverReadInterval = TimeSpan.FromMilliseconds(200);
-    private const int TakeoverReadMaxAttempts = 10;
     private const string HostOwnerId = "voice-presence.host";
 
     private readonly IVoicePresenceCapabilityQueryPort _capabilityQueryPort;
     private readonly IVoicePresenceSessionLeasePort _leasePort;
     private readonly IVoiceVolatileMediaStreamPort _mediaStreamPort;
     private readonly TimeProvider _timeProvider;
+    private readonly ILogger<ActorOwnedVoiceRealtimeSession>? _logger;
 
     public ActorOwnedVoiceRealtimeSession(
         IVoicePresenceCapabilityQueryPort capabilityQueryPort,
         IVoicePresenceSessionLeasePort leasePort,
         IVoiceVolatileMediaStreamPort mediaStreamPort,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        ILogger<ActorOwnedVoiceRealtimeSession>? logger = null)
     {
         _capabilityQueryPort = capabilityQueryPort ?? throw new ArgumentNullException(nameof(capabilityQueryPort));
         _leasePort = leasePort ?? throw new ArgumentNullException(nameof(leasePort));
         _mediaStreamPort = mediaStreamPort ?? throw new ArgumentNullException(nameof(mediaStreamPort));
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _logger = logger;
     }
 
     public async Task<RealtimeSessionResult<VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeSessionCompletion>> ExecuteAsync(
@@ -70,11 +72,16 @@ public sealed class ActorOwnedVoiceRealtimeSession
                     .Success(acceptedDetach, VoiceRealtimeSessionCompletion.Accepted, completed: true);
             }
 
-            // Attach with an existing/stale transport: TAKE IT OVER instead of rejecting with 409.
-            // The lease release is SessionId-only (no expiry/owner/epoch gate), so this evicts even a
-            // TTL-expired or relay-dead lease that left TransportAttached stuck — a new Start must never
-            // be permanently blocked by a prior session's leftover state. AcquireAsync below bumps the
-            // lease epoch, so the new session strictly out-fences the old relay's late frames.
+            // Attach over an existing/stale transport: TAKE IT OVER instead of rejecting with 409.
+            // The gate above reads an eventually-consistent capability PROJECTION; a stale projection
+            // (Garnet write-skip / version gap) would make a projection re-read fail-close every retry
+            // forever. So we deliberately do NOT re-read the projection and fail-close here. We dispatch
+            // the SessionId-only lease release (which clears the grain even on a TTL-expired / relay-dead
+            // lease) and fall through to AcquireAsync. The GRAIN is the strongly-consistent authority:
+            // HandleSessionLeaseRequestedAsync grants only when no DIFFERENT session holds the lease (a
+            // genuinely-live peer makes the lease observation time out rather than double-attaching), and
+            // every grant bumps LeaseEpoch so the new session out-fences the old relay's late frames
+            // (IsAcceptedTransportSignal enforces the epoch match).
             if (!string.IsNullOrWhiteSpace(capability.ActiveSessionId))
             {
                 var evictHandle = new VoicePresenceSessionLeaseHandle(
@@ -89,18 +96,14 @@ public sealed class ActorOwnedVoiceRealtimeSession
                     capability.LeaseEpoch,
                     inbound.ToolContext?.Clone());
                 await _mediaStreamPort.DetachAsync(evictHandle, expectedTransport: null, ct);
+                _logger?.LogInformation(
+                    "voice takeover: evicted prior session {EvictedSessionId} (transportLease={TransportLeaseId}, epoch={LeaseEpoch}) on actor {ActorId}/{ModuleName}; proceeding to acquire",
+                    capability.ActiveSessionId,
+                    capability.ActiveTransportLeaseId,
+                    capability.LeaseEpoch,
+                    capability.ActorId,
+                    capability.ModuleName);
             }
-
-            // Bounded re-read until the evict is observed cleared, absorbing projection lag / a transient
-            // write-skip so a single attach doesn't bounce. Fail closed only if still attached after the
-            // budget (the next attach re-fences by epoch and succeeds).
-            capability = await AwaitClearedCapabilityAsync(inbound.ActorId, inbound.ModuleName, ct);
-            if (capability == null)
-                return Failure(VoiceRealtimeSessionStartError.NotFound);
-            if (!capability.Initialized)
-                return Failure(VoiceRealtimeSessionStartError.NotInitialized);
-            if (capability.TransportAttached || IsActive(capability.LeaseExpiresAt, capability.ActiveSessionId))
-                return Failure(VoiceRealtimeSessionStartError.TransportAlreadyAttached);
         }
 
         if (inbound.Purpose == VoiceRealtimeSessionPurpose.Detach)
@@ -154,27 +157,4 @@ public sealed class ActorOwnedVoiceRealtimeSession
         !string.IsNullOrWhiteSpace(activeSessionId) &&
         expiresAtUtc.HasValue &&
         expiresAtUtc.Value.ToUniversalTime() > UtcNow;
-
-    // After a takeover evict, poll the capability projection (bounded) until it observes the cleared
-    // state, so a single attach absorbs projection lag instead of fail-closing on a stale read. Returns
-    // the latest snapshot (the caller fail-closes if it is still attached after the budget).
-    private async Task<VoicePresenceCapabilitySnapshot?> AwaitClearedCapabilityAsync(
-        string actorId,
-        string? moduleName,
-        CancellationToken ct)
-    {
-        VoicePresenceCapabilitySnapshot? snapshot = null;
-        for (var attempt = 0; attempt < TakeoverReadMaxAttempts; attempt++)
-        {
-            snapshot = await _capabilityQueryPort.GetAsync(actorId, moduleName, ct);
-            if (snapshot == null)
-                return null;
-            if (!snapshot.TransportAttached && !IsActive(snapshot.LeaseExpiresAt, snapshot.ActiveSessionId))
-                return snapshot;
-            if (attempt < TakeoverReadMaxAttempts - 1)
-                await Task.Delay(TakeoverReadInterval, _timeProvider, ct);
-        }
-
-        return snapshot;
-    }
 }
