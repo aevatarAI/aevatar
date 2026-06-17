@@ -88,6 +88,95 @@ public sealed class WorkflowFileSubmitToolTests
             .WithMessage("*WorkflowConnectedServiceFileSubmit:Targets[0].Endpoint*");
     }
 
+    [Theory]
+    [InlineData("Target", "", "Target")]
+    [InlineData("Provider", "", "Provider")]
+    [InlineData("OutputField", "", "OutputField")]
+    [InlineData("MaxFileBytes", "0", "MaxFileBytes")]
+    [InlineData("Arguments:folder:Name", "", "Arguments[folder].Name")]
+    public void AddWorkflowCapabilityServices_ShouldValidateConfiguredWorkflowFileSubmitTargetPolicy(
+        string setting,
+        string value,
+        string expectedPath)
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        var configurationValues = BuildWorkflowFileSubmitTargetConfiguration();
+        var configurationKey = $"WorkflowConnectedServiceFileSubmit:Targets:0:{setting}";
+        configurationValues[configurationKey] = value;
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(configurationValues)
+            .Build();
+
+        services.AddWorkflowCapability(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        var act = () => provider.GetRequiredService<IOptions<WorkflowConnectedServiceFileSubmitOptions>>().Value;
+
+        act.Should()
+            .Throw<OptionsValidationException>()
+            .WithMessage($"*WorkflowConnectedServiceFileSubmit:Targets[0].{expectedPath}*");
+    }
+
+    [Fact]
+    public void AddWorkflowCapabilityServices_ShouldValidateEmptyWorkflowFileSubmitAllowedMediaTypes()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        var configuration = new ConfigurationBuilder().Build();
+
+        services.AddWorkflowCapability(configuration);
+        services.Configure<WorkflowConnectedServiceFileSubmitOptions>(options =>
+        {
+            options.Targets.Add(new WorkflowConnectedServiceFileSubmitTarget(
+                Target: "submit_invoice",
+                Provider: "nyxid_connected_service",
+                OutputField: "document_id",
+                MaxFileBytes: 1024,
+                AllowedMediaTypes: new HashSet<string>(StringComparer.Ordinal),
+                Arguments: new Dictionary<string, WorkflowConnectedServiceFileSubmitArgumentPolicy>(StringComparer.Ordinal)));
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var act = () => provider.GetRequiredService<IOptions<WorkflowConnectedServiceFileSubmitOptions>>().Value;
+
+        act.Should()
+            .Throw<OptionsValidationException>()
+            .WithMessage("*WorkflowConnectedServiceFileSubmit:Targets[0].AllowedMediaTypes*");
+    }
+
+    [Fact]
+    public void AddWorkflowCapabilityServices_ShouldValidateBlankWorkflowFileSubmitArgumentKey()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        var configuration = new ConfigurationBuilder().Build();
+
+        services.AddWorkflowCapability(configuration);
+        services.Configure<WorkflowConnectedServiceFileSubmitOptions>(options =>
+        {
+            options.Targets.Add(new WorkflowConnectedServiceFileSubmitTarget(
+                Target: "submit_invoice",
+                Provider: "nyxid_connected_service",
+                OutputField: "document_id",
+                MaxFileBytes: 1024,
+                AllowedMediaTypes: new HashSet<string>(StringComparer.Ordinal) { "text/plain" },
+                Arguments: new Dictionary<string, WorkflowConnectedServiceFileSubmitArgumentPolicy>(StringComparer.Ordinal)
+                {
+                    [" "] = new(
+                        Name: "folder",
+                        Required: true),
+                }));
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var act = () => provider.GetRequiredService<IOptions<WorkflowConnectedServiceFileSubmitOptions>>().Value;
+
+        act.Should()
+            .Throw<OptionsValidationException>()
+            .WithMessage("*WorkflowConnectedServiceFileSubmit:Targets[0].Arguments contains a blank key*");
+    }
+
     [Fact]
     public async Task GetToolsAsync_ShouldReturnNoToolWhenNoFileSubmitTargetsExist()
     {
@@ -318,8 +407,8 @@ public sealed class WorkflowFileSubmitToolTests
             },
             Body: new Dictionary<string, string>(StringComparer.Ordinal)
             {
-            ["bucket"] = "reports",
-        }));
+                ["bucket"] = "reports",
+            }));
 
     private static Dictionary<string, string?> BuildWorkflowFileSubmitTargetConfiguration() =>
         new()
