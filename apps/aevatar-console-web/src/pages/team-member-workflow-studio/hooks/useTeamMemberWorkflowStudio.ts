@@ -43,8 +43,10 @@ import type {
   StudioExecutionFrame,
   StudioMemberBindingRunStatusResponse,
   StudioMemberDetail,
+  StudioWorkflowDraftCreateAcceptedReceipt,
   StudioWorkflowDocument,
   StudioWorkflowFile,
+  StudioWorkflowSaveResult,
 } from "@/shared/studio/models";
 
 type TeamMemberWorkflowStudioMode = "new" | "existing";
@@ -215,9 +217,34 @@ const MEMBER_BINDING_RUN_POLL_ATTEMPTS = 8;
 const MEMBER_BINDING_RUN_POLL_DELAY_MS = 900;
 const CREATED_MEMBER_MATERIALIZATION_ATTEMPTS = 8;
 const CREATED_MEMBER_MATERIALIZATION_DELAY_MS = 450;
+const WORKFLOW_DRAFT_MATERIALIZATION_ATTEMPTS = 10;
+const WORKFLOW_DRAFT_MATERIALIZATION_DELAY_MS = 900;
+const SAVED_WORKFLOW_QUERY_STALE_MS = 30_000;
 
 function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? "";
+}
+
+function normalizeWorkflowSaveResult(
+  result: StudioWorkflowSaveResult | StudioWorkflowFile,
+): StudioWorkflowSaveResult {
+  if ("kind" in result) {
+    return result;
+  }
+
+  return {
+    kind: "materialized",
+    workflow: result,
+  };
+}
+
+function describeWorkflowDraftAcceptedReceipt(
+  receipt: StudioWorkflowDraftCreateAcceptedReceipt,
+): string {
+  return (
+    trimOptional(receipt.readiness.message) ||
+    `Workflow draft ${receipt.workflowId} was accepted. Studio is waiting for the scoped workspace projection.`
+  );
 }
 
 function hasCurrentCompletedMemberBinding(
@@ -486,6 +513,17 @@ function waitForCreatedMemberMaterializationTick(): Promise<void> {
   });
 }
 
+function waitForWorkflowDraftMaterializationTick(): Promise<void> {
+  return new Promise((resolve) => {
+    const testEnvironment =
+      typeof process !== "undefined" && process.env.NODE_ENV === "test";
+    window.setTimeout(
+      resolve,
+      testEnvironment ? 0 : WORKFLOW_DRAFT_MATERIALIZATION_DELAY_MS,
+    );
+  });
+}
+
 async function waitForCreatedMemberVisible(input: {
   readonly memberId: string;
   readonly scopeId: string;
@@ -518,6 +556,44 @@ async function waitForCreatedMemberVisible(input: {
       )
     : new Error(
         `Workflow member ${input.memberId} was created but is not visible yet. Retry saving in a moment.`,
+      );
+}
+
+async function waitForWorkflowDraftMaterialized(input: {
+  readonly receipt: StudioWorkflowDraftCreateAcceptedReceipt;
+  readonly scopeId: string;
+}): Promise<StudioWorkflowFile> {
+  let lastNotFound: unknown = null;
+
+  for (
+    let attempt = 0;
+    attempt < WORKFLOW_DRAFT_MATERIALIZATION_ATTEMPTS;
+    attempt += 1
+  ) {
+    try {
+      return await studioApi.getWorkflowDraftFile(
+        input.receipt.workflowId,
+        input.scopeId,
+      );
+    } catch (error) {
+      if (!isStudioApiStatus(error, 404)) {
+        throw error;
+      }
+
+      lastNotFound = error;
+      if (attempt < WORKFLOW_DRAFT_MATERIALIZATION_ATTEMPTS - 1) {
+        await waitForWorkflowDraftMaterializationTick();
+      }
+    }
+  }
+
+  throw lastNotFound instanceof Error
+    ? new Error(
+        `Workflow draft ${input.receipt.workflowId} was accepted but is not readable yet. Retry saving in a moment.`,
+        { cause: lastNotFound },
+      )
+    : new Error(
+        `Workflow draft ${input.receipt.workflowId} was accepted but is not readable yet. Retry saving in a moment.`,
       );
 }
 
@@ -814,16 +890,28 @@ async function saveWorkflowDraft(input: {
     graphForLayout.nodes,
     layout ?? workflow.layout,
   );
-  const savedWorkflow = await studioApi.saveWorkflow({
-    workflowId: workflow.workflowId,
-    draftExists: workflow.draftExists,
-    scopeId: routeScopeId,
-    directoryId: workflow.directoryId,
-    workflowName: normalizedTitle,
-    fileName: workflow.fileName,
-    yaml: serialized.yaml,
-    layout: nextLayout,
-  });
+  const saveResult = normalizeWorkflowSaveResult(
+    await studioApi.saveWorkflow({
+      workflowId: workflow.workflowId,
+      draftExists: workflow.draftExists,
+      scopeId: routeScopeId,
+      directoryId: workflow.directoryId,
+      workflowName: normalizedTitle,
+      fileName: workflow.fileName,
+      yaml: serialized.yaml,
+      layout: nextLayout,
+    }),
+  );
+  if (saveResult.kind === "accepted") {
+    void message.info(describeWorkflowDraftAcceptedReceipt(saveResult.receipt));
+  }
+  const savedWorkflow =
+    saveResult.kind === "accepted"
+      ? await waitForWorkflowDraftMaterialized({
+          receipt: saveResult.receipt,
+          scopeId: routeScopeId,
+        })
+      : saveResult.workflow;
 
   return {
     document: savedDocument,
@@ -996,6 +1084,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     ),
     queryKey: workflowQueryKey,
     queryFn: () => studioApi.getWorkflow(routeDraftWorkflowId, route.scopeId),
+    staleTime: SAVED_WORKFLOW_QUERY_STALE_MS,
     retry: false,
   });
   const activeDraftWorkflowId =
@@ -1145,14 +1234,45 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     setWorkflowTitleState(saved.title);
     setDirty(false);
   }, []);
-  const markSavedDraft = React.useCallback(
+  const cacheSavedWorkflowDraft = React.useCallback(
     (saved: SavedWorkflowDraft) => {
       const savedWorkflow = buildSavedWorkflowCacheValue(saved);
       const savedSignature = readWorkflowSourceSignature(savedWorkflow);
-      if (savedSignature && route.scopeId && routeDraftWorkflowId) {
-        suppressedSourceSignatureRef.current = savedSignature;
-        queryClient.setQueryData(workflowQueryKey, savedWorkflow);
+      const savedWorkflowId = trimOptional(savedWorkflow.workflowId);
+      if (!savedSignature || !route.scopeId || !savedWorkflowId) {
+        return;
       }
+
+      suppressedSourceSignatureRef.current = savedSignature;
+      queryClient.setQueryData(
+        getTeamMemberWorkflowStudioWorkflowQueryKey(
+          route.scopeId,
+          savedWorkflowId,
+        ),
+        savedWorkflow,
+      );
+    },
+    [queryClient, route.scopeId],
+  );
+  const invalidateSavedWorkflowDraft = React.useCallback(
+    (saved: SavedWorkflowDraft) => {
+      const savedWorkflowId = trimOptional(saved.workflow.workflowId);
+      if (!route.scopeId || !savedWorkflowId) {
+        return;
+      }
+
+      void queryClient.invalidateQueries({
+        queryKey: getTeamMemberWorkflowStudioWorkflowQueryKey(
+          route.scopeId,
+          savedWorkflowId,
+        ),
+      });
+    },
+    [queryClient, route.scopeId],
+  );
+  const markSavedDraft = React.useCallback(
+    (saved: SavedWorkflowDraft) => {
+      cacheSavedWorkflowDraft(saved);
 
       setEditableDocument((currentDocument) =>
         currentDocument
@@ -1168,10 +1288,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       setDirty(false);
     },
     [
-      queryClient,
-      routeDraftWorkflowId,
-      route.scopeId,
-      workflowQueryKey,
+      cacheSavedWorkflowDraft,
     ],
   );
   const renameExistingMemberFromTitle = React.useCallback(
@@ -1341,6 +1458,8 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     },
     onSuccess: ({ memberId, savedDraft, workflowId }) => {
       setPendingCreatedWorkflowMemberLink(null);
+      cacheSavedWorkflowDraft(savedDraft);
+      invalidateSavedWorkflowDraft(savedDraft);
       applySavedDraft(savedDraft);
       void refreshTeamMemberSurfaces(route.scopeId, route.teamId);
       void message.success("Workflow member created.");
@@ -1410,16 +1529,6 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       });
       await renameExistingMemberFromTitle(normalizedTitle);
 
-      history.replace(
-        buildTeamMemberWorkflowStudioHref({
-          memberId: route.memberId,
-          mode: "edit-member",
-          scopeId: route.scopeId,
-          teamId: route.teamId,
-          workflowId: savedWorkflowId,
-        }),
-      );
-
       return {
         savedDraft,
         workflowId: savedWorkflowId,
@@ -1433,7 +1542,17 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       );
     },
     onSuccess: ({ savedDraft, workflowId }) => {
+      cacheSavedWorkflowDraft(savedDraft);
       applySavedDraft(savedDraft);
+      history.replace(
+        buildTeamMemberWorkflowStudioHref({
+          memberId: route.memberId,
+          mode: "edit-member",
+          scopeId: route.scopeId,
+          teamId: route.teamId,
+          workflowId,
+        }),
+      );
       void memberQuery.refetch();
       void refreshTeamMemberSurfaces(route.scopeId, route.teamId);
       void message.success("Workflow draft saved.");

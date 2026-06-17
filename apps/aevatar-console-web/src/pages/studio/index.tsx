@@ -116,9 +116,11 @@ import type {
   StudioMemberSummary,
   StudioTeamSummary,
   StudioValidationFinding,
+  StudioWorkflowDraftCreateAcceptedReceipt,
   StudioWorkflowDocument,
   StudioWorkflowFile,
   StudioWorkflowDirectory,
+  StudioWorkflowSaveResult,
 } from '@/shared/studio/models';
 import {
   formatStudioMemberLifecycleStage,
@@ -198,7 +200,7 @@ type BuildSurface = 'editor' | 'scripts' | 'gagent';
 type StudioSurface = 'build' | 'bind' | 'invoke' | 'observe';
 
 type DraftSaveNotice = {
-  readonly type: 'success' | 'error';
+  readonly type: 'success' | 'info' | 'error';
   readonly message: string;
 };
 
@@ -236,6 +238,9 @@ type StudioBindingRunOutcome =
     };
 
 const MEMBER_BINDING_RUN_POLL_ATTEMPTS = 8;
+const WORKFLOW_DRAFT_MATERIALIZATION_ATTEMPTS = 10;
+const WORKFLOW_DRAFT_MATERIALIZATION_DELAY_MS = 900;
+const SAVED_WORKFLOW_QUERY_STALE_MS = 30_000;
 
 // Refactor (iter160/cluster-1200): member binding run waiting uses shared
 //   probeAsyncOperation normalized states instead of duplicated page-local
@@ -659,10 +664,76 @@ function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? '';
 }
 
+function normalizeWorkflowSaveResult(
+  result: StudioWorkflowSaveResult | StudioWorkflowFile,
+): StudioWorkflowSaveResult {
+  if ('kind' in result) {
+    return result;
+  }
+
+  return {
+    kind: 'materialized',
+    workflow: result,
+  };
+}
+
+function describeWorkflowDraftAcceptedReceipt(
+  receipt: StudioWorkflowDraftCreateAcceptedReceipt,
+): string {
+  return (
+    trimOptional(receipt.readiness.message) ||
+    `Workflow draft ${receipt.workflowId} was accepted. Studio is waiting for the scoped workspace projection.`
+  );
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
     globalThis.setTimeout(resolve, ms);
   });
+}
+
+function waitForWorkflowDraftMaterializationTick(): Promise<void> {
+  const testEnvironment =
+    typeof process !== 'undefined' && process.env.NODE_ENV === 'test';
+  return delay(testEnvironment ? 0 : WORKFLOW_DRAFT_MATERIALIZATION_DELAY_MS);
+}
+
+async function waitForWorkflowDraftMaterialized(input: {
+  readonly receipt: StudioWorkflowDraftCreateAcceptedReceipt;
+  readonly scopeId: string;
+}): Promise<StudioWorkflowFile> {
+  let lastNotFound: unknown = null;
+
+  for (
+    let attempt = 0;
+    attempt < WORKFLOW_DRAFT_MATERIALIZATION_ATTEMPTS;
+    attempt += 1
+  ) {
+    try {
+      return await studioApi.getWorkflowDraftFile(
+        input.receipt.workflowId,
+        input.scopeId,
+      );
+    } catch (error) {
+      if (!isStudioApiStatus(error, 404)) {
+        throw error;
+      }
+
+      lastNotFound = error;
+      if (attempt < WORKFLOW_DRAFT_MATERIALIZATION_ATTEMPTS - 1) {
+        await waitForWorkflowDraftMaterializationTick();
+      }
+    }
+  }
+
+  throw lastNotFound instanceof Error
+    ? new Error(
+        `Workflow draft ${input.receipt.workflowId} was accepted but is not readable yet. Retry saving in a moment.`,
+        { cause: lastNotFound },
+      )
+    : new Error(
+        `Workflow draft ${input.receipt.workflowId} was accepted but is not readable yet. Retry saving in a moment.`,
+      );
 }
 
 function normalizeComparableText(value: string | null | undefined): string {
@@ -3217,6 +3288,7 @@ const StudioPage: React.FC = () => {
     queryKey: ['studio-workflow', workflowWorkspaceContextKey, selectedWorkflowId],
     enabled: studioHostReady && Boolean(selectedWorkflowId),
     queryFn: () => studioApi.getWorkflow(selectedWorkflowId, resolvedStudioScopeId),
+    staleTime: SAVED_WORKFLOW_QUERY_STALE_MS,
   });
   const gAgentKindsQuery = useQuery({
     queryKey: ['studio-runtime-gagent-kinds'],
@@ -5451,6 +5523,40 @@ const StudioPage: React.FC = () => {
       workflowWorkspaceContextKey,
     ],
   );
+
+  const waitForAcceptedWorkflowDraft = useCallback(
+    async (
+      receipt: StudioWorkflowDraftCreateAcceptedReceipt,
+    ): Promise<StudioWorkflowFile> => {
+      if (!resolvedStudioScopeId) {
+        throw new Error(
+          `Workflow draft ${receipt.workflowId} was accepted without a workspace scope.`,
+        );
+      }
+
+      const noticeMessage = describeWorkflowDraftAcceptedReceipt(receipt);
+      setSaveNotice({
+        type: 'info',
+        message: noticeMessage,
+      });
+      void message.info(noticeMessage);
+
+      const materializedWorkflow = await waitForWorkflowDraftMaterialized({
+        receipt,
+        scopeId: resolvedStudioScopeId,
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ['studio-workspace-workflows', workflowWorkspaceContextKey],
+      });
+      return materializedWorkflow;
+    },
+    [
+      queryClient,
+      resolvedStudioScopeId,
+      workflowWorkspaceContextKey,
+    ],
+  );
+
   const confirmScriptsStudioLeave = useCallback(async () => {
     if (!isBuildScriptsSurface) {
       return true;
@@ -5567,16 +5673,22 @@ const StudioPage: React.FC = () => {
         return;
       }
 
-      const savedWorkflow = await studioApi.saveWorkflow({
-        workflowId: activeWorkflowFile?.workflowId || undefined,
-        draftExists: activeWorkflowFile?.draftExists,
-        scopeId: resolvedStudioScopeId || undefined,
-        directoryId,
-        workflowName,
-        fileName: draftFileName,
-        yaml: savePayload.yaml,
-        layout: savePayload.layout,
-      });
+      const saveResult = normalizeWorkflowSaveResult(
+        await studioApi.saveWorkflow({
+          workflowId: activeWorkflowFile?.workflowId || undefined,
+          draftExists: activeWorkflowFile?.draftExists,
+          scopeId: resolvedStudioScopeId || undefined,
+          directoryId,
+          workflowName,
+          fileName: draftFileName,
+          yaml: savePayload.yaml,
+          layout: savePayload.layout,
+        }),
+      );
+      const savedWorkflow =
+        saveResult.kind === 'accepted'
+          ? await waitForAcceptedWorkflowDraft(saveResult.receipt)
+          : saveResult.workflow;
 
       await applySavedWorkflowSelection(savedWorkflow, {
         document: savePayload.document,
@@ -5968,14 +6080,20 @@ const StudioPage: React.FC = () => {
     setInventoryBusyAction('create');
 
     try {
-      const savedWorkflow = await studioApi.saveWorkflow({
-        scopeId: resolvedStudioScopeId || undefined,
-        directoryId,
-        workflowName,
-        fileName: buildWorkflowFileName(workflowName),
-        yaml: buildBlankDraftYaml(workflowName),
-        layout: buildStudioWorkflowLayout(workflowName, []),
-      });
+      const saveResult = normalizeWorkflowSaveResult(
+        await studioApi.saveWorkflow({
+          scopeId: resolvedStudioScopeId || undefined,
+          directoryId,
+          workflowName,
+          fileName: buildWorkflowFileName(workflowName),
+          yaml: buildBlankDraftYaml(workflowName),
+          layout: buildStudioWorkflowLayout(workflowName, []),
+        }),
+      );
+      const savedWorkflow =
+        saveResult.kind === 'accepted'
+          ? await waitForAcceptedWorkflowDraft(saveResult.receipt)
+          : saveResult.workflow;
 
       await applySavedWorkflowSelection(savedWorkflow);
       setCreateMemberModalOpen(false);
@@ -6156,21 +6274,27 @@ const StudioPage: React.FC = () => {
           ),
           availableStepTypes,
         });
-        const savedWorkflow = await studioApi.saveWorkflow({
-          workflowId,
-          scopeId: resolvedStudioScopeId || undefined,
-          directoryId:
-            (isSelectedWorkflow ? draftDirectoryId : '') ||
-            fallbackWorkflowFile.directoryId ||
-            currentWorkflowSummary?.directoryId ||
-            inventoryDirectoryId,
-          workflowName: nextWorkflowName,
-          fileName: buildWorkflowFileName(nextWorkflowName),
-          yaml: serialized.yaml,
-          layout:
-            (isSelectedWorkflow ? draftWorkflowLayout : null) ||
-            fallbackWorkflowFile.layout,
-        });
+        const saveResult = normalizeWorkflowSaveResult(
+          await studioApi.saveWorkflow({
+            workflowId,
+            scopeId: resolvedStudioScopeId || undefined,
+            directoryId:
+              (isSelectedWorkflow ? draftDirectoryId : '') ||
+              fallbackWorkflowFile.directoryId ||
+              currentWorkflowSummary?.directoryId ||
+              inventoryDirectoryId,
+            workflowName: nextWorkflowName,
+            fileName: buildWorkflowFileName(nextWorkflowName),
+            yaml: serialized.yaml,
+            layout:
+              (isSelectedWorkflow ? draftWorkflowLayout : null) ||
+              fallbackWorkflowFile.layout,
+          }),
+        );
+        const savedWorkflow =
+          saveResult.kind === 'accepted'
+            ? await waitForAcceptedWorkflowDraft(saveResult.receipt)
+            : saveResult.workflow;
 
         if (isSelectedWorkflow) {
           setEditableWorkflowDocument(

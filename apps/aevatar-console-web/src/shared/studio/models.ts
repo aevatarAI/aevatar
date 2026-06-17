@@ -152,6 +152,24 @@ export interface StudioSaveWorkflowInput {
   readonly layout?: unknown;
 }
 
+export interface StudioWorkflowDraftCreateReadiness {
+  readonly readable: boolean;
+  readonly stage: string;
+  readonly message: string;
+}
+
+export interface StudioWorkflowDraftCreateAcceptedReceipt {
+  readonly accepted: true;
+  readonly workflowId: string;
+  readonly commandId: string;
+  readonly ackStage: string;
+  readonly actorId: string;
+  readonly workspaceId: string;
+  readonly expectedVersion?: number | null;
+  readonly ackedAtUtc: string;
+  readonly readiness: StudioWorkflowDraftCreateReadiness;
+}
+
 export interface StudioParseYamlResult {
   readonly document?: StudioWorkflowDocument | null;
   readonly graph?: unknown;
@@ -165,6 +183,16 @@ export type StudioWorkflowFile = StudioWorkflowDraft & {
   readonly draftExists?: boolean;
   readonly findings: StudioValidationFinding[];
 };
+
+export type StudioWorkflowSaveResult =
+  | {
+      readonly kind: "materialized";
+      readonly workflow: StudioWorkflowFile;
+    }
+  | {
+      readonly kind: "accepted";
+      readonly receipt: StudioWorkflowDraftCreateAcceptedReceipt;
+    };
 
 export interface StudioSerializeYamlResult {
   readonly yaml: string;
