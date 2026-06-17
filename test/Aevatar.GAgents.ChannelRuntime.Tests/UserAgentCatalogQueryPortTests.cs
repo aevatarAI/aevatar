@@ -33,6 +33,27 @@ public sealed class UserAgentCatalogQueryPortTests
     }
 
     [Fact]
+    public async Task QueryVisibleByCallerAsync_SameRegistrationScopeTeammate_ReturnsSharedRows()
+    {
+        var owner = OwnerScope.ForChannel("user-A", "lark", "bot-1", "alice");
+        var teammate = OwnerScope.ForChannel("user-B", "lark", "bot-1", "bob");
+        var reader = new RecordingDocumentReader(
+        [
+            BuildDocument("owner-private-agent", owner),
+            BuildSharedDocument("shared-agent", owner, allowTrigger: false),
+        ]);
+        var port = new UserAgentCatalogQueryPort(reader);
+
+        var visible = await port.QueryVisibleByCallerAsync(teammate, CancellationToken.None);
+
+        visible.Select(static entry => entry.AgentId).Should().Equal("shared-agent");
+        reader.Queries.Should().HaveCount(2);
+        reader.Queries[1].Filters.Should().ContainSingle(filter =>
+            filter.FieldPath == nameof(UserAgentCatalogDocument.VisibleSharingAudienceKey) &&
+            string.Equals(filter.Value.RawValue as string, "lark:bot-1", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task GetVisibleForCallerAsync_AllowsSameRegistrationScopeSharedRow()
     {
         var owner = OwnerScope.ForChannel("user-A", "lark", "bot-1", "alice");
