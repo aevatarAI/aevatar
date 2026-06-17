@@ -80,7 +80,7 @@ touch the audio socket.
 | Plane | Route | Carrier | Notes |
 |---|---|---|---|
 | **Audio + control** | edge ⇄ aevatar ⇄ OpenAI | binary PCM16 (audio) + JSON `VoiceControlFrame` (control) over `/ws/voice`; relay WS to OpenAI | Hot path. Raw PCM never enters the actor inbox / `EventEnvelope` / projection / committed store (ADR-013 media red line). |
-| **Credential** | aevatar → NyxID → OpenAI | HTTPS mint, caller bearer flowed via AsyncLocal | Connect-time only. NyxID injects the real `sk-`; aevatar receives a short-lived `ek_` (~60s TTL) and dials OpenAI directly (ADR-0033). |
+| **Credential** | aevatar → NyxID → OpenAI | HTTPS mint; `/ws/voice` admission carries a short-TTL opaque `credential_ref` in typed `VoiceToolExecutionContext` and binds the raw caller bearer only when the live transport lease attaches | Connect-time/provider/tool use only. Actor state carries the ref and non-secret caller/channel fields; catalog, invoker, and provider reconnect resolve through `ICredentialProvider` at the co-located transport boundary. Raw bearers do not cross lease/proto/actor/readmodel boundaries. |
 | **Edge tools** | actor → NyxID proxy → node WS → edge HTTP → LAN | NyxID connected-service `x-aevatar-tool` operations | The LAN tool bridge. Edge publishes `/edge-tools/openapi.json`; only `EDGE_TOOLS_ALLOWLIST` operations are exposed (ADR-0031 short-term bridge). |
 | **Device events** | edge → aevatar `/api/device-events/{regId}` | HMAC-SHA256 signed callback body | Off-socket household-event ingress. The endpoint admits only fresh signed body timestamps and maps a stable delivery id into the envelope dedupe operation; the actor owns fencing / turn creation. |
 
@@ -120,7 +120,28 @@ The edge consumes a JSON projection of it (camelCase), hand-parsed by
   `owner_id`, `lease_epoch`, `lease_expires_at`) the actor owns; the volatile
   media relay is bound to that lease. Host/provider connect paths must carry
   the readmodel-observed positive `lease_epoch`; transport attach reuses that
-  lease generation and does not create the next epoch.
+  lease generation and does not create the next epoch. While the relay remains
+  live it sends typed actor renewal signals that extend the actor-owned lease
+  deadline. `owner_id`, `transport_lease_id`, and `lease_epoch` form the identity
+  fence; `lease_expires_at` / `renew_expires_at` are freshness deadlines and do
+  not independently identify a lease generation.
+- **Credential ref lifetime** — `/ws/voice` admission mints at most one
+  `voice-tool:` ref for an attach attempt and hands a non-protobuf transport
+  binding to the host attach path. The raw caller bearer becomes resolvable
+  only after `VoiceVolatileMediaStreamPort.AttachAsync` observes the accepted
+  `transport_lease_id` and binds the credential to that same live lease. The
+  actor/session/readmodel path carries only `VoiceToolExecutionContext` with
+  the opaque ref and non-secret caller/channel fields. Detach, failed attach,
+  and transport lifetime completion evict the bound credential in the same
+  cleanup path that removes the volatile media relay; expired refs are evicted
+  on resolve/issue and never fall back to durable `IAevatarSecretsStore`
+  writes.
+- **Credential/media co-location boundary** — voice tool credentials share the
+  `IVoiceVolatileMediaStreamPort` lifetime boundary: resolve is valid only in
+  the host process that owns the live transport lease and media relay. A tool
+  turn running in another silo cannot resolve this volatile ref today; that is
+  the same known boundary as the live media relay and is a follow-up topology
+  problem, not a durable credential fact source.
 
 ## Connect + turn sequence
 
@@ -141,7 +162,7 @@ sequenceDiagram
   H->>A: ExecuteAsync(Attach) preflight
   A-->>H: lease handle (else 404 / 503 / 409)
   H-->>VP: sessionAccepted (JSON control frame)
-  H->>N: mint ephemeral (caller bearer via AsyncLocal)
+  H->>N: mint ephemeral (resolve credential_ref at provider boundary)
   N->>O: POST /v1/realtime/client_secrets (NyxID injects sk-)
   O-->>N: ek_ (~60s TTL)
   N-->>H: ek_
@@ -172,7 +193,7 @@ sequenceDiagram
 | Media relay | `VoiceVolatileMediaStreamPort` (volatile, per-lease) | `VoiceSession` + WebRTC/WHIP transcode |
 | Brain state | `VoicePresenceModule` on a `RoleGAgent` actor | — (no `session.update`) |
 | Provider | `OpenAIRealtimeProvider` (direct WS) / MiniCPM | — |
-| Credentials | `NyxIdRealtimeProviderCredentialResolver` (ephemeral) | NyxID bearer only |
+| Credentials | `VoiceToolExecutionContext` + `ICredentialProvider` use-boundary resolution; `NyxIdRealtimeProviderCredentialResolver` mints provider ephemeral | NyxID bearer only |
 | Tools | `IVoiceToolInvoker` / `IAgentToolSource` (+ NyxID connected-service) | `/edge-tools` HTTP surface (LAN execution) |
 | Device events | `/api/device-events` HMAC ingress → actor | `AevatarDeviceEventClient` (HMAC sign) |
 

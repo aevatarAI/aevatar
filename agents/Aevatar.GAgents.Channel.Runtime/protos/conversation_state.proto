@@ -32,8 +32,12 @@ message ConversationGAgentState {
   // The chat LLM path uses this bounded window for "send image, ask later" without
   // relying on NyxID history, which intentionally does not store message content.
   repeated RecentConversationAttachmentActivity recent_attachment_activities = 14;
-  repeated aevatar.gagents.channel.abstractions.DeliveryLedgerEntry recent_deliveries = 15;
-  aevatar.gagents.channel.abstractions.DeliveryLedgerEntry last_successful_delivery = 16;
+  // Bounded ledger of platform message ids (Lark om_...) the bot has sent in this conversation, so
+  // a group reply that targets one of the bot's own messages counts as addressing the bot without a
+  // re-@-mention. Bounded + evicted by ConversationBotMessageLedger.
+  repeated string bot_sent_platform_message_ids = 15;
+  repeated aevatar.gagents.channel.abstractions.DeliveryLedgerEntry recent_deliveries = 16;
+  aevatar.gagents.channel.abstractions.DeliveryLedgerEntry last_successful_delivery = 17;
 }
 
 // Refactor (iter80/cluster-081-channel-reply-lifecycle-event-state-schema):

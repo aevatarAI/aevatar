@@ -396,13 +396,24 @@ public class WorkflowDefinitionCatalogTests
             return Task.CompletedTask;
         }
 
-        public Task<WorkflowCompensationTransitionResult> TryStartCompensationAsync(
+        Task<WorkflowCompensationTransitionResult> IWorkflowExecutionStateHost.TryStartCompensationAsync(
             WorkflowCompletedEvent terminalFailure,
-            CancellationToken ct = default)
+            StepCompletedEvent? terminalStep,
+            CancellationToken ct)
         {
             _ = terminalFailure;
+            _ = terminalStep;
             ct.ThrowIfCancellationRequested();
             return Task.FromResult(NoCompensableLedger());
+        }
+
+        Task IWorkflowExecutionStateHost.RecordCompensableStepDispatchAsync(
+            CompensableStepDispatchedEvent evt,
+            CancellationToken ct)
+        {
+            _ = evt;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
         }
 
         public Task<WorkflowCompensationTransitionResult> RecordCompensationStepCompletionAsync(

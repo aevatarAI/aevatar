@@ -35,4 +35,15 @@ public class NyxIdChatSystemPromptTests
         prompt.Should().Contain("Do not say it is waiting for remote approval");
         prompt.Should().NotContain("waiting for NyxID approval");
     }
+
+    [Fact]
+    public void Value_ShouldContainHonestSuccessRule()
+    {
+        var prompt = NyxIdChatSystemPrompt.Value;
+
+        prompt.Should().Contain("## Honest Success Rule");
+        prompt.Should().Contain("successful mutating tool result or typed success receipt");
+        prompt.Should().Contain("Read-only checks, searches, observation, trigger/rerun requests");
+        prompt.Should().Contain("genuine successful mutating tool receipt");
+    }
 }

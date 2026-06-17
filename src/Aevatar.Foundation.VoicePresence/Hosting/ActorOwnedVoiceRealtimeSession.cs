@@ -7,7 +7,7 @@ namespace Aevatar.Foundation.VoicePresence.Hosting;
 public sealed class ActorOwnedVoiceRealtimeSession
     : IRealtimeSession<VoiceRealtimeSessionRequest, VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeFrame, VoiceRealtimeSessionCompletion>
 {
-    private static readonly TimeSpan DefaultLeaseTtl = TimeSpan.FromMinutes(5);
+    internal static readonly TimeSpan DefaultLeaseTtl = TimeSpan.FromMinutes(5);
     private const string HostOwnerId = "voice-presence.host";
 
     private readonly IVoicePresenceCapabilityQueryPort _capabilityQueryPort;
@@ -60,7 +60,8 @@ public sealed class ActorOwnedVoiceRealtimeSession
                     capability.LeaseExpiresAt ?? _timeProvider.GetUtcNow(),
                     capability.RemoteAudioSupport,
                     capability.ActiveTransportLeaseId,
-                    capability.LeaseEpoch));
+                    capability.LeaseEpoch,
+                    inbound.ToolContext?.Clone()));
             if (onAcceptedAsync != null)
                 await onAcceptedAsync(acceptedDetach, ct);
 
@@ -85,7 +86,8 @@ public sealed class ActorOwnedVoiceRealtimeSession
             _timeProvider.GetUtcNow().Add(DefaultLeaseTtl),
             capability.StateVersion,
             capability.RemoteAudioSupport,
-            inbound.SessionOverrides?.Clone());
+            inbound.SessionOverrides?.Clone(),
+            inbound.ToolContext?.Clone());
 
         var leaseHandle = await _leasePort.AcquireAsync(leaseRequest, ct);
         var accepted = BuildAccepted(capability, leaseHandle);

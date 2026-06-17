@@ -9,6 +9,12 @@ public interface IVoiceVolatileMediaStreamPort
         IVoiceTransport transport,
         CancellationToken ct = default);
 
+    Task<VoiceTransportLifetimeCompleted?> AttachAsync(
+        VoicePresenceSessionLeaseHandle handle,
+        IVoiceTransport transport,
+        VoiceToolCredentialTransportBinding? toolCredentialBinding,
+        CancellationToken ct = default);
+
     Task DetachAsync(
         VoicePresenceSessionLeaseHandle handle,
         IVoiceTransport? expectedTransport,

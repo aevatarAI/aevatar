@@ -309,9 +309,11 @@ POST /api/chat { prompt, workflow?, workflowYaml?, source? }
 
 ### Saga 补偿生命周期
 
-Workflow step 可以通过 `compensation` 声明一个已存在的 step id。静态校验阶段会解析该目标，引用不存在的补偿步骤会被拒绝。运行时中，成功完成且声明了补偿的业务 step 会进入 `compensable_ledger`，ledger 归 `WorkflowRunGAgent` 持有，是 run actor 的权威状态。
+Workflow step 可以通过 `compensation` 声明一个已存在的 step id。静态校验阶段会解析该目标，引用不存在的补偿步骤会被拒绝。运行时中，`tool_call`、`connector_call`、`secure_connector_call` 这三个 side-effecting primitive 在 dispatch 前会由 `WorkflowRunGAgent` 持久化 `CompensableStepDispatchedEvent`，先写入 `PROVISIONAL` ledger 项；其他 primitive 即使声明 compensation，也只在成功完成后按 legacy 路径写入 `CONFIRMED` ledger 项。`compensable_ledger` 归 `WorkflowRunGAgent` 持有，是 run actor 的权威状态。
 
-当后续 step 发生终止失败且 ledger 非空时，run 不直接提交 `WorkflowCompletedEvent(success=false)`。`WorkflowExecutionKernel` 先请求 run actor 开启补偿相位，run actor 按 ledger 反向顺序提交 `CompensationRequestEvent`，再通过 self continuation 派发对应补偿 step。补偿 step 完成后以 `CompensationStepCompletedEvent` 回到 run actor，由 actor 校验 `run_id + compensation_step_id + execution_id`，拒绝陈旧或重复完成事件。
+成功完成会把匹配的 `PROVISIONAL` ledger 项确认成 `CONFIRMED` 并补齐 captured output；没有 provisional 项的 legacy success 仍追加一条 `CONFIRMED` ledger。失败完成通过 typed `WorkflowStepFailureOutcome` 对账：`CALLEE_CONFIRMED`（含默认 `UNSPECIFIED`）删除匹配 provisional，表示 callee 已确认没有可补偿副作用；`OUTCOME_UNCERTAIN` 保留 provisional，timeout / force-fail / stop-to-failure 这类中断按“副作用可能已发生”处理。
+
+当后续 step 发生终止失败且 ledger 非空时，run 不直接提交 `WorkflowCompletedEvent(success=false)`。`WorkflowExecutionKernel` 先请求 run actor 开启补偿相位，run actor 按 ledger 反向顺序提交 `CompensationRequestEvent`，再通过 self continuation 派发对应补偿 step。`PROVISIONAL` 和 `CONFIRMED` 项使用同一条 LIFO compensation walk；provisional 的 captured output 可为空，补偿 idempotency key 保持稳定，撤销未生效副作用必须是安全 no-op。补偿 step 完成后以 `CompensationStepCompletedEvent` 回到 run actor，由 actor 校验 `run_id + compensation_step_id + execution_id`，拒绝陈旧或重复完成事件。
 
 Saga 状态由强类型枚举 `WorkflowSagaStatus`（`workflow_execution_messages.proto`）表达，生命周期为：
 
@@ -320,7 +322,7 @@ WORKFLOW_SAGA_STATUS_UNSPECIFIED -> WORKFLOW_SAGA_STATUS_COMPENSATING -> WORKFLO
 WORKFLOW_SAGA_STATUS_UNSPECIFIED -> WORKFLOW_SAGA_STATUS_COMPENSATING -> WORKFLOW_SAGA_STATUS_COMPENSATION_DEAD_LETTER
 ```
 
-- `UNSPECIFIED`：非补偿阶段（run 仍是普通 `running` 运行态），成功的 compensable step 按完成顺序写入 ledger；saga_status 没有独立的 `running` 取值。
+- `UNSPECIFIED`：非补偿阶段（run 仍是普通 `running` 运行态），provisional/confirmed compensable step 按 dispatch/完成顺序写入 ledger；saga_status 没有独立的 `running` 取值。
 - `COMPENSATING`：终止失败已转入补偿相位，`compensation_cursor` 指向当前待补偿 ledger 项。
 - `COMPENSATED_FAILED`：所有补偿按反向顺序成功，随后发布失败的 `WorkflowCompletedEvent`，表示原业务 run 失败但补偿已完成。
 - `COMPENSATION_DEAD_LETTER`：某个补偿 step 失败或补偿耗尽，run actor 提交 `WorkflowCompensationFailedEvent`，记录失败补偿 step、剩余未补偿数量和错误；此状态不再走 on_error fallback，也不会静默丢弃。
@@ -663,7 +665,7 @@ steps:
 
 ### Q3：模块失败会怎样？
 
-取决于模块实现、步骤配置和 saga ledger。`WorkflowExecutionKernel` 收到 `Success=false` 的 `StepCompletedEvent` 后，若当前 run 有非空 `compensable_ledger`，先进入补偿相位；补偿全部成功后才以 `WorkflowCompletedEvent(Success=false)` 结束。没有 compensable ledger 时，失败直接发布 `WorkflowCompletedEvent(Success=false)`。支持 retry/on_error 的 step 会先按对应策略处理，未被策略接管的终止失败才触发上述逻辑。
+取决于模块实现、步骤配置和 saga ledger。`WorkflowExecutionKernel` 收到 `Success=false` 的 `StepCompletedEvent` 后，先用 `failure_outcome` 对账 provisional ledger；若当前 run 仍有非空 `compensable_ledger`，再进入补偿相位；补偿全部成功后才以 `WorkflowCompletedEvent(Success=false)` 结束。没有 compensable ledger 时，失败直接发布 `WorkflowCompletedEvent(Success=false)`。支持 retry/on_error 的 step 会先按对应策略处理，未被策略接管的终止失败才触发上述逻辑。
 
 ### Q4：怎么新增一种步骤类型？
 

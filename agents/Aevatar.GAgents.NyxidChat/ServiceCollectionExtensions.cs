@@ -76,6 +76,9 @@ public static class ServiceCollectionExtensions
                 sp.GetService<ILarkNyxClient>(),
                 sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowFileIngressPort>()));
         // ─── Conversation turn-runner override + reply generator ───
+        // Lets the turn runner resolve the bot's own Lark open_id on demand so its group-chat
+        // admission gate can tell whether an inbound @-mention addressed the bot.
+        services.TryAddSingleton<ILarkBotIdentityResolver, LarkBotIdentityResolver>();
         services.Replace(ServiceDescriptor.Singleton<IConversationTurnRunner, ChannelConversationTurnRunner>());
         // The CardKit runner depends on Aevatar.AI.ToolProviders.Lark services. AddNyxIdChat()
         // does not transitively register them — production hosts also call AddLarkTools() —

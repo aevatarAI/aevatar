@@ -397,6 +397,50 @@ public class VoicePresenceModuleTests
     }
 
     [Fact]
+    public async Task Active_tool_context_should_flow_to_catalog_invoker_and_provider_session_key()
+    {
+        var provider = new RecordingVoiceProvider();
+        var invoker = new RecordingVoiceToolInvoker("""{"ok":true}""");
+        var catalog = new StaticVoiceToolCatalog([
+            new VoiceToolDefinition
+            {
+                Name = "doorbell.open",
+                Description = "open",
+                ParametersSchema = "{}",
+            },
+        ]);
+        var module = CreateModule(provider, toolInvoker: invoker, toolCatalog: catalog);
+        var toolContext = new VoiceToolExecutionContext
+        {
+            CredentialRef = "voice-tool:ref-1",
+            ExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)),
+            CallerScopeId = "caller-scope-1",
+        };
+        var roleAgent = CreateRoleAgentWithActiveSession();
+        roleAgent.State.VoicePresence[DefaultModuleName].ActiveToolContext = toolContext.Clone();
+        var ctx = new StubEventHandlerContext(agent: roleAgent);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            FunctionCall = new VoiceFunctionCallRequested
+            {
+                CallId = "call-credential-ref",
+                ToolName = "doorbell.open",
+                ArgumentsJson = "{}",
+                ResponseId = 1,
+            },
+        }), ctx, CancellationToken.None);
+
+        invoker.LastToolContext.ShouldNotBeNull();
+        invoker.LastToolContext.ShouldNotBeSameAs(toolContext);
+        invoker.LastToolContext!.CredentialRef.ShouldBe("voice-tool:ref-1");
+        catalog.LastToolContext.ShouldNotBeNull();
+        catalog.LastToolContext!.CredentialRef.ShouldBe("voice-tool:ref-1");
+        provider.LastSessionKey.ToolContext.ShouldNotBeNull();
+        provider.LastSessionKey.ToolContext!.CredentialRef.ShouldBe("voice-tool:ref-1");
+    }
+
+    [Fact]
     public async Task Function_call_should_resolve_tool_invoker_from_services()
     {
         var provider = new RecordingVoiceProvider();
@@ -676,7 +720,9 @@ public class VoicePresenceModuleTests
         moduleSource.ShouldNotContain("TransportAttached = _userTransport", Case.Sensitive);
         moduleSource.ShouldNotContain("IsActorAccepted", Case.Sensitive);
         moduleSource.ShouldNotContain("DispatchFireAndForget", Case.Sensitive);
-        moduleSource.ShouldNotContain("VoiceTransportLease", Case.Sensitive);
+        moduleSource.ShouldNotContain("VoiceTransportLease _", Case.Sensitive);
+        moduleSource.ShouldNotContain("VoiceTransportLease(", Case.Sensitive);
+        moduleSource.ShouldNotContain("VoiceTransportLease =", Case.Sensitive);
         moduleSource.ShouldNotContain("_transportPump", Case.Sensitive);
         moduleSource.ShouldNotContain("_providerSession", Case.Sensitive);
         moduleSource.ShouldNotContain("_providerSessionKey", Case.Sensitive);
@@ -762,6 +808,12 @@ public class VoicePresenceModuleTests
         var module = CreateModule(new RecordingVoiceProvider());
         var roleAgent = new RecordingRoleAgent("voice-agent");
         var ctx = new StubEventHandlerContext(agent: roleAgent);
+        var toolContext = new VoiceToolExecutionContext
+        {
+            CredentialRef = "voice-tool:lease-ref",
+            ExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)),
+            CallerScopeId = "caller-scope-lease",
+        };
 
         await module.InitializeAsync(CancellationToken.None);
         await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
@@ -772,6 +824,7 @@ public class VoicePresenceModuleTests
                 SessionId = "lease-1",
                 OwnerId = "host-1",
                 ExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)),
+                ToolContext = toolContext.Clone(),
             },
         }), ctx, CancellationToken.None);
 
@@ -782,6 +835,8 @@ public class VoicePresenceModuleTests
         leasedState.TransportAttached.ShouldBeFalse();
         leasedState.PcmSampleRateHz.ShouldBe(24000);
         leasedState.RemoteAudioSupport.ShouldBe(VoiceRemoteAudioSupport.LocalOnly);
+        leasedState.ActiveToolContext.ShouldNotBeSameAs(toolContext);
+        leasedState.ActiveToolContext.CredentialRef.ShouldBe("voice-tool:lease-ref");
 
         await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
         {
@@ -797,6 +852,7 @@ public class VoicePresenceModuleTests
         releasedState.ActiveSessionId.ShouldBeEmpty();
         releasedState.ActiveLeaseOwnerId.ShouldBeEmpty();
         releasedState.LeaseExpiresAt.ShouldBeNull();
+        releasedState.ActiveToolContext.ShouldBeNull();
     }
 
     [Fact]
@@ -929,6 +985,212 @@ public class VoicePresenceModuleTests
 
         roleAgent.PersistedStates.ShouldBeEmpty();
         roleAgent.State.VoicePresence["voice_presence"].TransportAttached.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Transport_lease_renew_signal_should_extend_actor_owned_expiry_without_bumping_epoch()
+    {
+        var now = new DateTimeOffset(2026, 6, 17, 8, 0, 0, TimeSpan.Zero);
+        var module = CreateModule(
+            new RecordingVoiceProvider(),
+            options: new VoicePresenceModuleOptions
+            {
+                TimeProvider = new ManualTimeProvider(now),
+            });
+        var roleAgent = CreateRoleAgentWithAttachedTransport(now.AddMinutes(5));
+        var ctx = new StubEventHandlerContext(agent: roleAgent);
+        var renewExpiresAt = Timestamp.FromDateTimeOffset(now.AddMinutes(10));
+
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            TransportLeaseRenewRequested = new VoiceTransportLeaseRenewRequested
+            {
+                SessionId = "lease-current",
+                OwnerId = "host-current",
+                TransportLeaseId = "transport-current",
+                LeaseEpoch = 7,
+                RenewExpiresAt = renewExpiresAt.Clone(),
+            },
+        }), ctx, CancellationToken.None);
+
+        var renewed = roleAgent.PersistedStates.ShouldHaveSingleItem().State;
+        renewed.LeaseExpiresAt.ShouldBe(renewExpiresAt);
+        renewed.LeaseEpoch.ShouldBe(7);
+        renewed.ActiveTransportLeaseId.ShouldBe("transport-current");
+        renewed.TransportAttached.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Transport_lease_renew_signal_should_not_shorten_actor_owned_expiry()
+    {
+        var now = new DateTimeOffset(2026, 6, 17, 8, 0, 0, TimeSpan.Zero);
+        var module = CreateModule(
+            new RecordingVoiceProvider(),
+            options: new VoicePresenceModuleOptions
+            {
+                TimeProvider = new ManualTimeProvider(now),
+            });
+        var roleAgent = CreateRoleAgentWithAttachedTransport(now.AddMinutes(10));
+        var ctx = new StubEventHandlerContext(agent: roleAgent);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            TransportLeaseRenewRequested = new VoiceTransportLeaseRenewRequested
+            {
+                SessionId = "lease-current",
+                OwnerId = "host-current",
+                TransportLeaseId = "transport-current",
+                LeaseEpoch = 7,
+                RenewExpiresAt = Timestamp.FromDateTimeOffset(now.AddMinutes(5)),
+            },
+        }), ctx, CancellationToken.None);
+
+        roleAgent.PersistedStates.ShouldBeEmpty();
+        roleAgent.State.VoicePresence["voice_presence"].LeaseExpiresAt.ToDateTimeOffset()
+            .ShouldBe(now.AddMinutes(10));
+    }
+
+    [Theory]
+    [InlineData("owner")]
+    [InlineData("transport")]
+    [InlineData("epoch")]
+    [InlineData("expired")]
+    public async Task Transport_lease_renew_signal_should_ignore_identity_mismatch_or_expired_lease(
+        string mismatch)
+    {
+        var now = new DateTimeOffset(2026, 6, 17, 8, 0, 0, TimeSpan.Zero);
+        var module = CreateModule(
+            new RecordingVoiceProvider(),
+            options: new VoicePresenceModuleOptions
+            {
+                TimeProvider = new ManualTimeProvider(now),
+            });
+        var activeExpiry = mismatch == "expired" ? now.AddSeconds(-1) : now.AddMinutes(5);
+        var roleAgent = CreateRoleAgentWithAttachedTransport(activeExpiry);
+        var ctx = new StubEventHandlerContext(agent: roleAgent);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            TransportLeaseRenewRequested = new VoiceTransportLeaseRenewRequested
+            {
+                SessionId = "lease-current",
+                OwnerId = mismatch == "owner" ? "host-stale" : "host-current",
+                TransportLeaseId = mismatch == "transport" ? "transport-stale" : "transport-current",
+                LeaseEpoch = mismatch == "epoch" ? 6 : 7,
+                RenewExpiresAt = Timestamp.FromDateTimeOffset(now.AddMinutes(10)),
+            },
+        }), ctx, CancellationToken.None);
+
+        roleAgent.PersistedStates.ShouldBeEmpty();
+        roleAgent.State.VoicePresence["voice_presence"].LeaseExpiresAt.ToDateTimeOffset()
+            .ShouldBe(activeExpiry);
+    }
+
+    [Fact]
+    public async Task Transport_control_signal_should_accept_old_lease_expiry_after_renewal()
+    {
+        var now = new DateTimeOffset(2026, 6, 17, 8, 0, 0, TimeSpan.Zero);
+        var oldExpiry = Timestamp.FromDateTimeOffset(now.AddMinutes(5));
+        var roleAgent = CreateRoleAgentWithAttachedTransport(now.AddMinutes(10));
+        var state = roleAgent.State.VoicePresence["voice_presence"];
+        state.Status = VoicePresenceRuntimeStatus.AudioDraining;
+        state.CurrentResponseId = 4;
+        state.NextResponseId = 5;
+        var module = CreateModule(new RecordingVoiceProvider());
+        var ctx = new StubEventHandlerContext(agent: roleAgent);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            TransportControlFrameReceived = new VoiceTransportControlFrameReceived
+            {
+                SessionId = "lease-current",
+                OwnerId = "host-current",
+                TransportLeaseId = "transport-current",
+                LeaseExpiresAt = oldExpiry.Clone(),
+                LeaseEpoch = 7,
+                ControlFrame = new VoiceControlFrame
+                {
+                    DrainAcknowledged = new VoiceDrainAcknowledged
+                    {
+                        ResponseId = 4,
+                        PlayoutSequence = 9,
+                    },
+                },
+            },
+        }), ctx, CancellationToken.None);
+
+        var persisted = roleAgent.PersistedStates.ShouldHaveSingleItem().State;
+        persisted.LastDrainAckResponseId.ShouldBe(4);
+        persisted.LastDrainAckPlayoutSequence.ShouldBe(9);
+        persisted.LeaseExpiresAt.ToDateTimeOffset().ShouldBe(now.AddMinutes(10));
+    }
+
+    [Fact]
+    public async Task Provider_callback_signal_should_accept_old_lease_expiry_after_renewal()
+    {
+        var now = new DateTimeOffset(2026, 6, 17, 8, 0, 0, TimeSpan.Zero);
+        var oldExpiry = Timestamp.FromDateTimeOffset(now.AddMinutes(5));
+        var roleAgent = CreateRoleAgentWithAttachedTransport(now.AddMinutes(10));
+        var module = CreateModule(new RecordingVoiceProvider());
+        var ctx = new StubEventHandlerContext(agent: roleAgent);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            ProviderEventReceived = new VoiceProviderEventReceived
+            {
+                SessionId = "lease-current",
+                OwnerId = "host-current",
+                TransportLeaseId = "transport-current",
+                LeaseExpiresAt = oldExpiry.Clone(),
+                LeaseEpoch = 7,
+                ProviderEvent = new VoiceProviderEvent
+                {
+                    ResponseStarted = new VoiceResponseStarted { ProviderResponseId = "provider-r1" },
+                },
+            },
+        }), ctx, CancellationToken.None);
+
+        var persisted = roleAgent.PersistedStates.ShouldHaveSingleItem().State;
+        persisted.Status.ShouldBe(VoicePresenceRuntimeStatus.ResponseInProgress);
+        persisted.ProviderResponseBindings.ShouldHaveSingleItem().ProviderResponseId.ShouldBe("provider-r1");
+        persisted.LeaseExpiresAt.ToDateTimeOffset().ShouldBe(now.AddMinutes(10));
+    }
+
+    [Fact]
+    public async Task Input_image_signal_should_accept_old_lease_expiry_after_renewal()
+    {
+        var now = new DateTimeOffset(2026, 6, 17, 8, 0, 0, TimeSpan.Zero);
+        var oldExpiry = Timestamp.FromDateTimeOffset(now.AddMinutes(5));
+        var provider = new RecordingVoiceProvider();
+        var roleAgent = CreateRoleAgentWithAttachedTransport(now.AddMinutes(10));
+        var module = CreateModule(provider);
+        var ctx = new StubEventHandlerContext(agent: roleAgent);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            InputImageReceived = new VoiceInputImageReceived
+            {
+                SessionId = "lease-current",
+                OwnerId = "host-current",
+                TransportLeaseId = "transport-current",
+                LeaseExpiresAt = oldExpiry.Clone(),
+                LeaseEpoch = 7,
+                InputImage = new VoiceInputImage
+                {
+                    MediaType = "image/png",
+                    Data = ByteString.CopyFrom([7, 8, 9]),
+                },
+            },
+        }), ctx, CancellationToken.None);
+
+        provider.InputImages.ShouldHaveSingleItem().Data.ToByteArray().ShouldBe([7, 8, 9]);
+        roleAgent.PersistedStates.ShouldBeEmpty();
     }
 
     [Fact]
@@ -2274,13 +2536,18 @@ public class VoicePresenceModuleTests
 
     private static RecordingRoleAgent CreateRoleAgentWithAttachedTransport()
     {
+        return CreateRoleAgentWithAttachedTransport(DateTimeOffset.UtcNow.AddMinutes(5));
+    }
+
+    private static RecordingRoleAgent CreateRoleAgentWithAttachedTransport(DateTimeOffset leaseExpiresAt)
+    {
         var roleAgent = new RecordingRoleAgent("voice-agent");
         roleAgent.State.VoicePresence[DefaultModuleName] = new VoicePresenceRuntimeState
         {
             Initialized = true,
             ActiveSessionId = "lease-current",
             ActiveLeaseOwnerId = "host-current",
-            LeaseExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)),
+            LeaseExpiresAt = Timestamp.FromDateTimeOffset(leaseExpiresAt.ToUniversalTime()),
             TransportAttached = true,
             ActiveTransportLeaseId = "transport-current",
             LeaseEpoch = 7,
@@ -2346,6 +2613,7 @@ public class VoicePresenceModuleTests
 
         public bool Disposed { get; private set; }
         public VoiceSessionConfig? LastSession { get; private set; }
+        public VoiceProviderSessionKey LastSessionKey => _sessionKey;
         public bool ThrowOnInjectEvent { get; set; }
         public int InjectEventCalls { get; private set; }
 
@@ -2446,7 +2714,17 @@ public class VoicePresenceModuleTests
             VoicePresenceSessionLeaseHandle handle,
             IVoiceTransport transport,
             CancellationToken ct = default) =>
-            Task.FromResult<VoiceTransportLifetimeCompleted?>(null);
+            AttachAsync(handle, transport, null, ct);
+
+        public Task<VoiceTransportLifetimeCompleted?> AttachAsync(
+            VoicePresenceSessionLeaseHandle handle,
+            IVoiceTransport transport,
+            VoiceToolCredentialTransportBinding? toolCredentialBinding,
+            CancellationToken ct = default)
+        {
+            _ = toolCredentialBinding;
+            return Task.FromResult<VoiceTransportLifetimeCompleted?>(null);
+        }
 
         public Task DetachAsync(
             VoicePresenceSessionLeaseHandle handle,
@@ -2498,9 +2776,14 @@ public class VoicePresenceModuleTests
 
     private sealed class StaticVoiceToolCatalog(IReadOnlyList<VoiceToolDefinition> tools) : IVoiceToolCatalog
     {
-        public Task<IReadOnlyList<VoiceToolDefinition>> DiscoverAsync(CancellationToken ct = default)
+        public VoiceToolExecutionContext? LastToolContext { get; private set; }
+
+        public Task<IReadOnlyList<VoiceToolDefinition>> DiscoverAsync(
+            VoiceToolExecutionContext? toolContext = null,
+            CancellationToken ct = default)
         {
             _ = ct;
+            LastToolContext = toolContext?.Clone();
             return Task.FromResult(tools);
         }
     }
@@ -2661,23 +2944,34 @@ public class VoicePresenceModuleTests
         public int Calls { get; private set; }
         public string? LastToolName { get; private set; }
         public string? LastArgumentsJson { get; private set; }
+        public VoiceToolExecutionContext? LastToolContext { get; private set; }
 
-        public Task<string> ExecuteAsync(string toolName, string argumentsJson, CancellationToken ct = default)
+        public Task<string> ExecuteAsync(
+            string toolName,
+            string argumentsJson,
+            VoiceToolExecutionContext? toolContext = null,
+            CancellationToken ct = default)
         {
             _ = ct;
             Calls++;
             LastToolName = toolName;
             LastArgumentsJson = argumentsJson;
+            LastToolContext = toolContext?.Clone();
             return Task.FromResult(resultJson);
         }
     }
 
     private sealed class BlockingVoiceToolInvoker : IVoiceToolInvoker
     {
-        public async Task<string> ExecuteAsync(string toolName, string argumentsJson, CancellationToken ct = default)
+        public async Task<string> ExecuteAsync(
+            string toolName,
+            string argumentsJson,
+            VoiceToolExecutionContext? toolContext = null,
+            CancellationToken ct = default)
         {
             _ = toolName;
             _ = argumentsJson;
+            _ = toolContext;
 
             var gate = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
             using var registration = ct.Register(() => gate.TrySetCanceled(ct));
@@ -2687,10 +2981,15 @@ public class VoicePresenceModuleTests
 
     private sealed class ThrowingVoiceToolInvoker(string message) : IVoiceToolInvoker
     {
-        public Task<string> ExecuteAsync(string toolName, string argumentsJson, CancellationToken ct = default)
+        public Task<string> ExecuteAsync(
+            string toolName,
+            string argumentsJson,
+            VoiceToolExecutionContext? toolContext = null,
+            CancellationToken ct = default)
         {
             _ = toolName;
             _ = argumentsJson;
+            _ = toolContext;
             _ = ct;
             throw new InvalidOperationException(message);
         }
@@ -2698,8 +2997,11 @@ public class VoicePresenceModuleTests
 
     private sealed class ThrowingVoiceToolCatalog : IVoiceToolCatalog
     {
-        public Task<IReadOnlyList<VoiceToolDefinition>> DiscoverAsync(CancellationToken ct = default)
+        public Task<IReadOnlyList<VoiceToolDefinition>> DiscoverAsync(
+            VoiceToolExecutionContext? toolContext = null,
+            CancellationToken ct = default)
         {
+            _ = toolContext;
             _ = ct;
             throw new InvalidOperationException("catalog failed");
         }

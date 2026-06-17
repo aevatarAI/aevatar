@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Text;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -232,7 +233,8 @@ public sealed class ChatRuntimeStreamingBufferTests
             toolContext: null,
             llmControl,
             round: 1,
-            finalNoTools: true);
+            finalNoTools: true,
+            toolReceipts: null);
 
         finalRequest.Tools.Should().BeNull();
         finalRequest.ToolContext!.Request.CallId.Should().Be("req-123:final");
@@ -275,6 +277,65 @@ public sealed class ChatRuntimeStreamingBufferTests
         tool.CapturedContext.ExternalMetadata["safe"].Should().Be("tool-context");
         tool.CapturedContext.ExternalMetadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
         tool.CapturedContext.ExternalMetadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
+    }
+
+    [Fact]
+    public void BuildLlmStepRequest_WhenFinalNoToolsWithoutMutatingReceipt_ShouldInjectConstraintWithoutMutatingCallerMessages()
+    {
+        var provider = new RecordingStepProvider();
+        var runtime = CreateRuntime(provider);
+        var executor = runtime.CreateStepExecutor();
+        var messages = new List<ChatMessage>
+        {
+            ChatMessage.System("system"),
+            ChatMessage.User("hello"),
+        };
+
+        var request = executor.BuildLlmStepRequest(
+            messages,
+            "req-final",
+            metadata: null,
+            toolContext: null,
+            llmControl: null,
+            round: 1,
+            finalNoTools: true);
+
+        request.Messages.Should().HaveCount(3);
+        request.Messages.Last().Role.Should().Be("system");
+        request.Messages.Last().Content.Should().Contain("no successful mutating tool execution");
+        messages.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public void BuildLlmStepRequest_WhenFinalNoToolsHasMutatingSuccessReceipt_ShouldNotInjectConstraint()
+    {
+        var provider = new RecordingStepProvider();
+        var runtime = CreateRuntime(provider);
+        var executor = runtime.CreateStepExecutor();
+        var messages = new List<ChatMessage>
+        {
+            ChatMessage.System("system"),
+            ChatMessage.User("hello"),
+        };
+
+        var request = executor.BuildLlmStepRequest(
+            messages,
+            "req-final",
+            metadata: null,
+            toolContext: null,
+            llmControl: null,
+            round: 1,
+            finalNoTools: true,
+            toolReceipts:
+            [
+                new AgentToolReceipt
+                {
+                    Status = AgentToolReceiptStatus.Success,
+                    SideEffectKind = "definition.update",
+                },
+            ]);
+
+        request.Messages.Should().BeEquivalentTo(messages);
     }
 
     [Fact]
@@ -528,6 +589,184 @@ public sealed class ChatRuntimeStreamingBufferTests
             m.ToolCalls[0].Name == "lookup" &&
             m.ReasoningContent == "thinking-before-final-text-tool");
         assistantToolCallMessage.ReasoningContent.Should().Be("thinking-before-final-text-tool");
+    }
+
+    [Fact]
+    public async Task ChatStreamAsync_WhenFinalTextToolHasNoMutatingSuccess_ShouldInjectSummaryConstraint()
+    {
+        var provider = new QueuedStreamingProvider(
+        [
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "tc-initial-read",
+                        Name = "lookup",
+                        ArgumentsJson = "{\"q\":\"initial\"}",
+                    },
+                },
+            ],
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = """
+                        <function_calls>
+                        <invoke name="lookup">
+                        <parameter name="q">final</parameter>
+                        </invoke>
+                        </function_calls>
+                        """,
+                },
+            ],
+            [
+                new LLMStreamChunk { DeltaContent = "summary-ready" },
+            ],
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("lookup", args => $"RESULT:{args}", isReadOnly: true));
+        var runtime = CreateRuntime(provider, tools: tools);
+
+        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 1))
+        {
+        }
+
+        provider.StreamRequests.Should().HaveCount(3);
+        provider.StreamRequests[2].Messages
+            .Where(message => message.Role == "system" &&
+                              message.Content?.Contains("no successful mutating tool execution") == true)
+            .Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ChatStreamAsync_WhenFinalTextToolHasMutatingSuccess_ShouldNotInjectSummaryConstraint()
+    {
+        var provider = new QueuedStreamingProvider(
+        [
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "tc-initial-read",
+                        Name = "lookup",
+                        ArgumentsJson = "{\"q\":\"initial\"}",
+                    },
+                },
+            ],
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = """
+                        <function_calls>
+                        <invoke name="write_config">
+                        <parameter name="value">new</parameter>
+                        </invoke>
+                        </function_calls>
+                        """,
+                },
+            ],
+            [
+                new LLMStreamChunk { DeltaContent = "summary-ready" },
+            ],
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("lookup", args => $"RESULT:{args}", isReadOnly: true));
+        tools.Register(new DelegateTool("write_config", args => $"RESULT:{args}"));
+        var runtime = CreateRuntime(provider, tools: tools);
+
+        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 1))
+        {
+        }
+
+        provider.StreamRequests.Should().HaveCount(3);
+        provider.StreamRequests[2].Messages
+            .Where(message => message.Role == "system" &&
+                              message.Content?.Contains("no successful mutating tool execution") == true)
+            .Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ChatStreamAsync_WhenFinalNoToolsHasNoMutatingSuccess_ShouldInjectEphemeralConstraint()
+    {
+        var provider = new QueuedStreamingProvider(
+        [
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "tc-read",
+                        Name = "lookup",
+                        ArgumentsJson = "{\"q\":\"status\"}",
+                    },
+                },
+            ],
+            [
+                new LLMStreamChunk { DeltaContent = "final-without-mutation" },
+            ],
+            [
+                new LLMStreamChunk { DeltaContent = "second-turn" },
+            ],
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("lookup", args => $"RESULT:{args}", isReadOnly: true));
+        var runtime = CreateRuntime(provider, tools: tools);
+
+        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 1))
+        {
+        }
+
+        provider.StreamRequests.Should().HaveCount(2);
+        provider.StreamRequests[1].Messages
+            .Where(message => message.Role == "system" &&
+                              message.Content?.Contains("no successful mutating tool execution") == true)
+            .Should().ContainSingle();
+
+        await foreach (var _ in runtime.ChatStreamAsync("next", maxToolRounds: 1))
+        {
+        }
+
+        provider.StreamRequests.Should().HaveCount(3);
+        provider.StreamRequests[2].Messages
+            .Where(message => message.Role == "system" &&
+                              message.Content?.Contains("no successful mutating tool execution") == true)
+            .Should().BeEmpty("the guard is request-local and must not be persisted to history");
+    }
+
+    [Fact]
+    public async Task ChatStreamAsync_WhenFinalNoToolsHasMutatingSuccess_ShouldNotInjectConstraint()
+    {
+        var provider = new QueuedStreamingProvider(
+        [
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "tc-write",
+                        Name = "write_config",
+                        ArgumentsJson = "{\"value\":\"new\"}",
+                    },
+                },
+            ],
+            [
+                new LLMStreamChunk { DeltaContent = "final-after-mutation" },
+            ],
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("write_config", args => $"RESULT:{args}"));
+        var runtime = CreateRuntime(provider, tools: tools);
+
+        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 1))
+        {
+        }
+
+        provider.StreamRequests.Should().HaveCount(2);
+        provider.StreamRequests[1].Messages
+            .Where(message => message.Role == "system" &&
+                              message.Content?.Contains("no successful mutating tool execution") == true)
+            .Should().BeEmpty();
     }
 
     [Fact]
@@ -1159,11 +1398,19 @@ public sealed class ChatRuntimeStreamingBufferTests
         public Task InvokeAsync(LLMCallContext context, Func<Task> next) => handler(context, next);
     }
 
-    private sealed class DelegateTool(string name, Func<string, string> execute) : IAgentTool
+    private sealed class DelegateTool(
+        string name,
+        Func<string, string> execute,
+        bool isReadOnly = false,
+        bool isDestructive = false,
+        string sideEffectKind = "") : IAgentTool
     {
         public string Name => name;
         public string Description => "delegate";
         public string ParametersSchema => "{}";
+        public bool IsReadOnly => isReadOnly;
+        public bool IsDestructive => isDestructive;
+        public string SideEffectKind => sideEffectKind;
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {

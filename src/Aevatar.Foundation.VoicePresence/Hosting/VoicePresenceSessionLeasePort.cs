@@ -40,6 +40,7 @@ public sealed class VoicePresenceSessionLeasePort : IVoicePresenceSessionLeasePo
                     OwnerId = request.OwnerId,
                     ExpiresAt = Timestamp.FromDateTimeOffset(expiresAtUtc),
                     SessionOverrides = request.SessionOverrides?.Clone(),
+                    ToolContext = request.ToolContext?.Clone(),
                 }),
             ct);
 
@@ -54,7 +55,8 @@ public sealed class VoicePresenceSessionLeasePort : IVoicePresenceSessionLeasePo
             observed.LeaseExpiresAt?.ToUniversalTime() ?? expiresAtUtc,
             observed.RemoteAudioSupport,
             observed.ActiveTransportLeaseId,
-            observed.LeaseEpoch);
+            observed.LeaseEpoch,
+            request.ToolContext?.Clone());
     }
 
     public Task ReleaseAsync(
