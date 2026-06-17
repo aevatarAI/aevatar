@@ -223,19 +223,10 @@ public sealed class WorkflowFileArtifactLifecycleTests
     [Fact]
     public async Task WorkflowFileArtifactCleanupHostedService_ShouldTriggerCleanupOnStart()
     {
-        var cleanupPort = new RecordingWorkflowFileArtifactPort();
-        var service = new WorkflowFileArtifactCleanupHostedService(
-            cleanupPort,
-            Options.Create(new WorkflowFileArtifactOptions
-            {
-                CleanupEnabled = true,
-                CleanupOnStart = true,
-                CleanupInterval = TimeSpan.Zero,
-            }),
-            NullLogger<WorkflowFileArtifactCleanupHostedService>.Instance);
-
-        await service.StartAsync(CancellationToken.None);
-        await service.StopAsync(CancellationToken.None);
+        var cleanupPort = await RunCleanupHostedServiceAsync(
+            cleanupEnabled: true,
+            cleanupOnStart: true,
+            cleanupInterval: TimeSpan.Zero);
 
         cleanupPort.CleanupRequests.Should().ContainSingle();
     }
@@ -243,19 +234,10 @@ public sealed class WorkflowFileArtifactLifecycleTests
     [Fact]
     public async Task WorkflowFileArtifactCleanupHostedService_ShouldNotTriggerCleanupWhenDisabled()
     {
-        var cleanupPort = new RecordingWorkflowFileArtifactPort();
-        var service = new WorkflowFileArtifactCleanupHostedService(
-            cleanupPort,
-            Options.Create(new WorkflowFileArtifactOptions
-            {
-                CleanupEnabled = false,
-                CleanupOnStart = true,
-                CleanupInterval = TimeSpan.Zero,
-            }),
-            NullLogger<WorkflowFileArtifactCleanupHostedService>.Instance);
-
-        await service.StartAsync(CancellationToken.None);
-        await service.StopAsync(CancellationToken.None);
+        var cleanupPort = await RunCleanupHostedServiceAsync(
+            cleanupEnabled: false,
+            cleanupOnStart: true,
+            cleanupInterval: TimeSpan.Zero);
 
         cleanupPort.CleanupRequests.Should().BeEmpty();
     }
@@ -263,21 +245,33 @@ public sealed class WorkflowFileArtifactLifecycleTests
     [Fact]
     public async Task WorkflowFileArtifactCleanupHostedService_ShouldNotTriggerStartupCleanupWhenCleanupOnStartIsDisabled()
     {
-        var cleanupPort = new RecordingWorkflowFileArtifactPort();
-        var service = new WorkflowFileArtifactCleanupHostedService(
-            cleanupPort,
-            Options.Create(new WorkflowFileArtifactOptions
-            {
-                CleanupEnabled = true,
-                CleanupOnStart = false,
-                CleanupInterval = TimeSpan.Zero,
-            }),
-            NullLogger<WorkflowFileArtifactCleanupHostedService>.Instance);
-
-        await service.StartAsync(CancellationToken.None);
-        await service.StopAsync(CancellationToken.None);
+        var cleanupPort = await RunCleanupHostedServiceAsync(
+            cleanupEnabled: true,
+            cleanupOnStart: false,
+            cleanupInterval: TimeSpan.Zero);
 
         cleanupPort.CleanupRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task WorkflowFileArtifactCleanupHostedService_ShouldTriggerPeriodicCleanupAndStopCleanly()
+    {
+        var cleanupPort = new RecordingWorkflowFileArtifactPort(completeCleanupWhenCanceled: true);
+        using var service = CreateCleanupHostedService(
+            cleanupPort,
+            cleanupEnabled: true,
+            cleanupOnStart: false,
+            cleanupInterval: TimeSpan.FromMilliseconds(1));
+
+        await service.StartAsync(CancellationToken.None);
+        using var cleanupObservedTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        await cleanupPort.WaitForCleanupAsync(cleanupObservedTimeout.Token);
+        var act = async () => await service.StopAsync(CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(5));
+
+        await act.Should().NotThrowAsync();
+        cleanupPort.CleanupRequests.Should().ContainSingle();
     }
 
     private static IDisposable ClearRuntimeEnvironment()
@@ -307,13 +301,59 @@ public sealed class WorkflowFileArtifactLifecycleTests
         }
     }
 
-    private sealed class RecordingWorkflowFileArtifactPort :
+    private static async Task<RecordingWorkflowFileArtifactPort> RunCleanupHostedServiceAsync(
+        bool cleanupEnabled,
+        bool cleanupOnStart,
+        TimeSpan cleanupInterval)
+    {
+        var cleanupPort = new RecordingWorkflowFileArtifactPort();
+        using var service = CreateCleanupHostedService(
+            cleanupPort,
+            cleanupEnabled,
+            cleanupOnStart,
+            cleanupInterval);
+
+        await service.StartAsync(CancellationToken.None);
+        await service.StopAsync(CancellationToken.None);
+
+        return cleanupPort;
+    }
+
+    private static WorkflowFileArtifactCleanupHostedService CreateCleanupHostedService(
+        RecordingWorkflowFileArtifactPort cleanupPort,
+        bool cleanupEnabled,
+        bool cleanupOnStart,
+        TimeSpan cleanupInterval) =>
+        new(
+            cleanupPort,
+            Options.Create(new WorkflowFileArtifactOptions
+            {
+                CleanupEnabled = cleanupEnabled,
+                CleanupOnStart = cleanupOnStart,
+                CleanupInterval = cleanupInterval,
+            }),
+            NullLogger<WorkflowFileArtifactCleanupHostedService>.Instance);
+
+    private sealed class RecordingWorkflowFileArtifactPort(bool completeCleanupWhenCanceled = false) :
         IWorkflowFileIngressPort,
         IWorkflowFileArtifactReadPort,
         IWorkflowFileArtifactOwnershipPort,
         IWorkflowFileArtifactCleanupPort
     {
-        public List<WorkflowFileArtifactCleanupRequest> CleanupRequests { get; } = [];
+        private readonly object _cleanupRequestLock = new();
+        private readonly List<WorkflowFileArtifactCleanupRequest> _cleanupRequests = [];
+        private TaskCompletionSource<WorkflowFileArtifactCleanupRequest>? _nextCleanupRequest;
+
+        public IReadOnlyList<WorkflowFileArtifactCleanupRequest> CleanupRequests
+        {
+            get
+            {
+                lock (_cleanupRequestLock)
+                {
+                    return _cleanupRequests.ToArray();
+                }
+            }
+        }
 
         public ValueTask<WorkflowFileIngressResult> IngestAsync(
             WorkflowFileIngressRequest request,
@@ -337,15 +377,52 @@ public sealed class WorkflowFileArtifactLifecycleTests
             CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
-        public ValueTask<WorkflowFileArtifactCleanupResult> CleanupAsync(
+        public Task<WorkflowFileArtifactCleanupRequest> WaitForCleanupAsync(CancellationToken cancellationToken)
+        {
+            lock (_cleanupRequestLock)
+            {
+                if (_cleanupRequests.Count > 0)
+                    return Task.FromResult(_cleanupRequests[^1]);
+
+                _nextCleanupRequest ??= new TaskCompletionSource<WorkflowFileArtifactCleanupRequest>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                return _nextCleanupRequest.Task.WaitAsync(cancellationToken);
+            }
+        }
+
+        public async ValueTask<WorkflowFileArtifactCleanupResult> CleanupAsync(
             WorkflowFileArtifactCleanupRequest request,
             CancellationToken cancellationToken = default)
         {
-            CleanupRequests.Add(request);
-            return ValueTask.FromResult(new WorkflowFileArtifactCleanupResult(
+            TaskCompletionSource<WorkflowFileArtifactCleanupRequest>? nextCleanupRequest;
+            lock (_cleanupRequestLock)
+            {
+                _cleanupRequests.Add(request);
+                nextCleanupRequest = _nextCleanupRequest;
+                _nextCleanupRequest = null;
+            }
+
+            nextCleanupRequest?.TrySetResult(request);
+            if (completeCleanupWhenCanceled)
+                await WaitForCancellationAsync(cancellationToken).ConfigureAwait(false);
+
+            return new WorkflowFileArtifactCleanupResult(
                 ScannedArtifactCount: 0,
                 DeletedExpiredArtifactCount: 0,
-                DeletedIncompleteArtifactCount: 0));
+                DeletedIncompleteArtifactCount: 0);
+        }
+
+        private static async Task WaitForCancellationAsync(CancellationToken cancellationToken)
+        {
+            if (cancellationToken.IsCancellationRequested)
+                throw new OperationCanceledException(cancellationToken);
+
+            var cancellation = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var registration = cancellationToken.Register(
+                static state => ((TaskCompletionSource<bool>)state!).TrySetCanceled(),
+                cancellation);
+
+            await cancellation.Task.ConfigureAwait(false);
         }
     }
 }
