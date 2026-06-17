@@ -809,7 +809,10 @@ export type StudioWorkflowBuildPanelProps = {
   ) => void;
   readonly savePending: boolean;
   readonly canSaveWorkflow: boolean;
-  readonly saveNotice?: { readonly type: 'success' | 'error'; readonly message: string } | null;
+  readonly saveNotice?: {
+    readonly type: 'success' | 'info' | 'error';
+    readonly message: string;
+  } | null;
   readonly workflowGraph: {
     readonly steps: readonly StudioGraphStep[];
     readonly nodes: Node[];
@@ -1344,7 +1347,13 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
           <Alert
             message={saveNotice.message}
             showIcon
-            type={saveNotice.type === 'success' ? 'success' : 'error'}
+            type={
+              saveNotice.type === 'success'
+                ? 'success'
+                : saveNotice.type === 'info'
+                  ? 'info'
+                  : 'error'
+            }
           />
         ) : null}
       </div>
