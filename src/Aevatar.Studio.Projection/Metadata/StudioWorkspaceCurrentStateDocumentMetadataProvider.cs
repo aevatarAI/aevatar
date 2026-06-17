@@ -29,6 +29,22 @@ public sealed class StudioWorkspaceCurrentStateDocumentMetadataProvider
                     ["type"] = "text",
                     ["index"] = false,
                 },
+                ["draft_summaries"] = new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["type"] = "nested",
+                    ["dynamic"] = false,
+                    ["properties"] = new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["workflow_id"] = Keyword(),
+                        ["name"] = Keyword(),
+                        ["file_name"] = Keyword(),
+                        ["directory_id"] = Keyword(),
+                        ["version"] = new Dictionary<string, object?>(StringComparer.Ordinal)
+                        {
+                            ["type"] = "long",
+                        },
+                    },
+                },
             },
         },
         Settings: new Dictionary<string, object?>(StringComparer.Ordinal),

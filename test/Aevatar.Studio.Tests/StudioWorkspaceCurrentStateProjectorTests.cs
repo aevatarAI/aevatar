@@ -112,16 +112,33 @@ public sealed class StudioWorkspaceCurrentStateProjectorTests
 
         var written = dispatcher.Upserts.Should().ContainSingle().Subject;
         written.StateRootJson.Should().Contain("\"drafts\"");
+        written.StateRootJson.Should().Contain("nested");
+        written.DraftSummaries.Should().ContainSingle().Which.Should().BeEquivalentTo(new StudioWorkspaceDraftSummary
+        {
+            WorkflowId = "wf-alpha",
+            Name = "workflow alpha",
+            FileName = "workflow-alpha.yaml",
+            DirectoryId = "dir-1",
+            Version = 4,
+        });
         StudioWorkspaceCurrentStateDocument.Descriptor.Fields.InDeclarationOrder()
             .Select(field => field.Name)
             .Should().NotContain("state_root");
         StudioWorkspaceCurrentStateDocument.Descriptor.Fields.InDeclarationOrder()
             .Single(field => field.Name == "state_root_json")
             .FieldType.Should().Be(FieldType.String);
+        StudioWorkspaceCurrentStateDocument.Descriptor.Fields.InDeclarationOrder()
+            .Single(field => field.Name == "draft_summaries")
+            .MessageType.Should().Be(StudioWorkspaceDraftSummary.Descriptor);
 
         using var serialized = JsonDocument.Parse(ReadModelFormatter.Format(written));
         serialized.RootElement.TryGetProperty("state_root_json", out var stateRootJsonElement).Should().BeTrue();
         stateRootJsonElement.ValueKind.Should().Be(JsonValueKind.String);
+        serialized.RootElement.TryGetProperty("draft_summaries", out var draftSummariesElement).Should().BeTrue();
+        draftSummariesElement.ValueKind.Should().Be(JsonValueKind.Array);
+        draftSummariesElement[0].TryGetProperty("workflow_id", out _).Should().BeTrue();
+        draftSummariesElement[0].TryGetProperty("name", out _).Should().BeTrue();
+        draftSummariesElement[0].TryGetProperty("yaml", out _).Should().BeFalse();
         serialized.RootElement.TryGetProperty("state_root", out _).Should().BeFalse();
     }
 
@@ -146,6 +163,17 @@ public sealed class StudioWorkspaceCurrentStateProjectorTests
             .Subject;
         stateRootJsonMapping["type"].Should().Be("text");
         stateRootJsonMapping["index"].Should().Be(false);
+
+        var draftSummariesMapping = properties["draft_summaries"].Should()
+            .BeAssignableTo<IReadOnlyDictionary<string, object?>>()
+            .Subject;
+        draftSummariesMapping["type"].Should().Be("nested");
+        draftSummariesMapping["dynamic"].Should().Be(false);
+        var draftSummaryProperties = draftSummariesMapping["properties"].Should()
+            .BeAssignableTo<IReadOnlyDictionary<string, object?>>()
+            .Subject;
+        draftSummaryProperties.Should().ContainKeys("workflow_id", "name", "file_name", "directory_id", "version");
+        draftSummaryProperties.Should().NotContainKey("yaml");
     }
 
     [Fact]

@@ -52,7 +52,7 @@ public sealed class StudioWorkspaceCurrentStateProjector
         }
 
         var updatedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow);
-        await _writeDispatcher.UpsertAsync(new StudioWorkspaceCurrentStateDocument
+        var document = new StudioWorkspaceCurrentStateDocument
         {
             Id = context.RootActorId,
             ActorId = context.RootActorId,
@@ -60,6 +60,18 @@ public sealed class StudioWorkspaceCurrentStateProjector
             LastEventId = stateEvent.EventId ?? string.Empty,
             UpdatedAt = Timestamp.FromDateTimeOffset(updatedAt),
             StateRootJson = StateRootFormatter.Format(state),
-        }, ct);
+        };
+        document.DraftSummaries.AddRange(state.Drafts.Values.Select(ToDraftSummary));
+
+        await _writeDispatcher.UpsertAsync(document, ct);
     }
+
+    private static StudioWorkspaceDraftSummary ToDraftSummary(StudioWorkflowDraft draft) => new()
+    {
+        WorkflowId = draft.WorkflowId,
+        Name = draft.Name,
+        FileName = draft.FileName,
+        DirectoryId = draft.DirectoryId,
+        Version = draft.Version,
+    };
 }
