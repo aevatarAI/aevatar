@@ -142,6 +142,11 @@ The edge consumes a JSON projection of it (camelCase), hand-parsed by
   turn running in another silo cannot resolve this volatile ref today; that is
   the same known boundary as the live media relay and is a follow-up topology
   problem, not a durable credential fact source.
+- **Drain-ack timeout** — when a response enters `AudioDraining`, the actor
+  schedules a durable `VoiceDrainTimeoutExpired` self-signal and releases the
+  drain fence only after matching the active `response_id` and positive
+  `lease_epoch`; this preserves the existing ACK watermark without treating the
+  timeout as edge playout confirmation.
 
 ## Connect + turn sequence
 

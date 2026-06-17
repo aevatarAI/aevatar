@@ -554,6 +554,7 @@ public static class ServiceCollectionExtensions
             StaleAfter = options.StaleAfter,
             DedupeWindow = options.DedupeWindow,
             ToolExecutionTimeout = options.ToolExecutionTimeout,
+            DrainTimeout = options.DrainTimeout,
             PendingInjectionCapacity = options.PendingInjectionCapacity,
             TimeProvider = options.TimeProvider,
             DirectExternalEventTypeUrls = options.DirectExternalEventTypeUrls,

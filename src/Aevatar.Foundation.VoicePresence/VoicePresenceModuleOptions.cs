@@ -19,6 +19,8 @@ public sealed class VoicePresenceModuleOptions
 
     public TimeSpan ToolExecutionTimeout { get; init; } = TimeSpan.FromSeconds(10);
 
+    public TimeSpan DrainTimeout { get; init; } = TimeSpan.FromSeconds(5);
+
     public int PendingInjectionCapacity { get; init; } = 16;
 
     public TimeProvider TimeProvider { get; init; } = TimeProvider.System;
