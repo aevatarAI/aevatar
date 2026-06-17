@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
@@ -332,6 +333,7 @@ public sealed record WorkflowActorCurrentStateHttpResponse(
     bool? LastSuccess,
     string LastOutput,
     string LastError,
+    [property: JsonConverter(typeof(JsonStringEnumConverter))]
     WorkflowSagaStatus SagaStatus,
     WorkflowCompensationDeadLetterHttpResponse? DeadLetter,
     int TotalSteps,
