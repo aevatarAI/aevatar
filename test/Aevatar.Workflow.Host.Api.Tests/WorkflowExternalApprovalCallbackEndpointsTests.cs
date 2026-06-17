@@ -203,6 +203,38 @@ public sealed class WorkflowExternalApprovalCallbackEndpointsTests
     }
 
     [Fact]
+    public async Task HandleAsync_WhenReplayAdmissionExpired_ShouldReturnServiceUnavailableWithoutDispatch()
+    {
+        var replay = new RecordingReplayAdmissionPort
+        {
+            Result = new WorkflowWebhookReplayAdmission(WorkflowWebhookReplayAdmissionStatus.ExpiredRejected),
+        };
+        var dispatch = new RecordingSignalDispatch();
+        var lookup = new RecordingLookupPort { Result = ActiveContinuation() };
+        var http = CreateHttpContext();
+        var body = Body("APPROVED");
+        http.Request.Body = new MemoryStream(body);
+        Sign(http, "secret", body);
+
+        var result = await WorkflowExternalApprovalCallbackEndpoints.HandleAsync(
+            http,
+            "nyx",
+            lookup,
+            replay,
+            dispatch,
+            Options.Create(CreateOptions()),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        http.Response.Headers.RetryAfter.ToString().Should().Be("7");
+        replay.Requests.Should().ContainSingle();
+        dispatch.Commands.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task HandleAsync_WhenReplayAdmissionFails_ShouldReturnServiceUnavailableWithoutDispatch()
     {
         var replay = new RecordingReplayAdmissionPort { ThrowOnAdmit = true };

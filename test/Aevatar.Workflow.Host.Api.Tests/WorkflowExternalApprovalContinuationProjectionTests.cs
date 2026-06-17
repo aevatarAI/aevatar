@@ -91,6 +91,36 @@ public sealed class WorkflowExternalApprovalContinuationProjectionTests
     }
 
     [Fact]
+    public async Task ProjectAsync_WhenClearHasDifferentActiveBinding_ShouldKeepContinuationActive()
+    {
+        var store = new ContinuationStore();
+        var projector = new WorkflowExternalApprovalContinuationProjector(
+            store,
+            store,
+            new FixedClock(DateTimeOffset.Parse("2026-04-01T10:00:00Z")));
+
+        await projector.ProjectAsync(
+            Context(),
+            CommittedEnvelope(10, Register("run-1", "wait-approval", "approval", "nyxid", "instance_code", "app-42")),
+            CancellationToken.None);
+        await projector.ProjectAsync(
+            Context(),
+            CommittedEnvelope(11, Clear("run-2", "wait-approval-2", "approval-2", "nyxid", "instance_code", "app-42")),
+            CancellationToken.None);
+
+        var document = store.Stored.Values.Single();
+        document.Active.Should().BeTrue();
+        document.RunId.Should().Be("run-1");
+        document.StepId.Should().Be("wait-approval");
+        document.SignalName.Should().Be("approval");
+        document.CallbackIdempotencyKey.Should().Be("idem-42");
+        document.RequestId.Should().Be("request-42");
+        document.StateVersion.Should().Be(10);
+        document.LastEventId.Should().Be("evt-10");
+        store.UpsertCount.Should().Be(1);
+    }
+
+    [Fact]
     public async Task LookupPort_ShouldReturnOnlyActiveExactIdentity()
     {
         var store = new ContinuationStore();
