@@ -52,7 +52,7 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
                 IdempotencyKey = request.IdempotencyKey,
                 CapturedOutput = string.Empty,
                 LedgerStatus = CompensableLedgerEntryStatus.Provisional,
-            }, options => options.Excluding(x => x.CommittedAtUnixMs));
+            });
 
         var compensation = CompensationRequests(harness.Publisher).Should().ContainSingle().Subject;
         compensation.CompensationStepId.Should().Be("cancel_order");
@@ -110,7 +110,7 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
                 IdempotencyKey = request.IdempotencyKey,
                 CapturedOutput = """{"orderId":"order-1"}""",
                 LedgerStatus = CompensableLedgerEntryStatus.Confirmed,
-            }, options => options.Excluding(x => x.CommittedAtUnixMs));
+            });
     }
 
     [Fact]
@@ -128,7 +128,7 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
                 IdempotencyKey = $"{harness.RunId}:create_order:1",
                 CapturedOutput = "order-output",
                 LedgerStatus = CompensableLedgerEntryStatus.Confirmed,
-            }, options => options.Excluding(x => x.CommittedAtUnixMs));
+            });
     }
 
     [Fact]
@@ -173,6 +173,50 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
             .ContainSingle()
             .Which.RunId.Should().Be(harness.RunId);
         harness.Agent.State.SagaStatus.Should().Be(WorkflowSagaStatus.CompensatedFailed);
+    }
+
+    [Fact]
+    public async Task TerminalFailure_WithMultipleCompensations_ShouldPreserveOriginalFailedStepId()
+    {
+        var harness = await CreateStartedRunAsync(SagaWorkflowYaml());
+
+        await CompleteStepAsync(harness, "create_order", "order-output");
+        await CompleteStepAsync(harness, "charge_payment", "charge-output");
+        await FailStepAsync(harness, "ship_order", "ship failed");
+
+        var firstRequest = CompensationRequests(harness.Publisher).Should().ContainSingle().Subject;
+        firstRequest.FailedStepId.Should().Be("ship_order");
+        harness.Agent.State.CompensationOriginFailedStepId.Should().Be("ship_order");
+
+        await CompleteCompensationAsync(harness, firstRequest);
+
+        var secondRequest = CompensationRequests(harness.Publisher).Last();
+        secondRequest.CompensationStepId.Should().Be("cancel_order");
+        secondRequest.FailedStepId.Should().Be("ship_order");
+        harness.Agent.State.CompensationOriginFailedStepId.Should().Be("ship_order");
+    }
+
+    [Fact]
+    public async Task WorkflowCompletionRedelivery_WhenRunIsTerminal_ShouldNotDuplicateTerminalFacts()
+    {
+        var harness = await CreateStartedRunAsync(NoCompensationWorkflowYaml());
+
+        await FailStepAsync(harness, "failed_step", "boom");
+        var terminal = CommittedEvents<WorkflowCompletedEvent>(harness.CommittedPublisher)
+            .Should()
+            .ContainSingle(x => !x.Success)
+            .Subject;
+        var committedEventCount = harness.CommittedPublisher.Events.Count;
+        var publishedEventCount = harness.Publisher.Published.Count;
+
+        await harness.Agent.HandleEventAsync(SelfEnvelope(harness.RunId, terminal.Clone()));
+
+        CommittedEvents<WorkflowCompletedEvent>(harness.CommittedPublisher)
+            .Where(x => !x.Success)
+            .Should()
+            .ContainSingle();
+        harness.CommittedPublisher.Events.Should().HaveCount(committedEventCount);
+        harness.Publisher.Published.Should().HaveCount(publishedEventCount);
     }
 
     [Fact]
@@ -767,6 +811,55 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
         harness.Agent.State.SagaStatus.Should().Be(WorkflowSagaStatus.CompensationDeadLetter);
     }
 
+    [Fact]
+    public async Task ManagedWorkflowCallChild_WhenCompensationCompletes_ShouldSendCompensatedChildCompletionToParent()
+    {
+        const string parentActorId = "parent-run-actor";
+        const string parentRunId = "parent-run";
+        const string parentStepId = "call_child";
+        const string invocationId = "invoke-child-1";
+        var childRunId = "child-run-" + Guid.NewGuid().ToString("N");
+        var harness = await CreateRunAsync(childRunId, SagaWorkflowYaml());
+
+        await harness.Agent.HandleEventAsync(EnvelopeFrom(parentActorId, new StartWorkflowEvent
+        {
+            WorkflowName = "wf_2097",
+            RunId = childRunId,
+            Input = "hello",
+            WorkflowRuntime = new WorkflowToolRuntimeContextPayload
+            {
+                ParentActorId = parentActorId,
+                ParentRunId = parentRunId,
+                ParentStepId = parentStepId,
+                RootRunId = parentRunId,
+                Depth = 1,
+            },
+            Parameters =
+            {
+                ["workflow_call.invocation_id"] = invocationId,
+            },
+        }));
+
+        await CompleteStepAsync(harness, "create_order", "order-output");
+        await CompleteStepAsync(harness, "charge_payment", "charge-output");
+        await FailStepAsync(harness, "ship_order", "ship failed");
+        var firstRequest = CompensationRequests(harness.Publisher).Single();
+        await CompleteCompensationAsync(harness, firstRequest);
+        var secondRequest = CompensationRequests(harness.Publisher).Last();
+        await CompleteCompensationAsync(harness, secondRequest);
+
+        PublishedEvents<WorkflowCompletedEvent>(harness.Publisher)
+            .Where(x => x.Audience == TopologyAudience.Parent)
+            .Should()
+            .BeEmpty();
+        var sent = harness.Publisher.Sent.Should().ContainSingle(x => x.TargetActorId == parentActorId).Subject;
+        var completed = sent.Event.Should().BeOfType<SubWorkflowInvocationCompletedEvent>().Subject;
+        completed.InvocationId.Should().Be(invocationId);
+        completed.ChildRunId.Should().Be(childRunId);
+        completed.Success.Should().BeFalse();
+        completed.Compensated.Should().BeTrue();
+    }
+
     private static async Task CompleteStepAsync(RunHarness harness, string stepId, string output)
     {
         var request = harness.Publisher.Published
@@ -1185,6 +1278,8 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
     {
         public List<(IMessage Event, TopologyAudience Audience)> Published { get; } = [];
 
+        public List<(string TargetActorId, IMessage Event)> Sent { get; } = [];
+
         public bool AutoReplaySelfPublished { get; init; } = true;
 
         public WorkflowRunGAgent Agent { get; set; } = null!;
@@ -1213,8 +1308,12 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
             CancellationToken ct,
             EventEnvelope? sourceEnvelope,
             EventEnvelopePublishOptions? options)
-            where T : IMessage =>
-            Task.CompletedTask;
+            where T : IMessage
+        {
+            ct.ThrowIfCancellationRequested();
+            Sent.Add((targetActorId, evt.Descriptor.Parser.ParseFrom(evt.ToByteArray())));
+            return Task.CompletedTask;
+        }
     }
 
     private sealed record ScheduledCallback(

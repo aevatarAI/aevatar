@@ -369,6 +369,7 @@ internal sealed class TestAgent(string id, string? runId = null) : IAgent, IWork
             string.Empty,
             string.Empty,
             string.Empty,
+            string.Empty,
             string.Empty);
 
     public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
@@ -478,6 +479,7 @@ internal sealed class TestWorkflowRunAgent(string id, string runId) : IAgent, IW
     private static WorkflowCompensationTransitionResult NoCompensableLedger() =>
         new(
             WorkflowCompensationTransitionStatus.NoCompensableLedger,
+            string.Empty,
             string.Empty,
             string.Empty,
             string.Empty,

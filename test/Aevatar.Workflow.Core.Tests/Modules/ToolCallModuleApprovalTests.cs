@@ -393,6 +393,7 @@ public sealed class ToolCallModuleApprovalTests
                 string.Empty,
                 string.Empty,
                 string.Empty,
+                string.Empty,
                 string.Empty);
 
         public Task UpdateExecutionContextAsync(

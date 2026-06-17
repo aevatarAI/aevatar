@@ -317,6 +317,10 @@ Workflow step 可以通过 `compensation` 声明一个已存在的 step id。静
 
 补偿相位本身也有 actor-owned durable deadline。第一次进入补偿相位或 crash/reactivation 后重发当前 `CompensationRequestEvent` 时，`WorkflowExecutionKernel` 通过 `ScheduleSelfDurableTimeoutAsync` 安排 `WorkflowCompensationPhaseDeadlineFiredEvent`，相对超时为 `CompensationPhaseDeadlineMs = 300000`。deadline fired 后若 run 仍处于当前补偿相位且 callback lease 匹配，kernel 只向 `WorkflowRunGAgent` 报告 deadline exceeded；仍由 run actor 依据权威 `compensation_cursor` 提交 `WorkflowCompensationFailedEvent`，进入 `COMPENSATION_DEAD_LETTER` 并复用失败 `WorkflowCompletedEvent` 通知 caller。补偿正常完成或 dead-letter 终态会清理并取消 phase deadline lease；终态后迟到的 deadline fired event 会被忽略。
 
+run actor 会把触发补偿的原始失败 step 持久化为 `compensation_origin_failed_step_id`，后续每个 `CompensationRequestEvent.failed_step_id` 都复用这个 actor-owned fact，不从当前 compensation cursor 反推。`terminal_workflow_completion_recorded` 是 `WorkflowCompletedEvent` redelivery 的幂等门禁；补偿 dead-letter 可以先把 run 标为 failed，但不会阻止第一次最终 completion fact 落账。
+
+`workflow_call` child run 失败时先由 child run 自己完成补偿，再向 parent actor 发送 `SubWorkflowInvocationCompletedEvent(success=false, compensated=true)`。`compensated` 只表达 child compensation outcome；parent 侧仍把该 child failure 转成普通 `StepCompletedEvent(success=false)` 推进本 run，是否补偿 parent 的 `workflow_call` step 由 parent 自己的 ledger 决定。
+
 Saga 状态由强类型枚举 `WorkflowSagaStatus`（`workflow_execution_messages.proto`）表达，生命周期为：
 
 ```text

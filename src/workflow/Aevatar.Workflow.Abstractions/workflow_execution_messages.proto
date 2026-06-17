@@ -509,6 +509,7 @@ message SubWorkflowInvocationCompletedEvent
   bool success = 3;
   string output = 4;
   string error = 5;
+  bool compensated = 6;
 }
 message WorkflowSuspendedEvent
 {

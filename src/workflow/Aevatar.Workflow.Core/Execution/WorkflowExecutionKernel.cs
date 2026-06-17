@@ -764,7 +764,9 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         return ctx.PublishAsync(new CompensationRequestEvent
         {
             RunId = NormalizeRunId(runId),
-            FailedStepId = failedStepId ?? string.Empty,
+            FailedStepId = string.IsNullOrWhiteSpace(result.FailedStepId)
+                ? failedStepId ?? string.Empty
+                : result.FailedStepId,
             CompensationStepId = result.NextCompensationStepId,
             IdempotencyKey = result.IdempotencyKey ?? string.Empty,
             CapturedOutput = result.CapturedOutput ?? string.Empty,
@@ -1084,7 +1086,14 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         ArgumentNullException.ThrowIfNull(ctx);
         ArgumentNullException.ThrowIfNull(completed);
 
+        var state = LoadState(ctx);
+        var hasManagedWorkflowCallParent =
+            WorkflowRunExecutionContextStateAccess.Get(ctx).WorkflowRuntime != null &&
+            state.Variables.ContainsKey(WorkflowCallInvocationIdParameterKey);
         await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
+        if (hasManagedWorkflowCallParent)
+            return;
+
         await ctx.PublishAsync(completed.Clone(), TopologyAudience.Parent, ct);
     }
 
