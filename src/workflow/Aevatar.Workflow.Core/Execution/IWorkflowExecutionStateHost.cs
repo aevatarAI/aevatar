@@ -56,18 +56,12 @@ internal interface IWorkflowExecutionStateHost
 
     Task<WorkflowCompensationTransitionResult> TryStartCompensationAsync(
         WorkflowCompletedEvent terminalFailure,
-        CancellationToken ct = default);
-
-    Task<WorkflowCompensationTransitionResult> TryStartCompensationAsync(
-        WorkflowCompletedEvent terminalFailure,
         StepCompletedEvent? terminalStep,
-        CancellationToken ct = default) =>
-        TryStartCompensationAsync(terminalFailure, ct);
+        CancellationToken ct = default);
 
     Task RecordCompensableStepDispatchAsync(
         CompensableStepDispatchedEvent evt,
-        CancellationToken ct = default) =>
-        Task.CompletedTask;
+        CancellationToken ct = default);
 
     Task<WorkflowCompensationTransitionResult> RecordCompensationStepCompletionAsync(
         CompensationStepCompletedEvent completion,

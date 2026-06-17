@@ -1101,7 +1101,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 await SaveStateAsync(state, ctx, ct);
             }
 
-            await RecordCompensableStepDispatchAsync(step, idempotency, ctx, ct);
+            await RecordCompensableStepDispatchAsync(step, idempotency, ct);
             await ctx.PublishAsync(request, TopologyAudience.Self, ct);
         }
         catch
@@ -1127,7 +1127,6 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
     private async Task RecordCompensableStepDispatchAsync(
         StepDefinition step,
         WorkflowStepIdempotencyState idempotency,
-        IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
         var compensationStepId = step.Compensation?.Trim() ?? string.Empty;

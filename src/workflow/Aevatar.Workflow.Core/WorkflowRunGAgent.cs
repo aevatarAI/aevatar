@@ -190,11 +190,6 @@ public sealed class WorkflowRunGAgent
 
     async Task<WorkflowCompensationTransitionResult> IWorkflowExecutionStateHost.TryStartCompensationAsync(
         WorkflowCompletedEvent terminalFailure,
-        CancellationToken ct) =>
-        await ((IWorkflowExecutionStateHost)this).TryStartCompensationAsync(terminalFailure, null, ct);
-
-    async Task<WorkflowCompensationTransitionResult> IWorkflowExecutionStateHost.TryStartCompensationAsync(
-        WorkflowCompletedEvent terminalFailure,
         StepCompletedEvent? terminalStep,
         CancellationToken ct)
     {
