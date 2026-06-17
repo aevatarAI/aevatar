@@ -77,8 +77,38 @@ public sealed class WorkflowSagaCompensationTests
                 sources => sources.ReplaceIn(
                     "src/workflow/Aevatar.Workflow.Core/Execution/WorkflowExecutionKernel.cs",
                     "return ctx.PublishAsync(new CompensationRequestEvent",
-                    "return DispatchStepAsync(new StepDefinition(), string.Empty, [], new WorkflowExecutionKernelState(), ctx, ct); // return ctx.PublishAsync(new CompensationRequestEvent"),
-                "Compensation request dispatch must not inline-advance"
+                    "DispatchStepAsync(new StepDefinition(), string.Empty, [], new WorkflowExecutionKernelState(), WorkflowStepDispatchKind.Compensation, ctx, ct); return ctx.PublishAsync(new CompensationRequestEvent"),
+                "Compensation request publication paths must not inline-advance"
+            },
+            {
+                "sibling timeout terminal failure bypasses compensation decision",
+                sources => sources.ReplaceInMethod(
+                    "src/workflow/Aevatar.Workflow.Core/Execution/WorkflowExecutionKernel.cs",
+                    "HandleTimeoutFiredAsync",
+                    "ctx.Logger.LogWarning(\"workflow_loop: step={StepId} timed out after {Ms}ms\", stepId, evt.TimeoutMs);",
+                    """
+                    ctx.Logger.LogWarning("workflow_loop: step={StepId} timed out after {Ms}ms", stepId, evt.TimeoutMs);
+                    await PublishWorkflowCompletedAsync(
+                        ctx,
+                        new WorkflowCompletedEvent
+                        {
+                            WorkflowName = _workflow.Name,
+                            RunId = runId,
+                            Success = false,
+                            Error = $"TIMEOUT after {evt.TimeoutMs}ms",
+                        },
+                        ct);
+                    """),
+                "Failed WorkflowCompletedEvent may only be published directly"
+            },
+            {
+                "sibling compensation request publication inlines dispatch",
+                sources => sources.ReplaceInMethod(
+                    "src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.cs",
+                    "ResumeCompensationAsync",
+                    "await PublishAsync(new CompensationRequestEvent",
+                    "DispatchStepAsync(); await PublishAsync(new CompensationRequestEvent"),
+                "Compensation request publication paths must not inline-advance"
             },
             {
                 "validator stops rejecting missing compensation targets",
@@ -211,6 +241,7 @@ public sealed class WorkflowSagaCompensationTests
         var runAgentFile = "src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.cs";
         var validatorFile = "src/workflow/Aevatar.Workflow.Core/Validation/WorkflowValidator.cs";
         var kernelRoot = index.GetRoot(kernelFile);
+        var runAgentRoot = index.GetRoot(runAgentFile);
 
         var stepCompleted = index.GetMethod(kernelFile, "HandleStepCompletedAsync");
         if (!SagaSyntaxQueries.Invokes(stepCompleted, "TryStartCompensationOrPublishTerminalFailureAsync"))
@@ -268,19 +299,65 @@ public sealed class WorkflowSagaCompensationTests
                 "Dead-lettered compensation start result must publish failed WorkflowCompletedEvent to notify callers.");
         }
 
-        var publishCompensation = index.GetMethod(kernelFile, "PublishCompensationRequestAsync");
-        if (!SagaSyntaxQueries.PublishesEventToSelf(publishCompensation, "CompensationRequestEvent"))
-            violations.Add("Compensation request dispatch must use self-continuation.");
+        var unsafeFailedCompletionSites = SagaSyntaxQueries.WorkflowCompletedPublicationSites(kernelFile, kernelRoot)
+            .Where(site => SagaSyntaxQueries.WorkflowCompletedSuccessLiteral(site.Invocation) != true)
+            .Where(site => !IsAllowedFailedWorkflowCompletionPublication(site))
+            .ToList();
+        if (unsafeFailedCompletionSites.Count > 0)
+        {
+            violations.Add(
+                "Failed WorkflowCompletedEvent may only be published directly from start-rejection/no-step or compensation terminal contexts. Unexpected sites: " +
+                string.Join(", ", unsafeFailedCompletionSites.Select(SagaSyntaxQueries.SiteDisplayName)));
+        }
 
-        if (SagaSyntaxQueries.InvokesAny(
-                publishCompensation,
+        var compensationRequestSites = SagaSyntaxQueries.EventCreationInvocationSites(
+                "CompensationRequestEvent",
+                (kernelFile, kernelRoot),
+                (runAgentFile, runAgentRoot))
+            .ToList();
+        var expectedCompensationRequestSites = ImmutableHashSet.Create(
+            StringComparer.Ordinal,
+            $"{kernelFile}:PublishCompensationRequestAsync:PublishAsync",
+            $"{runAgentFile}:IWorkflowExecutionStateHost.TryStartCompensationAsync:PersistDomainEventAsync",
+            $"{runAgentFile}:IWorkflowExecutionStateHost.RecordCompensationStepCompletionAsync:PersistDomainEventAsync",
+            $"{runAgentFile}:ResumeCompensationAsync:PublishAsync");
+        var actualCompensationRequestSites = compensationRequestSites
+            .Select(SagaSyntaxQueries.SiteKey)
+            .ToImmutableHashSet(StringComparer.Ordinal);
+        if (compensationRequestSites.Count != expectedCompensationRequestSites.Count ||
+            !expectedCompensationRequestSites.SetEquals(actualCompensationRequestSites))
+        {
+            violations.Add(
+                "Compensation request publication/persistence sites must stay explicitly enumerated. Missing sites: " +
+                string.Join(", ", expectedCompensationRequestSites.Except(actualCompensationRequestSites)) +
+                "; unexpected sites: " +
+                string.Join(", ", actualCompensationRequestSites.Except(expectedCompensationRequestSites)));
+        }
+
+        var nonSelfCompensationRequestPublications = compensationRequestSites
+            .Where(site => site.InvocationName == "PublishAsync")
+            .Where(site => !SagaSyntaxQueries.InvocationTargetsSelf(site.Invocation))
+            .ToList();
+        if (nonSelfCompensationRequestPublications.Count > 0)
+        {
+            violations.Add(
+                "Compensation request dispatch must use self-continuation at every publication site. Unexpected sites: " +
+                string.Join(", ", nonSelfCompensationRequestPublications.Select(SagaSyntaxQueries.SiteDisplayName)));
+        }
+
+        var inlineCompensationRequestPublications = compensationRequestSites
+            .Where(site => SagaSyntaxQueries.InvokesAny(
+                site.Method,
                 "DispatchStepAsync",
                 "HandleCompensationRequestAsync",
                 "HandleStepCompletedAsync",
                 "Run"))
+            .ToList();
+        if (inlineCompensationRequestPublications.Count > 0)
         {
             violations.Add(
-                "Compensation request dispatch must not inline-advance or use callback-thread execution.");
+                "Compensation request publication paths must not inline-advance or use callback-thread execution. Unexpected sites: " +
+                string.Join(", ", inlineCompensationRequestPublications.Select(SagaSyntaxQueries.SiteDisplayName)));
         }
 
         if (!SagaSyntaxQueries.HasConstantValue(kernelRoot, "DefaultCompensationTimeoutMs", "30_000"))
@@ -399,6 +476,35 @@ public sealed class WorkflowSagaCompensationTests
         }
 
         return violations;
+    }
+
+    private static bool IsAllowedFailedWorkflowCompletionPublication(SagaInvocationSite site)
+    {
+        var methodName = SagaSyntaxQueries.MethodDisplayName(site.Method);
+        if (methodName == "HandleStartWorkflowAsync")
+        {
+            return SagaSyntaxQueries.HasAncestorIfCondition(site.Invocation, "state.Active") ||
+                   SagaSyntaxQueries.HasAncestorIfCondition(site.Invocation, "entry == null");
+        }
+
+        if (methodName == "TryStartCompensationOrPublishTerminalFailureAsync")
+        {
+            return SagaSyntaxQueries.HasAncestorSwitchLabel(
+                site.Invocation,
+                "WorkflowCompensationTransitionStatus.NoCompensableLedger",
+                "WorkflowCompensationTransitionStatus.CompletedAll",
+                "WorkflowCompensationTransitionStatus.CompensationDeadLettered");
+        }
+
+        if (methodName == "HandleCompensationTransitionAsync")
+        {
+            return SagaSyntaxQueries.HasAncestorSwitchLabel(
+                site.Invocation,
+                "WorkflowCompensationTransitionStatus.CompletedAll",
+                "WorkflowCompensationTransitionStatus.CompensationDeadLettered");
+        }
+
+        return false;
     }
 
     private sealed record SagaSourceFile(
@@ -584,6 +690,12 @@ public sealed class WorkflowSagaCompensationTests
         }
     }
 
+    private sealed record SagaInvocationSite(
+        string RelativePath,
+        MethodDeclarationSyntax Method,
+        InvocationExpressionSyntax Invocation,
+        string InvocationName);
+
     private static class SagaSyntaxQueries
     {
         public static bool Invokes(SyntaxNode node, string methodName) =>
@@ -615,21 +727,76 @@ public sealed class WorkflowSagaCompensationTests
                     variable.Identifier.ValueText == constantName &&
                     string.Equals(variable.Initializer?.Value.ToString(), valueText, StringComparison.Ordinal));
 
-        public static bool PublishesEventToSelf(SyntaxNode node, string eventType)
+        public static IReadOnlyList<SagaInvocationSite> WorkflowCompletedPublicationSites(
+            string relativePath,
+            CompilationUnitSyntax root) =>
+            InvocationSites(relativePath, root)
+                .Where(site => site.InvocationName == "PublishWorkflowCompletedAsync")
+                .ToList();
+
+        public static IReadOnlyList<SagaInvocationSite> EventCreationInvocationSites(
+            string eventType,
+            params (string RelativePath, CompilationUnitSyntax Root)[] roots)
         {
-            return node.DescendantNodes()
-                .OfType<InvocationExpressionSyntax>()
-                .Any(invocation =>
-                    GetInvocationName(invocation) == "PublishAsync" &&
-                    invocation.ArgumentList.Arguments.Count >= 2 &&
-                    invocation.ArgumentList.Arguments[0]
-                        .DescendantNodesAndSelf()
+            return roots
+                .SelectMany(root => InvocationSites(root.RelativePath, root.Root))
+                .Where(site => site.Invocation.ArgumentList.Arguments.Any(argument =>
+                    argument.DescendantNodesAndSelf()
                         .OfType<ObjectCreationExpressionSyntax>()
-                        .Any(x => TypeName(x.Type) == eventType) &&
-                    invocation.ArgumentList.Arguments[1]
-                        .ToString()
-                        .Contains("TopologyAudience.Self", StringComparison.Ordinal));
+                        .Any(creation => TypeName(creation.Type) == eventType)))
+                .ToList();
         }
+
+        public static bool? WorkflowCompletedSuccessLiteral(InvocationExpressionSyntax invocation)
+        {
+            var creation = invocation.ArgumentList.Arguments
+                .SelectMany(argument => argument.DescendantNodesAndSelf().OfType<ObjectCreationExpressionSyntax>())
+                .FirstOrDefault(x => TypeName(x.Type) == "WorkflowCompletedEvent");
+            if (creation?.Initializer == null)
+                return null;
+
+            foreach (var assignment in creation.Initializer.Expressions.OfType<AssignmentExpressionSyntax>())
+            {
+                if (assignment.Left.ToString() != "Success")
+                    continue;
+
+                if (assignment.Right.IsKind(SyntaxKind.TrueLiteralExpression))
+                    return true;
+                if (assignment.Right.IsKind(SyntaxKind.FalseLiteralExpression))
+                    return false;
+            }
+
+            return null;
+        }
+
+        public static bool InvocationTargetsSelf(InvocationExpressionSyntax invocation) =>
+            invocation.ArgumentList.Arguments
+                .Skip(1)
+                .Any(argument => argument.ToString().Contains("TopologyAudience.Self", StringComparison.Ordinal));
+
+        public static bool HasAncestorSwitchLabel(SyntaxNode node, params string[] labelTexts)
+        {
+            var labels = labelTexts.ToHashSet(StringComparer.Ordinal);
+            return node.Ancestors()
+                .OfType<SwitchSectionSyntax>()
+                .Any(section => section.Labels.Any(label => labels.Any(expected =>
+                    label.ToString().Contains(expected, StringComparison.Ordinal))));
+        }
+
+        public static bool HasAncestorIfCondition(SyntaxNode node, string conditionText) =>
+            node.Ancestors()
+                .OfType<IfStatementSyntax>()
+                .Any(ifStatement => ifStatement.Condition.ToString().Contains(conditionText, StringComparison.Ordinal));
+
+        public static string SiteKey(SagaInvocationSite site) =>
+            $"{site.RelativePath}:{MethodDisplayName(site.Method)}:{site.InvocationName}";
+
+        public static string SiteDisplayName(SagaInvocationSite site) => SiteKey(site);
+
+        public static string MethodDisplayName(MethodDeclarationSyntax method) =>
+            method.ExplicitInterfaceSpecifier is null
+                ? method.Identifier.ValueText
+                : $"{method.ExplicitInterfaceSpecifier.Name}.{method.Identifier.ValueText}";
 
         public static bool InvocationContainsAll(SyntaxNode node, string invocationName, params string[] fragments) =>
             node.DescendantNodes()
@@ -711,6 +878,23 @@ public sealed class WorkflowSagaCompensationTests
                     .DescendantNodes()
                     .OfType<ReturnStatementSyntax>()
                     .Any(returnStatement => returnStatement.ToString().Contains(statusText, StringComparison.Ordinal)));
+        }
+
+        private static IEnumerable<SagaInvocationSite> InvocationSites(
+            string relativePath,
+            CompilationUnitSyntax root)
+        {
+            foreach (var method in root.DescendantNodes().OfType<MethodDeclarationSyntax>())
+            {
+                foreach (var invocation in method.DescendantNodes().OfType<InvocationExpressionSyntax>())
+                {
+                    var invocationName = GetInvocationName(invocation);
+                    if (string.IsNullOrWhiteSpace(invocationName))
+                        continue;
+
+                    yield return new SagaInvocationSite(relativePath, method, invocation, invocationName);
+                }
+            }
         }
 
         private static string? GetInvocationName(InvocationExpressionSyntax invocation)
