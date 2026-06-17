@@ -1201,6 +1201,7 @@ public sealed partial class ConversationGAgent :
             try
             {
                 var absorbed = false;
+                AssignDeliveryProducedVersions(events);
                 await PersistDomainEventsAsync(
                     events,
                     ex =>
@@ -2094,6 +2095,7 @@ public sealed partial class ConversationGAgent :
             larkMessageId: delivered.ChannelMessageId,
             cardId: string.Empty,
             conversation: completed.Conversation);
+        deliveryProduced.ProducedAtVersion = NextCommittedVersion(1);
         await PersistDomainEventsAsync([delivered, deliveryProduced]);
         if (referenceActivity is not null)
             _ = ObserveReplyDeliveredAsync(ResolveRunner(), referenceActivity);
@@ -3542,4 +3544,19 @@ public sealed partial class ConversationGAgent :
     private long NextCommittedVersion() =>
         (EventSourcing ?? throw new InvalidOperationException("Event sourcing must be configured before computing the next committed version."))
         .CurrentVersion + 1;
+
+    private long NextCommittedVersion(int batchOffset) =>
+        (EventSourcing ?? throw new InvalidOperationException("Event sourcing must be configured before computing the next committed version."))
+        .CurrentVersion + batchOffset + 1;
+
+    private void AssignDeliveryProducedVersions(IReadOnlyList<IMessage> events)
+    {
+        var currentVersion = (EventSourcing ?? throw new InvalidOperationException("Event sourcing must be configured before assigning delivery event versions."))
+            .CurrentVersion;
+        for (var i = 0; i < events.Count; i++)
+        {
+            if (events[i] is DeliveryProducedEvent delivery)
+                delivery.ProducedAtVersion = currentVersion + i + 1;
+        }
+    }
 }

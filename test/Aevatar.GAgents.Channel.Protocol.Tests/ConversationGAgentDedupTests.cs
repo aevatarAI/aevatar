@@ -1066,6 +1066,32 @@ public sealed class ConversationGAgentDedupTests
 
         var events = await store.GetEventsAsync(agent.Id);
         events.Select(e => e.EventType).ShouldContain(s => s.Contains(nameof(LlmReplyDeliveredEvent)));
+        events.Count(e => e.EventData.Is(DeliveryProducedEvent.Descriptor)).ShouldBe(1);
+        var deliveryRecord = events.Single(e => e.EventData.Is(DeliveryProducedEvent.Descriptor));
+        var delivery = deliveryRecord.EventData.Unpack<DeliveryProducedEvent>();
+        delivery.RunId.ShouldBe("corr-delivered");
+        delivery.TurnId.ShouldBe("corr-delivered");
+        delivery.DeliveryKind.ShouldBe(DeliveryKind.TextMessage);
+        delivery.Status.ShouldBe(DeliveryStatus.Succeeded);
+        delivery.ProducedAtVersion.ShouldBe(deliveryRecord.Version);
+        delivery.RequestId.ShouldBe("llm:corr-delivered");
+        delivery.SourceEventId.ShouldBe("corr-delivered");
+        delivery.LarkMessageId.ShouldBe("om_delivery_ok");
+        delivery.CardId.ShouldBeEmpty();
+        delivery.Target.Channel.Value.ShouldBe("slack");
+        delivery.Target.ConversationKey.ShouldBe("conv:slack:C1");
+        delivery.Target.Platform.ShouldBe("slack");
+        delivery.Target.ReceiveId.ShouldBeEmpty();
+        delivery.Target.ReceiveIdType.ShouldBeEmpty();
+        delivery.Target.ConversationId.ShouldBe("conv:slack:C1");
+        delivery.Target.ReplyMessageId.ShouldBeEmpty();
+        var recentDelivery = agent.State.RecentDeliveries.ShouldHaveSingleItem();
+        recentDelivery.RequestId.ShouldBe("llm:corr-delivered");
+        recentDelivery.Status.ShouldBe(DeliveryStatus.Succeeded);
+        recentDelivery.LarkMessageId.ShouldBe("om_delivery_ok");
+        agent.State.LastSuccessfulDelivery.ShouldNotBeNull();
+        agent.State.LastSuccessfulDelivery!.RequestId.ShouldBe("llm:corr-delivered");
+        agent.State.LastSuccessfulDelivery.LarkMessageId.ShouldBe("om_delivery_ok");
     }
 
     [Fact]
@@ -1098,11 +1124,11 @@ public sealed class ConversationGAgentDedupTests
         var events = await store.GetEventsAsync(agent.Id);
         events.Select(e => e.EventType).ShouldContain(s => s.Contains(nameof(LlmReplyDeliveryFailedEvent)));
         events.Count(e => e.EventData.Is(DeliveryProducedEvent.Descriptor)).ShouldBe(1);
-        var delivery = events
-            .Single(e => e.EventData.Is(DeliveryProducedEvent.Descriptor))
-            .EventData.Unpack<DeliveryProducedEvent>();
+        var deliveryRecord = events.Single(e => e.EventData.Is(DeliveryProducedEvent.Descriptor));
+        var delivery = deliveryRecord.EventData.Unpack<DeliveryProducedEvent>();
         delivery.DeliveryKind.ShouldBe(DeliveryKind.TextMessage);
         delivery.Status.ShouldBe(DeliveryStatus.FailedPreSend);
+        delivery.ProducedAtVersion.ShouldBe(deliveryRecord.Version);
         delivery.RequestId.ShouldBe("llm:corr-delivery-failed");
         delivery.SourceEventId.ShouldBe("corr-delivery-failed");
         delivery.LarkMessageId.ShouldBeEmpty();
@@ -1903,6 +1929,32 @@ public sealed class ConversationGAgentDedupTests
         var completed = ConversationTurnCompletedEvent.Parser.ParseFrom(events.Last().EventData.Value);
         completed.Outbound.Text.ShouldBe("final text");
         completed.SentActivityId.ShouldStartWith("nyx-relay-stream:");
+        events.Count(e => e.EventData.Is(DeliveryProducedEvent.Descriptor)).ShouldBe(1);
+        var deliveryRecord = events.Single(e => e.EventData.Is(DeliveryProducedEvent.Descriptor));
+        var delivery = deliveryRecord.EventData.Unpack<DeliveryProducedEvent>();
+        delivery.RunId.ShouldBe("act-stream-sc");
+        delivery.TurnId.ShouldBe("act-stream-sc");
+        delivery.DeliveryKind.ShouldBe(DeliveryKind.TextMessage);
+        delivery.Status.ShouldBe(DeliveryStatus.Succeeded);
+        delivery.ProducedAtVersion.ShouldBe(deliveryRecord.Version);
+        delivery.RequestId.ShouldBe("llm:act-stream-sc");
+        delivery.SourceEventId.ShouldBe("act-stream-sc");
+        delivery.LarkMessageId.ShouldBe("nyx-relay-stream:om_stream");
+        delivery.CardId.ShouldBeEmpty();
+        delivery.Target.Channel.Value.ShouldBe("lark");
+        delivery.Target.ConversationKey.ShouldBe("conv:lark:grp");
+        delivery.Target.Platform.ShouldBe("lark");
+        delivery.Target.ReceiveId.ShouldBe("relay-msg-1");
+        delivery.Target.ReceiveIdType.ShouldBeEmpty();
+        delivery.Target.ConversationId.ShouldBe("conv:lark:grp");
+        delivery.Target.ReplyMessageId.ShouldBe("relay-msg-1");
+        var recentDelivery = agent.State.RecentDeliveries.ShouldHaveSingleItem();
+        recentDelivery.RequestId.ShouldBe("llm:act-stream-sc");
+        recentDelivery.Status.ShouldBe(DeliveryStatus.Succeeded);
+        recentDelivery.LarkMessageId.ShouldBe("nyx-relay-stream:om_stream");
+        agent.State.LastSuccessfulDelivery.ShouldNotBeNull();
+        agent.State.LastSuccessfulDelivery!.RequestId.ShouldBe("llm:act-stream-sc");
+        agent.State.LastSuccessfulDelivery.LarkMessageId.ShouldBe("nyx-relay-stream:om_stream");
     }
 
     [Fact]
