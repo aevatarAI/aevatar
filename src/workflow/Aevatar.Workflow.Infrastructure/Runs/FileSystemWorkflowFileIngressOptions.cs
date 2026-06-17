@@ -6,4 +6,6 @@ public sealed class FileSystemWorkflowFileIngressOptions
         Path.Combine(AppContext.BaseDirectory, "workflow-file-artifacts");
 
     public TimeSpan TimeToLive { get; set; } = TimeSpan.FromDays(1);
+
+    public TimeSpan IncompleteArtifactAge { get; set; } = TimeSpan.FromHours(1);
 }

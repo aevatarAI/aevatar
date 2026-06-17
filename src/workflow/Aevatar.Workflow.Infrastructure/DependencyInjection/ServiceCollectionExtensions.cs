@@ -28,6 +28,13 @@ public static class ServiceCollectionExtensions
         if (configureReportExport != null)
             services.Configure(configureReportExport);
         services.AddOptions<FileSystemWorkflowFileIngressOptions>();
+        var artifactOptions = services.AddOptions<WorkflowFileArtifactOptions>();
+        if (configuration != null)
+        {
+            artifactOptions.Bind(configuration.GetSection(WorkflowFileArtifactOptions.SectionName));
+        }
+
+        ConfigureWorkflowFileArtifacts(services, configuration);
         var submitOptions = services.AddOptions<WorkflowConnectedServiceFileSubmitOptions>();
         if (configuration != null)
         {
@@ -42,13 +49,7 @@ public static class ServiceCollectionExtensions
 
         // Replace the Noop fallback from Application layer with the real file export adapter.
         services.Replace(ServiceDescriptor.Singleton<IWorkflowRunReportExportPort, FileSystemWorkflowRunReportExporter>());
-        services.TryAddSingleton<FileSystemWorkflowFileIngressPort>();
-        services.TryAddSingleton<IWorkflowFileIngressPort>(sp =>
-            sp.GetRequiredService<FileSystemWorkflowFileIngressPort>());
-        services.TryAddSingleton<IWorkflowFileArtifactReadPort>(sp =>
-            sp.GetRequiredService<FileSystemWorkflowFileIngressPort>());
-        services.TryAddSingleton<IWorkflowFileArtifactOwnershipPort>(sp =>
-            sp.GetRequiredService<FileSystemWorkflowFileIngressPort>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, WorkflowFileArtifactCleanupHostedService>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowToolSource, WorkflowDocumentExtractToolSource>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowToolSource, WorkflowConnectedServiceResourceFetchToolSource>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowToolSource, WorkflowFileSubmitToolSource>());
@@ -61,6 +62,72 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<WorkflowRunActorPort>());
         services.TryAddSingleton<IWorkflowDefinitionResolver, RegistryWorkflowDefinitionResolver>();
         return services;
+    }
+
+    private static void ConfigureWorkflowFileArtifacts(
+        IServiceCollection services,
+        IConfiguration? configuration)
+    {
+        var backend = ResolveWorkflowFileArtifactBackend(configuration);
+        if (string.Equals(backend, "External", StringComparison.OrdinalIgnoreCase))
+        {
+            EnsureWorkflowFileArtifactPortRegistered<IWorkflowFileIngressPort>(services);
+            EnsureWorkflowFileArtifactPortRegistered<IWorkflowFileArtifactReadPort>(services);
+            EnsureWorkflowFileArtifactPortRegistered<IWorkflowFileArtifactOwnershipPort>(services);
+            EnsureWorkflowFileArtifactPortRegistered<IWorkflowFileArtifactCleanupPort>(services);
+            return;
+        }
+
+        if (!string.Equals(backend, "FileSystem", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                "WorkflowFileArtifacts:Backend must be either FileSystem or External.");
+        }
+
+        services.TryAddSingleton<FileSystemWorkflowFileIngressPort>();
+        services.TryAddSingleton<IWorkflowFileIngressPort>(sp =>
+            sp.GetRequiredService<FileSystemWorkflowFileIngressPort>());
+        services.TryAddSingleton<IWorkflowFileArtifactReadPort>(sp =>
+            sp.GetRequiredService<FileSystemWorkflowFileIngressPort>());
+        services.TryAddSingleton<IWorkflowFileArtifactOwnershipPort>(sp =>
+            sp.GetRequiredService<FileSystemWorkflowFileIngressPort>());
+        services.TryAddSingleton<IWorkflowFileArtifactCleanupPort>(sp =>
+            sp.GetRequiredService<FileSystemWorkflowFileIngressPort>());
+    }
+
+    private static string ResolveWorkflowFileArtifactBackend(IConfiguration? configuration)
+    {
+        var configuredBackend = configuration?[WorkflowFileArtifactOptions.SectionName + ":Backend"]?.Trim();
+        var environment = configuration?[WorkflowFileArtifactOptions.SectionName + ":Policies:Environment"]?.Trim();
+        environment = string.IsNullOrWhiteSpace(environment)
+            ? Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT")
+            : environment;
+        environment = string.IsNullOrWhiteSpace(environment)
+            ? Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT")
+            : environment;
+
+        if (string.Equals(environment, "Production", StringComparison.OrdinalIgnoreCase))
+        {
+            if (string.Equals(configuredBackend, "External", StringComparison.OrdinalIgnoreCase))
+                return "External";
+
+            throw new InvalidOperationException(
+                "WorkflowFileArtifacts:Backend must be External in Production and all workflow file artifact ports must be explicitly registered.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(configuredBackend))
+            return configuredBackend;
+
+        return "FileSystem";
+    }
+
+    private static void EnsureWorkflowFileArtifactPortRegistered<TPort>(IServiceCollection services)
+    {
+        if (services.Any(static descriptor => descriptor.ServiceType == typeof(TPort)))
+            return;
+
+        throw new InvalidOperationException(
+            $"WorkflowFileArtifacts:Backend=External requires an explicit {typeof(TPort).Name} registration.");
     }
 
     public static IServiceCollection AddWorkflowDefinitionFileSource(
