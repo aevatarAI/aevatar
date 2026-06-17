@@ -4,11 +4,35 @@ using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.AI.Tests;
 
 public sealed class NyxIdWorkflowConnectedServiceFileSubmitAdapterTests
 {
+    [Fact]
+    public void AddNyxIdTools_ShouldRegisterWorkflowFileSubmitAdapter()
+    {
+        var services = new ServiceCollection();
+
+        services.AddNyxIdTools(options =>
+        {
+            options.BaseUrl = "https://nyx.example.com";
+        });
+
+        services.Should().ContainSingle(descriptor =>
+            descriptor.ServiceType == typeof(IWorkflowConnectedServiceFileSubmitAdapter) &&
+            descriptor.ImplementationType == typeof(NyxIdWorkflowConnectedServiceFileSubmitAdapter));
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetServices<IWorkflowConnectedServiceFileSubmitAdapter>()
+            .Should()
+            .ContainSingle()
+            .Which
+            .Should()
+            .BeOfType<NyxIdWorkflowConnectedServiceFileSubmitAdapter>();
+    }
+
     [Fact]
     public async Task SubmitAsync_ShouldUseConfiguredEndpointAndReturnSanitizedOutputCode()
     {

@@ -28,6 +28,22 @@ public sealed class WorkflowFileSubmitToolTests
     }
 
     [Fact]
+    public async Task GetToolsAsync_ShouldReturnNoToolWhenNoFileSubmitTargetsExist()
+    {
+        var descriptor = BuildFileRef(sizeBytes: 12);
+        var artifactPort = new RecordingWorkflowFileArtifactReadPort(descriptor, Encoding.UTF8.GetBytes("upload bytes"));
+        var source = new WorkflowFileSubmitToolSource(
+            [],
+            artifactPort,
+            Options.Create(new WorkflowConnectedServiceFileSubmitOptions()));
+
+        var tools = await source.GetToolsAsync();
+
+        tools.Should().BeEmpty();
+        artifactPort.OpenCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_ShouldSubmitHostConfiguredTargetThroughMatchingProvider()
     {
         var descriptor = BuildFileRef(sizeBytes: 12);
