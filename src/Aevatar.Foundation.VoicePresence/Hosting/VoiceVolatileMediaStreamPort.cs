@@ -11,7 +11,8 @@ public sealed class VoiceVolatileMediaStreamPort(
     IVoicePresenceSessionLeasePort leasePort,
     IEnumerable<VoicePresenceModuleRegistration> moduleRegistrations,
     IServiceProvider serviceProvider,
-    IActorDispatchPort dispatchPort)
+    IActorDispatchPort dispatchPort,
+    IVoiceVolatileToolCredentialPort? toolCredentialPort = null)
     : IVoiceVolatileMediaStreamPort
 {
     private const string DetachedReason = "host_transport_detached";
@@ -22,6 +23,7 @@ public sealed class VoiceVolatileMediaStreamPort(
         leasePort ?? throw new ArgumentNullException(nameof(leasePort));
     private readonly IActorDispatchPort _dispatchPort =
         dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
+    private readonly IVoiceVolatileToolCredentialPort? _toolCredentialPort = toolCredentialPort;
     private readonly IServiceProvider _serviceProvider =
         serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
     private readonly IReadOnlyDictionary<string, VoicePresenceModuleRegistration> _registrationsByName =
@@ -33,6 +35,13 @@ public sealed class VoiceVolatileMediaStreamPort(
     public async Task<VoiceTransportLifetimeCompleted?> AttachAsync(
         VoicePresenceSessionLeaseHandle handle,
         IVoiceTransport transport,
+        CancellationToken ct = default) =>
+        await AttachAsync(handle, transport, null, ct);
+
+    public async Task<VoiceTransportLifetimeCompleted?> AttachAsync(
+        VoicePresenceSessionLeaseHandle handle,
+        IVoiceTransport transport,
+        VoiceToolCredentialTransportBinding? toolCredentialBinding,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(handle);
@@ -47,6 +56,8 @@ public sealed class VoiceVolatileMediaStreamPort(
             attachedHandle = await _transportAttachmentPort.AttachAsync(handle, transport, ct);
             if (string.IsNullOrWhiteSpace(attachedHandle.ActiveTransportLeaseId))
                 throw new VoiceVolatileMediaStreamUnavailableException();
+
+            await BindToolCredentialAsync(attachedHandle, toolCredentialBinding, ct);
 
             VoiceVolatileMediaRelay? relay = null;
             var providerSession = await registration.ConnectProviderSessionAsync(
@@ -94,9 +105,16 @@ public sealed class VoiceVolatileMediaStreamPort(
     {
         ArgumentNullException.ThrowIfNull(handle);
 
-        await StopRelayAsync(handle, ct);
-        await _transportAttachmentPort.DetachAsync(handle, expectedTransport, ct);
-        await _leasePort.ReleaseAsync(handle, DetachedReason, ct);
+        try
+        {
+            await StopRelayAsync(handle, ct);
+            await _transportAttachmentPort.DetachAsync(handle, expectedTransport, ct);
+            await _leasePort.ReleaseAsync(handle, DetachedReason, ct);
+        }
+        finally
+        {
+            await ReleaseToolCredentialAsync(handle, CancellationToken.None);
+        }
     }
 
     public async Task CompleteTransportLifetimeAsync(
@@ -114,8 +132,15 @@ public sealed class VoiceVolatileMediaStreamPort(
         if (string.IsNullOrWhiteSpace(transportLeaseId))
             return;
 
-        await StopRelayAsync(transportLeaseId);
-        await _leasePort.CompleteTransportLifetimeAsync(handle, transportLeaseId, reason, ct);
+        try
+        {
+            await StopRelayAsync(transportLeaseId);
+            await _leasePort.CompleteTransportLifetimeAsync(handle, transportLeaseId, reason, ct);
+        }
+        finally
+        {
+            await ReleaseToolCredentialAsync(transportLeaseId, CancellationToken.None);
+        }
     }
 
     public async Task<bool> TrySendToolResultAsync(
@@ -146,8 +171,15 @@ public sealed class VoiceVolatileMediaStreamPort(
         IVoiceTransport transport,
         CancellationToken ct)
     {
-        await _transportAttachmentPort.DetachAsync(attachedHandle, transport, ct);
-        await _leasePort.ReleaseAsync(attachedHandle, DetachedReason, ct);
+        try
+        {
+            await _transportAttachmentPort.DetachAsync(attachedHandle, transport, ct);
+            await _leasePort.ReleaseAsync(attachedHandle, DetachedReason, ct);
+        }
+        finally
+        {
+            await ReleaseToolCredentialAsync(attachedHandle, CancellationToken.None);
+        }
     }
 
     private async Task StopRelayAsync(string transportLeaseId)
@@ -155,6 +187,43 @@ public sealed class VoiceVolatileMediaStreamPort(
         if (_activeRelays.TryRemove(transportLeaseId, out var relay))
             await relay.DisposeAsync();
     }
+
+    private async Task BindToolCredentialAsync(
+        VoicePresenceSessionLeaseHandle handle,
+        VoiceToolCredentialTransportBinding? credentialBinding,
+        CancellationToken ct)
+    {
+        if (_toolCredentialPort is null)
+            return;
+
+        var credentialRef = Normalize(handle.ToolContext?.CredentialRef);
+        var transportLeaseId = Normalize(handle.ActiveTransportLeaseId);
+        if (credentialRef is null || transportLeaseId is null)
+            return;
+
+        if (credentialBinding is null ||
+            !string.Equals(credentialRef, Normalize(credentialBinding.CredentialRef), StringComparison.Ordinal))
+        {
+            throw new VoiceVolatileToolCredentialUnavailableException();
+        }
+
+        var bound = await _toolCredentialPort.BindTransportLeaseAsync(credentialBinding, transportLeaseId, ct);
+        if (!bound)
+            throw new VoiceVolatileToolCredentialUnavailableException();
+    }
+
+    private Task ReleaseToolCredentialAsync(
+        VoicePresenceSessionLeaseHandle handle,
+        CancellationToken ct)
+    {
+        var transportLeaseId = Normalize(handle.ActiveTransportLeaseId);
+        return transportLeaseId is null
+            ? Task.CompletedTask
+            : ReleaseToolCredentialAsync(transportLeaseId, ct);
+    }
+
+    private Task ReleaseToolCredentialAsync(string transportLeaseId, CancellationToken ct) =>
+        _toolCredentialPort?.ReleaseTransportLeaseAsync(transportLeaseId, ct) ?? Task.CompletedTask;
 
     private Task DispatchProviderEventAsync(
         VoiceProviderSessionKey sessionKey,
@@ -233,6 +302,12 @@ public sealed class VoiceVolatileMediaStreamPort(
             LeaseEpoch = handle.LeaseEpoch,
             Reason = reason,
         };
+
+    private static string? Normalize(string? value)
+    {
+        var normalized = value?.Trim();
+        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
+    }
 
     private static IReadOnlyDictionary<string, VoicePresenceModuleRegistration> BuildRegistrationMap(
         IEnumerable<VoicePresenceModuleRegistration> moduleRegistrations)

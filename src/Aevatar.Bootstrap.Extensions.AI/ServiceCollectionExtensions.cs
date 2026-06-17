@@ -191,9 +191,10 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IVoicePresenceLeaseObservationPort, VoicePresenceLeaseObservationPort>();
         services.TryAddSingleton<IVoicePresenceSessionLeasePort, VoicePresenceSessionLeasePort>();
         services.TryAddSingleton<IVoicePresenceTransportAttachmentPort, VoicePresenceTransportAttachmentPort>();
+        services.TryAddSingleton(sp => new VoiceVolatileToolCredentialPort(sp.GetService<TimeProvider>()));
+        services.TryAddSingleton<IVoiceVolatileToolCredentialPort>(sp => sp.GetRequiredService<VoiceVolatileToolCredentialPort>());
+        services.TryAddSingleton<IVoiceToolCredentialIssuer>(sp => sp.GetRequiredService<VoiceVolatileToolCredentialPort>());
         services.TryAddSingleton<IVoiceVolatileMediaStreamPort, VoiceVolatileMediaStreamPort>();
-        services.TryAddSingleton(sp => new VoiceToolCredentialIssuer(sp.GetService<TimeProvider>()));
-        services.TryAddSingleton<IVoiceToolCredentialIssuer>(sp => sp.GetRequiredService<VoiceToolCredentialIssuer>());
         services.TryAddSingleton<IRealtimeSession<VoiceRealtimeSessionRequest, VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeFrame, VoiceRealtimeSessionCompletion>, ActorOwnedVoiceRealtimeSession>();
         services.AddVoicePresenceCapabilityProjection();
         services.AddVoicePresenceCapabilityProjectionStore(configuration);

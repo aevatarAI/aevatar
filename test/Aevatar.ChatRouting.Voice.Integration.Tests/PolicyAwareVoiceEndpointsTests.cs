@@ -175,8 +175,13 @@ public sealed class PolicyAwareVoiceEndpointsTests
             []));
         var expiresAt = DateTimeOffset.UtcNow.AddMinutes(4);
         var issuer = new RecordingVoiceToolCredentialIssuer(
-            new VoiceToolCredentialIssueResult("voice-tool:issued-1", expiresAt));
+            new VoiceToolCredentialIssueResult(
+                "voice-tool:issued-1",
+                expiresAt,
+                new VoiceToolCredentialTransportBinding("voice-tool:issued-1", "caller-jwt", expiresAt)));
         var session = new RecordingVoiceRealtimeSession();
+        var mediaPort = new RecordingVolatileMediaStreamPort(
+            attachAsync: transport => transport.DisposeAsync().AsTask());
         var socket = new FakeWebSocket(WebSocketState.Open);
         var uri = "/ws/voice?channel=lark&registration_scope_id=bot-1&sender_id=sender-1" +
                   "&message_id=message-1&platform_message_id=platform-message-1" +
@@ -189,7 +194,7 @@ public sealed class PolicyAwareVoiceEndpointsTests
             policyPort,
             new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent-lark"]),
             session,
-            new RecordingVolatileMediaStreamPort(attachAsync: transport => transport.DisposeAsync().AsTask()),
+            mediaPort,
             toolCredentialIssuer: issuer);
         var context = CreateVoiceContext(app, uri);
         if (credentialSource == "authorization")
@@ -204,6 +209,13 @@ public sealed class PolicyAwareVoiceEndpointsTests
         issuer.Requests.Should().ContainSingle()
             .Which.NyxIdAccessToken.Should().Be("caller-jwt");
         issuer.ReleasedRefs.Should().ContainSingle().Which.Should().Be("voice-tool:issued-1");
+        mediaPort.AttachedCredentialBindings.Should().ContainSingle()
+            .Which.Should().BeEquivalentTo(new
+            {
+                CredentialRef = "voice-tool:issued-1",
+                NyxIdAccessToken = "caller-jwt",
+                ExpiresAtUtc = expiresAt,
+            });
         var toolContext = session.Requests.Should().ContainSingle().Subject.ToolContext;
         toolContext.Should().NotBeNull();
         toolContext!.CredentialRef.Should().Be("voice-tool:issued-1");
@@ -853,6 +865,8 @@ public sealed class PolicyAwareVoiceEndpointsTests
     {
         public bool SupportsRemoteAudio => true;
 
+        public List<VoiceToolCredentialTransportBinding?> AttachedCredentialBindings { get; } = [];
+
         public Task<bool> TrySendToolResultAsync(
             string transportLeaseId,
             string callId,
@@ -864,9 +878,17 @@ public sealed class PolicyAwareVoiceEndpointsTests
             VoicePresenceSessionLeaseHandle handle,
             IVoiceTransport transport,
             CancellationToken ct = default)
+            => AttachAsync(handle, transport, null, ct);
+
+        public Task<VoiceTransportLifetimeCompleted?> AttachAsync(
+            VoicePresenceSessionLeaseHandle handle,
+            IVoiceTransport transport,
+            VoiceToolCredentialTransportBinding? toolCredentialBinding,
+            CancellationToken ct = default)
         {
             _ = handle;
             ct.ThrowIfCancellationRequested();
+            AttachedCredentialBindings.Add(toolCredentialBinding);
             return AttachCoreAsync(transport);
         }
 

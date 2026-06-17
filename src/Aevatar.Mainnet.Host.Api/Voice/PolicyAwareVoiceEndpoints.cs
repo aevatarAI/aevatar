@@ -174,7 +174,11 @@ public static class PolicyAwareVoiceEndpoints
                     throw;
                 }
 
-                await mediaStreamPort.AttachAsync(accepted.LeaseHandle, transport, http.RequestAborted);
+                await mediaStreamPort.AttachAsync(
+                    accepted.LeaseHandle,
+                    transport,
+                    toolContextAdmission.TransportBinding,
+                    http.RequestAborted);
 
                 attached = true;
                 await WaitUntilClosedAsync(transport, http.RequestAborted);
@@ -182,6 +186,10 @@ public static class PolicyAwareVoiceEndpoints
             catch (VoiceVolatileMediaStreamUnavailableException)
             {
                 await TryCloseAsync(http, ws, RemoteAudioTransportUnavailableReason);
+            }
+            catch (VoiceVolatileToolCredentialUnavailableException)
+            {
+                await TryCloseAsync(http, ws, VoiceCredentialUnavailableReason);
             }
             catch (InvalidOperationException) when (!attached)
             {
@@ -198,11 +206,11 @@ public static class PolicyAwareVoiceEndpoints
         }
         finally
         {
-            await ReleaseToolCredentialAsync(http, toolContextAdmission.ToolContext);
+            await ReleasePendingToolCredentialAsync(http, toolContextAdmission.ToolContext);
         }
     }
 
-    private static async Task ReleaseToolCredentialAsync(HttpContext http, VoiceToolExecutionContext? toolContext)
+    private static async Task ReleasePendingToolCredentialAsync(HttpContext http, VoiceToolExecutionContext? toolContext)
     {
         var credentialRef = NormalizeOptional(toolContext?.CredentialRef);
         if (credentialRef is null)
@@ -292,10 +300,13 @@ public static class PolicyAwareVoiceEndpoints
             SenderBindingId = NormalizeOptional(http.Request.Query["sender_binding_id"].ToString()) ?? string.Empty,
         };
 
-        return new VoiceToolContextAdmission(true, toolContext);
+        return new VoiceToolContextAdmission(true, toolContext, issued.TransportBinding);
     }
 
-    private sealed record VoiceToolContextAdmission(bool Accepted, VoiceToolExecutionContext? ToolContext);
+    private sealed record VoiceToolContextAdmission(
+        bool Accepted,
+        VoiceToolExecutionContext? ToolContext,
+        VoiceToolCredentialTransportBinding? TransportBinding = null);
 
     private static async Task WriteCredentialUnavailableAsync(HttpContext http)
     {

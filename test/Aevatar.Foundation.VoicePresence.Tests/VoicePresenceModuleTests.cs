@@ -2501,7 +2501,17 @@ public class VoicePresenceModuleTests
             VoicePresenceSessionLeaseHandle handle,
             IVoiceTransport transport,
             CancellationToken ct = default) =>
-            Task.FromResult<VoiceTransportLifetimeCompleted?>(null);
+            AttachAsync(handle, transport, null, ct);
+
+        public Task<VoiceTransportLifetimeCompleted?> AttachAsync(
+            VoicePresenceSessionLeaseHandle handle,
+            IVoiceTransport transport,
+            VoiceToolCredentialTransportBinding? toolCredentialBinding,
+            CancellationToken ct = default)
+        {
+            _ = toolCredentialBinding;
+            return Task.FromResult<VoiceTransportLifetimeCompleted?>(null);
+        }
 
         public Task DetachAsync(
             VoicePresenceSessionLeaseHandle handle,
