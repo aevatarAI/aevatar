@@ -8,7 +8,6 @@ using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
-using System.Text.Json;
 
 namespace Aevatar.Workflow.Core.Tests.Modules;
 
@@ -185,7 +184,7 @@ public sealed class BackpressureModuleTopUpTests
     }
 
     [Fact]
-    public async Task ForEachModule_ShouldPublishDescriptorOnlyFileResultsWithPerFileErrors()
+    public async Task ForEachModule_ShouldPublishTypedFileResultsWithPerFileErrors()
     {
         var module = new ForEachModule();
         var context = new RecordingWorkflowContext();
@@ -238,18 +237,21 @@ public sealed class BackpressureModuleTopUpTests
         completed.Error.Should().Be("one or more foreach items failed");
         completed.Output.Should().NotContain("data_base64");
         completed.Output.Should().NotContain("base64");
-        using var doc = JsonDocument.Parse(completed.Output);
-        var items = doc.RootElement.EnumerateArray().ToArray();
-        items.Should().HaveCount(2);
-        items[0].GetProperty("index").GetInt32().Should().Be(0);
-        items[0].GetProperty("success").GetBoolean().Should().BeTrue();
-        items[0].GetProperty("file").GetProperty("fileId").GetString().Should().Be("file-a");
-        items[0].GetProperty("file").GetProperty("artifactId").GetString().Should().Be("workflow-file://file-a");
-        items[0].GetProperty("output").GetString().Should().Be("descriptor output");
-        items[1].GetProperty("index").GetInt32().Should().Be(1);
-        items[1].GetProperty("success").GetBoolean().Should().BeFalse();
-        items[1].GetProperty("file").GetProperty("fileId").GetString().Should().Be("file-b");
-        items[1].GetProperty("error").GetString().Should().Be("extract failed");
+        completed.Output.Should().Be("descriptor output\n---\n");
+        completed.FileItemResults.Should().NotBeNull();
+        completed.FileItemResults.Results.Should().HaveCount(2);
+        completed.FileItemResults.Results[0].Index.Should().Be(0);
+        completed.FileItemResults.Results[0].Success.Should().BeTrue();
+        completed.FileItemResults.Results[0].FileRef.FileId.Should().Be("file-a");
+        completed.FileItemResults.Results[0].FileRef.ArtifactId.Should().Be("workflow-file://file-a");
+        completed.FileItemResults.Results[0].Output.Should().Be("descriptor output");
+        completed.FileItemResults.Results[1].Index.Should().Be(1);
+        completed.FileItemResults.Results[1].Success.Should().BeFalse();
+        completed.FileItemResults.Results[1].FileRef.FileId.Should().Be("file-b");
+        completed.FileItemResults.Results[1].Error.Should().Be("extract failed");
+
+        var parsed = StepCompletedEvent.Parser.ParseFrom(completed.ToByteArray());
+        parsed.FileItemResults.Results[1].FileRef.FileId.Should().Be("file-b");
     }
 
     [Fact]

@@ -7,7 +7,6 @@
 // but is a general-purpose primitive.
 // ─────────────────────────────────────────────────────────────
 
-using System.Text.Json;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
@@ -176,12 +175,17 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
             {
                 var results = parentState.Collected;
                 var allSuccess = results.All(r => r.Success);
-                var merged = IsInputFileRefsSource(parentState)
-                    ? BuildFileItemResultsJson(results)
-                    : string.Join("\n---\n", results.Select(r => r.Output));
+                var useFileItemResults = IsInputFileRefsSource(parentState);
+                IEnumerable<ForEachItemResult> mergedResults = useFileItemResults
+                    ? results.OrderBy(static result => result.Index)
+                    : results.AsEnumerable();
+                var merged = string.Join("\n---\n", mergedResults.Select(r => r.Output));
                 var error = allSuccess
                     ? string.Empty
                     : "one or more foreach items failed";
+                var fileItemResults = useFileItemResults
+                    ? BuildFileItemResults(results)
+                    : null;
 
                 ctx.Logger.LogInformation(
                     "ForEach {StepId}: all {Count} items completed, success={Success}",
@@ -195,6 +199,7 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
                     StepId = parent,
                     RunId = runId,
                     Success = allSuccess, Output = merged, Error = error,
+                    FileItemResults = fileItemResults,
                 }, TopologyAudience.Self, ct);
             }
             else
@@ -246,40 +251,20 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
         return fileRef.FileName;
     }
 
-    private static string BuildFileItemResultsJson(IEnumerable<ForEachItemResult> results) =>
-        JsonSerializer.Serialize(
-            results
-                .OrderBy(static result => result.Index)
-                .Select(static result => new
-                {
-                    index = result.Index,
-                    file = ToFileDescriptor(result.FileRef),
-                    success = result.Success,
-                    output = result.Output,
-                    error = result.Error,
-                }));
-
-    private static object? ToFileDescriptor(WorkflowFileRef fileRef)
+    private static WorkflowFileItemResultSet BuildFileItemResults(IEnumerable<ForEachItemResult> results)
     {
-        if (fileRef == null)
-            return null;
-
-        return new
-        {
-            fileId = fileRef.FileId,
-            artifactId = fileRef.ArtifactId,
-            sourceKind = fileRef.SourceKind.ToString(),
-            sourceMessageId = fileRef.SourceMessageId,
-            sourceResourceKey = fileRef.SourceResourceKey,
-            fileName = fileRef.FileName,
-            mediaType = fileRef.MediaType,
-            sizeBytes = fileRef.SizeBytes,
-            sha256 = fileRef.Sha256,
-            createdAtUnixMs = fileRef.CreatedAtUnixMs,
-            expiresAtUnixMs = fileRef.ExpiresAtUnixMs,
-            ownerRunId = fileRef.OwnerRunId,
-            ownerScopeId = fileRef.OwnerScopeId,
-        };
+        var resultSet = new WorkflowFileItemResultSet();
+        resultSet.Results.Add(results
+            .OrderBy(static result => result.Index)
+            .Select(static result => new WorkflowFileItemResult
+            {
+                Index = result.Index,
+                FileRef = result.FileRef?.Clone(),
+                Success = result.Success,
+                Output = result.Output,
+                Error = result.Error,
+            }));
+        return resultSet;
     }
 
     private static Task SaveStateAsync(
