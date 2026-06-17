@@ -1085,7 +1085,6 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         ArgumentNullException.ThrowIfNull(completed);
 
         await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
-        await ctx.PublishAsync(completed.Clone(), TopologyAudience.Parent, ct);
     }
 
     private async Task DispatchStepAsync(

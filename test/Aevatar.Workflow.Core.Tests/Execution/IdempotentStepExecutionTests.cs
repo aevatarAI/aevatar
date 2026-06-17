@@ -715,7 +715,7 @@ public sealed class IdempotentStepExecutionTests
 
         StepRequests(ctx).Should().BeEmpty();
         var completions = WorkflowCompletions(ctx);
-        completions.Should().HaveCount(2);
+        completions.Should().ContainSingle();
         completions.Should().OnlyContain(x => !x.Success);
         completions.Should().OnlyContain(
             x => x.Error == "fork seed start step 'missing-step' was not found");

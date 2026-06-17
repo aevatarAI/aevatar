@@ -740,6 +740,7 @@ public sealed class WorkflowRunGAgent
     {
         var stateBeforeCompletion = State.Clone();
         await PersistDomainEventAsync(evt);
+        await PublishAsync(evt.Clone(), TopologyAudience.Parent);
         await PersistForkRequestOnTerminalFailureAsync(evt, stateBeforeCompletion, CancellationToken.None);
         await _subWorkflowOrchestrator.CancelPendingDefinitionResolutionTimeoutsAsync(stateBeforeCompletion, CancellationToken.None);
         await _subWorkflowOrchestrator.CleanupPendingInvocationsForRunAsync(evt.RunId, stateBeforeCompletion, CancellationToken.None);

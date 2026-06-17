@@ -904,7 +904,7 @@ public class RuntimeCallbackEventizationTests
     }
 
     [Fact]
-    public async Task WorkflowLoop_ShouldPublishCompletionToSelfAndParent_WhenRunTerminates()
+    public async Task WorkflowLoop_ShouldPublishCompletionOnlyToSelf_WhenRunTerminates()
     {
         var ctx = new SchedulingContext();
         var module = CreateKernel(new WorkflowDefinition
@@ -926,12 +926,8 @@ public class RuntimeCallbackEventizationTests
 
         var completions = WorkflowCompletions(ctx);
 
-        completions.Should().HaveCount(2);
-        completions.Select(x => x.Direction).Should().BeEquivalentTo(new[]
-        {
-            TopologyAudience.Self,
-            TopologyAudience.Parent,
-        });
+        completions.Should().ContainSingle()
+            .Which.Direction.Should().Be(TopologyAudience.Self);
         completions.Select(x => x.Event.RunId).Should().OnlyContain(runId => runId == "run-empty-directions");
         completions.Select(x => x.Event.Success).Should().OnlyContain(success => !success);
         completions.Select(x => x.Event.Error).Should().OnlyContain(error => error.Contains("无步骤", StringComparison.Ordinal));
@@ -1234,7 +1230,7 @@ public class RuntimeCallbackEventizationTests
 
     private static WorkflowCompletedEvent SingleWorkflowCompletion(
         SchedulingContext ctx,
-        TopologyAudience direction = TopologyAudience.Parent) =>
+        TopologyAudience direction = TopologyAudience.Self) =>
         ctx.Published
             .Where(x => x.Direction == direction)
             .Select(x => x.Event)
