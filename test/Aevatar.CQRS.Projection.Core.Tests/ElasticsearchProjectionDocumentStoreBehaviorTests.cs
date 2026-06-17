@@ -1221,6 +1221,46 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
     }
 
     [Fact]
+    public async Task ReconcileIndexAsync_WhenAliasHasMultipleBackings_ShouldFailClosedWithoutReindexingOrAliasSwap()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(req =>
+        {
+            var alias = Uri.UnescapeDataString(req.RequestUri!.AbsolutePath.Substring("/_alias/".Length));
+            return CreateJsonResponse(HttpStatusCode.OK,
+                $"{{\"{alias}-v00000000\":{{\"aliases\":{{\"{alias}\":{{}}}}}},\"{alias}-v11111111\":{{\"aliases\":{{\"{alias}\":{{}}}}}}}}");
+        });
+
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true },
+            handler);
+
+        var act = async () => await store.ReconcileIndexAsync();
+
+        var exception = await act.Should().ThrowAsync<ProjectionIndexSchemaDriftException>();
+        exception.Which.IndexAlias.Should().Be("aevatar-projection-core-tests");
+        exception.Which.CurrentPhysicalIndex.Should().Contain("aevatar-projection-core-tests-v00000000");
+        exception.Which.CurrentPhysicalIndex.Should().Contain("aevatar-projection-core-tests-v11111111");
+        handler.CapturedRequests.Should().ContainSingle(r =>
+            r.Method == "GET" &&
+            r.PathAndQuery.StartsWith("/_alias/", StringComparison.Ordinal));
+        handler.CapturedRequests
+            .Any(r => r.Method == "PUT")
+            .Should().BeFalse("ambiguous startup reconcile must not create a replacement physical index");
+        handler.CapturedRequests
+            .Any(r => r.PathAndQuery.StartsWith("/_reindex", StringComparison.Ordinal))
+            .Should().BeFalse("ambiguous startup reconcile must fail before data copy");
+        handler.CapturedRequests
+            .Any(r => r.PathAndQuery == "/_aliases" && r.Method == "POST")
+            .Should().BeFalse("ambiguous startup reconcile must not swap aliases automatically");
+        handler.CapturedRequests
+            .Any(r =>
+                r.PathAndQuery.Contains("/_doc/", StringComparison.Ordinal) ||
+                r.PathAndQuery.Contains("/_create/", StringComparison.Ordinal))
+            .Should().BeFalse("startup reconcile must not touch read-model documents");
+    }
+
+    [Fact]
     public async Task ReconcileIndexAsync_WhenReadModelUsesDynamicIndexScope_ShouldSkipLifecycle()
     {
         var handler = new ScriptedHttpMessageHandler();

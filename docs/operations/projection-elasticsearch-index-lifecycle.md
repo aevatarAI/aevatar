@@ -17,37 +17,69 @@ schema drift. Live Elasticsearch mappings are not a second truth source.
 
 `GetAsync`, `QueryAsync`, and `CheckIndexConsistencyAsync` are read-side paths:
 they may diagnose alias fingerprint drift, but they must not create indexes,
-run `_reindex`, or swap aliases.
+run `_reindex`, or swap aliases. `GetAsync` and `QueryAsync` fail closed on
+fingerprint drift before reading stale documents; the consistency probe reports
+drift without mutation. `UpsertAsync` calls `EnsureIndexAsync` before document
+writes; on fingerprint drift it also fails closed and does not reindex or swap
+aliases.
 
 ## Lifecycle Entry Points
 
-The lifecycle ensure runs from:
+The lifecycle has two mutation entry points:
 
-- write-side first touch before an upsert reaches Elasticsearch documents
-- the provider-local hosted startup initializer for static read-model aliases
-- dynamic index scopes only when a write resolves the concrete scoped alias
+- write-side first touch (`UpsertAsync -> EnsureIndexAsync`) before an upsert
+  reaches Elasticsearch documents
+- the provider-local hosted startup initializer, which invokes
+  `IProjectionIndexReconcileTarget.ReconcileIndexAsync` for static read-model
+  aliases
 
-All entry points call the same lifecycle manager. The startup initializer skips
-dynamic index-scope read models because their concrete aliases are data-driven.
+The write-side ensure path creates greenfield physical indexes and wraps legacy
+bare indexes, but it fails closed on single-backing fingerprint drift and
+multi-backing drift. Clean old-fingerprint migration is only the static startup
+reconcile contract.
 
-## Reconciliation
+The startup initializer skips dynamic index-scope read models because their
+concrete aliases are data-driven. Dynamic scopes remain write-side first-touch
+only for greenfield or legacy bare lifecycle; they do not get startup clean
+drift migration.
 
-The lifecycle manager handles four states:
+## Write-Side Ensure
+
+`EnsureIndexAsync` handles four states:
 
 1. Alias points at the expected physical index: no-op.
-2. Alias points at exactly one old fingerprint physical index: create the
-   expected physical index, copy old to new with `_reindex`, require no
-   per-document failures and no timeout, then atomically remove old / add new in
-   one `_aliases` request.
+2. Alias points at exactly one old fingerprint physical index: throw
+   `ProjectionIndexSchemaDriftException`; do not create the expected physical,
+   run `_reindex`, swap aliases, or write the document.
 3. A legacy bare index exists with the alias name: create the expected physical
    index, copy bare to physical with `_reindex`, then atomically add the alias
    and remove the bare index in one `_aliases` request.
 4. Nothing exists: create the expected physical index with the alias declared in
    the create-index payload.
 
-After a failed lifecycle ensure, read and write traffic must continue failing
-closed until the underlying Elasticsearch state is repaired or the migration is
-retried successfully.
+After a failed ensure, read and write traffic must continue failing closed until
+the underlying Elasticsearch state is repaired or static startup reconcile
+succeeds.
+
+## Static Startup Reconcile
+
+`IProjectionIndexReconcileTarget.ReconcileIndexAsync` is the controlled
+provider-local startup migration path for static aliases. It handles these
+states:
+
+1. Alias points at the expected physical index: no-op.
+2. Alias points at exactly one old fingerprint physical index: create the
+   expected physical index when missing, copy old to new with `_reindex`,
+   require no per-document failures and no timeout, then atomically remove old /
+   add new in one `_aliases` request. If the expected physical already exists,
+   reconcile only repoints the alias and does not reindex again.
+3. Alias has multiple backing physical indexes: throw
+   `ProjectionIndexSchemaDriftException`; do not create the expected physical,
+   run `_reindex`, swap aliases, or touch documents.
+4. A legacy bare index exists with the alias name: wrap it into the expected
+   physical with `_reindex` and an atomic `_aliases` request.
+5. Nothing exists: create the expected physical index with the alias declared in
+   the create-index payload.
 
 ## Fail-Closed Cases
 
@@ -81,9 +113,10 @@ surface that wraps it. A drifted probe result is not a repair attempt.
 
 ## Recovery Guidance
 
-For a clean single-backing old fingerprint alias, restart or retry a writer so
-the provider lifecycle can create the expected physical index, reindex, and swap
-the alias.
+For a clean single-backing old fingerprint alias, restart the host or otherwise
+run the provider-local static reconcile so it can create the expected physical
+index, reindex, and swap the alias. Retrying a writer is not a clean drift
+migration path; write-side ensure will fail closed on fingerprint drift.
 
 For fail-closed cases, prefer one explicit recovery path:
 

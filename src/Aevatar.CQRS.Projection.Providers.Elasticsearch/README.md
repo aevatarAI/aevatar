@@ -33,10 +33,11 @@ Elasticsearch Document Provider。
 - `DocumentIndexMetadata` 中显式声明的 mapping 优先，provider 不覆盖自定义 `text`、analyzer、object、nested 或其他业务 mapping
 - `google.protobuf.Any`、`google.protobuf.Struct`、map、repeated message 与 repeated scalar 字段默认保持开放，不由通用 helper 递归展开
 - schema-drift 权威源只有 alias + augmented mapping fingerprint：alias 必须指向 `{alias}-v{fingerprint}` 物理索引
-- alias 指向单一旧 fingerprint physical index 时，provider lifecycle 会创建 expected physical index、从旧 physical `_reindex`、确认没有 failures / timeout 后，用一次 `_aliases` 原子 remove old / add new
+- alias 指向单一旧 fingerprint physical index 时，clean migration 只能通过静态 provider-local startup reconcile（`IProjectionIndexReconcileTarget.ReconcileIndexAsync`）创建 expected physical index、从旧 physical `_reindex`、确认没有 failures / timeout 后，用一次 `_aliases` 原子 remove old / add new
+- write-side `UpsertAsync -> EnsureIndexAsync` 只处理 greenfield / legacy bare lifecycle；遇到单一旧 fingerprint 或多 backing drift 会 fail closed，不创建 expected physical、不 `_reindex`、不切 alias，也不会继续写 read model document
 - alias 多 backing、source 缺失、不兼容 mapping、reindex failure / timeout 或 partial copy 时继续 fail closed，不会切 alias，也不会继续读写 read model document
-- `GetAsync`、`QueryAsync` 与 consistency probe 只做 alias fingerprint 诊断；它们不会读取 live ES mapping 作为第二真相，也不会在 query-time 做 mapping repair、双读 fallback 或 reindex
-- `AutoCreateIndex=true` 会在缺失 index、legacy bare index 包装、写侧 first-touch 或 provider-local startup initializer 中复用同一个 lifecycle ensure；read-first 静态 alias 的迁移由 startup initializer 触发，动态 index scope 仍由写侧 first-touch 触发
+- `GetAsync`、`QueryAsync` 与 consistency probe 只做 alias fingerprint 诊断；读路径遇到 drift 会在读取 stale document 前 fail closed，probe 只报告 drift。它们不会读取 live ES mapping 作为第二真相，也不会在 query-time 做 mapping repair、双读 fallback、reindex 或 alias swap
+- `AutoCreateIndex=true` 时，缺失 index 与 legacy bare index 包装可由写侧 first-touch lifecycle 处理；clean single-backing drift migration 只由静态 startup reconcile 触发。动态 index scope 跳过 startup reconcile，仍由写侧 first-touch 处理 greenfield / bare lifecycle，不承诺 clean drift migration
 
 参考：
 
