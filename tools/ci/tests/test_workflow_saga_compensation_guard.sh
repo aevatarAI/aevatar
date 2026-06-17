@@ -14,6 +14,9 @@ mkdir -p "${stub_dir}"
 cat > "${stub_dir}/dotnet" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" > "${DOTNET_STUB_ARGS_FILE:?}"
+if [[ -n "${DOTNET_STUB_OUTPUT:-}" ]]; then
+  printf '%b' "${DOTNET_STUB_OUTPUT}"
+fi
 exit "${DOTNET_STUB_EXIT_CODE:-0}"
 STUB
 chmod +x "${stub_dir}/dotnet"
@@ -36,6 +39,22 @@ status=$?
 set -e
 if [[ ${status} -ne 37 ]]; then
   echo "workflow saga compensation guard should preserve dotnet test exit status"
+  cat /tmp/workflow-saga-guard-wrapper.out
+  exit 1
+fi
+
+set +e
+PATH="${stub_dir}:${PATH}" DOTNET_STUB_ARGS_FILE="${args_file}" DOTNET_STUB_OUTPUT=$'No test matches the given testcase filter `FullyQualifiedName~WorkflowSagaCompensation`\n' bash "${GUARD}" >/tmp/workflow-saga-guard-wrapper.out 2>&1
+status=$?
+set -e
+if [[ ${status} -eq 0 ]]; then
+  echo "workflow saga compensation guard should fail when dotnet test discovers zero matching tests"
+  cat /tmp/workflow-saga-guard-wrapper.out
+  exit 1
+fi
+
+if ! rg -q "Roslyn architecture test filter matched zero tests" /tmp/workflow-saga-guard-wrapper.out; then
+  echo "workflow saga compensation guard should report a clear zero-match error"
   cat /tmp/workflow-saga-guard-wrapper.out
   exit 1
 fi
