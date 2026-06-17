@@ -227,6 +227,40 @@ public class VoicePresenceProtoTests
     }
 
     [Fact]
+    public void VoiceModuleSignal_should_roundtrip_transport_lease_renew_requested()
+    {
+        var renewExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5));
+        var renew = new VoiceTransportLeaseRenewRequested
+        {
+            SessionId = "lease-1",
+            OwnerId = "host-1",
+            TransportLeaseId = "transport-1",
+            LeaseEpoch = 12,
+            RenewExpiresAt = renewExpiresAt,
+        };
+        var signal = new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            TransportLeaseRenewRequested = renew,
+        };
+
+        var parsed = VoiceModuleSignal.Parser.ParseFrom(signal.ToByteArray());
+        var signalOneof = VoiceModuleSignal.Descriptor.Oneofs
+            .Single(static oneof => oneof.Name == "signal");
+        var renewField = signalOneof.Fields
+            .Single(static field => field.Name == "transport_lease_renew_requested");
+
+        parsed.ShouldBe(signal);
+        parsed.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.TransportLeaseRenewRequested);
+        parsed.TransportLeaseRenewRequested.ShouldBe(renew);
+        renewField.FieldNumber.ShouldBe(18);
+        renewField.MessageType.Name.ShouldBe(nameof(VoiceTransportLeaseRenewRequested));
+        VoiceTransportLeaseRenewRequested.Descriptor.Fields.InDeclarationOrder()
+            .Select(static field => field.Name)
+            .ShouldNotContain("previous_lease_expires_at");
+    }
+
+    [Fact]
     public void VoicePresenceSessionDispatch_should_wrap_transport_control_self_signal()
     {
         var control = new VoiceTransportControlFrameReceived
@@ -282,5 +316,27 @@ public class VoicePresenceProtoTests
         signal.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.InputImageReceived);
         signal.InputImageReceived.ShouldBe(image);
         signal.InputImageReceived.ShouldNotBeSameAs(image);
+    }
+
+    [Fact]
+    public void VoicePresenceSessionDispatch_should_wrap_transport_lease_renew_direct_signal()
+    {
+        var renew = new VoiceTransportLeaseRenewRequested
+        {
+            SessionId = "lease-1",
+            OwnerId = "host-1",
+            TransportLeaseId = "transport-1",
+            LeaseEpoch = 13,
+            RenewExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)),
+        };
+
+        var envelope = VoicePresenceSessionDispatch.BuildDirectEnvelope("voice-agent", "voice_presence", renew);
+        var signal = envelope.Payload.Unpack<VoiceModuleSignal>();
+
+        envelope.Route.ShouldBe(EnvelopeRouteSemantics.CreateDirect(VoicePresenceSessionDispatch.HostPublisherId, "voice-agent"));
+        signal.ModuleName.ShouldBe("voice_presence");
+        signal.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.TransportLeaseRenewRequested);
+        signal.TransportLeaseRenewRequested.ShouldBe(renew);
+        signal.TransportLeaseRenewRequested.ShouldNotBeSameAs(renew);
     }
 }

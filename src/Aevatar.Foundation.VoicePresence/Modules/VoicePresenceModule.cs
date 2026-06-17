@@ -147,6 +147,9 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
             case VoiceModuleSignal.SignalOneofCase.TransportAttachRequested:
                 await HandleTransportAttachRequestedAsync(signal.TransportAttachRequested, ctx, ct);
                 break;
+            case VoiceModuleSignal.SignalOneofCase.TransportLeaseRenewRequested:
+                await HandleTransportLeaseRenewRequestedAsync(signal.TransportLeaseRenewRequested, ctx, ct);
+                break;
             case VoiceModuleSignal.SignalOneofCase.TransportDetachRequested:
                 await HandleTransportDetachRequestedAsync(signal.TransportDetachRequested, ctx, ct);
                 break;
@@ -438,7 +441,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
                 request.SessionId,
                 request.TransportLeaseId,
                 request.OwnerId,
-                request.LeaseExpiresAt,
                 request.LeaseEpoch))
         {
             return;
@@ -507,6 +509,33 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         await PersistRuntimeStateAsync(ctx, state, ct);
     }
 
+    private async Task HandleTransportLeaseRenewRequestedAsync(
+        VoiceTransportLeaseRenewRequested request,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        var state = HydrateRuntimeStateFromActor(ctx);
+        if (!IsAcceptedTransportSignal(
+                state,
+                request.SessionId,
+                request.TransportLeaseId,
+                request.OwnerId,
+                request.LeaseEpoch) ||
+            request.RenewExpiresAt == null)
+        {
+            return;
+        }
+
+        if (state.LeaseExpiresAt == null ||
+            request.RenewExpiresAt.ToDateTimeOffset() <= state.LeaseExpiresAt.ToDateTimeOffset())
+        {
+            return;
+        }
+
+        state.LeaseExpiresAt = request.RenewExpiresAt.Clone();
+        await PersistRuntimeStateAsync(ctx, state, ct);
+    }
+
     private async Task HandleTransportDetachRequestedAsync(
         VoiceTransportDetachRequested request,
         IEventHandlerContext ctx,
@@ -518,7 +547,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
                 request.SessionId,
                 request.TransportLeaseId,
                 request.OwnerId,
-                request.LeaseExpiresAt,
                 request.LeaseEpoch))
             return;
 
@@ -537,7 +565,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
                 request.SessionId,
                 request.TransportLeaseId,
                 request.OwnerId,
-                request.LeaseExpiresAt,
                 request.LeaseEpoch) ||
             request.ControlFrame == null)
         {
@@ -558,7 +585,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
                 request.SessionId,
                 request.TransportLeaseId,
                 request.OwnerId,
-                request.LeaseExpiresAt,
                 request.LeaseEpoch))
             return;
 
@@ -577,7 +603,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
                 request.SessionId,
                 request.TransportLeaseId,
                 request.OwnerId,
-                request.LeaseExpiresAt,
                 request.LeaseEpoch))
             return;
 
@@ -594,7 +619,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         string sessionId,
         string transportLeaseId,
         string? ownerId = null,
-        Timestamp? leaseExpiresAt = null,
         long leaseEpoch = 0)
     {
         if (string.IsNullOrWhiteSpace(sessionId) ||
@@ -608,7 +632,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         return string.Equals(state.ActiveSessionId, sessionId, StringComparison.Ordinal) &&
                string.Equals(state.ActiveTransportLeaseId, transportLeaseId, StringComparison.Ordinal) &&
                MatchesLeaseOwner(state, ownerId) &&
-               MatchesLeaseExpiry(state, leaseExpiresAt) &&
                MatchesLeaseEpoch(state, leaseEpoch);
     }
 
@@ -617,12 +640,11 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         string sessionId,
         string transportLeaseId,
         string? ownerId,
-        Timestamp? leaseExpiresAt,
         long leaseEpoch)
     {
         if (!string.IsNullOrWhiteSpace(transportLeaseId))
         {
-            return IsAcceptedTransportSignal(state, sessionId, transportLeaseId, ownerId, leaseExpiresAt, leaseEpoch);
+            return IsAcceptedTransportSignal(state, sessionId, transportLeaseId, ownerId, leaseEpoch);
         }
 
         if (string.IsNullOrWhiteSpace(sessionId) ||
@@ -654,7 +676,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
                 request.SessionId,
                 request.TransportLeaseId,
                 request.OwnerId,
-                request.LeaseExpiresAt,
                 request.LeaseEpoch);
         }
 

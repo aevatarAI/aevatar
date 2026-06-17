@@ -304,6 +304,14 @@ message VoiceTransportAttachRequested {
   int64 lease_epoch = 6;
 }
 
+message VoiceTransportLeaseRenewRequested {
+  string session_id = 1;
+  string owner_id = 2;
+  string transport_lease_id = 3;
+  int64 lease_epoch = 4;
+  google.protobuf.Timestamp renew_expires_at = 5;
+}
+
 message VoiceTransportDetachRequested {
   string session_id = 1;
   string transport_lease_id = 2;
@@ -388,6 +396,7 @@ message VoiceModuleSignal {
     VoiceProviderEventReceived provider_event_received = 14;
     VoiceTransportLifetimeCompleted transport_lifetime_completed = 16;
     VoiceInputImageReceived input_image_received = 17;
+    VoiceTransportLeaseRenewRequested transport_lease_renew_requested = 18;
   }
 }
 

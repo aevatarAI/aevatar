@@ -378,6 +378,79 @@ public class VoiceRealtimeSessionTests
     }
 
     [Fact]
+    public async Task VoiceVolatileMediaStreamPort_should_dispatch_lease_renewal_while_relay_is_attached()
+    {
+        var now = new DateTimeOffset(2026, 6, 17, 8, 0, 0, TimeSpan.Zero);
+        var timeProvider = new ControllableTimeProvider(now);
+        var leasePort = new RecordingLeasePort();
+        var attachmentPort = new RecordingAttachmentPort();
+        var dispatchPort = new RecordingDispatchPort();
+        var providerSession = new RecordingRelayProviderSession();
+        var port = new VoiceVolatileMediaStreamPort(
+            attachmentPort,
+            leasePort,
+            [CreateRelayRegistration(providerSession)],
+            new ServiceCollection().BuildServiceProvider(),
+            dispatchPort,
+            timeProvider: timeProvider);
+        var handle = CreateLeaseHandle(now.AddMinutes(5), activeTransportLeaseId: "transport-1");
+        var transport = new PassiveVoiceTransport();
+
+        await port.AttachAsync(handle, transport, CancellationToken.None);
+        timeProvider.Advance(ActorOwnedVoiceRealtimeSession.DefaultLeaseTtl / 2);
+
+        var signal = await dispatchPort.TakeSignalAsync<VoiceTransportLeaseRenewRequested>();
+
+        signal.SessionId.ShouldBe("lease-1");
+        signal.OwnerId.ShouldBe("host-1");
+        signal.TransportLeaseId.ShouldBe("transport-1");
+        signal.LeaseEpoch.ShouldBe(7);
+        signal.RenewExpiresAt.ToDateTimeOffset().ShouldBe(now.AddMinutes(7.5));
+
+        await port.DetachAsync(handle, transport, CancellationToken.None);
+    }
+
+    [Theory]
+    [InlineData("detached")]
+    [InlineData("completed")]
+    public async Task VoiceVolatileMediaStreamPort_should_stop_lease_renewal_after_relay_is_removed(
+        string removalPath)
+    {
+        var now = new DateTimeOffset(2026, 6, 17, 8, 0, 0, TimeSpan.Zero);
+        var timeProvider = new ControllableTimeProvider(now);
+        var leasePort = new RecordingLeasePort();
+        var attachmentPort = new RecordingAttachmentPort();
+        var dispatchPort = new RecordingDispatchPort();
+        var providerSession = new RecordingRelayProviderSession();
+        var port = new VoiceVolatileMediaStreamPort(
+            attachmentPort,
+            leasePort,
+            [CreateRelayRegistration(providerSession)],
+            new ServiceCollection().BuildServiceProvider(),
+            dispatchPort,
+            timeProvider: timeProvider);
+        var handle = CreateLeaseHandle(now.AddMinutes(5), activeTransportLeaseId: "transport-1");
+        var transport = new PassiveVoiceTransport();
+
+        await port.AttachAsync(handle, transport, CancellationToken.None);
+        if (removalPath == "detached")
+        {
+            await port.DetachAsync(handle, transport, CancellationToken.None);
+        }
+        else
+        {
+            await port.CompleteTransportLifetimeAsync(handle, null, "host_transport_completed");
+        }
+
+        timeProvider.Advance(ActorOwnedVoiceRealtimeSession.DefaultLeaseTtl / 2);
+
+        dispatchPort.Dispatches
+            .Select(static dispatch => dispatch.Envelope.Payload.Unpack<VoiceModuleSignal>())
+            .ShouldNotContain(static signal =>
+                signal.SignalCase == VoiceModuleSignal.SignalOneofCase.TransportLeaseRenewRequested);
+    }
+
+    [Fact]
     public async Task VoiceVolatileMediaStreamPort_should_bind_tool_credential_to_transport_lease_and_evict_on_detach()
     {
         var leasePort = new RecordingLeasePort();
@@ -1233,12 +1306,75 @@ public class VoiceRealtimeSessionTests
 
     private sealed class RecordingDispatchPort : IActorDispatchPort
     {
+        private readonly object _gate = new();
+        private readonly List<ISignalWaiter> _waiters = [];
+
         public List<(string ActorId, EventEnvelope Envelope)> Dispatches { get; } = [];
 
         public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
-            Dispatches.Add((actorId, envelope));
+            lock (_gate)
+            {
+                Dispatches.Add((actorId, envelope));
+                var signal = envelope.Payload.Unpack<VoiceModuleSignal>();
+                for (var i = _waiters.Count - 1; i >= 0; i--)
+                {
+                    if (_waiters[i].TrySet(signal))
+                        _waiters.RemoveAt(i);
+                }
+            }
+
             return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
+        }
+
+        public Task<T> TakeSignalAsync<T>()
+            where T : IMessage
+        {
+            lock (_gate)
+            {
+                foreach (var dispatch in Dispatches)
+                {
+                    var signal = dispatch.Envelope.Payload.Unpack<VoiceModuleSignal>();
+                    if (TryGetSignal(signal, out T? payload))
+                        return Task.FromResult(payload!);
+                }
+
+                var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _waiters.Add(new SignalWaiter<T>(completion));
+                return completion.Task;
+            }
+        }
+
+        private static bool TryGetSignal<T>(VoiceModuleSignal signal, out T? payload)
+            where T : IMessage
+        {
+            if (typeof(T) == typeof(VoiceTransportLeaseRenewRequested) &&
+                signal.SignalCase == VoiceModuleSignal.SignalOneofCase.TransportLeaseRenewRequested)
+            {
+                payload = (T)(object)signal.TransportLeaseRenewRequested;
+                return true;
+            }
+
+            payload = default;
+            return false;
+        }
+
+        private interface ISignalWaiter
+        {
+            bool TrySet(VoiceModuleSignal signal);
+        }
+
+        private sealed class SignalWaiter<T>(TaskCompletionSource<T> completion) : ISignalWaiter
+            where T : IMessage
+        {
+            public bool TrySet(VoiceModuleSignal signal)
+            {
+                if (!TryGetSignal(signal, out T? payload))
+                    return false;
+
+                completion.TrySetResult(payload!);
+                return true;
+            }
         }
     }
 
@@ -1261,6 +1397,130 @@ public class VoiceRealtimeSessionTests
     private sealed class FixedProjectionClock(DateTimeOffset utcNow) : IProjectionClock
     {
         public DateTimeOffset UtcNow { get; } = utcNow;
+    }
+
+    private sealed class ControllableTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        private readonly object _gate = new();
+        private readonly List<ManualTimer> _timers = [];
+        private DateTimeOffset _utcNow = utcNow;
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            lock (_gate)
+            {
+                return _utcNow;
+            }
+        }
+
+        public void Advance(TimeSpan delta)
+        {
+            ManualTimer[] timers;
+            lock (_gate)
+            {
+                _utcNow = _utcNow.Add(delta);
+                timers = _timers.ToArray();
+            }
+
+            foreach (var timer in timers)
+                timer.FireIfDue();
+        }
+
+        public override ITimer CreateTimer(
+            TimerCallback callback,
+            object? state,
+            TimeSpan dueTime,
+            TimeSpan period)
+        {
+            var timer = new ManualTimer(this, callback, state, dueTime, period);
+            lock (_gate)
+            {
+                _timers.Add(timer);
+            }
+
+            timer.FireIfDue();
+            return timer;
+        }
+
+        private void Remove(ManualTimer timer)
+        {
+            lock (_gate)
+            {
+                _timers.Remove(timer);
+            }
+        }
+
+        private sealed class ManualTimer(
+            ControllableTimeProvider owner,
+            TimerCallback callback,
+            object? state,
+            TimeSpan dueTime,
+            TimeSpan period) : ITimer
+        {
+            private readonly object _gate = new();
+            private TimeSpan _period = period;
+            private DateTimeOffset? _dueAt = ResolveDueAt(owner.GetUtcNow(), dueTime);
+            private bool _disposed;
+
+            public bool Change(TimeSpan dueTime, TimeSpan period)
+            {
+                lock (_gate)
+                {
+                    if (_disposed)
+                        return false;
+
+                    _period = period;
+                    _dueAt = ResolveDueAt(owner.GetUtcNow(), dueTime);
+                }
+
+                FireIfDue();
+                return true;
+            }
+
+            public void FireIfDue()
+            {
+                while (true)
+                {
+                    lock (_gate)
+                    {
+                        if (_disposed ||
+                            !_dueAt.HasValue ||
+                            _dueAt.Value > owner.GetUtcNow())
+                        {
+                            return;
+                        }
+
+                        _dueAt = _period == Timeout.InfiniteTimeSpan
+                            ? null
+                            : ResolveDueAt(owner.GetUtcNow(), _period);
+                    }
+
+                    callback(state);
+                }
+            }
+
+            public void Dispose()
+            {
+                lock (_gate)
+                {
+                    if (_disposed)
+                        return;
+
+                    _disposed = true;
+                }
+
+                owner.Remove(this);
+            }
+
+            public ValueTask DisposeAsync()
+            {
+                Dispose();
+                return ValueTask.CompletedTask;
+            }
+
+            private static DateTimeOffset? ResolveDueAt(DateTimeOffset now, TimeSpan dueTime) =>
+                dueTime == Timeout.InfiniteTimeSpan ? null : now.Add(dueTime);
+        }
     }
 
     private static EventEnvelope WrapCommitted(

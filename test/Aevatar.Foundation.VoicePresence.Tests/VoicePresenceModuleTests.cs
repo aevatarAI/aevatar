@@ -720,7 +720,9 @@ public class VoicePresenceModuleTests
         moduleSource.ShouldNotContain("TransportAttached = _userTransport", Case.Sensitive);
         moduleSource.ShouldNotContain("IsActorAccepted", Case.Sensitive);
         moduleSource.ShouldNotContain("DispatchFireAndForget", Case.Sensitive);
-        moduleSource.ShouldNotContain("VoiceTransportLease", Case.Sensitive);
+        moduleSource.ShouldNotContain("VoiceTransportLease _", Case.Sensitive);
+        moduleSource.ShouldNotContain("VoiceTransportLease(", Case.Sensitive);
+        moduleSource.ShouldNotContain("VoiceTransportLease =", Case.Sensitive);
         moduleSource.ShouldNotContain("_transportPump", Case.Sensitive);
         moduleSource.ShouldNotContain("_providerSession", Case.Sensitive);
         moduleSource.ShouldNotContain("_providerSessionKey", Case.Sensitive);
@@ -983,6 +985,212 @@ public class VoicePresenceModuleTests
 
         roleAgent.PersistedStates.ShouldBeEmpty();
         roleAgent.State.VoicePresence["voice_presence"].TransportAttached.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Transport_lease_renew_signal_should_extend_actor_owned_expiry_without_bumping_epoch()
+    {
+        var now = new DateTimeOffset(2026, 6, 17, 8, 0, 0, TimeSpan.Zero);
+        var module = CreateModule(
+            new RecordingVoiceProvider(),
+            options: new VoicePresenceModuleOptions
+            {
+                TimeProvider = new ManualTimeProvider(now),
+            });
+        var roleAgent = CreateRoleAgentWithAttachedTransport(now.AddMinutes(5));
+        var ctx = new StubEventHandlerContext(agent: roleAgent);
+        var renewExpiresAt = Timestamp.FromDateTimeOffset(now.AddMinutes(10));
+
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            TransportLeaseRenewRequested = new VoiceTransportLeaseRenewRequested
+            {
+                SessionId = "lease-current",
+                OwnerId = "host-current",
+                TransportLeaseId = "transport-current",
+                LeaseEpoch = 7,
+                RenewExpiresAt = renewExpiresAt.Clone(),
+            },
+        }), ctx, CancellationToken.None);
+
+        var renewed = roleAgent.PersistedStates.ShouldHaveSingleItem().State;
+        renewed.LeaseExpiresAt.ShouldBe(renewExpiresAt);
+        renewed.LeaseEpoch.ShouldBe(7);
+        renewed.ActiveTransportLeaseId.ShouldBe("transport-current");
+        renewed.TransportAttached.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Transport_lease_renew_signal_should_not_shorten_actor_owned_expiry()
+    {
+        var now = new DateTimeOffset(2026, 6, 17, 8, 0, 0, TimeSpan.Zero);
+        var module = CreateModule(
+            new RecordingVoiceProvider(),
+            options: new VoicePresenceModuleOptions
+            {
+                TimeProvider = new ManualTimeProvider(now),
+            });
+        var roleAgent = CreateRoleAgentWithAttachedTransport(now.AddMinutes(10));
+        var ctx = new StubEventHandlerContext(agent: roleAgent);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            TransportLeaseRenewRequested = new VoiceTransportLeaseRenewRequested
+            {
+                SessionId = "lease-current",
+                OwnerId = "host-current",
+                TransportLeaseId = "transport-current",
+                LeaseEpoch = 7,
+                RenewExpiresAt = Timestamp.FromDateTimeOffset(now.AddMinutes(5)),
+            },
+        }), ctx, CancellationToken.None);
+
+        roleAgent.PersistedStates.ShouldBeEmpty();
+        roleAgent.State.VoicePresence["voice_presence"].LeaseExpiresAt.ToDateTimeOffset()
+            .ShouldBe(now.AddMinutes(10));
+    }
+
+    [Theory]
+    [InlineData("owner")]
+    [InlineData("transport")]
+    [InlineData("epoch")]
+    [InlineData("expired")]
+    public async Task Transport_lease_renew_signal_should_ignore_identity_mismatch_or_expired_lease(
+        string mismatch)
+    {
+        var now = new DateTimeOffset(2026, 6, 17, 8, 0, 0, TimeSpan.Zero);
+        var module = CreateModule(
+            new RecordingVoiceProvider(),
+            options: new VoicePresenceModuleOptions
+            {
+                TimeProvider = new ManualTimeProvider(now),
+            });
+        var activeExpiry = mismatch == "expired" ? now.AddSeconds(-1) : now.AddMinutes(5);
+        var roleAgent = CreateRoleAgentWithAttachedTransport(activeExpiry);
+        var ctx = new StubEventHandlerContext(agent: roleAgent);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            TransportLeaseRenewRequested = new VoiceTransportLeaseRenewRequested
+            {
+                SessionId = "lease-current",
+                OwnerId = mismatch == "owner" ? "host-stale" : "host-current",
+                TransportLeaseId = mismatch == "transport" ? "transport-stale" : "transport-current",
+                LeaseEpoch = mismatch == "epoch" ? 6 : 7,
+                RenewExpiresAt = Timestamp.FromDateTimeOffset(now.AddMinutes(10)),
+            },
+        }), ctx, CancellationToken.None);
+
+        roleAgent.PersistedStates.ShouldBeEmpty();
+        roleAgent.State.VoicePresence["voice_presence"].LeaseExpiresAt.ToDateTimeOffset()
+            .ShouldBe(activeExpiry);
+    }
+
+    [Fact]
+    public async Task Transport_control_signal_should_accept_old_lease_expiry_after_renewal()
+    {
+        var now = new DateTimeOffset(2026, 6, 17, 8, 0, 0, TimeSpan.Zero);
+        var oldExpiry = Timestamp.FromDateTimeOffset(now.AddMinutes(5));
+        var roleAgent = CreateRoleAgentWithAttachedTransport(now.AddMinutes(10));
+        var state = roleAgent.State.VoicePresence["voice_presence"];
+        state.Status = VoicePresenceRuntimeStatus.AudioDraining;
+        state.CurrentResponseId = 4;
+        state.NextResponseId = 5;
+        var module = CreateModule(new RecordingVoiceProvider());
+        var ctx = new StubEventHandlerContext(agent: roleAgent);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            TransportControlFrameReceived = new VoiceTransportControlFrameReceived
+            {
+                SessionId = "lease-current",
+                OwnerId = "host-current",
+                TransportLeaseId = "transport-current",
+                LeaseExpiresAt = oldExpiry.Clone(),
+                LeaseEpoch = 7,
+                ControlFrame = new VoiceControlFrame
+                {
+                    DrainAcknowledged = new VoiceDrainAcknowledged
+                    {
+                        ResponseId = 4,
+                        PlayoutSequence = 9,
+                    },
+                },
+            },
+        }), ctx, CancellationToken.None);
+
+        var persisted = roleAgent.PersistedStates.ShouldHaveSingleItem().State;
+        persisted.LastDrainAckResponseId.ShouldBe(4);
+        persisted.LastDrainAckPlayoutSequence.ShouldBe(9);
+        persisted.LeaseExpiresAt.ToDateTimeOffset().ShouldBe(now.AddMinutes(10));
+    }
+
+    [Fact]
+    public async Task Provider_callback_signal_should_accept_old_lease_expiry_after_renewal()
+    {
+        var now = new DateTimeOffset(2026, 6, 17, 8, 0, 0, TimeSpan.Zero);
+        var oldExpiry = Timestamp.FromDateTimeOffset(now.AddMinutes(5));
+        var roleAgent = CreateRoleAgentWithAttachedTransport(now.AddMinutes(10));
+        var module = CreateModule(new RecordingVoiceProvider());
+        var ctx = new StubEventHandlerContext(agent: roleAgent);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            ProviderEventReceived = new VoiceProviderEventReceived
+            {
+                SessionId = "lease-current",
+                OwnerId = "host-current",
+                TransportLeaseId = "transport-current",
+                LeaseExpiresAt = oldExpiry.Clone(),
+                LeaseEpoch = 7,
+                ProviderEvent = new VoiceProviderEvent
+                {
+                    ResponseStarted = new VoiceResponseStarted { ProviderResponseId = "provider-r1" },
+                },
+            },
+        }), ctx, CancellationToken.None);
+
+        var persisted = roleAgent.PersistedStates.ShouldHaveSingleItem().State;
+        persisted.Status.ShouldBe(VoicePresenceRuntimeStatus.ResponseInProgress);
+        persisted.ProviderResponseBindings.ShouldHaveSingleItem().ProviderResponseId.ShouldBe("provider-r1");
+        persisted.LeaseExpiresAt.ToDateTimeOffset().ShouldBe(now.AddMinutes(10));
+    }
+
+    [Fact]
+    public async Task Input_image_signal_should_accept_old_lease_expiry_after_renewal()
+    {
+        var now = new DateTimeOffset(2026, 6, 17, 8, 0, 0, TimeSpan.Zero);
+        var oldExpiry = Timestamp.FromDateTimeOffset(now.AddMinutes(5));
+        var provider = new RecordingVoiceProvider();
+        var roleAgent = CreateRoleAgentWithAttachedTransport(now.AddMinutes(10));
+        var module = CreateModule(provider);
+        var ctx = new StubEventHandlerContext(agent: roleAgent);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            InputImageReceived = new VoiceInputImageReceived
+            {
+                SessionId = "lease-current",
+                OwnerId = "host-current",
+                TransportLeaseId = "transport-current",
+                LeaseExpiresAt = oldExpiry.Clone(),
+                LeaseEpoch = 7,
+                InputImage = new VoiceInputImage
+                {
+                    MediaType = "image/png",
+                    Data = ByteString.CopyFrom([7, 8, 9]),
+                },
+            },
+        }), ctx, CancellationToken.None);
+
+        provider.InputImages.ShouldHaveSingleItem().Data.ToByteArray().ShouldBe([7, 8, 9]);
+        roleAgent.PersistedStates.ShouldBeEmpty();
     }
 
     [Fact]
@@ -2328,13 +2536,18 @@ public class VoicePresenceModuleTests
 
     private static RecordingRoleAgent CreateRoleAgentWithAttachedTransport()
     {
+        return CreateRoleAgentWithAttachedTransport(DateTimeOffset.UtcNow.AddMinutes(5));
+    }
+
+    private static RecordingRoleAgent CreateRoleAgentWithAttachedTransport(DateTimeOffset leaseExpiresAt)
+    {
         var roleAgent = new RecordingRoleAgent("voice-agent");
         roleAgent.State.VoicePresence[DefaultModuleName] = new VoicePresenceRuntimeState
         {
             Initialized = true,
             ActiveSessionId = "lease-current",
             ActiveLeaseOwnerId = "host-current",
-            LeaseExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)),
+            LeaseExpiresAt = Timestamp.FromDateTimeOffset(leaseExpiresAt.ToUniversalTime()),
             TransportAttached = true,
             ActiveTransportLeaseId = "transport-current",
             LeaseEpoch = 7,
