@@ -602,6 +602,10 @@ message LlmReplyDeliveredEvent {
   int64 acked_at_unix_ms = 3;
   // Channel-side message id from the sink ack (e.g. Lark message_id).
   string channel_message_id = 4;
+  // The bare platform message id (Lark om_...) of the message the bot just sent, recorded into
+  // ConversationGAgentState.bot_sent_platform_message_ids so a later reply to it is recognized as
+  // addressing the bot. Distinct from channel_message_id, which is path-prefixed on the card path.
+  string bot_platform_message_id = 5;
 }
 
 // Persisted by ConversationGAgent when the channel sink rejects or times
