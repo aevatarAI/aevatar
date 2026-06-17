@@ -1898,7 +1898,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(
+            _logger.LogWarning(
                 ex,
                 "Lark subject contact lookup failed open: provider={ProviderSlug}, userIdType={UserIdType}",
                 providerSlug,
