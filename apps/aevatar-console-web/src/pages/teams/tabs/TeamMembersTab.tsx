@@ -1,5 +1,6 @@
 import {
   CheckCircleOutlined,
+  ClockCircleOutlined,
   PlayCircleOutlined,
   PlusOutlined,
   ToolOutlined,
@@ -17,6 +18,9 @@ import {
 } from "../components/TeamDetailPrimitives";
 
 type TeamRosterMemberRow = {
+  readonly automationDisabledReason: string;
+  readonly automationsHref: string;
+  readonly canAutomateMember: boolean;
   readonly canInvokeAsEntry: boolean;
   readonly canInvokeMember: boolean;
   readonly canSetAsEntry: boolean;
@@ -60,7 +64,7 @@ const ellipsisTextStyle: React.CSSProperties = {
 };
 
 const tableGridTemplateColumns =
-  "minmax(280px, 1.45fr) minmax(140px, 0.5fr) minmax(180px, 0.65fr) minmax(260px, 0.8fr)";
+  "minmax(280px, 1.35fr) minmax(140px, 0.45fr) minmax(180px, 0.55fr) minmax(390px, 0.95fr)";
 
 const tableShellStyle: React.CSSProperties = {
   borderRadius: 8,
@@ -96,11 +100,12 @@ const responsiveTableStyle = `
   }
 
   .team-members-table-primary-actions {
-    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
     width: 100% !important;
   }
 
   .team-members-table-invoke-action,
+  .team-members-table-automate-action,
   .team-members-table-studio-action {
     min-width: 0 !important;
     padding-inline: 8px !important;
@@ -184,7 +189,7 @@ const primaryActionsStyle: React.CSSProperties = {
   alignItems: "center",
   display: "grid",
   gap: 8,
-  gridTemplateColumns: "minmax(104px, max-content) minmax(148px, max-content)",
+  gridTemplateColumns: "minmax(104px, max-content) minmax(122px, max-content) minmax(148px, max-content)",
   justifyContent: "start",
   minWidth: 0,
 };
@@ -604,6 +609,33 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                             type="default"
                           >
                             {intl.formatMessage({ id: "teams.members.actions.invokeWorkflow" })}
+                          </Button>
+                          <Button
+                            className="team-members-table-automate-action"
+                            href={row.canAutomateMember ? row.automationsHref : undefined}
+                            disabled={!row.canAutomateMember}
+                            icon={<ClockCircleOutlined />}
+                            onClick={
+                              row.canAutomateMember
+                                ? handleNavigate(row.automationsHref)
+                                : undefined
+                            }
+                            size="small"
+                            style={{
+                              ...invokeActionStyle,
+                              minWidth: 122,
+                            }}
+                            title={
+                              row.canAutomateMember
+                                ? undefined
+                                : row.automationDisabledReason
+                            }
+                            type="default"
+                          >
+                            {intl.formatMessage({
+                              defaultMessage: "Automate",
+                              id: "teams.members.actions.automate",
+                            })}
                           </Button>
                           <Button
                             className="team-members-table-studio-action"

@@ -1,6 +1,7 @@
 import {
   buildTeamCreateHref,
   buildTeamDetailHref,
+  buildTeamMemberAutomationsHref,
   buildTeamMemberInvokeHref,
   buildTeamMemberWorkflowStudioHref,
   buildTeamStudioHref,
@@ -129,6 +130,35 @@ describe("teamRoutes", () => {
     ).toBe(buildTeamsHref());
   });
 
+  it("builds member-owned automation handoffs without using workflow or service identities", () => {
+    const memberId = "m-alpha";
+    const workflowId = "wf-alpha";
+    const publishedServiceId = "svc-alpha";
+
+    expect(
+      buildTeamMemberAutomationsHref({
+        memberId: ` ${memberId} `,
+        scopeId: " scope-alpha ",
+        teamId: " t-alpha ",
+      }),
+    ).toBe("/scopes/scope-alpha/teams/t-alpha/members/m-alpha/automations");
+    expect(
+      buildTeamMemberAutomationsHref({
+        scopeId: "scope-alpha",
+        teamId: "t-alpha",
+      }),
+    ).toBe("/scopes/scope-alpha/teams/t-alpha?tab=automations");
+    expect(
+      buildTeamMemberAutomationsHref({
+        memberId,
+        scopeId: "",
+        teamId: "t-alpha",
+      }),
+    ).toBe(buildTeamsHref());
+    expect(workflowId).not.toBe(memberId);
+    expect(publishedServiceId).not.toBe(memberId);
+  });
+
   it("keeps old Studio helpers on /studio", () => {
     expect(
       buildTeamStudioHref({
@@ -180,6 +210,20 @@ describe("teamRoutes", () => {
       scopeId: "scope-alpha",
       teamId: "t-alpha",
       workflowId: "wf-alpha",
+    });
+  });
+
+  it("reads member-owned automation routes from the canonical member path", () => {
+    expect(
+      readTeamDetailRouteState(
+        "?tab=members",
+        "/scopes/scope-alpha/teams/t-alpha/members/member-alpha/automations",
+      ),
+    ).toMatchObject({
+      memberId: "member-alpha",
+      scopeId: "scope-alpha",
+      tab: "automations",
+      teamId: "t-alpha",
     });
   });
 

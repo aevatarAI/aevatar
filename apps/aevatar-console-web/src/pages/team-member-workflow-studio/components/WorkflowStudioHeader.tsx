@@ -1,5 +1,6 @@
 import {
   ArrowLeftOutlined,
+  ClockCircleOutlined,
   CloudUploadOutlined,
   CodeOutlined,
   DeleteOutlined,
@@ -20,6 +21,9 @@ import { t } from "@/shared/i18n/messages";
 type WorkflowHeaderMenuItem = NonNullable<MenuProps["items"]>[number];
 
 type WorkflowStudioHeaderProps = {
+  readonly automationsHref: string;
+  readonly automationsPlaceholderReason?: string;
+  readonly canOpenAutomations: boolean;
   readonly memberPublished: boolean;
   readonly publishDisabled: boolean;
   readonly publishNotice: string;
@@ -34,6 +38,7 @@ type WorkflowStudioHeaderProps = {
   readonly dirty: boolean;
   readonly activeMemberRunPlaceholderReason?: string;
   readonly onPublishMember: () => void;
+  readonly onOpenAutomations: () => void;
   readonly onRefreshPublishStatus: () => void;
   readonly onAddNode: () => void;
   readonly onDeleteConnection: () => void;
@@ -433,12 +438,16 @@ const HeaderIdentity: React.FC<HeaderIdentityProps> = ({
 
 type HeaderActionsProps = {
   readonly activeMemberRunPlaceholderReason?: string;
+  readonly automationsHref: string;
+  readonly automationsPlaceholderReason?: string;
+  readonly canOpenAutomations: boolean;
   readonly canOpenDraftRunPanel: boolean;
   readonly canSave: boolean;
   readonly canViewYaml: boolean;
   readonly onAddNode: () => void;
   readonly onDeleteConnection: () => void;
   readonly onDeleteNode: () => void;
+  readonly onOpenAutomations: () => void;
   readonly onOpenDraftRunPanel: () => void;
   readonly onPasteYamlClick: () => void;
   readonly onPublishMember: () => void;
@@ -460,12 +469,16 @@ type HeaderActionsProps = {
 
 const HeaderActions: React.FC<HeaderActionsProps> = ({
   activeMemberRunPlaceholderReason,
+  automationsHref,
+  automationsPlaceholderReason,
+  canOpenAutomations,
   canOpenDraftRunPanel,
   canSave,
   canViewYaml,
   onAddNode,
   onDeleteConnection,
   onDeleteNode,
+  onOpenAutomations,
   onOpenDraftRunPanel,
   onPasteYamlClick,
   onPublishMember,
@@ -567,6 +580,33 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
       >
         <span className="workflow-studio-header__action-label workflow-studio-header__action-label--secondary">
           {t("teamMemberWorkflowStudio.header.addNode", "Add node")}
+        </span>
+      </Button>
+      <Button
+        aria-label={t(
+          "teamMemberWorkflowStudio.header.recurringWork",
+          "Recurring work",
+        )}
+        className="workflow-studio-header__compact-button"
+        disabled={!canOpenAutomations}
+        href={canOpenAutomations ? automationsHref : undefined}
+        icon={<ClockCircleOutlined />}
+        onClick={(event) => {
+          event.preventDefault();
+          onOpenAutomations();
+        }}
+        size="small"
+        title={
+          canOpenAutomations
+            ? t(
+                "teamMemberWorkflowStudio.header.openAutomations",
+                "Open recurring work for this member",
+              )
+            : automationsPlaceholderReason
+        }
+      >
+        <span className="workflow-studio-header__action-label workflow-studio-header__action-label--secondary">
+          {t("teamMemberWorkflowStudio.header.recurringWork", "Recurring work")}
         </span>
       </Button>
       <Button
@@ -729,6 +769,9 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
 };
 
 const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
+  automationsHref,
+  automationsPlaceholderReason,
+  canOpenAutomations,
   memberPublished,
   publishDisabled,
   publishNotice,
@@ -743,6 +786,7 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
   dirty,
   activeMemberRunPlaceholderReason,
   onPublishMember,
+  onOpenAutomations,
   onRefreshPublishStatus,
   onAddNode,
   onDeleteConnection,
@@ -806,12 +850,16 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
         />
         <HeaderActions
           activeMemberRunPlaceholderReason={activeMemberRunPlaceholderReason}
+          automationsHref={automationsHref}
+          automationsPlaceholderReason={automationsPlaceholderReason}
+          canOpenAutomations={canOpenAutomations}
           canOpenDraftRunPanel={canOpenDraftRunPanel}
           canSave={canSave}
           canViewYaml={canViewYaml}
           onAddNode={onAddNode}
           onDeleteConnection={onDeleteConnection}
           onDeleteNode={onDeleteNode}
+          onOpenAutomations={onOpenAutomations}
           onOpenDraftRunPanel={onOpenDraftRunPanel}
           onPasteYamlClick={onOpenPasteYaml}
           onPublishMember={onPublishMember}

@@ -15,8 +15,10 @@ import {
   history,
   subscribeToLocationChanges,
 } from "@/shared/navigation/history";
+import { t } from "@/shared/i18n/messages";
 import {
   buildTeamDetailHref,
+  buildTeamMemberAutomationsHref,
   buildTeamMemberWorkflowStudioHref,
   buildTeamsHref,
 } from "@/shared/navigation/teamRoutes";
@@ -128,6 +130,9 @@ type WorkflowSourceSignature = {
 };
 
 type TeamMemberWorkflowStudioState = {
+  readonly automationsHref: string;
+  readonly canOpenAutomations: boolean;
+  readonly automationsPlaceholderReason: string;
   readonly publishMember: () => void;
   readonly memberPublished: boolean;
   readonly publishDisabled: boolean;
@@ -140,6 +145,7 @@ type TeamMemberWorkflowStudioState = {
   readonly showRefreshPublishStatus: boolean;
   readonly backHref: string;
   readonly navigateToTeam: () => void;
+  readonly navigateToAutomations: () => void;
   readonly navigateToTeams: () => void;
   readonly closeYamlImportPanel: () => void;
   readonly pasteYaml: (yaml: string) => Promise<void>;
@@ -1006,6 +1012,11 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   });
   const backHref = teamMembersReturnHref;
   const teamHref = route.scopeId ? teamMembersReturnHref : teamsHref;
+  const automationsHref = buildTeamMemberAutomationsHref({
+    memberId: route.memberId || undefined,
+    scopeId: route.scopeId,
+    teamId: route.teamId,
+  });
   const parseQuery = useQuery({
     enabled: Boolean(
       workflowQuery.data &&
@@ -1778,6 +1789,31 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const publishHasDraftChanges = Boolean(dirty && workflowHasSteps);
   const publishPending = publishMutation.isPending;
   const memberPublished = memberIsPublished;
+  const memberPublishedServiceId = trimOptional(
+    memberQuery.data?.summary.publishedServiceId,
+  );
+  const canOpenAutomations = Boolean(
+    route.mode === "existing" &&
+      route.scopeId &&
+      route.teamId &&
+      route.memberId &&
+      memberQuery.data?.summary.lifecycleStage === "bind_ready" &&
+      memberPublishedServiceId,
+  );
+  const automationsPlaceholderReason = !route.memberId
+    ? t(
+        "teamMemberWorkflowStudio.header.automations.saveFirst",
+        "Save this member before adding recurring work.",
+      )
+    : !memberPublishedServiceId
+      ? t(
+          "teamMemberWorkflowStudio.header.automations.publishFirst",
+          "Publish this member before adding recurring work.",
+        )
+      : t(
+          "teamMemberWorkflowStudio.header.openAutomations",
+          "Open recurring work for this member",
+        );
   const publishVisibleError =
     publishError &&
     (publishBindingRunFailed ||
@@ -2267,6 +2303,9 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   );
 
   return {
+    automationsHref,
+    canOpenAutomations,
+    automationsPlaceholderReason,
     publishMember: () => {
       if (
         workflowQuery.data &&
@@ -2301,6 +2340,11 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     navigateToTeams: () => {
       if (!dirty || confirmDiscardUnsavedChanges()) {
         history.push(teamsHref);
+      }
+    },
+    navigateToAutomations: () => {
+      if (canOpenAutomations && (!dirty || confirmDiscardUnsavedChanges())) {
+        history.push(automationsHref);
       }
     },
     pasteYaml: async (yaml: string) => {
