@@ -1086,15 +1086,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         ArgumentNullException.ThrowIfNull(ctx);
         ArgumentNullException.ThrowIfNull(completed);
 
-        var state = LoadState(ctx);
-        var hasManagedWorkflowCallParent =
-            WorkflowRunExecutionContextStateAccess.Get(ctx).WorkflowRuntime != null &&
-            state.Variables.ContainsKey(WorkflowCallInvocationIdParameterKey);
         await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
-        if (hasManagedWorkflowCallParent)
-            return;
-
-        await ctx.PublishAsync(completed.Clone(), TopologyAudience.Parent, ct);
     }
 
     private async Task DispatchStepAsync(
@@ -1789,6 +1781,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
 
         ApplyTransformOperation(request, step.TransformOperation, state);
         ApplyHumanApprovalOptions(request, step.HumanApprovalOptions);
+        ApplyExternalApprovalOptions(request, step.ExternalApprovalOptions, state);
         ApplyInteractionPresentation(request, step.Presentation, state);
 
         return request;
@@ -1837,6 +1830,41 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             "rejected" => WorkflowHumanApprovalTimeoutDefaultDecision.Reject,
             _ => WorkflowHumanApprovalTimeoutDefaultDecision.Unspecified,
         };
+
+    private void ApplyExternalApprovalOptions(
+        StepRequestEvent request,
+        ExternalApprovalWaitOptionsDefinition? options,
+        WorkflowExecutionKernelState state)
+    {
+        if (options == null)
+            return;
+
+        var sourceId = EvaluateOption(options.SourceId, state);
+        var externalIdKind = EvaluateOption(options.ExternalIdKind, state);
+        var externalId = EvaluateOption(options.ExternalId, state);
+        if (string.IsNullOrWhiteSpace(sourceId) ||
+            string.IsNullOrWhiteSpace(externalIdKind) ||
+            string.IsNullOrWhiteSpace(externalId))
+        {
+            return;
+        }
+
+        (request.StepParameters ??= new WorkflowStepParameters()).ExternalApproval =
+            new WorkflowExternalApprovalWaitOptions
+            {
+                SourceId = sourceId,
+                ExternalIdKind = externalIdKind,
+                ExternalId = externalId,
+                SignalName = EvaluateOption(options.SignalName, state),
+                CallbackIdempotencyKey = EvaluateOption(options.CallbackIdempotencyKey, state),
+                RequestId = EvaluateOption(options.RequestId, state),
+            };
+    }
+
+    private string EvaluateOption(string? value, WorkflowExecutionKernelState state) =>
+        string.IsNullOrWhiteSpace(value)
+            ? string.Empty
+            : _expressionEvaluator.Evaluate(value, state.Variables).Trim();
 
     private static string NormalizeOptionToken(string? value) =>
         string.IsNullOrWhiteSpace(value)

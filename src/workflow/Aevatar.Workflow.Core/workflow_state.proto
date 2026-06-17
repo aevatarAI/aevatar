@@ -348,6 +348,16 @@ message PendingSignalState
   string signal_name = 4;
   WorkflowRuntimeCallbackLeaseState timeout_lease = 5;
   string timeout_callback_id = 6;
+  PendingExternalApprovalContinuationState external_approval = 7;
+}
+
+message PendingExternalApprovalContinuationState
+{
+  string source_id = 1;
+  string external_id_kind = 2;
+  string external_id = 3;
+  string callback_idempotency_key = 4;
+  string request_id = 5;
 }
 
 message WaitSignalModuleState

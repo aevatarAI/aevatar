@@ -345,6 +345,15 @@ message WorkflowHumanApprovalOptions {
   WorkflowHumanApprovalTimeoutDefaultDecision timeout_default_decision = 1;
 }
 
+message WorkflowExternalApprovalWaitOptions {
+  string source_id = 1;
+  string external_id_kind = 2;
+  string external_id = 3;
+  string signal_name = 4;
+  string callback_idempotency_key = 5;
+  string request_id = 6;
+}
+
 message WorkflowStepParameters
 {
   map<string, string> parameters = 1;
@@ -356,6 +365,7 @@ message WorkflowStepParameters
   TransformOperationSpec transform_operation = 7;
   WorkflowAgentToolScope agent_tool_scope = 8;
   WorkflowHumanApprovalOptions human_approval = 9;
+  WorkflowExternalApprovalWaitOptions external_approval = 10;
 }
 message StepRequestEvent
 {
@@ -831,8 +841,44 @@ message WorkflowLeaseWaitTimeoutFiredEvent
 message ReplaceWorkflowDefinitionAndExecuteEvent { string workflow_yaml = 1; string input = 2; }
 
 message WaitingForSignalEvent { string step_id = 1; string signal_name = 2; string prompt = 3; int32 timeout_ms = 4; string run_id = 5; }
-message SignalReceivedEvent   { string signal_name = 1; string payload = 2; string run_id = 3; string step_id = 4; }
+message SignalReceivedEvent {
+  string signal_name = 1;
+  string payload = 2;
+  string run_id = 3;
+  string step_id = 4;
+  WorkflowExternalApprovalTerminalSignal external_approval = 5;
+}
 message WaitSignalTimeoutFiredEvent { string run_id = 1; string step_id = 2; string signal_name = 3; int32 timeout_ms = 4; }
+message WorkflowExternalApprovalTerminalSignal {
+  string source_id = 1;
+  string external_id_kind = 2;
+  string external_id = 3;
+  string instance_code = 4;
+  string request_id = 5;
+  string terminal_status = 6;
+  string callback_idempotency_key = 7;
+  map<string, string> provider_delivery_evidence = 8;
+}
+message WorkflowExternalApprovalContinuationRegisteredEvent {
+  string run_id = 1;
+  string step_id = 2;
+  string signal_name = 3;
+  string source_id = 4;
+  string external_id_kind = 5;
+  string external_id = 6;
+  string callback_idempotency_key = 7;
+  string request_id = 8;
+}
+message WorkflowExternalApprovalContinuationClearedEvent {
+  string run_id = 1;
+  string step_id = 2;
+  string signal_name = 3;
+  string source_id = 4;
+  string external_id_kind = 5;
+  string external_id = 6;
+  string callback_idempotency_key = 7;
+  string request_id = 8;
+}
 message WorkflowHumanApprovalTimeoutFiredEvent { string run_id = 1; string step_id = 2; int32 timeout_seconds = 3; }
 message WorkflowStepTimeoutFiredEvent { string run_id = 1; string step_id = 2; int32 timeout_ms = 3; }
 message WorkflowCompensationPhaseDeadlineFiredEvent { string run_id = 1; }

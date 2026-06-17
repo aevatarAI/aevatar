@@ -282,6 +282,9 @@ public sealed class WorkflowInfrastructureCoverageTests
             x.ImplementationFactory != null);
         services.Should().Contain(x =>
             x.ServiceType == typeof(WorkflowWebhookIngressRequestBuilder));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IWorkflowWebhookReplayAdmissionPort) &&
+            x.ImplementationType == typeof(WorkflowWebhookReplayAdmissionPort));
         services.Should().NotContain(x =>
             x.ServiceType == typeof(IWorkflowWebhookReplayStore) &&
             x.ImplementationType == typeof(InMemoryWorkflowWebhookReplayStore));

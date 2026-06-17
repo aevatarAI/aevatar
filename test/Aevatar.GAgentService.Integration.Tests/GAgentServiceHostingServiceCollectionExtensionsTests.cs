@@ -23,7 +23,10 @@ using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.AGUI.Contracts;
 using Aevatar.Studio.Projection.ReadModels;
 using Aevatar.Workflow.Projection.ReadModels;
+using Aevatar.Workflow.Projection.Orchestration;
+using Aevatar.Workflow.Projection.Projectors;
 using Aevatar.Workflow.Application.Abstractions.Queries;
+using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -260,6 +263,65 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         await app.StartAsync();
 
         app.Services.GetRequiredService<IProjectionWriteDispatcher<WorkflowCatalogCurrentStateDocument>>()
+            .Should()
+            .NotBeNull();
+        AssertNoWorkflowCapabilitiesStartupArtifactServices(builder.Services);
+    }
+
+    [Fact]
+    public async Task AddGAgentServiceCapabilityBundle_WithWorkflowPlatform_ShouldResolveExternalApprovalContinuationProjection()
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = Environments.Development,
+        });
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        builder.Host.UseDefaultServiceProvider(options =>
+        {
+            options.ValidateOnBuild = false;
+            options.ValidateScopes = false;
+        });
+        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["GAgentService:Demo:Enabled"] = "false",
+            ["Projection:Document:Providers:InMemory:Enabled"] = "true",
+            ["Projection:Document:Providers:Elasticsearch:Enabled"] = "false",
+            ["Projection:Graph:Providers:InMemory:Enabled"] = "true",
+            ["Projection:Graph:Providers:Neo4j:Enabled"] = "false",
+            ["Projection:Policies:Environment"] = "Development",
+        });
+
+        builder.AddAevatarDefaultHost(options =>
+        {
+            options.ServiceName = "Aevatar.GAgentService.WorkflowProjectionStartup.Tests";
+            options.EnableConnectorBootstrap = false;
+            options.EnableHealthEndpoints = false;
+            options.MapRootHealthEndpoint = false;
+            options.EnableOpenApiDocument = false;
+            options.AutoMapCapabilities = false;
+        });
+        builder.AddAevatarPlatform(options =>
+        {
+            options.EnableAIFeatures = false;
+            options.EnableScriptingCapability = false;
+        });
+        builder.AddGAgentServiceCapabilityBundle();
+
+        await using var app = builder.Build();
+        app.MapAevatarCapabilities();
+
+        await app.StartAsync();
+
+        app.Services.GetRequiredService<IProjectionDocumentReader<WorkflowExternalApprovalContinuationDocument, string>>()
+            .Should()
+            .NotBeNull();
+        app.Services.GetRequiredService<IProjectionWriteDispatcher<WorkflowExternalApprovalContinuationDocument>>()
+            .Should()
+            .NotBeNull();
+        app.Services.GetRequiredService<WorkflowExternalApprovalContinuationLookupPort>()
+            .Should()
+            .NotBeNull();
+        app.Services.GetRequiredService<WorkflowExternalApprovalContinuationProjector>()
             .Should()
             .NotBeNull();
         AssertNoWorkflowCapabilitiesStartupArtifactServices(builder.Services);

@@ -49,21 +49,26 @@ public class WorkflowExecutionProjectionRegistrationTests
         await using var provider = services.BuildServiceProvider();
         var currentStateStore = provider.GetRequiredService<IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>>();
         var documentStore = provider.GetRequiredService<IProjectionDocumentReader<WorkflowRunInsightReportDocument, string>>();
+        var continuationStore = provider.GetRequiredService<IProjectionDocumentReader<WorkflowExternalApprovalContinuationDocument, string>>();
         var relationStore = provider.GetRequiredService<IProjectionGraphStore>();
         var currentStateDispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowExecutionCurrentStateDocument>>();
         var dispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowRunInsightReportDocument>>();
+        var continuationDispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowExternalApprovalContinuationDocument>>();
         var graphWriter = provider.GetRequiredService<IProjectionGraphWriter<WorkflowRunInsightReportDocument>>();
         var currentStateMaterializers = provider.GetServices<ICurrentStateProjectionMaterializer<WorkflowExecutionMaterializationContext>>();
         var artifactMaterializers = provider.GetServices<IProjectionArtifactMaterializer<WorkflowExecutionMaterializationContext>>();
         currentStateStore.Should().NotBeNull();
         documentStore.Should().NotBeNull();
+        continuationStore.Should().NotBeNull();
         relationStore.Should().NotBeNull();
         currentStateDispatcher.Should().NotBeNull();
         dispatcher.Should().NotBeNull();
+        continuationDispatcher.Should().NotBeNull();
         graphWriter.Should().NotBeNull();
         currentStateMaterializers.Should().ContainSingle();
-        artifactMaterializers.Should().ContainSingle();
+        artifactMaterializers.Should().HaveCount(2);
         provider.GetRequiredService<WorkflowExecutionCurrentStateProjector>().Should().NotBeNull();
+        provider.GetRequiredService<WorkflowExternalApprovalContinuationProjector>().Should().NotBeNull();
         provider.GetRequiredService<WorkflowRunInsightReportArtifactProjector>().Should().NotBeNull();
 
         Func<Task> act = () => StartHostedServicesAsync(provider);
@@ -130,6 +135,11 @@ public class WorkflowExecutionProjectionRegistrationTests
             keySelector: report => report.RootActorId,
             keyFormatter: key => key,
             defaultSortSelector: report => report.CreatedAt,
+            queryTakeMax: 200);
+        services.AddInMemoryDocumentProjectionStore<WorkflowExternalApprovalContinuationDocument, string>(
+            keySelector: document => document.Id,
+            keyFormatter: key => key,
+            defaultSortSelector: document => document.UpdatedAt,
             queryTakeMax: 200);
         services.AddInMemoryGraphProjectionStore();
     }

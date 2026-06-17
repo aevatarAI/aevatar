@@ -715,7 +715,7 @@ public sealed class IdempotentStepExecutionTests
 
         StepRequests(ctx).Should().BeEmpty();
         var completions = WorkflowCompletions(ctx);
-        completions.Should().HaveCount(2);
+        completions.Should().ContainSingle();
         completions.Should().OnlyContain(x => !x.Success);
         completions.Should().OnlyContain(
             x => x.Error == "fork seed start step 'missing-step' was not found");
@@ -973,6 +973,46 @@ public sealed class IdempotentStepExecutionTests
         var request = StepRequests(ctx).Single();
         request.StepParameters.AgentToolScope.Should().NotBeNull();
         request.StepParameters.AgentToolScope.AllowedToolNames.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task StartWorkflow_WithExternalApprovalYaml_ShouldDispatchEvaluatedTypedWaitOptions()
+    {
+        var workflow = new WorkflowParser().Parse(
+            """
+            name: approval_yaml
+            roles: []
+            steps:
+              - id: wait_approval
+                type: wait_signal
+                parameters:
+                  external_approval.source_id: "NyxID"
+                  external_approval.external_id_kind: "Instance_Code"
+                  external_approval.external_id: "${instance_code}"
+                  external_approval.signal_name: "approval-${input}"
+                  external_approval.callback_idempotency_key: "${concat('idem-', instance_code)}"
+                  external_approval.request_id: "${request_id}"
+            """);
+        var ctx = new RecordingEventHandlerContext();
+        var host = new RecordingStateHost();
+        var kernel = new WorkflowExecutionKernel(workflow, host);
+        var start = new StartWorkflowEvent { RunId = "run-approval", Input = "deploy" };
+        start.Parameters["instance_code"] = "APP-42";
+        start.Parameters["request_id"] = "REQ-42";
+
+        await kernel.HandleAsync(Wrap(start), ctx, CancellationToken.None);
+
+        var externalApproval = StepRequests(ctx)
+            .Single()
+            .StepParameters
+            .ExternalApproval;
+        externalApproval.Should().NotBeNull();
+        externalApproval.SourceId.Should().Be("NyxID");
+        externalApproval.ExternalIdKind.Should().Be("Instance_Code");
+        externalApproval.ExternalId.Should().Be("APP-42");
+        externalApproval.SignalName.Should().Be("approval-deploy");
+        externalApproval.CallbackIdempotencyKey.Should().Be("idem-APP-42");
+        externalApproval.RequestId.Should().Be("REQ-42");
     }
 
     // ──── Test infrastructure ────

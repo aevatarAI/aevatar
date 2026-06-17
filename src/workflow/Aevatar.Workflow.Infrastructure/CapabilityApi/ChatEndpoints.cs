@@ -29,6 +29,7 @@ public static class WorkflowCapabilityEndpoints
         group.MapPost("/workflow/runs/fork", HandleForkRun)
             .WithName("ForkWorkflowRun");
         WorkflowWebhookIngressEndpoints.Map(group);
+        WorkflowExternalApprovalCallbackEndpoints.Map(group);
 
         return app;
     }
