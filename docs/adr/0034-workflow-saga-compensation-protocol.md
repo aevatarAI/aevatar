@@ -378,3 +378,7 @@ string. A non-compensating run carries `UNSPECIFIED`; there is no distinct
 `running` saga state (the run-level status remains `running` while
 `saga_status = UNSPECIFIED`). The authoritative proto enum is the live contract;
 current operational vocabulary lives in `docs/canon/workflow-runtime.md`.
+
+## Update — 2026-06-16 (saga v1.1, #2125)
+
+Saga v1.1 adds provisional ledger accounting for in-flight side-effecting steps. `tool_call`, `connector_call`, and `secure_connector_call` steps that declare `compensation` now persist a run-owned `CompensableStepDispatchedEvent` before dispatch, creating a `PROVISIONAL` ledger entry. Success confirms it as `CONFIRMED` and fills captured output; `WorkflowStepFailureOutcome.CALLEE_CONFIRMED` drops the provisional entry; `OUTCOME_UNCERTAIN` keeps it and enters the existing reverse compensation walk. The #2126 phase deadline/budget must count provisional `OUTCOME_UNCERTAIN` entries the same as confirmed entries; dropped `CALLEE_CONFIRMED` entries do not count.

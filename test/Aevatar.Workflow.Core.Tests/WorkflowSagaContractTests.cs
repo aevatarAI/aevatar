@@ -23,6 +23,7 @@ public sealed class WorkflowSagaContractTests
             IdempotencyKey = "run-1:create_order",
             CapturedOutput = """{"orderId":"order-1"}""",
             CommittedAtUnixMs = 123456789,
+            LedgerStatus = CompensableLedgerEntryStatus.Confirmed,
         });
 
         state.CompensableLedger.Should().ContainSingle();
@@ -31,6 +32,7 @@ public sealed class WorkflowSagaContractTests
         state.CompensableLedger[0].IdempotencyKey.Should().Be("run-1:create_order");
         state.CompensableLedger[0].CapturedOutput.Should().Be("""{"orderId":"order-1"}""");
         state.CompensableLedger[0].CommittedAtUnixMs.Should().Be(123456789);
+        state.CompensableLedger[0].LedgerStatus.Should().Be(CompensableLedgerEntryStatus.Confirmed);
         state.CompensationCursor.Should().Be(1);
         state.SagaStatus.Should().Be(WorkflowSagaStatus.Compensating);
     }
@@ -55,6 +57,30 @@ public sealed class WorkflowSagaContractTests
     [Fact]
     public void WorkflowExecutionMessages_ShouldExposeCompensationEventContracts()
     {
+        AssertField<StepCompletedEvent>("failure_outcome", 15);
+        AssertRoundTrip(new StepCompletedEvent
+        {
+            RunId = "run-1",
+            StepId = "create_order",
+            Success = false,
+            Error = "timeout",
+            FailureOutcome = WorkflowStepFailureOutcome.OutcomeUncertain,
+        });
+
+        AssertField<CompensableStepDispatchedEvent>("run_id", 1);
+        AssertField<CompensableStepDispatchedEvent>("step_id", 2);
+        AssertField<CompensableStepDispatchedEvent>("compensation_step_id", 3);
+        AssertField<CompensableStepDispatchedEvent>("idempotency_key", 4);
+        AssertField<CompensableStepDispatchedEvent>("dispatched_at_unix_ms", 5);
+        AssertRoundTrip(new CompensableStepDispatchedEvent
+        {
+            RunId = "run-1",
+            StepId = "create_order",
+            CompensationStepId = "cancel_order",
+            IdempotencyKey = "run-1:create_order:1",
+            DispatchedAtUnixMs = 123456789,
+        });
+
         AssertField<CompensationRequestEvent>("run_id", 1);
         AssertField<CompensationRequestEvent>("failed_step_id", 2);
         AssertField<CompensationRequestEvent>("compensation_step_id", 3);
@@ -103,6 +129,36 @@ public sealed class WorkflowSagaContractTests
             FailedCompensationStepId = "cancel_order",
             RemainingUncompensated = 1,
             Error = "failed",
+        });
+    }
+
+    [Fact]
+    public void WorkflowSagaEnums_ShouldPreserveFieldNumbersAndRoundTrip()
+    {
+        ((int)WorkflowStepFailureOutcome.Unspecified).Should().Be(0);
+        ((int)WorkflowStepFailureOutcome.CalleeConfirmed).Should().Be(1);
+        ((int)WorkflowStepFailureOutcome.OutcomeUncertain).Should().Be(2);
+        ((int)CompensableLedgerEntryStatus.Unspecified).Should().Be(0);
+        ((int)CompensableLedgerEntryStatus.Confirmed).Should().Be(1);
+        ((int)CompensableLedgerEntryStatus.Provisional).Should().Be(2);
+
+        AssertField<CompletedStepLedgerEntry>("step_id", 1);
+        AssertField<CompletedStepLedgerEntry>("compensation_step_id", 2);
+        AssertField<CompletedStepLedgerEntry>("idempotency_key", 3);
+        AssertField<CompletedStepLedgerEntry>("captured_output", 4);
+        AssertField<CompletedStepLedgerEntry>("committed_at_unix_ms", 5);
+        AssertField<CompletedStepLedgerEntry>("ledger_status", 6);
+        AssertField<WorkflowRunState>("compensable_ledger", 25);
+        AssertField<WorkflowRunState>("compensation_cursor", 26);
+        AssertField<WorkflowRunState>("saga_status", 27);
+        AssertRoundTrip(new CompletedStepLedgerEntry
+        {
+            StepId = "create_order",
+            CompensationStepId = "cancel_order",
+            IdempotencyKey = "run-1:create_order:1",
+            CapturedOutput = "{}",
+            CommittedAtUnixMs = 123456789,
+            LedgerStatus = CompensableLedgerEntryStatus.Provisional,
         });
     }
 

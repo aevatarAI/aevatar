@@ -95,8 +95,10 @@ steps:
 
 Runtime semantics:
 
-- A successful step with a valid `compensation` declaration is added to the run actor's `compensable_ledger`.
-- If a later terminal failure occurs while the ledger is non-empty, compensation runs in reverse ledger order.
+- `tool_call`, `connector_call`, and `secure_connector_call` are the v1.1 side-effecting primitive set. When one declares `compensation`, dispatch first records a `PROVISIONAL` ledger entry before the external side-effect boundary.
+- A successful completion confirms a matching provisional entry as `CONFIRMED` and fills captured output. If no dispatch event exists, legacy success still appends one `CONFIRMED` entry.
+- A callee-confirmed failure removes the matching provisional entry. Timeout, force-fail, or stop-to-failure paths set `failure_outcome = OUTCOME_UNCERTAIN`, keep the provisional entry, and let compensation treat undoing a not-applied side effect as a safe no-op.
+- If a later terminal failure occurs while the ledger is non-empty, compensation runs in reverse ledger order over both `PROVISIONAL` and `CONFIRMED` entries.
 - The typed `WorkflowSagaStatus` moves `WORKFLOW_SAGA_STATUS_UNSPECIFIED -> WORKFLOW_SAGA_STATUS_COMPENSATING -> WORKFLOW_SAGA_STATUS_COMPENSATED_FAILED` when every compensation step succeeds (a non-compensating run stays `UNSPECIFIED`; there is no distinct `running` saga status).
 - If a compensation step fails, the run moves to `WORKFLOW_SAGA_STATUS_COMPENSATION_DEAD_LETTER` and emits `WorkflowCompensationFailedEvent` with the failed compensation step, remaining uncompensated count, and error.
 - Compensation dispatch uses self continuation. Stale or duplicate compensation completions are rejected by execution id and do not advance the cursor.
@@ -381,7 +383,7 @@ steps:
 - 常用参数：`tool`。
 - 工具输出若是 JSON object 且步骤成功，运行时会把顶层字段镜像为 `steps.<step_id>.json.<field>` 变量，供后续 `switch` / `conditional` / `while` 分支使用。
 - 当前 step 的 typed input file refs 会随 `WorkflowToolExecutionRequest` 传给 workflow tool。工具若同时支持 arguments `fileRef` 与当前输入文件上下文，显式 `fileRef` 优先；未显式选择时，只能在恰好 1 个当前输入文件时 fallback，多文件必须 fail closed 并要求调用方显式选择。
-- `tool_call` side effect 是 at-least-once。workflow actor 在 dispatch seam 解析并持久化 typed `idempotency_key`，审批 replay / crash replay 会复用同一个 key 并传给 tool invocation envelope；该 key 只用于 callee-side 幂等建议，不表示 engine-side dedup 或 exactly-once。
+- `tool_call` side effect 是 at-least-once。workflow actor 在 dispatch seam 解析并持久化 typed `idempotency_key`；若 step 声明 `compensation`，同一 seam 先写入 `PROVISIONAL` compensation ledger，再发布 tool invocation envelope。审批 replay / crash replay 会复用同一个 key；该 key 只用于 callee-side 幂等建议，不表示 engine-side dedup 或 exactly-once。
 - 需要人工审批的 direct `tool_call` 不把 `ApprovalPending` 当作失败完成。`ToolCallModule` 将原始 tool name、arguments、`execution_id`、`tool_call_id`、`approval_request_id` 持久化到 workflow actor state，并发布 `WorkflowSuspendedEvent.tool_approval`。该 suspension 只暴露审批对账键，不暴露工具参数。
 - tool approval resume 使用 `WorkflowResumedEvent.tool_approval` nested payload，仅携带 `execution_id`、`tool_call_id`、`approval_request_id`。客户端不得在 resume payload 中提交 tool name 或 arguments；approved replay 必须从 actor pending state 读取原始工具和参数，并向 tool middleware 传递 typed `ToolApprovalGrant`。
 - resume 对账按 `run_id + step_id + execution_id + tool_call_id + approval_request_id` 精确匹配。approved 后重放原工具；rejected / timed out / non-pending termination fail closed 并清理 pending state；stale 或 mismatched resume event 直接忽略。
@@ -636,7 +638,7 @@ steps:
 
 - 作用：调用外部 connector（HTTP/CLI/MCP 等），支持重试和降级策略。
 - 常用参数：`connector`、`operation`、`retry`、`timeout_ms`、`optional`、`on_missing`、`on_error`。
-- `connector_call` side effect 是 at-least-once。workflow actor 按 logical run id + step id + logical attempt 解析并持久化 typed `idempotency_key`，connector physical retry / pending replay 复用同一个 key；HTTP connector 会在 key 非空时发送 `Idempotency-Key` header，其他 connector 可按自身边界使用或忽略。该 key 不提供 engine-side dedup 或 exactly-once。
+- `connector_call` / `secure_connector_call` side effect 是 at-least-once。workflow actor 按 logical run id + step id + logical attempt 解析并持久化 typed `idempotency_key`；若 step 声明 `compensation`，同一 seam 先写入 `PROVISIONAL` compensation ledger，再发布 connector request。connector physical retry / pending replay 复用同一个 key；HTTP connector 会在 key 非空时发送 `Idempotency-Key` header，其他 connector 可按自身边界使用或忽略。该 key 不提供 engine-side dedup 或 exactly-once。
 - Ergonomic 说明（统一归一化到 `connector_call`）：
   - `http_get`/`http_post`/`http_put`/`http_delete`：自动补 `method=GET/POST/PUT/DELETE`（若未显式提供）。
   - `mcp_call`：若只写 `tool` 且未写 `operation/action`，会自动补 `operation=<tool>`。
