@@ -60,6 +60,8 @@ public sealed class AgentToolVoiceInvoker : IVoiceToolInvoker
         var agentToolContext = await ResolveToolContextAsync(toolContext, ct);
         if (agentToolContext is null)
             return await tool.ExecuteAsync(arguments, ct);
+        if (!agentToolContext.ToolVisibility.Allows(toolName))
+            throw new InvalidOperationException($"Tool '{toolName}' not found");
 
         using var scope = AgentToolContextScope.Push(agentToolContext);
         return await tool.ExecuteAsync(arguments, ct);

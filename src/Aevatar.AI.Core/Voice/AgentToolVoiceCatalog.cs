@@ -50,7 +50,9 @@ public sealed class AgentToolVoiceCatalog : IVoiceToolCatalog
                 return [];
 
             using var scope = AgentToolContextScope.Push(agentToolContext);
-            return await DiscoverAllToolsAsync(_toolSources, _logger, ct);
+            return FilterVisibleDefinitions(
+                await DiscoverAllToolsAsync(_toolSources, _logger, ct),
+                agentToolContext.ToolVisibility);
         }
 
         while (true)
@@ -164,5 +166,17 @@ public sealed class AgentToolVoiceCatalog : IVoiceToolCatalog
         }
 
         return definitions.Values.ToList();
+    }
+
+    private static IReadOnlyList<VoiceToolDefinition> FilterVisibleDefinitions(
+        IReadOnlyList<VoiceToolDefinition> definitions,
+        AgentToolVisibilityScope visibility)
+    {
+        if (!visibility.IsRestricted)
+            return definitions;
+
+        return definitions
+            .Where(definition => visibility.Allows(definition.Name))
+            .ToList();
     }
 }

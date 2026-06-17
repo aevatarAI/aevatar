@@ -471,6 +471,7 @@ public sealed class PolicyAwareVoiceEndpointsTests
 
     [Theory]
     [InlineData("remote-audio-unavailable", "remote_audio_transport_unavailable")]
+    [InlineData("credential-unavailable", "voice_credential_unavailable")]
     [InlineData("already-attached", "Voice transport already attached.")]
     public async Task PolicyAwareVoice_WhenAttachFailsAfterUpgrade_ShouldCloseWebSocketWithPolicyReason(
         string failureCase,
@@ -483,6 +484,8 @@ public sealed class PolicyAwareVoiceEndpointsTests
         {
             "remote-audio-unavailable" => new RecordingVolatileMediaStreamPort(
                 attachAsync: static _ => throw new VoiceVolatileMediaStreamUnavailableException()),
+            "credential-unavailable" => new RecordingVolatileMediaStreamPort(
+                attachAsync: static _ => throw new VoiceVolatileToolCredentialUnavailableException()),
             "already-attached" => new RecordingVolatileMediaStreamPort(
                 attachAsync: static _ => throw new InvalidOperationException("already attached")),
             _ => throw new ArgumentOutOfRangeException(nameof(failureCase), failureCase, null),

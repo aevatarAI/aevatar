@@ -92,6 +92,61 @@ public class AgentToolVoiceCatalogTests
         source.DiscoverCalls.Should().Be(2);
     }
 
+    [Fact]
+    public async Task DiscoverAsync_WithCredentialRef_ShouldMapVoiceBusinessContextAndRestrictVisibleTools()
+    {
+        var allowedTool = new FakeAgentTool("door.open", "allowed", "{}");
+        var deniedTool = new FakeAgentTool("lights.toggle", "denied", "{}");
+        var source = new CapturingToolSource([allowedTool, deniedTool]);
+        var credentials = new StubCredentialProvider(("voice-tool:ref-2", "caller-token-456"));
+        var catalog = new AgentToolVoiceCatalog([source], credentials);
+        var toolContext = CreateFullToolContext("voice-tool:ref-2");
+
+        var definitions = await catalog.DiscoverAsync(toolContext);
+
+        definitions.Should().ContainSingle().Which.Name.Should().Be("door.open");
+        var captured = source.CapturedContexts.Should().ContainSingle().Which;
+        captured.Credentials.NyxIdAccessToken.Should().Be("caller-token-456");
+        captured.Caller.ScopeId.Should().Be("caller-scope-1");
+        captured.Caller.OwnerSubject.Should().Be("owner-subject-1");
+        captured.Caller.ResponseId.Should().Be("response-1");
+        captured.Channel.Platform.Should().Be("lark");
+        captured.Channel.SenderId.Should().Be("sender-1");
+        captured.Channel.RegistrationScopeId.Should().Be("registration-scope-1");
+        captured.Channel.MessageId.Should().Be("message-1");
+        captured.Channel.PlatformMessageId.Should().Be("platform-message-1");
+        captured.Channel.DeliveryTargetId.Should().Be("delivery-1");
+        captured.SenderBinding.BindingId.Should().Be("sender-binding-1");
+        captured.Routing.NyxIdRoutePreference.Should().Be("direct");
+        captured.ConnectedServices.ContextJson.Should().Be("""{"service":"ctx"}""");
+        captured.ToolVisibility.IsRestricted.Should().BeTrue();
+        captured.ToolVisibility.Allows("door.open").Should().BeTrue();
+        captured.ToolVisibility.Allows("lights.toggle").Should().BeFalse();
+    }
+
+    private static VoiceToolExecutionContext CreateFullToolContext(string credentialRef)
+    {
+        var toolContext = new VoiceToolExecutionContext
+        {
+            CredentialRef = credentialRef,
+            ExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)),
+            CallerScopeId = " caller-scope-1 ",
+            OwnerSubject = " owner-subject-1 ",
+            ResponseId = " response-1 ",
+            ChannelPlatform = " lark ",
+            ChannelSenderId = " sender-1 ",
+            ChannelRegistrationScopeId = " registration-scope-1 ",
+            ChannelMessageId = " message-1 ",
+            ChannelPlatformMessageId = " platform-message-1 ",
+            ChannelDeliveryTargetId = " delivery-1 ",
+            SenderBindingId = " sender-binding-1 ",
+            NyxIdRoutePreference = " direct ",
+            ConnectedServicesContextJson = """ {"service":"ctx"} """,
+        };
+        toolContext.AllowedToolNames.Add(" door.open ");
+        return toolContext;
+    }
+
     private sealed class StubToolSource(params IAgentTool[] tools) : IAgentToolSource
     {
         public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
@@ -136,6 +191,18 @@ public class AgentToolVoiceCatalogTests
 
         public void Dispose()
         {
+        }
+    }
+
+    private sealed class CapturingToolSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource
+    {
+        public List<AgentToolExecutionContext> CapturedContexts { get; } = [];
+
+        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+        {
+            _ = ct;
+            CapturedContexts.Add(AgentToolRequestContext.Current!);
+            return Task.FromResult(tools);
         }
     }
 
