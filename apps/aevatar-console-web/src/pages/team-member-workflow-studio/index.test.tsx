@@ -585,6 +585,115 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(studioApi.bindMemberWorkflow).not.toHaveBeenCalled();
   });
 
+  it("runs the current unsaved new workflow draft without creating a member first", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/new/workflow",
+    );
+    (runtimeRunsApi.streamDraftRun as jest.Mock).mockResolvedValue(
+      createSseResponse(),
+    );
+    (parseBackendSSEStream as jest.Mock).mockReturnValue(createWorkflowInvokeEvents());
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    const runDraftButton = await screen.findByRole("button", { name: "Run" });
+    expect(runDraftButton).toBeEnabled();
+    fireEvent.click(runDraftButton);
+    const draftRunPanel = await screen.findByLabelText("Draft run panel");
+    expect(
+      within(draftRunPanel).getByRole("button", { name: "Start draft run" }),
+    ).toBeDisabled();
+    expect(
+      within(draftRunPanel).getByRole("button", { name: "Start draft run" }),
+    ).toHaveAttribute(
+      "title",
+      "Add at least one step before running this workflow draft.",
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Add first step" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Insert LLM call node" }),
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
+    });
+    expect(screen.getByText("Unsaved changes")).toBeTruthy();
+
+    fireEvent.change(within(draftRunPanel).getByRole("textbox"), {
+      target: { value: "Run the unsaved workflow" },
+    });
+    await waitFor(() => {
+      expect(
+        within(draftRunPanel).getByRole("button", { name: "Start draft run" }),
+      ).toBeEnabled();
+    });
+    fireEvent.click(
+      within(draftRunPanel).getByRole("button", { name: "Start draft run" }),
+    );
+
+    await waitFor(() => {
+      expect(runtimeRunsApi.streamDraftRun).toHaveBeenCalled();
+    });
+    expect(runtimeRunsApi.streamDraftRun).toHaveBeenCalledWith(
+      "scope-1",
+      expect.objectContaining({
+        prompt: "Run the unsaved workflow",
+        workflowYamls: [expect.any(String)],
+      }),
+      expect.any(AbortSignal),
+    );
+    const draftRunPayload = (runtimeRunsApi.streamDraftRun as jest.Mock).mock
+      .calls[0][1];
+    const draftRunYaml = draftRunPayload.workflowYamls[0];
+    expect(draftRunYaml).toContain("name: Untitled member");
+    expect(draftRunYaml).toContain("id: llm_step");
+    expect(draftRunYaml).toContain("type: llm_call");
+    expect(studioApi.saveWorkflow).not.toHaveBeenCalled();
+    expect(studioApi.createMember).not.toHaveBeenCalled();
+    expect(studioApi.updateMemberImplementationRef).not.toHaveBeenCalled();
+    expect(studioApi.bindMemberWorkflow).not.toHaveBeenCalled();
+    expect(runtimeRunsApi.streamChat).not.toHaveBeenCalled();
+  });
+
+  it("blocks draft runs while the selected new workflow node configuration is invalid", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/new/workflow",
+    );
+    (runtimeRunsApi.streamDraftRun as jest.Mock).mockResolvedValue(
+      createSseResponse(),
+    );
+    (parseBackendSSEStream as jest.Mock).mockReturnValue(createWorkflowInvokeEvents());
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Add first step" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Insert LLM call node" }),
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
+    });
+    fireEvent.change(screen.getByLabelText("Instruction"), {
+      target: { value: "" },
+    });
+
+    expect(await screen.findByText("Instruction is required.")).toBeTruthy();
+    const runDraftButton = screen.getByRole("button", { name: "Run" });
+    expect(runDraftButton).toBeDisabled();
+    expect(runDraftButton).toHaveAttribute("title", "Instruction is required.");
+    fireEvent.click(runDraftButton);
+
+    await flushAsyncWork();
+    expect(screen.queryByLabelText("Draft run panel")).toBeNull();
+    expect(screen.getByText("Instruction is required.")).toBeTruthy();
+    expect(runtimeRunsApi.streamDraftRun).not.toHaveBeenCalled();
+    expect(studioApi.serializeYaml).not.toHaveBeenCalled();
+  });
+
   it("opens the node library, inserts a first step, and saves a new linked workflow member", async () => {
     window.history.replaceState(
       {},

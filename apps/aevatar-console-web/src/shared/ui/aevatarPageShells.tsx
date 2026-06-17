@@ -74,6 +74,7 @@ type AevatarPanelProps = {
 type AevatarContextDrawerProps = {
   children: React.ReactNode;
   extra?: React.ReactNode;
+  mobilePlacement?: 'bottom' | 'right';
   onClose: () => void;
   open: boolean;
   subtitle?: React.ReactNode;
@@ -511,25 +512,37 @@ export const AevatarPanel: React.FC<AevatarPanelProps> = ({
 export const AevatarContextDrawer: React.FC<AevatarContextDrawerProps> = ({
   children,
   extra,
+  mobilePlacement = 'right',
   onClose,
   open,
   subtitle,
   title,
   width = AEVATAR_GLOBAL_UI_SPEC.tokens.inspectorWidth,
 }) => {
+  const screens = Grid.useBreakpoint();
   const { token } = theme.useToken();
+  const placement = screens.md ? 'right' : mobilePlacement;
+  const isBottomPlacement = placement === 'bottom';
 
   return (
     <Drawer
       destroyOnHidden
       onClose={onClose}
       open={open}
+      placement={placement}
+      rootClassName={`aevatar-context-drawer-${placement}`}
       size={
+        !isBottomPlacement &&
         width >= AEVATAR_GLOBAL_UI_SPEC.tokens.inspectorWidth
           ? 'large'
           : 'default'
       }
-      styles={{ body: aevatarDrawerBodyStyle }}
+      styles={{
+        body: aevatarDrawerBodyStyle,
+        ...(isBottomPlacement
+          ? { wrapper: { height: '76vh', maxHeight: '88vh', width: '100%' } }
+          : null),
+      }}
       title={
         <Space orientation="vertical" size={2}>
           <Typography.Text strong>{title}</Typography.Text>

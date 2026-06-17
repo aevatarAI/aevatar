@@ -8729,7 +8729,7 @@ const StudioPage: React.FC = () => {
                   trimOptional(workbenchPublishedServiceRevision?.revisionId) ||
                   trimOptional(workbenchPublishedService?.deploymentStatus) ||
               t("pages.studio.index.published.member", "Published member"),
-              }) || t("pages.studio.index.published.member.ready", "Published member ready for Bind, Invoke, or Observe.")
+              }) || t("pages.studio.index.published.member.ready", "Published member ready for callable runtime inspection.")
             : formatStudioAssetMeta({
                 primary: currentMemberImplementationLabel,
                 secondary:

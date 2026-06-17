@@ -74,9 +74,8 @@ type SavedWorkflowDraft = {
   readonly workflow: StudioWorkflowFile;
 };
 
-type RunActiveMemberVariables = {
+type RunCurrentDraftVariables = {
   readonly document: StudioWorkflowDocument;
-  readonly memberId: string;
   readonly runMessage: string;
   readonly title: string;
 };
@@ -174,7 +173,7 @@ type TeamMemberWorkflowStudioState = {
   readonly teamHref: string;
   readonly teamsHref: string;
   readonly canOpenDraftRunPanel: boolean;
-  readonly canRunActiveMember: boolean;
+  readonly canRunCurrentDraft: boolean;
   readonly canSave: boolean;
   readonly canViewYaml: boolean;
   readonly closeNodeLibrary: () => void;
@@ -187,9 +186,9 @@ type TeamMemberWorkflowStudioState = {
   readonly deleteSelectedNode: () => void;
   readonly dirty: boolean;
   readonly emptyDescription: string;
-  readonly runActiveMember: () => void;
-  readonly activeMemberRunPending: boolean;
-  readonly activeMemberRunPlaceholderReason: string;
+  readonly runCurrentDraft: () => void;
+  readonly currentDraftRunPending: boolean;
+  readonly currentDraftRunPlaceholderReason: string;
   readonly executionDetail: StudioExecutionDetail | null;
   readonly executionError: string;
   readonly executionRunMessage: string;
@@ -1678,15 +1677,14 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       void message.success("Workflow YAML imported.");
     },
   });
-  const activeMemberRunMutation = useMutation({
+  const currentDraftRunMutation = useMutation({
     mutationFn: async ({
       document,
-      memberId,
       runMessage,
       title,
-    }: RunActiveMemberVariables): Promise<StudioExecutionDetail> => {
-      if (!route.scopeId || !memberId) {
-        throw new Error("Resolve a workflow member before running its draft.");
+    }: RunCurrentDraftVariables): Promise<StudioExecutionDetail> => {
+      if (!route.scopeId) {
+        throw new Error("Resolve the current workspace before running the draft.");
       }
 
       const normalizedTitle = trimOptional(title) || "Workflow draft";
@@ -1699,7 +1697,8 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         availableStepTypes: AVAILABLE_STEP_TYPES,
       });
       const startedAtUtc = new Date().toISOString();
-      const executionId = `draft-run:${memberId}:${Date.now().toString(36)}`;
+      const executionScopeKey = trimOptional(route.memberId) || "current-workflow";
+      const executionId = `draft-run:${executionScopeKey}:${Date.now().toString(36)}`;
       const frames: StudioExecutionFrame[] = [];
       const accumulator = createRuntimeEventAccumulator();
       const controller = new AbortController();
@@ -2139,7 +2138,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
 
     void message.info("No published member status is visible yet.");
   }, [memberQuery, route.memberId, route.mode, route.scopeId, routeDraftWorkflowId, workflowQuery]);
-  const executionStatus = activeMemberRunMutation.isPending
+  const executionStatus = currentDraftRunMutation.isPending
     ? "running"
     : resolveWorkflowExecutionStatus(executionDetail);
   const serializeCurrentYaml = React.useCallback(async (options?: {
@@ -2228,37 +2227,35 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
 
     void serializeCurrentYaml();
   }, [serializeCurrentYaml, yamlPanelOpen]);
-  const canRunActiveMember = Boolean(
-    route.mode === "existing" &&
-      route.scopeId &&
-      route.memberId &&
+  const canRunCurrentDraft = Boolean(
+    route.scopeId &&
       editableDocument &&
       workflowHasSteps &&
-      !activeMemberRunMutation.isPending,
+      !selectedStepConfigurationError &&
+      !currentDraftRunMutation.isPending,
   );
   const canOpenDraftRunPanel = Boolean(
-    route.mode === "existing" &&
-      route.scopeId &&
-      route.memberId &&
+    route.scopeId &&
       editableDocument &&
+      !selectedStepConfigurationError &&
       !workflowLoading,
   );
-  const activeMemberRunPlaceholderReason =
-    route.mode === "new"
-      ? "Create and link a workflow member before running its draft."
-      : !route.memberId
-        ? "Resolve the workflow member before running its draft."
-        : !editableDocument
-          ? "Load the workflow draft before running it."
-          : !route.scopeId
-            ? "Resolve the current workspace before running the draft."
-            : activeMemberRunMutation.isPending
-              ? "Workflow draft run is already starting."
-              : linkedWorkflowMissing
-                ? "Run the local draft sketch. Saving remains limited until a stable workflow draft is linked."
-                : !workflowHasSteps
-                  ? "Add at least one step before running this workflow draft."
-                  : "Run the current workflow draft.";
+  const currentDraftRunPlaceholderReason =
+    !editableDocument
+      ? "Load the workflow draft before running it."
+      : !route.scopeId
+        ? "Resolve the current workspace before running the draft."
+        : currentDraftRunMutation.isPending
+          ? "Workflow draft run is already starting."
+          : selectedStepConfigurationError
+            ? selectedStepConfigurationError
+          : !workflowHasSteps
+            ? "Add at least one step before running this workflow draft."
+            : linkedWorkflowMissing
+              ? "Run the local draft sketch. Saving remains limited until a stable workflow draft is linked."
+              : route.mode === "new"
+                ? "Run the current unsaved workflow draft."
+                : "Run the current workflow draft.";
   const savePlaceholderReason =
     route.mode === "new"
       ? !editableDocument
@@ -2567,7 +2564,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     teamHref,
     teamsHref,
     canOpenDraftRunPanel,
-    canRunActiveMember,
+    canRunCurrentDraft,
     canSave,
     canViewYaml: Boolean(editableDocument && !workflowLoading),
     closeNodeLibrary: () => setNodeLibraryOpen(false),
@@ -2585,24 +2582,25 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         : linkedWorkflowMissing
           ? "No workflow draft is linked to this member yet. Build or paste a workflow, then save to create a reusable draft."
           : "Start this workflow by adding the first step.",
-    runActiveMember: () => {
+    runCurrentDraft: () => {
       if (
-        !route.memberId ||
+        !route.scopeId ||
         !editableDocument ||
-        activeMemberRunMutation.isPending
+        !workflowHasSteps ||
+        selectedStepConfigurationError ||
+        currentDraftRunMutation.isPending
       ) {
         return;
       }
 
-      activeMemberRunMutation.mutate({
+      currentDraftRunMutation.mutate({
         document: editableDocument,
-        memberId: route.memberId,
         runMessage: trimOptional(executionRunMessage),
         title: activeMemberTitle,
       });
     },
-    activeMemberRunPending: activeMemberRunMutation.isPending,
-    activeMemberRunPlaceholderReason,
+    currentDraftRunPending: currentDraftRunMutation.isPending,
+    currentDraftRunPlaceholderReason,
     executionDetail,
     executionError,
     executionRunMessage,
@@ -2627,6 +2625,10 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     nodeLibraryOpen,
     openNodeLibrary: () => setNodeLibraryOpen(true),
     openDraftRunPanel: () => {
+      if (!canOpenDraftRunPanel) {
+        return;
+      }
+
       setSelectedEdgeId("");
       setSelectedNodeId("");
       setSelectedStepConfigurationError("");
