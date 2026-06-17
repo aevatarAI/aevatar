@@ -334,6 +334,79 @@ public sealed class WorkflowSpreadsheetExtractToolTests
         output.ResultJson.Should().NotContain("stream too large");
     }
 
+    [Fact]
+    public async Task WorkflowSpreadsheetExtractTool_ShouldRejectPackageEntryCountOverConfiguredLimit()
+    {
+        var workbookBytes = BuildWorkbookWithExtraEntries(3);
+        var maxPackageEntries = CountPackageEntries(workbookBytes) - 1;
+        var fileRef = BuildXlsxFileRef("entry-count-workbook", "entry-count.xlsx", workbookBytes);
+
+        var output = await ExecuteSpreadsheetExtractAsync(
+            fileRef,
+            workbookBytes,
+            new WorkflowSpreadsheetExtractOptions
+            {
+                MaxPackageEntries = maxPackageEntries,
+            });
+
+        using var document = JsonDocument.Parse(output.ResultJson);
+        document.RootElement.GetProperty("error").GetString().Should().Be("workbook_too_large");
+        document.RootElement.GetProperty("detail").GetString()
+            .Should().Contain($"exceeds {maxPackageEntries} entries");
+        output.ResultJson.Should().NotContain("entry-count-secret");
+        output.ResultJson.Should().NotContain("xl/extra");
+    }
+
+    [Fact]
+    public async Task WorkflowSpreadsheetExtractTool_ShouldRejectPackagePartOverConfiguredByteLimit()
+    {
+        const int maxPackageEntryBytes = 1024;
+        var workbookBytes = BuildWorkbookWithExtraEntry(
+            "xl/extra/oversized-part.xml",
+            "package-part-secret-" + new string('x', maxPackageEntryBytes + 1));
+        var fileRef = BuildXlsxFileRef("large-part-workbook", "large-part.xlsx", workbookBytes);
+
+        var output = await ExecuteSpreadsheetExtractAsync(
+            fileRef,
+            workbookBytes,
+            new WorkflowSpreadsheetExtractOptions
+            {
+                MaxPackageEntryBytes = maxPackageEntryBytes,
+            });
+
+        using var document = JsonDocument.Parse(output.ResultJson);
+        document.RootElement.GetProperty("error").GetString().Should().Be("workbook_too_large");
+        document.RootElement.GetProperty("detail").GetString()
+            .Should().Contain($"package part exceeds {maxPackageEntryBytes} bytes");
+        output.ResultJson.Should().NotContain("package-part-secret");
+        output.ResultJson.Should().NotContain("oversized-part.xml");
+    }
+
+    [Fact]
+    public async Task WorkflowSpreadsheetExtractTool_ShouldRejectSharedStringCountOverConfiguredLimit()
+    {
+        var workbookBytes = BuildWorkbook(("Sheet1", new[]
+        {
+            new[] { "first-shared-string", "shared-string-secret" },
+        }));
+        var fileRef = BuildXlsxFileRef("shared-string-limit-workbook", "shared-string-limit.xlsx", workbookBytes);
+
+        var output = await ExecuteSpreadsheetExtractAsync(
+            fileRef,
+            workbookBytes,
+            new WorkflowSpreadsheetExtractOptions
+            {
+                MaxSharedStrings = 1,
+            });
+
+        using var document = JsonDocument.Parse(output.ResultJson);
+        document.RootElement.GetProperty("error").GetString().Should().Be("workbook_too_large");
+        document.RootElement.GetProperty("detail").GetString()
+            .Should().Contain("shared strings exceed 1 entries");
+        output.ResultJson.Should().NotContain("first-shared-string");
+        output.ResultJson.Should().NotContain("shared-string-secret");
+    }
+
     [Theory]
     [InlineData("legacy.xls")]
     [InlineData("macro.xlsm")]
@@ -568,6 +641,38 @@ public sealed class WorkflowSpreadsheetExtractToolTests
         return tools.Should().ContainSingle(x => x.Name == "spreadsheet_extract").Subject;
     }
 
+    private static async Task<WorkflowToolExecutionResult> ExecuteSpreadsheetExtractAsync(
+        ApplicationWorkflowFileRef fileRef,
+        byte[] workbookBytes,
+        WorkflowSpreadsheetExtractOptions options)
+    {
+        var tool = await GetSpreadsheetExtractToolAsync(
+            new StaticWorkflowFileArtifactReadPort(fileRef, new MemoryStream(workbookBytes)),
+            options);
+
+        return await tool.ExecuteAsync(new WorkflowToolExecutionRequest(
+            BuildSpreadsheetExtractArguments(fileRef),
+            "run-1",
+            "extract",
+            "exec-1",
+            "call-1",
+            "scope-1",
+            new ProtoWorkflowCallerCredential()));
+    }
+
+    private static ApplicationWorkflowFileRef BuildXlsxFileRef(
+        string fileId,
+        string fileName,
+        byte[] workbookBytes) =>
+        new()
+        {
+            FileId = fileId,
+            SourceKind = ApplicationWorkflowFileSourceKind.ChatInput,
+            FileName = fileName,
+            MediaType = XlsxMediaType,
+            SizeBytes = workbookBytes.Length,
+        };
+
     private static string BuildSpreadsheetExtractArguments(ApplicationWorkflowFileRef fileRef)
     {
         var payload = new Dictionary<string, object?>
@@ -627,7 +732,14 @@ public sealed class WorkflowSpreadsheetExtractToolTests
     private static byte[] BuildWorkbook(
         IReadOnlyList<(string Name, IReadOnlyList<string[]> Rows)> sheets,
         bool includeMacroProject,
-        bool includeExternalRelationship)
+        bool includeExternalRelationship) =>
+        BuildWorkbook(sheets, includeMacroProject, includeExternalRelationship, []);
+
+    private static byte[] BuildWorkbook(
+        IReadOnlyList<(string Name, IReadOnlyList<string[]> Rows)> sheets,
+        bool includeMacroProject,
+        bool includeExternalRelationship,
+        IReadOnlyList<(string Name, string Content)> extraEntries)
     {
         using var stream = new MemoryStream();
         using (var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true))
@@ -649,9 +761,39 @@ public sealed class WorkflowSpreadsheetExtractToolTests
 
             if (includeMacroProject)
                 AddEntry(archive, "xl/vbaProject.bin", "macro");
+
+            foreach (var extraEntry in extraEntries)
+            {
+                AddEntry(archive, extraEntry.Name, extraEntry.Content);
+            }
         }
 
         return stream.ToArray();
+    }
+
+    private static byte[] BuildWorkbookWithExtraEntries(int extraEntryCount) =>
+        BuildWorkbook(
+            [("Sheet1", new[] { new[] { "entry-count-visible" } })],
+            includeMacroProject: false,
+            includeExternalRelationship: false,
+            Enumerable.Range(0, extraEntryCount)
+                .Select(static index => (
+                    Name: $"xl/extra/entry{index + 1}.xml",
+                    Content: $"entry-count-secret-{index + 1}"))
+                .ToArray());
+
+    private static byte[] BuildWorkbookWithExtraEntry(string entryName, string content) =>
+        BuildWorkbook(
+            [("Sheet1", new[] { new[] { "part-size-visible" } })],
+            includeMacroProject: false,
+            includeExternalRelationship: false,
+            [(entryName, content)]);
+
+    private static int CountPackageEntries(byte[] workbookBytes)
+    {
+        using var stream = new MemoryStream(workbookBytes, writable: false);
+        using var archive = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: false);
+        return archive.Entries.Count;
     }
 
     private static byte[] BuildEncryptedWorkbookPackage()
