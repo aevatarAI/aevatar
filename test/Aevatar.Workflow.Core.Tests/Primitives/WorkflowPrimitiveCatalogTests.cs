@@ -26,4 +26,21 @@ public sealed class WorkflowPrimitiveCatalogTests
         WorkflowPrimitiveCatalog.ToCanonicalType("publish").Should().Be("emit");
         WorkflowPrimitiveCatalog.BuiltInCanonicalTypes.Should().Contain("notify");
     }
+
+    [Fact]
+    public void IsSideEffectingPrimitive_ShouldOnlyIncludeSagaV11ExternalDispatchPrimitives()
+    {
+        new[] { "tool_call", "connector_call", "secure_connector_call", "bridge_call", "http_post" }
+            .Should()
+            .OnlyContain(stepType => WorkflowPrimitiveCatalog.IsSideEffectingPrimitive(stepType));
+
+        new[]
+            {
+                "llm_call", "evaluate", "reflect", "emit", "notify", "workflow_call",
+                "dynamic_workflow", "lease", "human_input", "human_approval", "wait_signal",
+                "transform", "assign", "retrieve_facts", "cache",
+            }
+            .Should()
+            .OnlyContain(stepType => !WorkflowPrimitiveCatalog.IsSideEffectingPrimitive(stepType));
+    }
 }

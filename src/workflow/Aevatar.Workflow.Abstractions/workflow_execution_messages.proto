@@ -29,6 +29,12 @@ enum WorkflowSagaStatus {
   WORKFLOW_SAGA_STATUS_COMPENSATION_DEAD_LETTER = 3;
 }
 
+enum WorkflowStepFailureOutcome {
+  WORKFLOW_STEP_FAILURE_OUTCOME_UNSPECIFIED = 0;
+  WORKFLOW_STEP_FAILURE_OUTCOME_CALLEE_CONFIRMED = 1;
+  WORKFLOW_STEP_FAILURE_OUTCOME_OUTCOME_UNCERTAIN = 2;
+}
+
 message WorkflowFileRef {
   string file_id = 1;
   string artifact_id = 2;
@@ -370,6 +376,7 @@ message StepCompletedEvent {
   string execution_id = 12;
   WorkflowUsageMetrics usage = 13;
   VoteAgreementDecision vote_agreement_decision = 14;
+  WorkflowStepFailureOutcome failure_outcome = 15;
 }
 message SubWorkflowInvokeRequestedEvent
 {
@@ -849,6 +856,15 @@ message StaleStepCompletionRejectedEvent
   string run_id = 2;
   string expected_execution_id = 3;
   string received_execution_id = 4;
+}
+
+message CompensableStepDispatchedEvent
+{
+  string run_id = 1;
+  string step_id = 2;
+  string compensation_step_id = 3;
+  string idempotency_key = 4;
+  int64 dispatched_at_unix_ms = 5;
 }
 
 message CompensationRequestEvent

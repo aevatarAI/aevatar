@@ -21,6 +21,116 @@ namespace Aevatar.Workflow.Core.Tests;
 public sealed class WorkflowRunGAgentSagaCompensationTests
 {
     [Fact]
+    public async Task InFlightSideEffectingCompensableTimeout_ShouldDispatchProvisionalCompensation()
+    {
+        var harness = await CreateStartedRunAsync(InFlightCompensationWorkflowYaml());
+        var request = StepRequests(harness.Publisher, "create_order").Single();
+        var timeout = ScheduledTimeouts(harness.Publisher)
+            .Should()
+            .ContainSingle(x => x.Event is WorkflowStepTimeoutFiredEvent)
+            .Subject;
+        harness.Publisher.Published.Clear();
+
+        await harness.Agent.HandleEventAsync(SelfEnvelope(
+            harness.RunId,
+            new WorkflowStepTimeoutFiredEvent
+            {
+                RunId = harness.RunId,
+                StepId = "create_order",
+                TimeoutMs = 500,
+            },
+            MetadataFor(timeout)));
+
+        harness.Agent.State.CompensableLedger
+            .Should()
+            .ContainSingle()
+            .Which.Should().BeEquivalentTo(new CompletedStepLedgerEntry
+            {
+                StepId = "create_order",
+                CompensationStepId = "cancel_order",
+                IdempotencyKey = request.IdempotencyKey,
+                CapturedOutput = string.Empty,
+                LedgerStatus = CompensableLedgerEntryStatus.Provisional,
+            }, options => options.Excluding(x => x.CommittedAtUnixMs));
+
+        var compensation = CompensationRequests(harness.Publisher).Should().ContainSingle().Subject;
+        compensation.CompensationStepId.Should().Be("cancel_order");
+        compensation.IdempotencyKey.Should().Be(request.IdempotencyKey);
+        compensation.CapturedOutput.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CalleeConfirmedFailureAfterProvisionalDispatch_ShouldDropLedgerAndNotCompensate()
+    {
+        var harness = await CreateStartedRunAsync(InFlightCompensationWorkflowYaml());
+        var request = StepRequests(harness.Publisher, "create_order").Single();
+        harness.Agent.State.CompensableLedger.Should().ContainSingle()
+            .Which.LedgerStatus.Should().Be(CompensableLedgerEntryStatus.Provisional);
+        harness.Publisher.Published.Clear();
+
+        await harness.Agent.HandleEventAsync(SelfEnvelope(harness.RunId, new StepCompletedEvent
+        {
+            RunId = harness.RunId,
+            StepId = "create_order",
+            Success = false,
+            Error = "callee rejected cleanly",
+            ExecutionId = request.ExecutionId,
+            FailureOutcome = WorkflowStepFailureOutcome.CalleeConfirmed,
+        }));
+
+        harness.Agent.State.CompensableLedger.Should().BeEmpty();
+        CompensationRequests(harness.Publisher).Should().BeEmpty();
+        CommittedEvents<WorkflowCompensationFailedEvent>(harness.CommittedPublisher).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task SuccessfulCompletionAfterProvisionalDispatch_ShouldConfirmSingleLedgerEntry()
+    {
+        var harness = await CreateStartedRunAsync(InFlightCompensationWorkflowYaml());
+        var request = StepRequests(harness.Publisher, "create_order").Single();
+        harness.Agent.State.CompensableLedger.Should().ContainSingle()
+            .Which.LedgerStatus.Should().Be(CompensableLedgerEntryStatus.Provisional);
+        harness.Publisher.Published.Clear();
+
+        await harness.Agent.HandleEventAsync(SelfEnvelope(harness.RunId, new StepCompletedEvent
+        {
+            RunId = harness.RunId,
+            StepId = "create_order",
+            Success = true,
+            Output = """{"orderId":"order-1"}""",
+            ExecutionId = request.ExecutionId,
+        }));
+
+        harness.Agent.State.CompensableLedger.Should().ContainSingle()
+            .Which.Should().BeEquivalentTo(new CompletedStepLedgerEntry
+            {
+                StepId = "create_order",
+                CompensationStepId = "cancel_order",
+                IdempotencyKey = request.IdempotencyKey,
+                CapturedOutput = """{"orderId":"order-1"}""",
+                LedgerStatus = CompensableLedgerEntryStatus.Confirmed,
+            }, options => options.Excluding(x => x.CommittedAtUnixMs));
+    }
+
+    [Fact]
+    public async Task LegacySuccessfulCompletionWithoutDispatchEvent_ShouldAppendConfirmedLedgerEntry()
+    {
+        var harness = await CreateStartedRunAsync(LegacyCompensationWorkflowYaml());
+
+        await CompleteStepAsync(harness, "create_order", "order-output");
+
+        harness.Agent.State.CompensableLedger.Should().ContainSingle()
+            .Which.Should().BeEquivalentTo(new CompletedStepLedgerEntry
+            {
+                StepId = "create_order",
+                CompensationStepId = "cancel_order",
+                IdempotencyKey = $"{harness.RunId}:create_order:1",
+                CapturedOutput = "order-output",
+                LedgerStatus = CompensableLedgerEntryStatus.Confirmed,
+            }, options => options.Excluding(x => x.CommittedAtUnixMs));
+    }
+
+    [Fact]
     public async Task TerminalFailure_WithCompensableLedger_ShouldDispatchCompensationsInReverseOrder()
     {
         var harness = await CreateStartedRunAsync(SagaWorkflowYaml());
@@ -445,6 +555,7 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
     {
         eventStore ??= new RecordingEventStore();
         var committedHook = new RecordingCommittedStatePublicationHook();
+        var callbackScheduler = new RecordingRuntimeCallbackScheduler();
         var topologyPublisher = new RecordingEventPublisher(runId)
         {
             AutoReplaySelfPublished = autoReplaySelfPublished,
@@ -457,7 +568,7 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
         {
             EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<WorkflowRunState>(eventStore),
             EventPublisher = topologyPublisher,
-            Services = new TestServiceProvider(new NoopRuntimeCallbackScheduler(), committedHook),
+            Services = new TestServiceProvider(callbackScheduler, committedHook),
             Logger = NullLogger.Instance,
         };
         SetAgentId(agent, runId);
@@ -476,7 +587,7 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
             }));
         }
 
-        return new RunHarness(agent, runId, eventStore, committedHook, topologyPublisher);
+        return new RunHarness(agent, runId, eventStore, committedHook, topologyPublisher, callbackScheduler);
     }
 
     private static IReadOnlyList<CompensationRequestEvent> CompensationRequests(RecordingEventPublisher publisher) =>
@@ -484,6 +595,15 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
             .Where(x => x.Event is CompensationRequestEvent)
             .Select(x => (CompensationRequestEvent)x.Event)
             .ToArray();
+
+    private static IReadOnlyList<StepRequestEvent> StepRequests(RecordingEventPublisher publisher, string stepId) =>
+        publisher.Published
+            .Where(x => x.Event is StepRequestEvent requestEvent && requestEvent.StepId == stepId)
+            .Select(x => (StepRequestEvent)x.Event)
+            .ToArray();
+
+    private static IReadOnlyList<ScheduledCallback> ScheduledTimeouts(RecordingEventPublisher publisher) =>
+        publisher.CallbackScheduler.ScheduledCallbacks.ToArray();
 
     private static IReadOnlyList<(TEvent Event, TopologyAudience Audience)> PublishedEvents<TEvent>(
         RecordingEventPublisher publisher)
@@ -500,20 +620,41 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
             .Select(x => x.StateEvent.EventData.Unpack<TEvent>())
             .ToArray();
 
-    private static EventEnvelope SelfEnvelope(string runId, IMessage payload) =>
-        EnvelopeFrom(runId, payload);
+    private static EventEnvelope SelfEnvelope(
+        string runId,
+        IMessage payload,
+        EnvelopeCallbackContext? callback = null) =>
+        EnvelopeFrom(runId, payload, callback);
 
-    private static EventEnvelope EnvelopeFrom(string publisherActorId, IMessage payload) =>
+    private static EventEnvelope EnvelopeFrom(
+        string publisherActorId,
+        IMessage payload,
+        EnvelopeCallbackContext? callback = null) =>
         new()
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(payload),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication(publisherActorId, TopologyAudience.Self),
+            Runtime = callback == null
+                ? null
+                : new EnvelopeRuntime
+                {
+                    Callback = callback.Clone(),
+                },
             Propagation = new EnvelopePropagation
             {
                 CorrelationId = Guid.NewGuid().ToString("N"),
             },
+        };
+
+    private static EnvelopeCallbackContext MetadataFor(ScheduledCallback callback) =>
+        new()
+        {
+            CallbackId = callback.CallbackId,
+            Generation = callback.Generation,
+            SlotEpoch = callback.SlotEpoch,
+            FiredAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         };
 
     private static string SagaWorkflowYaml() =>
@@ -533,6 +674,31 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
             type: transform
           - id: refund_payment
             type: transform
+          - id: cancel_order
+            type: transform
+        """;
+
+    private static string InFlightCompensationWorkflowYaml() =>
+        """
+        name: wf_2097
+        roles: []
+        steps:
+          - id: create_order
+            type: connector_call
+            timeout_ms: 500
+            compensation: cancel_order
+          - id: cancel_order
+            type: connector_call
+        """;
+
+    private static string LegacyCompensationWorkflowYaml() =>
+        """
+        name: wf_2097
+        roles: []
+        steps:
+          - id: create_order
+            type: transform
+            compensation: cancel_order
           - id: cancel_order
             type: transform
         """;
@@ -599,7 +765,8 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
         string RunId,
         RecordingEventStore EventStore,
         RecordingCommittedStatePublicationHook CommittedPublisher,
-        RecordingEventPublisher Publisher);
+        RecordingEventPublisher Publisher,
+        RecordingRuntimeCallbackScheduler CallbackScheduler);
 
     private sealed class EmptyWorkflowModulePack : IWorkflowModulePack
     {
@@ -630,6 +797,9 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
 
         public WorkflowRunGAgent Agent { get; set; } = null!;
 
+        public RecordingRuntimeCallbackScheduler CallbackScheduler =>
+            (RecordingRuntimeCallbackScheduler)((TestServiceProvider)Agent.Services).Scheduler;
+
         public async Task PublishAsync<T>(
             T evt,
             TopologyAudience audience,
@@ -654,6 +824,12 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
             where T : IMessage =>
             Task.CompletedTask;
     }
+
+    private sealed record ScheduledCallback(
+        string CallbackId,
+        long Generation,
+        int SlotEpoch,
+        IMessage Event);
 
     private sealed class RecordingCommittedStatePublicationHook : ICommittedStatePublicationHook
     {
@@ -730,15 +906,17 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
     }
 
     private sealed class TestServiceProvider(
-        NoopRuntimeCallbackScheduler scheduler,
+        IActorRuntimeCallbackScheduler scheduler,
         RecordingCommittedStatePublicationHook committedHook) : IServiceProvider
     {
+        public IActorRuntimeCallbackScheduler Scheduler { get; } = scheduler;
+
         public object? GetService(System.Type serviceType)
         {
             if (serviceType == typeof(IEnumerable<IGAgentExecutionHook>))
                 return Array.Empty<IGAgentExecutionHook>();
             if (serviceType == typeof(IActorRuntimeCallbackScheduler))
-                return scheduler;
+                return Scheduler;
             if (serviceType == typeof(IEnumerable<ICommittedStatePublicationHook>))
                 return new ICommittedStatePublicationHook[] { committedHook };
 
@@ -746,25 +924,35 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
         }
     }
 
-    private sealed class NoopRuntimeCallbackScheduler : IActorRuntimeCallbackScheduler
+    private sealed class RecordingRuntimeCallbackScheduler : IActorRuntimeCallbackScheduler
     {
+        public List<ScheduledCallback> ScheduledCallbacks { get; } = [];
+
         public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
             RuntimeCallbackTimeoutRequest request,
-            CancellationToken ct = default) =>
-            Task.FromResult(new RuntimeCallbackLease(
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            var generation = ScheduledCallbacks.Count(x => x.CallbackId == request.CallbackId) + 1;
+            var slotEpoch = request.TriggerEnvelope.Runtime?.Callback?.SlotEpoch ?? 0;
+            var evt = request.TriggerEnvelope.Payload?.Unpack<WorkflowStepTimeoutFiredEvent>()
+                      ?? throw new InvalidOperationException("Expected scheduled timeout payload.");
+            ScheduledCallbacks.Add(new ScheduledCallback(request.CallbackId, generation, slotEpoch, evt));
+            var lease = new RuntimeCallbackLease(
                 request.ActorId,
                 request.CallbackId,
-                1,
-                RuntimeCallbackBackend.InMemory));
+                generation,
+                RuntimeCallbackBackend.InMemory)
+            {
+                SlotEpoch = slotEpoch,
+            };
+            return Task.FromResult(lease);
+        }
 
         public Task<RuntimeCallbackLease> ScheduleTimerAsync(
             RuntimeCallbackTimerRequest request,
             CancellationToken ct = default) =>
-            Task.FromResult(new RuntimeCallbackLease(
-                request.ActorId,
-                request.CallbackId,
-                1,
-                RuntimeCallbackBackend.InMemory));
+            throw new NotSupportedException("Saga compensation tests do not use durable timers.");
 
         public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default) =>
             Task.CompletedTask;

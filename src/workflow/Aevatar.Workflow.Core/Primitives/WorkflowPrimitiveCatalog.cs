@@ -109,6 +109,15 @@ public static class WorkflowPrimitiveCatalog
                knownCanonicalStepTypes.Contains(canonical);
     }
 
+    public static bool IsSideEffectingPrimitive(string stepType)
+    {
+        var canonical = ToCanonicalType(stepType);
+        // Saga v1.1 provisions only the current external-dispatch primitives; future primitives can opt in explicitly.
+        return string.Equals(canonical, "tool_call", StringComparison.Ordinal) ||
+               string.Equals(canonical, "connector_call", StringComparison.Ordinal) ||
+               string.Equals(canonical, "secure_connector_call", StringComparison.Ordinal);
+    }
+
     public static Dictionary<string, string> CanonicalizeStepTypeParameters(
         IReadOnlyDictionary<string, string>? parameters)
     {

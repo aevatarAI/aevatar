@@ -180,8 +180,22 @@ public sealed class WorkflowRunGAgent
             ct);
     }
 
+    Task IWorkflowExecutionStateHost.RecordCompensableStepDispatchAsync(
+        CompensableStepDispatchedEvent evt,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+        return PersistDomainEventAsync(evt, ct);
+    }
+
     async Task<WorkflowCompensationTransitionResult> IWorkflowExecutionStateHost.TryStartCompensationAsync(
         WorkflowCompletedEvent terminalFailure,
+        CancellationToken ct) =>
+        await ((IWorkflowExecutionStateHost)this).TryStartCompensationAsync(terminalFailure, null, ct);
+
+    async Task<WorkflowCompensationTransitionResult> IWorkflowExecutionStateHost.TryStartCompensationAsync(
+        WorkflowCompletedEvent terminalFailure,
+        StepCompletedEvent? terminalStep,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(terminalFailure);
@@ -189,16 +203,17 @@ public sealed class WorkflowRunGAgent
         if (IsCompensating(State))
             return BuildCurrentCompensationResult(WorkflowCompensationTransitionStatus.AlreadyCompensating);
 
-        if (State.CompensableLedger.Count == 0)
+        var compensationState = BuildCompensationStartState(State, terminalStep);
+        if (compensationState.CompensableLedger.Count == 0)
             return EmptyCompensationResult(WorkflowCompensationTransitionStatus.NoCompensableLedger);
 
-        var cursor = State.CompensableLedger.Count - 1;
-        var entry = State.CompensableLedger[cursor];
+        var cursor = compensationState.CompensableLedger.Count - 1;
+        var entry = compensationState.CompensableLedger[cursor];
         var executionId = Guid.NewGuid().ToString("N");
         await PersistDomainEventAsync(new CompensationRequestEvent
         {
             RunId = string.IsNullOrWhiteSpace(terminalFailure.RunId) ? RunId : WorkflowRunIdNormalizer.Normalize(terminalFailure.RunId),
-            FailedStepId = ResolveLastFailedStepId(State),
+            FailedStepId = ResolveLastFailedStepId(compensationState),
             CompensationStepId = entry.CompensationStepId,
             IdempotencyKey = entry.IdempotencyKey,
             CapturedOutput = entry.CapturedOutput,
@@ -1003,6 +1018,7 @@ public sealed class WorkflowRunGAgent
             .On<WorkflowRunExecutionContextClearedEvent>(ApplyWorkflowRunExecutionContextCleared)
             .On<WorkflowExecutionStateUpsertedEvent>(ApplyWorkflowExecutionStateUpserted)
             .On<WorkflowExecutionStateClearedEvent>(ApplyWorkflowExecutionStateCleared)
+            .On<CompensableStepDispatchedEvent>(ApplyCompensableStepDispatched)
             .On<StepCompletedEvent>(ApplyStepCompleted)
             .On<CompensationRequestEvent>(ApplyCompensationRequest)
             .On<CompensationStepCompletedEvent>(ApplyCompensationStepCompleted)
@@ -1224,10 +1240,10 @@ public sealed class WorkflowRunGAgent
     private WorkflowRunState ApplyStepCompleted(WorkflowRunState current, StepCompletedEvent evt)
     {
         var next = current.Clone();
-        if (!evt.Success)
+        var stepId = evt.StepId?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(stepId))
             return next;
 
-        var stepId = evt.StepId?.Trim() ?? string.Empty;
         var workflow = ResolveWorkflowForTransition(current);
         var step = string.IsNullOrWhiteSpace(stepId) ? null : workflow?.GetStep(stepId);
         var compensationStepId = step?.Compensation?.Trim() ?? string.Empty;
@@ -1235,6 +1251,27 @@ public sealed class WorkflowRunGAgent
             return next;
 
         var idempotencyKey = ResolveStepCompletionIdempotency(evt, current, stepId);
+        if (!evt.Success)
+        {
+            var failureOutcome = NormalizeFailureOutcome(evt.FailureOutcome);
+            if (failureOutcome == WorkflowStepFailureOutcome.CalleeConfirmed)
+                RemoveMatchingProvisionalLedgerEntries(next, stepId, compensationStepId, idempotencyKey);
+
+            return next;
+        }
+
+        var matchingProvisional = next.CompensableLedger.FirstOrDefault(entry =>
+            IsProvisional(entry) &&
+            string.Equals(entry.StepId, stepId, StringComparison.Ordinal) &&
+            string.Equals(entry.CompensationStepId, compensationStepId, StringComparison.Ordinal) &&
+            string.Equals(entry.IdempotencyKey, idempotencyKey, StringComparison.Ordinal));
+        if (matchingProvisional != null)
+        {
+            matchingProvisional.CapturedOutput = evt.Output ?? string.Empty;
+            matchingProvisional.LedgerStatus = CompensableLedgerEntryStatus.Confirmed;
+            return next;
+        }
+
         if (next.CompensableLedger.Any(entry =>
                 string.Equals(entry.StepId, stepId, StringComparison.Ordinal) &&
                 string.Equals(entry.CompensationStepId, compensationStepId, StringComparison.Ordinal) &&
@@ -1250,6 +1287,49 @@ public sealed class WorkflowRunGAgent
             IdempotencyKey = idempotencyKey,
             CapturedOutput = evt.Output ?? string.Empty,
             CommittedAtUnixMs = 0,
+            LedgerStatus = CompensableLedgerEntryStatus.Confirmed,
+        });
+        return next;
+    }
+
+    private WorkflowRunState BuildCompensationStartState(WorkflowRunState current, StepCompletedEvent? terminalStep)
+    {
+        if (terminalStep == null || terminalStep.Success)
+            return current;
+
+        if (NormalizeFailureOutcome(terminalStep.FailureOutcome) == WorkflowStepFailureOutcome.OutcomeUncertain)
+            return current;
+
+        return ApplyStepCompleted(current, terminalStep);
+    }
+
+    private static WorkflowRunState ApplyCompensableStepDispatched(
+        WorkflowRunState current,
+        CompensableStepDispatchedEvent evt)
+    {
+        var next = current.Clone();
+        var stepId = evt.StepId?.Trim() ?? string.Empty;
+        var compensationStepId = evt.CompensationStepId?.Trim() ?? string.Empty;
+        var idempotencyKey = evt.IdempotencyKey ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(stepId) || string.IsNullOrWhiteSpace(compensationStepId))
+            return next;
+
+        if (next.CompensableLedger.Any(entry =>
+                string.Equals(entry.StepId, stepId, StringComparison.Ordinal) &&
+                string.Equals(entry.CompensationStepId, compensationStepId, StringComparison.Ordinal) &&
+                string.Equals(entry.IdempotencyKey, idempotencyKey, StringComparison.Ordinal)))
+        {
+            return next;
+        }
+
+        next.CompensableLedger.Add(new CompletedStepLedgerEntry
+        {
+            StepId = stepId,
+            CompensationStepId = compensationStepId,
+            IdempotencyKey = idempotencyKey,
+            CapturedOutput = string.Empty,
+            CommittedAtUnixMs = Math.Max(0, evt.DispatchedAtUnixMs),
+            LedgerStatus = CompensableLedgerEntryStatus.Provisional,
         });
         return next;
     }
@@ -1434,6 +1514,35 @@ public sealed class WorkflowRunGAgent
             return 0;
 
         return Math.Clamp(cursor + 1, 0, ledgerCount);
+    }
+
+    private static WorkflowStepFailureOutcome NormalizeFailureOutcome(WorkflowStepFailureOutcome failureOutcome) =>
+        failureOutcome == WorkflowStepFailureOutcome.OutcomeUncertain
+            ? WorkflowStepFailureOutcome.OutcomeUncertain
+            : WorkflowStepFailureOutcome.CalleeConfirmed;
+
+    private static bool IsProvisional(CompletedStepLedgerEntry entry) =>
+        entry.LedgerStatus == CompensableLedgerEntryStatus.Provisional;
+
+    private static void RemoveMatchingProvisionalLedgerEntries(
+        WorkflowRunState state,
+        string stepId,
+        string compensationStepId,
+        string idempotencyKey)
+    {
+        for (var i = state.CompensableLedger.Count - 1; i >= 0; i--)
+        {
+            var entry = state.CompensableLedger[i];
+            if (!IsProvisional(entry))
+                continue;
+
+            if (string.Equals(entry.StepId, stepId, StringComparison.Ordinal) &&
+                string.Equals(entry.CompensationStepId, compensationStepId, StringComparison.Ordinal) &&
+                string.Equals(entry.IdempotencyKey, idempotencyKey, StringComparison.Ordinal))
+            {
+                state.CompensableLedger.RemoveAt(i);
+            }
+        }
     }
 
     private bool TryGetLedgerEntry(int cursor, [NotNullWhen(true)] out CompletedStepLedgerEntry? entry)

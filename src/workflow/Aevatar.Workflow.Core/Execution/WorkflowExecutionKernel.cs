@@ -236,6 +236,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             RunId = runId,
             Success = false,
             Error = $"TIMEOUT after {evt.TimeoutMs}ms",
+            FailureOutcome = WorkflowStepFailureOutcome.OutcomeUncertain,
         }, TopologyAudience.Self, ct);
 
         state.TimeoutsByStepId.Remove(stepId);
@@ -394,6 +395,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                         Error = evt.Error,
                     },
                     state,
+                    evt,
                     ct);
                 return;
             }
@@ -421,6 +423,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                     Error = evt.Error,
                 },
                 state,
+                evt,
                 ct);
             return;
         }
@@ -454,6 +457,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                         Error = $"invalid next_step '{directNextStepId}' from step '{current.Id}'",
                     },
                     state,
+                    null,
                     ct);
                 return;
             }
@@ -680,9 +684,10 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         IWorkflowExecutionContext ctx,
         WorkflowCompletedEvent terminalFailure,
         WorkflowExecutionKernelState state,
+        StepCompletedEvent? terminalStep,
         CancellationToken ct)
     {
-        var result = await _stateHost.TryStartCompensationAsync(terminalFailure, ct);
+        var result = await _stateHost.TryStartCompensationAsync(terminalFailure, terminalStep, ct);
         switch (result.Status)
         {
             case WorkflowCompensationTransitionStatus.Started:
@@ -1096,6 +1101,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 await SaveStateAsync(state, ctx, ct);
             }
 
+            await RecordCompensableStepDispatchAsync(step, idempotency, ctx, ct);
             await ctx.PublishAsync(request, TopologyAudience.Self, ct);
         }
         catch
@@ -1116,6 +1122,31 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
 
         state.CurrentStepDispatchPending = false;
         await SaveStateAsync(state, ctx, ct);
+    }
+
+    private async Task RecordCompensableStepDispatchAsync(
+        StepDefinition step,
+        WorkflowStepIdempotencyState idempotency,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        var compensationStepId = step.Compensation?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(compensationStepId) ||
+            !WorkflowPrimitiveCatalog.IsSideEffectingPrimitive(step.Type))
+        {
+            return;
+        }
+
+        await _stateHost.RecordCompensableStepDispatchAsync(
+            new CompensableStepDispatchedEvent
+            {
+                RunId = NormalizeRunId(_stateHost.RunId),
+                StepId = step.Id,
+                CompensationStepId = compensationStepId,
+                IdempotencyKey = idempotency.IdempotencyKey ?? string.Empty,
+                DispatchedAtUnixMs = 0,
+            },
+            ct);
     }
 
     private WorkflowStepIdempotencyState ResolveAndPersistStepIdempotency(

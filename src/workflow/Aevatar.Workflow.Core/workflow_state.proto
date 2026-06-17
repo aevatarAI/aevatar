@@ -220,6 +220,13 @@ enum SubWorkflowInvocationHandoffPhase
   SUB_WORKFLOW_INVOCATION_HANDOFF_PHASE_START_DISPATCHED = 6;
 }
 
+enum CompensableLedgerEntryStatus
+{
+  COMPENSABLE_LEDGER_ENTRY_STATUS_UNSPECIFIED = 0;
+  COMPENSABLE_LEDGER_ENTRY_STATUS_CONFIRMED = 1;
+  COMPENSABLE_LEDGER_ENTRY_STATUS_PROVISIONAL = 2;
+}
+
 message WorkflowRuntimeCallbackLeaseState
 {
   string actor_id = 1;
@@ -668,4 +675,5 @@ message CompletedStepLedgerEntry
   string idempotency_key = 3;
   string captured_output = 4;
   int64 committed_at_unix_ms = 5;
+  CompensableLedgerEntryStatus ledger_status = 6;
 }
