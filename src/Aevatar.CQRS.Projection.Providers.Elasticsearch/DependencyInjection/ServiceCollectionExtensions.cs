@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Google.Protobuf.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -37,7 +38,11 @@ public static class ElasticsearchProjectionServiceCollectionExtensions
             provider.GetRequiredService<ElasticsearchProjectionDocumentStore<TReadModel, TKey>>());
         services.AddSingleton<IProjectionIndexConsistencyProbe<TReadModel>>(provider =>
             provider.GetRequiredService<ElasticsearchProjectionDocumentStore<TReadModel, TKey>>());
-        services.AddHostedService<ElasticsearchIndexStartupInitializer<TReadModel, TKey>>();
+        // Non-generic reconcile target so the startup hosted service can enumerate every ES
+        // projection store via IEnumerable<IProjectionIndexReconcileTarget> and self-heal schema
+        // drift before the read path is hit.
+        services.AddSingleton<IProjectionIndexReconcileTarget>(provider =>
+            provider.GetRequiredService<ElasticsearchProjectionDocumentStore<TReadModel, TKey>>());
 
         return services;
     }

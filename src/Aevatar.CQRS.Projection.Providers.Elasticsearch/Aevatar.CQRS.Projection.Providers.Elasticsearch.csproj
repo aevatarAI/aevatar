@@ -18,7 +18,4 @@
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
   </ItemGroup>
-  <ItemGroup>
-    <InternalsVisibleTo Include="Aevatar.CQRS.Projection.Core.Tests" />
-  </ItemGroup>
 </Project>
