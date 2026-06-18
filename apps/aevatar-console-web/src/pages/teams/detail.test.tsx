@@ -8,6 +8,7 @@ import { runtimeActorsApi } from "@/shared/api/runtimeActorsApi";
 import { runtimeGAgentApi } from "@/shared/api/runtimeGAgentApi";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { scheduledDispatchApi } from "@/shared/api/scheduledDispatchApi";
+import { formatCompactDateTime } from "@/shared/datetime/dateTime";
 import { studioApi } from "@/shared/studio/api";
 import {
   createTestQueryClient,
@@ -859,9 +860,12 @@ jest.mock("@/shared/studio/api", () => ({
     listMembers: jest.fn(async () => mockCreateMembersCatalog()),
     getTeam: jest.fn(async () => mockCreateTeamSummary()),
     updateTeam: jest.fn(async () => ({
-      ...mockCreateTeamSummary(),
-      displayName: "Alpha Ops Team",
-      description: "",
+      status: "accepted",
+      scopeId: "scope-1",
+      teamId: "t-alpha",
+      commandId: "cmd-team-update",
+      correlationId: "corr-team-update",
+      ackedAt: "2026-05-01T08:06:00Z",
     })),
     setTeamEntryMember: jest.fn(async (_scopeId: string, _teamId: string, memberId: string) => ({
       ...mockCreateTeamSummary(),
@@ -996,9 +1000,12 @@ describe("TeamDetailPage", () => {
     );
     (studioApi.updateTeam as jest.Mock).mockReset();
     (studioApi.updateTeam as jest.Mock).mockImplementation(async () => ({
-      ...mockCreateTeamSummary(),
-      displayName: "Alpha Ops Team",
-      description: "",
+      status: "accepted",
+      scopeId: "scope-1",
+      teamId: "t-alpha",
+      commandId: "cmd-team-update",
+      correlationId: "corr-team-update",
+      ackedAt: "2026-05-01T08:06:00Z",
     }));
     (studioApi.setTeamEntryMember as jest.Mock).mockReset();
     (studioApi.setTeamEntryMember as jest.Mock).mockImplementation(
@@ -1023,14 +1030,20 @@ describe("TeamDetailPage", () => {
     );
     (studioApi.archiveTeam as jest.Mock).mockReset();
     (studioApi.archiveTeam as jest.Mock).mockImplementation(async () => ({
-      ...mockCreateTeamSummary(),
-      lifecycleStage: "archived",
+      status: "accepted",
+      scopeId: "scope-1",
+      teamId: "t-alpha",
+      commandId: "cmd-team-archive",
+      correlationId: "corr-team-archive",
+      ackedAt: "2026-05-01T08:07:00Z",
     }));
     (studioApi.listTeamMembers as jest.Mock).mockReset();
     (studioApi.listTeamMembers as jest.Mock).mockImplementation(
       async () => mockCreateTeamMembersCatalog(),
     );
     (runtimeRunsApi.streamTeamChat as jest.Mock).mockClear();
+    (message.success as jest.Mock).mockClear();
+    (message.error as jest.Mock).mockClear();
   });
 
   it("renders no-team-selected state without detail data flows for scope-only links", async () => {
@@ -2407,10 +2420,11 @@ describe("TeamDetailPage", () => {
       "",
       "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/automations",
     );
+    const nextFireTime = "2026-06-18T01:00:00Z";
     (scheduledDispatchApi.preview as jest.Mock).mockResolvedValueOnce({
       cronExpression: "0 9 * * 1-5",
       timezone: "Asia/Shanghai",
-      nextFireTimes: ["2026-06-18T01:00:00Z"],
+      nextFireTimes: [nextFireTime],
     });
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
@@ -2435,7 +2449,9 @@ describe("TeamDetailPage", () => {
       timezone: "Asia/Shanghai",
       count: 5,
     });
-    expect(await within(dialog).findByText("06-18 01:00")).toBeTruthy();
+    expect(
+      await within(dialog).findByText(formatCompactDateTime(nextFireTime)),
+    ).toBeTruthy();
   });
 
   it("creates member recurring work with the default service revision when the active serving revision is missing", async () => {
@@ -2911,6 +2927,47 @@ describe("TeamDetailPage", () => {
       });
     });
     expect(message.success).toHaveBeenCalledWith("团队已更新。");
+    await waitFor(() => {
+      expect(studioApi.getTeam).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("keeps a successful Team rename when the follow-up summary refresh is still syncing", async () => {
+    (studioApi.getTeam as jest.Mock)
+      .mockResolvedValueOnce(mockCreateTeamSummary())
+      .mockRejectedValueOnce(
+        new Error("StudioTeamSummary.displayName must be a string."),
+      );
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha",
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    await screen.findByRole("heading", {
+      level: 1,
+      name: "Alpha Support Team",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "编辑团队" }));
+    fireEvent.change(await screen.findByLabelText("编辑团队名称"), {
+      target: { value: " Alpha Ops Team " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存团队" }));
+
+    await waitFor(() => {
+      expect(studioApi.updateTeam).toHaveBeenCalledWith({
+        scopeId: "scope-1",
+        teamId: "t-alpha",
+        displayName: "Alpha Ops Team",
+        description: "Team summary",
+      });
+    });
+    expect(message.success).toHaveBeenCalledWith("团队已更新。");
+    expect(message.error).not.toHaveBeenCalledWith(
+      expect.stringContaining("StudioTeamSummary.displayName"),
+    );
     await waitFor(() => {
       expect(studioApi.getTeam).toHaveBeenCalledTimes(2);
     });
