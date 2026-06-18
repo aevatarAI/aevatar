@@ -4,6 +4,7 @@ using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Primitives;
 using ApplicationWorkflowFileRef = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileRef;
@@ -13,6 +14,26 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 
 public sealed class ChatFormRunRequestParserTests
 {
+    [Fact]
+    public void ServiceProvider_ShouldResolveParserWithSharedMultipartFileParser()
+    {
+        var services = new ServiceCollection();
+        services.AddOptions();
+        services.AddSingleton<IWorkflowFileIngressPort>(new RecordingWorkflowFileIngressPort());
+        services.AddSingleton<WorkflowMultipartFileInputParser>();
+        services.AddSingleton<WorkflowMultipartChatRequestParser>();
+
+        using var provider = services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateOnBuild = true,
+            ValidateScopes = true,
+        });
+
+        provider.GetRequiredService<WorkflowMultipartChatRequestParser>()
+            .Should()
+            .NotBeNull();
+    }
+
     [Fact]
     public async Task ParseAsync_ShouldIngestSingleFileAsFormUploadAndBuildFileRefInputPart()
     {
