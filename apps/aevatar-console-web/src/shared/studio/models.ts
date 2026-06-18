@@ -534,6 +534,14 @@ export type StudioMemberBindingRunStatus =
   | 'rejected'
   | 'unknown';
 
+export type StudioMemberBindingAckStage =
+  | 'dispatch_accepted'
+  | 'unknown';
+
+export type StudioMemberBindingRunRole =
+  | 'candidate'
+  | 'unknown';
+
 export interface StudioMemberBindingFailure {
   readonly code: string;
   readonly message?: string | null;
@@ -547,8 +555,16 @@ export interface StudioMemberBindingRunStatusResponse {
   readonly memberId: string;
   readonly stateVersion?: number | null;
   readonly platformBindingCommandId?: string | null;
+  readonly result?: StudioMemberBindingRunResult | null;
   readonly failure?: StudioMemberBindingFailure | null;
   readonly updatedAt?: string | null;
+}
+
+export interface StudioMemberBindingRunResult {
+  readonly publishedServiceId: string;
+  readonly revisionId: string;
+  readonly implementationKind: StudioMemberImplementationKind;
+  readonly expectedActorId?: string | null;
 }
 
 export interface StudioMemberBindingAcceptedResponse {
@@ -556,6 +572,8 @@ export interface StudioMemberBindingAcceptedResponse {
   readonly bindingRunId: string;
   readonly scopeId: string;
   readonly memberId: string;
+  readonly ackStage?: StudioMemberBindingAckStage | null;
+  readonly bindingRunRole?: StudioMemberBindingRunRole | null;
 }
 
 export type StudioMemberCommandStatus =

@@ -15,7 +15,10 @@ import type {
   StudioExecutionSummary,
   StudioMemberBindingContract,
   StudioMemberBindingAcceptedResponse,
+  StudioMemberBindingAckStage,
   StudioMemberBindingFailure,
+  StudioMemberBindingRunResult,
+  StudioMemberBindingRunRole,
   StudioMemberBindingRunStatus,
   StudioMemberBindingRunStatusResponse,
   StudioMemberBindingViewResponse,
@@ -1365,6 +1368,34 @@ function decodeStudioMemberBindingContract(
   };
 }
 
+function decodeStudioMemberBindingRunResult(
+  value: unknown
+): StudioMemberBindingRunResult {
+  const record = expectRecord(value, "StudioMemberBindingRunResult");
+  return {
+    publishedServiceId: readString(
+      record,
+      ["publishedServiceId", "PublishedServiceId"],
+      "StudioMemberBindingRunResult.publishedServiceId"
+    ),
+    revisionId: readString(
+      record,
+      ["revisionId", "RevisionId"],
+      "StudioMemberBindingRunResult.revisionId"
+    ),
+    implementationKind: readStudioMemberImplementationKind(record, [
+      "implementationKind",
+      "ImplementationKind",
+    ]),
+    expectedActorId:
+      readNullableString(
+        record,
+        ["expectedActorId", "ExpectedActorId"],
+        "StudioMemberBindingRunResult.expectedActorId"
+      ) ?? null,
+  };
+}
+
 function normalizeStudioMemberBindingRunStatus(
   value: string | number | null | undefined
 ): StudioMemberBindingRunStatus {
@@ -1401,6 +1432,41 @@ function normalizeStudioMemberBindingRunStatus(
     unspecified: "unknown",
     unknown: "unknown",
   }) as StudioMemberBindingRunStatus;
+}
+
+function normalizeStudioMemberBindingAckStage(
+  value: string | number | null | undefined
+): StudioMemberBindingAckStage {
+  if (value == null) {
+    return "unknown";
+  }
+
+  const normalized = normalizeEnumValue(value, "ackStage", {
+    "0": "unknown",
+    "1": "dispatch_accepted",
+    dispatch_accepted: "dispatch_accepted",
+    dispatchaccepted: "dispatch_accepted",
+    unknown: "unknown",
+  });
+
+  return normalized === "dispatch_accepted" ? normalized : "unknown";
+}
+
+function normalizeStudioMemberBindingRunRole(
+  value: string | number | null | undefined
+): StudioMemberBindingRunRole {
+  if (value == null) {
+    return "unknown";
+  }
+
+  const normalized = normalizeEnumValue(value, "bindingRunRole", {
+    "0": "unknown",
+    "1": "candidate",
+    candidate: "candidate",
+    unknown: "unknown",
+  });
+
+  return normalized === "candidate" ? normalized : "unknown";
 }
 
 function normalizeStudioMemberCommandStatus(
@@ -1451,6 +1517,10 @@ function decodeStudioMemberBindingRunStatusResponse(
   value: unknown
 ): StudioMemberBindingRunStatusResponse {
   const record = expectRecord(value, "StudioMemberBindingRunStatusResponse");
+  const result =
+    record.result == null && record.Result == null
+      ? undefined
+      : decodeStudioMemberBindingRunResult(record.result ?? record.Result);
   return {
     status: normalizeStudioMemberBindingRunStatus(
       readOptionalScalar(record, ["status", "Status"])
@@ -1478,6 +1548,7 @@ function decodeStudioMemberBindingRunStatusResponse(
         ["platformBindingCommandId", "PlatformBindingCommandId"],
         "StudioMemberBindingRunStatusResponse.platformBindingCommandId"
       ) ?? null,
+    ...(result === undefined ? {} : { result }),
     failure:
       record.failure == null && record.Failure == null
         ? null
@@ -1513,6 +1584,12 @@ function decodeStudioMemberBindingAcceptedResponse(
       record,
       ["memberId", "MemberId"],
       "StudioMemberBindingAcceptedResponse.memberId"
+    ),
+    ackStage: normalizeStudioMemberBindingAckStage(
+      readOptionalScalar(record, ["ackStage", "AckStage"])
+    ),
+    bindingRunRole: normalizeStudioMemberBindingRunRole(
+      readOptionalScalar(record, ["bindingRunRole", "BindingRunRole"])
     ),
   };
 }
