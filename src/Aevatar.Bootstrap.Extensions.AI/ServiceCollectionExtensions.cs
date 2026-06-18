@@ -345,58 +345,15 @@ public static class ServiceCollectionExtensions
         Func<VoiceProviderSessionKey, VoiceProviderAudioFrame, CancellationToken, Task> audioSink,
         CancellationToken ct)
     {
-        var providerSession = await provider.ConnectAsync(
-            new VoiceProviderSessionKey(
-                handle.SessionId,
-                handle.OwnerId,
-                handle.ActiveTransportLeaseId ?? string.Empty,
-                handle.LeaseEpoch,
-                Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(handle.ExpiresAtUtc.ToUniversalTime()),
-                handle.ActorId,
-                handle.ModuleName,
-                handle.ToolContext?.Clone()),
+        return await VoiceRealtimeSessionReadinessBootstrapper.ConnectAsync(
+            handle,
+            provider,
             providerConfig,
+            sessionConfig,
+            toolCatalog,
             eventSink,
             audioSink,
             ct);
-
-        var effectiveSession = await BuildEffectiveVoiceSessionConfigAsync(sessionConfig, toolCatalog, ct);
-        await providerSession.UpdateSessionAsync(effectiveSession, ct);
-        return providerSession;
-    }
-
-    private static async Task<VoiceSessionConfig> BuildEffectiveVoiceSessionConfigAsync(
-        VoiceSessionConfig sessionConfig,
-        IVoiceToolCatalog? toolCatalog,
-        CancellationToken ct)
-    {
-        var effectiveSession = sessionConfig.Clone();
-        if (toolCatalog == null)
-            return effectiveSession;
-
-        var knownNames = new HashSet<string>(
-            effectiveSession.ToolDefinitions
-                .Select(static definition => definition.Name)
-                .Where(static name => !string.IsNullOrWhiteSpace(name)),
-            StringComparer.OrdinalIgnoreCase);
-
-        foreach (var discoveredTool in await toolCatalog.DiscoverAsync(toolContext: null, ct: ct))
-        {
-            var toolName = discoveredTool.Name?.Trim();
-            if (string.IsNullOrWhiteSpace(toolName) || !knownNames.Add(toolName))
-                continue;
-
-            effectiveSession.ToolDefinitions.Add(new VoiceToolDefinition
-            {
-                Name = toolName,
-                Description = discoveredTool.Description ?? string.Empty,
-                ParametersSchema = string.IsNullOrWhiteSpace(discoveredTool.ParametersSchema)
-                    ? "{}"
-                    : discoveredTool.ParametersSchema,
-            });
-        }
-
-        return effectiveSession;
     }
 
     private static string? ResolveVoicePresenceDefaultProvider(
