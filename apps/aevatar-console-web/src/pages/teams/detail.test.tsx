@@ -2420,10 +2420,11 @@ describe("TeamDetailPage", () => {
       "",
       "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/automations",
     );
+    const nextFireTime = "2026-06-18T01:00:00Z";
     (scheduledDispatchApi.preview as jest.Mock).mockResolvedValueOnce({
       cronExpression: "0 9 * * 1-5",
       timezone: "Asia/Shanghai",
-      nextFireTimes: ["2026-06-18T01:00:00Z"],
+      nextFireTimes: [nextFireTime],
     });
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
@@ -2450,7 +2451,7 @@ describe("TeamDetailPage", () => {
     });
     expect(
       await within(dialog).findByText(
-        formatCompactDateTime("2026-06-18T01:00:00Z", "2026-06-18T01:00:00Z"),
+        formatCompactDateTime(nextFireTime, nextFireTime),
       ),
     ).toBeTruthy();
   });

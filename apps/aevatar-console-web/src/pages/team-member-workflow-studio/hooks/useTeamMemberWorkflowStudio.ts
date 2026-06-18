@@ -672,7 +672,7 @@ function readBindingRunFailureMessage(
   run: StudioMemberBindingRunStatusResponse | null,
 ): string {
   if (!run) {
-    return "Publish status is still pending.";
+    return "Binding run status is still pending.";
   }
 
   if (run.failure?.message) {
@@ -680,11 +680,11 @@ function readBindingRunFailureMessage(
   }
 
   if (run.status === "rejected") {
-    return "Publish binding request was rejected by the member authority.";
+    return "Binding run was rejected by the member authority.";
   }
 
   if (run.status === "failed") {
-    return "Publish failed while binding the member workflow.";
+    return "Binding run failed while binding the member workflow.";
   }
 
   return "";
@@ -1902,7 +1902,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         void message.success("Workflow member published.");
       } else {
         void message.info(
-          "Publish was accepted. Studio is still waiting for published status.",
+          "Binding candidate was accepted for dispatch. Studio is waiting for the binding-run read model.",
         );
       }
     },
@@ -2026,20 +2026,20 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         : selectedStepConfigurationError
           ? selectedStepConfigurationError
         : publishPending
-          ? "Publishing this member workflow."
+          ? "Binding candidate accepted for dispatch; waiting for binding-run status."
         : publishStatusStillInProgress
-          ? "Publish is still in progress. Use Refresh status before publishing again."
+          ? "Binding run is still in progress. Use Refresh status before publishing again."
         : memberIsPublished
           ? publishHasDraftChanges
-            ? "Publish saves draft changes, binds the member workflow, and observes readiness."
+            ? "Publish saves draft changes, dispatches a candidate binding run, and observes the read model."
             : "This member workflow is already published. Use Refresh status to check readiness."
         : !workflowQuery.data || !editableDocument
             ? "Load the workflow draft before publishing."
             : !workflowHasSteps
               ? "Add at least one step before publishing."
               : dirty
-                ? "Publish saves draft changes, binds the member workflow, and observes readiness."
-                : "Publish binds the saved workflow draft to this member and observes readiness.";
+                ? "Publish saves draft changes, dispatches a candidate binding run, and observes the read model."
+                : "Publish dispatches a candidate binding run for the saved workflow draft and observes the read model.";
   const publishTone: WorkflowPublishTone = publishError
     ? publishVisibleError
       ? "error"
@@ -2056,9 +2056,9 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const publishNotice =
     publishVisibleError ||
     (publishPending
-      ? `Publish status: ${publishBindingRun?.status ?? "accepted"}.`
+      ? `Binding candidate dispatch accepted; run status: ${publishBindingRun?.status ?? "accepted"}.`
       : publishStatusStillInProgress
-        ? `Publish is still in progress (${memberQuery.data?.currentBindingRun?.status ?? publishBindingRun?.status ?? "accepted"}). Use Refresh status to check readiness.`
+        ? `Binding run is still in progress (${memberQuery.data?.currentBindingRun?.status ?? publishBindingRun?.status ?? "accepted"}). Use Refresh status to check readiness.`
       : memberIsPublished
         ? "Published member workflow is serviceable."
         : "Draft member workflow is not published to the active member yet.");
@@ -2103,7 +2103,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       }
 
       if (!refreshedRun) {
-        void message.info("Publish status is not materialized yet. Try refreshing again.");
+        void message.info("Binding-run status is not materialized yet. Try refreshing again.");
         return;
       }
 
@@ -2119,7 +2119,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         return;
       }
 
-      void message.info("Publish is still in progress.");
+      void message.info("Binding run is still in progress.");
       return;
     }
 

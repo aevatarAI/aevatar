@@ -250,7 +250,7 @@ function formatPublishStatusLabel(input: {
   readonly tone: WorkflowStudioHeaderProps["publishTone"];
 }): string {
   if (input.pending) {
-    return t("teamMemberWorkflowStudio.header.publish.publishing", "Publishing");
+    return t("teamMemberWorkflowStudio.header.publish.binding", "Binding");
   }
 
   if (input.tone === "error") {
@@ -258,7 +258,7 @@ function formatPublishStatusLabel(input: {
   }
 
   if (input.tone === "processing") {
-    return t("teamMemberWorkflowStudio.header.publish.publishingStatus", "Publishing");
+    return t("teamMemberWorkflowStudio.header.publish.bindingStatus", "Binding");
   }
 
   return input.checked

@@ -923,6 +923,7 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.header.tabs.executions': 'Executions',
   'teamMemberWorkflowStudio.header.tabs.runs': 'Runs',
   'teamMemberWorkflowStudio.header.publish.binding': 'Binding',
+  'teamMemberWorkflowStudio.header.publish.bindingStatus': 'Binding',
   'teamMemberWorkflowStudio.header.publish.draft': 'Draft',
   'teamMemberWorkflowStudio.header.publish.error': 'Error',
   'teamMemberWorkflowStudio.header.publish.published': 'Published',

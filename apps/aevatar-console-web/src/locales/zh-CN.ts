@@ -861,6 +861,7 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.header.tabs.executions': '执行记录',
   'teamMemberWorkflowStudio.header.tabs.runs': '运行记录',
   'teamMemberWorkflowStudio.header.publish.binding': '绑定中',
+  'teamMemberWorkflowStudio.header.publish.bindingStatus': '绑定中',
   'teamMemberWorkflowStudio.header.publish.draft': '草稿',
   'teamMemberWorkflowStudio.header.publish.error': '错误',
   'teamMemberWorkflowStudio.header.publish.published': '已发布',
