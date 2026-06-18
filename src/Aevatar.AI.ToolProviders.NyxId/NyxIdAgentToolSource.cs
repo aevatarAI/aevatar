@@ -15,16 +15,19 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
     private readonly NyxIdApiClient _client;
     private readonly ILogger _logger;
     private readonly bool _toolApprovalHandlerAvailable;
+    private readonly INyxIdProxyFileArtifactIngress? _fileArtifactIngress;
 
     public NyxIdAgentToolSource(
         NyxIdToolOptions options,
         NyxIdApiClient client,
         IToolApprovalHandler? approvalHandler = null,
+        INyxIdProxyFileArtifactIngress? fileArtifactIngress = null,
         ILogger<NyxIdAgentToolSource>? logger = null)
     {
         _options = options;
         _client = client;
         _toolApprovalHandlerAvailable = approvalHandler is not null;
+        _fileArtifactIngress = fileArtifactIngress;
         _logger = logger ?? NullLogger<NyxIdAgentToolSource>.Instance;
     }
 
@@ -48,7 +51,7 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
             new NyxIdSessionsTool(_client),
             new NyxIdCatalogTool(_client),
             new NyxIdServicesTool(_client),
-            new NyxIdProxyTool(_client, _logger),
+            new NyxIdProxyTool(_client, _logger, _fileArtifactIngress, _options.EffectiveProxyFileArtifactMaxBytes),
             new NyxIdCodeExecuteTool(_client, _logger),
             new NyxIdApiKeysTool(_client),
             new NyxIdNodesTool(_client),

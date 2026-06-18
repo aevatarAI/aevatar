@@ -296,6 +296,29 @@ public sealed class MainnetHostCompositionTests
     }
 
     [Fact]
+    public void AddAevatarMainnetHost_ShouldRegisterNyxIdProxyFileArtifactIngressWithWorkflowFileStorage()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["Aevatar:NyxId:ProxyFileArtifactMaxBytes"] = "12345",
+        });
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        app.Services.GetRequiredService<INyxIdProxyFileArtifactIngress>()
+            .Should()
+            .BeOfType<NyxIdProxyWorkflowFileArtifactIngress>();
+        app.Services.GetRequiredService<NyxIdToolOptions>()
+            .ProxyFileArtifactMaxBytes.Should().Be(12345);
+    }
+
+    [Fact]
     public async Task AddAevatarMainnetHost_ShouldFailFastOnMalformedWorkflowFileSubmitEndpointPolicy()
     {
         using var home = new TemporaryAevatarHomeScope();

@@ -49,6 +49,7 @@ public static class WorkflowCapabilityServiceCollectionExtensions
             .Bind(configuration.GetSection(WorkflowMultipartFileIngressOptions.SectionName));
         services.AddOptions<WorkflowFormFileIngressOptions>()
             .Bind(configuration.GetSection(WorkflowFormFileIngressOptions.SectionName));
+        services.TryAddSingleton<WorkflowMultipartFileInputParser>();
         services.TryAddSingleton<WorkflowMultipartChatRequestParser>();
         services.AddOptions<WorkflowExternalApprovalCallbackOptions>()
             .Bind(configuration.GetSection(WorkflowExternalApprovalCallbackOptions.SectionName));
