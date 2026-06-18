@@ -111,10 +111,18 @@ The edge consumes a JSON projection of it (camelCase), hand-parsed by
   - up (client → aevatar): `drainAcknowledged`, `inputImage`,
     `functionCallOutput`
   - down (aevatar → client): `sessionAccepted`, `realtimeFrame`
+  - `sessionAccepted` advertises the typed wire contract version (`1.0`) and
+    the input image policy (`maxBytes: 512000`, allowed media types
+    `image/jpeg`, `image/png`) owned by aevatar.
   - `realtimeFrame` is itself a `VoiceRealtimeFrame` oneof: `responseStarted`/
     `Done`/`Cancelled`, `speechStarted`/`Stopped`, `functionCall`,
     `transcriptDelta`/`Completed`, `error`, `disconnected`, `sessionClosed`.
+    `transcriptCompleted` represents provider transcript text only; a
+    `drainAcknowledged` playout ACK advances the actor drain fence but does not
+    publish a transcript fact.
 - **Tool ownership** — every `VoiceToolDefinition` declares typed ownership.
+  The actor still owns persona, turn lifecycle and VAD; the edge sends no
+  `session.update` / `response.create` / `response.cancel`.
   `VOICE_TOOL_OWNER_UNSPECIFIED` and `VOICE_TOOL_OWNER_ACTOR` keep the default
   actor-owned path: the actor executes through `IVoiceToolInvoker` and submits
   the provider result. `VOICE_TOOL_OWNER_CLIENT` makes the edge client the owner
@@ -145,6 +153,14 @@ The edge consumes a JSON projection of it (camelCase), hand-parsed by
   cleanup path that removes the volatile media relay; expired refs are evicted
   on resolve/issue and never fall back to durable `IAevatarSecretsStore`
   writes.
+- **Media readiness vs. session-update readiness** — attach returns a provider
+  media session as soon as the provider socket is connected. Tool discovery and
+  the full `session.update` run as a lease-scoped readiness task behind that
+  session; audio frames and `response.cancel` pass through immediately, while
+  image input, event injection, tool results, and later session updates wait for
+  readiness. OpenAI connects with a no-auto-response baseline until the full
+  update lands, so first audio is not blocked by NyxID/OpenAPI discovery and the
+  model cannot create responses before the tool/persona session is ready.
 - **Credential/media co-location boundary** — voice tool credentials share the
   `IVoiceVolatileMediaStreamPort` lifetime boundary: resolve is valid only in
   the host process that owns the live transport lease and media relay. A tool
@@ -180,7 +196,10 @@ sequenceDiagram
   N->>O: POST /v1/realtime/client_secrets (NyxID injects sk-)
   O-->>N: ek_ (~60s TTL)
   N-->>H: ek_
-  H->>O: open realtime WS (ek_) — relay
+  H->>O: open realtime WS (ek_) — relay; no-auto-response baseline
+  H-->>VP: media relay starts; first PCM can flow
+  H->>N: discover caller-scoped tools if a live credential_ref exists
+  H->>O: session.update persona + tools; readiness opens response-producing calls
   loop conversation — hot path (no NyxID, no actor)
     VP->>H: PCM16 mic (binary)
     H->>O: PCM16 (relay)
@@ -238,7 +257,6 @@ Hardening and contract-completeness follow-ups are tracked under **milestone 23
 - #2151 — renew the session lease while the relay is attached
 - #2152 — bound `AudioDraining` with a server-side drain-ack timeout
 - #2153 — reuse the live relay provider session for upstream sends (barge-in latency)
-- #2154 — don't block first-audio on connect-time tool discovery
 - #2155 — route-scoped voice tool execution context (unblocks per-caller edge tools)
 - #2157 — replay protection for the device-event HMAC ingress
 - #2158 — harden / gate the `/ws/voice` dev-bypass route

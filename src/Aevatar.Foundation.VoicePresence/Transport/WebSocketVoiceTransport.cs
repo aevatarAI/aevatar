@@ -17,15 +17,8 @@ namespace Aevatar.Foundation.VoicePresence.Transport;
 public sealed class WebSocketVoiceTransport : IVoiceTransport
 {
     private const int ReceiveBufferSize = 8 * 1024;
-    private const int MaxInputImageBytes = 500 * 1024;
-    private const int MaxTextMessageBytes = ((MaxInputImageBytes + 2) / 3 * 4) + 1024;
     private static readonly JsonFormatter ControlJsonWriter = new(JsonFormatter.Settings.Default);
     private static readonly JsonParser ControlJsonReader = new(JsonParser.Settings.Default);
-    private static readonly string[] SupportedInputImageMediaTypes =
-    [
-        "image/jpeg",
-        "image/png",
-    ];
 
     private readonly WebSocket _ws;
     private readonly TaskCompletionSource _completion =
@@ -183,8 +176,11 @@ public sealed class WebSocketVoiceTransport : IVoiceTransport
                 buffer.AsMemory(totalBytes, buffer.Length - totalBytes), ct);
             totalBytes += result.Count;
 
-            if (result.MessageType == WebSocketMessageType.Text && totalBytes > MaxTextMessageBytes)
+            if (result.MessageType == WebSocketMessageType.Text &&
+                totalBytes > VoiceWireContractDefaults.MaxInputImageControlFrameBytes)
+            {
                 throw new VoiceTransportFrameRejectedException("Voice text frame exceeds the input image size limit.");
+            }
         } while (!result.EndOfMessage);
 
         return (totalBytes, result.MessageType, buffer);
@@ -244,13 +240,15 @@ public sealed class WebSocketVoiceTransport : IVoiceTransport
             return "Voice input image data is required.";
         }
 
-        var mediaType = inputImage.MediaType.Trim();
-        if (!SupportedInputImageMediaTypes.Contains(mediaType, StringComparer.OrdinalIgnoreCase))
-            return "Voice input image media type must be image/jpeg or image/png.";
+        if (!VoiceWireContractDefaults.IsSupportedInputImageMediaType(inputImage.MediaType))
+        {
+            return
+                $"Voice input image media type must be {VoiceWireContractDefaults.FormatSupportedInputImageMediaTypes()}.";
+        }
 
-        return inputImage.Data.Length <= MaxInputImageBytes
+        return inputImage.Data.Length <= VoiceWireContractDefaults.MaxInputImageBytes
             ? null
-            : "Voice input image exceeds the 500 KB size limit.";
+            : $"Voice input image exceeds the {VoiceWireContractDefaults.MaxInputImageBytes} bytes size limit.";
     }
 
     private async Task TryClosePolicyViolationAsync(string reason, CancellationToken ct)

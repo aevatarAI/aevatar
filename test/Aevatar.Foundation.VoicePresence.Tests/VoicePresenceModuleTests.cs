@@ -61,7 +61,7 @@ public class VoicePresenceModuleTests
     }
 
     [Fact]
-    public async Task Control_transcript_frame_should_enter_projection_backed_realtime_stream()
+    public async Task Drain_acknowledged_should_not_publish_transcript_completed()
     {
         var provider = new RecordingVoiceProvider();
         var module = CreateModule(provider);
@@ -70,6 +70,8 @@ public class VoicePresenceModuleTests
             .AddSingleton<IProjectionSessionEventHub<VoiceRealtimeFrame>>(hub)
             .BuildServiceProvider();
         var ctx = new StubEventHandlerContext(services, CreateRoleAgentWithActiveSession());
+        RoleVoiceState(ctx).Status = VoicePresenceRuntimeStatus.AudioDraining;
+        RoleVoiceState(ctx).CurrentResponseId = 5;
 
         await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
         {
@@ -87,9 +89,10 @@ public class VoicePresenceModuleTests
             },
         }), ctx, CancellationToken.None);
 
-        var published = hub.Events.ShouldHaveSingleItem();
-        published.Frame.FrameCase.ShouldBe(VoiceRealtimeFrame.FrameOneofCase.TranscriptCompleted);
-        published.Frame.TranscriptCompleted.ResponseId.ShouldBe(5);
+        hub.Events.ShouldBeEmpty();
+        var state = RoleVoiceState(ctx);
+        state.Status.ShouldBe(VoicePresenceRuntimeStatus.Idle);
+        state.LastDrainAckResponseId.ShouldBe(5);
     }
 
     [Fact]

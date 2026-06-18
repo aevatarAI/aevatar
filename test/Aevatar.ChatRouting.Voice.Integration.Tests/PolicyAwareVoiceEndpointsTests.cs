@@ -425,6 +425,10 @@ public sealed class PolicyAwareVoiceEndpointsTests
         accepted.FrameCase.Should().Be(VoiceControlFrame.FrameOneofCase.SessionAccepted);
         accepted.SessionAccepted.SessionId.Should().Be("session-1");
         accepted.SessionAccepted.PcmSampleRateHz.Should().Be(24000);
+        accepted.SessionAccepted.WireContractVersion.Should().Be(VoiceWireContractDefaults.CurrentWireContractVersion);
+        accepted.SessionAccepted.InputImagePolicy.MaxBytes.Should().Be(VoiceWireContractDefaults.MaxInputImageBytes);
+        accepted.SessionAccepted.InputImagePolicy.AllowedMediaTypes
+            .Should().Equal(VoiceWireContractDefaults.SupportedInputImageMediaTypes);
 
         var realtime = JsonParser.Default.Parse<VoiceControlFrame>(socket.SentTexts[1]);
         realtime.FrameCase.Should().Be(VoiceControlFrame.FrameOneofCase.RealtimeFrame);

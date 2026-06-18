@@ -161,7 +161,7 @@ public class WebSocketVoiceTransportTests
                 InputImage = new VoiceInputImage
                 {
                     MediaType = "image/jpeg",
-                    Data = ByteString.CopyFrom(new byte[(500 * 1024) + 1]),
+                    Data = ByteString.CopyFrom(new byte[VoiceWireContractDefaults.MaxInputImageBytes + 1]),
                 },
             }));
 
@@ -174,7 +174,8 @@ public class WebSocketVoiceTransportTests
         frames.ShouldBeEmpty();
         socket.CloseCalls.ShouldBe(1);
         socket.LastCloseStatus.ShouldBe(WebSocketCloseStatus.PolicyViolation);
-        socket.LastCloseDescription.ShouldBe("Voice input image exceeds the 500 KB size limit.");
+        socket.LastCloseDescription.ShouldBe(
+            $"Voice input image exceeds the {VoiceWireContractDefaults.MaxInputImageBytes} bytes size limit.");
     }
 
     private static void EnqueueTextMessage(FakeWebSocket socket, string text)

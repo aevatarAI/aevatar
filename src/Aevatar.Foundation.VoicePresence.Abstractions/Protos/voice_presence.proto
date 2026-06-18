@@ -296,12 +296,19 @@ message VoiceDrainAcknowledged {
   int64 playout_sequence = 2;
 }
 
+message VoiceInputImagePolicy {
+  int32 max_bytes = 1;
+  repeated string allowed_media_types = 2;
+}
+
 message VoiceTransportSessionAccepted {
   string actor_id = 1;
   string module_name = 2;
   string session_id = 3;
   int32 pcm_sample_rate_hz = 4;
   int64 observed_state_version = 5;
+  string wire_contract_version = 6;
+  VoiceInputImagePolicy input_image_policy = 7;
 }
 
 message VoiceControlFrame {

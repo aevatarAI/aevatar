@@ -25,8 +25,8 @@ public class OpenAIRealtimeProviderTests
             ToolNames = { "door.open" },
         }, CancellationToken.None);
 
-        session.SessionUpdateEvents.Count.ShouldBe(1);
-        using var document = JsonDocument.Parse(session.SessionUpdateEvents.Single());
+        session.SessionUpdateEvents.Count.ShouldBe(2);
+        using var document = JsonDocument.Parse(session.SessionUpdateEvents.Last());
         var root = document.RootElement;
         root.GetProperty("type").GetString().ShouldBe("session.update");
         root.TryGetProperty("input_audio_format", out _).ShouldBeFalse();
@@ -90,7 +90,7 @@ public class OpenAIRealtimeProviderTests
             ToolNames = { "door.open", "door.close" },
         }, CancellationToken.None);
 
-        using var document = JsonDocument.Parse(session.SessionUpdateEvents.Single());
+        using var document = JsonDocument.Parse(session.SessionUpdateEvents.Last());
         var tools = document.RootElement.GetProperty("session").GetProperty("tools").EnumerateArray().ToArray();
         tools.Length.ShouldBe(2);
 
@@ -128,7 +128,7 @@ public class OpenAIRealtimeProviderTests
             TurnDetectionMode = VoiceTurnDetectionMode.Disabled,
         }, CancellationToken.None);
 
-        using var serverVadDocument = JsonDocument.Parse(session.SessionUpdateEvents[0]);
+        using var serverVadDocument = JsonDocument.Parse(session.SessionUpdateEvents[1]);
         var turnDetection = serverVadDocument.RootElement
             .GetProperty("session")
             .GetProperty("audio")
@@ -139,7 +139,7 @@ public class OpenAIRealtimeProviderTests
         turnDetection.GetProperty("prefix_padding_ms").GetInt32().ShouldBe(125);
         turnDetection.GetProperty("silence_duration_ms").GetInt32().ShouldBe(375);
 
-        using var disabledDocument = JsonDocument.Parse(session.SessionUpdateEvents[1]);
+        using var disabledDocument = JsonDocument.Parse(session.SessionUpdateEvents[2]);
         disabledDocument.RootElement
             .GetProperty("session")
             .GetProperty("audio")
@@ -448,6 +448,25 @@ public class OpenAIRealtimeProviderTests
     }
 
     [Fact]
+    public async Task Connect_should_configure_no_auto_response_before_readiness_update()
+    {
+        var session = new FakeSession();
+        var provider = CreateProvider(session);
+
+        await using var providerSession = await ConnectAsync(provider);
+
+        session.SessionUpdateEvents.Count.ShouldBe(1);
+        using var document = JsonDocument.Parse(session.SessionUpdateEvents.Single());
+        var turnDetection = document.RootElement
+            .GetProperty("session")
+            .GetProperty("audio")
+            .GetProperty("input")
+            .GetProperty("turn_detection");
+        turnDetection.GetProperty("type").GetString().ShouldBe("server_vad");
+        turnDetection.GetProperty("create_response").GetBoolean().ShouldBeFalse();
+    }
+
+    [Fact]
     public async Task SendToolResult_with_empty_callId_should_throw()
     {
         var session = new FakeSession();
@@ -509,7 +528,7 @@ public class OpenAIRealtimeProviderTests
             SampleRateHz = 0,
         }, CancellationToken.None);
 
-        session.SessionUpdateEvents.Count.ShouldBe(1);
+        session.SessionUpdateEvents.Count.ShouldBe(2);
     }
 
     [Fact]
@@ -524,7 +543,7 @@ public class OpenAIRealtimeProviderTests
             Instructions = "test",
         }, CancellationToken.None);
 
-        using var document = JsonDocument.Parse(session.SessionUpdateEvents.Single());
+        using var document = JsonDocument.Parse(session.SessionUpdateEvents.Last());
         var configuredSession = document.RootElement.GetProperty("session");
         configuredSession.GetProperty("tools").GetArrayLength().ShouldBe(0);
         configuredSession.TryGetProperty("tool_choice", out _).ShouldBeFalse();
