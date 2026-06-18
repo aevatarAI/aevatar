@@ -20,24 +20,8 @@ public static class PolicyAwareVoiceEndpoints
 {
     private const string DefaultPattern = "/ws/voice";
     internal const string VoiceNotConfiguredReason = "voice_not_configured";
-    private const string ScopeClaimType = "scope";
     private const string RemoteAudioTransportUnavailableReason = "remote_audio_transport_unavailable";
     private const string VoiceCredentialUnavailableReason = "voice_credential_unavailable";
-    private static readonly string[] RoleClaimTypes =
-    [
-        "scope_role",
-        "scope.role",
-        "role",
-        ClaimTypes.Role,
-    ];
-
-    private static readonly HashSet<string> AdminRoleValues = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "admin",
-        "owner",
-        "scope-admin",
-        "scope_admin",
-    };
 
     public static IEndpointConventionBuilder MapPolicyAwareVoiceEndpoint(this IEndpointRouteBuilder app) =>
         app.Map(DefaultPattern, HandlePolicyAwareVoiceAsync);
@@ -53,13 +37,12 @@ public static class PolicyAwareVoiceEndpoints
 
     /// <summary>
     /// Fail-closed stand-ins for deployments without a configured voice
-    /// provider: both voice routes answer 503 voice_not_configured instead
-    /// of throwing an unhandled DI exception.
+    /// provider: the Mainnet voice ingress answers 503 voice_not_configured
+    /// instead of throwing an unhandled DI exception.
     /// </summary>
     public static IEndpointRouteBuilder MapVoiceNotConfiguredEndpoints(this IEndpointRouteBuilder app)
     {
         app.Map(DefaultPattern, HandleVoiceNotConfiguredAsync);
-        app.Map(DefaultPattern + "/{actorId}", HandleVoiceNotConfiguredAsync);
         return app;
     }
 
@@ -537,20 +520,6 @@ public static class PolicyAwareVoiceEndpoints
         string.Equals(channel, "nyxid", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(channel, "cli", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(channel, "web", StringComparison.OrdinalIgnoreCase);
-
-    internal static bool IsVoiceDevBypassPrincipal(ClaimsPrincipal user) =>
-        HasScope(user, "voice:bypass") || HasAdminRole(user);
-
-    private static bool HasScope(ClaimsPrincipal user, string scope) =>
-        user.Claims
-            .Where(static claim => string.Equals(claim.Type, ScopeClaimType, StringComparison.OrdinalIgnoreCase))
-            .SelectMany(static claim => (claim.Value ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-            .Any(value => string.Equals(value, scope, StringComparison.Ordinal));
-
-    private static bool HasAdminRole(ClaimsPrincipal user) =>
-        user.Claims.Any(static claim =>
-            RoleClaimTypes.Contains(claim.Type, StringComparer.OrdinalIgnoreCase) &&
-            AdminRoleValues.Contains(claim.Value?.Trim() ?? string.Empty));
 
     private static string? FirstNonEmpty(params string?[] values)
     {

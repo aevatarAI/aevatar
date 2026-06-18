@@ -107,9 +107,11 @@ Authoritative schema: `src/Aevatar.Foundation.VoicePresence.Abstractions/Protos/
 The edge consumes a JSON projection of it (camelCase), hand-parsed by
 `voice-presence` `Aevatar/AevatarRealtimeFrameParser.cs`.
 
-- **Endpoint** — `GET /ws/voice` (policy-resolved) and `GET /ws/voice/{actorId}`
-  (dev/admin bypass). Auth: `Authorization: Bearer <NyxID JWT>` or
-  `?access_token=`. Query: `codec=pcm16`, `mode`, `voice_module_name`.
+- **Endpoint** — `GET /ws/voice` (policy-resolved). Auth:
+  `Authorization: Bearer <NyxID JWT>` or `?access_token=`. Query:
+  `codec=pcm16`, `mode`, `voice_module_name`. Mainnet does not expose an
+  actor-id path; explicit voice attachment is represented only by typed
+  `ForwardToModel.tool_choice_hint.voice_attach_target`.
 - **Audio** — WebSocket **binary** frames carry raw PCM16 (24 kHz) both
   directions. `audio_received` / `audio_output` are `reserved` in the proto:
   audio was deliberately pulled out of the envelope.
@@ -267,7 +269,7 @@ Hardening and contract-completeness follow-ups are tracked under **milestone 23
 - #2153 — reuse the live relay provider session for upstream sends (barge-in latency)
 - #2155 — route-scoped voice tool execution context (unblocks per-caller edge tools)
 - #2157 — replay protection for the device-event HMAC ingress
-- #2158 — harden / gate the `/ws/voice` dev-bypass route
+- #2158 — remove Mainnet's `/ws/voice/{actorId}` dev-bypass route
 - #2159 — `/ws/voice` reconnect/reattach contract + wire dead attach timeouts
 - #2160 — version the wire contract + ship a shared frame/vocabulary descriptor
 - #2161 — operator setup guide for aevatar-mode voice
