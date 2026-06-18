@@ -618,7 +618,7 @@ const enUSMessages = {
   'teams.automations.form.displayNameAria': 'Automation name',
   'teams.automations.form.displayNamePlaceholder': 'Daily escalation digest',
   'teams.automations.form.editPromptHint':
-    'Re-enter the recurring prompt to save changes.',
+    'Optional: leave it blank to save without a recurring prompt.',
   'teams.automations.form.editTitle': 'Edit automation',
   'teams.automations.form.enabled': 'Enabled',
   'teams.automations.form.identityMissing':
@@ -636,9 +636,10 @@ const enUSMessages = {
     'Preview the cadence to confirm the next scheduled runs.',
   'teams.automations.form.previewHint':
     'Preview uses the schedule service before saving.',
-  'teams.automations.form.prompt': 'Recurring prompt',
-  'teams.automations.form.promptAria': 'Recurring prompt',
-  'teams.automations.form.promptLimit': 'Up to {maxLength} characters.',
+  'teams.automations.form.prompt': 'Recurring prompt (optional)',
+  'teams.automations.form.promptAria': 'Recurring prompt (optional)',
+  'teams.automations.form.promptLimit':
+    'Optional. Up to {maxLength} characters.',
   'teams.automations.form.promptPlaceholder':
     'Summarize escalations, blocked accounts, and follow-up owners.',
   'teams.automations.form.save': 'Save changes',
@@ -651,7 +652,7 @@ const enUSMessages = {
     "Recurring work runs through the selected member's published service.",
   'teams.automations.form.section.work': '2. Work to run',
   'teams.automations.form.section.workHint':
-    'Name the automation and write the prompt the member receives each time.',
+    'Name the automation and optionally add a prompt for each run.',
   'teams.automations.form.timezone': 'Timezone',
   'teams.automations.form.timezoneAria': 'Timezone',
   'teams.automations.form.title': 'New member automation',
@@ -670,8 +671,6 @@ const enUSMessages = {
   'teams.automations.messages.previewFailed': 'Preview failed: {message}',
   'teams.automations.messages.promptTooLong':
     'Recurring prompt must be {maxLength} characters or fewer.',
-  'teams.automations.messages.promptRequired':
-    'Describe the recurring work before saving it.',
   'teams.automations.messages.runNowFailed': 'Run request failed: {message}',
   'teams.automations.messages.runNowSuccess': 'Run requested.',
   'teams.automations.messages.serviceIdentityLoading':
@@ -811,20 +810,33 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.executionPanel.consoleAria':
     'Draft run console',
   'teamMemberWorkflowStudio.executionPanel.duration': 'Duration',
+  'teamMemberWorkflowStudio.executionPanel.clear': 'Clear logs',
+  'teamMemberWorkflowStudio.executionPanel.copyAll': 'Copy all logs',
+  'teamMemberWorkflowStudio.executionPanel.copyAllDone': 'Copied all logs.',
+  'teamMemberWorkflowStudio.executionPanel.copySelected': 'Copy selected log',
+  'teamMemberWorkflowStudio.executionPanel.copySelectedDone':
+    'Copied selected log.',
   'teamMemberWorkflowStudio.executionPanel.emptyEvidence':
-    'Usage, snapshots, and raw observed events will appear here when the backend emits them.',
+    'Runtime events will appear here when the backend emits them.',
+  'teamMemberWorkflowStudio.executionPanel.emptyEventPayload':
+    'No event payload was captured.',
   'teamMemberWorkflowStudio.executionPanel.emptyLogs':
-    'Step outputs will appear here after the workflow draft runs.',
+    'Node logs will appear after the workflow draft runs.',
   'teamMemberWorkflowStudio.executionPanel.emptyNodeInput':
-    'No user input provided.',
+    'No input captured for this node.',
   'teamMemberWorkflowStudio.executionPanel.emptyNodeOutput':
-    'No output captured.',
+    'No output captured for this node.',
   'teamMemberWorkflowStudio.executionPanel.emptyOutput':
     'Output will appear after the draft run emits a result.',
+  'teamMemberWorkflowStudio.executionPanel.error': 'Error',
   'teamMemberWorkflowStudio.executionPanel.evidence': 'Evidence frames',
+  'teamMemberWorkflowStudio.executionPanel.eventCount': '{count} events',
+  'teamMemberWorkflowStudio.executionPanel.eventPayload': 'Event payload',
   'teamMemberWorkflowStudio.executionPanel.events': 'Events',
   'teamMemberWorkflowStudio.executionPanel.items': 'items',
+  'teamMemberWorkflowStudio.executionPanel.logDetails': 'Log details',
   'teamMemberWorkflowStudio.executionPanel.logs': 'Logs',
+  'teamMemberWorkflowStudio.executionPanel.logsOverview': 'Logs overview',
   'teamMemberWorkflowStudio.executionPanel.node': 'Node',
   'teamMemberWorkflowStudio.executionPanel.nodeInput': 'Input',
   'teamMemberWorkflowStudio.executionPanel.nodeInteraction': 'Interaction',
@@ -832,14 +844,24 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.executionPanel.nodePrompt': 'Prompt',
   'teamMemberWorkflowStudio.executionPanel.nodeRunCardAria':
     '{stepId} node run',
+  'teamMemberWorkflowStudio.executionPanel.nodes': 'Nodes',
   'teamMemberWorkflowStudio.executionPanel.output': 'Output',
+  'teamMemberWorkflowStudio.executionPanel.overview': 'Overview',
   'teamMemberWorkflowStudio.executionPanel.rawFrames':
-    '{count} run event(s) received, but no step output is available yet.',
+    '{count} run event(s) received, but no node output is available yet.',
   'teamMemberWorkflowStudio.executionPanel.resultFirst': 'Result',
   'teamMemberWorkflowStudio.executionPanel.runLog': 'Run log',
+  'teamMemberWorkflowStudio.executionPanel.selectLog':
+    'Select a log entry to inspect its input, output, and raw event data.',
   'teamMemberWorkflowStudio.executionPanel.steps': 'Steps',
+  'teamMemberWorkflowStudio.executionPanel.status.error': 'Error',
+  'teamMemberWorkflowStudio.executionPanel.status.recorded': 'Recorded',
+  'teamMemberWorkflowStudio.executionPanel.status.running': 'Running',
+  'teamMemberWorkflowStudio.executionPanel.status.success': 'Success',
+  'teamMemberWorkflowStudio.executionPanel.status.waiting': 'Waiting',
   'teamMemberWorkflowStudio.executionPanel.summary': 'Summary',
   'teamMemberWorkflowStudio.executionPanel.timeline': 'Timeline',
+  'teamMemberWorkflowStudio.executionPanel.tokens': 'Tokens',
   'teamMemberWorkflowStudio.executionsPanel.description':
     'This tab only shows executions that can be safely scoped to the current workflow member by stable workflow or service identifiers.',
   'teamMemberWorkflowStudio.executionsPanel.empty':
@@ -901,6 +923,7 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.header.tabs.executions': 'Executions',
   'teamMemberWorkflowStudio.header.tabs.runs': 'Runs',
   'teamMemberWorkflowStudio.header.publish.binding': 'Binding',
+  'teamMemberWorkflowStudio.header.publish.bindingStatus': 'Binding',
   'teamMemberWorkflowStudio.header.publish.draft': 'Draft',
   'teamMemberWorkflowStudio.header.publish.error': 'Error',
   'teamMemberWorkflowStudio.header.publish.published': 'Published',
