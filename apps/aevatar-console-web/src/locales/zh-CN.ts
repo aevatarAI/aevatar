@@ -922,13 +922,38 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.draftRunPanel.closeAria': '关闭草稿运行面板',
   'teamMemberWorkflowStudio.draftRunPanel.emptyInputHint':
     '留空则不携带用户输入运行。',
+  'teamMemberWorkflowStudio.draftRunPanel.addFiles': '添加文件',
+  'teamMemberWorkflowStudio.draftRunPanel.clearFiles': '清空文件',
+  'teamMemberWorkflowStudio.draftRunPanel.fileMeta': '{size} · {type}',
+  'teamMemberWorkflowStudio.draftRunPanel.filesHint':
+    '文件只会随本次草稿运行发送。',
+  'teamMemberWorkflowStudio.draftRunPanel.filesDropPrompt':
+    '点击上传或拖拽文件到这里',
+  'teamMemberWorkflowStudio.draftRunPanel.filesSelectedNotice':
+    '已选择 {count} 个文件，将仅在本次运行会话中临时保存。',
+  'teamMemberWorkflowStudio.draftRunPanel.filesSectionAria':
+    '运行输入文件',
+  'teamMemberWorkflowStudio.draftRunPanel.filesSoftLimit':
+    '超过 10 MB 的文件可能会被运行时拒绝。',
+  'teamMemberWorkflowStudio.draftRunPanel.filesSoftLimitCompact':
+    '单文件最大 10 MB',
+  'teamMemberWorkflowStudio.draftRunPanel.filesTemporaryNotice':
+    '已选择的文件只会在本次运行会话中临时保存。',
+  'teamMemberWorkflowStudio.draftRunPanel.filesTitle': '运行输入文件',
+  'teamMemberWorkflowStudio.draftRunPanel.fileSizeBytes': '{size} B',
+  'teamMemberWorkflowStudio.draftRunPanel.fileSizeKb': '{size} KB',
+  'teamMemberWorkflowStudio.draftRunPanel.fileSizeMb': '{size} MB',
+  'teamMemberWorkflowStudio.draftRunPanel.fileSizeZero': '0 B',
   'teamMemberWorkflowStudio.draftRunPanel.messageLabel':
     '草稿运行输入',
   'teamMemberWorkflowStudio.draftRunPanel.messagePlaceholder':
     '本次 Workflow 草稿运行的可选输入',
+  'teamMemberWorkflowStudio.draftRunPanel.noFiles': '未选择文件。',
+  'teamMemberWorkflowStudio.draftRunPanel.removeFile': '移除 {fileName}',
   'teamMemberWorkflowStudio.draftRunPanel.sectionAria': '草稿运行面板',
   'teamMemberWorkflowStudio.draftRunPanel.startDraftRun': '开始草稿运行',
   'teamMemberWorkflowStudio.draftRunPanel.title': '草稿运行',
+  'teamMemberWorkflowStudio.draftRunPanel.unknownFileType': '未知类型',
   'teamMemberWorkflowStudio.runsPanel.description':
     '这个 tab 只展示明确关联到当前 Workflow 成员的运行记录。',
   'teamMemberWorkflowStudio.runsPanel.empty':

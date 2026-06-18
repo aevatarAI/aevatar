@@ -76,6 +76,7 @@ type SavedWorkflowDraft = {
 
 type RunCurrentDraftVariables = {
   readonly document: StudioWorkflowDocument;
+  readonly files: readonly File[];
   readonly runMessage: string;
   readonly title: string;
 };
@@ -185,6 +186,7 @@ type TeamMemberWorkflowStudioState = {
   readonly deleteSelectedConnection: () => void;
   readonly deleteSelectedNode: () => void;
   readonly dirty: boolean;
+  readonly draftRunFiles: readonly File[];
   readonly emptyDescription: string;
   readonly runCurrentDraft: () => void;
   readonly currentDraftRunPending: boolean;
@@ -203,6 +205,8 @@ type TeamMemberWorkflowStudioState = {
   readonly mode: TeamMemberWorkflowStudioMode;
   readonly navigateBack: () => void;
   readonly nodeLibraryOpen: boolean;
+  readonly addDraftRunFiles: (files: readonly File[]) => void;
+  readonly clearDraftRunFiles: () => void;
   readonly openNodeLibrary: () => void;
   readonly openDraftRunPanel: () => void;
   readonly openYamlImportPanel: () => void;
@@ -222,6 +226,7 @@ type TeamMemberWorkflowStudioState = {
   readonly selectEdge: (edgeId: string) => void;
   readonly selectExecutionLog: (index: number | null) => void;
   readonly selectNode: (nodeId: string) => void;
+  readonly removeDraftRunFile: (index: number) => void;
   readonly setExecutionRunMessage: (message: string) => void;
   readonly setWorkflowTitle: (title: string) => void;
   readonly teamName: string;
@@ -242,6 +247,10 @@ const SAVED_WORKFLOW_QUERY_STALE_MS = 30_000;
 
 function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? "";
+}
+
+function getDraftRunFileKey(file: File): string {
+  return `${file.name}:${file.size}:${file.lastModified}`;
 }
 
 function normalizeWorkflowSaveResult(
@@ -972,6 +981,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const [publishErrorVisible, setPublishErrorVisible] = React.useState(true);
   const [nodeLibraryOpen, setNodeLibraryOpen] = React.useState(false);
   const [draftRunPanelOpen, setDraftRunPanelOpen] = React.useState(false);
+  const [draftRunFiles, setDraftRunFiles] = React.useState<readonly File[]>([]);
   const [yamlImportPanelOpen, setYamlImportPanelOpen] = React.useState(false);
   const [yamlImportError, setYamlImportError] = React.useState("");
   const [yamlPanelOpen, setYamlPanelOpen] = React.useState(false);
@@ -991,6 +1001,36 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const suppressedSourceSignatureRef =
     React.useRef<WorkflowSourceSignature | null>(null);
   const teamsHref = buildTeamsHref();
+  const clearDraftRunFiles = React.useCallback(() => {
+    setDraftRunFiles([]);
+  }, []);
+  const closeDraftRunPanel = React.useCallback(() => {
+    setDraftRunPanelOpen(false);
+    setDraftRunFiles([]);
+  }, []);
+  const addDraftRunFiles = React.useCallback((files: readonly File[]) => {
+    if (files.length === 0) {
+      return;
+    }
+
+    setDraftRunFiles((current) => {
+      const existingKeys = new Set(current.map(getDraftRunFileKey));
+      const next = [...current];
+      for (const file of files) {
+        const key = getDraftRunFileKey(file);
+        if (!existingKeys.has(key)) {
+          existingKeys.add(key);
+          next.push(file);
+        }
+      }
+      return next;
+    });
+  }, []);
+  const removeDraftRunFile = React.useCallback((index: number) => {
+    setDraftRunFiles((current) =>
+      current.filter((_, currentIndex) => currentIndex !== index),
+    );
+  }, []);
   const teamQuery = useQuery({
     enabled: Boolean(route.scopeId && route.teamId),
     queryKey: getTeamMemberWorkflowStudioTeamQueryKey(
@@ -1098,6 +1138,9 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     route.scopeId,
     routeDraftWorkflowId,
   );
+  React.useEffect(() => {
+    setDraftRunFiles([]);
+  }, [route.scopeId, route.teamId, route.memberId, routeDraftWorkflowId]);
   const workflowQuery = useQuery({
     enabled: Boolean(
       route.scopeId &&
@@ -1228,7 +1271,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     setWorkflowTitleState(nextTitle);
     setSelectedEdgeId("");
     setSelectedNodeId("");
-    setDraftRunPanelOpen(false);
+    closeDraftRunPanel();
     setYamlImportPanelOpen(false);
     setYamlImportError("");
     setYamlPanelOpen(false);
@@ -1239,6 +1282,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     sourceKey,
     workflowDraftTitle,
     workflowQuery.data?.layout,
+    closeDraftRunPanel,
   ]);
 
   const graph = React.useMemo(
@@ -1668,7 +1712,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       setSelectedEdgeId("");
       setSelectedNodeId("");
       setSelectedStepConfigurationError("");
-      setDraftRunPanelOpen(false);
+      closeDraftRunPanel();
       setYamlImportPanelOpen(false);
       setYamlImportError("");
       setYamlPanelOpen(false);
@@ -1680,6 +1724,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const currentDraftRunMutation = useMutation({
     mutationFn: async ({
       document,
+      files,
       runMessage,
       title,
     }: RunCurrentDraftVariables): Promise<StudioExecutionDetail> => {
@@ -1731,6 +1776,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
             workflowYamls: [serialized.yaml],
           },
           controller.signal,
+          { files },
         );
 
         for await (const event of parseBackendSSEStream(response, {
@@ -1775,6 +1821,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       if (detail.error) {
         void message.error("Workflow draft run failed.");
       } else {
+        clearDraftRunFiles();
         void message.success("Workflow draft run completed.");
       }
     },
@@ -2576,6 +2623,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     deleteSelectedConnection,
     deleteSelectedNode,
     dirty,
+    draftRunFiles,
     emptyDescription:
       route.mode === "new"
         ? "Build the draft locally first, then save it as a linked Team workflow member."
@@ -2595,6 +2643,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
 
       currentDraftRunMutation.mutate({
         document: editableDocument,
+        files: draftRunFiles,
         runMessage: trimOptional(executionRunMessage),
         title: activeMemberTitle,
       });
@@ -2623,6 +2672,8 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       }
     },
     nodeLibraryOpen,
+    addDraftRunFiles,
+    clearDraftRunFiles,
     openNodeLibrary: () => setNodeLibraryOpen(true),
     openDraftRunPanel: () => {
       if (!canOpenDraftRunPanel) {
@@ -2641,7 +2692,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       setSelectedEdgeId("");
       setSelectedNodeId("");
       setSelectedStepConfigurationError("");
-      setDraftRunPanelOpen(false);
+      closeDraftRunPanel();
       setYamlPanelOpen(false);
       setYamlImportError("");
       setYamlImportPanelOpen(true);
@@ -2650,7 +2701,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       setSelectedEdgeId("");
       setSelectedNodeId("");
       setSelectedStepConfigurationError("");
-      setDraftRunPanelOpen(false);
+      closeDraftRunPanel();
       setYamlImportPanelOpen(false);
       setYamlImportError("");
       setYamlPanelOpen(true);
@@ -2707,7 +2758,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       setSelectedNodeId("");
       setSelectedStepConfigurationError("");
       setActiveExecutionLogIndex(null);
-      setDraftRunPanelOpen(false);
+      closeDraftRunPanel();
       setYamlImportPanelOpen(false);
       setYamlImportError("");
       setYamlPanelOpen(false);
@@ -2717,7 +2768,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       setSelectedNodeId("");
       setSelectedStepConfigurationError("");
       setActiveExecutionLogIndex(null);
-      setDraftRunPanelOpen(false);
+      closeDraftRunPanel();
       setYamlImportPanelOpen(false);
       setYamlImportError("");
       setYamlPanelOpen(false);
@@ -2733,11 +2784,12 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
           ? findExecutionLogIndexForStep(executionTrace, selectedStepId)
           : null,
       );
-      setDraftRunPanelOpen(false);
+      closeDraftRunPanel();
       setYamlImportPanelOpen(false);
       setYamlImportError("");
       setYamlPanelOpen(false);
     },
+    removeDraftRunFile,
     setExecutionRunMessage,
     setSelectedStepConfigurationError,
     setWorkflowTitle,

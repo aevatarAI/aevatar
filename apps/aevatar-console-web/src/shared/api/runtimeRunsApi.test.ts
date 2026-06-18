@@ -370,9 +370,64 @@ describe("runtimeRunsApi", () => {
             source: "studio",
           },
         }),
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+        },
         method: "POST",
       })
     );
+  });
+
+  it("routes draft runs with files through multipart form data", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+    } satisfies Partial<Response>);
+    const report = new File(["report"], "report.pdf", {
+      type: "application/pdf",
+    });
+    const image = new File(["image"], "screen.png", {
+      type: "image/png",
+    });
+
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await runtimeRunsApi.streamDraftRun(
+      "scope-1",
+      {
+        prompt: "Run draft",
+        workflowYamls: ["name: draft"],
+        metadata: { source: "studio" },
+        sessionId: "session-1",
+      },
+      new AbortController().signal,
+      { files: [report, image] }
+    );
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/scopes/scope-1/workflow/draft-run",
+      expect.objectContaining({
+        method: "POST",
+      })
+    );
+    expect(init.headers).toEqual({
+      Accept: "text/event-stream",
+    });
+    expect(init.body).toBeInstanceOf(FormData);
+    const form = init.body as FormData;
+    expect(form.get("payload")).toBe(
+      JSON.stringify({
+        eventFormat: "agui",
+        prompt: "Run draft",
+        workflowYamls: ["name: draft"],
+        sessionId: "session-1",
+        headers: {
+          source: "studio",
+        },
+      }),
+    );
+    expect(form.getAll("file")).toEqual([report, image]);
   });
 
   it("routes getRunSummary through the scope run endpoint", async () => {

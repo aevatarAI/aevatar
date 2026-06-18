@@ -643,6 +643,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
         workflowYamls: [expect.any(String)],
       }),
       expect.any(AbortSignal),
+      { files: [] },
     );
     const draftRunPayload = (runtimeRunsApi.streamDraftRun as jest.Mock).mock
       .calls[0][1];
@@ -655,6 +656,116 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(studioApi.updateMemberImplementationRef).not.toHaveBeenCalled();
     expect(studioApi.bindMemberWorkflow).not.toHaveBeenCalled();
     expect(runtimeRunsApi.streamChat).not.toHaveBeenCalled();
+  });
+
+  it("sends selected draft run files as transport options and clears hidden files when closed", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/new/workflow",
+    );
+    (runtimeRunsApi.streamDraftRun as jest.Mock).mockResolvedValue(
+      createSseResponse(),
+    );
+    (parseBackendSSEStream as jest.Mock).mockReturnValue(createWorkflowInvokeEvents());
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Run" }));
+    const draftRunPanel = await screen.findByLabelText("Draft run panel");
+    expect(within(draftRunPanel).getByText("Run input files")).toBeTruthy();
+    expect(
+      within(draftRunPanel).getByText(
+        "Selected files will be temporarily stored for this run session.",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(draftRunPanel).getByText("Click to upload or drag and drop"),
+    ).toBeTruthy();
+
+    const report = new File(["report"], "report.pdf", {
+      lastModified: 1,
+      type: "application/pdf",
+    });
+    const duplicateReport = new File(["report"], "report.pdf", {
+      lastModified: 1,
+      type: "application/pdf",
+    });
+    const image = new File(["image"], "screen.png", {
+      lastModified: 2,
+      type: "image/png",
+    });
+    const fileInput = within(draftRunPanel).getByTestId("draft-run-file-input");
+    fireEvent.change(fileInput, {
+      target: { files: [report, duplicateReport, image] },
+    });
+
+    expect(within(draftRunPanel).getByText("report.pdf")).toBeTruthy();
+    expect(within(draftRunPanel).getByText("screen.png")).toBeTruthy();
+    expect(within(draftRunPanel).getAllByText("report.pdf")).toHaveLength(1);
+    fireEvent.click(
+      within(draftRunPanel).getByRole("button", { name: "Remove screen.png" }),
+    );
+    expect(within(draftRunPanel).queryByText("screen.png")).toBeNull();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Add first step" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Insert LLM call node" }),
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
+    });
+    fireEvent.click(
+      within(draftRunPanel).getByRole("button", { name: "Start draft run" }),
+    );
+
+    await waitFor(() => {
+      expect(runtimeRunsApi.streamDraftRun).toHaveBeenCalledWith(
+        "scope-1",
+        expect.objectContaining({
+          prompt: "",
+          workflowYamls: [expect.any(String)],
+        }),
+        expect.any(AbortSignal),
+        { files: [report] },
+      );
+    });
+    await waitFor(() => {
+      expect(
+        within(draftRunPanel).getByText(
+          "Selected files will be temporarily stored for this run session.",
+        ),
+      ).toBeTruthy();
+    });
+
+    fireEvent.change(fileInput, {
+      target: { files: [image] },
+    });
+    expect(within(draftRunPanel).getByText("screen.png")).toBeTruthy();
+    fireEvent.click(screen.getByText("canvas"));
+    expect(screen.queryByLabelText("Draft run panel")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    const reopenedPanel = await screen.findByLabelText("Draft run panel");
+    expect(
+      within(reopenedPanel).getByText(
+        "Selected files will be temporarily stored for this run session.",
+      ),
+    ).toBeTruthy();
+
+    fireEvent.change(
+      within(reopenedPanel).getByTestId("draft-run-file-input"),
+      {
+        target: { files: [image] },
+      },
+    );
+    expect(within(reopenedPanel).getByText("screen.png")).toBeTruthy();
+    fireEvent.click(within(reopenedPanel).getByRole("button", { name: "Clear files" }));
+    expect(
+      within(reopenedPanel).getByText(
+        "Selected files will be temporarily stored for this run session.",
+      ),
+    ).toBeTruthy();
   });
 
   it("blocks draft runs while the selected new workflow node configuration is invalid", async () => {
@@ -3813,6 +3924,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
           workflowYamls: [expect.stringContaining("name: Workflow Alpha")],
         }),
         expect.any(AbortSignal),
+        { files: [] },
       );
     });
     expect(runtimeRunsApi.streamChat).not.toHaveBeenCalled();
@@ -4341,6 +4453,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
           workflowYamls: [expect.stringContaining("name: Workflow Alpha")],
         }),
         expect.any(AbortSignal),
+        { files: [] },
       );
     });
     const consolePanel = screen.getByLabelText("Draft run console");
@@ -4723,6 +4836,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
           workflowYamls: [expect.stringContaining("name: Workflow Alpha")],
         }),
         expect.any(AbortSignal),
+        { files: [] },
       );
     });
     expect(runtimeRunsApi.streamChat).not.toHaveBeenCalled();

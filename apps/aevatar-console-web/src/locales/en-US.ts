@@ -986,14 +986,39 @@ const enUSMessages = {
     'Close draft run panel',
   'teamMemberWorkflowStudio.draftRunPanel.emptyInputHint':
     'Leave blank to run this draft without user input.',
+  'teamMemberWorkflowStudio.draftRunPanel.addFiles': 'Add files',
+  'teamMemberWorkflowStudio.draftRunPanel.clearFiles': 'Clear files',
+  'teamMemberWorkflowStudio.draftRunPanel.fileMeta': '{size} · {type}',
+  'teamMemberWorkflowStudio.draftRunPanel.filesHint':
+    'Files are sent only with this draft run.',
+  'teamMemberWorkflowStudio.draftRunPanel.filesDropPrompt':
+    'Click to upload or drag and drop',
+  'teamMemberWorkflowStudio.draftRunPanel.filesSelectedNotice':
+    '{count} selected file(s) will be temporarily stored for this run session.',
+  'teamMemberWorkflowStudio.draftRunPanel.filesSectionAria':
+    'Run input files',
+  'teamMemberWorkflowStudio.draftRunPanel.filesSoftLimit':
+    'Files over 10 MB may be rejected by the runtime.',
+  'teamMemberWorkflowStudio.draftRunPanel.filesSoftLimitCompact':
+    'Max size: 10 MB per file',
+  'teamMemberWorkflowStudio.draftRunPanel.filesTemporaryNotice':
+    'Selected files will be temporarily stored for this run session.',
+  'teamMemberWorkflowStudio.draftRunPanel.filesTitle': 'Run input files',
+  'teamMemberWorkflowStudio.draftRunPanel.fileSizeBytes': '{size} B',
+  'teamMemberWorkflowStudio.draftRunPanel.fileSizeKb': '{size} KB',
+  'teamMemberWorkflowStudio.draftRunPanel.fileSizeMb': '{size} MB',
+  'teamMemberWorkflowStudio.draftRunPanel.fileSizeZero': '0 B',
   'teamMemberWorkflowStudio.draftRunPanel.messageLabel':
     'Draft run input',
   'teamMemberWorkflowStudio.draftRunPanel.messagePlaceholder':
     'Optional input sent to this workflow draft run',
+  'teamMemberWorkflowStudio.draftRunPanel.noFiles': 'No files selected.',
+  'teamMemberWorkflowStudio.draftRunPanel.removeFile': 'Remove {fileName}',
   'teamMemberWorkflowStudio.draftRunPanel.sectionAria': 'Draft run panel',
   'teamMemberWorkflowStudio.draftRunPanel.startDraftRun':
     'Start draft run',
   'teamMemberWorkflowStudio.draftRunPanel.title': 'Draft run',
+  'teamMemberWorkflowStudio.draftRunPanel.unknownFileType': 'unknown type',
   'teamMemberWorkflowStudio.runsPanel.description':
     'This tab only shows runs with an explicit link to the current workflow member.',
   'teamMemberWorkflowStudio.runsPanel.empty':
