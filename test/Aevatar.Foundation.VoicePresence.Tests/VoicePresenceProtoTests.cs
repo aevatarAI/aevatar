@@ -64,6 +64,7 @@ public class VoicePresenceProtoTests
             Name = "door.close",
             Description = "close the front door",
             ParametersSchema = """{"type":"object"}""",
+            Owner = VoiceToolOwner.Client,
         });
 
         var parsedControl = VoiceControlFrame.Parser.ParseFrom(controlFrame.ToByteArray());
@@ -83,6 +84,8 @@ public class VoicePresenceProtoTests
             .ShouldContain(nameof(VoiceToolDefinition));
         VoicePresenceReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(VoicePresenceEventDedupeFenceEntry));
+        sessionConfig.ToolDefinitions[0].Owner.ShouldBe(VoiceToolOwner.Client);
+        VoiceToolDefinition.Descriptor.Fields["owner"].FieldNumber.ShouldBe(4);
         VoiceTransportSessionAccepted.Descriptor.Fields.InDeclarationOrder()
             .Select(static field => field.Name)
             .ShouldContain("wire_contract_version");
@@ -95,6 +98,84 @@ public class VoicePresenceProtoTests
                 "max_bytes",
                 "allowed_media_types",
             ]);
+    }
+
+    [Fact]
+    public void VoiceFunctionCallOutput_should_roundtrip_through_control_frame_and_runtime_state()
+    {
+        var output = new VoiceFunctionCallOutput
+        {
+            CallId = "call-client-1",
+            ToolName = "edge.light.toggle",
+            OutputJson = """{"ok":true}""",
+        };
+        var controlFrame = new VoiceControlFrame
+        {
+            FunctionCallOutput = output.Clone(),
+        };
+        var pendingCall = new VoicePendingClientToolCall
+        {
+            CallId = "call-client-1",
+            ToolName = "edge.light.toggle",
+            ArgumentsJson = """{"room":"entry"}""",
+            ResponseId = 7,
+            ProviderResponseId = "provider-r7",
+            SessionId = "session-1",
+            OwnerId = "host-1",
+            TransportLeaseId = "transport-1",
+            LeaseEpoch = 4,
+            ExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(10)),
+        };
+        var runtimeState = new VoicePresenceRuntimeState();
+        runtimeState.PendingClientToolCalls.Add(pendingCall.Clone());
+
+        var parsedControl = VoiceControlFrame.Parser.ParseFrom(controlFrame.ToByteArray());
+        var parsedState = VoicePresenceRuntimeState.Parser.ParseFrom(runtimeState.ToByteArray());
+
+        parsedControl.ShouldBe(controlFrame);
+        parsedControl.FrameCase.ShouldBe(VoiceControlFrame.FrameOneofCase.FunctionCallOutput);
+        parsedControl.FunctionCallOutput.ResultCase.ShouldBe(VoiceFunctionCallOutput.ResultOneofCase.OutputJson);
+        parsedControl.FunctionCallOutput.OutputJson.ShouldBe("""{"ok":true}""");
+        parsedState.PendingClientToolCalls.ShouldHaveSingleItem().ShouldBe(pendingCall);
+        VoiceControlFrame.Descriptor.Oneofs.Single(static oneof => oneof.Name == "frame").Fields
+            .Single(static field => field.Name == "function_call_output")
+            .FieldNumber.ShouldBe(5);
+        VoicePresenceRuntimeState.Descriptor.Fields["pending_client_tool_calls"].FieldNumber.ShouldBe(24);
+        VoicePresenceReflection.Descriptor.MessageTypes.Select(static x => x.Name)
+            .ShouldContain(nameof(VoiceFunctionCallOutput));
+        VoicePresenceReflection.Descriptor.MessageTypes.Select(static x => x.Name)
+            .ShouldContain(nameof(VoicePendingClientToolCall));
+    }
+
+    [Fact]
+    public void VoiceModuleSignal_should_roundtrip_client_tool_timeout_with_tag_20()
+    {
+        var timeout = new VoiceClientToolCallTimeoutExpired
+        {
+            SessionId = "lease-1",
+            OwnerId = "host-1",
+            TransportLeaseId = "transport-1",
+            LeaseEpoch = 14,
+            CallId = "call-client-1",
+            ToolName = "edge.light.toggle",
+        };
+        var signal = new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            ClientToolCallTimeoutExpired = timeout,
+        };
+
+        var parsed = VoiceModuleSignal.Parser.ParseFrom(signal.ToByteArray());
+        var signalOneof = VoiceModuleSignal.Descriptor.Oneofs
+            .Single(static oneof => oneof.Name == "signal");
+        var timeoutField = signalOneof.Fields
+            .Single(static field => field.Name == "client_tool_call_timeout_expired");
+
+        parsed.ShouldBe(signal);
+        parsed.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.ClientToolCallTimeoutExpired);
+        parsed.ClientToolCallTimeoutExpired.ShouldBe(timeout);
+        timeoutField.FieldNumber.ShouldBe(20);
+        timeoutField.MessageType.Name.ShouldBe(nameof(VoiceClientToolCallTimeoutExpired));
     }
 
     [Fact]
