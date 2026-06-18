@@ -293,7 +293,32 @@ public static class PolicyAwareVoiceEndpoints
             SenderBindingId = NormalizeOptional(http.Request.Query["sender_binding_id"].ToString()) ?? string.Empty,
         };
 
+        // Slim the voice tool surface to the NyxID service-operation tools (overridable via
+        // VOICE_TOOL_ALLOWLIST). Unrestricted, the model session gets ~69 tools across every source
+        // (skills / workflow / storage / nyxid account-mgmt), which overwhelms the realtime model's
+        // tool selection so it never calls nyxid_proxy for Home Assistant. AllowedToolNames flows to
+        // both the actor and the relay (model) tool discovery, so the model only sees this focused set.
+        foreach (var allowed in ResolveVoiceToolAllowlist())
+            toolContext.AllowedToolNames.Add(allowed);
+
         return new VoiceToolContextAdmission(true, toolContext, issued.TransportBinding);
+    }
+
+    // The realtime voice agent's job is to operate the user's NyxID-connected services, so by default
+    // it only needs: nyxid_proxy (call any service — Home Assistant, Frigate, …), nyxid_status /
+    // nyxid_services (what's connected), nyxid_catalog (what else can be connected). Override with a
+    // comma-separated VOICE_TOOL_ALLOWLIST to widen or change the set.
+    private static readonly string[] DefaultVoiceToolAllowlist =
+        ["nyxid_proxy", "nyxid_status", "nyxid_services", "nyxid_catalog"];
+
+    private static IReadOnlyList<string> ResolveVoiceToolAllowlist()
+    {
+        var configured = Environment.GetEnvironmentVariable("VOICE_TOOL_ALLOWLIST");
+        if (string.IsNullOrWhiteSpace(configured))
+            return DefaultVoiceToolAllowlist;
+
+        var names = configured.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return names.Length > 0 ? names : DefaultVoiceToolAllowlist;
     }
 
     private sealed record VoiceToolContextAdmission(

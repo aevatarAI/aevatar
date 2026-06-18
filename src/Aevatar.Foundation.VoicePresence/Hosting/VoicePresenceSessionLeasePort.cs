@@ -56,7 +56,9 @@ public sealed class VoicePresenceSessionLeasePort : IVoicePresenceSessionLeasePo
             observed.RemoteAudioSupport,
             observed.ActiveTransportLeaseId,
             observed.LeaseEpoch,
-            request.ToolContext?.Clone());
+            request.ToolContext?.Clone(),
+            // Carry the resolved per-session prompt so the host-side relay session can apply it.
+            request.SessionOverrides?.Instructions);
     }
 
     public Task ReleaseAsync(
