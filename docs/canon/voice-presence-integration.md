@@ -14,6 +14,13 @@ the current-state map of the contract, the runtime planes, and the ownership
 boundary. Hardening / open work is tracked in **milestone 23 "Voice Realtime"**;
 design rationale lives in the referenced ADRs and is not restated here.
 
+Operator setup steps live in
+`docs/operations/2026-06-18-aevatar-mode-voice-presence-setup.md`. Keep this
+canon page as the contract SSOT; the runbook must only assemble verified
+surfaces from this page, the referenced ADRs, NyxID node/service/device
+registration, aevatar device-event ingress, `voice-presence/enable`, the
+voice-capability read model, and `/ws/voice`.
+
 ## Scope
 
 `voice-presence` is a standalone ASP.NET edge server (the home-presence device
@@ -227,6 +234,7 @@ sequenceDiagram
 - ADR-0033 — Voice Provider Credential via NyxID Ephemeral Broker
 - ADR-013 — NyxID pure passthrough (media red line)
 - `docs/canon/nyxid-connected-service-tools.md`
+- `docs/operations/2026-06-18-aevatar-mode-voice-presence-setup.md`
 - Milestone 23 "Voice Realtime" — foundational slices #1939–#1945 (merged)
 
 ## Open work
