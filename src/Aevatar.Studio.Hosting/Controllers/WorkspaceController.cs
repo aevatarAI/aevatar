@@ -163,7 +163,7 @@ public sealed class WorkspaceController : ControllerBase
     }
 
     [HttpPost("workflow-drafts")]
-    public async Task<ActionResult<WorkflowDraftResponse>> CreateDraft(
+    public async Task<ActionResult> CreateDraft(
         [FromBody] SaveWorkflowDraftRequest request,
         [FromQuery] string? scopeId,
         CancellationToken cancellationToken)
@@ -177,7 +177,7 @@ public sealed class WorkspaceController : ControllerBase
         {
             try
             {
-                return Ok(await _scopeWorkflowService.CreateDraftAsync(scopeContext.ScopeId, request, cancellationToken));
+                return Accepted(await _scopeWorkflowService.CreateDraftAsync(scopeContext.ScopeId, request, cancellationToken));
             }
             catch (AppApiException exception)
             {

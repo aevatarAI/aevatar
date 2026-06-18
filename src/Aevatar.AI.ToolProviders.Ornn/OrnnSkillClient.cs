@@ -236,6 +236,55 @@ public sealed class OrnnSkillClient
         }
     }
 
+    public async Task<OrnnSkillPublishResponse> UpdateSkillAsync(
+        string accessToken,
+        string skillId,
+        byte[] zipBytes,
+        CancellationToken ct = default)
+    {
+        var path = $"/api/v1/skills/{Uri.EscapeDataString(skillId)}";
+        using var timeoutCts = new CancellationTokenSource(_perCallTimeout);
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+
+        try
+        {
+            var response = await _nyxApi.ProxyRequestBinaryAsync(
+                token: accessToken,
+                slug: _options.NyxIdSlug,
+                path: path,
+                method: "PUT",
+                body: zipBytes,
+                contentType: "application/zip",
+                extraHeaders: null,
+                ct: linkedCts.Token);
+
+            if (TryUnwrapNyxIdProxyError(response, out var proxyError))
+                return new OrnnSkillPublishResponse(false, response, proxyError.Detail);
+
+            return new OrnnSkillPublishResponse(true, response);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
+        {
+            _logger.LogWarning(
+                "Ornn skill update exceeded {TimeoutSeconds}s per-call budget for '{SkillId}'",
+                (int)_perCallTimeout.TotalSeconds,
+                skillId);
+            return new OrnnSkillPublishResponse(
+                false,
+                string.Empty,
+                $"Ornn skill update exceeded {(int)_perCallTimeout.TotalSeconds}s budget.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Ornn skill update failed for '{SkillId}'", skillId);
+            return new OrnnSkillPublishResponse(false, string.Empty, ex.Message);
+        }
+    }
+
     /// <summary>
     /// Detect the wrapped error envelope NyxIdApiClient.SendAsync emits when the upstream
     /// returns non-2xx (<c>{"error": true, "status": N, "body": "..."}</c>) so callers see a
@@ -262,6 +311,7 @@ public sealed class OrnnSkillClient
                          statusProp.ValueKind == JsonValueKind.Number
                 ? statusProp.GetInt32()
                 : 0;
+            var upstreamDetail = TryExtractUpstreamOrnnReason(root);
 
             // 404 here means NyxID could not resolve `_options.NyxIdSlug` to an upstream: either
             // the user has not bound an Ornn service to this slug, or the deployment's NyxID
@@ -270,9 +320,8 @@ public sealed class OrnnSkillClient
             // of a bare "status=404".
             var detail = status switch
             {
-                403 => $"Ornn skill API access denied through NyxID proxy slug '{_options.NyxIdSlug}'. " +
-                       "The API key is missing proxy scope or service authorization for the Ornn UserService. " +
-                       "Reconnect the Ornn service in NyxID and recreate or rotate the scheduled agent key.",
+                403 when !string.IsNullOrWhiteSpace(upstreamDetail) => upstreamDetail,
+                403 => BuildProxyScopeAccessDeniedDetail(),
                 404 => $"Ornn skill API not reachable: NyxID has no service bound to slug '{_options.NyxIdSlug}'. " +
                        "The user may need to connect their Ornn account via NyxID (nyxid_services action=create), " +
                        "or the deployment may need to override Aevatar:Ornn:NyxIdSlug.",
@@ -286,6 +335,54 @@ public sealed class OrnnSkillClient
             return false;
         }
     }
+
+    private string BuildProxyScopeAccessDeniedDetail() =>
+        $"Ornn skill API access denied through NyxID proxy slug '{_options.NyxIdSlug}'. " +
+        "The API key is missing proxy scope or service authorization for the Ornn UserService. " +
+        "Reconnect the Ornn service in NyxID and recreate or rotate the scheduled agent key.";
+
+    private static string? TryExtractUpstreamOrnnReason(JsonElement root)
+    {
+        var body = root.TryGetProperty("body", out var bodyProp) && bodyProp.ValueKind == JsonValueKind.String
+            ? bodyProp.GetString()
+            : null;
+        if (string.IsNullOrWhiteSpace(body))
+            return null;
+
+        var trimmed = body.Trim();
+        if (!trimmed.StartsWith('{'))
+            return trimmed;
+
+        try
+        {
+            using var bodyDocument = JsonDocument.Parse(trimmed);
+            var bodyRoot = bodyDocument.RootElement;
+            if (bodyRoot.ValueKind != JsonValueKind.Object)
+                return trimmed;
+
+            if (bodyRoot.TryGetProperty("error", out var errorProp) &&
+                errorProp.ValueKind == JsonValueKind.Object)
+            {
+                var code = TryReadString(errorProp, "code");
+                var message = TryReadString(errorProp, "message");
+                if (!string.IsNullOrWhiteSpace(message))
+                    return string.IsNullOrWhiteSpace(code) ? message : $"{code}: {message}";
+            }
+
+            return TryReadString(bodyRoot, "message") ??
+                   TryReadString(bodyRoot, "detail");
+        }
+        catch (JsonException)
+        {
+            return trimmed;
+        }
+    }
+
+    private static string? TryReadString(JsonElement root, string propertyName) =>
+        root.TryGetProperty(propertyName, out var prop) && prop.ValueKind == JsonValueKind.String &&
+        !string.IsNullOrWhiteSpace(prop.GetString())
+            ? prop.GetString()
+            : null;
 
     private sealed record NyxIdProxyError(int Status, string Detail);
 }

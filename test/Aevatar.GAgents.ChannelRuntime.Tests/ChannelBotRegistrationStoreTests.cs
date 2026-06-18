@@ -81,6 +81,7 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
             NyxChannelBotId = "bot-1",
             NyxAgentApiKeyId = "key-1",
             NyxConversationRouteId = "route-1",
+            NyxReplyCredentialRef = "secrets://channel/nyxid/lark/reg-1/reply-api-key",
         });
 
         _agent.State.Registrations.Should().ContainSingle();
@@ -93,6 +94,7 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
         entry.NyxChannelBotId.Should().Be("bot-1");
         entry.NyxAgentApiKeyId.Should().Be("key-1");
         entry.NyxConversationRouteId.Should().Be("route-1");
+        entry.NyxReplyCredentialRef.Should().Be("secrets://channel/nyxid/lark/reg-1/reply-api-key");
         entry.Tombstoned.Should().BeFalse();
     }
 

@@ -11,6 +11,7 @@
 
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.GAgentService.Hosting.DependencyInjection;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Host.Api;
 
@@ -23,6 +24,14 @@ builder.AddAevatarDefaultHost(
         options.EnableWebSockets = true;
     });
 builder.AddAevatarPlatform();
+builder.Services.AddNyxIdTools(options =>
+{
+    options.BaseUrl = builder.Configuration["Aevatar:NyxId:Authority"]
+                      ?? builder.Configuration["Cli:App:NyxId:Authority"]
+                      ?? builder.Configuration["Aevatar:Authentication:Authority"];
+    if (long.TryParse(builder.Configuration["Aevatar:NyxId:ProxyFileArtifactMaxBytes"], out var maxBytes))
+        options.ProxyFileArtifactMaxBytes = maxBytes;
+});
 builder.Services.AddScheduledDispatchCapability(builder.Configuration);
 builder.AddAevatarWorkflowObservability();
 

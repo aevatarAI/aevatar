@@ -26,6 +26,7 @@ message ChannelBotRegistrationEntry {
   string nyx_conversation_route_id = 11;
   reserved 12;
   reserved "credential_ref";
+  string nyx_reply_credential_ref = 13;
 }
 
 message ChannelBotRegistrationStoreState {
@@ -54,6 +55,7 @@ message ChannelBotRegisterCommand {
   string nyx_conversation_route_id = 8;
   reserved 9;
   reserved "credential_ref";
+  string nyx_reply_credential_ref = 10;
 }
 
 message ChannelBotUnregisterCommand {
@@ -107,6 +109,7 @@ message ChannelBotRegistrationDocument {
   string nyx_conversation_route_id = 12;
   reserved 13;
   reserved "credential_ref";
+  string nyx_reply_credential_ref = 14;
 }
 
 // ─── Relay / conversation normalization ───

@@ -39,6 +39,7 @@ public sealed class NyxIdLLMProvider : ILLMProvider
 
     private readonly string _defaultModel;
     private readonly Uri _defaultNyxEndpoint;
+    private readonly string _defaultRoutePreference;
     private readonly Uri _authorityBase;
     private readonly Func<string?> _accessTokenAccessor;
     private readonly ILogger _logger;
@@ -48,6 +49,7 @@ public sealed class NyxIdLLMProvider : ILLMProvider
         string defaultModel,
         string nyxEndpoint,
         Func<string?> accessTokenAccessor,
+        string? defaultRoutePreference = null,
         ILogger? logger = null)
     {
         if (string.IsNullOrWhiteSpace(name))
@@ -60,6 +62,11 @@ public sealed class NyxIdLLMProvider : ILLMProvider
         Name = name.Trim();
         _defaultModel = defaultModel.Trim();
         _defaultNyxEndpoint = NormalizeNyxEndpoint(nyxEndpoint);
+        // When a request carries no route override (the server-default path nulls it), prefer
+        // this configured default route over the bare NyxID gateway. The gateway forwards to the
+        // OpenAI provider, which fails closed for deployments that have not connected OpenAI;
+        // the default route (e.g. the public chrono-llm route) is the connected fallback.
+        _defaultRoutePreference = NormalizeRoutePreference(defaultRoutePreference);
         _authorityBase = ResolveAuthorityBase(_defaultNyxEndpoint);
         _accessTokenAccessor = accessTokenAccessor ?? throw new ArgumentNullException(nameof(accessTokenAccessor));
         _logger = logger ?? NullLogger.Instance;
@@ -275,7 +282,15 @@ public sealed class NyxIdLLMProvider : ILLMProvider
         string routePreference)
     {
         if (string.IsNullOrWhiteSpace(routePreference))
+        {
+            if (!string.IsNullOrWhiteSpace(_defaultRoutePreference))
+            {
+                var defaultEndpoint = new Uri(_authorityBase, _defaultRoutePreference.TrimStart('/'));
+                return new NyxIdResolvedRoute(_defaultRoutePreference, defaultEndpoint, request, accessToken);
+            }
+
             return new NyxIdResolvedRoute(Name, _defaultNyxEndpoint, request, accessToken);
+        }
 
         var endpoint = new Uri(_authorityBase, routePreference.TrimStart('/'));
         return new NyxIdResolvedRoute(routePreference, endpoint, request, accessToken);

@@ -217,6 +217,9 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             x.ServiceType == typeof(ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>) &&
             x.ImplementationType == typeof(DefaultCommandDispatchService<WorkflowSignalCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>));
         services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandDispatchService<WorkflowRetryCompensationCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>) &&
+            x.ImplementationType == typeof(DefaultCommandDispatchService<WorkflowRetryCompensationCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>));
+        services.Should().Contain(x =>
             x.ServiceType == typeof(ICommandDispatchService<WorkflowStopCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>) &&
             x.ImplementationType == typeof(DefaultCommandDispatchService<WorkflowStopCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>));
         services.Should().NotContain(x =>
@@ -449,7 +452,12 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
                     ["input"] = "seed-input",
                     ["step-a"] = "alpha",
                 },
-                Attempt: 2));
+                Attempt: 2,
+                StartStepIdempotency: new WorkflowStepIdempotencyView(
+                    "source-run",
+                    "step-b",
+                    3,
+                    "source-run:step-b:3")));
 
         var envelope = factory.CreateEnvelope(command, new CommandContext(
             "actor-1",
@@ -461,6 +469,11 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         request.ForkSeed.SourceRunId.Should().Be("source-run");
         request.ForkSeed.StartAtStepId.Should().Be("step-b");
         request.ForkSeed.Attempt.Should().Be(2);
+        request.ForkSeed.StartStepIdempotency.Should().NotBeNull();
+        request.ForkSeed.StartStepIdempotency.LogicalRunId.Should().Be("source-run");
+        request.ForkSeed.StartStepIdempotency.StepId.Should().Be("step-b");
+        request.ForkSeed.StartStepIdempotency.LogicalAttempt.Should().Be(3);
+        request.ForkSeed.StartStepIdempotency.IdempotencyKey.Should().Be("source-run:step-b:3");
         request.ForkSeed.Variables.Should().Contain("input", "seed-input");
         request.ForkSeed.Variables.Should().Contain("step-a", "alpha");
     }
@@ -546,19 +559,19 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
                 },
                 new WorkflowChatInputPart
                 {
-                    Kind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.Image,
-                    Uri = "https://example.com/cat.png",
-                    MediaType = "image/png",
-                    Name = "cat",
+                    Kind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.File,
+                    Uri = "artifact-1",
+                    MediaType = "application/pdf",
+                    Name = "invoice.pdf",
                     FileRef = new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileRef
                     {
                         FileId = "file-1",
                         ArtifactId = "artifact-1",
                         SourceKind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileSourceKind.ConnectedServiceResource,
                         SourceMessageId = "om_1",
-                        SourceResourceKey = "image_key_1",
-                        FileName = "cat.png",
-                        MediaType = "image/png",
+                        SourceResourceKey = "file_key_1",
+                        FileName = "invoice.pdf",
+                        MediaType = "application/pdf",
                         Sha256 = "abc",
                         CreatedAtUnixMs = 1710000000000,
                         ExpiresAtUnixMs = 1710003600000,
@@ -578,17 +591,17 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         request.InputParts.Should().HaveCount(2);
         request.InputParts[0].Kind.Should().Be(Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Text);
         request.InputParts[0].Text.Should().Be("describe this");
-        request.InputParts[1].Kind.Should().Be(Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Image);
-        request.InputParts[1].Uri.Should().Be("https://example.com/cat.png");
-        request.InputParts[1].MediaType.Should().Be("image/png");
-        request.InputParts[1].Name.Should().Be("cat");
+        request.InputParts[1].Kind.Should().Be(Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.File);
+        request.InputParts[1].Uri.Should().Be("artifact-1");
+        request.InputParts[1].MediaType.Should().Be("application/pdf");
+        request.InputParts[1].Name.Should().Be("invoice.pdf");
         request.InputParts[1].FileRef.FileId.Should().Be("file-1");
         request.InputParts[1].FileRef.ArtifactId.Should().Be("artifact-1");
         request.InputParts[1].FileRef.SourceKind.Should().Be(Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.ConnectedServiceResource);
         request.InputParts[1].FileRef.SourceMessageId.Should().Be("om_1");
-        request.InputParts[1].FileRef.SourceResourceKey.Should().Be("image_key_1");
-        request.InputParts[1].FileRef.FileName.Should().Be("cat.png");
-        request.InputParts[1].FileRef.MediaType.Should().Be("image/png");
+        request.InputParts[1].FileRef.SourceResourceKey.Should().Be("file_key_1");
+        request.InputParts[1].FileRef.FileName.Should().Be("invoice.pdf");
+        request.InputParts[1].FileRef.MediaType.Should().Be("application/pdf");
         request.InputParts[1].FileRef.Sha256.Should().Be("abc");
         request.InputParts[1].FileRef.CreatedAtUnixMs.Should().Be(1710000000000);
         request.InputParts[1].FileRef.ExpiresAtUnixMs.Should().Be(1710003600000);

@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Foundation.VoicePresence.Hosting;
 
@@ -56,8 +57,9 @@ public static class VoicePresenceEndpoints
                 return;
 
             var ws = await ctx.WebSockets.AcceptWebSocketAsync();
-            var transport = new WebSocketVoiceTransport(ws);
             var mediaPort = resolveMediaPort(ctx);
+            var logger = ResolveLogger(ctx);
+            var transport = new WebSocketVoiceTransport(ws, logger);
             var attached = false;
             var detachHandle = accepted.LeaseHandle;
             IAsyncDisposable? realtimeSubscription = null;
@@ -68,6 +70,7 @@ public static class VoicePresenceEndpoints
                     ctx.RequestServices,
                     accepted,
                     transport,
+                    logger,
                     ctx.RequestAborted);
                 try
                 {
@@ -78,7 +81,7 @@ public static class VoicePresenceEndpoints
                 }
                 catch
                 {
-                    await CleanupAcceptedTransportAsync(mediaPort, accepted.LeaseHandle, transport);
+                    await CleanupAcceptedTransportAsync(mediaPort, accepted.LeaseHandle, transport, logger);
                     throw;
                 }
 
@@ -90,11 +93,11 @@ public static class VoicePresenceEndpoints
             }
             catch (VoiceVolatileMediaStreamUnavailableException)
             {
-                await TryCloseUnsupportedRemoteAudioAsync(ws);
+                await TryCloseUnsupportedRemoteAudioAsync(ws, logger);
             }
             catch (InvalidOperationException) when (!attached)
             {
-                await TryCloseConflictAsync(ws);
+                await TryCloseConflictAsync(ws, logger);
             }
             finally
             {
@@ -102,7 +105,10 @@ public static class VoicePresenceEndpoints
                     await realtimeSubscription.DisposeAsync();
 
                 if (attached)
-                    await mediaPort.DetachAsync(detachHandle, transport, ctx.RequestAborted);
+                    // CancellationToken.None: ctx.RequestAborted is already cancelled on a normal close,
+                    // and the dispatch port throws on a cancelled token before producing the release —
+                    // so detach must run uncancelled or the lease never releases (TransportAttached sticks).
+                    await mediaPort.DetachAsync(detachHandle, transport, CancellationToken.None);
             }
         });
     }
@@ -167,11 +173,12 @@ public static class VoicePresenceEndpoints
 
             var attached = false;
             var mediaPort = resolveMediaPort(ctx);
+            var logger = ResolveLogger(ctx);
             try
             {
                 var lifetimeCompleted = await mediaPort.AttachAsync(accepted.LeaseHandle, transportSession.Transport, ctx.RequestAborted);
                 attached = true;
-                _ = ObserveTransportLifetimeAsync(mediaPort, accepted.LeaseHandle, lifetimeCompleted, transportSession.Completion);
+                _ = ObserveTransportLifetimeAsync(mediaPort, accepted.LeaseHandle, lifetimeCompleted, transportSession.Completion, logger);
 
                 ctx.Response.StatusCode = StatusCodes.Status201Created;
                 ctx.Response.ContentType = "application/sdp";
@@ -305,7 +312,7 @@ public static class VoicePresenceEndpoints
             : queryModuleName.Trim();
     }
 
-    private static async Task TryCloseConflictAsync(WebSocket ws)
+    private static async Task TryCloseConflictAsync(WebSocket ws, ILogger logger)
     {
         if (ws.State is not WebSocketState.Open and not WebSocketState.CloseReceived)
             return;
@@ -318,13 +325,14 @@ public static class VoicePresenceEndpoints
                 "Voice transport already attached.",
                 cts.Token);
         }
-        catch
+        catch (Exception ex)
         {
             // best effort close after websocket upgrade
+            logger.LogWarning(ex, "Best-effort close of conflicting voice transport failed.");
         }
     }
 
-    private static async Task TryCloseUnsupportedRemoteAudioAsync(WebSocket ws)
+    private static async Task TryCloseUnsupportedRemoteAudioAsync(WebSocket ws, ILogger logger)
     {
         if (ws.State is not WebSocketState.Open and not WebSocketState.CloseReceived)
             return;
@@ -337,9 +345,10 @@ public static class VoicePresenceEndpoints
                 VoiceVolatileMediaStreamUnavailableException.Reason,
                 cts.Token);
         }
-        catch
+        catch (Exception ex)
         {
             // best effort close after websocket upgrade
+            logger.LogWarning(ex, "Best-effort close of voice transport with unsupported remote audio failed.");
         }
     }
 
@@ -357,15 +366,17 @@ public static class VoicePresenceEndpoints
     private static async Task CleanupAcceptedTransportAsync(
         IVoiceVolatileMediaStreamPort mediaPort,
         VoicePresenceSessionLeaseHandle handle,
-        WebSocketVoiceTransport transport)
+        WebSocketVoiceTransport transport,
+        ILogger logger)
     {
         try
         {
             await mediaPort.DetachAsync(handle, transport, CancellationToken.None);
         }
-        catch
+        catch (Exception ex)
         {
             // best effort cleanup for an accepted lease whose control channel failed before attach
+            logger.LogWarning(ex, "Best-effort detach of accepted voice transport failed before attach.");
         }
 
         await transport.DisposeAsync();
@@ -385,17 +396,24 @@ public static class VoicePresenceEndpoints
         IVoiceVolatileMediaStreamPort mediaPort,
         VoicePresenceSessionLeaseHandle handle,
         VoiceTransportLifetimeCompleted? lifetimeCompleted,
-        Task completion)
+        Task completion,
+        ILogger logger)
     {
         try
         {
             await completion;
         }
-        catch
+        catch (Exception ex)
         {
             // transport completion is best-effort cleanup only
+            logger.LogWarning(ex, "Voice transport completion faulted; proceeding to lifetime cleanup.");
         }
 
         await mediaPort.CompleteTransportLifetimeAsync(handle, lifetimeCompleted, "host_transport_completed");
     }
+
+    private static ILogger ResolveLogger(HttpContext ctx) =>
+        ctx.RequestServices
+            .GetRequiredService<ILoggerFactory>()
+            .CreateLogger(typeof(VoicePresenceEndpoints));
 }

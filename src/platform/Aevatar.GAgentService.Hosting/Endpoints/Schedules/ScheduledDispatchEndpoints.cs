@@ -1,6 +1,9 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Hosting.Serialization;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -58,11 +61,23 @@ public static class ScheduledDispatchEndpoints
     internal static async Task<IResult> Create(
         ScheduledDispatchConfigurationHttpRequest input,
         [FromServices] IScheduledDispatchApplicationService schedules,
+        [FromServices] IServiceCatalogQueryReader catalogReader,
+        [FromServices] IServiceRevisionCatalogQueryReader revisionCatalogReader,
         CancellationToken ct = default)
     {
+        ScheduledDispatchConfiguration configuration;
         try
         {
-            var receipt = await schedules.CreateAsync(input.ToConfiguration(input.ScheduleId), ct);
+            configuration = await input.ToConfigurationAsync(input.ScheduleId, catalogReader, revisionCatalogReader, ct);
+        }
+        catch (Exception ex) when (TryMapScheduleConfigurationError(ex, out var result))
+        {
+            return result;
+        }
+
+        try
+        {
+            var receipt = await schedules.CreateAsync(configuration, ct);
             return Results.Accepted($"/api/schedules/{receipt.ScheduleId}", receipt);
         }
         catch (Exception ex) when (TryMapScheduleMutationError(ex, out var result))
@@ -75,11 +90,23 @@ public static class ScheduledDispatchEndpoints
         string scheduleId,
         ScheduledDispatchConfigurationHttpRequest input,
         [FromServices] IScheduledDispatchApplicationService schedules,
+        [FromServices] IServiceCatalogQueryReader catalogReader,
+        [FromServices] IServiceRevisionCatalogQueryReader revisionCatalogReader,
         CancellationToken ct = default)
     {
+        ScheduledDispatchConfiguration configuration;
         try
         {
-            var receipt = await schedules.UpdateAsync(scheduleId, input.ToConfiguration(scheduleId), ct);
+            configuration = await input.ToConfigurationAsync(scheduleId, catalogReader, revisionCatalogReader, ct);
+        }
+        catch (Exception ex) when (TryMapScheduleConfigurationError(ex, out var result))
+        {
+            return result;
+        }
+
+        try
+        {
+            var receipt = await schedules.UpdateAsync(scheduleId, configuration, ct);
             return Results.Accepted($"/api/schedules/{receipt.ScheduleId}", receipt);
         }
         catch (Exception ex) when (TryMapScheduleMutationError(ex, out var result))
@@ -202,6 +229,38 @@ public static class ScheduledDispatchEndpoints
         }
     }
 
+    internal static bool TryMapScheduleConfigurationError(Exception ex, out IResult result)
+    {
+        switch (ex)
+        {
+            case FormatException:
+                result = Results.BadRequest(new
+                {
+                    code = "INVALID_SCHEDULED_DISPATCH_REQUEST",
+                    message = "payloadBase64 must be valid base64.",
+                    validation = new
+                    {
+                        field = "serviceInvocation.payloadBase64",
+                        error = "INVALID_BASE64",
+                    },
+                });
+                return true;
+            case InvalidOperationException invalid:
+                result = Results.BadRequest(new
+                {
+                    code = "INVALID_SCHEDULED_DISPATCH_REQUEST",
+                    message = invalid.Message,
+                });
+                return true;
+            case ArgumentException argument:
+                result = Results.BadRequest(new { error = argument.Message });
+                return true;
+            default:
+                result = Results.Empty;
+                return false;
+        }
+    }
+
     internal static bool TryMapScheduleMutationError(Exception ex, out IResult result)
     {
         switch (ex)
@@ -233,17 +292,24 @@ public sealed record ScheduledDispatchConfigurationHttpRequest
     public ScheduledDispatchEnvelopeTargetHttpRequest? Envelope { get; init; }
     public ScheduledDispatchServiceInvocationTargetHttpRequest? ServiceInvocation { get; init; }
 
-    public ScheduledDispatchConfiguration ToConfiguration(string? fallbackScheduleId) =>
+    public async Task<ScheduledDispatchConfiguration> ToConfigurationAsync(
+        string? fallbackScheduleId,
+        IServiceCatalogQueryReader catalogReader,
+        IServiceRevisionCatalogQueryReader revisionCatalogReader,
+        CancellationToken ct = default) =>
         new(
             ScheduleId: string.IsNullOrWhiteSpace(ScheduleId) ? fallbackScheduleId ?? string.Empty : ScheduleId,
             DisplayName: DisplayName ?? string.Empty,
-            Target: ResolveTarget(),
+            Target: await ResolveTargetAsync(catalogReader, revisionCatalogReader, ct),
             CronExpression: CronExpression,
             Timezone: Timezone ?? string.Empty,
             Enabled: Enabled,
             Headers: Headers ?? new Dictionary<string, string>(StringComparer.Ordinal));
 
-    private ScheduledDispatchTargetDescriptor ResolveTarget()
+    private async Task<ScheduledDispatchTargetDescriptor> ResolveTargetAsync(
+        IServiceCatalogQueryReader catalogReader,
+        IServiceRevisionCatalogQueryReader revisionCatalogReader,
+        CancellationToken ct)
     {
         var targetCount = (Envelope == null ? 0 : 1) +
                           (ServiceInvocation == null ? 0 : 1);
@@ -252,7 +318,7 @@ public sealed record ScheduledDispatchConfigurationHttpRequest
 
         if (Envelope != null)
             return Envelope.ToTarget();
-        return ServiceInvocation!.ToTarget();
+        return await ServiceInvocation!.ToTargetAsync(catalogReader, revisionCatalogReader, ct);
     }
 }
 
@@ -272,21 +338,70 @@ public sealed record ScheduledDispatchServiceInvocationTargetHttpRequest
 {
     public required ServiceIdentity Identity { get; init; }
     public required string EndpointId { get; init; }
-    public required Any Payload { get; init; }
+    public required string PayloadTypeUrl { get; init; }
+    public string? PayloadBase64 { get; init; }
+    public string? PayloadJson { get; init; }
     public string? RevisionId { get; init; }
     public ServiceInvocationCaller? Caller { get; init; }
     public ScheduledServiceInvocationAuthHttpRequest? Auth { get; init; }
 
-    public ScheduledDispatchTargetDescriptor ToTarget() =>
+    public async Task<ScheduledDispatchTargetDescriptor> ToTargetAsync(
+        IServiceCatalogQueryReader catalogReader,
+        IServiceRevisionCatalogQueryReader revisionCatalogReader,
+        CancellationToken ct = default)
+    {
+        var (payload, revisionId) = await ResolvePayloadAsync(catalogReader, revisionCatalogReader, ct);
+        return ToTarget(payload, revisionId);
+    }
+
+    public ScheduledDispatchTargetDescriptor ToTarget(Any payload, string revisionId) =>
         new(
             ScheduledDispatchTargetKind.ServiceInvocation,
             ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
                 Identity,
                 EndpointId,
-                Payload,
-                RevisionId,
+                payload,
+                revisionId,
                 Caller,
                 Auth?.ToAuth()));
+
+    private async Task<(Any Payload, string RevisionId)> ResolvePayloadAsync(
+        IServiceCatalogQueryReader catalogReader,
+        IServiceRevisionCatalogQueryReader revisionCatalogReader,
+        CancellationToken ct)
+    {
+        var typeUrl = PayloadTypeUrl ?? string.Empty;
+        var requestedRevisionId = RevisionId?.Trim() ?? string.Empty;
+        var hasJson = !string.IsNullOrWhiteSpace(PayloadJson);
+        var hasBase64 = !string.IsNullOrWhiteSpace(PayloadBase64);
+        if (hasJson && hasBase64)
+            throw new InvalidOperationException(
+                "payloadJson and payloadBase64 are mutually exclusive; specify only one.");
+
+        if (hasJson)
+        {
+            if (string.IsNullOrWhiteSpace(typeUrl))
+                throw new InvalidOperationException("payloadTypeUrl is required when payloadJson is provided.");
+
+            var revisionId = requestedRevisionId;
+            if (string.IsNullOrWhiteSpace(revisionId))
+            {
+                var catalog = await catalogReader.GetAsync(Identity, ct);
+                revisionId = catalog?.ActiveServingRevisionId ?? string.Empty;
+            }
+
+            var packed = await ServiceJsonPayloads.PackJsonAsync(
+                revisionCatalogReader,
+                Identity,
+                revisionId,
+                typeUrl,
+                PayloadJson!,
+                ct);
+            return (packed, revisionId);
+        }
+
+        return (ServiceJsonPayloads.PackBase64(typeUrl, PayloadBase64), requestedRevisionId);
+    }
 }
 
 public sealed record ScheduledServiceInvocationAuthHttpRequest

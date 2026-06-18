@@ -462,30 +462,69 @@ internal sealed class SubWorkflowOrchestrator
                 completionPublisherId);
         }
 
-        await _persistDomainEventAsync(new SubWorkflowInvocationCompletedEvent
-        {
-            InvocationId = pending.InvocationId,
-            ChildRunId = childRunId,
-            Success = completed.Success,
-            Output = completed.Output ?? string.Empty,
-            Error = completed.Error ?? string.Empty,
-        }, ct);
+        await PersistInvocationCompletedAsync(
+            pending,
+            childRunId,
+            completed.Success,
+            completed.Output ?? string.Empty,
+            completed.Error ?? string.Empty,
+            compensated: false,
+            ct);
 
-        var parentCompleted = new StepCompletedEvent
-        {
-            StepId = pending.ParentStepId,
-            RunId = pending.ParentRunId,
-            Success = completed.Success,
-            Output = completed.Output,
-            Error = completed.Error,
-        };
-        parentCompleted.Annotations[WorkflowCallInvocationIdMetadataKey] = pending.InvocationId;
-        parentCompleted.Annotations[WorkflowCallWorkflowNameMetadataKey] = pending.WorkflowName;
-        parentCompleted.Annotations[WorkflowCallLifecycleMetadataKey] = WorkflowCallLifecycle.Normalize(pending.Lifecycle);
-        parentCompleted.Annotations[WorkflowCallChildActorIdMetadataKey] = pending.ChildActorId;
-        parentCompleted.Annotations[WorkflowCallChildRunIdMetadataKey] = childRunId;
+        await PublishParentStepCompletionAsync(
+            pending,
+            childRunId,
+            completed.Success,
+            completed.Output ?? string.Empty,
+            completed.Error ?? string.Empty,
+            ct);
+        await TryFinalizeNonSingletonChildAsync(pending, ct);
+        return true;
+    }
 
-        await _publishAsync(parentCompleted, TopologyAudience.Self, ct);
+    public async Task<bool> HandleInvocationCompletedAsync(
+        SubWorkflowInvocationCompletedEvent completed,
+        WorkflowRunState state,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(completed);
+        ArgumentNullException.ThrowIfNull(state);
+
+        var childRunId = completed.ChildRunId?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(childRunId))
+            return false;
+
+        if (!TryGetPendingInvocationByChildRunId(state, childRunId, out var pending))
+            return false;
+
+        var invocationId = completed.InvocationId?.Trim() ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(invocationId) &&
+            !string.Equals(invocationId, pending.InvocationId, StringComparison.Ordinal))
+        {
+            _loggerAccessor().LogWarning(
+                "Ignore workflow_call completion due to invocation mismatch. childRun={ChildRunId} expectedInvocation={ExpectedInvocationId} actualInvocation={ActualInvocationId}",
+                childRunId,
+                pending.InvocationId,
+                invocationId);
+            return true;
+        }
+
+        await PersistInvocationCompletedAsync(
+            pending,
+            childRunId,
+            completed.Success,
+            completed.Output ?? string.Empty,
+            completed.Error ?? string.Empty,
+            completed.Compensated,
+            ct);
+
+        await PublishParentStepCompletionAsync(
+            pending,
+            childRunId,
+            completed.Success,
+            completed.Output ?? string.Empty,
+            completed.Error ?? string.Empty,
+            ct);
         await TryFinalizeNonSingletonChildAsync(pending, ct);
         return true;
     }
@@ -1266,6 +1305,51 @@ internal sealed class SubWorkflowOrchestrator
                 "Ignore non-singleton child cleanup failure for actor {ChildActorId}.",
                 pending.ChildActorId);
         }
+    }
+
+    private async Task PersistInvocationCompletedAsync(
+        WorkflowRunState.Types.PendingSubWorkflowInvocation pending,
+        string childRunId,
+        bool success,
+        string output,
+        string error,
+        bool compensated,
+        CancellationToken ct)
+    {
+        await _persistDomainEventAsync(new SubWorkflowInvocationCompletedEvent
+        {
+            InvocationId = pending.InvocationId,
+            ChildRunId = childRunId,
+            Success = success,
+            Output = output ?? string.Empty,
+            Error = error ?? string.Empty,
+            Compensated = compensated,
+        }, ct);
+    }
+
+    private async Task PublishParentStepCompletionAsync(
+        WorkflowRunState.Types.PendingSubWorkflowInvocation pending,
+        string childRunId,
+        bool success,
+        string output,
+        string error,
+        CancellationToken ct)
+    {
+        var parentCompleted = new StepCompletedEvent
+        {
+            StepId = pending.ParentStepId,
+            RunId = pending.ParentRunId,
+            Success = success,
+            Output = output ?? string.Empty,
+            Error = error ?? string.Empty,
+        };
+        parentCompleted.Annotations[WorkflowCallInvocationIdMetadataKey] = pending.InvocationId;
+        parentCompleted.Annotations[WorkflowCallWorkflowNameMetadataKey] = pending.WorkflowName;
+        parentCompleted.Annotations[WorkflowCallLifecycleMetadataKey] = WorkflowCallLifecycle.Normalize(pending.Lifecycle);
+        parentCompleted.Annotations[WorkflowCallChildActorIdMetadataKey] = pending.ChildActorId;
+        parentCompleted.Annotations[WorkflowCallChildRunIdMetadataKey] = childRunId;
+
+        await _publishAsync(parentCompleted, TopologyAudience.Self, ct);
     }
 
     private async Task TryCancelDefinitionResolutionTimeoutAsync(

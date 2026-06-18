@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Projection.ReadModels;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Projection.Orchestration;
@@ -28,6 +29,16 @@ public sealed class WorkflowRunForkSeedQueryPortTests
                 ["steps.step-a.success"] = "true",
                 ["workflow_call.invocation_id"] = "call-1",
             },
+            IdempotencyByStepId =
+            {
+                ["step-b"] = new WorkflowStepIdempotencyState
+                {
+                    LogicalRunId = "run-completed",
+                    StepId = "step-b",
+                    LogicalAttempt = 1,
+                    IdempotencyKey = "run-completed:step-b:1",
+                },
+            },
         });
 
         var mapper = new WorkflowRunForkSeedReadModelMapper();
@@ -45,6 +56,8 @@ public sealed class WorkflowRunForkSeedQueryPortTests
         view.LastFailedStepId.Should().BeEmpty();
         view.FinalError.Should().BeEmpty();
         view.ScopeId.Should().Be("scope-1");
+        view.IdempotencyByStepId.Should().ContainKey("step-b");
+        view.IdempotencyByStepId!["step-b"].IdempotencyKey.Should().Be("run-completed:step-b:1");
     }
 
     [Fact]
@@ -135,6 +148,16 @@ public sealed class WorkflowRunForkSeedQueryPortTests
                 StringComparer.Ordinal),
             ForkSeedCompletedStepIds = seedSnapshot.CompletedStepIds.ToList(),
             ForkSeedLastFailedStepId = seedSnapshot.LastFailedStepId,
+            ForkSeedIdempotencies = seedSnapshot.IdempotencyByStepId.ToDictionary(
+                x => x.Key,
+                x => new WorkflowStepIdempotencyReadModel
+                {
+                    LogicalRunId = x.Value.LogicalRunId,
+                    StepId = x.Value.StepId,
+                    LogicalAttempt = x.Value.LogicalAttempt,
+                    IdempotencyKey = x.Value.IdempotencyKey,
+                },
+                StringComparer.Ordinal),
         };
 
     private sealed class FakeWorkflowRunBindingReader(params WorkflowActorBinding[] bindings)

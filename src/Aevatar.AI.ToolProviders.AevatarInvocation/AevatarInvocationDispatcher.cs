@@ -73,6 +73,7 @@ public sealed class AevatarInvocationDispatcher
     private readonly IServiceRunQueryPort _serviceRunQueryPort;
     private readonly IGAgentRunTerminalQueryPort _terminalQueryPort;
     private readonly IWorkflowExecutionQueryApplicationService _workflowQueryService;
+    private readonly IWorkflowRunBackgroundDeliveryRegistrationPort? _workflowRunDeliveryRegistrationPort;
     private readonly ILogger<AevatarInvocationDispatcher> _logger;
 
     public AevatarInvocationDispatcher(
@@ -84,6 +85,7 @@ public sealed class AevatarInvocationDispatcher
         IServiceRunQueryPort serviceRunQueryPort,
         IGAgentRunTerminalQueryPort terminalQueryPort,
         IWorkflowExecutionQueryApplicationService workflowQueryService,
+        IWorkflowRunBackgroundDeliveryRegistrationPort? workflowRunDeliveryRegistrationPort = null,
         ILogger<AevatarInvocationDispatcher>? logger = null)
     {
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
@@ -94,6 +96,7 @@ public sealed class AevatarInvocationDispatcher
         _serviceRunQueryPort = serviceRunQueryPort ?? throw new ArgumentNullException(nameof(serviceRunQueryPort));
         _terminalQueryPort = terminalQueryPort ?? throw new ArgumentNullException(nameof(terminalQueryPort));
         _workflowQueryService = workflowQueryService ?? throw new ArgumentNullException(nameof(workflowQueryService));
+        _workflowRunDeliveryRegistrationPort = workflowRunDeliveryRegistrationPort;
         _logger = logger ?? NullLogger<AevatarInvocationDispatcher>.Instance;
     }
 
@@ -278,6 +281,10 @@ public sealed class AevatarInvocationDispatcher
         if (scope.Error != null)
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(scope.Error), scope.Error);
 
+        var backgroundDelivery = ResolveWorkflowBackgroundDelivery(wait, AgentToolRequestContext.Current);
+        if (backgroundDelivery.Error != null)
+            return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(backgroundDelivery.Error), backgroundDelivery.Error);
+
         var callerCredential = ResolveWorkflowCallerCredential(AgentToolRequestContext.Current);
         if (callerCredential.Error != null)
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(callerCredential.Error), callerCredential.Error);
@@ -311,17 +318,47 @@ public sealed class AevatarInvocationDispatcher
         }
 
         var receipt = result.Receipt;
+        var streamTopic = wait == InvocationWaitMode.Stream
+            ? AevatarInvocationStreamTopics.ForActorRun(receipt.ActorId, receipt.CommandId)
+            : string.Empty;
+        WorkflowRunBackgroundDeliveryReceipt? workflowRunDeliveryReceipt = null;
+        if (wait == InvocationWaitMode.Stream && backgroundDelivery.ShouldRegister)
+        {
+            var registration = await RegisterWorkflowRunBackgroundDeliveryAsync(
+                    receipt,
+                    streamTopic,
+                    backgroundDelivery.DurableReplyCredentialRef!,
+                    AgentToolRequestContext.Current,
+                    ct)
+                .ConfigureAwait(false);
+            if (registration.Error != null)
+            {
+                return ToChatRunRequest(chatRunRequest, new InvocationToolResult
+                {
+                    RunId = receipt.CommandId,
+                    Status = "background_delivery_failed",
+                    StreamTopic = string.Empty,
+                    ActorId = receipt.ActorId,
+                    CommandId = receipt.CommandId,
+                    CorrelationId = receipt.CorrelationId,
+                    Wait = wait,
+                    Error = registration.Error,
+                }, scope.Value!.ScopeId);
+            }
+
+            workflowRunDeliveryReceipt = registration.Receipt;
+        }
+
         return ToChatRunRequest(chatRunRequest, new InvocationToolResult
         {
             RunId = receipt.CommandId,
             Status = wait == InvocationWaitMode.Ack ? "accepted" : "streaming",
-            StreamTopic = wait == InvocationWaitMode.Stream
-                ? AevatarInvocationStreamTopics.ForActorRun(receipt.ActorId, receipt.CommandId)
-                : string.Empty,
+            StreamTopic = streamTopic,
             ActorId = receipt.ActorId,
             CommandId = receipt.CommandId,
             CorrelationId = receipt.CorrelationId,
             Wait = wait,
+            WorkflowRunDelivery = workflowRunDeliveryReceipt,
         }, scope.Value!.ScopeId);
     }
 
@@ -607,6 +644,122 @@ public sealed class AevatarInvocationDispatcher
         {
             _logger.LogWarning(ex, "Detached team invocation failed after accepted receipt was returned.");
         }
+    }
+
+    private async Task<WorkflowBackgroundDeliveryRegistrationResult> RegisterWorkflowRunBackgroundDeliveryAsync(
+        WorkflowChatRunAcceptedReceipt receipt,
+        string streamTopic,
+        string durableReplyCredentialRef,
+        AgentToolExecutionContext? context,
+        CancellationToken ct)
+    {
+        var registration = BuildWorkflowRunDeliveryRegistration(
+            receipt,
+            streamTopic,
+            durableReplyCredentialRef,
+            context);
+        if (registration is null)
+        {
+            return WorkflowBackgroundDeliveryRegistrationResult.Failed(Error(
+                "workflow_background_delivery_unsupported",
+                "This channel session cannot deliver workflow terminal results in the background because required reply target fields are unavailable."));
+        }
+
+        if (_workflowRunDeliveryRegistrationPort is null)
+        {
+            _logger.LogInformation(
+                "Workflow run background delivery registration skipped because no registration port is available: actorId={ActorId} commandId={CommandId}",
+                receipt.ActorId,
+                receipt.CommandId);
+            return WorkflowBackgroundDeliveryRegistrationResult.Failed(Error(
+                "workflow_background_delivery_unsupported",
+                "Workflow background delivery registration is unavailable in this host."));
+        }
+
+        try
+        {
+            var deliveryReceipt = await _workflowRunDeliveryRegistrationPort
+                .RegisterAsync(registration, ct)
+                .ConfigureAwait(false);
+            if (!IsDurableWorkflowRunDeliveryReceipt(deliveryReceipt))
+            {
+                return WorkflowBackgroundDeliveryRegistrationResult.Failed(Error(
+                    "workflow_background_delivery_registration_failed",
+                    "Workflow background delivery registration did not return a durable receipt."));
+            }
+
+            return WorkflowBackgroundDeliveryRegistrationResult.Success(deliveryReceipt);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Workflow run background delivery registration failed after accepted receipt: actorId={ActorId} commandId={CommandId}",
+                receipt.ActorId,
+                receipt.CommandId);
+            return WorkflowBackgroundDeliveryRegistrationResult.Failed(Error(
+                "workflow_background_delivery_registration_failed",
+                $"Workflow background delivery registration failed after workflow start acceptance: {ex.Message}"));
+        }
+    }
+
+    private static bool IsDurableWorkflowRunDeliveryReceipt(WorkflowRunBackgroundDeliveryReceipt? receipt) =>
+        receipt is not null &&
+        !string.IsNullOrWhiteSpace(receipt.DeliveryActorId) &&
+        !string.IsNullOrWhiteSpace(receipt.WorkflowActorId) &&
+        !string.IsNullOrWhiteSpace(receipt.WorkflowCommandId);
+
+    private static WorkflowRunBackgroundDeliveryRegistration? BuildWorkflowRunDeliveryRegistration(
+        WorkflowChatRunAcceptedReceipt receipt,
+        string streamTopic,
+        string durableReplyCredentialRef,
+        AgentToolExecutionContext? context)
+    {
+        context ??= AgentToolExecutionContext.Empty;
+        var platform = Normalize(context.Channel.Platform);
+        var replyMessageId = Normalize(context.Channel.MessageId);
+        var normalizedCredentialRef = Normalize(durableReplyCredentialRef);
+        if (platform is null || replyMessageId is null || normalizedCredentialRef is null)
+            return null;
+
+        var platformMessageId = Normalize(context.Channel.PlatformMessageId) ??
+                                string.Empty;
+        var registrationScopeId = Normalize(context.Channel.RegistrationScopeId) ??
+                                  Normalize(context.Caller.ScopeId) ??
+                                  string.Empty;
+        var deliveryId = $"workflow-run-delivery:{SanitizeActorIdSegment(receipt.ActorId)}:{SanitizeActorIdSegment(receipt.CommandId)}";
+        return new WorkflowRunBackgroundDeliveryRegistration(
+            DeliveryId: deliveryId,
+            WorkflowActorId: receipt.ActorId,
+            WorkflowRunId: receipt.CommandId,
+            WorkflowCommandId: receipt.CommandId,
+            WorkflowCorrelationId: receipt.CorrelationId,
+            StreamTopic: streamTopic,
+            ChannelPlatform: platform,
+            ReplyMessageId: replyMessageId,
+            PlatformMessageId: platformMessageId,
+            DurableReplyCredentialRef: normalizedCredentialRef,
+            RegistrationScopeId: registrationScopeId);
+    }
+
+    private static WorkflowBackgroundDeliveryResolution ResolveWorkflowBackgroundDelivery(
+        InvocationWaitMode wait,
+        AgentToolExecutionContext? context)
+    {
+        if (wait != InvocationWaitMode.Stream)
+            return WorkflowBackgroundDeliveryResolution.Disabled();
+
+        context ??= AgentToolExecutionContext.Empty;
+        if (Normalize(context.Channel.Platform) is null || Normalize(context.Channel.MessageId) is null)
+            return WorkflowBackgroundDeliveryResolution.Disabled();
+
+        var credentialRef = Normalize(context.Channel.DurableReplyCredentialRef);
+        if (credentialRef is not null)
+            return WorkflowBackgroundDeliveryResolution.Enabled(credentialRef);
+
+        return WorkflowBackgroundDeliveryResolution.Failed(Error(
+            "workflow_background_delivery_unsupported",
+            "This channel session cannot deliver workflow terminal results in the background because no durable NyxID reply credential reference is available."));
     }
 
     private StaticGAgentStreamInvocationRequest BuildStaticInvocationRequest(
@@ -1101,6 +1254,15 @@ public sealed class AevatarInvocationDispatcher
     private static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
+    private static string SanitizeActorIdSegment(string? value)
+    {
+        var normalized = Normalize(value) ?? "missing";
+        var chars = normalized
+            .Select(static c => char.IsLetterOrDigit(c) || c is '-' or '_' or '.' ? c : '-')
+            .ToArray();
+        return new string(chars);
+    }
+
     private static string? EmptyToNull(string value) =>
         string.IsNullOrWhiteSpace(value) ? null : value;
 
@@ -1132,6 +1294,32 @@ public sealed class AevatarInvocationDispatcher
             new(credential, null);
 
         public static WorkflowCallerCredentialResolution Failed(InvocationToolError error) =>
+            new(null, error);
+    }
+
+    private sealed record WorkflowBackgroundDeliveryResolution(
+        bool ShouldRegister,
+        string? DurableReplyCredentialRef,
+        InvocationToolError? Error)
+    {
+        public static WorkflowBackgroundDeliveryResolution Disabled() =>
+            new(false, null, null);
+
+        public static WorkflowBackgroundDeliveryResolution Enabled(string durableReplyCredentialRef) =>
+            new(true, durableReplyCredentialRef, null);
+
+        public static WorkflowBackgroundDeliveryResolution Failed(InvocationToolError error) =>
+            new(false, null, error);
+    }
+
+    private sealed record WorkflowBackgroundDeliveryRegistrationResult(
+        WorkflowRunBackgroundDeliveryReceipt? Receipt,
+        InvocationToolError? Error)
+    {
+        public static WorkflowBackgroundDeliveryRegistrationResult Success(WorkflowRunBackgroundDeliveryReceipt receipt) =>
+            new(receipt, null);
+
+        public static WorkflowBackgroundDeliveryRegistrationResult Failed(InvocationToolError error) =>
             new(null, error);
     }
 

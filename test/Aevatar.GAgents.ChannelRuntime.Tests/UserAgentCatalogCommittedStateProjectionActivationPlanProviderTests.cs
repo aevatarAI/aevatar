@@ -1,3 +1,4 @@
+using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.Testing;
 using FluentAssertions;
@@ -33,6 +34,24 @@ public sealed class UserAgentCatalogCommittedStateProjectionActivationPlanProvid
         var plans = provider.GetPlans(BuildCommittedStateContext(
             typeof(SkillRunnerGAgent),
             new SkillRunnerExecutionCompletedEvent(),
+            "skill-runner-1")).ToArray();
+
+        plans.Should().ContainSingle();
+        AssertDurablePlan(
+            plans[0],
+            typeof(UserAgentCatalogMaterializationRuntimeLease),
+            "skill-runner-1",
+            UserAgentCatalogProjectionBootstrapActivator.ProjectionKind);
+    }
+
+    [Fact]
+    public void GetPlans_ShouldMapSkillRunnerDeliveryProducedEvent()
+    {
+        var provider = new UserAgentCatalogCommittedStateProjectionActivationPlanProvider();
+
+        var plans = provider.GetPlans(BuildCommittedStateContext(
+            typeof(SkillRunnerGAgent),
+            new DeliveryProducedEvent(),
             "skill-runner-1")).ToArray();
 
         plans.Should().ContainSingle();

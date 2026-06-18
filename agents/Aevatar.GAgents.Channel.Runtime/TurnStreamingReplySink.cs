@@ -7,7 +7,7 @@ using Microsoft.Extensions.Logging;
 namespace Aevatar.GAgents.Channel.Runtime;
 
 /// <summary>
-/// Sends a single accumulated reply snapshot to the conversation actor that owns the relay reply.
+/// Sends a single accumulated reply snapshot to the actor that owns the visible reply delivery.
 /// The actor/run flow decides throttling, pending text, and final ordering before calling this sink.
 /// </summary>
 /// <remarks>
@@ -30,6 +30,7 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
     private readonly ChatActivity _activityTemplate;
     private readonly string _replyToken;
     private readonly long _replyTokenExpiresAtUnixMs;
+    private readonly string _runId;
     private readonly bool _cardMode;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger? _logger;
@@ -43,6 +44,7 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
         ChatActivity activityTemplate,
         string? replyToken,
         long replyTokenExpiresAtUnixMs,
+        string? runId,
         TimeProvider timeProvider,
         ILogger? logger = null,
         bool cardMode = false)
@@ -58,6 +60,7 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
         _activityTemplate = activityTemplate ?? throw new ArgumentNullException(nameof(activityTemplate));
         _replyToken = replyToken ?? string.Empty;
         _replyTokenExpiresAtUnixMs = replyTokenExpiresAtUnixMs;
+        _runId = runId ?? string.Empty;
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _logger = logger;
         _cardMode = cardMode;
@@ -91,6 +94,7 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
                 ChunkAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
                 ReplyToken = _replyToken,
                 ReplyTokenExpiresAtUnixMs = _replyTokenExpiresAtUnixMs,
+                RunId = _runId,
             }
             : new LlmReplyStreamChunkEvent
             {

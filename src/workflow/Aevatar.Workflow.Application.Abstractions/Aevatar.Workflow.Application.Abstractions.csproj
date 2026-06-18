@@ -7,6 +7,7 @@
     <RootNamespace>Aevatar.Workflow.Application.Abstractions</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Aevatar.Workflow.Abstractions\Aevatar.Workflow.Abstractions.csproj" />
     <ProjectReference Include="..\..\Aevatar.CQRS.Core.Abstractions\Aevatar.CQRS.Core.Abstractions.csproj" />
     <ProjectReference Include="..\..\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
   </ItemGroup>
@@ -18,7 +19,7 @@
     </PackageReference>
   </ItemGroup>
   <ItemGroup>
-    <Protobuf Include="Queries/workflow_projection_query_models.proto" GrpcServices="None" />
+    <Protobuf Include="Queries/workflow_projection_query_models.proto" GrpcServices="None" AdditionalImportDirs="..\Aevatar.Workflow.Abstractions;..\..\Aevatar.Foundation.Abstractions" />
     <Protobuf Include="Runs/workflow_run_events.proto" GrpcServices="None" />
   </ItemGroup>
 </Project>

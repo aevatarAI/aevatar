@@ -686,6 +686,11 @@ public sealed class WorkflowChatRunInteractionServiceTests
             CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<WorkflowActorSnapshot>>([]);
 
+        public Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowActorCurrentStatesAsync(
+            WorkflowActorCurrentStateListQuery query,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<WorkflowActorSnapshot>>([]);
+
         public Task<WorkflowActorProjectionState?> GetWorkflowActorProjectionStateAsync(
             string actorId,
             CancellationToken ct = default) =>

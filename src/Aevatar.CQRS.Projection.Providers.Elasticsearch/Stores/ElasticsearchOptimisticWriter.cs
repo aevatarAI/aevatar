@@ -215,13 +215,14 @@ internal sealed class ElasticsearchOptimisticWriter<TReadModel>
         var elapsedMs = Stopwatch.GetElapsedTime(startedAtTimestamp).TotalMilliseconds;
         _logger.LogError(
             ex,
-            "Projection read-model write failed. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result} errorType={ErrorType}",
+            "Projection read-model write failed. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result} errorType={ErrorType} exceptionMessage={ExceptionMessage}",
             ProviderName,
             typeof(TReadModel).FullName,
             keyValue,
             elapsedMs,
             "failed",
-            ex.GetType().Name);
+            ex.GetType().Name,
+            ex.Message);
     }
 
     internal sealed record ExistingReadModelState(

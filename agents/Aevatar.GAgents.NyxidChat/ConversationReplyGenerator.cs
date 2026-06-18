@@ -755,11 +755,13 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
 
     private IReadOnlyList<IToolCallMiddleware> BuildToolMiddlewaresForTurn()
     {
-        var effective = new List<IToolCallMiddleware>(_toolMiddlewares.Count + 1)
+        var effective = new List<IToolCallMiddleware>(_toolMiddlewares.Count + 2)
         {
+            new ToolCallCredentialPolicyMiddleware(),
             new ToolApprovalMiddleware(_approvalHandler ?? MissingApprovalHandler.Instance),
         };
-        effective.AddRange(_toolMiddlewares.Where(static middleware => middleware is not ToolApprovalMiddleware));
+        effective.AddRange(_toolMiddlewares.Where(static middleware =>
+            middleware is not ToolApprovalMiddleware and not ToolCallCredentialPolicyMiddleware));
         return effective;
     }
 
@@ -839,6 +841,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             ownerFallbackControl = effectiveControl with { SenderNyxIdAccessToken = null };
             ownerFallbackToolContext = ClearSenderBinding(effectiveToolContext);
             ownerFallback = ownerSnapshot;
+            var senderToken = llmControl?.SenderNyxIdAccessToken?.Trim();
 
             if (_preferencesStore is not null)
             {
@@ -855,27 +858,12 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                     string.IsNullOrWhiteSpace(effectiveControl.ModelOverride) ? "<server-default>" : effectiveControl.ModelOverride,
                     string.IsNullOrWhiteSpace(effectiveControl.NyxIdRoutePreference) ? "<server-default>" : effectiveControl.NyxIdRoutePreference,
                     effectiveControl.MaxToolRoundsOverride);
-                if (applied.RouteApplied)
+                if (applied.RouteApplied && string.IsNullOrWhiteSpace(senderToken))
                 {
-                    if (!string.IsNullOrWhiteSpace(llmControl?.SenderNyxIdAccessToken))
+                    effectiveControl = effectiveControl with
                     {
-                        var trimmedToken = llmControl.SenderNyxIdAccessToken.Trim();
-                        effectiveControl = effectiveControl with
-                        {
-                            NyxIdAccessToken = trimmedToken,
-                            NyxIdOrgToken = trimmedToken,
-                            SenderNyxIdAccessToken = trimmedToken,
-                        };
-                    }
-                    else
-                    {
-                        effective = ownerSnapshot;
-                        effectiveControl = ownerFallbackControl;
-                        effectiveToolContext = ownerFallbackToolContext;
-                        ownerFallback = null;
-                        ownerFallbackControl = null;
-                        ownerFallbackToolContext = null;
-                    }
+                        NyxIdRoutePreference = ownerFallbackControl?.NyxIdRoutePreference,
+                    };
                 }
             }
             else
@@ -883,6 +871,16 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 _logger.LogWarning(
                     "Sender binding is present but LLM preferences store is unavailable; using bot owner/default LLM config: bindingId={BindingId}",
                     senderBindingId);
+            }
+
+            if (!string.IsNullOrWhiteSpace(senderToken))
+            {
+                effectiveControl = effectiveControl with
+                {
+                    NyxIdAccessToken = senderToken,
+                    NyxIdOrgToken = senderToken,
+                    SenderNyxIdAccessToken = senderToken,
+                };
             }
         }
 
@@ -905,9 +903,9 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             {
                 throw;
             }
-            catch
+            catch (Exception ex)
             {
-                // User memory is best-effort context and must not break the main reply path.
+                _logger.LogWarning(ex, "User memory prompt context is unavailable; continuing reply generation without user memory.");
             }
         }
 

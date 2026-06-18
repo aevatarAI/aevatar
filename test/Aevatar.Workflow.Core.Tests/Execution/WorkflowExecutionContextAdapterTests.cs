@@ -359,6 +359,55 @@ public sealed class WorkflowExecutionContextAdapterTests
             States.Remove(scopeKey);
             return Task.CompletedTask;
         }
+
+        Task<WorkflowCompensationTransitionResult> IWorkflowExecutionStateHost.TryStartCompensationAsync(
+            WorkflowCompletedEvent terminalFailure,
+            StepCompletedEvent? terminalStep,
+            CancellationToken ct)
+        {
+            _ = terminalFailure;
+            _ = terminalStep;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(NoCompensableLedger());
+        }
+
+        Task IWorkflowExecutionStateHost.RecordCompensableStepDispatchAsync(
+            CompensableStepDispatchedEvent evt,
+            CancellationToken ct)
+        {
+            _ = evt;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task<WorkflowCompensationTransitionResult> RecordCompensationStepCompletionAsync(
+            CompensationStepCompletedEvent completion,
+            CancellationToken ct = default)
+        {
+            _ = completion;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(NoCompensableLedger());
+        }
+
+        public Task<WorkflowCompensationTransitionResult> RecordCompensationPhaseDeadlineExceededAsync(
+            string runId,
+            string error,
+            CancellationToken ct = default)
+        {
+            _ = runId;
+            _ = error;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(NoCompensableLedger());
+        }
+
+        private static WorkflowCompensationTransitionResult NoCompensableLedger() =>
+            new(
+                WorkflowCompensationTransitionStatus.NoCompensableLedger,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty);
     }
 
     private sealed class DefaultScopeStateHost : IWorkflowExecutionStateHost
@@ -404,6 +453,55 @@ public sealed class WorkflowExecutionContextAdapterTests
             _ = scopeKey;
             return Task.CompletedTask;
         }
+
+        Task<WorkflowCompensationTransitionResult> IWorkflowExecutionStateHost.TryStartCompensationAsync(
+            WorkflowCompletedEvent terminalFailure,
+            StepCompletedEvent? terminalStep,
+            CancellationToken ct)
+        {
+            _ = terminalFailure;
+            _ = terminalStep;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(NoCompensableLedger());
+        }
+
+        Task IWorkflowExecutionStateHost.RecordCompensableStepDispatchAsync(
+            CompensableStepDispatchedEvent evt,
+            CancellationToken ct)
+        {
+            _ = evt;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task<WorkflowCompensationTransitionResult> RecordCompensationStepCompletionAsync(
+            CompensationStepCompletedEvent completion,
+            CancellationToken ct = default)
+        {
+            _ = completion;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(NoCompensableLedger());
+        }
+
+        public Task<WorkflowCompensationTransitionResult> RecordCompensationPhaseDeadlineExceededAsync(
+            string runId,
+            string error,
+            CancellationToken ct = default)
+        {
+            _ = runId;
+            _ = error;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(NoCompensableLedger());
+        }
+
+        private static WorkflowCompensationTransitionResult NoCompensableLedger() =>
+            new(
+                WorkflowCompensationTransitionStatus.NoCompensableLedger,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty);
     }
 
     private sealed class StubAgent(string id) : IAgent

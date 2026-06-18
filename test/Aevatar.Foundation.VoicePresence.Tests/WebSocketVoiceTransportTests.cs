@@ -67,6 +67,34 @@ public class WebSocketVoiceTransportTests
         frames[1].Control!.DrainAcknowledged.ResponseId.ShouldBe(9);
     }
 
+    [Fact]
+    public async Task ReceiveFramesAsync_should_yield_function_call_output_control_frame()
+    {
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        socket.EnqueueReceive(
+            WebSocketMessageType.Text,
+            Encoding.UTF8.GetBytes(JsonFormatter.Default.Format(new VoiceControlFrame
+            {
+                FunctionCallOutput = new VoiceFunctionCallOutput
+                {
+                    CallId = "client-call-1",
+                    ToolName = "edge.light.toggle",
+                    OutputJson = """{"ok":true}""",
+                },
+            })));
+
+        await using var transport = new WebSocketVoiceTransport(socket);
+        var frames = new List<VoiceTransportFrame>();
+
+        await foreach (var frame in transport.ReceiveFramesAsync(CancellationToken.None))
+            frames.Add(frame);
+
+        var control = frames.ShouldHaveSingleItem().Control.ShouldNotBeNull();
+        control.FrameCase.ShouldBe(VoiceControlFrame.FrameOneofCase.FunctionCallOutput);
+        control.FunctionCallOutput.CallId.ShouldBe("client-call-1");
+        control.FunctionCallOutput.OutputJson.ShouldBe("""{"ok":true}""");
+    }
+
     [Theory]
     [InlineData("image/jpeg")]
     [InlineData("image/png")]
@@ -133,7 +161,7 @@ public class WebSocketVoiceTransportTests
                 InputImage = new VoiceInputImage
                 {
                     MediaType = "image/jpeg",
-                    Data = ByteString.CopyFrom(new byte[(500 * 1024) + 1]),
+                    Data = ByteString.CopyFrom(new byte[VoiceWireContractDefaults.MaxInputImageBytes + 1]),
                 },
             }));
 
@@ -146,7 +174,8 @@ public class WebSocketVoiceTransportTests
         frames.ShouldBeEmpty();
         socket.CloseCalls.ShouldBe(1);
         socket.LastCloseStatus.ShouldBe(WebSocketCloseStatus.PolicyViolation);
-        socket.LastCloseDescription.ShouldBe("Voice input image exceeds the 500 KB size limit.");
+        socket.LastCloseDescription.ShouldBe(
+            $"Voice input image exceeds the {VoiceWireContractDefaults.MaxInputImageBytes} bytes size limit.");
     }
 
     private static void EnqueueTextMessage(FakeWebSocket socket, string text)

@@ -91,4 +91,75 @@ public sealed class MessagesRequestNormalizerTests
         emptyMessages.Succeeded.Should().BeFalse();
         emptyMessages.ErrorCode.Should().Be("invalid_messages");
     }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Normalize_ShouldApplyDefaultModel_WhenCallerOmitsModel(string? callerModel)
+    {
+        var result = MessagesRequestNormalizer.Normalize(
+            new MessagesCommandRequest(
+                callerModel!,
+                100,
+                [ChatMessage.User("hello")],
+                [],
+                false,
+                null,
+                null,
+                null,
+                null,
+                false,
+                false,
+                null),
+            defaultModel: "chrono-llm-public/gpt-5.5");
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.Model.Should().Be("chrono-llm-public/gpt-5.5");
+    }
+
+    [Fact]
+    public void Normalize_ShouldPreferExplicitModel_OverDefault()
+    {
+        var result = MessagesRequestNormalizer.Normalize(
+            new MessagesCommandRequest(
+                " claude-sonnet ",
+                100,
+                [ChatMessage.User("hello")],
+                [],
+                false,
+                null,
+                null,
+                null,
+                null,
+                false,
+                false,
+                null),
+            defaultModel: "chrono-llm-public/gpt-5.5");
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.Model.Should().Be("claude-sonnet");
+    }
+
+    [Fact]
+    public void Normalize_ShouldRequireModel_WhenOmittedAndNoDefaultConfigured()
+    {
+        var result = MessagesRequestNormalizer.Normalize(
+            new MessagesCommandRequest(
+                "  ",
+                100,
+                [ChatMessage.User("hello")],
+                [],
+                false,
+                null,
+                null,
+                null,
+                null,
+                false,
+                false,
+                null));
+
+        result.Succeeded.Should().BeFalse();
+        result.ErrorCode.Should().Be("model_required");
+    }
 }

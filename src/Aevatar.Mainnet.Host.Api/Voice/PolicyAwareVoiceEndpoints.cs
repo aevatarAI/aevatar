@@ -1,5 +1,4 @@
 using System.Security.Claims;
-using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
@@ -13,6 +12,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Mainnet.Host.Api.Voice;
 
@@ -20,23 +20,8 @@ public static class PolicyAwareVoiceEndpoints
 {
     private const string DefaultPattern = "/ws/voice";
     internal const string VoiceNotConfiguredReason = "voice_not_configured";
-    private const string ScopeClaimType = "scope";
     private const string RemoteAudioTransportUnavailableReason = "remote_audio_transport_unavailable";
-    private static readonly string[] RoleClaimTypes =
-    [
-        "scope_role",
-        "scope.role",
-        "role",
-        ClaimTypes.Role,
-    ];
-
-    private static readonly HashSet<string> AdminRoleValues = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "admin",
-        "owner",
-        "scope-admin",
-        "scope_admin",
-    };
+    private const string VoiceCredentialUnavailableReason = "voice_credential_unavailable";
 
     public static IEndpointConventionBuilder MapPolicyAwareVoiceEndpoint(this IEndpointRouteBuilder app) =>
         app.Map(DefaultPattern, HandlePolicyAwareVoiceAsync);
@@ -52,13 +37,12 @@ public static class PolicyAwareVoiceEndpoints
 
     /// <summary>
     /// Fail-closed stand-ins for deployments without a configured voice
-    /// provider: both voice routes answer 503 voice_not_configured instead
-    /// of throwing an unhandled DI exception.
+    /// provider: the Mainnet voice ingress answers 503 voice_not_configured
+    /// instead of throwing an unhandled DI exception.
     /// </summary>
     public static IEndpointRouteBuilder MapVoiceNotConfiguredEndpoints(this IEndpointRouteBuilder app)
     {
         app.Map(DefaultPattern, HandleVoiceNotConfiguredAsync);
-        app.Map(DefaultPattern + "/{actorId}", HandleVoiceNotConfiguredAsync);
         return app;
     }
 
@@ -129,85 +113,226 @@ public static class PolicyAwareVoiceEndpoints
         IVoiceVolatileMediaStreamPort mediaStreamPort,
         ChatRouteVoiceAttachTarget voiceTarget)
     {
-        var result = await voiceRealtimeSession.ExecuteAsync(
-            new VoiceRealtimeSessionRequest(
-                voiceTarget.ActorId.Trim(),
-                NormalizeOptional(voiceTarget.VoiceModuleName),
-                VoiceRealtimeSessionPurpose.Attach,
-                voiceTarget.SessionOverrides?.Clone()),
-            static (_, _) => ValueTask.CompletedTask,
-            ct: http.RequestAborted);
-
-        var accepted = await WriteNonAcceptedResolutionAsync(http, result);
-        if (accepted is null)
+        var toolContextAdmission = await TryBuildToolContextAsync(http);
+        if (!toolContextAdmission.Accepted)
             return;
 
-        var ws = await http.WebSockets.AcceptWebSocketAsync();
-        var transport = new WebSocketVoiceTransport(ws);
-        var attached = false;
-        IAsyncDisposable? realtimeSubscription = null;
         try
         {
-            realtimeSubscription = await VoiceRealtimeTransportControlBridge.SubscribeAsync(
-                http.RequestServices,
-                accepted,
-                transport,
-                http.RequestAborted);
+            var result = await voiceRealtimeSession.ExecuteAsync(
+                new VoiceRealtimeSessionRequest(
+                    voiceTarget.ActorId.Trim(),
+                    NormalizeOptional(voiceTarget.VoiceModuleName),
+                    VoiceRealtimeSessionPurpose.Attach,
+                    voiceTarget.SessionOverrides?.Clone(),
+                    toolContextAdmission.ToolContext?.Clone()),
+                static (_, _) => ValueTask.CompletedTask,
+                ct: http.RequestAborted);
+
+            var accepted = await WriteNonAcceptedResolutionAsync(http, result);
+            if (accepted is null)
+                return;
+
+            var ws = await http.WebSockets.AcceptWebSocketAsync();
+            var logger = GetLogger(http);
+            var transport = new WebSocketVoiceTransport(ws, logger);
+            var attached = false;
+            // AcquireAsync returns a handle with an empty ActiveTransportLeaseId (the id is only known
+            // post-attach). Carry the resolved id so the close-time DetachAsync can stop the right relay
+            // and detach the transport — without it StopRelay/transport-detach are no-ops.
+            var detachHandle = accepted.LeaseHandle;
+            IAsyncDisposable? realtimeSubscription = null;
             try
             {
-                await VoiceRealtimeTransportControlBridge.SendSessionAcceptedAsync(
-                    transport,
+                realtimeSubscription = await VoiceRealtimeTransportControlBridge.SubscribeAsync(
+                    http.RequestServices,
                     accepted,
+                    transport,
+                    logger,
                     http.RequestAborted);
-            }
-            catch
-            {
-                await CleanupAcceptedTransportAsync(mediaStreamPort, accepted.LeaseHandle, transport);
-                throw;
-            }
+                try
+                {
+                    await VoiceRealtimeTransportControlBridge.SendSessionAcceptedAsync(
+                        transport,
+                        accepted,
+                        http.RequestAborted);
+                }
+                catch
+                {
+                    await CleanupAcceptedTransportAsync(http, mediaStreamPort, accepted.LeaseHandle, transport);
+                    throw;
+                }
 
-            // Refactor (cluster-voice-nyxid-ephemeral-broker): the realtime provider connect runs
-            // in-process inside AttachAsync, so the caller's NyxID bearer (already validated by the
-            // JWT handler) flows via AsyncLocal to the NyxID credential resolver, which mints the
-            // provider ephemeral on the caller's identity. The token is never persisted.
-            using (AgentToolContextScope.Push(BuildVoiceCallerToolContext(http)))
-            {
-                await mediaStreamPort.AttachAsync(accepted.LeaseHandle, transport, http.RequestAborted);
-            }
+                var lifetimeCompleted = await mediaStreamPort.AttachAsync(
+                    accepted.LeaseHandle,
+                    transport,
+                    toolContextAdmission.TransportBinding,
+                    http.RequestAborted);
+                if (!string.IsNullOrWhiteSpace(lifetimeCompleted?.TransportLeaseId))
+                    detachHandle = detachHandle with { ActiveTransportLeaseId = lifetimeCompleted!.TransportLeaseId };
 
-            attached = true;
-            await WaitUntilClosedAsync(transport, http.RequestAborted);
-        }
-        catch (VoiceVolatileMediaStreamUnavailableException)
-        {
-            await TryCloseAsync(ws, RemoteAudioTransportUnavailableReason);
-        }
-        catch (InvalidOperationException) when (!attached)
-        {
-            await TryCloseAsync(ws, "Voice transport already attached.");
+                attached = true;
+                await WaitUntilClosedAsync(transport, http.RequestAborted);
+            }
+            catch (VoiceVolatileMediaStreamUnavailableException)
+            {
+                await TryCloseAsync(http, ws, RemoteAudioTransportUnavailableReason);
+            }
+            catch (VoiceVolatileToolCredentialUnavailableException)
+            {
+                await TryCloseAsync(http, ws, VoiceCredentialUnavailableReason);
+            }
+            catch (InvalidOperationException) when (!attached)
+            {
+                await TryCloseAsync(http, ws, "Voice transport already attached.");
+            }
+            finally
+            {
+                if (realtimeSubscription != null)
+                    await realtimeSubscription.DisposeAsync();
+
+                if (attached)
+                    // CancellationToken.None: on a normal browser close http.RequestAborted is ALREADY
+                    // cancelled, and the dispatch port throws on a cancelled token before producing the
+                    // release signal — so the lease would never be released and TransportAttached would
+                    // stay stuck true (blocking the next session with 409). Detach must run uncancelled.
+                    await mediaStreamPort.DetachAsync(detachHandle, transport, CancellationToken.None);
+            }
         }
         finally
         {
-            if (realtimeSubscription != null)
-                await realtimeSubscription.DisposeAsync();
-
-            if (attached)
-                await mediaStreamPort.DetachAsync(accepted.LeaseHandle, transport, http.RequestAborted);
+            await ReleasePendingToolCredentialAsync(http, toolContextAdmission.ToolContext);
         }
     }
 
-    // Caller credential for realtime provider brokering: the NyxID resolver reads
-    // AgentToolRequestContext.NyxIdAccessToken to mint the provider ephemeral on the caller's
-    // identity. Sourced from the same places the JWT bearer handler accepts for /ws/voice.
-    private static AgentToolExecutionContext BuildVoiceCallerToolContext(HttpContext http)
+    private static async Task ReleasePendingToolCredentialAsync(HttpContext http, VoiceToolExecutionContext? toolContext)
     {
-        var bearer = ExtractCallerBearer(http);
-        return string.IsNullOrWhiteSpace(bearer)
-            ? AgentToolExecutionContext.Empty
-            : AgentToolExecutionContext.Empty with
-            {
-                Credentials = new AgentToolCredentials(bearer, null, null),
-            };
+        var credentialRef = NormalizeOptional(toolContext?.CredentialRef);
+        if (credentialRef is null)
+            return;
+
+        var issuer = http.RequestServices.GetService<IVoiceToolCredentialIssuer>();
+        if (issuer is null)
+            return;
+
+        try
+        {
+            await issuer.ReleaseAsync(credentialRef, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            GetLogger(http).LogWarning(ex, "Failed to release voice tool credential ref.");
+        }
+    }
+
+    private static async Task<VoiceToolContextAdmission> TryBuildToolContextAsync(HttpContext http)
+    {
+        var callerBearer = ExtractCallerBearer(http);
+        if (string.IsNullOrWhiteSpace(callerBearer))
+            return new VoiceToolContextAdmission(true, null);
+
+        var issuer = http.RequestServices.GetService<IVoiceToolCredentialIssuer>();
+        if (issuer is null)
+        {
+            await WriteCredentialUnavailableAsync(http);
+            return new VoiceToolContextAdmission(false, null);
+        }
+
+        var expiresAtUtc = DateTimeOffset.UtcNow.AddMinutes(5);
+        VoiceToolCredentialIssueResult? issued;
+        try
+        {
+            issued = await issuer.IssueAsync(
+                new VoiceToolCredentialIssueRequest(
+                    callerBearer,
+                    expiresAtUtc),
+                http.RequestAborted);
+        }
+        catch (OperationCanceledException) when (http.RequestAborted.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            await WriteCredentialUnavailableAsync(http);
+            return new VoiceToolContextAdmission(false, null);
+        }
+
+        if (issued is null || string.IsNullOrWhiteSpace(issued.CredentialRef))
+        {
+            await WriteCredentialUnavailableAsync(http);
+            return new VoiceToolContextAdmission(false, null);
+        }
+
+        var toolContext = new VoiceToolExecutionContext
+        {
+            CredentialRef = issued.CredentialRef,
+            ExpiresAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(issued.ExpiresAtUtc.ToUniversalTime()),
+            CallerScopeId = FirstNonEmpty(
+                http.User.FindFirst(AevatarStandardClaimTypes.ScopeId)?.Value,
+                http.User.FindFirst("uid")?.Value,
+                http.User.FindFirst("sub")?.Value,
+                http.User.FindFirst(ClaimTypes.NameIdentifier)?.Value) ?? string.Empty,
+            CallerSubject = FirstNonEmpty(
+                http.User.FindFirst("sub")?.Value,
+                http.User.FindFirst(ClaimTypes.NameIdentifier)?.Value) ?? string.Empty,
+            OwnerSubject = FirstNonEmpty(
+                http.User.FindFirst("sub")?.Value,
+                http.User.FindFirst(ClaimTypes.NameIdentifier)?.Value) ?? string.Empty,
+            ChannelPlatform = NormalizeOptional(http.Request.Query["channel"].ToString()) ?? OwnerScope.NyxIdPlatform,
+            ChannelSenderId = FirstNonEmpty(
+                http.Request.Query["sender_id"].ToString(),
+                http.User.FindFirst("sender_id")?.Value) ?? string.Empty,
+            ChannelRegistrationScopeId = FirstNonEmpty(
+                http.Request.Query["registration_scope_id"].ToString(),
+                http.User.FindFirst("registration_scope_id")?.Value,
+                http.User.FindFirst(AevatarStandardClaimTypes.ScopeId)?.Value) ?? string.Empty,
+            ChannelMessageId = NormalizeOptional(http.Request.Query["message_id"].ToString()) ?? string.Empty,
+            ChannelPlatformMessageId = NormalizeOptional(http.Request.Query["platform_message_id"].ToString()) ?? string.Empty,
+            ChannelDeliveryTargetId = NormalizeOptional(http.Request.Query["delivery_target_id"].ToString()) ?? string.Empty,
+            ConnectedServicesContextJson = NormalizeOptional(http.Request.Query["connected_services_context"].ToString()) ?? string.Empty,
+            NyxIdRoutePreference = NormalizeOptional(http.Request.Query["nyxid_route_preference"].ToString()) ?? string.Empty,
+            SenderBindingId = NormalizeOptional(http.Request.Query["sender_binding_id"].ToString()) ?? string.Empty,
+        };
+
+        // Slim the voice tool surface to the NyxID service-operation tools (overridable via
+        // VOICE_TOOL_ALLOWLIST). Unrestricted, the model session gets ~69 tools across every source
+        // (skills / workflow / storage / nyxid account-mgmt), which overwhelms the realtime model's
+        // tool selection so it never calls nyxid_proxy for Home Assistant. AllowedToolNames flows to
+        // both the actor and the relay (model) tool discovery, so the model only sees this focused set.
+        foreach (var allowed in ResolveVoiceToolAllowlist())
+            toolContext.AllowedToolNames.Add(allowed);
+
+        return new VoiceToolContextAdmission(true, toolContext, issued.TransportBinding);
+    }
+
+    // The realtime voice agent's job is to operate the user's NyxID-connected services + follow its
+    // skill playbooks. Default set: nyxid_proxy (call any service — Home Assistant, Frigate, …),
+    // nyxid_status / nyxid_services (what's connected), nyxid_catalog (what else can be connected), and
+    // ornn_search_skills + use_skill (find and load the Ornn skill playbooks — also a NyxID downstream
+    // service). Override with a comma-separated VOICE_TOOL_ALLOWLIST to widen or change the set.
+    private static readonly string[] DefaultVoiceToolAllowlist =
+        ["nyxid_proxy", "nyxid_status", "nyxid_services", "nyxid_catalog", "ornn_search_skills", "use_skill"];
+
+    private static IReadOnlyList<string> ResolveVoiceToolAllowlist()
+    {
+        var configured = Environment.GetEnvironmentVariable("VOICE_TOOL_ALLOWLIST");
+        if (string.IsNullOrWhiteSpace(configured))
+            return DefaultVoiceToolAllowlist;
+
+        var names = configured.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return names.Length > 0 ? names : DefaultVoiceToolAllowlist;
+    }
+
+    private sealed record VoiceToolContextAdmission(
+        bool Accepted,
+        VoiceToolExecutionContext? ToolContext,
+        VoiceToolCredentialTransportBinding? TransportBinding = null);
+
+    private static async Task WriteCredentialUnavailableAsync(HttpContext http)
+    {
+        http.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        await http.Response.WriteAsync(VoiceCredentialUnavailableReason, http.RequestAborted);
     }
 
     private static string? ExtractCallerBearer(HttpContext http)
@@ -275,7 +400,7 @@ public static class PolicyAwareVoiceEndpoints
         }
     }
 
-    private static async Task TryCloseAsync(System.Net.WebSockets.WebSocket ws, string reason)
+    private static async Task TryCloseAsync(HttpContext http, System.Net.WebSockets.WebSocket ws, string reason)
     {
         if (ws.State is not System.Net.WebSockets.WebSocketState.Open and not System.Net.WebSockets.WebSocketState.CloseReceived)
             return;
@@ -285,9 +410,9 @@ public static class PolicyAwareVoiceEndpoints
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
             await ws.CloseAsync(System.Net.WebSockets.WebSocketCloseStatus.PolicyViolation, reason, cts.Token);
         }
-        catch
+        catch (Exception ex)
         {
-            // best effort close after websocket upgrade
+            GetLogger(http).LogWarning(ex, "Failed to close voice WebSocket after upgrade.");
         }
     }
 
@@ -303,6 +428,7 @@ public static class PolicyAwareVoiceEndpoints
     }
 
     private static async Task CleanupAcceptedTransportAsync(
+        HttpContext http,
         IVoiceVolatileMediaStreamPort mediaStreamPort,
         VoicePresenceSessionLeaseHandle handle,
         WebSocketVoiceTransport transport)
@@ -311,13 +437,16 @@ public static class PolicyAwareVoiceEndpoints
         {
             await mediaStreamPort.DetachAsync(handle, transport, CancellationToken.None);
         }
-        catch
+        catch (Exception ex)
         {
-            // best effort cleanup for an accepted lease whose control channel failed before attach
+            GetLogger(http).LogWarning(ex, "Failed to detach accepted voice transport during control-channel cleanup.");
         }
 
         await transport.DisposeAsync();
     }
+
+    private static ILogger GetLogger(HttpContext http) =>
+        http.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(PolicyAwareVoiceEndpoints));
 
     private static ChatRouteInput BuildRouteInput(
         HttpContext http,
@@ -391,20 +520,6 @@ public static class PolicyAwareVoiceEndpoints
         string.Equals(channel, "nyxid", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(channel, "cli", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(channel, "web", StringComparison.OrdinalIgnoreCase);
-
-    internal static bool IsVoiceDevBypassPrincipal(ClaimsPrincipal user) =>
-        HasScope(user, "voice:bypass") || HasAdminRole(user);
-
-    private static bool HasScope(ClaimsPrincipal user, string scope) =>
-        user.Claims
-            .Where(static claim => string.Equals(claim.Type, ScopeClaimType, StringComparison.OrdinalIgnoreCase))
-            .SelectMany(static claim => (claim.Value ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-            .Any(value => string.Equals(value, scope, StringComparison.Ordinal));
-
-    private static bool HasAdminRole(ClaimsPrincipal user) =>
-        user.Claims.Any(static claim =>
-            RoleClaimTypes.Contains(claim.Type, StringComparer.OrdinalIgnoreCase) &&
-            AdminRoleValues.Contains(claim.Value?.Trim() ?? string.Empty));
 
     private static string? FirstNonEmpty(params string?[] values)
     {

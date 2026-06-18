@@ -1022,6 +1022,7 @@ public sealed class ScheduledAgentCreatorToolTests
 
             using var document = JsonDocument.Parse(result);
             document.RootElement.GetProperty("error").GetString().Should().Be("initialize_failed");
+            document.RootElement.GetProperty("detail").GetString().Should().Contain("dispatch failed");
             harness.Handler.Requests.Should().Contain(request =>
                 request.Method == HttpMethod.Delete &&
                 request.Path == "/api/v1/api-keys/key-created");

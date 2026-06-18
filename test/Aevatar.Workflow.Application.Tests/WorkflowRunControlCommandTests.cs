@@ -111,6 +111,48 @@ public sealed class WorkflowRunControlCommandTests
     }
 
     [Fact]
+    public async Task RetryCompensationResolver_ShouldResolveRunActor_WhenBindingMatches()
+    {
+        var resolver = new WorkflowRetryCompensationCommandTargetResolver(new FakeWorkflowActorBindingReader(
+                new WorkflowActorBinding(
+                    WorkflowActorKind.Run,
+                    "actor-1",
+                    "definition-1",
+                    "run-1",
+                    "direct",
+                    "yaml",
+                    new Dictionary<string, string>())));
+
+        var result = await resolver.ResolveAsync(
+            new WorkflowRetryCompensationCommand(
+                "actor-1",
+                "run-1",
+                "refund_payment",
+                "cmd-1",
+                "operator retry",
+                "corr-1"),
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        result.Target.Should().NotBeNull();
+        result.Target!.ActorId.Should().Be("actor-1");
+        result.Target.RunId.Should().Be("run-1");
+    }
+
+    [Fact]
+    public async Task RetryCompensationResolver_ShouldRejectBlankFailedStep_BeforeRuntimeLookup()
+    {
+        var resolver = new WorkflowRetryCompensationCommandTargetResolver(new FakeWorkflowActorBindingReader(null));
+
+        var result = await resolver.ResolveAsync(
+            new WorkflowRetryCompensationCommand("actor-1", "run-1", " ", "cmd-1"),
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowRunControlStartError.InvalidStepId("actor-1", "run-1", " "));
+    }
+
+    [Fact]
     public void ResumeEnvelopeFactory_ShouldPackWorkflowResumedEvent()
     {
         var factory = new WorkflowResumeCommandEnvelopeFactory();
@@ -231,6 +273,45 @@ public sealed class WorkflowRunControlCommandTests
         envelope.Propagation!.CorrelationId.Should().Be("corr-1");
         stopped.RunId.Should().Be("run-1");
         stopped.Reason.Should().Be("user requested stop");
+    }
+
+    [Fact]
+    public void RetryCompensationEnvelopeFactory_ShouldPackWorkflowCompensationRetryRequestedEvent()
+    {
+        var factory = new WorkflowRetryCompensationCommandEnvelopeFactory();
+        var envelope = factory.CreateEnvelope(
+            new WorkflowRetryCompensationCommand(
+                "actor-1",
+                "run-1",
+                " refund_payment ",
+                "cmd-1",
+                " operator retry ",
+                "corr-command"),
+            new CommandContext("actor-1", "cmd-1", "corr-1", new Dictionary<string, string>()));
+
+        var retry = envelope.Payload.Unpack<WorkflowCompensationRetryRequestedEvent>();
+
+        envelope.Id.Should().Be("cmd-1");
+        envelope.Route!.PublisherActorId.Should().Be("api.workflow.retry-compensation");
+        envelope.Route.GetTargetActorId().Should().Be("actor-1");
+        envelope.Propagation!.CorrelationId.Should().Be("corr-1");
+        retry.RunId.Should().Be("run-1");
+        retry.FailedCompensationStepId.Should().Be("refund_payment");
+        retry.Reason.Should().Be("operator retry");
+        retry.CommandId.Should().Be("cmd-1");
+        retry.CorrelationId.Should().Be("corr-1");
+    }
+
+    [Fact]
+    public void RetryCompensationEnvelopeFactory_ShouldRejectBlankFailedStep()
+    {
+        var factory = new WorkflowRetryCompensationCommandEnvelopeFactory();
+
+        var act = () => factory.CreateEnvelope(
+            new WorkflowRetryCompensationCommand("actor-1", "run-1", " ", "cmd-1"),
+            new CommandContext("actor-1", "cmd-1", "cmd-1", new Dictionary<string, string>()));
+
+        act.Should().Throw<ArgumentException>();
     }
 
     [Fact]

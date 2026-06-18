@@ -68,6 +68,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ExternalSubjectRef? Subject,
         BindingId? BindingId);
 
+    private sealed record LarkSubjectContactIds(string? UserId, string? EmployeeId);
+
     private readonly IServiceProvider _toolServiceProvider;
     private readonly IChannelBotRegistrationQueryPort _registrationQueryPort;
     private readonly IChannelBotRegistrationQueryByNyxIdentityPort? _registrationQueryByNyxIdentityPort;
@@ -88,6 +90,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private readonly ChannelWorkflowDraftRunAdmission? _workflowDraftRunAdmission;
     private readonly IRemoteToolApprovalPort? _remoteToolApprovalPort;
     private readonly ILogger<ChannelConversationTurnRunner> _logger;
+    private readonly ILarkBotIdentityResolver? _botIdentityResolver;
 
     public ChannelConversationTurnRunner(
         IServiceProvider services,
@@ -109,7 +112,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ChannelPlatformReplyService? replyService = null,
         ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>? workflowResumeService = null,
         ChannelWorkflowDraftRunAdmission? workflowDraftRunAdmission = null,
-        IRemoteToolApprovalPort? remoteToolApprovalPort = null)
+        IRemoteToolApprovalPort? remoteToolApprovalPort = null,
+        ILarkBotIdentityResolver? botIdentityResolver = null)
     {
         _toolServiceProvider = services ?? throw new ArgumentNullException(nameof(services));
         _registrationQueryPort = registrationQueryPort ?? throw new ArgumentNullException(nameof(registrationQueryPort));
@@ -131,6 +135,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         _workflowDraftRunAdmission = workflowDraftRunAdmission;
         _remoteToolApprovalPort = remoteToolApprovalPort;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _botIdentityResolver = botIdentityResolver;
     }
 
     public async Task<ConversationTurnResult> RunInboundAsync(
@@ -143,6 +148,13 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         var registration = await ResolveRegistrationAsync(activity, ct);
         if (registration is null)
             return ConversationTurnResult.PermanentFailure("registration_not_found", "Channel registration not found.");
+
+        // Group/channel chats deliver every message once the bot holds the broad read scope, so a
+        // turn only "addresses" the bot when it @-mentions the bot, replies to one of the bot's own
+        // messages, or is a slash command. Decided before the typing reaction so unaddressed group
+        // chatter produces neither a reaction nor a reply.
+        if (await ShouldIgnoreUnaddressedGroupMessageAsync(activity, registration, runtimeContext, ct))
+            return ConversationTurnResult.Ignored("group_message_not_addressed", activity.Id);
 
         // Capture the typing-reaction Task instead of `_ =`-discarding it. The direct-reply
         // AgentBuilder path can complete fast enough that the clear fires before Lark has
@@ -1299,10 +1311,12 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             var metadata = await BuildAgentBuilderMetadataAsync(
                     activity,
                     inboundEvent,
+                    runtimeContext,
                     ct);
             using (AgentToolContextScope.Push(BuildAgentBuilderToolContext(
                        inboundEvent,
                        activity,
+                       registration,
                        ResolveUserAccessToken(activity, runtimeContext),
                        metadata)))
             {
@@ -1757,6 +1771,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private async Task<IReadOnlyDictionary<string, string>> BuildReplyMetadataAsync(
         ChannelInboundEvent inboundEvent,
         ChatActivity? activity,
+        ConversationTurnRuntimeContext runtimeContext,
         CancellationToken ct)
     {
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -1812,12 +1827,138 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (!string.IsNullOrWhiteSpace(larkOperatorUnionId))
             metadata[ChannelMetadataKeys.LarkOperatorUnionId] = larkOperatorUnionId;
 
+        if (await TryResolveLarkSubjectContactIdsAsync(inboundEvent, activity, runtimeContext, larkUnionId, ct)
+                .ConfigureAwait(false) is { } subjectContactIds)
+        {
+            if (!string.IsNullOrWhiteSpace(subjectContactIds.UserId))
+                metadata[ChannelMetadataKeys.LarkSubjectUserId] = subjectContactIds.UserId;
+            if (!string.IsNullOrWhiteSpace(subjectContactIds.EmployeeId))
+                metadata[ChannelMetadataKeys.LarkSubjectEmployeeId] = subjectContactIds.EmployeeId;
+        }
+
         return metadata;
+    }
+
+    private async Task<LarkSubjectContactIds?> TryResolveLarkSubjectContactIdsAsync(
+        ChannelInboundEvent inboundEvent,
+        ChatActivity? activity,
+        ConversationTurnRuntimeContext runtimeContext,
+        string? larkUnionId,
+        CancellationToken ct)
+    {
+        if (activity?.Type != ActivityType.Message)
+            return null;
+
+        if (!IsLarkPlatform(inboundEvent.Platform))
+            return null;
+
+        var accessToken = activity is null
+            ? NormalizeOptional(runtimeContext.NyxUserAccessToken)
+            : ResolveUserAccessToken(activity, runtimeContext);
+        var providerSlug = NormalizeOptional(inboundEvent.NyxProviderSlug);
+        var scopeId = NormalizeOptional(inboundEvent.RegistrationScopeId);
+        if (string.IsNullOrWhiteSpace(accessToken) ||
+            string.IsNullOrWhiteSpace(providerSlug) ||
+            string.IsNullOrWhiteSpace(scopeId))
+        {
+            return null;
+        }
+
+        var lookupId = NormalizeOptional(larkUnionId);
+        var userIdType = "union_id";
+        if (string.IsNullOrWhiteSpace(lookupId))
+        {
+            lookupId = NormalizeOptional(inboundEvent.SenderId);
+            userIdType = "open_id";
+        }
+
+        if (string.IsNullOrWhiteSpace(lookupId))
+            return null;
+
+        try
+        {
+            var response = await _nyxClient.ProxyRequestAsync(
+                    accessToken!,
+                    providerSlug!,
+                    $"/open-apis/contact/v3/users/{Uri.EscapeDataString(lookupId!)}?user_id_type={userIdType}",
+                    "GET",
+                    body: null,
+                    extraHeaders: null,
+                    ct)
+                .ConfigureAwait(false);
+
+            if (LarkProxyResponse.TryGetError(response, out _, out _))
+                return null;
+
+            return TryParseLarkSubjectContactIds(response, out var contactIds) ? contactIds : null;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Lark subject contact lookup failed open: provider={ProviderSlug}, userIdType={UserIdType}",
+                providerSlug,
+                userIdType);
+            return null;
+        }
+    }
+
+    private static bool TryParseLarkSubjectContactIds(string? response, out LarkSubjectContactIds contactIds)
+    {
+        contactIds = new LarkSubjectContactIds(null, null);
+        if (string.IsNullOrWhiteSpace(response))
+            return false;
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("data", out var data) ||
+                data.ValueKind != JsonValueKind.Object ||
+                !data.TryGetProperty("user", out var user) ||
+                user.ValueKind != JsonValueKind.Object)
+            {
+                return false;
+            }
+
+            var userId = TryReadString(user, "user_id");
+            var employeeId = TryReadString(user, "employee_id");
+            if (string.IsNullOrWhiteSpace(userId) && string.IsNullOrWhiteSpace(employeeId))
+                return false;
+
+            contactIds = new LarkSubjectContactIds(userId, employeeId);
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsLarkPlatform(string? platform) =>
+        string.Equals(platform, "lark", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(platform, "feishu", StringComparison.OrdinalIgnoreCase);
+
+    private static string? TryReadString(JsonElement container, string propertyName)
+    {
+        if (!container.TryGetProperty(propertyName, out var property) ||
+            property.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+
+        return NormalizeOptional(property.GetString());
     }
 
     private static AgentToolExecutionContext BuildAgentBuilderToolContext(
         ChannelInboundEvent inboundEvent,
         ChatActivity activity,
+        ChannelBotRegistrationEntry registration,
         string? userAccessToken,
         IReadOnlyDictionary<string, string> metadata)
     {
@@ -1835,7 +1976,9 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 inboundEvent.SenderId,
                 inboundEvent.RegistrationScopeId,
                 inboundEvent.MessageId,
-                NormalizeOptional(activity.TransportExtras?.NyxPlatformMessageId)),
+                NormalizeOptional(activity.TransportExtras?.NyxPlatformMessageId),
+                null,
+                NormalizeOptional(registration.NyxReplyCredentialRef)),
             ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata),
         };
     }
@@ -1843,10 +1986,11 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private async Task<IReadOnlyDictionary<string, string>> BuildAgentBuilderMetadataAsync(
         ChatActivity activity,
         ChannelInboundEvent inboundEvent,
+        ConversationTurnRuntimeContext runtimeContext,
         CancellationToken ct)
     {
         var metadata = new Dictionary<string, string>(
-            await BuildReplyMetadataAsync(inboundEvent, activity, ct),
+            await BuildReplyMetadataAsync(inboundEvent, activity, runtimeContext, ct),
             StringComparer.Ordinal)
         {
             [ChannelMetadataKeys.ChatType] = ResolveConversationChatType(activity.Conversation),
@@ -2027,7 +2171,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             request.ReplyTokenExpiresAtUnixMs = token.ExpiresAtUtc.ToUnixTimeMilliseconds();
         }
 
-        var replyMetadata = await BuildReplyMetadataAsync(inboundEvent, activity, ct);
+        var replyMetadata = await BuildReplyMetadataAsync(inboundEvent, activity, runtimeContext, ct);
         foreach (var pair in replyMetadata)
             request.Metadata[pair.Key] = pair.Value;
 
@@ -2047,7 +2191,9 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 inboundEvent.SenderId,
                 inboundEvent.RegistrationScopeId,
                 inboundEvent.MessageId,
-                NormalizeOptional(activity.TransportExtras?.NyxPlatformMessageId)),
+                NormalizeOptional(activity.TransportExtras?.NyxPlatformMessageId),
+                null,
+                NormalizeOptional(registration.NyxReplyCredentialRef)),
             ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(replyMetadata),
         }).ToPayload();
 
@@ -2349,6 +2495,72 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         return string.Equals(platform, "feishu", StringComparison.OrdinalIgnoreCase)
             ? "lark"
             : platform;
+    }
+
+    // Group-chat admission: returns true when an inbound group/channel/thread message does NOT
+    // address the bot and should be dropped silently. The gate is opt-in — it stays inert until an
+    // ILarkBotIdentityResolver is wired, so a missing DI registration degrades to the legacy
+    // "engage everything" behavior rather than going silent. Slash commands and replies-to-the-bot
+    // are free signals checked before any network call; only a message that @-mentions someone
+    // forces an on-demand bot/v3/info resolve to learn whether that mention is the bot.
+    private async Task<bool> ShouldIgnoreUnaddressedGroupMessageAsync(
+        ChatActivity activity,
+        ChannelBotRegistrationEntry registration,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct)
+    {
+        if (_botIdentityResolver is null)
+            return false;
+
+        // Card actions (button clicks) are explicit interactions; never gate them. DMs are 1:1 and
+        // always addressed. Only Lark group-like message activities are subject to the gate.
+        if (activity.Type != ActivityType.Message)
+            return false;
+
+        if (!IsLarkActivity(activity, registration))
+            return false;
+
+        if (!IsGroupLikeScope(activity.Conversation?.Scope))
+            return false;
+
+        if (LooksLikeSlashCommand(activity.Content?.Text))
+            return false;
+
+        if (runtimeContext.IsReplyToBot)
+            return false;
+
+        // With no @-mention at all the message cannot name the bot, so ignore without a network
+        // call. Otherwise resolve the bot's own open_id and engage only if it is among the mentions.
+        if (activity.Mentions.Count == 0)
+            return true;
+
+        var accessToken = ResolveUserAccessToken(activity, runtimeContext);
+        var providerSlug = NormalizeOptional(registration.NyxProviderSlug);
+        if (string.IsNullOrWhiteSpace(accessToken) || string.IsNullOrWhiteSpace(providerSlug))
+            return false; // identity unknowable -> fail open (engage)
+
+        var botOpenId = await _botIdentityResolver.ResolveBotOpenIdAsync(providerSlug!, accessToken!, ct);
+        if (string.IsNullOrWhiteSpace(botOpenId))
+            return false; // resolution failed -> fail open (engage)
+
+        var botMentioned = activity.Mentions.Any(mention =>
+            string.Equals(mention.CanonicalId, botOpenId, StringComparison.Ordinal));
+        return !botMentioned;
+    }
+
+    private static bool IsGroupLikeScope(ConversationScope? scope) =>
+        scope is ConversationScope.Group or ConversationScope.Channel or ConversationScope.Thread;
+
+    private static bool LooksLikeSlashCommand(string? text) =>
+        !string.IsNullOrWhiteSpace(text) && text.TrimStart().StartsWith('/');
+
+    private static bool IsLarkActivity(ChatActivity activity, ChannelBotRegistrationEntry registration)
+    {
+        var platform = NormalizeOptional(activity.TransportExtras?.NyxPlatform)
+            ?? NormalizeOptional(registration.Platform)
+            ?? NormalizeOptional(activity.ChannelId?.Value);
+        return string.Equals(platform, "lark", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(platform, "feishu", StringComparison.OrdinalIgnoreCase);
     }
 
     // Lark reaction emoji_type for "hands typing on keyboard" — added immediately on inbound

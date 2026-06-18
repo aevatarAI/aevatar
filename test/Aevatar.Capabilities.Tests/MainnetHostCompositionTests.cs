@@ -13,6 +13,7 @@ using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.AI.ToolProviders.Telegram;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.AI.ToolProviders.Web;
+using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
 using Aevatar.Configuration;
@@ -24,6 +25,7 @@ using Aevatar.Foundation.Runtime.Hosting.Maintenance;
 using Aevatar.Foundation.VoicePresence;
 using Aevatar.Foundation.VoicePresence.Modules;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgents.Authoring.Lark;
 using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
@@ -31,11 +33,15 @@ using Aevatar.GAgents.Device;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.GAgents.StatusDashboard.Executors;
 using Aevatar.Mainnet.Host.Api.Hosting;
+using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.Scripting.Projection.ReadModels;
+using Aevatar.Workflow.Infrastructure.Runs;
+using Aevatar.Workflow.Integration.AI;
 using Aevatar.Workflow.Projection.ReadModels;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using System.Reflection;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.TestHost;
@@ -86,6 +92,9 @@ public sealed class MainnetHostCompositionTests
         app.Services.GetRequiredService<IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>>()
             .Should()
             .NotBeNull();
+        app.Services.GetRequiredService<IProjectionDocumentReader<WorkflowExternalApprovalContinuationDocument, string>>()
+            .Should()
+            .NotBeNull();
         app.Services.GetRequiredService<IProjectionDocumentReader<ScriptNativeDocumentReadModel, string>>()
             .Should()
             .NotBeNull();
@@ -129,6 +138,13 @@ public sealed class MainnetHostCompositionTests
         toolSources.Should().Contain(source => source is TelegramAgentToolSource);
         toolSources.Should().Contain(source => source is SkillsAgentToolSource);
         toolSources.Should().Contain(source => source is OrnnAgentToolSource);
+        toolSources.Should().Contain(source => source is HumanInteractionChannelToolSource);
+        app.Services.GetRequiredService<IHumanInteractionPort>()
+            .Should()
+            .BeOfType<SkillBackedHumanInteractionPort>();
+        app.Services.GetRequiredService<IChannelInteractionNotificationPort>()
+            .Should()
+            .BeOfType<FeishuCardNotificationPort>();
         // Yield capability follows the actor, never the container (#2004): a DI-global
         // yielding handler hands "I will resume you" to surfaces with no pending-approval
         // continuation, stranding dead-letter approvals. RoleGAgent wires its own handler;
@@ -199,6 +215,16 @@ public sealed class MainnetHostCompositionTests
         workspace.Sources.Should().Contain(source => source is OrnnAgentToolSource);
         app.Services.GetRequiredService<LarkToolOptions>()
             .EnableWorkflowFileSubmit.Should().BeFalse();
+        app.Services.GetServices<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowConnectedServiceResourceFetchAdapter>()
+            .Should()
+            .ContainSingle(adapter => adapter.GetType().Name == "LarkMessageResourceFetchAdapter");
+        var workflowToolNames = new List<string>();
+        foreach (var source in app.Services.GetServices<Aevatar.Workflow.Core.Modules.IWorkflowToolSource>())
+        {
+            var tools = await source.GetToolsAsync();
+            workflowToolNames.AddRange(tools.Select(static tool => tool.Name));
+        }
+        workflowToolNames.Should().ContainSingle(name => name == "workflow_connected_service_resource_fetch");
 
         var larkSelfNotify = registry.Resolve(new ChatRouteToolSetRef { Name = ToolSetNames.LarkSelfNotify });
         larkSelfNotify.IsSuccess.Should().BeTrue(larkSelfNotify.Error?.Message);
@@ -238,6 +264,80 @@ public sealed class MainnetHostCompositionTests
         using var app = builder.Build();
         app.Services.GetRequiredService<LarkToolOptions>()
             .EnableWorkflowFileSubmit.Should().BeTrue();
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_ShouldBindWorkflowConnectedServiceFileSubmitSection()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder(BuildWorkflowFileSubmitTargetConfiguration());
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        var target = app.Services.GetRequiredService<IOptions<WorkflowConnectedServiceFileSubmitOptions>>()
+            .Value
+            .Targets
+            .Should()
+            .ContainSingle()
+            .Subject;
+
+        target.Target.Should().Be("submit_invoice");
+        target.Provider.Should().Be("nyxid_connected_service");
+        target.Endpoint.Should().NotBeNull();
+        target.Endpoint!.ServiceSlug.Should().Be("storage");
+        target.Endpoint.Path.Should().Be("files/upload");
+        target.Endpoint.Method.Should().Be("POST");
+        target.Endpoint.FileFieldName.Should().Be("upload");
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_ShouldRegisterNyxIdProxyFileArtifactIngressWithWorkflowFileStorage()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["Aevatar:NyxId:ProxyFileArtifactMaxBytes"] = "12345",
+        });
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        app.Services.GetRequiredService<INyxIdProxyFileArtifactIngress>()
+            .Should()
+            .BeOfType<NyxIdProxyWorkflowFileArtifactIngress>();
+        app.Services.GetRequiredService<NyxIdToolOptions>()
+            .ProxyFileArtifactMaxBytes.Should().Be(12345);
+    }
+
+    [Fact]
+    public async Task AddAevatarMainnetHost_ShouldFailFastOnMalformedWorkflowFileSubmitEndpointPolicy()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var configurationValues = BuildWorkflowFileSubmitTargetConfiguration();
+        configurationValues["WorkflowConnectedServiceFileSubmit:Targets:0:Endpoint:Path"] = "https://storage.example.test/files/upload";
+        var builder = CreateBuilder(configurationValues);
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        await using var app = builder.Build();
+        var act = async () => await app.StartAsync();
+
+        await act.Should()
+            .ThrowAsync<OptionsValidationException>()
+            .WithMessage("*WorkflowConnectedServiceFileSubmit:Targets[0].Endpoint.Path*");
     }
 
     [Fact]
@@ -396,6 +496,51 @@ public sealed class MainnetHostCompositionTests
             .ContainSingle(static name => string.Equals(name, "voice_presence", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public void MapAevatarMainnetHost_WithVoiceConfigured_ShouldExposeOnlyPolicyAwareVoiceIngress()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["Aevatar:VoicePresence:OpenAI:ApiKey"] = "voice-openai-key",
+        });
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        app.MapAevatarMainnetHost();
+
+        var routePatterns = ((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(static source => source.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Select(static endpoint => endpoint.RoutePattern.RawText)
+            .ToList();
+
+        routePatterns.Should().Contain("/ws/voice");
+        routePatterns.Should().NotContain("/ws/voice/{actorId}");
+    }
+
+    [Fact]
+    public void ConfigureMainnetAIFeatures_ShouldPreserveConfiguredVoiceDrainTimeout()
+    {
+        var options = new AevatarAIFeatureOptions();
+        options.VoicePresence.Module = new VoicePresenceModuleOptions
+        {
+            DrainTimeout = TimeSpan.FromSeconds(17),
+        };
+
+        InvokeConfigureMainnetAIFeatures(options);
+
+        options.VoicePresence.Module.DrainTimeout.Should().Be(TimeSpan.FromSeconds(17));
+        options.VoicePresence.Module.DirectExternalEventTypeUrls
+            .Should()
+            .ContainSingle("type.googleapis.com/aevatar.gagents.household.DeviceInbound");
+    }
+
     private static WebApplicationBuilder CreateBuilder(IReadOnlyDictionary<string, string?>? overrides = null)
     {
         var options = new WebApplicationOptions
@@ -422,6 +567,33 @@ public sealed class MainnetHostCompositionTests
 
         builder.Configuration.AddInMemoryCollection(values);
         return builder;
+    }
+
+    private static Dictionary<string, string?> BuildWorkflowFileSubmitTargetConfiguration() =>
+        new()
+        {
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:Target"] = "submit_invoice",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:Provider"] = "nyxid_connected_service",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:OutputField"] = "document_id",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:MaxFileBytes"] = "1024",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:AllowedMediaTypes:0"] = "text/plain",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:Arguments:folder:Name"] = "folder",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:Arguments:folder:Required"] = "true",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:Arguments:folder:AllowedValues:0"] = "reports",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:Endpoint:ServiceSlug"] = "storage",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:Endpoint:Path"] = "files/upload",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:Endpoint:Method"] = "POST",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:Endpoint:FileFieldName"] = "upload",
+        };
+
+    private static void InvokeConfigureMainnetAIFeatures(AevatarAIFeatureOptions options)
+    {
+        var method = typeof(MainnetHostBuilderExtensions).GetMethod(
+            "ConfigureMainnetAIFeatures",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        method.Should().NotBeNull();
+
+        method!.Invoke(null, [options]);
     }
 
     private static IEnumerable<ServiceDescriptor> HostedServiceDescriptors<THostedService>(IServiceCollection services)

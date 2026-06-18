@@ -5,11 +5,15 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Foundation.VoicePresence.Hosting;
 
-public sealed class VoicePresenceTransportAttachmentPort(IActorDispatchPort dispatchPort)
+public sealed class VoicePresenceTransportAttachmentPort(
+    IActorDispatchPort dispatchPort,
+    IVoicePresenceLeaseObservationPort observationPort)
     : IVoicePresenceTransportAttachmentPort
 {
     private readonly IActorDispatchPort _dispatchPort =
         dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
+    private readonly IVoicePresenceLeaseObservationPort _observationPort =
+        observationPort ?? throw new ArgumentNullException(nameof(observationPort));
 
     public async Task<VoicePresenceSessionLeaseHandle> AttachAsync(
         VoicePresenceSessionLeaseHandle handle,
@@ -20,11 +24,6 @@ public sealed class VoicePresenceTransportAttachmentPort(IActorDispatchPort disp
         ArgumentNullException.ThrowIfNull(transport);
 
         var transportLeaseId = Guid.NewGuid().ToString("N");
-        var attachedHandle = handle with
-        {
-            ActiveTransportLeaseId = transportLeaseId,
-        };
-
         await _dispatchPort.DispatchAsync(
             handle.ActorId,
             VoicePresenceSessionDispatch.BuildDirectEnvelope(
@@ -36,10 +35,17 @@ public sealed class VoicePresenceTransportAttachmentPort(IActorDispatchPort disp
                     OwnerId = handle.OwnerId,
                     TransportLeaseId = transportLeaseId,
                     LeaseExpiresAt = Timestamp.FromDateTimeOffset(handle.ExpiresAtUtc.ToUniversalTime()),
+                    LeaseEpoch = handle.LeaseEpoch,
                 }),
             ct);
 
-        return attachedHandle;
+        var observed = await _observationPort.ObserveTransportAttachAsync(handle, transportLeaseId, ct);
+        return handle with
+        {
+            ObservedStateVersion = observed.StateVersion,
+            ActiveTransportLeaseId = transportLeaseId,
+            LeaseEpoch = observed.LeaseEpoch,
+        };
     }
 
     public Task DetachAsync(
@@ -65,6 +71,7 @@ public sealed class VoicePresenceTransportAttachmentPort(IActorDispatchPort disp
                     OwnerId = handle.OwnerId,
                     TransportLeaseId = transportLeaseId,
                     LeaseExpiresAt = Timestamp.FromDateTimeOffset(handle.ExpiresAtUtc.ToUniversalTime()),
+                    LeaseEpoch = handle.LeaseEpoch,
                     Reason = "host_transport_detached",
                 }),
             ct);

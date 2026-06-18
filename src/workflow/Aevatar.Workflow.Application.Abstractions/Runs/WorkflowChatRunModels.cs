@@ -10,6 +10,7 @@ public enum WorkflowChatInputPartKind
     Image = 2,
     Audio = 3,
     Video = 4,
+    File = 5,
 }
 
 public enum WorkflowFileSourceKind
@@ -73,7 +74,8 @@ public sealed record WorkflowChatRunForkSeed(
     string SourceRunId,
     string StartAtStepId,
     IReadOnlyDictionary<string, string> Variables,
-    int Attempt = 0);
+    int Attempt = 0,
+    WorkflowStepIdempotencyView? StartStepIdempotency = null);
 
 public enum WorkflowChatSourceKind
 {

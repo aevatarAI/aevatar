@@ -53,8 +53,9 @@ public sealed class SkillRunnerExecutionProjector
         string agentId,
         SkillRunnerState state,
         StateEvent stateEvent,
-        DateTimeOffset updatedAt) =>
-        new()
+        DateTimeOffset updatedAt)
+    {
+        var document = new SkillRunnerExecutionDocument
         {
             Id = agentId,
             ActorId = agentId,
@@ -75,7 +76,11 @@ public sealed class SkillRunnerExecutionProjector
             RunAtUtc = state.OneShotRunAt,
             RetiredAtUtc = state.RetiredAt,
             RetirementReason = state.RetirementReason ?? string.Empty,
+            LastSuccessfulDelivery = state.LastSuccessfulDelivery?.Clone(),
         };
+        document.RecentDeliveries.AddRange(state.RecentDeliveries.Select(static entry => entry.Clone()));
+        return document;
+    }
 
     private static bool TryResolveRunnerActorId(
         UserAgentCatalogMaterializationContext context,

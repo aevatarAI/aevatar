@@ -1,5 +1,6 @@
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Modules;
+using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 using Google.Protobuf;
 
@@ -267,8 +268,62 @@ public class BackpressureHelperTests
         request.Parameters.Should().ContainKey("key").WhoseValue.Should().Be("val");
     }
 
+    [Fact]
+    public void ToStepRequest_ShouldRoundtripQueuedInputFileRefs()
+    {
+        var entry = new BackpressureQueueEntry
+        {
+            StepId = "s-file",
+            StepType = "tool_call",
+            RunId = "run-file",
+            Input = "payload",
+            TargetRole = "worker",
+        };
+        entry.InputFileRefs.Add(BuildWorkflowFileRef("file-a"));
+        entry.InputFileRefs.Add(BuildWorkflowFileRef("file-b"));
+
+        var request = BackpressureHelper.ToStepRequest(entry);
+
+        request.InputFileRefs.Select(fileRef => fileRef.FileId).Should().Equal("file-a", "file-b");
+    }
+
+    [Fact]
+    public void ToQueueEntry_ShouldCaptureInputFileRefsForQueuedDispatch()
+    {
+        var fileRefs = new[]
+        {
+            BuildWorkflowFileRef("file-a"),
+            BuildWorkflowFileRef("file-b"),
+        };
+
+        var entry = BackpressureHelper.ToQueueEntry(
+            "s-file",
+            "tool_call",
+            "run-file",
+            "payload",
+            "worker",
+            new Dictionary<string, string> { ["tool"] = "extract" },
+            fileRefs);
+
+        entry.InputFileRefs.Select(fileRef => fileRef.FileId).Should().Equal("file-a", "file-b");
+        entry.Parameters.Should().ContainKey("tool").WhoseValue.Should().Be("extract");
+    }
+
     private static BackpressureQueueEntry MakeEntry(string stepId) =>
         new() { StepId = stepId, StepType = "llm_call", RunId = "r1", Input = "test" };
+
+    private static WorkflowFileRef BuildWorkflowFileRef(string fileId) =>
+        new()
+        {
+            FileId = fileId,
+            ArtifactId = $"workflow-file://{fileId}",
+            SourceKind = WorkflowFileSourceKind.FormUpload,
+            FileName = $"{fileId}.txt",
+            MediaType = "text/plain",
+            SizeBytes = 12,
+            OwnerRunId = "run-file",
+            OwnerScopeId = "scope-file",
+        };
 
     private static string FindBackpressureHelperSource()
     {
