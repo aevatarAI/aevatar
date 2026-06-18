@@ -221,17 +221,6 @@ export type StreamEndpointInvokeRequest = {
   headers?: Record<string, string>;
 };
 
-export type ScopeDraftRunStreamRequest = {
-  readonly prompt: string;
-  readonly workflowYamls: readonly string[];
-  readonly metadata?: Record<string, string>;
-  readonly sessionId?: string;
-};
-
-export type ScopeDraftRunStreamOptions = {
-  readonly files?: readonly File[];
-};
-
 export type WorkflowRunSummary = {
   actorId?: string;
   completionStatus?: string;
@@ -325,53 +314,26 @@ export const runtimeRunsApi = {
 
   async streamDraftRun(
     scopeId: string,
-    request: ScopeDraftRunStreamRequest,
-    signal: AbortSignal,
-    options?: ScopeDraftRunStreamOptions
+    request: ChatRunRequest,
+    signal: AbortSignal
   ): Promise<Response> {
-    const payload = compactObject({
-      eventFormat: "agui",
-      prompt: request.prompt.trim(),
-      workflowYamls:
-        request.workflowYamls && request.workflowYamls.length > 0
-          ? request.workflowYamls
-          : undefined,
-      sessionId: trimOptional(request.sessionId),
-      headers: request.metadata,
-    });
-    const files = options?.files?.filter(Boolean) ?? [];
-    const endpoint = `${buildScopePath(scopeId)}/workflow/draft-run`;
-
-    if (files.length > 0) {
-      const form = new FormData();
-      form.append("payload", JSON.stringify(payload));
-      for (const file of files) {
-        form.append("file", file, file.name);
-      }
-
-      const response = await authFetch(endpoint, {
-        method: "POST",
-        headers: {
-          Accept: "text/event-stream",
-        },
-        body: form,
-        signal,
-      });
-
-      if (!response.ok) {
-        throw new Error(await readResponseError(response));
-      }
-
-      return response;
-    }
-
-    const response = await authFetch(endpoint, {
+    const response = await authFetch(`${buildScopePath(scopeId)}/workflow/draft-run`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Accept: "text/event-stream",
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(
+        compactObject({
+          eventFormat: "agui",
+          prompt: request.prompt.trim(),
+          workflowYamls:
+            request.workflowYamls && request.workflowYamls.length > 0
+              ? request.workflowYamls
+              : undefined,
+          headers: request.metadata,
+        })
+      ),
       signal,
     });
 
