@@ -540,13 +540,6 @@ export interface StudioMemberBindingFailure {
   readonly failedAt?: string | null;
 }
 
-export interface StudioMemberBindingRunResult {
-  readonly publishedServiceId: string;
-  readonly revisionId: string;
-  readonly implementationKind: StudioMemberImplementationKind;
-  readonly expectedActorId?: string | null;
-}
-
 export interface StudioMemberBindingRunStatusResponse {
   readonly status: StudioMemberBindingRunStatus;
   readonly bindingRunId: string;
@@ -554,21 +547,15 @@ export interface StudioMemberBindingRunStatusResponse {
   readonly memberId: string;
   readonly stateVersion?: number | null;
   readonly platformBindingCommandId?: string | null;
-  readonly result?: StudioMemberBindingRunResult | null;
   readonly failure?: StudioMemberBindingFailure | null;
   readonly updatedAt?: string | null;
 }
-
-export type StudioMemberBindingAckStage = 'dispatch_accepted' | string;
-export type StudioMemberBindingRunRole = 'candidate' | string;
 
 export interface StudioMemberBindingAcceptedResponse {
   readonly status: StudioMemberBindingRunStatus;
   readonly bindingRunId: string;
   readonly scopeId: string;
   readonly memberId: string;
-  readonly ackStage?: StudioMemberBindingAckStage | null;
-  readonly bindingRunRole?: StudioMemberBindingRunRole | null;
 }
 
 export type StudioMemberCommandStatus =

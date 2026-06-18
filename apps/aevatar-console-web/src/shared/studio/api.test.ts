@@ -868,8 +868,6 @@ describe('studioApi host-session requests', () => {
         bindingRunId: 'bind-1',
         scopeId: 'scope-1',
         memberId: 'joker',
-        ackStage: 'dispatch_accepted',
-        bindingRunRole: 'candidate',
       }),
     } as Response);
     global.fetch = fetchMock as typeof global.fetch;
@@ -889,8 +887,6 @@ describe('studioApi host-session requests', () => {
       bindingRunId: 'bind-1',
       scopeId: 'scope-1',
       memberId: 'joker',
-      ackStage: 'dispatch_accepted',
-      bindingRunRole: 'candidate',
     });
 
     const [input, init] = fetchMock.mock.calls[0] as [
@@ -1141,12 +1137,6 @@ describe('studioApi host-session requests', () => {
         ScopeId: 'scope-1',
         MemberId: 'joker',
         StateVersion: 9,
-        Result: {
-          PublishedServiceId: 'member-joker',
-          RevisionId: 'rev-1',
-          ImplementationKind: 'workflow',
-          ExpectedActorId: 'scope-workflow:scope-1:joker',
-        },
         UpdatedAt: '2026-03-26T08:01:00Z',
       }),
     } as Response);
@@ -1159,12 +1149,6 @@ describe('studioApi host-session requests', () => {
         bindingRunId: 'bind-1',
         status: 'platform_binding_pending',
         stateVersion: 9,
-        result: {
-          publishedServiceId: 'member-joker',
-          revisionId: 'rev-1',
-          implementationKind: 'workflow',
-          expectedActorId: 'scope-workflow:scope-1:joker',
-        },
       }),
     );
 
