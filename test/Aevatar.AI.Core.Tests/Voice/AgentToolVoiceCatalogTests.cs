@@ -93,6 +93,25 @@ public class AgentToolVoiceCatalogTests
     }
 
     [Fact]
+    public async Task DiscoverAsync_WithDifferentCredentialRefs_ShouldNotReuseCallerScopedSnapshot()
+    {
+        var source = new TokenNamedToolSource();
+        var credentials = new StubCredentialProvider(
+            ("voice-tool:ref-1", "caller-token-123"),
+            ("voice-tool:ref-2", "caller-token-456"));
+        var catalog = new AgentToolVoiceCatalog([source], credentials);
+
+        var firstDefinitions = await catalog.DiscoverAsync(CreateToolContext("voice-tool:ref-1"));
+        var secondDefinitions = await catalog.DiscoverAsync(CreateToolContext("voice-tool:ref-2"));
+
+        firstDefinitions.Should().ContainSingle(definition => definition.Name == "caller-token-123.only");
+        secondDefinitions.Should().ContainSingle(definition => definition.Name == "caller-token-456.only");
+        credentials.RequestedRefs.Should().Equal("voice-tool:ref-1", "voice-tool:ref-2");
+        source.CapturedNyxIdAccessTokens.Should().Equal("caller-token-123", "caller-token-456");
+        source.DiscoverCalls.Should().Be(2);
+    }
+
+    [Fact]
     public async Task DiscoverAsync_WithCredentialRef_ShouldMapVoiceBusinessContextAndRestrictVisibleTools()
     {
         var allowedTool = new FakeAgentTool("door.open", "allowed", "{}");
@@ -126,26 +145,29 @@ public class AgentToolVoiceCatalogTests
 
     private static VoiceToolExecutionContext CreateFullToolContext(string credentialRef)
     {
-        var toolContext = new VoiceToolExecutionContext
-        {
-            CredentialRef = credentialRef,
-            ExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)),
-            CallerScopeId = " caller-scope-1 ",
-            OwnerSubject = " owner-subject-1 ",
-            ResponseId = " response-1 ",
-            ChannelPlatform = " lark ",
-            ChannelSenderId = " sender-1 ",
-            ChannelRegistrationScopeId = " registration-scope-1 ",
-            ChannelMessageId = " message-1 ",
-            ChannelPlatformMessageId = " platform-message-1 ",
-            ChannelDeliveryTargetId = " delivery-1 ",
-            SenderBindingId = " sender-binding-1 ",
-            NyxIdRoutePreference = " direct ",
-            ConnectedServicesContextJson = """ {"service":"ctx"} """,
-        };
+        var toolContext = CreateToolContext(credentialRef);
+        toolContext.CallerScopeId = " caller-scope-1 ";
+        toolContext.OwnerSubject = " owner-subject-1 ";
+        toolContext.ResponseId = " response-1 ";
+        toolContext.ChannelPlatform = " lark ";
+        toolContext.ChannelSenderId = " sender-1 ";
+        toolContext.ChannelRegistrationScopeId = " registration-scope-1 ";
+        toolContext.ChannelMessageId = " message-1 ";
+        toolContext.ChannelPlatformMessageId = " platform-message-1 ";
+        toolContext.ChannelDeliveryTargetId = " delivery-1 ";
+        toolContext.SenderBindingId = " sender-binding-1 ";
+        toolContext.NyxIdRoutePreference = " direct ";
+        toolContext.ConnectedServicesContextJson = """ {"service":"ctx"} """;
         toolContext.AllowedToolNames.Add(" door.open ");
         return toolContext;
     }
+
+    private static VoiceToolExecutionContext CreateToolContext(string credentialRef) =>
+        new()
+        {
+            CredentialRef = credentialRef,
+            ExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)),
+        };
 
     private sealed class StubToolSource(params IAgentTool[] tools) : IAgentToolSource
     {
@@ -221,6 +243,24 @@ public class AgentToolVoiceCatalogTests
                 ? new FakeAgentTool("anonymous.only", "anonymous", "{}")
                 : new FakeAgentTool("caller.only", "caller", "{}");
             return Task.FromResult<IReadOnlyList<IAgentTool>>([tool]);
+        }
+    }
+
+    private sealed class TokenNamedToolSource : IAgentToolSource
+    {
+        public int DiscoverCalls { get; private set; }
+        public List<string?> CapturedNyxIdAccessTokens { get; } = [];
+
+        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+        {
+            _ = ct;
+            DiscoverCalls++;
+            var token = AgentToolRequestContext.NyxIdAccessToken;
+            CapturedNyxIdAccessTokens.Add(token);
+            return Task.FromResult<IReadOnlyList<IAgentTool>>(
+            [
+                new FakeAgentTool($"{token}.only", "caller", "{}"),
+            ]);
         }
     }
 

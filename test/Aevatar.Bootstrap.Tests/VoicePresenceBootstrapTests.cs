@@ -2,6 +2,7 @@ using System.Reflection;
 using Aevatar.AI.Abstractions.Voice;
 using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.VoicePresence;
 using Aevatar.Foundation.VoicePresence.Abstractions;
@@ -151,6 +152,119 @@ public sealed class VoicePresenceBootstrapTests
         provider.SessionKey.TransportLeaseId.Should().Be("transport-1");
     }
 
+    [Fact]
+    public async Task ConnectVoiceProviderSessionAsync_ShouldReturnBeforeToolDiscoveryAndSessionUpdateComplete()
+    {
+        using var toolCatalog = new BlockingVoiceToolCatalog();
+        var provider = new RecordingRealtimeVoiceProvider();
+        var handle = CreateLeaseHandle(toolContext: null);
+
+        await using var session = await InvokeConnectVoiceProviderSessionAsync(
+            handle,
+            provider,
+            new VoiceProviderConfig { ProviderName = "test" },
+            new VoiceSessionConfig { SampleRateHz = 24000 },
+            toolCatalog);
+
+        provider.Session.Should().NotBeNull();
+        provider.Session!.UpdateCalls.Should().Be(0);
+        await toolCatalog.WaitForDiscoveryAsync();
+
+        toolCatalog.Release([new VoiceToolDefinition
+        {
+            Name = "door.open",
+            Description = "open door",
+            ParametersSchema = """{"type":"object"}""",
+        }]);
+
+        await provider.Session.WaitForUpdateAsync();
+        provider.Session.UpdateCalls.Should().Be(1);
+        provider.Session.LastSession!.ToolDefinitions
+            .Should().ContainSingle(definition => definition.Name == "door.open");
+    }
+
+    [Fact]
+    public async Task ReadinessGatedSession_ShouldPassAudioAndCancelThroughBeforeReadiness()
+    {
+        using var toolCatalog = new BlockingVoiceToolCatalog();
+        var provider = new RecordingRealtimeVoiceProvider();
+        var handle = CreateLeaseHandle(toolContext: null);
+
+        await using var session = await InvokeConnectVoiceProviderSessionAsync(
+            handle,
+            provider,
+            new VoiceProviderConfig { ProviderName = "test" },
+            new VoiceSessionConfig { SampleRateHz = 24000 },
+            toolCatalog);
+
+        await toolCatalog.WaitForDiscoveryAsync();
+        await session.SendAudioAsync(new byte[] { 1, 2, 3 }, CancellationToken.None);
+        await session.CancelResponseAsync(CancellationToken.None);
+
+        provider.Session!.SentAudioFrames.Should().ContainSingle()
+            .Which.Should().Equal([1, 2, 3]);
+        provider.Session.CancelCalls.Should().Be(1);
+        provider.Session.UpdateCalls.Should().Be(0);
+
+        toolCatalog.Release([]);
+        await provider.Session.WaitForUpdateAsync();
+    }
+
+    [Fact]
+    public async Task ReadinessGatedSession_ShouldGateResponseProducingMethodsOnReadiness()
+    {
+        using var toolCatalog = new BlockingVoiceToolCatalog();
+        var provider = new RecordingRealtimeVoiceProvider();
+        var handle = CreateLeaseHandle(toolContext: null);
+
+        await using var session = await InvokeConnectVoiceProviderSessionAsync(
+            handle,
+            provider,
+            new VoiceProviderConfig { ProviderName = "test" },
+            new VoiceSessionConfig { SampleRateHz = 24000 },
+            toolCatalog);
+
+        await toolCatalog.WaitForDiscoveryAsync();
+        var sendToolResult = session.SendToolResultAsync("call-1", """{"ok":true}""", CancellationToken.None);
+
+        provider.Session!.ToolResultCalls.Should().Be(0);
+        sendToolResult.IsCompleted.Should().BeFalse();
+
+        toolCatalog.Release([]);
+        await provider.Session.WaitForUpdateAsync();
+        await sendToolResult.WaitAsync(TimeSpan.FromSeconds(5));
+
+        provider.Session.ToolResultCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ConnectVoiceProviderSessionAsync_ShouldPassLeaseToolContextToCatalog()
+    {
+        var toolCatalog = new CapturingVoiceToolCatalog();
+        var provider = new RecordingRealtimeVoiceProvider();
+        var toolContext = new VoiceToolExecutionContext
+        {
+            CredentialRef = "voice-tool:ref-1",
+            ExpiresAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
+                DateTimeOffset.UtcNow.AddMinutes(5)),
+        };
+        var handle = CreateLeaseHandle(toolContext);
+
+        await using var session = await InvokeConnectVoiceProviderSessionAsync(
+            handle,
+            provider,
+            new VoiceProviderConfig { ProviderName = "test" },
+            new VoiceSessionConfig { SampleRateHz = 24000 },
+            toolCatalog);
+
+        await provider.Session!.WaitForUpdateAsync();
+
+        toolCatalog.Contexts.Should().ContainSingle();
+        toolCatalog.Contexts[0]!.CredentialRef.Should().Be("voice-tool:ref-1");
+        provider.Session.LastSession!.ToolDefinitions
+            .Should().ContainSingle(definition => definition.Name == "caller.only");
+    }
+
     private static async Task<RealtimeVoiceProviderSession> InvokeConnectVoiceProviderSessionAsync(
         VoicePresenceSessionLeaseHandle handle,
         IRealtimeVoiceProvider provider,
@@ -179,6 +293,19 @@ public sealed class VoicePresenceBootstrapTests
 
         return await task;
     }
+
+    private static VoicePresenceSessionLeaseHandle CreateLeaseHandle(VoiceToolExecutionContext? toolContext) =>
+        new(
+            "agent-1",
+            "voice_presence",
+            "lease-1",
+            "host-1",
+            8,
+            DateTimeOffset.UtcNow.AddMinutes(5),
+            VoiceRemoteAudioSupport.Supported,
+            "transport-1",
+            17,
+            toolContext);
 
     private static void AddVoicePresenceTestCredentialResolver(IServiceCollection services) =>
         services.AddSingleton<IRealtimeProviderCredentialResolver, NoOpRealtimeProviderCredentialResolver>();
@@ -215,6 +342,7 @@ public sealed class VoicePresenceBootstrapTests
     private sealed class RecordingRealtimeVoiceProvider : IRealtimeVoiceProvider
     {
         public VoiceProviderSessionKey? SessionKey { get; private set; }
+        public RecordingRealtimeVoiceProviderSession? Session { get; private set; }
 
         public Task<RealtimeVoiceProviderSession> ConnectAsync(
             VoiceProviderSessionKey sessionKey,
@@ -228,7 +356,8 @@ public sealed class VoicePresenceBootstrapTests
             _ = audioSink;
             _ = ct;
             SessionKey = sessionKey;
-            return Task.FromResult<RealtimeVoiceProviderSession>(new RecordingRealtimeVoiceProviderSession());
+            Session = new RecordingRealtimeVoiceProviderSession();
+            return Task.FromResult<RealtimeVoiceProviderSession>(Session);
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
@@ -236,20 +365,105 @@ public sealed class VoicePresenceBootstrapTests
 
     private sealed class RecordingRealtimeVoiceProviderSession : RealtimeVoiceProviderSession
     {
-        public override Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct) => Task.CompletedTask;
+        private readonly TaskCompletionSource _sessionUpdated =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public List<byte[]> SentAudioFrames { get; } = [];
+        public int CancelCalls { get; private set; }
+        public int ToolResultCalls { get; private set; }
+        public int UpdateCalls { get; private set; }
+        public VoiceSessionConfig? LastSession { get; private set; }
+
+        public override Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct)
+        {
+            _ = ct;
+            SentAudioFrames.Add(pcm16.ToArray());
+            return Task.CompletedTask;
+        }
 
         public override Task SendInputImageAsync(VoiceInputImage inputImage, CancellationToken ct) => Task.CompletedTask;
 
-        public override Task SendToolResultAsync(string callId, string resultJson, CancellationToken ct) =>
-            Task.CompletedTask;
+        public override Task SendToolResultAsync(string callId, string resultJson, CancellationToken ct)
+        {
+            _ = callId;
+            _ = resultJson;
+            _ = ct;
+            ToolResultCalls++;
+            return Task.CompletedTask;
+        }
 
         public override Task InjectEventAsync(VoiceConversationEventInjection injection, CancellationToken ct) =>
             Task.CompletedTask;
 
-        public override Task CancelResponseAsync(CancellationToken ct) => Task.CompletedTask;
+        public override Task CancelResponseAsync(CancellationToken ct)
+        {
+            _ = ct;
+            CancelCalls++;
+            return Task.CompletedTask;
+        }
 
-        public override Task UpdateSessionAsync(VoiceSessionConfig session, CancellationToken ct) => Task.CompletedTask;
+        public override Task UpdateSessionAsync(VoiceSessionConfig session, CancellationToken ct)
+        {
+            _ = ct;
+            UpdateCalls++;
+            LastSession = session.Clone();
+            _sessionUpdated.TrySetResult();
+            return Task.CompletedTask;
+        }
+
+        public Task WaitForUpdateAsync() =>
+            _sessionUpdated.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         public override ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class BlockingVoiceToolCatalog : IVoiceToolCatalog, IDisposable
+    {
+        private readonly TaskCompletionSource _entered =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<IReadOnlyList<VoiceToolDefinition>> _release =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<IReadOnlyList<VoiceToolDefinition>> DiscoverAsync(
+            VoiceToolExecutionContext? toolContext = null,
+            CancellationToken ct = default)
+        {
+            _ = toolContext;
+            _entered.TrySetResult();
+            return _release.Task.WaitAsync(ct);
+        }
+
+        public Task WaitForDiscoveryAsync() =>
+            _entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        public void Release(IReadOnlyList<VoiceToolDefinition> definitions) =>
+            _release.TrySetResult(definitions);
+
+        public void Dispose()
+        {
+            _release.TrySetResult([]);
+        }
+    }
+
+    private sealed class CapturingVoiceToolCatalog : IVoiceToolCatalog
+    {
+        public List<VoiceToolExecutionContext?> Contexts { get; } = [];
+
+        public Task<IReadOnlyList<VoiceToolDefinition>> DiscoverAsync(
+            VoiceToolExecutionContext? toolContext = null,
+            CancellationToken ct = default)
+        {
+            _ = ct;
+            Contexts.Add(toolContext?.Clone());
+            return Task.FromResult<IReadOnlyList<VoiceToolDefinition>>(
+            [
+                new VoiceToolDefinition
+                {
+                    Name = "caller.only",
+                    Description = "caller",
+                    ParametersSchema = "{}",
+                },
+            ]);
+        }
     }
 }
