@@ -1,11 +1,13 @@
 using Aevatar.Foundation.VoicePresence.Abstractions;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Bootstrap.Extensions.AI;
 
 internal sealed class ReadinessGatedRealtimeVoiceProviderSession(
     RealtimeVoiceProviderSession innerSession,
     Task readiness,
-    CancellationTokenSource readinessCancellation)
+    CancellationTokenSource readinessCancellation,
+    ILogger<ReadinessGatedRealtimeVoiceProviderSession>? logger = null)
     : RealtimeVoiceProviderSession
 {
     private readonly RealtimeVoiceProviderSession _innerSession =
@@ -13,6 +15,7 @@ internal sealed class ReadinessGatedRealtimeVoiceProviderSession(
     private readonly Task _readiness = readiness ?? throw new ArgumentNullException(nameof(readiness));
     private readonly CancellationTokenSource _readinessCancellation =
         readinessCancellation ?? throw new ArgumentNullException(nameof(readinessCancellation));
+    private readonly ILogger<ReadinessGatedRealtimeVoiceProviderSession>? _logger = logger;
     private bool _disposed;
 
     public override Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct) =>
@@ -77,8 +80,9 @@ internal sealed class ReadinessGatedRealtimeVoiceProviderSession(
         catch (OperationCanceledException) when (_readinessCancellation.IsCancellationRequested)
         {
         }
-        catch
+        catch (Exception ex)
         {
+            _logger?.LogWarning(ex, "Voice realtime readiness failed while disposing the provider session.");
         }
     }
 }

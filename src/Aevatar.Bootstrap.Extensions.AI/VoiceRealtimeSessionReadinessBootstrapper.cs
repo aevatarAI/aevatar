@@ -1,6 +1,7 @@
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.Abstractions.Sessions;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Bootstrap.Extensions.AI;
 
@@ -14,6 +15,7 @@ internal static class VoiceRealtimeSessionReadinessBootstrapper
         IVoiceToolCatalog? toolCatalog,
         Func<VoiceProviderSessionKey, VoiceProviderEvent, CancellationToken, Task> eventSink,
         Func<VoiceProviderSessionKey, VoiceProviderAudioFrame, CancellationToken, Task> audioSink,
+        ILogger<ReadinessGatedRealtimeVoiceProviderSession>? logger,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(handle);
@@ -45,8 +47,19 @@ internal static class VoiceRealtimeSessionReadinessBootstrapper
             toolCatalog,
             handle.ToolContext?.Clone(),
             readinessCancellation.Token);
-        return new ReadinessGatedRealtimeVoiceProviderSession(providerSession, readiness, readinessCancellation);
+        return new ReadinessGatedRealtimeVoiceProviderSession(providerSession, readiness, readinessCancellation, logger);
     }
+
+    public static Task<RealtimeVoiceProviderSession> ConnectAsync(
+        VoicePresenceSessionLeaseHandle handle,
+        IRealtimeVoiceProvider provider,
+        VoiceProviderConfig providerConfig,
+        VoiceSessionConfig sessionConfig,
+        IVoiceToolCatalog? toolCatalog,
+        Func<VoiceProviderSessionKey, VoiceProviderEvent, CancellationToken, Task> eventSink,
+        Func<VoiceProviderSessionKey, VoiceProviderAudioFrame, CancellationToken, Task> audioSink,
+        CancellationToken ct) =>
+        ConnectAsync(handle, provider, providerConfig, sessionConfig, toolCatalog, eventSink, audioSink, logger: null, ct);
 
     private static VoiceProviderSessionKey BuildSessionKey(VoicePresenceSessionLeaseHandle handle) =>
         new(

@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Google.Protobuf;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Foundation.VoicePresence.Transport;
 
@@ -21,14 +22,18 @@ public sealed class WebSocketVoiceTransport : IVoiceTransport
     private static readonly JsonParser ControlJsonReader = new(JsonParser.Settings.Default);
 
     private readonly WebSocket _ws;
+    private readonly ILogger? _logger;
     private readonly TaskCompletionSource _completion =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly SemaphoreSlim _sendGate = new(1, 1);
     private bool _disposed;
 
-    public WebSocketVoiceTransport(WebSocket ws)
+    public WebSocketVoiceTransport(
+        WebSocket ws,
+        ILogger? logger = null)
     {
         _ws = ws ?? throw new ArgumentNullException(nameof(ws));
+        _logger = logger;
         if (_ws.State != WebSocketState.Open)
             _completion.TrySetResult();
     }
@@ -151,9 +156,10 @@ public sealed class WebSocketVoiceTransport : IVoiceTransport
                 using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
                 await _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, null, cts.Token);
             }
-            catch
+            catch (Exception ex)
             {
                 // best-effort close
+                _logger?.LogWarning(ex, "Best-effort close of voice WebSocket transport failed during disposal.");
             }
         }
 
@@ -260,8 +266,9 @@ public sealed class WebSocketVoiceTransport : IVoiceTransport
         {
             await _ws.CloseAsync(WebSocketCloseStatus.PolicyViolation, reason, ct);
         }
-        catch
+        catch (Exception ex)
         {
+            _logger?.LogWarning(ex, "Failed to close invalid voice WebSocket control frame.");
             // best-effort close for invalid client input
         }
     }

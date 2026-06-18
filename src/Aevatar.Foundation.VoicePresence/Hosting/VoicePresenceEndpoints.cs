@@ -57,9 +57,9 @@ public static class VoicePresenceEndpoints
                 return;
 
             var ws = await ctx.WebSockets.AcceptWebSocketAsync();
-            var transport = new WebSocketVoiceTransport(ws);
             var mediaPort = resolveMediaPort(ctx);
             var logger = ResolveLogger(ctx);
+            var transport = new WebSocketVoiceTransport(ws, logger);
             var attached = false;
             var detachHandle = accepted.LeaseHandle;
             IAsyncDisposable? realtimeSubscription = null;
@@ -70,6 +70,7 @@ public static class VoicePresenceEndpoints
                     ctx.RequestServices,
                     accepted,
                     transport,
+                    logger,
                     ctx.RequestAborted);
                 try
                 {

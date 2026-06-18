@@ -286,7 +286,7 @@ public static class ServiceCollectionExtensions
                     serviceProvider.GetService<IVoiceToolInvoker>(),
                     serviceProvider.GetService<IVoiceToolCatalog>(),
                     serviceProvider.GetService<ILogger<VoicePresenceModule>>()),
-                (serviceProvider, handle, eventSink, audioSink, ct) => ConnectVoiceProviderSessionAsync(
+                (serviceProvider, handle, eventSink, audioSink, ct) => ConnectVoiceProviderSessionWithLoggingAsync(
                     handle,
                     new OpenAIRealtimeProvider(
                         voiceOptions.OpenAIProviderOptions,
@@ -297,6 +297,7 @@ public static class ServiceCollectionExtensions
                     serviceProvider.GetService<IVoiceToolCatalog>(),
                     eventSink,
                     audioSink,
+                    serviceProvider.GetService<ILogger<ReadinessGatedRealtimeVoiceProviderSession>>(),
                     ct),
                 BuildOpenAIVoiceSessionConfig(configuration, options).SampleRateHz));
         }
@@ -318,7 +319,7 @@ public static class ServiceCollectionExtensions
                     serviceProvider.GetService<IVoiceToolInvoker>(),
                     serviceProvider.GetService<IVoiceToolCatalog>(),
                     serviceProvider.GetService<ILogger<VoicePresenceModule>>()),
-                (serviceProvider, handle, eventSink, audioSink, ct) => ConnectVoiceProviderSessionAsync(
+                (serviceProvider, handle, eventSink, audioSink, ct) => ConnectVoiceProviderSessionWithLoggingAsync(
                     handle,
                     new MiniCPMRealtimeProvider(
                         voiceOptions.MiniCPMProviderOptions,
@@ -328,6 +329,7 @@ public static class ServiceCollectionExtensions
                     serviceProvider.GetService<IVoiceToolCatalog>(),
                     eventSink,
                     audioSink,
+                    serviceProvider.GetService<ILogger<ReadinessGatedRealtimeVoiceProviderSession>>(),
                     ct),
                 BuildMiniCpmVoiceSessionConfig(configuration, options).SampleRateHz));
         }
@@ -345,6 +347,29 @@ public static class ServiceCollectionExtensions
         Func<VoiceProviderSessionKey, VoiceProviderAudioFrame, CancellationToken, Task> audioSink,
         CancellationToken ct)
     {
+        return await ConnectVoiceProviderSessionWithLoggingAsync(
+            handle,
+            provider,
+            providerConfig,
+            sessionConfig,
+            toolCatalog,
+            eventSink,
+            audioSink,
+            logger: null,
+            ct);
+    }
+
+    private static async Task<RealtimeVoiceProviderSession> ConnectVoiceProviderSessionWithLoggingAsync(
+        VoicePresenceSessionLeaseHandle handle,
+        IRealtimeVoiceProvider provider,
+        VoiceProviderConfig providerConfig,
+        VoiceSessionConfig sessionConfig,
+        IVoiceToolCatalog? toolCatalog,
+        Func<VoiceProviderSessionKey, VoiceProviderEvent, CancellationToken, Task> eventSink,
+        Func<VoiceProviderSessionKey, VoiceProviderAudioFrame, CancellationToken, Task> audioSink,
+        ILogger<ReadinessGatedRealtimeVoiceProviderSession>? logger,
+        CancellationToken ct)
+    {
         return await VoiceRealtimeSessionReadinessBootstrapper.ConnectAsync(
             handle,
             provider,
@@ -353,6 +378,7 @@ public static class ServiceCollectionExtensions
             toolCatalog,
             eventSink,
             audioSink,
+            logger,
             ct);
     }
 
