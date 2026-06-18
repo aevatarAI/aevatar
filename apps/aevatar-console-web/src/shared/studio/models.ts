@@ -594,6 +594,20 @@ export interface StudioTeamUpdateInput {
   readonly description?: string | null;
 }
 
+export type StudioTeamCommandStatus =
+  | 'accepted'
+  | 'no_change'
+  | 'unknown';
+
+export interface StudioTeamCommandResponse {
+  readonly status: StudioTeamCommandStatus;
+  readonly scopeId: string;
+  readonly teamId: string;
+  readonly commandId?: string | null;
+  readonly correlationId?: string | null;
+  readonly ackedAt?: string | null;
+}
+
 export type StudioMemberBindingTargetKind = StudioScopeBindingTargetKind;
 export type StudioMemberBindingResult = StudioScopeBindingResult;
 export type StudioMemberBindingRevision = StudioScopeBindingRevision;
