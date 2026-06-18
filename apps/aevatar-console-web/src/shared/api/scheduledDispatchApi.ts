@@ -22,7 +22,7 @@ export const scheduledWorkflowPromptMaxLength = 4_000;
 
 export type ScheduledWorkflowChatTargetInput = {
   readonly identity: ServiceIdentity;
-  readonly prompt: string;
+  readonly prompt?: string;
   readonly sessionId?: string;
   readonly revisionId?: string;
 };
@@ -377,7 +377,7 @@ function encodeConfiguration(input: ScheduledDispatchConfigurationInput) {
     namespace: input.workflowChatTarget.identity.namespace.trim(),
     serviceId: input.workflowChatTarget.identity.serviceId.trim(),
   };
-  const prompt = input.workflowChatTarget.prompt.trim();
+  const prompt = input.workflowChatTarget.prompt?.trim() ?? "";
   if (prompt.length > scheduledWorkflowPromptMaxLength) {
     throw new Error(
       `Recurring prompt must be ${scheduledWorkflowPromptMaxLength} characters or fewer.`,

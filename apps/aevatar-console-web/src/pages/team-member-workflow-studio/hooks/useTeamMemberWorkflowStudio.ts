@@ -32,6 +32,13 @@ import {
   type StudioStepInspectorDraft,
 } from "@/shared/studio/document";
 import {
+  buildExecutionTrace,
+  decorateEdgesForExecution,
+  decorateNodesForExecution,
+  findExecutionLogIndexForStep,
+  type ExecutionTrace,
+} from "@/shared/studio/execution";
+import {
   buildStudioGraphElements,
   buildStudioWorkflowLayout,
   STUDIO_GRAPH_CATEGORIES,
@@ -84,6 +91,16 @@ type PublishedWorkflow = {
   readonly run: StudioMemberBindingRunStatusResponse | null;
   readonly savedDraft: SavedWorkflowDraft | null;
 };
+
+class PublishWorkflowStatusError extends Error {
+  readonly showAsError: boolean;
+
+  constructor(message: string, showAsError: boolean) {
+    super(message);
+    this.name = "PublishWorkflowStatusError";
+    this.showAsError = showAsError;
+  }
+}
 
 type CreatedWorkflowMember = {
   readonly memberId: string;
@@ -176,6 +193,8 @@ type TeamMemberWorkflowStudioState = {
   readonly executionError: string;
   readonly executionRunMessage: string;
   readonly executionStatus: WorkflowExecutionStatus;
+  readonly activeExecutionLogIndex: number | null;
+  readonly clearExecutionLogs: () => void;
   readonly graph: ReturnType<typeof buildStudioGraphElements>;
   readonly insertNode: (stepType: string) => void;
   readonly linkedWorkflowMissing: boolean;
@@ -201,6 +220,7 @@ type TeamMemberWorkflowStudioState = {
   readonly updateSelectedStepConfiguration: (parametersText: string) => void;
   readonly selectCanvas: () => void;
   readonly selectEdge: (edgeId: string) => void;
+  readonly selectExecutionLog: (index: number | null) => void;
   readonly selectNode: (nodeId: string) => void;
   readonly setExecutionRunMessage: (message: string) => void;
   readonly setWorkflowTitle: (title: string) => void;
@@ -652,7 +672,7 @@ function readBindingRunFailureMessage(
   run: StudioMemberBindingRunStatusResponse | null,
 ): string {
   if (!run) {
-    return "Publish status is still pending.";
+    return "Binding run status is still pending.";
   }
 
   if (run.failure?.message) {
@@ -660,11 +680,11 @@ function readBindingRunFailureMessage(
   }
 
   if (run.status === "rejected") {
-    return "Publish binding request was rejected by the member authority.";
+    return "Binding run was rejected by the member authority.";
   }
 
   if (run.status === "failed") {
-    return "Publish failed while binding the member workflow.";
+    return "Binding run failed while binding the member workflow.";
   }
 
   return "";
@@ -941,12 +961,15 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const [executionDetail, setExecutionDetail] =
     React.useState<StudioExecutionDetail | null>(null);
   const [executionError, setExecutionError] = React.useState("");
+  const [activeExecutionLogIndex, setActiveExecutionLogIndex] =
+    React.useState<number | null>(null);
   const [executionRunMessage, setExecutionRunMessage] = React.useState("");
   const [pendingCreatedWorkflowMemberLink, setPendingCreatedWorkflowMemberLink] =
     React.useState<PendingCreatedWorkflowMemberLink | null>(null);
   const [publishBindingRun, setPublishBindingRun] =
     React.useState<StudioMemberBindingRunStatusResponse | null>(null);
   const [publishError, setPublishError] = React.useState("");
+  const [publishErrorVisible, setPublishErrorVisible] = React.useState(true);
   const [nodeLibraryOpen, setNodeLibraryOpen] = React.useState(false);
   const [draftRunPanelOpen, setDraftRunPanelOpen] = React.useState(false);
   const [yamlImportPanelOpen, setYamlImportPanelOpen] = React.useState(false);
@@ -1221,6 +1244,45 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const graph = React.useMemo(
     () => buildStudioGraphElements(editableDocument, editableLayout),
     [editableDocument, editableLayout],
+  );
+  const executionTrace = React.useMemo<ExecutionTrace | null>(
+    () => buildExecutionTrace(executionDetail),
+    [executionDetail],
+  );
+  React.useEffect(() => {
+    if (!executionTrace?.logs.length) {
+      setActiveExecutionLogIndex(null);
+      return;
+    }
+
+    setActiveExecutionLogIndex((currentIndex) => {
+      if (
+        typeof currentIndex === "number" &&
+        currentIndex >= 0 &&
+        currentIndex < executionTrace.logs.length
+      ) {
+        return currentIndex;
+      }
+
+      return executionTrace.defaultLogIndex;
+    });
+  }, [executionTrace]);
+  const graphWithExecution = React.useMemo(
+    () => ({
+      ...graph,
+      edges: decorateEdgesForExecution(
+        graph.edges,
+        graph.nodes,
+        executionTrace,
+        activeExecutionLogIndex,
+      ),
+      nodes: decorateNodesForExecution(
+        graph.nodes,
+        executionTrace,
+        activeExecutionLogIndex,
+      ),
+    }),
+    [activeExecutionLogIndex, executionTrace, graph],
   );
   const selectedStepDraft = React.useMemo(() => {
     const selectedStepId = readStepIdFromGraphNodeId(selectedNodeId);
@@ -1734,14 +1796,16 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         currentMember,
       );
       if (!dirty && hasCurrentCompletedMemberBinding(currentMember)) {
-        throw new Error(
+        throw new PublishWorkflowStatusError(
           "This member workflow is already published. Refresh status to check readiness.",
+          false,
         );
       }
 
       if (hasActiveMemberBindingRun(currentMember)) {
-        throw new Error(
+        throw new PublishWorkflowStatusError(
           "Publish is already in progress for this member. Refresh status before publishing again.",
+          false,
         );
       }
 
@@ -1815,12 +1879,16 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       };
     },
     onError: (error) => {
+      setPublishErrorVisible(
+        !(error instanceof PublishWorkflowStatusError && !error.showAsError),
+      );
       setPublishError(
         error instanceof Error ? error.message : "Failed to publish workflow member.",
       );
     },
     onMutate: () => {
       setPublishError("");
+      setPublishErrorVisible(true);
       setPublishBindingRun(null);
     },
     onSuccess: ({ run, savedDraft }) => {
@@ -1834,7 +1902,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         void message.success("Workflow member published.");
       } else {
         void message.info(
-          "Publish was accepted. Studio is still waiting for published status.",
+          "Binding candidate was accepted for dispatch. Studio is waiting for the binding-run read model.",
         );
       }
     },
@@ -1934,7 +2002,8 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         );
   const publishVisibleError =
     publishError &&
-    (publishBindingRunFailed ||
+    (publishErrorVisible ||
+      publishBindingRunFailed ||
       (!memberIsPublished && !publishStatusStillInProgress))
       ? publishError
       : "";
@@ -1956,19 +2025,21 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         ? "No stable workflow draft is linked to this member yet."
         : selectedStepConfigurationError
           ? selectedStepConfigurationError
+        : publishPending
+          ? "Binding candidate accepted for dispatch; waiting for binding-run status."
         : publishStatusStillInProgress
-          ? "Publish is still in progress. Use Refresh status before publishing again."
+          ? "Binding run is still in progress. Use Refresh status before publishing again."
         : memberIsPublished
           ? publishHasDraftChanges
-            ? "Publish saves draft changes, binds the member workflow, and observes readiness."
+            ? "Publish saves draft changes, dispatches a candidate binding run, and observes the read model."
             : "This member workflow is already published. Use Refresh status to check readiness."
         : !workflowQuery.data || !editableDocument
             ? "Load the workflow draft before publishing."
             : !workflowHasSteps
               ? "Add at least one step before publishing."
               : dirty
-                ? "Publish saves draft changes, binds the member workflow, and observes readiness."
-                : "Publish binds the saved workflow draft to this member and observes readiness.";
+                ? "Publish saves draft changes, dispatches a candidate binding run, and observes the read model."
+                : "Publish dispatches a candidate binding run for the saved workflow draft and observes the read model.";
   const publishTone: WorkflowPublishTone = publishError
     ? publishVisibleError
       ? "error"
@@ -1985,9 +2056,9 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const publishNotice =
     publishVisibleError ||
     (publishPending
-      ? `Publish status: ${publishBindingRun?.status ?? "accepted"}.`
+      ? `Binding candidate dispatch accepted; run status: ${publishBindingRun?.status ?? "accepted"}.`
       : publishStatusStillInProgress
-        ? `Publish is still in progress (${memberQuery.data?.currentBindingRun?.status ?? publishBindingRun?.status ?? "accepted"}). Use Refresh status to check readiness.`
+        ? `Binding run is still in progress (${memberQuery.data?.currentBindingRun?.status ?? publishBindingRun?.status ?? "accepted"}). Use Refresh status to check readiness.`
       : memberIsPublished
         ? "Published member workflow is serviceable."
         : "Draft member workflow is not published to the active member yet.");
@@ -2032,7 +2103,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       }
 
       if (!refreshedRun) {
-        void message.info("Publish status is not materialized yet. Try refreshing again.");
+        void message.info("Binding-run status is not materialized yet. Try refreshing again.");
         return;
       }
 
@@ -2048,7 +2119,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         return;
       }
 
-      void message.info("Publish is still in progress.");
+      void message.info("Binding run is still in progress.");
       return;
     }
 
@@ -2417,6 +2488,21 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     },
     [editableDocument, selectedStepDraft],
   );
+  const selectExecutionLog = React.useCallback(
+    (index: number | null) => {
+      if (index === null) {
+        setActiveExecutionLogIndex(null);
+        return;
+      }
+
+      setActiveExecutionLogIndex(
+        index >= 0 && index < (executionTrace?.logs.length ?? 0)
+          ? index
+          : null,
+      );
+    },
+    [executionTrace?.logs.length],
+  );
 
   return {
     automationsHref,
@@ -2519,7 +2605,13 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     executionError,
     executionRunMessage,
     executionStatus,
-    graph,
+    activeExecutionLogIndex,
+    clearExecutionLogs: () => {
+      setExecutionDetail(null);
+      setExecutionError("");
+      setActiveExecutionLogIndex(null);
+    },
+    graph: graphWithExecution,
     insertNode,
     linkedWorkflowMissing,
     loading: Boolean(workflowLoading),
@@ -2614,6 +2706,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       setSelectedEdgeId("");
       setSelectedNodeId("");
       setSelectedStepConfigurationError("");
+      setActiveExecutionLogIndex(null);
       setDraftRunPanelOpen(false);
       setYamlImportPanelOpen(false);
       setYamlImportError("");
@@ -2623,15 +2716,23 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       setSelectedEdgeId(edgeId);
       setSelectedNodeId("");
       setSelectedStepConfigurationError("");
+      setActiveExecutionLogIndex(null);
       setDraftRunPanelOpen(false);
       setYamlImportPanelOpen(false);
       setYamlImportError("");
       setYamlPanelOpen(false);
     },
+    selectExecutionLog,
     selectNode: (nodeId: string) => {
       setSelectedEdgeId("");
       setSelectedNodeId(nodeId);
       setSelectedStepConfigurationError("");
+      const selectedStepId = readStepIdFromGraphNodeId(nodeId);
+      setActiveExecutionLogIndex(
+        selectedStepId
+          ? findExecutionLogIndexForStep(executionTrace, selectedStepId)
+          : null,
+      );
       setDraftRunPanelOpen(false);
       setYamlImportPanelOpen(false);
       setYamlImportError("");

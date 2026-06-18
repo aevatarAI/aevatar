@@ -60,6 +60,13 @@ export type ExecutionTrace = {
   readonly defaultLogIndex: number | null;
 };
 
+export type ExecutionLogStatus =
+  | 'waiting'
+  | 'running'
+  | 'success'
+  | 'error'
+  | 'recorded';
+
 function formatParameterValue(value: unknown): string {
   if (value === null || value === undefined) {
     return '';
@@ -300,7 +307,7 @@ function normalizeExecutionTimeout(value: unknown): number | null {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
-function getExecutionFocusStepId(
+export function getExecutionFocusStepId(
   trace: ExecutionTrace | null,
   activeLogIndex: number | null,
 ): string | null {
@@ -313,6 +320,40 @@ function getExecutionFocusStepId(
     : null;
 
   return activeLog?.stepId || trace.latestStepId || null;
+}
+
+export function normalizeExecutionLogStatus(
+  log: ExecutionLogItem | null | undefined,
+): ExecutionLogStatus {
+  switch (log?.tone) {
+    case 'completed':
+      return 'success';
+    case 'failed':
+      return 'error';
+    case 'pending':
+      return 'waiting';
+    case 'run':
+    case 'started':
+    default:
+      return 'running';
+  }
+}
+
+export function findExecutionLogIndexForStep(
+  trace: ExecutionTrace | null,
+  stepId: string,
+): number | null {
+  if (!trace?.logs?.length || !stepId) {
+    return null;
+  }
+
+  for (let index = trace.logs.length - 1; index >= 0; index -= 1) {
+    if (trace.logs[index].stepId === stepId) {
+      return index;
+    }
+  }
+
+  return null;
 }
 
 export function formatDurationBetween(
@@ -852,7 +893,6 @@ export function decorateNodesForExecution(
     const stepState = trace?.stepStates.get(node.data.stepId);
     return {
       ...node,
-      draggable: false,
       selectable: true,
       data: {
         ...node.data,
@@ -910,21 +950,4 @@ export function decorateEdgesForExecution(
       zIndex: 4,
     };
   });
-}
-
-export function findExecutionLogIndexForStep(
-  trace: ExecutionTrace | null,
-  stepId: string,
-): number | null {
-  if (!trace?.logs?.length || !stepId) {
-    return null;
-  }
-
-  for (let index = trace.logs.length - 1; index >= 0; index -= 1) {
-    if (trace.logs[index].stepId === stepId) {
-      return index;
-    }
-  }
-
-  return null;
 }

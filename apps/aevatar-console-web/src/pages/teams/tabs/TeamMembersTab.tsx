@@ -3,6 +3,7 @@ import {
   ClockCircleOutlined,
   PlayCircleOutlined,
   PlusOutlined,
+  StopOutlined,
   ToolOutlined,
 } from "@ant-design/icons";
 import { Button, Skeleton, Tooltip, Typography, theme } from "antd";
@@ -64,7 +65,7 @@ const ellipsisTextStyle: React.CSSProperties = {
 };
 
 const tableGridTemplateColumns =
-  "minmax(280px, 1.35fr) minmax(140px, 0.45fr) minmax(180px, 0.55fr) minmax(390px, 0.95fr)";
+  "minmax(260px, 1.4fr) minmax(140px, 0.45fr) minmax(180px, 0.7fr) 180px";
 
 const tableShellStyle: React.CSSProperties = {
   borderRadius: 8,
@@ -96,32 +97,37 @@ const responsiveTableStyle = `
   }
 
   .team-members-table-actions {
+    justify-content: flex-start !important;
     width: 100% !important;
   }
 
   .team-members-table-primary-actions {
-    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    justify-content: flex-start !important;
     width: 100% !important;
   }
 
   .team-members-table-invoke-action,
   .team-members-table-automate-action,
-  .team-members-table-studio-action {
-    min-width: 0 !important;
-    padding-inline: 8px !important;
-    width: 100% !important;
-  }
-
+  .team-members-table-studio-action,
   .team-members-table-entry-action {
     min-width: 0 !important;
-    width: 100% !important;
   }
 }
 
 @media (max-width: 420px) {
   .team-members-table-primary-actions {
-    grid-template-columns: minmax(0, 1fr) !important;
+    justify-content: flex-start !important;
   }
+}
+
+.team-members-table-action-button {
+  transition: background-color 160ms ease, color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+}
+
+.team-members-table-action-button:hover,
+.team-members-table-action-button:focus-visible {
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08) !important;
+  transform: translateY(-1px);
 }
 `;
 
@@ -136,7 +142,8 @@ const tableHeaderStyle: React.CSSProperties = {
 };
 
 const tableHeaderActionStyle: React.CSSProperties = {
-  justifySelf: "start",
+  justifySelf: "end",
+  textAlign: "right",
 };
 
 const rosterRowBaseStyle: React.CSSProperties = {
@@ -179,41 +186,35 @@ const serviceCellStyle: React.CSSProperties = {
 
 const actionCellStyle: React.CSSProperties = {
   alignItems: "flex-start",
-  display: "grid",
-  gap: 10,
-  justifyItems: "start",
+  display: "flex",
+  justifyContent: "flex-end",
+  justifyItems: "end",
+  justifySelf: "stretch",
   minWidth: 0,
+  width: "100%",
 };
 
 const primaryActionsStyle: React.CSSProperties = {
   alignItems: "center",
-  display: "grid",
-  gap: 8,
-  gridTemplateColumns: "minmax(104px, max-content) minmax(122px, max-content) minmax(148px, max-content)",
-  justifyContent: "start",
+  borderRadius: 12,
+  display: "flex",
+  flex: "0 0 auto",
+  gap: 4,
+  justifyContent: "flex-end",
   minWidth: 0,
+  padding: 4,
+  width: "max-content",
 };
 
-const invokeActionStyle: React.CSSProperties = {
-  fontWeight: 650,
+const memberActionButtonBaseStyle: React.CSSProperties = {
+  border: "none",
+  borderRadius: 8,
+  boxShadow: "none",
   height: 32,
-  justifyContent: "center",
-  minWidth: 104,
-  paddingInline: 12,
-};
-
-const studioActionStyle: React.CSSProperties = {
-  height: 32,
-  justifyContent: "center",
-  minWidth: 148,
-  paddingInline: 12,
-};
-
-const entryActionStyle: React.CSSProperties = {
-  height: 32,
-  justifyContent: "center",
-  minWidth: 260,
-  paddingInline: 12,
+  lineHeight: 1,
+  minWidth: 32,
+  paddingInline: 0,
+  width: 32,
 };
 
 const memberRosterSkeletonRowKeys = ["primary", "secondary", "tertiary"] as const;
@@ -388,21 +389,27 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                         active
                         className="team-members-table-invoke-action"
                         size="small"
-                        style={invokeActionStyle}
+                        style={memberActionButtonBaseStyle}
+                      />
+                      <Skeleton.Button
+                        active
+                        className="team-members-table-automate-action"
+                        size="small"
+                        style={memberActionButtonBaseStyle}
                       />
                       <Skeleton.Button
                         active
                         className="team-members-table-studio-action"
                         size="small"
-                        style={studioActionStyle}
+                        style={memberActionButtonBaseStyle}
+                      />
+                      <Skeleton.Button
+                        active
+                        className="team-members-table-entry-action"
+                        size="small"
+                        style={memberActionButtonBaseStyle}
                       />
                     </div>
-                    <Skeleton.Button
-                      active
-                      className="team-members-table-entry-action"
-                      size="small"
-                      style={entryActionStyle}
-                    />
                   </div>
                 </div>
               ))}
@@ -492,6 +499,49 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                         id: "teams.members.actions.workflowOnlyTitle",
                       });
                   const rowBusy = entryActionBusyMemberId === row.memberId;
+                  const invokeActionLabel = intl.formatMessage({
+                    id: "teams.members.actions.invokeWorkflow",
+                  });
+                  const automateActionLabel = intl.formatMessage({
+                    defaultMessage: "Automate",
+                    id: "teams.members.actions.automate",
+                  });
+                  const studioActionLabel = intl.formatMessage({
+                    id: "teams.members.actions.workflowStudio",
+                  });
+                  const entryActionLabel = row.isEntryMember
+                    ? intl.formatMessage({ id: "teams.members.actions.clearEntry" })
+                    : intl.formatMessage({ id: "teams.members.actions.setEntry" });
+                  const entryActionIcon = row.isEntryMember ? (
+                    <StopOutlined />
+                  ) : (
+                    <CheckCircleOutlined />
+                  );
+                  const buildMemberActionButtonStyle = (
+                    tone: "default" | "primary" | "success" = "default",
+                  ): React.CSSProperties => {
+                    if (tone === "success") {
+                      return {
+                        ...memberActionButtonBaseStyle,
+                        background: token.colorSuccessBg,
+                        color: token.colorSuccess,
+                      };
+                    }
+
+                    if (tone === "primary") {
+                      return {
+                        ...memberActionButtonBaseStyle,
+                        background: token.colorPrimaryBg,
+                        color: token.colorPrimary,
+                      };
+                    }
+
+                    return {
+                      ...memberActionButtonBaseStyle,
+                      background: token.colorBgContainer,
+                      color: token.colorTextSecondary,
+                    };
+                  };
 
                   return (
                     <div
@@ -582,124 +632,127 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                       <div className="team-members-table-actions" style={actionCellStyle}>
                         <div
                           className="team-members-table-primary-actions"
-                          style={primaryActionsStyle}
+                          style={{
+                            ...primaryActionsStyle,
+                            background: token.colorFillQuaternary,
+                            border: `1px solid ${token.colorBorderSecondary}`,
+                          }}
                         >
-                          <Button
-                            className="team-members-table-invoke-action"
-                            href={row.canInvokeMember ? row.invokeHref : undefined}
-                            disabled={!row.canInvokeMember}
-                            icon={<PlayCircleOutlined />}
-                            onClick={
+                          <Tooltip
+                            title={
                               row.canInvokeMember
-                                ? handleNavigate(row.invokeHref)
-                                : undefined
+                                ? invokeActionLabel
+                                : invokeDisabledReason
                             }
-                            size="small"
-                            style={{
-                              ...invokeActionStyle,
-                              ...(row.canInvokeMember
-                                ? {
-                                    background: token.colorSuccessBg,
-                                    borderColor: token.colorSuccessBorder,
-                                    color: token.colorSuccess,
-                                  }
-                                : null),
-                            }}
-                            title={row.canInvokeMember ? undefined : invokeDisabledReason}
-                            type="default"
                           >
-                            {intl.formatMessage({ id: "teams.members.actions.invokeWorkflow" })}
-                          </Button>
-                          <Button
-                            className="team-members-table-automate-action"
-                            href={row.canAutomateMember ? row.automationsHref : undefined}
-                            disabled={!row.canAutomateMember}
-                            icon={<ClockCircleOutlined />}
-                            onClick={
-                              row.canAutomateMember
-                                ? handleNavigate(row.automationsHref)
-                                : undefined
-                            }
-                            size="small"
-                            style={{
-                              ...invokeActionStyle,
-                              minWidth: 122,
-                            }}
+                            <Button
+                              aria-label={invokeActionLabel}
+                              className="team-members-table-action-button team-members-table-invoke-action"
+                              href={row.canInvokeMember ? row.invokeHref : undefined}
+                              disabled={!row.canInvokeMember}
+                              icon={<PlayCircleOutlined />}
+                              onClick={
+                                row.canInvokeMember
+                                  ? handleNavigate(row.invokeHref)
+                                  : undefined
+                              }
+                              size="small"
+                              style={buildMemberActionButtonStyle(
+                                row.canInvokeMember ? "success" : "default",
+                              )}
+                              type="default"
+                            />
+                          </Tooltip>
+                          <Tooltip
                             title={
                               row.canAutomateMember
-                                ? undefined
+                                ? automateActionLabel
                                 : row.automationDisabledReason
                             }
-                            type="default"
                           >
-                            {intl.formatMessage({
-                              defaultMessage: "Automate",
-                              id: "teams.members.actions.automate",
-                            })}
-                          </Button>
-                          <Button
-                            className="team-members-table-studio-action"
-                            href={row.workflowSupported ? row.studioHref : undefined}
-                            disabled={!row.workflowSupported}
-                            icon={<ToolOutlined />}
-                            onClick={
-                              row.workflowSupported
-                                ? handleNavigate(row.studioHref)
-                                : undefined
-                            }
-                            size="small"
-                            style={studioActionStyle}
+                            <Button
+                              aria-label={automateActionLabel}
+                              className="team-members-table-action-button team-members-table-automate-action"
+                              href={
+                                row.canAutomateMember
+                                  ? row.automationsHref
+                                  : undefined
+                              }
+                              disabled={!row.canAutomateMember}
+                              icon={<ClockCircleOutlined />}
+                              onClick={
+                                row.canAutomateMember
+                                  ? handleNavigate(row.automationsHref)
+                                  : undefined
+                              }
+                              size="small"
+                              style={buildMemberActionButtonStyle()}
+                              type="default"
+                            />
+                          </Tooltip>
+                          <Tooltip
                             title={
                               row.workflowSupported
-                                ? undefined
+                                ? studioActionLabel
                                 : intl.formatMessage({
                                     id: "teams.members.actions.workflowOnlyTitle",
                                   })
                             }
-                            type="default"
                           >
-                            {intl.formatMessage({ id: "teams.members.actions.workflowStudio" })}
-                          </Button>
+                            <Button
+                              aria-label={studioActionLabel}
+                              className="team-members-table-action-button team-members-table-studio-action"
+                              href={row.workflowSupported ? row.studioHref : undefined}
+                              disabled={!row.workflowSupported}
+                              icon={<ToolOutlined />}
+                              onClick={
+                                row.workflowSupported
+                                  ? handleNavigate(row.studioHref)
+                                  : undefined
+                              }
+                              size="small"
+                              style={buildMemberActionButtonStyle()}
+                              type="default"
+                            />
+                          </Tooltip>
+                          {row.isEntryMember ? (
+                            <Tooltip title={entryActionLabel}>
+                              <Button
+                                aria-label={entryActionLabel}
+                                icon={entryActionIcon}
+                                className="team-members-table-action-button team-members-table-entry-action"
+                                disabled={
+                                  rowBusy ||
+                                  (isEntryActionBusy &&
+                                    entryActionBusyMemberId !== row.memberId)
+                                }
+                                loading={entryActionBusyMemberId === row.memberId}
+                                onClick={onClearEntry}
+                                size="small"
+                                style={buildMemberActionButtonStyle("primary")}
+                                type="default"
+                              />
+                            </Tooltip>
+                          ) : row.canSetAsEntry && onSetEntry ? (
+                            <Tooltip title={entryActionLabel}>
+                              <Button
+                                aria-label={entryActionLabel}
+                                className="team-members-table-action-button team-members-table-entry-action"
+                                disabled={
+                                  rowBusy ||
+                                  (isEntryActionBusy &&
+                                    entryActionBusyMemberId !== row.memberId)
+                                }
+                                icon={entryActionIcon}
+                                loading={entryActionBusyMemberId === row.memberId}
+                                onClick={() => onSetEntry(row.memberId)}
+                                size="small"
+                                style={buildMemberActionButtonStyle()}
+                                type="default"
+                              />
+                            </Tooltip>
+                          ) : null}
                         </div>
-                        {row.isEntryMember ? (
-                          <Button
-                            icon={<CheckCircleOutlined />}
-                            className="team-members-table-entry-action"
-                            disabled={
-                              rowBusy ||
-                              (isEntryActionBusy && entryActionBusyMemberId !== row.memberId)
-                            }
-                            loading={entryActionBusyMemberId === row.memberId}
-                            onClick={onClearEntry}
-                            size="small"
-                            style={{
-                              ...entryActionStyle,
-                              color: token.colorTextSecondary,
-                            }}
-                            type="default"
-                          >
-                            {intl.formatMessage({ id: "teams.members.actions.clearEntry" })}
-                          </Button>
-                        ) : row.canSetAsEntry && onSetEntry ? (
-                          <Button
-                            className="team-members-table-entry-action"
-                            disabled={
-                              rowBusy ||
-                              (isEntryActionBusy &&
-                                entryActionBusyMemberId !== row.memberId)
-                            }
-                            loading={entryActionBusyMemberId === row.memberId}
-                            onClick={() => onSetEntry(row.memberId)}
-                            size="small"
-                            style={{
-                              ...entryActionStyle,
-                              color: token.colorTextSecondary,
-                            }}
-                            type="default"
-                          >
-                            {intl.formatMessage({ id: "teams.members.actions.setEntry" })}
-                          </Button>
-                        ) : null}
                       </div>
                     </div>
                   );

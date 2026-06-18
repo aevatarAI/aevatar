@@ -1,37 +1,90 @@
-import { Alert, Segmented, Tag, Typography } from "antd";
+import {
+  CheckCircleOutlined,
+  ClockCircleOutlined,
+  CloseCircleOutlined,
+  CloseOutlined,
+  CopyOutlined,
+  LoadingOutlined,
+  PauseCircleOutlined,
+} from "@ant-design/icons";
+import { Alert, Button, Segmented, Tag, Tooltip, Typography, message } from "antd";
 import React from "react";
 import { t } from "@/shared/i18n/messages";
 import {
   buildExecutionTrace,
   formatDurationBetween,
+  formatExecutionLogsClipboard,
+  normalizeExecutionLogStatus,
   type ExecutionLogItem,
+  type ExecutionLogStatus,
 } from "@/shared/studio/execution";
 import type { StudioExecutionDetail } from "@/shared/studio/models";
 
 type WorkflowStudioExecutionPanelProps = {
+  readonly activeLogIndex?: number | null;
   readonly detail: StudioExecutionDetail | null;
   readonly error?: string;
   readonly height?: number;
+  readonly onClear?: () => void;
+  readonly onSelectLog?: (index: number | null) => void;
 };
 
-type DetailMode = "logs" | "evidence";
+type OverviewMode = "nodes" | "events";
+type DetailPanelState = "both" | "input" | "output";
+type OverviewEntryType = "node" | "run" | "event";
 
-type NodeRunCard = {
-  readonly statusLog: ExecutionLogItem;
+type ExecutionOverviewEntry = {
+  readonly category: NonNullable<ExecutionLogItem["category"]>;
+  readonly completedAt: string;
+  readonly entryId: string;
+  readonly eventCount: number;
+  readonly eventType: string;
   readonly inputText: string;
   readonly interactionText: string;
-  readonly pendingText: string;
+  readonly logIndex: number;
+  readonly meta: string;
   readonly outputText: string;
+  readonly payloadText: string;
+  readonly pendingText: string;
+  readonly previewText: string;
+  readonly rawText: string;
+  readonly rowType: OverviewEntryType;
+  readonly startedAt: string;
+  readonly status: ExecutionLogStatus;
+  readonly statusLog: ExecutionLogItem;
   readonly stepId: string;
+  readonly subtitle: string;
+  readonly title: string;
 };
 
-type MutableNodeRunCard = {
-  statusLog: ExecutionLogItem;
+type MutableExecutionOverviewEntry = {
+  category: NonNullable<ExecutionLogItem["category"]>;
+  completedAt: string;
+  entryId: string;
+  eventCount: number;
+  eventType: string;
   inputText: string;
   interactionText: string;
-  pendingText: string;
+  logIndex: number;
+  meta: string;
   outputText: string;
+  payloadText: string;
+  pendingText: string;
+  previewText: string;
+  rawText: string;
+  rowType: OverviewEntryType;
+  startedAt: string;
+  status: ExecutionLogStatus;
+  statusLog: ExecutionLogItem;
   stepId: string;
+  subtitle: string;
+  title: string;
+};
+
+type ExecutionTokenUsage = {
+  readonly completionTokens: number;
+  readonly promptTokens: number;
+  readonly totalTokens: number;
 };
 
 const categoryLabels: Record<NonNullable<ExecutionLogItem["category"]>, string> = {
@@ -54,13 +107,15 @@ const categoryColors: Record<NonNullable<ExecutionLogItem["category"]>, string> 
   usage: "gold",
 };
 
-const toneColors: Record<ExecutionLogItem["tone"], string> = {
-  completed: "green",
-  failed: "red",
-  pending: "orange",
-  run: "blue",
-  started: "processing",
+const statusColors: Record<ExecutionLogStatus, string> = {
+  error: "red",
+  recorded: "default",
+  running: "processing",
+  success: "green",
+  waiting: "orange",
 };
+
+const nodeDetailBlockHeight = 230;
 
 function formatConsoleDateTime(value: string | null | undefined): string {
   if (!value) {
@@ -79,87 +134,59 @@ function formatConsoleDateTime(value: string | null | undefined): string {
   });
 }
 
-function trimConsoleText(value: string, maxLength: number): string {
-  const text = value.trim();
-  return text.length > maxLength ? `${text.slice(0, maxLength - 3)}...` : text;
+function isDetailPaneVisible(
+  state: DetailPanelState,
+  pane: "input" | "output",
+): boolean {
+  return state === "both" || state === pane;
 }
 
-function isEvidenceLog(log: ExecutionLogItem): boolean {
-  return ["custom", "raw", "snapshot", "usage"].includes(log.category || "");
+function toggleDetailPanelState(
+  state: DetailPanelState,
+  pane: "input" | "output",
+): DetailPanelState {
+  if (pane === "input") {
+    return state === "output" ? "both" : state === "both" ? "output" : "input";
+  }
+
+  return state === "input" ? "both" : state === "both" ? "input" : "output";
 }
 
 function isTerminalStepLog(log: ExecutionLogItem | undefined): boolean {
   return log?.tone === "completed" || log?.tone === "failed";
 }
 
-function buildNodeRunCards(logs: readonly ExecutionLogItem[]): NodeRunCard[] {
-  const activeCardIndexByStepId = new Map<string, number>();
-  const cards: MutableNodeRunCard[] = [];
+function readStatusLabel(status: ExecutionLogStatus): string {
+  switch (status) {
+    case "error":
+      return t("teamMemberWorkflowStudio.executionPanel.status.error", "Error");
+    case "recorded":
+      return t(
+        "teamMemberWorkflowStudio.executionPanel.status.recorded",
+        "Recorded",
+      );
+    case "success":
+      return t("teamMemberWorkflowStudio.executionPanel.status.success", "Success");
+    case "waiting":
+      return t("teamMemberWorkflowStudio.executionPanel.status.waiting", "Waiting");
+    default:
+      return t("teamMemberWorkflowStudio.executionPanel.status.running", "Running");
+  }
+}
 
-  logs.forEach((log) => {
-    if (log.category !== "step" || !log.stepId) {
-      return;
-    }
-
-    const activeIndex = activeCardIndexByStepId.get(log.stepId);
-    const activeCard =
-      typeof activeIndex === "number" ? cards[activeIndex] : undefined;
-
-    if (log.tone === "started") {
-      cards.push({
-        statusLog: log,
-        inputText: log.clipboardText.trim(),
-        interactionText: "",
-        pendingText: "",
-        outputText: "",
-        stepId: log.stepId,
-      });
-      activeCardIndexByStepId.set(log.stepId, cards.length - 1);
-      return;
-    }
-
-    if (log.tone === "pending" || log.tone === "run") {
-      if (activeCard && !isTerminalStepLog(activeCard.statusLog)) {
-        activeCard.statusLog = log;
-        if (log.tone === "pending") {
-          activeCard.pendingText = log.clipboardText.trim();
-        } else {
-          activeCard.interactionText = log.clipboardText.trim();
-        }
-      } else {
-        cards.push({
-          statusLog: log,
-          inputText: "",
-          interactionText: log.tone === "run" ? log.clipboardText.trim() : "",
-          pendingText: log.tone === "pending" ? log.clipboardText.trim() : "",
-          outputText: "",
-          stepId: log.stepId,
-        });
-        activeCardIndexByStepId.set(log.stepId, cards.length - 1);
-      }
-      return;
-    }
-
-    if (log.tone === "completed" || log.tone === "failed") {
-      if (activeCard && !isTerminalStepLog(activeCard.statusLog)) {
-        activeCard.statusLog = log;
-        activeCard.outputText = log.clipboardText.trim();
-        activeCardIndexByStepId.delete(log.stepId);
-        return;
-      }
-
-      cards.push({
-        statusLog: log,
-        inputText: "",
-        interactionText: "",
-        pendingText: "",
-        outputText: log.clipboardText.trim(),
-        stepId: log.stepId,
-      });
-    }
-  });
-
-  return cards;
+function renderStatusIcon(status: ExecutionLogStatus): React.ReactNode {
+  switch (status) {
+    case "error":
+      return <CloseCircleOutlined style={{ color: "#dc2626" }} />;
+    case "recorded":
+      return <CheckCircleOutlined style={{ color: "#64748b" }} />;
+    case "success":
+      return <CheckCircleOutlined style={{ color: "#16a34a" }} />;
+    case "waiting":
+      return <PauseCircleOutlined style={{ color: "#d97706" }} />;
+    default:
+      return <LoadingOutlined style={{ color: "#2563eb" }} />;
+  }
 }
 
 function buildOutputText(
@@ -175,6 +202,226 @@ function buildOutputText(
     .reverse()
     .find((log) => log.category === "output" && log.clipboardText.trim());
   return finishedLog?.clipboardText.trim() || "";
+}
+
+function readJsonObject(text: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function readTokenNumber(
+  record: Record<string, unknown>,
+  ...keys: string[]
+): number {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+
+    if (typeof value === "string") {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+  }
+
+  return 0;
+}
+
+function buildTokenUsage(
+  logs: readonly ExecutionLogItem[],
+): ExecutionTokenUsage {
+  return logs
+    .filter((log) => log.category === "usage" && log.payloadText)
+    .reduce(
+      (total, log) => {
+        const payload = readJsonObject(log.payloadText || "");
+        if (!payload) {
+          return total;
+        }
+
+        return {
+          completionTokens:
+            total.completionTokens +
+            readTokenNumber(payload, "completionTokens", "completion_tokens"),
+          promptTokens:
+            total.promptTokens +
+            readTokenNumber(payload, "promptTokens", "prompt_tokens"),
+          totalTokens:
+            total.totalTokens +
+            readTokenNumber(payload, "totalTokens", "total_tokens"),
+        };
+      },
+      {
+        completionTokens: 0,
+        promptTokens: 0,
+        totalTokens: 0,
+      },
+    );
+}
+
+function buildOverviewEntries(
+  logs: readonly ExecutionLogItem[],
+): ExecutionOverviewEntry[] {
+  const activeEntryIndexByStepId = new Map<string, number>();
+  const entries: MutableExecutionOverviewEntry[] = [];
+
+  logs.forEach((log, logIndex) => {
+    const category = log.category || "custom";
+    const status = normalizeExecutionLogStatus(log);
+
+    if (category !== "step" || !log.stepId) {
+      const eventStatus: ExecutionLogStatus =
+        status === "error" ? "error" : "recorded";
+      entries.push({
+        category,
+        completedAt:
+          eventStatus === "recorded" || eventStatus === "error"
+            ? log.timestamp
+            : "",
+        entryId: `event:${logIndex}:${log.eventType || log.title}`,
+        eventCount: 1,
+        eventType: log.eventType || "",
+        inputText: "",
+        interactionText: "",
+        logIndex,
+        meta: log.meta,
+        outputText: category === "output" ? log.clipboardText.trim() : "",
+        payloadText: (log.payloadText || log.clipboardText || "").trim(),
+        pendingText: "",
+        previewText: log.previewText,
+        rawText: (log.rawText || "").trim(),
+        rowType: category === "lifecycle" ? "run" : "event",
+        startedAt: log.timestamp,
+        status: eventStatus,
+        statusLog: log,
+        stepId: "",
+        subtitle: log.meta || categoryLabels[category],
+        title: log.title,
+      });
+      return;
+    }
+
+    const activeIndex = activeEntryIndexByStepId.get(log.stepId);
+    const activeEntry =
+      typeof activeIndex === "number" ? entries[activeIndex] : undefined;
+
+    const createNodeEntry = (): MutableExecutionOverviewEntry => ({
+      category,
+      completedAt: "",
+      entryId: `node:${log.stepId}:${logIndex}`,
+      eventCount: 1,
+      eventType: log.eventType || "",
+      inputText: log.tone === "started" ? log.clipboardText.trim() : "",
+      interactionText: log.tone === "run" ? log.clipboardText.trim() : "",
+      logIndex,
+      meta: log.meta,
+      outputText:
+        log.tone === "completed" || log.tone === "failed"
+          ? log.clipboardText.trim()
+          : "",
+      payloadText: (log.payloadText || "").trim(),
+      pendingText: log.tone === "pending" ? log.clipboardText.trim() : "",
+      previewText: log.previewText,
+      rawText: (log.rawText || "").trim(),
+      rowType: "node",
+      startedAt: log.timestamp,
+      status,
+      statusLog: log,
+      stepId: log.stepId || "",
+      subtitle: log.meta || categoryLabels[category],
+      title: log.stepId || log.title,
+    });
+
+    if (log.tone === "started") {
+      entries.push(createNodeEntry());
+      activeEntryIndexByStepId.set(log.stepId, entries.length - 1);
+      return;
+    }
+
+    if (activeEntry && !isTerminalStepLog(activeEntry.statusLog)) {
+      activeEntry.eventCount += 1;
+      activeEntry.eventType = log.eventType || activeEntry.eventType;
+      activeEntry.logIndex = logIndex;
+      activeEntry.meta = log.meta || activeEntry.meta;
+      activeEntry.payloadText = (log.payloadText || activeEntry.payloadText).trim();
+      activeEntry.previewText = log.previewText || activeEntry.previewText;
+      activeEntry.rawText = (log.rawText || activeEntry.rawText).trim();
+      activeEntry.status = status;
+      activeEntry.statusLog = log;
+      activeEntry.subtitle = log.meta || activeEntry.subtitle;
+
+      if (log.tone === "pending") {
+        activeEntry.pendingText = log.clipboardText.trim();
+      }
+
+      if (log.tone === "run") {
+        activeEntry.interactionText = log.clipboardText.trim();
+      }
+
+      if (log.tone === "completed" || log.tone === "failed") {
+        activeEntry.completedAt = log.timestamp;
+        activeEntry.outputText = log.clipboardText.trim();
+        activeEntryIndexByStepId.delete(log.stepId);
+      }
+      return;
+    }
+
+    const nextEntry = createNodeEntry();
+    if (log.tone === "completed" || log.tone === "failed") {
+      nextEntry.completedAt = log.timestamp;
+    } else {
+      activeEntryIndexByStepId.set(log.stepId, entries.length);
+    }
+    entries.push(nextEntry);
+  });
+
+  return entries;
+}
+
+function findSelectedEntry(
+  entries: readonly ExecutionOverviewEntry[],
+  logs: readonly ExecutionLogItem[],
+  activeLogIndex: number | null | undefined,
+): ExecutionOverviewEntry | null {
+  if (typeof activeLogIndex !== "number") {
+    return null;
+  }
+
+  const direct = entries.find((entry) => entry.logIndex === activeLogIndex);
+  if (direct) {
+    return direct;
+  }
+
+  const activeLog = logs[activeLogIndex];
+  if (!activeLog?.stepId) {
+    return null;
+  }
+
+  return entries.find((entry) => entry.stepId === activeLog.stepId) || null;
+}
+
+function isEntrySelected(
+  entry: ExecutionOverviewEntry,
+  selectedEntry: ExecutionOverviewEntry | null,
+): boolean {
+  if (!selectedEntry) {
+    return false;
+  }
+
+  if (entry.logIndex === selectedEntry.logIndex) {
+    return true;
+  }
+
+  return Boolean(entry.stepId && entry.stepId === selectedEntry.stepId);
 }
 
 function renderMetric(label: string, value: React.ReactNode): React.ReactNode {
@@ -197,73 +444,57 @@ function renderMetric(label: string, value: React.ReactNode): React.ReactNode {
   );
 }
 
-function renderPayloadBlock(text: string): React.ReactNode {
-  const payload = text.trim();
-  if (!payload) {
-    return null;
-  }
-
-  return (
-    <pre
-      style={{
-        background: "#f8fafc",
-        border: "1px solid #e5e7eb",
-        borderRadius: 4,
-        color: "#334155",
-        fontSize: 11,
-        lineHeight: "16px",
-        margin: "6px 0 0",
-        maxHeight: 118,
-        overflow: "auto",
-        padding: 8,
-        whiteSpace: "pre-wrap",
-        wordBreak: "break-word",
-      }}
-    >
-      {payload}
-    </pre>
-  );
-}
-
-function renderNodeTextBlock(
+function renderDataBlock(
   label: string,
   value: string,
   emptyText: string,
+  options: {
+    readonly danger?: boolean;
+    readonly height?: number;
+    readonly maxHeight?: number;
+    readonly testId?: string;
+  } = {},
 ): React.ReactNode {
   const text = value.trim();
+  const blockHeight = options.height;
 
   return (
     <div
       style={{
+        alignContent: "start",
         display: "grid",
-        gap: 4,
+        gap: 6,
+        minHeight: 0,
         minWidth: 0,
       }}
     >
       <Typography.Text
         style={{
-          color: "#64748b",
+          color: options.danger ? "#b91c1c" : "#64748b",
           fontSize: 11,
-          fontWeight: 600,
+          fontWeight: 700,
           textTransform: "uppercase",
         }}
       >
         {label}
       </Typography.Text>
       <pre
+        data-testid={options.testId}
         style={{
           background: text ? "#f8fafc" : "#ffffff",
-          border: "1px solid #e5e7eb",
+          border: `1px solid ${options.danger ? "#fecaca" : "#e5e7eb"}`,
           borderRadius: 6,
-          color: text ? "#334155" : "#94a3b8",
-          fontFamily: "inherit",
+          color: text ? (options.danger ? "#991b1b" : "#334155") : "#94a3b8",
+          fontFamily:
+            "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
           fontSize: 12,
+          height: blockHeight,
           lineHeight: "18px",
           margin: 0,
-          maxHeight: 120,
-          minHeight: 34,
+          maxHeight: blockHeight ? undefined : options.maxHeight ?? 180,
+          minHeight: 50,
           overflow: "auto",
-          padding: "8px 10px",
+          padding: "9px 10px",
           whiteSpace: "pre-wrap",
           wordBreak: "break-word",
         }}
@@ -274,184 +505,352 @@ function renderNodeTextBlock(
   );
 }
 
-function renderNodeRunCard(card: NodeRunCard, index: number): React.ReactNode {
-  const log = card.statusLog;
+function formatEntryClipboard(entry: ExecutionOverviewEntry): string {
+  const lines = [
+    `[${entry.startedAt}] ${entry.title}`,
+    entry.subtitle,
+    entry.inputText ? `Input:\n${entry.inputText}` : "",
+    entry.pendingText ? `Prompt:\n${entry.pendingText}` : "",
+    entry.interactionText ? `Interaction:\n${entry.interactionText}` : "",
+    entry.outputText ? `Output:\n${entry.outputText}` : "",
+    entry.payloadText ? `Payload:\n${entry.payloadText}` : "",
+  ].filter(Boolean);
+
+  return lines.join("\n\n");
+}
+
+async function copyToClipboard(text: string, successText: string): Promise<void> {
+  if (!text.trim()) {
+    return;
+  }
+
+  await navigator.clipboard?.writeText(text);
+  void message.success(successText);
+}
+
+function renderOverviewRow(
+  entry: ExecutionOverviewEntry,
+  selected: boolean,
+  onSelectLog?: (index: number | null) => void,
+): React.ReactNode {
+  const duration =
+    entry.startedAt && entry.completedAt
+      ? formatDurationBetween(entry.startedAt, entry.completedAt)
+      : "";
 
   return (
-    <div
-      aria-label={t(
-        "teamMemberWorkflowStudio.executionPanel.nodeRunCardAria",
-        "{stepId} node run",
-        { stepId: card.stepId },
-      )}
-      key={[index, card.stepId, log.timestamp].join(":")}
+    <button
+      aria-pressed={selected}
+      data-testid={`workflow-execution-log-row-${entry.rowType}-${entry.stepId || entry.logIndex}`}
+      key={entry.entryId}
+      onClick={() => onSelectLog?.(entry.logIndex)}
       style={{
-        border: "1px solid #e5e7eb",
-        borderRadius: 8,
+        appearance: "none",
+        background: selected ? "#eef4ff" : "#ffffff",
+        border: `1px solid ${selected ? "#b7cdfd" : "#e5e7eb"}`,
+        borderRadius: 6,
+        color: "inherit",
+        cursor: "pointer",
         display: "grid",
-        gap: 10,
-        padding: 10,
+        gap: 6,
+        padding: "8px 10px",
+        textAlign: "left",
+        width: "100%",
       }}
+      type="button"
     >
-      <div
+      <span
+        style={{
+          alignItems: "center",
+          display: "grid",
+          gap: 8,
+          gridTemplateColumns: "18px minmax(0, 1fr) max-content",
+          minWidth: 0,
+        }}
+      >
+        {renderStatusIcon(entry.status)}
+        <span
+          style={{
+            display: "grid",
+            gap: 1,
+            minWidth: 0,
+          }}
+        >
+          <Typography.Text
+            strong
+            style={{
+              color: "#111827",
+              fontSize: 12,
+              lineHeight: "17px",
+            }}
+          >
+            {entry.title}
+          </Typography.Text>
+          <Typography.Text
+            style={{
+              color: "#64748b",
+              fontSize: 11,
+              lineHeight: "15px",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {entry.subtitle || categoryLabels[entry.category]}
+          </Typography.Text>
+        </span>
+        <Typography.Text style={{ color: "#94a3b8", fontSize: 11 }}>
+          {formatConsoleDateTime(entry.startedAt)}
+        </Typography.Text>
+      </span>
+      <span
         style={{
           alignItems: "center",
           display: "flex",
           flexWrap: "wrap",
-          gap: 6,
+          gap: 5,
           minWidth: 0,
         }}
       >
-        <Tag color="cyan" style={{ marginInlineEnd: 0 }}>
-          {t("teamMemberWorkflowStudio.executionPanel.node", "Node")}
+        <Tag color={statusColors[entry.status]} style={{ marginInlineEnd: 0 }}>
+          {readStatusLabel(entry.status)}
         </Tag>
-        <Tag color={toneColors[log.tone]} style={{ marginInlineEnd: 0 }}>
-          {log.tone}
+        <Tag color={categoryColors[entry.category]} style={{ marginInlineEnd: 0 }}>
+          {categoryLabels[entry.category]}
         </Tag>
-        <Typography.Text strong style={{ fontSize: 12 }}>
-          {card.stepId}
-        </Typography.Text>
-        {log.meta ? (
+        {duration ? (
           <Typography.Text style={{ color: "#64748b", fontSize: 11 }}>
-            {log.meta}
+            {duration}
           </Typography.Text>
         ) : null}
-        <Typography.Text style={{ color: "#94a3b8", fontSize: 11 }}>
-          {formatConsoleDateTime(log.timestamp)}
-        </Typography.Text>
-      </div>
-      {renderNodeTextBlock(
+        {entry.eventCount > 1 ? (
+          <Typography.Text style={{ color: "#64748b", fontSize: 11 }}>
+            {t(
+              "teamMemberWorkflowStudio.executionPanel.eventCount",
+              "{count} events",
+              { count: entry.eventCount },
+            )}
+          </Typography.Text>
+        ) : null}
+      </span>
+    </button>
+  );
+}
+
+function renderNodeInputPane(
+  entry: ExecutionOverviewEntry,
+  blockHeight = nodeDetailBlockHeight,
+): React.ReactNode {
+  const interactionContext = entry.meta.trim();
+
+  return (
+    <div
+      style={{
+        alignContent: "start",
+        alignSelf: "start",
+        display: "grid",
+        gap: 10,
+        minHeight: 0,
+        minWidth: 0,
+      }}
+    >
+      {renderDataBlock(
         t("teamMemberWorkflowStudio.executionPanel.nodeInput", "Input"),
-        card.inputText,
+        entry.inputText,
         t(
           "teamMemberWorkflowStudio.executionPanel.emptyNodeInput",
-          "No user input provided.",
+          "No input captured for this node.",
         ),
+        { height: blockHeight, testId: "workflow-execution-node-input-block" },
       )}
-      {card.pendingText
-        ? renderNodeTextBlock(
-            t(
-              "teamMemberWorkflowStudio.executionPanel.nodePrompt",
-              "Prompt",
-            ),
-            card.pendingText,
+      {entry.pendingText
+        ? renderDataBlock(
+            t("teamMemberWorkflowStudio.executionPanel.nodePrompt", "Prompt"),
+            [interactionContext, entry.pendingText].filter(Boolean).join("\n\n"),
             "",
+            { maxHeight: Math.max(90, Math.floor(blockHeight / 2)) },
           )
         : null}
-      {card.interactionText
-        ? renderNodeTextBlock(
+      {entry.interactionText
+        ? renderDataBlock(
             t(
               "teamMemberWorkflowStudio.executionPanel.nodeInteraction",
               "Interaction",
             ),
-            card.interactionText,
+            [interactionContext, entry.interactionText]
+              .filter(Boolean)
+              .join("\n\n"),
             "",
+            { maxHeight: Math.max(90, Math.floor(blockHeight / 2)) },
           )
         : null}
-      {renderNodeTextBlock(
-        t("teamMemberWorkflowStudio.executionPanel.nodeOutput", "Output"),
-        card.outputText,
-        t(
-          "teamMemberWorkflowStudio.executionPanel.emptyNodeOutput",
-          "No output captured.",
-        ),
-      )}
     </div>
   );
 }
 
-function renderLogRow(
-  log: ExecutionLogItem,
-  index: number,
-  options: { readonly showPayload?: boolean } = {},
+function renderNodeOutputPane(
+  entry: ExecutionOverviewEntry,
+  blockHeight = nodeDetailBlockHeight,
 ): React.ReactNode {
-  const category = log.category || "custom";
-  const payloadText =
-    options.showPayload && log.payloadText
-      ? log.payloadText
-      : "";
+  const outputIsError = entry.status === "error";
 
-  return (
-    <div
-      key={[
-        index,
-        log.timestamp,
-        log.title,
-        log.meta,
-        log.eventType || "",
-      ].join(":")}
-      style={{
-        borderBottom: "1px solid #edf2f7",
-        display: "grid",
-        gap: 4,
-        padding: "8px 0",
-      }}
-    >
+  return renderDataBlock(
+    outputIsError
+      ? t("teamMemberWorkflowStudio.executionPanel.error", "Error")
+      : t("teamMemberWorkflowStudio.executionPanel.nodeOutput", "Output"),
+    entry.outputText,
+    t(
+      "teamMemberWorkflowStudio.executionPanel.emptyNodeOutput",
+      "No output captured for this node.",
+    ),
+    {
+      danger: outputIsError,
+      height: blockHeight,
+      testId: "workflow-execution-node-output-block",
+    },
+  );
+}
+
+function renderSelectedDetails(
+  entry: ExecutionOverviewEntry | null,
+  detailPanelState: DetailPanelState,
+): React.ReactNode {
+  if (!entry) {
+    return (
       <div
         style={{
           alignItems: "center",
+          color: "#64748b",
           display: "flex",
-          flexWrap: "wrap",
-          gap: 6,
-          minWidth: 0,
+          fontSize: 12,
+          justifyContent: "center",
+          minHeight: 0,
+          padding: 16,
+          textAlign: "center",
         }}
       >
-        <Tag color={categoryColors[category]} style={{ marginInlineEnd: 0 }}>
-          {categoryLabels[category]}
-        </Tag>
-        <Tag color={toneColors[log.tone]} style={{ marginInlineEnd: 0 }}>
-          {log.tone}
-        </Tag>
-        <Typography.Text strong style={{ fontSize: 12 }}>
-          {log.title}
-        </Typography.Text>
-        {log.meta ? (
-          <Typography.Text style={{ color: "#64748b", fontSize: 11 }}>
-            {log.meta}
-          </Typography.Text>
-        ) : null}
-        <Typography.Text style={{ color: "#94a3b8", fontSize: 11 }}>
-          {formatConsoleDateTime(log.timestamp)}
-        </Typography.Text>
+        {t(
+          "teamMemberWorkflowStudio.executionPanel.selectLog",
+          "Select a log entry to inspect its input, output, and raw event data.",
+        )}
       </div>
-      {log.previewText ? (
-        <Typography.Text
-          style={{
-            color: "#334155",
-            fontSize: 12,
-            overflowWrap: "anywhere",
-          }}
-        >
-          {trimConsoleText(log.previewText, 260)}
-        </Typography.Text>
-      ) : null}
-      {renderPayloadBlock(payloadText)}
+    );
+  }
+
+  const jsonText = [
+    entry.eventType ? `eventType: ${entry.eventType}` : "",
+    entry.payloadText || entry.rawText,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  if (entry.rowType !== "node") {
+    return renderDataBlock(
+      t("teamMemberWorkflowStudio.executionPanel.eventPayload", "Event payload"),
+      jsonText || entry.previewText,
+      t(
+        "teamMemberWorkflowStudio.executionPanel.emptyEventPayload",
+        "No event payload was captured.",
+      ),
+      { maxHeight: 260 },
+    );
+  }
+
+  const showInput = isDetailPaneVisible(detailPanelState, "input");
+  const showOutput = isDetailPaneVisible(detailPanelState, "output");
+
+  return (
+    <div
+      style={{
+        alignItems: "start",
+        display: "grid",
+        gap: 10,
+        gridTemplateColumns:
+          showInput && showOutput
+            ? "minmax(0, 1fr) minmax(0, 1fr)"
+            : "minmax(0, 1fr)",
+        minHeight: 0,
+        minWidth: 0,
+      }}
+    >
+      {showInput ? renderNodeInputPane(entry) : null}
+      {showOutput ? renderNodeOutputPane(entry) : null}
     </div>
   );
 }
 
 const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> = ({
+  activeLogIndex,
   detail,
   error,
   height = 210,
+  onClear,
+  onSelectLog,
 }) => {
-  const [detailMode, setDetailMode] = React.useState<DetailMode>("logs");
+  const [overviewMode, setOverviewMode] = React.useState<OverviewMode>("nodes");
+  const [detailPanelState, setDetailPanelState] =
+    React.useState<DetailPanelState>("both");
   const trace = React.useMemo(() => buildExecutionTrace(detail), [detail]);
   const logs = trace?.logs ?? [];
+  const entries = React.useMemo(() => buildOverviewEntries(logs), [logs]);
+  const nodeEntries = entries.filter((entry) => entry.rowType === "node");
+  const eventEntries = entries.filter((entry) => entry.rowType !== "node");
+  const baseSelectedEntry =
+    findSelectedEntry(entries, logs, activeLogIndex) ||
+    entries.find((entry) => entry.status === "error") ||
+    nodeEntries[0] ||
+    entries[0] ||
+    null;
   const rawFrames = detail?.frames ?? [];
   const hasExecutionContent = Boolean(error || detail);
-  const nodeRunCards = React.useMemo(() => buildNodeRunCards(logs), [logs]);
-  const evidenceLogs = logs.filter(isEvidenceLog);
-  const stepLogCount = new Set(
-    logs
-      .filter((log) => log.category === "step" && log.stepId)
-      .map((log) => log.stepId),
-  ).size;
   const outputText = detail ? buildOutputText(detail, logs) : "";
+  const tokenUsage = React.useMemo(() => buildTokenUsage(logs), [logs]);
   const duration = detail
     ? formatDurationBetween(detail.startedAtUtc, detail.completedAtUtc)
     : "";
-  const visibleLogs = detailMode === "evidence" ? evidenceLogs : [];
+  const totalStepCount = new Set(nodeEntries.map((entry) => entry.stepId)).size;
+  const visibleEntries =
+    overviewMode === "nodes"
+      ? nodeEntries.length
+        ? nodeEntries
+        : eventEntries
+      : eventEntries;
+  const selectedEntry =
+    visibleEntries.find((entry) => isEntrySelected(entry, baseSelectedEntry)) ||
+    visibleEntries[0] ||
+    baseSelectedEntry;
+  const runStatus: ExecutionLogStatus =
+    detail?.status === "failed"
+      ? "error"
+      : detail?.status === "succeeded"
+        ? "success"
+        : "running";
+  const handleOverviewKeyDown = React.useCallback(
+    (event: React.KeyboardEvent<HTMLElement>) => {
+      if (!visibleEntries.length || !onSelectLog) {
+        return;
+      }
+
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") {
+        return;
+      }
+
+      event.preventDefault();
+      const selectedVisibleIndex = visibleEntries.findIndex((entry) =>
+        isEntrySelected(entry, selectedEntry),
+      );
+      const fallbackIndex = event.key === "ArrowDown" ? -1 : visibleEntries.length;
+      const currentIndex =
+        selectedVisibleIndex >= 0 ? selectedVisibleIndex : fallbackIndex;
+      const nextIndex =
+        event.key === "ArrowDown"
+          ? Math.min(currentIndex + 1, visibleEntries.length - 1)
+          : Math.max(currentIndex - 1, 0);
+
+      onSelectLog(visibleEntries[nextIndex]?.logIndex ?? null);
+    },
+    [onSelectLog, selectedEntry, visibleEntries],
+  );
 
   if (!hasExecutionContent) {
     return null;
@@ -501,17 +900,26 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
                   alignItems: "center",
                   display: "flex",
                   flexWrap: "wrap",
-                  gap: 10,
+                  gap: 9,
                   minWidth: 0,
                 }}
               >
-                <Typography.Text strong style={{ fontSize: 12 }}>
+                <Typography.Text strong style={{ color: "#111827", fontSize: 13 }}>
+                  {t("teamMemberWorkflowStudio.executionPanel.logs", "Logs")}
+                </Typography.Text>
+                <Typography.Text
+                  style={{
+                    color: "#64748b",
+                    fontSize: 12,
+                    maxWidth: 240,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
                   {detail.workflowName}
                 </Typography.Text>
-                <Tag
-                  color={detail.status === "failed" ? "red" : "blue"}
-                  style={{ marginInlineEnd: 0 }}
-                >
+                <Tag color={statusColors[runStatus]} style={{ marginInlineEnd: 0 }}>
                   {detail.status}
                 </Tag>
                 {duration
@@ -529,7 +937,7 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
                   alignItems: "center",
                   display: "flex",
                   flexWrap: "wrap",
-                  gap: 12,
+                  gap: 10,
                 }}
               >
                 {renderMetric(
@@ -538,12 +946,63 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
                 )}
                 {renderMetric(
                   t("teamMemberWorkflowStudio.executionPanel.steps", "Steps"),
-                  stepLogCount,
+                  totalStepCount,
                 )}
                 {renderMetric(
-                  t("teamMemberWorkflowStudio.executionPanel.logs", "Logs"),
-                  nodeRunCards.length,
+                  t("teamMemberWorkflowStudio.executionPanel.output", "Output"),
+                  outputText ? "1" : "0",
                 )}
+                {tokenUsage.totalTokens > 0
+                  ? renderMetric(
+                      t(
+                        "teamMemberWorkflowStudio.executionPanel.tokens",
+                        "Tokens",
+                      ),
+                      tokenUsage.totalTokens,
+                    )
+                  : null}
+                <Tooltip
+                  title={t(
+                    "teamMemberWorkflowStudio.executionPanel.copyAll",
+                    "Copy all logs",
+                  )}
+                >
+                  <Button
+                    aria-label={t(
+                      "teamMemberWorkflowStudio.executionPanel.copyAll",
+                      "Copy all logs",
+                    )}
+                    icon={<CopyOutlined />}
+                    onClick={() =>
+                      void copyToClipboard(
+                        formatExecutionLogsClipboard(trace),
+                        t(
+                          "teamMemberWorkflowStudio.executionPanel.copyAllDone",
+                          "Copied all logs.",
+                        ),
+                      )
+                    }
+                    size="small"
+                    type="text"
+                  />
+                </Tooltip>
+                <Tooltip
+                  title={t(
+                    "teamMemberWorkflowStudio.executionPanel.clear",
+                    "Clear logs",
+                  )}
+                >
+                  <Button
+                    aria-label={t(
+                      "teamMemberWorkflowStudio.executionPanel.clear",
+                      "Clear logs",
+                    )}
+                    icon={<CloseOutlined />}
+                    onClick={onClear}
+                    size="small"
+                    type="text"
+                  />
+                </Tooltip>
               </div>
             </div>
 
@@ -551,184 +1010,272 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
               style={{
                 display: "grid",
                 gap: 0,
-                gridTemplateColumns: "minmax(420px, 1.35fr) minmax(340px, 0.85fr)",
+                gridTemplateColumns: selectedEntry
+                  ? "minmax(300px, 0.82fr) minmax(420px, 1.18fr)"
+                  : "minmax(420px, 1fr)",
                 minHeight: 0,
                 minWidth: 0,
               }}
             >
               <section
-                aria-label={t(
-                  "teamMemberWorkflowStudio.executionPanel.output",
-                  "Output",
-                )}
                 style={{
-                  borderRight: "1px solid #edf2f7",
+                  borderRight: selectedEntry ? "1px solid #edf2f7" : 0,
                   display: "grid",
                   gridTemplateRows: "min-content minmax(0, 1fr)",
                   minHeight: 0,
                   minWidth: 0,
-                  padding: "10px 14px 12px",
+                  padding: "10px 12px 12px",
                 }}
               >
                 <div
                   style={{
                     alignItems: "center",
                     display: "flex",
+                    gap: 8,
                     justifyContent: "space-between",
                     marginBottom: 8,
                     minWidth: 0,
                   }}
                 >
-                  <Typography.Text strong style={{ fontSize: 13 }}>
-                    {t("teamMemberWorkflowStudio.executionPanel.output", "Output")}
-                  </Typography.Text>
-                  <Typography.Text style={{ color: "#64748b", fontSize: 11 }}>
-                    {t(
-                      "teamMemberWorkflowStudio.executionPanel.resultFirst",
-                      "Result",
-                    )}
-                  </Typography.Text>
-                </div>
-                {detail.error ? (
-                  <Alert message={detail.error} showIcon type="error" />
-                ) : outputText ? (
-                  <pre
-                    style={{
-                      background: "#0f172a",
-                      border: "1px solid #1e293b",
-                      borderRadius: 6,
-                      color: "#e2e8f0",
-                      fontSize: 13,
-                      lineHeight: "20px",
-                      margin: 0,
-                      minHeight: 0,
-                      overflow: "auto",
-                      padding: 14,
-                      whiteSpace: "pre-wrap",
-                      wordBreak: "break-word",
-                    }}
-                  >
-                    {outputText}
-                  </pre>
-                ) : (
                   <div
                     style={{
                       alignItems: "center",
-                      background: "#f8fafc",
-                      border: "1px solid #e5e7eb",
-                      borderRadius: 6,
-                      color: "#64748b",
                       display: "flex",
-                      fontSize: 12,
-                      justifyContent: "center",
-                      minHeight: 0,
-                      padding: 14,
+                      gap: 7,
+                      minWidth: 0,
                     }}
                   >
-                    {t(
-                      "teamMemberWorkflowStudio.executionPanel.emptyOutput",
-                      "Output will appear after the draft run emits a result.",
-                    )}
+                    <ClockCircleOutlined style={{ color: "#64748b" }} />
+                    <Typography.Text strong style={{ fontSize: 13 }}>
+                      {t(
+                        "teamMemberWorkflowStudio.executionPanel.overview",
+                        "Overview",
+                      )}
+                    </Typography.Text>
                   </div>
-                )}
-              </section>
-
-              <section
-                aria-label={t(
-                  "teamMemberWorkflowStudio.executionPanel.timeline",
-                  "Timeline",
-                )}
-                style={{
-                  display: "grid",
-                  gridTemplateRows: "min-content minmax(0, 1fr)",
-                  minHeight: 0,
-                  minWidth: 0,
-                  padding: "10px 14px 12px",
-                }}
-              >
-                <div
-                  style={{
-                    alignItems: "center",
-                    display: "flex",
-                    gap: 10,
-                    justifyContent: "space-between",
-                    marginBottom: 8,
-                    minWidth: 0,
-                  }}
-                >
-                  <Typography.Text strong style={{ fontSize: 13 }}>
-                    {t(
-                      "teamMemberWorkflowStudio.executionPanel.runLog",
-                      "Run log",
-                    )}
-                  </Typography.Text>
                   <Segmented
-                    size="small"
-                    value={detailMode}
-                    onChange={(value) => setDetailMode(value as DetailMode)}
+                    onChange={(value) => setOverviewMode(value as OverviewMode)}
                     options={[
                       {
                         label: t(
-                          "teamMemberWorkflowStudio.executionPanel.logs",
-                          "Logs",
+                          "teamMemberWorkflowStudio.executionPanel.nodes",
+                          "Nodes",
                         ),
-                        value: "logs",
+                        value: "nodes",
                       },
                       {
                         label: t(
-                          "teamMemberWorkflowStudio.executionPanel.evidence",
-                          "Evidence frames",
+                          "teamMemberWorkflowStudio.executionPanel.events",
+                          "Events",
                         ),
-                        value: "evidence",
+                        value: "events",
                       },
                     ]}
+                    size="small"
+                    value={overviewMode}
                   />
                 </div>
                 <div
+                  aria-label={t(
+                    "teamMemberWorkflowStudio.executionPanel.logsOverview",
+                    "Logs overview",
+                  )}
+                  onKeyDown={handleOverviewKeyDown}
+                  role="listbox"
+                  tabIndex={0}
                   style={{
+                    display: "grid",
+                    gap: 8,
                     minHeight: 0,
                     overflow: "auto",
-                    paddingRight: 4,
+                    paddingRight: 3,
                   }}
                 >
-                  {detailMode === "logs" && nodeRunCards.length ? (
-                    <div
-                      style={{
-                        display: "grid",
-                        gap: 10,
-                      }}
-                    >
-                      {nodeRunCards.map((card, index) =>
-                        renderNodeRunCard(card, index),
-                      )}
-                    </div>
-                  ) : visibleLogs.length ? (
-                    visibleLogs.map((log, index) =>
-                      renderLogRow(log, index, {
-                        showPayload: detailMode === "evidence",
-                      }),
+                  {visibleEntries.length ? (
+                    visibleEntries.map((entry) =>
+                      renderOverviewRow(
+                        entry,
+                        isEntrySelected(entry, selectedEntry),
+                        onSelectLog,
+                      ),
                     )
                   ) : (
                     <Typography.Text style={{ color: "#64748b", fontSize: 12 }}>
-                      {detailMode === "evidence"
-                        ? t(
-                            "teamMemberWorkflowStudio.executionPanel.emptyEvidence",
-                            "Usage, snapshots, and raw observed events will appear here when the backend emits them.",
-                          )
-                        : rawFrames.length
+                      {overviewMode === "nodes"
+                        ? rawFrames.length
                           ? t(
-                            "teamMemberWorkflowStudio.executionPanel.rawFrames",
-                            "{count} run event(s) received, but no step output is available yet.",
-                            { count: rawFrames.length },
-                          )
+                              "teamMemberWorkflowStudio.executionPanel.rawFrames",
+                              "{count} run event(s) received, but no node output is available yet.",
+                              { count: rawFrames.length },
+                            )
+                          : t(
+                              "teamMemberWorkflowStudio.executionPanel.emptyLogs",
+                              "Node logs will appear after the workflow draft runs.",
+                            )
                         : t(
-                            "teamMemberWorkflowStudio.executionPanel.emptyLogs",
-                            "Step outputs will appear here after the workflow draft runs.",
+                            "teamMemberWorkflowStudio.executionPanel.emptyEvidence",
+                            "Runtime events will appear here when the backend emits them.",
                           )}
                     </Typography.Text>
                   )}
                 </div>
               </section>
+
+              {selectedEntry ? (
+                <section
+                  aria-label={t(
+                    "teamMemberWorkflowStudio.executionPanel.logDetails",
+                    "Log details",
+                  )}
+                  style={{
+                    display: "grid",
+                    gridTemplateRows: "min-content minmax(0, 1fr)",
+                    minHeight: 0,
+                    minWidth: 0,
+                    padding: "10px 14px 12px",
+                  }}
+                >
+                  <div
+                    style={{
+                      alignItems: "center",
+                      display: "flex",
+                      flexWrap: "wrap",
+                      gap: 8,
+                      justifyContent: "space-between",
+                      marginBottom: 8,
+                      minWidth: 0,
+                    }}
+                  >
+                    <div
+                      style={{
+                        alignItems: "center",
+                        display: "flex",
+                        gap: 8,
+                        minWidth: 0,
+                      }}
+                    >
+                      {renderStatusIcon(selectedEntry.status)}
+                      <Typography.Text
+                        strong
+                        style={{
+                          fontSize: 13,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {selectedEntry.title}
+                      </Typography.Text>
+                      <Tag
+                        color={statusColors[selectedEntry.status]}
+                        style={{ marginInlineEnd: 0 }}
+                      >
+                        {readStatusLabel(selectedEntry.status)}
+                      </Tag>
+                    </div>
+                    <div
+                      style={{
+                        alignItems: "center",
+                        display: "flex",
+                        flexWrap: "wrap",
+                        gap: 8,
+                      }}
+                    >
+                      {selectedEntry.rowType === "node" ? (
+                        <div
+                          style={{
+                            alignItems: "center",
+                            background: "#f8fafc",
+                            border: "1px solid #e5e7eb",
+                            borderRadius: 6,
+                            display: "inline-flex",
+                            gap: 2,
+                            padding: 2,
+                          }}
+                        >
+                          {(["input", "output"] as const).map((pane) => {
+                            const active = isDetailPaneVisible(
+                              detailPanelState,
+                              pane,
+                            );
+                            const label =
+                              pane === "input"
+                                ? t(
+                                    "teamMemberWorkflowStudio.executionPanel.nodeInput",
+                                    "Input",
+                                  )
+                                : t(
+                                    "teamMemberWorkflowStudio.executionPanel.nodeOutput",
+                                    "Output",
+                                  );
+
+                            return (
+                              <Button
+                                aria-pressed={active}
+                                key={pane}
+                                onClick={() =>
+                                  setDetailPanelState((current) =>
+                                    toggleDetailPanelState(current, pane),
+                                  )
+                                }
+                                size="small"
+                                style={{
+                                  background: active ? "#ffffff" : "transparent",
+                                  borderColor: active ? "#dbe3ee" : "transparent",
+                                  boxShadow: active
+                                    ? "0 1px 2px rgba(15, 23, 42, 0.06)"
+                                    : "none",
+                                  color: active ? "#111827" : "#64748b",
+                                  fontWeight: active ? 600 : 400,
+                                }}
+                                type="text"
+                              >
+                                {label}
+                              </Button>
+                            );
+                          })}
+                        </div>
+                      ) : null}
+                      {overviewMode === "events" ? (
+                        <Tooltip
+                          title={t(
+                            "teamMemberWorkflowStudio.executionPanel.copySelected",
+                            "Copy selected log",
+                          )}
+                        >
+                          <Button
+                            aria-label={t(
+                              "teamMemberWorkflowStudio.executionPanel.copySelected",
+                              "Copy selected log",
+                            )}
+                            icon={<CopyOutlined />}
+                            onClick={() =>
+                              void copyToClipboard(
+                                formatEntryClipboard(selectedEntry),
+                                t(
+                                  "teamMemberWorkflowStudio.executionPanel.copySelectedDone",
+                                  "Copied selected log.",
+                                ),
+                              )
+                            }
+                            size="small"
+                            type="text"
+                          />
+                        </Tooltip>
+                      ) : null}
+                    </div>
+                  </div>
+                  <div
+                    style={{
+                      minHeight: 0,
+                      overflow: "auto",
+                      paddingRight: 2,
+                    }}
+                  >
+                    {renderSelectedDetails(selectedEntry, detailPanelState)}
+                  </div>
+                </section>
+              ) : null}
             </div>
           </>
         ) : null}
