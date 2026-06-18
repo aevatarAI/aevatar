@@ -115,6 +115,8 @@ const statusColors: Record<ExecutionLogStatus, string> = {
   waiting: "orange",
 };
 
+const nodeDetailBlockHeight = 230;
+
 function formatConsoleDateTime(value: string | null | undefined): string {
   if (!value) {
     return "";
@@ -167,7 +169,6 @@ function readStatusLabel(status: ExecutionLogStatus): string {
       return t("teamMemberWorkflowStudio.executionPanel.status.success", "Success");
     case "waiting":
       return t("teamMemberWorkflowStudio.executionPanel.status.waiting", "Waiting");
-    case "running":
     default:
       return t("teamMemberWorkflowStudio.executionPanel.status.running", "Running");
   }
@@ -183,7 +184,6 @@ function renderStatusIcon(status: ExecutionLogStatus): React.ReactNode {
       return <CheckCircleOutlined style={{ color: "#16a34a" }} />;
     case "waiting":
       return <PauseCircleOutlined style={{ color: "#d97706" }} />;
-    case "running":
     default:
       return <LoadingOutlined style={{ color: "#2563eb" }} />;
   }
@@ -448,9 +448,15 @@ function renderDataBlock(
   label: string,
   value: string,
   emptyText: string,
-  options: { readonly danger?: boolean; readonly maxHeight?: number } = {},
+  options: {
+    readonly danger?: boolean;
+    readonly height?: number;
+    readonly maxHeight?: number;
+    readonly testId?: string;
+  } = {},
 ): React.ReactNode {
   const text = value.trim();
+  const blockHeight = options.height;
 
   return (
     <div
@@ -473,6 +479,7 @@ function renderDataBlock(
         {label}
       </Typography.Text>
       <pre
+        data-testid={options.testId}
         style={{
           background: text ? "#f8fafc" : "#ffffff",
           border: `1px solid ${options.danger ? "#fecaca" : "#e5e7eb"}`,
@@ -481,9 +488,10 @@ function renderDataBlock(
           fontFamily:
             "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
           fontSize: 12,
+          height: blockHeight,
           lineHeight: "18px",
           margin: 0,
-          maxHeight: options.maxHeight ?? 180,
+          maxHeight: blockHeight ? undefined : options.maxHeight ?? 180,
           minHeight: 50,
           overflow: "auto",
           padding: "9px 10px",
@@ -631,7 +639,7 @@ function renderOverviewRow(
 
 function renderNodeInputPane(
   entry: ExecutionOverviewEntry,
-  maxHeight = 260,
+  blockHeight = nodeDetailBlockHeight,
 ): React.ReactNode {
   const interactionContext = entry.meta.trim();
 
@@ -653,14 +661,14 @@ function renderNodeInputPane(
           "teamMemberWorkflowStudio.executionPanel.emptyNodeInput",
           "No input captured for this node.",
         ),
-        { maxHeight },
+        { height: blockHeight, testId: "workflow-execution-node-input-block" },
       )}
       {entry.pendingText
         ? renderDataBlock(
             t("teamMemberWorkflowStudio.executionPanel.nodePrompt", "Prompt"),
             [interactionContext, entry.pendingText].filter(Boolean).join("\n\n"),
             "",
-            { maxHeight: Math.max(90, Math.floor(maxHeight / 2)) },
+            { maxHeight: Math.max(90, Math.floor(blockHeight / 2)) },
           )
         : null}
       {entry.interactionText
@@ -673,7 +681,7 @@ function renderNodeInputPane(
               .filter(Boolean)
               .join("\n\n"),
             "",
-            { maxHeight: Math.max(90, Math.floor(maxHeight / 2)) },
+            { maxHeight: Math.max(90, Math.floor(blockHeight / 2)) },
           )
         : null}
     </div>
@@ -682,7 +690,7 @@ function renderNodeInputPane(
 
 function renderNodeOutputPane(
   entry: ExecutionOverviewEntry,
-  maxHeight = 260,
+  blockHeight = nodeDetailBlockHeight,
 ): React.ReactNode {
   const outputIsError = entry.status === "error";
 
@@ -695,7 +703,11 @@ function renderNodeOutputPane(
       "teamMemberWorkflowStudio.executionPanel.emptyNodeOutput",
       "No output captured for this node.",
     ),
-    { danger: outputIsError, maxHeight },
+    {
+      danger: outputIsError,
+      height: blockHeight,
+      testId: "workflow-execution-node-output-block",
+    },
   );
 }
 
@@ -761,8 +773,8 @@ function renderSelectedDetails(
         minWidth: 0,
       }}
     >
-      {showInput ? renderNodeInputPane(entry, showOutput ? 170 : 260) : null}
-      {showOutput ? renderNodeOutputPane(entry, showInput ? 250 : 260) : null}
+      {showInput ? renderNodeInputPane(entry) : null}
+      {showOutput ? renderNodeOutputPane(entry) : null}
     </div>
   );
 }
@@ -1006,11 +1018,6 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
               }}
             >
               <section
-                aria-label={t(
-                  "teamMemberWorkflowStudio.executionPanel.logsOverview",
-                  "Logs overview",
-                )}
-                onKeyDown={handleOverviewKeyDown}
                 style={{
                   borderRight: selectedEntry ? "1px solid #edf2f7" : 0,
                   display: "grid",
@@ -1019,7 +1026,6 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
                   minWidth: 0,
                   padding: "10px 12px 12px",
                 }}
-                tabIndex={0}
               >
                 <div
                   style={{
@@ -1070,6 +1076,13 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
                   />
                 </div>
                 <div
+                  aria-label={t(
+                    "teamMemberWorkflowStudio.executionPanel.logsOverview",
+                    "Logs overview",
+                  )}
+                  onKeyDown={handleOverviewKeyDown}
+                  role="listbox"
+                  tabIndex={0}
                   style={{
                     display: "grid",
                     gap: 8,
