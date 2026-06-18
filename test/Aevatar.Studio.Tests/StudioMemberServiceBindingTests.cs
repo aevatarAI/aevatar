@@ -40,6 +40,8 @@ public sealed class StudioMemberServiceBindingTests
             CancellationToken.None);
 
         response.Status.Should().Be(StudioMemberBindingRunStatusNames.Accepted);
+        response.AckStage.Should().Be(StudioMemberBindingAckStageNames.DispatchAccepted);
+        response.BindingRunRole.Should().Be(StudioMemberBindingRunRoleNames.Candidate);
         response.BindingRunId.Should().StartWith("bind-");
         response.ScopeId.Should().Be(ScopeId);
         response.MemberId.Should().Be(MemberId);

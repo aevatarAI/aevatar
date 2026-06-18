@@ -14,6 +14,7 @@ public static class SkillRunnerDefaults
     public const string StatusDisabled = "disabled";
     public const string StatusCompleted = "completed";
     public const string RejectionReasonRunnerDisabled = "runner_disabled";
+    public const string ScheduleTriggerReason = "schedule";
     public const string ExternalTriggerReason = "external_trigger";
     public const string OneShotTriggerReason = "one_shot";
     public const string OneShotSkillName = "one-shot-reminder";
@@ -30,8 +31,10 @@ public static class SkillRunnerDefaults
     public const int MaxRetryAttempts = 1;
     public const int ExternalTriggerMaxDispatchAttempts = 3;
     public const int ExternalTriggerTerminalDeliveryRetention = 1000;
+    public const int CronOccurrenceTerminalRetention = 1000;
     public static readonly TimeSpan RetryBackoff = TimeSpan.FromSeconds(30);
     public static readonly TimeSpan ExternalTriggerTerminalDeliveryRetentionAge = TimeSpan.FromDays(30);
+    public static readonly TimeSpan CronOccurrenceTerminalRetentionAge = TimeSpan.FromDays(30);
 
     /// <summary>
     /// Throttle for streaming-edit (Lark <c>PUT /open-apis/im/v1/messages/{id}</c>) deltas.

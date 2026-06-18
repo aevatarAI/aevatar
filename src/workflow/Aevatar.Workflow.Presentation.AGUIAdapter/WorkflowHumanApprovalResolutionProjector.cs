@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
@@ -28,10 +29,14 @@ public sealed class WorkflowHumanApprovalResolutionProjector
         if (!ProjectionDispatchRouteFilter.ShouldDispatch(envelope))
             return;
 
-        if (envelope.Payload?.Is(WorkflowHumanApprovalResolvedEvent.Descriptor) != true)
+        var sourceEnvelope = CommittedStateEventEnvelope.TryCreateObservedEnvelope(envelope, out var observedEnvelope) &&
+                             observedEnvelope?.Payload != null
+            ? observedEnvelope
+            : envelope;
+        if (sourceEnvelope.Payload?.Is(WorkflowHumanApprovalResolvedEvent.Descriptor) != true)
             return;
 
-        var evt = envelope.Payload.Unpack<WorkflowHumanApprovalResolvedEvent>();
+        var evt = sourceEnvelope.Payload.Unpack<WorkflowHumanApprovalResolvedEvent>();
         if (string.IsNullOrWhiteSpace(evt.DeliveryTargetId))
             return;
 
@@ -46,6 +51,7 @@ public sealed class WorkflowHumanApprovalResolutionProjector
                 EditedContent = string.IsNullOrWhiteSpace(evt.EditedContent) ? null : evt.EditedContent,
                 Feedback = string.IsNullOrWhiteSpace(evt.Feedback) ? null : evt.Feedback,
                 ResolvedContent = string.IsNullOrWhiteSpace(evt.ResolvedContent) ? null : evt.ResolvedContent,
+                TimedOut = evt.ResolutionSource == WorkflowHumanApprovalResolutionSource.Timeout,
             },
             evt.DeliveryTargetId,
             ct);

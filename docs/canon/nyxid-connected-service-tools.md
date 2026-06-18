@@ -85,6 +85,13 @@ token 可见性与 `NyxIdProxyTool` 一致：user token 优先，org-only 的 se
 
 发现发生在请求期的工具分类阶段：tool-set 边界（`ToolSetResponsesToolProvider`）会把请求的 `AgentToolExecutionContext` 通过 `AgentToolContextScope` 发布到 AsyncLocal，`NyxIdConnectedServiceToolSource.DiscoverToolsAsync` 据此拿到当前用户的 NyxID token 并 live 发现。未配置 NyxID base URL 或上下文里没有 token 时，不暴露任何动态工具。
 
+Voice realtime attach 也遵循同一边界。若 live transport lease 带有可用的
+`voice-tool:` credential ref，session-readiness discovery 会解析该 ref，并为
+该 lease 构建 caller-scoped snapshot；它不得读取或写入匿名的进程级 voice
+catalog cache。匿名 voice session 仍可复用 no-token catalog cache；带 caller
+token 的发现必须保持 request/lease scoped，因为 connected-service 可见性由
+bearer 决定。
+
 ## 5. 架构边界
 
 - 发现期可请求 NyxID live surface，但**不在中间层保存 service/endpoint 事实状态**；没有进程内 catalog。
@@ -92,7 +99,15 @@ token 可见性与 `NyxIdProxyTool` 一致：user token 优先，org-only 的 se
 - 不绕过 NyxID proxy 直接打下游 base URL。
 - 不引入新的投影主链或 read model。
 
-## 6. 相关代码
+## 6. `QuotaLedger` profile
+
+审批额度账本使用同一条 connected-service 边界。`QuotaLedger` 不是 Aevatar 内部账本，也不是 NyxID 新能力；它只是一个外部 REST service profile，契约见 [approval-quota-ledger.openapi.yaml](../contracts/approval-quota-ledger.openapi.yaml)，权威口径见 [approval-quota-ledger.md](approval-quota-ledger.md)。
+
+注册时把该 OpenAPI spec 挂到现有 NyxID service 上，Aevatar 仍通过 NyxID live discovery 读取 spec，并通过 `proxy/s/{slug}/...` 调用 `GET /balances`、`POST /balances/reserve`、`POST /balances/deduct` 和 `POST /balances/release`。余额、reservation、deduction transaction 都归外部 ledger 或渠道原生账本拥有；Aevatar 只传递强类型字段和稳定 idempotency key。
+
+如果目标渠道已经原生维护额度，优先记录渠道 API、scope 和真实 subject probe，再直接使用渠道原生账本。渠道自动扣减时不得再调用 `QuotaLedger` deduct。
+
+## 7. 相关代码
 
 - `src/Aevatar.AI.ToolProviders.NyxId/NyxIdConnectedServiceToolSource.cs`
 - `src/Aevatar.AI.ToolProviders.NyxId/ConnectedServices/`（marker / 解析 / schema 内联 / 命名 / proxy tool）

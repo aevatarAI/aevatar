@@ -8,5 +8,7 @@ public interface IVoiceToolCatalog
     /// <summary>
     /// Discovers all currently available voice-callable tools.
     /// </summary>
-    Task<IReadOnlyList<VoiceToolDefinition>> DiscoverAsync(CancellationToken ct = default);
+    Task<IReadOnlyList<VoiceToolDefinition>> DiscoverAsync(
+        VoiceToolExecutionContext? toolContext = null,
+        CancellationToken ct = default);
 }

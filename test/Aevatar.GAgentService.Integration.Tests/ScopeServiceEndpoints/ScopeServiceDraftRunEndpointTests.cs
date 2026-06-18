@@ -2,8 +2,6 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Reflection;
 using System.Security.Claims;
-using System.Text;
-using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
@@ -89,83 +87,6 @@ public sealed class ScopeServiceDraftRunEndpointTests : ScopeServiceEndpointTest
         host.InteractionService.LastRequest!.ScopeId.Should().Be("scope-a");
         host.InteractionService.LastRequest.Source.WorkflowYamls.Should().NotBeNull();
         host.InteractionService.LastRequest.Source.WorkflowYamls.Should().HaveCount(2);
-    }
-
-    [Fact]
-    public async Task ScopeDraftRunEndpoint_ShouldAcceptMultipartPayloadAndFiles()
-    {
-        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
-        host.InteractionService.ResultFactory = async (request, emitAsync, onAcceptedAsync, ct) =>
-        {
-            var receipt = new WorkflowChatRunAcceptedReceipt("run-actor-1", "main", "cmd-1", "corr-1");
-            if (onAcceptedAsync != null)
-                await onAcceptedAsync(receipt, ct);
-
-            await emitAsync(new WorkflowRunEventEnvelope
-            {
-                TextMessageContent = new WorkflowTextMessageContentEventPayload
-                {
-                    MessageId = "msg-1",
-                    Delta = "hello",
-                },
-            }, ct);
-            return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
-                .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
-        };
-        using var form = new MultipartFormDataContent();
-        var payload = JsonSerializer.Serialize(new
-        {
-            prompt = "",
-            workflowYamls = new[]
-            {
-                "name: main\nsteps:\n  - run: echo hello",
-            },
-            eventFormat = "agui",
-        }, new JsonSerializerOptions(JsonSerializerDefaults.Web));
-        form.Add(new StringContent(payload, Encoding.UTF8, "application/json"), "payload");
-        form.Add(
-            new ByteArrayContent(Encoding.UTF8.GetBytes("plain file body"))
-            {
-                Headers =
-                {
-                    ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("text/plain"),
-                },
-            },
-            "file",
-            "notes.txt");
-        form.Add(
-            new ByteArrayContent([0x89, 0x50, 0x4e, 0x47])
-            {
-                Headers =
-                {
-                    ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/png"),
-                },
-            },
-            "file",
-            "screen.png");
-        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, "/api/scopes/scope-a/workflow/draft-run")
-        {
-            Content = form,
-        };
-
-        var response = await host.Client.SendAsync(httpRequest);
-        var body = await response.Content.ReadAsStringAsync();
-
-        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
-        host.InteractionService.LastRequest.Should().NotBeNull();
-        var request = host.InteractionService.LastRequest!;
-        request.Prompt.Should().Be("[content], [image]");
-        request.Source.WorkflowYamls.Should().ContainSingle();
-        request.InputParts.Should().NotBeNull();
-        request.InputParts!.Should().HaveCount(2);
-        request.InputParts[0].Kind.Should().Be(WorkflowChatInputPartKind.Text);
-        request.InputParts[0].DataBase64.Should().Be(Convert.ToBase64String(Encoding.UTF8.GetBytes("plain file body")));
-        request.InputParts[0].MediaType.Should().Be("text/plain");
-        request.InputParts[0].Name.Should().Be("notes.txt");
-        request.InputParts[1].Kind.Should().Be(WorkflowChatInputPartKind.Image);
-        request.InputParts[1].DataBase64.Should().Be(Convert.ToBase64String([0x89, 0x50, 0x4e, 0x47]));
-        request.InputParts[1].MediaType.Should().Be("image/png");
-        request.InputParts[1].Name.Should().Be("screen.png");
     }
 
     [Fact]

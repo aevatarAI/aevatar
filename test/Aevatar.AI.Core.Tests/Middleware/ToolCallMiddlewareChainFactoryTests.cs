@@ -8,7 +8,7 @@ namespace Aevatar.AI.Core.Tests.Middleware;
 public sealed class ToolCallMiddlewareChainFactoryTests
 {
     [Fact]
-    public async Task ForAgentRuntime_ShouldPrependCanonicalApprovalMiddleware()
+    public async Task ForAgentRuntime_ShouldPrependCanonicalCredentialAndApprovalMiddlewares()
     {
         var custom = new RecordingMiddleware();
 
@@ -17,9 +17,10 @@ public sealed class ToolCallMiddlewareChainFactoryTests
             new ScriptedApprovalHandler(ToolApprovalResult.Approved()),
             null);
 
-        chain.Should().HaveCount(2);
-        chain[0].Should().BeOfType<ToolApprovalMiddleware>();
-        chain[1].Should().BeSameAs(custom);
+        chain.Should().HaveCount(3);
+        chain[0].Should().BeOfType<ToolCallCredentialPolicyMiddleware>();
+        chain[1].Should().BeOfType<ToolApprovalMiddleware>();
+        chain[2].Should().BeSameAs(custom);
 
         var context = NewContext();
         await RunChainAsync(chain, context);
@@ -39,9 +40,10 @@ public sealed class ToolCallMiddlewareChainFactoryTests
             new ScriptedApprovalHandler(ToolApprovalResult.Approved()),
             null);
 
-        chain.Should().HaveCount(2);
+        chain.Should().HaveCount(3);
+        chain[0].Should().BeOfType<ToolCallCredentialPolicyMiddleware>();
         chain.Should().ContainSingle(middleware => middleware is ToolApprovalMiddleware);
-        chain[1].Should().BeSameAs(custom);
+        chain[2].Should().BeSameAs(custom);
 
         var context = NewContext();
         await RunChainAsync(chain, context);
@@ -50,6 +52,22 @@ public sealed class ToolCallMiddlewareChainFactoryTests
         custom.Executions.Should().Be(1);
         context.Terminate.Should().BeFalse();
         context.Result.Should().Be("""{"ok":true}""");
+    }
+
+    [Fact]
+    public void ForAgentRuntime_ShouldRemoveExternallyRegisteredCredentialPolicyMiddleware()
+    {
+        var custom = new RecordingMiddleware();
+
+        var chain = ToolCallMiddlewareChainFactory.ForAgentRuntime(
+            [new ToolCallCredentialPolicyMiddleware(), custom],
+            new ScriptedApprovalHandler(ToolApprovalResult.Approved()),
+            null);
+
+        chain.Should().HaveCount(3);
+        chain.Should().ContainSingle(middleware => middleware is ToolCallCredentialPolicyMiddleware);
+        chain[0].Should().BeOfType<ToolCallCredentialPolicyMiddleware>();
+        chain[2].Should().BeSameAs(custom);
     }
 
     private static ToolCallContext NewContext() => new()

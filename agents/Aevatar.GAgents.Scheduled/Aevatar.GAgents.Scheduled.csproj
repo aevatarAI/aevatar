@@ -45,6 +45,6 @@
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
   </ItemGroup>
   <ItemGroup>
-    <Protobuf Include="protos\*.proto" GrpcServices="None" ProtoRoot="protos" AdditionalImportDirs="..\..\src\Aevatar.Foundation.Abstractions" />
+    <Protobuf Include="protos\*.proto" GrpcServices="None" ProtoRoot="protos" AdditionalImportDirs="..\Aevatar.GAgents.Channel.Abstractions\protos;..\..\src\Aevatar.Foundation.Abstractions" />
   </ItemGroup>
 </Project>

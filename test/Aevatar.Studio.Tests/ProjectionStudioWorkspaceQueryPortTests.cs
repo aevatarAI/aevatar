@@ -5,6 +5,7 @@ using Aevatar.Studio.Projection.QueryPorts;
 using Aevatar.Studio.Projection.ReadModels;
 using Aevatar.Studio.Workspace;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http;
 using ProtoWorkspaceDirectory = Aevatar.Studio.Workspace.StudioWorkspaceDirectory;
@@ -14,8 +15,13 @@ namespace Aevatar.Studio.Tests;
 
 public sealed class ProjectionStudioWorkspaceQueryPortTests
 {
+    private static readonly JsonFormatter StateRootFormatter = new(
+        JsonFormatter.Settings.Default
+            .WithPreserveProtoFieldNames(true)
+            .WithFormatDefaultValues(true));
+
     [Fact]
-    public async Task GetAsync_ShouldMapPackedWorkspaceState()
+    public async Task GetAsync_ShouldMapOpaqueWorkspaceStateJson()
     {
         var scopeResolver = new StubScopeResolver { ScopeId = "scope-1" };
         var actorId = StudioWorkspaceConventions.BuildActorId("scope-1");
@@ -57,7 +63,7 @@ public sealed class ProjectionStudioWorkspaceQueryPortTests
             StateVersion = 17,
             LastEventId = "evt-17",
             UpdatedAt = Timestamp.FromDateTimeOffset(updatedAt),
-            StateRoot = Any.Pack(state),
+            StateRootJson = StateRootFormatter.Format(state),
         });
         var port = new ProjectionStudioWorkspaceQueryPort(reader, scopeResolver);
 
@@ -116,7 +122,7 @@ public sealed class ProjectionStudioWorkspaceQueryPortTests
     }
 
     [Fact]
-    public async Task GetAsync_WhenStateRootIsUnexpectedType_ShouldUseScopedEmptyStateButKeepDocumentWatermark()
+    public async Task GetAsync_WhenStateRootJsonIsInvalid_ShouldUseScopedEmptyStateButKeepDocumentWatermark()
     {
         var scopeResolver = new StubScopeResolver { ScopeId = "scope-2" };
         var actorId = StudioWorkspaceConventions.BuildActorId("scope-2");
@@ -129,7 +135,7 @@ public sealed class ProjectionStudioWorkspaceQueryPortTests
             StateVersion = 23,
             LastEventId = "evt-23",
             UpdatedAt = Timestamp.FromDateTimeOffset(updatedAt),
-            StateRoot = Any.Pack(new StringValue { Value = "not-a-workspace-state" }),
+            StateRootJson = "{not-json",
         });
         var port = new ProjectionStudioWorkspaceQueryPort(reader, scopeResolver);
 

@@ -904,7 +904,7 @@ public class RuntimeCallbackEventizationTests
     }
 
     [Fact]
-    public async Task WorkflowLoop_ShouldPublishCompletionToSelfAndParent_WhenRunTerminates()
+    public async Task WorkflowLoop_ShouldPublishCompletionOnlyToSelf_WhenRunTerminates()
     {
         var ctx = new SchedulingContext();
         var module = CreateKernel(new WorkflowDefinition
@@ -926,12 +926,8 @@ public class RuntimeCallbackEventizationTests
 
         var completions = WorkflowCompletions(ctx);
 
-        completions.Should().HaveCount(2);
-        completions.Select(x => x.Direction).Should().BeEquivalentTo(new[]
-        {
-            TopologyAudience.Self,
-            TopologyAudience.Parent,
-        });
+        completions.Should().ContainSingle()
+            .Which.Direction.Should().Be(TopologyAudience.Self);
         completions.Select(x => x.Event.RunId).Should().OnlyContain(runId => runId == "run-empty-directions");
         completions.Select(x => x.Event.Success).Should().OnlyContain(success => !success);
         completions.Select(x => x.Event.Error).Should().OnlyContain(error => error.Contains("无步骤", StringComparison.Ordinal));
@@ -1234,7 +1230,7 @@ public class RuntimeCallbackEventizationTests
 
     private static WorkflowCompletedEvent SingleWorkflowCompletion(
         SchedulingContext ctx,
-        TopologyAudience direction = TopologyAudience.Parent) =>
+        TopologyAudience direction = TopologyAudience.Self) =>
         ctx.Published
             .Where(x => x.Direction == direction)
             .Select(x => x.Event)
@@ -1444,6 +1440,55 @@ public class RuntimeCallbackEventizationTests
             _executionStates.Remove(scopeKey);
             return Task.CompletedTask;
         }
+
+        Task<WorkflowCompensationTransitionResult> IWorkflowExecutionStateHost.TryStartCompensationAsync(
+            WorkflowCompletedEvent terminalFailure,
+            StepCompletedEvent? terminalStep,
+            CancellationToken ct)
+        {
+            _ = terminalFailure;
+            _ = terminalStep;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(NoCompensableLedger());
+        }
+
+        Task IWorkflowExecutionStateHost.RecordCompensableStepDispatchAsync(
+            CompensableStepDispatchedEvent evt,
+            CancellationToken ct)
+        {
+            _ = evt;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task<WorkflowCompensationTransitionResult> RecordCompensationStepCompletionAsync(
+            CompensationStepCompletedEvent completion,
+            CancellationToken ct = default)
+        {
+            _ = completion;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(NoCompensableLedger());
+        }
+
+        public Task<WorkflowCompensationTransitionResult> RecordCompensationPhaseDeadlineExceededAsync(
+            string runId,
+            string error,
+            CancellationToken ct = default)
+        {
+            _ = runId;
+            _ = error;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(NoCompensableLedger());
+        }
+
+        private static WorkflowCompensationTransitionResult NoCompensableLedger() =>
+            new(
+                WorkflowCompensationTransitionStatus.NoCompensableLedger,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty);
 
         public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
 

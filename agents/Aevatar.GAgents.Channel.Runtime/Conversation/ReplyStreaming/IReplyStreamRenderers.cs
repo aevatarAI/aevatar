@@ -3,7 +3,7 @@ using Google.Protobuf;
 
 namespace Aevatar.GAgents.Channel.Runtime;
 
-internal interface IReplyOperationStepRenderer
+public interface IReplyOperationStepRenderer
 {
     bool CanHandle(ReplyOperationStepEvent evt);
 
@@ -13,12 +13,12 @@ internal interface IReplyOperationStepRenderer
         CancellationToken ct);
 }
 
-internal interface INyxRelayTextReplyStreamRenderer : IReplyOperationStepRenderer
+public interface INyxRelayTextReplyStreamRenderer : IReplyOperationStepRenderer
 {
     ReplyOperationStepEvent CreateStep(NyxRelayTextOperationStepInput input);
 }
 
-internal interface ILarkCardReplyStreamRenderer : IReplyOperationStepRenderer
+public interface ILarkCardReplyStreamRenderer : IReplyOperationStepRenderer
 {
     ReplyOperationStepEvent CreateCreateStep(LarkCardCreateOperationStepInput input);
 
@@ -27,7 +27,7 @@ internal interface ILarkCardReplyStreamRenderer : IReplyOperationStepRenderer
     ReplyOperationStepEvent CreateFinalizeStep(LarkCardFinalizeOperationStepInput input);
 }
 
-internal interface IReplyOperationActorContext
+public interface IReplyOperationActorContext
 {
     bool MatchesNyxRelayTextInFlight(
         string correlationId,
@@ -59,7 +59,7 @@ internal interface IReplyOperationActorContext
         CancellationToken ct);
 }
 
-internal sealed record NyxRelayTextOperationStepInput(
+public sealed record NyxRelayTextOperationStepInput(
     NyxRelayTextOperationKind Operation,
     LlmReplyStreamChunkEvent Chunk,
     string CorrelationId,
@@ -71,14 +71,14 @@ internal sealed record NyxRelayTextOperationStepInput(
     long Sequence,
     long Generation);
 
-internal sealed record LarkCardCreateOperationStepInput(
+public sealed record LarkCardCreateOperationStepInput(
     LlmReplyCardStreamChunkEvent Chunk,
     string CorrelationId,
     string StreamingElementId,
     long Sequence,
     long Generation);
 
-internal sealed record LarkCardStreamOperationStepInput(
+public sealed record LarkCardStreamOperationStepInput(
     LlmReplyCardStreamChunkEvent Chunk,
     string CorrelationId,
     string CardId,
@@ -86,7 +86,7 @@ internal sealed record LarkCardStreamOperationStepInput(
     long Sequence,
     long Generation);
 
-internal sealed record LarkCardFinalizeOperationStepInput(
+public sealed record LarkCardFinalizeOperationStepInput(
     ChatActivity ActivityForToken,
     string CorrelationId,
     string CommandId,

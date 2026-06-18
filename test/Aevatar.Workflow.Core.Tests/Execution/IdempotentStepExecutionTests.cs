@@ -72,6 +72,204 @@ public sealed class IdempotentStepExecutionTests
     }
 
     [Fact]
+    public async Task StepRequest_ShouldResolveAndPersistDefaultIdempotencyKeyBeforePublish()
+    {
+        var ctx = new RecordingEventHandlerContext();
+        var host = new RecordingStateHost();
+        var kernel = new WorkflowExecutionKernel(SingleStepWorkflow(), host);
+
+        await kernel.HandleAsync(
+            Wrap(new StartWorkflowEvent { RunId = "run-1", Input = "hello" }),
+            ctx,
+            CancellationToken.None);
+
+        var request = StepRequests(ctx).Single();
+        request.IdempotencyKey.Should().Be("run-1:step-1:1");
+
+        var state = LoadKernelState(host);
+        state.IdempotencyByStepId.Should().ContainKey("step-1");
+        state.IdempotencyByStepId["step-1"].Should().BeEquivalentTo(new
+        {
+            LogicalRunId = "run-1",
+            StepId = "step-1",
+            LogicalAttempt = 1,
+            IdempotencyKey = "run-1:step-1:1",
+        });
+    }
+
+    [Fact]
+    public async Task StepRequest_ShouldUseAuthorExpressionOverDefaultAndEvaluateVariables()
+    {
+        var workflow = new WorkflowDefinition
+        {
+            Name = "author-key-workflow",
+            Roles = [new RoleDefinition { Id = "worker", Name = "Worker" }],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "charge",
+                    Type = "tool_call",
+                    TargetRole = "worker",
+                    IdempotencyKey = "${concat(order_id, ':', step_id, ':', logical_attempt, ':', input)}",
+                    Parameters = { ["tool"] = "charge" },
+                },
+            ],
+        };
+        var ctx = new RecordingEventHandlerContext();
+        var host = new RecordingStateHost();
+        var kernel = new WorkflowExecutionKernel(workflow, host);
+        var start = new StartWorkflowEvent { RunId = "run-1", Input = "payload" };
+        start.Parameters["order_id"] = "order-7";
+
+        await kernel.HandleAsync(Wrap(start), ctx, CancellationToken.None);
+
+        StepRequests(ctx).Single().IdempotencyKey.Should().Be("order-7:charge:1:payload");
+        LoadKernelState(host).IdempotencyByStepId["charge"].IdempotencyKey.Should().Be("order-7:charge:1:payload");
+    }
+
+    [Fact]
+    public async Task PendingDispatchReplay_ShouldRestorePersistedIdempotencyKey()
+    {
+        var workflow = new WorkflowDefinition
+        {
+            Name = "replay-workflow",
+            Roles = [new RoleDefinition { Id = "worker", Name = "Worker" }],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "side_effect",
+                    Type = "tool_call",
+                    TargetRole = "worker",
+                    IdempotencyKey = "${nonce}",
+                    Parameters = { ["tool"] = "external" },
+                },
+            ],
+        };
+        var ctx = new RecordingEventHandlerContext();
+        var host = new RecordingStateHost();
+        var kernel = new WorkflowExecutionKernel(workflow, host);
+        var start = new StartWorkflowEvent { RunId = "run-1", Input = "payload" };
+        start.Parameters["nonce"] = "first-key";
+
+        await kernel.HandleAsync(Wrap(start), ctx, CancellationToken.None);
+
+        var state = LoadKernelState(host);
+        var originalExecutionId = state.ExecutionIdsByStepId["side_effect"];
+        state.CurrentStepDispatchPending = true;
+        state.Variables["nonce"] = "changed-key";
+        await host.UpsertExecutionStateAsync("workflow_execution_kernel", Any.Pack(state), CancellationToken.None);
+        ctx.Published.Clear();
+
+        await kernel.HandleAsync(Wrap(new StartWorkflowEvent { RunId = "run-1", Input = "payload" }), ctx, CancellationToken.None);
+
+        var replay = StepRequests(ctx).Single();
+        replay.IdempotencyKey.Should().Be("first-key");
+        replay.ExecutionId.Should().Be(originalExecutionId);
+    }
+
+    [Fact]
+    public async Task StartWorkflow_WithForkSeedIdempotency_ShouldReuseSourceFailedStepKey()
+    {
+        var ctx = new RecordingEventHandlerContext();
+        var host = new RecordingStateHost();
+        var kernel = new WorkflowExecutionKernel(ThreeStepWorkflow(), host);
+        var start = new StartWorkflowEvent
+        {
+            RunId = "fork-run",
+            Input = "fresh-input",
+            ForkSeed = new WorkflowRunForkSeed
+            {
+                SourceRunId = "source-run",
+                StartAtStepId = "step-b",
+                StartStepIdempotency = new WorkflowStepIdempotencyState
+                {
+                    LogicalRunId = "source-run",
+                    StepId = "step-b",
+                    LogicalAttempt = 2,
+                    IdempotencyKey = "source-run:step-b:2",
+                },
+            },
+        };
+        start.ForkSeed.Variables["input"] = "seed-input";
+
+        await kernel.HandleAsync(Wrap(start), ctx, CancellationToken.None);
+
+        var request = StepRequests(ctx).Single();
+        request.IdempotencyKey.Should().Be("source-run:step-b:2");
+        var persisted = LoadKernelState(host).IdempotencyByStepId["step-b"];
+        persisted.LogicalRunId.Should().Be("source-run");
+        persisted.LogicalAttempt.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task CompensationRequest_ShouldPersistCarriedIdempotencyKeyForCrashReplay()
+    {
+        var workflow = new WorkflowDefinition
+        {
+            Name = "compensation-workflow",
+            Roles = [new RoleDefinition { Id = "worker", Name = "Worker" }],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "cancel",
+                    Type = "tool_call",
+                    Parameters = { ["tool"] = "cancel_order" },
+                },
+            ],
+        };
+        var ctx = new RecordingEventHandlerContext();
+        var host = new RecordingStateHost();
+        var kernel = new WorkflowExecutionKernel(workflow, host);
+
+        await kernel.HandleAsync(Wrap(new StartWorkflowEvent { RunId = "run-1", Input = "start" }), ctx, CancellationToken.None);
+        var state = LoadKernelState(host);
+        state.CurrentStepDispatchPending = false;
+        state.ExecutionIdsByStepId.Clear();
+        state.IdempotencyByStepId.Clear();
+        await host.UpsertExecutionStateAsync("workflow_execution_kernel", Any.Pack(state), CancellationToken.None);
+        ctx.Published.Clear();
+
+        await kernel.HandleAsync(
+            Wrap(new CompensationRequestEvent
+            {
+                RunId = "run-1",
+                FailedStepId = "charge",
+                CompensationStepId = "cancel",
+                IdempotencyKey = "compensate:charge:1",
+                CapturedOutput = "captured",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var first = StepRequests(ctx).Single();
+        first.IdempotencyKey.Should().Be("compensate:charge:1");
+        first.Input.Should().Be("captured");
+        var persistedState = LoadKernelState(host);
+        persistedState.IdempotencyByStepId["cancel"].IdempotencyKey.Should().Be("compensate:charge:1");
+        persistedState.CurrentStepDispatchPending = true;
+        persistedState.Variables["input"] = "changed";
+        await host.UpsertExecutionStateAsync("workflow_execution_kernel", Any.Pack(persistedState), CancellationToken.None);
+        ctx.Published.Clear();
+
+        await kernel.HandleAsync(
+            Wrap(new CompensationRequestEvent
+            {
+                RunId = "run-1",
+                FailedStepId = "charge",
+                CompensationStepId = "cancel",
+                IdempotencyKey = "different",
+                CapturedOutput = "other",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        StepRequests(ctx).Single().IdempotencyKey.Should().Be("compensate:charge:1");
+    }
+
+    [Fact]
     public async Task DuplicateWorkflowCallStart_WithSameRunAndInvocation_ShouldNotPublishAlreadyActiveFailure()
     {
         var ctx = new RecordingEventHandlerContext();
@@ -392,6 +590,7 @@ public sealed class IdempotentStepExecutionTests
         secondRequest.Should().NotBeNull("retry with delayMs=0 should immediately re-dispatch");
         secondRequest!.ExecutionId.Should().NotBeNullOrEmpty();
         secondRequest.ExecutionId.Should().NotBe(firstExecutionId, "retry must generate a new execution_id");
+        secondRequest.IdempotencyKey.Should().Be("run-1:step-1:2");
         secondRequest.InputFileRefs.Should().ContainSingle().Which.FileId.Should().Be("file-retry");
     }
 
@@ -516,7 +715,7 @@ public sealed class IdempotentStepExecutionTests
 
         StepRequests(ctx).Should().BeEmpty();
         var completions = WorkflowCompletions(ctx);
-        completions.Should().HaveCount(2);
+        completions.Should().ContainSingle();
         completions.Should().OnlyContain(x => !x.Success);
         completions.Should().OnlyContain(
             x => x.Error == "fork seed start step 'missing-step' was not found");
@@ -776,6 +975,46 @@ public sealed class IdempotentStepExecutionTests
         request.StepParameters.AgentToolScope.AllowedToolNames.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task StartWorkflow_WithExternalApprovalYaml_ShouldDispatchEvaluatedTypedWaitOptions()
+    {
+        var workflow = new WorkflowParser().Parse(
+            """
+            name: approval_yaml
+            roles: []
+            steps:
+              - id: wait_approval
+                type: wait_signal
+                parameters:
+                  external_approval.source_id: "NyxID"
+                  external_approval.external_id_kind: "Instance_Code"
+                  external_approval.external_id: "${instance_code}"
+                  external_approval.signal_name: "approval-${input}"
+                  external_approval.callback_idempotency_key: "${concat('idem-', instance_code)}"
+                  external_approval.request_id: "${request_id}"
+            """);
+        var ctx = new RecordingEventHandlerContext();
+        var host = new RecordingStateHost();
+        var kernel = new WorkflowExecutionKernel(workflow, host);
+        var start = new StartWorkflowEvent { RunId = "run-approval", Input = "deploy" };
+        start.Parameters["instance_code"] = "APP-42";
+        start.Parameters["request_id"] = "REQ-42";
+
+        await kernel.HandleAsync(Wrap(start), ctx, CancellationToken.None);
+
+        var externalApproval = StepRequests(ctx)
+            .Single()
+            .StepParameters
+            .ExternalApproval;
+        externalApproval.Should().NotBeNull();
+        externalApproval.SourceId.Should().Be("NyxID");
+        externalApproval.ExternalIdKind.Should().Be("Instance_Code");
+        externalApproval.ExternalId.Should().Be("APP-42");
+        externalApproval.SignalName.Should().Be("approval-deploy");
+        externalApproval.CallbackIdempotencyKey.Should().Be("idem-APP-42");
+        externalApproval.RequestId.Should().Be("REQ-42");
+    }
+
     // ──── Test infrastructure ────
 
     private static readonly string[] DefaultStartVariableKeys =
@@ -949,6 +1188,55 @@ public sealed class IdempotentStepExecutionTests
             States.Remove(scopeKey);
             return Task.CompletedTask;
         }
+
+        Task<WorkflowCompensationTransitionResult> IWorkflowExecutionStateHost.TryStartCompensationAsync(
+            WorkflowCompletedEvent terminalFailure,
+            StepCompletedEvent? terminalStep,
+            CancellationToken ct)
+        {
+            _ = terminalFailure;
+            _ = terminalStep;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(NoCompensableLedger());
+        }
+
+        Task IWorkflowExecutionStateHost.RecordCompensableStepDispatchAsync(
+            CompensableStepDispatchedEvent evt,
+            CancellationToken ct)
+        {
+            _ = evt;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task<WorkflowCompensationTransitionResult> RecordCompensationStepCompletionAsync(
+            CompensationStepCompletedEvent completion,
+            CancellationToken ct = default)
+        {
+            _ = completion;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(NoCompensableLedger());
+        }
+
+        public Task<WorkflowCompensationTransitionResult> RecordCompensationPhaseDeadlineExceededAsync(
+            string runId,
+            string error,
+            CancellationToken ct = default)
+        {
+            _ = runId;
+            _ = error;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(NoCompensableLedger());
+        }
+
+        private static WorkflowCompensationTransitionResult NoCompensableLedger() =>
+            new(
+                WorkflowCompensationTransitionStatus.NoCompensableLedger,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty);
     }
 
     private sealed class StubAgent(string id) : IAgent

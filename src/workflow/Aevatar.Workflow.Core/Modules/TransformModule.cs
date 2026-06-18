@@ -69,6 +69,7 @@ public sealed class TransformModule : IEventModule<IWorkflowExecutionContext>
                         "\n---\n",
                         WorkflowParameterValueParser.SplitInputByDelimiterOrJsonArray(input, separator)),
                     "json_extract" => JsonExtract(input, request.Parameters, n),
+                    "json_parse" => JsonParse(input, request.Parameters),
                     "rss_extract_items" => ExtractRssItems(input, request.Parameters),
                     "distinct" => string.Join("\n", input.Split('\n').Distinct()),
                     "uppercase" => input.ToUpperInvariant(),
@@ -83,6 +84,7 @@ public sealed class TransformModule : IEventModule<IWorkflowExecutionContext>
         {
             if (transformOperation is not null ||
                 IsRecognizedTransformOperationName(op) ||
+                string.Equals(op, "json_parse", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(op, "rss_extract_items", StringComparison.OrdinalIgnoreCase))
             {
                 await PublishFailureAsync(request, ctx, ex.Message, ct);
@@ -536,6 +538,41 @@ public sealed class TransformModule : IEventModule<IWorkflowExecutionContext>
             throw new InvalidOperationException("json_extract field projection requires a JSON object or array of objects.");
 
         return SerializeJsonNode(ProjectFields(target, fields));
+    }
+
+    private static string JsonParse(string input, IReadOnlyDictionary<string, string> parameters)
+    {
+        var path = WorkflowParameterValueParser.GetString(parameters, string.Empty, "path", "json_path").Trim();
+        if (string.IsNullOrWhiteSpace(path))
+            throw new InvalidOperationException("json_parse requires a path parameter.");
+
+        using var document = ParseJsonParseInput(input);
+        if (!TryResolveJsonPath(document.RootElement, path, out var target))
+            throw new InvalidOperationException($"json_parse path '{path}' was not found.");
+
+        if (target.ValueKind != JsonValueKind.String)
+            throw new InvalidOperationException("json_parse selected node must be a JSON string.");
+
+        try
+        {
+            return SerializeJsonNode(JsonNode.Parse(target.GetString() ?? string.Empty));
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException("json_parse selected string must contain valid JSON.", ex);
+        }
+    }
+
+    private static JsonDocument ParseJsonParseInput(string input)
+    {
+        try
+        {
+            return JsonDocument.Parse(input);
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException("json_parse input must be valid JSON.", ex);
+        }
     }
 
     private static string SerializeJsonNodes(IEnumerable<JsonNode?> nodes) =>

@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Reflection;
 using System.Security.Claims;
+using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
@@ -28,6 +29,7 @@ using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.AGUI.Contracts;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
@@ -256,8 +258,10 @@ public abstract class ScopeServiceEndpointTestKit
             RecordingResumeDispatchService resumeDispatchService,
             RecordingSignalDispatchService signalDispatchService,
             RecordingStopDispatchService stopDispatchService,
+            RecordingRetryCompensationDispatchService retryCompensationDispatchService,
             RecordingServiceRunRegistrationPort serviceRunRegistrationPort,
-            FakeServiceRunQueryPort serviceRunQueryPort)
+            FakeServiceRunQueryPort serviceRunQueryPort,
+            RecordingWorkflowFileIngressPort workflowFileIngressPort)
         {
             _app = app;
             Client = client;
@@ -280,8 +284,10 @@ public abstract class ScopeServiceEndpointTestKit
             ResumeDispatchService = resumeDispatchService;
             SignalDispatchService = signalDispatchService;
             StopDispatchService = stopDispatchService;
+            RetryCompensationDispatchService = retryCompensationDispatchService;
             ServiceRunRegistrationPort = serviceRunRegistrationPort;
             ServiceRunQueryPort = serviceRunQueryPort;
+            WorkflowFileIngressPort = workflowFileIngressPort;
         }
 
         public HttpClient Client { get; }
@@ -332,9 +338,13 @@ public abstract class ScopeServiceEndpointTestKit
 
         public RecordingStopDispatchService StopDispatchService { get; }
 
+        public RecordingRetryCompensationDispatchService RetryCompensationDispatchService { get; }
+
         public RecordingServiceRunRegistrationPort ServiceRunRegistrationPort { get; }
 
         public FakeServiceRunQueryPort ServiceRunQueryPort { get; }
+
+        public RecordingWorkflowFileIngressPort WorkflowFileIngressPort { get; }
 
         public static async Task<ScopeServiceEndpointTestHost> StartAsync(
             bool authenticationEnabled = true,
@@ -369,6 +379,7 @@ public abstract class ScopeServiceEndpointTestKit
             var resumeDispatchService = new RecordingResumeDispatchService();
             var signalDispatchService = new RecordingSignalDispatchService();
             var stopDispatchService = new RecordingStopDispatchService();
+            var retryCompensationDispatchService = new RecordingRetryCompensationDispatchService();
             var actorRuntime = new NoOpActorRuntime();
             var eventSubscriptionProvider = new NoOpActorEventSubscriptionProvider();
             var serviceRunQueryPort = new FakeServiceRunQueryPort
@@ -385,6 +396,7 @@ public abstract class ScopeServiceEndpointTestKit
             {
                 LinkedQueryPort = serviceRunQueryPort,
             };
+            var workflowFileIngressPort = new RecordingWorkflowFileIngressPort();
             builder.Services.AddSingleton<IServiceGovernanceCommandPort>(commandPort);
             builder.Services.AddSingleton<IServiceGovernanceQueryPort>(queryPort);
             builder.Services.AddSingleton<IScopeBindingCommandPort>(scopeBindingPort);
@@ -410,10 +422,15 @@ public abstract class ScopeServiceEndpointTestKit
             builder.Services.AddSingleton<ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>(resumeDispatchService);
             builder.Services.AddSingleton<ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>(signalDispatchService);
             builder.Services.AddSingleton<ICommandDispatchService<WorkflowStopCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>(stopDispatchService);
+            builder.Services.AddSingleton<ICommandDispatchService<WorkflowRetryCompensationCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>(retryCompensationDispatchService);
             builder.Services.AddSingleton<IActorRuntime>(actorRuntime);
             builder.Services.AddSingleton<IActorEventSubscriptionProvider>(eventSubscriptionProvider);
             builder.Services.AddSingleton<IServiceRunRegistrationPort>(serviceRunRegistrationPort);
             builder.Services.AddSingleton<IServiceRunQueryPort>(serviceRunQueryPort);
+            builder.Services.AddSingleton<IWorkflowFileIngressPort>(workflowFileIngressPort);
+            builder.Services.AddSingleton<WorkflowMultipartFileInputParser>();
+            builder.Services.AddSingleton(Options.Create(new WorkflowMultipartFileIngressOptions()));
+            builder.Services.AddSingleton(Options.Create(new WorkflowFormFileIngressOptions()));
             if (userConfigQueryPort != null)
                 builder.Services.AddSingleton(userConfigQueryPort);
             builder.Services.AddSingleton<IOptions<ScopeWorkflowCapabilityOptions>>(
@@ -527,8 +544,10 @@ public abstract class ScopeServiceEndpointTestKit
                 resumeDispatchService,
                 signalDispatchService,
                 stopDispatchService,
+                retryCompensationDispatchService,
                 serviceRunRegistrationPort,
-                serviceRunQueryPort);
+                serviceRunQueryPort,
+                workflowFileIngressPort);
         }
 
         private static bool TryGetRequestedScopeId(string? path, out string scopeId)
@@ -1229,6 +1248,11 @@ public abstract class ScopeServiceEndpointTestKit
             return Task.FromResult<WorkflowActorSnapshot?>(snapshot);
         }
 
+        public Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowActorCurrentStatesAsync(
+            WorkflowActorCurrentStateListQuery query,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<WorkflowActorSnapshot>>([]);
+
         public Task<WorkflowRunReport?> GetWorkflowRunReportArtifactAsync(string actorId, CancellationToken ct = default)
         {
             ReportCalls.Add(actorId);
@@ -1647,6 +1671,21 @@ public abstract class ScopeServiceEndpointTestKit
         }
     }
 
+    protected sealed class RecordingRetryCompensationDispatchService
+        : ICommandDispatchService<WorkflowRetryCompensationCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>
+    {
+        public WorkflowRetryCompensationCommand? LastCommand { get; private set; }
+
+        public Task<CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>> DispatchAsync(
+            WorkflowRetryCompensationCommand command,
+            CancellationToken ct = default)
+        {
+            LastCommand = command;
+            return Task.FromResult(CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>.Success(
+                new WorkflowRunControlAcceptedReceipt(command.ActorId, command.RunId, "cmd-retry-compensation", "corr-retry-compensation")));
+        }
+    }
+
     protected sealed class TestAuthHandler
         : Microsoft.AspNetCore.Authentication.AuthenticationHandler<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions>
     {
@@ -1664,5 +1703,49 @@ public abstract class ScopeServiceEndpointTestKit
             // This handler returns NoResult so it does not interfere.
             return Task.FromResult(Microsoft.AspNetCore.Authentication.AuthenticateResult.NoResult());
         }
+    }
+
+    protected sealed class RecordingWorkflowFileIngressPort : IWorkflowFileIngressPort
+    {
+        public List<WorkflowFileIngressRequest> Requests { get; } = [];
+
+        public ValueTask<WorkflowFileIngressResult> IngestAsync(
+            WorkflowFileIngressRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            Requests.Add(request);
+            var index = Requests.Count;
+            return ValueTask.FromResult(new WorkflowFileIngressResult(new WorkflowFileRef
+            {
+                FileId = $"file-{index}",
+                ArtifactId = $"workflow-file://file-{index}",
+                SourceKind = request.SourceKind,
+                FileName = request.FileName,
+                MediaType = request.MediaType,
+                SizeBytes = request.Content.Length,
+                Sha256 = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+                CreatedAtUnixMs = 1710000000000,
+                ExpiresAtUnixMs = 1710003600000,
+                OwnerScopeId = request.OwnerScopeId,
+            }));
+        }
+    }
+
+    protected static MultipartFormDataContent CreateMultipartScopeStreamContent(
+        string? payloadJson,
+        IReadOnlyList<(string FileName, string ContentType, string Content)> files)
+    {
+        var content = new MultipartFormDataContent();
+        if (payloadJson != null)
+            content.Add(new StringContent(payloadJson, Encoding.UTF8, "application/json"), "payload");
+
+        foreach (var file in files)
+        {
+            var fileContent = new ByteArrayContent(Encoding.UTF8.GetBytes(file.Content));
+            fileContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(file.ContentType);
+            content.Add(fileContent, "file", file.FileName);
+        }
+
+        return content;
     }
 }

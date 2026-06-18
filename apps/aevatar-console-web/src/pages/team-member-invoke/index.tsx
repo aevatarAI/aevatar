@@ -334,11 +334,12 @@ const TeamMemberInvokePage: React.FC = () => {
           </AevatarPanel>
         ) : (
           <StudioMemberInvokePanel
+            enableFileAttachments
             initialServiceId={boundPublishedServiceId}
             memberId={route.memberId}
             memberRevision={memberRevision}
             presentation="member-run"
-            runtimeTarget="service"
+            runtimeTarget="member"
             teamId={route.teamId}
             scopeId={route.scopeId}
             selectedMemberLabel={memberLabel}

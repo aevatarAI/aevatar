@@ -46,6 +46,7 @@ public static class AgentToolExecutionContextMapper
         "registration_scope_id",
         "delivery_target_id",
         "channel.delivery_target_id",
+        "channel.durable_reply_credential_ref",
         "message_id",
         "channel.message_id",
         "platform_message_id",
@@ -129,7 +130,8 @@ public static class AgentToolExecutionContextMapper
         var context = new AgentToolExecutionContext(
             new AgentToolRequestIdentity(
                 AgentToolExecutionContext.Normalize(payload.Request?.RequestId),
-                AgentToolExecutionContext.Normalize(payload.Request?.CallId)),
+                AgentToolExecutionContext.Normalize(payload.Request?.CallId),
+                AgentToolExecutionContext.Normalize(payload.Request?.IdempotencyKey)),
             new AgentToolCredentials(
                 AgentToolExecutionContext.Normalize(payload.Credentials?.NyxIdAccessToken),
                 AgentToolExecutionContext.Normalize(payload.Credentials?.NyxIdOrgToken),
@@ -144,7 +146,8 @@ public static class AgentToolExecutionContextMapper
                 AgentToolExecutionContext.Normalize(payload.Channel?.RegistrationScopeId),
                 AgentToolExecutionContext.Normalize(payload.Channel?.MessageId),
                 AgentToolExecutionContext.Normalize(payload.Channel?.PlatformMessageId),
-                AgentToolExecutionContext.Normalize(payload.Channel?.DeliveryTargetId)),
+                AgentToolExecutionContext.Normalize(payload.Channel?.DeliveryTargetId),
+                AgentToolExecutionContext.Normalize(payload.Channel?.DurableReplyCredentialRef)),
             new AgentToolSenderBindingContext(AgentToolExecutionContext.Normalize(payload.SenderBinding?.BindingId)),
             new LLMRequestRoutingContext(
                 AgentToolExecutionContext.Normalize(payload.Routing?.ModelOverride),
@@ -168,6 +171,7 @@ public static class AgentToolExecutionContextMapper
             {
                 RequestId = context.Request.RequestId ?? string.Empty,
                 CallId = context.Request.CallId ?? string.Empty,
+                IdempotencyKey = context.Request.IdempotencyKey ?? string.Empty,
             },
             Credentials = new AgentToolCredentialsPayload
             {
@@ -189,6 +193,7 @@ public static class AgentToolExecutionContextMapper
                 MessageId = context.Channel.MessageId ?? string.Empty,
                 PlatformMessageId = context.Channel.PlatformMessageId ?? string.Empty,
                 DeliveryTargetId = context.Channel.DeliveryTargetId ?? string.Empty,
+                DurableReplyCredentialRef = context.Channel.DurableReplyCredentialRef ?? string.Empty,
             },
             SenderBinding = new AgentToolSenderBindingContextPayload
             {

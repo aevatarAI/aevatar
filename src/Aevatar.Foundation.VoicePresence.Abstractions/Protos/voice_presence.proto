@@ -29,6 +29,12 @@ enum VoiceTurnDetectionMode {
   VOICE_TURN_DETECTION_MODE_DISABLED = 3;
 }
 
+enum VoiceToolOwner {
+  VOICE_TOOL_OWNER_UNSPECIFIED = 0;
+  VOICE_TOOL_OWNER_ACTOR = 1;
+  VOICE_TOOL_OWNER_CLIENT = 2;
+}
+
 message VoiceProviderConfig {
   string provider_name = 1;
   string endpoint = 2;
@@ -72,6 +78,26 @@ message VoiceToolDefinition {
   string name = 1;
   string description = 2;
   string parameters_schema = 3;
+  VoiceToolOwner owner = 4;
+}
+
+message VoiceToolExecutionContext {
+  string credential_ref = 1;
+  google.protobuf.Timestamp expires_at = 2;
+  string caller_scope_id = 3;
+  string caller_subject = 4;
+  string owner_subject = 5;
+  string response_id = 6;
+  string channel_platform = 7;
+  string channel_sender_id = 8;
+  string channel_registration_scope_id = 9;
+  string channel_message_id = 10;
+  string channel_platform_message_id = 11;
+  string channel_delivery_target_id = 12;
+  string connected_services_context_json = 13;
+  repeated string allowed_tool_names = 14;
+  string nyx_id_route_preference = 15;
+  string sender_binding_id = 16;
 }
 
 message VoiceConversationEventInjection {
@@ -93,6 +119,19 @@ message VoicePendingEventInjection {
 message VoiceProviderResponseBinding {
   string provider_response_id = 1;
   int32 response_id = 2;
+}
+
+message VoicePendingClientToolCall {
+  string call_id = 1;
+  string tool_name = 2;
+  string arguments_json = 3;
+  int32 response_id = 4;
+  string provider_response_id = 5;
+  string session_id = 6;
+  string owner_id = 7;
+  string transport_lease_id = 8;
+  int64 lease_epoch = 9;
+  google.protobuf.Timestamp expires_at = 10;
 }
 
 message VoicePresenceEventDedupeFenceEntry {
@@ -123,6 +162,8 @@ message VoicePresenceRuntimeState {
   repeated VoicePresenceEventDedupeFenceEntry event_dedupe_fence = 20;
   int64 lease_epoch = 21;
   VoiceSessionConfig active_session_config = 22;
+  VoiceToolExecutionContext active_tool_context = 23;
+  repeated VoicePendingClientToolCall pending_client_tool_calls = 24;
 }
 
 message VoicePresenceRuntimeStateChangedEvent {
@@ -144,6 +185,7 @@ message VoicePresenceSessionLeaseRequested {
   string owner_id = 2;
   google.protobuf.Timestamp expires_at = 3;
   VoiceSessionOverrides session_overrides = 4;
+  VoiceToolExecutionContext tool_context = 5;
 }
 
 message VoicePresenceSessionLeaseReleased {
@@ -172,6 +214,21 @@ message VoiceFunctionCallRequested {
   string arguments_json = 3;
   int32 response_id = 4;
   string provider_response_id = 5;
+}
+
+message VoiceFunctionCallFailure {
+  string error_code = 1;
+  string error_message = 2;
+}
+
+message VoiceFunctionCallOutput {
+  string call_id = 1;
+  string tool_name = 2;
+
+  oneof result {
+    string output_json = 3;
+    VoiceFunctionCallFailure failure = 4;
+  }
 }
 
 message VoiceSpeechStarted {}
@@ -239,12 +296,19 @@ message VoiceDrainAcknowledged {
   int64 playout_sequence = 2;
 }
 
+message VoiceInputImagePolicy {
+  int32 max_bytes = 1;
+  repeated string allowed_media_types = 2;
+}
+
 message VoiceTransportSessionAccepted {
   string actor_id = 1;
   string module_name = 2;
   string session_id = 3;
   int32 pcm_sample_rate_hz = 4;
   int64 observed_state_version = 5;
+  string wire_contract_version = 6;
+  VoiceInputImagePolicy input_image_policy = 7;
 }
 
 message VoiceControlFrame {
@@ -253,6 +317,7 @@ message VoiceControlFrame {
     VoiceInputImage input_image = 2;
     VoiceTransportSessionAccepted session_accepted = 3;
     VoiceRealtimeFrame realtime_frame = 4;
+    VoiceFunctionCallOutput function_call_output = 5;
   }
 }
 
@@ -281,6 +346,14 @@ message VoiceTransportAttachRequested {
   string transport_lease_id = 3;
   google.protobuf.Timestamp lease_expires_at = 4;
   int64 lease_epoch = 6;
+}
+
+message VoiceTransportLeaseRenewRequested {
+  string session_id = 1;
+  string owner_id = 2;
+  string transport_lease_id = 3;
+  int64 lease_epoch = 4;
+  google.protobuf.Timestamp renew_expires_at = 5;
 }
 
 message VoiceTransportDetachRequested {
@@ -317,6 +390,23 @@ message VoiceTransportLifetimeCompleted {
   string owner_id = 4;
   google.protobuf.Timestamp lease_expires_at = 5;
   int64 lease_epoch = 6;
+}
+
+message VoiceDrainTimeoutExpired {
+  string session_id = 1;
+  string owner_id = 2;
+  string transport_lease_id = 3;
+  int64 lease_epoch = 4;
+  int32 response_id = 5;
+}
+
+message VoiceClientToolCallTimeoutExpired {
+  string session_id = 1;
+  string owner_id = 2;
+  string transport_lease_id = 3;
+  int64 lease_epoch = 4;
+  string call_id = 5;
+  string tool_name = 6;
 }
 
 message VoiceProviderEventReceived {
@@ -367,6 +457,9 @@ message VoiceModuleSignal {
     VoiceProviderEventReceived provider_event_received = 14;
     VoiceTransportLifetimeCompleted transport_lifetime_completed = 16;
     VoiceInputImageReceived input_image_received = 17;
+    VoiceTransportLeaseRenewRequested transport_lease_renew_requested = 18;
+    VoiceDrainTimeoutExpired drain_timeout_expired = 19;
+    VoiceClientToolCallTimeoutExpired client_tool_call_timeout_expired = 20;
   }
 }
 
@@ -384,4 +477,6 @@ message VoicePresenceCapabilityReadModel {
   google.protobuf.Timestamp lease_expires_at = 11;
   VoiceRemoteAudioSupport remote_audio_support = 12;
   string active_transport_lease_id = 13;
+  int64 lease_epoch = 14;
+  string active_lease_owner_id = 15;
 }

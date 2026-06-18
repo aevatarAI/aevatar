@@ -22,16 +22,16 @@ public sealed class EditorController : ControllerBase
         Ok(ParseYamlHttpResponse.FromApplicationResponse(_editorService.ParseYaml(request)));
 
     [HttpPost("serialize-yaml")]
-    public ActionResult<SerializeYamlResponse> SerializeYaml([FromBody] SerializeYamlHttpRequest request) =>
-        Ok(_editorService.SerializeYaml(request.ToApplicationRequest()));
+    public ActionResult<SerializeYamlHttpResponse> SerializeYaml([FromBody] SerializeYamlHttpRequest request) =>
+        Ok(SerializeYamlHttpResponse.FromApplicationResponse(_editorService.SerializeYaml(request.ToApplicationRequest())));
 
     [HttpPost("validate")]
     public ActionResult<ValidateWorkflowResponse> Validate([FromBody] ValidateWorkflowHttpRequest request) =>
         Ok(_editorService.Validate(request.ToApplicationRequest()));
 
     [HttpPost("normalize")]
-    public ActionResult<NormalizeWorkflowResponse> Normalize([FromBody] NormalizeWorkflowHttpRequest request) =>
-        Ok(_editorService.Normalize(request.ToApplicationRequest()));
+    public ActionResult<NormalizeWorkflowHttpResponse> Normalize([FromBody] NormalizeWorkflowHttpRequest request) =>
+        Ok(NormalizeWorkflowHttpResponse.FromApplicationResponse(_editorService.Normalize(request.ToApplicationRequest())));
 
     [HttpPost("diff")]
     public ActionResult<DiffWorkflowResponse> Diff([FromBody] DiffWorkflowRequest request) =>

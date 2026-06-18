@@ -32,8 +32,10 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.Text.Json;
+using WorkflowSagaStatus = Aevatar.Workflow.Abstractions.WorkflowSagaStatus;
 
 namespace Aevatar.GAgentService.Hosting.Endpoints;
 
@@ -47,7 +49,7 @@ public static class ScopeServiceEndpoints
     {
         WriteIndented = true,
     };
-    private static readonly JsonSerializerOptions HttpJsonSerializerOptions = new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions ScopeRequestJsonOptions = new(JsonSerializerDefaults.Web);
 
     public static IEndpointRouteBuilder MapScopeServiceEndpoints(this IEndpointRouteBuilder app)
     {
@@ -74,10 +76,12 @@ public static class ScopeServiceEndpoints
         group.MapPost("/{scopeId}/members/{memberId}/runs/{runId}:resume", HandleResumeMemberRunAsync);
         group.MapPost("/{scopeId}/members/{memberId}/runs/{runId}:signal", HandleSignalMemberRunAsync);
         group.MapPost("/{scopeId}/members/{memberId}/runs/{runId}:stop", HandleStopMemberRunAsync);
+        group.MapPost("/{scopeId}/members/{memberId}/runs/{runId}:retry-compensation", HandleRetryCompensationMemberRunAsync);
         group.MapGet("/{scopeId}/runs/{runId}/audit", HandleGetDefaultRunAuditAsync);
         group.MapPost("/{scopeId}/runs/{runId}:resume", HandleResumeDefaultRunAsync);
         group.MapPost("/{scopeId}/runs/{runId}:signal", HandleSignalDefaultRunAsync);
         group.MapPost("/{scopeId}/runs/{runId}:stop", HandleStopDefaultRunAsync);
+        group.MapPost("/{scopeId}/runs/{runId}:retry-compensation", HandleRetryCompensationDefaultRunAsync);
         group.MapGet("/{scopeId}/services", HandleListScopeServicesAsync);
         group.MapPost("/{scopeId}/services/{serviceId}/invoke/{endpointId}:stream", HandleInvokeStreamAsync);
         group.MapPost("/{scopeId}/services/{serviceId}/invoke/{endpointId}", HandleInvokeAsync);
@@ -90,6 +94,7 @@ public static class ScopeServiceEndpoints
         group.MapPost("/{scopeId}/services/{serviceId}/runs/{runId}:resume", HandleResumeRunAsync);
         group.MapPost("/{scopeId}/services/{serviceId}/runs/{runId}:signal", HandleSignalRunAsync);
         group.MapPost("/{scopeId}/services/{serviceId}/runs/{runId}:stop", HandleStopRunAsync);
+        group.MapPost("/{scopeId}/services/{serviceId}/runs/{runId}:retry-compensation", HandleRetryCompensationRunAsync);
         group.MapPost("/{scopeId}/services/{serviceId}/bindings", HandleCreateBindingAsync);
         group.MapPut("/{scopeId}/services/{serviceId}/bindings/{bindingId}", HandleUpdateBindingAsync);
         group.MapPost("/{scopeId}/services/{serviceId}/bindings/{bindingId}:retire", HandleRetireBindingAsync);
@@ -102,6 +107,8 @@ public static class ScopeServiceEndpoints
         HttpContext http,
         string scopeId,
         [FromServices] IWorkflowChatRunInteractionPort chatRunService,
+        [FromServices] WorkflowMultipartFileInputParser multipartFileInputParser,
+        [FromServices] IWorkflowFileIngressPort workflowFileIngressPort,
         CancellationToken ct)
     {
         try
@@ -109,7 +116,24 @@ public static class ScopeServiceEndpoints
             if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
                 return;
 
-            var request = await ReadDraftRunHttpRequestAsync(http, ct);
+            var requestInput = await ParseScopeDraftRunRequestAsync(
+                http,
+                multipartFileInputParser,
+                workflowFileIngressPort,
+                scopeId,
+                ct);
+            if (requestInput.Failure != null)
+            {
+                await WriteJsonErrorResponseAsync(
+                    http,
+                    requestInput.Failure.Value.StatusCode,
+                    requestInput.Failure.Value.Code,
+                    requestInput.Failure.Value.Message,
+                    ct);
+                return;
+            }
+
+            var request = requestInput.Request!;
             if (request.WorkflowYamls == null || request.WorkflowYamls.Count == 0)
                 throw new InvalidOperationException("workflowYamls is required.");
 
@@ -133,16 +157,17 @@ public static class ScopeServiceEndpoints
                 return;
             }
 
-            var inputParts = MapWorkflowInputParts(request.InputParts);
+            var normalizedPrompt = request.Prompt?.Trim() ?? string.Empty;
+            var llmControl = await BuildScopedLlmControlAsync(http, ct);
             var chatRequest = new WorkflowChatRunRequest(
-                Prompt: ResolveDraftRunPrompt(request.Prompt, inputParts),
+                Prompt: normalizedPrompt,
                 Source: WorkflowChatSource.InlineYamlBundle(request.WorkflowYamls),
                 SessionId: request.SessionId,
-                InputParts: inputParts,
+                InputParts: MapWorkflowChatInputParts(requestInput.InputParts),
                 Metadata: scopedHeaders,
                 ScopeId: scopeId,
                 CallerCredential: callerCredential.Credential,
-                LlmControl: ToWorkflowLlmControl(await BuildScopedLlmControlAsync(http, ct)),
+                LlmControl: ToWorkflowLlmControl(llmControl),
                 Headers: scopedHeaders);
 
             if (eventFormat == ScopeWorkflowEndpoints.ScopeWorkflowStreamEventFormat.Agui)
@@ -159,15 +184,15 @@ public static class ScopeServiceEndpoints
                 http,
                 new ChatInput
                 {
-                    Prompt = chatRequest.Prompt,
+                    Prompt = normalizedPrompt,
+                    InputParts = requestInput.InputParts,
                     WorkflowYamls = chatRequest.Source.InlineBundle?.YamlDocuments
                         .Select(static document => document.Yaml)
                         .ToArray(),
                     SessionId = chatRequest.SessionId,
-                    InputParts = MapInputParts(request.InputParts),
                     ScopeId = scopeId,
                     Headers = scopedHeaders,
-                    LlmControl = await BuildScopedLlmControlInputAsync(http, ct),
+                    LlmControl = ToChatLlmControlInput(llmControl),
                 },
                 chatRunService,
                 ct);
@@ -183,120 +208,78 @@ public static class ScopeServiceEndpoints
         }
     }
 
-    private static async Task<ScopeDraftRunHttpRequest> ReadDraftRunHttpRequestAsync(
+    private static async ValueTask<ScopeDraftRunRequestInput> ParseScopeDraftRunRequestAsync(
         HttpContext http,
+        WorkflowMultipartFileInputParser multipartFileInputParser,
+        IWorkflowFileIngressPort workflowFileIngressPort,
+        string scopeId,
         CancellationToken ct)
     {
-        if (http.Request.HasFormContentType)
-            return await ReadMultipartDraftRunHttpRequestAsync(http, ct);
-
-        try
+        if (WorkflowMultipartFileInputParser.IsMultipartForm(http.Request.ContentType))
         {
-            var request = await http.Request.ReadFromJsonAsync<ScopeDraftRunHttpRequest>(
-                HttpJsonSerializerOptions,
-                cancellationToken: ct);
-            return request ?? throw new InvalidOperationException("Request body is required.");
-        }
-        catch (JsonException ex)
-        {
-            throw new InvalidOperationException("Request body must be valid JSON.", ex);
-        }
-    }
+            var multipartResult = await multipartFileInputParser.ParseAsync(http, ct);
+            if (!multipartResult.Succeeded)
+                return ScopeDraftRunRequestInput.Failed(ToScopeDraftRunRequestError(multipartResult.Error!.Value));
 
-    private static async Task<ScopeDraftRunHttpRequest> ReadMultipartDraftRunHttpRequestAsync(
-        HttpContext http,
-        CancellationToken ct)
-    {
-        var form = await http.Request.ReadFormAsync(ct);
-        var payload = form["payload"].FirstOrDefault();
-        if (string.IsNullOrWhiteSpace(payload))
-            throw new InvalidOperationException("multipart payload is required.");
+            var request = ParseScopeDraftRunPayload(multipartResult.RawPayloadJson);
+            if (request == null)
+                return ScopeDraftRunRequestInput.Failed(ScopeDraftRunRequestParseError.InvalidRequest);
 
-        ScopeDraftRunHttpRequest? request;
-        try
-        {
-            request = JsonSerializer.Deserialize<ScopeDraftRunHttpRequest>(
-                payload,
-                HttpJsonSerializerOptions);
-        }
-        catch (JsonException ex)
-        {
-            throw new InvalidOperationException("multipart payload must be valid JSON.", ex);
-        }
-
-        if (request == null)
-            throw new InvalidOperationException("multipart payload is required.");
-
-        var inputParts = new List<StreamContentPartHttpRequest>();
-        if (request.InputParts is { Count: > 0 })
-            inputParts.AddRange(request.InputParts);
-
-        foreach (var file in form.Files.Where(static file => file is { Length: > 0 }))
-        {
-            await using var stream = file.OpenReadStream();
-            using var memory = new MemoryStream();
-            await stream.CopyToAsync(memory, ct);
-            inputParts.Add(ToDraftRunFileInputPart(file, memory.ToArray()));
-        }
-
-        return request with
-        {
-            InputParts = inputParts.Count == 0 ? request.InputParts : inputParts,
-        };
-    }
-
-    private static StreamContentPartHttpRequest ToDraftRunFileInputPart(
-        IFormFile file,
-        byte[] content)
-    {
-        var mediaType = NormalizeOptional(file.ContentType) ?? "application/octet-stream";
-        return new StreamContentPartHttpRequest(
-            Type: ResolveDraftRunFileInputPartType(mediaType),
-            DataBase64: Convert.ToBase64String(content),
-            MediaType: mediaType,
-            Name: NormalizeOptional(file.FileName));
-    }
-
-    private static string ResolveDraftRunFileInputPartType(string mediaType)
-    {
-        if (mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
-            return "image";
-
-        if (mediaType.StartsWith("audio/", StringComparison.OrdinalIgnoreCase))
-            return "audio";
-
-        if (mediaType.StartsWith("video/", StringComparison.OrdinalIgnoreCase))
-            return "video";
-
-        return "text";
-    }
-
-    private static string ResolveDraftRunPrompt(
-        string? prompt,
-        IReadOnlyList<WorkflowChatInputPart>? inputParts)
-    {
-        if (!string.IsNullOrWhiteSpace(prompt))
-            return prompt.Trim();
-
-        if (inputParts is not { Count: > 0 })
-            return string.Empty;
-
-        var textParts = inputParts
-            .Where(part => part.Kind == WorkflowChatInputPartKind.Text && !string.IsNullOrWhiteSpace(part.Text))
-            .Select(part => part.Text!.Trim())
-            .ToArray();
-        if (textParts.Length > 0)
-            return string.Join("\n", textParts);
-
-        return string.Join(
-            ", ",
-            inputParts.Select(static part => part.Kind switch
+            var inputParts = MapInputParts(request.InputParts);
+            if (multipartResult.Form is { HasFiles: true } form)
             {
-                WorkflowChatInputPartKind.Image => "[image]",
-                WorkflowChatInputPartKind.Audio => "[audio]",
-                WorkflowChatInputPartKind.Video => "[video]",
-                _ => "[content]",
-            }));
+                try
+                {
+                    var uploadedParts = await IngestMultipartInputPartsAsync(
+                        form,
+                        workflowFileIngressPort,
+                        scopeId,
+                        ct);
+                    inputParts = AppendInputParts(inputParts, uploadedParts);
+                }
+                catch (InvalidOperationException)
+                {
+                    return ScopeDraftRunRequestInput.Failed(ScopeDraftRunRequestParseError.InvalidFileInput);
+                }
+            }
+
+            return ScopeDraftRunRequestInput.Success(request, inputParts);
+        }
+
+        if (!IsJsonContentType(http.Request.ContentType))
+            return ScopeDraftRunRequestInput.Failed(ScopeDraftRunRequestParseError.UnsupportedMediaType);
+
+        ScopeDraftRunHttpRequest? parsed;
+        try
+        {
+            parsed = await JsonSerializer.DeserializeAsync<ScopeDraftRunHttpRequest>(
+                http.Request.Body,
+                ScopeRequestJsonOptions,
+                ct);
+        }
+        catch (JsonException)
+        {
+            return ScopeDraftRunRequestInput.Failed(ScopeDraftRunRequestParseError.InvalidRequest);
+        }
+
+        return parsed == null
+            ? ScopeDraftRunRequestInput.Failed(ScopeDraftRunRequestParseError.InvalidRequest)
+            : ScopeDraftRunRequestInput.Success(parsed, MapInputParts(parsed.InputParts));
+    }
+
+    private static ScopeDraftRunHttpRequest? ParseScopeDraftRunPayload(string? payload)
+    {
+        if (string.IsNullOrWhiteSpace(payload))
+            return null;
+
+        try
+        {
+            return JsonSerializer.Deserialize<ScopeDraftRunHttpRequest>(payload, ScopeRequestJsonOptions);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private static async Task<IResult> HandleUpsertBindingAsync(
@@ -713,12 +696,13 @@ public static class ScopeServiceEndpoints
     private static async Task HandleInvokeDefaultChatStreamAsync(
         HttpContext http,
         string scopeId,
-        StreamScopeServiceHttpRequest request,
         [FromServices] ServiceInvocationResolutionService resolutionService,
         [FromServices] ServiceInvokeReadinessErrorMapper readinessErrorMapper,
         [FromServices] IInvokeAdmissionAuthorizer admissionAuthorizer,
         [FromServices] IServiceRunRegistrationPort serviceRunRegistrationPort,
         [FromServices] IWorkflowChatRunInteractionPort chatRunService,
+        [FromServices] WorkflowMultipartFileInputParser multipartFileInputParser,
+        [FromServices] IWorkflowFileIngressPort workflowFileIngressPort,
         [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus> scriptServiceRunService,
         [FromServices] IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
@@ -733,13 +717,14 @@ public static class ScopeServiceEndpoints
             scopeId,
             serviceId,
             "chat",
-            request,
+            multipartFileInputParser,
             appId: null,
             resolutionService,
             readinessErrorMapper,
             admissionAuthorizer,
             serviceRunRegistrationPort,
             chatRunService,
+            workflowFileIngressPort,
             scriptServiceRunService,
             staticGAgentStreamInvocationPort,
             options,
@@ -776,13 +761,14 @@ public static class ScopeServiceEndpoints
         string scopeId,
         string memberId,
         string endpointId,
-        StreamScopeServiceHttpRequest request,
         [FromServices] IMemberPublishedServiceResolver memberPublishedServiceResolver,
         [FromServices] ServiceInvocationResolutionService resolutionService,
         [FromServices] ServiceInvokeReadinessErrorMapper readinessErrorMapper,
         [FromServices] IInvokeAdmissionAuthorizer admissionAuthorizer,
         [FromServices] IServiceRunRegistrationPort serviceRunRegistrationPort,
         [FromServices] IWorkflowChatRunInteractionPort chatRunService,
+        [FromServices] WorkflowMultipartFileInputParser multipartFileInputParser,
+        [FromServices] IWorkflowFileIngressPort workflowFileIngressPort,
         [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus> scriptServiceRunService,
         [FromServices] IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
@@ -801,13 +787,14 @@ public static class ScopeServiceEndpoints
                 memberResolution.ScopeId,
                 memberResolution.PublishedServiceId,
                 endpointId,
-                request,
+                multipartFileInputParser,
                 null,
                 resolutionService,
                 readinessErrorMapper,
                 admissionAuthorizer,
                 serviceRunRegistrationPort,
                 chatRunService,
+                workflowFileIngressPort,
                 scriptServiceRunService,
                 staticGAgentStreamInvocationPort,
                 options,
@@ -872,13 +859,14 @@ public static class ScopeServiceEndpoints
         string scopeId,
         string teamId,
         string endpointId,
-        StreamScopeServiceHttpRequest request,
         [FromServices] ITeamEntryMemberResolver teamEntryMemberResolver,
         [FromServices] ServiceInvocationResolutionService resolutionService,
         [FromServices] ServiceInvokeReadinessErrorMapper readinessErrorMapper,
         [FromServices] IInvokeAdmissionAuthorizer admissionAuthorizer,
         [FromServices] IServiceRunRegistrationPort serviceRunRegistrationPort,
         [FromServices] IWorkflowChatRunInteractionPort chatRunService,
+        [FromServices] WorkflowMultipartFileInputParser multipartFileInputParser,
+        [FromServices] IWorkflowFileIngressPort workflowFileIngressPort,
         [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus> scriptServiceRunService,
         [FromServices] IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
@@ -895,13 +883,14 @@ public static class ScopeServiceEndpoints
                 teamResolution.ScopeId,
                 teamResolution.PublishedServiceId,
                 endpointId,
-                request,
+                multipartFileInputParser,
                 null,
                 resolutionService,
                 readinessErrorMapper,
                 admissionAuthorizer,
                 serviceRunRegistrationPort,
                 chatRunService,
+                workflowFileIngressPort,
                 scriptServiceRunService,
                 staticGAgentStreamInvocationPort,
                 options,
@@ -1032,71 +1021,143 @@ public static class ScopeServiceEndpoints
             options,
             ct);
 
-    private static Task<IResult> HandleResumeDefaultRunAsync(
+    private static async Task<IResult> HandleResumeDefaultRunAsync(
         HttpContext http,
         string scopeId,
         string runId,
         ResumeScopeServiceRunHttpRequest request,
-        [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
         [FromServices] IWorkflowRunBindingReader workflowRunBindingReader,
         [FromServices] ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError> resumeService,
-        [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
-        CancellationToken ct) =>
-        HandleResumeRunAsync(
+        CancellationToken ct)
+    {
+        var resolution = await ResolveScopedWorkflowRunAsync(
             http,
             scopeId,
-            ResolveDefaultScopeServiceId(options.Value),
             runId,
-            request,
-            lifecycleQueryPort,
+            request.ActorId,
             workflowRunBindingReader,
-            resumeService,
-            options,
             ct);
+        if (resolution.Failure != null)
+            return resolution.Failure;
 
-    private static Task<IResult> HandleSignalDefaultRunAsync(
+        return await WorkflowCapabilityEndpoints.HandleResume(
+            new WorkflowResumeInput
+            {
+                ActorId = resolution.Binding!.ActorId,
+                RunId = resolution.Binding.RunId,
+                StepId = request.StepId ?? string.Empty,
+                CommandId = request.CommandId,
+                Approved = request.Approved,
+                UserInput = request.UserInput,
+                Metadata = request.Metadata,
+                ToolApproval = request.ToolApproval == null
+                    ? null
+                    : new WorkflowToolApprovalResumeInput
+                    {
+                        ExecutionId = request.ToolApproval.ExecutionId ?? string.Empty,
+                        ToolCallId = request.ToolApproval.ToolCallId ?? string.Empty,
+                        ApprovalRequestId = request.ToolApproval.ApprovalRequestId ?? string.Empty,
+                    },
+            },
+            resumeService,
+            ct);
+    }
+
+    private static async Task<IResult> HandleSignalDefaultRunAsync(
         HttpContext http,
         string scopeId,
         string runId,
         SignalScopeServiceRunHttpRequest request,
-        [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
         [FromServices] IWorkflowRunBindingReader workflowRunBindingReader,
         [FromServices] ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError> signalService,
-        [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
-        CancellationToken ct) =>
-        HandleSignalRunAsync(
+        CancellationToken ct)
+    {
+        var resolution = await ResolveScopedWorkflowRunAsync(
             http,
             scopeId,
-            ResolveDefaultScopeServiceId(options.Value),
             runId,
-            request,
-            lifecycleQueryPort,
+            request.ActorId,
             workflowRunBindingReader,
-            signalService,
-            options,
             ct);
+        if (resolution.Failure != null)
+            return resolution.Failure;
 
-    private static Task<IResult> HandleStopDefaultRunAsync(
+        return await WorkflowCapabilityEndpoints.HandleSignal(
+            new WorkflowSignalInput
+            {
+                ActorId = resolution.Binding!.ActorId,
+                RunId = resolution.Binding.RunId,
+                SignalName = request.SignalName ?? string.Empty,
+                StepId = request.StepId,
+                CommandId = request.CommandId,
+                Payload = request.Payload,
+            },
+            signalService,
+            ct);
+    }
+
+    private static async Task<IResult> HandleStopDefaultRunAsync(
         HttpContext http,
         string scopeId,
         string runId,
         StopScopeServiceRunHttpRequest request,
-        [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
         [FromServices] IWorkflowRunBindingReader workflowRunBindingReader,
         [FromServices] ICommandDispatchService<WorkflowStopCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError> stopService,
-        [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
-        CancellationToken ct) =>
-        HandleStopRunAsync(
+        CancellationToken ct)
+    {
+        var resolution = await ResolveScopedWorkflowRunAsync(
             http,
             scopeId,
-            ResolveDefaultScopeServiceId(options.Value),
             runId,
-            request,
-            lifecycleQueryPort,
+            request.ActorId,
             workflowRunBindingReader,
-            stopService,
-            options,
             ct);
+        if (resolution.Failure != null)
+            return resolution.Failure;
+
+        return await WorkflowCapabilityEndpoints.HandleStop(
+            new WorkflowStopInput
+            {
+                ActorId = resolution.Binding!.ActorId,
+                RunId = resolution.Binding.RunId,
+                CommandId = request.CommandId,
+                Reason = request.Reason,
+            },
+            stopService,
+            ct);
+    }
+
+    private static async Task<IResult> HandleRetryCompensationDefaultRunAsync(
+        HttpContext http,
+        string scopeId,
+        string runId,
+        RetryCompensationScopeServiceRunHttpRequest request,
+        [FromServices] IWorkflowRunBindingReader workflowRunBindingReader,
+        [FromServices] ICommandDispatchService<WorkflowRetryCompensationCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError> retryService,
+        CancellationToken ct)
+    {
+        var resolution = await ResolveScopedWorkflowRunAsync(
+            http,
+            scopeId,
+            runId,
+            request.ActorId,
+            workflowRunBindingReader,
+            ct);
+        if (resolution.Failure != null)
+            return resolution.Failure;
+
+        return await WorkflowCapabilityEndpoints.HandleRetryCompensation(
+            new WorkflowRetryCompensationInput
+            {
+                ActorId = resolution.Binding!.ActorId,
+                RunId = resolution.Binding.RunId,
+                FailedCompensationStepId = request.FailedCompensationStepId ?? string.Empty,
+                CommandId = request.CommandId,
+                Reason = request.Reason,
+            },
+            retryService,
+            ct);
+    }
 
     private static async Task<IResult> HandleListMemberRunsAsync(
         HttpContext http,
@@ -1438,6 +1499,52 @@ public static class ScopeServiceEndpoints
         }
     }
 
+    private static async Task<IResult> HandleRetryCompensationMemberRunAsync(
+        HttpContext http,
+        string scopeId,
+        string memberId,
+        string runId,
+        RetryCompensationScopeServiceRunHttpRequest request,
+        [FromServices] IMemberPublishedServiceResolver memberPublishedServiceResolver,
+        [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
+        [FromServices] IWorkflowRunBindingReader workflowRunBindingReader,
+        [FromServices] ICommandDispatchService<WorkflowRetryCompensationCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError> retryService,
+        [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
+        CancellationToken ct)
+    {
+        try
+        {
+            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+                return denied;
+
+            if (AevatarMemberAccessGuard.TryCreateMemberAccessDeniedResult(http, memberId, out var memberDenied))
+                return memberDenied;
+
+            var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
+                new MemberPublishedServiceResolveRequest(scopeId, memberId),
+                ct);
+            return await HandleRetryCompensationRunAsync(
+                http,
+                memberResolution.ScopeId,
+                memberResolution.PublishedServiceId,
+                runId,
+                request,
+                lifecycleQueryPort,
+                workflowRunBindingReader,
+                retryService,
+                options,
+                ct);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new
+            {
+                code = "INVALID_MEMBER_RUN_RETRY_COMPENSATION_REQUEST",
+                message = ex.Message,
+            });
+        }
+    }
+
     private static async Task<IResult> HandleListRunsAsync(
         HttpContext http,
         string scopeId,
@@ -1624,13 +1731,14 @@ public static class ScopeServiceEndpoints
         string scopeId,
         string serviceId,
         string endpointId,
-        StreamScopeServiceHttpRequest request,
+        WorkflowMultipartFileInputParser multipartFileInputParser,
         string? appId,
         [FromServices] ServiceInvocationResolutionService resolutionService,
         [FromServices] ServiceInvokeReadinessErrorMapper readinessErrorMapper,
         [FromServices] IInvokeAdmissionAuthorizer admissionAuthorizer,
         [FromServices] IServiceRunRegistrationPort serviceRunRegistrationPort,
         [FromServices] IWorkflowChatRunInteractionPort chatRunService,
+        [FromServices] IWorkflowFileIngressPort workflowFileIngressPort,
         [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus> scriptServiceRunService,
         [FromServices] IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
@@ -1641,6 +1749,19 @@ public static class ScopeServiceEndpoints
             if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
                 return;
 
+            var requestInput = await ParseScopeStreamRequestAsync(http, multipartFileInputParser, ct);
+            if (requestInput.Failure != null)
+            {
+                await WriteJsonErrorResponseAsync(
+                    http,
+                    requestInput.Failure.Value.StatusCode,
+                    requestInput.Failure.Value.Code,
+                    requestInput.Failure.Value.Message,
+                    ct);
+                return;
+            }
+
+            var request = requestInput.Request!;
             var normalizedPrompt = request.Prompt?.Trim() ?? string.Empty;
             var scopedHeaders = BuildScopedHeaders(request.Headers);
             var callerCredential = WorkflowCallerCredentialExtractor.Extract(http);
@@ -1673,12 +1794,23 @@ public static class ScopeServiceEndpoints
             {
                 case ServiceImplementationKind.Workflow:
                     EnsureWorkflowStreamTarget(target, invocationRequest);
+                    var inputParts = MapInputParts(request.InputParts);
+                    if (requestInput.MultipartForm is { HasFiles: true } multipartForm)
+                    {
+                        var uploadedParts = await IngestMultipartInputPartsAsync(
+                            multipartForm,
+                            workflowFileIngressPort,
+                            scopeId,
+                            ct);
+                        inputParts = AppendInputParts(inputParts, uploadedParts);
+                    }
+
                     await WorkflowCapabilityEndpoints.HandleChat(
                         http,
                         new ChatInput
                         {
                             Prompt = normalizedPrompt,
-                            InputParts = MapInputParts(request.InputParts),
+                            InputParts = inputParts,
                             Source = new WorkflowChatSourceInput
                             {
                                 Kind = "definition_actor",
@@ -1711,6 +1843,7 @@ public static class ScopeServiceEndpoints
                     break;
 
                 case ServiceImplementationKind.Static:
+                    EnsureNoMultipartFilesForNonWorkflowStream(requestInput);
                     await HandleStaticGAgentChatStreamAsync(
                         http,
                         normalizedPrompt,
@@ -1725,6 +1858,7 @@ public static class ScopeServiceEndpoints
                     break;
 
                 case ServiceImplementationKind.Scripting:
+                    EnsureNoMultipartFilesForNonWorkflowStream(requestInput);
                     await HandleScriptingServiceChatStreamAsync(
                         http,
                         target,
@@ -2294,6 +2428,44 @@ public static class ScopeServiceEndpoints
             ct);
     }
 
+    private static async Task<IResult> HandleRetryCompensationRunAsync(
+        HttpContext http,
+        string scopeId,
+        string serviceId,
+        string runId,
+        RetryCompensationScopeServiceRunHttpRequest request,
+        [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
+        [FromServices] IWorkflowRunBindingReader workflowRunBindingReader,
+        [FromServices] ICommandDispatchService<WorkflowRetryCompensationCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError> retryService,
+        [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
+        CancellationToken ct)
+    {
+        var resolution = await ResolveScopeServiceRunAsync(
+            http,
+            options.Value,
+            scopeId,
+            serviceId,
+            runId,
+            request.ActorId,
+            lifecycleQueryPort,
+            workflowRunBindingReader,
+            ct);
+        if (resolution.Failure != null)
+            return resolution.Failure;
+
+        return await WorkflowCapabilityEndpoints.HandleRetryCompensation(
+            new WorkflowRetryCompensationInput
+            {
+                ActorId = resolution.Binding!.ActorId,
+                RunId = resolution.Binding.RunId,
+                FailedCompensationStepId = request.FailedCompensationStepId ?? string.Empty,
+                CommandId = request.CommandId,
+                Reason = request.Reason,
+            },
+            retryService,
+            ct);
+    }
+
     private static async Task<IResult> HandleCreateBindingAsync(
         HttpContext http,
         string scopeId,
@@ -2447,6 +2619,57 @@ public static class ScopeServiceEndpoints
 
         var deployments = await lifecycleQueryPort.GetServiceDeploymentsAsync(identity, ct);
         return new ScopeServiceResolution(identity, service, deployments, null);
+    }
+
+    private static async Task<ScopeWorkflowRunResolution> ResolveScopedWorkflowRunAsync(
+        HttpContext http,
+        string scopeId,
+        string runId,
+        string? requestedActorId,
+        IWorkflowRunBindingReader workflowRunBindingReader,
+        CancellationToken ct)
+    {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return new ScopeWorkflowRunResolution(null, denied);
+
+        var normalizedRunId = ScopeWorkflowCapabilityOptions.NormalizeRequired(runId, nameof(runId));
+        var matches = (await workflowRunBindingReader.ListByRunIdAsync(normalizedRunId, ct: ct))
+            .Where(binding =>
+                binding.ActorKind == WorkflowActorKind.Run &&
+                string.Equals(binding.ScopeId, scopeId, StringComparison.Ordinal))
+            .ToList();
+
+        var normalizedActorId = NormalizeOptional(requestedActorId);
+        if (!string.IsNullOrWhiteSpace(normalizedActorId))
+        {
+            matches = matches
+                .Where(binding => string.Equals(binding.ActorId, normalizedActorId, StringComparison.Ordinal))
+                .ToList();
+        }
+
+        if (matches.Count == 0)
+        {
+            return new ScopeWorkflowRunResolution(
+                null,
+                Results.NotFound(new
+                {
+                    code = "SCOPE_RUN_NOT_FOUND",
+                    message = $"Run '{normalizedRunId}' was not found in scope '{scopeId}'.",
+                }));
+        }
+
+        if (matches.Count > 1)
+        {
+            return new ScopeWorkflowRunResolution(
+                null,
+                Results.Conflict(new
+                {
+                    code = "SCOPE_RUN_AMBIGUOUS",
+                    message = $"Run '{normalizedRunId}' is ambiguous in scope '{scopeId}'.",
+                }));
+        }
+
+        return new ScopeWorkflowRunResolution(matches[0], null);
     }
 
     private static async Task<ScopeServiceRunResolution> ResolveScopeServiceRunAsync(
@@ -2884,6 +3107,8 @@ const response = await fetch("{{invokePath}}", {
             snapshot?.RoleReplyCount ?? 0,
             snapshot?.LastOutput ?? string.Empty,
             snapshot?.LastError ?? string.Empty,
+            snapshot?.SagaStatus ?? WorkflowSagaStatus.Unspecified,
+            BuildScopeServiceRunDeadLetter(snapshot),
             ServiceImplementationKind.Workflow.ToString(),
             ServiceRunStatus.Accepted.ToString(),
             string.Empty,
@@ -2930,6 +3155,8 @@ const response = await fetch("{{invokePath}}", {
             workflowSnapshot?.RoleReplyCount ?? 0,
             workflowSnapshot?.LastOutput ?? (registryBackedSummary ? snapshot.LastOutput : string.Empty),
             workflowSnapshot?.LastError ?? (registryBackedSummary ? snapshot.LastError : string.Empty),
+            workflowSnapshot?.SagaStatus ?? WorkflowSagaStatus.Unspecified,
+            BuildScopeServiceRunDeadLetter(workflowSnapshot),
             snapshot.ImplementationKind.ToString(),
             snapshot.Status.ToString(),
             snapshot.CommandId,
@@ -2983,7 +3210,21 @@ const response = await fetch("{{invokePath}}", {
             summary.CompletedSteps,
             summary.RoleReplyCount,
             summary.LastOutput,
-            summary.LastError);
+            summary.LastError,
+            summary.SagaStatus,
+            summary.DeadLetter);
+    }
+
+    private static ScopeServiceRunDeadLetterHttpResponse? BuildScopeServiceRunDeadLetter(
+        WorkflowActorSnapshot? snapshot)
+    {
+        if (snapshot?.SagaStatus != WorkflowSagaStatus.CompensationDeadLetter)
+            return null;
+
+        return new ScopeServiceRunDeadLetterHttpResponse(
+            snapshot.DeadLetterFailedCompensationStepId,
+            snapshot.DeadLetterRemainingUncompensated,
+            snapshot.DeadLetterError);
     }
 
     private static ServiceDeploymentSnapshot? ResolveRunDeployment(
@@ -3268,9 +3509,11 @@ const response = await fetch("{{invokePath}}", {
                     NyxIdRoutePreference = route,
                 };
             }
-            catch
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                // Best-effort; fall back to provider defaults if config unavailable.
+                var loggerFactory = http.RequestServices.GetService<ILoggerFactory>();
+                var logger = loggerFactory?.CreateLogger("Aevatar.GAgentService.ScopeServiceEndpoints");
+                logger?.LogWarning(ex, "Failed to resolve scoped user LLM configuration; falling back to provider defaults.");
             }
         }
 
@@ -3288,6 +3531,92 @@ const response = await fetch("{{invokePath}}", {
         {
             target[key] = value;
         }
+    }
+
+    private static async ValueTask<ScopeStreamRequestInput> ParseScopeStreamRequestAsync(
+        HttpContext http,
+        WorkflowMultipartFileInputParser multipartFileInputParser,
+        CancellationToken ct)
+    {
+        if (WorkflowMultipartFileInputParser.IsMultipartForm(http.Request.ContentType))
+        {
+            var multipartResult = await multipartFileInputParser.ParseAsync(http, ct);
+            if (!multipartResult.Succeeded)
+                return ScopeStreamRequestInput.Failed(ToScopeStreamRequestError(multipartResult.Error!.Value));
+
+            var request = ParseScopeStreamPayload(multipartResult.RawPayloadJson);
+            if (request == null)
+                return ScopeStreamRequestInput.Failed(ScopeStreamRequestParseError.InvalidRequest);
+
+            return ScopeStreamRequestInput.Success(request, multipartResult.Form);
+        }
+
+        if (!IsJsonContentType(http.Request.ContentType))
+            return ScopeStreamRequestInput.Failed(ScopeStreamRequestParseError.UnsupportedMediaType);
+
+        StreamScopeServiceHttpRequest? parsed;
+        try
+        {
+            parsed = await JsonSerializer.DeserializeAsync<StreamScopeServiceHttpRequest>(
+                http.Request.Body,
+                ScopeRequestJsonOptions,
+                ct);
+        }
+        catch (JsonException)
+        {
+            return ScopeStreamRequestInput.Failed(ScopeStreamRequestParseError.InvalidRequest);
+        }
+
+        return parsed == null
+            ? ScopeStreamRequestInput.Failed(ScopeStreamRequestParseError.InvalidRequest)
+            : ScopeStreamRequestInput.Success(parsed, null);
+    }
+
+    private static StreamScopeServiceHttpRequest? ParseScopeStreamPayload(string? payload)
+    {
+        if (string.IsNullOrWhiteSpace(payload))
+            return new StreamScopeServiceHttpRequest(null);
+
+        try
+        {
+            return JsonSerializer.Deserialize<StreamScopeServiceHttpRequest>(payload, ScopeRequestJsonOptions);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static bool IsJsonContentType(string? contentType) =>
+        contentType?.StartsWith("application/json", StringComparison.OrdinalIgnoreCase) == true;
+
+    private static ScopeStreamRequestParseError ToScopeStreamRequestError(
+        WorkflowMultipartFileInputParseError error) =>
+        new(error.StatusCode, error.Code, error.Message);
+
+    private static ScopeDraftRunRequestParseError ToScopeDraftRunRequestError(
+        WorkflowMultipartFileInputParseError error)
+    {
+        if (error.StatusCode == StatusCodes.Status415UnsupportedMediaType)
+            return ScopeDraftRunRequestParseError.UnsupportedMediaType;
+
+        return string.Equals(error.Code, "INVALID_FILE_INPUT", StringComparison.Ordinal)
+            ? ScopeDraftRunRequestParseError.InvalidFileInput
+            : ScopeDraftRunRequestParseError.InvalidRequest;
+    }
+
+    private static ChatLlmControlInput? ToChatLlmControlInput(LLMControlContext? control)
+    {
+        if (control == null)
+            return null;
+
+        return new ChatLlmControlInput
+        {
+            ModelOverride = control.ModelOverride,
+            NyxIdRoutePreference = control.NyxIdRoutePreference,
+            MaxToolRoundsOverride = control.MaxToolRoundsOverride,
+            UserMemoryPrompt = control.UserMemoryPrompt,
+        };
     }
 
     private static IReadOnlyList<ChatInputContentPart>? MapInputParts(
@@ -3309,30 +3638,146 @@ const response = await fetch("{{invokePath}}", {
             }).ToList();
     }
 
-    private static IReadOnlyList<WorkflowChatInputPart>? MapWorkflowInputParts(
-        IReadOnlyList<StreamContentPartHttpRequest>? parts)
+    private static IReadOnlyList<WorkflowChatInputPart>? MapWorkflowChatInputParts(
+        IReadOnlyList<ChatInputContentPart>? parts)
     {
         if (parts is not { Count: > 0 })
             return null;
 
-        return parts
-            .Where(p => p != null)
-            .Select(p => new WorkflowChatInputPart
+        var inputParts = new List<WorkflowChatInputPart>(parts.Count);
+        foreach (var part in parts)
+        {
+            if (part == null || string.IsNullOrWhiteSpace(part.Type))
+                continue;
+
+            if (!TryParseWorkflowChatInputPartKind(part.Type, out var kind))
+                continue;
+
+            inputParts.Add(new WorkflowChatInputPart
             {
-                Kind = p.Type?.ToLowerInvariant() switch
-                {
-                    "image" => WorkflowChatInputPartKind.Image,
-                    "audio" => WorkflowChatInputPartKind.Audio,
-                    "video" => WorkflowChatInputPartKind.Video,
-                    "text" => WorkflowChatInputPartKind.Text,
-                    _ => WorkflowChatInputPartKind.Unspecified,
-                },
-                Text = p.Text,
-                DataBase64 = p.DataBase64,
-                MediaType = p.MediaType,
-                Uri = p.Uri,
-                Name = p.Name,
-            }).ToList();
+                Kind = kind,
+                Text = string.IsNullOrWhiteSpace(part.Text) ? null : part.Text,
+                DataBase64 = part.DataBase64,
+                MediaType = part.FileRef?.MediaType ?? part.MediaType,
+                Uri = part.FileRef?.ArtifactId ?? part.FileRef?.Uri ?? part.Uri,
+                Name = part.FileRef?.FileName ?? part.FileRef?.Name ?? part.Name,
+                FileRef = MapWorkflowFileRef(part.FileRef),
+            });
+        }
+
+        return inputParts.Count == 0 ? null : inputParts;
+    }
+
+    private static bool TryParseWorkflowChatInputPartKind(
+        string raw,
+        out WorkflowChatInputPartKind kind)
+    {
+        kind = raw.Trim().ToLowerInvariant() switch
+        {
+            "text" => WorkflowChatInputPartKind.Text,
+            "image" => WorkflowChatInputPartKind.Image,
+            "audio" => WorkflowChatInputPartKind.Audio,
+            "video" => WorkflowChatInputPartKind.Video,
+            "file" => WorkflowChatInputPartKind.File,
+            _ => WorkflowChatInputPartKind.Unspecified,
+        };
+
+        return kind != WorkflowChatInputPartKind.Unspecified;
+    }
+
+    private static WorkflowFileRef? MapWorkflowFileRef(ChatInputFileRef? fileRef)
+    {
+        if (fileRef == null)
+            return null;
+
+        return new WorkflowFileRef
+        {
+            FileId = fileRef.FileId,
+            ArtifactId = fileRef.ArtifactId ?? fileRef.Uri,
+            SourceKind = MapWorkflowFileSourceKind(fileRef.SourceKind),
+            SourceMessageId = fileRef.SourceMessageId,
+            SourceResourceKey = fileRef.SourceResourceKey,
+            FileName = fileRef.FileName ?? fileRef.Name,
+            MediaType = fileRef.MediaType,
+            Sha256 = fileRef.Sha256,
+            CreatedAtUnixMs = fileRef.CreatedAtUnixMs ?? 0,
+            ExpiresAtUnixMs = fileRef.ExpiresAtUnixMs ?? 0,
+            OwnerRunId = fileRef.OwnerRunId,
+            OwnerScopeId = fileRef.OwnerScopeId,
+        };
+    }
+
+    private static WorkflowFileSourceKind MapWorkflowFileSourceKind(string? raw)
+    {
+        var key = string.IsNullOrWhiteSpace(raw)
+            ? string.Empty
+            : raw.Trim().ToLowerInvariant().Replace("-", string.Empty).Replace("_", string.Empty);
+        return key switch
+        {
+            "chatinput" or "chat" => WorkflowFileSourceKind.ChatInput,
+            "formupload" or "form" => WorkflowFileSourceKind.FormUpload,
+            "connectedserviceresource" or "connectedservice" => WorkflowFileSourceKind.ConnectedServiceResource,
+            "externalresource" or "external" => WorkflowFileSourceKind.ExternalResource,
+            "generated" => WorkflowFileSourceKind.Generated,
+            _ => WorkflowFileSourceKind.Unspecified,
+        };
+    }
+
+    private static IReadOnlyList<ChatInputContentPart>? AppendInputParts(
+        IReadOnlyList<ChatInputContentPart>? existing,
+        IReadOnlyList<ChatInputContentPart> appended)
+    {
+        if (appended.Count == 0)
+            return existing;
+
+        if (existing is not { Count: > 0 })
+            return appended;
+
+        var inputParts = new List<ChatInputContentPart>(existing.Count + appended.Count);
+        inputParts.AddRange(existing);
+        inputParts.AddRange(appended);
+        return inputParts;
+    }
+
+    private static async ValueTask<IReadOnlyList<ChatInputContentPart>> IngestMultipartInputPartsAsync(
+        WorkflowMultipartFileInputForm form,
+        IWorkflowFileIngressPort workflowFileIngressPort,
+        string scopeId,
+        CancellationToken ct)
+    {
+        var inputParts = new List<ChatInputContentPart>(form.PendingFiles.Count);
+        foreach (var file in form.PendingFiles)
+        {
+            WorkflowFileIngressResult ingressResult;
+            try
+            {
+                ingressResult = await workflowFileIngressPort.IngestAsync(
+                    WorkflowMultipartFileInputParser.BuildIngressRequest(file, scopeId),
+                    ct);
+            }
+            catch (ArgumentException ex)
+            {
+                throw new InvalidOperationException("Multipart chat file input is invalid.", ex);
+            }
+            catch (InvalidOperationException ex)
+            {
+                throw new InvalidOperationException("Multipart chat file input is invalid.", ex);
+            }
+            catch (IOException ex)
+            {
+                throw new InvalidOperationException("Multipart chat file input is invalid.", ex);
+            }
+
+            inputParts.Add(WorkflowMultipartFileInputParser.BuildInputPart(file, ingressResult.FileRef));
+        }
+
+        return inputParts;
+    }
+
+    private static void EnsureNoMultipartFilesForNonWorkflowStream(ScopeStreamRequestInput requestInput)
+    {
+        if (requestInput.MultipartForm?.HasFiles == true)
+            throw new InvalidOperationException("Multipart file input is only supported for workflow services.");
     }
 
     private static IReadOnlyList<GAgentDraftRunInputPart>? MapGAgentDraftRunInputParts(
@@ -3664,6 +4109,12 @@ const response = await fetch("{{invokePath}}", {
         string? CommandId = null,
         string? ActorId = null);
 
+    public sealed record RetryCompensationScopeServiceRunHttpRequest(
+        string? FailedCompensationStepId,
+        string? Reason = null,
+        string? CommandId = null,
+        string? ActorId = null);
+
     public sealed record BoundScopeServiceHttpRequest(
         string ServiceId,
         string? EndpointId = null);
@@ -3696,6 +4147,75 @@ const response = await fetch("{{invokePath}}", {
         ServiceDeploymentCatalogSnapshot? Deployments,
         WorkflowActorBinding? Binding,
         IResult? Failure);
+
+    private sealed record ScopeWorkflowRunResolution(
+        WorkflowActorBinding? Binding,
+        IResult? Failure);
+
+    private sealed record ScopeDraftRunRequestInput(
+        ScopeDraftRunHttpRequest? Request,
+        IReadOnlyList<ChatInputContentPart>? InputParts,
+        ScopeDraftRunRequestParseError? Failure)
+    {
+        public static ScopeDraftRunRequestInput Success(
+            ScopeDraftRunHttpRequest request,
+            IReadOnlyList<ChatInputContentPart>? inputParts) =>
+            new(request, inputParts, null);
+
+        public static ScopeDraftRunRequestInput Failed(ScopeDraftRunRequestParseError error) =>
+            new(null, null, error);
+    }
+
+    private readonly record struct ScopeDraftRunRequestParseError(
+        int StatusCode,
+        string Code,
+        string Message)
+    {
+        public static readonly ScopeDraftRunRequestParseError UnsupportedMediaType = new(
+            StatusCodes.Status415UnsupportedMediaType,
+            "UNSUPPORTED_MEDIA_TYPE",
+            "Content-Type must be application/json or multipart/form-data.");
+
+        public static readonly ScopeDraftRunRequestParseError InvalidRequest = new(
+            StatusCodes.Status400BadRequest,
+            "INVALID_SCOPE_DRAFT_RUN_REQUEST",
+            "Multipart draft-run payload is invalid.");
+
+        public static readonly ScopeDraftRunRequestParseError InvalidFileInput = new(
+            StatusCodes.Status400BadRequest,
+            "INVALID_FILE_INPUT",
+            "Multipart chat file input is invalid.");
+    }
+
+    private sealed record ScopeStreamRequestInput(
+        StreamScopeServiceHttpRequest? Request,
+        WorkflowMultipartFileInputForm? MultipartForm,
+        ScopeStreamRequestParseError? Failure)
+    {
+        public static ScopeStreamRequestInput Success(
+            StreamScopeServiceHttpRequest request,
+            WorkflowMultipartFileInputForm? multipartForm) =>
+            new(request, multipartForm, null);
+
+        public static ScopeStreamRequestInput Failed(ScopeStreamRequestParseError error) =>
+            new(null, null, error);
+    }
+
+    private readonly record struct ScopeStreamRequestParseError(
+        int StatusCode,
+        string Code,
+        string Message)
+    {
+        public static readonly ScopeStreamRequestParseError UnsupportedMediaType = new(
+            StatusCodes.Status415UnsupportedMediaType,
+            "UNSUPPORTED_MEDIA_TYPE",
+            "Content-Type must be application/json or multipart/form-data.");
+
+        public static readonly ScopeStreamRequestParseError InvalidRequest = new(
+            StatusCodes.Status400BadRequest,
+            "INVALID_SERVICE_STREAM_REQUEST",
+            "Service stream request body is invalid.");
+    }
 
     public sealed record ScopeBindingStatusHttpResponse(
         bool Available,
@@ -3858,6 +4378,8 @@ const response = await fetch("{{invokePath}}", {
         int RoleReplyCount,
         string LastOutput,
         string LastError,
+        WorkflowSagaStatus SagaStatus,
+        ScopeServiceRunDeadLetterHttpResponse? DeadLetter,
         string ImplementationKind,
         string Status,
         string CommandId,
@@ -3887,7 +4409,14 @@ const response = await fetch("{{invokePath}}", {
         int CompletedSteps,
         int RoleReplyCount,
         string LastOutput,
-        string LastError);
+        string LastError,
+        WorkflowSagaStatus SagaStatus,
+        ScopeServiceRunDeadLetterHttpResponse? DeadLetter);
+
+    public sealed record ScopeServiceRunDeadLetterHttpResponse(
+        string FailedCompensationStepId,
+        int RemainingUncompensated,
+        string Error);
 
     public sealed record ScopeServiceRunAuditHttpResponse(
         ScopeServiceRunSummaryHttpResponse Summary,

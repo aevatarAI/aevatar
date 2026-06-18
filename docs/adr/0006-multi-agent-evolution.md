@@ -296,6 +296,8 @@ WorkflowRunGAgent (编排者)
      → 父 workflow 执行定义中的 fallback 步骤
 ```
 
+**SUPERSEDING NOTE:** The optional compensation sketch above is superseded by ADR-0034 for workflow saga compensation. Current workflow compensation semantics are actor-owned and ledger-based: terminal failure with a non-empty `compensable_ledger` enters `compensating`, dispatches compensation by self continuation in reverse order, and terminates as `compensated_failed` or `compensation_dead_letter`. ADR-0006's original decision is not rewritten.
+
 ---
 
 ### Phase 3：协议完善 [P1]

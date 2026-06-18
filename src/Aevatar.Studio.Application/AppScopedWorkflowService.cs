@@ -62,20 +62,31 @@ public sealed class AppScopedWorkflowService
                 draft);
     }
 
-    public Task<WorkflowDraftResponse> CreateDraftAsync(
+    public async Task<WorkflowDraftCreateAcceptedResponse> CreateDraftAsync(
         string scopeId,
         SaveWorkflowDraftRequest request,
         CancellationToken ct = default)
-        => SaveDraftAsync(scopeId, workflowId: null, request, ct);
+    {
+        var (draft, receipt) = await SaveDraftCommandAsync(scopeId, workflowId: null, request, ct);
+        return ToDraftCreateAcceptedResponse(draft.WorkflowId, receipt);
+    }
 
-    public Task<WorkflowDraftResponse> UpdateDraftAsync(
+    public async Task<WorkflowDraftResponse> UpdateDraftAsync(
         string scopeId,
         string workflowId,
         SaveWorkflowDraftRequest request,
         CancellationToken ct = default)
-        => SaveDraftAsync(scopeId, NormalizeRequired(workflowId, nameof(workflowId)), request, ct);
+    {
+        var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
+        var (draft, _) = await SaveDraftCommandAsync(
+            normalizedScopeId,
+            NormalizeRequired(workflowId, nameof(workflowId)),
+            request,
+            ct);
+        return ToDraftWorkflowResponse(normalizedScopeId, draft);
+    }
 
-    private async Task<WorkflowDraftResponse> SaveDraftAsync(
+    private async Task<(StudioWorkflowDraftRecord Draft, StudioWorkspaceCommandReceipt Receipt)> SaveDraftCommandAsync(
         string scopeId,
         string? workflowId,
         SaveWorkflowDraftRequest request,
@@ -153,15 +164,13 @@ public sealed class AppScopedWorkflowService
             Version: existingDraft?.Version ?? 0);
 
         // Scoped workspace save persists an editor draft; publish stays on the scope-binding flow.
-        await workspaceCommandPort.SaveDraftAsync(
+        var receipt = await workspaceCommandPort.SaveDraftAsync(
             normalizedScopeId,
             stored,
-            workspace.StateVersion,
+            expectedVersion: null,
             ct);
 
-        return ToDraftWorkflowResponse(
-            normalizedScopeId,
-            stored);
+        return (stored, receipt);
     }
 
     public async Task DeleteDraftAsync(
@@ -183,7 +192,7 @@ public sealed class AppScopedWorkflowService
             throw new WorkflowDraftNotFoundException(normalizedWorkflowId);
         }
 
-        await workspaceCommandPort.DeleteDraftAsync(normalizedScopeId, normalizedWorkflowId, workspace.StateVersion, ct);
+        await workspaceCommandPort.DeleteDraftAsync(normalizedScopeId, normalizedWorkflowId, expectedVersion: null, ct);
     }
 
     // Refactor (iter56/cluster-929-studio-workflow-obsolete-shims):
@@ -335,6 +344,23 @@ public sealed class AppScopedWorkflowService
 
         return draft.WorkflowId;
     }
+
+    private static WorkflowDraftCreateAcceptedResponse ToDraftCreateAcceptedResponse(
+        string workflowId,
+        StudioWorkspaceCommandReceipt receipt) =>
+        new(
+            Accepted: true,
+            WorkflowId: workflowId,
+            CommandId: receipt.CommandId,
+            AckStage: "accepted",
+            ActorId: receipt.ActorId,
+            WorkspaceId: receipt.WorkspaceId,
+            ExpectedVersion: receipt.ExpectedVersion,
+            AckedAtUtc: DateTimeOffset.UtcNow,
+            Readiness: new WorkflowDraftReadinessResponse(
+                Readable: false,
+                Stage: "projection_pending",
+                Message: "The workflow draft create command was accepted. Poll the workflow draft by id until the scoped workspace read model observes it."));
 
     private static string CreateWorkflowDraftId() =>
         Guid.NewGuid().ToString("N");

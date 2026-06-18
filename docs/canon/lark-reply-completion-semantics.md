@@ -35,6 +35,12 @@ ConversationGAgent ──► IChannelLlmReplyRunDispatcher ──► AgentRunGAg
 
 > 注：`REPLY_HANDED_OFF` 不直接证明 `chain.delivered` — 还需 `last_reply_delivery.delivered != null`。本表把它列在 finalized 列是因为 finalized 是 AgentRunGAgent 视角的终态。
 
+## 2.1 用户可见投递 Ledger
+
+`last_reply_delivery` 只描述最近 reply 的链路快照，不是跨请求查询事实源。每一次用户可见出站投递必须由权威 actor 提交共享 `DeliveryProducedEvent`：`ConversationGAgent` 在 text/card 发送成功、pre-send 失败、post-send 失败边界提交；`AgentRunGAgent` 在 streaming card 终态批次里提交并维护 run 自身 ledger。
+
+Conversation state 维护 bounded `recent_deliveries` 与 `last_successful_delivery`。读侧通过 `ConversationDeliveryCurrentStateDocument` 覆盖复制这些字段，并由 `ConversationDeliveryQueryPort` 读取 current-state read model；不得在 query path 读取 event store、重放事件或启动 projection priming 来推断投递完成态。
+
 ## 3. 时序图：Happy Path（streaming）
 
 ```mermaid
@@ -219,7 +225,17 @@ internal static bool IsTerminal(AgentRunState s) =>
 - 在终态 actor 上发起新的 redispatch / callback schedule
 - 通过 `lock` / `ConcurrentDictionary` 维护 "is this signal stale" 的内存字典（破坏 Actor 单线程事实源）
 
-## 10. 实现 Checklist
+## 10. Workflow wait=stream 后台投递契约
+
+`aevatar_start_workflow wait=stream` 在 channel chat turn 中只承诺 workflow run command 已 accepted，并返回 typed `WorkflowRunBackgroundDeliveryReceipt`。聊天轮必须 ack-fast 结束，不能挂住原 LLM turn 等 workflow terminal，也不能依赖一次性 report artifact 或用户 relay token 作为后续完成态投递依据。
+
+AgentRun/NyxidChat 侧为每个 workflow command 注册一个 run-scoped `WorkflowRunDeliveryGAgent`。该 actor 的 Protobuf state 持久化 delivery id、workflow actor/run/command/correlation id、channel reply target、registration scope 与 long-lived `bot_agent_key_id`；projection callback 只把 terminal frame 包成 `WorkflowRunDeliveryTerminalFrameObserved` 自消息投回 actor，actor handler 内完成 stale check、relay side effect 与 delivered/failed event 持久化。
+
+后台观察必须复用 `IWorkflowExecutionProjectionPort.AttachExistingActorProjectionAsync(...)` 连接既有 workflow run event projection 链，只消费 committed `RunFinished` / `RunError` / `RunStopped` terminal frame。禁止新增平行 workflow stream subscriber、禁止 query-time replay/priming、禁止用进程内 run-to-context registry 保存会话事实。MVP 只做 completion/error/stopped terminal reply；progress edit 流后续可在同一 projection input 上叠加 throttle。
+
+Nyx relay terminal reply 必须经 channel-relay `/reply` 使用长效 bot agent key 投递到同一 reply target。用户 inbound relay token 过期不得影响后台 terminal delivery；短命用户凭据只属于原入站 turn，不能进入 `WorkflowRunDeliveryGAgentState`。
+
+## 11. 实现 Checklist
 
 - [ ] `agents/Aevatar.GAgents.NyxidChat/Protos/agent_run.proto`：扩 `AgentRunStatus` 加 `REPLY_HANDED_OFF`；`reply_dispatched` 标 `reserved`；加 `cleanup_completed_at`、`reply_produced_at_unix_ms`
 - [ ] `agents/Aevatar.GAgents.Channel.Runtime/Protos/conversation_state.proto`：新增 `ReplyDeliveryStatus` 消息 + `ConversationState.last_reply_delivery` 字段
@@ -247,7 +263,7 @@ internal static bool IsTerminal(AgentRunState s) =>
   - [ ] `ChatRuntime` Usage 重排测试（provider 中段发 Usage）
   - [ ] reply chain happy path 端到端断言新事件序列
 
-## 11. 反例（implementation smells）
+## 12. 反例（implementation smells）
 
 下列模式视为契约违反，应在 review 时拒收：
 
@@ -257,8 +273,11 @@ internal static bool IsTerminal(AgentRunState s) =>
 - `AgentRunGAgent` 在 `Status == DROPPED` 后仍执行 `ScheduleTerminalCleanupAsync` 内部副作用
 - `ChatRuntime` 对外暴露多个 `IsLast = true` chunk（multi-round 时各 round 都发 terminal）
 - 用 `reply_dispatched` bool 替代 `Status == REPLY_HANDED_OFF` 做新代码判断
+- `wait=stream` 后仍阻塞聊天轮等待 workflow terminal
+- 后台 workflow terminal delivery 读取 report artifact 或 event store replay 拼装完成态
+- 使用用户 relay token 而不是 bot agent key 执行后台 channel-relay reply
 
-## 12. 参考
+## 13. 参考
 
 - ADR-0021 [`docs/adr/0021-lark-reply-chain-completion-semantics.md`](../adr/0021-lark-reply-chain-completion-semantics.md)
 - ADR-0027 [`docs/adr/0027-lark-reply-run-dispatcher-plain-task-handoff.md`](../adr/0027-lark-reply-run-dispatcher-plain-task-handoff.md)

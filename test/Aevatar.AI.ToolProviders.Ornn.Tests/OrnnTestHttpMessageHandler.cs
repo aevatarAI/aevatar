@@ -73,13 +73,15 @@ internal sealed class OrnnTestHttpMessageHandler : HttpMessageHandler
 internal sealed record CapturedHttpRequest(
     HttpMethod Method,
     Uri? RequestUri,
-    AuthenticationHeaderValue? Authorization)
+    AuthenticationHeaderValue? Authorization,
+    string? ContentType)
 {
     public static CapturedHttpRequest From(HttpRequestMessage request)
     {
         return new CapturedHttpRequest(
             request.Method,
             request.RequestUri,
-            request.Headers.Authorization);
+            request.Headers.Authorization,
+            request.Content?.Headers.ContentType?.MediaType);
     }
 }

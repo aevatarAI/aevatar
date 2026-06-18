@@ -1211,7 +1211,7 @@ public sealed class WorkflowLoopModuleCoverageTests
 
     private static WorkflowCompletedEvent SingleWorkflowCompletion(
         TestEventHandlerContext ctx,
-        TopologyAudience direction = TopologyAudience.Parent) =>
+        TopologyAudience direction = TopologyAudience.Self) =>
         ctx.Published
             .Where(x => x.direction == direction)
             .Select(x => x.evt)

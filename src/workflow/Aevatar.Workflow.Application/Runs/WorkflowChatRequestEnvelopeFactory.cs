@@ -66,6 +66,7 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
                 Application.Abstractions.Runs.WorkflowChatInputPartKind.Image => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Image,
                 Application.Abstractions.Runs.WorkflowChatInputPartKind.Audio => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Audio,
                 Application.Abstractions.Runs.WorkflowChatInputPartKind.Video => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Video,
+                Application.Abstractions.Runs.WorkflowChatInputPartKind.File => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.File,
                 _ => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Unspecified,
             },
             Text = source.Text ?? string.Empty,
@@ -147,6 +148,17 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             StartAtStepId = Normalize(source.StartAtStepId),
             Attempt = Math.Max(0, source.Attempt),
         };
+        if (source.StartStepIdempotency != null)
+        {
+            payload.StartStepIdempotency = new Aevatar.Workflow.Abstractions.WorkflowStepIdempotencyState
+            {
+                LogicalRunId = Normalize(source.StartStepIdempotency.LogicalRunId),
+                StepId = Normalize(source.StartStepIdempotency.StepId),
+                LogicalAttempt = Math.Max(0, source.StartStepIdempotency.LogicalAttempt),
+                IdempotencyKey = Normalize(source.StartStepIdempotency.IdempotencyKey),
+            };
+        }
+
         AppendVariables(payload.Variables, source.Variables);
         return payload;
     }

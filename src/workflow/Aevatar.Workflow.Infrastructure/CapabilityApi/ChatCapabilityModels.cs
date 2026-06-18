@@ -204,6 +204,15 @@ public sealed record WorkflowStopInput
     public string? Reason { get; init; }
 }
 
+public sealed record WorkflowRetryCompensationInput
+{
+    public required string ActorId { get; init; }
+    public required string RunId { get; init; }
+    public required string FailedCompensationStepId { get; init; }
+    public string? CommandId { get; init; }
+    public string? Reason { get; init; }
+}
+
 public sealed record WorkflowForkRunInput
 {
     public required string SourceRunId { get; init; }

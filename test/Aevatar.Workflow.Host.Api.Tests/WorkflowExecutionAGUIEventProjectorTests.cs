@@ -175,6 +175,71 @@ public sealed class WorkflowExecutionAGUIEventProjectorTests
     }
 
     [Fact]
+    public async Task ProjectAsync_ShouldNotPublishTerminalRunEvent_FromChildActor()
+    {
+        var streams = new InMemoryStreamProvider();
+        var streamHub = new ProjectionSessionEventHub<WorkflowRunEventEnvelope>(
+            streams,
+            new WorkflowRunEventSessionCodec());
+        var projector = new WorkflowExecutionRunEventProjector(
+            new StaticMapper(
+            [
+                BuildRunFinished("child-1", "child done"),
+                new WorkflowRunEventEnvelope
+                {
+                    Custom = new WorkflowCustomEventPayload { Name = "child.observed" },
+                },
+            ]),
+            streamHub);
+
+        var sink = new RecordingSink();
+        await using var subscription = await streamHub.SubscribeAsync("actor-1", "cmd-1", evt => sink.PushAsync(evt));
+
+        await projector.ProjectAsync(BuildContext(), new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = "child-1",
+            },
+        });
+
+        await sink.WaitForCountAsync(1, TimeSpan.FromSeconds(2));
+        sink.SnapshotEvents().Should().ContainSingle()
+            .Which.Custom.Name.Should().Be("child.observed");
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldPublishTerminalRunEvent_FromRootActor()
+    {
+        var streams = new InMemoryStreamProvider();
+        var streamHub = new ProjectionSessionEventHub<WorkflowRunEventEnvelope>(
+            streams,
+            new WorkflowRunEventSessionCodec());
+        var projector = new WorkflowExecutionRunEventProjector(
+            new StaticMapper([BuildRunFinished("actor-1", "done")]),
+            streamHub);
+
+        var sink = new RecordingSink();
+        await using var subscription = await streamHub.SubscribeAsync("actor-1", "cmd-1", evt => sink.PushAsync(evt));
+
+        await projector.ProjectAsync(BuildContext(), new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = "actor-1",
+            },
+        });
+
+        await sink.WaitForCountAsync(1, TimeSpan.FromSeconds(2));
+        sink.SnapshotEvents().Should().ContainSingle()
+            .Which.EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.RunFinished);
+    }
+
+    [Fact]
     public async Task ProjectAsync_WhenContextSessionIdMissing_ShouldNotPublish()
     {
         var streams = new InMemoryStreamProvider();

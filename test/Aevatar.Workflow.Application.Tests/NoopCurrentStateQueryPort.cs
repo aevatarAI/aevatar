@@ -25,6 +25,15 @@ internal sealed class NoopCurrentStateQueryPort : IWorkflowExecutionCurrentState
         return Task.FromResult<IReadOnlyList<WorkflowActorSnapshot>>([]);
     }
 
+    public Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowActorCurrentStatesAsync(
+        WorkflowActorCurrentStateListQuery query,
+        CancellationToken ct = default)
+    {
+        _ = query;
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult<IReadOnlyList<WorkflowActorSnapshot>>([]);
+    }
+
     public Task<WorkflowActorProjectionState?> GetWorkflowActorProjectionStateAsync(
         string actorId,
         CancellationToken ct = default)

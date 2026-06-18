@@ -12,7 +12,8 @@ public sealed record VoiceProviderSessionKey(
     long LeaseEpoch,
     Timestamp? LeaseExpiresAt = null,
     string ActorId = "",
-    string ModuleName = "");
+    string ModuleName = "",
+    VoiceToolExecutionContext? ToolContext = null);
 
 // Refactor (iter106/cluster-106-voice-provider-session-runtime):
 //   Old pattern: Realtime voice providers and the module keep provider session, event channel, cancellation source, dispatch loop, and transport pump as process-local mutable runtime objects.

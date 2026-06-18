@@ -45,6 +45,8 @@ internal static class VoicePresenceCapabilityReadModelMapper
                 ? VoiceRemoteAudioSupport.LocalOnly
                 : state.RemoteAudioSupport,
             ActiveTransportLeaseId = state.ActiveTransportLeaseId ?? string.Empty,
+            LeaseEpoch = state.LeaseEpoch,
+            ActiveLeaseOwnerId = state.ActiveLeaseOwnerId ?? string.Empty,
         };
     }
 
@@ -68,7 +70,9 @@ internal static class VoicePresenceCapabilityReadModelMapper
             readModel.RemoteAudioSupport == VoiceRemoteAudioSupport.Unspecified
                 ? VoiceRemoteAudioSupport.LocalOnly
                 : readModel.RemoteAudioSupport,
-            string.IsNullOrWhiteSpace(readModel.ActiveTransportLeaseId) ? null : readModel.ActiveTransportLeaseId);
+            string.IsNullOrWhiteSpace(readModel.ActiveTransportLeaseId) ? null : readModel.ActiveTransportLeaseId,
+            readModel.LeaseEpoch,
+            string.IsNullOrWhiteSpace(readModel.ActiveLeaseOwnerId) ? null : readModel.ActiveLeaseOwnerId);
     }
 
     public static string NormalizeModuleName(string? moduleName) =>

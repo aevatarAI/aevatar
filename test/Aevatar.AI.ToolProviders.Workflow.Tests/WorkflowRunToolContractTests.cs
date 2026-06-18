@@ -1,5 +1,7 @@
 using System.Text.Json;
 using Aevatar.AI.ToolProviders.Workflow.Tools;
+using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using FluentAssertions;
 using Xunit;
@@ -337,6 +339,53 @@ public sealed class WorkflowRunToolContractTests
     }
 
     [Fact]
+    public async Task WorkflowActorCurrentStateTool_DeadLetters_ShouldUseSagaStatusFilteredCurrentStateList()
+    {
+        var query = new RecordingWorkflowExecutionQueryService
+        {
+            CurrentStates =
+            [
+                new WorkflowActorSnapshot
+                {
+                    ActorId = "run-dead-letter-1",
+                    WorkflowName = "orders",
+                    CompletionStatus = WorkflowRunCompletionStatus.Failed,
+                    SagaStatus = WorkflowSagaStatus.CompensationDeadLetter,
+                    StateVersion = 44,
+                    LastEventId = "evt-44",
+                    DeadLetterFailedCompensationStepId = "refund_payment",
+                    DeadLetterRemainingUncompensated = 2,
+                    DeadLetterError = "refund failed",
+                },
+            ],
+        };
+        var tool = new WorkflowActorCurrentStateTool(
+            query,
+            new WorkflowToolOptions { MaxWorkflowActorCurrentStates = 5 });
+
+        var result = await tool.ExecuteAsync("""{"action":"dead_letters","take":9}""");
+
+        using var document = JsonDocument.Parse(result);
+        var root = document.RootElement;
+        root.GetProperty("count").GetInt32().Should().Be(1);
+        var deadLetter = root.GetProperty("dead_letters")[0];
+        deadLetter.GetProperty("actor_id").GetString().Should().Be("run-dead-letter-1");
+        deadLetter.GetProperty("state_version").GetInt64().Should().Be(44);
+        deadLetter.GetProperty("saga_status").GetString().Should().Be("CompensationDeadLetter");
+        deadLetter.GetProperty("dead_letter").GetProperty("failed_compensation_step_id").GetString()
+            .Should().Be("refund_payment");
+        deadLetter.GetProperty("dead_letter").GetProperty("remaining_uncompensated").GetInt32()
+            .Should().Be(2);
+        deadLetter.GetProperty("dead_letter").GetProperty("error").GetString()
+            .Should().Be("refund failed");
+        query.LastCurrentStateListQuery.Should().NotBeNull();
+        query.LastCurrentStateListQuery!.Take.Should().Be(9);
+        query.LastCurrentStateListQuery.SagaStatus.Should().Be(WorkflowSagaStatus.CompensationDeadLetter);
+        query.Calls.Should().Equal("ListWorkflowActorCurrentStatesQuery:9:CompensationDeadLetter");
+        tool.ParametersSchema.Should().Contain("\"dead_letters\"");
+    }
+
+    [Fact]
     public async Task WorkflowActorCurrentStateTool_Graph_ShouldNotExposeWorkflowArtifactSubgraph()
     {
         var query = new RecordingWorkflowExecutionQueryService();
@@ -434,6 +483,8 @@ public sealed class WorkflowRunToolContractTests
         public WorkflowCatalogItemDetail? Detail { get; init; }
         public IReadOnlyList<WorkflowAgentSummary> Agents { get; init; } = [];
         public WorkflowActorSnapshot? CurrentState { get; init; }
+        public IReadOnlyList<WorkflowActorSnapshot> CurrentStates { get; init; } = [];
+        public WorkflowActorCurrentStateListQuery? LastCurrentStateListQuery { get; private set; }
         public IReadOnlyList<WorkflowRunTimelineExportItem> Timeline { get; init; } = [];
         public IReadOnlyList<WorkflowRunGraphExportEdge> GraphEdges { get; init; } = [];
         public WorkflowRunGraphExportSubgraph GraphSubgraph { get; init; } = new();
@@ -467,6 +518,15 @@ public sealed class WorkflowRunToolContractTests
         {
             Calls.Add($"GetWorkflowActorCurrentState:{actorId}");
             return Task.FromResult(CurrentState);
+        }
+
+        public Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowActorCurrentStatesAsync(
+            WorkflowActorCurrentStateListQuery query,
+            CancellationToken ct = default)
+        {
+            LastCurrentStateListQuery = query;
+            Calls.Add($"ListWorkflowActorCurrentStatesQuery:{query.Take}:{query.SagaStatus}");
+            return Task.FromResult(CurrentStates);
         }
 
         public Task<WorkflowRunReport?> GetWorkflowRunReportArtifactAsync(string actorId, CancellationToken ct = default)

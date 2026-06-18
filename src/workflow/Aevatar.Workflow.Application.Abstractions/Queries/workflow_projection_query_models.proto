@@ -6,6 +6,7 @@ option csharp_namespace = "Aevatar.Workflow.Application.Abstractions.Queries";
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/wrappers.proto";
+import "workflow_execution_messages.proto";
 
 message WorkflowActorSnapshot {
   string actor_id = 1;
@@ -23,6 +24,10 @@ message WorkflowActorSnapshot {
   int32 completed_steps = 13;
   int32 role_reply_count = 14;
   repeated WorkflowRunFileRef input_file_refs = 15;
+  aevatar.workflow.WorkflowSagaStatus saga_status = 16;
+  string dead_letter_failed_compensation_step_id = 17;
+  int32 dead_letter_remaining_uncompensated = 18;
+  string dead_letter_error = 19;
 }
 
 message WorkflowRunFileRef {

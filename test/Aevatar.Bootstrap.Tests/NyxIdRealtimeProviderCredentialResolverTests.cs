@@ -3,8 +3,10 @@ using System.Reflection;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Bootstrap.Extensions.AI;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -59,6 +61,49 @@ public sealed class NyxIdRealtimeProviderCredentialResolverTests
     }
 
     [Fact]
+    public async Task ResolveApiKey_with_actor_side_credential_ref_mints_ephemeral_on_caller_identity()
+    {
+        var credentials = new StubCredentialProvider(("voice-tool:ref-1", "caller-jwt-from-ref"));
+        var resolver = CreateResolver("""{"value":"ek_ga_from_ref"}""", out var handler, credentials);
+        var sessionKey = SessionKey with
+        {
+            ToolContext = new VoiceToolExecutionContext
+            {
+                CredentialRef = "voice-tool:ref-1",
+                ExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)),
+            },
+        };
+
+        var result = await resolver.ResolveApiKeyAsync(sessionKey, Config(), CancellationToken.None);
+
+        result.Should().Be("ek_ga_from_ref");
+        handler.RequestCount.Should().Be(1);
+        handler.LastAuthorization.Should().Be("Bearer caller-jwt-from-ref");
+        credentials.RequestedRefs.Should().ContainSingle().Which.Should().Be("voice-tool:ref-1");
+    }
+
+    [Fact]
+    public async Task ResolveApiKey_with_expired_actor_side_credential_ref_returns_null()
+    {
+        var credentials = new StubCredentialProvider(("voice-tool:expired", "caller-jwt-from-ref"));
+        var resolver = CreateResolver("""{"value":"ek_unused"}""", out var handler, credentials);
+        var sessionKey = SessionKey with
+        {
+            ToolContext = new VoiceToolExecutionContext
+            {
+                CredentialRef = "voice-tool:expired",
+                ExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(-1)),
+            },
+        };
+
+        var result = await resolver.ResolveApiKeyAsync(sessionKey, Config(), CancellationToken.None);
+
+        result.Should().BeNull();
+        handler.RequestCount.Should().Be(0);
+        credentials.RequestedRefs.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ResolveApiKey_when_response_has_no_ephemeral_throws()
     {
         var resolver = CreateResolver("""{"unexpected":true}""", out _);
@@ -70,11 +115,14 @@ public sealed class NyxIdRealtimeProviderCredentialResolverTests
     }
 
     [Fact]
-    public void Broker_is_enabled_only_when_service_slug_configured()
+    public void Broker_is_enabled_by_default_with_conventional_slug()
     {
-        IsBrokerEnabled(BuildConfig(slug: null)).Should().BeFalse();
-        IsBrokerEnabled(BuildConfig(slug: "")).Should().BeFalse();
-        IsBrokerEnabled(BuildConfig(slug: "openai-realtime")).Should().BeTrue();
+        // Voice broker is ON by default even when the deployment config/secret is absent or empty,
+        // so a wiped config cannot disable voice. A configured slug still overrides the default.
+        IsBrokerEnabled(BuildConfig(slug: null)).Should().BeTrue();
+        IsBrokerEnabled(BuildConfig(slug: "")).Should().BeTrue();
+        BuildBrokerOptions(BuildConfig(slug: null)).ServiceSlug.Should().Be("openai-realtime");
+        BuildBrokerOptions(BuildConfig(slug: "custom-openai")).ServiceSlug.Should().Be("custom-openai");
     }
 
     [Fact]
@@ -95,7 +143,8 @@ public sealed class NyxIdRealtimeProviderCredentialResolverTests
 
     private static NyxIdRealtimeProviderCredentialResolver CreateResolver(
         string responseJson,
-        out StubHttpMessageHandler handler)
+        out StubHttpMessageHandler handler,
+        ICredentialProvider? credentialProvider = null)
     {
         var capturedHandler = new StubHttpMessageHandler(responseJson);
         handler = capturedHandler;
@@ -107,7 +156,8 @@ public sealed class NyxIdRealtimeProviderCredentialResolverTests
         return new NyxIdRealtimeProviderCredentialResolver(
             factory,
             options,
-            NullLogger<NyxIdRealtimeProviderCredentialResolver>.Instance);
+            NullLogger<NyxIdRealtimeProviderCredentialResolver>.Instance,
+            credentialProvider);
     }
 
     private static IConfiguration BuildConfig(string? slug)
@@ -156,6 +206,23 @@ public sealed class NyxIdRealtimeProviderCredentialResolverTests
             {
                 Content = new StringContent(responseJson),
             });
+        }
+    }
+
+    private sealed class StubCredentialProvider(params (string Ref, string Token)[] credentials) : ICredentialProvider
+    {
+        private readonly Dictionary<string, string> _credentials = credentials.ToDictionary(
+            static credential => credential.Ref,
+            static credential => credential.Token,
+            StringComparer.Ordinal);
+
+        public List<string> RequestedRefs { get; } = [];
+
+        public Task<string?> ResolveAsync(string credentialRef, CancellationToken ct = default)
+        {
+            _ = ct;
+            RequestedRefs.Add(credentialRef);
+            return Task.FromResult(_credentials.GetValueOrDefault(credentialRef));
         }
     }
 }

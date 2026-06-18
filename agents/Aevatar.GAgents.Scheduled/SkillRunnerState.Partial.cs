@@ -1,9 +1,12 @@
+using Aevatar.GAgents.Channel.Abstractions;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgents.Scheduled;
 
 public sealed partial class SkillRunnerState
 {
+    internal const int RecentDeliveriesCap = 100;
+
     public ExternalTriggerSource? FindExternalTriggerSource(string? sourceId)
     {
         var normalized = sourceId?.Trim();
@@ -31,6 +34,17 @@ public sealed partial class SkillRunnerState
     {
         var record = FindExternalTriggerDelivery(identity);
         return record is not null && IsTerminalExternalTriggerStatus(record.Status);
+    }
+
+    public bool IsCronOccurrenceTerminal(string? cronOccurrenceKey)
+    {
+        var normalized = NormalizeCronOccurrenceKey(cronOccurrenceKey);
+        return !string.IsNullOrEmpty(normalized) &&
+               RecentCronOccurrenceTerminals.Any(record =>
+                   string.Equals(
+                       NormalizeCronOccurrenceKey(record.CronOccurrenceKey),
+                       normalized,
+                       StringComparison.Ordinal));
     }
 
     public IReadOnlyList<SkillRunnerExternalTriggerDeliveryRecord> RecoverableExternalTriggerDeliveries() =>
@@ -98,6 +112,63 @@ public sealed partial class SkillRunnerState
         RecentExternalTriggerDeliveries.AddRange(kept);
     }
 
+    internal void AppendDelivery(DeliveryProducedEvent produced)
+    {
+        ArgumentNullException.ThrowIfNull(produced);
+
+        var entry = ToLedgerEntry(produced);
+        RecentDeliveries.Add(entry);
+        while (RecentDeliveries.Count > RecentDeliveriesCap)
+            RecentDeliveries.RemoveAt(0);
+
+        if (entry.Status == DeliveryStatus.Succeeded)
+            LastSuccessfulDelivery = entry.Clone();
+    }
+
+    internal void UpsertCronOccurrenceTerminal(string? cronOccurrenceKey, Timestamp terminalAt)
+    {
+        ArgumentNullException.ThrowIfNull(terminalAt);
+
+        var normalized = NormalizeCronOccurrenceKey(cronOccurrenceKey);
+        if (string.IsNullOrEmpty(normalized))
+            return;
+
+        var existingIndex = FindCronOccurrenceTerminalIndex(normalized);
+        var next = new SkillRunnerCronOccurrenceTerminalRecord
+        {
+            CronOccurrenceKey = normalized,
+            TerminalAt = terminalAt,
+        };
+
+        if (existingIndex >= 0)
+            RecentCronOccurrenceTerminals[existingIndex] = next;
+        else
+            RecentCronOccurrenceTerminals.Add(next);
+    }
+
+    internal void TrimCronOccurrenceTerminals(DateTimeOffset now)
+    {
+        var cutoff = now - SkillRunnerDefaults.CronOccurrenceTerminalRetentionAge;
+        var keysToRemove = RecentCronOccurrenceTerminals
+            .OrderByDescending(static record => ToDateTimeOffset(record.TerminalAt))
+            .Skip(SkillRunnerDefaults.CronOccurrenceTerminalRetention)
+            .Concat(RecentCronOccurrenceTerminals
+                .Where(record => ToDateTimeOffset(record.TerminalAt) < cutoff))
+            .Select(static record => NormalizeCronOccurrenceKey(record.CronOccurrenceKey))
+            .Where(static key => !string.IsNullOrEmpty(key))
+            .ToHashSet(StringComparer.Ordinal);
+
+        if (keysToRemove.Count == 0)
+            return;
+
+        var kept = RecentCronOccurrenceTerminals
+            .Where(record => !keysToRemove.Contains(NormalizeCronOccurrenceKey(record.CronOccurrenceKey)))
+            .Select(static record => record.Clone())
+            .ToArray();
+        RecentCronOccurrenceTerminals.Clear();
+        RecentCronOccurrenceTerminals.AddRange(kept);
+    }
+
     private int FindExternalTriggerDeliveryIndex(SkillRunnerExternalTriggerIdentity identity)
     {
         for (var i = 0; i < RecentExternalTriggerDeliveries.Count; i++)
@@ -105,6 +176,23 @@ public sealed partial class SkillRunnerState
             var record = RecentExternalTriggerDeliveries[i];
             if (string.Equals(record.Identity?.SourceId?.Trim(), identity.SourceId?.Trim(), StringComparison.Ordinal) &&
                 string.Equals(record.Identity?.DeliveryId?.Trim(), identity.DeliveryId?.Trim(), StringComparison.Ordinal))
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private int FindCronOccurrenceTerminalIndex(string normalizedCronOccurrenceKey)
+    {
+        for (var i = 0; i < RecentCronOccurrenceTerminals.Count; i++)
+        {
+            var record = RecentCronOccurrenceTerminals[i];
+            if (string.Equals(
+                    NormalizeCronOccurrenceKey(record.CronOccurrenceKey),
+                    normalizedCronOccurrenceKey,
+                    StringComparison.Ordinal))
             {
                 return i;
             }
@@ -128,4 +216,20 @@ public sealed partial class SkillRunnerState
 
     private static string BuildDeliveryKey(SkillRunnerExternalTriggerIdentity? identity) =>
         $"{identity?.SourceId?.Trim() ?? string.Empty}\n{identity?.DeliveryId?.Trim() ?? string.Empty}";
+
+    private static string NormalizeCronOccurrenceKey(string? cronOccurrenceKey) =>
+        cronOccurrenceKey?.Trim() ?? string.Empty;
+
+    private static DeliveryLedgerEntry ToLedgerEntry(DeliveryProducedEvent produced) =>
+        new()
+        {
+            DeliveryKind = produced.DeliveryKind,
+            Status = produced.Status,
+            Target = produced.Target?.Clone() ?? new DeliveryTarget(),
+            LarkMessageId = produced.LarkMessageId ?? string.Empty,
+            CardId = produced.CardId ?? string.Empty,
+            RequestId = produced.RequestId ?? string.Empty,
+            SourceEventId = produced.SourceEventId ?? string.Empty,
+            ProducedAtVersion = produced.ProducedAtVersion,
+        };
 }

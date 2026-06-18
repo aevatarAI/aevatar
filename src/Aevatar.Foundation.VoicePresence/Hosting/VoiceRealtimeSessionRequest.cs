@@ -7,7 +7,8 @@ public sealed record VoiceRealtimeSessionRequest(
     string ActorId,
     string? ModuleName = null,
     VoiceRealtimeSessionPurpose Purpose = VoiceRealtimeSessionPurpose.Attach,
-    VoiceSessionOverrides? SessionOverrides = null);
+    VoiceSessionOverrides? SessionOverrides = null,
+    VoiceToolExecutionContext? ToolContext = null);
 
 public enum VoiceRealtimeSessionPurpose
 {
@@ -21,7 +22,18 @@ public sealed record VoiceRealtimeSessionAccepted(
     string SessionId,
     int PcmSampleRateHz,
     long ObservedStateVersion,
-    VoicePresenceSessionLeaseHandle LeaseHandle);
+    VoicePresenceSessionLeaseHandle LeaseHandle,
+    string WireContractVersion = VoiceWireContractDefaults.CurrentWireContractVersion,
+    VoiceInputImagePolicy? InputImagePolicy = null)
+{
+    public string EffectiveWireContractVersion =>
+        string.IsNullOrWhiteSpace(WireContractVersion)
+            ? VoiceWireContractDefaults.CurrentWireContractVersion
+            : WireContractVersion;
+
+    public VoiceInputImagePolicy CreateEffectiveInputImagePolicy() =>
+        InputImagePolicy?.Clone() ?? VoiceWireContractDefaults.CreateInputImagePolicy();
+}
 
 public enum VoiceRealtimeSessionStartError
 {

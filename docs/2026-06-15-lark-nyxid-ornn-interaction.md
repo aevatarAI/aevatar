@@ -55,9 +55,9 @@ sequenceDiagram
         EX->>N: NyxIdLLMProvider.ChatStreamAsync<br/>POST /api/v1/llm/gateway/v1/chat/completions
         N-->>EX: SSE 流式 LLMStreamChunk
         loop 每个 delta
-            EX->>CG: LlmReplyCardStreamChunkEvent<br/>(IActorDispatchPort)
+            EX->>AR: LlmReplyCardStreamChunkEvent<br/>(IActorDispatchPort)
         end
-        CG->>N: ChannelCardConversationTurnRunner<br/>Create→Stream→Finalize CardKit 卡片
+        AR->>N: ChannelCardConversationTurnRunner<br/>Create→Stream→Finalize CardKit 卡片
         N->>L: 卡片流式更新
         L-->>U: 卡片实时刷新
 
@@ -72,8 +72,9 @@ sequenceDiagram
         end
     end
 
-    EX->>CG: 最终回复 chunk
-    CG->>N: PATCH 卡片 settings streaming_mode=false
+    EX->>AR: 最终回复 chunk
+    AR->>N: PATCH 卡片 settings streaming_mode=false
+    AR->>CG: LarkCardDeliveryCompletedEvent
     N->>L: 关闭流式卡片
     L-->>U: 卡片最终态
 ```
@@ -95,9 +96,10 @@ sequenceDiagram
 
 - `ConversationGAgent`（按 conversationId 分桶的 Orleans grain）负责：去重、解析 conversation→bot persona / LLM 配置 / 技能包绑定、持久化 `ConversationHistoryEntry`，然后发 `NeedsLlmReplyEvent` 启一个新的 **per-turn `AgentRunGAgent`** grain。
   - 文件：`agents/Aevatar.GAgents.Channel.Runtime/Conversation/ConversationGAgent.cs`
-  - 流式卡片生命周期：`ConversationGAgent.LarkCardStreaming.cs` + `ReplyStreaming/LarkCardReplyStreamRenderer.cs`
+  - 卡片模式下只消费终态 `LarkCardDeliveryCompletedEvent`，把完成事实写回 conversation。
 - `AgentRunGAgent` 是「一轮对话」的状态机，持有「LLM step → tool step → LLM step …」的多步循环（上限 40 轮）。
   - 文件：`agents/Aevatar.GAgents.NyxidChat/AgentRunGAgent.cs`
+  - 流式卡片生命周期：`AgentRunGAgent.LarkCardDelivery.cs` 驱动 CardKit Create → Stream → Finalize；renderer 抽象继续复用 `ReplyStreaming/LarkCardReplyStreamRenderer.cs`。
   - 它**不做 IO**，把每步的 IO 委托给 `AgentRunReplyGenerationExecutor`（`agents/Aevatar.GAgents.NyxidChat/AgentRunReplyGenerationExecutor.cs`）。
   - 步骤间驱动用 typed event：`AgentRunNextLlmStepRequestedEvent` / `AgentRunNextToolStepRequestedEvent` / `AgentRunReplyGenerationFailed`，通过 `DispatchToRunActorAsync` 回投。
 
@@ -108,7 +110,7 @@ sequenceDiagram
   - 文件：`src/Aevatar.AI.LLMProviders.NyxId/NyxIdLLMProvider.cs`
   - 协议：用「用户自己的 NyxID access token」当 OpenAI API Key，POST `{nyx}/api/v1/llm/gateway/v1/chat/completions`，SSE 回 `LLMStreamChunk`。
   - NyxID 后端 `gateway_request`（`../NyxID/backend/src/handlers/llm_gateway.rs:325`）按 `model` 字段路由到上游 provider。
-- **流式回调钩子**：每个 delta 走 `onDelta` → `TurnStreamingReplySink.DispatchAsync`（`agents/Aevatar.GAgents.Channel.Runtime/TurnStreamingReplySink.cs`）→ `IActorDispatchPort` 把 `LlmReplyCardStreamChunkEvent`（卡片模式）或 `LlmReplyStreamChunkEvent`（文本编辑模式）回投给 `ConversationGAgent`。带节流（`StreamingCardKitFlushIntervalMs`）和 interim-chunk 上限。
+- **流式回调钩子**：每个 delta 走 `onDelta` → `TurnStreamingReplySink.DispatchAsync`（`agents/Aevatar.GAgents.Channel.Runtime/TurnStreamingReplySink.cs`）→ `IActorDispatchPort` 投递流式 chunk。文本编辑模式的 `LlmReplyStreamChunkEvent` 回到 `ConversationGAgent`；卡片模式的 `LlmReplyCardStreamChunkEvent` 投到 **run actor**。`AgentRunReplyGenerationExecutor` 在 card-mode 下使用 `streamingTargetActorId = runActorId`，非卡片模式仍使用 `targetActorId`。带节流（`StreamingCardKitFlushIntervalMs`）和 interim-chunk 上限。
 
 ### 1.4 工具调用：Ornn 技能 / sandbox（在 LLM 循环内）
 
@@ -126,7 +128,7 @@ LLM 流式返回里若带 `tool_calls`，executor 解析出 `effectiveToolCalls`
 
 ### 1.5 出站：aevatar → NyxID → Lark 卡片
 
-`ConversationGAgent.HandleLlmReplyCardStreamChunkAsync` 把每个 chunk 喂给 `LarkCardReplyStreamRenderer`，驱动三阶段卡片生命周期（`LarkCardOperationPhase`：**Create → Stream → Finalize**）：
+`AgentRunGAgent.HandleLlmReplyCardStreamChunkAsync` 把每个 card chunk 喂给 `LarkCardReplyStreamRenderer`，由 `AgentRunGAgent.LarkCardDelivery.cs` 驱动三阶段卡片生命周期（`LarkCardOperationPhase`：**Create → Stream → Finalize**）。完成后 run actor 发 `LarkCardDeliveryCompletedEvent` 给 `ConversationGAgent`，后者只负责落 conversation 终态与 history：
 
 | 阶段 | 动作 | 实现 |
 |---|---|---|
@@ -351,7 +353,7 @@ flowchart LR
 
 ### 直聊链路
 - 回调入口：`agents/Aevatar.GAgents.NyxidChat/NyxIdChatEndpoints.Relay.cs`（路由：`NyxIdChatEndpoints.cs:35`）
-- 编排：`agents/Aevatar.GAgents.Channel.Runtime/Conversation/ConversationGAgent.cs` + `ConversationGAgent.LarkCardStreaming.cs`
+- 编排：`agents/Aevatar.GAgents.Channel.Runtime/Conversation/ConversationGAgent.cs` + `agents/Aevatar.GAgents.NyxidChat/AgentRunGAgent.LarkCardDelivery.cs`
 - 回合状态机：`agents/Aevatar.GAgents.NyxidChat/AgentRunGAgent.cs`
 - 步骤执行器：`agents/Aevatar.GAgents.NyxidChat/AgentRunReplyGenerationExecutor.cs`
 - LLM provider：`src/Aevatar.AI.LLMProviders.NyxId/NyxIdLLMProvider.cs`

@@ -13,6 +13,7 @@ using Aevatar.GAgents.Device;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.GAgents.StatusDashboard;
 using Aevatar.GAgents.StreamingProxy;
+using Aevatar.Workflow.Projection.ReadModels;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -38,6 +39,10 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
             AddElasticsearchStores(services, configuration);
             services.TryAddEnumerable(
                 ServiceDescriptor.Singleton<IHostedService, AevatarOAuthClientEsAclStartupGuard>());
+            // Self-heal projection-index schema drift at startup (reindex + atomic alias swap)
+            // so a deploy that bumps a read-model schema doesn't 500 reads (e.g. /ws/voice).
+            services.TryAddEnumerable(
+                ServiceDescriptor.Singleton<IHostedService, ElasticsearchProjectionIndexReconcileHostedService>());
         }
         else
         {
@@ -50,6 +55,7 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
     private static void AddElasticsearchStores(IServiceCollection services, IConfiguration configuration)
     {
         TryAddElasticsearchStore<ChannelBotRegistrationDocument>(services, configuration, static document => document.Id);
+        TryAddElasticsearchStore<ConversationDeliveryCurrentStateDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<ProjectionScopeStatusDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<ExternalIdentityBindingDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<AevatarOAuthClientDocument>(services, configuration, static document => document.Id);
@@ -59,6 +65,7 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         TryAddElasticsearchStore<SkillRunnerExecutionDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<UserAgentCatalogNyxCredentialDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<HealthProbeTargetDocument>(services, configuration, static document => document.Id);
+        TryAddElasticsearchStore<WorkflowExternalApprovalContinuationDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<StreamingProxyChatSessionTerminalSnapshot>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<StreamingProxyRoomParticipantsSnapshot>(services, configuration, static document => document.Id);
     }
@@ -66,6 +73,7 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
     private static void AddInMemoryStores(IServiceCollection services)
     {
         TryAddInMemoryStore<ChannelBotRegistrationDocument>(services, static document => document.Id);
+        TryAddInMemoryStore<ConversationDeliveryCurrentStateDocument>(services, static document => document.Id);
         TryAddInMemoryStore<ProjectionScopeStatusDocument>(services, static document => document.Id);
         TryAddInMemoryStore<ExternalIdentityBindingDocument>(services, static document => document.Id);
         TryAddInMemoryStore<AevatarOAuthClientDocument>(services, static document => document.Id);
@@ -75,6 +83,7 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         TryAddInMemoryStore<SkillRunnerExecutionDocument>(services, static document => document.Id);
         TryAddInMemoryStore<UserAgentCatalogNyxCredentialDocument>(services, static document => document.Id);
         TryAddInMemoryStore<HealthProbeTargetDocument>(services, static document => document.Id);
+        TryAddInMemoryStore<WorkflowExternalApprovalContinuationDocument>(services, static document => document.Id);
         TryAddInMemoryStore(
             services,
             static (StreamingProxyChatSessionTerminalSnapshot document) => document.Id,

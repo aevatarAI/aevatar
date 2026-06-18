@@ -33,9 +33,10 @@ namespace Aevatar.GAgents.NyxidChat;
 //   Old pattern: process-local Channel/Task workers owned business IO via singleton executor.
 //   New principle: actor-owned operation state (operation_id/lease_epoch/step) + typed self-continuation events; provider IO is inline async, no in-process worker queue.
 [GAgent("nyxid.chat.agent-run")]
-public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
+public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 {
     internal const long MaxRunRequestAgeMs = 5 * 60 * 1000;
+    private const int RecentDeliveriesCap = 100;
 
     /// <summary>
     /// Hard upper bound on a single LLM reply turn. Mirrors
@@ -90,7 +91,10 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             .On<AgentRunReplyGenerationRequestedEvent>(ApplyReplyGenerationRequested)
             .On<AgentRunReplyStepStateUpdatedEvent>(ApplyReplyStepStateUpdated)
             .On<AgentRunReplyProducedEvent>(ApplyReplyProduced)
+            .On<AgentRunCardDeliveryCompletionPreparedEvent>(ApplyCardDeliveryCompletionPrepared)
             .On<AgentRunReplyDispatchedEvent>(ApplyReplyDispatched)
+            .On<AgentRunLarkCardDeliveryChangedEvent>(ApplyLarkCardDeliveryChanged)
+            .On<DeliveryProducedEvent>(ApplyDeliveryProduced)
             .On<AgentRunDroppedEvent>(ApplyDropped)
             .On<AgentRunDropNotificationDispatchedEvent>(ApplyDropNotificationDispatched)
             .On<AgentRunFailedEvent>(ApplyFailed)
@@ -245,8 +249,11 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         if (!IsCurrentOutputDispatchRetry(command))
             return;
 
-        var request = BuildOutputDispatchRetryRequest(command);
-        if (command.RequiresRuntimeReplyToken)
+        var hasPendingCardCompletion = HasPendingCardDeliveryCompletion();
+        var request = hasPendingCardCompletion
+            ? BuildCardDeliveryCompletionRetryRequest()
+            : BuildOutputDispatchRetryRequest(command);
+        if (command.RequiresRuntimeReplyToken && !hasPendingCardCompletion)
         {
             _logger.LogWarning(
                 "Dropping durable output-dispatch retry without runtime reply_token: runId={RunId} correlation={CorrelationId}",
@@ -693,6 +700,41 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     // refused to fire, and every run terminated as the generic apology). Any completed
     // empty step gets exactly one no-tools retry (FinalNoToolsStep guarantees the
     // retry itself terminates) before failing as empty_reply.
+    private const int EmptyRetryRecentMessagesFloor = 6;
+
+    private static bool IsSystemRole(string role) =>
+        string.Equals(role, "system", StringComparison.OrdinalIgnoreCase);
+
+    // Empty-reply one-shot recovery retry: a first attempt that produced nothing was often caused by
+    // a conversation history too large for the model. The retry runs on a minimal context so it can
+    // still answer. Keep every system message (anchored instructions) plus the most-recent
+    // keepRecent non-system messages, preserving order, dropping the older middle. Returns the number
+    // of messages dropped (for logging).
+    private static int TrimMessagesToRecentFloor(
+        Google.Protobuf.Collections.RepeatedField<AgentRunChatMessage> messages,
+        int keepRecent)
+    {
+        var nonSystemCount = messages.Count(m => !IsSystemRole(m.Role));
+        if (nonSystemCount <= keepRecent)
+            return 0;
+
+        var dropAllowance = nonSystemCount - keepRecent;
+        var dropped = dropAllowance;
+        var kept = new List<AgentRunChatMessage>(messages.Count);
+        foreach (var message in messages)
+        {
+            if (!IsSystemRole(message.Role) && dropAllowance > 0)
+            {
+                dropAllowance--;
+                continue;
+            }
+            kept.Add(message);
+        }
+        messages.Clear();
+        messages.AddRange(kept);
+        return dropped;
+    }
+
     private static bool ShouldRecoverEmptyLlmStep(AgentRunReplyStepState stepState)
     {
         if (stepState.FinalNoToolsStep)
@@ -715,7 +757,8 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     private async Task<AgentRunReplyStepState> AdvanceToFinalNoToolsStepAsync(
         AgentRunReplyStepState stepState,
         AgentRunChatMessage? llmVisibleNudge = null,
-        bool useOwnerFallbackRouting = false)
+        bool useOwnerFallbackRouting = false,
+        bool trimHistoryToRecent = false)
     {
         var next = stepState.Clone();
         next.FinalNoToolsStep = true;
@@ -725,6 +768,14 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             next.LlmControl = ResolveOwnerFallbackControl(stepState).ToPayload();
             next.ToolContext = ResolveOwnerFallbackToolContext(stepState).ToPayload();
             StripServerDefaultFallbackMetadata(next.ExternalMetadata);
+        }
+        if (trimHistoryToRecent)
+        {
+            var dropped = TrimMessagesToRecentFloor(next.Messages, EmptyRetryRecentMessagesFloor);
+            if (dropped > 0)
+                _logger.LogWarning(
+                    "Empty reply recovery: trimmed {Dropped} oldest history messages to the recent floor before retry: runId={RunId} correlation={CorrelationId}",
+                    dropped, next.RunId, next.CorrelationId);
         }
         // The nudge is LLM-visible plumbing for the retry step only: it is deliberately
         // NOT mirrored into AppendedHistory, so it never lands in the durable
@@ -825,7 +876,8 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 stepState = await AdvanceToFinalNoToolsStepAsync(
                     stepState,
                     BuildEmptyStepRecoveryNudge(),
-                    useOwnerFallbackRouting: true);
+                    useOwnerFallbackRouting: true,
+                    trimHistoryToRecent: true);
                 await DispatchLlmStepExecutorAsync(request, stepState);
                 return;
             }
@@ -1148,6 +1200,16 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             appendedHistory,
             toolReceipts);
 
+        if (await TryCompleteCardStreamedReplyAsync(
+                request,
+                runId,
+                renderedReplyText,
+                outboundIntent,
+                appendedHistory ?? []))
+        {
+            return;
+        }
+
         await DispatchReadyEventAsync(
             request,
             runId,
@@ -1177,6 +1239,16 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     private async Task ReDispatchProducedReplyAsync(NeedsLlmReplyEvent request, string runId)
     {
         var outbound = State.ProducedOutbound;
+        if (await TryCompleteCardStreamedReplyAsync(
+                request,
+                runId,
+                State.ProducedReplyText ?? string.Empty,
+                outbound,
+                State.ProducedAppendedHistory.ToArray()))
+        {
+            return;
+        }
+
         await DispatchReadyEventAsync(
             request,
             runId,
@@ -1290,6 +1362,52 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         evt.AppendedHistory.AddRange((appendedHistory ?? []).Select(entry => entry.Clone()));
         evt.ToolReceipts.AddRange((toolReceipts ?? []).Select(receipt => receipt.Clone()));
         await PersistDomainEventAsync(evt);
+    }
+
+    private Task PersistReplyProducedWithCardCompletionAsync(
+        NeedsLlmReplyEvent request,
+        string runId,
+        string replyText,
+        MessageContent? outbound,
+        LlmReplyTerminalState terminalState,
+        string errorCode,
+        string errorSummary,
+        IReadOnlyList<ConversationHistoryEntry>? appendedHistory,
+        AgentRunLarkCardDeliveryCompletion completion)
+    {
+        var produced = new AgentRunReplyProducedEvent
+        {
+            RunId = runId,
+            CorrelationId = request.CorrelationId,
+            TargetActorId = request.TargetActorId,
+            TerminalState = terminalState,
+            ErrorCode = errorCode,
+            ErrorSummary = errorSummary,
+            ProducedAtUnixMs = completion.CompletedAtUnixMs > 0
+                ? completion.CompletedAtUnixMs
+                : _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+            ReplyText = replyText ?? string.Empty,
+        };
+        if (outbound is not null)
+            produced.Outbound = outbound.Clone();
+        produced.AppendedHistory.AddRange((appendedHistory ?? []).Select(entry => entry.Clone()));
+
+        var deliveryProduced = BuildDeliveryProducedEvent(
+            DeliveryKind.StreamingCard,
+            ResolveCardDeliveryStatus(completion, State.LarkCardDelivery?.TerminalReason),
+            completion,
+            request.Activity,
+            cardId: State.LarkCardDelivery?.CardId);
+
+        return PersistDomainEventsAsync(
+        [
+            produced,
+            deliveryProduced,
+            new AgentRunCardDeliveryCompletionPreparedEvent
+            {
+                Completion = completion.Clone(),
+            },
+        ]);
     }
 
     private string RenderReplyWithReceipts(
@@ -1570,7 +1688,8 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                         Attempt = State.GenerationAttempt,
                         Generation = Math.Max(1, State.GenerationAttempt),
                         RequestedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
-                        RequiresRuntimeReplyToken = IsRelayRequest(request),
+                        RequiresRuntimeReplyToken =
+                            IsRelayRequest(request) && !HasPendingCardDeliveryCompletion(),
                     }),
                 ct: CancellationToken.None);
             return true;
@@ -2018,6 +2137,35 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         next.TargetActorId = string.IsNullOrWhiteSpace(next.TargetActorId) ? evt.TargetActorId : next.TargetActorId;
         // Promote committed -> handed-off (ADR-0021 AgentRunGAgent-side terminal).
         next.Status = AgentRunStatus.ReplyHandedOff;
+        next.PendingCardDeliveryCompletion = null;
+        return next;
+    }
+
+    private static AgentRunGAgentState ApplyCardDeliveryCompletionPrepared(
+        AgentRunGAgentState current,
+        AgentRunCardDeliveryCompletionPreparedEvent evt)
+    {
+        var next = current.Clone();
+        if (evt.Completion is null)
+            return next;
+
+        next.RunId = string.IsNullOrWhiteSpace(next.RunId) ? evt.Completion.RunId : next.RunId;
+        next.CorrelationId = string.IsNullOrWhiteSpace(next.CorrelationId)
+            ? evt.Completion.CorrelationId
+            : next.CorrelationId;
+        next.TargetActorId = string.IsNullOrWhiteSpace(next.TargetActorId)
+            ? evt.Completion.TargetActorId
+            : next.TargetActorId;
+        next.PendingCardDeliveryCompletion = evt.Completion.Clone();
+        return next;
+    }
+
+    private static AgentRunGAgentState ApplyDeliveryProduced(
+        AgentRunGAgentState current,
+        DeliveryProducedEvent evt)
+    {
+        var next = current.Clone();
+        AppendDelivery(next, evt);
         return next;
     }
 
@@ -2084,6 +2232,102 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         var trimmed = value?.Trim();
         return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
     }
+
+    private DeliveryProducedEvent BuildDeliveryProducedEvent(
+        DeliveryKind kind,
+        DeliveryStatus status,
+        AgentRunLarkCardDeliveryCompletion completion,
+        ChatActivity? activity,
+        string? cardId)
+    {
+        return new DeliveryProducedEvent
+        {
+            RunId = NormalizeOptional(completion.RunId) ?? NormalizeOptional(State.RunId) ?? string.Empty,
+            TurnId = NormalizeOptional(completion.CorrelationId) ?? NormalizeOptional(State.CorrelationId) ?? string.Empty,
+            DeliveryKind = kind,
+            Target = BuildDeliveryTarget(activity, completion),
+            Status = status,
+            LarkMessageId = NormalizeOptional(completion.CardMessageId) ?? string.Empty,
+            CardId = NormalizeOptional(cardId) ?? string.Empty,
+            RequestId = NormalizeOptional(completion.CommandId) ?? string.Empty,
+            SourceEventId = NormalizeOptional(completion.CorrelationId) ?? string.Empty,
+            ProducedAtVersion = NextCommittedVersion(),
+        };
+    }
+
+    private static DeliveryTarget BuildDeliveryTarget(
+        ChatActivity? activity,
+        AgentRunLarkCardDeliveryCompletion completion)
+    {
+        var extras = activity?.TransportExtras;
+        var conversation = activity?.Conversation;
+        return new DeliveryTarget
+        {
+            Channel = conversation?.Channel?.Clone() ?? activity?.ChannelId?.Clone() ?? new ChannelId(),
+            ConversationKey = conversation?.CanonicalKey ?? string.Empty,
+            Platform = NormalizeOptional(extras?.NyxPlatform) ?? conversation?.Channel?.Value ?? activity?.ChannelId?.Value ?? string.Empty,
+            ReceiveId = NormalizeOptional(extras?.NyxLarkChatId) ??
+                        NormalizeOptional(extras?.NyxLarkUnionId) ??
+                        string.Empty,
+            ReceiveIdType = ResolveReceiveIdType(extras),
+            ConversationId = NormalizeOptional(extras?.NyxConversationId) ?? conversation?.CanonicalKey ?? string.Empty,
+            ReplyMessageId = NormalizeOptional(completion.CardMessageId) ?? string.Empty,
+        };
+    }
+
+    private static string ResolveReceiveIdType(TransportExtras? extras)
+    {
+        if (!string.IsNullOrWhiteSpace(extras?.NyxLarkChatId))
+            return "chat_id";
+        if (!string.IsNullOrWhiteSpace(extras?.NyxLarkUnionId))
+            return "union_id";
+        return string.Empty;
+    }
+
+    private static DeliveryStatus ResolveCardDeliveryStatus(
+        AgentRunLarkCardDeliveryCompletion completion,
+        string? terminalReason)
+    {
+        if (completion.Outcome != AgentRunLarkCardDeliveryCompletionOutcome.Completed ||
+            completion.DeliveryFailure is not null)
+        {
+            return DeliveryStatus.FailedPostSend;
+        }
+
+        var reason = NormalizeOptional(terminalReason);
+        return reason is not null &&
+               !string.Equals(reason, "completed", StringComparison.Ordinal)
+            ? DeliveryStatus.FailedPostSend
+            : DeliveryStatus.Succeeded;
+    }
+
+    private static void AppendDelivery(AgentRunGAgentState state, DeliveryProducedEvent produced)
+    {
+        var entry = ToDeliveryLedgerEntry(produced);
+        state.RecentDeliveries.Add(entry);
+        while (state.RecentDeliveries.Count > RecentDeliveriesCap)
+            state.RecentDeliveries.RemoveAt(0);
+
+        if (entry.Status == DeliveryStatus.Succeeded)
+            state.LastSuccessfulDelivery = entry.Clone();
+    }
+
+    private static DeliveryLedgerEntry ToDeliveryLedgerEntry(DeliveryProducedEvent produced) =>
+        new()
+        {
+            DeliveryKind = produced.DeliveryKind,
+            Status = produced.Status,
+            Target = produced.Target?.Clone() ?? new DeliveryTarget(),
+            LarkMessageId = produced.LarkMessageId ?? string.Empty,
+            CardId = produced.CardId ?? string.Empty,
+            RequestId = produced.RequestId ?? string.Empty,
+            SourceEventId = produced.SourceEventId ?? string.Empty,
+            ProducedAtVersion = produced.ProducedAtVersion,
+        };
+
+    private long NextCommittedVersion() =>
+        (EventSourcing ?? throw new InvalidOperationException("Event sourcing must be configured before computing the next committed version."))
+        .CurrentVersion + 1;
 
     private static string ResolveRunId(NeedsLlmReplyEvent request) =>
         AgentRunId.Parse(request.RunId).Value;

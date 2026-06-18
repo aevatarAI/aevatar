@@ -344,6 +344,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             Operation = operation,
             Payload = ResolvePayload(request, isSecureStep, ctx) ?? string.Empty,
             Parameters = request.Parameters.ToDictionary(kv => kv.Key, kv => kv.Value),
+            IdempotencyKey = request.IdempotencyKey ?? string.Empty,
         };
         _ = ExecuteConnectorAndSignalAsync(ctx, connector, connectorRequest, pending);
     }
@@ -420,6 +421,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             ExecutionId = request.ExecutionId,
             SecureStep = isSecureStep,
             ConnectorType = connectorType,
+            IdempotencyKey = request.IdempotencyKey ?? string.Empty,
         };
         foreach (var (key, value) in request.Parameters)
             pending.Parameters[key] = value;
@@ -518,6 +520,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             RunId = pending.RunId,
             Input = pending.Input,
             ExecutionId = pending.ExecutionId,
+            IdempotencyKey = pending.IdempotencyKey,
         };
         foreach (var (key, value) in pending.Parameters)
             request.Parameters[key] = value;

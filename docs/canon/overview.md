@@ -17,6 +17,8 @@ owner: eanzhao
 
 新增功能的落点先读 [module-placement-map.md](module-placement-map.md)。该入口按 feature family 给出 tier、actor/domain owner、Application command/query、Projection/readmodel、Infrastructure/provider、Host/bootstrap 与 cross-actor protocol 的默认位置，避免从项目引用图反推架构职责。
 
+审批额度账本边界见 [approval-quota-ledger.md](approval-quota-ledger.md)：额度事实源属于外部 connected service 或渠道原生账本，不属于 Aevatar runtime、readmodel 或 projection 主链。
+
 ## 2. 解决方案结构
 
 ```mermaid

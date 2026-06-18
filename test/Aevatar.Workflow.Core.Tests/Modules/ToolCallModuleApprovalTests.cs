@@ -37,7 +37,8 @@ public sealed class ToolCallModuleApprovalTests
             "danger_step",
             """{"danger":true}""",
             "exec-1",
-            [fileRef]);
+            [fileRef],
+            "idem-approval-1");
 
         ctx.Published.Select(x => x.Event).OfType<WorkflowToolCallStartedEvent>().Should().ContainSingle();
         ctx.Published.Select(x => x.Event).OfType<WorkflowToolCallCompletedEvent>().Should().BeEmpty();
@@ -55,6 +56,7 @@ public sealed class ToolCallModuleApprovalTests
         state.PendingApprovals.Should().ContainKey("run-1:danger_step:exec-1:workflow:run-1:danger_step:exec-1:approval-1");
         var pendingState = state.PendingApprovals.Values.Should().ContainSingle().Subject;
         pendingState.InputFileRefs.Should().ContainSingle().Which.FileId.Should().Be("file-approval");
+        pendingState.IdempotencyKey.Should().Be("idem-approval-1");
     }
 
     [Fact]
@@ -84,7 +86,8 @@ public sealed class ToolCallModuleApprovalTests
             "danger_step",
             """{"danger":true}""",
             "exec-1",
-            [fileRef]);
+            [fileRef],
+            "idem-approval-1");
         ctx.Published.Clear();
 
         await module.HandleAsync(
@@ -106,6 +109,7 @@ public sealed class ToolCallModuleApprovalTests
         tool.Requests.Should().HaveCount(2);
         tool.Requests[1].ArgumentsJson.Should().Be("""{"danger":true}""");
         tool.Requests[1].InputFileRefs.Should().ContainSingle().Which.FileId.Should().Be("file-replay");
+        tool.Requests[1].IdempotencyKey.Should().Be("idem-approval-1");
         tool.Requests[1].ApprovalGrant.Should().NotBeNull();
         var grant = tool.Requests[1].ApprovalGrant!;
         grant.ApprovalRequestId.Should().Be("approval-1");
@@ -211,7 +215,8 @@ public sealed class ToolCallModuleApprovalTests
         string stepId,
         string input,
         string executionId,
-        IReadOnlyList<WorkflowFileRef>? inputFileRefs = null)
+        IReadOnlyList<WorkflowFileRef>? inputFileRefs = null,
+        string idempotencyKey = "")
     {
         var request = new StepRequestEvent
         {
@@ -219,6 +224,7 @@ public sealed class ToolCallModuleApprovalTests
             StepType = "tool_call",
             RunId = ctx.RunId,
             ExecutionId = executionId,
+            IdempotencyKey = idempotencyKey,
             Input = input,
             Parameters = { ["tool"] = toolName },
         };
@@ -340,6 +346,55 @@ public sealed class ToolCallModuleApprovalTests
 
         public Task ClearExecutionStateAsync(string scopeKey, CancellationToken ct = default) =>
             ClearStateAsync(scopeKey, ct);
+
+        Task<WorkflowCompensationTransitionResult> IWorkflowExecutionStateHost.TryStartCompensationAsync(
+            WorkflowCompletedEvent terminalFailure,
+            StepCompletedEvent? terminalStep,
+            CancellationToken ct)
+        {
+            _ = terminalFailure;
+            _ = terminalStep;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(NoCompensableLedger());
+        }
+
+        Task IWorkflowExecutionStateHost.RecordCompensableStepDispatchAsync(
+            CompensableStepDispatchedEvent evt,
+            CancellationToken ct)
+        {
+            _ = evt;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task<WorkflowCompensationTransitionResult> RecordCompensationStepCompletionAsync(
+            CompensationStepCompletedEvent completion,
+            CancellationToken ct = default)
+        {
+            _ = completion;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(NoCompensableLedger());
+        }
+
+        public Task<WorkflowCompensationTransitionResult> RecordCompensationPhaseDeadlineExceededAsync(
+            string runId,
+            string error,
+            CancellationToken ct = default)
+        {
+            _ = runId;
+            _ = error;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(NoCompensableLedger());
+        }
+
+        private static WorkflowCompensationTransitionResult NoCompensableLedger() =>
+            new(
+                WorkflowCompensationTransitionStatus.NoCompensableLedger,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty);
 
         public Task UpdateExecutionContextAsync(
             WorkflowRunExecutionContextDelta delta,

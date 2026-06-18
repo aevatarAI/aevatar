@@ -181,8 +181,8 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
 
     private async Task EnsureCreatableAsync(string scheduleId, CancellationToken ct)
     {
-        var existing = await _queryPort.GetAsync(scheduleId, ct);
-        if (existing != null)
+        var existingActorId = await _actorPort.ResolveScheduleActorAsync(scheduleId, ct);
+        if (!string.IsNullOrWhiteSpace(existingActorId))
             throw new ScheduledDispatchConflictException(scheduleId, $"Scheduled dispatch '{scheduleId}' already exists.");
     }
 

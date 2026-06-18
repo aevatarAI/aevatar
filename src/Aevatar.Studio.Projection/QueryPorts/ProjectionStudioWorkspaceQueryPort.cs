@@ -3,6 +3,7 @@ using Aevatar.Studio.Workspace;
 using Aevatar.Studio.Application.Studio;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Projection.ReadModels;
+using Google.Protobuf;
 
 namespace Aevatar.Studio.Projection.QueryPorts;
 
@@ -11,6 +12,9 @@ namespace Aevatar.Studio.Projection.QueryPorts;
 //   New principle: Studio executions are a bounded ServiceRunGAgent readmodel facade; UI/layout/draft index are deleted/downgraded to client cache or derived from existing actor-backed sources. No new history/draft index actor.
 public sealed class ProjectionStudioWorkspaceQueryPort : IStudioWorkspaceQueryPort
 {
+    private static readonly JsonParser StateRootParser = new(
+        JsonParser.Settings.Default.WithIgnoreUnknownFields(true));
+
     private readonly IProjectionDocumentReader<StudioWorkspaceCurrentStateDocument, string> _documentReader;
     private readonly IAppScopeResolver _scopeResolver;
 
@@ -36,9 +40,8 @@ public sealed class ProjectionStudioWorkspaceQueryPort : IStudioWorkspaceQueryPo
         var normalizedScopeId = StudioWorkspaceConventions.NormalizeScopeId(scopeId);
         var actorId = StudioWorkspaceConventions.BuildActorId(normalizedScopeId);
         var document = await _documentReader.GetAsync(actorId, ct);
-        var state = document?.StateRoot?.Is(StudioWorkspaceState.Descriptor) == true
-            ? document.StateRoot.Unpack<StudioWorkspaceState>()
-            : new StudioWorkspaceState
+        var state = TryParseStateRoot(document?.StateRootJson) ??
+                    new StudioWorkspaceState
             {
                 WorkspaceId = actorId,
                 ScopeId = normalizedScopeId,
@@ -106,5 +109,24 @@ public sealed class ProjectionStudioWorkspaceQueryPort : IStudioWorkspaceQueryPo
             draft.UpdatedAtUtc?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
             draft.CreatedAtUtc?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
             draft.Version);
+    }
+
+    private static StudioWorkspaceState? TryParseStateRoot(string? stateRootJson)
+    {
+        if (string.IsNullOrWhiteSpace(stateRootJson))
+            return null;
+
+        try
+        {
+            return StateRootParser.Parse<StudioWorkspaceState>(stateRootJson);
+        }
+        catch (InvalidProtocolBufferException)
+        {
+            return null;
+        }
+        catch (InvalidJsonException)
+        {
+            return null;
+        }
     }
 }

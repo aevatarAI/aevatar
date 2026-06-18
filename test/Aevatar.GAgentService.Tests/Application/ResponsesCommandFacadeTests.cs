@@ -11,6 +11,7 @@ using Aevatar.GAgentService.Application.Responses;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgentService.Tests.Application;
 
@@ -55,6 +56,32 @@ public sealed class ResponsesCommandFacadeTests
         toolContext.Caller.ResponseId.Should().Be(command.ResponseId);
         toolContext.Credentials.NyxIdAccessToken.Should().Be("token");
         toolContext.Routing.NyxIdRoutePreference.Should().Be("route-value");
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldApplyConfiguredDefaultModel_WhenCallerOmitsModel()
+    {
+        var dispatch = new RecordingActorDispatchPort();
+        var facade = CreateFacade(
+            dispatchPort: dispatch,
+            routeResolver: new StaticResponsesRouteResolver("/api/v1/proxy/s/chrono-llm-public"),
+            chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(ForwardToModelAction(string.Empty)),
+            defaultIngressModel: "chrono-llm-public/gpt-5.5");
+
+        var result = await facade.CreateAsync(new ResponsesCommandRequest(
+            "  ",
+            "hi without a model",
+            [],
+            false,
+            null,
+            null,
+            null,
+            []), CallerScopeContext("token"));
+
+        result.Error.Should().BeNull();
+        var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
+        command.Model.Should().Be("gpt-5.5");
+        command.RoutePreference.Should().Be("/api/v1/proxy/s/chrono-llm-public");
     }
 
     [Fact]
@@ -817,7 +844,8 @@ public sealed class ResponsesCommandFacadeTests
         IResponsesChatRouteDecisionPort? chatRouteDecisionPort = null,
         IToolSetRegistry? toolSetRegistry = null,
         IActorDispatchPort? dispatchPort = null,
-        ILlmSessionRunObservationService? observationService = null)
+        ILlmSessionRunObservationService? observationService = null,
+        string? defaultIngressModel = null)
     {
         var effectiveSessionPort = sessionPort ?? new RecordingSessionPort();
         return new ResponsesCommandFacade(
@@ -830,7 +858,10 @@ public sealed class ResponsesCommandFacadeTests
             new ResponsesToolClassificationService([], NullLogger<ResponsesToolClassificationService>.Instance),
             new ResponsesDirectToolPlanService(toolSetRegistry ?? new EmptyToolSetRegistry()),
             observationService ?? StaticLlmSessionRunObservationService.Completed("ok"),
-            NullLogger<ResponsesCommandFacade>.Instance);
+            NullLogger<ResponsesCommandFacade>.Instance,
+            defaultIngressModel is null
+                ? null
+                : Options.Create(new ResponsesIngressOptions { DefaultModel = defaultIngressModel }));
     }
 
     private static ResponsesCreateCommandPlan BuildStreamPlan() =>
