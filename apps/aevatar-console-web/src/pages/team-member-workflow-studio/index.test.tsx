@@ -3850,6 +3850,12 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(logDetails).toHaveTextContent("Run the workflow");
     expect(logDetails).toHaveTextContent("Workflow complete");
     expect(
+      within(logDetails).getByTestId("workflow-execution-node-input-block"),
+    ).toHaveStyle({ height: "230px" });
+    expect(
+      within(logDetails).getByTestId("workflow-execution-node-output-block"),
+    ).toHaveStyle({ height: "230px" });
+    expect(
       within(consolePanel).queryByRole("button", { name: "Copy selected log" }),
     ).toBeNull();
     expect(screen.getByRole("button", { name: "node:step:triage" })).toHaveAttribute(
