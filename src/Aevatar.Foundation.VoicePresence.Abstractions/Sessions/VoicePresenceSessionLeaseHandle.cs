@@ -13,4 +13,8 @@ public sealed record VoicePresenceSessionLeaseHandle(
     VoiceRemoteAudioSupport RemoteAudioSupport,
     string? ActiveTransportLeaseId = null,
     long LeaseEpoch = 0,
-    VoiceToolExecutionContext? ToolContext = null);
+    VoiceToolExecutionContext? ToolContext = null,
+    // The resolved per-session system prompt (chat-route policy sessionOverrides.instructions).
+    // Carried on the handle so the host-side relay/model session can apply it — the relay is built
+    // from static app config and otherwise never sees the policy prompt.
+    string? Instructions = null);

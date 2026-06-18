@@ -149,7 +149,9 @@ public sealed class ActorOwnedVoiceRealtimeSession
             leaseHandle.SessionId,
             capability.PcmSampleRateHz,
             leaseHandle.ObservedStateVersion,
-            leaseHandle);
+            leaseHandle,
+            VoiceWireContractDefaults.CurrentWireContractVersion,
+            VoiceWireContractDefaults.CreateInputImagePolicy());
 
     private DateTimeOffset UtcNow => _timeProvider.GetUtcNow();
 

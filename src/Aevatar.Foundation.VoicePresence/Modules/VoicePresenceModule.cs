@@ -990,16 +990,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
     }
 
     private Task PublishRealtimeFrameAsync(
-        VoiceControlFrame controlFrame,
-        VoicePresenceRuntimeState state,
-        IEventHandlerContext ctx,
-        CancellationToken ct)
-    {
-        var frame = BuildRealtimeFrame(controlFrame, state);
-        return frame == null ? Task.CompletedTask : PublishRealtimeFrameAsync(frame, ctx, ct);
-    }
-
-    private Task PublishRealtimeFrameAsync(
         VoiceRemoteTransportOutput output,
         VoicePresenceRuntimeState state,
         IEventHandlerContext ctx,
@@ -1056,22 +1046,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
             }),
             _ => null,
         };
-    }
-
-    private VoiceRealtimeFrame? BuildRealtimeFrame(
-        VoiceControlFrame controlFrame,
-        VoicePresenceRuntimeState state)
-    {
-        if (controlFrame.FrameCase != VoiceControlFrame.FrameOneofCase.DrainAcknowledged)
-            return null;
-
-        return CreateRealtimeFrame(state.ActiveSessionId, new VoiceRealtimeFrame
-        {
-            TranscriptCompleted = new VoiceTranscriptCompleted
-            {
-                ResponseId = controlFrame.DrainAcknowledged.ResponseId,
-            },
-        });
     }
 
     private VoiceRealtimeFrame? CreateRealtimeFrame(string? sessionId, VoiceRealtimeFrame frame)
@@ -1339,7 +1313,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
                     state,
                     frame.DrainAcknowledged.ResponseId,
                     frame.DrainAcknowledged.PlayoutSequence);
-                await PublishRealtimeFrameAsync(frame, state, ctx, ct);
                 await FlushPendingEventInjectionsAsync(state, ct);
                 await PersistRuntimeStateAsync(ctx, state, ct);
                 break;

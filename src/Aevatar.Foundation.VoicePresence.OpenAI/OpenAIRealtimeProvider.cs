@@ -74,6 +74,7 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
         var session = await _sessionFactory.StartConversationSessionAsync(effectiveConfig, _options.DefaultModel, ct);
         var providerSession = new OpenAIRealtimeProviderSession(sessionKey, session, this, _logger, eventSink, audioSink);
         providerSession.Start();
+        await providerSession.UpdateSessionAsync(BuildNoAutoResponseSessionConfig(), createResponse: false, ct);
         return providerSession;
     }
 
@@ -149,7 +150,10 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
             _ => null,
         };
 
-    private BinaryData BuildSessionUpdateEvent(VoiceSessionConfig session, int sampleRateHz)
+    private BinaryData BuildSessionUpdateEvent(
+        VoiceSessionConfig session,
+        int sampleRateHz,
+        bool? createResponseOverride = null)
     {
         // Refactor (iter94/cluster-809):
         // Old:OpenAI SDK typed beta session options.
@@ -165,7 +169,7 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
                 ["input"] = new JsonObject
                 {
                     ["format"] = BuildPcmAudioFormat(sampleRateHz),
-                    ["turn_detection"] = BuildTurnDetection(session),
+                    ["turn_detection"] = BuildTurnDetection(session, createResponseOverride),
                 },
                 ["output"] = new JsonObject
                 {
@@ -182,6 +186,19 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
         if (tools.Count > 0)
             sessionObject["tool_choice"] = "auto";
 
+        if (_logger.IsEnabled(LogLevel.Information))
+        {
+            var toolNames = new List<string>(tools.Count);
+            foreach (var t in tools)
+                toolNames.Add(t?["name"]?.GetValue<string>() ?? "?");
+            _logger.LogInformation(
+                "voice session.update built: {ToolCount} tools, tool_choice={ToolChoice}, instructions={InstrChars} chars, tools=[{ToolNames}]",
+                tools.Count,
+                tools.Count > 0 ? "auto" : "none",
+                (sessionObject["instructions"]?.GetValue<string>() ?? string.Empty).Length,
+                string.Join(",", toolNames));
+        }
+
         var updateEvent = new JsonObject
         {
             ["type"] = "session.update",
@@ -190,6 +207,13 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
 
         return BinaryData.FromString(updateEvent.ToJsonString());
     }
+
+    private static VoiceSessionConfig BuildNoAutoResponseSessionConfig() =>
+        new()
+        {
+            SampleRateHz = OpenAIRealtimeProviderOptions.DefaultSampleRateHz,
+            TurnDetectionMode = VoiceTurnDetectionMode.ServerVad,
+        };
 
     private JsonArray BuildTools(VoiceSessionConfig session)
     {
@@ -254,18 +278,19 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
             ["rate"] = sampleRateHz,
         };
 
-    private JsonNode? BuildTurnDetection(VoiceSessionConfig session)
+    private JsonNode? BuildTurnDetection(VoiceSessionConfig session, bool? createResponseOverride = null)
     {
         return session.TurnDetectionMode switch
         {
             VoiceTurnDetectionMode.Disabled or VoiceTurnDetectionMode.ClientVad => null,
             VoiceTurnDetectionMode.Unspecified when !_options.EnableServerVad => null,
-            VoiceTurnDetectionMode.Unspecified or VoiceTurnDetectionMode.ServerVad => BuildServerVadTurnDetection(session),
+            VoiceTurnDetectionMode.Unspecified or VoiceTurnDetectionMode.ServerVad =>
+                BuildServerVadTurnDetection(session, createResponseOverride),
             _ => null,
         };
     }
 
-    private JsonObject BuildServerVadTurnDetection(VoiceSessionConfig session)
+    private JsonObject BuildServerVadTurnDetection(VoiceSessionConfig session, bool? createResponseOverride = null)
     {
         return new JsonObject
         {
@@ -280,7 +305,7 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
                 ? session.VadSilenceDurationMs
                 : (int)_options.SilenceDuration.TotalMilliseconds,
             ["interrupt_response"] = _options.InterruptResponseOnSpeech,
-            ["create_response"] = _options.AutoCreateResponse,
+            ["create_response"] = createResponseOverride ?? _options.AutoCreateResponse,
         };
     }
 
@@ -420,6 +445,19 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
 
             _outputSampleRateHz = _connector.ResolveSampleRateHz(session.SampleRateHz);
             await _physicalSession.SendSessionUpdateAsync(_connector.BuildSessionUpdateEvent(session, _outputSampleRateHz), ct);
+        }
+
+        internal async Task UpdateSessionAsync(
+            VoiceSessionConfig session,
+            bool createResponse,
+            CancellationToken ct)
+        {
+            ArgumentNullException.ThrowIfNull(session);
+
+            _outputSampleRateHz = _connector.ResolveSampleRateHz(session.SampleRateHz);
+            await _physicalSession.SendSessionUpdateAsync(
+                _connector.BuildSessionUpdateEvent(session, _outputSampleRateHz, createResponse),
+                ct);
         }
 
         internal async Task InjectUserTextAsync(string text, CancellationToken ct)

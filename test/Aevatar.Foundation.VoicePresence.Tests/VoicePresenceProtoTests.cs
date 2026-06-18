@@ -34,10 +34,15 @@ public class VoicePresenceProtoTests
     {
         var controlFrame = new VoiceControlFrame
         {
-            DrainAcknowledged = new VoiceDrainAcknowledged
+            SessionAccepted = new VoiceTransportSessionAccepted
             {
-                ResponseId = 3,
-                PlayoutSequence = 42,
+                ActorId = "agent-1",
+                ModuleName = "voice_presence",
+                SessionId = "session-1",
+                PcmSampleRateHz = 24000,
+                ObservedStateVersion = 5,
+                WireContractVersion = VoiceWireContractDefaults.CurrentWireContractVersion,
+                InputImagePolicy = VoiceWireContractDefaults.CreateInputImagePolicy(),
             },
         };
         var providerConfig = new VoiceProviderConfig
@@ -63,8 +68,10 @@ public class VoicePresenceProtoTests
 
         var parsedControl = VoiceControlFrame.Parser.ParseFrom(controlFrame.ToByteArray());
         parsedControl.ShouldBe(controlFrame);
-        parsedControl.DrainAcknowledged.ResponseId.ShouldBe(3);
-        parsedControl.DrainAcknowledged.PlayoutSequence.ShouldBe(42);
+        parsedControl.SessionAccepted.WireContractVersion.ShouldBe(VoiceWireContractDefaults.CurrentWireContractVersion);
+        parsedControl.SessionAccepted.InputImagePolicy.MaxBytes.ShouldBe(VoiceWireContractDefaults.MaxInputImageBytes);
+        parsedControl.SessionAccepted.InputImagePolicy.AllowedMediaTypes
+            .ShouldBe(VoiceWireContractDefaults.SupportedInputImageMediaTypes);
 
         providerConfig.Clone().ShouldBe(providerConfig);
         sessionConfig.Clone().ShouldBe(sessionConfig);
@@ -76,6 +83,18 @@ public class VoicePresenceProtoTests
             .ShouldContain(nameof(VoiceToolDefinition));
         VoicePresenceReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(VoicePresenceEventDedupeFenceEntry));
+        VoiceTransportSessionAccepted.Descriptor.Fields.InDeclarationOrder()
+            .Select(static field => field.Name)
+            .ShouldContain("wire_contract_version");
+        VoiceTransportSessionAccepted.Descriptor.Fields.InDeclarationOrder()
+            .Select(static field => field.Name)
+            .ShouldContain("input_image_policy");
+        VoiceInputImagePolicy.Descriptor.Fields.InDeclarationOrder()
+            .Select(static field => field.Name)
+            .ShouldBe([
+                "max_bytes",
+                "allowed_media_types",
+            ]);
     }
 
     [Fact]
