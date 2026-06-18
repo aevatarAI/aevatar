@@ -120,6 +120,20 @@ public sealed record WorkflowStepIdempotencyView(
     }
 }
 
+public sealed record WorkflowExternalApprovalContinuation(
+    string ActorId,
+    string RunId,
+    string StepId,
+    string SignalName,
+    string SourceId,
+    string ExternalIdKind,
+    string ExternalId,
+    string CallbackIdempotencyKey,
+    string RequestId,
+    long SourceVersion,
+    string SourceEventId,
+    DateTimeOffset UpdatedAt);
+
 /// <summary>
 /// Narrow read contract for resolving workflow actor bindings without exposing raw actor state.
 /// </summary>
@@ -147,6 +161,28 @@ public interface IWorkflowRunForkSeedQueryPort
 {
     Task<WorkflowRunForkSeedView?> GetForkSeedAsync(
         string runId,
+        CancellationToken ct = default);
+}
+
+public interface IWorkflowExternalApprovalContinuationLookupPort
+{
+    Task<WorkflowExternalApprovalContinuation?> FindActiveAsync(
+        string sourceId,
+        string externalIdKind,
+        string externalId,
+        CancellationToken ct = default);
+}
+
+public interface IWorkflowWebhookReplayAdmissionPort
+{
+    bool IsAvailable { get; }
+
+    ValueTask<WorkflowWebhookReplayAdmission> AdmitAsync(
+        WorkflowWebhookReplayAdmissionRequest request,
+        CancellationToken ct = default);
+
+    ValueTask ReleaseAsync(
+        WorkflowWebhookReplayAdmissionRequest request,
         CancellationToken ct = default);
 }
 

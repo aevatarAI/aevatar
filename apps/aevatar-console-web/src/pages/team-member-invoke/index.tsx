@@ -337,12 +337,12 @@ const TeamMemberInvokePage: React.FC = () => {
             initialServiceId={boundPublishedServiceId}
             memberId={route.memberId}
             memberRevision={memberRevision}
+            presentation="member-run"
             runtimeTarget="service"
             teamId={route.teamId}
             scopeId={route.scopeId}
             selectedMemberLabel={memberLabel}
             services={invokeServices}
-            targetSummaryVariant="member-run"
           />
         )}
       </div>

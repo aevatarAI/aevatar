@@ -28,6 +28,7 @@ using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.AGUI.Contracts;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
@@ -138,6 +139,10 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
             CompletedSteps = 2,
             RoleReplyCount = 1,
             LastOutput = "awaiting approval",
+            SagaStatus = WorkflowSagaStatus.CompensationDeadLetter,
+            DeadLetterFailedCompensationStepId = "refund_payment",
+            DeadLetterRemainingUncompensated = 2,
+            DeadLetterError = "refund failed",
         };
 
         var response = await host.Client.GetFromJsonAsync<ScopeServiceEndpoints.ScopeServiceRunSummaryHttpResponse>("/api/scopes/scope-a/runs/run-default-detail-1");
@@ -151,6 +156,11 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
         response.WorkflowName.Should().Be("approval");
         response.StateVersion.Should().Be(4);
         response.LastEventId.Should().Be("evt-4");
+        response.SagaStatus.Should().Be(WorkflowSagaStatus.CompensationDeadLetter);
+        response.DeadLetter.Should().NotBeNull();
+        response.DeadLetter!.FailedCompensationStepId.Should().Be("refund_payment");
+        response.DeadLetter.RemainingUncompensated.Should().Be(2);
+        response.DeadLetter.Error.Should().Be("refund failed");
     }
 
     [Fact]
@@ -248,6 +258,10 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
             CompletedSteps = 1,
             RoleReplyCount = 1,
             LastOutput = "working",
+            SagaStatus = WorkflowSagaStatus.CompensationDeadLetter,
+            DeadLetterFailedCompensationStepId = "cancel_order",
+            DeadLetterRemainingUncompensated = 1,
+            DeadLetterError = "cancel failed",
         };
 
         var response = await host.Client.GetFromJsonAsync<ScopeServiceEndpoints.MemberScopeServiceRunSummaryHttpResponse>(
@@ -263,6 +277,11 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
         response.WorkflowName.Should().Be("member-flow");
         response.StateVersion.Should().Be(14);
         response.LastEventId.Should().Be("evt-14");
+        response.SagaStatus.Should().Be(WorkflowSagaStatus.CompensationDeadLetter);
+        response.DeadLetter.Should().NotBeNull();
+        response.DeadLetter!.FailedCompensationStepId.Should().Be("cancel_order");
+        response.DeadLetter.RemainingUncompensated.Should().Be(1);
+        response.DeadLetter.Error.Should().Be("cancel failed");
     }
 
     [Fact]
@@ -439,6 +458,40 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
         host.StopDispatchService.LastCommand!.ActorId.Should().Be("run-actor-member-stop-1");
         host.StopDispatchService.LastCommand.RunId.Should().Be("run-member-stop-1");
         host.StopDispatchService.LastCommand.Reason.Should().Be("manual");
+    }
+
+    [Fact]
+    public async Task RetryCompensationMemberRunEndpoint_ShouldResolveMemberPublishedServiceAndDispatch()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.LifecycleQueryPort.Service = BuildService("scope-a", "member-a", "def-member-retry");
+        host.LifecycleQueryPort.Deployments = BuildDeployments("scope-a:default:default:member-a", "dep-member-retry", "rev-1", "def-member-retry");
+        host.RunBindingReader.BindingsByRunId["run-member-dead-letter-1"] =
+        [
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                "run-actor-member-dead-letter-1",
+                "def-member-retry",
+                "run-member-dead-letter-1",
+                "member-flow",
+                "yaml",
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                "scope-a"),
+        ];
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/members/member-a/runs/run-member-dead-letter-1:retry-compensation", new
+        {
+            failedCompensationStepId = "cancel_order",
+            reason = "operator retry",
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        response.Headers.Location.Should().NotBeNull();
+        host.RetryCompensationDispatchService.LastCommand.Should().NotBeNull();
+        host.RetryCompensationDispatchService.LastCommand!.ActorId.Should().Be("run-actor-member-dead-letter-1");
+        host.RetryCompensationDispatchService.LastCommand.RunId.Should().Be("run-member-dead-letter-1");
+        host.RetryCompensationDispatchService.LastCommand.FailedCompensationStepId.Should().Be("cancel_order");
+        host.RetryCompensationDispatchService.LastCommand.Reason.Should().Be("operator retry");
     }
 
     [Fact]

@@ -225,11 +225,28 @@ message StudioTeamCurrentStateDocument {
 // connector/role catalogs, service-run execution state, workflow runtime state,
 // provider secrets, memory, and registry facts.
 
+message StudioWorkspaceDraftSummary {
+  string workflow_id = 1;
+  string name = 2;
+  string file_name = 3;
+  string directory_id = 4;
+  int64 version = 5;
+}
+
 message StudioWorkspaceCurrentStateDocument {
   string id = 1;
   string actor_id = 2;
   int64 state_version = 3;
   string last_event_id = 4;
   google.protobuf.Timestamp updated_at = 5;
-  google.protobuf.Any state_root = 10;
+  reserved 10;
+  reserved "state_root";
+
+  // Opaque protobuf JSON for StudioWorkspaceState. Stored as a scalar readmodel
+  // field so Elasticsearch never dynamically maps draft YAML/step/config trees.
+  string state_root_json = 11;
+
+  // Stable draft query surface. Complex draft payloads such as YAML remain only
+  // in state_root_json and are not indexed as dynamic Elasticsearch fields.
+  repeated StudioWorkspaceDraftSummary draft_summaries = 12;
 }

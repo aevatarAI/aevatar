@@ -10,9 +10,10 @@ namespace Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 /// fingerprint iff their canonicalized <c>Mappings</c> dictionaries are equal
 /// (key-order independent, recursive). The fingerprint is the version suffix
 /// on physical Elasticsearch index names. When proto/descriptor changes shift
-/// the augmented mappings, the fingerprint shifts; a mismatched alias is
-/// schema drift and the lifecycle manager fails loud instead of reading live
-/// mappings or repairing from the query/projection path.
+/// the augmented mappings, the fingerprint shifts. The lifecycle manager uses
+/// that mismatch as the migration trigger and remains the only place allowed
+/// to create the expected physical index, reindex, and swap aliases; query and
+/// probe paths never read live mappings or repair schema drift.
 /// </summary>
 internal static class ElasticsearchProjectionSchemaFingerprint
 {

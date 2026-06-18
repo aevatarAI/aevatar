@@ -942,6 +942,80 @@ public sealed class SubWorkflowOrchestratorTests
     }
 
     [Fact]
+    public async Task HandleInvocationCompletedAsync_WhenCompensatedChildFails_ShouldPersistCompensatedTerminalOutcome()
+    {
+        var harness = CreateHarness();
+        var state = BuildStateWithPending(new WorkflowRunState.Types.PendingSubWorkflowInvocation
+        {
+            InvocationId = "invoke-compensated",
+            ParentRunId = "parent-run",
+            ParentStepId = "step-compensated",
+            WorkflowName = "sub_flow",
+            ChildActorId = "child-compensated",
+            ChildRunId = "child-run-compensated",
+            Lifecycle = WorkflowCallLifecycle.Transient,
+        });
+
+        var handled = await harness.Orchestrator.HandleInvocationCompletedAsync(
+            new SubWorkflowInvocationCompletedEvent
+            {
+                InvocationId = "invoke-compensated",
+                ChildRunId = "child-run-compensated",
+                Success = false,
+                Error = "child failed after compensation",
+                Compensated = true,
+            },
+            state,
+            CancellationToken.None);
+
+        handled.Should().BeTrue();
+        var completion = harness.Persisted.OfType<SubWorkflowInvocationCompletedEvent>()
+            .Should()
+            .ContainSingle()
+            .Subject;
+        completion.Compensated.Should().BeTrue();
+        completion.Success.Should().BeFalse();
+        var parentCompletion = harness.Published.Should().ContainSingle().Subject.Message.Should().BeOfType<StepCompletedEvent>().Subject;
+        parentCompletion.Success.Should().BeFalse();
+        parentCompletion.Error.Should().Be("child failed after compensation");
+        harness.Runtime.Unlinked.Should().ContainSingle("child-compensated");
+        harness.Runtime.Destroyed.Should().ContainSingle("child-compensated");
+    }
+
+    [Fact]
+    public async Task TryHandleCompletionAsync_WhenOrdinaryChildCompletes_ShouldPersistCompensatedFalse()
+    {
+        var harness = CreateHarness();
+        var state = BuildStateWithPending(new WorkflowRunState.Types.PendingSubWorkflowInvocation
+        {
+            InvocationId = "invoke-ordinary",
+            ParentRunId = "parent-run",
+            ParentStepId = "step-ordinary",
+            WorkflowName = "sub_flow",
+            ChildActorId = "child-ordinary",
+            ChildRunId = "child-run-ordinary",
+            Lifecycle = WorkflowCallLifecycle.Singleton,
+        });
+
+        var handled = await harness.Orchestrator.TryHandleCompletionAsync(
+            new WorkflowCompletedEvent
+            {
+                RunId = "child-run-ordinary",
+                Success = false,
+                Error = "ordinary child failure",
+            },
+            "child-ordinary",
+            state,
+            CancellationToken.None);
+
+        handled.Should().BeTrue();
+        harness.Persisted.OfType<SubWorkflowInvocationCompletedEvent>()
+            .Should()
+            .ContainSingle()
+            .Which.Compensated.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task TryHandleStoppedAsync_WhenTransientChildStops_ShouldPublishParentFailureAndCleanup()
     {
         var harness = CreateHarness();
@@ -970,7 +1044,8 @@ public sealed class SubWorkflowOrchestratorTests
         harness.Persisted.OfType<SubWorkflowInvocationCompletedEvent>().Should().ContainSingle(x =>
             x.InvocationId == "invoke-stop-1" &&
             !x.Success &&
-            x.Error.Contains("manual", StringComparison.Ordinal));
+            x.Error.Contains("manual", StringComparison.Ordinal) &&
+            !x.Compensated);
         var parentCompletion = harness.Published.Single().Message.Should().BeOfType<StepCompletedEvent>().Subject;
         parentCompletion.StepId.Should().Be("step-stop-a");
         parentCompletion.RunId.Should().Be("parent-run");
@@ -1011,7 +1086,8 @@ public sealed class SubWorkflowOrchestratorTests
         harness.Persisted.OfType<SubWorkflowInvocationCompletedEvent>().Should().ContainSingle(x =>
             x.InvocationId == "invoke-stop-2" &&
             !x.Success &&
-            x.Error.Contains("manual", StringComparison.Ordinal));
+            x.Error.Contains("manual", StringComparison.Ordinal) &&
+            !x.Compensated);
         harness.Published.Should().ContainSingle();
         harness.Runtime.Unlinked.Should().BeEmpty();
         harness.Runtime.Destroyed.Should().BeEmpty();
@@ -1052,6 +1128,9 @@ public sealed class SubWorkflowOrchestratorTests
 
         harness.Persisted.Should().HaveCount(2);
         harness.Persisted.Should().OnlyContain(x => x is SubWorkflowInvocationCompletedEvent);
+        harness.Persisted.OfType<SubWorkflowInvocationCompletedEvent>()
+            .Should()
+            .OnlyContain(x => !x.Compensated);
         harness.Runtime.Unlinked.Should().ContainSingle("child-transient");
         harness.Runtime.Destroyed.Should().ContainSingle("child-transient");
         harness.Runtime.Unlinked.Should().NotContain("child-singleton");

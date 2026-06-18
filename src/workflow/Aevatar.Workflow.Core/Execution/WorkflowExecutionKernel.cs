@@ -13,8 +13,16 @@ namespace Aevatar.Workflow.Core.Execution;
 
 internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContext>
 {
+    private enum WorkflowStepDispatchKind
+    {
+        Forward,
+        Compensation,
+    }
+
     private const string ModuleStateKey = "workflow_execution_kernel";
     private const string WorkflowCallInvocationIdParameterKey = "workflow_call.invocation_id";
+    private const int DefaultCompensationTimeoutMs = 30_000;
+    private const int CompensationPhaseDeadlineMs = 300_000;
     private static readonly Regex TimeoutErrorPattern = new(
         @"\bTIMEOUT\b|(?:^|[^A-Za-z0-9])timed out after\s+\d+\s*(?:ms|milliseconds?|s|sec|secs|seconds?|m|min|mins|minutes?|h|hr|hrs|hours?)\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
@@ -46,6 +54,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 payload.Is(StepCompletedEvent.Descriptor) ||
                 payload.Is(WorkflowStoppedEvent.Descriptor) ||
                 payload.Is(WorkflowStepTimeoutFiredEvent.Descriptor) ||
+                payload.Is(WorkflowCompensationPhaseDeadlineFiredEvent.Descriptor) ||
                 payload.Is(WorkflowStepRetryBackoffFiredEvent.Descriptor));
     }
 
@@ -71,6 +80,16 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         if (payload.Is(WorkflowStepTimeoutFiredEvent.Descriptor))
         {
             await HandleTimeoutFiredAsync(payload.Unpack<WorkflowStepTimeoutFiredEvent>(), envelope, workflowContext, ct);
+            return;
+        }
+
+        if (payload.Is(WorkflowCompensationPhaseDeadlineFiredEvent.Descriptor))
+        {
+            await HandleCompensationPhaseDeadlineFiredAsync(
+                payload.Unpack<WorkflowCompensationPhaseDeadlineFiredEvent>(),
+                envelope,
+                workflowContext,
+                ct);
             return;
         }
 
@@ -143,6 +162,8 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         state.Usage = new WorkflowUsageMetricsState();
         state.CurrentStepDispatchPending = false;
         state.CurrentStepTimeoutCallbackId = string.Empty;
+        state.CompensationPhaseDeadlineCallbackId = string.Empty;
+        state.CompensationPhaseDeadlineLease = null;
         if (evt.WorkflowRuntime != null)
         {
             await _stateHost.UpdateExecutionContextAsync(
@@ -186,7 +207,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         var startInput = hasForkSeedStart && forkSeed!.Variables.TryGetValue("input", out var seedInput)
             ? seedInput ?? string.Empty
             : evt.Input ?? string.Empty;
-        await DispatchStepAsync(entry, startInput, state.InputFileRefs, state, ctx, ct);
+        await DispatchStepAsync(entry, startInput, state.InputFileRefs, state, WorkflowStepDispatchKind.Forward, ctx, ct);
     }
 
     private async Task HandleTimeoutFiredAsync(
@@ -483,7 +504,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             return;
         }
 
-        await DispatchStepAsync(next, evt.Output ?? string.Empty, [], state, ctx, ct);
+        await DispatchStepAsync(next, evt.Output ?? string.Empty, [], state, WorkflowStepDispatchKind.Forward, ctx, ct);
     }
 
     private async Task HandleCompensationRequestAsync(
@@ -534,7 +555,8 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         var input = string.IsNullOrWhiteSpace(evt.CapturedOutput)
             ? state.CurrentStepInput
             : evt.CapturedOutput;
-        await DispatchStepAsync(step, input, state.CurrentStepInputFileRefs, state, ctx, ct);
+        await EnsureCompensationPhaseDeadlineAsync(state, ctx, ct);
+        await DispatchStepAsync(step, input, state.CurrentStepInputFileRefs, state, WorkflowStepDispatchKind.Compensation, ctx, ct);
     }
 
     private async Task HandleCompensationStepCompletedAsync(
@@ -624,6 +646,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             case WorkflowCompensationTransitionStatus.AdvancedAndRequestedNext:
             case WorkflowCompensationTransitionStatus.Started:
             case WorkflowCompensationTransitionStatus.AlreadyCompensating:
+                await EnsureCompensationPhaseDeadlineAsync(LoadState(ctx), ctx, ct);
                 await PublishCompensationRequestAsync(
                     ctx,
                     runId,
@@ -693,6 +716,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             case WorkflowCompensationTransitionStatus.Started:
             case WorkflowCompensationTransitionStatus.AlreadyCompensating:
             case WorkflowCompensationTransitionStatus.AdvancedAndRequestedNext:
+                await EnsureCompensationPhaseDeadlineAsync(state, ctx, ct);
                 await PublishCompensationRequestAsync(
                     ctx,
                     terminalFailure.RunId,
@@ -740,7 +764,9 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         return ctx.PublishAsync(new CompensationRequestEvent
         {
             RunId = NormalizeRunId(runId),
-            FailedStepId = failedStepId ?? string.Empty,
+            FailedStepId = string.IsNullOrWhiteSpace(result.FailedStepId)
+                ? failedStepId ?? string.Empty
+                : result.FailedStepId,
             CompensationStepId = result.NextCompensationStepId,
             IdempotencyKey = result.IdempotencyKey ?? string.Empty,
             CapturedOutput = result.CapturedOutput ?? string.Empty,
@@ -821,7 +847,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             state.IdempotencyByStepId.Remove(step.Id);
             state.RetryAttemptsByStepId[step.Id] = nextRetryCount;
             await SaveStateAsync(state, ctx, ct);
-            await DispatchStepAsync(step, retryInput, state.CurrentStepInputFileRefs, state, ctx, ct);
+            await DispatchStepAsync(step, retryInput, state.CurrentStepInputFileRefs, state, ResolveRetryDispatchKind(state, step.Id), ctx, ct);
             return true;
         }
 
@@ -911,7 +937,9 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             pending.NextAttempt,
             evt.DelayMs);
 
-        var timeoutCallbackId = step.TimeoutMs is > 0
+        var dispatchKind = ResolveRetryDispatchKind(state, step.Id);
+        var effectiveTimeoutMs = ResolveStepTimeoutMs(step, dispatchKind);
+        var timeoutCallbackId = effectiveTimeoutMs > 0
             ? BuildStepTimeoutCallbackId(state.RunId, step.Id, ResolveInboundEnvelopeId(ctx))
             : string.Empty;
 
@@ -923,7 +951,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
 
         try
         {
-            await DispatchStepAsync(step, retryInput, state.CurrentStepInputFileRefs, state, ctx, ct);
+            await DispatchStepAsync(step, retryInput, state.CurrentStepInputFileRefs, state, dispatchKind, ctx, ct);
         }
         catch
         {
@@ -1021,7 +1049,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 }
                 else
                 {
-                    await DispatchStepAsync(next, output, [], state, ctx, ct);
+                    await DispatchStepAsync(next, output, [], state, WorkflowStepDispatchKind.Forward, ctx, ct);
                 }
 
                 return true;
@@ -1042,7 +1070,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 var fallbackInput = string.IsNullOrWhiteSpace(evt.Output)
                     ? evt.Error ?? string.Empty
                     : evt.Output;
-                await DispatchStepAsync(fallback, fallbackInput, [], state, ctx, ct);
+                await DispatchStepAsync(fallback, fallbackInput, [], state, WorkflowStepDispatchKind.Forward, ctx, ct);
                 return true;
             }
             default:
@@ -1059,7 +1087,6 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         ArgumentNullException.ThrowIfNull(completed);
 
         await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
-        await ctx.PublishAsync(completed.Clone(), TopologyAudience.Parent, ct);
     }
 
     private async Task DispatchStepAsync(
@@ -1067,6 +1094,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         string input,
         IEnumerable<WorkflowFileRef> inputFileRefs,
         WorkflowExecutionKernelState state,
+        WorkflowStepDispatchKind dispatchKind,
         IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
@@ -1074,7 +1102,8 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         var request = BuildStepRequest(step, input, fileRefs, state, ctx);
         var idempotency = ResolveAndPersistStepIdempotency(step, state);
         request.IdempotencyKey = idempotency.IdempotencyKey;
-        var timeoutCallbackId = step.TimeoutMs is > 0
+        var effectiveTimeoutMs = ResolveStepTimeoutMs(step, dispatchKind);
+        var timeoutCallbackId = effectiveTimeoutMs > 0
             ? BuildStepTimeoutCallbackId(state.RunId, step.Id, ResolveInboundEnvelopeId(ctx))
             : string.Empty;
 
@@ -1094,7 +1123,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         RuntimeCallbackLease? timeoutLease = null;
         try
         {
-            timeoutLease = await ScheduleStepTimeoutLeaseAsync(timeoutCallbackId, step, state.RunId, ctx, ct);
+            timeoutLease = await ScheduleStepTimeoutLeaseAsync(timeoutCallbackId, step, effectiveTimeoutMs, state.RunId, ctx, ct);
             if (timeoutLease != null)
             {
                 state.TimeoutsByStepId[step.Id] = WorkflowRuntimeCallbackLeaseStateCodec.ToState(timeoutLease);
@@ -1183,14 +1212,15 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
     private async Task<RuntimeCallbackLease?> ScheduleStepTimeoutLeaseAsync(
         string callbackId,
         StepDefinition step,
+        int effectiveTimeoutMs,
         string runId,
         IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
-        if (step.TimeoutMs is not > 0 || string.IsNullOrWhiteSpace(callbackId))
+        if (effectiveTimeoutMs <= 0 || string.IsNullOrWhiteSpace(callbackId))
             return null;
 
-        var timeoutMs = Math.Clamp(step.TimeoutMs.Value, 100, 600_000);
+        var timeoutMs = Math.Clamp(effectiveTimeoutMs, 100, 600_000);
         return await ctx.ScheduleSelfDurableTimeoutAsync(
             callbackId,
             TimeSpan.FromMilliseconds(timeoutMs),
@@ -1243,6 +1273,114 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             ct);
     }
 
+    private async Task EnsureCompensationPhaseDeadlineAsync(
+        WorkflowExecutionKernelState state,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        if (state.CompensationPhaseDeadlineLease != null &&
+            !string.IsNullOrWhiteSpace(state.CompensationPhaseDeadlineCallbackId))
+        {
+            return;
+        }
+
+        await ScheduleCompensationPhaseDeadlineAsync(state, ctx, ct);
+    }
+
+    private async Task ScheduleCompensationPhaseDeadlineAsync(
+        WorkflowExecutionKernelState state,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        await CancelCompensationPhaseDeadlineAsync(state, ctx, CancellationToken.None);
+
+        var callbackId = BuildCompensationPhaseDeadlineCallbackId(state.RunId, ResolveInboundEnvelopeId(ctx));
+        state.CompensationPhaseDeadlineCallbackId = callbackId;
+        state.CompensationPhaseDeadlineLease = null;
+        await SaveStateAsync(state, ctx, ct);
+
+        RuntimeCallbackLease? lease = null;
+        try
+        {
+            lease = await ctx.ScheduleSelfDurableTimeoutAsync(
+                callbackId,
+                TimeSpan.FromMilliseconds(CompensationPhaseDeadlineMs),
+                new WorkflowCompensationPhaseDeadlineFiredEvent
+                {
+                    RunId = state.RunId,
+                },
+                ct: ct);
+
+            state.CompensationPhaseDeadlineLease = WorkflowRuntimeCallbackLeaseStateCodec.ToState(lease);
+            await SaveStateAsync(state, ctx, ct);
+        }
+        catch
+        {
+            state.CompensationPhaseDeadlineCallbackId = string.Empty;
+            state.CompensationPhaseDeadlineLease = null;
+            await SaveStateAsync(state, ctx, CancellationToken.None);
+            if (lease != null)
+            {
+                await WorkflowRuntimeCallbackLeaseSupport.TryCancelAsync(
+                    ctx,
+                    lease,
+                    "workflow_loop compensation phase deadline cleanup",
+                    CancellationToken.None);
+            }
+
+            throw;
+        }
+    }
+
+    private async Task CancelCompensationPhaseDeadlineAsync(
+        WorkflowExecutionKernelState state,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        var lease = state.CompensationPhaseDeadlineLease?.Clone();
+        state.CompensationPhaseDeadlineLease = null;
+        state.CompensationPhaseDeadlineCallbackId = string.Empty;
+        await SaveStateAsync(state, ctx, ct);
+        await WorkflowRuntimeCallbackLeaseSupport.TryCancelAsync(
+            ctx,
+            lease,
+            "workflow_loop compensation phase deadline cleanup",
+            ct);
+    }
+
+    private async Task HandleCompensationPhaseDeadlineFiredAsync(
+        WorkflowCompensationPhaseDeadlineFiredEvent evt,
+        EventEnvelope envelope,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        var runId = NormalizeRunId(evt.RunId);
+        if (string.IsNullOrWhiteSpace(runId))
+            return;
+
+        var state = LoadState(ctx);
+        if (!IsActiveRun(state, runId))
+            return;
+
+        if (!MatchesCompensationPhaseDeadline(state, envelope))
+        {
+            ctx.Logger.LogDebug(
+                "workflow_loop: ignore compensation phase deadline without matching lease metadata run={RunId}",
+                runId);
+            return;
+        }
+
+        var error = $"compensation phase deadline exceeded after {CompensationPhaseDeadlineMs}ms";
+        var result = await _stateHost.RecordCompensationPhaseDeadlineExceededAsync(runId, error, ct);
+        await HandleCompensationTransitionAsync(
+            result,
+            runId,
+            state.CurrentStepId,
+            error,
+            ctx,
+            ct);
+    }
+
     private async Task CleanupRunAsync(
         WorkflowExecutionKernelState state,
         IWorkflowExecutionContext ctx,
@@ -1252,6 +1390,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
     {
         var timeoutLeases = state.TimeoutsByStepId.Values.ToList();
         var retryLeases = state.RetryBackoffsByStepId.Values.Select(x => x.Lease).ToList();
+        var compensationPhaseDeadlineLease = state.CompensationPhaseDeadlineLease?.Clone();
         var terminalStepId = preserveTerminalFacts
             ? state.CurrentStepId
             : string.Empty;
@@ -1289,6 +1428,8 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         state.InputFileRefs.Clear();
         state.CurrentStepDispatchPending = false;
         state.CurrentStepTimeoutCallbackId = string.Empty;
+        state.CompensationPhaseDeadlineCallbackId = string.Empty;
+        state.CompensationPhaseDeadlineLease = null;
         state.Variables.Clear();
         foreach (var (key, value) in terminalVariables)
             state.Variables[key] = value ?? string.Empty;
@@ -1319,6 +1460,11 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 lease,
                 "workflow_loop run retry cleanup",
                 ct);
+        await WorkflowRuntimeCallbackLeaseSupport.TryCancelAsync(
+            ctx,
+            compensationPhaseDeadlineLease,
+            "workflow_loop run compensation phase deadline cleanup",
+            ct);
     }
 
     private static WorkflowExecutionKernelState LoadState(IWorkflowExecutionContext ctx) =>
@@ -1339,6 +1485,8 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             state.RetryAttemptsByStepId.Count == 0 &&
             state.TimeoutsByStepId.Count == 0 &&
             state.RetryBackoffsByStepId.Count == 0 &&
+            string.IsNullOrWhiteSpace(state.CompensationPhaseDeadlineCallbackId) &&
+            state.CompensationPhaseDeadlineLease == null &&
             state.ExecutionIdsByStepId.Count == 0 &&
             state.IdempotencyByStepId.Count == 0 &&
             state.CompensationExecutionIdsByStepId.Count == 0 &&
@@ -1633,6 +1781,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
 
         ApplyTransformOperation(request, step.TransformOperation, state);
         ApplyHumanApprovalOptions(request, step.HumanApprovalOptions);
+        ApplyExternalApprovalOptions(request, step.ExternalApprovalOptions, state);
         ApplyInteractionPresentation(request, step.Presentation, state);
 
         return request;
@@ -1681,6 +1830,41 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             "rejected" => WorkflowHumanApprovalTimeoutDefaultDecision.Reject,
             _ => WorkflowHumanApprovalTimeoutDefaultDecision.Unspecified,
         };
+
+    private void ApplyExternalApprovalOptions(
+        StepRequestEvent request,
+        ExternalApprovalWaitOptionsDefinition? options,
+        WorkflowExecutionKernelState state)
+    {
+        if (options == null)
+            return;
+
+        var sourceId = EvaluateOption(options.SourceId, state);
+        var externalIdKind = EvaluateOption(options.ExternalIdKind, state);
+        var externalId = EvaluateOption(options.ExternalId, state);
+        if (string.IsNullOrWhiteSpace(sourceId) ||
+            string.IsNullOrWhiteSpace(externalIdKind) ||
+            string.IsNullOrWhiteSpace(externalId))
+        {
+            return;
+        }
+
+        (request.StepParameters ??= new WorkflowStepParameters()).ExternalApproval =
+            new WorkflowExternalApprovalWaitOptions
+            {
+                SourceId = sourceId,
+                ExternalIdKind = externalIdKind,
+                ExternalId = externalId,
+                SignalName = EvaluateOption(options.SignalName, state),
+                CallbackIdempotencyKey = EvaluateOption(options.CallbackIdempotencyKey, state),
+                RequestId = EvaluateOption(options.RequestId, state),
+            };
+    }
+
+    private string EvaluateOption(string? value, WorkflowExecutionKernelState state) =>
+        string.IsNullOrWhiteSpace(value)
+            ? string.Empty
+            : _expressionEvaluator.Evaluate(value, state.Variables).Trim();
 
     private static string NormalizeOptionToken(string? value) =>
         string.IsNullOrWhiteSpace(value)
@@ -1871,6 +2055,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 timeoutLease = await ScheduleStepTimeoutLeaseAsync(
                     state.CurrentStepTimeoutCallbackId,
                     step,
+                    ResolveStepTimeoutMs(step, ResolveRetryDispatchKind(state, step.Id)),
                     state.RunId,
                     ctx,
                     ct);
@@ -1931,6 +2116,17 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                string.Equals(callbackState.CallbackId, pending.CallbackId, StringComparison.Ordinal);
     }
 
+    private static bool MatchesCompensationPhaseDeadline(
+        WorkflowExecutionKernelState state,
+        EventEnvelope envelope)
+    {
+        if (state.CompensationPhaseDeadlineLease != null)
+            return WorkflowRuntimeCallbackLeaseSupport.MatchesLease(envelope, state.CompensationPhaseDeadlineLease);
+
+        return RuntimeCallbackEnvelopeStateReader.TryRead(envelope, out var callbackState) &&
+               string.Equals(callbackState.CallbackId, state.CompensationPhaseDeadlineCallbackId, StringComparison.Ordinal);
+    }
+
     private static string ResolveInboundEnvelopeId(IWorkflowExecutionContext ctx) =>
         string.IsNullOrWhiteSpace(ctx.InboundEnvelope?.Id)
             ? Guid.NewGuid().ToString("N")
@@ -1941,5 +2137,20 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
 
     private static string BuildStepRetryBackoffCallbackId(string runId, string stepId, string originEnvelopeId) =>
         RuntimeCallbackKeyComposer.BuildCallbackId("workflow-step-retry-backoff", runId, stepId, originEnvelopeId);
+
+    private static string BuildCompensationPhaseDeadlineCallbackId(string runId, string originEnvelopeId) =>
+        RuntimeCallbackKeyComposer.BuildCallbackId("workflow-compensation-phase-deadline", runId, originEnvelopeId);
+
+    private static int ResolveStepTimeoutMs(StepDefinition step, WorkflowStepDispatchKind dispatchKind) =>
+        dispatchKind == WorkflowStepDispatchKind.Compensation
+            ? step.TimeoutMs is > 0 ? step.TimeoutMs.Value : DefaultCompensationTimeoutMs
+            : step.TimeoutMs is > 0 ? step.TimeoutMs.Value : 0;
+
+    private static WorkflowStepDispatchKind ResolveRetryDispatchKind(
+        WorkflowExecutionKernelState state,
+        string stepId) =>
+        state.CompensationExecutionIdsByStepId.ContainsKey(stepId)
+            ? WorkflowStepDispatchKind.Compensation
+            : WorkflowStepDispatchKind.Forward;
 
 }

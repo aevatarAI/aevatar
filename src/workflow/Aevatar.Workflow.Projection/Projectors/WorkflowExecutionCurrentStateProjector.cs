@@ -1,6 +1,7 @@
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core;
+using Aevatar.Workflow.Projection.Observability;
 using Aevatar.Workflow.Projection.ReadModels;
 
 namespace Aevatar.Workflow.Projection.Projectors;
@@ -20,7 +21,7 @@ public sealed class WorkflowExecutionCurrentStateProjector
     {
     }
 
-    protected override WorkflowExecutionCurrentStateDocument Map(
+    protected override WorkflowExecutionCurrentStateDocument? Map(
         MappedCurrentStateProjectionInput<WorkflowExecutionMaterializationContext, WorkflowRunState> input)
     {
         var context = input.Context;
@@ -33,6 +34,8 @@ public sealed class WorkflowExecutionCurrentStateProjector
             return null;
 
         var stateEvent = input.StateEvent;
+        WorkflowCompensationMetrics.ObserveCommittedPayload(stateEvent.EventData);
+
         var state = input.State;
         var seedSnapshot = _forkSeedMapper.ToProjectionSnapshot(state);
 

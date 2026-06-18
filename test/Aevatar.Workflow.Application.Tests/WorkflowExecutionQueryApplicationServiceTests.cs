@@ -1,6 +1,7 @@
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Queries;
 using Aevatar.Workflow.Application.Workflows;
 using FluentAssertions;
@@ -125,6 +126,47 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
             "ListWorkflowRunTimelineExport:run-1:5",
             "GetWorkflowRunGraphExportEdges:run-1:7:Outbound:child",
             "GetWorkflowRunGraphExportSubgraph:run-1:3:9:Outbound:child");
+    }
+
+    [Fact]
+    public async Task ListWorkflowActorCurrentStatesAsync_ShouldDelegateStructuredCurrentStateQuery()
+    {
+        var snapshot = new WorkflowActorSnapshot
+        {
+            ActorId = "run-dead-letter-1",
+            WorkflowName = "orders",
+            SagaStatus = WorkflowSagaStatus.CompensationDeadLetter,
+            StateVersion = 33,
+        };
+        var calls = new List<string>();
+        var currentStatePort = new FakeCurrentStateQueryPort(calls)
+        {
+            WorkflowActorCurrentStateQueryEnabled = true,
+            Snapshots = [snapshot],
+        };
+        var service = new WorkflowExecutionQueryApplicationService(
+            new StaticWorkflowDefinitionCatalog([]),
+            currentStatePort,
+            new FakeArtifactQueryPort(calls),
+            new StaticWorkflowCatalogPort(),
+            new StaticWorkflowCapabilitiesPort());
+
+        var result = await service.ListWorkflowActorCurrentStatesAsync(
+            new WorkflowActorCurrentStateListQuery
+            {
+                Take = 17,
+                SagaStatus = WorkflowSagaStatus.CompensationDeadLetter,
+                ScopeId = "scope-a",
+                DefinitionActorIds = ["def-a", "def-b"],
+            });
+
+        result.Should().ContainSingle().Which.Should().BeSameAs(snapshot);
+        currentStatePort.LastListQuery.Should().NotBeNull();
+        currentStatePort.LastListQuery!.Take.Should().Be(17);
+        currentStatePort.LastListQuery.SagaStatus.Should().Be(WorkflowSagaStatus.CompensationDeadLetter);
+        currentStatePort.LastListQuery.ScopeId.Should().Be("scope-a");
+        currentStatePort.LastListQuery.DefinitionActorIds.Should().Equal("def-a", "def-b");
+        calls.Should().Equal("ListWorkflowActorCurrentStatesQuery:17:CompensationDeadLetter:scope-a:def-a,def-b");
     }
 
     [Fact]
@@ -304,6 +346,7 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
         public bool WorkflowActorCurrentStateQueryEnabled { get; set; }
         public IReadOnlyList<WorkflowActorSnapshot> Snapshots { get; init; } = [];
         public WorkflowActorSnapshot? SingleSnapshot { get; init; }
+        public WorkflowActorCurrentStateListQuery? LastListQuery { get; private set; }
 
         public Task<WorkflowActorSnapshot?> GetWorkflowActorCurrentStateAsync(string actorId, CancellationToken ct = default)
         {
@@ -314,6 +357,16 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
         public Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowActorCurrentStatesAsync(int take = 200, CancellationToken ct = default)
         {
             calls.Add($"ListWorkflowActorCurrentStates:{take}");
+            return Task.FromResult(Snapshots);
+        }
+
+        public Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowActorCurrentStatesAsync(
+            WorkflowActorCurrentStateListQuery query,
+            CancellationToken ct = default)
+        {
+            LastListQuery = query;
+            calls.Add(
+                $"ListWorkflowActorCurrentStatesQuery:{query.Take}:{query.SagaStatus}:{query.ScopeId}:{string.Join(",", query.DefinitionActorIds)}");
             return Task.FromResult(Snapshots);
         }
 

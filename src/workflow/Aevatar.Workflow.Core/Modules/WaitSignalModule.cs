@@ -47,11 +47,14 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
             var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
             var stepId = NormalizeStepId(request.StepId);
             var signalName = NormalizeSignalName(
-                WorkflowParameterValueParser.GetString(request.Parameters, "default", "signal_name", "signal"));
+                !string.IsNullOrWhiteSpace(request.StepParameters?.ExternalApproval?.SignalName)
+                    ? request.StepParameters.ExternalApproval.SignalName
+                    : WorkflowParameterValueParser.GetString(request.Parameters, "default", "signal_name", "signal"));
             var prompt = WorkflowParameterValueParser.GetString(request.Parameters, string.Empty, "prompt", "message");
             var timeoutMs = ResolveTimeoutMs(request.Parameters);
             var pendingKey = new PendingSignalKey(runId, signalName, stepId);
             var state = WorkflowExecutionStateAccess.Load<WaitSignalModuleState>(ctx, ModuleStateKey);
+            var externalApproval = ResolveExternalApproval(request);
             // Refactor (iter89/cluster-089-workflow-module-clock-state):
             //   Old: wait_signal used process wall clock for buffered signal
             //        eviction and received timestamps.
@@ -96,9 +99,11 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
                 TimeoutCallbackId = timeoutMs > 0
                     ? BuildTimeoutCallbackId(runId, signalName, stepId, ResolveOriginEnvelopeId(envelope))
                     : string.Empty,
+                ExternalApproval = externalApproval,
             };
             state.Pending[BuildPendingKey(pendingKey)] = pendingState;
             await SaveStateAsync(state, ctx, ct);
+            await PublishExternalApprovalRegisteredAsync(pendingState, ctx, ct);
 
             if (timeoutMs > 0)
             {
@@ -170,6 +175,7 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
 
             state.Pending.Remove(BuildPendingKey(pendingKey));
             await SaveStateAsync(state, ctx, ct);
+            await PublishExternalApprovalClearedAsync(pending, ctx, ct);
             return;
         }
 
@@ -218,6 +224,7 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
 
         stateForSignal.Pending.Remove(BuildPendingKey(resolvedKey));
         await SaveStateAsync(stateForSignal, ctx, ct);
+        await PublishExternalApprovalClearedAsync(pendingStateForSignal, ctx, ct);
 
         if (pendingStateForSignal.TimeoutLease != null)
         {
@@ -268,6 +275,87 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
         return true;
     }
 
+    private static PendingExternalApprovalContinuationState? ResolveExternalApproval(
+        StepRequestEvent request)
+    {
+        var options = request.StepParameters?.ExternalApproval;
+        if (options == null)
+            return null;
+
+        var sourceId = NormalizeIdentity(options.SourceId);
+        var externalIdKind = NormalizeIdentity(options.ExternalIdKind);
+        var externalId = NormalizeIdentity(options.ExternalId);
+        if (string.IsNullOrWhiteSpace(sourceId) ||
+            string.IsNullOrWhiteSpace(externalIdKind) ||
+            string.IsNullOrWhiteSpace(externalId))
+        {
+            return null;
+        }
+
+        return new PendingExternalApprovalContinuationState
+        {
+            SourceId = sourceId,
+            ExternalIdKind = externalIdKind,
+            ExternalId = externalId,
+            CallbackIdempotencyKey = NormalizeIdentity(options.CallbackIdempotencyKey),
+            RequestId = NormalizeIdentity(options.RequestId),
+        };
+    }
+
+    private static async Task PublishExternalApprovalRegisteredAsync(
+        PendingSignalState pending,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        var externalApproval = pending.ExternalApproval;
+        if (externalApproval == null ||
+            string.IsNullOrWhiteSpace(externalApproval.SourceId) ||
+            string.IsNullOrWhiteSpace(externalApproval.ExternalIdKind) ||
+            string.IsNullOrWhiteSpace(externalApproval.ExternalId))
+        {
+            return;
+        }
+
+        await ctx.PublishAsync(new WorkflowExternalApprovalContinuationRegisteredEvent
+        {
+            RunId = pending.RunId,
+            StepId = pending.StepId,
+            SignalName = pending.SignalName,
+            SourceId = externalApproval.SourceId,
+            ExternalIdKind = externalApproval.ExternalIdKind,
+            ExternalId = externalApproval.ExternalId,
+            CallbackIdempotencyKey = externalApproval.CallbackIdempotencyKey,
+            RequestId = externalApproval.RequestId,
+        }, TopologyAudience.ParentAndChildren, ct);
+    }
+
+    private static async Task PublishExternalApprovalClearedAsync(
+        PendingSignalState pending,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        var externalApproval = pending.ExternalApproval;
+        if (externalApproval == null ||
+            string.IsNullOrWhiteSpace(externalApproval.SourceId) ||
+            string.IsNullOrWhiteSpace(externalApproval.ExternalIdKind) ||
+            string.IsNullOrWhiteSpace(externalApproval.ExternalId))
+        {
+            return;
+        }
+
+        await ctx.PublishAsync(new WorkflowExternalApprovalContinuationClearedEvent
+        {
+            RunId = pending.RunId,
+            StepId = pending.StepId,
+            SignalName = pending.SignalName,
+            SourceId = externalApproval.SourceId,
+            ExternalIdKind = externalApproval.ExternalIdKind,
+            ExternalId = externalApproval.ExternalId,
+            CallbackIdempotencyKey = externalApproval.CallbackIdempotencyKey,
+            RequestId = externalApproval.RequestId,
+        }, TopologyAudience.ParentAndChildren, ct);
+    }
+
     private static int ResolveTimeoutMs(IReadOnlyDictionary<string, string> parameters)
     {
         var timeoutMs = WorkflowParameterValueParser.GetBoundedInt(
@@ -298,6 +386,9 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
         var normalized = string.IsNullOrWhiteSpace(signalName) ? "default" : signalName.Trim();
         return normalized.ToLowerInvariant();
     }
+
+    private static string NormalizeIdentity(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
 
     private static string NormalizeStepId(string? stepId) =>
         string.IsNullOrWhiteSpace(stepId) ? string.Empty : stepId.Trim();
@@ -334,6 +425,7 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
             return;
 
         await SaveStateAsync(state, ctx, ct);
+        await PublishExternalApprovalClearedAsync(existingPending, ctx, ct);
         await WorkflowRuntimeCallbackLeaseSupport.TryCancelAsync(
             ctx,
             existingPending.TimeoutLease,

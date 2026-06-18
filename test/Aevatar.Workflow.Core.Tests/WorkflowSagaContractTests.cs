@@ -22,7 +22,6 @@ public sealed class WorkflowSagaContractTests
             CompensationStepId = "cancel_order",
             IdempotencyKey = "run-1:create_order",
             CapturedOutput = """{"orderId":"order-1"}""",
-            CommittedAtUnixMs = 123456789,
             LedgerStatus = CompensableLedgerEntryStatus.Confirmed,
         });
 
@@ -31,7 +30,6 @@ public sealed class WorkflowSagaContractTests
         state.CompensableLedger[0].CompensationStepId.Should().Be("cancel_order");
         state.CompensableLedger[0].IdempotencyKey.Should().Be("run-1:create_order");
         state.CompensableLedger[0].CapturedOutput.Should().Be("""{"orderId":"order-1"}""");
-        state.CompensableLedger[0].CommittedAtUnixMs.Should().Be(123456789);
         state.CompensableLedger[0].LedgerStatus.Should().Be(CompensableLedgerEntryStatus.Confirmed);
         state.CompensationCursor.Should().Be(1);
         state.SagaStatus.Should().Be(WorkflowSagaStatus.Compensating);
@@ -130,6 +128,23 @@ public sealed class WorkflowSagaContractTests
             RemainingUncompensated = 1,
             Error = "failed",
         });
+
+        AssertField<WorkflowCompensationPhaseDeadlineFiredEvent>("run_id", 1);
+        AssertRoundTrip(new WorkflowCompensationPhaseDeadlineFiredEvent
+        {
+            RunId = "run-1",
+        });
+
+        AssertField<SubWorkflowInvocationCompletedEvent>("compensated", 6);
+        AssertRoundTrip(new SubWorkflowInvocationCompletedEvent
+        {
+            InvocationId = "invoke-1",
+            ChildRunId = "child-run-1",
+            Success = false,
+            Output = string.Empty,
+            Error = "failed after compensation",
+            Compensated = true,
+        });
     }
 
     [Fact]
@@ -146,18 +161,22 @@ public sealed class WorkflowSagaContractTests
         AssertField<CompletedStepLedgerEntry>("compensation_step_id", 2);
         AssertField<CompletedStepLedgerEntry>("idempotency_key", 3);
         AssertField<CompletedStepLedgerEntry>("captured_output", 4);
-        AssertField<CompletedStepLedgerEntry>("committed_at_unix_ms", 5);
+        AssertFieldMissing<CompletedStepLedgerEntry>("committed_at_unix_ms");
+        AssertReserved<CompletedStepLedgerEntry>("committed_at_unix_ms", 5);
         AssertField<CompletedStepLedgerEntry>("ledger_status", 6);
         AssertField<WorkflowRunState>("compensable_ledger", 25);
         AssertField<WorkflowRunState>("compensation_cursor", 26);
         AssertField<WorkflowRunState>("saga_status", 27);
+        AssertField<WorkflowExecutionKernelState>("compensation_phase_deadline_lease", 17);
+        AssertField<WorkflowExecutionKernelState>("compensation_phase_deadline_callback_id", 18);
+        AssertField<WorkflowRunState>("compensation_origin_failed_step_id", 32);
+        AssertField<WorkflowRunState>("terminal_workflow_completion_recorded", 33);
         AssertRoundTrip(new CompletedStepLedgerEntry
         {
             StepId = "create_order",
             CompensationStepId = "cancel_order",
             IdempotencyKey = "run-1:create_order:1",
             CapturedOutput = "{}",
-            CommittedAtUnixMs = 123456789,
             LedgerStatus = CompensableLedgerEntryStatus.Provisional,
         });
     }
@@ -169,6 +188,25 @@ public sealed class WorkflowSagaContractTests
 
         field.Should().NotBeNull();
         field!.FieldNumber.Should().Be(number);
+    }
+
+    private static void AssertFieldMissing<TMessage>(string name)
+        where TMessage : IMessage<TMessage>, new()
+    {
+        new TMessage().Descriptor.FindFieldByName(name).Should().BeNull();
+    }
+
+    private static void AssertReserved<TMessage>(string name, int number)
+        where TMessage : IMessage<TMessage>, new()
+    {
+        var messageDescriptor = new TMessage().Descriptor;
+        var file = FileDescriptorProto.Parser.ParseFrom(messageDescriptor.File.SerializedData);
+        var descriptor = file.MessageType.Single(message => message.Name == messageDescriptor.Name);
+
+        descriptor.ReservedName.Should().Contain(name);
+        descriptor.ReservedRange.Should().Contain(range =>
+            range.Start <= number &&
+            number < range.End);
     }
 
     private static void AssertRoundTrip<TMessage>(TMessage message)

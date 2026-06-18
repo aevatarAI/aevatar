@@ -270,6 +270,38 @@ public sealed class ScopeServiceRunControlEndpointTests : ScopeServiceEndpointTe
     }
 
     [Fact]
+    public async Task ScopeRetryCompensationRunEndpoint_ShouldResolveScopedRunAndDispatch()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.RunBindingReader.BindingsByRunId["run-dead-letter-1"] =
+        [
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                "run-actor-dead-letter-1",
+                "def-actor-1",
+                "run-dead-letter-1",
+                "main",
+                "yaml",
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                "scope-a"),
+        ];
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/runs/run-dead-letter-1:retry-compensation", new
+        {
+            failedCompensationStepId = "refund_payment",
+            reason = "operator retry",
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        response.Headers.Location.Should().NotBeNull();
+        host.RetryCompensationDispatchService.LastCommand.Should().NotBeNull();
+        host.RetryCompensationDispatchService.LastCommand!.ActorId.Should().Be("run-actor-dead-letter-1");
+        host.RetryCompensationDispatchService.LastCommand.RunId.Should().Be("run-dead-letter-1");
+        host.RetryCompensationDispatchService.LastCommand.FailedCompensationStepId.Should().Be("refund_payment");
+        host.RetryCompensationDispatchService.LastCommand.Reason.Should().Be("operator retry");
+    }
+
+    [Fact]
     public async Task ResumeRunEndpoint_ShouldResolveRunFromServiceAndDispatch()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
@@ -386,6 +418,40 @@ public sealed class ScopeServiceRunControlEndpointTests : ScopeServiceEndpointTe
         host.StopDispatchService.LastCommand!.ActorId.Should().Be("run-actor-3");
         host.StopDispatchService.LastCommand.RunId.Should().Be("run-3");
         host.StopDispatchService.LastCommand.Reason.Should().Be("manual");
+    }
+
+    [Fact]
+    public async Task RetryCompensationRunEndpoint_ShouldResolveRunFromServiceAndDispatch()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.LifecycleQueryPort.Service = BuildService("scope-a", "orders", "def-actor-1");
+        host.LifecycleQueryPort.Deployments = BuildDeployments("scope-a:default:default:orders", "dep-1", "rev-1", "def-actor-1");
+        host.RunBindingReader.BindingsByRunId["run-dead-letter-2"] =
+        [
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                "run-actor-dead-letter-2",
+                "def-actor-1",
+                "run-dead-letter-2",
+                "orders",
+                "yaml",
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                "scope-a"),
+        ];
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/services/orders/runs/run-dead-letter-2:retry-compensation", new
+        {
+            failedCompensationStepId = "cancel_order",
+            reason = "operator retry",
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        response.Headers.Location.Should().NotBeNull();
+        host.RetryCompensationDispatchService.LastCommand.Should().NotBeNull();
+        host.RetryCompensationDispatchService.LastCommand!.ActorId.Should().Be("run-actor-dead-letter-2");
+        host.RetryCompensationDispatchService.LastCommand.RunId.Should().Be("run-dead-letter-2");
+        host.RetryCompensationDispatchService.LastCommand.FailedCompensationStepId.Should().Be("cancel_order");
+        host.RetryCompensationDispatchService.LastCommand.Reason.Should().Be("operator retry");
     }
 
     [Fact]

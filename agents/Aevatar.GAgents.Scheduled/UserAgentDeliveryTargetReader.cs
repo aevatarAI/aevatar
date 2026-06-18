@@ -56,7 +56,7 @@ public sealed class UserAgentDeliveryTargetReader : IUserAgentDeliveryTargetRead
         return new UserAgentDeliveryTarget(
             AgentId: document.Id ?? string.Empty,
 #pragma warning disable CS0612 // legacy field read for delivery target compatibility
-            Platform: document.Platform ?? string.Empty,
+            Platform: ResolveDeliveryPlatform(document),
 #pragma warning restore CS0612
             ConversationId: document.ConversationId ?? string.Empty,
             NyxProviderSlug: document.NyxProviderSlug ?? string.Empty,
@@ -68,5 +68,15 @@ public sealed class UserAgentDeliveryTargetReader : IUserAgentDeliveryTargetRead
             OutputFormat: document.OutputFormat,
             TemplateName: document.TemplateName ?? string.Empty,
             AgentType: document.AgentType ?? string.Empty);
+    }
+
+    private static string ResolveDeliveryPlatform(UserAgentCatalogDocument document)
+    {
+#pragma warning disable CS0612 // legacy field read for delivery target compatibility
+        if (!string.IsNullOrWhiteSpace(document.Platform))
+            return document.Platform;
+#pragma warning restore CS0612
+
+        return document.TargetPlatform ?? string.Empty;
     }
 }

@@ -2,19 +2,30 @@ using System.Text.Json;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.Foundation.Abstractions.Interactions;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Integration.AI;
 
-public sealed class HumanInteractionChannelToolSource(IChannelInteractionNotificationPort notificationPort) : IAgentToolSource
+public sealed class HumanInteractionChannelToolSource : IAgentToolSource
 {
+    private readonly IChannelInteractionNotificationPort _notificationPort;
+
+    public HumanInteractionChannelToolSource(
+        IChannelInteractionNotificationPort notificationPort,
+        ILogger<HumanInteractionChannelToolSource>? logger = null)
+    {
+        _notificationPort = notificationPort;
+        _ = logger;
+    }
+
     public const string DeliveryCapability = "human_interaction.delivery";
     public const string ResolutionCapability = "human_interaction.resolution_update";
 
     public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
         Task.FromResult<IReadOnlyList<IAgentTool>>(
         [
-            new DeliveryTool(notificationPort),
-            new ResolutionTool(notificationPort),
+            new DeliveryTool(_notificationPort),
+            new ResolutionTool(_notificationPort),
         ]);
 
     private sealed class DeliveryTool(IChannelInteractionNotificationPort notificationPort) : IAgentTool, IAgentToolCapabilityDescriptor
@@ -35,16 +46,16 @@ public sealed class HumanInteractionChannelToolSource(IChannelInteractionNotific
             var interaction = envelope.Interaction ??
                               throw new InvalidOperationException("Human interaction payload is required.");
 
-            await notificationPort.DeliverAsync(
-                new ChannelInteractionNotificationRequest
-                {
-                    ActorId = interaction.ActorId,
-                    RunId = interaction.RunId,
-                    StepId = interaction.StepId,
-                    DeliveryTargetId = envelope.DeliveryTargetId ?? string.Empty,
-                    InteractionSpec = interaction.InteractionSpec?.Clone() ?? BuildInteractionSpec(interaction),
-                },
-                ct);
+            var request = new ChannelInteractionNotificationRequest
+            {
+                ActorId = interaction.ActorId,
+                RunId = interaction.RunId,
+                StepId = interaction.StepId,
+                DeliveryTargetId = envelope.DeliveryTargetId ?? string.Empty,
+                InteractionSpec = interaction.InteractionSpec?.Clone() ?? BuildInteractionSpec(interaction),
+            };
+
+            await notificationPort.DeliverAsync(request, ct);
 
             return SuccessJson;
         }
@@ -68,16 +79,16 @@ public sealed class HumanInteractionChannelToolSource(IChannelInteractionNotific
             var resolution = envelope.Resolution ??
                              throw new InvalidOperationException("Human approval resolution is required.");
 
-            await notificationPort.DeliverAsync(
-                new ChannelInteractionNotificationRequest
-                {
-                    ActorId = resolution.ActorId,
-                    RunId = resolution.RunId,
-                    StepId = resolution.StepId,
-                    DeliveryTargetId = envelope.DeliveryTargetId ?? string.Empty,
-                    InteractionSpec = BuildResolutionSpec(resolution),
-                },
-                ct);
+            var request = new ChannelInteractionNotificationRequest
+            {
+                ActorId = resolution.ActorId,
+                RunId = resolution.RunId,
+                StepId = resolution.StepId,
+                DeliveryTargetId = envelope.DeliveryTargetId ?? string.Empty,
+                InteractionSpec = BuildResolutionSpec(resolution),
+            };
+
+            await notificationPort.DeliverAsync(request, ct);
 
             return SuccessJson;
         }

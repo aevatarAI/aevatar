@@ -1571,6 +1571,68 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
+    public async Task HandleRetryCompensation_ShouldDispatchCommand_WhenRunOwnershipMatches()
+    {
+        var receipt = new WorkflowRunControlAcceptedReceipt("actor-1", "run-1", "retry-cmd-1", "corr-1");
+        var service = new RecordingDispatchService<WorkflowRetryCompensationCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>
+        {
+            Result = CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>.Success(receipt),
+        };
+
+        var result = await WorkflowCapabilityEndpoints.HandleRetryCompensation(
+            new WorkflowRetryCompensationInput
+            {
+                ActorId = "actor-1",
+                RunId = "run-1",
+                FailedCompensationStepId = " refund_payment ",
+                CommandId = "retry-cmd-1",
+                Reason = "operator retry",
+            },
+            service,
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        http.Response.Headers.Location.ToString().Should().Be("/api/workflow-actors/actor-1/current-state");
+        service.Commands.Should().ContainSingle();
+        service.Commands.Single().ActorId.Should().Be("actor-1");
+        service.Commands.Single().RunId.Should().Be("run-1");
+        service.Commands.Single().FailedCompensationStepId.Should().Be("refund_payment");
+        service.Commands.Single().CommandId.Should().Be("retry-cmd-1");
+        service.Commands.Single().Reason.Should().Be("operator retry");
+        body.Should().Contain("\"failedCompensationStepId\":\"refund_payment\"");
+        body.Should().Contain("\"acceptedCommandId\":\"retry-cmd-1\"");
+        body.Should().Contain("\"statusUrl\":\"/api/workflow-actors/actor-1/current-state\"");
+    }
+
+    [Fact]
+    public async Task HandleRetryCompensation_ShouldRejectMissingFailedStep()
+    {
+        var service = new RecordingDispatchService<WorkflowRetryCompensationCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>();
+
+        var result = await WorkflowCapabilityEndpoints.HandleRetryCompensation(
+            new WorkflowRetryCompensationInput
+            {
+                ActorId = "actor-1",
+                RunId = "run-1",
+                FailedCompensationStepId = " ",
+            },
+            service,
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("actorId, runId and failedCompensationStepId are required");
+        service.Commands.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task HandleForkRun_ShouldReturnAcceptedLocationAndDispatchMappedCommand()
     {
         var service = new RecordingDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>

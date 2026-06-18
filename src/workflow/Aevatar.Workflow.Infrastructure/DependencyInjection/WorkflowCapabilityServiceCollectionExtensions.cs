@@ -50,7 +50,10 @@ public static class WorkflowCapabilityServiceCollectionExtensions
         services.AddOptions<WorkflowFormFileIngressOptions>()
             .Bind(configuration.GetSection(WorkflowFormFileIngressOptions.SectionName));
         services.TryAddSingleton<WorkflowMultipartChatRequestParser>();
+        services.AddOptions<WorkflowExternalApprovalCallbackOptions>()
+            .Bind(configuration.GetSection(WorkflowExternalApprovalCallbackOptions.SectionName));
         services.TryAddSingleton<WorkflowWebhookIngressRequestBuilder>();
+        services.TryAddSingleton<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowWebhookReplayAdmissionPort, WorkflowWebhookReplayAdmissionPort>();
         var webhookReplayRedisConnectionString = configuration[$"{WorkflowWebhookIngressOptions.SectionName}:RedisConnectionString"];
         if (!string.IsNullOrWhiteSpace(webhookReplayRedisConnectionString))
         {

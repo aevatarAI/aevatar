@@ -631,6 +631,44 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
+    public async Task GenerateReplyAsync_WithChannelContextMiddleware_IncludesLarkSubjectIdsSeparatelyFromOperatorIds()
+    {
+        var providerFactory = new RecordingProviderFactory();
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            llmMiddlewares: [new ChannelContextMiddleware(NullLogger<ChannelContextMiddleware>.Instance)]);
+
+        var reply = await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-lark-subject-context",
+                ChannelId = ChannelId.From("lark"),
+                Conversation = new ConversationReference { CanonicalKey = "lark:group:oc_1" },
+                Content = new MessageContent { Text = "hello" },
+            },
+            new Dictionary<string, string>
+            {
+                [ChannelMetadataKeys.Platform] = "lark",
+                [ChannelMetadataKeys.ChatType] = "group",
+                [ChannelMetadataKeys.SenderId] = "ou_sender_1",
+                [ChannelMetadataKeys.ConversationId] = "oc_1",
+                [ChannelMetadataKeys.LarkSubjectUserId] = "lark-subject-user-1",
+                [ChannelMetadataKeys.LarkSubjectEmployeeId] = "employee-1",
+            },
+            streamingSink: null,
+            CancellationToken.None);
+
+        reply.Text.Should().Be("ok");
+        var systemPrompt = providerFactory.Requests.Should().ContainSingle().Subject
+            .Messages.First(message => message.Role == "system").Content;
+        systemPrompt.Should().Contain("subject_user_id: \"lark-subject-user-1\"");
+        systemPrompt.Should().Contain("subject_employee_id: \"employee-1\"");
+        systemPrompt.Should().Contain("operator_user_id: \"\"");
+        systemPrompt.Should().Contain("operator_open_id: \"\"");
+        systemPrompt.Should().NotContain("operator_user_id: \"lark-subject-user-1\"");
+    }
+
+    [Fact]
     public async Task GenerateReplyAsync_AggregatesUsageAndFinishReasonAtActorEdge()
     {
         // ADR-0021 §6 / canon §8: the actor-edge closeout returned by GenerateReplyAsync

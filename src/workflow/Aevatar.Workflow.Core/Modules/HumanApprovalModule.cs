@@ -105,8 +105,13 @@ public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext
             //   Old pattern: Information log included raw value/prompt/input preview
             //   New principle: only stable id + length + status + redaction marker
             ctx.Logger.LogInformation(
-                "HumanApproval: run={RunId} step={StepId} status=suspended prompt_len={PromptLen} prompt_redacted=true timeout={Timeout}s",
-                runId, request.StepId, prompt.Length, timeoutSeconds);
+                "HumanApproval: run={RunId} step={StepId} status=suspended prompt_len={PromptLen} prompt_redacted=true timeout={Timeout}s deliveryTargetId={DeliveryTargetId} hasDeliveryTargetId={HasDeliveryTargetId}",
+                runId,
+                request.StepId,
+                prompt.Length,
+                timeoutSeconds,
+                deliveryTargetId ?? string.Empty,
+                !string.IsNullOrWhiteSpace(deliveryTargetId));
 
             var suspended = new WorkflowSuspendedEvent
             {
@@ -120,7 +125,7 @@ public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext
             ApplyTypedInteraction(suspended, request);
             ApplyTypedDeliveryTarget(suspended, deliveryTargetId);
 
-            await ctx.PublishAsync(suspended, TopologyAudience.ParentAndChildren, ct);
+            await ctx.PublishAsync(suspended, TopologyAudience.Self, ct);
             return;
         }
 

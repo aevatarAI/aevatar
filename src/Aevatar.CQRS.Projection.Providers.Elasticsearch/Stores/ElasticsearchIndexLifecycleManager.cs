@@ -9,7 +9,7 @@ namespace Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 /// <summary>
 /// Owns the physical-index lifecycle behind a stable read/write alias name.
 ///
-/// Reconciliation state machine, applied once per <see cref="EnsureIndexAsync"/>
+/// Write-path reconciliation state machine, applied once per <see cref="EnsureIndexAsync"/>
 /// invocation per alias name in a process:
 ///
 /// 1. Alias exists and points at <c>{alias}-v{fingerprint}</c> matching the
@@ -18,7 +18,7 @@ namespace Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 ///    alias+fingerprint lifecycle is the only schema-drift authority, so
 ///    projection must refuse to write instead of repairing drift through a
 ///    query-time or projection-turn mapping reader.
-/// 3. No alias exists but a bare index with the alias name does — this is a
+/// 3. No alias exists but a bare index with the alias name does - this is a
 ///    pre-aliased prod index from before the lifecycle landed. Create the
 ///    new physical with expected mapping, reindex from the bare index, then
 ///    run an atomic <c>_aliases</c> call that adds the alias to the new
@@ -92,9 +92,10 @@ internal sealed class ElasticsearchIndexLifecycleManager : IDisposable
         var fingerprint = ElasticsearchProjectionSchemaFingerprint.Compute(metadata);
         var expectedPhysical = $"{aliasName}-v{fingerprint}";
 
-        var currentAliasTarget = await TryResolveAliasTargetAsync(aliasName, ct);
-        if (currentAliasTarget is not null)
+        var aliasResolution = await ResolveAliasAsync(aliasName, ct);
+        if (aliasResolution.Targets.Count == 1)
         {
+            var currentAliasTarget = aliasResolution.Targets[0];
             if (string.Equals(currentAliasTarget, expectedPhysical, StringComparison.Ordinal))
             {
                 return new ProjectionIndexConsistencyResult(
@@ -113,6 +114,17 @@ internal sealed class ElasticsearchIndexLifecycleManager : IDisposable
                 currentAliasTarget,
                 ProjectionIndexConsistencyStatus.Drifted,
                 "Projection index schema drift detected: alias points to a physical index with a different schema fingerprint.");
+        }
+
+        if (aliasResolution.Targets.Count > 1)
+        {
+            return new ProjectionIndexConsistencyResult(
+                "Elasticsearch",
+                aliasName,
+                expectedPhysical,
+                string.Join(",", aliasResolution.Targets),
+                ProjectionIndexConsistencyStatus.Drifted,
+                "Projection index schema drift detected: alias points to multiple physical indices.");
         }
 
         var bareExists = await IndexExistsAsync(aliasName, ct);
@@ -141,9 +153,10 @@ internal sealed class ElasticsearchIndexLifecycleManager : IDisposable
         var fingerprint = ElasticsearchProjectionSchemaFingerprint.Compute(metadata);
         var expectedPhysical = $"{aliasName}-v{fingerprint}";
 
-        var currentAliasTarget = await TryResolveAliasTargetAsync(aliasName, ct);
-        if (currentAliasTarget is not null)
+        var aliasResolution = await ResolveAliasAsync(aliasName, ct);
+        if (aliasResolution.Targets.Count == 1)
         {
+            var currentAliasTarget = aliasResolution.Targets[0];
             if (string.Equals(currentAliasTarget, expectedPhysical, StringComparison.Ordinal))
                 return;
 
@@ -156,6 +169,16 @@ internal sealed class ElasticsearchIndexLifecycleManager : IDisposable
                 aliasName,
                 currentAliasTarget,
                 expectedPhysical);
+        }
+
+        if (aliasResolution.Targets.Count > 1)
+        {
+            throw new ProjectionIndexSchemaDriftException(
+                "Elasticsearch",
+                aliasName,
+                string.Join(",", aliasResolution.Targets),
+                expectedPhysical,
+                "Elasticsearch projection index schema drift detected: alias points to multiple physical indices.");
         }
 
         var bareExists = await IndexExistsAsync(aliasName, ct);
@@ -188,9 +211,10 @@ internal sealed class ElasticsearchIndexLifecycleManager : IDisposable
         var fingerprint = ElasticsearchProjectionSchemaFingerprint.Compute(metadata);
         var expectedPhysical = $"{aliasName}-v{fingerprint}";
 
-        var currentAliasTarget = await TryResolveAliasTargetAsync(aliasName, ct);
-        if (currentAliasTarget is not null)
+        var aliasResolution = await ResolveAliasAsync(aliasName, ct);
+        if (aliasResolution.Targets.Count == 1)
         {
+            var currentAliasTarget = aliasResolution.Targets[0];
             if (string.Equals(currentAliasTarget, expectedPhysical, StringComparison.Ordinal))
                 return;
 
@@ -219,6 +243,16 @@ internal sealed class ElasticsearchIndexLifecycleManager : IDisposable
             return;
         }
 
+        if (aliasResolution.Targets.Count > 1)
+        {
+            throw new ProjectionIndexSchemaDriftException(
+                "Elasticsearch",
+                aliasName,
+                string.Join(",", aliasResolution.Targets),
+                expectedPhysical,
+                "Elasticsearch projection index schema drift detected: alias points to multiple physical indices.");
+        }
+
         var bareExists = await IndexExistsAsync(aliasName, ct);
         if (bareExists)
         {
@@ -232,12 +266,12 @@ internal sealed class ElasticsearchIndexLifecycleManager : IDisposable
     private static Dictionary<string, object?> RemoveAliasAction(string physical, string alias) =>
         new() { ["remove"] = new Dictionary<string, object?> { ["index"] = physical, ["alias"] = alias } };
 
-    private async Task<string?> TryResolveAliasTargetAsync(string aliasName, CancellationToken ct)
+    private async Task<AliasResolution> ResolveAliasAsync(string aliasName, CancellationToken ct)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, $"_alias/{Uri.EscapeDataString(aliasName)}");
         using var response = await _httpClient.SendAsync(request, ct);
         if (response.StatusCode == HttpStatusCode.NotFound)
-            return null;
+            return AliasResolution.Missing;
 
         await EnsureSuccessAsync(response, $"resolve alias '{aliasName}'", ct);
         var body = await response.Content.ReadAsStringAsync(ct);
@@ -251,8 +285,9 @@ internal sealed class ElasticsearchIndexLifecycleManager : IDisposable
         // the bare-index / greenfield branches instead of throwing on
         // unexpected payloads.
         if (doc.RootElement.ValueKind != JsonValueKind.Object)
-            return null;
+            return AliasResolution.Missing;
 
+        var targets = new List<string>();
         foreach (var physical in doc.RootElement.EnumerateObject())
         {
             if (physical.Value.ValueKind != JsonValueKind.Object)
@@ -262,10 +297,12 @@ internal sealed class ElasticsearchIndexLifecycleManager : IDisposable
             if (aliases.ValueKind != JsonValueKind.Object)
                 continue;
             if (aliases.TryGetProperty(aliasName, out _))
-                return physical.Name;
+                targets.Add(physical.Name);
         }
 
-        return null;
+        return targets.Count == 0
+            ? AliasResolution.Missing
+            : new AliasResolution(targets);
     }
 
     private async Task<bool> IndexExistsAsync(string indexOrAliasName, CancellationToken ct)
@@ -355,7 +392,7 @@ internal sealed class ElasticsearchIndexLifecycleManager : IDisposable
         };
 
         using var response = await _httpClient.SendAsync(request, ct);
-        await EnsureSuccessAsync(response, $"reindex '{sourceIndex}' → '{destIndex}'", ct);
+        await EnsureSuccessAsync(response, $"reindex '{sourceIndex}' to '{destIndex}'", ct);
 
         var body = await response.Content.ReadAsStringAsync(ct);
         using var doc = JsonDocument.Parse(body);
@@ -406,4 +443,9 @@ internal sealed class ElasticsearchIndexLifecycleManager : IDisposable
     }
 
     public void Dispose() => _initLock.Dispose();
+
+    private sealed record AliasResolution(IReadOnlyList<string> Targets)
+    {
+        public static AliasResolution Missing { get; } = new(Array.Empty<string>());
+    }
 }
