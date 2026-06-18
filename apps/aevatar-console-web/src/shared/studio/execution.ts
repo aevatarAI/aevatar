@@ -893,7 +893,6 @@ export function decorateNodesForExecution(
     const stepState = trace?.stepStates.get(node.data.stepId);
     return {
       ...node,
-      draggable: false,
       selectable: true,
       data: {
         ...node.data,
