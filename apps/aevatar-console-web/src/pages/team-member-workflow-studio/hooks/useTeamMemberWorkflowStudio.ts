@@ -991,6 +991,9 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const suppressedSourceSignatureRef =
     React.useRef<WorkflowSourceSignature | null>(null);
   const teamsHref = buildTeamsHref();
+  const closeDraftRunPanel = React.useCallback(() => {
+    setDraftRunPanelOpen(false);
+  }, []);
   const teamQuery = useQuery({
     enabled: Boolean(route.scopeId && route.teamId),
     queryKey: getTeamMemberWorkflowStudioTeamQueryKey(
@@ -1228,7 +1231,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     setWorkflowTitleState(nextTitle);
     setSelectedEdgeId("");
     setSelectedNodeId("");
-    setDraftRunPanelOpen(false);
+    closeDraftRunPanel();
     setYamlImportPanelOpen(false);
     setYamlImportError("");
     setYamlPanelOpen(false);
@@ -1239,6 +1242,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     sourceKey,
     workflowDraftTitle,
     workflowQuery.data?.layout,
+    closeDraftRunPanel,
   ]);
 
   const graph = React.useMemo(
@@ -1668,7 +1672,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       setSelectedEdgeId("");
       setSelectedNodeId("");
       setSelectedStepConfigurationError("");
-      setDraftRunPanelOpen(false);
+      closeDraftRunPanel();
       setYamlImportPanelOpen(false);
       setYamlImportError("");
       setYamlPanelOpen(false);
@@ -2641,7 +2645,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       setSelectedEdgeId("");
       setSelectedNodeId("");
       setSelectedStepConfigurationError("");
-      setDraftRunPanelOpen(false);
+      closeDraftRunPanel();
       setYamlPanelOpen(false);
       setYamlImportError("");
       setYamlImportPanelOpen(true);
@@ -2650,7 +2654,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       setSelectedEdgeId("");
       setSelectedNodeId("");
       setSelectedStepConfigurationError("");
-      setDraftRunPanelOpen(false);
+      closeDraftRunPanel();
       setYamlImportPanelOpen(false);
       setYamlImportError("");
       setYamlPanelOpen(true);
@@ -2707,7 +2711,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       setSelectedNodeId("");
       setSelectedStepConfigurationError("");
       setActiveExecutionLogIndex(null);
-      setDraftRunPanelOpen(false);
+      closeDraftRunPanel();
       setYamlImportPanelOpen(false);
       setYamlImportError("");
       setYamlPanelOpen(false);
@@ -2717,7 +2721,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       setSelectedNodeId("");
       setSelectedStepConfigurationError("");
       setActiveExecutionLogIndex(null);
-      setDraftRunPanelOpen(false);
+      closeDraftRunPanel();
       setYamlImportPanelOpen(false);
       setYamlImportError("");
       setYamlPanelOpen(false);
@@ -2733,7 +2737,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
           ? findExecutionLogIndexForStep(executionTrace, selectedStepId)
           : null,
       );
-      setDraftRunPanelOpen(false);
+      closeDraftRunPanel();
       setYamlImportPanelOpen(false);
       setYamlImportError("");
       setYamlPanelOpen(false);

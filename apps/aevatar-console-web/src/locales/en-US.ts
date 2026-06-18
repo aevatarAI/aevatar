@@ -987,6 +987,8 @@ const enUSMessages = {
     'Close draft run panel',
   'teamMemberWorkflowStudio.draftRunPanel.emptyInputHint':
     'Leave blank to run this draft without user input.',
+  'teamMemberWorkflowStudio.draftRunPanel.filesBackendPendingNotice':
+    'File input for draft runs is pending backend support.',
   'teamMemberWorkflowStudio.draftRunPanel.messageLabel':
     'Draft run input',
   'teamMemberWorkflowStudio.draftRunPanel.messagePlaceholder':

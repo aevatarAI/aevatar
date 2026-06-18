@@ -923,6 +923,8 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.draftRunPanel.closeAria': '关闭草稿运行面板',
   'teamMemberWorkflowStudio.draftRunPanel.emptyInputHint':
     '留空则不携带用户输入运行。',
+  'teamMemberWorkflowStudio.draftRunPanel.filesBackendPendingNotice':
+    '草稿运行文件输入等待后端支持。',
   'teamMemberWorkflowStudio.draftRunPanel.messageLabel':
     '草稿运行输入',
   'teamMemberWorkflowStudio.draftRunPanel.messagePlaceholder':

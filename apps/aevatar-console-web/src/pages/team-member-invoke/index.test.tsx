@@ -26,6 +26,7 @@ jest.mock("@/shared/api/scopeRuntimeApi", () => ({
 jest.mock("../studio/components/StudioMemberInvokePanel", () => ({
   __esModule: true,
   default: (props: {
+    enableFileAttachments?: boolean;
     initialServiceId?: string;
     memberId?: string;
     presentation?: string;
@@ -41,6 +42,7 @@ jest.mock("../studio/components/StudioMemberInvokePanel", () => ({
       React.createElement("span", { key: "scope" }, `scope:${props.scopeId}`),
       React.createElement("span", { key: "member" }, `member:${props.memberId}`),
       React.createElement("span", { key: "target" }, `target:${props.runtimeTarget ?? "default"}`),
+      React.createElement("span", { key: "attachments" }, `attachments:${props.enableFileAttachments ? "on" : "off"}`),
       React.createElement("span", { key: "team" }, `team:${props.teamId}`),
       React.createElement("span", { key: "service" }, `service:${props.initialServiceId}`),
       React.createElement("span", { key: "label" }, `label:${props.selectedMemberLabel}`),
@@ -191,7 +193,10 @@ describe("TeamMemberInvokePage", () => {
       "member:member-alpha",
     );
     expect(screen.getByTestId("member-invoke-panel")).toHaveTextContent(
-      "target:service",
+      "target:member",
+    );
+    expect(screen.getByTestId("member-invoke-panel")).toHaveTextContent(
+      "attachments:on",
     );
     expect(screen.getByTestId("member-invoke-panel")).toHaveTextContent(
       "team:team-1",

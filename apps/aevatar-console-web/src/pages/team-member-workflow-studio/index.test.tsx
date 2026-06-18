@@ -657,6 +657,52 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(runtimeRunsApi.streamChat).not.toHaveBeenCalled();
   });
 
+  it("keeps draft run file input unavailable until backend multipart support lands", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/new/workflow",
+    );
+    (runtimeRunsApi.streamDraftRun as jest.Mock).mockResolvedValue(
+      createSseResponse(),
+    );
+    (parseBackendSSEStream as jest.Mock).mockReturnValue(createWorkflowInvokeEvents());
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Run" }));
+    const draftRunPanel = await screen.findByLabelText("Draft run panel");
+    expect(
+      within(draftRunPanel).getByText(
+        "File input for draft runs is pending backend support.",
+      ),
+    ).toBeTruthy();
+    expect(within(draftRunPanel).queryByTestId("draft-run-file-input")).toBeNull();
+    expect(within(draftRunPanel).queryByTestId("draft-run-file-drop-zone")).toBeNull();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Add first step" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Insert LLM call node" }),
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
+    });
+    fireEvent.click(
+      within(draftRunPanel).getByRole("button", { name: "Start draft run" }),
+    );
+
+    await waitFor(() => {
+      expect(runtimeRunsApi.streamDraftRun).toHaveBeenCalledWith(
+        "scope-1",
+        expect.objectContaining({
+          prompt: "",
+          workflowYamls: [expect.any(String)],
+        }),
+        expect.any(AbortSignal),
+      );
+    });
+  });
+
   it("blocks draft runs while the selected new workflow node configuration is invalid", async () => {
     window.history.replaceState(
       {},
