@@ -10,6 +10,7 @@ public enum WorkflowChatInputPartKind
     Image = 2,
     Audio = 3,
     Video = 4,
+    File = 5,
 }
 
 public enum WorkflowFileSourceKind

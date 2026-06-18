@@ -504,6 +504,9 @@ message ForEachItemResult
 {
   bool success = 1;
   string output = 2;
+  int32 index = 3;
+  WorkflowFileRef file_ref = 4;
+  string error = 5;
 }
 
 message ForEachParentState
@@ -511,6 +514,8 @@ message ForEachParentState
   int32 expected = 1;
   repeated ForEachItemResult collected = 2;
   repeated string collected_step_ids = 3;
+  repeated WorkflowFileRef item_file_refs = 4;
+  string items_source = 5;
 }
 
 message ForEachModuleState
@@ -675,6 +680,7 @@ message BackpressureQueueEntry
   string input = 4;
   string target_role = 5;
   map<string, string> parameters = 6;
+  repeated WorkflowFileRef input_file_refs = 7;
 }
 
 message BackpressureQueueState

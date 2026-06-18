@@ -1,6 +1,6 @@
 name: probe_document_extract
 description: >-
-  Capability probe — read-file/document_extract: the user sends a file (PDF/DOCX/txt/json/md/csv)
+  Capability probe — read-file/document_extract: the user sends a file (PDF/DOCX/txt/json/md/csv/png/jpeg)
   plus a trigger, the workflow's document_extract step extracts its text and returns it as the run
   output. Used to verify the chat-attachment file -> workflow document_extract path end to end
   before running real file-dependent workflows (petty-cash / invoice / resume / reimbursement).
@@ -13,7 +13,9 @@ when_to_use: Use to verify that an attached file reaches a workflow document_ext
 # can fall back to the run's input file. PASS = extracted text returned; FAIL = a fileRef/argument
 # error, which confirms the gap (fix: thread CurrentStepInputFileRefs into WorkflowToolExecutionRequest
 # and let document_extract fall back to it). Supported: text/plain, application/json, text/markdown,
-# text/csv, application/pdf, DOCX. No image OCR.
+# text/csv, application/pdf, DOCX, image/png, and image/jpeg. image/webp remains unsupported for
+# document_extract. Image extraction requires a configured image-capable LLM provider and reads at
+# most 5 MiB from the artifact store.
 
 roles:
   - id: file_probe

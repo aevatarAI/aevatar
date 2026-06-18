@@ -10,7 +10,8 @@ namespace Aevatar.Workflow.Infrastructure.Runs;
 public sealed class FileSystemWorkflowFileIngressPort :
     IWorkflowFileIngressPort,
     IWorkflowFileArtifactReadPort,
-    IWorkflowFileArtifactOwnershipPort
+    IWorkflowFileArtifactOwnershipPort,
+    IWorkflowFileArtifactCleanupPort
 {
     private const string ArtifactIdPrefix = "workflow-file://";
     private const string ContentFileName = "content.bin";
@@ -128,6 +129,46 @@ public sealed class FileSystemWorkflowFileIngressPort :
         return new WorkflowFileArtifactContent(descriptor, File.OpenRead(contentPath));
     }
 
+    public async ValueTask<WorkflowFileArtifactCleanupResult> CleanupAsync(
+        WorkflowFileArtifactCleanupRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var observedAtUnixMs = request.ObservedAtUnixMs > 0
+            ? request.ObservedAtUnixMs
+            : DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var observedAtUtc = DateTimeOffset.FromUnixTimeMilliseconds(observedAtUnixMs);
+        var rootDirectory = NormalizeRootDirectory(_options.Value.RootDirectory);
+        if (!Directory.Exists(rootDirectory))
+            return new WorkflowFileArtifactCleanupResult(0, 0, 0);
+
+        long scanned = 0;
+        long deletedExpired = 0;
+        long deletedIncomplete = 0;
+        foreach (var artifactDirectory in Directory.EnumerateDirectories(rootDirectory))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            scanned++;
+            var fileId = Path.GetFileName(artifactDirectory);
+            if (!IsSafeFileId(fileId))
+                continue;
+
+            var descriptorPath = Path.Combine(artifactDirectory, DescriptorFileName);
+            if (!File.Exists(descriptorPath))
+            {
+                if (IsIncompleteArtifactStale(artifactDirectory, observedAtUtc, _options.Value.IncompleteArtifactAge))
+                    deletedIncomplete += DeleteArtifactDirectory(artifactDirectory);
+                continue;
+            }
+
+            var descriptorBytes = await File.ReadAllBytesAsync(descriptorPath, cancellationToken);
+            var descriptor = ToApplication(ProtoWorkflowFileRef.Parser.ParseFrom(descriptorBytes));
+            if (descriptor.ExpiresAtUnixMs > 0 && descriptor.ExpiresAtUnixMs <= observedAtUnixMs)
+                deletedExpired += DeleteArtifactDirectory(artifactDirectory);
+        }
+
+        return new WorkflowFileArtifactCleanupResult(scanned, deletedExpired, deletedIncomplete);
+    }
+
     private string ResolveArtifactDirectory(WorkflowFileRef fileRef)
     {
         ArgumentNullException.ThrowIfNull(fileRef);
@@ -192,6 +233,24 @@ public sealed class FileSystemWorkflowFileIngressPort :
         Path.GetFullPath(string.IsNullOrWhiteSpace(rootDirectory)
             ? Path.Combine(AppContext.BaseDirectory, "workflow-file-artifacts")
             : rootDirectory.Trim());
+
+    private static bool IsIncompleteArtifactStale(
+        string artifactDirectory,
+        DateTimeOffset observedAtUtc,
+        TimeSpan configuredIncompleteArtifactAge)
+    {
+        var incompleteArtifactAge = configuredIncompleteArtifactAge <= TimeSpan.Zero
+            ? TimeSpan.FromHours(1)
+            : configuredIncompleteArtifactAge;
+        var lastWriteTimeUtc = Directory.GetLastWriteTimeUtc(artifactDirectory);
+        return observedAtUtc.UtcDateTime - lastWriteTimeUtc >= incompleteArtifactAge;
+    }
+
+    private static int DeleteArtifactDirectory(string artifactDirectory)
+    {
+        Directory.Delete(artifactDirectory, recursive: true);
+        return 1;
+    }
 
     private async ValueTask<WorkflowFileRef> ReadDescriptorAsync(
         WorkflowFileRef fileRef,

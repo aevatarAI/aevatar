@@ -122,6 +122,50 @@ BindWorkflowDefinition(yaml)
 - timezone 为空时默认为 `UTC`，非空时必须能被 runtime `TimeZoneInfo` 解析。
 - `Headers` 是 command dispatch headers，不用于承载 schedule 核心语义。
 
+### Connected-Service Resource Fetch
+
+Workflow runtime owns the canonical connected-service resource fetch use case. The only workflow-callable tool name is `workflow_connected_service_resource_fetch`; connected-service provider packages do not publish a same-name workflow tool.
+
+运行边界：
+
+- Tool arguments identify a narrow route with typed fields: `provider`、`operation`、`resource_kind`、`message_id`、`resource_key`。
+- Workflow infrastructure resolves the route through registered `IWorkflowConnectedServiceResourceFetchAdapter` instances. Unsupported routes fail before any provider call.
+- Provider packages only register binary adapters for their own public surface. The first Lark adapter exposes `lark/message_resource_download/image` and `lark/message_resource_download/file`.
+- Downloaded bytes must enter workflow storage only through `IWorkflowFileIngressPort` with `WorkflowFileSourceKind.ConnectedServiceResource`; workflow commands, actor state, readmodels, logs, and tool results must not carry raw bytes or base64.
+- The tool result is a sanitized `WorkflowFileRef` plus route facts. It does not expose provider response bodies, base64, or downloaded content.
+
+### NyxID Proxy File Artifacts
+
+`nyxid_proxy(response_mode=file_artifact)` is the only v1 public NyxID proxy binary download mode for workflow-managed runs. Missing `response_mode` and explicit `text` keep the existing string proxy behavior.
+
+运行边界：
+
+- `NyxIdProxyTool` owns response-mode parsing. Invalid modes fail closed; v1 does not expose `file_artifact_put`、`nyxid_binary_download`、provider-specific global download tools、`binary_base64` or `data_uri`.
+- `response_mode=file_artifact` requires `GET`, no request body, a managed workflow runtime parent from typed `AgentToolRequestContext.Current.WorkflowRuntime`, a caller scope, and a host-registered `INyxIdProxyFileArtifactIngress`.
+- The binary response is downloaded through `NyxIdApiClient.ProxyGetBinaryResponseAsync` with `ProxyFileArtifactMaxBytes` defaulting to 25 MiB and capped at 100 MiB. Content-length and streaming reads are bounded before workflow ingress.
+- Persistence only goes through `IWorkflowFileIngressPort` with `WorkflowFileSourceKind.ConnectedServiceResource`; `nyxid_proxy` does not stage process-local handles or persist raw bytes itself.
+- Success and failure results are structured JSON with `success`、`response_mode`、bounded source diagnostics, and a sanitized `WorkflowFileRef` projection on success. Results must not include raw bytes, base64, data URI, provider response bodies, or durable byte state.
+
+### Workflow File Artifact Lifecycle
+
+Workflow file artifacts use narrow ports with separate responsibilities:
+
+- `IWorkflowFileIngressPort` writes bytes at Host/adapter ingress and returns a typed `WorkflowFileRef`.
+- `IWorkflowFileArtifactReadPort` describes or opens an existing descriptor-backed artifact.
+- `IWorkflowFileArtifactOwnershipPort` binds owner facts when a workflow run actor later claims an ownerless artifact.
+- `IWorkflowFileArtifactCleanupPort` is cleanup-only lifecycle surface. It is triggered by Host background service, while the provider owns physical cleanup decisions.
+- `WorkflowMultipartFileInputParser` is the shared Host/adapter boundary parser for multipart file input. It validates form shape and media constraints, returns raw payload JSON, `HasFiles`, and pending file bytes, but does not decide service kind and does not write artifacts by itself.
+
+Runtime boundary:
+
+- The artifact descriptor manifest is the readability commit record. Content without a descriptor is staged/incomplete and can be cleaned by the provider after its configured age.
+- Workflow run ownership remains actor fact. Descriptor owner fields are only file-reference facts used by the artifact provider and do not replace actor-owned run state.
+- Cleanup must be based on durable descriptor/index state. A provider must not depend on a process-local run/artifact registry, `actorId -> context` lookup, or query-time reconstruction to decide what to remove.
+- `WorkflowChatRunRequest`、actor state、readmodels、logs、prompts 与 tool results continue to carry only `WorkflowFileRef` descriptors or sanitized derived fields. They must not carry file bytes, base64, multipart payloads, or provider raw response bodies.
+- Scope service endpoints that accept multipart stream requests must resolve the service target first. Only workflow service targets may ingest pending files into artifact storage, and the owner scope must come from the path `scopeId`; static or scripting targets fail closed before artifact ingress.
+- Host composition must fail closed for production/external backends. `WorkflowFileArtifacts:Backend=External` requires explicit registrations for ingress/read/ownership/cleanup ports; production policy rejects the implicit filesystem backend.
+- The filesystem backend is the local/test concrete backend. Its cleanup removes expired descriptor-committed artifacts and stale staged directories without introducing a process-local artifact registry.
+
 ### Webhook Ingress API
 
 `POST /api/workflow-webhooks/{routeKey}` 是 workflow 的第四个 start-run 入口。它和 `/api/chat` 复用同一条 `WorkflowChatRunRequest` accepted-only command dispatch 主干；它不是 workflow YAML 顶级 trigger，也不复用 channel inbound 或 `WorkflowSignalCommand`。
