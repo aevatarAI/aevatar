@@ -42,11 +42,12 @@ src/Aevatar.Foundation.Core/Pipeline/StaticHandlerAdapter.cs	50	broad catch retu
 src/Aevatar.Foundation.Core/Pipeline/StaticHandlerAdapter.cs	67	broad catch returns null without visible failure signal
 src/Aevatar.Foundation.Runtime/Streaming/InMemoryStreamProvider.cs	162	empty broad catch block
 src/Aevatar.Foundation.Runtime/Streaming/InMemoryStreamProvider.cs	178	empty broad catch block
-src/Aevatar.Foundation.VoicePresence/Hosting/VoiceRealtimeTransportControlBridge.cs	76	empty broad catch block
+src/Aevatar.Bootstrap.Extensions.AI/ReadinessGatedRealtimeVoiceProviderSession.cs	80	empty broad catch block
+src/Aevatar.Foundation.VoicePresence/Hosting/VoiceRealtimeTransportControlBridge.cs	78	empty broad catch block
 src/Aevatar.Foundation.VoicePresence/Transport/WebRtcVoiceTransport.cs	111	empty broad catch block
 src/Aevatar.Foundation.VoicePresence/Transport/WebRtcVoiceTransport.cs	127	empty broad catch block
-src/Aevatar.Foundation.VoicePresence/Transport/WebSocketVoiceTransport.cs	161	empty broad catch block
-src/Aevatar.Foundation.VoicePresence/Transport/WebSocketVoiceTransport.cs	265	empty broad catch block
+src/Aevatar.Foundation.VoicePresence/Transport/WebSocketVoiceTransport.cs	154	empty broad catch block
+src/Aevatar.Foundation.VoicePresence/Transport/WebSocketVoiceTransport.cs	263	empty broad catch block
 src/Aevatar.Scripting.Core/ScriptEvolutionSessionGAgent.cs	423	empty broad catch block
 src/Aevatar.Scripting.Infrastructure/Compilation/CachedScriptBehaviorArtifactResolver.cs	295	empty broad catch block
 src/Aevatar.Scripting.Infrastructure/Compilation/GrpcToolsScriptProtoCompiler.cs	131	empty broad catch block
