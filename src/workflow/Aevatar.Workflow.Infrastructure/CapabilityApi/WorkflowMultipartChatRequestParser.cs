@@ -17,7 +17,7 @@ internal sealed class WorkflowMultipartChatRequestParser
         _fileIngressPort = fileIngressPort;
     }
 
-    public WorkflowMultipartChatRequestParser(
+    internal WorkflowMultipartChatRequestParser(
         IWorkflowFileIngressPort fileIngressPort,
         Microsoft.Extensions.Options.IOptions<WorkflowMultipartFileIngressOptions> multipartOptions,
         Microsoft.Extensions.Options.IOptions<WorkflowFormFileIngressOptions>? formOptions = null)
