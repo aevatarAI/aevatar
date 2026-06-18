@@ -195,7 +195,10 @@ public sealed class ScheduledDispatchEndpointsTests
             },
         });
 
-        var result = await CreateAsync(request, service, CreateHttpContext("owner-user-1"));
+        var result = await CreateAsync(
+            request,
+            service,
+            CreateHttpContext(scopeId: "scope-1", uid: "owner-user-1", sub: "owner-user-subject"));
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
@@ -942,7 +945,12 @@ public sealed class ScheduledDispatchEndpointsTests
                 "actor:schedule-1"),
             []);
 
-    private static DefaultHttpContext CreateHttpContext(string? scopeId = null)
+    private static DefaultHttpContext CreateHttpContext(
+        string? scopeId = null,
+        string? uid = null,
+        string? sub = null,
+        string? nameIdentifier = null,
+        string? userId = null)
     {
         var http = new DefaultHttpContext
         {
@@ -951,10 +959,22 @@ public sealed class ScheduledDispatchEndpointsTests
                 .AddOptions()
                 .BuildServiceProvider(),
         };
+        var claims = new List<Claim>();
         if (!string.IsNullOrWhiteSpace(scopeId))
+            claims.Add(new Claim("scope_id", scopeId));
+        if (!string.IsNullOrWhiteSpace(uid))
+            claims.Add(new Claim("uid", uid));
+        if (!string.IsNullOrWhiteSpace(sub))
+            claims.Add(new Claim("sub", sub));
+        if (!string.IsNullOrWhiteSpace(nameIdentifier))
+            claims.Add(new Claim(ClaimTypes.NameIdentifier, nameIdentifier));
+        if (!string.IsNullOrWhiteSpace(userId))
+            claims.Add(new Claim("user_id", userId));
+
+        if (claims.Count > 0)
         {
             http.User = new ClaimsPrincipal(new ClaimsIdentity(
-                [new Claim("scope_id", scopeId)],
+                claims,
                 "test"));
         }
 

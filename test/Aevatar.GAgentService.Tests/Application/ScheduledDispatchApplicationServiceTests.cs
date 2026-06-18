@@ -363,6 +363,31 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
+    public async Task CreateAsync_ShouldRejectScopeOwnerServiceInvocationAuthWithoutOwnerSubject()
+    {
+        var service = CreateService();
+
+        var act = () => service.CreateAsync(new ScheduledDispatchConfiguration(
+            "schedule-owner-auth",
+            string.Empty,
+            new ScheduledDispatchTargetDescriptor(
+                ScheduledDispatchTargetKind.ServiceInvocation,
+                ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
+                    new ServiceIdentity { ServiceId = "svc" },
+                    "run",
+                    Any.Pack(new Empty()),
+                    Auth: new ScheduledServiceInvocationAuth(
+                        ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource("owner-proxy")))),
+            "0 9 * * *",
+            "UTC",
+            true,
+            new Dictionary<string, string>()));
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*scope owner NyxID subject is required*");
+    }
+
+    [Fact]
     public async Task CreateAsync_ShouldNormalizeScopeOwnerServiceInvocationAuth()
     {
         var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };

@@ -70,9 +70,14 @@ internal static class WorkflowScheduleConfigurationMapper
 
         if (hasScopeOwnerNyxId)
         {
+            var scopeOwnerNyxId = configuration.Auth.ScopeOwnerNyxId!;
+            if (scopeOwnerNyxId.OwnerSubject == null)
+                throw new ArgumentException("Scope owner NyxID subject is required.", nameof(configuration.Auth));
+
             return new ScheduledServiceInvocationAuth(
                 ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
-                    NormalizeRequired(configuration.Auth.ScopeOwnerNyxId!.Scope, nameof(configuration.Auth.ScopeOwnerNyxId.Scope))));
+                    NormalizeRequired(scopeOwnerNyxId.Scope, nameof(scopeOwnerNyxId.Scope)),
+                    MapNyxIdSubject(scopeOwnerNyxId.OwnerSubject)));
         }
 
         var senderNyxId = configuration.Auth.SenderNyxId!;
@@ -80,12 +85,16 @@ internal static class WorkflowScheduleConfigurationMapper
             throw new ArgumentException("Sender NyxID subject is required.", nameof(configuration.Auth));
 
         return new ScheduledServiceInvocationAuth(SenderNyxId: new ScheduledServiceInvocationNyxIdCredentialSource(
-            new ScheduledServiceInvocationNyxIdSubjectRef(
-                NormalizeRequired(senderNyxId.Subject.Platform, nameof(senderNyxId.Subject.Platform)),
-                NormalizeOptional(senderNyxId.Subject.Tenant, string.Empty),
-                NormalizeRequired(senderNyxId.Subject.ExternalUserId, nameof(senderNyxId.Subject.ExternalUserId))),
+            MapNyxIdSubject(senderNyxId.Subject),
             NormalizeRequired(senderNyxId.Scope, nameof(senderNyxId.Scope))));
     }
+
+    private static ScheduledServiceInvocationNyxIdSubjectRef MapNyxIdSubject(
+        WorkflowScheduleNyxIdSubjectRef subject) =>
+        new(
+            NormalizeRequired(subject.Platform, nameof(subject.Platform)),
+            NormalizeOptional(subject.Tenant, string.Empty),
+            NormalizeRequired(subject.ExternalUserId, nameof(subject.ExternalUserId)));
 
     private static IReadOnlyDictionary<string, string> BuildWorkflowScheduleHeaders(
         WorkflowScheduleConfiguration configuration)

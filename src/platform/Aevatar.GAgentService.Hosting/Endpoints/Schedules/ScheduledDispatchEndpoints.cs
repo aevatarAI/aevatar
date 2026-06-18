@@ -238,7 +238,6 @@ public static class ScheduledDispatchEndpoints
 
         var ownerUserId = ReadFirstClaim(
             http.User,
-            "scope_id",
             "uid",
             "sub",
             ClaimTypes.NameIdentifier,

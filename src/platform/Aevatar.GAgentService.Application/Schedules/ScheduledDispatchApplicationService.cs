@@ -327,9 +327,14 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             NormalizeRequired(source.Scope, nameof(source.Scope))));
     }
 
-    private static ScheduledServiceInvocationNyxIdSubjectRef? NormalizeOwnerSubject(
-        ScheduledServiceInvocationNyxIdSubjectRef? subject) =>
-        subject == null ? null : NormalizeSubject(subject);
+    private static ScheduledServiceInvocationNyxIdSubjectRef NormalizeOwnerSubject(
+        ScheduledServiceInvocationNyxIdSubjectRef? subject)
+    {
+        if (subject == null)
+            throw new ArgumentException("Service invocation scope owner NyxID subject is required.", nameof(subject));
+
+        return NormalizeSubject(subject);
+    }
 
     private static ScheduledServiceInvocationNyxIdSubjectRef NormalizeSubject(
         ScheduledServiceInvocationNyxIdSubjectRef subject) =>

@@ -184,13 +184,17 @@ public sealed class WorkflowScheduleApplicationServiceTests
         await service.CreateAsync(CreateConfiguration("owner-auth-schedule") with
         {
             Auth = new WorkflowScheduleAuth(
-                ScopeOwnerNyxId: new WorkflowScheduleScopeOwnerNyxIdCredentialSource(" owner-proxy ")),
+                ScopeOwnerNyxId: new WorkflowScheduleScopeOwnerNyxIdCredentialSource(
+                    " owner-proxy ",
+                    new WorkflowScheduleNyxIdSubjectRef(" nyx ", " tenant-1 ", " owner-user-1 "))),
         });
 
         var invocation = actorPort.Created.Single().Configuration.Target.ServiceInvocation!;
         invocation.Auth.Should().NotBeNull();
         invocation.Auth!.SenderNyxId.Should().BeNull();
         invocation.Auth.ScopeOwnerNyxId!.Scope.Should().Be("owner-proxy");
+        invocation.Auth.ScopeOwnerNyxId.OwnerSubject.Should().BeEquivalentTo(
+            new ScheduledServiceInvocationNyxIdSubjectRef("nyx", "tenant-1", "owner-user-1"));
     }
 
     [Fact]
@@ -204,7 +208,9 @@ public sealed class WorkflowScheduleApplicationServiceTests
                 new WorkflowScheduleNyxIdCredentialSource(
                     new WorkflowScheduleNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
                     "proxy"),
-                new WorkflowScheduleScopeOwnerNyxIdCredentialSource("owner-proxy")),
+                new WorkflowScheduleScopeOwnerNyxIdCredentialSource(
+                    "owner-proxy",
+                    new WorkflowScheduleNyxIdSubjectRef("nyx", string.Empty, "owner-user-1"))),
         });
 
         await act.Should().ThrowAsync<ArgumentException>()
@@ -219,7 +225,9 @@ public sealed class WorkflowScheduleApplicationServiceTests
         var act = () => service.CreateAsync(CreateConfiguration("auth-schedule") with
         {
             Auth = new WorkflowScheduleAuth(
-                ScopeOwnerNyxId: new WorkflowScheduleScopeOwnerNyxIdCredentialSource(" ")),
+                ScopeOwnerNyxId: new WorkflowScheduleScopeOwnerNyxIdCredentialSource(
+                    " ",
+                    new WorkflowScheduleNyxIdSubjectRef("nyx", string.Empty, "owner-user-1"))),
         });
 
         await act.Should().ThrowAsync<ArgumentException>()

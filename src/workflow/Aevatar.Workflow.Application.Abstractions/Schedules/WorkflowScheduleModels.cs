@@ -26,7 +26,9 @@ public sealed record WorkflowScheduleNyxIdCredentialSource(
     WorkflowScheduleNyxIdSubjectRef Subject,
     string Scope);
 
-public sealed record WorkflowScheduleScopeOwnerNyxIdCredentialSource(string Scope);
+public sealed record WorkflowScheduleScopeOwnerNyxIdCredentialSource(
+    string Scope,
+    WorkflowScheduleNyxIdSubjectRef OwnerSubject);
 
 public sealed record WorkflowScheduleAuth(
     WorkflowScheduleNyxIdCredentialSource? SenderNyxId = null,
