@@ -368,6 +368,17 @@ public sealed class PolicyAwareVoiceEndpointsTests
                     PlayoutSequence = 12,
                 },
             })));
+        socket.EnqueueReceive(
+            WebSocketMessageType.Text,
+            Encoding.UTF8.GetBytes(JsonFormatter.Default.Format(new VoiceControlFrame
+            {
+                FunctionCallOutput = new VoiceFunctionCallOutput
+                {
+                    CallId = "client-call-1",
+                    ToolName = "edge.light.toggle",
+                    OutputJson = """{"ok":true}""",
+                },
+            })));
         var mediaPort = new RecordingVolatileMediaStreamPort(
             attachAsync: async transport =>
             {
@@ -421,10 +432,16 @@ public sealed class PolicyAwareVoiceEndpointsTests
         realtime.RealtimeFrame.ResponseStarted.ResponseId.Should().Be(responseId);
         realtime.RealtimeFrame.ResponseStarted.ProviderResponseId.Should().Be("provider-response-51");
 
-        var ack = receivedControls.Should().ContainSingle().Which;
+        receivedControls.Should().HaveCount(2);
+        var ack = receivedControls[0];
         ack.FrameCase.Should().Be(VoiceControlFrame.FrameOneofCase.DrainAcknowledged);
         ack.DrainAcknowledged.ResponseId.Should().Be(realtime.RealtimeFrame.ResponseStarted.ResponseId);
         ack.DrainAcknowledged.PlayoutSequence.Should().Be(12);
+
+        var output = receivedControls[1];
+        output.FrameCase.Should().Be(VoiceControlFrame.FrameOneofCase.FunctionCallOutput);
+        output.FunctionCallOutput.CallId.Should().Be("client-call-1");
+        output.FunctionCallOutput.OutputJson.Should().Be("""{"ok":true}""");
     }
 
     [Theory]
