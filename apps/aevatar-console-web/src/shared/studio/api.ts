@@ -16,6 +16,7 @@ import type {
   StudioMemberBindingContract,
   StudioMemberBindingAcceptedResponse,
   StudioMemberBindingFailure,
+  StudioMemberBindingRunResult,
   StudioMemberBindingRunStatus,
   StudioMemberBindingRunStatusResponse,
   StudioMemberBindingViewResponse,
@@ -1447,6 +1448,34 @@ function decodeStudioMemberBindingFailure(
   };
 }
 
+function decodeStudioMemberBindingRunResult(
+  value: unknown
+): StudioMemberBindingRunResult {
+  const record = expectRecord(value, "StudioMemberBindingRunResult");
+  return {
+    publishedServiceId: readString(
+      record,
+      ["publishedServiceId", "PublishedServiceId"],
+      "StudioMemberBindingRunResult.publishedServiceId"
+    ),
+    revisionId: readString(
+      record,
+      ["revisionId", "RevisionId"],
+      "StudioMemberBindingRunResult.revisionId"
+    ),
+    implementationKind: readStudioMemberImplementationKind(record, [
+      "implementationKind",
+      "ImplementationKind",
+    ]),
+    expectedActorId:
+      readNullableString(
+        record,
+        ["expectedActorId", "ExpectedActorId"],
+        "StudioMemberBindingRunResult.expectedActorId"
+      ) ?? null,
+  };
+}
+
 function decodeStudioMemberBindingRunStatusResponse(
   value: unknown
 ): StudioMemberBindingRunStatusResponse {
@@ -1478,6 +1507,10 @@ function decodeStudioMemberBindingRunStatusResponse(
         ["platformBindingCommandId", "PlatformBindingCommandId"],
         "StudioMemberBindingRunStatusResponse.platformBindingCommandId"
       ) ?? null,
+    result:
+      record.result == null && record.Result == null
+        ? null
+        : decodeStudioMemberBindingRunResult(record.result ?? record.Result),
     failure:
       record.failure == null && record.Failure == null
         ? null
@@ -1514,6 +1547,18 @@ function decodeStudioMemberBindingAcceptedResponse(
       ["memberId", "MemberId"],
       "StudioMemberBindingAcceptedResponse.memberId"
     ),
+    ackStage:
+      readNullableString(
+        record,
+        ["ackStage", "AckStage"],
+        "StudioMemberBindingAcceptedResponse.ackStage"
+      ) ?? null,
+    bindingRunRole:
+      readNullableString(
+        record,
+        ["bindingRunRole", "BindingRunRole"],
+        "StudioMemberBindingAcceptedResponse.bindingRunRole"
+      ) ?? null,
   };
 }
 
