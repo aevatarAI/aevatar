@@ -28,6 +28,13 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
     private const int DefaultLastDrainAckResponseId = -1;
     private const long DefaultLastDrainAckPlayoutSequence = -1;
 
+    private enum VoiceLeaseUpstreamDeliveryStatus
+    {
+        NoLease,
+        Delivered,
+        DeliveryGap,
+    }
+
     private readonly IRealtimeVoiceProvider _provider;
     private readonly VoiceProviderConfig _providerConfig;
     private readonly VoiceSessionConfig? _sessionConfig;
@@ -241,7 +248,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
                     normalizedEvent.ResponseCancelled.ProviderResponseId);
                 RetireProviderResponse(state, normalizedEvent.ResponseCancelled.ProviderResponseId);
                 stateChanged = true;
-                await FlushPendingEventInjectionsAsync(state, ct);
+                await FlushPendingEventInjectionsAsync(state, ctx, ct);
                 break;
             case VoiceProviderEvent.EventOneofCase.SpeechStarted:
             {
@@ -250,8 +257,20 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
                 {
                     var responseId = state.CurrentResponseId;
                     var providerResponseId = state.ActiveProviderResponseId;
-                    await using var providerSession = await ConnectProviderSessionAsync(state, ct);
-                    await providerSession.CancelResponseAsync(ct);
+                    var deliveryStatus = await TrySendLeaseUpstreamAsync(
+                        state,
+                        ctx,
+                        transportLeaseId,
+                        "response.cancel",
+                        static (mediaPort, upstreamTransportLeaseId, upstreamCt) =>
+                            mediaPort.TryCancelResponseAsync(upstreamTransportLeaseId, upstreamCt),
+                        ct);
+                    if (deliveryStatus == VoiceLeaseUpstreamDeliveryStatus.NoLease)
+                    {
+                        await using var providerSession = await ConnectProviderSessionAsync(state, ct);
+                        await providerSession.CancelResponseAsync(ct);
+                    }
+
                     if (!string.IsNullOrWhiteSpace(providerResponseId))
                     {
                         if (!state.CancelledProviderResponseIds.Contains(providerResponseId))
@@ -517,6 +536,17 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
             return;
         }
 
+        var deliveryStatus = await TrySendLeaseUpstreamAsync(
+            state,
+            ctx,
+            request.TransportLeaseId,
+            "input_image",
+            (mediaPort, transportLeaseId, upstreamCt) =>
+                mediaPort.TrySendInputImageAsync(transportLeaseId, request.InputImage, upstreamCt),
+            ct);
+        if (deliveryStatus != VoiceLeaseUpstreamDeliveryStatus.NoLease)
+            return;
+
         await using var providerSession = await ConnectProviderSessionAsync(state, ct);
         await providerSession.SendInputImageAsync(request.InputImage, ct);
     }
@@ -670,7 +700,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
 
         state.LastDrainAckResponseId = request.ResponseId;
         state.Status = VoicePresenceRuntimeStatus.Idle;
-        await FlushPendingEventInjectionsAsync(state, ct);
+        await FlushPendingEventInjectionsAsync(state, ctx, ct);
         await PersistRuntimeStateAsync(ctx, state, ct);
     }
 
@@ -1321,46 +1351,63 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         IEventHandlerContext ctx,
         CancellationToken ct)
     {
-        var transportLeaseId = !string.IsNullOrWhiteSpace(envelopeLeaseId)
-            ? envelopeLeaseId
-            : state.ActiveTransportLeaseId;
+        var deliveryStatus = await TrySendLeaseUpstreamAsync(
+            state,
+            ctx,
+            envelopeLeaseId,
+            "tool_result",
+            (mediaPort, transportLeaseId, upstreamCt) =>
+                mediaPort.TrySendToolResultAsync(transportLeaseId, callId, resultJson, upstreamCt),
+            ct);
+        if (deliveryStatus != VoiceLeaseUpstreamDeliveryStatus.NoLease)
+            return;
 
-        if (!string.IsNullOrWhiteSpace(transportLeaseId))
-        {
-            var mediaPort = ctx.Services.GetService<IVoiceVolatileMediaStreamPort>();
-            if (mediaPort != null)
-            {
-                var delivered = await mediaPort.TrySendToolResultAsync(transportLeaseId, callId, resultJson, ct);
-                _logger.LogInformation(
-                    "Voice tool result callId={CallId} delivered via {DeliveryPath} lease={TransportLeaseId}",
-                    callId,
-                    delivered ? "live-relay" : "ephemeral-fallback",
-                    transportLeaseId);
-
-                if (delivered)
-                    return;
-
-                _logger.LogWarning(
-                    "No live voice relay for lease={TransportLeaseId}; tool result callId={CallId} fell back to a throwaway provider session (cross-host topology or detached transport).",
-                    transportLeaseId,
-                    callId);
-            }
-            else
-            {
-                _logger.LogWarning(
-                    "IVoiceVolatileMediaStreamPort unavailable; tool result callId={CallId} fell back to a throwaway provider session.",
-                    callId);
-            }
-        }
-        else
-        {
-            _logger.LogWarning(
-                "Voice tool result callId={CallId} had no transport lease (envelope and state both empty); using a throwaway provider session — the model may not receive the result.",
-                callId);
-        }
+        _logger.LogWarning(
+            "Voice tool result callId={CallId} had no transport lease (envelope and state both empty); using a throwaway provider session.",
+            callId);
 
         await using var providerSession = await ConnectProviderSessionAsync(state, ct);
         await providerSession.SendToolResultAsync(callId, resultJson, ct);
+    }
+
+    private async Task<VoiceLeaseUpstreamDeliveryStatus> TrySendLeaseUpstreamAsync(
+        VoicePresenceRuntimeState state,
+        IEventHandlerContext ctx,
+        string? envelopeLeaseId,
+        string operationName,
+        Func<IVoiceVolatileMediaStreamPort, string, CancellationToken, Task<bool>> sendAsync,
+        CancellationToken ct)
+    {
+        var transportLeaseId = !string.IsNullOrWhiteSpace(envelopeLeaseId)
+            ? envelopeLeaseId
+            : state.ActiveTransportLeaseId;
+        if (string.IsNullOrWhiteSpace(transportLeaseId))
+            return VoiceLeaseUpstreamDeliveryStatus.NoLease;
+
+        var mediaPort = ctx.Services.GetService<IVoiceVolatileMediaStreamPort>();
+        if (mediaPort == null)
+        {
+            _logger.LogWarning(
+                "Voice upstream operation {OperationName} for lease={TransportLeaseId} could not be delivered because the live media port is unavailable.",
+                operationName,
+                transportLeaseId);
+            return VoiceLeaseUpstreamDeliveryStatus.DeliveryGap;
+        }
+
+        if (await sendAsync(mediaPort, transportLeaseId, ct))
+        {
+            _logger.LogInformation(
+                "Voice upstream operation {OperationName} delivered via live relay lease={TransportLeaseId}.",
+                operationName,
+                transportLeaseId);
+            return VoiceLeaseUpstreamDeliveryStatus.Delivered;
+        }
+
+        _logger.LogWarning(
+            "Voice upstream operation {OperationName} for lease={TransportLeaseId} could not be delivered because no live relay exists on this host.",
+            operationName,
+            transportLeaseId);
+        return VoiceLeaseUpstreamDeliveryStatus.DeliveryGap;
     }
 
     private async Task<VoiceSessionConfig?> BuildEffectiveSessionConfigAsync(
@@ -1465,7 +1512,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
                     state,
                     frame.DrainAcknowledged.ResponseId,
                     frame.DrainAcknowledged.PlayoutSequence);
-                await FlushPendingEventInjectionsAsync(state, ct);
+                await FlushPendingEventInjectionsAsync(state, ctx, ct);
                 await PersistRuntimeStateAsync(ctx, state, ct);
                 break;
             case VoiceControlFrame.FrameOneofCase.FunctionCallOutput:
@@ -1512,7 +1559,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
             return;
         }
 
-        await TryInjectEventAsync(state, injection, ct);
+        await TryInjectEventAsync(state, injection, ctx, ct);
         await PersistRuntimeStateAsync(ctx, state, ct);
     }
 
@@ -1624,7 +1671,10 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         string.Equals(left.Key, right.Key, StringComparison.Ordinal) &&
         Equals(left.RecordedAt, right.RecordedAt);
 
-    private async Task FlushPendingEventInjectionsAsync(VoicePresenceRuntimeState state, CancellationToken ct)
+    private async Task FlushPendingEventInjectionsAsync(
+        VoicePresenceRuntimeState state,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
     {
         while (state.PendingInjections.Count > 0 && IsReadyToInject(state))
         {
@@ -1633,7 +1683,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
             if (IsExpired(next))
                 continue;
 
-            if (await TryInjectEventAsync(state, next, ct))
+            if (await TryInjectEventAsync(state, next, ctx, ct))
                 return;
 
             return;
@@ -1654,11 +1704,29 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
     private async Task<bool> TryInjectEventAsync(
         VoicePresenceRuntimeState state,
         VoicePendingEventInjection injection,
+        IEventHandlerContext ctx,
         CancellationToken ct)
     {
         var providerInjection = BuildProviderInjection(injection);
         try
         {
+            var deliveryStatus = await TrySendLeaseUpstreamAsync(
+                state,
+                ctx,
+                null,
+                "event_injection",
+                (mediaPort, transportLeaseId, upstreamCt) =>
+                    mediaPort.TryInjectEventAsync(transportLeaseId, providerInjection, upstreamCt),
+                ct);
+            if (deliveryStatus == VoiceLeaseUpstreamDeliveryStatus.Delivered)
+            {
+                state.AwaitingInjectedResponseStart = true;
+                return true;
+            }
+
+            if (deliveryStatus == VoiceLeaseUpstreamDeliveryStatus.DeliveryGap)
+                return false;
+
             await using var providerSession = await ConnectProviderSessionAsync(state, ct);
             await providerSession.InjectEventAsync(providerInjection, ct);
             state.AwaitingInjectedResponseStart = true;

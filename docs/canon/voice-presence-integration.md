@@ -150,7 +150,11 @@ The edge consumes a JSON projection of it (camelCase), hand-parsed by
   live it sends typed actor renewal signals that extend the actor-owned lease
   deadline. `owner_id`, `transport_lease_id`, and `lease_epoch` form the identity
   fence; `lease_expires_at` / `renew_expires_at` are freshness deadlines and do
-  not independently identify a lease generation.
+  not independently identify a lease generation. After the actor accepts an
+  upstream `transport_lease_id`, barge-in cancellation, input images, tool
+  results, and event injection are delivered only through the live media relay
+  bound at attach time. A missing media port or relay for that lease is a
+  delivery/topology gap, not permission to open a replacement provider socket.
 - **Credential ref lifetime** — `/ws/voice` admission mints at most one
   `voice-tool:` ref for an attach attempt and hands a non-protobuf transport
   binding to the host attach path. The raw caller bearer becomes resolvable
