@@ -1353,15 +1353,6 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
       );
       return;
     }
-    if (!prompt) {
-      void message.error(
-        intl.formatMessage({
-          id: "teams.automations.messages.promptRequired",
-          defaultMessage: "Describe the recurring work before saving it.",
-        }),
-      );
-      return;
-    }
     if (prompt.length > scheduledWorkflowPromptMaxLength) {
       void message.error(
         intl.formatMessage(
@@ -2240,7 +2231,6 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
         okButtonProps={{
           disabled:
             !activeFormMember ||
-            !formState.prompt.trim() ||
             promptTooLong ||
             Boolean(formCronValidationMessage) ||
             !canCreateAutomation,
@@ -2337,7 +2327,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
                 {intl.formatMessage({
                   id: "teams.automations.form.section.workHint",
                   defaultMessage:
-                    "Name the automation and write the prompt the member receives each time.",
+                    "Name the automation and optionally add a prompt for each run.",
                 })}
               </Typography.Text>
             </div>
@@ -2369,13 +2359,13 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
               <Typography.Text strong>
                 {intl.formatMessage({
                   id: "teams.automations.form.prompt",
-                  defaultMessage: "Recurring prompt",
+                  defaultMessage: "Recurring prompt (optional)",
                 })}
               </Typography.Text>
               <Input.TextArea
                 aria-label={intl.formatMessage({
                   id: "teams.automations.form.promptAria",
-                  defaultMessage: "Recurring prompt",
+                  defaultMessage: "Recurring prompt (optional)",
                 })}
                 autoSize={{ minRows: 4, maxRows: 7 }}
                 disabled={formSubmitting}
@@ -2406,7 +2396,8 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
                 <Typography.Text style={{ fontSize: 12 }} type="secondary">
                   {intl.formatMessage({
                     id: "teams.automations.form.editPromptHint",
-                    defaultMessage: "Re-enter the recurring prompt to save changes.",
+                    defaultMessage:
+                      "Optional: leave it blank to save without a recurring prompt.",
                   })}
                 </Typography.Text>
               ) : null}
