@@ -23,6 +23,7 @@
     <ProjectReference Include="..\..\workflow\Aevatar.Workflow.Application.Abstractions\Aevatar.Workflow.Application.Abstractions.csproj" />
     <ProjectReference Include="..\..\workflow\Aevatar.Workflow.Infrastructure\Aevatar.Workflow.Infrastructure.csproj" />
     <ProjectReference Include="..\..\..\agents\Aevatar.GAgents.Channel.Identity.Abstractions\Aevatar.GAgents.Channel.Identity.Abstractions.csproj" />
+    <ProjectReference Include="..\..\..\agents\Aevatar.GAgents.Channel.Identity\Aevatar.GAgents.Channel.Identity.csproj" />
   </ItemGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
