@@ -735,7 +735,16 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
             return;
         }
 
-        await HandleControlFrameAsync(request.ControlFrame, ctx, state, ct);
+        await HandleControlFrameAsync(
+            request.ControlFrame,
+            ctx,
+            state,
+            new VoiceClientToolCallCompletionFence(
+                request.SessionId,
+                request.OwnerId ?? string.Empty,
+                request.TransportLeaseId,
+                request.LeaseEpoch),
+            ct);
     }
 
     private async Task HandleTransportRelayStoppedAsync(
@@ -986,7 +995,16 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
             return;
         }
 
-        await HandleControlFrameAsync(request.ControlFrame, ctx, state, ct);
+        await HandleControlFrameAsync(
+            request.ControlFrame,
+            ctx,
+            state,
+            new VoiceClientToolCallCompletionFence(
+                state.ActiveSessionId ?? string.Empty,
+                state.ActiveLeaseOwnerId ?? string.Empty,
+                state.ActiveTransportLeaseId ?? string.Empty,
+                state.LeaseEpoch),
+            ct);
     }
 
     private async Task<bool> CloseRemoteSessionAsync(
@@ -1274,10 +1292,14 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
     private async Task HandleFunctionCallOutputAsync(
         VoiceFunctionCallOutput output,
         VoicePresenceRuntimeState state,
+        VoiceClientToolCallCompletionFence completionFence,
         IEventHandlerContext ctx,
         CancellationToken ct)
     {
-        var pendingCall = VoiceClientToolCallStateMachine.CompletePendingCall(state, output);
+        var pendingCall = VoiceClientToolCallStateMachine.CompletePendingCall(
+            state,
+            output,
+            completionFence);
         if (pendingCall == null)
             return;
 
@@ -1291,18 +1313,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         await PersistRuntimeStateAsync(ctx, state, ct);
     }
 
-    // Refactor (cluster-voice-tool-result-live-relay): the function_call is emitted by the LIVE realtime
-    // socket owned by the host's VoiceVolatileMediaStreamPort relay (keyed by the transport lease), and
-    // that socket's audio is relayed to the caller. Deliver the tool result there so the
-    // function_call_output lands on the conversation that requested it and the spoken answer is heard.
-    //
-    // The lease key MUST come from the incoming provider-event envelope (envelopeLeaseId): on the
-    // policy-aware /ws/voice relay path the FunctionCall is admitted via the RemoteSessionId fallback and
-    // the transport lease is never persisted into state.ActiveTransportLeaseId (it is empty there), while
-    // the envelope's TransportLeaseId is exactly the _activeRelays key. Fall back to state only for
-    // non-relay/legacy paths, and to a throwaway provider session only when no lease is available at all —
-    // otherwise the result would be added to a brand-new empty conversation whose audio goes nowhere, and
-    // the model would re-call the tool forever.
     private async Task DeliverToolResultAsync(
         VoicePresenceRuntimeState state,
         string callId,
@@ -1438,13 +1448,14 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
     private async Task HandleControlFrameAsync(VoiceControlFrame frame, IEventHandlerContext ctx, CancellationToken ct)
     {
         var state = HydrateRuntimeStateFromActor(ctx);
-        await HandleControlFrameAsync(frame, ctx, state, ct);
+        await HandleControlFrameAsync(frame, ctx, state, null, ct);
     }
 
     private async Task HandleControlFrameAsync(
         VoiceControlFrame frame,
         IEventHandlerContext ctx,
         VoicePresenceRuntimeState state,
+        VoiceClientToolCallCompletionFence? clientToolCallCompletionFence,
         CancellationToken ct)
     {
         switch (frame.FrameCase)
@@ -1458,7 +1469,16 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
                 await PersistRuntimeStateAsync(ctx, state, ct);
                 break;
             case VoiceControlFrame.FrameOneofCase.FunctionCallOutput:
-                await HandleFunctionCallOutputAsync(frame.FunctionCallOutput, state, ctx, ct);
+                if (clientToolCallCompletionFence != null)
+                {
+                    await HandleFunctionCallOutputAsync(
+                        frame.FunctionCallOutput,
+                        state,
+                        clientToolCallCompletionFence,
+                        ctx,
+                        ct);
+                }
+
                 break;
             case VoiceControlFrame.FrameOneofCase.InputImage:
                 break;

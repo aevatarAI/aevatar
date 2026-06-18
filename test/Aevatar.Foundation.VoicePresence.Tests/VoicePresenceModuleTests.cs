@@ -1057,6 +1057,159 @@ public class VoicePresenceModuleTests
     }
 
     [Fact]
+    public async Task Client_tool_output_without_valid_transport_fence_should_be_ignored()
+    {
+        var provider = new RecordingVoiceProvider();
+        var mediaPort = new RecordingToolResultMediaPort(deliver: true);
+        var services = new ServiceCollection()
+            .AddSingleton<IVoiceVolatileMediaStreamPort>(mediaPort)
+            .BuildServiceProvider();
+        var module = CreateModule(provider);
+        var roleAgent = CreateRoleAgentWithAttachedTransport();
+        roleAgent.State.VoicePresence[DefaultModuleName].PendingClientToolCalls.Add(new VoicePendingClientToolCall
+        {
+            CallId = "client-call-1",
+            ToolName = "edge.light.toggle",
+            SessionId = "lease-current",
+            OwnerId = "host-current",
+            TransportLeaseId = "transport-current",
+            LeaseEpoch = 7,
+            ExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(10)),
+        });
+        var ctx = new StubEventHandlerContext(services, roleAgent);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceControlFrame
+        {
+            FunctionCallOutput = new VoiceFunctionCallOutput
+            {
+                CallId = "client-call-1",
+                ToolName = "edge.light.toggle",
+                OutputJson = """{"ok":true}""",
+            },
+        }), ctx, CancellationToken.None);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = DefaultModuleName,
+            TransportControlFrameReceived = new VoiceTransportControlFrameReceived
+            {
+                SessionId = "lease-current",
+                OwnerId = "host-current",
+                TransportLeaseId = "transport-other",
+                LeaseEpoch = 7,
+                ControlFrame = new VoiceControlFrame
+                {
+                    FunctionCallOutput = new VoiceFunctionCallOutput
+                    {
+                        CallId = "client-call-1",
+                        ToolName = "edge.light.toggle",
+                        OutputJson = """{"ok":true}""",
+                    },
+                },
+            },
+        }), ctx, CancellationToken.None);
+
+        RoleVoiceState(ctx).PendingClientToolCalls.ShouldHaveSingleItem().CallId.ShouldBe("client-call-1");
+        mediaPort.ToolResults.ShouldBeEmpty();
+        provider.ToolResults.ShouldBeEmpty();
+        roleAgent.PersistedStates.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Client_tool_failure_output_should_clear_pending_call_and_deliver_error_json()
+    {
+        var provider = new RecordingVoiceProvider();
+        var mediaPort = new RecordingToolResultMediaPort(deliver: true);
+        var services = new ServiceCollection()
+            .AddSingleton<IVoiceVolatileMediaStreamPort>(mediaPort)
+            .BuildServiceProvider();
+        var module = CreateModule(provider);
+        var roleAgent = CreateRoleAgentWithAttachedTransport();
+        AddPendingClientToolCall(roleAgent, "client-call-failed");
+        var ctx = new StubEventHandlerContext(services, roleAgent);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = DefaultModuleName,
+            TransportControlFrameReceived = new VoiceTransportControlFrameReceived
+            {
+                SessionId = "lease-current",
+                OwnerId = "host-current",
+                TransportLeaseId = "transport-current",
+                LeaseEpoch = 7,
+                ControlFrame = new VoiceControlFrame
+                {
+                    FunctionCallOutput = new VoiceFunctionCallOutput
+                    {
+                        CallId = "client-call-failed",
+                        ToolName = "edge.light.toggle",
+                        Failure = new VoiceFunctionCallFailure
+                        {
+                            ErrorCode = "edge_failed",
+                            ErrorMessage = "edge tool failed",
+                        },
+                    },
+                },
+            },
+        }), ctx, CancellationToken.None);
+
+        RoleVoiceState(ctx).PendingClientToolCalls.ShouldBeEmpty();
+        mediaPort.ToolResults.ShouldHaveSingleItem();
+        mediaPort.ToolResults[0].TransportLeaseId.ShouldBe("transport-current");
+        mediaPort.ToolResults[0].CallId.ShouldBe("client-call-failed");
+        mediaPort.ToolResults[0].ResultJson.ShouldContain("edge_failed");
+        mediaPort.ToolResults[0].ResultJson.ShouldContain("edge tool failed");
+        provider.ToolResults.ShouldBeEmpty();
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Client_tool_invalid_output_should_clear_pending_call_and_deliver_error_json(bool emptyOutputJson)
+    {
+        var provider = new RecordingVoiceProvider();
+        var mediaPort = new RecordingToolResultMediaPort(deliver: true);
+        var services = new ServiceCollection()
+            .AddSingleton<IVoiceVolatileMediaStreamPort>(mediaPort)
+            .BuildServiceProvider();
+        var module = CreateModule(provider);
+        var roleAgent = CreateRoleAgentWithAttachedTransport();
+        AddPendingClientToolCall(roleAgent, "client-call-invalid");
+        var ctx = new StubEventHandlerContext(services, roleAgent);
+        var output = new VoiceFunctionCallOutput
+        {
+            CallId = "client-call-invalid",
+            ToolName = "edge.light.toggle",
+        };
+        if (emptyOutputJson)
+            output.OutputJson = string.Empty;
+
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = DefaultModuleName,
+            TransportControlFrameReceived = new VoiceTransportControlFrameReceived
+            {
+                SessionId = "lease-current",
+                OwnerId = "host-current",
+                TransportLeaseId = "transport-current",
+                LeaseEpoch = 7,
+                ControlFrame = new VoiceControlFrame
+                {
+                    FunctionCallOutput = output,
+                },
+            },
+        }), ctx, CancellationToken.None);
+
+        RoleVoiceState(ctx).PendingClientToolCalls.ShouldBeEmpty();
+        mediaPort.ToolResults.ShouldHaveSingleItem();
+        mediaPort.ToolResults[0].TransportLeaseId.ShouldBe("transport-current");
+        mediaPort.ToolResults[0].CallId.ShouldBe("client-call-invalid");
+        mediaPort.ToolResults[0].ResultJson.ShouldContain("invalid_client_tool_output");
+        mediaPort.ToolResults[0].ResultJson.ShouldContain("client tool output did not include a result");
+        provider.ToolResults.ShouldBeEmpty();
+    }
+
+    [Fact]
     public async Task Client_tool_timeout_should_resume_actor_and_send_error_result()
     {
         var now = new DateTimeOffset(2026, 6, 18, 8, 0, 0, TimeSpan.Zero);
@@ -3113,6 +3266,20 @@ public class VoicePresenceModuleTests
             LastDrainAckPlayoutSequence = -1,
         };
         return roleAgent;
+    }
+
+    private static void AddPendingClientToolCall(RecordingRoleAgent roleAgent, string callId)
+    {
+        roleAgent.State.VoicePresence[DefaultModuleName].PendingClientToolCalls.Add(new VoicePendingClientToolCall
+        {
+            CallId = callId,
+            ToolName = "edge.light.toggle",
+            SessionId = "lease-current",
+            OwnerId = "host-current",
+            TransportLeaseId = "transport-current",
+            LeaseEpoch = 7,
+            ExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(10)),
+        });
     }
 
     private static EventEnvelope CreateExternalPublication(IMessage payload)

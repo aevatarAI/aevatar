@@ -36,7 +36,8 @@ internal static class VoiceClientToolCallStateMachine
 
     public static VoicePendingClientToolCall? CompletePendingCall(
         VoicePresenceRuntimeState state,
-        VoiceFunctionCallOutput output)
+        VoiceFunctionCallOutput output,
+        VoiceClientToolCallCompletionFence completionFence)
     {
         if (string.IsNullOrWhiteSpace(output.CallId))
             return null;
@@ -47,11 +48,14 @@ internal static class VoiceClientToolCallStateMachine
             if (!string.Equals(pendingCall.CallId, output.CallId, StringComparison.Ordinal))
                 continue;
 
-            if (!string.IsNullOrWhiteSpace(output.ToolName) &&
+            if (string.IsNullOrWhiteSpace(output.ToolName) ||
                 !string.Equals(pendingCall.ToolName, output.ToolName, StringComparison.Ordinal))
             {
                 return null;
             }
+
+            if (!MatchesCompletionFence(pendingCall, completionFence))
+                return null;
 
             state.PendingClientToolCalls.RemoveAt(i);
             return pendingCall;
@@ -131,13 +135,9 @@ internal static class VoiceClientToolCallStateMachine
         {
             VoiceFunctionCallOutput.ResultOneofCase.OutputJson when !string.IsNullOrWhiteSpace(output.OutputJson) =>
                 output.OutputJson,
-            VoiceFunctionCallOutput.ResultOneofCase.OutputJson => "{}",
+            VoiceFunctionCallOutput.ResultOneofCase.OutputJson => BuildInvalidOutputJson(),
             VoiceFunctionCallOutput.ResultOneofCase.Failure => BuildFailureJson(output.Failure),
-            _ => BuildFailureJson(new VoiceFunctionCallFailure
-            {
-                ErrorCode = "invalid_client_tool_output",
-                ErrorMessage = "client tool output did not include a result",
-            }),
+            _ => BuildInvalidOutputJson(),
         };
     }
 
@@ -148,18 +148,26 @@ internal static class VoiceClientToolCallStateMachine
             ErrorMessage = $"client-owned tool '{pendingCall.ToolName}' timed out after {(int)timeout.TotalMilliseconds} ms",
         });
 
-    private static bool RemovePendingCall(VoicePresenceRuntimeState state, string callId)
+    private static void RemovePendingCall(VoicePresenceRuntimeState state, string callId)
     {
         for (var i = state.PendingClientToolCalls.Count - 1; i >= 0; i--)
         {
             if (string.Equals(state.PendingClientToolCalls[i].CallId, callId, StringComparison.Ordinal))
             {
                 state.PendingClientToolCalls.RemoveAt(i);
-                return true;
+                return;
             }
         }
+    }
 
-        return false;
+    private static bool MatchesCompletionFence(
+        VoicePendingClientToolCall pendingCall,
+        VoiceClientToolCallCompletionFence completionFence)
+    {
+        return string.Equals(pendingCall.SessionId, completionFence.SessionId, StringComparison.Ordinal) &&
+               string.Equals(pendingCall.OwnerId, completionFence.OwnerId, StringComparison.Ordinal) &&
+               string.Equals(pendingCall.TransportLeaseId, completionFence.TransportLeaseId, StringComparison.Ordinal) &&
+               pendingCall.LeaseEpoch == completionFence.LeaseEpoch;
     }
 
     private static bool MatchesTimeout(
@@ -174,6 +182,13 @@ internal static class VoiceClientToolCallStateMachine
                (string.IsNullOrWhiteSpace(timeout.ToolName) ||
                 string.Equals(pendingCall.ToolName, timeout.ToolName, StringComparison.Ordinal));
     }
+
+    private static string BuildInvalidOutputJson() =>
+        BuildFailureJson(new VoiceFunctionCallFailure
+        {
+            ErrorCode = "invalid_client_tool_output",
+            ErrorMessage = "client tool output did not include a result",
+        });
 
     private static string BuildFailureJson(VoiceFunctionCallFailure? failure)
     {
@@ -193,3 +208,9 @@ internal static class VoiceClientToolCallStateMachine
         });
     }
 }
+
+internal sealed record VoiceClientToolCallCompletionFence(
+    string SessionId,
+    string OwnerId,
+    string TransportLeaseId,
+    long LeaseEpoch);
