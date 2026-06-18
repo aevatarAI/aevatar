@@ -333,6 +333,10 @@ public class VoicePresenceEndpointsTests
         accepted.FrameCase.ShouldBe(VoiceControlFrame.FrameOneofCase.SessionAccepted);
         accepted.SessionAccepted.SessionId.ShouldBe("session-1");
         accepted.SessionAccepted.PcmSampleRateHz.ShouldBe(24000);
+        accepted.SessionAccepted.WireContractVersion.ShouldBe(VoiceWireContractDefaults.CurrentWireContractVersion);
+        accepted.SessionAccepted.InputImagePolicy.MaxBytes.ShouldBe(VoiceWireContractDefaults.MaxInputImageBytes);
+        accepted.SessionAccepted.InputImagePolicy.AllowedMediaTypes
+            .ShouldBe(VoiceWireContractDefaults.SupportedInputImageMediaTypes);
 
         var realtime = JsonParser.Default.Parse<VoiceControlFrame>(socket.SentTexts[1]);
         realtime.FrameCase.ShouldBe(VoiceControlFrame.FrameOneofCase.RealtimeFrame);
