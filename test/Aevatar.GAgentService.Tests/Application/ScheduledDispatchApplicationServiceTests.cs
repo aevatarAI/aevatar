@@ -333,6 +333,79 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
+    public async Task CreateAsync_ShouldRejectServiceInvocationAuthWithBothNyxIdSources()
+    {
+        var service = CreateService();
+
+        var act = () => service.CreateAsync(new ScheduledDispatchConfiguration(
+            "schedule-auth",
+            string.Empty,
+            new ScheduledDispatchTargetDescriptor(
+                ScheduledDispatchTargetKind.ServiceInvocation,
+                ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
+                    new ServiceIdentity { ServiceId = "svc" },
+                    "run",
+                    Any.Pack(new Empty()),
+                    Auth: new ScheduledServiceInvocationAuth(
+                        new ScheduledServiceInvocationNyxIdCredentialSource(
+                            new ScheduledServiceInvocationNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
+                            "proxy"),
+                        new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource("owner-proxy")))),
+            "0 9 * * *",
+            "UTC",
+            true,
+            new Dictionary<string, string>()));
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*Exactly one service invocation NyxID credential source*");
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldNormalizeScopeOwnerServiceInvocationAuth()
+    {
+        var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            new RecordingScheduledDispatchQueryPort(),
+            new ScheduledDispatchTargetPreparationService());
+
+        await service.CreateAsync(new ScheduledDispatchConfiguration(
+            "schedule-owner-auth",
+            "Invoke",
+            new ScheduledDispatchTargetDescriptor(
+                ScheduledDispatchTargetKind.ServiceInvocation,
+                ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
+                    new ServiceIdentity { TenantId = "tenant", AppId = "app", Namespace = "default", ServiceId = "svc" },
+                    "run",
+                    Any.Pack(new StringValue { Value = "invoke" }),
+                    Auth: new ScheduledServiceInvocationAuth(
+                        ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(" owner-proxy ")))),
+            "0 9 * * *",
+            "UTC",
+            true,
+            new Dictionary<string, string>()));
+
+        var created = actorPort.Created.Should().ContainSingle().Which;
+        created.Configuration.Target.ServiceInvocation!.Auth!.SenderNyxId.Should().BeNull();
+        created.Configuration.Target.ServiceInvocation.Auth.ScopeOwnerNyxId!.Scope.Should().Be("owner-proxy");
+        created.Dispatch.Descriptor.ServiceInvocation!.Auth!.ScopeOwnerNyxId!.Scope.Should().Be("owner-proxy");
+    }
+
+    [Fact]
+    public async Task NoopScheduledServiceInvocationCredentialExchangePort_ShouldRejectScopeOwnerExchange()
+    {
+        var port = new NoopScheduledServiceInvocationCredentialExchangePort();
+
+        var result = await port.IssueScopeOwnerNyxIdAsync(
+            new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource("owner-proxy"),
+            new ServiceIdentity { TenantId = "owner-nyx-user", ServiceId = "svc" });
+
+        result.Succeeded.Should().BeFalse();
+        result.AccessToken.Should().BeNull();
+        result.Error.Should().Be("Scheduled service invocation scope owner NyxID credential exchange is not configured.");
+    }
+
+    [Fact]
     public async Task ScheduledDispatchActorPort_ShouldCreateActorWhenMissingAndDispatchServiceInvocationCommands()
     {
         var runtime = new RecordingActorRuntime();

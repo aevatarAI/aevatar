@@ -173,6 +173,60 @@ public sealed class WorkflowScheduleApplicationServiceTests
     }
 
     [Fact]
+    public async Task CreateAsync_ShouldMapWorkflowScheduleScopeOwnerAuthToServiceInvocationAuth()
+    {
+        var actorPort = new FakeWorkflowScheduleActorPort
+        {
+            ResolveActorId = string.Empty,
+        };
+        var service = CreateService(actorPort);
+
+        await service.CreateAsync(CreateConfiguration("owner-auth-schedule") with
+        {
+            Auth = new WorkflowScheduleAuth(
+                ScopeOwnerNyxId: new WorkflowScheduleScopeOwnerNyxIdCredentialSource(" owner-proxy ")),
+        });
+
+        var invocation = actorPort.Created.Single().Configuration.Target.ServiceInvocation!;
+        invocation.Auth.Should().NotBeNull();
+        invocation.Auth!.SenderNyxId.Should().BeNull();
+        invocation.Auth.ScopeOwnerNyxId!.Scope.Should().Be("owner-proxy");
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldRejectWorkflowScheduleAuthWithBothNyxIdSources()
+    {
+        var service = CreateService();
+
+        var act = () => service.CreateAsync(CreateConfiguration("auth-schedule") with
+        {
+            Auth = new WorkflowScheduleAuth(
+                new WorkflowScheduleNyxIdCredentialSource(
+                    new WorkflowScheduleNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
+                    "proxy"),
+                new WorkflowScheduleScopeOwnerNyxIdCredentialSource("owner-proxy")),
+        });
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*Exactly one workflow schedule NyxID credential source*");
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldRejectEmptyWorkflowScheduleScopeOwnerAuth()
+    {
+        var service = CreateService();
+
+        var act = () => service.CreateAsync(CreateConfiguration("auth-schedule") with
+        {
+            Auth = new WorkflowScheduleAuth(
+                ScopeOwnerNyxId: new WorkflowScheduleScopeOwnerNyxIdCredentialSource(" ")),
+        });
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*Scope*required*");
+    }
+
+    [Fact]
     public async Task CreateAsync_ShouldRejectEmptyWorkflowScheduleAuth()
     {
         var service = CreateService();
