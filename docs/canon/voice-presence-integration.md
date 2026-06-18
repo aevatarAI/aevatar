@@ -110,9 +110,15 @@ The edge consumes a JSON projection of it (camelCase), hand-parsed by
   `VoiceControlFrame` oneof:
   - up (client → aevatar): `drainAcknowledged`, `inputImage`
   - down (aevatar → client): `sessionAccepted`, `realtimeFrame`
+  - `sessionAccepted` advertises the typed wire contract version (`1.0`) and
+    the input image policy (`maxBytes: 512000`, allowed media types
+    `image/jpeg`, `image/png`) owned by aevatar.
   - `realtimeFrame` is itself a `VoiceRealtimeFrame` oneof: `responseStarted`/
     `Done`/`Cancelled`, `speechStarted`/`Stopped`, `functionCall`,
     `transcriptDelta`/`Completed`, `error`, `disconnected`, `sessionClosed`.
+    `transcriptCompleted` represents provider transcript text only; a
+    `drainAcknowledged` playout ACK advances the actor drain fence but does not
+    publish a transcript fact.
 - **Ownership** — the actor owns persona, tools, turn lifecycle and VAD; the
   edge sends no `session.update` / `response.create` / `response.cancel` and
   drops any local `function_call_output` (tools execute actor-side).

@@ -25,6 +25,8 @@ public static class VoiceRealtimeTransportControlBridge
                 SessionId = accepted.SessionId,
                 PcmSampleRateHz = accepted.PcmSampleRateHz,
                 ObservedStateVersion = accepted.ObservedStateVersion,
+                WireContractVersion = accepted.EffectiveWireContractVersion,
+                InputImagePolicy = accepted.CreateEffectiveInputImagePolicy(),
             },
         }, ct);
     }
