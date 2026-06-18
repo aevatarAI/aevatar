@@ -618,7 +618,7 @@ const enUSMessages = {
   'teams.automations.form.displayNameAria': 'Automation name',
   'teams.automations.form.displayNamePlaceholder': 'Daily escalation digest',
   'teams.automations.form.editPromptHint':
-    'Re-enter the recurring prompt to save changes.',
+    'Optional: leave it blank to save without a recurring prompt.',
   'teams.automations.form.editTitle': 'Edit automation',
   'teams.automations.form.enabled': 'Enabled',
   'teams.automations.form.identityMissing':
@@ -636,9 +636,10 @@ const enUSMessages = {
     'Preview the cadence to confirm the next scheduled runs.',
   'teams.automations.form.previewHint':
     'Preview uses the schedule service before saving.',
-  'teams.automations.form.prompt': 'Recurring prompt',
-  'teams.automations.form.promptAria': 'Recurring prompt',
-  'teams.automations.form.promptLimit': 'Up to {maxLength} characters.',
+  'teams.automations.form.prompt': 'Recurring prompt (optional)',
+  'teams.automations.form.promptAria': 'Recurring prompt (optional)',
+  'teams.automations.form.promptLimit':
+    'Optional. Up to {maxLength} characters.',
   'teams.automations.form.promptPlaceholder':
     'Summarize escalations, blocked accounts, and follow-up owners.',
   'teams.automations.form.save': 'Save changes',
@@ -651,7 +652,7 @@ const enUSMessages = {
     "Recurring work runs through the selected member's published service.",
   'teams.automations.form.section.work': '2. Work to run',
   'teams.automations.form.section.workHint':
-    'Name the automation and write the prompt the member receives each time.',
+    'Name the automation and optionally add a prompt for each run.',
   'teams.automations.form.timezone': 'Timezone',
   'teams.automations.form.timezoneAria': 'Timezone',
   'teams.automations.form.title': 'New member automation',
@@ -670,8 +671,6 @@ const enUSMessages = {
   'teams.automations.messages.previewFailed': 'Preview failed: {message}',
   'teams.automations.messages.promptTooLong':
     'Recurring prompt must be {maxLength} characters or fewer.',
-  'teams.automations.messages.promptRequired':
-    'Describe the recurring work before saving it.',
   'teams.automations.messages.runNowFailed': 'Run request failed: {message}',
   'teams.automations.messages.runNowSuccess': 'Run requested.',
   'teams.automations.messages.serviceIdentityLoading':

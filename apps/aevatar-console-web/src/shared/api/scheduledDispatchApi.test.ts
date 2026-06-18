@@ -285,6 +285,46 @@ describe("scheduledDispatchApi", () => {
     expect(body.serviceInvocation).not.toHaveProperty("revisionId");
   });
 
+  it("creates workflow schedules without requiring a recurring prompt", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 202,
+      json: async () => createReceipt(),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await scheduledDispatchApi.create({
+      displayName: "Daily escalation digest",
+      cronExpression: "0 9 * * 1-5",
+      timezone: "Asia/Shanghai",
+      enabled: true,
+      workflowChatTarget: {
+        identity: {
+          tenantId: "scope-1",
+          appId: "default",
+          namespace: "default",
+          serviceId: "svc-alpha",
+        },
+      },
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(init.body)).serviceInvocation).toEqual({
+      identity: {
+        tenantId: "scope-1",
+        appId: "default",
+        namespace: "default",
+        serviceId: "svc-alpha",
+      },
+      endpointId: "chat",
+      payloadTypeUrl: "type.googleapis.com/aevatar.ai.ChatRequestEvent",
+      payloadBase64: encodeChatRequestEventBase64({
+        prompt: "",
+        scopeId: "scope-1",
+      }),
+    });
+  });
+
   it("puts workflow chat as base64 service invocation when updating without a revision", async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,

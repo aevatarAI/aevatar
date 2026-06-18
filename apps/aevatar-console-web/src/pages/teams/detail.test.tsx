@@ -8,6 +8,7 @@ import { runtimeActorsApi } from "@/shared/api/runtimeActorsApi";
 import { runtimeGAgentApi } from "@/shared/api/runtimeGAgentApi";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { scheduledDispatchApi } from "@/shared/api/scheduledDispatchApi";
+import { formatCompactDateTime } from "@/shared/datetime/dateTime";
 import { studioApi } from "@/shared/studio/api";
 import {
   createTestQueryClient,
@@ -2340,7 +2341,7 @@ describe("TeamDetailPage", () => {
     fireEvent.change(await screen.findByLabelText("自动化名称"), {
       target: { value: "Daily escalation digest" },
     });
-    fireEvent.change(screen.getByLabelText("周期 Prompt"), {
+    fireEvent.change(screen.getByLabelText(/周期 Prompt/), {
       target: { value: "Summarize escalations and follow-up owners." },
     });
     fireEvent.change(screen.getByLabelText("Cron 表达式"), {
@@ -2435,7 +2436,55 @@ describe("TeamDetailPage", () => {
       timezone: "Asia/Shanghai",
       count: 5,
     });
-    expect(await within(dialog).findByText("06-18 01:00")).toBeTruthy();
+    expect(
+      await within(dialog).findByText(
+        formatCompactDateTime("2026-06-18T01:00:00Z", "2026-06-18T01:00:00Z"),
+      ),
+    ).toBeTruthy();
+  });
+
+  it("creates member recurring work when recurring prompt is blank", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?memberId=member-team-alpha&tab=automations",
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    fireEvent.click(await screen.findByRole("button", { name: "添加周期任务" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "新建成员自动化",
+    });
+    expect(within(dialog).getByLabelText(/周期 Prompt/)).toHaveValue("");
+    expect(dialog).toHaveTextContent("周期 Prompt（选填）");
+    expect(dialog).toHaveTextContent(/选填，最多/);
+
+    fireEvent.change(within(dialog).getByLabelText("自动化名称"), {
+      target: { value: "Daily escalation digest" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "创建自动化" }));
+
+    await waitFor(() => {
+      expect(scheduledDispatchApi.create).toHaveBeenCalled();
+    });
+    expect((scheduledDispatchApi.create as jest.Mock).mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        displayName: "Daily escalation digest",
+        workflowChatTarget: {
+          identity: {
+            tenantId: "scope-1",
+            appId: "default",
+            namespace: "default",
+            serviceId: "alpha-service",
+          },
+          prompt: "",
+          revisionId: "rev-2",
+        },
+      }),
+    );
+    expect(message.error).not.toHaveBeenCalledWith("保存前请先描述周期任务。");
+    expect(message.success).toHaveBeenCalledWith("自动化已创建。");
   });
 
   it("creates member recurring work with the default service revision when the active serving revision is missing", async () => {
@@ -2464,7 +2513,7 @@ describe("TeamDetailPage", () => {
     fireEvent.change(await screen.findByLabelText("自动化名称"), {
       target: { value: "Daily escalation digest" },
     });
-    fireEvent.change(screen.getByLabelText("周期 Prompt"), {
+    fireEvent.change(screen.getByLabelText(/周期 Prompt/), {
       target: { value: "Summarize escalations and follow-up owners." },
     });
     fireEvent.click(screen.getByRole("button", { name: "创建自动化" }));
@@ -2505,7 +2554,7 @@ describe("TeamDetailPage", () => {
     expect(
       await screen.findByText("目标服务为 alpha-service。"),
     ).toBeTruthy();
-    fireEvent.change(await screen.findByLabelText("周期 Prompt"), {
+    fireEvent.change(await screen.findByLabelText(/周期 Prompt/), {
       target: { value: "Summarize escalations and follow-up owners." },
     });
     fireEvent.click(screen.getByRole("button", { name: "创建自动化" }));
@@ -2541,7 +2590,7 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     fireEvent.click(await screen.findByRole("button", { name: "添加周期任务" }));
-    fireEvent.change(await screen.findByLabelText("周期 Prompt"), {
+    fireEvent.change(await screen.findByLabelText(/周期 Prompt/), {
       target: { value: "Summarize escalations and follow-up owners." },
     });
     fireEvent.click(screen.getByRole("button", { name: "创建自动化" }));
@@ -2581,13 +2630,13 @@ describe("TeamDetailPage", () => {
     expect(within(editDialog).getByLabelText("时区")).toHaveValue("Asia/Shanghai");
     expect(within(editDialog).getByText("目标服务为 alpha-service。")).toBeTruthy();
     expect(
-      within(editDialog).getByText("请重新填写周期 Prompt 后再保存修改。"),
+      within(editDialog).getByText("选填：留空也可以保存为无周期 Prompt。"),
     ).toBeTruthy();
 
     fireEvent.change(within(editDialog).getByLabelText("自动化名称"), {
       target: { value: "Daily escalation digest - edited" },
     });
-    fireEvent.change(within(editDialog).getByLabelText("周期 Prompt"), {
+    fireEvent.change(within(editDialog).getByLabelText(/周期 Prompt/), {
       target: { value: "Summarize edited escalations and owners." },
     });
     fireEvent.change(within(editDialog).getByLabelText("Cron 表达式"), {
