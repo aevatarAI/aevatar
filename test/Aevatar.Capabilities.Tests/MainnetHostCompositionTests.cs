@@ -35,6 +35,7 @@ using Aevatar.GAgents.StatusDashboard.Executors;
 using Aevatar.Mainnet.Host.Api.Hosting;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.Scripting.Projection.ReadModels;
+using Aevatar.Workflow.Infrastructure.Runs;
 using Aevatar.Workflow.Integration.AI;
 using Aevatar.Workflow.Projection.ReadModels;
 using FluentAssertions;
@@ -214,6 +215,16 @@ public sealed class MainnetHostCompositionTests
         workspace.Sources.Should().Contain(source => source is OrnnAgentToolSource);
         app.Services.GetRequiredService<LarkToolOptions>()
             .EnableWorkflowFileSubmit.Should().BeFalse();
+        app.Services.GetServices<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowConnectedServiceResourceFetchAdapter>()
+            .Should()
+            .ContainSingle(adapter => adapter.GetType().Name == "LarkMessageResourceFetchAdapter");
+        var workflowToolNames = new List<string>();
+        foreach (var source in app.Services.GetServices<Aevatar.Workflow.Core.Modules.IWorkflowToolSource>())
+        {
+            var tools = await source.GetToolsAsync();
+            workflowToolNames.AddRange(tools.Select(static tool => tool.Name));
+        }
+        workflowToolNames.Should().ContainSingle(name => name == "workflow_connected_service_resource_fetch");
 
         var larkSelfNotify = registry.Resolve(new ChatRouteToolSetRef { Name = ToolSetNames.LarkSelfNotify });
         larkSelfNotify.IsSuccess.Should().BeTrue(larkSelfNotify.Error?.Message);
@@ -253,6 +264,80 @@ public sealed class MainnetHostCompositionTests
         using var app = builder.Build();
         app.Services.GetRequiredService<LarkToolOptions>()
             .EnableWorkflowFileSubmit.Should().BeTrue();
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_ShouldBindWorkflowConnectedServiceFileSubmitSection()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder(BuildWorkflowFileSubmitTargetConfiguration());
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        var target = app.Services.GetRequiredService<IOptions<WorkflowConnectedServiceFileSubmitOptions>>()
+            .Value
+            .Targets
+            .Should()
+            .ContainSingle()
+            .Subject;
+
+        target.Target.Should().Be("submit_invoice");
+        target.Provider.Should().Be("nyxid_connected_service");
+        target.Endpoint.Should().NotBeNull();
+        target.Endpoint!.ServiceSlug.Should().Be("storage");
+        target.Endpoint.Path.Should().Be("files/upload");
+        target.Endpoint.Method.Should().Be("POST");
+        target.Endpoint.FileFieldName.Should().Be("upload");
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_ShouldRegisterNyxIdProxyFileArtifactIngressWithWorkflowFileStorage()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["Aevatar:NyxId:ProxyFileArtifactMaxBytes"] = "12345",
+        });
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        app.Services.GetRequiredService<INyxIdProxyFileArtifactIngress>()
+            .Should()
+            .BeOfType<NyxIdProxyWorkflowFileArtifactIngress>();
+        app.Services.GetRequiredService<NyxIdToolOptions>()
+            .ProxyFileArtifactMaxBytes.Should().Be(12345);
+    }
+
+    [Fact]
+    public async Task AddAevatarMainnetHost_ShouldFailFastOnMalformedWorkflowFileSubmitEndpointPolicy()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var configurationValues = BuildWorkflowFileSubmitTargetConfiguration();
+        configurationValues["WorkflowConnectedServiceFileSubmit:Targets:0:Endpoint:Path"] = "https://storage.example.test/files/upload";
+        var builder = CreateBuilder(configurationValues);
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        await using var app = builder.Build();
+        var act = async () => await app.StartAsync();
+
+        await act.Should()
+            .ThrowAsync<OptionsValidationException>()
+            .WithMessage("*WorkflowConnectedServiceFileSubmit:Targets[0].Endpoint.Path*");
     }
 
     [Fact]
@@ -455,6 +540,23 @@ public sealed class MainnetHostCompositionTests
         builder.Configuration.AddInMemoryCollection(values);
         return builder;
     }
+
+    private static Dictionary<string, string?> BuildWorkflowFileSubmitTargetConfiguration() =>
+        new()
+        {
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:Target"] = "submit_invoice",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:Provider"] = "nyxid_connected_service",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:OutputField"] = "document_id",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:MaxFileBytes"] = "1024",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:AllowedMediaTypes:0"] = "text/plain",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:Arguments:folder:Name"] = "folder",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:Arguments:folder:Required"] = "true",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:Arguments:folder:AllowedValues:0"] = "reports",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:Endpoint:ServiceSlug"] = "storage",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:Endpoint:Path"] = "files/upload",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:Endpoint:Method"] = "POST",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:Endpoint:FileFieldName"] = "upload",
+        };
 
     private static void InvokeConfigureMainnetAIFeatures(AevatarAIFeatureOptions options)
     {

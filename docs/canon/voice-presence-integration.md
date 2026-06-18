@@ -115,7 +115,8 @@ The edge consumes a JSON projection of it (camelCase), hand-parsed by
   audio was deliberately pulled out of the envelope.
 - **Control / events** — WebSocket **text** frames carry a JSON
   `VoiceControlFrame` oneof:
-  - up (client → aevatar): `drainAcknowledged`, `inputImage`
+  - up (client → aevatar): `drainAcknowledged`, `inputImage`,
+    `functionCallOutput`
   - down (aevatar → client): `sessionAccepted`, `realtimeFrame`
   - `sessionAccepted` advertises the typed wire contract version (`1.0`) and
     the input image policy (`maxBytes: 512000`, allowed media types
@@ -126,9 +127,19 @@ The edge consumes a JSON projection of it (camelCase), hand-parsed by
     `transcriptCompleted` represents provider transcript text only; a
     `drainAcknowledged` playout ACK advances the actor drain fence but does not
     publish a transcript fact.
-- **Ownership** — the actor owns persona, tools, turn lifecycle and VAD; the
-  edge sends no `session.update` / `response.create` / `response.cancel` and
-  drops any local `function_call_output` (tools execute actor-side).
+- **Tool ownership** — every `VoiceToolDefinition` declares typed ownership.
+  The actor still owns persona, turn lifecycle and VAD; the edge sends no
+  `session.update` / `response.create` / `response.cancel`.
+  `VOICE_TOOL_OWNER_UNSPECIFIED` and `VOICE_TOOL_OWNER_ACTOR` keep the default
+  actor-owned path: the actor executes through `IVoiceToolInvoker` and submits
+  the provider result. `VOICE_TOOL_OWNER_CLIENT` makes the edge client the owner
+  of the side effect and output. The provider `function_call` is still published
+  through `VoiceRealtimeFrame.functionCall`; the actor records a
+  `VoicePendingClientToolCall` in `VoicePresenceRuntimeState` and waits for a
+  matching `VoiceControlFrame.functionCallOutput` or a durable
+  `VoiceClientToolCallTimeoutExpired` self-signal before reusing the same
+  provider result delivery path. No process-local pending map or device command
+  queue is part of this contract.
 - **Lease** — the host attaches a transport lease (`transport_lease_id`,
   `owner_id`, `lease_epoch`, `lease_expires_at`) the actor owns; the volatile
   media relay is bound to that lease. Host/provider connect paths must carry
@@ -203,10 +214,18 @@ sequenceDiagram
     H-->>VP: PCM16 response (binary)
   end
   O-->>A: function_call event (relay → actor)
-  A->>N: tool exec (proxy → node WS)
-  N->>VP: POST /edge-tools/tools/{name}
-  VP->>VP: run HA / Frigate / LCD on LAN
-  VP-->>A: result
+  alt actor-owned tool
+    A->>N: tool exec (proxy → node WS)
+    N->>VP: POST /edge-tools/tools/{name}
+    VP->>VP: run HA / Frigate / LCD on LAN
+    VP-->>A: result
+  else client-owned tool
+    A-->>H: realtimeFrame.functionCall
+    H-->>VP: functionCall (JSON)
+    VP->>VP: run local tool
+    VP-->>H: functionCallOutput (JSON)
+    H-->>A: typed control self-signal
+  end
   A->>O: SendToolResult (upstream)
   O-->>H: responseStarted/Done · transcripts → realtimeFrame
   H-->>VP: realtimeFrame (JSON)
@@ -247,7 +266,6 @@ Hardening and contract-completeness follow-ups are tracked under **milestone 23
 - #2152 — bound `AudioDraining` with a server-side drain-ack timeout
 - #2153 — reuse the live relay provider session for upstream sends (barge-in latency)
 - #2155 — route-scoped voice tool execution context (unblocks per-caller edge tools)
-- #2156 — typed `VoiceFunctionCallOutput` control frame
 - #2157 — replay protection for the device-event HMAC ingress
 - #2158 — harden / gate the `/ws/voice` dev-bypass route
 - #2159 — `/ws/voice` reconnect/reattach contract + wire dead attach timeouts

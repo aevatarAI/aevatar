@@ -743,6 +743,7 @@ internal static class ChatRunRequestNormalizer
                 WorkflowChatInputPartKind.Image => "[image]",
                 WorkflowChatInputPartKind.Audio => "[audio]",
                 WorkflowChatInputPartKind.Video => "[video]",
+                WorkflowChatInputPartKind.File => "[file]",
                 _ => "[content]",
             }));
     }
@@ -755,6 +756,7 @@ internal static class ChatRunRequestNormalizer
             "image" => WorkflowChatInputPartKind.Image,
             "audio" => WorkflowChatInputPartKind.Audio,
             "video" => WorkflowChatInputPartKind.Video,
+            "file" => WorkflowChatInputPartKind.File,
             _ => WorkflowChatInputPartKind.Unspecified,
         };
 

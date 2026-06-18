@@ -1,20 +1,40 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
 /// <summary>Tool to make proxied requests to downstream services through NyxID.</summary>
 public sealed class NyxIdProxyTool : IAgentTool
 {
+    private const string TextResponseMode = "text";
+    private const string FileArtifactResponseMode = "file_artifact";
+
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
+
     private readonly NyxIdApiClient _client;
     private readonly ILogger _logger;
+    private readonly INyxIdProxyFileArtifactIngress? _fileArtifactIngress;
+    private readonly long _fileArtifactMaxBytes;
 
-    public NyxIdProxyTool(NyxIdApiClient client, ILogger? logger = null)
+    public NyxIdProxyTool(
+        NyxIdApiClient client,
+        ILogger? logger = null,
+        INyxIdProxyFileArtifactIngress? fileArtifactIngress = null,
+        long fileArtifactMaxBytes = NyxIdToolOptions.DefaultProxyFileArtifactMaxBytes)
     {
         _client = client;
         _logger = logger ?? NullLogger.Instance;
+        _fileArtifactIngress = fileArtifactIngress;
+        _fileArtifactMaxBytes = NormalizeMaxBytes(fileArtifactMaxBytes);
     }
 
     public string Name => "nyxid_proxy";
@@ -59,6 +79,11 @@ public sealed class NyxIdProxyTool : IAgentTool
               "type": "object",
               "additionalProperties": { "type": "string" },
               "description": "Additional HTTP headers"
+            },
+            "response_mode": {
+              "type": "string",
+              "enum": ["text", "file_artifact"],
+              "description": "Response handling mode. Omit or use text for the existing JSON/string response. Use file_artifact only for GET binary downloads in a managed workflow run."
             }
           }
         }
@@ -69,11 +94,6 @@ public sealed class NyxIdProxyTool : IAgentTool
         // Refactor (iter25/cluster-025-nyxid-tool-discovery-actor-cache):
         //   Old pattern: NyxIdSpecCatalog + SpecFetchToken + IServiceDiscoveryCache 在仓库内建第二 catalog(NyxID 真实源的影子)
         //   New principle: NyxID 是唯一真实源;删除 in-process catalog 假权威面; routing 和 spec hints 请求时读取 live NyxID surface;保留 typed tools + live nyxid_proxy
-        var token = AgentToolRequestContext.NyxIdAccessToken;
-        var orgToken = AgentToolRequestContext.NyxIdOrgToken;
-        if (string.IsNullOrWhiteSpace(token))
-            return """{"error":"No NyxID access token available. User must be authenticated."}""";
-
         _logger.LogDebug("[nyxid_proxy] Raw arguments: {Args}", argumentsJson);
 
         var args = ToolArgs.Parse(argumentsJson);
@@ -81,6 +101,19 @@ public sealed class NyxIdProxyTool : IAgentTool
         {
             _logger.LogWarning("[nyxid_proxy] Argument parse failed: {Error}, raw={Raw}", args.ParseError, args.Raw);
             return $"{{\"error\":\"Failed to parse tool arguments\",\"detail\":{System.Text.Json.JsonSerializer.Serialize(args.ParseError)},\"received\":{System.Text.Json.JsonSerializer.Serialize(args.Raw)}}}";
+        }
+
+        var responseMode = ResolveResponseMode(args.Str("response_mode"));
+        if (responseMode == null)
+            return FileArtifactError("invalid_response_mode", "response_mode must be omitted, text, or file_artifact.");
+
+        var token = AgentToolRequestContext.NyxIdAccessToken;
+        var orgToken = AgentToolRequestContext.NyxIdOrgToken;
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            return responseMode == FileArtifactResponseMode
+                ? FileArtifactError("missing_nyxid_access_token", "No NyxID access token available. User must be authenticated.")
+                : """{"error":"No NyxID access token available. User must be authenticated."}""";
         }
 
         var slug = args.Str("slug") ?? args.Str("service");
@@ -92,6 +125,9 @@ public sealed class NyxIdProxyTool : IAgentTool
         // No slug → discover mode: merge services from both tokens
         if (string.IsNullOrWhiteSpace(slug))
         {
+            if (responseMode == FileArtifactResponseMode)
+                return FileArtifactError("file_artifact_requires_slug", "response_mode=file_artifact requires slug.");
+
             _logger.LogInformation("[nyxid_proxy] No slug provided, returning service discovery. raw={Raw}", args.Raw);
             return await DiscoverMergedServicesAsync(token, orgToken, ct);
         }
@@ -99,7 +135,24 @@ public sealed class NyxIdProxyTool : IAgentTool
         if (string.IsNullOrWhiteSpace(path))
         {
             _logger.LogWarning("[nyxid_proxy] Missing path. slug={Slug}, raw={Raw}", slug, args.Raw);
+            if (responseMode == FileArtifactResponseMode)
+                return FileArtifactError("file_artifact_requires_path", "response_mode=file_artifact requires path.");
+
             return $"{{\"error\":\"'path' is required when 'slug' is provided\",\"received\":{args.Raw}}}";
+        }
+
+        if (responseMode == FileArtifactResponseMode)
+        {
+            return await ExecuteFileArtifactAsync(
+                token,
+                orgToken,
+                slug,
+                path,
+                method,
+                args,
+                body,
+                headers,
+                ct);
         }
 
         // Resolve which token owns the target service: user token first, fallback to org token
@@ -117,6 +170,102 @@ public sealed class NyxIdProxyTool : IAgentTool
         }
 
         return result;
+    }
+
+    private async Task<string> ExecuteFileArtifactAsync(
+        string token,
+        string? orgToken,
+        string slug,
+        string path,
+        string method,
+        ToolArgs args,
+        string? body,
+        Dictionary<string, string>? headers,
+        CancellationToken ct)
+    {
+        if (!string.Equals(method.Trim(), "GET", StringComparison.OrdinalIgnoreCase))
+            return FileArtifactError("file_artifact_requires_get", "response_mode=file_artifact only supports GET.");
+
+        if (HasRequestBody(args))
+            return FileArtifactError("file_artifact_disallows_body", "response_mode=file_artifact does not accept a request body.");
+
+        if (_fileArtifactIngress == null)
+            return FileArtifactError("file_artifact_ingress_unavailable", "Host has not registered workflow file artifact ingress.");
+
+        var context = AgentToolRequestContext.Current;
+        var workflowRuntime = context?.WorkflowRuntime ?? AgentWorkflowRuntimeContext.Empty;
+        var callerScopeId = Normalize(context?.Caller.ScopeId);
+        var ownerRunId = Normalize(workflowRuntime.ParentRunId);
+        if (!workflowRuntime.HasManagedParent || callerScopeId == null || ownerRunId == null)
+            return FileArtifactError("managed_workflow_context_required", "response_mode=file_artifact requires a managed workflow runtime context and caller scope.");
+
+        var effectiveToken = await ResolveTokenForServiceAsync(token, orgToken, slug, ct);
+        _logger.LogInformation(
+            "[nyxid_proxy] GET file_artifact slug={Slug} path={Path} maxBytes={MaxBytes} tokenSource={Source}",
+            slug,
+            path,
+            _fileArtifactMaxBytes,
+            effectiveToken == token ? "user" : "org");
+
+        var response = await _client.ProxyGetBinaryResponseAsync(
+            effectiveToken,
+            slug,
+            path,
+            headers,
+            _fileArtifactMaxBytes,
+            ct);
+
+        if (!response.Succeeded)
+        {
+            var error = response.Detail switch
+            {
+                "content_length_exceeds_max_bytes" => "file_artifact_too_large",
+                "content_exceeds_max_bytes" => "file_artifact_too_large",
+                _ => "provider_binary_download_failed",
+            };
+            var detail = error == "file_artifact_too_large"
+                ? response.Detail ?? "content_exceeds_max_bytes"
+                : "NyxID binary proxy request failed.";
+            return FileArtifactError(
+                error,
+                detail,
+                response.HttpStatus,
+                response.ContentType);
+        }
+
+        if (response.Content.Length == 0)
+            return FileArtifactError("empty_file_artifact", "NyxID binary proxy response was empty.", response.HttpStatus, response.ContentType);
+
+        WorkflowFileIngressResult ingressResult;
+        try
+        {
+            ingressResult = await _fileArtifactIngress.IngestAsync(new WorkflowFileIngressRequest(
+                response.Content,
+                WorkflowFileSourceKind.ConnectedServiceResource,
+                SourceMessageId: $"nyxid_proxy:{slug}",
+                SourceResourceKey: path,
+                FileName: response.FileName,
+                MediaType: response.ContentType,
+                OwnerRunId: ownerRunId,
+                OwnerScopeId: callerScopeId), ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "[nyxid_proxy] File artifact ingress failed. slug={Slug} path={Path}", slug, path);
+            return FileArtifactError("artifact_ingress_failed", "Downloaded resource could not be stored.", response.HttpStatus, response.ContentType);
+        }
+
+        return JsonSerializer.Serialize(
+            new NyxIdProxyFileArtifactSuccess(
+                true,
+                FileArtifactResponseMode,
+                slug,
+                path,
+                response.HttpStatus,
+                response.ContentType,
+                response.FileName,
+                ToFileRefProjection(ingressResult.FileRef)),
+            JsonOptions);
     }
 
     // ─── Dual-token service discovery + routing ───
@@ -332,4 +481,93 @@ public sealed class NyxIdProxyTool : IAgentTool
         }
     }
 
+    private static string? ResolveResponseMode(string? raw)
+    {
+        var normalized = Normalize(raw);
+        if (normalized == null)
+            return TextResponseMode;
+
+        if (string.Equals(normalized, TextResponseMode, StringComparison.OrdinalIgnoreCase))
+            return TextResponseMode;
+
+        if (string.Equals(normalized, FileArtifactResponseMode, StringComparison.OrdinalIgnoreCase))
+            return FileArtifactResponseMode;
+
+        return null;
+    }
+
+    private static bool HasRequestBody(ToolArgs args) =>
+        args.Has("body");
+
+    private static long NormalizeMaxBytes(long maxBytes) =>
+        maxBytes <= 0
+            ? NyxIdToolOptions.DefaultProxyFileArtifactMaxBytes
+            : Math.Min(maxBytes, NyxIdToolOptions.HardProxyFileArtifactMaxBytes);
+
+    private static string FileArtifactError(
+        string error,
+        string detail,
+        int httpStatus = 0,
+        string? sourceContentType = null) =>
+        JsonSerializer.Serialize(
+            new NyxIdProxyFileArtifactError(
+                false,
+                FileArtifactResponseMode,
+                error,
+                detail,
+                httpStatus == 0 ? null : httpStatus,
+                sourceContentType),
+            JsonOptions);
+
+    private static NyxIdProxyWorkflowFileRefProjection ToFileRefProjection(WorkflowFileRef fileRef) =>
+        new(
+            fileRef.FileId,
+            fileRef.ArtifactId,
+            fileRef.SourceKind.ToString(),
+            fileRef.SourceMessageId,
+            fileRef.SourceResourceKey,
+            fileRef.FileName,
+            fileRef.MediaType,
+            fileRef.SizeBytes,
+            fileRef.Sha256,
+            fileRef.CreatedAtUnixMs,
+            fileRef.ExpiresAtUnixMs,
+            fileRef.OwnerRunId,
+            fileRef.OwnerScopeId);
+
+    private static string? Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private sealed record NyxIdProxyFileArtifactSuccess(
+        bool Success,
+        string ResponseMode,
+        string Slug,
+        string Path,
+        int HttpStatus,
+        string? SourceContentType,
+        string? SourceFileName,
+        NyxIdProxyWorkflowFileRefProjection FileRef);
+
+    private sealed record NyxIdProxyFileArtifactError(
+        bool Success,
+        string ResponseMode,
+        string Error,
+        string Detail,
+        int? HttpStatus,
+        string? SourceContentType);
+
+    private sealed record NyxIdProxyWorkflowFileRefProjection(
+        string? FileId,
+        string? ArtifactId,
+        string SourceKind,
+        string? SourceMessageId,
+        string? SourceResourceKey,
+        string? FileName,
+        string? MediaType,
+        long SizeBytes,
+        string? Sha256,
+        long CreatedAtUnixMs,
+        long ExpiresAtUnixMs,
+        string? OwnerRunId,
+        string? OwnerScopeId);
 }

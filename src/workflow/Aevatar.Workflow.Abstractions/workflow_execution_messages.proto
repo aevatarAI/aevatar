@@ -11,6 +11,7 @@ enum WorkflowChatInputPartKind {
   WORKFLOW_CHAT_INPUT_PART_KIND_IMAGE = 2;
   WORKFLOW_CHAT_INPUT_PART_KIND_AUDIO = 3;
   WORKFLOW_CHAT_INPUT_PART_KIND_VIDEO = 4;
+  WORKFLOW_CHAT_INPUT_PART_KIND_FILE = 5;
 }
 
 enum WorkflowFileSourceKind {
@@ -388,6 +389,16 @@ message WorkflowUsageMetrics {
   double cost = 5;
   int64 latency_ms = 6;
 }
+message WorkflowFileItemResult {
+  int32 index = 1;
+  WorkflowFileRef file_ref = 2;
+  bool success = 3;
+  string output = 4;
+  string error = 5;
+}
+message WorkflowFileItemResultSet {
+  repeated WorkflowFileItemResult results = 1;
+}
 message StepCompletedEvent {
   string step_id = 1;
   bool success = 2;
@@ -404,6 +415,7 @@ message StepCompletedEvent {
   WorkflowUsageMetrics usage = 13;
   VoteAgreementDecision vote_agreement_decision = 14;
   WorkflowStepFailureOutcome failure_outcome = 15;
+  WorkflowFileItemResultSet file_item_results = 16;
 }
 message SubWorkflowInvokeRequestedEvent
 {

@@ -21,11 +21,12 @@ The active voice execution path is actor-side:
 - The actor sends the JSON result back to the realtime provider through
   `IRealtimeVoiceProvider.SendToolResultAsync(...)`.
 
-The current transport contract is asymmetric for local tool execution. The
-downstream realtime feed can carry `VoiceRealtimeFrame.function_call`, but
-`VoiceControlFrame` only accepts `drain_acknowledged`. There is no typed
-`function_call_output` control frame that a client can use to answer a model
-function call through the active voice transport.
+The original transport contract was asymmetric for local tool execution. The
+downstream realtime feed could carry `VoiceRealtimeFrame.function_call`, but
+`VoiceControlFrame` had no typed `function_call_output` control frame that a
+client could use to answer a model function call through the active voice
+transport. Issue #2156 closes that protocol gap by adding typed ownership and a
+typed uplink result.
 
 NyxID already has a service and node proxy surface that reaches private-host
 APIs without requiring Aevatar to add a new external feature:
@@ -50,20 +51,21 @@ through NyxID's existing proxy and connected-service tool surfaces.
 This is a design decision, not a new Aevatar protocol implementation. No new
 NyxID endpoint, schema field, or node feature is required for issue #2009.
 
-The long-term direction remains a first-class client-owned voice tool protocol,
-but it must be implemented as a typed voice contract, not as a process-local
-registry:
+The first-class client-owned voice tool protocol is implemented as a typed voice
+contract, not as a process-local registry:
 
-- Add a typed `VoiceFunctionCallOutput` message with at least `call_id`,
-  `tool_name`, `output_json`, and an explicit failure shape.
-- Add it to `VoiceControlFrame` as `function_call_output`.
-- Mark tool ownership in typed session configuration, for example actor-owned
-  versus client-owned tool definitions, rather than overloading a generic bag.
-- Keep call correlation in actor-owned voice session state. The actor may wait
-  for a client-owned output only by ending the current turn and resuming from a
-  control-frame event or timeout event.
-- Align timeout semantics with the existing tool execution timeout and return an
-  honest JSON error to the provider when a client-owned output does not arrive.
+- `VoiceFunctionCallOutput` carries `call_id`, `tool_name`, success
+  `output_json`, or a typed `VoiceFunctionCallFailure`.
+- `VoiceControlFrame.function_call_output` is the client-to-actor uplink.
+- `VoiceToolDefinition.owner` marks actor-owned versus client-owned tools.
+  Unspecified ownership remains actor-owned.
+- `VoicePendingClientToolCall` lives in actor-owned
+  `VoicePresenceRuntimeState`. The actor waits for a client output only by
+  ending the current turn and resuming from a control-frame event or timeout
+  event.
+- `VoiceClientToolCallTimeoutExpired` aligns timeout semantics with the existing
+  tool execution timeout and returns an honest JSON error to the provider when a
+  client-owned output does not arrive.
 
 Do not solve this gap with a Device GAgent outbound command queue in this slice.
 Device command subscriptions may be useful for durable device management, but
@@ -106,8 +108,8 @@ actor-owned credential contract.
   `actorId -> edge context` registry. NyxID remains the live source for
   connected services and OpenAPI specs.
 - Stable voice protocol semantics are protobuf fields. A future
-  `function_call_output` is a typed control-frame message, not JSON hidden in an
-  existing field.
+  client-owned tool semantic must continue to be a typed control-frame or
+  state/message field, not JSON hidden in an existing field.
 - The voice actor remains the authority for the voice session, call correlation,
   timeout, and provider result submission. The edge client owns only the LAN
   side effect and the tool output it returns.
@@ -154,6 +156,8 @@ Voice model function call
   are generally safe.
 - The long-term transport callback protocol remains available for low-latency
   client-owned tools and for tools that should never be exposed as HTTP services.
+  Its implemented form is the typed `function_call_output` uplink guarded by
+  actor-owned pending call state and timeout self-signals.
 
 ## Verification
 
