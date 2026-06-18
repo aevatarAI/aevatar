@@ -1,9 +1,13 @@
 import {
   ClearOutlined,
+  CloseOutlined,
+  FileImageOutlined,
+  FileOutlined,
+  PaperClipOutlined,
   PlayCircleOutlined,
   StopOutlined,
 } from '@ant-design/icons';
-import { Button, Input, Typography } from 'antd';
+import { Button, Input, Tooltip, Typography } from 'antd';
 import React from 'react';
 import { AevatarPanel } from '@/shared/ui/aevatarPageShells';
 import type { InvokeResultState } from './StudioMemberInvokePanel.currentRun';
@@ -14,9 +18,12 @@ import {
 import { t } from "@/shared/i18n/messages";
 
 type StudioMemberInvokeComposerPanelProps = {
+  readonly acceptedFileTypes?: string;
+  readonly attachments?: readonly File[];
   readonly blockedReason?: string;
   readonly canInvoke: boolean;
   readonly defaultPrompt: string;
+  readonly enableFileAttachments?: boolean;
   readonly formError: string;
   readonly invokeStatus: InvokeResultState['status'];
   readonly isHistoricalRunSelected?: boolean;
@@ -25,6 +32,8 @@ type StudioMemberInvokeComposerPanelProps = {
   readonly prompt: string;
   readonly currentRunPrompt?: string;
   readonly onAbort: () => void;
+  readonly onAttachmentsAdd?: (files: readonly File[]) => void;
+  readonly onAttachmentRemove?: (index: number) => void;
   readonly onClear: () => void;
   readonly onInvoke: () => void;
   readonly onPromptChange: (value: string) => void;
@@ -189,6 +198,60 @@ const submittedReceiptTextStyle: React.CSSProperties = {
   wordBreak: 'break-word',
 };
 
+const attachmentToolbarStyle: React.CSSProperties = {
+  alignItems: 'center',
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 8,
+  minWidth: 0,
+};
+
+const attachmentListStyle: React.CSSProperties = {
+  alignItems: 'center',
+  display: 'flex',
+  flex: '1 1 260px',
+  flexWrap: 'wrap',
+  gap: 6,
+  minWidth: 0,
+};
+
+const attachmentChipStyle: React.CSSProperties = {
+  alignItems: 'center',
+  background: '#f8fafc',
+  border: '1px solid #dbe3ee',
+  borderRadius: 8,
+  color: '#334155',
+  display: 'inline-flex',
+  gap: 6,
+  maxWidth: 240,
+  minHeight: 28,
+  minWidth: 0,
+  padding: '3px 5px 3px 8px',
+};
+
+const attachmentNameStyle: React.CSSProperties = {
+  fontSize: 12,
+  fontWeight: 700,
+  lineHeight: '16px',
+  maxWidth: 154,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
+
+const attachmentMetaStyle: React.CSSProperties = {
+  color: '#64748b',
+  flex: '0 0 auto',
+  fontSize: 11,
+  lineHeight: '14px',
+};
+
+const attachmentEmptyStyle: React.CSSProperties = {
+  color: '#64748b',
+  fontSize: 12,
+  lineHeight: '18px',
+};
+
 const composerGuidanceStyle: React.CSSProperties = {
   background: '#f8fafc',
   border: '1px solid #dbe3ee',
@@ -200,12 +263,46 @@ const composerGuidanceStyle: React.CSSProperties = {
   padding: '8px 10px',
 };
 
+function formatFileSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return '0 B';
+  }
+
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+
+  const kib = bytes / 1024;
+  if (kib < 1024) {
+    return `${kib.toFixed(kib >= 10 ? 0 : 1)} KB`;
+  }
+
+  const mib = kib / 1024;
+  return `${mib.toFixed(mib >= 10 ? 0 : 1)} MB`;
+}
+
+function getFileIcon(file: File): React.ReactNode {
+  return file.type.startsWith('image/') ? <FileImageOutlined /> : <FileOutlined />;
+}
+
+function getAttachmentKey(file: File): string {
+  return [
+    file.name,
+    file.size,
+    file.lastModified,
+    file.type || 'file',
+  ].join(':');
+}
+
 export const StudioMemberInvokeComposerPanel: React.FC<
   StudioMemberInvokeComposerPanelProps
 > = ({
+  acceptedFileTypes,
+  attachments = [],
   blockedReason = '',
   canInvoke,
   defaultPrompt,
+  enableFileAttachments = false,
   formError,
   invokeStatus,
   isHistoricalRunSelected = false,
@@ -213,16 +310,21 @@ export const StudioMemberInvokeComposerPanel: React.FC<
   layout = 'panel',
   currentRunPrompt,
   onAbort,
+  onAttachmentsAdd,
+  onAttachmentRemove,
   onClear,
   onInvoke,
   onPromptChange,
   prompt,
 }) => {
+  const fileInputRef = React.useRef<HTMLInputElement | null>(null);
   const isRunning = invokeStatus === 'running';
   const isDockLayout = layout === 'dock';
   const isMemberRunLayout = layout === 'member-run';
   const inputLocked = isMemberRunLayout && isRunning;
   const displayedPrompt = inputLocked ? currentRunPrompt || prompt : prompt;
+  const canAttachFiles =
+    enableFileAttachments && isChatEndpoint && isMemberRunLayout;
   const promptPlaceholder =
     defaultPrompt ||
     (isMemberRunLayout
@@ -273,6 +375,89 @@ export const StudioMemberInvokeComposerPanel: React.FC<
         "pages.studio.studiomemberinvokesetuppanels.copy",
         "Workflow request input",
       );
+  const renderAttachmentToolbar = () => {
+    if (!canAttachFiles) {
+      return null;
+    }
+
+    return (
+      <div
+        data-testid="studio-invoke-attachment-toolbar"
+        style={attachmentToolbarStyle}
+      >
+        <input
+          ref={fileInputRef}
+          aria-label={t(
+            "pages.studio.studiomemberinvokesetuppanels.attach.files.input",
+            "Attach files",
+          )}
+          accept={acceptedFileTypes}
+          multiple
+          style={{ display: 'none' }}
+          type="file"
+          onChange={(event) => {
+            const nextFiles = Array.from(event.target.files ?? []);
+            if (nextFiles.length > 0) {
+              onAttachmentsAdd?.(nextFiles);
+            }
+            event.currentTarget.value = '';
+          }}
+        />
+        <Tooltip
+          title={t(
+            "pages.studio.studiomemberinvokesetuppanels.attach.files",
+            "Attach files",
+          )}
+        >
+          <Button
+            aria-label={t(
+              "pages.studio.studiomemberinvokesetuppanels.attach.files.button",
+              "Add files",
+            )}
+            disabled={inputLocked}
+            icon={<PaperClipOutlined />}
+            onClick={() => fileInputRef.current?.click()}
+          />
+        </Tooltip>
+        <div style={attachmentListStyle}>
+          {attachments.length === 0 ? (
+            <span style={attachmentEmptyStyle}>
+              {t(
+                "pages.studio.studiomemberinvokesetuppanels.no.files.attached",
+                "No files attached",
+              )}
+            </span>
+          ) : (
+            attachments.map((file, index) => (
+              <span
+                key={getAttachmentKey(file)}
+                data-testid="studio-invoke-attachment-chip"
+                style={attachmentChipStyle}
+              >
+                {getFileIcon(file)}
+                <Tooltip title={`${file.name} · ${file.type || 'file'} · ${formatFileSize(file.size)}`}>
+                  <span style={attachmentNameStyle}>{file.name}</span>
+                </Tooltip>
+                <span style={attachmentMetaStyle}>{formatFileSize(file.size)}</span>
+                <Button
+                  aria-label={t(
+                    "pages.studio.studiomemberinvokesetuppanels.remove.attachment",
+                    "Remove {name}",
+                    { name: file.name },
+                  )}
+                  disabled={inputLocked}
+                  icon={<CloseOutlined />}
+                  onClick={() => onAttachmentRemove?.(index)}
+                  size="small"
+                  type="text"
+                />
+              </span>
+            ))
+          )}
+        </div>
+      </div>
+    );
+  };
   const content = (
     <div
       style={
@@ -305,18 +490,17 @@ export const StudioMemberInvokeComposerPanel: React.FC<
         {isMemberRunLayout ? (
           <div style={memberRunLauncherRowStyle}>
             {inputLocked ? (
-              <div
+              <fieldset
                 aria-label={inputAriaLabel}
                 data-testid="studio-invoke-submitted-input-receipt"
-                role="group"
                 style={submittedReceiptStyle}
               >
-                <span style={submittedReceiptLabelStyle}>
+                <legend style={submittedReceiptLabelStyle}>
                   {t(
                     "pages.studio.studiomemberinvokesetuppanels.submitted.input",
                     "Submitted input",
                   )}
-                </span>
+                </legend>
                 <span style={submittedReceiptTextStyle}>
                   {displayedPrompt ||
                     t(
@@ -324,7 +508,7 @@ export const StudioMemberInvokeComposerPanel: React.FC<
                       "No input captured.",
                     )}
                 </span>
-              </div>
+              </fieldset>
             ) : (
               <Input.TextArea
                 aria-label={inputAriaLabel}
@@ -414,6 +598,7 @@ export const StudioMemberInvokeComposerPanel: React.FC<
             onChange={(event) => onPromptChange(event.target.value)}
           />
         )}
+        {renderAttachmentToolbar()}
         {formError ? (
           <Typography.Text type="danger">{formError}</Typography.Text>
         ) : isHistoricalRunSelected ? (
