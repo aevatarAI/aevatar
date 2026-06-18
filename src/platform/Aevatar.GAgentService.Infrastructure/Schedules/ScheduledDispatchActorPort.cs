@@ -284,7 +284,19 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
 
     private static ScheduledServiceInvocationAuthState? CreateAuthState(ScheduledServiceInvocationAuth? auth)
     {
-        if (auth?.SenderNyxId == null)
+        if (auth == null)
+            return null;
+        if (auth.ScopeOwnerNyxId != null)
+        {
+            return new ScheduledServiceInvocationAuthState
+            {
+                ScopeOwnerNyxId = new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState
+                {
+                    Scope = auth.ScopeOwnerNyxId.Scope,
+                },
+            };
+        }
+        if (auth.SenderNyxId == null)
             return null;
 
         return new ScheduledServiceInvocationAuthState

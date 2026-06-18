@@ -462,10 +462,18 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
     private static ScheduledServiceInvocationAuth? ToRuntimeAuth(ScheduledServiceInvocationAuthState? auth)
     {
-        if (auth?.SenderNyxId == null)
+        if (auth == null)
+            return null;
+        if (auth.ScopeOwnerNyxId != null)
+        {
+            return new ScheduledServiceInvocationAuth(
+                ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
+                    auth.ScopeOwnerNyxId.Scope ?? string.Empty));
+        }
+        if (auth.SenderNyxId == null)
             return null;
 
-        return new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationNyxIdCredentialSource(
+        return new ScheduledServiceInvocationAuth(SenderNyxId: new ScheduledServiceInvocationNyxIdCredentialSource(
             new ScheduledServiceInvocationNyxIdSubjectRef(
                 auth.SenderNyxId.Subject?.Platform ?? string.Empty,
                 auth.SenderNyxId.Subject?.Tenant ?? string.Empty,
@@ -725,7 +733,19 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     private static ScheduledServiceInvocationAuthState? NormalizeServiceInvocationAuth(
         ScheduledServiceInvocationAuthState? auth)
     {
-        if (auth?.SenderNyxId == null)
+        if (auth == null)
+            return null;
+        if (auth.ScopeOwnerNyxId != null)
+        {
+            return new ScheduledServiceInvocationAuthState
+            {
+                ScopeOwnerNyxId = new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState
+                {
+                    Scope = NormalizeOptional(auth.ScopeOwnerNyxId.Scope),
+                },
+            };
+        }
+        if (auth.SenderNyxId == null)
             return null;
 
         return new ScheduledServiceInvocationAuthState

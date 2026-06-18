@@ -62,14 +62,24 @@ internal static class WorkflowScheduleConfigurationMapper
     {
         if (configuration.Auth == null)
             return null;
-        if (configuration.Auth.SenderNyxId == null)
-            throw new ArgumentException("Sender NyxID credential source is required.", nameof(configuration.Auth));
 
-        var senderNyxId = configuration.Auth.SenderNyxId;
+        var hasSenderNyxId = configuration.Auth.SenderNyxId != null;
+        var hasScopeOwnerNyxId = configuration.Auth.ScopeOwnerNyxId != null;
+        if (hasSenderNyxId == hasScopeOwnerNyxId)
+            throw new ArgumentException("Exactly one workflow schedule NyxID credential source is required.", nameof(configuration.Auth));
+
+        if (hasScopeOwnerNyxId)
+        {
+            return new ScheduledServiceInvocationAuth(
+                ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
+                    NormalizeRequired(configuration.Auth.ScopeOwnerNyxId!.Scope, nameof(configuration.Auth.ScopeOwnerNyxId.Scope))));
+        }
+
+        var senderNyxId = configuration.Auth.SenderNyxId!;
         if (senderNyxId.Subject == null)
             throw new ArgumentException("Sender NyxID subject is required.", nameof(configuration.Auth));
 
-        return new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationNyxIdCredentialSource(
+        return new ScheduledServiceInvocationAuth(SenderNyxId: new ScheduledServiceInvocationNyxIdCredentialSource(
             new ScheduledServiceInvocationNyxIdSubjectRef(
                 NormalizeRequired(senderNyxId.Subject.Platform, nameof(senderNyxId.Subject.Platform)),
                 NormalizeOptional(senderNyxId.Subject.Tenant, string.Empty),

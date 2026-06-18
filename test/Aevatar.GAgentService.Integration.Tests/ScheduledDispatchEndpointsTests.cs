@@ -183,6 +183,61 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
+    public async Task Create_ShouldAcceptServiceInvocationScopeOwnerNyxIdWithoutSubject()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+        var request = CreateServiceInvocationRequestWithAuth(new ScheduledServiceInvocationAuthHttpRequest
+        {
+            ScopeOwnerNyxId = new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceHttpRequest
+            {
+                Scope = " proxy ",
+            },
+        });
+
+        var result = await CreateAsync(request, service);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        var auth = service.Created.Should().ContainSingle().Which.Target.ServiceInvocation!.Auth;
+        auth.Should().NotBeNull();
+        auth!.SenderNyxId.Should().BeNull();
+        auth.ScopeOwnerNyxId.Should().NotBeNull();
+        auth.ScopeOwnerNyxId!.Scope.Should().Be("proxy");
+    }
+
+    [Fact]
+    public async Task Create_ShouldRejectServiceInvocationAuthWithBothNyxIdSources()
+    {
+        var request = CreateServiceInvocationRequestWithAuth(new ScheduledServiceInvocationAuthHttpRequest
+        {
+            ScopeOwnerNyxId = new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceHttpRequest
+            {
+                Scope = "proxy",
+            },
+            SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceHttpRequest
+            {
+                Subject = new ScheduledServiceInvocationNyxIdSubjectRefHttpRequest
+                {
+                    Platform = "lark",
+                    ExternalUserId = "ou-user-1",
+                },
+                Scope = "proxy",
+            },
+        });
+
+        var result = await CreateAsync(
+            request,
+            new RecordingScheduledDispatchApplicationService());
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+    }
+
+    [Fact]
     public async Task Create_ShouldAcceptTenantlessServiceInvocationNyxIdSubject()
     {
         var service = new RecordingScheduledDispatchApplicationService();

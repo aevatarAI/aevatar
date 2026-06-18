@@ -407,13 +407,34 @@ public sealed record ScheduledDispatchServiceInvocationTargetHttpRequest
 public sealed record ScheduledServiceInvocationAuthHttpRequest
 {
     public ScheduledServiceInvocationNyxIdCredentialSourceHttpRequest? SenderNyxId { get; init; }
+    public ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceHttpRequest? ScopeOwnerNyxId { get; init; }
 
     public ScheduledServiceInvocationAuth ToAuth()
     {
-        if (SenderNyxId == null)
-            throw new ArgumentException("Sender NyxID credential source is required.", nameof(SenderNyxId));
+        var hasSenderNyxId = SenderNyxId != null;
+        var hasScopeOwnerNyxId = ScopeOwnerNyxId != null;
+        if (hasSenderNyxId == hasScopeOwnerNyxId)
+            throw new ArgumentException("Exactly one NyxID credential source is required.", nameof(SenderNyxId));
 
-        return new ScheduledServiceInvocationAuth(SenderNyxId.ToSource());
+        return hasScopeOwnerNyxId
+            ? new ScheduledServiceInvocationAuth(ScopeOwnerNyxId: ScopeOwnerNyxId!.ToSource())
+            : new ScheduledServiceInvocationAuth(SenderNyxId: SenderNyxId!.ToSource());
+    }
+}
+
+public sealed record ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceHttpRequest
+{
+    public required string Scope { get; init; }
+
+    public ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource ToSource() =>
+        new(NormalizeRequired(Scope, nameof(Scope)));
+
+    private static string NormalizeRequired(string? value, string name)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            throw new ArgumentException($"{name} is required.", name);
+
+        return value.Trim();
     }
 }
 

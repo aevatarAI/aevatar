@@ -44,7 +44,8 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         ScheduledServiceInvocationDispatchRequest dispatch,
         CancellationToken ct)
     {
-        if (dispatch.Auth?.SenderNyxId == null)
+        var exchange = await ExchangeSenderCredentialAsync(dispatch, ct);
+        if (exchange == null)
         {
             return EnrichChatPayload(
                 dispatch.Request,
@@ -54,7 +55,6 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
                     dispatch.ProjectSenderNyxIdAccessTokenToWorkflowCallerCredential);
         }
 
-        var exchange = await _credentialExchangePort.IssueSenderNyxIdAsync(dispatch.Auth.SenderNyxId, ct);
         if (!exchange.Succeeded)
         {
             throw new InvalidOperationException(string.IsNullOrWhiteSpace(exchange.Error)
@@ -68,6 +68,38 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
             NormalizeSenderNyxIdAccessToken(exchange.AccessToken),
             dispatch.ProjectSenderNyxIdAccessTokenToWorkflowCallerCredential);
     }
+
+    private Task<ScheduledServiceInvocationCredentialExchangeResult?> ExchangeSenderCredentialAsync(
+        ScheduledServiceInvocationDispatchRequest dispatch,
+        CancellationToken ct)
+    {
+        if (dispatch.Auth == null)
+            return Task.FromResult<ScheduledServiceInvocationCredentialExchangeResult?>(null);
+        if (dispatch.Auth.ScopeOwnerNyxId != null)
+        {
+            return ExchangeScopeOwnerNyxIdAsync(
+                dispatch.Auth.ScopeOwnerNyxId,
+                dispatch.Request.Identity,
+                ct);
+        }
+        if (dispatch.Auth.SenderNyxId != null)
+        {
+            return ExchangeSenderNyxIdAsync(dispatch.Auth.SenderNyxId, ct);
+        }
+
+        return Task.FromResult<ScheduledServiceInvocationCredentialExchangeResult?>(null);
+    }
+
+    private async Task<ScheduledServiceInvocationCredentialExchangeResult?> ExchangeScopeOwnerNyxIdAsync(
+        ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource source,
+        ServiceIdentity serviceIdentity,
+        CancellationToken ct) =>
+        await _credentialExchangePort.IssueScopeOwnerNyxIdAsync(source, serviceIdentity, ct);
+
+    private async Task<ScheduledServiceInvocationCredentialExchangeResult?> ExchangeSenderNyxIdAsync(
+        ScheduledServiceInvocationNyxIdCredentialSource source,
+        CancellationToken ct) =>
+        await _credentialExchangePort.IssueSenderNyxIdAsync(source, ct);
 
     private static ServiceInvocationRequest EnrichChatPayload(
         ServiceInvocationRequest request,

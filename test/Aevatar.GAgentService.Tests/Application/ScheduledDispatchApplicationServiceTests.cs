@@ -376,6 +376,38 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
+    public async Task ScheduledDispatchActorPort_ShouldPersistScopeOwnerNyxIdAuth()
+    {
+        var dispatchPort = new RecordingActorDispatchPort();
+        var port = new ScheduledDispatchActorPort(new RecordingActorRuntime(), dispatchPort);
+        var configuration = new ScheduledDispatchConfiguration(
+            "schedule-owner",
+            "Invoke",
+            new ScheduledDispatchTargetDescriptor(
+                ScheduledDispatchTargetKind.ServiceInvocation,
+                ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
+                    new ServiceIdentity { TenantId = "owner-nyx-user", AppId = "app", Namespace = "default", ServiceId = "svc" },
+                    "run",
+                    Any.Pack(new StringValue { Value = "invoke" }),
+                    Auth: new ScheduledServiceInvocationAuth(
+                        ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource("proxy")))),
+            "0 9 * * *",
+            "UTC",
+            true,
+            new Dictionary<string, string>(),
+            ScheduledDispatchScheduleKind.Workflow);
+        var prepared = await new ScheduledDispatchTargetPreparationService()
+            .PrepareAsync(configuration, "cmd-1", "corr-1");
+
+        await port.DispatchCreateAsync("scheduled-dispatch:schedule-owner", configuration, prepared);
+
+        var command = dispatchPort.Envelopes.Should().ContainSingle().Which.Payload.Unpack<ScheduledDispatchCreateCommand>();
+        command.Target.ServiceInvocation.Auth.SenderNyxId.Should().BeNull();
+        command.Target.ServiceInvocation.Auth.ScopeOwnerNyxId.Should().NotBeNull();
+        command.Target.ServiceInvocation.Auth.ScopeOwnerNyxId.Scope.Should().Be("proxy");
+    }
+
+    [Fact]
     public async Task ScheduledDispatchActorPort_ShouldResolveExistingActorAndDispatchLifecycleCommands()
     {
         var runtime = new RecordingActorRuntime();

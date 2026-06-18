@@ -39,8 +39,11 @@ public sealed record ScheduledServiceInvocationNyxIdCredentialSource(
     ScheduledServiceInvocationNyxIdSubjectRef Subject,
     string Scope);
 
+public sealed record ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(string Scope);
+
 public sealed record ScheduledServiceInvocationAuth(
-    ScheduledServiceInvocationNyxIdCredentialSource? SenderNyxId = null);
+    ScheduledServiceInvocationNyxIdCredentialSource? SenderNyxId = null,
+    ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource? ScopeOwnerNyxId = null);
 
 public sealed record ScheduledServiceInvocationCredentialExchangeResult(
     bool Succeeded,
@@ -241,6 +244,11 @@ public interface IScheduledServiceInvocationCredentialExchangePort
 {
     Task<ScheduledServiceInvocationCredentialExchangeResult> IssueSenderNyxIdAsync(
         ScheduledServiceInvocationNyxIdCredentialSource source,
+        CancellationToken ct = default);
+
+    Task<ScheduledServiceInvocationCredentialExchangeResult> IssueScopeOwnerNyxIdAsync(
+        ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource source,
+        ServiceIdentity serviceIdentity,
         CancellationToken ct = default);
 }
 

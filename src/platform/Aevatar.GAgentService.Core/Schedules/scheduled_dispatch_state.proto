@@ -92,6 +92,12 @@ message ScheduledServiceInvocationTargetState
 message ScheduledServiceInvocationAuthState
 {
   ScheduledServiceInvocationNyxIdCredentialSourceState sender_nyx_id = 1;
+  ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState scope_owner_nyx_id = 2;
+}
+
+message ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState
+{
+  string scope = 1;
 }
 
 message ScheduledServiceInvocationNyxIdCredentialSourceState
