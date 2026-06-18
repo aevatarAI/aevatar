@@ -44,59 +44,63 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         ScheduledServiceInvocationDispatchRequest dispatch,
         CancellationToken ct)
     {
-        var exchange = await ExchangeSenderCredentialAsync(dispatch, ct);
+        var exchange = await ExchangeCredentialAsync(dispatch, ct);
         if (exchange == null)
         {
             return EnrichChatPayload(
                 dispatch.Request,
                 dispatch.Headers,
-                senderNyxIdAccessToken: null,
-                projectSenderNyxIdAccessTokenToWorkflowCallerCredential:
-                    dispatch.ProjectSenderNyxIdAccessTokenToWorkflowCallerCredential);
+                credential: null,
+                projectNyxIdAccessTokenToWorkflowCallerCredential:
+                    dispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredential);
         }
 
-        if (!exchange.Succeeded)
+        if (!exchange.Result.Succeeded)
         {
-            throw new InvalidOperationException(string.IsNullOrWhiteSpace(exchange.Error)
-                ? "Scheduled service invocation sender NyxID credential exchange failed."
-                : exchange.Error.Trim());
+            throw new InvalidOperationException(string.IsNullOrWhiteSpace(exchange.Result.Error)
+                ? $"Scheduled service invocation {ToErrorSubject(exchange.Role)} NyxID credential exchange failed."
+                : exchange.Result.Error.Trim());
         }
 
         return EnrichChatPayload(
             dispatch.Request,
             dispatch.Headers,
-            NormalizeSenderNyxIdAccessToken(exchange.AccessToken),
-            dispatch.ProjectSenderNyxIdAccessTokenToWorkflowCallerCredential);
+            new ExchangedCredential(
+                exchange.Role,
+                NormalizeNyxIdAccessToken(exchange.Result.AccessToken, ToErrorSubject(exchange.Role))),
+            dispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredential);
     }
 
-    private Task<ScheduledServiceInvocationCredentialExchangeResult?> ExchangeSenderCredentialAsync(
+    private async Task<CredentialExchange?> ExchangeCredentialAsync(
         ScheduledServiceInvocationDispatchRequest dispatch,
         CancellationToken ct)
     {
         if (dispatch.Auth == null)
-            return Task.FromResult<ScheduledServiceInvocationCredentialExchangeResult?>(null);
+            return null;
         if (dispatch.Auth.ScopeOwnerNyxId != null)
         {
-            return ExchangeScopeOwnerNyxIdAsync(
+            var result = await ExchangeScopeOwnerNyxIdAsync(
                 dispatch.Auth.ScopeOwnerNyxId,
                 dispatch.Request.Identity,
                 ct);
+            return new CredentialExchange(CredentialRole.ScopeOwner, result);
         }
         if (dispatch.Auth.SenderNyxId != null)
         {
-            return ExchangeSenderNyxIdAsync(dispatch.Auth.SenderNyxId, ct);
+            var result = await ExchangeSenderNyxIdAsync(dispatch.Auth.SenderNyxId, ct);
+            return new CredentialExchange(CredentialRole.Sender, result);
         }
 
-        return Task.FromResult<ScheduledServiceInvocationCredentialExchangeResult?>(null);
+        return null;
     }
 
-    private async Task<ScheduledServiceInvocationCredentialExchangeResult?> ExchangeScopeOwnerNyxIdAsync(
+    private async Task<ScheduledServiceInvocationCredentialExchangeResult> ExchangeScopeOwnerNyxIdAsync(
         ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource source,
         ServiceIdentity serviceIdentity,
         CancellationToken ct) =>
         await _credentialExchangePort.IssueScopeOwnerNyxIdAsync(source, serviceIdentity, ct);
 
-    private async Task<ScheduledServiceInvocationCredentialExchangeResult?> ExchangeSenderNyxIdAsync(
+    private async Task<ScheduledServiceInvocationCredentialExchangeResult> ExchangeSenderNyxIdAsync(
         ScheduledServiceInvocationNyxIdCredentialSource source,
         CancellationToken ct) =>
         await _credentialExchangePort.IssueSenderNyxIdAsync(source, ct);
@@ -104,10 +108,10 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
     private static ServiceInvocationRequest EnrichChatPayload(
         ServiceInvocationRequest request,
         IReadOnlyDictionary<string, string>? headers,
-        string? senderNyxIdAccessToken,
-        bool projectSenderNyxIdAccessTokenToWorkflowCallerCredential)
+        ExchangedCredential? credential,
+        bool projectNyxIdAccessTokenToWorkflowCallerCredential)
     {
-        if ((headers == null || headers.Count == 0) && string.IsNullOrWhiteSpace(senderNyxIdAccessToken))
+        if ((headers == null || headers.Count == 0) && credential == null)
             return request;
 
         var cloned = request.Clone();
@@ -125,15 +129,24 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
             }
         }
 
-        if (!string.IsNullOrWhiteSpace(senderNyxIdAccessToken))
+        if (credential != null)
         {
-            var token = senderNyxIdAccessToken.Trim();
-            var control = LLMControlContextMapper.FromPayload(chatRequest.LlmControl) with
+            var token = credential.AccessToken;
+            var existingControl = LLMControlContextMapper.FromPayload(chatRequest.LlmControl);
+            var control = existingControl with
             {
-                SenderNyxIdAccessToken = token,
+                NyxIdAccessToken = credential.Role == CredentialRole.ScopeOwner
+                    ? token
+                    : existingControl.NyxIdAccessToken,
+                NyxIdOrgToken = credential.Role == CredentialRole.ScopeOwner
+                    ? token
+                    : existingControl.NyxIdOrgToken,
+                SenderNyxIdAccessToken = credential.Role == CredentialRole.Sender
+                    ? token
+                    : existingControl.SenderNyxIdAccessToken,
             };
             chatRequest.LlmControl = control.ToPayload();
-            if (projectSenderNyxIdAccessTokenToWorkflowCallerCredential)
+            if (projectNyxIdAccessTokenToWorkflowCallerCredential)
                 chatRequest.ConnectorHttpAuthorization = $"Bearer {token}";
         }
 
@@ -141,14 +154,29 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         return cloned;
     }
 
-    private static string NormalizeSenderNyxIdAccessToken(string? accessToken)
+    private static string NormalizeNyxIdAccessToken(string? accessToken, string credentialSubject)
     {
         var parsed = WorkflowCallerCredentialTokens.ParseOptional(accessToken);
         if (parsed.IsMissing)
-            throw new InvalidOperationException("Scheduled service invocation sender NyxID credential exchange returned an empty access token.");
+            throw new InvalidOperationException($"Scheduled service invocation {credentialSubject} NyxID credential exchange returned an empty access token.");
         if (parsed.IsInvalid)
-            throw new InvalidOperationException("Scheduled service invocation sender NyxID credential exchange returned an invalid access token.");
+            throw new InvalidOperationException($"Scheduled service invocation {credentialSubject} NyxID credential exchange returned an invalid access token.");
 
         return parsed.NormalizedBearerToken!;
     }
+
+    private enum CredentialRole
+    {
+        Sender,
+        ScopeOwner,
+    }
+
+    private sealed record CredentialExchange(
+        CredentialRole Role,
+        ScheduledServiceInvocationCredentialExchangeResult Result);
+
+    private sealed record ExchangedCredential(CredentialRole Role, string AccessToken);
+
+    private static string ToErrorSubject(CredentialRole role) =>
+        role == CredentialRole.ScopeOwner ? "scope owner" : "sender";
 }

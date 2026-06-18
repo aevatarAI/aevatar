@@ -340,7 +340,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                     request,
                     ToRuntimeAuth(State.Target?.ServiceInvocation?.Auth),
                     ReadOnlyCopy(prepared.Headers ?? EmptyHeaders),
-                    ProjectSenderNyxIdAccessTokenToWorkflowCallerCredential:
+                    ProjectNyxIdAccessTokenToWorkflowCallerCredential:
                         State.ScheduleKind == ScheduledDispatchScheduleKindState.Workflow),
                 ct);
             return new ScheduledDispatchReceipt(

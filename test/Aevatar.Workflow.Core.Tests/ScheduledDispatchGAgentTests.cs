@@ -887,7 +887,7 @@ public sealed class ScheduledDispatchGAgentTests
         auth.SenderNyxId.Subject.Platform.Should().Be("lark");
         auth.SenderNyxId.Subject.Tenant.Should().Be("tenant-1");
         auth.SenderNyxId.Scope.Should().Be("proxy");
-        serviceInvocationDispatch.ProjectSenderNyxIdAccessTokenToWorkflowCallerCredentials.Should()
+        serviceInvocationDispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredentials.Should()
             .ContainSingle()
             .Which.Should().BeFalse();
         var request = serviceInvocationDispatch.Requests.Should().ContainSingle().Which;
@@ -948,7 +948,7 @@ public sealed class ScheduledDispatchGAgentTests
 
         serviceInvocationDispatch.Auths.Should().ContainSingle()
             .Which!.SenderNyxId!.Subject.ExternalUserId.Should().Be("ou-user-1");
-        serviceInvocationDispatch.ProjectSenderNyxIdAccessTokenToWorkflowCallerCredentials.Should()
+        serviceInvocationDispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredentials.Should()
             .ContainSingle()
             .Which.Should().BeTrue();
         serviceInvocationDispatch.Requests.Should().ContainSingle();
@@ -1541,7 +1541,7 @@ public sealed class ScheduledDispatchGAgentTests
         public List<ServiceInvocationRequest> Requests { get; } = [];
         public List<ScheduledServiceInvocationAuth?> Auths { get; } = [];
         public List<IReadOnlyDictionary<string, string>?> Headers { get; } = [];
-        public List<bool> ProjectSenderNyxIdAccessTokenToWorkflowCallerCredentials { get; } = [];
+        public List<bool> ProjectNyxIdAccessTokenToWorkflowCallerCredentials { get; } = [];
 
         public Func<ScheduledServiceInvocationDispatchRequest, ScheduledServiceInvocationDispatchReceipt> ReceiptFactory { get; set; } =
             dispatch => new ScheduledServiceInvocationDispatchReceipt(
@@ -1562,8 +1562,8 @@ public sealed class ScheduledDispatchGAgentTests
             Headers.Add(dispatch.Headers == null
                 ? null
                 : new Dictionary<string, string>(dispatch.Headers, StringComparer.Ordinal));
-            ProjectSenderNyxIdAccessTokenToWorkflowCallerCredentials.Add(
-                dispatch.ProjectSenderNyxIdAccessTokenToWorkflowCallerCredential);
+            ProjectNyxIdAccessTokenToWorkflowCallerCredentials.Add(
+                dispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredential);
             if (DispatchException != null)
                 throw DispatchException;
 

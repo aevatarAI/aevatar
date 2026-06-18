@@ -202,7 +202,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
     }
 
     [Fact]
-    public async Task ScheduledServiceInvocationDispatchPort_WithScopeOwnerAuth_ShouldExchangeOwnerTokenWithoutRequestSubject()
+    public async Task ScheduledServiceInvocationDispatchPort_WithScopeOwnerAuth_ShouldInjectOwnerTokenIntoOwnerLlmControlFields()
     {
         var invocationPort = new RecordingServiceInvocationPort();
         var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("owner-token");
@@ -225,7 +225,53 @@ public sealed class ScheduledDispatchServiceInvocationTests
         credentialExchange.ScopeOwnerServiceIdentities.Should().ContainSingle()
             .Which.TenantId.Should().Be("owner-nyx-user");
         var invokedChat = invocationPort.Requests.Should().ContainSingle().Which.Payload.Unpack<ChatRequestEvent>();
-        invokedChat.LlmControl.SenderNyxIdAccessToken.Should().Be("owner-token");
+        invokedChat.LlmControl.NyxIdAccessToken.Should().Be("owner-token");
+        invokedChat.LlmControl.NyxIdOrgToken.Should().Be("owner-token");
+        invokedChat.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
+        invokedChat.ConnectorHttpAuthorization.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ScheduledServiceInvocationDispatchPort_WithScopeOwnerAuthAndWorkflowProjection_ShouldProjectOwnerTokenToConnectorAuthorization()
+    {
+        var invocationPort = new RecordingServiceInvocationPort();
+        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("owner-token");
+        var port = new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange);
+        var original = new ServiceInvocationRequest
+        {
+            CommandId = "cmd-invoke",
+            CorrelationId = "corr-invoke",
+            Identity = new ServiceIdentity { TenantId = "owner-nyx-user", ServiceId = "svc" },
+            Payload = Any.Pack(new ChatRequestEvent
+            {
+                Prompt = "hello",
+                ConnectorHttpAuthorization = "Bearer stored-token",
+                LlmControl = new LLMControlContextPayload
+                {
+                    ModelOverride = "sonnet",
+                    SenderNyxIdAccessToken = "existing-sender-token",
+                },
+            }),
+        };
+        var auth = new ScheduledServiceInvocationAuth(
+            ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource("proxy"));
+
+        await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
+            original,
+            auth,
+            ProjectNyxIdAccessTokenToWorkflowCallerCredential: true));
+
+        var invokedChat = invocationPort.Requests.Should().ContainSingle().Which.Payload.Unpack<ChatRequestEvent>();
+        invokedChat.LlmControl.NyxIdAccessToken.Should().Be("owner-token");
+        invokedChat.LlmControl.NyxIdOrgToken.Should().Be("owner-token");
+        invokedChat.LlmControl.SenderNyxIdAccessToken.Should().Be("existing-sender-token");
+        invokedChat.LlmControl.ModelOverride.Should().Be("sonnet");
+        invokedChat.ConnectorHttpAuthorization.Should().Be("Bearer owner-token");
+        var originalChat = original.Payload.Unpack<ChatRequestEvent>();
+        originalChat.LlmControl.NyxIdAccessToken.Should().BeEmpty();
+        originalChat.LlmControl.NyxIdOrgToken.Should().BeEmpty();
+        originalChat.LlmControl.SenderNyxIdAccessToken.Should().Be("existing-sender-token");
+        originalChat.ConnectorHttpAuthorization.Should().Be("Bearer stored-token");
     }
 
     [Fact]
@@ -264,7 +310,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
                 ["connector.http.authorization"] = "Bearer header-token",
                 ["schedule"] = "scheduled",
             },
-            ProjectSenderNyxIdAccessTokenToWorkflowCallerCredential: true));
+            ProjectNyxIdAccessTokenToWorkflowCallerCredential: true));
 
         credentialExchange.Sources.Should().ContainSingle()
             .Which.Subject.ExternalUserId.Should().Be("ou-user-1");
