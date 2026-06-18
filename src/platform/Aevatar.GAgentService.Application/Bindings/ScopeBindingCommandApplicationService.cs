@@ -80,6 +80,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         {
             var updateSpec = CloneServiceDefinition(desiredBinding.ServiceDefinition);
             updateSpec.PolicyIds.Add(existingService.PolicyIds);
+            ApplyExistingExternalExposure(updateSpec, existingService.ExternalExposure);
             await _serviceCommandPort.UpdateServiceAsync(new UpdateServiceDefinitionCommand
             {
                 Spec = updateSpec,
@@ -330,6 +331,8 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         CancellationToken ct)
     {
         var workflowBundle = await ParseWorkflowBundleAsync(request.Workflow?.WorkflowYamls, ct);
+        var workflowId = ScopeWorkflowCapabilityConventions.NormalizeOptional(request.Workflow?.WorkflowId) ??
+                         ScopeWorkflowCapabilityOptions.NormalizeRequired(identity.ServiceId, nameof(identity.ServiceId));
         var definitionActorIdPrefix = ScopeWorkflowCapabilityConventions.BuildDefaultDefinitionActorIdPrefix(_options, normalizedScopeId);
         var displayName = ScopeWorkflowCapabilityConventions.ResolveDisplayName(
             request.DisplayName,
@@ -373,6 +376,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                     WorkflowName: workflowBundle.EntryWorkflowName,
                     DefinitionActorIdPrefix: definitionActorIdPrefix,
                     Workflow: new ScopeBindingWorkflowResult(
+                        workflowId,
                         workflowBundle.EntryWorkflowName,
                         definitionActorIdPrefix),
                     ExpectedDeploymentId: expectedDeploymentId));
@@ -454,7 +458,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         var gagent = request.GAgent
             ?? throw new InvalidOperationException("gagent is required for implementationKind 'gagent'.");
         var agentKind = NormalizeGAgentKind(gagent);
-        var actorTypeName = NormalizeLegacyActorTypeName(gagent.ActorTypeName, agentKind);
+        var diagnosticClrTypeName = ResolveDiagnosticClrTypeName(agentKind);
 
         // Start with caller-supplied endpoints, then ensure a chat endpoint always exists.
         var endpointSpecs = (gagent.Endpoints ?? [])
@@ -464,7 +468,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
             endpointSpecs.Insert(0, BuildChatEndpointSpec());
         var displayName = ScopeWorkflowCapabilityConventions.ResolveDisplayName(
             request.DisplayName,
-            actorTypeName.Split(',')[0]);
+            agentKind);
         var serviceDefinition = new ServiceDefinitionSpec
         {
             Identity = identity.Clone(),
@@ -483,7 +487,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                     ImplementationKind = ServiceImplementationKind.Static,
                     StaticSpec = new StaticServiceRevisionSpec
                     {
-                        ActorTypeName = actorTypeName,
+                        ActorTypeName = diagnosticClrTypeName,
                         AgentKind = agentKind,
                     },
                 };
@@ -499,7 +503,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                     ScopeBindingImplementationKind.GAgent,
                     $"gagent-service:static-runtime:{expectedDeploymentId}",
                     GAgent: new ScopeBindingGAgentResult(
-                        actorTypeName),
+                        diagnosticClrTypeName),
                     ExpectedDeploymentId: expectedDeploymentId));
     }
 
@@ -509,23 +513,12 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         if (!string.IsNullOrWhiteSpace(agentKind))
             return agentKind;
 
-        var actorTypeName = ScopeWorkflowCapabilityConventions.NormalizeOptional(gagent.ActorTypeName);
-        if (string.IsNullOrWhiteSpace(actorTypeName))
-            ScopeWorkflowCapabilityOptions.NormalizeRequired(string.Empty, nameof(gagent.AgentKind));
-
-        if (_agentKindRegistry != null &&
-            _agentKindRegistry.TryResolveKindByClrTypeName(actorTypeName!, out var resolvedKind))
-            return resolvedKind;
-
-        return string.Empty;
+        ScopeWorkflowCapabilityOptions.NormalizeRequired(string.Empty, nameof(gagent.AgentKind));
+        throw new InvalidOperationException("gagent agentKind is required.");
     }
 
-    private string NormalizeLegacyActorTypeName(string? actorTypeName, string agentKind)
+    private string ResolveDiagnosticClrTypeName(string agentKind)
     {
-        var normalizedActorTypeName = ScopeWorkflowCapabilityConventions.NormalizeOptional(actorTypeName);
-        if (!string.IsNullOrWhiteSpace(normalizedActorTypeName))
-            return normalizedActorTypeName;
-
         if (_agentKindRegistry != null)
         {
             var implementation = _agentKindRegistry.Resolve(agentKind);
@@ -621,7 +614,25 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         };
         clone.Endpoints.Add(source.Endpoints.Select(CloneEndpointSpec));
         clone.PolicyIds.Add(source.PolicyIds);
+        if (source.ExternalExposure != null)
+            clone.ExternalExposure = source.ExternalExposure.Clone();
         return clone;
+    }
+
+    private static void ApplyExistingExternalExposure(
+        ServiceDefinitionSpec spec,
+        ServiceExternalExposureSnapshot? existingExternalExposure)
+    {
+        if (existingExternalExposure == null)
+            return;
+
+        spec.ExternalExposure = new ExternalExposure
+        {
+            NyxidSlug = existingExternalExposure.NyxidSlug ?? string.Empty,
+            RegisteredAt = existingExternalExposure.RegisteredAt.HasValue
+                ? Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(existingExternalExposure.RegisteredAt.Value)
+                : null,
+        };
     }
 
     private static ServiceEndpointSpec CloneEndpointSpec(ServiceEndpointSpec spec) =>

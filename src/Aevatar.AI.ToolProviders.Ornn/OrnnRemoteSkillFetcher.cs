@@ -30,7 +30,10 @@ public sealed class OrnnRemoteSkillFetcher : IRemoteSkillFetcher
 
         if (skill.Files != null && skill.Files.Count > 0)
         {
-            if (skill.Files.TryGetValue("SKILL.md", out var skillMd))
+            var skillMd = skill.Files
+                .FirstOrDefault(f => f.Key.Equals("SKILL.md", StringComparison.OrdinalIgnoreCase))
+                .Value;
+            if (skillMd is not null)
                 instructions = skillMd;
 
             var others = skill.Files
@@ -50,6 +53,10 @@ public sealed class OrnnRemoteSkillFetcher : IRemoteSkillFetcher
         var workflows = DiscoverWorkflows(skill.Files, parsed.WorkflowEntry);
         if (workflows.Count == 0)
             workflows = extraction.Workflows;
+        var scriptExtraction = new SkillScriptExtractor().ExtractFromFiles(
+            parsed.Name ?? skill.Name ?? nameOrId,
+            parsed.ScriptEntry,
+            extraction.RemainingFiles);
 
         return new SkillDefinition
         {
@@ -62,8 +69,9 @@ public sealed class OrnnRemoteSkillFetcher : IRemoteSkillFetcher
             WhenToUse = parsed.WhenToUse,
             IsModelInvocable = parsed.IsModelInvocable,
             IsUserInvocable = parsed.IsUserInvocable,
-            AssociatedFiles = extraction.RemainingFiles,
+            AssociatedFiles = scriptExtraction.RemainingFiles,
             Workflows = workflows,
+            Scripts = scriptExtraction.Scripts,
         };
     }
 
@@ -85,19 +93,47 @@ public sealed class OrnnRemoteSkillFetcher : IRemoteSkillFetcher
         if (workflowFiles.Length == 0)
             return [];
 
-        var defaultWorkflowId = Path.GetFileNameWithoutExtension(workflowFiles[0].Key);
+        var defaultWorkflowId = GetWorkflowFileId(workflowFiles[0].Key);
         var workflowId = string.IsNullOrWhiteSpace(workflowEntry)
             ? defaultWorkflowId
-            : Path.GetFileNameWithoutExtension(workflowEntry.Trim());
+            : GetWorkflowFileId(workflowEntry.Trim());
+        var orderedWorkflowFiles = OrderWorkflowFilesByEntry(workflowFiles, workflowId);
 
         return
         [
             new SkillWorkflowDescriptor
             {
                 WorkflowId = workflowId,
-                WorkflowYamls = workflowFiles.Select(static file => file.Value.Trim()).ToArray(),
+                WorkflowYamls = orderedWorkflowFiles.Select(static file => file.Value.Trim()).ToArray(),
             }
         ];
+    }
+
+    private static IReadOnlyList<KeyValuePair<string, string>> OrderWorkflowFilesByEntry(
+        IReadOnlyList<KeyValuePair<string, string>> workflowFiles,
+        string workflowId)
+    {
+        if (string.IsNullOrWhiteSpace(workflowId))
+            return workflowFiles;
+
+        var entry = workflowFiles.FirstOrDefault(file =>
+            string.Equals(
+                GetWorkflowFileId(file.Key),
+                workflowId,
+                StringComparison.Ordinal));
+        if (entry.Key == null)
+            return workflowFiles;
+
+        return workflowFiles
+            .OrderByDescending(file => string.Equals(file.Key, entry.Key, StringComparison.Ordinal))
+            .ThenBy(static file => file.Key, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static string GetWorkflowFileId(string path)
+    {
+        var fileName = path.Split(PathSeparators, StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? path;
+        return Path.GetFileNameWithoutExtension(fileName);
     }
 
     private static bool IsWorkflowYamlPath(string path)

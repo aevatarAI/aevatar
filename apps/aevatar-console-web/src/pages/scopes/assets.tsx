@@ -708,7 +708,7 @@ const TeamAssetsPage: React.FC = () => {
   return (
     <PageContainer
       className="aevatar-page-shell-document"
-      content="Team home now lives under /teams. Keep this page for older asset deep links, source inspection, and catalog detail while the team-first flow finishes taking over."
+      content="Team home now lives under /scopes/:scopeId/teams. Keep this page for older asset deep links, source inspection, and catalog detail while the scoped team flow finishes taking over."
       extra={[
         <Button
           key="open-studio"
@@ -739,8 +739,6 @@ const TeamAssetsPage: React.FC = () => {
               buildRuntimeGAgentsHref({
                 scopeId: activeDraft.scopeId.trim(),
                 actorId: currentDefaultRouteRevision?.primaryActorId || undefined,
-                actorTypeName:
-                  currentDefaultRouteRevision?.staticActorTypeName || undefined,
               }),
             )
           }

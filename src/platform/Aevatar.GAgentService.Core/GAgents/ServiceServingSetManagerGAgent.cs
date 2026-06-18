@@ -1,4 +1,6 @@
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgentService.Abstractions;
@@ -9,12 +11,17 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Core.GAgents;
 
+[GAgent("gagent.service.serving-set-manager")]
 public sealed class ServiceServingSetManagerGAgent : GAgentBase<ServiceServingSetState>
 {
+    private readonly IActorDispatchPort _dispatchPort;
     private readonly IServiceServingTargetResolver _targetResolver;
 
-    public ServiceServingSetManagerGAgent(IServiceServingTargetResolver targetResolver)
+    public ServiceServingSetManagerGAgent(
+        IActorDispatchPort dispatchPort,
+        IServiceServingTargetResolver targetResolver)
     {
+        _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _targetResolver = targetResolver ?? throw new ArgumentNullException(nameof(targetResolver));
         InitializeId();
     }
@@ -36,6 +43,7 @@ public sealed class ServiceServingSetManagerGAgent : GAgentBase<ServiceServingSe
             Reason = command.Reason ?? string.Empty,
             UpdatedAt = Timestamp.FromDateTime(DateTime.UtcNow),
         });
+        await DispatchInvocationServingObservationAsync(CancellationToken.None);
     }
 
     [EventHandler]
@@ -54,6 +62,7 @@ public sealed class ServiceServingSetManagerGAgent : GAgentBase<ServiceServingSe
             Reason = command.Reason ?? string.Empty,
             UpdatedAt = Timestamp.FromDateTime(DateTime.UtcNow),
         });
+        await DispatchInvocationServingObservationAsync(CancellationToken.None);
     }
 
     protected override ServiceServingSetState TransitionState(ServiceServingSetState current, IMessage evt) =>
@@ -124,5 +133,36 @@ public sealed class ServiceServingSetManagerGAgent : GAgentBase<ServiceServingSe
             AllocationWeight = source.AllocationWeight,
             ServingState = source.ServingState,
             EnabledEndpointIds = { source.EnabledEndpointIds },
+        };
+
+    private Task DispatchInvocationServingObservationAsync(CancellationToken ct)
+    {
+        var identity = State.Identity;
+        if (identity == null || string.IsNullOrWhiteSpace(identity.ServiceId))
+            return Task.CompletedTask;
+
+        var actorId = ServiceActorIds.InvocationCatalog(identity);
+        return _dispatchPort.DispatchAsync(
+            actorId,
+            CreateEnvelope(
+                actorId,
+                new ObserveServiceInvocationServingCommand
+                {
+                    Identity = identity.Clone(),
+                    ServingTargets = { State.Targets.Select(CloneTarget) },
+                    SourceServingVersion = State.LastAppliedEventVersion,
+                    ObservedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+                }),
+            ct);
+    }
+
+    private static EventEnvelope CreateEnvelope(string actorId, IMessage payload) =>
+        new()
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(payload),
+            Route = EnvelopeRouteSemantics.CreateDirect("gagent-service.serving-set", actorId),
+            Propagation = new EnvelopePropagation(),
         };
 }

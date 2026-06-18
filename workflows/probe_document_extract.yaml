@@ -1,0 +1,48 @@
+name: probe_document_extract
+description: >-
+  Capability probe — read-file/document_extract: the user sends a file (PDF/DOCX/txt/json/md/csv)
+  plus a trigger, the workflow's document_extract step extracts its text and returns it as the run
+  output. Used to verify the chat-attachment file -> workflow document_extract path end to end
+  before running real file-dependent workflows (petty-cash / invoice / resume / reimbursement).
+when_to_use: Use to verify that an attached file reaches a workflow document_extract step and its text is extracted (returns extracted text, not a fileRef/argument error).
+
+# KNOWN BOUNDARY being probed (2026-06-12): the chat file's fileRef is carried on the run's
+# InputFileRefs channel (WorkflowExecutionKernel state), but ToolCallModule does not inject it into
+# the tool request, there is no ${input_file_refs} expression, and document_extract only reads a
+# fileRef from its own arguments. So this step omits fileRef on purpose to test whether the tool
+# can fall back to the run's input file. PASS = extracted text returned; FAIL = a fileRef/argument
+# error, which confirms the gap (fix: thread CurrentStepInputFileRefs into WorkflowToolExecutionRequest
+# and let document_extract fall back to it). Supported: text/plain, application/json, text/markdown,
+# text/csv, application/pdf, DOCX. No image OCR.
+
+roles:
+  - id: file_probe
+    name: File Probe
+    system_prompt: >-
+      You report a document_extract probe result. You receive the extraction tool output as input.
+      Output STRICT JSON only, no markdown fences: {"extracted": true|false, "preview":
+      "<first 200 chars of extracted text, else empty>", "note": "<error text verbatim if extraction
+      failed, else empty>"}. Never invent file content.
+
+steps:
+  - id: extract_file
+    type: tool_call
+    parameters:
+      tool: document_extract
+      # fileRef omitted on purpose — probing whether document_extract falls back to the run's
+      # input file. maxChars kept small; this is a read-only extraction.
+      arguments: '{"maxChars":"2000"}'
+    next: report
+
+  - id: report
+    type: llm_call
+    target_role: file_probe
+    parameters:
+      prompt_prefix: "Report this document_extract output as the probe result:"
+    next: summary
+
+  - id: summary
+    type: assign
+    parameters:
+      target: final_summary
+      value: "📄 document_extract probe → ${steps.report.output}"

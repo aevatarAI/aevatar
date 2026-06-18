@@ -2,6 +2,7 @@ import { buildStudioRoute } from '@/shared/studio/navigation';
 
 type TeamDetailTab =
   | 'overview'
+  | 'automations'
   | 'members';
 
 type TeamToStudioMode = 'create-member' | 'edit-member' | 'build-member';
@@ -36,6 +37,7 @@ function parseTeamTab(
 ): TeamDetailTab {
   switch (trimOptional(value).toLowerCase()) {
     case 'overview':
+    case 'automations':
     case 'members':
       return trimOptional(value).toLowerCase() as TeamDetailTab;
     default:
@@ -64,13 +66,19 @@ function buildHref(
 }
 
 export function buildTeamsHref(): string {
-  return '/teams';
+  return '/scopes';
 }
 
 export function buildTeamCreateHref(options?: {
+  scopeId?: string;
   teamName?: string;
 }): string {
-  return buildHref('/teams/new', {
+  const scopeId = trimOptional(options?.scopeId);
+  const pathname = scopeId
+    ? `/scopes/${encodeURIComponent(scopeId)}/teams/new`
+    : buildTeamsHref();
+
+  return buildHref(pathname, {
     teamName: options?.teamName,
   });
 }
@@ -92,13 +100,11 @@ export function buildTeamDetailHref(options: {
 
   const teamId = trimOptional(options.teamId);
   if (!teamId) {
-    return buildHref(buildTeamsHref(), {
-      scopeId,
-    });
+    return `/scopes/${encodeURIComponent(scopeId)}/teams`;
   }
 
   return buildHref(
-    `/teams/${encodeURIComponent(scopeId)}/${encodeURIComponent(teamId)}`,
+    `/scopes/${encodeURIComponent(scopeId)}/teams/${encodeURIComponent(teamId)}`,
     {
       memberId: options.memberId,
       workflowId: options.workflowId,
@@ -161,29 +167,132 @@ export function buildTeamStudioHref(options: {
   });
 }
 
+export function buildTeamMemberWorkflowStudioHref(options: {
+  memberId?: string;
+  mode: 'create-member' | 'edit-member';
+  scopeId: string;
+  teamId: string;
+  workflowId?: string;
+}): string {
+  const scopeId = trimOptional(options.scopeId);
+  const teamId = trimOptional(options.teamId);
+  if (!scopeId || !teamId) {
+    return buildTeamsHref();
+  }
+
+  if (options.mode === 'create-member') {
+    return `/scopes/${encodeURIComponent(scopeId)}/teams/${encodeURIComponent(teamId)}/members/new/workflow`;
+  }
+
+  const memberId = trimOptional(options.memberId);
+  if (!memberId) {
+    return buildTeamDetailHref({
+      scopeId,
+      tab: 'members',
+      teamId,
+    });
+  }
+
+  return buildHref(
+    `/scopes/${encodeURIComponent(scopeId)}/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(memberId)}/workflow`,
+    {
+      workflowId: options.workflowId,
+    },
+  );
+}
+
+export function buildTeamMemberInvokeHref(options: {
+  memberId?: string;
+  scopeId: string;
+  teamId: string;
+}): string {
+  const scopeId = trimOptional(options.scopeId);
+  const teamId = trimOptional(options.teamId);
+  if (!scopeId || !teamId) {
+    return buildTeamsHref();
+  }
+
+  const memberId = trimOptional(options.memberId);
+  if (!memberId) {
+    return buildTeamDetailHref({
+      scopeId,
+      tab: 'members',
+      teamId,
+    });
+  }
+
+  return `/scopes/${encodeURIComponent(scopeId)}/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(memberId)}/invoke`;
+}
+
+export function buildTeamMemberAutomationsHref(options: {
+  memberId?: string;
+  scopeId: string;
+  teamId: string;
+}): string {
+  const scopeId = trimOptional(options.scopeId);
+  const teamId = trimOptional(options.teamId);
+  if (!scopeId || !teamId) {
+    return buildTeamsHref();
+  }
+
+  const memberId = trimOptional(options.memberId);
+  if (!memberId) {
+    return buildTeamDetailHref({
+      scopeId,
+      tab: 'automations',
+      teamId,
+    });
+  }
+
+  return `/scopes/${encodeURIComponent(scopeId)}/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(memberId)}/automations`;
+}
+
 export function readTeamDetailRouteState(
   search = typeof window === 'undefined' ? '' : window.location.search,
   pathname = typeof window === 'undefined' ? '' : window.location.pathname,
 ): TeamDetailRouteState {
   const params = new URLSearchParams(search);
   const pathnameSegments = pathname.split('/').filter(Boolean);
-  const isTeamPath = pathnameSegments[0] === 'teams';
-  const scopeIdFromPath =
-    isTeamPath && pathnameSegments[1]
-      ? decodePathSegment(pathnameSegments[1])
-      : '';
-  const teamIdFromPath =
-    isTeamPath && pathnameSegments[2]
-      ? decodePathSegment(pathnameSegments[2])
+  const hasScopedTeamPath =
+    pathnameSegments[0] === 'scopes' && pathnameSegments[2] === 'teams';
+  const scopedTeamsIndex = hasScopedTeamPath ? 2 : -1;
+  const scopedMembersIndex =
+    scopedTeamsIndex >= 0
+      ? pathnameSegments.indexOf('members', scopedTeamsIndex + 2)
+      : -1;
+  const membersIndex = scopedMembersIndex;
+  let scopeIdFromPath = '';
+  if (hasScopedTeamPath && pathnameSegments[1]) {
+    scopeIdFromPath = decodePathSegment(pathnameSegments[1]);
+  }
+
+  let teamIdFromPath = '';
+  if (scopedTeamsIndex >= 0 && pathnameSegments[scopedTeamsIndex + 1]) {
+    teamIdFromPath = decodePathSegment(pathnameSegments[scopedTeamsIndex + 1]);
+  }
+
+  const memberIdFromPath =
+    membersIndex >= 0 && pathnameSegments[membersIndex + 1]
+      ? decodePathSegment(pathnameSegments[membersIndex + 1])
       : '';
   const defaultTab: TeamDetailTab = 'overview';
+  const memberId =
+    memberIdFromPath === 'new'
+      ? ''
+      : memberIdFromPath || trimOptional(params.get('memberId'));
+  const memberSurfaceFromPath =
+    membersIndex >= 0 && pathnameSegments[membersIndex + 2]
+      ? decodePathSegment(pathnameSegments[membersIndex + 2])
+      : '';
+  const pathTab =
+    memberSurfaceFromPath === 'automations' ? 'automations' : undefined;
 
   return {
-    memberId: trimOptional(params.get('memberId')),
+    memberId,
     runId: trimOptional(params.get('runId')),
     scopeId: scopeIdFromPath || trimOptional(params.get('scopeId')),
     serviceId: trimOptional(params.get('serviceId')),
-    tab: parseTeamTab(params.get('tab'), defaultTab),
+    tab: parseTeamTab(pathTab ?? params.get('tab'), defaultTab),
     teamId: teamIdFromPath || trimOptional(params.get('teamId')),
     testTeam: ['1', 'true', 'yes'].includes(trimOptional(params.get('testTeam')).toLowerCase()),
     workflowId: trimOptional(params.get('workflowId')),

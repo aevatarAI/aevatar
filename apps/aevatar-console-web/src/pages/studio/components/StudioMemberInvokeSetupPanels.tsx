@@ -3,7 +3,7 @@ import {
   PlayCircleOutlined,
   StopOutlined,
 } from '@ant-design/icons';
-import { Button, Collapse, Input, Typography } from 'antd';
+import { Button, Input, Typography } from 'antd';
 import React from 'react';
 import { AevatarPanel } from '@/shared/ui/aevatarPageShells';
 import type { InvokeResultState } from './StudioMemberInvokePanel.currentRun';
@@ -21,15 +21,12 @@ type StudioMemberInvokeComposerPanelProps = {
   readonly invokeStatus: InvokeResultState['status'];
   readonly isHistoricalRunSelected?: boolean;
   readonly isChatEndpoint: boolean;
-  readonly layout?: 'panel' | 'dock';
-  readonly payloadBase64: string;
-  readonly payloadTypeUrl: string;
+  readonly layout?: 'panel' | 'dock' | 'member-run';
   readonly prompt: string;
+  readonly currentRunPrompt?: string;
   readonly onAbort: () => void;
   readonly onClear: () => void;
   readonly onInvoke: () => void;
-  readonly onPayloadBase64Change: (value: string) => void;
-  readonly onPayloadTypeUrlChange: (value: string) => void;
   readonly onPromptChange: (value: string) => void;
 };
 
@@ -45,6 +42,13 @@ const dockComposerStyle: React.CSSProperties = {
   background: studioInvokeColors.panel,
   display: 'grid',
   gap: 6,
+  minWidth: 0,
+};
+
+const memberRunComposerStyle: React.CSSProperties = {
+  background: 'transparent',
+  display: 'grid',
+  gap: 8,
   minWidth: 0,
 };
 
@@ -69,15 +73,64 @@ const dockComposerSecondaryButtonStyle: React.CSSProperties = {
   flex: '0 0 auto',
 };
 
+const memberRunInputStyle: React.CSSProperties = {
+  background: '#fbfcfe',
+  borderColor: '#d8dee9',
+  borderRadius: 10,
+  fontSize: 14,
+  lineHeight: 1.7,
+  minHeight: 64,
+  padding: '12px 14px',
+};
+
+const memberRunLauncherRowStyle: React.CSSProperties = {
+  alignItems: 'stretch',
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 10,
+  minWidth: 0,
+};
+
+const memberRunLauncherInputStyle: React.CSSProperties = {
+  ...memberRunInputStyle,
+  flex: '1 1 460px',
+  minWidth: 260,
+};
+
+const memberRunActionsStyle: React.CSSProperties = {
+  alignItems: 'center',
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 10,
+  justifyContent: 'flex-end',
+};
+
+const memberRunInlineActionsStyle: React.CSSProperties = {
+  ...memberRunActionsStyle,
+  alignContent: 'stretch',
+  flex: '0 0 auto',
+};
+
+const memberRunPrimaryButtonStyle: React.CSSProperties = {
+  minHeight: 42,
+  minWidth: 128,
+};
+
+const memberRunSecondaryButtonStyle: React.CSSProperties = {
+  minHeight: 42,
+  minWidth: 92,
+};
+
 const promptLabelRowStyle: React.CSSProperties = {
   alignItems: 'center',
   display: 'flex',
+  gap: 8,
   justifyContent: 'space-between',
   minWidth: 0,
 };
 
 const promptKickerStyle: React.CSSProperties = {
-  color: studioInvokeColors.accent,
+  color: '#475569',
   fontSize: 10.5,
   fontWeight: 800,
   letterSpacing: 0,
@@ -91,17 +144,56 @@ const promptDockHintStyle: React.CSSProperties = {
   lineHeight: '16px',
 };
 
-const typedPayloadGridStyle: React.CSSProperties = {
+const memberRunStatePillStyle: React.CSSProperties = {
+  background: '#ecfdf5',
+  border: '1px solid #bbf7d0',
+  borderRadius: 999,
+  color: '#047857',
+  flex: '0 0 auto',
+  fontSize: 11,
+  fontWeight: 700,
+  lineHeight: '18px',
+  padding: '2px 8px',
+  whiteSpace: 'nowrap',
+};
+
+const submittedReceiptStyle: React.CSSProperties = {
+  alignItems: 'flex-start',
+  background: '#f8fafc',
+  border: '1px solid #dbe3ee',
+  borderRadius: 10,
   display: 'grid',
-  gap: 8,
-  minWidth: 0,
+  flex: '1 1 460px',
+  gap: 4,
+  minHeight: 42,
+  minWidth: 260,
+  padding: '10px 12px',
+};
+
+const submittedReceiptLabelStyle: React.CSSProperties = {
+  color: '#64748b',
+  fontSize: 11,
+  fontWeight: 800,
+  letterSpacing: 0,
+  lineHeight: '14px',
+  textTransform: 'uppercase',
+};
+
+const submittedReceiptTextStyle: React.CSSProperties = {
+  color: '#0f172a',
+  fontSize: 13,
+  lineHeight: '18px',
+  maxHeight: 54,
+  overflow: 'hidden',
+  overflowWrap: 'anywhere',
+  wordBreak: 'break-word',
 };
 
 const composerGuidanceStyle: React.CSSProperties = {
-  background: studioInvokeColors.surfaceActive,
-  border: `1px solid ${studioInvokeColors.borderStrong}`,
+  background: '#f8fafc',
+  border: '1px solid #dbe3ee',
   borderRadius: 8,
-  color: studioInvokeColors.textSoft,
+  color: '#475569',
   display: 'grid',
   gap: 2,
   minWidth: 0,
@@ -119,50 +211,166 @@ export const StudioMemberInvokeComposerPanel: React.FC<
   isHistoricalRunSelected = false,
   isChatEndpoint,
   layout = 'panel',
+  currentRunPrompt,
   onAbort,
   onClear,
   onInvoke,
-  onPayloadBase64Change,
-  onPayloadTypeUrlChange,
   onPromptChange,
-  payloadBase64,
-  payloadTypeUrl,
   prompt,
 }) => {
   const isRunning = invokeStatus === 'running';
+  const isDockLayout = layout === 'dock';
+  const isMemberRunLayout = layout === 'member-run';
+  const inputLocked = isMemberRunLayout && isRunning;
+  const displayedPrompt = inputLocked ? currentRunPrompt || prompt : prompt;
   const promptPlaceholder =
-    defaultPrompt || t("pages.studio.studiomemberinvokesetuppanels.prompt.invoke", "Enter a prompt to start an independent Invoke.");
-  const primaryButtonLabel = isRunning ? 'Stop' : 'Invoke';
+    defaultPrompt ||
+    (isMemberRunLayout
+      ? t(
+          "pages.studio.studiomemberinvokesetuppanels.member.run.prompt.invoke",
+          "Describe the task or input for this run.",
+        )
+      : t(
+          "pages.studio.studiomemberinvokesetuppanels.prompt.invoke",
+          "Describe what the workflow should do.",
+        ));
+  const primaryButtonLabel = isRunning
+    ? isMemberRunLayout
+      ? t(
+          "pages.studio.studiomemberinvokesetuppanels.stop.run",
+          "Stop run",
+        )
+      : t(
+          "pages.studio.studiomemberinvokesetuppanels.stop.current.run",
+          "Stop",
+        )
+    : isMemberRunLayout
+      ? t(
+          "pages.studio.studiomemberinvokesetuppanels.start.run",
+          "Start run",
+        )
+      : t(
+          "pages.studio.studiomemberinvokesetuppanels.run.workflow",
+          "Run workflow",
+        );
   const primaryButtonIcon = isRunning ? (
     <StopOutlined />
   ) : (
     <PlayCircleOutlined />
   );
+  const promptLabel = isMemberRunLayout
+    ? t(
+        "pages.studio.studiomemberinvokesetuppanels.run.launcher",
+        "Run launcher",
+      )
+    : t("pages.studio.studiomemberinvokesetuppanels.prompt.3", "Request");
+  const inputAriaLabel = isMemberRunLayout
+      ? t(
+          "pages.studio.studiomemberinvokesetuppanels.run.input",
+          "Run input",
+        )
+    : t(
+        "pages.studio.studiomemberinvokesetuppanels.copy",
+        "Workflow request input",
+      );
   const content = (
     <div
       style={
-        layout === 'dock' ? dockComposerStyle : { display: 'grid', gap: 12 }
+        isDockLayout
+          ? dockComposerStyle
+          : isMemberRunLayout
+            ? memberRunComposerStyle
+            : { display: 'grid', gap: 12 }
       }
     >
       <div style={{ display: 'grid', gap: 6, minWidth: 0 }}>
         <div style={promptLabelRowStyle}>
-          <span style={promptKickerStyle}>{t("pages.studio.studiomemberinvokesetuppanels.prompt.3", "Prompt")}</span>
-          {layout === 'dock' ? (
+          <span style={promptKickerStyle}>{promptLabel}</span>
+          {isDockLayout ? (
             <Typography.Text style={promptDockHintStyle} type="secondary">
-              {t("pages.studio.studiomemberinvokesetuppanels.new.run.per.invoke.2", "New run per Invoke")}</Typography.Text>
+              {t(
+                "pages.studio.studiomemberinvokesetuppanels.new.run.per.request",
+                "Each request starts a new run",
+              )}
+            </Typography.Text>
+          ) : inputLocked ? (
+            <span style={memberRunStatePillStyle}>
+              {t(
+                "pages.studio.studiomemberinvokesetuppanels.in.progress",
+                "In progress",
+              )}
+            </span>
           ) : null}
         </div>
-        {layout === 'dock' ? (
+        {isMemberRunLayout ? (
+          <div style={memberRunLauncherRowStyle}>
+            {inputLocked ? (
+              <div
+                aria-label={inputAriaLabel}
+                data-testid="studio-invoke-submitted-input-receipt"
+                role="group"
+                style={submittedReceiptStyle}
+              >
+                <span style={submittedReceiptLabelStyle}>
+                  {t(
+                    "pages.studio.studiomemberinvokesetuppanels.submitted.input",
+                    "Submitted input",
+                  )}
+                </span>
+                <span style={submittedReceiptTextStyle}>
+                  {displayedPrompt ||
+                    t(
+                      "pages.studio.studiomemberinvokesetuppanels.no.input.captured",
+                      "No input captured.",
+                    )}
+                </span>
+              </div>
+            ) : (
+              <Input.TextArea
+                aria-label={inputAriaLabel}
+                autoSize={{ minRows: 2, maxRows: 5 }}
+                placeholder={promptPlaceholder}
+                style={memberRunLauncherInputStyle}
+                value={displayedPrompt}
+                onChange={(event) => onPromptChange(event.target.value)}
+              />
+            )}
+            <div
+              data-testid="studio-invoke-playground-actions"
+              style={memberRunInlineActionsStyle}
+            >
+              <Button
+                danger={isRunning}
+                disabled={!isRunning && !canInvoke}
+                icon={primaryButtonIcon}
+                onClick={isRunning ? onAbort : onInvoke}
+                size="large"
+                style={memberRunPrimaryButtonStyle}
+                type="primary"
+              >
+                {primaryButtonLabel}
+              </Button>
+              <Button
+                disabled={isRunning}
+                icon={<ClearOutlined />}
+                onClick={onClear}
+                style={memberRunSecondaryButtonStyle}
+              >
+                {t("pages.studio.studiomemberinvokesetuppanels.clear.4", "Clear")}
+              </Button>
+            </div>
+          </div>
+        ) : isDockLayout ? (
           <div
             data-testid="studio-invoke-playground-actions"
             style={dockComposerRowStyle}
           >
             <Input.TextArea
-              aria-label={t("pages.studio.studiomemberinvokesetuppanels.copy", "Invocation request input")}
+              aria-label={inputAriaLabel}
               autoSize={{ minRows: 1, maxRows: 4 }}
               placeholder={promptPlaceholder}
               style={dockComposerInputStyle}
-              value={prompt}
+              value={displayedPrompt}
               onChange={(event) => onPromptChange(event.target.value)}
             />
             <Button
@@ -175,31 +383,34 @@ export const StudioMemberInvokeComposerPanel: React.FC<
             >
               {primaryButtonLabel}
             </Button>
-            {layout === 'dock' && !isRunning ? (
-              <Button
-                disabled
-                icon={<StopOutlined />}
-                size="large"
-                style={dockComposerSecondaryButtonStyle}
-              >
-                {t("pages.studio.studiomemberinvokesetuppanels.stop.3", "Stop")}</Button>
-            ) : null}
-            {layout === 'dock' ? (
-              <Button
-                icon={<ClearOutlined />}
-                size="large"
-                style={dockComposerSecondaryButtonStyle}
-                onClick={onClear}
-              >
-                {t("pages.studio.studiomemberinvokesetuppanels.clear.3", "Clear")}</Button>
-            ) : null}
+            <Button
+              icon={<ClearOutlined />}
+              size="large"
+              style={dockComposerSecondaryButtonStyle}
+              onClick={onClear}
+            >
+              {t("pages.studio.studiomemberinvokesetuppanels.clear.3", "Clear")}
+            </Button>
           </div>
         ) : (
           <Input.TextArea
-            aria-label={t("pages.studio.studiomemberinvokesetuppanels.copy.2", "Invocation request input")}
-            autoSize={{ minRows: 4, maxRows: 8 }}
+            aria-label={
+              isMemberRunLayout
+                ? inputAriaLabel
+                : t(
+                    "pages.studio.studiomemberinvokesetuppanels.copy.2",
+                    "Workflow request input",
+                  )
+            }
+            autoSize={
+              isMemberRunLayout
+                ? { minRows: 3, maxRows: 6 }
+                : { minRows: 4, maxRows: 8 }
+            }
             placeholder={promptPlaceholder}
-            value={prompt}
+            readOnly={inputLocked}
+            style={isMemberRunLayout ? memberRunInputStyle : undefined}
+            value={displayedPrompt}
             onChange={(event) => onPromptChange(event.target.value)}
           />
         )}
@@ -211,7 +422,16 @@ export const StudioMemberInvokeComposerPanel: React.FC<
             style={composerGuidanceStyle}
           >
             <Typography.Text style={promptDockHintStyle} type="secondary">
-              {t("pages.studio.studiomemberinvokesetuppanels.historical.run.is.read.only", "Historical run is read-only. Sending this prompt creates a new independent Run and fresh Observe handoff.")}</Typography.Text>
+              {isMemberRunLayout
+                ? t(
+                    "pages.studio.studiomemberinvokesetuppanels.historical.run.starts.separate.run",
+                    "Historical runs are read-only. Starting again creates a separate run.",
+                  )
+                : t(
+                    "pages.studio.studiomemberinvokesetuppanels.historical.run.is.read.only",
+                    "Historical run is read-only. Sending this request starts a new run and fresh Observe handoff.",
+                  )}
+            </Typography.Text>
           </div>
         ) : !canInvoke ? (
           <div
@@ -219,86 +439,88 @@ export const StudioMemberInvokeComposerPanel: React.FC<
             style={composerGuidanceStyle}
           >
             <Typography.Text style={promptDockHintStyle} type="secondary">
-              {blockedReason || t("pages.studio.studiomemberinvokesetuppanels.team.member.endpoint", "Select a callable Team member and endpoint.")}
+              {blockedReason ||
+                t(
+                  "pages.studio.studiomemberinvokesetuppanels.team.member.endpoint",
+                  "Select a runnable Team member and endpoint.",
+                )}
             </Typography.Text>
           </div>
+        ) : isMemberRunLayout ? (
+          <Typography.Text style={promptDockHintStyle} type="secondary">
+            {inputLocked
+              ? t(
+                  "pages.studio.studiomemberinvokesetuppanels.submitted.input.locked",
+                  "This submitted input is locked while the run is in progress.",
+                )
+              : t(
+                  "pages.studio.studiomemberinvokesetuppanels.member.run.isolated",
+                  "Each run is isolated. Previous runs are not sent as context.",
+                )}
+          </Typography.Text>
         ) : isChatEndpoint ? (
           <Typography.Text
             style={layout === 'dock' ? promptDockHintStyle : helperTextStyle}
             type="secondary"
           >
-            {t("pages.studio.studiomemberinvokesetuppanels.prompt.invoke.invoke.run", "Enter a prompt to start an independent Invoke. Each Invoke creates a new Run.")}</Typography.Text>
+            {t(
+              "pages.studio.studiomemberinvokesetuppanels.prompt.invoke.invoke.run",
+              "Describe the work this workflow should perform. Each request starts a new run.",
+            )}
+          </Typography.Text>
         ) : (
           <Typography.Text style={promptDockHintStyle} type="secondary">
-            {t("pages.studio.studiomemberinvokesetuppanels.prompt.invoke.invoke.run.2", "Enter a prompt to start an independent Invoke. Each Invoke creates a new Run.")}</Typography.Text>
+            {t(
+              "pages.studio.studiomemberinvokesetuppanels.prompt.invoke.invoke.run.2",
+              "Describe the work this workflow should perform. Each request starts a new run.",
+            )}
+          </Typography.Text>
         )}
       </div>
 
-      {!isChatEndpoint ? (
-          <Collapse
-            bordered={false}
-            items={[
-            {
-              key: 'typed-payload',
-              label: t("pages.studio.studiomemberinvokesetuppanels.advanced.typed.payload.2", "Advanced typed payload"),
-              children: (
-                <div style={typedPayloadGridStyle}>
-                  <div style={typedPayloadGridStyle}>
-                    <Typography.Text style={helperTextStyle} type="secondary">
-                      {t("pages.studio.studiomemberinvokesetuppanels.payload.type.url.3", "Payload type URL")}</Typography.Text>
-                    <Input
-                      aria-label={t("pages.studio.studiomemberinvokesetuppanels.payload.type.url.4", "Payload type URL")}
-                      placeholder="type.googleapis.com/google.protobuf.StringValue"
-                      value={payloadTypeUrl}
-                      onChange={(event) =>
-                        onPayloadTypeUrlChange(event.target.value)
-                      }
-                    />
-                  </div>
-                  <div style={typedPayloadGridStyle}>
-                    <Typography.Text style={helperTextStyle} type="secondary">
-                      {t("pages.studio.studiomemberinvokesetuppanels.payload.base64.3", "Payload base64")}</Typography.Text>
-                    <Input.TextArea
-                      aria-label={t("pages.studio.studiomemberinvokesetuppanels.payload.base64.4", "Payload base64")}
-                      autoSize={{ minRows: 2, maxRows: 5 }}
-                      placeholder={t("pages.studio.studiomemberinvokesetuppanels.paste.encoded.protobuf.payload.when.2", "Paste encoded protobuf payload when this type cannot be built from text.")}
-                      value={payloadBase64}
-                      onChange={(event) =>
-                        onPayloadBase64Change(event.target.value)
-                      }
-                    />
-                  </div>
-                </div>
-              ),
-            },
-          ]}
-          size="small"
-        />
-      ) : null}
-
-      {layout === 'dock' ? null : (
+      {isDockLayout || isMemberRunLayout ? null : (
         <div
           data-testid="studio-invoke-playground-actions"
-          style={playgroundActionsStyle}
+          style={
+            isMemberRunLayout ? memberRunActionsStyle : playgroundActionsStyle
+          }
         >
           <Button
+            danger={isMemberRunLayout && isRunning}
             disabled={!isRunning && !canInvoke}
             icon={primaryButtonIcon}
             onClick={isRunning ? onAbort : onInvoke}
+            size={isMemberRunLayout ? 'large' : undefined}
+            style={isMemberRunLayout ? memberRunPrimaryButtonStyle : undefined}
             type="primary"
           >
             {primaryButtonLabel}
           </Button>
-          <Button disabled={!isRunning} icon={<StopOutlined />} onClick={onAbort}>
-            {t("pages.studio.studiomemberinvokesetuppanels.stop.4", "Stop")}</Button>
-          <Button icon={<ClearOutlined />} onClick={onClear}>
-            {t("pages.studio.studiomemberinvokesetuppanels.clear.4", "Clear")}</Button>
+          {isMemberRunLayout ? null : (
+            <Button
+              disabled={!isRunning}
+              icon={<StopOutlined />}
+              onClick={onAbort}
+            >
+              {t("pages.studio.studiomemberinvokesetuppanels.stop.4", "Stop")}
+            </Button>
+          )}
+          <Button
+            disabled={isMemberRunLayout && isRunning}
+            icon={<ClearOutlined />}
+            onClick={onClear}
+            style={
+              isMemberRunLayout ? memberRunSecondaryButtonStyle : undefined
+            }
+          >
+            {t("pages.studio.studiomemberinvokesetuppanels.clear.4", "Clear")}
+          </Button>
         </div>
       )}
     </div>
   );
 
-  if (layout === 'dock') {
+  if (isDockLayout || isMemberRunLayout) {
     return content;
   }
 
@@ -306,8 +528,11 @@ export const StudioMemberInvokeComposerPanel: React.FC<
     <AevatarPanel
       layoutMode="document"
       padding={14}
-      title={t("pages.studio.studiomemberinvokesetuppanels.copy.3", "Debug console")}
-      titleHelp={t("pages.studio.studiomemberinvokesetuppanels.prompt.2", "Enter a prompt or payload first, then invoke the current member directly.")}
+      title={t("pages.studio.studiomemberinvokesetuppanels.copy.3", "Request")}
+      titleHelp={t(
+        "pages.studio.studiomemberinvokesetuppanels.prompt.2",
+        "Describe the work to run against this workflow member.",
+      )}
     >
       {content}
     </AevatarPanel>

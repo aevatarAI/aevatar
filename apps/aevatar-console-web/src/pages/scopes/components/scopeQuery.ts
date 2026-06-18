@@ -1,5 +1,6 @@
 export type { ScopeQueryDraft } from "@/shared/navigation/scopeRoutes";
 export {
+  buildTeamCreateRoute,
   buildScopeHref,
   buildScopeOverviewHref,
   buildTeamWorkspaceRoute,

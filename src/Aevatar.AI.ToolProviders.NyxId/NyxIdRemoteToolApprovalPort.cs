@@ -68,6 +68,20 @@ public sealed class NyxIdRemoteToolApprovalPort : IRemoteToolApprovalPort
             ExtractDateTimeOffset(response, "expires_at"));
     }
 
+    public async Task<RemoteToolApprovalDecisionResult> DecideAsync(
+        RemoteToolApprovalDecision decision,
+        CancellationToken ct)
+    {
+        var token = AgentToolRequestContext.NyxIdAccessToken;
+        if (string.IsNullOrWhiteSpace(token))
+            throw new InvalidOperationException("NyxID authentication required for remote approval.");
+
+        var response = await _apiClient.DecideApprovalAsync(token, decision.RequestId, decision.Approved, ct);
+        return TryReadDecisionError(response, out var result)
+            ? result
+            : new RemoteToolApprovalDecisionResult(true);
+    }
+
     private static RemoteToolApprovalStatus MapStatus(string? status)
     {
         return status?.Trim().ToLowerInvariant() switch
@@ -103,4 +117,75 @@ public sealed class NyxIdRemoteToolApprovalPort : IRemoteToolApprovalPort
             ? parsed
             : null;
     }
+
+    private static bool TryReadDecisionError(string response, out RemoteToolApprovalDecisionResult result)
+    {
+        result = new RemoteToolApprovalDecisionResult(false, Detail: "empty_response");
+        if (string.IsNullOrWhiteSpace(response))
+            return false;
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+            if (!root.TryGetProperty("error", out var errorProp) ||
+                errorProp.ValueKind != JsonValueKind.True)
+            {
+                return false;
+            }
+
+            var status = ReadOptionalInt(root, "status");
+            var body = ReadOptionalString(root, "body");
+            var message = ReadOptionalString(root, "message");
+            var errorKey = ReadOptionalString(root, "error_key") ?? ReadOptionalString(root, "error");
+            TryMergeBodyError(body, ref errorKey, ref message);
+            result = new RemoteToolApprovalDecisionResult(
+                false,
+                errorKey,
+                message ?? body ?? response,
+                status);
+            return true;
+        }
+        catch (JsonException)
+        {
+            result = new RemoteToolApprovalDecisionResult(
+                false,
+                "invalid_error_response",
+                response);
+            return true;
+        }
+    }
+
+    private static void TryMergeBodyError(string? body, ref string? errorKey, ref string? message)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+            return;
+
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            var root = document.RootElement;
+            errorKey ??= ReadOptionalString(root, "error") ?? ReadOptionalString(root, "code");
+            message ??= ReadOptionalString(root, "message");
+        }
+        catch (JsonException)
+        {
+            if (body.Contains("already_decided", StringComparison.OrdinalIgnoreCase))
+                errorKey ??= "already_decided";
+            else if (body.Contains("expired", StringComparison.OrdinalIgnoreCase))
+                errorKey ??= "forbidden";
+        }
+    }
+
+    private static string? ReadOptionalString(JsonElement root, string propertyName) =>
+        root.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String
+            ? property.GetString()
+            : null;
+
+    private static int? ReadOptionalInt(JsonElement root, string propertyName) =>
+        root.TryGetProperty(propertyName, out var property) &&
+        property.ValueKind == JsonValueKind.Number &&
+        property.TryGetInt32(out var value)
+            ? value
+            : null;
 }

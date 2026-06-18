@@ -25,6 +25,8 @@ public sealed class EditorControllerSerializationTests
     [Fact]
     public void EditorWorkflowHttpRequests_ShouldUseScopedWorkflowDocumentInputConverter()
     {
+        typeof(ParseYamlHttpResponse).GetProperty(nameof(ParseYamlHttpResponse.Document))!
+            .ShouldUseWorkflowDocumentInputConverter();
         typeof(SerializeYamlHttpRequest).GetProperty(nameof(SerializeYamlHttpRequest.Document))!
             .ShouldUseWorkflowDocumentInputConverter();
         typeof(ValidateWorkflowHttpRequest).GetProperty(nameof(ValidateWorkflowHttpRequest.Document))!
@@ -138,6 +140,44 @@ public sealed class EditorControllerSerializationTests
         var body = await response.Content.ReadAsStringAsync();
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         body.Should().NotContain("target_role: writer");
+    }
+
+    [Fact]
+    public async Task ParseYaml_ShouldReturnPlainJsonStepParameters()
+    {
+        using var host = await StartHostAsync();
+        var client = host.GetTestClient();
+        using var response = await client.PostAsJsonAsync("/api/editor/parse-yaml", new
+        {
+            yaml = """
+                   name: draft
+                   steps:
+                     - id: clean
+                       type: tool_call
+                       parameters:
+                         tool: code_execute
+                         arguments:
+                           language: javascript
+                           code: |
+                             console.log("ok");
+                       next: capture
+                     - id: capture
+                       type: assign
+                       parameters:
+                         target: result
+                         value: "$input"
+                   """,
+            availableStepTypes = new[] { "tool_call", "assign" },
+        });
+
+        var body = await response.Content.ReadAsStringAsync();
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        body.Should().Contain("\"tool\":\"code_execute\"");
+        body.Should().Contain("\"arguments\":{\"language\":\"javascript\",\"code\":\"console.log(\\\"ok\\\");\\n\"}");
+        body.Should().Contain("\"target\":\"result\"");
+        body.Should().Contain("\"value\":\"$input\"");
+        body.Should().NotContain("\"tool\":{}");
+        body.Should().NotContain("\"arguments\":{}");
     }
 
     private static object BuildPlainParameterRequest() => new

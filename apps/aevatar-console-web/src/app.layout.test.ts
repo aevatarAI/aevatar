@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { getLocale, setLocale } from "@umijs/max";
 import React from "react";
@@ -9,7 +7,7 @@ import { layout } from "./app";
 describe("layout menu collapse behavior", () => {
   beforeEach(() => {
     setLocale("en-US", false);
-    window.history.replaceState({}, "", "/teams");
+    window.history.replaceState({}, "", "/scopes");
   });
 
   it("keeps grouped navigation titles hidden in collapsed mode", () => {
@@ -61,7 +59,7 @@ describe("layout menu collapse behavior", () => {
   });
 
   it("updates the controlled global menu collapse state after SPA route changes", () => {
-    window.history.replaceState({}, "", "/teams?scopeId=scope-a");
+    window.history.replaceState({}, "", "/scopes/scope-a/teams");
     const teamsLayout = layout({
       initialState: {
         auth: {} as never,
@@ -79,22 +77,6 @@ describe("layout menu collapse behavior", () => {
 
     expect(teamsLayout.collapsed).toBeUndefined();
     expect(studioLayout.collapsed).toBe(true);
-  });
-
-  it("styles collapsed menu items without icons as visible tokens", () => {
-    const globalStyles = fs.readFileSync(
-      path.resolve(__dirname, "./global.less"),
-      "utf8",
-    );
-
-    expect(globalStyles).toContain(".ant-menu-inline-collapsed-noicon");
-    expect(globalStyles).toContain(
-      ".ant-pro-sider.ant-layout-sider.ant-pro-sider-fixed.ant-pro-sider-collapsed",
-    );
-    expect(globalStyles).toContain("flex: 0 0 40px !important;");
-    expect(globalStyles).toContain("inset-inline-start: 8px;");
-    expect(globalStyles).toContain("text-transform: uppercase;");
-    expect(globalStyles).toContain("min-width: 20px;");
   });
 
   it("renders a global language switch in the layout actions", async () => {

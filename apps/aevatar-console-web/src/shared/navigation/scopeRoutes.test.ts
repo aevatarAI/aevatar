@@ -1,4 +1,5 @@
 import {
+  buildTeamCreateRoute,
   buildScopeOverviewHref,
   buildTeamWorkspaceRoute,
   readScopeQueryDraft,
@@ -7,21 +8,30 @@ import {
 
 describe("scopeRoutes", () => {
   it("reads the scope from a team detail pathname when the query is empty", () => {
-    expect(readScopeQueryDraft("", "/teams/scope-alpha")).toEqual({
+    expect(readScopeQueryDraft("", "/scopes/scope-alpha/teams")).toEqual({
       scopeId: "scope-alpha",
     });
   });
 
-  it("does not treat the create route segment as a real scope", () => {
-    expect(readScopeQueryDraft("", "/teams/new")).toEqual({
-      scopeId: "",
-    });
-    expect(readScopeQueryDraft("?scopeId=new", "/teams/new")).toEqual({
+  it("does not read scope from removed legacy team pathnames", () => {
+    expect(readScopeQueryDraft("", "/teams/scope-alpha")).toEqual({
       scopeId: "",
     });
   });
 
-  it("keeps an explicit real scope on the team create route", () => {
+  it("does not treat removed legacy create routes as scoped team routes", () => {
+    expect(readScopeQueryDraft("", "/teams/new")).toEqual({
+      scopeId: "",
+    });
+  });
+
+  it("ignores scopeId=new only on scoped team create routes", () => {
+    expect(readScopeQueryDraft("?scopeId=new", "/scopes/scope-alpha/teams/new")).toEqual({
+      scopeId: "scope-alpha",
+    });
+  });
+
+  it("keeps an explicit query scope only as a route draft outside scoped team routes", () => {
     expect(readScopeQueryDraft("?scopeId=scope-alpha", "/teams/new")).toEqual({
       scopeId: "scope-alpha",
     });
@@ -32,18 +42,26 @@ describe("scopeRoutes", () => {
       buildScopeOverviewHref(
         { scopeId: "scope-alpha" },
         { workflowId: "wf-1" },
-        "/teams/scope-alpha",
+        "/scopes/scope-alpha/teams",
       ),
-    ).toBe("/teams/scope-alpha?scopeId=scope-alpha&workflowId=wf-1");
+    ).toBe("/scopes/scope-alpha/teams?workflowId=wf-1");
   });
 
   it("builds the canonical team workspace route with scope context", () => {
     expect(buildTeamWorkspaceRoute("scope-alpha")).toBe(
-      "/teams/scope-alpha?scopeId=scope-alpha",
+      "/scopes/scope-alpha/teams",
     );
+    expect(buildTeamWorkspaceRoute("")).toBe("/scopes");
   });
 
-  it("falls back to the legacy scope overview path outside team detail routes", () => {
+  it("builds the canonical scoped team create route", () => {
+    expect(buildTeamCreateRoute("scope-alpha", { teamName: "Support" })).toBe(
+      "/scopes/scope-alpha/teams/new?teamName=Support",
+    );
+    expect(buildTeamCreateRoute("")).toBe("/scopes");
+  });
+
+  it("falls back to the scope overview path outside team detail routes", () => {
     expect(resolveScopeOverviewPath({ scopeId: "scope-alpha" }, "/scopes/overview")).toBe(
       "/scopes/overview",
     );

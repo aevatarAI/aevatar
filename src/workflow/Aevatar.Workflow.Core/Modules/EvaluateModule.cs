@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Primitives;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -11,9 +12,6 @@ namespace Aevatar.Workflow.Core.Modules;
 /// Sends a structured evaluation prompt to the target role, parses the numeric score
 /// from the response, and applies threshold-based branching.
 /// </summary>
-// Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
-//   Old pattern: WorkflowStepTargetAgentResolver 用 agent_type/agent_id 通过 Type.GetType + AppDomain scan + IRoleAgentTypeResolver 直接 create/link actors,workflow step parameter 暴露 raw CLR lifecycle
-//   New principle: role-level agent_kind 配合 WorkflowRunGAgent runtime lifecycle;step 只用 target_role;删 agent_type/agent_id raw lifecycle 参数 + IWorkflowAgentTypeAliasProvider;Foundation 加 CreateByKindAsync;Bridge 注册 stable kind token
 public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
 {
     private const string ModuleStateKey = "evaluate";
@@ -114,6 +112,7 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
                 RunId = runId,
                 StepId = stepId,
             };
+            WorkflowLlmExecutionIntentRuntimeContextAccess.ApplySenderNyxIdAccessToken(ctx, intent);
             CopyParametersToIntent(request.Parameters, intent);
             try
             {
@@ -227,9 +226,6 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
         IDictionary<string, string> parameters,
         WorkflowLlmExecutionIntent intent)
     {
-        // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
-        //   Old pattern: module helpers hid raw step agent_type/agent_id lifecycle parameters by filtering them before dispatch
-        //   New principle: validator rejects raw lifecycle input; helpers only copy already-valid chat metadata parameters
         foreach (var (key, value) in parameters)
         {
             if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value))
@@ -243,6 +239,9 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
             intent.Annotations[normalizedKey] = normalizedValue;
         }
     }
+
+    private static string? Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private WorkflowStepTargetAgentResolver ResolveTargetAgentResolver(IEventContext ctx)
     {

@@ -100,6 +100,7 @@ message StudioMemberBindingAuthorityState {
 
 message StudioMemberWorkflowBindingRequest {
   repeated string workflow_yamls = 1;
+  string workflow_id = 2;
 }
 
 message StudioMemberScriptBindingRequest {
@@ -117,7 +118,8 @@ message StudioMemberGAgentEndpointBindingRequest {
 }
 
 message StudioMemberGAgentBindingRequest {
-  string actor_type_name = 1;
+  reserved "actor_type_name";
+  string agent_kind = 1;
   repeated StudioMemberGAgentEndpointBindingRequest endpoints = 2;
 }
 
@@ -212,6 +214,7 @@ message StudioMemberCreatedEvent {
   StudioMemberImplementationKind implementation_kind = 5;
   string published_service_id = 6;
   google.protobuf.Timestamp created_at_utc = 7;
+  StudioMemberImplementationRef implementation_ref = 8;
 }
 
 // Refactor (iter1345/cluster-519-draft-member-authority):

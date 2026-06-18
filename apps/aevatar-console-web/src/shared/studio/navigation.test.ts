@@ -86,10 +86,10 @@ describe('buildStudioRoute', () => {
         memberId: 'member-alpha',
         step: 'build',
         tab: 'studio',
-        returnTo: '/teams/scope-1/t-alpha?tab=members',
+        returnTo: '/scopes/scope-1/teams/t-alpha?tab=members',
       }),
     ).toBe(
-      '/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Amember-alpha&step=build&tab=studio&returnTo=%2Fteams%2Fscope-1%2Ft-alpha%3Ftab%3Dmembers',
+      '/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Amember-alpha&step=build&tab=studio&returnTo=%2Fscopes%2Fscope-1%2Fteams%2Ft-alpha%3Ftab%3Dmembers',
     );
   });
 

@@ -270,10 +270,12 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
             Error = "超时",
         }));
 
-        success.Should().ContainSingle();
-        success[0].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.RunFinished);
-        success[0].RunFinished.ThreadId.Should().Be("test");
-        success[0].RunFinished.Result.Unpack<WorkflowRunResultPayload>().Output.Should().Be("完成");
+        success.Should().HaveCount(2);
+        success[0].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.Usage);
+        success[0].Usage.Available.Should().BeFalse();
+        success[1].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.RunFinished);
+        success[1].RunFinished.ThreadId.Should().Be("test");
+        success[1].RunFinished.Result.Unpack<WorkflowRunResultPayload>().Output.Should().Be("完成");
 
         failure.Should().ContainSingle();
         failure[0].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.RunError);
@@ -409,7 +411,6 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
                 ToolName = "dangerous_tool",
                 ToolCallId = "call-tool",
                 ApprovalRequestId = "approval-tool",
-                ArgumentsJson = """{"danger":true}""",
             },
         }));
 
@@ -422,7 +423,7 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
         payload.ToolName.Should().Be("dangerous_tool");
         payload.ToolCallId.Should().Be("call-tool");
         payload.ApprovalRequestId.Should().Be("approval-tool");
-        payload.ArgumentsJson.Should().Be("""{"danger":true}""");
+        payload.ArgumentsJson.Should().BeEmpty();
     }
 
     [Fact]

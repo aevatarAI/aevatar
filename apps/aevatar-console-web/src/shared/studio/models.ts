@@ -98,6 +98,8 @@ export interface StudioWorkspaceSettings {
 }
 
 export interface StudioWorkflowDraftSummary {
+  readonly activeRevisionId?: string | null;
+  readonly serviceKey?: string | null;
   readonly workflowId: string;
   readonly name: string;
   readonly description: string;
@@ -150,6 +152,24 @@ export interface StudioSaveWorkflowInput {
   readonly layout?: unknown;
 }
 
+export interface StudioWorkflowDraftCreateReadiness {
+  readonly readable: boolean;
+  readonly stage: string;
+  readonly message: string;
+}
+
+export interface StudioWorkflowDraftCreateAcceptedReceipt {
+  readonly accepted: true;
+  readonly workflowId: string;
+  readonly commandId: string;
+  readonly ackStage: string;
+  readonly actorId: string;
+  readonly workspaceId: string;
+  readonly expectedVersion?: number | null;
+  readonly ackedAtUtc: string;
+  readonly readiness: StudioWorkflowDraftCreateReadiness;
+}
+
 export interface StudioParseYamlResult {
   readonly document?: StudioWorkflowDocument | null;
   readonly graph?: unknown;
@@ -163,6 +183,16 @@ export type StudioWorkflowFile = StudioWorkflowDraft & {
   readonly draftExists?: boolean;
   readonly findings: StudioValidationFinding[];
 };
+
+export type StudioWorkflowSaveResult =
+  | {
+      readonly kind: "materialized";
+      readonly workflow: StudioWorkflowFile;
+    }
+  | {
+      readonly kind: "accepted";
+      readonly receipt: StudioWorkflowDraftCreateAcceptedReceipt;
+    };
 
 export interface StudioSerializeYamlResult {
   readonly yaml: string;
@@ -190,7 +220,7 @@ export interface StudioExecutionSummary {
   readonly roleReplyCount?: number | null;
   readonly output?: string | null;
   readonly auditUpdatedAtUtc?: string | null;
-  readonly auditSource?: 'service-run-summary' | 'run-audit' | 'invoke-session';
+  readonly auditSource?: 'service-run-summary' | 'run-audit' | 'invoke-session' | 'draft-run-session';
 }
 
 export interface StudioExecutionFrame {
@@ -210,6 +240,15 @@ export interface StudioStartExecutionInput {
   readonly scopeId?: string | null;
   readonly workflowId?: string | null;
   readonly eventFormat?: string | null;
+}
+
+export interface StudioMemberWorkflowBindingInput {
+  readonly scopeId: string;
+  readonly memberId: string;
+  readonly displayName?: string | null;
+  readonly workflowId: string;
+  readonly workflowYamls: readonly string[];
+  readonly revisionId?: string | null;
 }
 
 export type StudioScopeBindingImplementationKind =
@@ -287,7 +326,7 @@ export interface StudioScopeBindingResult {
     readonly definitionActorId: string;
   } | null;
   readonly gAgent?: {
-    readonly actorTypeName: string;
+    readonly diagnosticClrTypeName: string;
   } | null;
 }
 
@@ -316,6 +355,7 @@ export interface StudioScopeBindingRevision {
   readonly scriptDefinitionActorId: string;
   readonly scriptSourceHash: string;
   readonly staticActorTypeName: string;
+  readonly staticAgentKind?: string;
 }
 
 export interface StudioScopeBindingStatus {
@@ -360,7 +400,7 @@ export function describeStudioScopeBindingRevisionTarget(
     case 'script':
       return revision.scriptId || 'Script';
     case 'gagent':
-      return revision.staticActorTypeName || 'GAgent';
+      return revision.staticAgentKind || revision.staticActorTypeName || 'GAgent';
     default:
       return 'Unknown';
   }
@@ -457,6 +497,7 @@ export interface StudioMemberSummary {
   readonly displayName: string;
   readonly description: string;
   readonly implementationKind: StudioMemberImplementationKind;
+  readonly implementationRef?: StudioMemberImplementationRef | null;
   readonly lifecycleStage: StudioMemberLifecycleStage;
   readonly publishedServiceId: string;
   readonly lastBoundRevisionId: string | null;
@@ -471,7 +512,8 @@ export interface StudioMemberImplementationRef {
   readonly workflowRevision?: string | null;
   readonly scriptId?: string | null;
   readonly scriptRevision?: string | null;
-  readonly actorTypeName?: string | null;
+  readonly agentKind?: string | null;
+  readonly diagnosticActorTypeName?: string | null;
 }
 
 export interface StudioMemberBindingContract {
@@ -514,6 +556,18 @@ export interface StudioMemberBindingAcceptedResponse {
   readonly bindingRunId: string;
   readonly scopeId: string;
   readonly memberId: string;
+}
+
+export type StudioMemberCommandStatus =
+  | 'accepted'
+  | 'no_change'
+  | 'unknown';
+
+export interface StudioMemberCommandResponse {
+  readonly status: StudioMemberCommandStatus;
+  readonly scopeId: string;
+  readonly memberId: string;
+  readonly ackedAt?: string | null;
 }
 
 export interface StudioMemberDetail {
@@ -662,7 +716,7 @@ export interface StudioScopeGAgentBindingInput {
   readonly scopeId: string;
   readonly serviceId?: string | null;
   readonly displayName?: string | null;
-  readonly actorTypeName: string;
+  readonly agentKind: string;
   readonly endpoints: readonly StudioScopeGAgentEndpointInput[];
   readonly revisionId?: string | null;
 }

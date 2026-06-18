@@ -444,6 +444,39 @@ public sealed class ConnectorCallModuleCoverageTests
         completed.Error.Should().Contain("valid");
     }
 
+    [Fact]
+    public async Task HandleAsync_WhenHostCallbackConnectorReturnsStructuredPayload_ShouldExposePayloadAndBranchAnnotations()
+    {
+        var registry = new ConfiguredConnectorRegistry();
+        await registry.RegisterAsync(ConnectorRegistration.External(new StructuredHostCallbackConnector("host-router")));
+        var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(registry));
+        var ctx = CreateContext();
+        ctx.SetNextElapsedTime(TimeSpan.FromMilliseconds(88));
+        var request = new StepRequestEvent
+        {
+            StepId = "host-route",
+            RunId = "run-host-route",
+            StepType = "connector_call",
+            Input = """{"issue":"1738","repo":"aevatar"}""",
+            Parameters =
+            {
+                ["connector"] = "host-router",
+                ["operation"] = "classify_pr",
+            },
+        };
+
+        await HandleAndDrainAsync(module, Envelope(request), ctx);
+
+        var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
+        completed.Success.Should().BeTrue();
+        completed.Output.Should().Be("""{"route":"phase9-router","approved":true,"budget":{"remainingTokens":128}}""");
+        completed.Annotations["host_callback.result.route"].Should().Be("phase9-router");
+        completed.Annotations["host_callback.result.approved"].Should().Be("true");
+        completed.Annotations["host_callback.result.budget.remainingTokens"].Should().Be("128");
+        completed.Annotations["connector.type"].Should().Be("host_callback");
+        completed.Annotations["connector.duration_ms"].Should().Be("88.00");
+    }
+
     private static TestEventHandlerContext CreateContext()
     {
         return new TestEventHandlerContext(
@@ -562,6 +595,31 @@ public sealed class ConnectorCallModuleCoverageTests
             {
                 Success = true,
                 Output = output,
+            });
+        }
+    }
+
+    private sealed class StructuredHostCallbackConnector(string name) : IConnector
+    {
+        public string Name { get; } = name;
+
+        public string Type => "host_callback";
+
+        public Task<ConnectorResponse> ExecuteAsync(ConnectorRequest request, CancellationToken ct = default)
+        {
+            _ = ct;
+            request.Operation.Should().Be("classify_pr");
+            request.Payload.Should().Be("""{"issue":"1738","repo":"aevatar"}""");
+            return Task.FromResult(new ConnectorResponse
+            {
+                Success = true,
+                Output = """{"route":"phase9-router","approved":true,"budget":{"remainingTokens":128}}""",
+                Metadata = new Dictionary<string, string>
+                {
+                    ["host_callback.result.route"] = "phase9-router",
+                    ["host_callback.result.approved"] = "true",
+                    ["host_callback.result.budget.remainingTokens"] = "128",
+                },
             });
         }
     }

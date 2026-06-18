@@ -125,15 +125,17 @@ public sealed class ProjectionStudioMemberQueryPort : IStudioMemberQueryPort
             // proto3 optional `team_id` semantics — absence on the wire means
             // "unassigned" on the application contract.
             TeamId = document.HasTeamId ? document.TeamId : null,
+            ImplementationRef = ToImplementationRefResponse(
+                document,
+                NormalizeImplementationKindWire(document.ImplementationKind)),
         };
     }
 
     private static StudioMemberDetailResponse ToDetail(StudioMemberCurrentStateDocument document)
     {
         var summary = ToSummary(document);
-        var implementationRef = ToImplementationRefResponse(document, summary.ImplementationKind);
         var lastBinding = ToLastBindingResponse(document);
-        return new StudioMemberDetailResponse(summary, implementationRef, lastBinding)
+        return new StudioMemberDetailResponse(summary, summary.ImplementationRef, lastBinding)
         {
             CurrentBindingRun = ToBindingRunStatusResponse(document),
         };
@@ -167,7 +169,7 @@ public sealed class ProjectionStudioMemberQueryPort : IStudioMemberQueryPort
         {
             return new StudioMemberImplementationRefResponse(
                 ImplementationKind: implementationKindWire,
-                ActorTypeName: document.ImplementationActorTypeName);
+                DiagnosticActorTypeName: document.ImplementationActorTypeName);
         }
 
         return null;

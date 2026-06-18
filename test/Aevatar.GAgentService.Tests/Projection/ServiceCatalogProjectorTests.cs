@@ -24,6 +24,11 @@ public sealed class ServiceCatalogProjectorTests
             Spec = GAgentServiceTestKit.CreateDefinitionSpec(identity),
             DefaultServingRevisionId = "r-default",
         };
+        state.Spec.ExternalExposure = new ExternalExposure
+        {
+            NyxidSlug = "aevatar-orders",
+            RegisteredAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-06-11T01:02:03+00:00")),
+        };
         var context = new ServiceCatalogProjectionContext
         {
             RootActorId = "tenant:app:default:svc",
@@ -44,6 +49,9 @@ public sealed class ServiceCatalogProjectorTests
         readModel!.DisplayName.Should().Be("Service");
         readModel.DefaultServingRevisionId.Should().Be("r-default");
         readModel.Endpoints.Should().ContainSingle(x => x.EndpointId == "run");
+        readModel.ExternalExposure.Should().NotBeNull();
+        readModel.ExternalExposure.NyxidSlug.Should().Be("aevatar-orders");
+        readModel.ExternalExposure.RegisteredAt.Should().Be(DateTimeOffset.Parse("2026-06-11T01:02:03+00:00"));
     }
 
     [Fact]

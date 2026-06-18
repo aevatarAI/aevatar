@@ -92,6 +92,19 @@ const DEFAULT_PARAMETERS_BY_STEP_TYPE: Record<string, Record<string, unknown>> =
 const LLM_CALL_STEP_TYPE = 'llm_call';
 const LLM_PROMPT_PARAMETER = 'prompt';
 const LLM_PROMPT_PREFIX_PARAMETER = 'prompt_prefix';
+const DEFAULT_STEP_ID_BASE_BY_STEP_TYPE: Record<string, string> = {
+  connector_call: 'connector_step',
+  dynamic_workflow: 'dynamic_workflow_step',
+  human_approval: 'approval_step',
+  human_input: 'human_input_step',
+  llm_call: 'llm_step',
+  map_reduce: 'map_reduce_step',
+  retrieve_facts: 'retrieve_facts_step',
+  tool_call: 'tool_step',
+  wait_signal: 'signal_wait_step',
+  workflow_call: 'workflow_step',
+  workflow_yaml_validate: 'workflow_validation_step',
+};
 
 function normalizeString(value: unknown): string {
   return String(value ?? '').trim();
@@ -195,7 +208,7 @@ export function parseInspectorParameters(
 
   const parsed = JSON.parse(trimmed) as unknown;
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('Step parameters must be a JSON object.');
+    throw new Error('Raw node configuration must be a JSON object.');
   }
 
   return Object.fromEntries(Object.entries(parsed));
@@ -253,6 +266,11 @@ function createUniqueStepId(
   }
 
   return `${base}_${suffix}`;
+}
+
+function resolveDefaultStepIdBase(stepType: string): string {
+  const normalizedStepType = normalizeStepType(stepType);
+  return DEFAULT_STEP_ID_BASE_BY_STEP_TYPE[normalizedStepType] || `${normalizedStepType}_step`;
 }
 
 function listRoleIds(document: StudioWorkflowDocument): string[] {
@@ -471,7 +489,10 @@ export function insertStepByType(
     normalizeString(options?.targetRoleId) ||
     normalizeString(sourceStep?.targetRole ?? sourceStep?.target_role) ||
     normalizeString(roles[0]?.id);
-  const nextId = createUniqueStepId(document, normalizedStepType);
+  const nextId = createUniqueStepId(
+    document,
+    resolveDefaultStepIdBase(normalizedStepType),
+  );
   const parameters = createDefaultStepParameters(normalizedStepType);
   const connectorName = normalizeString(options?.connectorName);
 
@@ -545,8 +566,6 @@ export function removeStep(
     };
   }
 
-  const removedStep = steps[currentIndex] as StudioWorkflowStepDocument;
-  const replacementStepId = normalizeString(removedStep.next);
   const nextSteps = steps
     .filter((entry) => normalizeString(entry.id) !== currentStepId)
     .map((entry) => {
@@ -554,25 +573,18 @@ export function removeStep(
       const next = normalizeString(step.next);
       const branches = Object.fromEntries(
         Object.entries(step.branches ?? {})
-          .map(([label, target]) => [
-            label,
-            target === currentStepId ? replacementStepId : target,
-          ])
+          .filter(([, target]) => target !== currentStepId)
           .filter(([, target]) => Boolean(normalizeString(target))),
       );
 
       return {
         ...step,
-        next: next === currentStepId ? replacementStepId || null : step.next ?? null,
+        next: next === currentStepId ? null : step.next ?? null,
         branches,
       } satisfies StudioWorkflowStepDocument;
     });
 
-  const preferredStep =
-    nextSteps.find((entry) => normalizeString(entry.id) === replacementStepId) ??
-    nextSteps[currentIndex] ??
-    nextSteps[currentIndex - 1] ??
-    nextSteps[0];
+  const preferredStep = nextSteps[currentIndex] ?? nextSteps[currentIndex - 1] ?? nextSteps[0];
   const fallbackRoleId = normalizeString(roles[0]?.id);
 
   return {

@@ -141,6 +141,102 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
+    public async Task Create_ShouldReturnBadRequest_WhenServiceInvocationAuthIsEmpty()
+    {
+        var request = CreateServiceInvocationRequestWithAuth(new ScheduledServiceInvocationAuthHttpRequest());
+
+        var result = await ScheduledDispatchEndpoints.Create(
+            request,
+            new RecordingScheduledDispatchApplicationService());
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+    }
+
+    [Fact]
+    public async Task Create_ShouldAcceptTenantlessServiceInvocationNyxIdSubject()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+        var request = CreateServiceInvocationRequestWithAuth(new ScheduledServiceInvocationAuthHttpRequest
+        {
+            SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceHttpRequest
+            {
+                Subject = new ScheduledServiceInvocationNyxIdSubjectRefHttpRequest
+                {
+                    Platform = "GitHub",
+                    ExternalUserId = "ou-user-1",
+                },
+                Scope = " proxy ",
+            },
+        });
+
+        var result = await ScheduledDispatchEndpoints.Create(request, service);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        var auth = service.Created.Should().ContainSingle().Which.Target.ServiceInvocation!.Auth;
+        auth.Should().NotBeNull();
+        auth!.SenderNyxId.Should().NotBeNull();
+        var subject = auth.SenderNyxId.Subject;
+        subject.Platform.Should().Be("github");
+        subject.Tenant.Should().BeEmpty();
+        subject.ExternalUserId.Should().Be("ou-user-1");
+    }
+
+    [Fact]
+    public async Task Create_ShouldReturnBadRequest_WhenServiceInvocationAuthSubjectIsNull()
+    {
+        var request = CreateServiceInvocationRequestWithAuth(new ScheduledServiceInvocationAuthHttpRequest
+        {
+            SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceHttpRequest
+            {
+                Subject = null!,
+                Scope = "proxy",
+            },
+        });
+
+        var result = await ScheduledDispatchEndpoints.Create(
+            request,
+            new RecordingScheduledDispatchApplicationService());
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+    }
+
+    [Fact]
+    public async Task Create_ShouldReturnBadRequest_WhenServiceInvocationAuthFieldsAreBlank()
+    {
+        var request = CreateServiceInvocationRequestWithAuth(new ScheduledServiceInvocationAuthHttpRequest
+        {
+            SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceHttpRequest
+            {
+                Subject = new ScheduledServiceInvocationNyxIdSubjectRefHttpRequest
+                {
+                    Platform = " ",
+                    Tenant = "tenant-1",
+                    ExternalUserId = "ou-user-1",
+                },
+                Scope = "",
+            },
+        });
+
+        var result = await ScheduledDispatchEndpoints.Create(
+            request,
+            new RecordingScheduledDispatchApplicationService());
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+    }
+
+    [Fact]
     public async Task Enable_ShouldMapNotFound()
     {
         var service = new RecordingScheduledDispatchApplicationService
@@ -209,6 +305,37 @@ public sealed class ScheduledDispatchEndpointsTests
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
         service.Disabled.Should().ContainSingle().Which.Should().Be(("schedule-1", string.Empty));
+    }
+
+    [Fact]
+    public async Task Delete_ShouldAcceptReasonFromQueryAndMapNotFound()
+    {
+        var acceptedService = new RecordingScheduledDispatchApplicationService();
+        var notFoundService = new RecordingScheduledDispatchApplicationService
+        {
+            DeleteException = new ScheduledDispatchNotFoundException("missing"),
+        };
+
+        var accepted = await ScheduledDispatchEndpoints.Delete(
+            "schedule-1",
+            "cleanup",
+            null,
+            acceptedService);
+        var notFound = await ScheduledDispatchEndpoints.Delete(
+            "missing",
+            null,
+            new ScheduledDispatchStateChangeHttpRequest { Reason = "body" },
+            notFoundService);
+
+        var acceptedHttp = CreateHttpContext();
+        await accepted.ExecuteAsync(acceptedHttp);
+        var notFoundHttp = CreateHttpContext();
+        await notFound.ExecuteAsync(notFoundHttp);
+
+        acceptedHttp.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        notFoundHttp.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        acceptedService.Deleted.Should().ContainSingle().Which.Should().Be(("schedule-1", "cleanup"));
+        notFoundService.Deleted.Should().ContainSingle().Which.Should().Be(("missing", "body"));
     }
 
     [Fact]
@@ -373,6 +500,30 @@ public sealed class ScheduledDispatchEndpointsTests
             },
         };
 
+    private static ScheduledDispatchConfigurationHttpRequest CreateServiceInvocationRequestWithAuth(
+        ScheduledServiceInvocationAuthHttpRequest auth) =>
+        new()
+        {
+            ScheduleId = "schedule-1",
+            DisplayName = "Run service",
+            CronExpression = "0 10 * * *",
+            Timezone = "UTC",
+            Enabled = false,
+            ServiceInvocation = new ScheduledDispatchServiceInvocationTargetHttpRequest
+            {
+                Identity = new ServiceIdentity
+                {
+                    TenantId = "tenant",
+                    AppId = "app",
+                    Namespace = "default",
+                    ServiceId = "svc",
+                },
+                EndpointId = "run",
+                Payload = Any.Pack(new StringValue { Value = "run" }),
+                Auth = auth,
+            },
+        };
+
     private static ScheduledDispatchDetail CreateDetail(string scheduleId) =>
         new(
             new ScheduledDispatchSummary(
@@ -417,9 +568,11 @@ public sealed class ScheduledDispatchEndpointsTests
     private sealed class RecordingScheduledDispatchApplicationService : IScheduledDispatchApplicationService
     {
         public List<ScheduledDispatchConfiguration> Created { get; } = [];
+        public List<ScheduledDispatchConfiguration> Ensured { get; } = [];
         public List<(string ScheduleId, ScheduledDispatchConfiguration Configuration)> Updated { get; } = [];
         public List<(string ScheduleId, string Reason)> Enabled { get; } = [];
         public List<(string ScheduleId, string Reason)> Disabled { get; } = [];
+        public List<(string ScheduleId, string Reason)> Deleted { get; } = [];
         public int? LastListTake { get; private set; }
         public string? LastListCursor { get; private set; }
         public bool? LastListIncludeTotalCount { get; private set; }
@@ -430,6 +583,7 @@ public sealed class ScheduledDispatchEndpointsTests
         public Exception? UpdateException { get; set; }
         public Exception? EnableException { get; set; }
         public Exception? DisableException { get; set; }
+        public Exception? DeleteException { get; set; }
         public Exception? GetException { get; set; }
         public Exception? PreviewException { get; set; }
         public Exception? RunNowException { get; set; }
@@ -442,6 +596,21 @@ public sealed class ScheduledDispatchEndpointsTests
             if (CreateException != null)
                 throw CreateException;
 
+            return Task.FromResult(new ScheduledDispatchMutationReceipt(
+                configuration.ScheduleId,
+                $"actor:{configuration.ScheduleId}",
+                Accepted: true,
+                CommandId: "cmd",
+                CorrelationId: "corr",
+                AckedAt: DateTimeOffset.UtcNow,
+                AckStage: "accepted"));
+        }
+
+        public Task<ScheduledDispatchMutationReceipt> EnsureAsync(
+            ScheduledDispatchConfiguration configuration,
+            CancellationToken ct = default)
+        {
+            Ensured.Add(configuration);
             return Task.FromResult(new ScheduledDispatchMutationReceipt(
                 configuration.ScheduleId,
                 $"actor:{configuration.ScheduleId}",
@@ -498,6 +667,25 @@ public sealed class ScheduledDispatchEndpointsTests
             Disabled.Add((scheduleId, reason));
             if (DisableException != null)
                 throw DisableException;
+
+            return Task.FromResult(new ScheduledDispatchMutationReceipt(
+                scheduleId,
+                $"actor:{scheduleId}",
+                Accepted: true,
+                CommandId: "cmd",
+                CorrelationId: "corr",
+                AckedAt: DateTimeOffset.UtcNow,
+                AckStage: "accepted"));
+        }
+
+        public Task<ScheduledDispatchMutationReceipt> DeleteAsync(
+            string scheduleId,
+            string reason,
+            CancellationToken ct = default)
+        {
+            Deleted.Add((scheduleId, reason));
+            if (DeleteException != null)
+                throw DeleteException;
 
             return Task.FromResult(new ScheduledDispatchMutationReceipt(
                 scheduleId,

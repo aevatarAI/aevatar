@@ -2,13 +2,20 @@ namespace Aevatar.AI.Abstractions.ToolProviders;
 
 // Refactor (iter23/cluster-001-nyxid-tool-approval-polling):
 //   Old pattern: remote approval submit/status lived behind a blocking IToolApprovalHandler poll loop.
-//   New principle: remote approval is a narrow submit/status port; RoleGAgent owns continuation state.
-/// <summary>Remote approval submit/status port; refactor helper, no behavior change.</summary>
+//   New principle: remote approval is a narrow command/status port; RoleGAgent owns continuation state.
+/// <summary>Remote approval command/status port.</summary>
 public interface IRemoteToolApprovalPort
 {
     Task<RemoteToolApprovalSubmission> SubmitAsync(RemoteToolApprovalRequest request, CancellationToken ct);
 
     Task<RemoteToolApprovalStatusSnapshot> GetStatusAsync(RemoteToolApprovalStatusQuery query, CancellationToken ct);
+
+    Task<RemoteToolApprovalDecisionResult> DecideAsync(RemoteToolApprovalDecision decision, CancellationToken ct);
+}
+
+public interface IRemoteToolApprovalNotificationPort
+{
+    Task NotifyAsync(RemoteToolApprovalNotification notification, CancellationToken ct);
 }
 
 public sealed record RemoteToolApprovalRequest(
@@ -23,9 +30,24 @@ public sealed record RemoteToolApprovalSubmission(
     string RemoteApprovalId,
     DateTimeOffset? ExpiresAt);
 
+public sealed record RemoteToolApprovalNotification(
+    RemoteToolApprovalRequest Request,
+    RemoteToolApprovalSubmission Submission,
+    AgentToolExecutionContext ToolContext);
+
 public sealed record RemoteToolApprovalStatusQuery(
     string RequestId,
     string RemoteApprovalId);
+
+public sealed record RemoteToolApprovalDecision(
+    string RequestId,
+    bool Approved);
+
+public sealed record RemoteToolApprovalDecisionResult(
+    bool Succeeded,
+    string? ErrorKey = null,
+    string? Detail = null,
+    int? Status = null);
 
 public sealed record RemoteToolApprovalStatusSnapshot(
     RemoteToolApprovalStatus Status,

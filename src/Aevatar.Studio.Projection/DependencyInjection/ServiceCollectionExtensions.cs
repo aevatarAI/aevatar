@@ -5,6 +5,7 @@ using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.CQRS.Core.DependencyInjection;
 using Aevatar.Foundation.Abstractions.EventSourcing;
+using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Projection.CommandServices;
 using Aevatar.Studio.Projection.Metadata;
@@ -12,7 +13,6 @@ using Aevatar.Studio.Projection.Orchestration;
 using Aevatar.Studio.Projection.Projectors;
 using Aevatar.Studio.Projection.QueryPorts;
 using Aevatar.Studio.Projection.ReadModels;
-using Aevatar.Studio.Projection.Repair;
 using Aevatar.GAgents.StudioMember;
 using Aevatar.Studio.Workspace;
 using Microsoft.Extensions.Configuration;
@@ -41,8 +41,12 @@ public static class ServiceCollectionExtensions
             optionsBuilder.Bind(configuration.GetSection(StudioMemberPlatformBindingOptions.SectionName));
 
         services.AddCqrsCore();
+        services.AddAevatarAgentKindRegistry(builder => builder.ScanAssemblies(
+            typeof(Aevatar.GAgents.UserConfig.UserConfigGAgent).Assembly,
+            typeof(Aevatar.GAgents.StudioMember.StudioMemberGAgent).Assembly,
+            typeof(Aevatar.GAgents.StudioTeam.StudioTeamGAgent).Assembly,
+            typeof(Aevatar.Studio.Workspace.StudioWorkspaceGAgent).Assembly));
         services.AddStudioProjectionActorCommandDispatch();
-        services.TryAddSingleton<StudioWorkflowDraftMemberEnsureCommandFactory>();
 
         // Projection read-model runtime (write dispatcher + sink bindings)
         services.AddProjectionReadModelRuntime();
@@ -107,10 +111,6 @@ public static class ServiceCollectionExtensions
         services.AddCurrentStateProjectionMaterializer<
             StudioMaterializationContext,
             StudioTeamCurrentStateProjector>();
-
-        services.AddCurrentStateProjectionMaterializer<
-            StudioMaterializationContext,
-            StudioWorkflowDraftMemberEnsureMaterializer>();
 
         services.AddCurrentStateProjectionMaterializer<
             StudioMaterializationContext,
@@ -186,11 +186,6 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IStudioMemberCommandPort, ActorDispatchStudioMemberCommandService>();
         services.TryAddSingleton<IStudioMemberPlatformBindingCommandPort, ScopeBindingStudioMemberPlatformBindingCommandService>();
         services.TryAddSingleton<IStudioTeamCommandPort, ActorDispatchStudioTeamCommandService>();
-        services.TryAddSingleton(sp => new StudioWorkflowDraftMemberRepairService(
-            sp.GetRequiredService<IStudioWorkspaceQueryPort>(),
-            sp.GetRequiredService<IStudioActorBootstrap>(),
-            sp.GetRequiredService<StudioProjectionActorCommandDispatch>(),
-            sp.GetRequiredService<StudioWorkflowDraftMemberEnsureCommandFactory>()));
 
         return services;
     }

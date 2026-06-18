@@ -1,4 +1,5 @@
-using Aevatar.Hosting;
+using System.Text.Json;
+using Aevatar.Capabilities;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Microsoft.AspNetCore.Builder;
@@ -317,7 +318,9 @@ internal static class StudioMemberEndpoints
     /// </summary>
     public sealed class StudioMemberPatchBody
     {
-        public System.Text.Json.JsonElement? TeamId { get; set; }
+        public JsonElement? DisplayName { get; set; }
+        public JsonElement? TeamId { get; set; }
+        public JsonElement? ImplementationRef { get; set; }
     }
 
     internal static async Task<IResult> HandlePatchAsync(
@@ -333,6 +336,24 @@ internal static class StudioMemberEndpoints
 
         if (body == null)
             return BadRequest("INVALID_STUDIO_MEMBER_REQUEST", "request body is required.");
+
+        PatchValue<string> displayNamePatch;
+        if (!body.DisplayName.HasValue)
+        {
+            displayNamePatch = PatchValue<string>.Absent;
+        }
+        else
+        {
+            var jsonValue = body.DisplayName.Value;
+            if (jsonValue.ValueKind != JsonValueKind.String)
+            {
+                return BadRequest(
+                    "INVALID_STUDIO_MEMBER_REQUEST",
+                    "displayName must be a string or absent.");
+            }
+
+            displayNamePatch = PatchValue<string>.Of(jsonValue.GetString());
+        }
 
         // Translate the wire body into the application contract. JsonElement
         // semantics:
@@ -369,11 +390,41 @@ internal static class StudioMemberEndpoints
             }
         }
 
+        PatchValue<StudioMemberImplementationRefResponse> implementationRefPatch;
+        if (!body.ImplementationRef.HasValue)
+        {
+            implementationRefPatch = PatchValue<StudioMemberImplementationRefResponse>.Absent;
+        }
+        else
+        {
+            var jsonValue = body.ImplementationRef.Value;
+            if (jsonValue.ValueKind == JsonValueKind.Null)
+            {
+                return BadRequest(
+                    "INVALID_STUDIO_MEMBER_REQUEST",
+                    "implementationRef must be an object when present.");
+            }
+
+            if (jsonValue.ValueKind != JsonValueKind.Object)
+            {
+                return BadRequest(
+                    "INVALID_STUDIO_MEMBER_REQUEST",
+                    "implementationRef must be an object or absent.");
+            }
+
+            var implementationRef = jsonValue.Deserialize<StudioMemberImplementationRefResponse>(
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            implementationRefPatch = PatchValue<StudioMemberImplementationRefResponse>.Of(implementationRef);
+        }
+
         try
         {
-            var detail = await memberService.UpdateAsync(
-                scopeId, memberId, new UpdateStudioMemberRequest(teamIdPatch), ct);
-            return Results.Ok(detail);
+            var receipt = await memberService.UpdateAsync(
+                scopeId,
+                memberId,
+                new UpdateStudioMemberRequest(displayNamePatch, teamIdPatch, implementationRefPatch),
+                ct);
+            return Results.Accepted(BuildMemberLocation(scopeId, memberId), receipt);
         }
         catch (StudioMemberNotFoundException ex)
         {
@@ -384,6 +435,9 @@ internal static class StudioMemberEndpoints
             return BadRequest("INVALID_STUDIO_MEMBER_REQUEST", ex.Message);
         }
     }
+
+    private static string BuildMemberLocation(string scopeId, string memberId) =>
+        $"/api/scopes/{Uri.EscapeDataString(scopeId)}/members/{Uri.EscapeDataString(memberId)}";
 
     private static IResult BadRequest(string code, string message) =>
         Results.BadRequest(new { code, message });

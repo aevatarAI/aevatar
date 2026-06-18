@@ -54,7 +54,7 @@ public sealed class ChatHistory
         var result = new List<ChatMessage>();
         if (!string.IsNullOrEmpty(systemPrompt))
             result.Add(ChatMessage.System(systemPrompt));
-        result.AddRange(_messages);
+        result.AddRange(ChatMessageToolCallTranscript.WithoutInvalidToolCallPairs(_messages));
         return result;
     }
 
@@ -97,6 +97,7 @@ public sealed class ChatHistory
         if (_messages.Count <= MaxMessages) return;
         var toRemove = _messages.Count - MaxMessages;
         _messages.RemoveRange(0, toRemove);
+        ChatMessageToolCallTranscript.RemoveInvalidToolCallPairs(_messages);
     }
 
     private static ContentPart ClonePart(ContentPart source) => new()

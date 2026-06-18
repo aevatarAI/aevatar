@@ -71,6 +71,10 @@ public sealed class SkillRunnerExecutionProjector
             NextRunAtUtc = state.NextRunAt,
             ErrorCount = state.ErrorCount,
             LastError = state.LastError ?? string.Empty,
+            ScheduleMode = state.ScheduleMode,
+            RunAtUtc = state.OneShotRunAt,
+            RetiredAtUtc = state.RetiredAt,
+            RetirementReason = state.RetirementReason ?? string.Empty,
         };
 
     private static bool TryResolveRunnerActorId(
@@ -100,6 +104,11 @@ public sealed class SkillRunnerExecutionProjector
 
     private static string ResolveRunnerStatus(SkillRunnerState state)
     {
+        if (state.ScheduleMode == SkillRunnerScheduleMode.OneShot && state.RetiredAt != null)
+            return state.ErrorCount > 0
+                ? SkillRunnerDefaults.StatusError
+                : SkillRunnerDefaults.StatusCompleted;
+
         if (!state.Enabled)
             return SkillRunnerDefaults.StatusDisabled;
 

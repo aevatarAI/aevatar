@@ -1,6 +1,7 @@
-import { InfoCircleOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, InfoCircleOutlined } from '@ant-design/icons';
 import { PageContainer, ProCard } from '@ant-design/pro-components';
 import {
+  Button,
   Drawer,
   Empty,
   Grid,
@@ -73,6 +74,7 @@ type AevatarPanelProps = {
 type AevatarContextDrawerProps = {
   children: React.ReactNode;
   extra?: React.ReactNode;
+  mobilePlacement?: 'bottom' | 'right';
   onClose: () => void;
   open: boolean;
   subtitle?: React.ReactNode;
@@ -84,6 +86,14 @@ type AevatarStatusTagProps = {
   domain: AevatarStatusDomain;
   label?: string;
   status: string;
+};
+
+type AevatarBackButtonProps = {
+  ariaLabel?: string;
+  className?: string;
+  onBack: () => void;
+  style?: React.CSSProperties;
+  title?: React.ReactNode;
 };
 
 const pageContentViewportStyle: React.CSSProperties = {
@@ -199,6 +209,40 @@ const titleRowStyle: React.CSSProperties = {
   flexWrap: 'wrap',
   gap: 6,
   maxWidth: '100%',
+};
+
+const backButtonStyle: React.CSSProperties = {
+  alignItems: 'center',
+  display: 'inline-flex',
+  flex: '0 0 auto',
+  height: 32,
+  justifyContent: 'center',
+  width: 32,
+};
+
+export const AevatarBackButton: React.FC<AevatarBackButtonProps> = ({
+  ariaLabel,
+  className,
+  onBack,
+  style,
+  title,
+}) => {
+  const label = ariaLabel ?? t("shared.ui.aevatarpageshells.back", "Back");
+
+  return (
+    <Tooltip title={title ?? label}>
+      <Button
+        aria-label={label}
+        className={className}
+        data-aevatar-back-button="true"
+        icon={<ArrowLeftOutlined />}
+        onClick={onBack}
+        size="small"
+        style={{ ...backButtonStyle, ...style }}
+        type="text"
+      />
+    </Tooltip>
+  );
 };
 
 export const AevatarHelpTooltip: React.FC<{
@@ -468,25 +512,37 @@ export const AevatarPanel: React.FC<AevatarPanelProps> = ({
 export const AevatarContextDrawer: React.FC<AevatarContextDrawerProps> = ({
   children,
   extra,
+  mobilePlacement = 'right',
   onClose,
   open,
   subtitle,
   title,
   width = AEVATAR_GLOBAL_UI_SPEC.tokens.inspectorWidth,
 }) => {
+  const screens = Grid.useBreakpoint();
   const { token } = theme.useToken();
+  const placement = screens.md ? 'right' : mobilePlacement;
+  const isBottomPlacement = placement === 'bottom';
 
   return (
     <Drawer
       destroyOnHidden
       onClose={onClose}
       open={open}
+      placement={placement}
+      rootClassName={`aevatar-context-drawer-${placement}`}
       size={
+        !isBottomPlacement &&
         width >= AEVATAR_GLOBAL_UI_SPEC.tokens.inspectorWidth
           ? 'large'
           : 'default'
       }
-      styles={{ body: aevatarDrawerBodyStyle }}
+      styles={{
+        body: aevatarDrawerBodyStyle,
+        ...(isBottomPlacement
+          ? { wrapper: { height: '76vh', maxHeight: '88vh', width: '100%' } }
+          : null),
+      }}
       title={
         <Space orientation="vertical" size={2}>
           <Typography.Text strong>{title}</Typography.Text>

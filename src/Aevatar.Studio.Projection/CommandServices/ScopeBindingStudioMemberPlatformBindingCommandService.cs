@@ -191,6 +191,26 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
             return null;
         }
 
+        StudioMemberImplementationRef implementationRef;
+        try
+        {
+            implementationRef = BuildImplementationRef(result);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "StudioMember platform binding result mapping failed. bindingRunId={BindingRunId} platformBindingCommandId={CommandId}",
+                request.BindingRunId,
+                commandId);
+
+            return BuildFailedContinuation(
+                request.BindingRunId,
+                commandId,
+                PlatformBindingFailedFailureCode,
+                ex.Message);
+        }
+
         return new StudioMemberPlatformBindingSucceeded
         {
             BindingRunId = request.BindingRunId,
@@ -202,7 +222,7 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
                 RevisionId = result.RevisionId,
                 ImplementationKind = ToStudioKind(result.ImplementationKind),
                 ExpectedActorId = result.ExpectedActorId,
-                ImplementationRef = BuildImplementationRef(result),
+                ImplementationRef = implementationRef,
             },
         };
     }
@@ -320,7 +340,9 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
             StudioMemberBindingRequest.ImplementationOneofCase.Workflow => new ScopeBindingUpsertRequest(
                 ScopeId: bindingRequest.ScopeId,
                 ImplementationKind: ScopeBindingImplementationKind.Workflow,
-                Workflow: new ScopeBindingWorkflowSpec(bindingRequest.Workflow.WorkflowYamls.ToArray()),
+                Workflow: new ScopeBindingWorkflowSpec(
+                    bindingRequest.Workflow.WorkflowId,
+                    bindingRequest.Workflow.WorkflowYamls.ToArray()),
                 DisplayName: request.Admitted.DisplayName,
                 RevisionId: revisionId,
                 ServiceId: request.Admitted.PublishedServiceId,
@@ -341,7 +363,7 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
                 ScopeId: bindingRequest.ScopeId,
                 ImplementationKind: ScopeBindingImplementationKind.GAgent,
                 GAgent: new ScopeBindingGAgentSpec(
-                    bindingRequest.Gagent.ActorTypeName,
+                    bindingRequest.Gagent.AgentKind,
                     bindingRequest.Gagent.Endpoints.Select(ToScopeBindingEndpoint).ToArray()),
                 DisplayName: request.Admitted.DisplayName,
                 RevisionId: revisionId,
@@ -437,7 +459,7 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
             {
                 Workflow = new StudioMemberWorkflowRef
                 {
-                    WorkflowId = result.Workflow?.WorkflowName ?? result.WorkflowName,
+                    WorkflowId = ResolveWorkflowId(result),
                     WorkflowRevision = result.RevisionId,
                 },
             },
@@ -453,9 +475,18 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
             {
                 Gagent = new StudioMemberGAgentRef
                 {
-                    ActorTypeName = result.GAgent?.ActorTypeName ?? string.Empty,
+                    ActorTypeName = result.GAgent?.DiagnosticClrTypeName ?? string.Empty,
                 },
             },
             _ => new StudioMemberImplementationRef(),
         };
+
+    private static string ResolveWorkflowId(ScopeBindingUpsertResult result)
+    {
+        var workflowId = result.Workflow?.WorkflowId?.Trim();
+        if (!string.IsNullOrWhiteSpace(workflowId))
+            return workflowId;
+
+        throw new InvalidOperationException("scope binding workflow result workflow id is required for workflow member binding.");
+    }
 }

@@ -1111,6 +1111,74 @@ public sealed class LlmSessionGAgentTests
     }
 
     [Fact]
+    public async Task HandleLlmRunRequestedAsync_WhenLocalToolThrows_ShouldRecordSafeToolOutputAndContinueNextRound()
+    {
+        var eventStore = new InMemoryEventStore();
+        var tool = new ThrowingAgentTool(
+            "get_weather",
+            new InvalidOperationException("secret token /Users/me/path"));
+        var toolProvider = new StaticResponsesToolProvider(substituteTools: [tool]);
+        var provider = new ScriptedLlmProviderFactory([
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "call_1",
+                        Name = "get_weather",
+                        ArgumentsJson = """{"city":"Singapore"}""",
+                    },
+                    IsLast = true,
+                },
+            ],
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = "safe output accepted",
+                    IsLast = true,
+                },
+            ],
+        ]);
+        var actor = CreateActorWithStore(
+            "resp_safe_tool_failure",
+            eventStore,
+            services =>
+            {
+                services.AddSingleton<ILLMProviderFactory>(provider);
+                services.AddSingleton<IResponsesToolProvider>(toolProvider);
+            });
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_safe_tool_failure"),
+        });
+        var selection = BuildForwardedSelection();
+        selection.SubstitutedToolNames.Add("get_weather");
+
+        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_safe_tool_failure", selection));
+
+        actor.State.Record!.Status.Should().Be(LlmSessionStatus.Completed);
+        actor.State.Completion!.OutputText.Should().Be("safe output accepted");
+        provider.Requests.Should().HaveCount(2);
+        var toolMessage = provider.Requests[1].Messages.Single(message =>
+            string.Equals(message.Role, "tool", StringComparison.Ordinal));
+        toolMessage.Content.Should().Contain("aevatar_local_tool_execution_failed");
+        toolMessage.Content.Should().Contain("get_weather");
+        toolMessage.Content.Should().NotContain("secret token");
+        toolMessage.Content.Should().NotContain("/Users/me/path");
+
+        var localObserved = (await eventStore.GetEventsAsync(actor.Id))
+            .Select(static evt => evt.EventData)
+            .Where(static payload => payload.Is(LlmToolCallObserved.Descriptor))
+            .Select(static payload => payload.Unpack<LlmToolCallObserved>())
+            .Should()
+            .ContainSingle(observed => !observed.Forwarded)
+            .Subject;
+        localObserved.LocalResultJson.Should().Be(toolMessage.Content);
+        localObserved.LocalResult.StructValue.Fields["error"]
+            .StructValue.Fields["code"].StringValue.Should().Be("aevatar_local_tool_execution_failed");
+    }
+
+    [Fact]
     public async Task HandleLlmRunRequestedAsync_ShouldPropagateTypedToolContextAcrossProviderAndToolScopes()
     {
         var tool = new RecordingAgentTool("get_weather", """{"temperature":28}""");
@@ -1193,6 +1261,53 @@ public sealed class LlmSessionGAgentTests
             options => options.Excluding(context => context.Request.CallId));
         tool.ExecutionContexts[0]!.Request.CallId.Should().Be("call_1");
         AgentToolRequestContext.Current.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleLlmRunRequestedAsync_WhenToolProviderDiscoveryFails_ShouldContinueWithOtherProviders()
+    {
+        var tool = new RecordingAgentTool("get_weather", """{"temperature":28}""");
+        var provider = new ScriptedLlmProviderFactory([
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "call_1",
+                        Name = "get_weather",
+                        ArgumentsJson = """{"city":"Singapore"}""",
+                    },
+                    IsLast = true,
+                },
+            ],
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = "done",
+                    IsLast = true,
+                },
+            ],
+        ]);
+        var actor = CreateActor(
+            "resp_provider_discovery_failure",
+            services =>
+            {
+                services.AddSingleton<ILLMProviderFactory>(provider);
+                services.AddSingleton<IResponsesToolProvider>(new FaultingResponsesToolProvider());
+                services.AddSingleton<IResponsesToolProvider>(new StaticResponsesToolProvider(substituteTools: [tool]));
+            });
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_provider_discovery_failure"),
+        });
+        var selection = BuildForwardedSelection();
+        selection.SubstitutedToolNames.Add("get_weather");
+
+        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_provider_discovery_failure", selection));
+
+        actor.State.Record!.Status.Should().Be(LlmSessionStatus.Completed);
+        tool.Executions.Should().ContainSingle();
+        actor.State.Completion!.OutputText.Should().Be("done");
     }
 
     [Fact]
@@ -1560,6 +1675,21 @@ public sealed class LlmSessionGAgentTests
         }
     }
 
+    private sealed class FaultingResponsesToolProvider : IResponsesToolProvider
+    {
+        public ValueTask<IReadOnlyList<IAgentTool>> GetSubstituteToolsAsync(
+            ResponsesToolProviderContext context,
+            CancellationToken ct = default) =>
+            ValueTask.FromException<IReadOnlyList<IAgentTool>>(
+                new InvalidOperationException("substitute discovery failed"));
+
+        public ValueTask<IReadOnlyList<IAgentTool>> GetAdditiveToolsAsync(
+            ResponsesToolProviderContext context,
+            CancellationToken ct = default) =>
+            ValueTask.FromException<IReadOnlyList<IAgentTool>>(
+                new InvalidOperationException("additive discovery failed"));
+    }
+
     private sealed class RecordingAgentTool(string name, string resultJson) : IAgentTool
     {
         public List<string> Executions { get; } = [];
@@ -1577,5 +1707,17 @@ public sealed class LlmSessionGAgentTests
             ExecutionContexts.Add(AgentToolRequestContext.Current);
             return Task.FromResult(resultJson);
         }
+    }
+
+    private sealed class ThrowingAgentTool(string name, Exception exception) : IAgentTool
+    {
+        public string Name { get; } = name;
+
+        public string Description => "throwing test tool";
+
+        public string ParametersSchema => """{"type":"object"}""";
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromException<string>(exception);
     }
 }

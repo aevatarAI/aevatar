@@ -15,13 +15,14 @@
     <ProjectReference Include="..\Aevatar.GAgentService.Governance.Hosting\Aevatar.GAgentService.Governance.Hosting.csproj" />
     <ProjectReference Include="..\..\Aevatar.CQRS.Projection.Providers.Elasticsearch\Aevatar.CQRS.Projection.Providers.Elasticsearch.csproj" />
     <ProjectReference Include="..\..\Aevatar.CQRS.Projection.Providers.InMemory\Aevatar.CQRS.Projection.Providers.InMemory.csproj" />
-    <ProjectReference Include="..\..\Aevatar.Hosting\Aevatar.Hosting.csproj" />
+    <ProjectReference Include="..\..\Aevatar.Capabilities\Aevatar.Capabilities.csproj" />
     <ProjectReference Include="..\..\Aevatar.AGUI.Contracts\Aevatar.AGUI.Contracts.csproj" />
     <ProjectReference Include="..\..\Aevatar.Studio.Application\Aevatar.Studio.Application.csproj" />
     <ProjectReference Include="..\..\Aevatar.Studio.Projection\Aevatar.Studio.Projection.csproj" />
     <ProjectReference Include="..\..\Aevatar.Scripting.Hosting\Aevatar.Scripting.Hosting.csproj" />
     <ProjectReference Include="..\..\workflow\Aevatar.Workflow.Application.Abstractions\Aevatar.Workflow.Application.Abstractions.csproj" />
     <ProjectReference Include="..\..\workflow\Aevatar.Workflow.Infrastructure\Aevatar.Workflow.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\..\agents\Aevatar.GAgents.Channel.Identity.Abstractions\Aevatar.GAgents.Channel.Identity.Abstractions.csproj" />
   </ItemGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />

@@ -26,9 +26,26 @@ public sealed class StepDefinition
     public Dictionary<string, string> Parameters { get; init; } = [];
 
     /// <summary>
+    /// Typed deterministic transform operation for bounded numeric and grouping transforms.
+    /// </summary>
+    public TransformOperationSpec? TransformOperation { get; init; }
+
+    /// <summary>
+    /// Presentation contract rendered outside the workflow core boundary.
+    /// </summary>
+    public StepPresentation? Presentation { get; init; }
+
+    public WorkflowAgentToolScopeDefinition? AgentToolScope { get; init; }
+
+    /// <summary>
     /// 下一步骤 ID，用于线性流程控制。
     /// </summary>
     public string? Next { get; init; }
+
+    /// <summary>
+    /// 可选补偿步骤 id：声明撤销本步骤的同 workflow 步骤；仅在反向补偿走查时执行，不在正向路径自动插入。
+    /// </summary>
+    public string? Compensation { get; init; }
 
     /// <summary>
     /// 子步骤列表，用于并行或嵌套结构。
@@ -44,6 +61,11 @@ public sealed class StepDefinition
     /// 步骤级重试配置。为 null 表示不重试（失败即终止或走 on_error）。
     /// </summary>
     public StepRetryPolicy? Retry { get; init; }
+
+    /// <summary>
+    /// 可选幂等键表达式；缺省解析与分发线程化由 #2098 处理，本步仅承载授权字段。
+    /// </summary>
+    public string? IdempotencyKey { get; init; }
 
     /// <summary>
     /// 步骤级错误处理策略。为 null 表示使用默认行为（fail，终止 workflow）。

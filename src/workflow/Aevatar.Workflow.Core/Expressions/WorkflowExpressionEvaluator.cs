@@ -1,20 +1,21 @@
-// ─────────────────────────────────────────────────────────────
-// WorkflowExpressionEvaluator — 轻量级表达式求值器
-// 支持变量插值、条件表达式、字符串函数
-// 供 YAML 工作流步骤参数动态计算
+// -------------------------------------------------------------
+// WorkflowExpressionEvaluator - lightweight expression evaluator
+// Supports variable interpolation, conditionals, and string functions
+// for dynamic YAML workflow step parameters.
 //
-// 语法:
-//   ${variables.name}          — 变量引用
-//   ${if(cond, true, false)}   — 条件
-//   ${concat(a, b, ...)}       — 拼接
-//   ${isBlank(val)}            — 空值检测
-//   ${length(val)}             — 长度
-//   ${not(val)}                — 取反
-//   ${and(a, b)}               — 逻辑与
-//   ${or(a, b)}                — 逻辑或
-// ─────────────────────────────────────────────────────────────
+// Syntax:
+//   ${variables.name}          - variable reference
+//   ${if(cond, true, false)}   - conditional
+//   ${concat(a, b, ...)}       - concatenation
+//   ${isBlank(val)}            - blank value check
+//   ${length(val)}             - length
+//   ${not(val)}                - negation
+//   ${and(a, b)}               - logical and
+//   ${or(a, b)}                - logical or
+// -------------------------------------------------------------
 
 using System.Globalization;
+using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -27,7 +28,7 @@ namespace Aevatar.Workflow.Core.Expressions;
 /// </summary>
 public sealed partial class WorkflowExpressionEvaluator
 {
-    [GeneratedRegex(@"\$\{([^}]+)\}", RegexOptions.Compiled)]
+    [GeneratedRegex(@"(?<!\$)\$\{([^}]+)\}", RegexOptions.Compiled)]
     private static partial Regex ExpressionPattern();
 
     /// <summary>
@@ -42,11 +43,37 @@ public sealed partial class WorkflowExpressionEvaluator
         if (string.IsNullOrEmpty(template) || !template.Contains("${"))
             return template;
 
-        return ExpressionPattern().Replace(template, match =>
+        var result = new StringBuilder(template.Length);
+        var cursor = 0;
+        foreach (Match match in ExpressionPattern().Matches(template))
         {
+            AppendLiteralSegment(result, template.AsSpan(cursor, match.Index - cursor));
             var expr = match.Groups[1].Value.Trim();
-            return EvaluateExpression(expr, variables);
-        });
+            result.Append(EvaluateExpression(expr, variables));
+            cursor = match.Index + match.Length;
+        }
+
+        AppendLiteralSegment(result, template.AsSpan(cursor));
+        return result.ToString();
+    }
+
+    private static void AppendLiteralSegment(StringBuilder result, ReadOnlySpan<char> value)
+    {
+        for (var i = 0; i < value.Length;)
+        {
+            if (i + 2 < value.Length &&
+                value[i] == '$' &&
+                value[i + 1] == '$' &&
+                value[i + 2] == '{')
+            {
+                result.Append("${");
+                i += 3;
+                continue;
+            }
+
+            result.Append(value[i]);
+            i++;
+        }
     }
 
     /// <summary>
@@ -95,7 +122,7 @@ public sealed partial class WorkflowExpressionEvaluator
         return ResolveVariable(expression, variables);
     }
 
-    // ─── Functions ───
+    // Functions
 
     private string EvalIf(List<string> args, IReadOnlyDictionary<string, string> variables)
     {
@@ -227,7 +254,7 @@ public sealed partial class WorkflowExpressionEvaluator
     private string EvalGte(List<string> args, IReadOnlyDictionary<string, string> variables) =>
         EvalNumericComparison(args, variables, static (l, r) => l >= r, "gte");
 
-    // ─── Helpers ───
+    // Helpers
 
     private static string ResolveVariable(string name, IReadOnlyDictionary<string, string> variables)
     {
@@ -236,7 +263,7 @@ public sealed partial class WorkflowExpressionEvaluator
             (name.StartsWith('"') && name.EndsWith('"')))
             return name[1..^1];
 
-        // Dotted path: variables.name → look up "name"
+        // Dotted path: variables.name resolves the "name" key.
         var key = name.StartsWith("variables.", StringComparison.OrdinalIgnoreCase)
             ? name["variables.".Length..]
             : name;

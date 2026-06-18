@@ -135,16 +135,21 @@ public sealed class StudioMemberServiceTeamTests
     }
 
     [Fact]
-    public async Task UpdateAsync_ShouldThrow_WhenMemberNotFound()
+    public async Task UpdateAsync_ShouldAcceptTeamPatch_WhenMemberReadModelIsMissing()
     {
-        var service = NewService(memberQueryPort: new InMemoryMemberQueryPort(null));
+        var commandPort = new RecordingMemberCommandPort();
+        var service = NewService(
+            commandPort: commandPort,
+            memberQueryPort: new InMemoryMemberQueryPort(null));
 
-        var act = () => service.UpdateAsync(
+        var response = await service.UpdateAsync(
             ScopeId,
             "missing-member",
             new UpdateStudioMemberRequest(TeamId: PatchValue<string>.Of("t-1")));
 
-        await act.Should().ThrowAsync<StudioMemberNotFoundException>();
+        response.Status.Should().Be(StudioMemberCommandStatusNames.Accepted);
+        commandPort.PatchTeamAssignmentCalls.Should().Be(1);
+        commandPort.LastTargetTeamId.Should().Be("t-1");
     }
 
     private static StudioMemberService NewService(
@@ -157,6 +162,7 @@ public sealed class StudioMemberServiceTeamTests
             new InertBindingRunQueryPort(),
             teamQueryPort ?? new InMemoryTeamQueryPort(NewTeamSummary()),
             new ThrowingServiceLifecycleQueryPort(),
+            new ReadyScopeBindingReadinessQueryPort(),
             new ThrowingServiceCommandPort());
 
     private static StudioMemberDetailResponse NewDetail(string? currentTeamId = null)
@@ -270,6 +276,13 @@ public sealed class StudioMemberServiceTeamTests
             StudioMemberImplementationRefResponse implementation, CancellationToken ct = default) =>
             Task.CompletedTask;
 
+        public Task RenameAsync(
+            string scopeId,
+            string memberId,
+            string displayName,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
+
         public Task StartBindingRunAsync(
             StudioMemberBindingRunStartRequest request,
             CancellationToken ct = default) =>
@@ -290,6 +303,24 @@ public sealed class StudioMemberServiceTeamTests
         public Task<ScopeBindingUpsertResult> UpsertAsync(
             ScopeBindingUpsertRequest request, CancellationToken ct = default) =>
             throw new InvalidOperationException("scope binding should not be called in team tests.");
+    }
+
+    private sealed class ReadyScopeBindingReadinessQueryPort : IScopeBindingReadinessQueryPort
+    {
+        public Task<ScopeBindingReadinessSnapshot> GetReadinessAsync(
+            ScopeBindingReadinessRequest request,
+            CancellationToken ct = default) =>
+            Task.FromResult(new ScopeBindingReadinessSnapshot(
+                request.ScopeId,
+                request.ServiceId,
+                ScopeBindingReadinessStatus.Ready,
+                ServiceCatalogVisible: true,
+                ServingSetVisible: true,
+                EligibleServingTargetVisible: true,
+                InvokeReady: true,
+                RevisionId: request.ExpectedRevisionId,
+                DeploymentId: "dep-1",
+                ObservedAtUtc: DateTimeOffset.UtcNow));
     }
 
     private sealed class ThrowingServiceLifecycleQueryPort : IServiceLifecycleQueryPort

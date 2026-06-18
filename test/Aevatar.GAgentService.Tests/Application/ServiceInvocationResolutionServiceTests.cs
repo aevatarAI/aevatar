@@ -12,7 +12,7 @@ namespace Aevatar.GAgentService.Tests.Application;
 public sealed class ServiceInvocationResolutionServiceTests
 {
     [Fact]
-    public async Task ResolveAsync_ShouldUseTrafficViewTargetAndArtifactEndpoint()
+    public async Task ResolveAsync_ShouldUseInvocationCatalogReadinessAndPreparedArtifact()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
         var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
@@ -23,32 +23,11 @@ public sealed class ServiceInvocationResolutionServiceTests
                 identity,
                 "r2",
                 GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "chat")));
-        var service = new ServiceInvocationResolutionService(
-            new RecordingCatalogQueryReader
-            {
-                GetResult = CreateCatalogSnapshot(identity, policyIds: ["policy-a"]),
-            },
-            new RecordingTrafficViewQueryReader
-            {
-                GetResult = new ServiceTrafficViewSnapshot(
-                    ServiceKeys.Build(identity),
-                    2,
-                    "rollout-1",
-                    [
-                        new ServiceTrafficEndpointSnapshot(
-                            "chat",
-                            [
-                                new ServiceTrafficTargetSnapshot(
-                                    "dep-2",
-                                    "r2",
-                                    "actor-2",
-                                    100,
-                                    ServiceServingState.Active.ToString()),
-                            ]),
-                    ],
-                    DateTimeOffset.UtcNow),
-            },
-            revisionCatalog);
+        var service = CreateService(
+            identity,
+            revisionCatalog,
+            readiness: Ready(identity, "chat", "r2", "dep-2", "actor-2"),
+            policyIds: ["policy-a"]);
 
         var resolved = await service.ResolveAsync(new ServiceInvocationRequest
         {
@@ -66,43 +45,9 @@ public sealed class ServiceInvocationResolutionServiceTests
     }
 
     [Fact]
-    public async Task ResolveAsync_ShouldRejectMissingServingTargetForEndpoint()
-    {
-        var identity = GAgentServiceTestKit.CreateIdentity();
-        var service = new ServiceInvocationResolutionService(
-            new RecordingCatalogQueryReader
-            {
-                GetResult = CreateCatalogSnapshot(identity),
-            },
-            new RecordingTrafficViewQueryReader
-            {
-                GetResult = new ServiceTrafficViewSnapshot(
-                    ServiceKeys.Build(identity),
-                    1,
-                    string.Empty,
-                    [],
-                    DateTimeOffset.UtcNow),
-            },
-            new FakeServiceRevisionCatalogQueryReader());
-
-        var act = () => service.ResolveAsync(new ServiceInvocationRequest
-        {
-            Identity = identity.Clone(),
-            EndpointId = "missing",
-            Payload = Any.Pack(new StringValue { Value = "payload" }),
-        });
-
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*has no serving target*");
-    }
-
-    [Fact]
     public async Task ResolveAsync_ShouldRejectMissingIdentity()
     {
-        var service = new ServiceInvocationResolutionService(
-            new RecordingCatalogQueryReader(),
-            new RecordingTrafficViewQueryReader(),
-            new FakeServiceRevisionCatalogQueryReader());
+        var service = CreateService(GAgentServiceTestKit.CreateIdentity(), new FakeServiceRevisionCatalogQueryReader());
 
         var act = () => service.ResolveAsync(new ServiceInvocationRequest
         {
@@ -117,10 +62,7 @@ public sealed class ServiceInvocationResolutionServiceTests
     [Fact]
     public async Task ResolveAsync_ShouldRejectBlankEndpointId()
     {
-        var service = new ServiceInvocationResolutionService(
-            new RecordingCatalogQueryReader(),
-            new RecordingTrafficViewQueryReader(),
-            new FakeServiceRevisionCatalogQueryReader());
+        var service = CreateService(GAgentServiceTestKit.CreateIdentity(), new FakeServiceRevisionCatalogQueryReader());
 
         var act = () => service.ResolveAsync(new ServiceInvocationRequest
         {
@@ -139,22 +81,17 @@ public sealed class ServiceInvocationResolutionServiceTests
         var identity = GAgentServiceTestKit.CreateIdentity();
         var service = new ServiceInvocationResolutionService(
             new RecordingCatalogQueryReader(),
-            new RecordingTrafficViewQueryReader(),
+            new RecordingInvocationCatalogQueryReader(),
             new FakeServiceRevisionCatalogQueryReader());
 
-        var act = () => service.ResolveAsync(new ServiceInvocationRequest
-        {
-            Identity = identity.Clone(),
-            EndpointId = "chat",
-            Payload = Any.Pack(new StringValue { Value = "payload" }),
-        });
+        var act = () => service.ResolveAsync(NewRequest(identity, "chat"));
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*was not found*");
     }
 
     [Fact]
-    public async Task ResolveAsync_ShouldRejectMissingTrafficView()
+    public async Task ResolveAsync_ShouldRejectMissingInvocationCatalogReadModel_AsUnspecified()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
         var service = new ServiceInvocationResolutionService(
@@ -162,116 +99,54 @@ public sealed class ServiceInvocationResolutionServiceTests
             {
                 GetResult = CreateCatalogSnapshot(identity),
             },
-            new RecordingTrafficViewQueryReader(),
+            new RecordingInvocationCatalogQueryReader(),
             new FakeServiceRevisionCatalogQueryReader());
 
-        var act = () => service.ResolveAsync(new ServiceInvocationRequest
-        {
-            Identity = identity.Clone(),
-            EndpointId = "chat",
-            Payload = Any.Pack(new StringValue { Value = "payload" }),
-        });
+        var act = () => service.ResolveAsync(NewRequest(identity, "chat"));
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*has no serving traffic view*");
+        var ex = await act.Should().ThrowAsync<ServiceInvokeReadinessException>();
+        ex.Which.Snapshot.ReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Unspecified);
+        ex.Which.Snapshot.UnavailableReason.Should().Be(ServiceInvokeUnavailableReason.Unspecified);
     }
 
-    [Fact]
-    public async Task ResolveAsync_ShouldFallbackToServingSet_WhenTrafficViewIsMissing()
+    [Theory]
+    [InlineData(ServiceInvokeUnavailableReason.ServingTargetMissing)]
+    [InlineData(ServiceInvokeUnavailableReason.RevisionNotPrepared)]
+    [InlineData(ServiceInvokeUnavailableReason.PreparedArtifactMissing)]
+    public async Task ResolveAsync_ShouldRejectUnavailableReadiness_WithCanonicalReason(ServiceInvokeUnavailableReason reason)
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
-        await revisionCatalog.UpsertRevisionAsync(
-            ServiceKeys.Build(identity),
-            "r2",
-            GAgentServiceTestKit.CreatePreparedStaticArtifact(
-                identity,
-                "r2",
-                GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "chat")));
-        var service = new ServiceInvocationResolutionService(
-            new RecordingCatalogQueryReader
-            {
-                GetResult = CreateCatalogSnapshot(identity, policyIds: ["policy-a"]),
-            },
-            new RecordingTrafficViewQueryReader(),
-            new RecordingServingSetQueryReader
-            {
-                GetResult = new ServiceServingSetSnapshot(
-                    ServiceKeys.Build(identity),
-                    2,
-                    "rollout-1",
-                    [
-                        new ServiceServingTargetSnapshot(
-                            "dep-2",
-                            "r2",
-                            "actor-2",
-                            100,
-                            ServiceServingState.Active.ToString(),
-                            []),
-                    ],
-                    DateTimeOffset.UtcNow),
-            },
-            revisionCatalog);
+        var service = CreateService(
+            identity,
+            new FakeServiceRevisionCatalogQueryReader(),
+            readiness: Unavailable(identity, "chat", reason, "r1", "dep-1", "actor-1"));
 
-        var resolved = await service.ResolveAsync(new ServiceInvocationRequest
-        {
-            Identity = identity.Clone(),
-            EndpointId = "chat",
-            Payload = Any.Pack(new StringValue { Value = "payload" }),
-        });
+        var act = () => service.ResolveAsync(NewRequest(identity, "chat"));
 
-        resolved.Service.RevisionId.Should().Be("r2");
-        resolved.Service.DeploymentId.Should().Be("dep-2");
-        resolved.Service.PrimaryActorId.Should().Be("actor-2");
-        resolved.Service.PolicyIds.Should().ContainSingle("policy-a");
-        resolved.Artifact.RevisionId.Should().Be("r2");
-        resolved.Endpoint.EndpointId.Should().Be("chat");
+        var ex = await act.Should().ThrowAsync<ServiceInvokeReadinessException>();
+        ex.Which.Snapshot.ReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Unavailable);
+        ex.Which.Snapshot.UnavailableReason.Should().Be(reason);
     }
 
     [Fact]
-    public async Task ResolveAsync_ShouldRejectMissingPreparedArtifact()
+    public async Task ResolveAsync_ShouldRejectMissingEndpointReadiness_AsUnspecified()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var service = new ServiceInvocationResolutionService(
-            new RecordingCatalogQueryReader
-            {
-                GetResult = CreateCatalogSnapshot(identity),
-            },
-            new RecordingTrafficViewQueryReader
-            {
-                GetResult = new ServiceTrafficViewSnapshot(
-                    ServiceKeys.Build(identity),
-                    2,
-                    string.Empty,
-                    [
-                        new ServiceTrafficEndpointSnapshot(
-                            "chat",
-                            [
-                                new ServiceTrafficTargetSnapshot(
-                                    "dep-1",
-                                    "r1",
-                                    "actor-1",
-                                    100,
-                                    ServiceServingState.Active.ToString()),
-                            ]),
-                    ],
-                    DateTimeOffset.UtcNow),
-            },
-            new FakeServiceRevisionCatalogQueryReader());
+        var service = CreateService(
+            identity,
+            new FakeServiceRevisionCatalogQueryReader(),
+            readiness: Ready(identity, "other", "r1", "dep-1", "actor-1"));
 
-        var act = () => service.ResolveAsync(new ServiceInvocationRequest
-        {
-            Identity = identity.Clone(),
-            EndpointId = "chat",
-            Payload = Any.Pack(new StringValue { Value = "payload" }),
-        });
+        var act = () => service.ResolveAsync(NewRequest(identity, "chat"));
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*Prepared artifact*was not found*");
+        var ex = await act.Should().ThrowAsync<ServiceInvokeReadinessException>();
+        ex.Which.Snapshot.ReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Unspecified);
+        ex.Which.Snapshot.UnavailableReason.Should().Be(ServiceInvokeUnavailableReason.Unspecified);
+        ex.Which.Snapshot.AggregateStateVersion.Should().Be(7);
     }
 
     [Fact]
-    public async Task ResolveAsync_ShouldHonorExplicitRevisionSelection()
+    public async Task ResolveAsync_ShouldHonorExplicitRevisionSelection_FromReadinessEntry()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
         var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
@@ -289,38 +164,14 @@ public sealed class ServiceInvocationResolutionServiceTests
                 identity,
                 "r2",
                 GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "chat")));
-        var service = new ServiceInvocationResolutionService(
-            new RecordingCatalogQueryReader
-            {
-                GetResult = CreateCatalogSnapshot(identity),
-            },
-            new RecordingTrafficViewQueryReader
-            {
-                GetResult = new ServiceTrafficViewSnapshot(
-                    ServiceKeys.Build(identity),
-                    2,
-                    string.Empty,
-                    [
-                        new ServiceTrafficEndpointSnapshot(
-                            "chat",
-                            [
-                                new ServiceTrafficTargetSnapshot(
-                                    "dep-1",
-                                    "r1",
-                                    "actor-1",
-                                    100,
-                                    ServiceServingState.Active.ToString()),
-                                new ServiceTrafficTargetSnapshot(
-                                    "dep-2",
-                                    "r2",
-                                    "actor-2",
-                                    100,
-                                    ServiceServingState.Active.ToString()),
-                            ]),
-                    ],
-                    DateTimeOffset.UtcNow),
-            },
-            revisionCatalog);
+        var service = CreateService(
+            identity,
+            revisionCatalog,
+            readinessEntries:
+            [
+                Ready(identity, "chat", "r1", "dep-1", "actor-1"),
+                Ready(identity, "chat", "r2", "dep-2", "actor-2"),
+            ]);
 
         var resolved = await service.ResolveAsync(new ServiceInvocationRequest
         {
@@ -336,47 +187,113 @@ public sealed class ServiceInvocationResolutionServiceTests
     }
 
     [Fact]
-    public async Task ResolveAsync_ShouldRejectExplicitRevisionWhenTargetIsNotActive()
+    public async Task ResolveAsync_ShouldMapReadyDriftMissingArtifact_ToPreparedArtifactMissing()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var service = new ServiceInvocationResolutionService(
-            new RecordingCatalogQueryReader
-            {
-                GetResult = CreateCatalogSnapshot(identity),
-            },
-            new RecordingTrafficViewQueryReader
-            {
-                GetResult = new ServiceTrafficViewSnapshot(
-                    ServiceKeys.Build(identity),
-                    2,
-                    string.Empty,
-                    [
-                        new ServiceTrafficEndpointSnapshot(
-                            "chat",
-                            [
-                                new ServiceTrafficTargetSnapshot(
-                                    "dep-1",
-                                    "r1",
-                                    "actor-1",
-                                    100,
-                                    ServiceServingState.Paused.ToString()),
-                            ]),
-                    ],
-                    DateTimeOffset.UtcNow),
-            },
-            new FakeServiceRevisionCatalogQueryReader());
+        var service = CreateService(
+            identity,
+            new FakeServiceRevisionCatalogQueryReader(),
+            readiness: Ready(identity, "chat", "r1", "dep-1", "actor-1"));
 
-        var act = () => service.ResolveAsync(new ServiceInvocationRequest
+        var act = () => service.ResolveAsync(NewRequest(identity, "chat"));
+
+        var ex = await act.Should().ThrowAsync<ServiceInvokeReadinessException>();
+        ex.Which.Snapshot.ReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Unavailable);
+        ex.Which.Snapshot.UnavailableReason.Should().Be(ServiceInvokeUnavailableReason.PreparedArtifactMissing);
+    }
+
+    private static ServiceInvocationRequest NewRequest(ServiceIdentity identity, string endpointId) =>
+        new()
         {
             Identity = identity.Clone(),
-            EndpointId = "chat",
-            RevisionId = "r1",
+            EndpointId = endpointId,
             Payload = Any.Pack(new StringValue { Value = "payload" }),
-        });
+        };
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage($"*Revision 'r1' is not active on service '{ServiceKeys.Build(identity)}'.*");
+    private static ServiceInvocationResolutionService CreateService(
+        ServiceIdentity identity,
+        IServiceRevisionCatalogQueryReader revisionCatalog,
+        ServiceInvokeReadinessSnapshot? readiness = null,
+        ServiceInvocationCatalogSnapshot? readinessCatalog = default,
+        IReadOnlyList<ServiceInvokeReadinessSnapshot>? readinessEntries = null,
+        IReadOnlyList<string>? policyIds = null)
+    {
+        var serviceKey = ServiceKeys.Build(identity);
+        readinessCatalog ??= new ServiceInvocationCatalogSnapshot(
+            serviceKey,
+            readinessEntries ?? (readiness == null ? [] : [readiness]),
+            DateTimeOffset.Parse("2026-06-05T00:00:00+00:00"),
+            7,
+            $"{serviceKey}:invocation-catalog:7",
+            1,
+            2,
+            3);
+
+        return new ServiceInvocationResolutionService(
+            new RecordingCatalogQueryReader
+            {
+                GetResult = CreateCatalogSnapshot(identity, policyIds),
+            },
+            new RecordingInvocationCatalogQueryReader
+            {
+                GetResult = readinessCatalog,
+            },
+            revisionCatalog);
     }
+
+    private static ServiceInvokeReadinessSnapshot Ready(
+        ServiceIdentity identity,
+        string endpointId,
+        string revisionId,
+        string deploymentId,
+        string actorId) =>
+        Snapshot(
+            identity,
+            endpointId,
+            ServiceInvokeReadinessStatus.Ready,
+            ServiceInvokeUnavailableReason.Unspecified,
+            revisionId,
+            deploymentId,
+            actorId);
+
+    private static ServiceInvokeReadinessSnapshot Unavailable(
+        ServiceIdentity identity,
+        string endpointId,
+        ServiceInvokeUnavailableReason reason,
+        string revisionId = "",
+        string deploymentId = "",
+        string actorId = "") =>
+        Snapshot(
+            identity,
+            endpointId,
+            ServiceInvokeReadinessStatus.Unavailable,
+            reason,
+            revisionId,
+            deploymentId,
+            actorId);
+
+    private static ServiceInvokeReadinessSnapshot Snapshot(
+        ServiceIdentity identity,
+        string endpointId,
+        ServiceInvokeReadinessStatus status,
+        ServiceInvokeUnavailableReason reason,
+        string revisionId,
+        string deploymentId,
+        string actorId) =>
+        new(
+            ServiceKeys.Build(identity),
+            endpointId,
+            status,
+            reason,
+            revisionId,
+            deploymentId,
+            actorId,
+            DateTimeOffset.Parse("2026-06-05T00:00:00+00:00"),
+            7,
+            $"{ServiceKeys.Build(identity)}:invocation-catalog:7",
+            1,
+            2,
+            3);
 
     private static ServiceCatalogSnapshot CreateCatalogSnapshot(
         ServiceIdentity identity,
@@ -416,19 +333,11 @@ public sealed class ServiceInvocationResolutionServiceTests
             Task.FromResult<IReadOnlyList<ServiceCatalogSnapshot>>([]);
     }
 
-    private sealed class RecordingTrafficViewQueryReader : IServiceTrafficViewQueryReader
+    private sealed class RecordingInvocationCatalogQueryReader : IServiceInvocationCatalogQueryReader
     {
-        public ServiceTrafficViewSnapshot? GetResult { get; init; }
+        public ServiceInvocationCatalogSnapshot? GetResult { get; init; }
 
-        public Task<ServiceTrafficViewSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
-            Task.FromResult(GetResult);
-    }
-
-    private sealed class RecordingServingSetQueryReader : IServiceServingSetQueryReader
-    {
-        public ServiceServingSetSnapshot? GetResult { get; init; }
-
-        public Task<ServiceServingSetSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
+        public Task<ServiceInvocationCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             Task.FromResult(GetResult);
     }
 }

@@ -115,7 +115,7 @@ Add events: `im.message.receive_v1`, `card.action.trigger`.
 
 **Stage 3: Advanced Lark capabilities** — only when the user needs proactive sends, typed Lark tools, delivery target bindings, spreadsheet appends, approval actions, or active chat lookup. Ensure NyxID has a usable Lark outbound provider slug (typically `api-lark-bot`); if not, `use_skill(skill="nyxid")` to drive the catalog connection flow.
 
-For advanced Lark API operations outside the current relay reply, prefer typed tools: `lark_messages_send`, `lark_messages_search`, `lark_messages_batch_get`, `lark_messages_reactions_list`, `lark_messages_reactions_delete`, `lark_chats_lookup`, `lark_sheets_append_rows`, `lark_approvals_list`, `lark_approvals_act`.
+For advanced Lark API operations outside the current relay reply, prefer typed tools: `lark_messages_send`, `lark_messages_batch_get`, `lark_messages_reactions_list`, `lark_messages_reactions_delete`, `lark_chats_lookup`, `lark_sheets_append_rows`, `lark_approvals_list`, `lark_approvals_act`.
 
 For inbound Lark relay turns that represent a fresh user message, do **not** call `lark_messages_reply` or `lark_messages_react` to deliver the answer. Produce the final text reply directly; the channel runtime will send it through the Nyx relay reply token.
 
@@ -127,14 +127,69 @@ Workflow `human_approval`, `human_input`, `secure_input` steps can send Feishu d
 
 Bind `agent_id` to the real outbound route:
 - `agent_delivery_targets action=list`
-- `agent_delivery_targets action=upsert agent_id=<agent_id> conversation_id=<chat_id> nyx_provider_slug=<lark_slug, e.g. api-lark-bot> nyx_api_key=<key>`
+- `agent_delivery_targets action=upsert agent_id=<agent_id> conversation_id=<chat_id> nyx_provider_slug=<lark_slug, e.g. api-lark-bot>`
 - `agent_delivery_targets action=delete agent_id=<agent_id> confirm=true`
 
 `channel_registrations` configures inbound bot callbacks; `agent_delivery_targets` configures outbound agent delivery. Today the human-interaction delivery path supports `lark`.
 
+### scheduled_agent_creator (scheduled Ornn skill agents)
+
+Use `scheduled_agent_creator` to create a new caller-owned scheduled automation agent from an Ornn skill reference, or to create a single delayed reminder.
+
+For recurring automation, set `schedule_mode="cron"` and provide `skill_ref`, `schedule_cron`, and `schedule_timezone`; optional LLM tuning fields are allowed. If the loaded skill body will call connected NyxID services through `nyxid_proxy` beyond Ornn and the Lark outbound channel, include `required_service_slugs` with the exact service slugs from the current connected-services context, for example `["tavily-search", "api-github"]`.
+
+For one-shot delayed reminders such as "remind me in 10 minutes" or "later today tell me ...", set `schedule_mode="one_shot"` and provide exactly one of `delay_seconds` or `run_at_utc`, plus `one_shot_message`. Prefer `delay_seconds` when the user gave a relative delay. Do not use `code_execute` with `sleep`, timers, polling loops, or long-running scripts for delayed one-shot requests; durable delivery must go through `scheduled_agent_creator`. Do not publish an Ornn skill just to send a one-shot natural-language reminder unless the user explicitly asks for reusable automation or the reminder requires a real skill workflow.
+
+Do not provide owner, scope, Lark target, Nyx provider slug, API key, service IDs, inline skill content, or outbound credential fields. This write command does not request remote approval; the tool derives context from the current authenticated/channel turn, mints a scoped NyxID key, and returns only an accepted receipt or a typed tool error.
+
+`skill_ref` must be unversioned for now. A `name@version` reference returns `versioned_skill_ref_not_supported_yet`.
+
+## Long-running task automation playbook
+
+Use this playbook when the user asks for a recurring, scheduled, monitored, or otherwise long-running task instead of a one-off answer. Typical triggers include: "每天...", "每周...", "each week...", "monitor X and tell me...", "定时...", "recurring", "keep watching", and "长期跟踪".
+
+1. Recognize the request as automation.
+   - Do not answer with a one-shot summary if the user wants repeat runs.
+   - Do not ask the user to hand-write the skill package.
+   - Treat the future runner as a runnable Ornn skill, not a chat-only script.
+
+2. Reuse before you author — search Ornn first.
+   - Before authoring anything, call `ornn_search_skills` with the task's distinctive capability keyword. Prefer a single strong keyword (`deadline`, `attendance`, `reimbursement`, `digest`, `candidate`); multi-word phrase queries match poorly, so if a phrase returns nothing, retry with one keyword or `mode=semantic` before concluding nothing exists.
+   - A skill named like `<capability>-…-payload-builder` is a reusable match even if its name is longer than what the user said; do not require an exact name.
+   - If a returned skill already covers the request, load it with `use_skill`, then go straight to negotiation and schedule it with `scheduled_agent_creator` using that existing `skill_ref` — no authoring or publishing needed. Do NOT author a duplicate of a skill that already exists.
+   - Only author a new skill when the search returns no suitable match.
+
+3. Author a runnable skill package yourself.
+   - Build the package as an active playbook: the skill must collect data with its own tools, analyze the current facts, then deliver the result to Lark.
+   - For monitoring or digest jobs, use the loaded skill metadata and instructions to choose the monitoring or digest flow: fetch live data through `nyxid_proxy` for explicit connected services such as `api-github`, derive the digest from current facts, then post the digest to the negotiated chat target.
+   - Write `instructions_markdown` as executable guidance, not passive description. Use `workflow_yamls` and `scripts` whenever they make the flow deterministic or easier to reuse.
+   - Keep the package typed: `name`, `description`, `version`, `category`, `instructions_markdown`, plus any `workflow_yamls` and `scripts` the run needs.
+
+4. Negotiate schedule and output with an interactive Lark card.
+   - Use `reply_with_interaction` to ask for the minimum missing details.
+   - Ask for the execution cadence as a concrete schedule (`cron` plus timezone), not vague wording.
+   - Ask where the result should go: direct message or group chat.
+   - Ask for the output format: plain text or Feishu cloud doc.
+   - Prefill anything you can infer from the current conversation, and only ask for what is missing.
+   - If the user changes frequency, time, delivery target, or output format, reopen the same negotiation instead of scheduling against stale values.
+
+5. Publish the skill, then schedule it.
+   - Call `ornn_publish_skill` with the assembled typed package.
+   - If publish fails, inspect the diagnostics, fix the package, and retry.
+   - Ornn private skill publishing executes directly. Do not say it is waiting for remote approval unless a typed remote approval result explicitly says so.
+   - Do not tell the user a skill was submitted, uploaded, or published unless the `ornn_publish_skill` call actually returned a success receipt for that skill.
+   - Once the skill is published successfully, call `scheduled_agent_creator` with the published `skill_ref`, the agreed `schedule_cron`, the agreed `schedule_timezone`, and `required_service_slugs` for every connected service slug the skill body will call through `nyxid_proxy`.
+   - Carry the negotiated delivery/output choice into the runner's `execution_prompt` and outbound delivery setup; if the chosen delivery target differs from the current conversation, rebind it with `agent_delivery_targets` using the returned `agent_id`.
+   - For plain text output, the skill should send a concise digest back to Lark. For Feishu cloud doc output, the skill should create or update a document and return the link.
+
+6. Recover cleanly.
+   - Publish failure means the package is wrong; refine and republish.
+   - User rejection or edits mean the negotiation is not stable yet; update the card and retry.
+   - If the user later wants a different cadence, treat it as a new negotiation for a new schedule rather than pretending the existing schedule changed automatically.
+
 ### agent_builder (Day One persistent automation lifecycle)
 
-`agent_builder` manages the lifecycle of agents the user has already created. Recipes for *new* agents live as Ornn skills — match the user's intent against `ornn_search_skills` and follow the SKILL.md verbatim. `agent_builder` itself does not create agents.
+`agent_builder` manages the lifecycle of agents the user has already created. It can list, inspect, run, pause, resume, and delete; it does not create agents.
 
 | Intent | Slash command |
 |---|---|

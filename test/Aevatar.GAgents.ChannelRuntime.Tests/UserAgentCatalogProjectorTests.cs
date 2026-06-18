@@ -54,6 +54,7 @@ public sealed class UserAgentCatalogProjectorTests
                     LarkReceiveIdType = "chat_id",
                     LarkReceiveIdFallback = "on_user_1",
                     LarkReceiveIdTypeFallback = "union_id",
+                    OutputFormat = SkillRunnerOutputFormat.FeishuDoc,
                 },
             },
         };
@@ -89,6 +90,7 @@ public sealed class UserAgentCatalogProjectorTests
         document.LarkReceiveIdType.Should().Be("chat_id");
         document.LarkReceiveIdFallback.Should().Be("on_user_1");
         document.LarkReceiveIdTypeFallback.Should().Be("union_id");
+        document.OutputFormat.Should().Be(SkillRunnerOutputFormat.FeishuDoc);
     }
 
     [Fact]
@@ -203,6 +205,7 @@ public sealed class UserAgentCatalogProjectorTests
             LarkReceiveIdType = "chat_id",
             LarkReceiveIdFallback = "on_user_1",
             LarkReceiveIdTypeFallback = "union_id",
+            OutputFormat = SkillRunnerOutputFormat.Text,
         };
 
         var entry = UserAgentCatalogQueryPort.ToEntry(document);
@@ -211,6 +214,7 @@ public sealed class UserAgentCatalogProjectorTests
         entry.LarkReceiveIdType.Should().Be("chat_id");
         entry.LarkReceiveIdFallback.Should().Be("on_user_1");
         entry.LarkReceiveIdTypeFallback.Should().Be("union_id");
+        entry.OutputFormat.Should().Be(SkillRunnerOutputFormat.Text);
     }
 
     [Fact]

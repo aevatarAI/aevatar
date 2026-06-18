@@ -7,6 +7,8 @@ public interface IVoicePresenceRuntimeStateOwner
 {
     bool TryGetVoicePresenceRuntimeState(string moduleName, out VoicePresenceRuntimeState runtimeState);
 
+    bool TryGetVoiceSessionDefaults(string moduleName, out VoiceSessionDefaults defaults);
+
     Task PersistVoicePresenceRuntimeStateAsync(
         string moduleName,
         VoicePresenceRuntimeState runtimeState,

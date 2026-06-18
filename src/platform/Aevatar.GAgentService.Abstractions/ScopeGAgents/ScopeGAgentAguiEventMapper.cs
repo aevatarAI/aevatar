@@ -8,6 +8,7 @@ using AiTextContent = Aevatar.AI.Abstractions.TextMessageContentEvent;
 using AiTextEnd = Aevatar.AI.Abstractions.TextMessageEndEvent;
 using AiTextReasoning = Aevatar.AI.Abstractions.TextMessageReasoningEvent;
 using AiTextStart = Aevatar.AI.Abstractions.TextMessageStartEvent;
+using AiTokenUsage = Aevatar.AI.Abstractions.ChatTokenUsageEvent;
 using AiToolCall = Aevatar.AI.Abstractions.ToolCallEvent;
 using AiToolResult = Aevatar.AI.Abstractions.ToolResultEvent;
 using AiMediaContent = Aevatar.AI.Abstractions.MediaContentEvent;
@@ -107,6 +108,22 @@ public static class ScopeGAgentAguiEventMapper
                 {
                     Name = "MEDIA_CONTENT",
                     Payload = payload,
+                },
+            };
+        }
+
+        if (payload.Is(AiTokenUsage.Descriptor))
+        {
+            var ai = payload.Unpack<AiTokenUsage>();
+            return new AGUIEvent
+            {
+                Usage = new UsageEvent
+                {
+                    Available = ai.Usage != null,
+                    PromptTokens = ai.Usage?.PromptTokens ?? 0,
+                    CompletionTokens = ai.Usage?.CompletionTokens ?? 0,
+                    TotalTokens = ai.Usage?.TotalTokens ?? 0,
+                    Model = string.IsNullOrWhiteSpace(ai.Model) ? null : ai.Model,
                 },
             };
         }

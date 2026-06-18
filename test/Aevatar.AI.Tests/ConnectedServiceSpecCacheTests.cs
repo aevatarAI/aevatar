@@ -1,6 +1,7 @@
 using System.Net;
 using Aevatar.AI.ToolProviders.NyxId;
 using FluentAssertions;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.AI.Tests;
 
@@ -133,6 +134,40 @@ public class ConnectedServiceSpecCacheTests
     }
 
     [Fact]
+    public async Task GetOrFetchAsync_LogsWarning_OnHttpErrorFallback()
+    {
+        var handler = new FakeHttpHandler(statusCode: HttpStatusCode.NotFound);
+        var http = new HttpClient(handler);
+        var logger = new RecordingLogger<ConnectedServiceSpecCache>();
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        using var cache = new ConnectedServiceSpecCache(options, http, logger);
+
+        var ops = await cache.GetOrFetchAsync("unknown-service", "svc-unknown", null, "token");
+
+        ops.Should().BeNull();
+        logger.Entries.Should().Contain(entry =>
+            entry.Level == LogLevel.Warning &&
+            entry.Message.Contains("returned 404", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task GetOrFetchAsync_LogsWarning_OnParseFallback()
+    {
+        var handler = new FakeHttpHandler("not-json");
+        var http = new HttpClient(handler);
+        var logger = new RecordingLogger<ConnectedServiceSpecCache>();
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        using var cache = new ConnectedServiceSpecCache(options, http, logger);
+
+        var ops = await cache.GetOrFetchAsync("broken-service", "svc-broken", null, "token");
+
+        ops.Should().BeNull();
+        logger.Entries.Should().Contain(entry =>
+            entry.Level == LogLevel.Warning &&
+            entry.Message.Contains("failed", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task GetOrFetchAsync_ReturnsNull_WhenSlugEmpty()
     {
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
@@ -187,6 +222,29 @@ public class ConnectedServiceSpecCacheTests
             if (_responseBody is not null)
                 response.Content = new StringContent(_responseBody, System.Text.Encoding.UTF8, "application/json");
             return Task.FromResult(response);
+        }
+    }
+
+    private sealed record LogEntry(LogLevel Level, string Message, Exception? Exception);
+
+    private sealed class RecordingLogger<T> : ILogger<T>
+    {
+        public List<LogEntry> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull =>
+            null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            Entries.Add(new LogEntry(logLevel, formatter(state, exception), exception));
         }
     }
 }

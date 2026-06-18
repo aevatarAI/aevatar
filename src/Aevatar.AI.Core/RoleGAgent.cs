@@ -8,7 +8,6 @@
 // ─────────────────────────────────────────────────────────────
 
 using System.Text;
-using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
@@ -19,6 +18,7 @@ using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.VoicePresence.Abstractions;
@@ -29,6 +29,7 @@ namespace Aevatar.AI.Core;
 /// <summary>
 /// Role-based AI GAgent. Receives ChatRequestEvent and streams LLM response.
 /// </summary>
+[GAgent("ai.role-agent")]
 public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePresenceRuntimeStateOwner
 {
     private const string LlmFailureContentPrefix = "[[AEVATAR_LLM_ERROR]]";
@@ -45,7 +46,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
         IEnumerable<IAgentToolSource>? toolSources = null,
         IToolApprovalHandler? approvalHandler = null,
-        IRemoteToolApprovalPort? remoteToolApprovalPort = null)
+        IRemoteToolApprovalPort? remoteToolApprovalPort = null,
+        IRemoteToolApprovalNotificationPort? remoteToolApprovalNotificationPort = null)
         : base(
             llmProviderFactory,
             additionalHooks,
@@ -53,9 +55,14 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             toolMiddlewares,
             llmMiddlewares,
             toolSources,
-            approvalHandler)
+            // RoleGAgent owns the pending-approval continuation (persisted state +
+            // remote escalation + timeout), so yielding is its capability default.
+            // Surfaces without that continuation must NOT wire a yielding handler;
+            // they fall through to MissingApprovalHandler and fail closed.
+            approvalHandler ?? new YieldApprovalHandler())
     {
         RemoteToolApprovalPort = remoteToolApprovalPort;
+        RemoteToolApprovalNotificationPort = remoteToolApprovalNotificationPort;
     }
 
     /// <summary>Role name.</summary>
@@ -67,6 +74,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
     public string RoleId { get; private set; } = "";
 
     protected IRemoteToolApprovalPort? RemoteToolApprovalPort { get; }
+
+    protected IRemoteToolApprovalNotificationPort? RemoteToolApprovalNotificationPort { get; }
 
     // Refactor (iter35/cluster-036-voice-presence-rolegagent-state):
     //   Old pattern: VoicePresenceModule 在 module 内持有 process-local background state(unbounded channels / TaskCompletionSource waiters / 静态字段持 lifecycle),还保留 disabled remote voice fallback shell.
@@ -82,6 +91,20 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         }
 
         runtimeState = new VoicePresenceRuntimeState();
+        return false;
+    }
+
+    public bool TryGetVoiceSessionDefaults(string moduleName, out VoiceSessionDefaults defaults)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(moduleName);
+
+        if (State.VoiceSessionDefaults.TryGetValue(moduleName, out var stored))
+        {
+            defaults = stored.Clone();
+            return true;
+        }
+
+        defaults = new VoiceSessionDefaults();
         return false;
     }
 
@@ -107,6 +130,33 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
     public async Task HandleInitializeRoleAgent(InitializeRoleAgentEvent evt)
     {
         await PersistDomainEventAsync(evt);
+    }
+
+    [EventHandler]
+    public async Task HandleVoicePresenceEnableRequested(VoicePresenceEnableRequested command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        var moduleName = NormalizeModuleExtensionText(command.ModuleName);
+        if (string.IsNullOrWhiteSpace(moduleName))
+            throw new InvalidOperationException("module_name is required.");
+
+        var defaults = command.VoiceSessionDefaults?.Clone() ?? new VoiceSessionDefaults();
+        var runtimeState = CreateEnabledVoicePresenceRuntimeState(defaults, command.RemoteAudioSupport);
+        await PersistDomainEventsAsync(
+        [
+            new VoicePresenceEnabledEvent
+            {
+                ModuleName = moduleName,
+                VoiceSessionDefaults = defaults.Clone(),
+                RuntimeState = runtimeState.Clone(),
+            },
+            new VoicePresenceRuntimeStateChangedEvent
+            {
+                ModuleName = moduleName,
+                State = runtimeState.Clone(),
+            },
+        ]);
     }
 
     /// <summary>Handles tool approval decisions from the frontend or NyxID remote.</summary>
@@ -230,16 +280,15 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
         try
         {
-            var submission = await RemoteToolApprovalPort.SubmitAsync(
-                new RemoteToolApprovalRequest(
-                    pending.RequestId,
-                    pending.ToolName,
-                    pending.ToolCallId,
-                    pending.ArgumentsJson,
-                    ToolApprovalMode.Auto,
-                    pending.IsDestructive),
-                CancellationToken.None);
-
+            var pendingToolContext = ResolvePendingToolContext(pending);
+            var request = new RemoteToolApprovalRequest(
+                pending.RequestId,
+                pending.ToolName,
+                pending.ToolCallId,
+                pending.ArgumentsJson,
+                ToolApprovalMode.Auto,
+                pending.IsDestructive);
+            var submission = await RemoteToolApprovalPort.SubmitAsync(request, CancellationToken.None);
             var callbackId = BuildRemoteApprovalStatusCallbackId(pending.RequestId, submission.RemoteApprovalId, 1);
             await PersistDomainEventAsync(new RemoteToolApprovalSubmittedEvent
             {
@@ -248,6 +297,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 StatusCheckAttempt = 1,
                 ExpiresAtUnixMs = ResolveRemoteApprovalDeadlineUnixMs(submission.ExpiresAt),
             });
+
+            await TryNotifyRemoteApprovalSubmittedAsync(request, submission, pendingToolContext);
 
             await ScheduleRemoteApprovalStatusCheckAsync(
                 pending.RequestId,
@@ -264,6 +315,32 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 pending,
                 "approval_timeout",
                 $"Remote approval submit failed: {ex.Message}");
+        }
+    }
+
+    private async Task TryNotifyRemoteApprovalSubmittedAsync(
+        RemoteToolApprovalRequest request,
+        RemoteToolApprovalSubmission submission,
+        AgentToolExecutionContext toolContext)
+    {
+        var notificationPort = RemoteToolApprovalNotificationPort;
+        if (notificationPort is null)
+            return;
+
+        try
+        {
+            await notificationPort.NotifyAsync(
+                new RemoteToolApprovalNotification(request, submission, toolContext),
+                CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(
+                ex,
+                "[{Role}] Remote approval notification failed. request={RequestId}, remote={RemoteApprovalId}",
+                RoleName,
+                request.RequestId,
+                submission.RemoteApprovalId);
         }
     }
 
@@ -380,58 +457,38 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         SessionReplayRecord replayRecord,
         ChatRequestEvent request)
     {
-        return DetectPendingApprovalFromHistory(request);
+        var receipt = replayRecord.ToolReceipts
+            .LastOrDefault(static candidate =>
+                candidate.Status == AgentToolReceiptStatus.ApprovalRequired &&
+                !string.IsNullOrWhiteSpace(candidate.ApprovalRequestId));
+        if (receipt is null)
+            return null;
+
+        return new PendingToolApprovalState
+        {
+            RequestId = receipt.ApprovalRequestId,
+            SessionId = request.SessionId ?? string.Empty,
+            ToolName = receipt.ToolName ?? string.Empty,
+            ToolCallId = receipt.CallId ?? string.Empty,
+            ArgumentsJson = ResolveToolArguments(replayRecord.ToolCalls, receipt.CallId),
+            IsDestructive = receipt.IsDestructive,
+            ToolContext = ResolveToolContext(
+                request,
+                receipt.ApprovalRequestId,
+                receipt.CallId ?? string.Empty).ToPayload(),
+        };
     }
 
-    private PendingToolApprovalState? DetectPendingApprovalFromHistory(ChatRequestEvent request)
+    private static string ResolveToolArguments(IReadOnlyList<ToolCall> toolCalls, string? callId)
     {
-        // Scan recent history messages for approval_required marker
-        for (var i = History.Messages.Count - 1; i >= 0; i--)
-        {
-            var msg = History.Messages[i];
-            if (msg.Role != "tool" || string.IsNullOrWhiteSpace(msg.Content))
-                continue;
+        if (string.IsNullOrWhiteSpace(callId))
+            return "{}";
 
-            if (!msg.Content.Contains(Middleware.ToolApprovalMiddleware.ApprovalRequiredKey))
-                continue;
-
-            try
-            {
-                using var doc = JsonDocument.Parse(msg.Content);
-                if (doc.RootElement.ValueKind != JsonValueKind.Object)
-                    continue;
-                if (!doc.RootElement.TryGetProperty("approval_required", out var ar) || !ar.GetBoolean())
-                    continue;
-
-                var requestId = doc.RootElement.TryGetProperty("request_id", out var rid)
-                    ? rid.GetString() ?? Guid.NewGuid().ToString("N")
-                    : Guid.NewGuid().ToString("N");
-                var toolName = doc.RootElement.TryGetProperty("tool_name", out var tn)
-                    ? tn.GetString() ?? "" : "";
-                var toolCallId = doc.RootElement.TryGetProperty("tool_call_id", out var tcid)
-                    ? tcid.GetString() ?? "" : "";
-                var args = doc.RootElement.TryGetProperty("arguments", out var a)
-                    ? a.GetString() ?? "{}" : "{}";
-
-                var pending = new PendingToolApprovalState
-                {
-                    RequestId = requestId,
-                    SessionId = request.SessionId ?? "",
-                    ToolName = toolName,
-                    ToolCallId = toolCallId,
-                    ArgumentsJson = args,
-                    IsDestructive = true,
-                    ToolContext = ResolveToolContext(request, requestId, toolCallId).ToPayload(),
-                };
-                return pending;
-            }
-            catch (JsonException)
-            {
-                // Not valid JSON, skip
-            }
-        }
-
-        return null;
+        var toolCall = toolCalls.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, callId, StringComparison.Ordinal));
+        return string.IsNullOrWhiteSpace(toolCall?.ArgumentsJson)
+            ? "{}"
+            : toolCall.ArgumentsJson;
     }
 
     // Stored lease from the last scheduled timeout, kept in-memory for cancellation.
@@ -634,6 +691,24 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         return next;
     }
 
+    private static RoleGAgentState ApplyVoicePresenceEnabled(
+        RoleGAgentState current,
+        VoicePresenceEnabledEvent evt)
+    {
+        if (string.IsNullOrWhiteSpace(evt.ModuleName))
+            return current;
+
+        var moduleName = NormalizeModuleExtensionText(evt.ModuleName);
+        var next = current.Clone();
+        next.VoiceSessionDefaults[moduleName] = evt.VoiceSessionDefaults?.Clone() ?? new VoiceSessionDefaults();
+        next.VoicePresence[moduleName] = evt.RuntimeState?.Clone() ?? new VoicePresenceRuntimeState
+        {
+            Initialized = true,
+            RemoteAudioSupport = VoiceRemoteAudioSupport.Supported,
+        };
+        return next;
+    }
+
     /// <summary>Returns agent description.</summary>
     public override Task<string> GetDescriptionAsync() =>
         Task.FromResult($"RoleGAgent[{RoleName}]:{Id}");
@@ -647,6 +722,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             .On<PendingToolApprovalPersistedEvent>(ApplyPendingApproval)
             .On<RemoteToolApprovalSubmittedEvent>(ApplyRemoteApprovalSubmitted)
             .On<ClearPendingApprovalEvent>(ApplyClearPendingApproval)
+            .On<VoicePresenceEnabledEvent>(ApplyVoicePresenceEnabled)
             .On<VoicePresenceRuntimeStateChangedEvent>(ApplyVoicePresenceRuntimeStateChanged)
             .OrCurrent();
 
@@ -814,6 +890,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         //   New principle: commit RoleChatSessionCompletedEvent first; publish terminal frames only from that committed fact.
         await PersistSessionCompletionAsync(request, replayRecord);
         replayRecord = await PublishMissingDisplayContentAsync(request.SessionId, replayRecord);
+        await PublishUsageAsync(request.SessionId, ToTokenUsagePayload(replayRecord.Usage), replayRecord.Model);
         await PublishCompletionAsync(request.SessionId, replayRecord.Content);
     }
 
@@ -839,6 +916,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         var fullReasoning = new StringBuilder();
         var toolCalls = new StreamingToolCallAccumulator();
         var contentParts = new List<ContentPart>();
+        var toolReceipts = new List<AgentToolReceipt>();
+        TokenUsage? usage = null;
         // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
         IReadOnlyDictionary<string, string>? metadata = request.Metadata.Count > 0
             ? AgentToolExecutionContextMapper.StripOwnedControlKeys(
@@ -850,6 +929,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
         await foreach (var chunk in ChatStreamAsync(inputParts, request.SessionId, llmControl, toolContext, metadata, streamCt))
         {
+            if (chunk.Usage != null)
+                usage = chunk.Usage;
+
             if (!string.IsNullOrEmpty(chunk.DeltaContent))
             {
                 fullContent.Append(chunk.DeltaContent);
@@ -883,6 +965,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
             if (chunk.DeltaToolCall != null)
                 toolCalls.TrackDelta(chunk.DeltaToolCall);
+
+            if (chunk.ToolReceipt != null)
+                toolReceipts.Add(chunk.ToolReceipt.Clone());
         }
 
         var appendedHistoryMessages = History.Messages
@@ -907,14 +992,19 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 continue;
             }
 
-            var (success, error) = ClassifyToolResult(toolResult.Content);
-            await PublishAsync(new ToolResultEvent
+            var receipt = toolReceipts
+                .LastOrDefault(candidate => string.Equals(candidate.CallId, toolResult.ToolCallId, StringComparison.Ordinal));
+            var toolResultEvent = new ToolResultEvent
             {
                 CallId = toolResult.ToolCallId,
                 ResultJson = toolResult.Content ?? string.Empty,
-                Success = success,
-                Error = error ?? string.Empty,
-            }, TopologyAudience.Parent);
+                Success = receipt?.Status is null or AgentToolReceiptStatus.Success or AgentToolReceiptStatus.ApprovalRequired,
+                Error = receipt?.ErrorMessage ?? string.Empty,
+            };
+            if (receipt is not null)
+                toolResultEvent.Receipt = receipt.Clone();
+
+            await PublishAsync(toolResultEvent, TopologyAudience.Parent);
         }
 
         var response = fullContent.ToString();
@@ -941,6 +1031,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             fullReasoning.ToString(),
             toolCalls.BuildToolCalls(),
             contentParts,
+            toolReceipts,
+            Usage: usage,
+            Model: EffectiveConfig.Model ?? string.Empty,
             ContentEmitted: fullContent.Length > 0);
     }
 
@@ -951,7 +1044,10 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             replayRecord.ReasoningContent,
             replayRecord.ToolCalls,
             replayRecord.ContentParts,
-            replayRecord.ContentEmitted);
+            replayRecord.ContentEmitted,
+            replayRecord.Usage,
+            replayRecord.Model,
+            replayRecord.ToolReceipts);
 
     protected Task PersistRoleChatSessionCompletionAsync(
         ChatRequestEvent request,
@@ -959,7 +1055,10 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         string reasoningContent,
         IReadOnlyList<ToolCall> toolCalls,
         IReadOnlyList<ContentPart> contentParts,
-        bool contentEmitted)
+        bool contentEmitted,
+        TokenUsage? usage = null,
+        string? model = null,
+        IReadOnlyList<AgentToolReceipt>? toolReceipts = null)
     {
         if (string.IsNullOrWhiteSpace(request.SessionId))
             return Task.CompletedTask;
@@ -977,6 +1076,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             ContentEmitted = contentEmitted,
             ToolCalls = { ToToolCallEvents(toolCalls) },
             OutputParts = { ContentPartProtoMapper.ToProtoList(contentParts) },
+            ToolReceipts = { (toolReceipts ?? []).Select(receipt => receipt.Clone()) },
+            Usage = ToTokenUsagePayload(usage),
+            Model = model ?? string.Empty,
         });
     }
 
@@ -1086,6 +1188,19 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             }, TopologyAudience.Parent);
         }
 
+        foreach (var receipt in trackedSession.ToolReceipts)
+        {
+            var toolResultEvent = new ToolResultEvent
+            {
+                CallId = receipt.CallId ?? string.Empty,
+                ResultJson = receipt.ResultJson ?? string.Empty,
+                Success = receipt.Status is AgentToolReceiptStatus.Success or AgentToolReceiptStatus.ApprovalRequired,
+                Error = receipt.ErrorMessage ?? string.Empty,
+                Receipt = receipt.Clone(),
+            };
+            await PublishAsync(toolResultEvent, TopologyAudience.Parent);
+        }
+
         foreach (var contentPart in trackedSession.OutputParts)
         {
             await PublishAsync(new MediaContentEvent
@@ -1096,6 +1211,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             }, TopologyAudience.Parent);
         }
 
+        await PublishUsageAsync(sessionId, trackedSession.Usage, trackedSession.Model);
         await PublishCompletionAsync(sessionId, trackedSession.FinalContent);
     }
 
@@ -1126,6 +1242,21 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 SessionId = sessionId,
             },
             TopologyAudience.Parent);
+
+    private Task PublishUsageAsync(string sessionId, TokenUsagePayload? usage, string? model)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId) || usage == null)
+            return Task.CompletedTask;
+
+        return PublishAsync(
+            new ChatTokenUsageEvent
+            {
+                SessionId = sessionId,
+                Usage = usage.Clone(),
+                Model = model ?? string.Empty,
+            },
+            TopologyAudience.Parent);
+    }
 
     private static bool IsDisplayableCompletionContent(string? content) =>
         !string.IsNullOrWhiteSpace(content) &&
@@ -1168,6 +1299,15 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         next.RoleName = evt.RoleName ?? string.Empty;
         next.EventModules = NormalizeModuleExtensionText(evt.EventModules);
         next.EventRoutes = NormalizeModuleExtensionText(evt.EventRoutes);
+        next.VoiceSessionDefaults.Clear();
+        foreach (var entry in evt.VoiceSessionDefaults)
+        {
+            var moduleName = NormalizeModuleExtensionText(entry.Key);
+            if (string.IsNullOrWhiteSpace(moduleName))
+                continue;
+
+            next.VoiceSessionDefaults[moduleName] = entry.Value?.Clone() ?? new VoiceSessionDefaults();
+        }
         overrides.ProviderName = string.IsNullOrWhiteSpace(evt.ProviderName) ? string.Empty : evt.ProviderName.Trim();
         overrides.Model = string.IsNullOrWhiteSpace(evt.Model) ? string.Empty : evt.Model.Trim();
         overrides.SystemPrompt = evt.SystemPrompt ?? string.Empty;
@@ -1260,6 +1400,10 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         session.ToolCalls.Add(evt.ToolCalls);
         session.OutputParts.Clear();
         session.OutputParts.Add(evt.OutputParts);
+        session.ToolReceipts.Clear();
+        session.ToolReceipts.Add(evt.ToolReceipts.Select(receipt => receipt.Clone()));
+        session.Usage = evt.Usage?.Clone();
+        session.Model = evt.Model ?? string.Empty;
         next.Sessions[evt.SessionId] = session;
         TrimTrackedSessions(next);
         return next;
@@ -1275,36 +1419,6 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 ToolName = toolCall.Name,
                 ArgumentsJson = toolCall.ArgumentsJson,
             };
-        }
-    }
-
-    private static (bool Success, string? Error) ClassifyToolResult(string? resultJson)
-    {
-        if (string.IsNullOrWhiteSpace(resultJson))
-            return (true, null);
-
-        try
-        {
-            using var doc = JsonDocument.Parse(resultJson);
-            if (doc.RootElement.ValueKind != JsonValueKind.Object ||
-                !doc.RootElement.TryGetProperty("error", out var errorElement))
-            {
-                return (true, null);
-            }
-
-            var error = errorElement.ValueKind switch
-            {
-                JsonValueKind.String => errorElement.GetString(),
-                JsonValueKind.Null or JsonValueKind.Undefined => null,
-                _ => errorElement.ToString(),
-            };
-            return string.IsNullOrWhiteSpace(error)
-                ? (true, null)
-                : (false, error.Trim());
-        }
-        catch (JsonException)
-        {
-            return (true, null);
         }
     }
 
@@ -1341,6 +1455,28 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             state.ConfigOverrides = new AIAgentConfigOverrides();
         return state.ConfigOverrides;
     }
+
+    private static VoicePresenceRuntimeState CreateEnabledVoicePresenceRuntimeState(
+        VoiceSessionDefaults defaults,
+        VoiceRemoteAudioSupport remoteAudioSupport)
+    {
+        var runtimeState = new VoicePresenceRuntimeState
+        {
+            Status = VoicePresenceRuntimeStatus.Idle,
+            Initialized = true,
+            RemoteAudioSupport = NormalizeEnableRemoteAudioSupport(remoteAudioSupport),
+        };
+
+        if (defaults.HasSampleRateHz && defaults.SampleRateHz > 0)
+            runtimeState.PcmSampleRateHz = defaults.SampleRateHz;
+
+        return runtimeState;
+    }
+
+    private static VoiceRemoteAudioSupport NormalizeEnableRemoteAudioSupport(VoiceRemoteAudioSupport remoteAudioSupport) =>
+        remoteAudioSupport == VoiceRemoteAudioSupport.Unspecified
+            ? VoiceRemoteAudioSupport.Supported
+            : remoteAudioSupport;
 
     private async Task ApplyModuleExtensionsFromStateIfNeededAsync(RoleGAgentState state, CancellationToken ct)
     {
@@ -1411,10 +1547,23 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         string ReasoningContent,
         IReadOnlyList<ToolCall> ToolCalls,
         IReadOnlyList<ContentPart> ContentParts,
+        IReadOnlyList<AgentToolReceipt> ToolReceipts,
+        TokenUsage? Usage,
+        string? Model,
         bool ContentEmitted)
     {
         public static SessionReplayRecord FromFailure(string content) =>
-            new(content, string.Empty, [], [], ContentEmitted: false);
+            new(content, string.Empty, [], [], [], Usage: null, Model: null, ContentEmitted: false);
     }
+
+    private static TokenUsagePayload? ToTokenUsagePayload(TokenUsage? usage) =>
+        usage == null
+            ? null
+            : new TokenUsagePayload
+            {
+                PromptTokens = usage.PromptTokens,
+                CompletionTokens = usage.CompletionTokens,
+                TotalTokens = usage.TotalTokens,
+            };
 
 }

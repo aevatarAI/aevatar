@@ -14,6 +14,7 @@ public interface ITeamEntryMemberResolver
     Task<TeamEntryMemberResolution> ResolveAsync(
         string scopeId,
         string teamId,
+        string endpointId,
         CancellationToken ct = default);
 }
 

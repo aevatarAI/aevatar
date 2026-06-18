@@ -109,6 +109,8 @@ public sealed class TornadoLLMProvider : ILLMProvider
 
     private LlmTornado.Chat.ChatRequest MapRequest(LLMRequest request)
     {
+        request = SanitizeMessages(request);
+
         // Graceful multimodal fallback: strip non-text content parts instead of throwing.
         var hasNonText = request.Messages.Any(m =>
             m.ContentParts?.Any(p => p.Kind is not (ContentPartKind.Unspecified or ContentPartKind.Text)) == true);
@@ -158,6 +160,28 @@ public sealed class TornadoLLMProvider : ILLMProvider
         // LlmTornado Provider 主要用于纯 Chat 场景
 
         return chatRequest;
+    }
+
+    private static LLMRequest SanitizeMessages(LLMRequest request)
+    {
+        var sanitizedMessages = ChatMessageToolCallTranscript.WithoutInvalidToolCallPairs(request.Messages);
+        return sanitizedMessages.Count == request.Messages.Count
+            ? request
+            : new LLMRequest
+            {
+                Messages = sanitizedMessages,
+                RequestId = request.RequestId,
+                Metadata = request.Metadata,
+                CallerContext = request.CallerContext,
+                ToolContext = request.ToolContext,
+                RoutingContext = request.RoutingContext,
+                LlmControl = request.LlmControl,
+                Tools = request.Tools,
+                Model = request.Model,
+                Temperature = request.Temperature,
+                MaxTokens = request.MaxTokens,
+                ResponseFormat = request.ResponseFormat,
+            };
     }
 
     private static Dictionary<string, string>? BuildMetadata(LLMRequest request)

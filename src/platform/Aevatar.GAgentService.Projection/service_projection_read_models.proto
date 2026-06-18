@@ -7,6 +7,7 @@ option csharp_namespace = "Aevatar.GAgentService.Projection.ReadModels";
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/struct.proto";
 import "llm_sessions.proto";
+import "service_invocation_catalog.proto";
 import "service_revision.proto";
 
 // --- ServiceCatalogReadModel ---
@@ -26,6 +27,7 @@ message ServiceCatalogReadModel {
   google.protobuf.Timestamp updated_at_utc_value = 15;
   repeated ServiceCatalogEndpointReadModel endpoint_entries = 16;
   repeated string policy_id_entries = 17;
+  ServiceCatalogExternalExposureReadModel external_exposure = 18;
 }
 
 message ServiceCatalogEndpointReadModel {
@@ -35,6 +37,11 @@ message ServiceCatalogEndpointReadModel {
   string request_type_url = 4;
   string response_type_url = 5;
   string description = 6;
+}
+
+message ServiceCatalogExternalExposureReadModel {
+  string nyxid_slug = 1;
+  google.protobuf.Timestamp registered_at_utc_value = 2;
 }
 
 // --- ServiceDeploymentCatalogReadModel ---
@@ -178,6 +185,35 @@ message ServiceTrafficTargetReadModel {
   string serving_state = 5;
 }
 
+// --- ServiceInvocationCatalogReadModel ---
+
+message ServiceInvocationCatalogReadModel {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  string tenant_id = 5;
+  string app_id = 6;
+  string namespace = 7;
+  string service_id = 8;
+  string service_key = 9;
+  google.protobuf.Timestamp observed_at_utc_value = 10;
+  int64 source_catalog_version = 11;
+  int64 source_serving_version = 12;
+  int64 source_revision_version = 13;
+  repeated ServiceInvocationReadinessEntryReadModel entry_entries = 14;
+}
+
+message ServiceInvocationReadinessEntryReadModel {
+  string service_key = 1;
+  string endpoint_id = 2;
+  aevatar.gagentservice.ServiceInvokeReadinessStatus readiness_status = 3;
+  aevatar.gagentservice.ServiceInvokeUnavailableReason unavailable_reason = 4;
+  string selected_revision_id = 5;
+  string selected_deployment_id = 6;
+  string selected_actor_id = 7;
+}
+
 // --- ServiceRunCurrentStateReadModel ---
 
 message ServiceRunCurrentStateReadModel {
@@ -204,6 +240,8 @@ message ServiceRunCurrentStateReadModel {
 
   google.protobuf.Timestamp created_at_utc_value = 20;
   google.protobuf.Timestamp updated_at_utc_value = 21;
+  string last_output = 22;
+  string last_error = 23;
 }
 // --- GAgentRunTerminalReadModel ---
 
@@ -374,6 +412,8 @@ message ScheduledDispatchDocument {
   string service_id = 28;
   string service_endpoint_id = 29;
   string schedule_kind = 30;
+  bool deleted = 31;
+  google.protobuf.Timestamp deleted_at_utc_value = 32;
 }
 
 message ScheduledDispatchFireRecordDocument {

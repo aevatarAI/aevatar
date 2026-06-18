@@ -18,6 +18,10 @@ public sealed class UserAgentCatalogReadModelEntry
     public string ApiKeyId { get; init; } = string.Empty;
     public string ScheduleCron { get; init; } = string.Empty;
     public string ScheduleTimezone { get; init; } = string.Empty;
+    public SkillRunnerScheduleMode ScheduleMode { get; init; } = SkillRunnerScheduleMode.Cron;
+    public Timestamp? RunAt { get; init; }
+    public Timestamp? RetiredAt { get; init; }
+    public string RetirementReason { get; init; } = string.Empty;
     public string Status { get; init; } = string.Empty;
     public Timestamp? LastRunAt { get; init; }
     public Timestamp? NextRunAt { get; init; }
@@ -30,6 +34,7 @@ public sealed class UserAgentCatalogReadModelEntry
     public string LarkReceiveIdType { get; init; } = string.Empty;
     public string LarkReceiveIdFallback { get; init; } = string.Empty;
     public string LarkReceiveIdTypeFallback { get; init; } = string.Empty;
+    public SkillRunnerOutputFormat OutputFormat { get; init; } = SkillRunnerOutputFormat.Auto;
     public OwnerScope? OwnerScope { get; init; }
     public long CatalogAuthorityStateVersion { get; init; }
     public string CatalogLastEventId { get; init; } = string.Empty;

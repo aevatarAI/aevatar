@@ -84,6 +84,58 @@ internal sealed class ElasticsearchIndexLifecycleManager : IDisposable
         }
     }
 
+    public async Task<ProjectionIndexConsistencyResult> CheckConsistencyAsync(
+        string aliasName,
+        DocumentIndexMetadata metadata,
+        CancellationToken ct)
+    {
+        var fingerprint = ElasticsearchProjectionSchemaFingerprint.Compute(metadata);
+        var expectedPhysical = $"{aliasName}-v{fingerprint}";
+
+        var currentAliasTarget = await TryResolveAliasTargetAsync(aliasName, ct);
+        if (currentAliasTarget is not null)
+        {
+            if (string.Equals(currentAliasTarget, expectedPhysical, StringComparison.Ordinal))
+            {
+                return new ProjectionIndexConsistencyResult(
+                    "Elasticsearch",
+                    aliasName,
+                    expectedPhysical,
+                    currentAliasTarget,
+                    ProjectionIndexConsistencyStatus.Consistent,
+                    "Projection index alias points to the expected physical index.");
+            }
+
+            return new ProjectionIndexConsistencyResult(
+                "Elasticsearch",
+                aliasName,
+                expectedPhysical,
+                currentAliasTarget,
+                ProjectionIndexConsistencyStatus.Drifted,
+                "Projection index schema drift detected: alias points to a physical index with a different schema fingerprint.");
+        }
+
+        var bareExists = await IndexExistsAsync(aliasName, ct);
+        if (bareExists)
+        {
+            return new ProjectionIndexConsistencyResult(
+                "Elasticsearch",
+                aliasName,
+                expectedPhysical,
+                aliasName,
+                ProjectionIndexConsistencyStatus.Drifted,
+                "Projection index schema drift detected: index exists as a bare index instead of an aliased physical index.");
+        }
+
+        return new ProjectionIndexConsistencyResult(
+            "Elasticsearch",
+            aliasName,
+            expectedPhysical,
+            null,
+            ProjectionIndexConsistencyStatus.Missing,
+            "Projection index alias is not present.");
+    }
+
     private async Task ReconcileAsync(string aliasName, DocumentIndexMetadata metadata, CancellationToken ct)
     {
         var fingerprint = ElasticsearchProjectionSchemaFingerprint.Compute(metadata);
@@ -99,10 +151,11 @@ internal sealed class ElasticsearchIndexLifecycleManager : IDisposable
             // an in-place lifecycle migration and reindex. New principle: alias +
             // fingerprint is the sole schema-drift truth source; a mismatched
             // physical means configuration drift and projection refuses to proceed.
-            throw new InvalidOperationException(
-                $"Elasticsearch projection index schema drift detected for alias '{aliasName}'. " +
-                $"Current physical '{currentAliasTarget}' does not match expected physical '{expectedPhysical}'. " +
-                "Rebuild or repoint the projection index lifecycle explicitly before accepting projection writes.");
+            throw new ProjectionIndexSchemaDriftException(
+                "Elasticsearch",
+                aliasName,
+                currentAliasTarget,
+                expectedPhysical);
         }
 
         var bareExists = await IndexExistsAsync(aliasName, ct);

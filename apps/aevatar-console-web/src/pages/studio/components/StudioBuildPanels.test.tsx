@@ -1166,13 +1166,10 @@ describe('StudioWorkflowBuildPanel', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Add step' }));
     expect(await screen.findByTestId('workflow-step-type-picker')).toBeInTheDocument();
-    expect(screen.getByTestId('workflow-step-type-picker-grid')).toHaveStyle({
-      overflowY: 'auto',
-    });
     fireEvent.click(screen.getByRole('button', { name: /llm_call/i }));
 
     await waitFor(() => {
-      expect(screen.getByLabelText('Step ID')).toHaveValue('llm_call');
+      expect(screen.getByLabelText('Step ID')).toHaveValue('llm_step');
     });
 
     fireEvent.change(screen.getByLabelText('Step ID'), {
@@ -1498,6 +1495,100 @@ describe('StudioWorkflowBuildPanel', () => {
     });
   });
 
+  it('infers unknown step parameters and keeps structured edits on parametersText', async () => {
+    const handleApplyStepDraft = jest.fn<Promise<void>, [AppliedStepDraft]>(
+      async () => undefined,
+    );
+
+    render(
+      <WorkflowBuildHarness
+        initialDocumentOverride={{
+          ...initialDocument,
+          steps: [
+            {
+              ...initialDocument.steps[0],
+              parameters: {
+                config: {
+                  mode: 'strict',
+                },
+                note: 'legacy',
+              },
+              type: 'custom_step',
+            },
+            initialDocument.steps[1],
+          ],
+        }}
+        onApplyStepDraftOverride={handleApplyStepDraft}
+        onContinueToBind={jest.fn()}
+        onSaveDraft={jest.fn()}
+        runtimePrimitivesOverride={[]}
+      />,
+    );
+
+    const configInput = await screen.findByLabelText('Parameter Config');
+    expect(configInput).toHaveValue('{\n  "mode": "strict"\n}');
+
+    fireEvent.change(configInput, {
+      target: {
+        value: '{\n  "mode": "relaxed"\n}',
+      },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply changes' }));
+
+    await waitFor(() => {
+      expect(handleApplyStepDraft).toHaveBeenCalledTimes(1);
+    });
+    const appliedDraft = handleApplyStepDraft.mock.calls.at(0)?.[0];
+    if (!appliedDraft) {
+      throw new Error('Expected an applied step draft.');
+    }
+    expect(JSON.parse(appliedDraft.parametersText)).toEqual({
+      config: {
+        mode: 'relaxed',
+      },
+      note: 'legacy',
+    });
+  });
+
+  it('blocks apply, save, and run when parameter JSON is invalid', async () => {
+    const handleApplyStepDraft = jest.fn<Promise<void>, [AppliedStepDraft]>(
+      async () => undefined,
+    );
+    const handleSaveDraft = jest.fn();
+    const buildWorkflowYamls = jest.fn<
+      Promise<string[]>,
+      Parameters<BuildWorkflowYamlsForTest>
+    >(async () => ['name: workflow-demo']);
+
+    render(
+      <WorkflowBuildHarness
+        buildWorkflowYamlsOverride={buildWorkflowYamls}
+        onApplyStepDraftOverride={handleApplyStepDraft}
+        onContinueToBind={jest.fn()}
+        onSaveDraft={handleSaveDraft}
+      />,
+    );
+
+    fireEvent.change(await screen.findByLabelText('Step parameters'), {
+      target: {
+        value: '{ "prompt_prefix": ',
+      },
+    });
+
+    expect(screen.getByText('Unexpected end of JSON input')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Apply changes' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save draft' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Run' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply changes' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save draft' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
+
+    expect(handleApplyStepDraft).not.toHaveBeenCalled();
+    expect(handleSaveDraft).not.toHaveBeenCalled();
+    expect(buildWorkflowYamls).not.toHaveBeenCalled();
+  });
+
   it('keeps runtime metadata out of output and only exposes it in debug details', async () => {
     mockedParseBackendSSEStream.mockImplementationOnce(async function* () {
       yield {
@@ -1606,18 +1697,19 @@ describe('StudioWorkflowBuildPanel', () => {
       <StudioGAgentBuildPanel
         scopeId="scope-1"
         currentMemberLabel="gagent-1"
-        gAgentTypes={[
+        gAgentKinds={[
           {
-            assemblyName: 'Aevatar.GAgents',
-            fullName: 'Aevatar.GAgents.TestGAgent',
-            typeName: 'TestGAgent',
+            agentKind: 'aevatar.test.gagent',
+            displayName: 'Test GAgent',
+            diagnosticClrTypeName: 'aevatar.test.gagent',
+            endpoints: [],
           },
         ]}
-        gAgentTypesError={null}
-        gAgentTypesLoading={false}
-        selectedGAgentTypeName="Aevatar.GAgents.TestGAgent, Aevatar.GAgents"
+        gAgentKindsError={null}
+        gAgentKindsLoading={false}
+        selectedAgentKind="aevatar.test.gagent"
         onContinueToBind={jest.fn()}
-        onSelectGAgentTypeName={jest.fn()}
+        onSelectAgentKind={jest.fn()}
       />,
     );
 

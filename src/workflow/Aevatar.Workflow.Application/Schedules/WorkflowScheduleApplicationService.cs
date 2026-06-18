@@ -1,9 +1,6 @@
-using Aevatar.AI.Abstractions;
-using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.Workflow.Application.Abstractions.Schedules;
-using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Application.Schedules;
 
@@ -20,7 +17,9 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
         WorkflowScheduleConfiguration configuration,
         CancellationToken ct = default)
     {
-        var receipt = await _scheduledDispatches.CreateAsync(ToScheduledDispatchConfiguration(configuration), ct);
+        var receipt = await _scheduledDispatches.CreateAsync(
+            WorkflowScheduleConfigurationMapper.ToScheduledDispatchConfiguration(configuration),
+            ct);
         return ToWorkflowMutationReceipt(receipt);
     }
 
@@ -30,7 +29,10 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
         CancellationToken ct = default)
     {
         await EnsureWorkflowScheduleAsync(scheduleId, ct);
-        var receipt = await _scheduledDispatches.UpdateAsync(scheduleId, ToScheduledDispatchConfiguration(configuration), ct);
+        var receipt = await _scheduledDispatches.UpdateAsync(
+            scheduleId,
+            WorkflowScheduleConfigurationMapper.ToScheduledDispatchConfiguration(configuration),
+            ct);
         return ToWorkflowMutationReceipt(receipt);
     }
 
@@ -110,68 +112,6 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
             receipt.AckStage);
     }
 
-    private static ScheduledDispatchConfiguration ToScheduledDispatchConfiguration(
-        WorkflowScheduleConfiguration configuration)
-    {
-        ArgumentNullException.ThrowIfNull(configuration);
-        return new ScheduledDispatchConfiguration(
-            configuration.ScheduleId,
-            configuration.DisplayName,
-            new ScheduledDispatchTargetDescriptor(
-                ScheduledDispatchTargetKind.ServiceInvocation,
-                ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
-                    BuildWorkflowServiceIdentity(configuration),
-                    "chat",
-                    Any.Pack(BuildWorkflowChatRequest(configuration)),
-                    configuration.RevisionId)),
-            configuration.CronExpression,
-            configuration.Timezone,
-            configuration.Enabled,
-            BuildWorkflowScheduleHeaders(configuration),
-            ScheduledDispatchScheduleKind.Workflow);
-    }
-
-    private static ServiceIdentity BuildWorkflowServiceIdentity(WorkflowScheduleConfiguration configuration)
-    {
-        var scopeId = NormalizeRequired(FirstNonBlank(configuration.ScopeId, configuration.TenantId), nameof(configuration.ScopeId));
-        var serviceId = NormalizeRequired(FirstNonBlank(configuration.ServiceId, configuration.WorkflowName), nameof(configuration.ServiceId));
-        return new ServiceIdentity
-        {
-            TenantId = scopeId,
-            AppId = NormalizeOptional(configuration.AppId, ScopeServiceIdentityDefaults.ServiceAppId),
-            Namespace = NormalizeOptional(configuration.Namespace, ScopeServiceIdentityDefaults.ServiceNamespace),
-            ServiceId = serviceId,
-        };
-    }
-
-    private static ChatRequestEvent BuildWorkflowChatRequest(WorkflowScheduleConfiguration configuration)
-    {
-        var request = new ChatRequestEvent
-        {
-            Prompt = NormalizeRequired(configuration.Prompt, nameof(configuration.Prompt)),
-        };
-
-        foreach (var (key, value) in BuildWorkflowScheduleHeaders(configuration))
-            request.Metadata[key] = value;
-
-        return request;
-    }
-
-    private static IReadOnlyDictionary<string, string> BuildWorkflowScheduleHeaders(
-        WorkflowScheduleConfiguration configuration)
-    {
-        var headers = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var (key, value) in configuration.Headers ?? new Dictionary<string, string>())
-        {
-            if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value))
-                continue;
-
-            headers[key.Trim()] = value.Trim();
-        }
-
-        return headers;
-    }
-
     private static WorkflowScheduleDetail ToWorkflowDetail(ScheduledDispatchDetail detail) =>
         new(
             ToWorkflowSummary(detail.Schedule),
@@ -234,18 +174,4 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
         return parts.Length > 0 ? parts[0] : string.Empty;
     }
 
-    private static string NormalizeRequired(string? value, string fieldName)
-    {
-        var normalized = value?.Trim() ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(normalized))
-            throw new ArgumentException($"{fieldName} is required.", fieldName);
-
-        return normalized;
-    }
-
-    private static string NormalizeOptional(string? value, string fallback) =>
-        string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
-
-    private static string? FirstNonBlank(params string?[] values) =>
-        values.FirstOrDefault(static value => !string.IsNullOrWhiteSpace(value));
 }

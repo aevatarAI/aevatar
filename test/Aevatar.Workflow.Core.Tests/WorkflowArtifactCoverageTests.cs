@@ -198,14 +198,16 @@ public sealed class WorkflowArtifactCoverageTests
                 Temperature = 0.25,
                 MaxTokens = 256,
             },
-            "workflow-run");
+            "workflow-run",
+            "workflow-run:planner");
         var withoutTemperature = WorkflowRoleAgentEnvelopeFactory.CreateInitializeEnvelope(
             new RoleDefinition
             {
                 Id = "reviewer",
                 Name = "Reviewer",
             },
-            "workflow-run");
+            "workflow-run",
+            "workflow-run:reviewer");
 
         var withTemperaturePayload = withTemperature.Payload!.Unpack<WorkflowRoleInitializeEvent>();
         var withoutTemperaturePayload = withoutTemperature.Payload!.Unpack<WorkflowRoleInitializeEvent>();
@@ -217,7 +219,10 @@ public sealed class WorkflowArtifactCoverageTests
         withTemperaturePayload.SystemPrompt.Should().Be("You are helpful.");
         withTemperaturePayload.HasTemperature.Should().BeTrue();
         withTemperaturePayload.Temperature.Should().BeApproximately(0.25, 0.0001);
-        withTemperature.Route!.PublisherActorId.Should().Be("workflow-run");
+        withTemperature.Route!.IsDirect().Should().BeTrue();
+        withTemperature.Route.IsTopologyPublication().Should().BeFalse();
+        withTemperature.Route.PublisherActorId.Should().Be("workflow-run");
+        withTemperature.Route.GetTargetActorId().Should().Be("workflow-run:planner");
         withTemperature.Propagation!.CorrelationId.Should().NotBeNullOrWhiteSpace();
 
         withoutTemperaturePayload.RoleId.Should().Be("reviewer");

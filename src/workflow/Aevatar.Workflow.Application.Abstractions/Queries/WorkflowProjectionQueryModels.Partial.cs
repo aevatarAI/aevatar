@@ -1,4 +1,5 @@
 using Google.Protobuf.WellKnownTypes;
+using ApplicationWorkflowFileSourceKind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileSourceKind;
 
 namespace Aevatar.Workflow.Application.Abstractions.Queries;
 
@@ -29,6 +30,15 @@ public sealed partial class WorkflowActorProjectionState
     {
         get => LastUpdatedAtUtc == null ? default : LastUpdatedAtUtc.ToDateTimeOffset();
         set => LastUpdatedAtUtc = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(value.ToUniversalTime());
+    }
+}
+
+public sealed partial class WorkflowRunFileRef
+{
+    public ApplicationWorkflowFileSourceKind SourceKind
+    {
+        get => (ApplicationWorkflowFileSourceKind)SourceKindValue;
+        set => SourceKindValue = (int)value;
     }
 }
 

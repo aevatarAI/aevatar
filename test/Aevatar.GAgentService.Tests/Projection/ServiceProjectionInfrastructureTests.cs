@@ -244,6 +244,9 @@ public sealed class ServiceProjectionInfrastructureTests
             x.ServiceType == typeof(IServiceRevisionCatalogQueryReader) &&
             x.ImplementationType == typeof(ServiceRevisionCatalogQueryReader));
         services.Should().Contain(x =>
+            x.ServiceType == typeof(IServiceScriptingRepublishCandidateQueryReader) &&
+            x.ImplementationType == typeof(ServiceScriptingRepublishCandidateQueryReader));
+        services.Should().Contain(x =>
             x.ServiceType == typeof(IGAgentRunTerminalQueryPort) &&
             x.ImplementationType == typeof(GAgentRunTerminalQueryReader));
         services.Should().Contain(x =>
