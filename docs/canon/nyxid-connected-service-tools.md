@@ -85,6 +85,13 @@ token 可见性与 `NyxIdProxyTool` 一致：user token 优先，org-only 的 se
 
 发现发生在请求期的工具分类阶段：tool-set 边界（`ToolSetResponsesToolProvider`）会把请求的 `AgentToolExecutionContext` 通过 `AgentToolContextScope` 发布到 AsyncLocal，`NyxIdConnectedServiceToolSource.DiscoverToolsAsync` 据此拿到当前用户的 NyxID token 并 live 发现。未配置 NyxID base URL 或上下文里没有 token 时，不暴露任何动态工具。
 
+Voice realtime attach 也遵循同一边界。若 live transport lease 带有可用的
+`voice-tool:` credential ref，session-readiness discovery 会解析该 ref，并为
+该 lease 构建 caller-scoped snapshot；它不得读取或写入匿名的进程级 voice
+catalog cache。匿名 voice session 仍可复用 no-token catalog cache；带 caller
+token 的发现必须保持 request/lease scoped，因为 connected-service 可见性由
+bearer 决定。
+
 ## 5. 架构边界
 
 - 发现期可请求 NyxID live surface，但**不在中间层保存 service/endpoint 事实状态**；没有进程内 catalog。
