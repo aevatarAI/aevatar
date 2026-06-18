@@ -363,10 +363,27 @@ public class VoicePresenceWhipEndpointsTests
     {
         public bool SupportsRemoteAudio => true;
 
+        public Task<bool> TryCancelResponseAsync(
+            string transportLeaseId,
+            CancellationToken ct = default) =>
+            Task.FromResult(false);
+
+        public Task<bool> TrySendInputImageAsync(
+            string transportLeaseId,
+            VoiceInputImage inputImage,
+            CancellationToken ct = default) =>
+            Task.FromResult(false);
+
         public Task<bool> TrySendToolResultAsync(
             string transportLeaseId,
             string callId,
             string resultJson,
+            CancellationToken ct = default) =>
+            Task.FromResult(false);
+
+        public Task<bool> TryInjectEventAsync(
+            string transportLeaseId,
+            VoiceConversationEventInjection injection,
             CancellationToken ct = default) =>
             Task.FromResult(false);
 

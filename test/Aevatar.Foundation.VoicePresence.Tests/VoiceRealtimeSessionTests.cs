@@ -392,12 +392,41 @@ public class VoiceRealtimeSessionTests
         {
             SpeechStarted = new VoiceSpeechStarted(),
         }, CancellationToken.None);
+        (await port.TryCancelResponseAsync("transport-1", CancellationToken.None)).ShouldBeTrue();
+        (await port.TrySendInputImageAsync(
+            "transport-1",
+            new VoiceInputImage
+            {
+                MediaType = "image/jpeg",
+                Data = ByteString.CopyFrom([8, 9]),
+            },
+            CancellationToken.None)).ShouldBeTrue();
+        (await port.TrySendToolResultAsync(
+            "transport-1",
+            "call-1",
+            """{"ok":true}""",
+            CancellationToken.None)).ShouldBeTrue();
+        (await port.TryInjectEventAsync(
+            "transport-1",
+            new VoiceConversationEventInjection
+            {
+                EnvelopeId = "external-1",
+                PublisherActorId = "external-agent",
+                EventType = StringValue.Descriptor.FullName,
+                PayloadJson = "\"door\"",
+            },
+            CancellationToken.None)).ShouldBeTrue();
+        (await port.TryCancelResponseAsync("missing-transport", CancellationToken.None)).ShouldBeFalse();
         await port.DetachAsync(handle, transport, CancellationToken.None);
 
         lifetimeCompleted.ShouldNotBeNull();
         lifetimeCompleted.TransportLeaseId.ShouldBe("transport-1");
         attachmentPort.AttachedHandles.ShouldHaveSingleItem().ShouldBe(handle);
         providerSession.AudioFrames.ShouldHaveSingleItem().ShouldBe(new byte[] { 1, 2, 3, 4 });
+        providerSession.CancelCalls.ShouldBe(1);
+        providerSession.InputImages.ShouldHaveSingleItem().Data.ToByteArray().ShouldBe([8, 9]);
+        providerSession.ToolResults.ShouldHaveSingleItem().ShouldBe(("call-1", """{"ok":true}"""));
+        providerSession.InjectedEvents.ShouldHaveSingleItem().EnvelopeId.ShouldBe("external-1");
         transport.SentAudio.ShouldHaveSingleItem().ShouldBe(new byte[] { 9, 8, 7 });
 
         var signals = dispatchPort.Dispatches
@@ -1268,10 +1297,27 @@ public class VoiceRealtimeSessionTests
 
         public List<VoicePresenceSessionLeaseHandle> DetachedHandles { get; } = [];
 
+        public Task<bool> TryCancelResponseAsync(
+            string transportLeaseId,
+            CancellationToken ct = default) =>
+            Task.FromResult(false);
+
+        public Task<bool> TrySendInputImageAsync(
+            string transportLeaseId,
+            VoiceInputImage inputImage,
+            CancellationToken ct = default) =>
+            Task.FromResult(false);
+
         public Task<bool> TrySendToolResultAsync(
             string transportLeaseId,
             string callId,
             string resultJson,
+            CancellationToken ct = default) =>
+            Task.FromResult(false);
+
+        public Task<bool> TryInjectEventAsync(
+            string transportLeaseId,
+            VoiceConversationEventInjection injection,
             CancellationToken ct = default) =>
             Task.FromResult(false);
 
@@ -1669,6 +1715,10 @@ public class VoiceRealtimeSessionTests
         private Func<VoiceProviderSessionKey, VoiceProviderAudioFrame, CancellationToken, Task>? _audioSink;
 
         public List<byte[]> AudioFrames { get; } = [];
+        public int CancelCalls { get; private set; }
+        public List<VoiceInputImage> InputImages { get; } = [];
+        public List<(string CallId, string ResultJson)> ToolResults { get; } = [];
+        public List<VoiceConversationEventInjection> InjectedEvents { get; } = [];
 
         public void Connect(
             VoiceProviderSessionKey sessionKey,
@@ -1687,8 +1737,12 @@ public class VoiceRealtimeSessionTests
             return Task.CompletedTask;
         }
 
-        public override Task SendInputImageAsync(VoiceInputImage inputImage, CancellationToken ct) =>
-            Task.CompletedTask;
+        public override Task SendInputImageAsync(VoiceInputImage inputImage, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            InputImages.Add(inputImage.Clone());
+            return Task.CompletedTask;
+        }
 
         public Task EmitAudioAsync(byte[] pcm16, CancellationToken ct) =>
             _audioSink?.Invoke(
@@ -1699,13 +1753,26 @@ public class VoiceRealtimeSessionTests
         public Task EmitEventAsync(VoiceProviderEvent providerEvent, CancellationToken ct) =>
             _eventSink?.Invoke(_sessionKey, providerEvent, ct) ?? Task.CompletedTask;
 
-        public override Task SendToolResultAsync(string callId, string resultJson, CancellationToken ct) =>
-            Task.CompletedTask;
+        public override Task SendToolResultAsync(string callId, string resultJson, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            ToolResults.Add((callId, resultJson));
+            return Task.CompletedTask;
+        }
 
-        public override Task InjectEventAsync(VoiceConversationEventInjection injection, CancellationToken ct) =>
-            Task.CompletedTask;
+        public override Task InjectEventAsync(VoiceConversationEventInjection injection, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            InjectedEvents.Add(injection.Clone());
+            return Task.CompletedTask;
+        }
 
-        public override Task CancelResponseAsync(CancellationToken ct) => Task.CompletedTask;
+        public override Task CancelResponseAsync(CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            CancelCalls++;
+            return Task.CompletedTask;
+        }
 
         public override Task UpdateSessionAsync(VoiceSessionConfig session, CancellationToken ct) =>
             Task.CompletedTask;
