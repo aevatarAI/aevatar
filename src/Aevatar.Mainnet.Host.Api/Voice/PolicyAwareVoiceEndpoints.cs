@@ -151,7 +151,8 @@ public static class PolicyAwareVoiceEndpoints
                 return;
 
             var ws = await http.WebSockets.AcceptWebSocketAsync();
-            var transport = new WebSocketVoiceTransport(ws);
+            var logger = GetLogger(http);
+            var transport = new WebSocketVoiceTransport(ws, logger);
             var attached = false;
             // AcquireAsync returns a handle with an empty ActiveTransportLeaseId (the id is only known
             // post-attach). Carry the resolved id so the close-time DetachAsync can stop the right relay
@@ -164,6 +165,7 @@ public static class PolicyAwareVoiceEndpoints
                     http.RequestServices,
                     accepted,
                     transport,
+                    logger,
                     http.RequestAborted);
                 try
                 {
@@ -321,12 +323,13 @@ public static class PolicyAwareVoiceEndpoints
         return new VoiceToolContextAdmission(true, toolContext, issued.TransportBinding);
     }
 
-    // The realtime voice agent's job is to operate the user's NyxID-connected services, so by default
-    // it only needs: nyxid_proxy (call any service — Home Assistant, Frigate, …), nyxid_status /
-    // nyxid_services (what's connected), nyxid_catalog (what else can be connected). Override with a
-    // comma-separated VOICE_TOOL_ALLOWLIST to widen or change the set.
+    // The realtime voice agent's job is to operate the user's NyxID-connected services + follow its
+    // skill playbooks. Default set: nyxid_proxy (call any service — Home Assistant, Frigate, …),
+    // nyxid_status / nyxid_services (what's connected), nyxid_catalog (what else can be connected), and
+    // ornn_search_skills + use_skill (find and load the Ornn skill playbooks — also a NyxID downstream
+    // service). Override with a comma-separated VOICE_TOOL_ALLOWLIST to widen or change the set.
     private static readonly string[] DefaultVoiceToolAllowlist =
-        ["nyxid_proxy", "nyxid_status", "nyxid_services", "nyxid_catalog"];
+        ["nyxid_proxy", "nyxid_status", "nyxid_services", "nyxid_catalog", "ornn_search_skills", "use_skill"];
 
     private static IReadOnlyList<string> ResolveVoiceToolAllowlist()
     {
