@@ -95,13 +95,13 @@ owner: eanzhao
 
 #### Multipart File Producer
 
-`multipart/form-data` 用于在 Host/API 边界上传一个文件并启动同一条 chat run 主链路。
+`multipart/form-data` 用于在 Host/API 边界上传文件并启动同一条 chat run 主链路。multipart shape、字段名、大小、媒体类型、raw `payload` JSON 与 pending file bytes 由 workflow infrastructure 的共享 `WorkflowMultipartFileInputParser` 处理；artifact ingress 与 typed `WorkflowFileRef` 注入只在确认目标语义后发生。
 
 必需字段：
 
 | Field | Requirement |
 |---|---|
-| `file` | 必须且只能出现一个文件 part；字段名必须是 `file`，可通过 `WorkflowFormFileIngress:FileFieldName` 调整。 |
+| `file` | 必须至少出现一个文件 part；字段名必须是 `file`，可通过 `WorkflowFormFileIngress:FileFieldName` 调整。同一字段可重复，按 form 顺序追加 input parts。 |
 
 可选字段：
 
@@ -125,9 +125,9 @@ owner: eanzhao
 成功路径：
 
 1. Host 先校验 caller credential；无效 bearer 不读取文件、不写 artifact store。
-2. Host 校验 multipart shape、文件数量、字段名、大小、media type。
-3. Host 调用 `IWorkflowFileIngressPort.IngestAsync(...)`，`SourceKind=FormUpload`。
-4. parser 把返回的 typed `WorkflowFileRef` 构造成既有 `ChatInputContentPart.fileRef`；`image/*`、`audio/*`、`video/*` 分别映射为 `type=image/audio/video`，其余已允许的 document/text/spreadsheet 类型统一映射为 `type=file`。
+2. Host 通过共享 parser 校验 multipart shape、字段名、大小、media type，并得到 raw payload JSON 与 pending files。
+3. `/api/chat` 兼容 facade 在 payload 校验通过后调用 `IWorkflowFileIngressPort.IngestAsync(...)`，`SourceKind=FormUpload`。
+4. 共享 parser 的 mapping helper 把返回的 typed `WorkflowFileRef` 构造成既有 `ChatInputContentPart.fileRef`；`image/*`、`audio/*`、`video/*` 分别映射为 `type=image/audio/video`，其余已允许的 document/text/spreadsheet 类型统一映射为 `type=file`。
 5. `ChatRunRequestNormalizer` 继续生成 `WorkflowChatRunRequest`，后续 CQRS command skeleton 不区分 JSON producer 与 form producer。
 
 actor-facing command、state、readmodel、stream frame 与日志都不得携带上传文件 bytes/base64；它们只携带 `WorkflowFileRef` 或由它派生出的 URI/metadata。
@@ -138,13 +138,15 @@ actor-facing command、state、readmodel、stream frame 与日志都不得携带
 |---|---:|---|
 | `INVALID_CALLER_CREDENTIAL` | 400 | Authorization bearer 格式无效。 |
 | `INVALID_CHAT_INPUT` | 400 | JSON body 或 multipart payload 不是合法 `ChatInput`。 |
-| `INVALID_FILE_INPUT` | 400 | 文件缺失、多个文件、字段名不匹配、media type 不允许、大小超限或 payload 试图携带 actor-facing file payload。 |
+| `INVALID_FILE_INPUT` | 400 | 文件缺失、字段名不匹配、media type 不允许、大小超限或 payload 试图携带 actor-facing file payload。 |
 | `UNSUPPORTED_MEDIA_TYPE` | 415 | 请求不是 JSON，也不是 `multipart/form-data`。 |
 | `PROMPT_REQUIRED` | 400 | normalizer 无法从 prompt 或 input parts 得到有效输入。 |
 | `WORKFLOW_NOT_FOUND` | 404 | workflow 名称未命中。 |
 | `WORKFLOW_BINDING_MISMATCH` | 409 | 目标 actor workflow binding 与请求不一致。 |
 
 WebSocket 不接收 `multipart/form-data`。文件输入应先经 HTTP artifact ingress producer 生成 typed file ref，或由客户端使用已有 `fileRef` descriptor。
+
+Scope service stream 入口（如 `/api/scopes/{scopeId}/invoke/chat:stream`、member/team stream）也可以接收 `multipart/form-data`，但 Host 只做 Content-Type 分派、path `scopeId` 权威性、DTO 反序列化、service kind gating 和错误映射。共享 parser 先返回 raw payload JSON、`HasFiles` 与 pending files；只有 service invocation 目标解析并确认是 workflow service 后，Host 才使用 path `scopeId` 调用 `IWorkflowFileIngressPort.IngestAsync(...)` 并追加 typed file refs。static / scripting 目标收到 multipart 文件时 fail closed，且不得通过公开 JSON `inputParts`、headers 或 metadata 承载上传文件语义。
 
 ### 多模态文件输入
 
