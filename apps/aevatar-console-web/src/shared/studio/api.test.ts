@@ -1371,19 +1371,28 @@ describe('studioApi host-session requests', () => {
       } as Response)
       .mockResolvedValueOnce({
         ok: true,
-        status: 200,
+        status: 202,
+        headers: new Headers({ 'content-type': 'application/json' }),
         json: async () => ({
-          ...teamResponse,
-          displayName: 'Alpha Ops',
-          description: '',
+          status: 'accepted',
+          scopeId: 'scope-1',
+          teamId: 't-alpha',
+          commandId: 'cmd-team-update',
+          correlationId: 'corr-team-update',
+          ackedAt: '2026-05-01T08:06:00Z',
         }),
       } as Response)
       .mockResolvedValueOnce({
         ok: true,
-        status: 200,
+        status: 202,
+        headers: new Headers({ 'content-type': 'application/json' }),
         json: async () => ({
-          ...teamResponse,
-          lifecycleStage: 'archived',
+          status: 'accepted',
+          scopeId: 'scope-1',
+          teamId: 't-alpha',
+          commandId: 'cmd-team-archive',
+          correlationId: 'corr-team-archive',
+          ackedAt: '2026-05-01T08:07:00Z',
         }),
       } as Response)
       .mockResolvedValueOnce({
@@ -1432,13 +1441,20 @@ describe('studioApi host-session requests', () => {
         description: null,
       }),
     ).resolves.toEqual({
-      ...teamResponse,
-      displayName: 'Alpha Ops',
-      description: '',
+      status: 'accepted',
+      scopeId: 'scope-1',
+      teamId: 't-alpha',
+      commandId: 'cmd-team-update',
+      correlationId: 'corr-team-update',
+      ackedAt: '2026-05-01T08:06:00Z',
     });
     await expect(studioApi.archiveTeam('scope-1', 't-alpha')).resolves.toEqual({
-      ...teamResponse,
-      lifecycleStage: 'archived',
+      status: 'accepted',
+      scopeId: 'scope-1',
+      teamId: 't-alpha',
+      commandId: 'cmd-team-archive',
+      correlationId: 'corr-team-archive',
+      ackedAt: '2026-05-01T08:07:00Z',
     });
     await expect(studioApi.listTeamMembers('scope-1', 't-alpha')).resolves.toEqual({
       scopeId: 'scope-1',
@@ -1507,6 +1523,53 @@ describe('studioApi host-session requests', () => {
         credentials: 'same-origin',
       }),
     );
+  });
+
+  it('accepts legacy studio team update summaries without treating them as decode failures', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        teamId: 't-alpha',
+        scopeId: 'scope-1',
+        displayName: 'Alpha Ops',
+        description: '',
+        lifecycleStage: 'active',
+        memberCount: 1,
+        createdAt: '2026-05-01T08:00:00Z',
+        updatedAt: '2026-05-01T08:06:00Z',
+        entryMemberId: 'joker',
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      studioApi.updateTeam({
+        scopeId: 'scope-1',
+        teamId: 't-alpha',
+        displayName: 'Alpha Ops',
+        description: null,
+      }),
+    ).resolves.toEqual({
+      status: 'accepted',
+      scopeId: 'scope-1',
+      teamId: 't-alpha',
+      commandId: null,
+      correlationId: null,
+      ackedAt: null,
+    });
   });
 
   it('sets and clears a studio team entry member', async () => {
