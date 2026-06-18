@@ -1169,7 +1169,7 @@ const TeamDetailPage: React.FC = () => {
       });
       void message.success(intl.formatMessage({ id: "teams.detail.messages.updateSuccess" }));
       setTeamEditorOpen(false);
-      await refreshTeamAuthority();
+      void refreshTeamAuthority().catch(() => undefined);
     } catch (error) {
       void message.error(
         describeError(error, intl.formatMessage({ id: "teams.detail.messages.updateFailed" })),
@@ -1219,7 +1219,7 @@ const TeamDetailPage: React.FC = () => {
       await studioApi.archiveTeam(scopeId, selectedTeamId);
       void message.success(intl.formatMessage({ id: "teams.detail.messages.archiveSuccess" }));
       setTeamArchiveOpen(false);
-      await refreshTeamAuthority();
+      void refreshTeamAuthority().catch(() => undefined);
     } catch (error) {
       void message.error(
         describeError(error, intl.formatMessage({ id: "teams.detail.messages.archiveFailed" })),
