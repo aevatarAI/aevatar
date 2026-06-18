@@ -30,10 +30,18 @@ internal static class VoiceRealtimeSessionReadinessBootstrapper
             audioSink,
             ct);
 
+        // Apply the resolved per-session prompt (chat-route policy sessionOverrides.instructions, carried
+        // on the lease handle) to the relay/model session. The static BuildOpenAIVoiceSessionConfig never
+        // sees it, so without this the model runs with an EMPTY system prompt and has no guidance for
+        // which tools to call (it could only call obvious zero-arg tools, never nyxid_proxy for HA).
+        var readinessConfig = sessionConfig.Clone();
+        if (!string.IsNullOrWhiteSpace(handle.Instructions))
+            readinessConfig.Instructions = handle.Instructions;
+
         var readinessCancellation = new CancellationTokenSource();
         var readiness = CompleteReadinessAsync(
             providerSession,
-            sessionConfig.Clone(),
+            readinessConfig,
             toolCatalog,
             handle.ToolContext?.Clone(),
             readinessCancellation.Token);
