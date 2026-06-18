@@ -23,8 +23,6 @@ terminal completion through typed `aevatar_observe_run` targets.
 exists, ordinary `/ws/voice` supports only typed
 `tool_choice_hint.voice_attach_target` attachment; pure model forwarding
 remains fail-closed.
-Issue #2158 removes the Mainnet `/ws/voice/{actorId}` bypass; explicit voice
-attach identity in Mainnet is only the typed `voice_attach_target`.
 
 ## Context
 
@@ -183,9 +181,8 @@ declare the resolved tool set to the OpenAI Realtime provider, and feed
 function calls through the same `ToolCallLoop` without treating tool prefill as
 actor addressing.
 
-Mainnet no longer exposes `/ws/voice/{actorId}`. Foundation's generic
-`MapVoicePresenceWebSocket` remains a low-level mapper for non-Mainnet or test
-hosts that provide their own admission and credential wrapper.
+`/ws/voice/{actorId}` (dev/admin bypass from ADR-0024 D4) stays. It
+short-circuits the resolver, so its semantics are unaffected.
 
 This supersedes ADR-0025's "voice v1 supports `ForwardToGAgent` only;
 `ForwardToModel` returns HTTP 501". Voice v2 supports `ForwardToModel`
@@ -241,9 +238,7 @@ deferred:
 - The existing `/v1/responses` Aevatar substitute and additive tool model
   (`nyxid-responses-direct.md` §5) is extended, not replaced. The new
   invocation tools join the additive-tool category.
-- Mainnet exposes only `/ws/voice` for voice WebSocket ingress. Explicit attach
-  identity is typed `voice_attach_target`; Foundation's generic mapper is not a
-  Mainnet production route.
+- `/ws/voice/{actorId}` dev bypass is preserved.
 - This ADR does not redesign the read-path for sub-run state observation;
   `aevatar_observe_run` reads through the existing readmodel projection
   surfaces, one typed target per call. Ordinary workflow queries stay on
@@ -308,7 +303,7 @@ Stage 1's tool sources are merged.
 | **2** | Extend `ForwardToModel` proto with `tool_set_ref` + `tool_choice_hint`. Policy authors express GAgent, team, and workflow targets directly as tool-first `ForwardToModel` actions. ChatRun-owned SSE session continuation remains deferred. | No |
 | **3** | Delete legacy wire actions and migration path. Reserve old proto tags/names for `ForwardToGAgent`, `ForwardToTeam`, `ForwardToWorkflow`, and `Bypass`; no new policy writer may emit them. | Yes (clients still using legacy actions) |
 | **4** | Remove code paths: `ResponsesEndpoints.cs:779-927`, `AgentRunGAgent.cs:1108-1141`, resolver branches for legacy actions. `/v1/messages` 501 fallback for these actions deleted. | Yes (clients still using legacy actions) |
-| **5** | `VoiceSessionActor` implementation. `/ws/voice` switches from typed attach target to session-owned `ForwardToModel + tool_set_ref` execution. Mainnet keeps a single `/ws/voice` ingress. **Blocked by:** VoicePresence.OpenAI GA migration. | Yes (voice clients) |
+| **5** | `VoiceSessionActor` implementation. `/ws/voice` switches from typed attach target to session-owned `ForwardToModel + tool_set_ref` execution. `/ws/voice/{actorId}` dev bypass unaffected. **Blocked by:** VoicePresence.OpenAI GA migration. | Yes (voice clients) |
 
 ## Supersedes
 

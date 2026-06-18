@@ -9,9 +9,7 @@ owner: eanzhao
 > Superseded for GAgent/team routing by ADR-0026. The current wire action set
 > no longer includes `ForwardToGAgent` or `ForwardToTeam`; policies express
 > those targets as `ForwardToModel.tool_set_ref + tool_choice_hint` with
-> `aevatar_invoke_gagent` or `aevatar_invoke_team`. Narrowed by issue #2158:
-> Mainnet voice ingress is only `/ws/voice`; explicit voice attach identity is
-> typed `ForwardToModel.tool_choice_hint.voice_attach_target`.
+> `aevatar_invoke_gagent` or `aevatar_invoke_team`.
 
 ## Context
 
@@ -24,7 +22,7 @@ policy:
 | Direct chat | `/api/scopes/{scopeId}/nyxid-chat/...` | hard-codes `NyxIdChatGAgent` |
 | NyxID relay (Lark / Telegram) | `/api/webhooks/nyxid-relay` → `ConversationGAgent` | runner picked via DI singleton; one path |
 | NyxID Responses | `/v1/responses` + `/v1/messages` | `ILLMProviderFactory.GetDefault()` directly; no GAgent |
-| Voice | `/ws/voice` | policy-aware entry resolves target; explicit attach identity is typed `voice_attach_target` |
+| Voice | `/ws/voice` + dev/admin `/ws/voice/{actorId}` | policy-aware entry resolves target; explicit actorId entry is gated bypass |
 
 Issues #672 + #674 introduce one user-configurable layer that decides which
 target GAgent or LLM model handles each inbound request. The earlier proposal
@@ -96,9 +94,9 @@ The existing repository already mounts `/api/ws/chat` for text JSON chat. The
 voice transport is binary PCM16 frames + JSON text control frames
 (`WebSocketVoiceTransport`); mixing both protocols on `/ws/chat` makes the
 upgrade ambiguous to clients and reviewers. The policy-aware voice endpoint
-is therefore `/ws/voice` (no `actorId` in route). The later Mainnet hardening
-removed the explicit-actor path; policy authors express explicit voice attach
-through typed `voice_attach_target`.
+is therefore `/ws/voice` (no `actorId` in route); the existing explicit-actor
+endpoint stays at `/ws/voice/{actorId}` and is restricted to a dev/admin
+scope in Phase 4 so prod traffic doesn't bypass policy.
 
 ### D5 — v1 scope reduction
 
@@ -120,12 +118,11 @@ The old `ForwardToGAgent`, `ForwardToTeam`, `ForwardToWorkflow`, and `Bypass`
 tags/names remain reserved for protobuf compatibility only. They are not live
 policy actions and must not be reintroduced as fields.
 
-Mainnet no longer exposes a dev/admin explicit-actor path outside
-`ChatRouteAction`. Ordinary `/ws/voice` may attach only when the resolved
-`ForwardToModel.tool_choice_hint.voice_attach_target` carries a typed target.
-Tool-first `ForwardToModel` execution through a voice session actor is not
-implemented in this milestone and remains the later Stage 5 work described by
-ADR-0026.
+`/ws/voice/{actorId}` remains a dev/admin explicit-actor bypass outside
+`ChatRouteAction`; it reads the `actorId` from the route and short-circuits the
+resolver. Ordinary `/ws/voice` tool-first `ForwardToModel` execution through a
+voice session actor is not implemented in this milestone and remains the
+later Stage 5 work described by ADR-0026.
 
 The write side also drops `ResetChatRoutePolicyRequested`: because
 `default_target` is REQUIRED whenever the actor exists (per D6 below), a
@@ -181,7 +178,8 @@ holds — and only as configuration, not as event-sourced fact. Existing
   actor — explicitly deferred per #674 review).
 - Telemetry pipeline for `matched_rule_id` (will arrive via existing run
   trace channels in a later issue).
-- Voice session actor execution for pure `ForwardToModel` voice decisions.
+- Decommissioning `/ws/voice/{actorId}` — it stays available, gated by a
+  dev/admin scope.
 
 ## Consequences
 
@@ -191,8 +189,9 @@ holds — and only as configuration, not as event-sourced fact. Existing
 - Four existing ingress entries (NyxIdChat, Responses, Messages, Relay) will
   each add one resolver call in Phase 3 — no schema breakage at the
   ingress, no new actor in the dispatch path.
-- Phase 4 is the first Mainnet host voice mount; Mainnet now uses the
-  policy-aware `/ws/voice` endpoint rather than the Foundation generic mapper.
+- Phase 4 is the first Mainnet host mount of `MapVoicePresenceWebSocket`;
+  the existing CLI #205 path continues to work via the dev-scoped explicit
+  endpoint.
 - Reverting to a router-actor shape later would require unwinding every
   resolver call site. The boundary form is intentionally costly to walk
   back from — this is what protects #568's anti-Harness invariant.

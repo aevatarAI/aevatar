@@ -9,8 +9,7 @@ owner: eanzhao
 > Superseded for target encoding by ADR-0026 and narrowed by issues #1321 and
 > #674. Voice still resolves through `/ws/voice`; attach targets are expressed
 > only by `ForwardToModel.tool_choice_hint.voice_attach_target`, not by tool
-> prefilled argument bags. Narrowed again by issue #2158: Mainnet no longer
-> maps `/ws/voice/{actorId}`.
+> prefilled argument bags.
 
 ## Context
 
@@ -39,11 +38,11 @@ and provider state machines.
   still fails closed before WebSocket accept.
 - Route policy and authorization remain separate. Ordinary `/ws/voice` no
   longer derives a target actor from tool prefill; it attaches only when the
-  policy carries the typed voice attach target. Mainnet does not expose an
-  actor-id path, so there is no second URL actor identity channel.
-- `Aevatar.Foundation.VoicePresence.Hosting.MapVoicePresenceWebSocket` remains
-  a low-level mapper for non-Mainnet or test hosts that provide their own
-  admission and credential wrapper. It is not a Mainnet production ingress.
+  policy carries the typed voice attach target. Explicit actor attach through
+  the path remains limited to the dev/admin bypass below.
+- Explicit actorId bypass stays at `GET /ws/voice/{actorId}`, but Mainnet Host
+  gates it with the `voice-dev` authorization policy (`voice:bypass` scope or
+  admin/owner role).
 
 ## Boundaries
 
@@ -75,7 +74,6 @@ and provider state machines.
 - `/ws/voice` returns `501` before WebSocket accept for `ForwardToModel`
   decisions that do not carry a typed voice attach target, including decisions
   that carry only `tool_choice_hint.prefilled_arguments`.
-- Mainnet route tables contain `/ws/voice` and do not contain
-  `/ws/voice/{actorId}`.
+- `/ws/voice/{actorId}` rejects callers without `voice:bypass` or admin/owner.
 - Static checks show no ChatRouting dependency inside
   `Aevatar.Foundation.VoicePresence`.
