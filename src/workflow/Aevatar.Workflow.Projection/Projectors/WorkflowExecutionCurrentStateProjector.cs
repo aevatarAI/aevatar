@@ -1,6 +1,7 @@
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core;
+using Aevatar.Workflow.Projection.Observability;
 using Aevatar.Workflow.Projection.ReadModels;
 
 namespace Aevatar.Workflow.Projection.Projectors;
@@ -20,7 +21,7 @@ public sealed class WorkflowExecutionCurrentStateProjector
     {
     }
 
-    protected override WorkflowExecutionCurrentStateDocument Map(
+    protected override WorkflowExecutionCurrentStateDocument? Map(
         MappedCurrentStateProjectionInput<WorkflowExecutionMaterializationContext, WorkflowRunState> input)
     {
         var context = input.Context;
@@ -33,6 +34,8 @@ public sealed class WorkflowExecutionCurrentStateProjector
             return null;
 
         var stateEvent = input.StateEvent;
+        WorkflowCompensationMetrics.ObserveCommittedPayload(stateEvent.EventData);
+
         var state = input.State;
         var seedSnapshot = _forkSeedMapper.ToProjectionSnapshot(state);
 
@@ -54,6 +57,10 @@ public sealed class WorkflowExecutionCurrentStateProjector
             Input = state.Input ?? string.Empty,
             FinalOutput = state.FinalOutput ?? string.Empty,
             FinalError = state.FinalError ?? string.Empty,
+            SagaStatus = state.SagaStatus,
+            DeadLetterFailedCompensationStepId = state.DeadLetterFailedCompensationStepId ?? string.Empty,
+            DeadLetterRemainingUncompensated = state.DeadLetterRemainingUncompensated,
+            DeadLetterError = state.DeadLetterError ?? string.Empty,
             ExecutionStateCount = state.ExecutionStates.Count,
             Success = ResolveSuccess(state.Status),
             StateVersion = stateEvent.Version,
@@ -70,7 +77,25 @@ public sealed class WorkflowExecutionCurrentStateProjector
                 StringComparer.Ordinal),
             ForkSeedCompletedStepIds = seedSnapshot.CompletedStepIds.ToList(),
             ForkSeedLastFailedStepId = seedSnapshot.LastFailedStepId,
+            ForkSeedIdempotencies = seedSnapshot.IdempotencyByStepId.ToDictionary(
+                x => x.Key,
+                x => MapStepIdempotency(x.Value),
+                StringComparer.Ordinal),
             InputFileRefs = seedSnapshot.InputFileRefs.Select(MapInputFileRef).ToList(),
+        };
+    }
+
+    private static WorkflowStepIdempotencyReadModel MapStepIdempotency(
+        WorkflowStepIdempotencyState source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        return new WorkflowStepIdempotencyReadModel
+        {
+            LogicalRunId = source.LogicalRunId ?? string.Empty,
+            StepId = source.StepId ?? string.Empty,
+            LogicalAttempt = source.LogicalAttempt,
+            IdempotencyKey = source.IdempotencyKey ?? string.Empty,
         };
     }
 

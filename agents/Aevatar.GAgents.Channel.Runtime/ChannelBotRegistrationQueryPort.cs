@@ -123,5 +123,6 @@ public sealed class ChannelBotRegistrationQueryPort : IChannelBotRegistrationQue
             NyxChannelBotId = document.NyxChannelBotId ?? string.Empty,
             NyxAgentApiKeyId = document.NyxAgentApiKeyId ?? string.Empty,
             NyxConversationRouteId = document.NyxConversationRouteId ?? string.Empty,
+            NyxReplyCredentialRef = document.NyxReplyCredentialRef ?? string.Empty,
         };
 }

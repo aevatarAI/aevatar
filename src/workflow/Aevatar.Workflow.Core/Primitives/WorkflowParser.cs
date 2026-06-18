@@ -38,6 +38,7 @@ public sealed class WorkflowParser
         ("prompt", static step => step.Prompt),
         ("timeout", static step => step.Timeout),
         ("timeout_seconds", static step => step.TimeoutSeconds),
+        ("timeout_default_decision", static step => step.TimeoutDefaultDecision),
         ("duration_ms", static step => step.DurationMs),
         ("variable", static step => step.Variable),
         ("on_timeout", static step => step.OnTimeout),
@@ -165,6 +166,8 @@ public sealed class WorkflowParser
             TransformOperation = MapTransformOperation(canonicalType, parameters),
             Presentation = presentation,
             AgentToolScope = agentToolScope,
+            HumanApprovalOptions = MapHumanApprovalOptions(canonicalType, parameters),
+            ExternalApprovalOptions = MapExternalApprovalOptions(canonicalType, parameters),
             Next = s.Next,
             Compensation = NormalizeText(s.Compensation),
             Children = s.Children?.Select(MapStep).ToList(),
@@ -186,7 +189,7 @@ public sealed class WorkflowParser
         var interactionTemplateSpec = isNotifyStep
             ? MapInteractionTemplateSpec(ResolveInteractionTemplateSpecSource(step, rawParameters))
             : null;
-        var deliveryTargetId = isNotifyStep
+        var deliveryTargetId = SupportsHumanInteractionDelivery(canonicalStepType)
             ? ResolveDeliveryTargetId(step, rawParameters)
             : null;
         var presentation = new StepPresentation
@@ -199,6 +202,12 @@ public sealed class WorkflowParser
             ? presentation
             : null;
     }
+
+    private static bool SupportsHumanInteractionDelivery(string canonicalStepType) =>
+        string.Equals(canonicalStepType, "notify", StringComparison.Ordinal) ||
+        string.Equals(canonicalStepType, "human_approval", StringComparison.Ordinal) ||
+        string.Equals(canonicalStepType, "human_input", StringComparison.Ordinal) ||
+        string.Equals(canonicalStepType, "secure_input", StringComparison.Ordinal);
 
     private static object? ResolveInteractionSpecSource(
         RawStep step,
@@ -967,6 +976,51 @@ public sealed class WorkflowParser
         return spec;
     }
 
+    private static HumanApprovalOptionsDefinition? MapHumanApprovalOptions(
+        string canonicalType,
+        IReadOnlyDictionary<string, string> parameters)
+    {
+        if (!string.Equals(canonicalType, "human_approval", StringComparison.Ordinal))
+            return null;
+
+        var decision = GetParameter(parameters, "timeout_default_decision").Trim();
+        return string.IsNullOrWhiteSpace(decision)
+            ? null
+            : new HumanApprovalOptionsDefinition { TimeoutDefaultDecision = decision };
+    }
+
+    private static ExternalApprovalWaitOptionsDefinition? MapExternalApprovalOptions(
+        string canonicalType,
+        IReadOnlyDictionary<string, string> parameters)
+    {
+        if (!string.Equals(canonicalType, "wait_signal", StringComparison.Ordinal))
+            return null;
+
+        var sourceId = GetParameter(parameters, "external_approval.source_id", "approval_source_id", "source_id").Trim();
+        var externalIdKind = GetParameter(parameters, "external_approval.external_id_kind", "external_id_kind").Trim();
+        var externalId = GetParameter(parameters, "external_approval.external_id", "external_id").Trim();
+        if (string.IsNullOrWhiteSpace(sourceId) ||
+            string.IsNullOrWhiteSpace(externalIdKind) ||
+            string.IsNullOrWhiteSpace(externalId))
+        {
+            return null;
+        }
+
+        return new ExternalApprovalWaitOptionsDefinition
+        {
+            SourceId = sourceId,
+            ExternalIdKind = externalIdKind,
+            ExternalId = externalId,
+            SignalName = GetParameter(parameters, "external_approval.signal_name", "signal_name", "signal").Trim(),
+            CallbackIdempotencyKey = GetParameter(
+                parameters,
+                "external_approval.callback_idempotency_key",
+                "callback_idempotency_key",
+                "idempotency_key").Trim(),
+            RequestId = GetParameter(parameters, "external_approval.request_id", "request_id").Trim(),
+        };
+    }
+
     private static TransformOperationKind ParseTransformOperationKind(string? value) =>
         NormalizeEnumToken(value) switch
         {
@@ -1223,6 +1277,7 @@ public sealed class WorkflowParser
         public string? Prompt { get; set; }
         public object? Timeout { get; set; }
         public object? TimeoutSeconds { get; set; }
+        public string? TimeoutDefaultDecision { get; set; }
         public object? DurationMs { get; set; }
         public string? Variable { get; set; }
         public string? OnTimeout { get; set; }

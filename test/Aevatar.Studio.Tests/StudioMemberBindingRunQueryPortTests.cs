@@ -40,6 +40,7 @@ public sealed class StudioMemberBindingRunQueryPortTests
         run.StateVersion.Should().Be(7);
         run.PlatformBindingCommandId.Should().Be("platform-bind-1");
         run.UpdatedAt.Should().Be(DateTimeOffset.Parse("2026-04-30T08:00:00Z"));
+        run.Result.Should().BeNull();
     }
 
     [Fact]
@@ -148,6 +149,95 @@ public sealed class StudioMemberBindingRunQueryPortTests
         run.Failure.Message.Should().Be("platform refused the revision");
         run.Failure.FailedAt.Should().Be(failedAt);
         run.PlatformBindingCommandId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetAsync_ShouldMapResultFromBindingRunDocument()
+    {
+        var actorId = StudioMemberConventions.BuildBindingRunActorId("bind-1");
+        var reader = new StubDocumentReader([
+            new StudioMemberBindingRunCurrentStateDocument
+            {
+                Id = actorId,
+                ActorId = actorId,
+                BindingRunId = "bind-1",
+                ScopeId = "scope-1",
+                MemberId = "m-1",
+                Status = StudioMemberBindingRunStatusNames.Succeeded,
+                ResultPublishedServiceId = "svc-alpha",
+                ResultRevisionId = "rev-alpha",
+                ResultImplementationKind = MemberImplementationKindNames.Workflow,
+                ResultExpectedActorId = "scope-workflow:scope-1:m-1",
+            },
+        ]);
+        var port = new ProjectionStudioMemberBindingRunQueryPort(reader);
+
+        var run = await port.GetAsync("scope-1", "m-1", "bind-1");
+
+        run.Should().NotBeNull();
+        run!.Result.Should().NotBeNull();
+        run.Result!.PublishedServiceId.Should().Be("svc-alpha");
+        run.Result.RevisionId.Should().Be("rev-alpha");
+        run.Result.ImplementationKind.Should().Be(MemberImplementationKindNames.Workflow);
+        run.Result.ExpectedActorId.Should().Be("scope-workflow:scope-1:m-1");
+    }
+
+    [Fact]
+    public async Task GetAsync_ShouldOmitResult_WhenCoreResultFieldsAreIncomplete()
+    {
+        var actorId = StudioMemberConventions.BuildBindingRunActorId("bind-1");
+        var reader = new StubDocumentReader([
+            new StudioMemberBindingRunCurrentStateDocument
+            {
+                Id = actorId,
+                ActorId = actorId,
+                BindingRunId = "bind-1",
+                ScopeId = "scope-1",
+                MemberId = "m-1",
+                Status = StudioMemberBindingRunStatusNames.MemberNotificationPending,
+                ResultPublishedServiceId = "svc-alpha",
+            },
+        ]);
+        var port = new ProjectionStudioMemberBindingRunQueryPort(reader);
+
+        var run = await port.GetAsync("scope-1", "m-1", "bind-1");
+
+        run.Should().NotBeNull();
+        run!.Result.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetAsync_ShouldExposeRejectedActiveRunCandidateFromBindingRunReadModel()
+    {
+        var failedAt = DateTimeOffset.Parse("2026-04-30T09:45:00Z");
+        var actorId = StudioMemberConventions.BuildBindingRunActorId("bind-rejected");
+        var reader = new StubDocumentReader([
+            new StudioMemberBindingRunCurrentStateDocument
+            {
+                Id = actorId,
+                ActorId = actorId,
+                BindingRunId = "bind-rejected",
+                ScopeId = "scope-1",
+                MemberId = "m-alpha",
+                Status = StudioMemberBindingRunStatusNames.Rejected,
+                StateVersion = 5,
+                FailureCode = "STUDIO_MEMBER_BINDING_RUN_ALREADY_ACTIVE",
+                FailureMessage = "member already has an active binding run.",
+                FailureAt = Timestamp.FromDateTimeOffset(failedAt),
+            },
+        ]);
+        var port = new ProjectionStudioMemberBindingRunQueryPort(reader);
+
+        var run = await port.GetAsync("scope-1", "m-alpha", "bind-rejected");
+
+        run.Should().NotBeNull();
+        run!.Status.Should().Be(StudioMemberBindingRunStatusNames.Rejected);
+        run.StateVersion.Should().Be(5);
+        run.Failure.Should().NotBeNull();
+        run.Failure!.Code.Should().Be("STUDIO_MEMBER_BINDING_RUN_ALREADY_ACTIVE");
+        run.Failure.Message.Should().Be("member already has an active binding run.");
+        run.Failure.FailedAt.Should().Be(failedAt);
+        run.Result.Should().BeNull();
     }
 
     [Theory]

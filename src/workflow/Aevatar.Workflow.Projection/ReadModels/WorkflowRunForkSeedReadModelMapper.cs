@@ -26,7 +26,11 @@ public sealed class WorkflowRunForkSeedReadModelMapper
             source.ForkSeedCompletedStepIds.ToList(),
             source.ForkSeedLastFailedStepId ?? string.Empty,
             source.FinalError ?? string.Empty,
-            source.ScopeId ?? string.Empty);
+            source.ScopeId ?? string.Empty,
+            source.ForkSeedIdempotencies.ToDictionary(
+                x => x.Key,
+                x => ToView(x.Value),
+                StringComparer.Ordinal));
     }
 
     public WorkflowRunForkSeedProjectionSnapshot ToProjectionSnapshot(WorkflowRunState state)
@@ -49,7 +53,11 @@ public sealed class WorkflowRunForkSeedReadModelMapper
             completedStepIds,
             lastFailedStepId,
             state.ScopeId ?? string.Empty,
-            kernelState?.InputFileRefs.Select(static fileRef => fileRef.Clone()).ToList() ?? []);
+            kernelState?.InputFileRefs.Select(static fileRef => fileRef.Clone()).ToList() ?? [],
+            kernelState?.IdempotencyByStepId.ToDictionary(
+                x => x.Key,
+                x => x.Value.Clone(),
+                StringComparer.Ordinal) ?? new Dictionary<string, WorkflowStepIdempotencyState>(StringComparer.Ordinal));
     }
 
     private static WorkflowExecutionKernelState? TryReadKernelState(WorkflowRunState state)
@@ -84,6 +92,13 @@ public sealed class WorkflowRunForkSeedReadModelMapper
             x => x.Key,
             x => x.Value,
             StringComparer.Ordinal);
+
+    private static WorkflowStepIdempotencyView ToView(WorkflowStepIdempotencyReadModel source) =>
+        new(
+            source.LogicalRunId ?? string.Empty,
+            source.StepId ?? string.Empty,
+            source.LogicalAttempt,
+            source.IdempotencyKey ?? string.Empty);
 }
 
 public sealed record WorkflowRunForkSeedProjectionSnapshot(
@@ -93,4 +108,5 @@ public sealed record WorkflowRunForkSeedProjectionSnapshot(
     IReadOnlyList<string> CompletedStepIds,
     string LastFailedStepId,
     string ScopeId,
-    IReadOnlyList<WorkflowFileRef> InputFileRefs);
+    IReadOnlyList<WorkflowFileRef> InputFileRefs,
+    IReadOnlyDictionary<string, WorkflowStepIdempotencyState> IdempotencyByStepId);

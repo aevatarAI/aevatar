@@ -71,6 +71,39 @@ roles:
   Old pattern: ChatRuntime.ChatStreamAsync 用 Task.Run + Channel<LLMStreamChunk>/ChannelWriter 在 actor turn 外跑 LLM/tool/hook/history 业务循环,违反 actor execution integrity
   New principle: ChatStreamAsync owns the stream flow directly; the Task.Run + Channel owned-stream loop and stream_buffer_capacity config were removed; middleware wrapping stays inside private bridge adapters.
 
+### Saga compensation
+
+Every step may declare `compensation: <step_id>` when its successful side effect can be undone by another step in the same workflow. The compensation target must resolve to an existing step id during validation; it is not a late-bound name or inline body.
+
+```yaml
+steps:
+  - id: create_order
+    type: connector_call
+    next: charge_payment
+    compensation: cancel_order
+  - id: charge_payment
+    type: connector_call
+    next: ship_order
+    compensation: refund_payment
+  - id: ship_order
+    type: connector_call
+  - id: refund_payment
+    type: connector_call
+  - id: cancel_order
+    type: connector_call
+```
+
+Runtime semantics:
+
+- `tool_call`, `connector_call`, and `secure_connector_call` are the v1.1 side-effecting primitive set. When one declares `compensation`, dispatch first records a `PROVISIONAL` ledger entry before the external side-effect boundary.
+- A successful completion confirms a matching provisional entry as `CONFIRMED` and fills captured output. If no dispatch event exists, legacy success still appends one `CONFIRMED` entry.
+- A callee-confirmed failure removes the matching provisional entry. Timeout, force-fail, or stop-to-failure paths set `failure_outcome = OUTCOME_UNCERTAIN`, keep the provisional entry, and let compensation treat undoing a not-applied side effect as a safe no-op.
+- If a later terminal failure occurs while the ledger is non-empty, compensation runs in reverse ledger order over both `PROVISIONAL` and `CONFIRMED` entries.
+- The typed `WorkflowSagaStatus` moves `WORKFLOW_SAGA_STATUS_UNSPECIFIED -> WORKFLOW_SAGA_STATUS_COMPENSATING -> WORKFLOW_SAGA_STATUS_COMPENSATED_FAILED` when every compensation step succeeds (a non-compensating run stays `UNSPECIFIED`; there is no distinct `running` saga status).
+- If a compensation step fails, the run moves to `WORKFLOW_SAGA_STATUS_COMPENSATION_DEAD_LETTER` and emits `WorkflowCompensationFailedEvent` with the failed compensation step, remaining uncompensated count, and error.
+- Compensation dispatch uses self continuation. Stale or duplicate compensation completions are rejected by execution id and do not advance the cursor.
+- A child `workflow_call` reports its own compensated terminal failure with `SubWorkflowInvocationCompletedEvent.compensated = true`. The flag is child-outcome-only; parent workflow compensation remains driven by the parent run's own ledger.
+
 ## 2. Data 原语
 
 ### `transform`
@@ -351,6 +384,7 @@ steps:
 - 常用参数：`tool`。
 - 工具输出若是 JSON object 且步骤成功，运行时会把顶层字段镜像为 `steps.<step_id>.json.<field>` 变量，供后续 `switch` / `conditional` / `while` 分支使用。
 - 当前 step 的 typed input file refs 会随 `WorkflowToolExecutionRequest` 传给 workflow tool。工具若同时支持 arguments `fileRef` 与当前输入文件上下文，显式 `fileRef` 优先；未显式选择时，只能在恰好 1 个当前输入文件时 fallback，多文件必须 fail closed 并要求调用方显式选择。
+- `tool_call` side effect 是 at-least-once。workflow actor 在 dispatch seam 解析并持久化 typed `idempotency_key`；若 step 声明 `compensation`，同一 seam 先写入 `PROVISIONAL` compensation ledger，再发布 tool invocation envelope。审批 replay / crash replay 会复用同一个 key；该 key 只用于 callee-side 幂等建议，不表示 engine-side dedup 或 exactly-once。
 - 需要人工审批的 direct `tool_call` 不把 `ApprovalPending` 当作失败完成。`ToolCallModule` 将原始 tool name、arguments、`execution_id`、`tool_call_id`、`approval_request_id` 持久化到 workflow actor state，并发布 `WorkflowSuspendedEvent.tool_approval`。该 suspension 只暴露审批对账键，不暴露工具参数。
 - tool approval resume 使用 `WorkflowResumedEvent.tool_approval` nested payload，仅携带 `execution_id`、`tool_call_id`、`approval_request_id`。客户端不得在 resume payload 中提交 tool name 或 arguments；approved replay 必须从 actor pending state 读取原始工具和参数，并向 tool middleware 传递 typed `ToolApprovalGrant`。
 - resume 对账按 `run_id + step_id + execution_id + tool_call_id + approval_request_id` 精确匹配。approved 后重放原工具；rejected / timed out / non-pending termination fail closed 并清理 pending state；stale 或 mismatched resume event 直接忽略。
@@ -605,6 +639,7 @@ steps:
 
 - 作用：调用外部 connector（HTTP/CLI/MCP 等），支持重试和降级策略。
 - 常用参数：`connector`、`operation`、`retry`、`timeout_ms`、`optional`、`on_missing`、`on_error`。
+- `connector_call` / `secure_connector_call` side effect 是 at-least-once。workflow actor 按 logical run id + step id + logical attempt 解析并持久化 typed `idempotency_key`；若 step 声明 `compensation`，同一 seam 先写入 `PROVISIONAL` compensation ledger，再发布 connector request。connector physical retry / pending replay 复用同一个 key；HTTP connector 会在 key 非空时发送 `Idempotency-Key` header，其他 connector 可按自身边界使用或忽略。该 key 不提供 engine-side dedup 或 exactly-once。
 - Ergonomic 说明（统一归一化到 `connector_call`）：
   - `http_get`/`http_post`/`http_put`/`http_delete`：自动补 `method=GET/POST/PUT/DELETE`（若未显式提供）。
   - `mcp_call`：若只写 `tool` 且未写 `operation/action`，会自动补 `operation=<tool>`。
@@ -668,7 +703,9 @@ steps:
 ### `human_approval`
 
 - 作用：暂停并等待人工批准/拒绝。
-- 常用参数：`prompt`、`timeout`、`on_reject`。
+- 常用参数：`prompt`、`timeout`、`timeout_default_decision`、`delivery_target_id`、`on_reject`。
+- `timeout_default_decision` 支持 `reject` / `approve`；缺省安全值为 `reject`。
+- `delivery_target_id` 是通用投递目标，不表示某个固定渠道。运行时通过 `WorkflowSuspendedEvent -> IHumanInteractionPort` 交给宿主/skill/agent 能力投递，Feishu/Lark、Web、Email 等只是边界实现。
 
 ```yaml
 steps:
@@ -676,7 +713,9 @@ steps:
     type: human_approval
     parameters:
       prompt: "Approve release?"
+      delivery_target_id: "${input.approver_delivery_target_id}"
       timeout: "3600"
+      timeout_default_decision: "reject"
       on_reject: "fail"
 ```
 
@@ -732,7 +771,8 @@ POST /api/workflows/signal
 - 长运行建议：对预计会 stall `3600-5400s` 的外部工作，优先采用 `emit/connector_call -> wait_signal` 或 `human_approval` continuation，而不是把普通 `llm_call/connector_call` 步骤 timeout 调大到超过 executor 的 `600s` 上限。
 - `human_approval.on_reject`：
   - `fail`：拒绝会终止流程；
-  - `skip`：拒绝后继续下一个步骤（输入保持原值）。
+  - `skip` / `continue`：拒绝后继续下一个步骤（输入保持原值）。
+- `human_approval.timeout_default_decision`：超时由 workflow actor 自身的 durable callback 触发，并按 `approve` / `reject` 自动完成；渠道/skill 只负责通知和把按钮回调转换为 resume，不拥有超时语义。
 - `wait_signal.timeout_ms`：超时会返回失败 `StepCompletedEvent`，上层可配 `on_error` 做降级。
 - UI 层建议把“待处理交互卡片”与执行日志放在一起，便于审计 run 的人工干预轨迹。
 

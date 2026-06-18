@@ -15,6 +15,16 @@ public sealed record WorkflowFileIngressResult(WorkflowFileRef FileRef);
 
 public sealed record WorkflowFileArtifactContent(WorkflowFileRef FileRef, Stream Content);
 
+public sealed record WorkflowFileArtifactCleanupRequest(long ObservedAtUnixMs);
+
+public sealed record WorkflowFileArtifactCleanupResult(
+    long ScannedArtifactCount,
+    long DeletedExpiredArtifactCount,
+    long DeletedIncompleteArtifactCount)
+{
+    public long DeletedArtifactCount => DeletedExpiredArtifactCount + DeletedIncompleteArtifactCount;
+}
+
 public interface IWorkflowFileIngressPort
 {
     ValueTask<WorkflowFileIngressResult> IngestAsync(
@@ -39,5 +49,12 @@ public interface IWorkflowFileArtifactOwnershipPort
         WorkflowFileRef fileRef,
         string ownerRunId,
         string? ownerScopeId,
+        CancellationToken cancellationToken = default);
+}
+
+public interface IWorkflowFileArtifactCleanupPort
+{
+    ValueTask<WorkflowFileArtifactCleanupResult> CleanupAsync(
+        WorkflowFileArtifactCleanupRequest request,
         CancellationToken cancellationToken = default);
 }

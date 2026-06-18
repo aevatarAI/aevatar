@@ -195,10 +195,26 @@ public sealed partial class WorkflowExecutionCurrentStateDocument : IProjectionR
         set => WorkflowExecutionReadModelCollections.ReplaceCollection(ForkSeedCompletedStepIdEntries, value);
     }
 
+    public IDictionary<string, WorkflowStepIdempotencyReadModel> ForkSeedIdempotencies
+    {
+        get => ForkSeedIdempotencyEntries;
+        set => WorkflowExecutionReadModelCollections.ReplaceMap(ForkSeedIdempotencyEntries, value);
+    }
+
     public IList<WorkflowExecutionInputFileRefReadModel> InputFileRefs
     {
         get => InputFileRefEntries;
         set => WorkflowExecutionReadModelCollections.ReplaceCollection(InputFileRefEntries, value);
+    }
+}
+
+public sealed partial class WorkflowExternalApprovalContinuationDocument
+    : IProjectionReadModel<WorkflowExternalApprovalContinuationDocument>
+{
+    public DateTimeOffset UpdatedAt
+    {
+        get => UpdatedAtUtcValue == null ? default : UpdatedAtUtcValue.ToDateTimeOffset();
+        set => UpdatedAtUtcValue = Timestamp.FromDateTimeOffset(value.ToUniversalTime());
     }
 }
 

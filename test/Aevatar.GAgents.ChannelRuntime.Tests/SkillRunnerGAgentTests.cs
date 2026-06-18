@@ -15,9 +15,11 @@ using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Platform.Lark;
 using Aevatar.GAgents.Scheduled;
+using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Google.Protobuf;
@@ -433,6 +435,161 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         _agent.State.Enabled.Should().BeFalse();
         _agent.State.LastError.Should().Be(SkillRunnerDefaults.RejectionReasonRunnerDisabled);
         _agent.State.ErrorCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task HandleTriggerAsync_SameCronOccurrenceDeliveredTwice_ShouldExecuteAndSendOnlyOnce()
+    {
+        var provider = new StubStreamingProviderFactory("first output", "second output");
+        var agent = CreateAgent("skill-runner-cron-duplicate", providerFactory: provider);
+        await agent.ActivateAsync();
+        await agent.HandleInitializeAsync(CreateTextOutputInitializeCommand());
+        var handler = new RecordingHandler("""{"code":0,"msg":"success","data":{"message_id":"om_cron"}}""");
+        AttachNyxIdApiClient(agent, handler);
+        var occurrenceKey = "schedule:runner-1:fire:2026-06-16T01:00:00.0000000+00:00";
+
+        await DispatchCronFireAsync(agent, "schedule-envelope-1", occurrenceKey);
+        var outboundRequestsAfterFirstDelivery = handler.Requests.Count;
+
+        await DispatchCronFireAsync(agent, "schedule-envelope-redelivery", occurrenceKey);
+
+        provider.Requests.Should().ContainSingle();
+        handler.Requests.Should().HaveCount(outboundRequestsAfterFirstDelivery);
+        var persisted = await _store.GetEventsAsync("skill-runner-cron-duplicate");
+        persisted.Select(x => x.EventData)
+            .Count(x => x.Is(SkillRunnerExecutionCompletedEvent.Descriptor))
+            .Should()
+            .Be(1);
+        var duplicate = persisted.Select(x => x.EventData)
+            .Where(x => x.Is(SkillRunnerCronOccurrenceDuplicateIgnoredEvent.Descriptor))
+            .Select(x => x.Unpack<SkillRunnerCronOccurrenceDuplicateIgnoredEvent>())
+            .Should()
+            .ContainSingle()
+            .Subject;
+        duplicate.CronOccurrenceKey.Should().Be(occurrenceKey);
+        agent.State.IsCronOccurrenceTerminal(occurrenceKey).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task HandleTriggerAsync_CronOccurrenceWithoutBaggage_ShouldUseEnvelopeIdForRedeliveryDedup()
+    {
+        var provider = new StubStreamingProviderFactory("first output", "second output");
+        var agent = CreateAgent("skill-runner-cron-envelope-id", providerFactory: provider);
+        await agent.ActivateAsync();
+        await agent.HandleInitializeAsync(CreateTextOutputInitializeCommand());
+        AttachNyxIdApiClient(agent, new RecordingHandler("""{"code":0,"msg":"success","data":{"message_id":"om_cron"}}"""));
+        var envelopeId = "schedule:runner-1:fire:2026-06-16T02:00:00.0000000+00:00";
+
+        await DispatchCronFireAsync(agent, envelopeId, cronOccurrenceKey: null);
+        await DispatchCronFireAsync(agent, envelopeId, cronOccurrenceKey: null);
+
+        provider.Requests.Should().ContainSingle();
+        var completed = await ReadSingleCompletedEventAsync(_store, "skill-runner-cron-envelope-id");
+        completed.CronOccurrenceKey.Should().Be(envelopeId);
+        agent.State.IsCronOccurrenceTerminal(envelopeId).Should().BeTrue();
+        var persisted = await _store.GetEventsAsync("skill-runner-cron-envelope-id");
+        persisted.Select(x => x.EventData)
+            .Count(x => x.Is(SkillRunnerCronOccurrenceDuplicateIgnoredEvent.Descriptor))
+            .Should()
+            .Be(1);
+    }
+
+    [Fact]
+    public async Task HandleTriggerAsync_CronRetryAttempt_ShouldBypassDuplicateSkipAndUseSameOccurrenceKey()
+    {
+        var scheduler = new RecordingCallbackScheduler();
+        var provider = new StubStreamingProviderFactory(
+            new StubStreamingTurn(new InvalidOperationException("transient")),
+            new StubStreamingTurn(["retry output"]));
+        using var serviceProvider = BuildServiceProvider(
+            new InMemoryEventStore(),
+            services => services.AddSingleton<IActorRuntimeCallbackScheduler>(scheduler));
+        var agent = CreateAgent(
+            "skill-runner-cron-retry",
+            serviceProvider,
+            providerFactory: provider);
+        await agent.ActivateAsync();
+        await agent.HandleInitializeAsync(CreateTextOutputInitializeCommand());
+        AttachNyxIdApiClient(agent, new RecordingHandler("""{"code":0,"msg":"success","data":{"message_id":"om_retry"}}"""));
+        var occurrenceKey = "schedule:runner-1:fire:2026-06-16T03:00:00.0000000+00:00";
+
+        await DispatchCronFireAsync(agent, "first-attempt-envelope", occurrenceKey);
+
+        scheduler.Timeouts.Should().ContainSingle();
+        var retryEnvelope = scheduler.Timeouts[0].TriggerEnvelope;
+        retryEnvelope.Propagation.Baggage[ScheduledDispatchMetadataKeys.IdempotencyKey].Should().Be(occurrenceKey);
+
+        await agent.HandleEventAsync(retryEnvelope);
+
+        provider.Requests.Should().HaveCount(2);
+        var store = serviceProvider.GetRequiredService<IEventStore>() as InMemoryEventStore
+            ?? throw new InvalidOperationException("test store missing");
+        var completed = await ReadSingleCompletedEventAsync(store, "skill-runner-cron-retry");
+        completed.CronOccurrenceKey.Should().Be(occurrenceKey);
+        agent.State.IsCronOccurrenceTerminal(occurrenceKey).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task HandleTriggerAsync_ExternalTriggerWithScheduleReason_ShouldNotUseCronOccurrenceDedup()
+    {
+        var provider = new StubStreamingProviderFactory("external output");
+        var agent = CreateAgent("skill-runner-external-schedule-reason", providerFactory: provider);
+        await agent.ActivateAsync();
+        var initialize = CreateInitializeCommandWithExternalSource();
+        initialize.OutputFormat = SkillRunnerOutputFormat.Text;
+        initialize.OutboundConfig.OutputFormat = SkillRunnerOutputFormat.Text;
+        await agent.HandleInitializeAsync(initialize);
+        AttachNyxIdApiClient(agent, new RecordingHandler("""{"code":0,"msg":"success","data":{"message_id":"om_external"}}"""));
+        var identity = CreateExternalIdentity("delivery-schedule-reason");
+        await agent.HandleAdmitExternalTriggerAsync(new AdmitSkillRunnerExternalTriggerCommand { Identity = identity });
+
+        await DispatchCronFireAsync(
+            agent,
+            "schedule-envelope-external",
+            "schedule:runner-1:fire:2026-06-16T04:00:00.0000000+00:00",
+            new TriggerSkillRunnerExecutionCommand
+            {
+                Reason = SkillRunnerDefaults.ScheduleTriggerReason,
+                ExternalTriggerIdentity = identity.Clone(),
+            });
+
+        provider.Requests.Should().ContainSingle();
+        var completed = await ReadSingleCompletedEventAsync(_store, "skill-runner-external-schedule-reason");
+        completed.ExternalTriggerIdentity.DeliveryId.Should().Be(identity.DeliveryId);
+        completed.CronOccurrenceKey.Should().BeEmpty();
+        agent.State.RecentCronOccurrenceTerminals.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleTriggerAsync_OneShotReminder_ShouldNotUseCronOccurrenceDedup()
+    {
+        using var provider = BuildServiceProvider(
+            new InMemoryEventStore(),
+            services =>
+            {
+                services.AddSingleton<IActorRuntimeCallbackScheduler>(new RecordingCallbackScheduler());
+            });
+        var agent = CreateAgent("skill-runner-one-shot-not-cron", provider);
+        await agent.ActivateAsync();
+        AttachNyxIdApiClient(agent, new RecordingHandler("""{"code":0,"msg":"success","data":{"message_id":"om_one_shot"}}"""));
+        await agent.HandleInitializeAsync(CreateOneShotInitializeCommand(DateTimeOffset.UtcNow.AddMinutes(30)));
+
+        await DispatchCronFireAsync(
+            agent,
+            "one-shot-envelope",
+            "schedule:runner-1:fire:2026-06-16T05:00:00.0000000+00:00",
+            new TriggerSkillRunnerExecutionCommand
+            {
+                Reason = SkillRunnerDefaults.OneShotTriggerReason,
+            });
+
+        var completed = await ReadSingleCompletedEventAsync(
+            provider.GetRequiredService<IEventStore>() as InMemoryEventStore
+            ?? throw new InvalidOperationException("test store missing"),
+            "skill-runner-one-shot-not-cron");
+        completed.CronOccurrenceKey.Should().BeEmpty();
+        agent.State.RecentCronOccurrenceTerminals.Should().BeEmpty();
+        agent.State.RetiredAt.Should().NotBeNull();
     }
 
     [Fact]
@@ -873,6 +1030,83 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public void TrimCronOccurrenceTerminals_ShouldTrimByCountAndAge()
+    {
+        var state = new SkillRunnerState();
+        var now = new DateTimeOffset(2026, 6, 16, 8, 0, 0, TimeSpan.Zero);
+
+        for (var i = 0; i <= SkillRunnerDefaults.CronOccurrenceTerminalRetention; i++)
+        {
+            state.UpsertCronOccurrenceTerminal(
+                $"schedule:runner-1:fire:recent-{i:0000}",
+                Timestamp.FromDateTimeOffset(now - TimeSpan.FromMinutes(i)));
+        }
+
+        var oldKey = "schedule:runner-1:fire:old";
+        state.UpsertCronOccurrenceTerminal(
+            oldKey,
+            Timestamp.FromDateTimeOffset(now - SkillRunnerDefaults.CronOccurrenceTerminalRetentionAge - TimeSpan.FromDays(1)));
+
+        state.TrimCronOccurrenceTerminals(now);
+
+        state.RecentCronOccurrenceTerminals.Should().HaveCount(SkillRunnerDefaults.CronOccurrenceTerminalRetention);
+        state.IsCronOccurrenceTerminal(oldKey).Should().BeFalse();
+        state.IsCronOccurrenceTerminal("schedule:runner-1:fire:recent-1000").Should().BeFalse();
+        state.IsCronOccurrenceTerminal("schedule:runner-1:fire:recent-0000").Should().BeTrue();
+    }
+
+    [Fact]
+    public void SkillRunnerCronOccurrenceProtoContract_ShouldUseAppendOnlyFieldNumbersAndRoundTrip()
+    {
+        SkillRunnerState.Descriptor.FindFieldByName("recent_cron_occurrence_terminals")!.FieldNumber
+            .Should()
+            .Be(30);
+        SkillRunnerExecutionCompletedEvent.Descriptor.FindFieldByName("cron_occurrence_key")!.FieldNumber
+            .Should()
+            .Be(12);
+        SkillRunnerExecutionFailedEvent.Descriptor.FindFieldByName("cron_occurrence_key")!.FieldNumber
+            .Should()
+            .Be(9);
+        SkillRunnerExecutionRejectedEvent.Descriptor.FindFieldByName("cron_occurrence_key")!.FieldNumber
+            .Should()
+            .Be(4);
+        SkillRunnerCronOccurrenceDuplicateIgnoredEvent.Descriptor.FindFieldByName("cron_occurrence_key")!.FieldNumber
+            .Should()
+            .Be(1);
+        SkillRunnerCronOccurrenceDuplicateIgnoredEvent.Descriptor.FindFieldByName("ignored_at")!.FieldNumber
+            .Should()
+            .Be(2);
+
+        var state = new SkillRunnerState();
+        state.RecentCronOccurrenceTerminals.Add(new SkillRunnerCronOccurrenceTerminalRecord
+        {
+            CronOccurrenceKey = "schedule:runner-1:fire:2026-06-16T06:00:00.0000000+00:00",
+            TerminalAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 6, 16, 6, 0, 0, TimeSpan.Zero)),
+        });
+
+        var parsedState = SkillRunnerState.Parser.ParseFrom(state.ToByteArray());
+        parsedState.RecentCronOccurrenceTerminals.Should().ContainSingle()
+            .Which.CronOccurrenceKey.Should().Be(state.RecentCronOccurrenceTerminals[0].CronOccurrenceKey);
+
+        var completed = new SkillRunnerExecutionCompletedEvent
+        {
+            CompletedAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 6, 16, 6, 1, 0, TimeSpan.Zero)),
+            Output = "done",
+            CronOccurrenceKey = state.RecentCronOccurrenceTerminals[0].CronOccurrenceKey,
+        };
+        SkillRunnerExecutionCompletedEvent.Parser.ParseFrom(completed.ToByteArray())
+            .CronOccurrenceKey.Should().Be(completed.CronOccurrenceKey);
+
+        var duplicate = new SkillRunnerCronOccurrenceDuplicateIgnoredEvent
+        {
+            CronOccurrenceKey = completed.CronOccurrenceKey,
+            IgnoredAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 6, 16, 6, 2, 0, TimeSpan.Zero)),
+        };
+        SkillRunnerCronOccurrenceDuplicateIgnoredEvent.Parser.ParseFrom(duplicate.ToByteArray())
+            .CronOccurrenceKey.Should().Be(duplicate.CronOccurrenceKey);
+    }
+
+    [Fact]
     public async Task HandleInitializeAsync_ShouldDispatchCatalogCommandsThroughDispatchPort()
     {
         var catalogActor = Substitute.For<IActor>();
@@ -1032,6 +1266,13 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         using var body = JsonDocument.Parse(handler.LastBody!);
         body.RootElement.GetProperty("receive_id").GetString().Should().Be("ou_user_1");
         body.RootElement.GetProperty("msg_type").GetString().Should().Be("text");
+        var delivery = await ReadSingleDeliveryProducedEventAsync(_store, "skill-runner-test");
+        delivery.DeliveryKind.Should().Be(DeliveryKind.TextMessage);
+        delivery.Status.Should().Be(DeliveryStatus.Succeeded);
+        delivery.LarkMessageId.Should().Be("om_1");
+        delivery.Target.ReceiveId.Should().Be("ou_user_1");
+        _agent.State.LastSuccessfulDelivery.Should().NotBeNull();
+        _agent.State.LastSuccessfulDelivery!.LarkMessageId.Should().Be("om_1");
     }
 
     [Fact]
@@ -1598,6 +1839,14 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         handler.Requests[3].RequestUri!.AbsolutePath.Should()
             .EndWith("/open-apis/cardkit/v1/cards/card_auto/settings");
         ExtractCardKitSettings(handler.Bodies[3]!).Should().Contain("streaming_mode");
+        var deliveries = await ReadDeliveryProducedEventsAsync(_store, "skill-runner-cardkit-auto");
+        deliveries.Should().ContainSingle(delivery =>
+            delivery.DeliveryKind == DeliveryKind.StreamingCard &&
+            delivery.Status == DeliveryStatus.Succeeded &&
+            delivery.LarkMessageId == "om_card" &&
+            delivery.CardId == "card_auto");
+        agent.State.LastSuccessfulDelivery.Should().NotBeNull();
+        agent.State.LastSuccessfulDelivery!.CardId.Should().Be("card_auto");
     }
 
     [Fact]
@@ -1665,6 +1914,18 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             .EndWith("/open-apis/cardkit/v1/cards/card_partial/elements/streaming_main/content");
         handler.Requests[4].RequestUri!.AbsolutePath.Should().EndWith("/open-apis/im/v1/messages");
         ExtractLarkText(handler.Bodies[4]!).Should().Contain("Skill runner failed");
+        var deliveries = await ReadDeliveryProducedEventsAsync(
+            serviceProvider.GetRequiredService<IEventStore>() as InMemoryEventStore
+            ?? throw new InvalidOperationException("test store missing"),
+            "skill-runner-cardkit-visible-failure");
+        deliveries.Should().Contain(delivery =>
+            delivery.DeliveryKind == DeliveryKind.StreamingCard &&
+            delivery.Status == DeliveryStatus.FailedPostSend &&
+            delivery.CardId == "card_partial");
+        deliveries.Should().Contain(delivery =>
+            delivery.DeliveryKind == DeliveryKind.TextMessage &&
+            delivery.Status == DeliveryStatus.Succeeded &&
+            delivery.LarkMessageId == "om_failure");
     }
 
     [Fact]
@@ -2457,6 +2718,23 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             .Subject;
     }
 
+    private static async Task<DeliveryProducedEvent> ReadSingleDeliveryProducedEventAsync(
+        InMemoryEventStore store,
+        string actorId) =>
+        (await ReadDeliveryProducedEventsAsync(store, actorId)).Should().ContainSingle().Subject;
+
+    private static async Task<IReadOnlyList<DeliveryProducedEvent>> ReadDeliveryProducedEventsAsync(
+        InMemoryEventStore store,
+        string actorId)
+    {
+        var persisted = await store.GetEventsAsync(actorId);
+        return persisted
+            .Select(x => x.EventData)
+            .Where(x => x.Is(DeliveryProducedEvent.Descriptor))
+            .Select(x => x.Unpack<DeliveryProducedEvent>())
+            .ToArray();
+    }
+
     private static async Task<object> InvokeExecuteSkillResultObjectAsync(SkillRunnerGAgent agent)
     {
         var method = typeof(SkillRunnerGAgent).GetMethod(
@@ -2491,6 +2769,30 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             return evt.Unpack<SkillRunnerExecutionFailedEvent>().ExternalTriggerIdentity is not null;
         return evt.Is(SkillRunnerExecutionRejectedEvent.Descriptor) &&
                evt.Unpack<SkillRunnerExecutionRejectedEvent>().ExternalTriggerIdentity is not null;
+    }
+
+    private static Task DispatchCronFireAsync(
+        SkillRunnerGAgent agent,
+        string envelopeId,
+        string? cronOccurrenceKey,
+        TriggerSkillRunnerExecutionCommand? command = null)
+    {
+        var envelope = new EventEnvelope
+        {
+            Id = envelopeId,
+            Timestamp = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 6, 16, 0, 0, 0, TimeSpan.Zero)),
+            Payload = Any.Pack(command ?? new TriggerSkillRunnerExecutionCommand
+            {
+                Reason = SkillRunnerDefaults.ScheduleTriggerReason,
+            }),
+            Route = EnvelopeRouteSemantics.CreateDirect("scheduled-dispatch:test", agent.Id),
+            Propagation = new EnvelopePropagation(),
+        };
+
+        if (!string.IsNullOrWhiteSpace(cronOccurrenceKey))
+            envelope.Propagation.Baggage[ScheduledDispatchMetadataKeys.IdempotencyKey] = cronOccurrenceKey.Trim();
+
+        return agent.HandleEventAsync(envelope);
     }
 
     private sealed record SkillRunnerExecutionResultSnapshot(
@@ -2641,15 +2943,17 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
 
     private sealed class RecordingHandler(string responseBody) : HttpMessageHandler
     {
-        public HttpRequestMessage? LastRequest { get; private set; }
-        public string? LastBody { get; private set; }
+        public List<HttpRequestMessage> Requests { get; } = [];
+        public List<string?> Bodies { get; } = [];
+        public HttpRequestMessage? LastRequest => Requests.LastOrDefault();
+        public string? LastBody => Bodies.LastOrDefault();
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            LastRequest = request;
-            LastBody = request.Content == null
+            Requests.Add(request);
+            Bodies.Add(request.Content == null
                 ? null
-                : await request.Content.ReadAsStringAsync(cancellationToken);
+                : await request.Content.ReadAsStringAsync(cancellationToken));
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(responseBody, Encoding.UTF8, "application/json"),
@@ -2797,6 +3101,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         var services = new ServiceCollection();
         services.AddSingleton(eventStore);
         services.AddSingleton<EventSourcingRuntimeOptions>();
+        services.AddSingleton<IActorRuntimeCallbackScheduler>(new RecordingCallbackScheduler());
         services.AddTransient(
             typeof(IEventSourcingBehaviorFactory<>),
             typeof(DefaultEventSourcingBehaviorFactory<>));
@@ -2822,6 +3127,14 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             NyxApiKey = "nyx-api-key",
         },
     };
+
+    private static InitializeSkillRunnerCommand CreateTextOutputInitializeCommand()
+    {
+        var command = CreateInitializeCommand();
+        command.OutputFormat = SkillRunnerOutputFormat.Text;
+        command.OutboundConfig.OutputFormat = SkillRunnerOutputFormat.Text;
+        return command;
+    }
 
     private static InitializeSkillRunnerCommand CreateOneShotInitializeCommand(DateTimeOffset runAtUtc) => new()
     {

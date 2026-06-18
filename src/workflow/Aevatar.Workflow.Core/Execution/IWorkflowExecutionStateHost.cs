@@ -2,6 +2,25 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Core.Execution;
 
+internal enum WorkflowCompensationTransitionStatus
+{
+    Started,
+    AlreadyCompensating,
+    NoCompensableLedger,
+    AdvancedAndRequestedNext,
+    CompletedAll,
+    RejectedStaleOrDuplicate,
+    CompensationDeadLettered,
+}
+
+internal readonly record struct WorkflowCompensationTransitionResult(
+    WorkflowCompensationTransitionStatus Status,
+    string NextCompensationStepId,   // empty when no next request should be sent
+    string FailedStepId,
+    string IdempotencyKey,
+    string CapturedOutput,
+    string ExecutionId);
+
 // Refactor (iter115/cluster-3):
 //   Old pattern: WorkflowRunGAgent exposed only a process-local runtime context,
 //                so durable control/security facts could not survive replay.
@@ -34,6 +53,24 @@ internal interface IWorkflowExecutionStateHost
 
     Task ClearExecutionStateAsync(
         string scopeKey,
+        CancellationToken ct = default);
+
+    Task<WorkflowCompensationTransitionResult> TryStartCompensationAsync(
+        WorkflowCompletedEvent terminalFailure,
+        StepCompletedEvent? terminalStep,
+        CancellationToken ct = default);
+
+    Task RecordCompensableStepDispatchAsync(
+        CompensableStepDispatchedEvent evt,
+        CancellationToken ct = default);
+
+    Task<WorkflowCompensationTransitionResult> RecordCompensationStepCompletionAsync(
+        CompensationStepCompletedEvent completion,
+        CancellationToken ct = default);
+
+    Task<WorkflowCompensationTransitionResult> RecordCompensationPhaseDeadlineExceededAsync(
+        string runId,
+        string error,
         CancellationToken ct = default);
 }
 

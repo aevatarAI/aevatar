@@ -27,24 +27,27 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
     private readonly IUserAgentCatalogQueryPort _queryPort;
     private readonly IUserAgentCatalogCommandPort _commandPort;
     private readonly ICallerScopeResolver _callerScopeResolver;
+    private readonly IScheduledAgentApiKeyIssuer? _apiKeyIssuer;
 
     public AgentDeliveryTargetTool(
         IUserAgentCatalogQueryPort queryPort,
         IUserAgentCatalogCommandPort commandPort,
-        ICallerScopeResolver callerScopeResolver)
+        ICallerScopeResolver callerScopeResolver,
+        IScheduledAgentApiKeyIssuer? apiKeyIssuer = null)
     {
         _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
         _commandPort = commandPort ?? throw new ArgumentNullException(nameof(commandPort));
         _callerScopeResolver = callerScopeResolver ?? throw new ArgumentNullException(nameof(callerScopeResolver));
+        _apiKeyIssuer = apiKeyIssuer;
     }
 
     public string Name => "agent_delivery_targets";
 
     public string Description =>
         "Manage agent delivery targets for workflow human interaction cards and outbound channel delivery. " +
-        "Actions: list, upsert (rebind existing only), delete. " +
-        "Use this to rebind an agent_id/delivery_target_id to a different Lark conversation or Nyx provider slug; " +
-        "creating new delivery targets (which mints credentials) is the scheduled_agent_creator tool's job. " +
+        "Actions: list, create, upsert (rebind existing only), delete. " +
+        "Use create to mint server-side credentials for a stable delivery_target_id without creating a scheduled runner. " +
+        "Use upsert to rebind an existing agent_id/delivery_target_id to a different platform conversation or outbound provider slug. " +
         "Operations are scoped to the caller's own delivery targets.";
 
     // Note (issue #466): no `owner_nyx_user_id` and no `nyx_api_key` parameters. Owner
@@ -56,24 +59,28 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
           "properties": {
             "action": {
               "type": "string",
-              "enum": ["list", "upsert", "delete"],
+              "enum": ["list", "create", "upsert", "delete"],
               "description": "Action to perform (default: list)"
             },
             "agent_id": {
               "type": "string",
               "description": "Agent ID / delivery target ID to bind"
             },
+            "delivery_target_id": {
+              "type": "string",
+              "description": "Stable delivery target ID. Required for create; accepted as an alias for agent_id in upsert/delete."
+            },
             "platform": {
               "type": "string",
-              "description": "Target platform (default: lark)"
+              "description": "Delivery platform for the target"
             },
             "conversation_id": {
               "type": "string",
-              "description": "Conversation/chat ID on the target platform"
+              "description": "Platform conversation or recipient ID"
             },
             "nyx_provider_slug": {
               "type": "string",
-              "description": "Nyx proxy service slug, e.g. api-lark-bot"
+              "description": "Outbound provider service slug for this target"
             },
             "confirm": {
               "type": "boolean",
@@ -108,10 +115,11 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         var root = doc.RootElement;
         var action = GetStr(root, "action") ?? "list";
 
-        if (action is "upsert" or "delete")
+        if (action is "create" or "upsert" or "delete")
         {
             return action switch
             {
+                "create" => await CreateAsync(_queryPort, _commandPort, _callerScopeResolver, _apiKeyIssuer, token, caller, root, ct),
                 "upsert" => await UpsertAsync(_queryPort, _commandPort, caller, root, ct),
                 "delete" => await DeleteAsync(_queryPort, _commandPort, caller, root, ct),
                 _ => await ListAsync(_queryPort, caller, ct),
@@ -119,6 +127,120 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         }
 
         return await ListAsync(_queryPort, caller, ct);
+    }
+
+    private static async Task<string> CreateAsync(
+        IUserAgentCatalogQueryPort queryPort,
+        IUserAgentCatalogCommandPort commandPort,
+        ICallerScopeResolver callerScopeResolver,
+        IScheduledAgentApiKeyIssuer? apiKeyIssuer,
+        string token,
+        OwnerScope caller,
+        JsonElement args,
+        CancellationToken ct)
+    {
+        if (apiKeyIssuer is null)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error = "delivery_target_creation_unavailable",
+                hint = "The host has not registered the delivery-target credential issuer.",
+            });
+        }
+
+        var deliveryTargetId = GetRequired(args, "'delivery_target_id' is required for create", "delivery_target_id", "agent_id", "deliveryTargetId", "agentId");
+        if (deliveryTargetId.error != null)
+            return deliveryTargetId.error;
+
+        var conversationId = GetRequired(args, "'conversation_id' is required for create", "conversation_id", "conversationId");
+        if (conversationId.error != null)
+            return conversationId.error;
+
+        var nyxProviderSlug = GetRequired(args, "'nyx_provider_slug' is required for create", "nyx_provider_slug", "nyxProviderSlug");
+        if (nyxProviderSlug.error != null)
+            return nyxProviderSlug.error;
+
+        var platform = GetRequired(args, "'platform' is required for create", "platform");
+        if (platform.error != null)
+            return platform.error;
+
+        var targetPlatform = platform.value!;
+
+        if (await queryPort.ExistsActiveAsync(deliveryTargetId.value!, ct))
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error = "delivery_target_already_exists",
+                delivery_target_id = deliveryTargetId.value,
+                hint = "Use a different delivery_target_id. Existing delivery target ids are globally reserved.",
+            });
+        }
+
+        OwnerScope keyScope;
+        try
+        {
+            keyScope = await callerScopeResolver.RequireAsync(ct);
+        }
+        catch (CallerScopeUnavailableException ex)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error = "caller_scope_unavailable",
+                detail = ex.Message,
+                hint = "Re-authenticate (cli/web) or ensure the channel relay propagates platform/sender_id metadata.",
+            });
+        }
+
+        var keyScopeId = keyScope.RegistrationScopeId;
+        var key = await apiKeyIssuer.IssueAsync(
+            token,
+            new ScheduledAgentServiceSlugs(
+                nyxProviderSlug.value!,
+                FailureNotificationSlug: null,
+                RequiredServiceSlugs: [],
+                RequiresOrnnService: false),
+            deliveryTargetId.value!,
+            skillName: string.Empty,
+            scopeId: keyScopeId,
+            ct);
+        if (!key.Success)
+            return key.ToErrorJson();
+
+        try
+        {
+            await commandPort.UpsertAsync(
+                new UserAgentCatalogUpsertCommand
+                {
+                    AgentId = deliveryTargetId.value!,
+                    ConversationId = conversationId.value!,
+                    NyxProviderSlug = nyxProviderSlug.value!,
+                    NyxApiKey = key.FullKey ?? string.Empty,
+                    ApiKeyId = key.ApiKeyId ?? string.Empty,
+                    AgentType = "delivery_target",
+                    TemplateName = "explicit_delivery_target",
+                    ScopeId = keyScopeId,
+                    TargetPlatform = targetPlatform,
+                    OwnerScope = caller.Clone(),
+                },
+                ct);
+        }
+        catch
+        {
+            await apiKeyIssuer.TryRevokeAsync(token, key.ApiKeyId ?? string.Empty, CancellationToken.None);
+            throw;
+        }
+
+        return JsonSerializer.Serialize(new
+        {
+            status = "accepted",
+            agent_id = deliveryTargetId.value,
+            delivery_target_id = deliveryTargetId.value,
+            platform = targetPlatform,
+            conversation_id = conversationId.value,
+            nyx_provider_slug = nyxProviderSlug.value,
+            api_key_id = key.ApiKeyId,
+            note = "Delivery target create accepted. Projection is propagating; try 'list' after a few seconds.",
+        });
     }
 
     private static string? GetStr(JsonElement el, params string[] properties)
@@ -164,7 +286,7 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
             {
                 agent_id = entry.AgentId,
                 delivery_target_id = entry.AgentId,
-                platform = entry.OwnerScope?.Platform ?? string.Empty,
+                platform = ResolveDeliveryPlatform(entry),
                 conversation_id = entry.ConversationId,
                 nyx_provider_slug = entry.NyxProviderSlug,
                 created_at = entry.CreatedAt,
@@ -182,15 +304,15 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         JsonElement args,
         CancellationToken ct)
     {
-        var agentId = GetRequired(args, "agent_id", "delivery_target_id", "agentId", "deliveryTargetId");
+        var agentId = GetRequired(args, "'agent_id' is required for upsert", "agent_id", "delivery_target_id", "agentId", "deliveryTargetId");
         if (agentId.error != null)
             return agentId.error;
 
-        var conversationId = GetRequired(args, "conversation_id", "conversationId");
+        var conversationId = GetRequired(args, "'conversation_id' is required for upsert", "conversation_id", "conversationId");
         if (conversationId.error != null)
             return conversationId.error;
 
-        var nyxProviderSlug = GetRequired(args, "nyx_provider_slug", "nyxProviderSlug");
+        var nyxProviderSlug = GetRequired(args, "'nyx_provider_slug' is required for upsert", "nyx_provider_slug", "nyxProviderSlug");
         if (nyxProviderSlug.error != null)
             return nyxProviderSlug.error;
 
@@ -212,7 +334,7 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
             return JsonSerializer.Serialize(new
             {
                 error = "delivery_target_not_found_for_caller",
-                hint = "agent_delivery_targets.upsert is a rebind operation only — it preserves the existing API key. To create a new agent (which mints credentials), use the scheduled_agent_creator tool instead.",
+                hint = "agent_delivery_targets.upsert is a rebind operation only — it preserves the existing API key. Use action=create to create a new delivery target with server-side credentials.",
             });
         }
 
@@ -299,12 +421,15 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         });
     }
 
-    private static (string? value, string? error) GetRequired(JsonElement args, params string[] keys)
+    private static (string? value, string? error) GetRequired(JsonElement args, string errorMessage, params string[] keys)
     {
         var value = GetStr(args, keys)?.Trim();
         if (!string.IsNullOrWhiteSpace(value))
             return (value, null);
 
-        return (null, JsonSerializer.Serialize(new { error = $"'{keys[0]}' is required for upsert" }));
+        return (null, JsonSerializer.Serialize(new { error = errorMessage }));
     }
+
+    private static string ResolveDeliveryPlatform(UserAgentCatalogReadModelEntry entry) =>
+        entry.TargetPlatform ?? string.Empty;
 }

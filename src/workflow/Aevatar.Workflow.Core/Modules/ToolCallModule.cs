@@ -155,7 +155,8 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
                 CallerCredential: callerCredential,
                 RuntimeContext: runtimeContext,
                 ApprovalGrant: approvalGrant,
-                InputFileRefs: request.InputFileRefs),
+                InputFileRefs: request.InputFileRefs,
+                IdempotencyKey: request.IdempotencyKey ?? string.Empty),
             ct);
     }
 
@@ -290,6 +291,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             ToolCallId = NormalizeRequired(callId),
             ApprovalRequestId = NormalizeRequired(pending.ApprovalRequestId),
             ArgumentsJson = pending.ArgumentsJson ?? string.Empty,
+            IdempotencyKey = request.IdempotencyKey ?? string.Empty,
         };
         pendingState.InputFileRefs.Add(request.InputFileRefs.Select(static fileRef => fileRef.Clone()));
         state.PendingApprovals[BuildPendingKey(pendingState)] = pendingState;
@@ -373,6 +375,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             RunId = pending.RunId,
             ExecutionId = pending.ExecutionId,
             Input = pending.ArgumentsJson,
+            IdempotencyKey = pending.IdempotencyKey,
             Parameters = { ["tool"] = pending.ToolName },
             InputFileRefs = { pending.InputFileRefs.Select(static fileRef => fileRef.Clone()) },
         };

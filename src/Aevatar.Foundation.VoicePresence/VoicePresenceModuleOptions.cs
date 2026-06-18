@@ -15,9 +15,11 @@ public sealed class VoicePresenceModuleOptions
 
     public TimeSpan StaleAfter { get; init; } = TimeSpan.FromSeconds(10);
 
-    public TimeSpan DedupeWindow { get; init; } = TimeSpan.FromSeconds(2);
+    public TimeSpan DedupeWindow { get; init; } = TimeSpan.FromSeconds(10);
 
     public TimeSpan ToolExecutionTimeout { get; init; } = TimeSpan.FromSeconds(10);
+
+    public TimeSpan DrainTimeout { get; init; } = TimeSpan.FromSeconds(5);
 
     public int PendingInjectionCapacity { get; init; } = 16;
 

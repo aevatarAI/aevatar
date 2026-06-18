@@ -90,6 +90,31 @@ public sealed class NyxIdRelayOutboundPort
             platformMessageId: result.PlatformMessageId);
     }
 
+    public async Task<EmitResult> SendWithAgentKeyAsync(
+        string platform,
+        ConversationReference conversation,
+        MessageContent content,
+        OutboundDeliveryContext delivery,
+        string agentKey,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(agentKey))
+        {
+            return EmitResult.Failed(
+                "bot_agent_key_missing",
+                "Relay reply is missing the bot agent key required for channel-relay/reply.");
+        }
+
+        return await SendAsync(
+                platform,
+                conversation,
+                content,
+                delivery,
+                agentKey,
+                ct)
+            .ConfigureAwait(false);
+    }
+
     /// <summary>
     /// Edits a previously-sent relay reply in place. Used by the progressive streaming reply path
     /// to drive edit-in-place updates while the LLM is still generating.

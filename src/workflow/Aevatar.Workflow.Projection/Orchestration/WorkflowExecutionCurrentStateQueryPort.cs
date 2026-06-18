@@ -1,5 +1,6 @@
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Projection.Configuration;
 using Aevatar.Workflow.Projection.ReadModels;
 
@@ -46,16 +47,28 @@ public sealed class WorkflowExecutionCurrentStateQueryPort : IWorkflowExecutionC
 
     public async Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowActorCurrentStatesAsync(
         int take = 200,
+        CancellationToken ct = default) =>
+        await ListWorkflowActorCurrentStatesAsync(
+            new WorkflowActorCurrentStateListQuery
+            {
+                Take = take,
+            },
+            ct);
+
+    public async Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowActorCurrentStatesAsync(
+        WorkflowActorCurrentStateListQuery query,
         CancellationToken ct = default)
     {
         if (!_workflowRunCurrentStateQueryEnabled)
             return [];
 
-        var boundedTake = Math.Clamp(take, 1, 1000);
+        ArgumentNullException.ThrowIfNull(query);
+        var boundedTake = Math.Clamp(query.Take, 1, 1000);
         var currentStates = await _currentStateReader.QueryAsync(
             new ProjectionDocumentQuery
             {
                 Take = boundedTake,
+                Filters = BuildFilters(query),
             },
             ct);
         var snapshots = new List<WorkflowActorSnapshot>(currentStates.Items.Count);
@@ -76,5 +89,55 @@ public sealed class WorkflowExecutionCurrentStateQueryPort : IWorkflowExecutionC
 
         var currentState = await _currentStateReader.GetAsync(actorId, ct);
         return currentState == null ? null : _mapper.ToActorProjectionState(currentState);
+    }
+
+    private static IReadOnlyList<ProjectionDocumentFilter> BuildFilters(WorkflowActorCurrentStateListQuery query)
+    {
+        var filters = new List<ProjectionDocumentFilter>();
+        if (query.SagaStatus is { } sagaStatus && sagaStatus != WorkflowSagaStatus.Unspecified)
+        {
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(WorkflowExecutionCurrentStateDocument.SagaStatus),
+                Operator = ProjectionDocumentFilterOperator.Eq,
+                Value = ProjectionDocumentValue.FromString(sagaStatus.ToString()),
+            });
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.ScopeId))
+        {
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(WorkflowExecutionCurrentStateDocument.ScopeId),
+                Operator = ProjectionDocumentFilterOperator.Eq,
+                Value = ProjectionDocumentValue.FromString(query.ScopeId.Trim()),
+            });
+        }
+
+        var definitionActorIds = query.DefinitionActorIds
+            .Select(static value => value?.Trim() ?? string.Empty)
+            .Where(static value => value.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (definitionActorIds.Length == 1)
+        {
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(WorkflowExecutionCurrentStateDocument.DefinitionActorId),
+                Operator = ProjectionDocumentFilterOperator.Eq,
+                Value = ProjectionDocumentValue.FromString(definitionActorIds[0]),
+            });
+        }
+        else if (definitionActorIds.Length > 1)
+        {
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(WorkflowExecutionCurrentStateDocument.DefinitionActorId),
+                Operator = ProjectionDocumentFilterOperator.In,
+                Value = ProjectionDocumentValue.FromStrings(definitionActorIds),
+            });
+        }
+
+        return filters;
     }
 }

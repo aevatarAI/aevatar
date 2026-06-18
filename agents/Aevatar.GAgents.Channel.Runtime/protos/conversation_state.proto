@@ -6,6 +6,7 @@ option csharp_namespace = "Aevatar.GAgents.Channel.Runtime";
 
 import "chat_activity.proto";
 import "conversation_events.proto";
+import "delivery_ledger.proto";
 
 message ConversationGAgentState {
   aevatar.gagents.channel.abstractions.ConversationReference conversation = 1;
@@ -21,9 +22,6 @@ message ConversationGAgentState {
   ReplyDeliveryStatus last_reply_delivery = 8;
   repeated RelayReplayClaim relay_replay_claims = 9;
   repeated PendingRelayAdmission pending_relay_admissions = 10;
-  // Refactor (iter20/cluster-004):
-  //   Old pattern: ConversationGAgent 持有 actor token registry + 可见回复状态部分仅在内存
-  //   New principle: 删 actor token registry,credentials runtime-only,可见回复 lifecycle 持久到 ConversationGAgent state
   repeated ConversationReplyLifecycleState active_reply_lifecycles = 11;
   // Conversation-owned LLM transcript window. Each normal channel LLM run receives
   // this snapshot as prior context and, after successful user-visible delivery,
@@ -34,6 +32,12 @@ message ConversationGAgentState {
   // The chat LLM path uses this bounded window for "send image, ask later" without
   // relying on NyxID history, which intentionally does not store message content.
   repeated RecentConversationAttachmentActivity recent_attachment_activities = 14;
+  // Bounded ledger of platform message ids (Lark om_...) the bot has sent in this conversation, so
+  // a group reply that targets one of the bot's own messages counts as addressing the bot without a
+  // re-@-mention. Bounded + evicted by ConversationBotMessageLedger.
+  repeated string bot_sent_platform_message_ids = 15;
+  repeated aevatar.gagents.channel.abstractions.DeliveryLedgerEntry recent_deliveries = 16;
+  aevatar.gagents.channel.abstractions.DeliveryLedgerEntry last_successful_delivery = 17;
 }
 
 // Refactor (iter80/cluster-081-channel-reply-lifecycle-event-state-schema):
@@ -44,18 +48,16 @@ message ConversationReplyLifecycleState {
   ConversationReplyLifecycleMode mode = 2;
   ConversationReplyLifecyclePhase phase = 3;
   string platform_message_id = 4;
-  string card_id = 5;
-  string card_message_id = 6;
-  string original_card_id = 7;
+  reserved 5 to 7;
+  reserved "card_id", "card_message_id", "original_card_id";
   string last_flushed_text = 8;
   int32 edit_count = 9;
-  int64 sequence = 10;
-  string streaming_element_id = 11;
+  reserved 10, 11;
+  reserved "sequence", "streaming_element_id";
   string terminal_reason = 12;
   int64 updated_at_unix_ms = 13;
-  LarkCardOperationPhase lark_card_in_flight_operation = 14;
-  int64 lark_card_in_flight_sequence = 15;
-  int64 lark_card_operation_generation = 16;
+  reserved 14 to 16;
+  reserved "lark_card_in_flight_operation", "lark_card_in_flight_sequence", "lark_card_operation_generation";
   string pending_accumulated_text = 17;
   string pending_finalize_text = 18;
   string pending_finalize_command_id = 19;

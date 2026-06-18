@@ -6,6 +6,7 @@ option csharp_namespace = "Aevatar.GAgents.Scheduled";
 
 import "google/protobuf/timestamp.proto";
 import "agent_messages.proto";
+import "delivery_ledger.proto";
 
 // ─── Skill Runner (persistent scheduled agent) ───
 
@@ -99,6 +100,11 @@ message SkillRunnerExternalTriggerDeliveryRecord {
   int32 dispatch_attempt = 6;
 }
 
+message SkillRunnerCronOccurrenceTerminalRecord {
+  string cron_occurrence_key = 1;
+  google.protobuf.Timestamp terminal_at = 2;
+}
+
 message SkillRunnerOutboundConfig {
   string conversation_id = 1;
   string nyx_provider_slug = 2;
@@ -173,6 +179,9 @@ message SkillRunnerState {
   google.protobuf.Timestamp retired_at = 27;
   string retirement_reason = 28;
   string one_shot_message = 29;
+  repeated SkillRunnerCronOccurrenceTerminalRecord recent_cron_occurrence_terminals = 30;
+  repeated aevatar.gagents.channel.abstractions.DeliveryLedgerEntry recent_deliveries = 31;
+  aevatar.gagents.channel.abstractions.DeliveryLedgerEntry last_successful_delivery = 32;
 }
 
 message SkillRunnerExecutionDocument {
@@ -195,6 +204,8 @@ message SkillRunnerExecutionDocument {
   google.protobuf.Timestamp run_at_utc = 17;
   google.protobuf.Timestamp retired_at_utc = 18;
   string retirement_reason = 19;
+  repeated aevatar.gagents.channel.abstractions.DeliveryLedgerEntry recent_deliveries = 20;
+  aevatar.gagents.channel.abstractions.DeliveryLedgerEntry last_successful_delivery = 21;
 }
 
 message InitializeSkillRunnerCommand {
@@ -282,6 +293,7 @@ message SkillRunnerExecutionCompletedEvent {
   string workflow_command_id = 9;
   string workflow_correlation_id = 10;
   SkillRunnerExternalTriggerIdentity external_trigger_identity = 11;
+  string cron_occurrence_key = 12;
 }
 
 message SkillRunnerExecutionFailedEvent {
@@ -293,12 +305,14 @@ message SkillRunnerExecutionFailedEvent {
   string workflow_id = 6;
   SkillRunnerExecutionErrorCode error_code = 7;
   SkillRunnerExternalTriggerIdentity external_trigger_identity = 8;
+  string cron_occurrence_key = 9;
 }
 
 message SkillRunnerExecutionRejectedEvent {
   google.protobuf.Timestamp rejected_at = 1;
   string reason = 2;
   SkillRunnerExternalTriggerIdentity external_trigger_identity = 3;
+  string cron_occurrence_key = 4;
 }
 
 message SkillRunnerExternalTriggerAdmittedEvent {
@@ -322,6 +336,11 @@ message SkillRunnerExternalTriggerDuplicateIgnoredEvent {
   SkillRunnerExternalTriggerIdentity identity = 1;
   google.protobuf.Timestamp ignored_at = 2;
   string reason = 3;
+}
+
+message SkillRunnerCronOccurrenceDuplicateIgnoredEvent {
+  string cron_occurrence_key = 1;
+  google.protobuf.Timestamp ignored_at = 2;
 }
 
 message DisableSkillRunnerCommand {

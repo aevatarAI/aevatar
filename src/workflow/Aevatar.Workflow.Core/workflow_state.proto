@@ -157,7 +157,13 @@ message WorkflowRunState
   int32 max_active_sub_workflows = 24;
   repeated CompletedStepLedgerEntry compensable_ledger = 25;
   int32 compensation_cursor = 26;
-  string saga_status = 27;
+  WorkflowSagaStatus saga_status = 27;
+  string compensation_execution_id = 28;
+  string dead_letter_failed_compensation_step_id = 29;
+  int32 dead_letter_remaining_uncompensated = 30;
+  string dead_letter_error = 31;
+  string compensation_origin_failed_step_id = 32;
+  bool terminal_workflow_completion_recorded = 33;
 }
 
 message WorkflowRunExecutionContextState
@@ -214,6 +220,13 @@ enum SubWorkflowInvocationHandoffPhase
   SUB_WORKFLOW_INVOCATION_HANDOFF_PHASE_START_DISPATCH_PENDING = 4;
   SUB_WORKFLOW_INVOCATION_HANDOFF_PHASE_START_FAILED = 5;
   SUB_WORKFLOW_INVOCATION_HANDOFF_PHASE_START_DISPATCHED = 6;
+}
+
+enum CompensableLedgerEntryStatus
+{
+  COMPENSABLE_LEDGER_ENTRY_STATUS_UNSPECIFIED = 0;
+  COMPENSABLE_LEDGER_ENTRY_STATUS_CONFIRMED = 1;
+  COMPENSABLE_LEDGER_ENTRY_STATUS_PROVISIONAL = 2;
 }
 
 message WorkflowRuntimeCallbackLeaseState
@@ -299,6 +312,10 @@ message WorkflowExecutionKernelState
   WorkflowUsageMetricsState usage = 12;
   repeated WorkflowFileRef input_file_refs = 13;
   repeated WorkflowFileRef current_step_input_file_refs = 14;
+  map<string, WorkflowStepIdempotencyState> idempotency_by_step_id = 15;
+  map<string, string> compensation_execution_ids_by_step_id = 16;
+  WorkflowRuntimeCallbackLeaseState compensation_phase_deadline_lease = 17;
+  string compensation_phase_deadline_callback_id = 18;
 }
 
 message WorkflowUsageMetricsState
@@ -331,6 +348,16 @@ message PendingSignalState
   string signal_name = 4;
   WorkflowRuntimeCallbackLeaseState timeout_lease = 5;
   string timeout_callback_id = 6;
+  PendingExternalApprovalContinuationState external_approval = 7;
+}
+
+message PendingExternalApprovalContinuationState
+{
+  string source_id = 1;
+  string external_id_kind = 2;
+  string external_id = 3;
+  string callback_idempotency_key = 4;
+  string request_id = 5;
 }
 
 message WaitSignalModuleState
@@ -394,6 +421,7 @@ message PendingToolCallApprovalState
   string arguments_json = 7;
   string input = 8;
   repeated WorkflowFileRef input_file_refs = 9;
+  string idempotency_key = 10;
 }
 
 message ToolCallModuleState
@@ -408,6 +436,10 @@ message PendingApprovalState
   string input = 3;
   string on_reject = 4;
   string delivery_target_id = 5;
+  WorkflowHumanApprovalTimeoutDefaultDecision timeout_default_decision = 6;
+  int32 timeout_seconds = 7;
+  WorkflowRuntimeCallbackLeaseState timeout_lease = 8;
+  string timeout_callback_id = 9;
 }
 
 message HumanApprovalModuleState
@@ -472,6 +504,9 @@ message ForEachItemResult
 {
   bool success = 1;
   string output = 2;
+  int32 index = 3;
+  WorkflowFileRef file_ref = 4;
+  string error = 5;
 }
 
 message ForEachParentState
@@ -479,6 +514,8 @@ message ForEachParentState
   int32 expected = 1;
   repeated ForEachItemResult collected = 2;
   repeated string collected_step_ids = 3;
+  repeated WorkflowFileRef item_file_refs = 4;
+  string items_source = 5;
 }
 
 message ForEachModuleState
@@ -563,6 +600,7 @@ message PendingConnectorCallState
   map<string, string> parameters = 14;
   bool secure_step = 15;
   string connector_type = 16;
+  string idempotency_key = 17;
 }
 
 message ConnectorCallModuleState
@@ -642,6 +680,7 @@ message BackpressureQueueEntry
   string input = 4;
   string target_role = 5;
   map<string, string> parameters = 6;
+  repeated WorkflowFileRef input_file_refs = 7;
 }
 
 message BackpressureQueueState
@@ -655,9 +694,11 @@ message BackpressureQueueState
 
 message CompletedStepLedgerEntry
 {
+  reserved 5;
+  reserved "committed_at_unix_ms";
   string step_id = 1;
   string compensation_step_id = 2;
   string idempotency_key = 3;
   string captured_output = 4;
-  int64 committed_at_unix_ms = 5;
+  CompensableLedgerEntryStatus ledger_status = 6;
 }

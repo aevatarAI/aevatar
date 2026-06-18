@@ -149,22 +149,123 @@ public sealed class WorkflowValidatorTests
             error.Contains("cancel_order", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void Validate_WhenCompensationPointsToSameStep_ShouldReject()
+    {
+        var errors = WorkflowValidator.Validate(WorkflowWith(
+            Step("create_order", "tool_call", new(), compensation: "create_order")));
+
+        errors.Should().Contain("步骤 'create_order' 的 compensation 不能指向自身");
+    }
+
+    [Fact]
+    public void Validate_WhenCompensationChainHasTwoStepCycle_ShouldReject()
+    {
+        var errors = WorkflowValidator.Validate(WorkflowWith(
+            Step("create_order", "tool_call", new(), compensation: "cancel_order"),
+            Step("cancel_order", "tool_call", new(), compensation: "create_order")));
+
+        errors.Should().Contain(
+            "步骤 'create_order' 的 compensation 链构成环：create_order -> cancel_order -> create_order");
+    }
+
+    [Fact]
+    public void Validate_WhenCompensationChainHasThreeStepCycle_ShouldReject()
+    {
+        var errors = WorkflowValidator.Validate(WorkflowWith(
+            Step("reserve_inventory", "tool_call", new(), compensation: "release_inventory"),
+            Step("release_inventory", "tool_call", new(), compensation: "audit_release"),
+            Step("audit_release", "tool_call", new(), compensation: "reserve_inventory")));
+
+        errors.Should().Contain(
+            "步骤 'reserve_inventory' 的 compensation 链构成环：reserve_inventory -> release_inventory -> audit_release -> reserve_inventory");
+    }
+
+    [Fact]
+    public void Validate_WhenCompensationTargetAppearsInNextPath_ShouldReject()
+    {
+        var errors = WorkflowValidator.Validate(WorkflowWith(
+            Step("create_order", "tool_call", new(), next: "cancel_order", compensation: "cancel_order"),
+            Step("cancel_order", "tool_call", new())));
+
+        errors.Should().Contain(
+            "步骤 'cancel_order' 既是 compensation 目标又出现在正向路径（next/branches），会被双重执行");
+    }
+
+    [Fact]
+    public void Validate_WhenCompensationTargetAppearsInBranchPath_ShouldReject()
+    {
+        var errors = WorkflowValidator.Validate(WorkflowWith(
+            Step("create_order", "tool_call", new(), compensation: "cancel_order"),
+            Step(
+                "check_payment",
+                "conditional",
+                new(),
+                branches: new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["true"] = "ship_order",
+                    ["false"] = "cancel_order",
+                }),
+            Step("ship_order", "tool_call", new()),
+            Step("cancel_order", "tool_call", new())));
+
+        errors.Should().Contain(
+            "步骤 'cancel_order' 既是 compensation 目标又出现在正向路径（next/branches），会被双重执行");
+    }
+
+    [Fact]
+    public void Validate_WhenCompensationTargetDeclaresCompensation_ShouldReject()
+    {
+        var errors = WorkflowValidator.Validate(WorkflowWith(
+            Step("create_order", "tool_call", new(), compensation: "cancel_order"),
+            Step("cancel_order", "tool_call", new(), compensation: "audit_cancel"),
+            Step("audit_cancel", "tool_call", new())));
+
+        errors.Should().Contain(
+            "步骤 'cancel_order' 是 compensation 步骤，不允许再声明 compensation（不会在反向 walk 生效）");
+    }
+
+    [Fact]
+    public void Validate_WhenSagaCompensationGraphIsValid_ShouldNotReportCompensationGraphErrors()
+    {
+        var errors = WorkflowValidator.Validate(WorkflowWith(
+            Step("create_order", "tool_call", new(), next: "charge_payment", compensation: "cancel_order"),
+            Step("charge_payment", "tool_call", new(), next: "ship_order", compensation: "refund_payment"),
+            Step("ship_order", "tool_call", new()),
+            Step("refund_payment", "tool_call", new()),
+            Step("cancel_order", "tool_call", new())));
+
+        errors.Should().NotContain("步骤 'create_order' 的 compensation 不能指向自身");
+        errors.Should().NotContain(error => error.Contains("compensation 链构成环", StringComparison.Ordinal));
+        errors.Should().NotContain(error => error.Contains("既是 compensation 目标又出现在正向路径", StringComparison.Ordinal));
+        errors.Should().NotContain(error => error.Contains("是 compensation 步骤，不允许再声明 compensation", StringComparison.Ordinal));
+    }
+
     private static WorkflowDefinition WorkflowWith(StepDefinition step) =>
+        WorkflowWith([step]);
+
+    private static WorkflowDefinition WorkflowWith(params StepDefinition[] steps) =>
         new()
         {
             Name = "lease_validation",
             Roles = [],
-            Steps = [step],
+            Steps = [.. steps],
         };
 
     private static StepDefinition Step(
         string id,
         string type,
-        Dictionary<string, string> parameters) =>
+        Dictionary<string, string> parameters,
+        string? next = null,
+        string? compensation = null,
+        Dictionary<string, string>? branches = null) =>
         new()
         {
             Id = id,
             Type = type,
             Parameters = parameters,
+            Next = next,
+            Compensation = compensation,
+            Branches = branches,
         };
 }

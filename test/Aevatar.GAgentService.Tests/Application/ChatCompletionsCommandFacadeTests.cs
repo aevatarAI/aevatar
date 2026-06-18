@@ -11,6 +11,7 @@ using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgentService.Tests.Application;
 
@@ -50,6 +51,28 @@ public sealed class ChatCompletionsCommandFacadeTests
         toolContext.Caller.ResponseId.Should().Be(command.ResponseId);
         toolContext.Credentials.NyxIdAccessToken.Should().Be("token");
         toolContext.Routing.NyxIdRoutePreference.Should().Be("route-value");
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldApplyConfiguredDefaultModel_WhenCallerOmitsModel()
+    {
+        var sessions = new RecordingSessionPort();
+        var observation = ObservationScenarioBuilder.ForResponse("chatcmpl_default_model")
+            .WithCompletedText("hello")
+            .Build();
+        var dispatch = new RecordingActorDispatchPort(observation);
+        var facade = CreateFacade(
+            sessionPort: sessions,
+            dispatchPort: dispatch,
+            observationRuntime: observation,
+            defaultIngressModel: "chrono-llm-public/gpt-5.5");
+
+        var result = await facade.CreateAsync(BuildRequest("  "), CallerScopeContext("token"));
+
+        result.Error.Should().BeNull();
+        var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
+        command.Model.Should().Be("gpt-5.5");
+        command.RoutePreference.Should().Be("route-value");
     }
 
     [Fact]
@@ -644,7 +667,8 @@ public sealed class ChatCompletionsCommandFacadeTests
         IResponsesToolClassificationService? toolClassificationService = null,
         IResponsesDirectToolPlanService? directToolPlanService = null,
         ObservationScenarioRuntime? observationRuntime = null,
-        TimeSpan? observationTimeout = null)
+        TimeSpan? observationTimeout = null,
+        string? defaultIngressModel = null)
     {
         var effectiveSessionPort = sessionPort ?? new RecordingSessionPort();
         var runtime = observationRuntime ?? ObservationScenarioBuilder.ForResponse("chatcmpl_default")
@@ -661,7 +685,10 @@ public sealed class ChatCompletionsCommandFacadeTests
             directToolPlanService ?? new StaticResponsesDirectToolPlanService(),
             new LlmSessionRunObservationService(runtime.ScopePreparationPort, runtime.ProjectionPort),
             NullLogger<ChatCompletionsCommandFacade>.Instance,
-            observationTimeout);
+            observationTimeout,
+            defaultIngressModel is null
+                ? null
+                : Options.Create(new ResponsesIngressOptions { DefaultModel = defaultIngressModel }));
     }
 
     private static ResponsesCallerScopeResolutionContext CallerScopeContext(string bearerToken) =>

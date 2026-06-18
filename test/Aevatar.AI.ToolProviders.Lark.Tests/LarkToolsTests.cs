@@ -6,10 +6,12 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Tools;
 using Aevatar.AI.ToolProviders.Lark.Tools;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.Workflow.Infrastructure.Runs;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core.Modules;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace Aevatar.AI.ToolProviders.Lark.Tests;
@@ -408,6 +410,83 @@ public class LarkToolsTests
             result.Should().Contain("nyx_proxy_error status=500");
             result.Should().Contain("\"message_id\":\"om_1\"");
         }
+    }
+
+    [Fact]
+    public async Task LarkMessageResourceFetchAdapter_ShouldMapWorkflowRouteToBinaryDownload()
+    {
+        var client = new StubLarkNyxClient
+        {
+            MessageResourceResponse = new LarkMessageResourceDownloadResult(
+                Succeeded: true,
+                Content: Encoding.UTF8.GetBytes("downloaded"),
+                ContentType: "image/png",
+                FileName: "picture.png"),
+        };
+        var adapter = new LarkMessageResourceFetchAdapter(client);
+
+        var result = await adapter.FetchAsync(new WorkflowConnectedServiceResourceFetchRequest(
+            Route: new WorkflowConnectedServiceResourceFetchRoute("lark", "message_resource_download", "image"),
+            SourceMessageId: "om_123",
+            SourceResourceKey: "img_v3_456",
+            CallerCredential: new WorkflowCallerCredential("token-123")));
+
+        result.Succeeded.Should().BeTrue();
+        result.Content.ToArray().Should().Equal(Encoding.UTF8.GetBytes("downloaded"));
+        result.MediaType.Should().Be("image/png");
+        result.FileName.Should().Be("picture.png");
+        client.LastMessageResourceToken.Should().Be("token-123");
+        client.LastMessageResourceRequest.Should().Be(new LarkMessageResourceDownloadRequest(
+            "om_123",
+            "img_v3_456",
+            LarkMessageResourceKind.Image));
+    }
+
+    [Fact]
+    public async Task LarkMessageResourceFetchAdapter_ShouldMapFileRouteToBinaryDownload()
+    {
+        var client = new StubLarkNyxClient
+        {
+            MessageResourceResponse = new LarkMessageResourceDownloadResult(
+                Succeeded: true,
+                Content: Encoding.UTF8.GetBytes("downloaded-file"),
+                ContentType: "application/pdf",
+                FileName: "receipt.pdf"),
+        };
+        var adapter = new LarkMessageResourceFetchAdapter(client);
+
+        var result = await adapter.FetchAsync(new WorkflowConnectedServiceResourceFetchRequest(
+            Route: new WorkflowConnectedServiceResourceFetchRoute("lark", "message_resource_download", "file"),
+            SourceMessageId: "om_123",
+            SourceResourceKey: "file_v3_456",
+            CallerCredential: new WorkflowCallerCredential("token-123")));
+
+        result.Succeeded.Should().BeTrue();
+        result.Content.ToArray().Should().Equal(Encoding.UTF8.GetBytes("downloaded-file"));
+        result.MediaType.Should().Be("application/pdf");
+        result.FileName.Should().Be("receipt.pdf");
+        client.LastMessageResourceToken.Should().Be("token-123");
+        client.LastMessageResourceRequest.Should().Be(new LarkMessageResourceDownloadRequest(
+            "om_123",
+            "file_v3_456",
+            LarkMessageResourceKind.File));
+    }
+
+    [Fact]
+    public async Task LarkMessageResourceFetchAdapter_ShouldFailClosedForWrongRoute()
+    {
+        var client = new StubLarkNyxClient();
+        var adapter = new LarkMessageResourceFetchAdapter(client);
+
+        Func<Task> act = () => adapter.FetchAsync(new WorkflowConnectedServiceResourceFetchRequest(
+            Route: new WorkflowConnectedServiceResourceFetchRoute("nyxid", "message_resource_download", "image"),
+            SourceMessageId: "om_123",
+            SourceResourceKey: "img_v3_456",
+            CallerCredential: new WorkflowCallerCredential("token-123"))).AsTask();
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*lark/message_resource_download/image*");
+        client.LastMessageResourceRequest.Should().BeNull();
     }
 
     [Fact]
@@ -2086,27 +2165,6 @@ public class LarkToolsTests
     }
 
     [Theory]
-    [InlineData(false, "api-lark-bot")]
-    [InlineData(true, " ")]
-    public async Task WorkflowFileSubmitSource_ShouldReturnEmpty_WhenDisabledOrProviderSlugMissing(
-        bool enabled,
-        string providerSlug)
-    {
-        var source = CreateWorkflowFileSubmitSource(
-            new LarkToolOptions
-            {
-                EnableWorkflowFileSubmit = enabled,
-                ProviderSlug = providerSlug,
-            },
-            new StubLarkNyxClient(),
-            new RecordingWorkflowFileArtifactReadPort(BuildFileRef(sizeBytes: 5)));
-
-        var tools = await source.GetToolsAsync();
-
-        tools.Should().BeEmpty();
-    }
-
-    [Theory]
     [InlineData("bad-target", "doc_file", "doccn_123", "invalid_target")]
     [InlineData("lark_drive_media", "folder", "doccn_123", "unsupported_parent_type")]
     [InlineData("lark_drive_media", "doc_file", " ", "missing_parent_node")]
@@ -2329,8 +2387,6 @@ public class LarkToolsTests
         root.GetProperty("provider").GetString().Should().Be("lark");
         root.GetProperty("target").GetString().Should().Be("lark_drive_media");
         root.GetProperty("file_token").GetString().Should().Be("file_123");
-        root.GetProperty("parent_type").GetString().Should().Be("doc_file");
-        root.GetProperty("parent_node").GetString().Should().Be("doccn_123");
         root.GetProperty("file_name").GetString().Should().Be("argument.txt");
         root.GetProperty("size_bytes").GetInt64().Should().Be(12);
         result.ResultJson.Should().NotContain("upload bytes");
@@ -2373,7 +2429,6 @@ public class LarkToolsTests
         root.GetProperty("target").GetString().Should().Be("lark_approval_file");
         root.GetProperty("file_code").GetString().Should().Be("approval_file_123");
         root.GetProperty("output_field").GetString().Should().Be("file_code");
-        root.GetProperty("file_type").GetString().Should().Be("attachment");
         root.TryGetProperty("file_token", out _).Should().BeFalse();
         root.TryGetProperty("parent_type", out _).Should().BeFalse();
         root.TryGetProperty("parent_node", out _).Should().BeFalse();
@@ -2512,6 +2567,7 @@ public class LarkToolsTests
         public string? LastDocxCreateToken { get; private set; }
         public string? LastDriveMediaUploadToken { get; private set; }
         public string? LastApprovalFileUploadToken { get; private set; }
+        public string? LastMessageResourceToken { get; private set; }
         public LarkSendMessageRequest? LastSendRequest { get; private set; }
         public LarkReplyMessageRequest? LastReplyRequest { get; private set; }
         public LarkMessageReactionRequest? LastReactionRequest { get; private set; }
@@ -2572,6 +2628,7 @@ public class LarkToolsTests
             LarkMessageResourceDownloadRequest request,
             CancellationToken ct)
         {
+            LastMessageResourceToken = token;
             LastMessageResourceRequest = request;
             return Task.FromResult(MessageResourceResponse);
         }
@@ -2648,23 +2705,19 @@ public class LarkToolsTests
         IWorkflowFileArtifactReadPort fileArtifacts,
         ILarkNyxClient client)
     {
-        var source = CreateWorkflowFileSubmitSource(
-            new LarkToolOptions { EnableWorkflowFileSubmit = true },
-            client,
-            fileArtifacts);
+        var source = CreateWorkflowFileSubmitSource(client, fileArtifacts);
         var tools = await source.GetToolsAsync();
         return tools.Should().ContainSingle(x => x.Name == "workflow_file_submit").Subject;
     }
 
-    private static LarkWorkflowFileSubmitToolSource CreateWorkflowFileSubmitSource(
-        LarkToolOptions options,
+    private static WorkflowFileSubmitToolSource CreateWorkflowFileSubmitSource(
         ILarkNyxClient client,
-        IWorkflowFileArtifactReadPort? fileArtifacts)
+        IWorkflowFileArtifactReadPort fileArtifacts)
     {
-        var services = new ServiceCollection();
-        if (fileArtifacts != null)
-            services.AddSingleton(fileArtifacts);
-        return new LarkWorkflowFileSubmitToolSource(options, client, services.BuildServiceProvider());
+        return new WorkflowFileSubmitToolSource(
+            [new LarkWorkflowFileSubmitAdapter(client)],
+            fileArtifacts,
+            Options.Create(new WorkflowConnectedServiceFileSubmitOptions()));
     }
 
     private static WorkflowToolExecutionRequest NewWorkflowToolRequest(string argumentsJson, string? bearerToken) =>

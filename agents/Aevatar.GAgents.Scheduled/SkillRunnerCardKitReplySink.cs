@@ -82,7 +82,10 @@ internal sealed class SkillRunnerCardKitReplySink
                 close.Detail);
         }
 
-        return SkillRunnerCardKitDeliveryResult.Success(visibleMessageCreated: true, cardId);
+        return SkillRunnerCardKitDeliveryResult.Success(
+            visibleMessageCreated: true,
+            cardId,
+            bind.MessageId);
     }
 
     private async Task<SkillRunnerCardKitDeliveryResult> CreateCardAsync(CancellationToken ct)
@@ -131,7 +134,7 @@ internal sealed class SkillRunnerCardKitReplySink
                 ct).ConfigureAwait(false);
 
             return result.Succeeded
-                ? SkillRunnerCardKitDeliveryResult.Success(true, cardId)
+                ? SkillRunnerCardKitDeliveryResult.Success(true, cardId, result.MessageId)
                 : SkillRunnerCardKitDeliveryResult.Failed(false, cardId, result.LarkCode, result.Detail);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -254,18 +257,20 @@ internal sealed record SkillRunnerCardKitDeliveryResult(
     bool Succeeded,
     bool VisibleMessageCreated,
     string? CardId,
+    string? MessageId,
     int? LarkCode,
     string Detail)
 {
     public static SkillRunnerCardKitDeliveryResult Success(
         bool visibleMessageCreated,
-        string? cardId = null) =>
-        new(true, visibleMessageCreated, cardId, null, string.Empty);
+        string? cardId = null,
+        string? messageId = null) =>
+        new(true, visibleMessageCreated, cardId, messageId, null, string.Empty);
 
     public static SkillRunnerCardKitDeliveryResult Failed(
         bool visibleMessageCreated,
         string? cardId,
         int? larkCode,
         string detail) =>
-        new(false, visibleMessageCreated, cardId, larkCode, detail);
+        new(false, visibleMessageCreated, cardId, null, larkCode, detail);
 }

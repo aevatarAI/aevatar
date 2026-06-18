@@ -1,6 +1,7 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Foundation.VoicePresence.Hosting;
 
@@ -25,6 +26,8 @@ public static class VoiceRealtimeTransportControlBridge
                 SessionId = accepted.SessionId,
                 PcmSampleRateHz = accepted.PcmSampleRateHz,
                 ObservedStateVersion = accepted.ObservedStateVersion,
+                WireContractVersion = accepted.EffectiveWireContractVersion,
+                InputImagePolicy = accepted.CreateEffectiveInputImagePolicy(),
             },
         }, ct);
     }
@@ -33,6 +36,7 @@ public static class VoiceRealtimeTransportControlBridge
         IServiceProvider services,
         VoiceRealtimeSessionAccepted accepted,
         IVoiceTransport transport,
+        ILogger? logger,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(services);
@@ -45,14 +49,22 @@ public static class VoiceRealtimeTransportControlBridge
             : hub.SubscribeAsync(
                 accepted.ActorId,
                 accepted.SessionId,
-                frame => SendRealtimeFrameAsync(transport, accepted, frame),
+                frame => SendRealtimeFrameAsync(transport, accepted, frame, logger),
                 ct);
     }
+
+    public static Task<IAsyncDisposable> SubscribeAsync(
+        IServiceProvider services,
+        VoiceRealtimeSessionAccepted accepted,
+        IVoiceTransport transport,
+        CancellationToken ct) =>
+        SubscribeAsync(services, accepted, transport, logger: null, ct);
 
     private static async ValueTask SendRealtimeFrameAsync(
         IVoiceTransport transport,
         VoiceRealtimeSessionAccepted accepted,
-        VoiceRealtimeFrame frame)
+        VoiceRealtimeFrame frame,
+        ILogger? logger)
     {
         if (frame.FrameCase == VoiceRealtimeFrame.FrameOneofCase.None)
             return;
@@ -73,9 +85,14 @@ public static class VoiceRealtimeTransportControlBridge
                 RealtimeFrame = frame.Clone(),
             }, CancellationToken.None);
         }
-        catch
+        catch (Exception ex)
         {
             // A closed client transport must not fail the projection fanout.
+            logger?.LogWarning(
+                ex,
+                "Failed to forward voice realtime frame {FrameCase} for session {SessionId}.",
+                frame.FrameCase,
+                accepted.SessionId);
         }
     }
 

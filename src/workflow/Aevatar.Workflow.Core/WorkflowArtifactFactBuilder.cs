@@ -60,6 +60,18 @@ internal static class WorkflowArtifactFactBuilder
             return true;
         }
 
+        if (envelope.Payload.Is(WorkflowExternalApprovalContinuationRegisteredEvent.Descriptor))
+        {
+            artifactFact = envelope.Payload.Unpack<WorkflowExternalApprovalContinuationRegisteredEvent>();
+            return true;
+        }
+
+        if (envelope.Payload.Is(WorkflowExternalApprovalContinuationClearedEvent.Descriptor))
+        {
+            artifactFact = envelope.Payload.Unpack<WorkflowExternalApprovalContinuationClearedEvent>();
+            return true;
+        }
+
         return false;
     }
 

@@ -10,6 +10,7 @@ using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgentService.Application.Responses;
 
@@ -32,9 +33,14 @@ public sealed class ResponsesCommandFacade(
     IResponsesToolClassificationService toolClassificationService,
     IResponsesDirectToolPlanService directToolPlanService,
     ILlmSessionRunObservationService observationService,
-    ILogger<ResponsesCommandFacade> logger) : IResponsesCommandFacade
+    ILogger<ResponsesCommandFacade> logger,
+    IOptions<ResponsesIngressOptions>? ingressOptions = null) : IResponsesCommandFacade
 {
     private static readonly TimeSpan DefaultObservationTimeout = TimeSpan.FromSeconds(30);
+
+    // Default model applied when a direct caller omits `model`; null preserves the
+    // "model is required" contract (see ResponsesIngressOptions).
+    private readonly string? _defaultIngressModel = ingressOptions?.Value?.NormalizedDefaultModel;
 
     public async Task<ResponsesCreateCommandResult> CreateAsync(
         ResponsesCommandRequest request,
@@ -44,7 +50,7 @@ public sealed class ResponsesCommandFacade(
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(callerScopeContext);
 
-        var normalizedResult = ResponsesRequestNormalizer.Normalize(request);
+        var normalizedResult = ResponsesRequestNormalizer.Normalize(request, _defaultIngressModel);
         if (!normalizedResult.Succeeded)
         {
             return ResponsesCreateCommandResult.FromError(

@@ -45,7 +45,16 @@ public static class WorkflowCapabilityServiceCollectionExtensions
         services.AddWorkflowScheduleExtensions();
         services.AddOptions<WorkflowWebhookIngressOptions>()
             .Bind(configuration.GetSection(WorkflowWebhookIngressOptions.SectionName));
+        services.AddOptions<WorkflowMultipartFileIngressOptions>()
+            .Bind(configuration.GetSection(WorkflowMultipartFileIngressOptions.SectionName));
+        services.AddOptions<WorkflowFormFileIngressOptions>()
+            .Bind(configuration.GetSection(WorkflowFormFileIngressOptions.SectionName));
+        services.TryAddSingleton<WorkflowMultipartFileInputParser>();
+        services.TryAddSingleton<WorkflowMultipartChatRequestParser>();
+        services.AddOptions<WorkflowExternalApprovalCallbackOptions>()
+            .Bind(configuration.GetSection(WorkflowExternalApprovalCallbackOptions.SectionName));
         services.TryAddSingleton<WorkflowWebhookIngressRequestBuilder>();
+        services.TryAddSingleton<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowWebhookReplayAdmissionPort, WorkflowWebhookReplayAdmissionPort>();
         var webhookReplayRedisConnectionString = configuration[$"{WorkflowWebhookIngressOptions.SectionName}:RedisConnectionString"];
         if (!string.IsNullOrWhiteSpace(webhookReplayRedisConnectionString))
         {
@@ -64,8 +73,9 @@ public static class WorkflowCapabilityServiceCollectionExtensions
             options.WorkflowDirectories.Add(AevatarPaths.Workflows);
             options.DuplicatePolicy = WorkflowDefinitionDuplicatePolicy.Override;
         });
-        services.AddWorkflowInfrastructure(options =>
-            configuration.GetSection("WorkflowRunReportExport").Bind(options));
+        services.AddWorkflowInfrastructure(
+            options => configuration.GetSection("WorkflowRunReportExport").Bind(options),
+            configuration);
         services.TryAddSingleton<WorkflowCapabilityRegistrationsMarker>();
         return services;
     }

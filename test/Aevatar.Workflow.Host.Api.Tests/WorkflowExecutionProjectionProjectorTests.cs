@@ -1,3 +1,4 @@
+using System.Diagnostics.Metrics;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
@@ -898,6 +899,10 @@ public sealed class WorkflowExecutionProjectionProjectorTests
                     Input = "hello",
                     FinalOutput = "done",
                     FinalError = "err",
+                    SagaStatus = WorkflowSagaStatus.CompensationDeadLetter,
+                    DeadLetterFailedCompensationStepId = "refund_payment",
+                    DeadLetterRemainingUncompensated = 2,
+                    DeadLetterError = "refund failed",
                     ExecutionStates =
                     {
                         ["workflow_execution_kernel"] = Any.Pack(new WorkflowExecutionKernelState
@@ -916,6 +921,11 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         document.WorkflowName.Should().Be("wf-current");
         document.ScopeId.Should().Be("scope-current");
         document.Status.Should().Be(status);
+        document.SagaStatus.Should().Be(WorkflowSagaStatus.CompensationDeadLetter);
+        document.DeadLetterFailedCompensationStepId.Should().Be("refund_payment");
+        document.DeadLetterRemainingUncompensated.Should().Be(2);
+        document.DeadLetterError.Should().Be("refund failed");
+        document.StateVersion.Should().Be(1);
         document.Compiled.Should().BeTrue();
         document.ExecutionStateCount.Should().Be(1);
         document.Success.Should().Be(expectedSuccess);
@@ -983,6 +993,75 @@ public sealed class WorkflowExecutionProjectionProjectorTests
     }
 
     [Fact]
+    public async Task WorkflowExecutionCurrentStateProjector_ShouldObserveCompensationMetricsFromCommittedFactsOnly()
+    {
+        using var metrics = new RecordingMeterListener();
+        var dispatcher = new RecordingWriteDispatcher<WorkflowExecutionCurrentStateDocument>();
+        var projector = new WorkflowExecutionCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(new DateTimeOffset(2026, 3, 18, 7, 50, 0, TimeSpan.Zero)));
+
+        await projector.ProjectAsync(
+            CreateContext(),
+            WrapCommitted(
+                new CompensationRequestEvent
+                {
+                    RunId = "root-actor",
+                    CompensationStepId = "refund_payment",
+                },
+                new WorkflowRunState { RunId = "root-actor", Status = "running" },
+                version: 10,
+                eventId: "evt-comp-request"));
+        await projector.ProjectAsync(
+            CreateContext(),
+            WrapCommitted(
+                new CompensationStepCompletedEvent
+                {
+                    RunId = "root-actor",
+                    CompensationStepId = "refund_payment",
+                    Success = true,
+                },
+                new WorkflowRunState { RunId = "root-actor", Status = "running" },
+                version: 11,
+                eventId: "evt-comp-success"));
+        await projector.ProjectAsync(
+            CreateContext(),
+            WrapCommitted(
+                new WorkflowCompensationFailedEvent
+                {
+                    RunId = "root-actor",
+                    FailedCompensationStepId = "refund_payment",
+                    RemainingUncompensated = 2,
+                    Error = "refund failed",
+                },
+                new WorkflowRunState
+                {
+                    RunId = "root-actor",
+                    Status = "failed",
+                    SagaStatus = WorkflowSagaStatus.CompensationDeadLetter,
+                },
+                version: 12,
+                eventId: "evt-comp-dead-letter"));
+        await projector.ProjectAsync(
+            CreateContext(),
+            WrapCommitted(
+                new WorkflowCompensationFailedEvent
+                {
+                    RunId = "child-run",
+                    FailedCompensationStepId = "child_refund",
+                },
+                new WorkflowRunState { RunId = "child-run", Status = "failed" },
+                version: 13,
+                eventId: "evt-child-comp-dead-letter",
+                publisherActorId: "child-run"));
+
+        dispatcher.Upserts.Should().HaveCount(3);
+        metrics.Sum("aevatar.workflow.compensation.requested_total").Should().Be(1);
+        metrics.Sum("aevatar.workflow.compensation.succeeded_total").Should().Be(1);
+        metrics.Sum("aevatar.workflow.compensation.dead_lettered_total").Should().Be(1);
+    }
+
+    [Fact]
     public void WorkflowRunGraphArtifactMaterializer_ShouldDeriveFromReportAndDeduplicateNodesAndEdges()
     {
         var readModel = new WorkflowRunInsightReportDocument
@@ -1042,6 +1121,10 @@ public sealed class WorkflowExecutionProjectionProjectorTests
             WorkflowName = string.Empty,
             CommandId = "cmd-4",
             Status = "running",
+            SagaStatus = WorkflowSagaStatus.CompensationDeadLetter,
+            DeadLetterFailedCompensationStepId = "refund_payment",
+            DeadLetterRemainingUncompensated = 2,
+            DeadLetterError = "refund failed",
             FinalOutput = string.Empty,
             FinalError = string.Empty,
             StateVersion = 30,
@@ -1169,6 +1252,10 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         snapshot.CompletionStatus.Should().Be(Aevatar.Workflow.Application.Abstractions.Queries.WorkflowRunCompletionStatus.Running);
         snapshot.LastSuccess.Should().BeNull();
         snapshot.LastOutput.Should().BeEmpty();
+        snapshot.SagaStatus.Should().Be(WorkflowSagaStatus.CompensationDeadLetter);
+        snapshot.DeadLetterFailedCompensationStepId.Should().Be("refund_payment");
+        snapshot.DeadLetterRemainingUncompensated.Should().Be(2);
+        snapshot.DeadLetterError.Should().Be("refund failed");
         snapshot.TotalSteps.Should().Be(0);
         snapshot.RoleReplyCount.Should().Be(0);
 
@@ -1306,5 +1393,41 @@ public sealed class WorkflowExecutionProjectionProjectorTests
     private sealed class FixedProjectionClock(DateTimeOffset utcNow) : IProjectionClock
     {
         public DateTimeOffset UtcNow { get; } = utcNow;
+    }
+
+    private sealed class RecordingMeterListener : IDisposable
+    {
+        private readonly MeterListener _listener = new();
+        private readonly List<(string InstrumentName, long Measurement)> _measurements = [];
+
+        public RecordingMeterListener()
+        {
+            _listener.InstrumentPublished = (instrument, listener) =>
+            {
+                if (instrument.Meter.Name == "Aevatar.Workflow" &&
+                    instrument.Name.StartsWith("aevatar.workflow.compensation.", StringComparison.Ordinal))
+                {
+                    listener.EnableMeasurementEvents(instrument);
+                }
+            };
+            _listener.SetMeasurementEventCallback<long>(
+                (instrument, measurement, tags, state) =>
+                {
+                    _ = tags;
+                    _ = state;
+                    _measurements.Add((instrument.Name, measurement));
+                });
+            _listener.Start();
+        }
+
+        public long Sum(string instrumentName)
+        {
+            _listener.RecordObservableInstruments();
+            return _measurements
+                .Where(x => string.Equals(x.InstrumentName, instrumentName, StringComparison.Ordinal))
+                .Sum(x => x.Measurement);
+        }
+
+        public void Dispose() => _listener.Dispose();
     }
 }

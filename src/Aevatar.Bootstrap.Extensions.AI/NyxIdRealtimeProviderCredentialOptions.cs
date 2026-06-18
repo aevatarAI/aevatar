@@ -12,10 +12,18 @@ namespace Aevatar.Bootstrap.Extensions.AI;
 public sealed class NyxIdRealtimeProviderCredentialOptions
 {
     /// <summary>
-    /// NyxID service slug that holds the real OpenAI key (e.g. <c>openai-realtime</c>).
-    /// Empty disables broker mode (static-key / local-dev path stays in effect).
+    /// Conventional NyxID service slug holding the real OpenAI Realtime key. The voice broker is
+    /// enabled by default with this slug so that a wiped or absent deployment config/secret cannot
+    /// silently disable voice (a recurring failure mode when CD re-applies the manifest). The
+    /// caller's NyxID identity must own a service with this slug for minting to succeed.
     /// </summary>
-    public string ServiceSlug { get; set; } = string.Empty;
+    public const string DefaultServiceSlug = "openai-realtime";
+
+    /// <summary>
+    /// NyxID service slug that holds the real OpenAI key. Defaults to <see cref="DefaultServiceSlug" />
+    /// (broker enabled); a configured <c>Aevatar:VoicePresence:OpenAI:Nyxid:ServiceSlug</c> overrides it.
+    /// </summary>
+    public string ServiceSlug { get; set; } = DefaultServiceSlug;
 
     /// <summary>
     /// Proxied OpenAI path that mints the realtime ephemeral client secret. The

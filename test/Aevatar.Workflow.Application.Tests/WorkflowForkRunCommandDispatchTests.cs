@@ -219,6 +219,10 @@ public sealed class WorkflowForkRunCommandDispatchTests
                 {
                     ["step-a"] = "alpha",
                     ["topic"] = "seed-topic",
+                },
+                idempotencyByStepId: new Dictionary<string, WorkflowStepIdempotencyView>(StringComparer.Ordinal)
+                {
+                    ["step-b"] = new("source-run", "step-b", 2, "source-run:step-b:2"),
                 }),
         };
         var runPort = new RecordingRunProvisioningPort();
@@ -275,6 +279,10 @@ public sealed class WorkflowForkRunCommandDispatchTests
         request.CallerCredential.BearerToken.Should().Be("typed-token");
         request.ForkSeed.SourceRunId.Should().Be("source-run");
         request.ForkSeed.StartAtStepId.Should().Be("step-b");
+        request.ForkSeed.StartStepIdempotency.LogicalRunId.Should().Be("source-run");
+        request.ForkSeed.StartStepIdempotency.StepId.Should().Be("step-b");
+        request.ForkSeed.StartStepIdempotency.LogicalAttempt.Should().Be(2);
+        request.ForkSeed.StartStepIdempotency.IdempotencyKey.Should().Be("source-run:step-b:2");
         request.ForkSeed.Variables.Should().Contain("step-a", "alpha");
         request.ForkSeed.Variables.Should().Contain("topic", "seed-topic");
         request.ForkSeed.Variables.Should().Contain("input", "override-input");
@@ -376,7 +384,8 @@ public sealed class WorkflowForkRunCommandDispatchTests
         string? workflowYaml = null,
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
         IReadOnlyDictionary<string, string>? variables = null,
-        string scopeId = "") =>
+        string scopeId = "",
+        IReadOnlyDictionary<string, WorkflowStepIdempotencyView>? idempotencyByStepId = null) =>
         new WorkflowRunForkSeedView(
             SourceRunId: "source-run",
             Status: status,
@@ -390,7 +399,8 @@ public sealed class WorkflowForkRunCommandDispatchTests
             CompletedStepIds: ["step-a"],
             LastFailedStepId: "step-b",
             FinalError: status.Equals("failed", StringComparison.OrdinalIgnoreCase) ? "boom" : string.Empty,
-            ScopeId: scopeId);
+            ScopeId: scopeId,
+            IdempotencyByStepId: idempotencyByStepId ?? new Dictionary<string, WorkflowStepIdempotencyView>(StringComparer.Ordinal));
 
     private static string WorkflowYaml(string name) =>
         $$"""

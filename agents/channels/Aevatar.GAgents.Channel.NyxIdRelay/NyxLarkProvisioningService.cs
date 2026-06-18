@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.Configuration;
 using Aevatar.GAgents.Channel.Runtime;
 using Microsoft.Extensions.Logging;
 
@@ -22,6 +23,7 @@ public sealed record NyxLarkProvisioningResult(
     string? NyxChannelBotId = null,
     string? NyxAgentApiKeyId = null,
     string? NyxConversationRouteId = null,
+    string? NyxReplyCredentialRef = null,
     string? RelayCallbackUrl = null,
     string? WebhookUrl = null,
     string? Error = null,
@@ -50,6 +52,7 @@ public sealed record NyxChannelBotProvisioningResult(
     string? NyxChannelBotId = null,
     string? NyxAgentApiKeyId = null,
     string? NyxConversationRouteId = null,
+    string? NyxReplyCredentialRef = null,
     string? RelayCallbackUrl = null,
     string? WebhookUrl = null,
     string? Error = null,
@@ -82,18 +85,20 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
     private readonly NyxIdApiClient _nyxClient;
     private readonly NyxIdToolOptions _nyxOptions;
     private readonly ChannelRegistrationCommandFacade _commandFacade;
+    private readonly IAevatarSecretsStore _secretsStore;
     private readonly ILogger<NyxLarkProvisioningService> _logger;
 
-    private sealed record RelayApiKeyCredentials(string Id);
     public NyxLarkProvisioningService(
         NyxIdApiClient nyxClient,
         NyxIdToolOptions nyxOptions,
         ChannelRegistrationCommandFacade commandFacade,
+        IAevatarSecretsStore secretsStore,
         ILogger<NyxLarkProvisioningService> logger)
     {
         _nyxClient = nyxClient ?? throw new ArgumentNullException(nameof(nyxClient));
         _nyxOptions = nyxOptions ?? throw new ArgumentNullException(nameof(nyxOptions));
         _commandFacade = commandFacade ?? throw new ArgumentNullException(nameof(commandFacade));
+        _secretsStore = secretsStore ?? throw new ArgumentNullException(nameof(secretsStore));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -132,12 +137,15 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
         string? apiKeyId = null;
         string? channelBotId = null;
         string? routeId = null;
+        string? replyCredentialRef = null;
         var localMirrorAccepted = false;
 
         try
         {
-            var relayApiKey = await CreateRelayApiKeyAsync(request.AccessToken, relayCallbackUrl, registrationId, ct);
-            apiKeyId = relayApiKey.Id;
+            var relayApiKeyResponse = await CreateRelayApiKeyAsync(request.AccessToken, relayCallbackUrl, registrationId, ct);
+            apiKeyId = NyxApiResponseHelper.ExtractRequiredApiKeyId(relayApiKeyResponse);
+            var relayApiKey = NyxApiResponseHelper.ExtractRequiredApiKeyCredentials(relayApiKeyResponse);
+            replyCredentialRef = PersistRelayApiKeySecret(registrationId, relayApiKey);
 
             channelBotId = await RegisterChannelBotAsync(
                 request.AccessToken,
@@ -167,6 +175,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
                 apiKeyId,
                 channelBotId,
                 routeId,
+                replyCredentialRef,
                 ct);
             localMirrorAccepted = true;
 
@@ -177,6 +186,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
                 NyxChannelBotId: channelBotId,
                 NyxAgentApiKeyId: apiKeyId,
                 NyxConversationRouteId: routeId,
+                NyxReplyCredentialRef: replyCredentialRef,
                 RelayCallbackUrl: relayCallbackUrl,
                 WebhookUrl: webhookUrl,
                 Note: "Provisioning completed in Nyx and the local mirror command was accepted. Configure the Lark developer console webhook URL to point at Nyx; local read model visibility is asynchronous.");
@@ -228,13 +238,13 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
         return ToGenericResult(result);
     }
 
-    private async Task<RelayApiKeyCredentials> CreateRelayApiKeyAsync(
+    private async Task<string> CreateRelayApiKeyAsync(
         string accessToken,
         string relayCallbackUrl,
         string registrationId,
         CancellationToken ct)
     {
-        var response = await _nyxClient.CreateApiKeyAsync(
+        return await _nyxClient.CreateApiKeyAsync(
             accessToken,
             JsonSerializer.Serialize(new
             {
@@ -244,8 +254,13 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
                 callback_url = relayCallbackUrl,
             }),
             ct);
+    }
 
-        return new RelayApiKeyCredentials(NyxApiResponseHelper.ExtractRequiredApiKeyId(response));
+    private string PersistRelayApiKeySecret(string registrationId, NyxRelayApiKeyCredentials credentials)
+    {
+        var secretRef = $"secrets://channel/nyxid/lark/{registrationId}/reply-api-key";
+        _secretsStore.Set(secretRef, credentials.FullKey);
+        return secretRef;
     }
 
     private async Task<string> RegisterChannelBotAsync(
@@ -327,6 +342,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
         string apiKeyId,
         string channelBotId,
         string routeId,
+        string replyCredentialRef,
         CancellationToken ct)
     {
         // Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
@@ -342,6 +358,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
             NyxAgentApiKeyId = apiKeyId,
             NyxChannelBotId = channelBotId,
             NyxConversationRouteId = routeId,
+            NyxReplyCredentialRef = replyCredentialRef,
         };
 
         await _commandFacade.RegisterLocalMirrorAsync(cmd, ct);
@@ -368,6 +385,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
             NyxChannelBotId: result.NyxChannelBotId,
             NyxAgentApiKeyId: result.NyxAgentApiKeyId,
             NyxConversationRouteId: result.NyxConversationRouteId,
+            NyxReplyCredentialRef: result.NyxReplyCredentialRef,
             RelayCallbackUrl: result.RelayCallbackUrl,
             WebhookUrl: result.WebhookUrl,
             Error: result.Error,

@@ -201,7 +201,7 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
         {
             await _apiKeyIssuer.TryRevokeAsync(token, key.ApiKeyId ?? string.Empty, CancellationToken.None);
             _logger?.LogWarning(ex, "Scheduled agent create dispatch failed after key issue: agentId={AgentId}", agentId);
-            return JsonSerializer.Serialize(new { error = "initialize_failed" });
+            return JsonSerializer.Serialize(new { error = "initialize_failed", detail = ex.Message });
         }
 
         return JsonSerializer.Serialize(new

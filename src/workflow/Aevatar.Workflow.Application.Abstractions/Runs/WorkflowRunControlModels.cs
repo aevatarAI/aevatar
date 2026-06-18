@@ -100,6 +100,25 @@ public sealed record WorkflowSignalCommand(
     string? CommandId,
     string? Payload,
     string? StepId = null,
+    string? CorrelationId = null,
+    WorkflowExternalApprovalTerminalSignalCommand? ExternalApproval = null) : WorkflowRunControlCommandBase(ActorId, RunId, CommandId, CorrelationId);
+
+public sealed record WorkflowExternalApprovalTerminalSignalCommand(
+    string SourceId,
+    string ExternalIdKind,
+    string ExternalId,
+    string InstanceCode,
+    string RequestId,
+    string TerminalStatus,
+    string CallbackIdempotencyKey,
+    IReadOnlyDictionary<string, string>? ProviderDeliveryEvidence = null);
+
+public sealed record WorkflowRetryCompensationCommand(
+    string ActorId,
+    string RunId,
+    string FailedCompensationStepId,
+    string? CommandId,
+    string? Reason = null,
     string? CorrelationId = null) : WorkflowRunControlCommandBase(ActorId, RunId, CommandId, CorrelationId);
 
 public sealed record WorkflowStopCommand(

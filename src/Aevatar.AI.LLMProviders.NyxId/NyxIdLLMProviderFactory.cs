@@ -16,9 +16,11 @@ public sealed class NyxIdLLMProviderFactory : ILLMProviderFactory
         string defaultModel,
         string gatewayEndpoint,
         Func<string?> accessTokenAccessor,
+        string? defaultRoutePreference = null,
         ILogger? logger = null)
     {
-        var provider = new NyxIdLLMProvider(name, defaultModel, gatewayEndpoint, accessTokenAccessor, logger);
+        var provider = new NyxIdLLMProvider(
+            name, defaultModel, gatewayEndpoint, accessTokenAccessor, defaultRoutePreference, logger);
         ImmutableInterlocked.AddOrUpdate(ref _providers, provider.Name, provider, (_, _) => provider);
         if (string.IsNullOrWhiteSpace(Volatile.Read(ref _defaultName)))
             Volatile.Write(ref _defaultName, provider.Name);

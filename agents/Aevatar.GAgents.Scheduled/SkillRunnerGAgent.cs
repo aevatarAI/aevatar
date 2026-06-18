@@ -17,6 +17,7 @@ using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Platform.Lark;
+using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -46,7 +47,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     // The runner reads it after each ChatStreamAsync to enforce the safety net for issue
     // #439 — see EnsureToolStatusAllowsCompletion.
     private readonly SkillRunnerToolFailureCounter _toolFailureCounter;
-    private readonly SkillRunnerInteractiveDeliveryTracker _interactiveDeliveryTracker;
+    private readonly SkillRunnerInteractiveDeliverySignalCollector _interactiveDeliverySignals;
     private string? _systemPromptOverride;
     private Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease? _oneShotLease;
     private Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease? _retryLease;
@@ -116,13 +117,13 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         _workflowDispatchService = workflowDispatchService;
         _clock = clock ?? new SystemClock();
         _toolFailureCounter = toolMiddlewareChain.Counter;
-        _interactiveDeliveryTracker = toolMiddlewareChain.InteractiveDeliveryTracker;
+        _interactiveDeliverySignals = toolMiddlewareChain.InteractiveDeliverySignals;
     }
 
     private readonly record struct ToolMiddlewareChain(
         IReadOnlyList<IToolCallMiddleware> Middlewares,
         SkillRunnerToolFailureCounter Counter,
-        SkillRunnerInteractiveDeliveryTracker InteractiveDeliveryTracker);
+        SkillRunnerInteractiveDeliverySignalCollector InteractiveDeliverySignals);
 
     private sealed record SkillRunnerExecutionPlan(
         SkillRunnerExecutionKind Kind,
@@ -208,11 +209,11 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         IEnumerable<IToolCallMiddleware>? input)
     {
         var counter = new SkillRunnerToolFailureCounter();
-        var interactiveDeliveryTracker = new SkillRunnerInteractiveDeliveryTracker();
+        var interactiveDeliverySignals = new SkillRunnerInteractiveDeliverySignalCollector();
         var combined = (input ?? Array.Empty<IToolCallMiddleware>()).ToList();
         combined.Add(new NyxIdProxyToolFailureCountingMiddleware(counter));
-        combined.Add(new SkillRunnerInteractiveDeliveryTrackingMiddleware(interactiveDeliveryTracker));
-        return new ToolMiddlewareChain(combined, counter, interactiveDeliveryTracker);
+        combined.Add(new SkillRunnerInteractiveDeliveryTrackingMiddleware(interactiveDeliverySignals));
+        return new ToolMiddlewareChain(combined, counter, interactiveDeliverySignals);
     }
 
     protected override async Task OnActivateAsync(CancellationToken ct)
@@ -255,6 +256,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             .On<SkillRunnerExternalTriggerDispatchRequestedEvent>(ApplyExternalTriggerDispatchRequested)
             .On<SkillRunnerExternalTriggerRejectedEvent>(ApplyExternalTriggerRejected)
             .On<SkillRunnerExternalTriggerDuplicateIgnoredEvent>(ApplyExternalTriggerDuplicateIgnored)
+            .On<SkillRunnerCronOccurrenceDuplicateIgnoredEvent>(ApplyCronOccurrenceDuplicateIgnored)
+            .On<DeliveryProducedEvent>(ApplyDeliveryProduced)
             .On<SkillRunnerDisabledEvent>(ApplyDisabled)
             .On<SkillRunnerEnabledEvent>(ApplyEnabled)
             .OrCurrent();
@@ -393,6 +396,17 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     [EventHandler(AllowSelfHandling = true)]
     public async Task HandleTriggerAsync(TriggerSkillRunnerExecutionCommand command)
     {
+        var cronOccurrenceKey = ResolveCronOccurrenceKey(command);
+        if (ShouldSkipCronOccurrence(command, cronOccurrenceKey))
+        {
+            await PersistDomainEventAsync(new SkillRunnerCronOccurrenceDuplicateIgnoredEvent
+            {
+                CronOccurrenceKey = cronOccurrenceKey,
+                IgnoredAt = Timestamp.FromDateTimeOffset(_clock.UtcNow),
+            });
+            return;
+        }
+
         var externalIdentity = NormalizeExternalTriggerIdentity(command.ExternalTriggerIdentity, _clock.UtcNow);
         var hasExternalTrigger = IsValidExternalTriggerIdentity(externalIdentity);
         if (hasExternalTrigger && State.IsExternalTriggerTerminal(externalIdentity))
@@ -414,6 +428,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 RejectedAt = Timestamp.FromDateTimeOffset(_clock.UtcNow),
                 Reason = SkillRunnerDefaults.RejectionReasonRunnerDisabled,
                 ExternalTriggerIdentity = hasExternalTrigger ? externalIdentity : null,
+                CronOccurrenceKey = cronOccurrenceKey,
             });
             if (State.ScheduleMode == SkillRunnerScheduleMode.OneShot && !hasExternalTrigger)
                 await RetireOneShotAsync(_clock.UtcNow, SkillRunnerDefaults.OneShotRetirementReasonRejected, CancellationToken.None);
@@ -443,6 +458,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 WorkflowCommandId = result.WorkflowReceipt?.CommandId ?? string.Empty,
                 WorkflowCorrelationId = result.WorkflowReceipt?.CorrelationId ?? string.Empty,
                 ExternalTriggerIdentity = hasExternalTrigger ? externalIdentity : null,
+                CronOccurrenceKey = cronOccurrenceKey,
             });
 
             await CancelRetryLeaseAsync(CancellationToken.None);
@@ -483,6 +499,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 WorkflowId = executionFailure?.WorkflowId ?? string.Empty,
                 ErrorCode = executionFailure?.ErrorCode ?? SkillRunnerExecutionErrorCode.Unspecified,
                 ExternalTriggerIdentity = hasExternalTrigger ? externalIdentity : null,
+                CronOccurrenceKey = cronOccurrenceKey,
             });
 
             await TrySendFailureAsync(ex.Message, CancellationToken.None);
@@ -512,14 +529,68 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         await CancelRetryLeaseAsync(ct);
         var retryCommand = command.Clone();
         retryCommand.RetryAttempt = retryAttempt;
+        var cronOccurrenceKey = ResolveCronOccurrenceKey(command);
+        var options = string.IsNullOrWhiteSpace(cronOccurrenceKey)
+            ? null
+            : CreateCronOccurrencePropagationOptions(cronOccurrenceKey);
         _retryLease = await ScheduleSelfDurableTimeoutAsync(
             SkillRunnerDefaults.RetryCallbackId,
             SkillRunnerDefaults.RetryBackoff,
             retryCommand,
+            options,
             ct: ct);
         Logger.LogInformation(
             "Skill runner {ActorId} scheduled retry attempt {Attempt} in {Backoff}",
             Id, retryAttempt, SkillRunnerDefaults.RetryBackoff);
+    }
+
+    private bool ShouldSkipCronOccurrence(
+        TriggerSkillRunnerExecutionCommand command,
+        string cronOccurrenceKey) =>
+        command.RetryAttempt == 0 &&
+        !string.IsNullOrWhiteSpace(cronOccurrenceKey) &&
+        State.IsCronOccurrenceTerminal(cronOccurrenceKey);
+
+    private string ResolveCronOccurrenceKey(TriggerSkillRunnerExecutionCommand command)
+    {
+        if (!IsCronScheduleTrigger(command))
+            return string.Empty;
+
+        if (TryReadCronOccurrenceKeyFromBaggage(out var baggageKey))
+            return baggageKey;
+
+        return ActiveInboundEnvelope?.Id?.Trim() ?? string.Empty;
+    }
+
+    private bool TryReadCronOccurrenceKeyFromBaggage(out string cronOccurrenceKey)
+    {
+        cronOccurrenceKey = string.Empty;
+        if (ActiveInboundEnvelope?.Propagation?.Baggage is null)
+            return false;
+
+        if (!ActiveInboundEnvelope.Propagation.Baggage.TryGetValue(
+                ScheduledDispatchMetadataKeys.IdempotencyKey,
+                out var value))
+        {
+            return false;
+        }
+
+        cronOccurrenceKey = value?.Trim() ?? string.Empty;
+        return !string.IsNullOrEmpty(cronOccurrenceKey);
+    }
+
+    private static bool IsCronScheduleTrigger(TriggerSkillRunnerExecutionCommand command) =>
+        string.Equals(command.Reason?.Trim(), SkillRunnerDefaults.ScheduleTriggerReason, StringComparison.Ordinal) &&
+        !IsValidExternalTriggerIdentity(command.ExternalTriggerIdentity);
+
+    private static EventEnvelopePublishOptions CreateCronOccurrencePropagationOptions(string cronOccurrenceKey)
+    {
+        var options = new EventEnvelopePublishOptions
+        {
+            Propagation = new EventEnvelopePropagationOverrides(),
+        };
+        options.Propagation.Baggage[ScheduledDispatchMetadataKeys.IdempotencyKey] = cronOccurrenceKey.Trim();
+        return options;
     }
 
     private async Task CancelRetryLeaseAsync(CancellationToken ct)
@@ -647,7 +718,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         // The counter is populated by NyxIdProxyToolFailureCountingMiddleware as the LLM
         // fans out nyxid_proxy calls inside the ChatStreamAsync loop.
         _toolFailureCounter.Reset();
-        _interactiveDeliveryTracker.Reset();
+        _interactiveDeliverySignals.Reset();
 
         if (State.ScheduleMode == SkillRunnerScheduleMode.OneShot &&
             !string.IsNullOrWhiteSpace(State.OneShotMessage) &&
@@ -742,10 +813,15 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 State.RequiresNyxidProxySuccess,
                 _toolFailureCounter.LatestFailure ?? _toolFailureCounter.FirstFailure);
 
-            if (_interactiveDeliveryTracker.HasSuccessfulInteractiveDelivery)
+            await PersistInteractiveDeliverySignalsAsync(requestId, CancellationToken.None);
+
+            if (State.RecentDeliveries.Any(entry =>
+                    entry.Status == DeliveryStatus.Succeeded &&
+                    entry.DeliveryKind == DeliveryKind.InteractiveCard &&
+                    string.Equals(entry.RequestId, requestId, StringComparison.Ordinal)))
             {
                 Logger.LogInformation(
-                    "Skill runner {ActorId} skipped outer Lark reply because the skill already delivered a successful interactive/card message.",
+                    "Skill runner {ActorId} skipped outer Lark reply because the current run already committed a successful interactive/card delivery.",
                     Id);
                 return output;
             }
@@ -760,6 +836,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             await DispatchOutputChunksAsync(
                 streamingState,
                 chunks,
+                requestId,
                 preferCardKit: ShouldPreferCardKitOutput(),
                 ct);
 
@@ -847,6 +924,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     private async Task DispatchOutputChunksAsync(
         SkillRunnerStreamingRunState? streamingState,
         IReadOnlyList<string> chunks,
+        string requestId,
         bool preferCardKit,
         CancellationToken ct)
     {
@@ -856,8 +934,16 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         if (streamingState is not null)
         {
             await streamingState.FinalizeAsync(chunks[0], ct);
+            await PersistDeliveryProducedAsync(
+                DeliveryKind.TextMessage,
+                DeliveryStatus.Succeeded,
+                requestId,
+                sourceEventId: string.Empty,
+                larkMessageId: streamingState.PlatformMessageId,
+                cardId: string.Empty,
+                ct);
         }
-        else if (preferCardKit && chunks.Count == 1 && await TryDispatchCardKitOutputAsync(chunks[0], ct))
+        else if (preferCardKit && chunks.Count == 1 && await TryDispatchCardKitOutputAsync(chunks[0], requestId, ct))
         {
             return;
         }
@@ -866,17 +952,17 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             // No CardKit/text streaming sink (explicit text mode, no NyxID client, missing
             // outbound config, or tests injecting a null client). Fall back to a one-shot
             // text send so the user still receives the report.
-            await SendTextOutputAsync(chunks[0], ct);
+            await SendTextOutputAsync(chunks[0], providerSlugOverride: null, requestId, ct);
         }
 
         for (var i = 1; i < chunks.Count; i++)
-            await SendTextOutputAsync(chunks[i], ct);
+            await SendTextOutputAsync(chunks[i], providerSlugOverride: null, requestId, ct);
     }
 
     private bool ShouldPreferCardKitOutput() =>
         State.OutboundConfig?.OutputFormat is null or SkillRunnerOutputFormat.Auto;
 
-    private async Task<bool> TryDispatchCardKitOutputAsync(string output, CancellationToken ct)
+    private async Task<bool> TryDispatchCardKitOutputAsync(string output, string requestId, CancellationToken ct)
     {
         var sink = TryCreateCardKitSink();
         if (sink is null)
@@ -884,10 +970,28 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
         var result = await sink.SendFinalAsync(output, ct);
         if (result.Succeeded)
+        {
+            await PersistDeliveryProducedAsync(
+                DeliveryKind.StreamingCard,
+                DeliveryStatus.Succeeded,
+                requestId,
+                sourceEventId: string.Empty,
+                larkMessageId: result.MessageId,
+                cardId: result.CardId,
+                ct);
             return true;
+        }
 
         if (!result.VisibleMessageCreated)
         {
+            await PersistDeliveryProducedAsync(
+                DeliveryKind.StreamingCard,
+                DeliveryStatus.FailedPreSend,
+                requestId,
+                sourceEventId: string.Empty,
+                larkMessageId: string.Empty,
+                cardId: result.CardId,
+                ct);
             Logger.LogWarning(
                 "Skill runner {ActorId} CardKit delivery failed before any visible Lark card was sent; falling back to text. card_id={CardId}, lark_code={LarkCode}, detail={Detail}",
                 Id,
@@ -897,6 +1001,14 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             return false;
         }
 
+        await PersistDeliveryProducedAsync(
+            DeliveryKind.StreamingCard,
+            DeliveryStatus.FailedPostSend,
+            requestId,
+            sourceEventId: string.Empty,
+            larkMessageId: result.MessageId,
+            cardId: result.CardId,
+            ct);
         throw new SkillRunnerVisibleDeliveryException(BuildLarkRejectionMessage(result.LarkCode, result.Detail));
     }
 
@@ -1039,6 +1151,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
         public Task FinalizeAsync(string finalText, CancellationToken ct) =>
             TryDispatchAsync(finalText, isFinal: true, ct);
+
+        public string? PlatformMessageId => _sink.PlatformMessageId;
 
         private async Task TryDispatchAsync(string text, bool isFinal, CancellationToken ct)
         {
@@ -1365,6 +1479,61 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             UserMemoryPrompt: llmControl.UserMemoryPrompt,
             RoutePreference: llmControl.NyxIdRoutePreference);
 
+    private async Task PersistInteractiveDeliverySignalsAsync(string requestId, CancellationToken ct)
+    {
+        foreach (var signal in _interactiveDeliverySignals.Signals)
+        {
+            await PersistDeliveryProducedAsync(
+                signal.DeliveryKind,
+                signal.Status,
+                string.IsNullOrWhiteSpace(signal.RequestId) ? requestId : signal.RequestId,
+                signal.SourceEventId,
+                signal.LarkMessageId,
+                signal.CardId,
+                ct);
+        }
+    }
+
+    private Task PersistDeliveryProducedAsync(
+        DeliveryKind kind,
+        DeliveryStatus status,
+        string? requestId,
+        string? sourceEventId,
+        string? larkMessageId,
+        string? cardId,
+        CancellationToken ct) =>
+        PersistDomainEventAsync(new DeliveryProducedEvent
+        {
+            RunId = Id,
+            TurnId = NormalizeOptional(requestId) ?? string.Empty,
+            DeliveryKind = kind,
+            Target = BuildDeliveryTarget(),
+            Status = status,
+            LarkMessageId = NormalizeOptional(larkMessageId) ?? string.Empty,
+            CardId = NormalizeOptional(cardId) ?? string.Empty,
+            RequestId = NormalizeOptional(requestId) ?? string.Empty,
+            SourceEventId = NormalizeOptional(sourceEventId) ?? string.Empty,
+            ProducedAtVersion = NextCommittedVersion(),
+        }, ct);
+
+    private DeliveryTarget BuildDeliveryTarget()
+    {
+        var outbound = State.OutboundConfig;
+        var target = LarkConversationTargets.Resolve(
+            outbound?.LarkReceiveId,
+            outbound?.LarkReceiveIdType,
+            outbound?.ConversationId);
+        return new DeliveryTarget
+        {
+            Channel = ChannelId.From("lark"),
+            ConversationKey = outbound?.ConversationId ?? string.Empty,
+            Platform = ResolveOutboundPlatform(outbound),
+            ReceiveId = target.ReceiveId ?? string.Empty,
+            ReceiveIdType = target.ReceiveIdType ?? string.Empty,
+            ConversationId = outbound?.ConversationId ?? string.Empty,
+        };
+    }
+
     private static bool HasSkillReference(SkillRunnerSkillReference? skillRef) =>
         skillRef is not null &&
         (!string.IsNullOrWhiteSpace(skillRef.Name) ||
@@ -1595,12 +1764,13 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         await DispatchOutputChunksAsync(
             streamingState: null,
             chunks,
+            requestId,
             preferCardKit: false,
             ct);
     }
 
     private Task SendTextOutputAsync(string output, CancellationToken ct) =>
-        SendTextOutputAsync(output, providerSlugOverride: null, ct);
+        SendTextOutputAsync(output, providerSlugOverride: null, requestId: null, ct);
 
     /// <summary>
     /// Posts <paramref name="output"/> as a Lark text message. <paramref name="providerSlugOverride"/>
@@ -1610,7 +1780,11 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     /// rejected (e.g. cross-tenant <c>99992364</c>). All other call sites — main report send,
     /// chunked overflow continuations — pass <c>null</c> and stay on the primary slug.
     /// </summary>
-    private async Task SendTextOutputAsync(string output, string? providerSlugOverride, CancellationToken ct)
+    private async Task SendTextOutputAsync(
+        string output,
+        string? providerSlugOverride,
+        string? requestId,
+        CancellationToken ct)
     {
         var client = _nyxIdApiClient ?? Services.GetService<NyxIdApiClient>();
         if (client is null)
@@ -1630,6 +1804,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         var slug = string.IsNullOrWhiteSpace(providerSlugOverride)
             ? State.OutboundConfig.NyxProviderSlug
             : providerSlugOverride!;
+        var deliveryRequestId = ResolveDeliveryRequestId(requestId);
 
         var deliveryTarget = LarkConversationTargets.Resolve(
             State.OutboundConfig.LarkReceiveId,
@@ -1659,6 +1834,14 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
         if (!outcome.Succeeded)
         {
+            await PersistDeliveryProducedAsync(
+                DeliveryKind.TextMessage,
+                DeliveryStatus.FailedPreSend,
+                requestId: deliveryRequestId,
+                sourceEventId: string.Empty,
+                larkMessageId: string.Empty,
+                cardId: string.Empty,
+                ct);
             // Surface downstream rejection so HandleTriggerAsync sees a real failure instead of
             // persisting SkillRunnerExecutionCompletedEvent on a silently-dropped Lark response.
             // The Error field on SkillRunnerExecutionFailedEvent ends up in `/agent-status`'s
@@ -1668,6 +1851,32 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             // agent.
             throw new InvalidOperationException(BuildLarkRejectionMessage(outcome.LarkCode, outcome.Detail));
         }
+
+        await PersistDeliveryProducedAsync(
+            string.IsNullOrWhiteSpace(providerSlugOverride) ? DeliveryKind.TextMessage : DeliveryKind.FailureNotification,
+            DeliveryStatus.Succeeded,
+            requestId: deliveryRequestId,
+            sourceEventId: string.Empty,
+            larkMessageId: outcome.MessageId,
+            cardId: string.Empty,
+            ct);
+    }
+
+    private static string ResolveDeliveryRequestId(string? requestId) =>
+        string.IsNullOrWhiteSpace(requestId) ? Guid.NewGuid().ToString("N") : requestId.Trim();
+
+    private static string? NormalizeOptional(string? value)
+    {
+        var normalized = value?.Trim();
+        return string.IsNullOrEmpty(normalized) ? null : normalized;
+    }
+
+    private static string ResolveOutboundPlatform(SkillRunnerOutboundConfig? outbound)
+    {
+        if (!string.IsNullOrWhiteSpace(outbound?.OwnerScope?.Platform))
+            return outbound.OwnerScope.Platform.Trim();
+
+        return ResolvePlatform(outbound?.Platform);
     }
 
     private LarkReceiveTarget? ResolveFallbackTarget()
@@ -1765,7 +1974,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         {
             try
             {
-                await SendTextOutputAsync(message, providerSlugOverride: failureSlug, ct);
+                await SendTextOutputAsync(message, providerSlugOverride: failureSlug, requestId: null, ct);
                 return;
             }
             catch (Exception ex)
@@ -1779,7 +1988,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
         try
         {
-            await SendTextOutputAsync(message, providerSlugOverride: null, ct);
+            await SendTextOutputAsync(message, providerSlugOverride: null, requestId: null, ct);
         }
         catch (Exception ex)
         {
@@ -1966,6 +2175,10 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             next.TrimExternalTriggerDeliveries(ToDateTimeOffset(evt.CompletedAt));
         }
 
+        MarkCronOccurrenceTerminal(
+            next,
+            evt.CronOccurrenceKey,
+            evt.CompletedAt ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow));
         return next;
     }
 
@@ -1995,6 +2208,10 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             next.TrimExternalTriggerDeliveries(ToDateTimeOffset(evt.FailedAt));
         }
 
+        MarkCronOccurrenceTerminal(
+            next,
+            evt.CronOccurrenceKey,
+            evt.FailedAt ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow));
         return next;
     }
 
@@ -2014,6 +2231,10 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             next.TrimExternalTriggerDeliveries(ToDateTimeOffset(evt.RejectedAt));
         }
 
+        MarkCronOccurrenceTerminal(
+            next,
+            evt.CronOccurrenceKey,
+            evt.RejectedAt ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow));
         return next;
     }
 
@@ -2087,6 +2308,37 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         }
 
         return next;
+    }
+
+    private static SkillRunnerState ApplyCronOccurrenceDuplicateIgnored(
+        SkillRunnerState current,
+        SkillRunnerCronOccurrenceDuplicateIgnoredEvent evt)
+    {
+        var next = current.Clone();
+        MarkCronOccurrenceTerminal(
+            next,
+            evt.CronOccurrenceKey,
+            evt.IgnoredAt ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow));
+        return next;
+    }
+
+    private static SkillRunnerState ApplyDeliveryProduced(SkillRunnerState current, DeliveryProducedEvent evt)
+    {
+        var next = current.Clone();
+        next.AppendDelivery(evt);
+        return next;
+    }
+
+    private static void MarkCronOccurrenceTerminal(
+        SkillRunnerState state,
+        string? cronOccurrenceKey,
+        Timestamp terminalAt)
+    {
+        if (string.IsNullOrWhiteSpace(cronOccurrenceKey))
+            return;
+
+        state.UpsertCronOccurrenceTerminal(cronOccurrenceKey, terminalAt);
+        state.TrimCronOccurrenceTerminals(ToDateTimeOffset(terminalAt));
     }
 
     private static SkillRunnerState ApplyDisabled(SkillRunnerState current, SkillRunnerDisabledEvent _)
@@ -2179,4 +2431,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
     private static DateTimeOffset ToDateTimeOffset(Timestamp? timestamp) =>
         timestamp?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
+
+    private long NextCommittedVersion() =>
+        (EventSourcing ?? throw new InvalidOperationException("Event sourcing must be configured before computing the next committed version."))
+        .CurrentVersion + 1;
 }
