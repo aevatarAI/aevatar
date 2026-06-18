@@ -412,6 +412,34 @@ public sealed class MainnetHostCompositionTests
     }
 
     [Fact]
+    public void MapAevatarMainnetHost_WithVoiceConfigured_ShouldExposeOnlyPolicyAwareVoiceIngress()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["Aevatar:VoicePresence:OpenAI:ApiKey"] = "voice-openai-key",
+        });
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        app.MapAevatarMainnetHost();
+
+        var routePatterns = ((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(static source => source.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Select(static endpoint => endpoint.RoutePattern.RawText)
+            .ToList();
+
+        routePatterns.Should().Contain("/ws/voice");
+        routePatterns.Should().NotContain("/ws/voice/{actorId}");
+    }
+
+    [Fact]
     public void ConfigureMainnetAIFeatures_ShouldPreserveConfiguredVoiceDrainTimeout()
     {
         var options = new AevatarAIFeatureOptions();

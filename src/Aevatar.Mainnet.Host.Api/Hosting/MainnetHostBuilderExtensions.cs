@@ -40,7 +40,6 @@ using Aevatar.GAgents.StatusDashboard.Executors;
 using Aevatar.GAgents.StreamingProxy;
 using Aevatar.Foundation.Runtime.Hosting.Maintenance;
 using Aevatar.Foundation.VoicePresence;
-using Aevatar.Foundation.VoicePresence.Hosting;
 using Aevatar.Mainnet.Host.Api.ChatCompletions;
 using Aevatar.Mainnet.Host.Api.ChatRouting;
 using Aevatar.Mainnet.Host.Api.Messages;
@@ -152,18 +151,6 @@ public static class MainnetHostBuilderExtensions
         builder.Services.Configure<ChatRoutingOptions>(options =>
         {
             options.Defaults.DefaultForwardToModelToolSetName = ToolSetNames.WorkspaceDefault;
-        });
-        // Implement (issue #695):
-        //   Behavior: gate explicit /ws/voice/{actorId} bypass behind voice:bypass or admin.
-        //   Why this shape: policy-aware /ws/voice owns normal routing; actor-id bypass stays dev/admin only.
-        builder.Services.AddAuthorization(options =>
-        {
-            options.AddPolicy("voice-dev", policy =>
-            {
-                policy.RequireAuthenticatedUser();
-                policy.RequireAssertion(context =>
-                    PolicyAwareVoiceEndpoints.IsVoiceDevBypassPrincipal(context.User));
-            });
         });
         builder.Services.TryAddSingleton<IResponsesCallerScopeResolver, NyxIdResponsesCallerScopeResolver>();
         builder.Services.Configure<ResponsesNyxIdIdentityAssertionOptions>(
@@ -338,8 +325,6 @@ public static class MainnetHostBuilderExtensions
         if (PolicyAwareVoiceEndpoints.IsVoiceRealtimeConfigured(app.Services))
         {
             app.MapPolicyAwareVoiceEndpoint();
-            app.MapVoicePresenceWebSocket("/ws/voice/{actorId}")
-                .RequireAuthorization("voice-dev");
         }
         else
         {

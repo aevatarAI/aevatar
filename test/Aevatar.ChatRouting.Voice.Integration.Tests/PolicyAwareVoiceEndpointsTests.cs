@@ -1,8 +1,6 @@
-using System.Net;
 using System.Net.WebSockets;
 using System.Security.Claims;
 using System.Text;
-using System.Text.Encodings.Web;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
@@ -15,18 +13,13 @@ using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
-using Microsoft.AspNetCore.Authentication;
-using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Routing;
-using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using Xunit;
 using RoutingOwnerScope = Aevatar.Foundation.Abstractions.OwnerScope;
 using ScheduledOwnerScope = Aevatar.Foundation.Abstractions.OwnerScope;
@@ -51,15 +44,12 @@ public sealed class PolicyAwareVoiceEndpointsTests
         PolicyAwareVoiceEndpoints.IsVoiceRealtimeConfigured(app.Services).Should().BeFalse();
         app.MapVoiceNotConfiguredEndpoints();
 
-        foreach (var uri in new[] { "/ws/voice", "/ws/voice/voice-agent-lark" })
-        {
-            var context = CreateVoiceContext(app, uri);
-            var pattern = uri == "/ws/voice" ? "/ws/voice" : "/ws/voice/{actorId}";
-            await GetEndpoint(app, pattern).RequestDelegate!(context);
+        var context = CreateVoiceContext(app, "/ws/voice");
+        await GetEndpoint(app, "/ws/voice").RequestDelegate!(context);
 
-            context.Response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable, uri);
-            (await ReadBodyAsync(context)).Should().Be("voice_not_configured", uri);
-        }
+        context.Response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        (await ReadBodyAsync(context)).Should().Be("voice_not_configured");
+        GetEndpointPatterns(app).Should().NotContain("/ws/voice/{actorId}");
     }
 
     [Fact]
@@ -513,15 +503,17 @@ public sealed class PolicyAwareVoiceEndpointsTests
     }
 
     [Fact]
-    public async Task BypassVoiceEndpoint_WithoutDevScope_ShouldReturnUnauthorized()
+    public void PolicyAwareVoiceEndpoints_ShouldNotRegisterActorIdRoute()
     {
-        await using var app = CreateBypassAuthApp();
-        await app.StartAsync();
+        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(
+            VoiceAttachTarget("voice-agent-lark", "voice_presence_openai"),
+            []));
+        using var app = CreatePolicyAwareApp(
+            policyPort,
+            new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent-lark"]),
+            new RecordingVoiceRealtimeSession());
 
-        var response = await app.GetTestClient().GetAsync("/ws/voice/agent-1");
-
-        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
-        await app.StopAsync();
+        GetEndpointPatterns(app).Should().ContainSingle().Which.Should().Be("/ws/voice");
     }
 
     [Fact]
@@ -669,36 +661,6 @@ public sealed class PolicyAwareVoiceEndpointsTests
         return app;
     }
 
-    private static WebApplication CreateBypassAuthApp()
-    {
-        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
-        {
-            EnvironmentName = Environments.Development,
-        });
-        builder.WebHost.UseTestServer();
-        builder.Services.AddAuthentication(TestAuthHandler.AuthenticationScheme)
-            .AddScheme<AuthenticationSchemeOptions, TestAuthHandler>(TestAuthHandler.AuthenticationScheme, _ => { });
-        builder.Services.AddAuthorization(options =>
-        {
-            options.AddPolicy("voice-dev", policy =>
-            {
-                policy.RequireAuthenticatedUser();
-                policy.RequireAssertion(context =>
-                    PolicyAwareVoiceEndpoints.IsVoiceDevBypassPrincipal(context.User));
-            });
-        });
-        builder.Services.AddSingleton<IRealtimeSession<VoiceRealtimeSessionRequest, VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeFrame, VoiceRealtimeSessionCompletion>>(
-            new RecordingVoiceRealtimeSession(VoiceRealtimeSessionStartError.NotFound));
-        builder.Services.AddSingleton<IVoiceVolatileMediaStreamPort>(new RecordingVolatileMediaStreamPort());
-
-        var app = builder.Build();
-        app.UseAuthentication();
-        app.UseAuthorization();
-        app.MapVoicePresenceWebSocket("/ws/voice/{actorId}")
-            .RequireAuthorization("voice-dev");
-        return app;
-    }
-
     private static DefaultHttpContext CreateVoiceContext(WebApplication app, string uri)
     {
         var parsed = new Uri("http://localhost" + uri);
@@ -730,6 +692,13 @@ public sealed class PolicyAwareVoiceEndpointsTests
             .SelectMany(static dataSource => dataSource.Endpoints)
             .OfType<RouteEndpoint>()
             .Single(endpoint => endpoint.RoutePattern.RawText == pattern);
+
+    private static List<string?> GetEndpointPatterns(WebApplication app) =>
+        ((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(static dataSource => dataSource.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Select(static endpoint => endpoint.RoutePattern.RawText)
+            .ToList();
 
     private static VoicePresenceSessionLeaseHandle CreateLeaseHandle(string actorId, string? moduleName) =>
         new(
@@ -1119,23 +1088,4 @@ public sealed class PolicyAwareVoiceEndpointsTests
         }
     }
 
-    private sealed class TestAuthHandler(
-        IOptionsMonitor<AuthenticationSchemeOptions> options,
-        ILoggerFactory logger,
-        UrlEncoder encoder)
-        : AuthenticationHandler<AuthenticationSchemeOptions>(options, logger, encoder)
-    {
-        public const string AuthenticationScheme = "Test";
-
-        protected override Task<AuthenticateResult> HandleAuthenticateAsync()
-        {
-            return Request.Headers.ContainsKey("x-test-auth")
-                ? Task.FromResult(AuthenticateResult.Success(new AuthenticationTicket(
-                    new ClaimsPrincipal(new ClaimsIdentity(
-                        [new Claim("scope", Request.Headers["x-test-auth"].ToString())],
-                        AuthenticationScheme)),
-                    AuthenticationScheme)))
-                : Task.FromResult(AuthenticateResult.NoResult());
-        }
-    }
 }
