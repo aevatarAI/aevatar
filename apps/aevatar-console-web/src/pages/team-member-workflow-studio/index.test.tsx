@@ -5129,7 +5129,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
       expect(screen.getByText("Error")).toBeTruthy();
       expect(
         screen.getByTitle(
-          /Publish binding request was rejected by the member authority/,
+          /Binding run was rejected by the member authority/,
         ),
       ).toBeTruthy();
     });
@@ -5201,7 +5201,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
       clickPublishAction();
 
       await waitFor(() => {
-        expect(screen.getByText("Publishing")).toBeTruthy();
+        expect(screen.getByText("Binding")).toBeTruthy();
       });
       for (let index = 0; index < 8; index += 1) {
         await act(async () => {
@@ -5211,10 +5211,10 @@ describe("TeamMemberWorkflowStudioPage", () => {
       }
 
       await waitFor(() => {
-        expect(screen.getByText("Publishing")).toBeTruthy();
+        expect(screen.getByText("Binding")).toBeTruthy();
       });
       expect(
-        screen.getAllByTitle(/Publish is still in progress/).length,
+        screen.getAllByTitle(/Binding run is still in progress/).length,
       ).toBeGreaterThan(0);
       expect(screen.getByRole("button", { name: "Refresh status" })).toBeEnabled();
       expect(screen.queryByRole("button", { name: "Publish" })).toBeNull();
@@ -5297,8 +5297,10 @@ describe("TeamMemberWorkflowStudioPage", () => {
     await waitFor(() => {
       expect(studioApi.getMemberBindingRun).toHaveBeenCalled();
       expect(screen.getByRole("button", { name: "Publish" })).toBeDisabled();
-      expect(screen.getByText("Publishing")).toBeTruthy();
-      expect(screen.getAllByTitle(/Publishing this member workflow/).length).toBeGreaterThan(0);
+      expect(screen.getByText("Binding")).toBeTruthy();
+      expect(
+        screen.getAllByTitle(/Binding candidate accepted for dispatch/).length,
+      ).toBeGreaterThan(0);
       expect(screen.queryByRole("button", { name: "Refresh status" })).toBeNull();
     });
 
@@ -5321,7 +5323,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
       },
       { timeout: 2_000 },
     );
-    expect(screen.queryByText("Publishing")).toBeNull();
+    expect(screen.queryByText("Binding")).toBeNull();
     expect(screen.getByRole("button", { name: "Refresh status" })).toBeEnabled();
   });
 
@@ -5684,7 +5686,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
     await waitFor(() => {
-      expect(screen.getByText("Publishing")).toBeTruthy();
+      expect(screen.getByText("Binding")).toBeTruthy();
     });
 
     const refreshButton = screen.getByRole("button", { name: "Refresh status" });
@@ -5701,7 +5703,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
       );
       expect(screen.getByText("Published")).toBeTruthy();
     });
-    expect(screen.queryByText("Publishing")).toBeNull();
+    expect(screen.queryByText("Binding")).toBeNull();
     expect(screen.queryByRole("button", { name: "Publish" })).toBeNull();
   });
 
@@ -5760,7 +5762,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
     await waitFor(() => {
-      expect(screen.getByText("Publishing")).toBeTruthy();
+      expect(screen.getByText("Binding")).toBeTruthy();
     });
     (studioApi.getMemberBindingRun as jest.Mock).mockClear();
 
@@ -5776,9 +5778,9 @@ describe("TeamMemberWorkflowStudioPage", () => {
         "m-alpha",
         "binding-run-fallback",
       );
-      expect(screen.getByText("Publishing")).toBeTruthy();
+      expect(screen.getByText("Binding")).toBeTruthy();
       expect(
-        screen.getAllByTitle(/Publish is still in progress/).length,
+        screen.getAllByTitle(/Binding run is still in progress/).length,
       ).toBeGreaterThan(0);
     });
     expect(screen.getByRole("button", { name: "Refresh status" })).toBeEnabled();
