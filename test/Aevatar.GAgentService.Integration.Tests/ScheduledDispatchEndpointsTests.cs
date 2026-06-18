@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Security.Claims;
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
@@ -183,7 +184,7 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
-    public async Task Create_ShouldAcceptServiceInvocationScopeOwnerNyxIdWithoutSubject()
+    public async Task Create_ShouldBindServiceInvocationScopeOwnerNyxIdFromAuthenticatedUser()
     {
         var service = new RecordingScheduledDispatchApplicationService();
         var request = CreateServiceInvocationRequestWithAuth(new ScheduledServiceInvocationAuthHttpRequest
@@ -194,7 +195,7 @@ public sealed class ScheduledDispatchEndpointsTests
             },
         });
 
-        var result = await CreateAsync(request, service);
+        var result = await CreateAsync(request, service, CreateHttpContext("owner-user-1"));
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
@@ -205,6 +206,10 @@ public sealed class ScheduledDispatchEndpointsTests
         auth!.SenderNyxId.Should().BeNull();
         auth.ScopeOwnerNyxId.Should().NotBeNull();
         auth.ScopeOwnerNyxId!.Scope.Should().Be("proxy");
+        auth.ScopeOwnerNyxId.OwnerSubject.Should().BeEquivalentTo(new ScheduledServiceInvocationNyxIdSubjectRef(
+            OwnerScope.NyxIdPlatform,
+            string.Empty,
+            "owner-user-1"));
     }
 
     [Fact]
@@ -845,8 +850,10 @@ public sealed class ScheduledDispatchEndpointsTests
 
     private static Task<IResult> CreateAsync(
         ScheduledDispatchConfigurationHttpRequest request,
-        RecordingScheduledDispatchApplicationService service) =>
+        RecordingScheduledDispatchApplicationService service,
+        HttpContext? http = null) =>
         ScheduledDispatchEndpoints.Create(
+            http ?? CreateHttpContext(),
             request,
             service,
             new FakeServiceCatalogQueryReader(),
@@ -855,8 +862,10 @@ public sealed class ScheduledDispatchEndpointsTests
     private static Task<IResult> UpdateAsync(
         string scheduleId,
         ScheduledDispatchConfigurationHttpRequest request,
-        RecordingScheduledDispatchApplicationService service) =>
+        RecordingScheduledDispatchApplicationService service,
+        HttpContext? http = null) =>
         ScheduledDispatchEndpoints.Update(
+            http ?? CreateHttpContext(),
             scheduleId,
             request,
             service,
@@ -933,7 +942,7 @@ public sealed class ScheduledDispatchEndpointsTests
                 "actor:schedule-1"),
             []);
 
-    private static DefaultHttpContext CreateHttpContext()
+    private static DefaultHttpContext CreateHttpContext(string? scopeId = null)
     {
         var http = new DefaultHttpContext
         {
@@ -942,6 +951,13 @@ public sealed class ScheduledDispatchEndpointsTests
                 .AddOptions()
                 .BuildServiceProvider(),
         };
+        if (!string.IsNullOrWhiteSpace(scopeId))
+        {
+            http.User = new ClaimsPrincipal(new ClaimsIdentity(
+                [new Claim("scope_id", scopeId)],
+                "test"));
+        }
+
         http.Response.Body = new MemoryStream();
         return http;
     }

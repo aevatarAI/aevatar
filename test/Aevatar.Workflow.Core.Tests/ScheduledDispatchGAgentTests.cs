@@ -927,6 +927,12 @@ public sealed class ScheduledDispatchGAgentTests
                         ScopeOwnerNyxId = new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState
                         {
                             Scope = " owner-proxy ",
+                            OwnerSubject = new ScheduledServiceInvocationNyxIdSubjectRefState
+                            {
+                                Platform = OwnerScope.NyxIdPlatform,
+                                Tenant = string.Empty,
+                                ExternalUserId = " owner-nyx-user ",
+                            },
                         },
                     },
                 },
@@ -943,11 +949,16 @@ public sealed class ScheduledDispatchGAgentTests
         auth.Should().NotBeNull();
         auth!.SenderNyxId.Should().BeNull();
         auth.ScopeOwnerNyxId!.Scope.Should().Be("owner-proxy");
+        auth.ScopeOwnerNyxId.OwnerSubject.Should().BeEquivalentTo(new ScheduledServiceInvocationNyxIdSubjectRef(
+            OwnerScope.NyxIdPlatform,
+            string.Empty,
+            "owner-nyx-user"));
         serviceInvocationDispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredentials.Should()
             .ContainSingle()
             .Which.Should().BeFalse();
         serviceInvocationDispatch.Requests.Should().ContainSingle();
         agent.State.Target!.ServiceInvocation!.Auth!.ScopeOwnerNyxId!.Scope.Should().Be("owner-proxy");
+        agent.State.Target.ServiceInvocation.Auth.ScopeOwnerNyxId.OwnerSubject.ExternalUserId.Should().Be("owner-nyx-user");
         agent.State.FireCount.Should().Be(1);
         agent.State.FailureCount.Should().Be(0);
     }

@@ -517,8 +517,10 @@ public sealed class ScheduledDispatchServiceInvocationTests
             NullLogger<NyxIdScheduledServiceInvocationCredentialExchangePort>.Instance);
 
         var result = await port.IssueScopeOwnerNyxIdAsync(
-            new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource("proxy"),
-            new ServiceIdentity { TenantId = "owner-nyx-user", ServiceId = "svc" });
+            new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
+                "proxy",
+                new ScheduledServiceInvocationNyxIdSubjectRef(OwnerScope.NyxIdPlatform, string.Empty, "owner-nyx-user")),
+            new ServiceIdentity { TenantId = "tenant-should-not-be-used", ServiceId = "svc" });
 
         result.Succeeded.Should().BeTrue();
         result.AccessToken.Should().Be(" owner-token ");
@@ -529,6 +531,21 @@ public sealed class ScheduledDispatchServiceInvocationTests
             ExternalUserId = "owner-nyx-user",
         });
         broker.Scopes.Should().ContainSingle().Which.Value.Should().Be("proxy");
+    }
+
+    [Fact]
+    public async Task NyxIdScheduledServiceInvocationCredentialExchangePort_ShouldRejectScopeOwnerWithoutPersistedSubject()
+    {
+        var port = new NyxIdScheduledServiceInvocationCredentialExchangePort(
+            new RecordingCapabilityBroker(),
+            NullLogger<NyxIdScheduledServiceInvocationCredentialExchangePort>.Instance);
+
+        var act = () => port.IssueScopeOwnerNyxIdAsync(
+            new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource("proxy"),
+            new ServiceIdentity { TenantId = "owner-nyx-user", ServiceId = "svc" });
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*scope owner NyxID subject is required*");
     }
 
     [Fact]

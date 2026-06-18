@@ -98,6 +98,7 @@ message ScheduledServiceInvocationAuthState
 message ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState
 {
   string scope = 1;
+  ScheduledServiceInvocationNyxIdSubjectRefState owner_subject = 2;
 }
 
 message ScheduledServiceInvocationNyxIdCredentialSourceState

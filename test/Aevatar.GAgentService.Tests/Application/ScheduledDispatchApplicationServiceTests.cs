@@ -350,7 +350,9 @@ public sealed class ScheduledDispatchApplicationServiceTests
                         new ScheduledServiceInvocationNyxIdCredentialSource(
                             new ScheduledServiceInvocationNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
                             "proxy"),
-                        new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource("owner-proxy")))),
+                        new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
+                            "owner-proxy",
+                            new ScheduledServiceInvocationNyxIdSubjectRef(OwnerScope.NyxIdPlatform, string.Empty, "owner-nyx-user"))))),
             "0 9 * * *",
             "UTC",
             true,
@@ -379,7 +381,9 @@ public sealed class ScheduledDispatchApplicationServiceTests
                     "run",
                     Any.Pack(new StringValue { Value = "invoke" }),
                     Auth: new ScheduledServiceInvocationAuth(
-                        ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(" owner-proxy ")))),
+                        ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
+                            " owner-proxy ",
+                            new ScheduledServiceInvocationNyxIdSubjectRef(OwnerScope.NyxIdPlatform, string.Empty, " owner-nyx-user "))))),
             "0 9 * * *",
             "UTC",
             true,
@@ -387,8 +391,14 @@ public sealed class ScheduledDispatchApplicationServiceTests
 
         var created = actorPort.Created.Should().ContainSingle().Which;
         created.Configuration.Target.ServiceInvocation!.Auth!.SenderNyxId.Should().BeNull();
-        created.Configuration.Target.ServiceInvocation.Auth.ScopeOwnerNyxId!.Scope.Should().Be("owner-proxy");
-        created.Dispatch.Descriptor.ServiceInvocation!.Auth!.ScopeOwnerNyxId!.Scope.Should().Be("owner-proxy");
+        var configurationOwnerAuth = created.Configuration.Target.ServiceInvocation.Auth.ScopeOwnerNyxId!;
+        configurationOwnerAuth.Scope.Should().Be("owner-proxy");
+        configurationOwnerAuth.OwnerSubject.Should().BeEquivalentTo(
+            new ScheduledServiceInvocationNyxIdSubjectRef(OwnerScope.NyxIdPlatform, string.Empty, "owner-nyx-user"));
+        var dispatchOwnerAuth = created.Dispatch.Descriptor.ServiceInvocation!.Auth!.ScopeOwnerNyxId!;
+        dispatchOwnerAuth.Scope.Should().Be("owner-proxy");
+        dispatchOwnerAuth.OwnerSubject.Should().BeEquivalentTo(
+            new ScheduledServiceInvocationNyxIdSubjectRef(OwnerScope.NyxIdPlatform, string.Empty, "owner-nyx-user"));
     }
 
     [Fact]
@@ -463,7 +473,9 @@ public sealed class ScheduledDispatchApplicationServiceTests
                     "run",
                     Any.Pack(new StringValue { Value = "invoke" }),
                     Auth: new ScheduledServiceInvocationAuth(
-                        ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource("proxy")))),
+                        ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
+                            "proxy",
+                            new ScheduledServiceInvocationNyxIdSubjectRef(OwnerScope.NyxIdPlatform, string.Empty, "owner-nyx-user"))))),
             "0 9 * * *",
             "UTC",
             true,
@@ -478,6 +490,13 @@ public sealed class ScheduledDispatchApplicationServiceTests
         command.Target.ServiceInvocation.Auth.SenderNyxId.Should().BeNull();
         command.Target.ServiceInvocation.Auth.ScopeOwnerNyxId.Should().NotBeNull();
         command.Target.ServiceInvocation.Auth.ScopeOwnerNyxId.Scope.Should().Be("proxy");
+        command.Target.ServiceInvocation.Auth.ScopeOwnerNyxId.OwnerSubject.Should().BeEquivalentTo(
+            new ScheduledServiceInvocationNyxIdSubjectRefState
+            {
+                Platform = OwnerScope.NyxIdPlatform,
+                Tenant = string.Empty,
+                ExternalUserId = "owner-nyx-user",
+            });
     }
 
     [Fact]

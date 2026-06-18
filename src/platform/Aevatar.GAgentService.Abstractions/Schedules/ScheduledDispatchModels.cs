@@ -39,7 +39,9 @@ public sealed record ScheduledServiceInvocationNyxIdCredentialSource(
     ScheduledServiceInvocationNyxIdSubjectRef Subject,
     string Scope);
 
-public sealed record ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(string Scope);
+public sealed record ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
+    string Scope,
+    ScheduledServiceInvocationNyxIdSubjectRef? OwnerSubject = null);
 
 public sealed record ScheduledServiceInvocationAuth(
     ScheduledServiceInvocationNyxIdCredentialSource? SenderNyxId = null,

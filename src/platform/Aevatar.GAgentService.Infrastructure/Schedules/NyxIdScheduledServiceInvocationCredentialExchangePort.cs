@@ -81,19 +81,17 @@ public sealed class NyxIdScheduledServiceInvocationCredentialExchangePort : ISch
         ct.ThrowIfCancellationRequested();
 
         var ownerSubject = new ScheduledServiceInvocationNyxIdCredentialSource(
-            new ScheduledServiceInvocationNyxIdSubjectRef(
-                OwnerScope.NyxIdPlatform,
-                string.Empty,
-                ResolveScopeOwnerNyxUserId(serviceIdentity)),
+            ResolveScopeOwnerSubject(source),
             source.Scope);
         return IssueSenderNyxIdAsync(ownerSubject, ct);
     }
 
-    private static string ResolveScopeOwnerNyxUserId(ServiceIdentity serviceIdentity)
+    private static ScheduledServiceInvocationNyxIdSubjectRef ResolveScopeOwnerSubject(
+        ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource source)
     {
-        if (string.IsNullOrWhiteSpace(serviceIdentity.TenantId))
-            throw new ArgumentException("Service invocation identity tenant id is required for scope owner NyxID credential exchange.", nameof(serviceIdentity));
+        if (source.OwnerSubject == null)
+            throw new ArgumentException("Schedule scope owner NyxID subject is required for scope owner credential exchange.", nameof(source));
 
-        return serviceIdentity.TenantId.Trim();
+        return source.OwnerSubject;
     }
 }

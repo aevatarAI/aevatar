@@ -314,7 +314,8 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             var ownerSource = auth.ScopeOwnerNyxId!;
             return new ScheduledServiceInvocationAuth(
                 ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
-                    NormalizeRequired(ownerSource.Scope, nameof(ownerSource.Scope))));
+                    NormalizeRequired(ownerSource.Scope, nameof(ownerSource.Scope)),
+                    NormalizeOwnerSubject(ownerSource.OwnerSubject)));
         }
 
         var source = auth.SenderNyxId!;
@@ -322,12 +323,20 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             throw new ArgumentException("Service invocation sender NyxID subject is required.", nameof(auth));
 
         return new ScheduledServiceInvocationAuth(SenderNyxId: new ScheduledServiceInvocationNyxIdCredentialSource(
-            new ScheduledServiceInvocationNyxIdSubjectRef(
-                NormalizeRequired(source.Subject.Platform, nameof(source.Subject.Platform)),
-                NormalizeOptional(source.Subject.Tenant),
-                NormalizeRequired(source.Subject.ExternalUserId, nameof(source.Subject.ExternalUserId))),
+            NormalizeSubject(source.Subject),
             NormalizeRequired(source.Scope, nameof(source.Scope))));
     }
+
+    private static ScheduledServiceInvocationNyxIdSubjectRef? NormalizeOwnerSubject(
+        ScheduledServiceInvocationNyxIdSubjectRef? subject) =>
+        subject == null ? null : NormalizeSubject(subject);
+
+    private static ScheduledServiceInvocationNyxIdSubjectRef NormalizeSubject(
+        ScheduledServiceInvocationNyxIdSubjectRef subject) =>
+        new(
+            NormalizeRequired(subject.Platform, nameof(subject.Platform)),
+            NormalizeOptional(subject.Tenant),
+            NormalizeRequired(subject.ExternalUserId, nameof(subject.ExternalUserId)));
 
     private static void ValidateSchedule(ScheduledDispatchConfiguration configuration)
     {
