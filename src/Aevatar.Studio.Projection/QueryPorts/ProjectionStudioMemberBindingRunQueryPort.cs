@@ -65,7 +65,27 @@ public sealed class ProjectionStudioMemberBindingRunQueryPort : IStudioMemberBin
             PlatformBindingCommandId = string.IsNullOrEmpty(document.PlatformBindingCommandId)
                 ? null
                 : document.PlatformBindingCommandId,
+            Result = ToResultResponse(document),
         };
+    }
+
+    private static StudioMemberBindingRunResultResponse? ToResultResponse(
+        StudioMemberBindingRunCurrentStateDocument document)
+    {
+        if (string.IsNullOrEmpty(document.ResultPublishedServiceId)
+            || string.IsNullOrEmpty(document.ResultRevisionId)
+            || string.IsNullOrEmpty(document.ResultImplementationKind))
+        {
+            return null;
+        }
+
+        return new StudioMemberBindingRunResultResponse(
+            PublishedServiceId: document.ResultPublishedServiceId,
+            RevisionId: document.ResultRevisionId,
+            ImplementationKind: document.ResultImplementationKind,
+            ExpectedActorId: string.IsNullOrEmpty(document.ResultExpectedActorId)
+                ? null
+                : document.ResultExpectedActorId);
     }
 
     private static string NormalizeBindingRunStatusWire(string? wire) => wire switch

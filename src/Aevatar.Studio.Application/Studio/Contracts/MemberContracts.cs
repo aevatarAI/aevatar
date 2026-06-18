@@ -40,6 +40,16 @@ public static class StudioMemberBindingRunStatusNames
     public const string Unknown = "unknown";
 }
 
+public static class StudioMemberBindingAckStageNames
+{
+    public const string DispatchAccepted = "dispatch_accepted";
+}
+
+public static class StudioMemberBindingRunRoleNames
+{
+    public const string Candidate = "candidate";
+}
+
 public static class StudioMemberInvocationReadinessStatusNames
 {
     public const string Ready = "ready";
@@ -146,6 +156,12 @@ public sealed record StudioMemberBindingFailureResponse(
     string Message,
     DateTimeOffset FailedAt);
 
+public sealed record StudioMemberBindingRunResultResponse(
+    string PublishedServiceId,
+    string RevisionId,
+    string ImplementationKind,
+    string? ExpectedActorId = null);
+
 // Refactor (iter159/cluster-594-first):
 //   Old pattern: Studio member binding-run status response 未暴露 StateVersion
 //   New principle: 暴露 readmodel 已有的 StateVersion; 前端用 freshness marker 诚实表达 not-yet-materialized 状态
@@ -159,6 +175,8 @@ public sealed record StudioMemberBindingRunStatusResponse(
     DateTimeOffset? UpdatedAt = null)
 {
     public string? PlatformBindingCommandId { get; init; }
+
+    public StudioMemberBindingRunResultResponse? Result { get; init; }
 }
 
 public sealed record StudioMemberRosterResponse(
@@ -272,7 +290,12 @@ public sealed record StudioMemberBindingAcceptedResponse(
     string Status,
     string BindingRunId,
     string ScopeId,
-    string MemberId);
+    string MemberId)
+{
+    public string AckStage { get; init; } = StudioMemberBindingAckStageNames.DispatchAccepted;
+
+    public string BindingRunRole { get; init; } = StudioMemberBindingRunRoleNames.Candidate;
+}
 
 public sealed record StudioMemberBindingRunStartRequest(
     string BindingRunId,
