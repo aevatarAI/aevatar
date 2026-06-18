@@ -182,6 +182,19 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
         if (tools.Count > 0)
             sessionObject["tool_choice"] = "auto";
 
+        if (_logger.IsEnabled(LogLevel.Information))
+        {
+            var toolNames = new List<string>(tools.Count);
+            foreach (var t in tools)
+                toolNames.Add(t?["name"]?.GetValue<string>() ?? "?");
+            _logger.LogInformation(
+                "voice session.update built: {ToolCount} tools, tool_choice={ToolChoice}, instructions={InstrChars} chars, tools=[{ToolNames}]",
+                tools.Count,
+                tools.Count > 0 ? "auto" : "none",
+                (sessionObject["instructions"]?.GetValue<string>() ?? string.Empty).Length,
+                string.Join(",", toolNames));
+        }
+
         var updateEvent = new JsonObject
         {
             ["type"] = "session.update",
