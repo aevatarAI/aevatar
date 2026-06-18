@@ -47,6 +47,7 @@ public static class ScopeServiceEndpoints
     {
         WriteIndented = true,
     };
+    private static readonly JsonSerializerOptions HttpJsonSerializerOptions = new(JsonSerializerDefaults.Web);
 
     public static IEndpointRouteBuilder MapScopeServiceEndpoints(this IEndpointRouteBuilder app)
     {
@@ -100,7 +101,6 @@ public static class ScopeServiceEndpoints
     private static async Task HandleDraftRunAsync(
         HttpContext http,
         string scopeId,
-        ScopeDraftRunHttpRequest request,
         [FromServices] IWorkflowChatRunInteractionPort chatRunService,
         CancellationToken ct)
     {
@@ -109,6 +109,7 @@ public static class ScopeServiceEndpoints
             if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
                 return;
 
+            var request = await ReadDraftRunHttpRequestAsync(http, ct);
             if (request.WorkflowYamls == null || request.WorkflowYamls.Count == 0)
                 throw new InvalidOperationException("workflowYamls is required.");
 
@@ -132,10 +133,12 @@ public static class ScopeServiceEndpoints
                 return;
             }
 
+            var inputParts = MapWorkflowInputParts(request.InputParts);
             var chatRequest = new WorkflowChatRunRequest(
-                Prompt: request.Prompt?.Trim() ?? string.Empty,
+                Prompt: ResolveDraftRunPrompt(request.Prompt, inputParts),
                 Source: WorkflowChatSource.InlineYamlBundle(request.WorkflowYamls),
                 SessionId: request.SessionId,
+                InputParts: inputParts,
                 Metadata: scopedHeaders,
                 ScopeId: scopeId,
                 CallerCredential: callerCredential.Credential,
@@ -161,6 +164,7 @@ public static class ScopeServiceEndpoints
                         .Select(static document => document.Yaml)
                         .ToArray(),
                     SessionId = chatRequest.SessionId,
+                    InputParts = MapInputParts(request.InputParts),
                     ScopeId = scopeId,
                     Headers = scopedHeaders,
                     LlmControl = await BuildScopedLlmControlInputAsync(http, ct),
@@ -177,6 +181,122 @@ public static class ScopeServiceEndpoints
                 ex.Message,
                 ct);
         }
+    }
+
+    private static async Task<ScopeDraftRunHttpRequest> ReadDraftRunHttpRequestAsync(
+        HttpContext http,
+        CancellationToken ct)
+    {
+        if (http.Request.HasFormContentType)
+            return await ReadMultipartDraftRunHttpRequestAsync(http, ct);
+
+        try
+        {
+            var request = await http.Request.ReadFromJsonAsync<ScopeDraftRunHttpRequest>(
+                HttpJsonSerializerOptions,
+                cancellationToken: ct);
+            return request ?? throw new InvalidOperationException("Request body is required.");
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException("Request body must be valid JSON.", ex);
+        }
+    }
+
+    private static async Task<ScopeDraftRunHttpRequest> ReadMultipartDraftRunHttpRequestAsync(
+        HttpContext http,
+        CancellationToken ct)
+    {
+        var form = await http.Request.ReadFormAsync(ct);
+        var payload = form["payload"].FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(payload))
+            throw new InvalidOperationException("multipart payload is required.");
+
+        ScopeDraftRunHttpRequest? request;
+        try
+        {
+            request = JsonSerializer.Deserialize<ScopeDraftRunHttpRequest>(
+                payload,
+                HttpJsonSerializerOptions);
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException("multipart payload must be valid JSON.", ex);
+        }
+
+        if (request == null)
+            throw new InvalidOperationException("multipart payload is required.");
+
+        var inputParts = new List<StreamContentPartHttpRequest>();
+        if (request.InputParts is { Count: > 0 })
+            inputParts.AddRange(request.InputParts);
+
+        foreach (var file in form.Files.Where(static file => file is { Length: > 0 }))
+        {
+            await using var stream = file.OpenReadStream();
+            using var memory = new MemoryStream();
+            await stream.CopyToAsync(memory, ct);
+            inputParts.Add(ToDraftRunFileInputPart(file, memory.ToArray()));
+        }
+
+        return request with
+        {
+            InputParts = inputParts.Count == 0 ? request.InputParts : inputParts,
+        };
+    }
+
+    private static StreamContentPartHttpRequest ToDraftRunFileInputPart(
+        IFormFile file,
+        byte[] content)
+    {
+        var mediaType = NormalizeOptional(file.ContentType) ?? "application/octet-stream";
+        return new StreamContentPartHttpRequest(
+            Type: ResolveDraftRunFileInputPartType(mediaType),
+            DataBase64: Convert.ToBase64String(content),
+            MediaType: mediaType,
+            Name: NormalizeOptional(file.FileName));
+    }
+
+    private static string ResolveDraftRunFileInputPartType(string mediaType)
+    {
+        if (mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+            return "image";
+
+        if (mediaType.StartsWith("audio/", StringComparison.OrdinalIgnoreCase))
+            return "audio";
+
+        if (mediaType.StartsWith("video/", StringComparison.OrdinalIgnoreCase))
+            return "video";
+
+        return "text";
+    }
+
+    private static string ResolveDraftRunPrompt(
+        string? prompt,
+        IReadOnlyList<WorkflowChatInputPart>? inputParts)
+    {
+        if (!string.IsNullOrWhiteSpace(prompt))
+            return prompt.Trim();
+
+        if (inputParts is not { Count: > 0 })
+            return string.Empty;
+
+        var textParts = inputParts
+            .Where(part => part.Kind == WorkflowChatInputPartKind.Text && !string.IsNullOrWhiteSpace(part.Text))
+            .Select(part => part.Text!.Trim())
+            .ToArray();
+        if (textParts.Length > 0)
+            return string.Join("\n", textParts);
+
+        return string.Join(
+            ", ",
+            inputParts.Select(static part => part.Kind switch
+            {
+                WorkflowChatInputPartKind.Image => "[image]",
+                WorkflowChatInputPartKind.Audio => "[audio]",
+                WorkflowChatInputPartKind.Video => "[video]",
+                _ => "[content]",
+            }));
     }
 
     private static async Task<IResult> HandleUpsertBindingAsync(
@@ -3189,6 +3309,32 @@ const response = await fetch("{{invokePath}}", {
             }).ToList();
     }
 
+    private static IReadOnlyList<WorkflowChatInputPart>? MapWorkflowInputParts(
+        IReadOnlyList<StreamContentPartHttpRequest>? parts)
+    {
+        if (parts is not { Count: > 0 })
+            return null;
+
+        return parts
+            .Where(p => p != null)
+            .Select(p => new WorkflowChatInputPart
+            {
+                Kind = p.Type?.ToLowerInvariant() switch
+                {
+                    "image" => WorkflowChatInputPartKind.Image,
+                    "audio" => WorkflowChatInputPartKind.Audio,
+                    "video" => WorkflowChatInputPartKind.Video,
+                    "text" => WorkflowChatInputPartKind.Text,
+                    _ => WorkflowChatInputPartKind.Unspecified,
+                },
+                Text = p.Text,
+                DataBase64 = p.DataBase64,
+                MediaType = p.MediaType,
+                Uri = p.Uri,
+                Name = p.Name,
+            }).ToList();
+    }
+
     private static IReadOnlyList<GAgentDraftRunInputPart>? MapGAgentDraftRunInputParts(
         IReadOnlyList<StreamContentPartHttpRequest>? parts)
     {
@@ -3438,7 +3584,8 @@ const response = await fetch("{{invokePath}}", {
         IReadOnlyList<string>? WorkflowYamls,
         string? SessionId = null,
         Dictionary<string, string>? Headers = null,
-        string? EventFormat = null);
+        string? EventFormat = null,
+        IReadOnlyList<StreamContentPartHttpRequest>? InputParts = null);
 
     public sealed record UpsertScopeBindingHttpRequest(
         string ImplementationKind,
