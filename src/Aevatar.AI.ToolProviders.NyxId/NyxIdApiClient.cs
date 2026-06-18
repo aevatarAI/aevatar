@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgents.Channel.Abstractions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -210,6 +211,7 @@ public sealed class NyxIdApiClient : IDisposable
             request.Content = new StringContent(body, Encoding.UTF8, "application/json");
         }
 
+        ApplyIdempotencyKey(request, httpMethod);
         return await SendAsync(request, ct);
     }
 
@@ -243,6 +245,7 @@ public sealed class NyxIdApiClient : IDisposable
                 Headers = { ContentType = MediaTypeHeaderValue.Parse(contentType) },
             };
 
+        ApplyIdempotencyKey(request, httpMethod);
         return await SendAsync(request, ct);
     }
 
@@ -288,6 +291,7 @@ public sealed class NyxIdApiClient : IDisposable
             request.Content = multipart;
         }
 
+        ApplyIdempotencyKey(request, httpMethod);
         return await SendAsync(request, ct);
     }
 
@@ -296,6 +300,21 @@ public sealed class NyxIdApiClient : IDisposable
         string slug,
         string path,
         Dictionary<string, string>? extraHeaders,
+        CancellationToken ct) =>
+        await ProxyGetBinaryResponseAsync(
+            token,
+            slug,
+            path,
+            extraHeaders,
+            NyxIdToolOptions.DefaultProxyFileArtifactMaxBytes,
+            ct);
+
+    public async Task<NyxIdProxyBinaryResponse> ProxyGetBinaryResponseAsync(
+        string token,
+        string slug,
+        string path,
+        Dictionary<string, string>? extraHeaders,
+        long maxBytes,
         CancellationToken ct)
     {
         var baseUrl = GetBaseUrl();
@@ -309,7 +328,7 @@ public sealed class NyxIdApiClient : IDisposable
         if (!callerSpecifiedUserAgent)
             request.Headers.TryAddWithoutValidation(UserAgentHeaderName, DefaultProxyUserAgent);
 
-        return await SendBinaryResponseAsync(request, ct);
+        return await SendBinaryResponseAsync(request, NormalizeProxyFileArtifactMaxBytes(maxBytes), ct);
     }
 
     // ─── SSH ───
@@ -862,6 +881,21 @@ public sealed class NyxIdApiClient : IDisposable
         return callerSpecifiedUserAgent;
     }
 
+    private static void ApplyIdempotencyKey(HttpRequestMessage request, HttpMethod httpMethod)
+    {
+        if (httpMethod == HttpMethod.Get ||
+            httpMethod == HttpMethod.Head ||
+            httpMethod == HttpMethod.Options ||
+            request.Headers.Contains("Idempotency-Key"))
+        {
+            return;
+        }
+
+        var key = AgentToolRequestContext.IdempotencyKey;
+        if (!string.IsNullOrWhiteSpace(key))
+            request.Headers.TryAddWithoutValidation("Idempotency-Key", key.Trim());
+    }
+
     internal async Task<string> GetAsync(string token, string path, CancellationToken ct)
     {
         var url = $"{GetBaseUrl()}{path}";
@@ -950,7 +984,10 @@ public sealed class NyxIdApiClient : IDisposable
         }
     }
 
-    private async Task<NyxIdProxyBinaryResponse> SendBinaryResponseAsync(HttpRequestMessage request, CancellationToken ct)
+    private async Task<NyxIdProxyBinaryResponse> SendBinaryResponseAsync(
+        HttpRequestMessage request,
+        long maxBytes,
+        CancellationToken ct)
     {
         try
         {
@@ -958,12 +995,15 @@ public sealed class NyxIdApiClient : IDisposable
                 request,
                 HttpCompletionOption.ResponseHeadersRead,
                 ct);
-            var content = await response.Content.ReadAsByteArrayAsync(ct);
             var contentType = response.Content.Headers.ContentType?.ToString();
             var fileName = ResolveContentDispositionFileName(response);
 
             if (!response.IsSuccessStatusCode)
             {
+                var errorContent = await ReadBoundedContentAsync(
+                    response.Content,
+                    Math.Min(maxBytes, 64 * 1024),
+                    ct);
                 _logger.LogWarning(
                     "NyxID binary proxy request failed: {Method} {Url} -> {Status}",
                     request.Method, request.RequestUri, (int)response.StatusCode);
@@ -972,13 +1012,43 @@ public sealed class NyxIdApiClient : IDisposable
                     [],
                     contentType,
                     fileName,
-                    Detail: Encoding.UTF8.GetString(content),
+                    Detail: Encoding.UTF8.GetString(errorContent.Content),
+                    HttpStatus: (int)response.StatusCode);
+            }
+
+            if (response.Content.Headers.ContentLength is { } contentLength &&
+                contentLength > maxBytes)
+            {
+                _logger.LogWarning(
+                    "NyxID binary proxy response content length exceeded max bytes: {Method} {Url} length={Length} max={MaxBytes}",
+                    request.Method, request.RequestUri, contentLength, maxBytes);
+                return new NyxIdProxyBinaryResponse(
+                    false,
+                    [],
+                    contentType,
+                    fileName,
+                    Detail: "content_length_exceeds_max_bytes",
+                    HttpStatus: (int)response.StatusCode);
+            }
+
+            var content = await ReadBoundedContentAsync(response.Content, maxBytes, ct);
+            if (content.Exceeded)
+            {
+                _logger.LogWarning(
+                    "NyxID binary proxy response exceeded max bytes while reading: {Method} {Url} max={MaxBytes}",
+                    request.Method, request.RequestUri, maxBytes);
+                return new NyxIdProxyBinaryResponse(
+                    false,
+                    [],
+                    contentType,
+                    fileName,
+                    Detail: "content_exceeds_max_bytes",
                     HttpStatus: (int)response.StatusCode);
             }
 
             return new NyxIdProxyBinaryResponse(
                 true,
-                content,
+                content.Content,
                 contentType,
                 fileName,
                 HttpStatus: (int)response.StatusCode);
@@ -1013,6 +1083,36 @@ public sealed class NyxIdApiClient : IDisposable
         return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
 
+    private static long NormalizeProxyFileArtifactMaxBytes(long maxBytes) =>
+        maxBytes <= 0
+            ? NyxIdToolOptions.DefaultProxyFileArtifactMaxBytes
+            : Math.Min(maxBytes, NyxIdToolOptions.HardProxyFileArtifactMaxBytes);
+
+    private static async Task<BoundedBinaryContent> ReadBoundedContentAsync(
+        HttpContent content,
+        long maxBytes,
+        CancellationToken ct)
+    {
+        await using var stream = await content.ReadAsStreamAsync(ct);
+        using var memory = new MemoryStream();
+        var buffer = new byte[81920];
+        long total = 0;
+        while (true)
+        {
+            var read = await stream.ReadAsync(buffer, ct);
+            if (read == 0)
+                break;
+
+            total += read;
+            if (total > maxBytes)
+                return new BoundedBinaryContent([], Exceeded: true);
+
+            memory.Write(buffer, 0, read);
+        }
+
+        return new BoundedBinaryContent(memory.ToArray(), Exceeded: false);
+    }
+
     private static string EscapeJsonString(string value) =>
         System.Text.Json.JsonSerializer.Serialize(value);
 
@@ -1027,6 +1127,8 @@ public sealed class NyxIdApiClient : IDisposable
         detail = string.Empty;
         return false;
     }
+
+    private readonly record struct BoundedBinaryContent(byte[] Content, bool Exceeded);
 
     private static bool TryParseStructuredErrorEnvelope(string response, out NyxIdApiErrorEnvelope error)
     {

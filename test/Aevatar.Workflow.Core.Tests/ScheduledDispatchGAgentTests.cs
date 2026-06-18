@@ -311,6 +311,33 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
+    public async Task HandleEnableAsync_AfterDisable_ShouldRegisterNewNextFireLease()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(eventStore, dispatch, scheduler);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(cronExpression: "* * * * *", enabled: true));
+
+        await agent.HandleDisableAsync(new ScheduledDispatchDisableCommand { Reason = "pause" });
+        await agent.HandleEnableAsync(new ScheduledDispatchEnableCommand { Reason = "resume" });
+
+        agent.State.Enabled.Should().BeTrue();
+        agent.State.NextFireAt.Should().NotBeNull();
+        agent.State.NextFireLease.Should().NotBeNull();
+        agent.State.NextFireLease!.Generation.Should().Be(2);
+        scheduler.TimeoutRequests.Should().HaveCount(2);
+        scheduler.Canceled.Should().ContainSingle()
+            .Which.Generation.Should().Be(1);
+        eventStore.GetEvents(ScheduleActorId)
+            .Where(x => string.Equals(x.EventType, ScheduledDispatchEnabledEvent.Descriptor.FullName, StringComparison.Ordinal))
+            .Should()
+            .ContainSingle()
+            .Which.EventData.Unpack<ScheduledDispatchEnabledEvent>().Reason.Should().Be("resume");
+    }
+
+    [Fact]
     public async Task HandleConfigureAsync_WhenEnabledUpdatePersistsNextFire_ShouldCancelPreviousLeaseAfterNewLeaseIsDurable()
     {
         var eventStore = new TestEventStore();

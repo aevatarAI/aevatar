@@ -4,6 +4,8 @@ package aevatar.ai.toolproviders.aevatar_invocation.v1;
 
 option csharp_namespace = "Aevatar.AI.ToolProviders.AevatarInvocation";
 
+import "ai_messages.proto";
+
 enum InvocationWaitMode {
   INVOCATION_WAIT_MODE_UNSPECIFIED = 0;
   INVOCATION_WAIT_MODE_ACK = 1;
@@ -106,6 +108,7 @@ message InvocationToolResult {
   string service_id = 9;
   string endpoint_id = 10;
   InvocationWaitMode wait = 11;
+  aevatar.ai.WorkflowRunBackgroundDeliveryReceipt workflow_run_delivery = 12;
 }
 
 message RunEventSummary {

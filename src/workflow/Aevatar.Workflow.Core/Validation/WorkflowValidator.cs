@@ -75,6 +75,9 @@ public static class WorkflowValidator
             if (!string.IsNullOrWhiteSpace(step.Next) && !stepIds.Contains(step.Next))
                 errors.Add($"步骤 '{step.Id}' 的 next 引用不存在的步骤 '{step.Next}'");
 
+            if (!string.IsNullOrWhiteSpace(step.Compensation) && step.Compensation == step.Id)
+                errors.Add($"步骤 '{step.Id}' 的 compensation 不能指向自身");
+
             if (!string.IsNullOrWhiteSpace(step.Compensation) && !stepIds.Contains(step.Compensation))
                 errors.Add($"步骤 '{step.Id}' 的 compensation '{step.Compensation}' 引用不存在的步骤 '{step.Compensation}'");
 
@@ -83,7 +86,134 @@ public static class WorkflowValidator
 
         }
 
+        DetectCompensationCycles(allSteps, stepIds, errors);
+        ValidateCompensationTargetsExcludedFromForwardPath(allSteps, errors);
+        ValidateNestedCompensationTargets(allSteps, errors);
+
         return errors;
+    }
+
+    private static void DetectCompensationCycles(
+        IReadOnlyList<StepDefinition> allSteps,
+        ISet<string> stepIds,
+        List<string> errors)
+    {
+        var stepsById = BuildFirstStepById(allSteps);
+        var inspectedStarts = new HashSet<string>(StringComparer.Ordinal);
+        var reportedCycles = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var step in allSteps)
+        {
+            if (string.IsNullOrWhiteSpace(step.Id) || !inspectedStarts.Add(step.Id))
+                continue;
+
+            var path = new List<string>();
+            var pathIndexes = new Dictionary<string, int>(StringComparer.Ordinal);
+            var currentId = step.Id;
+
+            while (stepsById.TryGetValue(currentId, out var currentStep))
+            {
+                pathIndexes[currentId] = path.Count;
+                path.Add(currentId);
+
+                var nextId = currentStep.Compensation;
+                if (string.IsNullOrWhiteSpace(nextId) ||
+                    !stepIds.Contains(nextId) ||
+                    nextId == currentId)
+                {
+                    break;
+                }
+
+                if (pathIndexes.TryGetValue(nextId, out var cycleStartIndex))
+                {
+                    var cyclePath = path
+                        .Skip(cycleStartIndex)
+                        .Append(nextId)
+                        .ToList();
+                    var cycleKey = string.Join(
+                        "\u001F",
+                        cyclePath
+                            .Take(cyclePath.Count - 1)
+                            .OrderBy(id => id, StringComparer.Ordinal));
+
+                    if (reportedCycles.Add(cycleKey))
+                    {
+                        errors.Add(
+                            $"步骤 '{step.Id}' 的 compensation 链构成环：{string.Join(" -> ", cyclePath)}");
+                    }
+                    break;
+                }
+
+                currentId = nextId;
+            }
+        }
+    }
+
+    private static void ValidateCompensationTargetsExcludedFromForwardPath(
+        IReadOnlyList<StepDefinition> allSteps,
+        List<string> errors)
+    {
+        var forwardReferenced = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var step in allSteps)
+        {
+            if (!string.IsNullOrWhiteSpace(step.Next))
+                forwardReferenced.Add(step.Next);
+
+            if (step.Branches == null)
+                continue;
+
+            foreach (var target in step.Branches.Values)
+            {
+                if (!string.IsNullOrWhiteSpace(target))
+                    forwardReferenced.Add(target);
+            }
+        }
+
+        var reportedTargets = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var step in allSteps)
+        {
+            if (string.IsNullOrWhiteSpace(step.Compensation) ||
+                !forwardReferenced.Contains(step.Compensation) ||
+                !reportedTargets.Add(step.Compensation))
+            {
+                continue;
+            }
+
+            errors.Add($"步骤 '{step.Compensation}' 既是 compensation 目标又出现在正向路径（next/branches），会被双重执行");
+        }
+    }
+
+    private static void ValidateNestedCompensationTargets(
+        IReadOnlyList<StepDefinition> allSteps,
+        List<string> errors)
+    {
+        var stepsById = BuildFirstStepById(allSteps);
+        var reportedTargets = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var step in allSteps)
+        {
+            if (string.IsNullOrWhiteSpace(step.Compensation) ||
+                !reportedTargets.Add(step.Compensation) ||
+                !stepsById.TryGetValue(step.Compensation, out var compensationStep) ||
+                string.IsNullOrWhiteSpace(compensationStep.Compensation))
+            {
+                continue;
+            }
+
+            errors.Add($"步骤 '{step.Compensation}' 是 compensation 步骤，不允许再声明 compensation（不会在反向 walk 生效）");
+        }
+    }
+
+    private static Dictionary<string, StepDefinition> BuildFirstStepById(IEnumerable<StepDefinition> allSteps)
+    {
+        var stepsById = new Dictionary<string, StepDefinition>(StringComparer.Ordinal);
+        foreach (var step in allSteps)
+        {
+            if (!string.IsNullOrWhiteSpace(step.Id))
+                stepsById.TryAdd(step.Id, step);
+        }
+
+        return stepsById;
     }
 
     private static void ValidateBranchTargets(

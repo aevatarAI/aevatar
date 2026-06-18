@@ -3,7 +3,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.Channel.Runtime;
 
-internal sealed class LarkCardReplyStreamRenderer(
+public sealed class LarkCardReplyStreamRenderer(
     IConversationCardTurnRunner runner,
     ILogger<LarkCardReplyStreamRenderer> logger) : ILarkCardReplyStreamRenderer
 {

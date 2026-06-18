@@ -251,6 +251,63 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
+    public async Task HandleNextLlmStepAsync_EmptyStepWithLongHistory_TrimsRetryToRecentMessages()
+    {
+        // Regression: when a conversation has a very long history the first LLM attempt
+        // may return empty because the context overflows the model's context window.
+        // The empty-reply recovery retry must trim the history to a recent-messages floor
+        // so the retry has room to produce a real answer instead of overflowing again.
+        var actorRuntime = new DispatchingActorRuntime();
+        var executor = new PausedReplyGenerationExecutor();
+        var runtime = CreateRunAgentWithExecutor(
+            actorRuntime, executor, new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions());
+
+        var longStep = new AgentRunReplyStepState
+        {
+            RunId = "run-long", CorrelationId = "corr-long", TargetActorId = "actor-1",
+            Attempt = 1, NextStepIndex = 1, MaxToolRounds = 4,
+        };
+        longStep.Messages.Add(new AgentRunChatMessage { Role = "system", Content = "system prompt" });
+        for (var i = 0; i < 40; i++)
+            longStep.Messages.Add(new AgentRunChatMessage
+            {
+                Role = i % 2 == 0 ? "user" : "assistant", Content = $"m{i}",
+            });
+
+        SetState(runtime, new AgentRunGAgentState
+        {
+            RunId = "run-long", CorrelationId = "corr-long", TargetActorId = "actor-1",
+            Status = AgentRunStatus.ReplyGenerationRequested, GenerationAttempt = 1,
+            GenerationStep = longStep,
+        });
+
+        await runtime.HandleNextLlmStepAsync(new AgentRunNextLlmStepRequestedEvent
+        {
+            RunId = "run-long", CorrelationId = "corr-long", TargetActorId = "actor-1",
+            Attempt = 1, StepIndex = 2,
+            Request = new NeedsLlmReplyEvent
+            {
+                CorrelationId = "corr-long", RunId = "run-long", TargetActorId = "actor-1",
+                RegistrationId = "reg-1", Activity = BuildRelayActivity(),
+            },
+            LlmStepResult = new AgentRunLlmStepResult
+            {
+                AccumulatedText = string.Empty, Content = string.Empty,
+                ReasoningContent = string.Empty, FinishReason = "stop",
+                HasStreamedTextContent = false,
+            },
+        });
+
+        var retry = executor.LlmStepExecutions.Should().ContainSingle().Subject;
+        retry.StepState.FinalNoToolsStep.Should().BeTrue();
+        retry.StepState.Messages.Count(m => m.Role == "system").Should().BeGreaterThan(0);
+        // system (1) + recent floor (6) + recovery nudge (1) = 8 upper bound
+        retry.StepState.Messages.Count.Should().BeLessThanOrEqualTo(8);
+        retry.StepState.Messages.Should().NotContain(m => m.Content == "m0",
+            "the oldest non-system messages must be dropped to fit within the recent floor");
+    }
+
+    [Fact]
     public async Task HandleNextLlmStepAsync_ReasoningOnlyResult_StaysInStepMessagesButOutOfDurableHistory()
     {
         // Reasoning-only results keep their intra-run record (step messages feed the
@@ -1486,7 +1543,14 @@ public sealed class AgentRunGAgentTests
             {
                 SenderBinding = new AgentToolSenderBindingContext("bnd-user-1"),
             }).ToPayload(),
-            LlmControl = ControlForAgentRun(rounds: 6).ToPayload(),
+            LlmControl = new LLMControlContext(
+                NyxIdAccessToken: null,
+                NyxIdOrgToken: null,
+                SenderNyxIdAccessToken: "sender-session-jwt",
+                ModelOverride: null,
+                NyxIdRoutePreference: null,
+                MaxToolRoundsOverride: 6,
+                UserMemoryPrompt: null).ToPayload(),
             Metadata =
             {
                 [ChannelMetadataKeys.Platform] = "lark",
@@ -3681,6 +3745,7 @@ public sealed class AgentRunGAgentTests
                 request.Activity.Clone(),
                 request.ReplyToken,
                 request.ReplyTokenExpiresAtUnixMs,
+                request.RunId,
                 TimeProvider.System,
                 cardMode: _relayOptions.StreamingCardKitEnabled);
         }

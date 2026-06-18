@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package aevatar.gagents.channel.runtime;
+
+option csharp_namespace = "Aevatar.GAgents.Channel.Runtime";
+
+import "google/protobuf/timestamp.proto";
+import "chat_activity.proto";
+import "delivery_ledger.proto";
+
+message ConversationDeliveryCurrentStateDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp created_at_utc = 5;
+  google.protobuf.Timestamp updated_at_utc = 6;
+  aevatar.gagents.channel.abstractions.ConversationReference conversation = 7;
+  repeated aevatar.gagents.channel.abstractions.DeliveryLedgerEntry recent_deliveries = 8;
+  aevatar.gagents.channel.abstractions.DeliveryLedgerEntry last_successful_delivery = 9;
+}

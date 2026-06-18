@@ -168,6 +168,16 @@ public sealed class NyxIdRelayTransport
             },
         };
 
+        // Reply target + @-mentions feed the group-chat admission gate (only engage when the
+        // bot is mentioned, the message replies to one of the bot's messages, or it is a slash
+        // command). NyxID forwards both verbatim but normalizes neither into typed fields.
+        if (!isCardAction)
+        {
+            activity.ReplyToActivityId = NormalizeOptional(payload.ReplyToPlatformMessageId) ?? string.Empty;
+            if (IsLark(platform))
+                activity.Mentions.AddRange(BuildLarkMentions(payload));
+        }
+
         activity.Conversation.CanonicalKey = canonicalKey;
         return NyxIdRelayParseResult.Parsed(payload, activity);
     }
@@ -295,6 +305,67 @@ public sealed class NyxIdRelayTransport
             return false;
 
         return TryReadLarkMessageContentObject(message, out content);
+    }
+
+    private static bool TryGetLarkRawMessage(NyxIdRelayCallbackPayload payload, out JsonElement message)
+    {
+        message = default;
+        if (payload.RawPlatformData is not { } raw || raw.ValueKind != JsonValueKind.Object)
+            return false;
+
+        if (!raw.TryGetProperty("event", out var evt) || evt.ValueKind != JsonValueKind.Object)
+            return false;
+
+        if (!evt.TryGetProperty("message", out var rawMessage) || rawMessage.ValueKind != JsonValueKind.Object)
+            return false;
+
+        message = rawMessage;
+        return true;
+    }
+
+    // Lift Lark's event.message.mentions[] into typed ParticipantRefs. Each mention identifies a
+    // mentioned party by open_id (preferred), union_id, or user_id; the runtime gate matches the
+    // bot's own open_id against these to decide whether a group message addressed the bot.
+    private static List<ParticipantRef> BuildLarkMentions(NyxIdRelayCallbackPayload payload)
+    {
+        var mentions = new List<ParticipantRef>();
+        if (!TryGetLarkRawMessage(payload, out var message))
+            return mentions;
+
+        if (!message.TryGetProperty("mentions", out var rawMentions) ||
+            rawMentions.ValueKind != JsonValueKind.Array)
+        {
+            return mentions;
+        }
+
+        foreach (var rawMention in rawMentions.EnumerateArray())
+        {
+            if (rawMention.ValueKind != JsonValueKind.Object)
+                continue;
+
+            var canonicalId = ResolveLarkMentionCanonicalId(rawMention);
+            if (canonicalId is null)
+                continue;
+
+            mentions.Add(new ParticipantRef
+            {
+                CanonicalId = canonicalId,
+                DisplayName = ReadOptionalStringProperty(rawMention, "name") ?? string.Empty,
+            });
+        }
+
+        return mentions;
+    }
+
+    private static string? ResolveLarkMentionCanonicalId(JsonElement mention)
+    {
+        // Match on open_id only: it is always present on a Lark mention and is the same identity
+        // space as the bot's own open_id (resolved from bot/v3/info), so it is the one value the
+        // admission gate can compare against. union_id/user_id would never match and are ignored.
+        if (!mention.TryGetProperty("id", out var id) || id.ValueKind != JsonValueKind.Object)
+            return null;
+
+        return ReadOptionalStringProperty(id, "open_id");
     }
 
     private static string? ExtractLarkRawText(NyxIdRelayCallbackPayload payload) =>

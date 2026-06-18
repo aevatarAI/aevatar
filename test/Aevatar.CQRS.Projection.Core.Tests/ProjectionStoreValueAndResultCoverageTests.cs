@@ -93,7 +93,7 @@ public sealed class ProjectionStoreValueAndResultCoverageTests
                 CreateReadModel("actor-1", "evt-3", 4))
             .Disposition
             .Should()
-            .Be(ProjectionWriteDisposition.Gap);
+            .Be(ProjectionWriteDisposition.Applied);
     }
 
     [Fact]

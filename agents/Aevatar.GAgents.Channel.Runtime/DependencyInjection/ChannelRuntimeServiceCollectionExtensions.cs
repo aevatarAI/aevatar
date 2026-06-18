@@ -77,6 +77,9 @@ public static class ChannelRuntimeServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionActivationPlanProvider,
             ChannelBotRegistrationCommittedStateProjectionActivationPlanProvider>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionActivationPlanProvider,
+            ConversationDeliveryCommittedStateProjectionActivationPlanProvider>());
 
         // ─── Channel Bot Registration projection pipeline ───
         services.AddProjectionMaterializationRuntimeCore<
@@ -99,6 +102,24 @@ public static class ChannelRuntimeServiceCollectionExtensions
         services.TryAddSingleton<IChannelBotRegistrationRuntimeQueryPort, ChannelBotRegistrationRuntimeQueryPort>();
         services.TryAddSingleton<ChannelBotRegistrationProjectionBootstrapActivator>();
         services.AddHostedService<ChannelBotRegistrationStartupService>();
+
+        // ─── Conversation Delivery projection pipeline ───
+        services.AddProjectionMaterializationRuntimeCore<
+            ConversationDeliveryMaterializationContext,
+            ConversationDeliveryMaterializationRuntimeLease,
+            ProjectionMaterializationScopeGAgent<ConversationDeliveryMaterializationContext>>(
+            static scopeKey => new ConversationDeliveryMaterializationContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            static context => new ConversationDeliveryMaterializationRuntimeLease(context));
+        services.AddCurrentStateProjectionMaterializer<
+            ConversationDeliveryMaterializationContext,
+            ConversationDeliveryCurrentStateProjector>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<ConversationDeliveryCurrentStateDocument>,
+            ConversationDeliveryDocumentMetadataProvider>();
+        services.TryAddSingleton<IConversationDeliveryQueryPort, ConversationDeliveryQueryPort>();
 
         // ─── Channel pipeline composition ───
         services.TryAddSingleton<ConversationDispatchMiddleware>();

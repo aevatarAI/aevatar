@@ -9,6 +9,7 @@
     <RootNamespace>Aevatar.GAgentService.Integration.Tests</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.NyxId\Aevatar.AI.ToolProviders.NyxId.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Bootstrap\Aevatar.Bootstrap.csproj" />
     <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Hosting\Aevatar.GAgentService.Hosting.csproj" />
     <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Application\Aevatar.GAgentService.Application.csproj" />

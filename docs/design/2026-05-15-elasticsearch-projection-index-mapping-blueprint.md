@@ -43,8 +43,8 @@ owner: aevatar-core
 2. 稳定 read model 字段 mapping 应由 Elasticsearch provider 基于 protobuf descriptor 统一补齐，而不是由每个业务 metadata provider 重复手写。
 3. 显式 metadata provider mapping 优先。统一 helper 只补缺失的稳定字段，不覆盖业务 provider 已声明的 mapping。
 4. open / native / plugin document 区域必须显式保留开放边界，禁止为了标准化把动态脚本字段收窄。
-5. 不背历史 index 兼容包袱。mapping 变更以 alias + augmented mapping fingerprint lifecycle 为唯一 schema-drift 权威；alias 指向非当前 fingerprint 的 physical index 时 fail loud，不做在线兼容、双轨 query fallback 或旧 index repair。
-6. 当前 `GetAsync` / `QueryAsync` 会调用 `EnsureIndexAsync` 处理缺失 index，这是既有 lifecycle 行为；本设计不新增 query-time ES actual mapping reader、query-time mapping mutation / repair，也不引入 query-time replay 或 priming。
+5. 不背历史 index 兼容包袱。mapping 变更以 alias + augmented mapping fingerprint lifecycle 为唯一 schema-drift 权威；alias 指向单一旧 fingerprint physical index 时，clean migration 只能由静态 provider-local startup reconcile（`IProjectionIndexReconcileTarget.ReconcileIndexAsync`）创建 expected physical、old-to-new `_reindex`、确认无 failures / timeout 后 atomic `_aliases` swap。write-side `UpsertAsync -> EnsureIndexAsync`、read/query path 与 consistency probe 遇到 fingerprint drift 直接 fail closed，不 `_reindex`、不切 alias。alias 多 backing、source 缺失、不兼容 mapping、reindex failure / timeout、partial copy 仍 fail closed。
+6. 当前 `GetAsync` / `QueryAsync` 只做 read-side alias fingerprint 诊断；本设计不新增 query-time ES actual mapping reader、query-time mapping mutation / repair、query-time reindex，也不引入 query-time replay 或 priming。缺失 index 与 legacy bare index 包装可由写侧 first-touch lifecycle 处理；clean single-backing drift migration 只属于静态 startup reconcile。dynamic index scope 跳过 startup reconcile，写侧 first-touch 仅覆盖 greenfield / bare lifecycle，不承诺 drift migration。
 
 ## 3. 重构目标
 
@@ -78,7 +78,7 @@ owner: aevatar-core
 - 不新增 read model 类型。
 - 不引入第二套 projection envelope。
 - 不在 query path 中刷新 read model、修复 index mapping 或重建 index；缺失 index 的创建继续沿用当前 `EnsureIndexAsync` 行为。
-- 不自动修复已有 Elasticsearch index 的错误 mapping；需要时直接清空 / 重建 projection index，或通过显式运维迁移重建 alias 指向。
+- 不在 query/read path 自动修复已有 Elasticsearch index 的错误 mapping；clean fingerprint drift 只能由静态 provider-local startup reconcile（`IProjectionIndexReconcileTarget.ReconcileIndexAsync`）或显式运维迁移处理。
 - 不改变 native script materialization compiler 的 schema-driven mapping 语义。
 - 不为了兼容历史 index 增加双轨 query fallback。
 
@@ -86,13 +86,13 @@ owner: aevatar-core
 
 1. Elasticsearch mapping augmentation 必须位于 provider 边界，不得泄露到 Domain / Application / Host 业务编排层。
 2. 统一 helper 只能基于 protobuf read model contract 和显式 `DocumentIndexMetadata` 工作，不能依赖运行时 query 样本或已写入 document。
-3. query path 禁止执行 live ES mapping 读取、mapping mutation / repair、projection lifecycle 操作或 event replay；不得在查询路径补写 read model 数据。
+3. query path 禁止执行 live ES mapping 读取、mapping mutation / repair、projection lifecycle 操作、reindex 或 event replay；不得在查询路径补写 read model 数据。
 4. 显式业务 mapping 优先；helper 不得覆盖 metadata provider 已声明的字段 mapping。
 5. provider-owned `ProjectionDocumentId` 必须保持 `keyword`；冲突时应启动期失败，而不是降级兼容。
 6. `google.protobuf.Any`、`google.protobuf.Struct`、map 字段、repeated complex message 默认不得递归展开为静态 mapping。
 7. native / plugin script read model 的开放字段区域必须保持显式 open 或由脚本 schema 编译器生成，不得被通用 helper 猜测。
 8. 所有稳定 mapping 规则必须可测试，不依赖人工检查 index payload。
-9. 重构语义必须诚实: 新 mapping 契约不兼容旧 index 时，直接要求清空 / 重建 projection index；不在应用读路径里偷偷修复，也不为未投产历史数据设计兼容层。
+9. 重构语义必须诚实: 新 mapping 契约不兼容旧 index 时，clean fingerprint drift 由静态 provider-local startup reconcile 显式迁移，或由运维清空 / 重建 projection index；write/read/query/probe 路径不偷偷修复，也不为未投产历史数据设计兼容层。
 10. 本设计不得引入内部泛化 `Metadata` bag；`DocumentIndexMetadata` 是 Elasticsearch index 边界元信息，允许保留该命名。
 
 ## 6. 当前基线
@@ -328,9 +328,9 @@ internal static class ElasticsearchProjectionDescriptorMappingSupport
   - 开发 / 测试环境的 projection index 重建步骤
 - DoD:
   - 明确新建 index 自动获得 stable mapping。
-  - 明确 mapping 契约变更不兼容旧 index 时，直接清空 / 重建 projection index；不设计 alias cutover、双写、双读或在线兼容。
-  - 明确 query path 不做自动修复。
-  - 明确 `AutoCreateIndex=true` 时，read path 的 `EnsureIndexAsync` 可以在清空后按新契约重建缺失 index；若需要保留数据，则应先导出 / 重放 projection，而不是在 provider 内兼容旧 mapping。
+  - 明确 mapping 契约变更不兼容旧 index 时，只有静态 provider-local startup reconcile 可对 clean single-backing fingerprint drift 执行 reindex-and-swap；其它失败或歧义场景直接 fail closed，由运维清空 / 重建 projection index；不设计双写、双读或 query-time 在线兼容。
+  - 明确 write/read/query/probe path 不做自动修复、reindex 或 alias swap。
+  - 明确 `AutoCreateIndex=true` 时，缺失 index 和 legacy bare index 包装可由写侧 first-touch lifecycle 处理；clean single-backing fingerprint drift 只由静态 startup reconcile 处理。dynamic index scope 跳过 startup reconcile，不承诺 clean drift migration。若 migration 失败或需要自定义数据保留策略，则应先导出 / 重放 projection 或显式运维迁移，而不是在 query path 兼容旧 mapping。
 
 ## 11. 里程碑与依赖
 

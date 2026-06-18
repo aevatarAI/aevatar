@@ -137,10 +137,12 @@ public abstract class GAgentBase : IAgent, IEventModuleContainer<IEventHandlerCo
 
             var pipeline = GetOrBuildPipeline();
 
+            var matchedAny = false;
             foreach (var handler in pipeline)
             {
                 ct.ThrowIfCancellationRequested();
                 if (!handler.CanHandle(envelope)) continue;
+                matchedAny = true;
 
                 var hookCtx = new GAgentExecutionHookContext
                 {
@@ -181,6 +183,17 @@ public abstract class GAgentBase : IAgent, IEventModuleContainer<IEventHandlerCo
                     await RunHooksAsync(h => h.OnEventHandlerEndAsync(hookCtx, ct), "OnEventHandlerEnd");
                     await OnEventHandlerEndAsync(envelope, handler.Name, null, sw.Elapsed, error, ct);
                 }
+            }
+
+            if (!matchedAny)
+            {
+                // No handler matched — for a directly-dispatched envelope this is a silent drop
+                // (e.g. a pluggable module that was never mounted), which is exactly the failure
+                // mode that made a dropped voice session-lease invisible. Surface it at Debug.
+                Logger.LogDebug(
+                    "No handler matched envelope {EventType} for agent {AgentId}",
+                    envelope.Payload?.TypeUrl,
+                    Id);
             }
         }
         finally

@@ -1,4 +1,5 @@
 using System.Net.WebSockets;
+using System.Text.Json;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
@@ -21,16 +22,90 @@ namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 public static class WorkflowCapabilityEndpoints
 {
     private const string WorkflowRuntimeDefaultsSectionName = "WorkflowRuntimeDefaults";
+    private static readonly WorkflowMultipartChatRequestParseError ChatPostUnsupportedMediaType = new(
+        StatusCodes.Status415UnsupportedMediaType,
+        "UNSUPPORTED_MEDIA_TYPE",
+        "Content-Type must be application/json or multipart/form-data.");
 
     public static IEndpointRouteBuilder MapWorkflowCapabilityEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api").WithTags("Chat");
+        group.MapPost("/chat", HandleChatPost)
+            .WithName("StartWorkflowChat");
+        group.MapGet(
+                "/ws/chat",
+                async (
+                    HttpContext http,
+                    [FromServices] IWorkflowChatRunInteractionPort chatRunService,
+                    [FromServices] ILoggerFactory loggerFactory,
+                    CancellationToken ct) =>
+                    await HandleChatWebSocket(http, chatRunService, loggerFactory, ct))
+            .WithName("StartWorkflowChatWebSocket");
         ChatQueryEndpoints.Map(group);
         group.MapPost("/workflow/runs/fork", HandleForkRun)
             .WithName("ForkWorkflowRun");
         WorkflowWebhookIngressEndpoints.Map(group);
+        WorkflowExternalApprovalCallbackEndpoints.Map(group);
 
         return app;
+    }
+
+    internal static async Task HandleChatPost(
+        HttpContext http,
+        [FromServices] IWorkflowChatRunInteractionPort chatRunService,
+        [FromServices] WorkflowMultipartChatRequestParser multipartParser,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(http);
+        ArgumentNullException.ThrowIfNull(chatRunService);
+        ArgumentNullException.ThrowIfNull(multipartParser);
+
+        var callerCredential = WorkflowCallerCredentialExtractor.Extract(http);
+        if (!callerCredential.Succeeded)
+        {
+            var (code, message) = ChatRunStartErrorMapper.ToCommandError(callerCredential.Error);
+            var statusCode = ChatRunStartErrorMapper.ToHttpStatusCode(callerCredential.Error);
+            await WriteJsonErrorResponseAsync(http, statusCode, code, message, ct);
+            return;
+        }
+
+        ChatInput input;
+        if (IsMultipartForm(http.Request.ContentType))
+        {
+            var parsed = await multipartParser.ParseAsync(http, ct);
+            if (!parsed.Succeeded)
+            {
+                await WriteJsonErrorResponseAsync(http, parsed.StatusCode, parsed.Code, parsed.Message, ct);
+                return;
+            }
+
+            input = parsed.Input!;
+        }
+        else
+        {
+            if (!IsJson(http.Request.ContentType))
+            {
+                var error = ChatPostUnsupportedMediaType;
+                await WriteJsonErrorResponseAsync(http, error.StatusCode, error.Code, error.Message, ct);
+                return;
+            }
+
+            var parsed = await ParseJsonChatInputAsync(http.Request, ct);
+            if (parsed == null)
+            {
+                await WriteJsonErrorResponseAsync(
+                    http,
+                    StatusCodes.Status400BadRequest,
+                    "INVALID_CHAT_INPUT",
+                    "Chat request body is invalid.",
+                    ct);
+                return;
+            }
+
+            input = parsed;
+        }
+
+        await HandleChat(http, input, chatRunService, ct);
     }
 
     public static IEndpointRouteBuilder MapWorkflowChatInteractionEndpoints(this IEndpointRouteBuilder app)
@@ -380,6 +455,65 @@ public static class WorkflowCapabilityEndpoints
         }
     }
 
+    public static async Task<IResult> HandleRetryCompensation(
+        WorkflowRetryCompensationInput input,
+        [FromServices] ICommandDispatchService<WorkflowRetryCompensationCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError> retryService,
+        CancellationToken ct = default)
+    {
+        using var scope = ApiRequestScope.BeginHttp();
+        ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(retryService);
+
+        try
+        {
+            var actorId = (input.ActorId ?? string.Empty).Trim();
+            var runId = (input.RunId ?? string.Empty).Trim();
+            var failedCompensationStepId = (input.FailedCompensationStepId ?? string.Empty).Trim();
+            var commandId = NormalizeOptional(input.CommandId);
+            var reason = NormalizeOptional(input.Reason);
+            if (string.IsNullOrWhiteSpace(actorId) ||
+                string.IsNullOrWhiteSpace(runId) ||
+                string.IsNullOrWhiteSpace(failedCompensationStepId))
+            {
+                scope.MarkResult(StatusCodes.Status400BadRequest);
+                return Results.BadRequest(new { error = "actorId, runId and failedCompensationStepId are required." });
+            }
+
+            var dispatch = await retryService.DispatchAsync(
+                new WorkflowRetryCompensationCommand(
+                    actorId,
+                    runId,
+                    failedCompensationStepId,
+                    commandId,
+                    reason),
+                ct);
+            if (!dispatch.Succeeded || dispatch.Receipt == null)
+                return MapRunControlDispatchFailure(dispatch.Error, scope);
+
+            var statusUrl = BuildWorkflowRunStatusUrl(dispatch.Receipt);
+            return Results.Accepted(statusUrl, new
+            {
+                accepted = true,
+                actorId = dispatch.Receipt.ActorId,
+                runId = dispatch.Receipt.RunId,
+                failedCompensationStepId,
+                reason,
+                acceptedCommandId = dispatch.Receipt.CommandId,
+                correlationId = dispatch.Receipt.CorrelationId,
+                statusUrl,
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            return Results.StatusCode(499);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            scope.MarkError();
+            throw;
+        }
+    }
+
     public static async Task<IResult> HandleForkRun(
         WorkflowForkRunInput input,
         [FromServices] ICommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError> forkDispatchService,
@@ -635,6 +769,30 @@ public static class WorkflowCapabilityEndpoints
             },
             cancellationToken: ct);
     }
+
+    private static async ValueTask<ChatInput?> ParseJsonChatInputAsync(
+        HttpRequest request,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await JsonSerializer.DeserializeAsync<ChatInput>(
+                request.Body,
+                ChatWebSocketProtocol.JsonOptions,
+                cancellationToken);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static bool IsMultipartForm(string? contentType) =>
+        contentType?.StartsWith("multipart/form-data", StringComparison.OrdinalIgnoreCase) == true;
+
+    private static bool IsJson(string? contentType) =>
+        string.IsNullOrWhiteSpace(contentType) ||
+        contentType.StartsWith("application/json", StringComparison.OrdinalIgnoreCase);
 
     private static async Task WriteStreamErrorFrameAsync(
         ChatSseResponseWriter writer,

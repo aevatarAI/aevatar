@@ -137,11 +137,10 @@ message ChatRouteAction {
   // or `aevatar_invoke_team`.
   reserved 2, 6;
   reserved "forward_to_gagent", "forward_to_team";
-  // tag 5 + name `bypass` were previously a `Bypass` oneof variant; removed
-  // because the dev `/ws/voice/{actorId}` entry does not produce a
-  // ChatRouteAction at all (it bypasses the resolver entirely). Don't reuse
-  // tag 5 or the field name `bypass` to keep wire/protoc churn predictable
-  // if this proto ever sees deployed binaries.
+  // tag 5 + name `bypass` were previously a `Bypass` oneof variant. Mainnet
+  // voice attach now enters only through `/ws/voice`, with explicit actor
+  // identity carried by typed `voice_attach_target`; don't reuse the removed
+  // tag/name for another escape path.
   reserved 5;
   reserved "bypass";
   // tag 3 + name `forward_to_workflow` were removed when workflow routing

@@ -60,6 +60,76 @@ public sealed class WorkflowRunControlContinuationRoundTripTests
     }
 
     [Fact]
+    public async Task SignalEnvelopeFactory_ShouldResumeExternalApprovalWaitSignalRoundTrip()
+    {
+        var module = new WaitSignalModule();
+        var context = new RecordingWorkflowContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "wait-approval",
+                StepType = "wait_signal",
+                RunId = "run-approval-roundtrip",
+                StepParameters = new WorkflowStepParameters
+                {
+                    ExternalApproval = new WorkflowExternalApprovalWaitOptions
+                    {
+                        SourceId = "nyxid",
+                        ExternalIdKind = "instance_code",
+                        ExternalId = "app-42",
+                        SignalName = "approval-terminal",
+                        CallbackIdempotencyKey = "idem-42",
+                    },
+                },
+            }),
+            context,
+            CancellationToken.None);
+
+        context.Published.Clear();
+
+        var terminal = new WorkflowExternalApprovalTerminalSignalCommand(
+            "nyxid",
+            "instance_code",
+            "app-42",
+            "",
+            "",
+            "APPROVED",
+            "idem-42");
+        var envelope = new WorkflowSignalCommandEnvelopeFactory().CreateEnvelope(
+            new WorkflowSignalCommand(
+                "actor-1",
+                "run-approval-roundtrip",
+                "approval-terminal",
+                "external-approval:nyxid:instance_code:app-42:APPROVED",
+                terminal.TerminalStatus,
+                "wait-approval",
+                "external-approval:nyxid:instance_code:app-42:APPROVED",
+                terminal),
+            new CommandContext(
+                "actor-1",
+                "external-approval:nyxid:instance_code:app-42:APPROVED",
+                "external-approval:nyxid:instance_code:app-42:APPROVED",
+                new Dictionary<string, string>()));
+
+        var signal = envelope.Payload.Unpack<SignalReceivedEvent>();
+        signal.ExternalApproval.Should().NotBeNull();
+        signal.ExternalApproval.TerminalStatus.Should().Be("APPROVED");
+        signal.ExternalApproval.CallbackIdempotencyKey.Should().Be("idem-42");
+
+        await module.HandleAsync(envelope, context, CancellationToken.None);
+
+        var completion = context.Published.Select(x => x.Event).OfType<StepCompletedEvent>().Single();
+        completion.StepId.Should().Be("wait-approval");
+        completion.RunId.Should().Be("run-approval-roundtrip");
+        completion.Success.Should().BeTrue();
+        completion.Output.Should().Be("APPROVED");
+        context.Published.Select(x => x.Event).OfType<WorkflowExternalApprovalContinuationClearedEvent>()
+            .Should()
+            .ContainSingle();
+    }
+
+    [Fact]
     public async Task ResumeEnvelopeFactory_ShouldResumeHumanApprovalModuleRoundTrip()
     {
         var module = new HumanApprovalModule();

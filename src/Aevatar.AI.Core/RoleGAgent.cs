@@ -706,6 +706,13 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             Initialized = true,
             RemoteAudioSupport = VoiceRemoteAudioSupport.Supported,
         };
+        // Mount the voice runtime module so VoiceModuleSignal (session-lease / transport-attach /
+        // provider events) actually reaches a handler. Without this the capability projection
+        // materializes (Initialized=true, pre-check passes) but the pluggable VoicePresenceModule is
+        // never in the actor's pipeline, so the dispatched lease request matches no handler, is
+        // silently dropped, and /ws/voice times out after 5s. The next state apply diffs
+        // _appliedEventModules and re-runs SetModulesAsync to mount it.
+        next.EventModules = AppendModuleExtension(next.EventModules, moduleName);
         return next;
     }
 
@@ -1505,6 +1512,23 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
     private static string NormalizeModuleExtensionText(string? value) =>
         string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
+
+    // Idempotently add a module name to a comma-separated EventModules string, matching the
+    // delimiter/options RoleGAgentFactory.BuildModuleExtensions splits on (',' + RemoveEmptyEntries
+    // + TrimEntries). De-duplicated ordinal so re-enabling voice never appends a duplicate.
+    private static string AppendModuleExtension(string? existing, string moduleName)
+    {
+        if (string.IsNullOrWhiteSpace(moduleName))
+            return NormalizeModuleExtensionText(existing);
+
+        var modules = NormalizeModuleExtensionText(existing)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToList();
+        if (!modules.Contains(moduleName, StringComparer.Ordinal))
+            modules.Add(moduleName);
+
+        return string.Join(',', modules);
+    }
 
     private static IReadOnlyList<ContentPart> ResolveRequestInputParts(ChatRequestEvent request)
     {

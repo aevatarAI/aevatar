@@ -89,7 +89,8 @@ public sealed record WorkflowRunForkSeedView(
     IReadOnlyList<string> CompletedStepIds,
     string LastFailedStepId,
     string FinalError,
-    string ScopeId = "")
+    string ScopeId = "",
+    IReadOnlyDictionary<string, WorkflowStepIdempotencyView>? IdempotencyByStepId = null)
 {
     public WorkflowRunForkSeedView()
         : this(
@@ -101,10 +102,37 @@ public sealed record WorkflowRunForkSeedView(
             [],
             string.Empty,
             string.Empty,
-            string.Empty)
+            string.Empty,
+            new Dictionary<string, WorkflowStepIdempotencyView>(StringComparer.Ordinal))
     {
     }
 }
+
+public sealed record WorkflowStepIdempotencyView(
+    string LogicalRunId,
+    string StepId,
+    int LogicalAttempt,
+    string IdempotencyKey)
+{
+    public WorkflowStepIdempotencyView()
+        : this(string.Empty, string.Empty, 0, string.Empty)
+    {
+    }
+}
+
+public sealed record WorkflowExternalApprovalContinuation(
+    string ActorId,
+    string RunId,
+    string StepId,
+    string SignalName,
+    string SourceId,
+    string ExternalIdKind,
+    string ExternalId,
+    string CallbackIdempotencyKey,
+    string RequestId,
+    long SourceVersion,
+    string SourceEventId,
+    DateTimeOffset UpdatedAt);
 
 /// <summary>
 /// Narrow read contract for resolving workflow actor bindings without exposing raw actor state.
@@ -133,6 +161,28 @@ public interface IWorkflowRunForkSeedQueryPort
 {
     Task<WorkflowRunForkSeedView?> GetForkSeedAsync(
         string runId,
+        CancellationToken ct = default);
+}
+
+public interface IWorkflowExternalApprovalContinuationLookupPort
+{
+    Task<WorkflowExternalApprovalContinuation?> FindActiveAsync(
+        string sourceId,
+        string externalIdKind,
+        string externalId,
+        CancellationToken ct = default);
+}
+
+public interface IWorkflowWebhookReplayAdmissionPort
+{
+    bool IsAvailable { get; }
+
+    ValueTask<WorkflowWebhookReplayAdmission> AdmitAsync(
+        WorkflowWebhookReplayAdmissionRequest request,
+        CancellationToken ct = default);
+
+    ValueTask ReleaseAsync(
+        WorkflowWebhookReplayAdmissionRequest request,
         CancellationToken ct = default);
 }
 

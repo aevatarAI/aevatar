@@ -3,6 +3,7 @@ using Aevatar.AI.ToolProviders.ChronoStorage;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
 using Aevatar.AI.ToolProviders.Web;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Http;
@@ -32,6 +33,28 @@ public sealed class ToolProviderHttpClientRegistrationTests
         provider.GetRequiredService<IRemoteToolApprovalPort>().Should()
             .BeOfType<NyxIdRemoteToolApprovalPort>();
         provider.GetServices<IToolApprovalHandler>().Should().BeEmpty();
+    }
+
+    [Fact]
+    public void AddNyxIdTools_ShouldRegisterFileArtifactIngressOnlyWhenWorkflowIngressExists()
+    {
+        var withoutWorkflowIngress = new ServiceCollection();
+        withoutWorkflowIngress.AddNyxIdTools(options => options.BaseUrl = "https://nyx.test");
+
+        withoutWorkflowIngress.Should().NotContain(descriptor =>
+            descriptor.ServiceType == typeof(INyxIdProxyFileArtifactIngress));
+
+        var withWorkflowIngress = new ServiceCollection();
+        withWorkflowIngress.AddSingleton<IWorkflowFileIngressPort, StubWorkflowFileIngressPort>();
+        withWorkflowIngress.AddNyxIdTools(options => options.BaseUrl = "https://nyx.test");
+
+        withWorkflowIngress.Should().ContainSingle(descriptor =>
+            descriptor.ServiceType == typeof(INyxIdProxyFileArtifactIngress) &&
+            descriptor.ImplementationFactory != null);
+        using var provider = withWorkflowIngress.BuildServiceProvider();
+        provider.GetRequiredService<INyxIdProxyFileArtifactIngress>()
+            .Should()
+            .BeOfType<NyxIdProxyWorkflowFileArtifactIngress>();
     }
 
     [Fact]
@@ -150,4 +173,17 @@ file static class HttpClientRegistrationAssertions
             .Should()
             .BeTrue("AddHttpClient should register HttpClientFactoryOptions for '{0}'", name);
     }
+}
+
+file sealed class StubWorkflowFileIngressPort : IWorkflowFileIngressPort
+{
+    public ValueTask<WorkflowFileIngressResult> IngestAsync(
+        WorkflowFileIngressRequest request,
+        CancellationToken cancellationToken = default) =>
+        ValueTask.FromResult(new WorkflowFileIngressResult(new WorkflowFileRef
+        {
+            FileId = "file-1",
+            ArtifactId = "artifact-1",
+            SourceKind = request.SourceKind,
+        }));
 }

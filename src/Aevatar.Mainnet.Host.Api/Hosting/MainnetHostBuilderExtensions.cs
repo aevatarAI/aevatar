@@ -40,7 +40,6 @@ using Aevatar.GAgents.StatusDashboard.Executors;
 using Aevatar.GAgents.StreamingProxy;
 using Aevatar.Foundation.Runtime.Hosting.Maintenance;
 using Aevatar.Foundation.VoicePresence;
-using Aevatar.Foundation.VoicePresence.Hosting;
 using Aevatar.Mainnet.Host.Api.ChatCompletions;
 using Aevatar.Mainnet.Host.Api.ChatRouting;
 using Aevatar.Mainnet.Host.Api.Messages;
@@ -50,6 +49,7 @@ using Aevatar.Mainnet.Host.Api.Status;
 using Aevatar.Mainnet.Host.Api.Voice;
 using Aevatar.Studio.Hosting;
 using Aevatar.Workflow.Extensions.Hosting;
+using Aevatar.Workflow.Integration.AI;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
@@ -152,23 +152,16 @@ public static class MainnetHostBuilderExtensions
         {
             options.Defaults.DefaultForwardToModelToolSetName = ToolSetNames.WorkspaceDefault;
         });
-        // Implement (issue #695):
-        //   Behavior: gate explicit /ws/voice/{actorId} bypass behind voice:bypass or admin.
-        //   Why this shape: policy-aware /ws/voice owns normal routing; actor-id bypass stays dev/admin only.
-        builder.Services.AddAuthorization(options =>
-        {
-            options.AddPolicy("voice-dev", policy =>
-            {
-                policy.RequireAuthenticatedUser();
-                policy.RequireAssertion(context =>
-                    PolicyAwareVoiceEndpoints.IsVoiceDevBypassPrincipal(context.User));
-            });
-        });
         builder.Services.TryAddSingleton<IResponsesCallerScopeResolver, NyxIdResponsesCallerScopeResolver>();
         builder.Services.Configure<ResponsesNyxIdIdentityAssertionOptions>(
             builder.Configuration.GetSection(ResponsesNyxIdIdentityAssertionOptions.SectionName));
         builder.Services.TryAddSingleton<NyxIdIdentityAssertionValidator>();
         builder.Services.TryAddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
+        // Default model for direct OpenAI-compatible ingress (/v1/responses, /v1/messages,
+        // /v1/chat/completions) when the caller omits `model`. The slug/model value is a
+        // host fact supplied by configuration; an explicit caller model always wins.
+        builder.Services.Configure<ResponsesIngressOptions>(
+            builder.Configuration.GetSection(ResponsesIngressOptions.SectionName));
         builder.Services.TryAddSingleton<IResponsesCommandFacade, ResponsesCommandFacade>();
         builder.Services.TryAddSingleton<IMessagesCommandFacade, MessagesCommandFacade>();
         builder.Services.TryAddSingleton<IChatCompletionsCommandFacade, ChatCompletionsCommandFacade>();
@@ -207,6 +200,8 @@ public static class MainnetHostBuilderExtensions
         // layer between Studio and the AI/agent packages that consume the port.
         builder.Services.TryAddSingleton<IOwnerLlmConfigSource, StudioUserConfigOwnerLlmConfigSource>();
         builder.Services.AddLarkAgentAuthoring();
+        builder.Services.AddSkillBackedHumanInteractionDelivery();
+        builder.Services.AddChannelBackedHumanInteractionTools();
         builder.Services.AddNyxIdRelayChannel();
         builder.Services.AddLarkPlatform();
         builder.Services.AddTelegramPlatform();
@@ -232,6 +227,8 @@ public static class MainnetHostBuilderExtensions
             else
                 o.EnableSshExecTool = true; // mainnet default: enabled (Lark bot needs it)
             o.BypassSshExecApproval = true; // mainnet Lark bot internal-only
+            if (long.TryParse(builder.Configuration["Aevatar:NyxId:ProxyFileArtifactMaxBytes"], out var maxBytes))
+                o.ProxyFileArtifactMaxBytes = maxBytes;
         });
         builder.Services.AddLarkTools(o =>
         {
@@ -330,8 +327,6 @@ public static class MainnetHostBuilderExtensions
         if (PolicyAwareVoiceEndpoints.IsVoiceRealtimeConfigured(app.Services))
         {
             app.MapPolicyAwareVoiceEndpoint();
-            app.MapVoicePresenceWebSocket("/ws/voice/{actorId}")
-                .RequireAuthorization("voice-dev");
         }
         else
         {
@@ -422,6 +417,7 @@ public static class MainnetHostBuilderExtensions
             StaleAfter = options.StaleAfter,
             DedupeWindow = options.DedupeWindow,
             ToolExecutionTimeout = options.ToolExecutionTimeout,
+            DrainTimeout = options.DrainTimeout,
             PendingInjectionCapacity = options.PendingInjectionCapacity,
             TimeProvider = options.TimeProvider,
             DirectExternalEventTypeUrls = directEventTypeUrls,

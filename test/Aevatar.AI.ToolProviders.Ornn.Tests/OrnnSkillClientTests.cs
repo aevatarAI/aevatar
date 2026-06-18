@@ -296,6 +296,38 @@ public sealed class OrnnSkillClientTests
     }
 
     [Fact]
+    public async Task GetSkillJsonAsync_WhenOrnnReturnsNestedPermissionError_ShouldSurfaceUpstreamReason()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson(
+            """{ "error": { "code": "permission_denied", "message": "Missing ornn:skill:read permission" } }""",
+            HttpStatusCode.Forbidden);
+        var client = CreateClient(handler, slug: "ornn-api");
+
+        var act = async () => await client.GetSkillJsonAsync("sender-token", "private-skill");
+
+        var assertion = await act.Should().ThrowAsync<RemoteSkillFetchException>();
+        assertion.Which.HttpStatus.Should().Be(403);
+        assertion.Which.Message.Should().Contain("permission_denied: Missing ornn:skill:read permission");
+        assertion.Which.Message.Should().NotContain("missing proxy scope");
+    }
+
+    [Fact]
+    public async Task GetSkillJsonAsync_WhenOrnnReturnsProblemJsonPermissionError_ShouldSurfaceDetail()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson(
+            """{ "status": 403, "code": "permission_denied", "detail": "You do not have permission to read this skill" }""",
+            HttpStatusCode.Forbidden);
+        var client = CreateClient(handler, slug: "ornn-api");
+
+        var act = async () => await client.GetSkillJsonAsync("sender-token", "private-skill");
+
+        var assertion = await act.Should().ThrowAsync<RemoteSkillFetchException>();
+        assertion.Which.HttpStatus.Should().Be(403);
+        assertion.Which.Message.Should().Contain("You do not have permission to read this skill");
+        assertion.Which.Message.Should().NotContain("missing proxy scope");
+    }
+
+    [Fact]
     public async Task GetSkillJsonAsync_ReturnsNullWhenPerCallTimeoutFiresOnSlowUpstream()
     {
         // Regression for the 2026-05-13 lark-bot incident: a NyxID-proxied call to
@@ -348,6 +380,23 @@ public sealed class OrnnSkillClientTests
         var act = async () => await client.GetSkillJsonAsync("token", "project-summary", callerCts.Token);
 
         await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
+    public async Task UpdateSkillAsync_RoutesPutThroughNyxIdProxyWithEscapedIdAndZipContentType()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson("""{ "data": { "id": "skill-1" } }""");
+        var client = CreateClient(handler);
+
+        var result = await client.UpdateSkillAsync("access-token", "skill id/1", [1, 2, 3]);
+
+        result.Succeeded.Should().BeTrue();
+        var request = handler.Requests.Should().ContainSingle().Subject;
+        request.Method.Should().Be(HttpMethod.Put);
+        request.Authorization!.Parameter.Should().Be("access-token");
+        request.ContentType.Should().Be("application/zip");
+        request.RequestUri!.AbsoluteUri.Should().Be(
+            "https://nyx.example/api/v1/proxy/s/ornn/api/v1/skills/skill%20id%2F1");
     }
 
     private static OrnnSkillClient CreateClient(

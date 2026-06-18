@@ -291,6 +291,24 @@ public sealed class OrnnPublishSkillToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenPublishReturnsPermissionError_ShouldSurfaceUpstreamReason()
+    {
+        var handler = new CapturingHandler(
+            new CapturingResponse("""{ "data": { "valid": true, "violations": [] } }"""),
+            new CapturingResponse(
+                """{ "status": 403, "code": "permission_denied", "detail": "Missing ornn:skill:create permission" }""",
+                HttpStatusCode.Forbidden));
+        var tool = CreateTool(handler);
+
+        using var _ = BeginTokenScope();
+        var result = await tool.ExecuteAsync(ValidArguments());
+
+        result.Should().Contain("\"status\":\"error\"");
+        result.Should().Contain("Missing ornn:skill:create permission");
+        result.Should().NotContain("missing proxy scope");
+    }
+
+    [Fact]
     public async Task CreateSuccessReceipt_ShouldMapPublishedSkillSubjectFromToolResult()
     {
         var handler = new CapturingHandler(
@@ -376,11 +394,16 @@ public sealed class OrnnPublishSkillToolTests
 
     private sealed class CapturingHandler : HttpMessageHandler
     {
-        private readonly Queue<string> _responses;
+        private readonly Queue<CapturingResponse> _responses;
 
         public CapturingHandler(params string[] responses)
+            : this(responses.Select(body => new CapturingResponse(body)).ToArray())
         {
-            _responses = new Queue<string>(responses);
+        }
+
+        public CapturingHandler(params CapturingResponse[] responses)
+        {
+            _responses = new Queue<CapturingResponse>(responses);
         }
 
         public List<HttpRequestMessage> Requests { get; } = [];
@@ -390,11 +413,15 @@ public sealed class OrnnPublishSkillToolTests
             CancellationToken cancellationToken)
         {
             Requests.Add(request);
-            var body = _responses.Count == 0 ? """{ "error": true }""" : _responses.Dequeue();
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            var response = _responses.Count == 0
+                ? new CapturingResponse("""{ "error": true }""")
+                : _responses.Dequeue();
+            return Task.FromResult(new HttpResponseMessage(response.StatusCode)
             {
-                Content = new StringContent(body),
+                Content = new StringContent(response.Body),
             });
         }
     }
+
+    private sealed record CapturingResponse(string Body, HttpStatusCode StatusCode = HttpStatusCode.OK);
 }

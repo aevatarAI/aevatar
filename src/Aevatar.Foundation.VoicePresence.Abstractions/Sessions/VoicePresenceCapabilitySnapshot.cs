@@ -15,4 +15,6 @@ public sealed record VoicePresenceCapabilitySnapshot(
     string? ActiveSessionId,
     DateTimeOffset? LeaseExpiresAt,
     VoiceRemoteAudioSupport RemoteAudioSupport,
-    string? ActiveTransportLeaseId = null);
+    string? ActiveTransportLeaseId = null,
+    long LeaseEpoch = 0,
+    string? ActiveLeaseOwnerId = null);

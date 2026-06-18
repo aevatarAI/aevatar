@@ -32,7 +32,16 @@ public sealed class AgentDeliveryTargetToolTests
         properties.TryGetProperty("nyx_api_key", out _).Should().BeFalse();
         properties.TryGetProperty("api_key_id", out _).Should().BeFalse();
         properties.TryGetProperty("allowed_service_ids", out _).Should().BeFalse();
-        tool.Description.Should().Contain("scheduled_agent_creator");
+        document.RootElement.GetProperty("properties")
+            .GetProperty("action")
+            .GetProperty("enum")
+            .EnumerateArray()
+            .Select(static value => value.GetString())
+            .Should()
+            .Contain("create");
+        tool.Description.Should().Contain("without creating a scheduled runner");
+        tool.Description.Should().Contain("different platform conversation");
+        tool.Description.Should().NotContain("different Lark conversation");
         tool.Description.Should().NotContain("agent_builder tool's job");
     }
 
@@ -135,6 +144,371 @@ public sealed class AgentDeliveryTargetToolTests
             var result = await tool.ExecuteAsync("""{"action":"upsert"}""");
             result.Should().Contain("agent_id");
             result.Should().Contain("required");
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_Create_MintsCredential_And_UpsertsCatalog()
+    {
+        var caller = OwnerScope.ForNyxIdNative("user-1");
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetForCallerAsync("aelf-twitter-approval", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(null));
+
+        UserAgentCatalogUpsertCommand? captured = null;
+        var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        commandPort.UpsertAsync(Arg.Do<UserAgentCatalogUpsertCommand>(command => captured = command), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        var issuer = new RecordingApiKeyIssuer();
+        var resolver = Substitute.For<ICallerScopeResolver>();
+        resolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(caller));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(commandPort);
+        services.AddSingleton(resolver);
+        services.AddSingleton<IScheduledAgentApiKeyIssuer>(issuer);
+        var tool = CreateTool(services);
+
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        });
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "create",
+                  "delivery_target_id": "aelf-twitter-approval",
+                  "platform": "lark",
+                  "conversation_id": "oc_9f1b8d3835674963417954fad20f8a3c",
+                  "nyx_provider_slug": "api-lark-bot-2"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+            doc.RootElement.GetProperty("delivery_target_id").GetString().Should().Be("aelf-twitter-approval");
+            doc.RootElement.GetProperty("api_key_id").GetString().Should().Be("key-aelf-twitter-approval");
+
+            result.Should().NotContain("nyx_api_key");
+            result.Should().NotContain("full_key");
+            result.Should().NotContain("secret-created-key");
+
+            issuer.Issues.Should().ContainSingle();
+            issuer.Issues[0].AgentId.Should().Be("aelf-twitter-approval");
+            issuer.Issues[0].ServiceSlugs.PrimaryOutboundSlug.Should().Be("api-lark-bot-2");
+            issuer.Issues[0].ServiceSlugs.RequiresOrnnService.Should().BeFalse();
+            issuer.Issues[0].SkillName.Should().BeEmpty();
+
+            captured.Should().NotBeNull();
+            captured!.AgentId.Should().Be("aelf-twitter-approval");
+            captured.ConversationId.Should().Be("oc_9f1b8d3835674963417954fad20f8a3c");
+            captured.NyxProviderSlug.Should().Be("api-lark-bot-2");
+            captured.NyxApiKey.Should().Be("secret-created-key");
+            captured.ApiKeyId.Should().Be("key-aelf-twitter-approval");
+            captured.AgentType.Should().Be("delivery_target");
+            captured.TemplateName.Should().Be("explicit_delivery_target");
+            captured.TargetPlatform.Should().Be("lark");
+            captured.LarkReceiveId.Should().BeEmpty();
+            captured.LarkReceiveIdType.Should().BeEmpty();
+            captured.OwnerScope.Should().NotBeNull();
+            captured.OwnerScope!.MatchesStrictly(caller).Should().BeTrue();
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_Create_Accepts_NonLark_TargetPlatform_WithoutLarkFields()
+    {
+        var caller = OwnerScope.ForNyxIdNative("user-1");
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetForCallerAsync("email-approval", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(null));
+
+        UserAgentCatalogUpsertCommand? captured = null;
+        var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        commandPort.UpsertAsync(Arg.Do<UserAgentCatalogUpsertCommand>(command => captured = command), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        var resolver = Substitute.For<ICallerScopeResolver>();
+        resolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(caller));
+
+        var tool = new AgentDeliveryTargetTool(queryPort, commandPort, resolver, new RecordingApiKeyIssuer());
+
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        });
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "create",
+                  "delivery_target_id": "email-approval",
+                  "platform": "email",
+                  "conversation_id": "approvals@example.com",
+                  "nyx_provider_slug": "api-email-outbound"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+            doc.RootElement.GetProperty("platform").GetString().Should().Be("email");
+
+            captured.Should().NotBeNull();
+            captured!.TargetPlatform.Should().Be("email");
+            captured.ConversationId.Should().Be("approvals@example.com");
+            captured.NyxProviderSlug.Should().Be("api-email-outbound");
+            captured.LarkReceiveId.Should().BeEmpty();
+            captured.LarkReceiveIdType.Should().BeEmpty();
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_Create_Rejects_Global_DeliveryTargetId_Collision_BeforeMintingCredential()
+    {
+        var caller = OwnerScope.ForNyxIdNative("user-2");
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.ExistsActiveAsync("approvals", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(true));
+
+        var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        var issuer = new RecordingApiKeyIssuer();
+        var resolver = Substitute.For<ICallerScopeResolver>();
+        resolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(caller));
+
+        var tool = new AgentDeliveryTargetTool(queryPort, commandPort, resolver, issuer);
+
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        });
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "create",
+                  "delivery_target_id": "approvals",
+                  "platform": "email",
+                  "conversation_id": "approvals@example.com",
+                  "nyx_provider_slug": "api-email-outbound"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("error").GetString().Should().Be("delivery_target_already_exists");
+            doc.RootElement.GetProperty("delivery_target_id").GetString().Should().Be("approvals");
+            issuer.Issues.Should().BeEmpty();
+            await commandPort.DidNotReceive().UpsertAsync(Arg.Any<UserAgentCatalogUpsertCommand>(), Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_Create_DoesNotRequireScheduledRunnerPort()
+    {
+        var caller = OwnerScope.ForNyxIdNative("user-1");
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetForCallerAsync("aelf-twitter-approval", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(null));
+
+        var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        commandPort.UpsertAsync(Arg.Any<UserAgentCatalogUpsertCommand>(), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        var resolver = Substitute.For<ICallerScopeResolver>();
+        resolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(caller));
+
+        var tool = new AgentDeliveryTargetTool(
+            queryPort,
+            commandPort,
+            resolver,
+            new RecordingApiKeyIssuer());
+
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        });
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "create",
+                  "delivery_target_id": "aelf-twitter-approval",
+                  "platform": "lark",
+                  "conversation_id": "oc_chat_1",
+                  "nyx_provider_slug": "api-lark-bot"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+            await commandPort.Received(1).UpsertAsync(Arg.Any<UserAgentCatalogUpsertCommand>(), Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_Create_RollsBackCredential_WhenCatalogDispatchFails()
+    {
+        var caller = OwnerScope.ForNyxIdNative("user-1");
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetForCallerAsync("aelf-twitter-approval", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(null));
+
+        var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        commandPort.UpsertAsync(Arg.Any<UserAgentCatalogUpsertCommand>(), Arg.Any<CancellationToken>())
+            .Returns<Task>(_ => throw new InvalidOperationException("dispatch failed"));
+
+        var issuer = new RecordingApiKeyIssuer();
+        var resolver = Substitute.For<ICallerScopeResolver>();
+        resolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(caller));
+
+        var tool = new AgentDeliveryTargetTool(queryPort, commandPort, resolver, issuer);
+
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        });
+        try
+        {
+            var act = () => tool.ExecuteAsync("""
+                {
+                  "action": "create",
+                  "delivery_target_id": "aelf-twitter-approval",
+                  "platform": "lark",
+                  "conversation_id": "oc_chat_1",
+                  "nyx_provider_slug": "api-lark-bot"
+                }
+                """);
+
+            await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("dispatch failed");
+            issuer.RevokedApiKeyIds.Should().ContainSingle().Which.Should().Be("key-aelf-twitter-approval");
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_List_Shows_Created_DeliveryTarget_FromProjection()
+    {
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.QueryByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogReadModelEntry>>(
+                [
+                new UserAgentCatalogReadModelEntry
+                {
+                    AgentId = "aelf-twitter-approval",
+                    ConversationId = "oc_9f1b8d3835674963417954fad20f8a3c",
+                    NyxProviderSlug = "api-lark-bot-2",
+                    LarkReceiveId = "oc_9f1b8d3835674963417954fad20f8a3c",
+                    LarkReceiveIdType = "chat_id",
+                    TargetPlatform = "lark",
+                    OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
+                    AgentType = "delivery_target",
+                },
+            ]));
+
+        var resolver = Substitute.For<ICallerScopeResolver>();
+        resolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>());
+        services.AddSingleton(resolver);
+        var tool = CreateTool(services);
+
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        });
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"action":"list"}""");
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("total").GetInt32().Should().Be(1);
+            var target = doc.RootElement.GetProperty("delivery_targets")[0];
+            target.GetProperty("delivery_target_id").GetString().Should().Be("aelf-twitter-approval");
+            target.GetProperty("platform").GetString().Should().Be("lark");
+            target.GetProperty("conversation_id").GetString().Should().Be("oc_9f1b8d3835674963417954fad20f8a3c");
+            target.GetProperty("nyx_provider_slug").GetString().Should().Be("api-lark-bot-2");
+            result.Should().NotContain("secret");
+            result.Should().NotContain("nyx_api_key");
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_List_Uses_TargetPlatform_As_DeliveryPlatform()
+    {
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.QueryByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogReadModelEntry>>(
+                [
+                new UserAgentCatalogReadModelEntry
+                {
+                    AgentId = "email-approval",
+                    ConversationId = "approvals@example.com",
+                    NyxProviderSlug = "api-email-outbound",
+                    TargetPlatform = "email",
+                    OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
+                    AgentType = "delivery_target",
+                },
+            ]));
+
+        var resolver = Substitute.For<ICallerScopeResolver>();
+        resolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>());
+        services.AddSingleton(resolver);
+        var tool = CreateTool(services);
+
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        });
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"action":"list"}""");
+
+            using var doc = JsonDocument.Parse(result);
+            var target = doc.RootElement.GetProperty("delivery_targets")[0];
+            target.GetProperty("delivery_target_id").GetString().Should().Be("email-approval");
+            target.GetProperty("platform").GetString().Should().Be("email");
         }
         finally
         {
@@ -728,7 +1102,8 @@ public sealed class AgentDeliveryTargetToolTests
         return new AgentDeliveryTargetTool(
             provider.GetRequiredService<IUserAgentCatalogQueryPort>(),
             provider.GetService<IUserAgentCatalogCommandPort>() ?? Substitute.For<IUserAgentCatalogCommandPort>(),
-            provider.GetRequiredService<ICallerScopeResolver>());
+            provider.GetRequiredService<ICallerScopeResolver>(),
+            provider.GetService<IScheduledAgentApiKeyIssuer>());
     }
 
     private static IServiceCollection CreateDefaultServices()
@@ -757,4 +1132,35 @@ public sealed class AgentDeliveryTargetToolTests
         services.AddSingleton(resolver);
         return (CreateTool(services), queryPort, commandPort);
     }
+
+    private sealed class RecordingApiKeyIssuer : IScheduledAgentApiKeyIssuer
+    {
+        public List<IssueCall> Issues { get; } = [];
+        public List<string> RevokedApiKeyIds { get; } = [];
+
+        public Task<ScheduledAgentApiKeyIssueResult> IssueAsync(
+            string token,
+            ScheduledAgentServiceSlugs serviceSlugs,
+            string agentId,
+            string skillName,
+            string? scopeId,
+            CancellationToken ct)
+        {
+            Issues.Add(new IssueCall(token, serviceSlugs, agentId, skillName, scopeId));
+            return Task.FromResult(ScheduledAgentApiKeyIssueResult.Succeeded($"key-{agentId}", "secret-created-key"));
+        }
+
+        public Task TryRevokeAsync(string token, string apiKeyId, CancellationToken ct)
+        {
+            RevokedApiKeyIds.Add(apiKeyId);
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed record IssueCall(
+        string Token,
+        ScheduledAgentServiceSlugs ServiceSlugs,
+        string AgentId,
+        string SkillName,
+        string? ScopeId);
 }

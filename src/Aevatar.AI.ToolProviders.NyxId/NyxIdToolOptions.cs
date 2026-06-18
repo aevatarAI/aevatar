@@ -3,6 +3,9 @@ namespace Aevatar.AI.ToolProviders.NyxId;
 /// <summary>NyxID tool provider configuration.</summary>
 public sealed class NyxIdToolOptions
 {
+    public const long DefaultProxyFileArtifactMaxBytes = 25L * 1024 * 1024;
+    public const long HardProxyFileArtifactMaxBytes = 100L * 1024 * 1024;
+
     /// <summary>NyxID API base URL (e.g. https://nyx-api.chrono-ai.fun).</summary>
     public string? BaseUrl { get; set; }
 
@@ -23,4 +26,14 @@ public sealed class NyxIdToolOptions
     /// identity policy already define the trust boundary.
     /// </summary>
     public bool BypassSshExecApproval { get; set; }
+
+    /// <summary>
+    /// Maximum bytes accepted by nyxid_proxy response_mode=file_artifact.
+    /// </summary>
+    public long ProxyFileArtifactMaxBytes { get; set; } = DefaultProxyFileArtifactMaxBytes;
+
+    public long EffectiveProxyFileArtifactMaxBytes =>
+        ProxyFileArtifactMaxBytes <= 0
+            ? DefaultProxyFileArtifactMaxBytes
+            : Math.Min(ProxyFileArtifactMaxBytes, HardProxyFileArtifactMaxBytes);
 }

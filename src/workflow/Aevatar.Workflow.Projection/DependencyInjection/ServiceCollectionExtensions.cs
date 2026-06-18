@@ -39,6 +39,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowRunInsightReportDocument>, WorkflowRunInsightReportDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowActorBindingDocument>, WorkflowActorBindingDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowCatalogCurrentStateDocument>, WorkflowCatalogCurrentStateDocumentMetadataProvider>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowExternalApprovalContinuationDocument>, WorkflowExternalApprovalContinuationDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
         services.TryAddSingleton<WorkflowExecutionReadModelMapper>();
         services.TryAddSingleton<WorkflowCatalogReadModelMapper>();
@@ -82,6 +83,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<WorkflowExecutionArtifactQueryPort>();
         services.TryAddSingleton<WorkflowRunForkSeedReadModelMapper>();
         services.TryAddSingleton<WorkflowRunForkSeedQueryPort>();
+        services.TryAddSingleton<WorkflowExternalApprovalContinuationLookupPort>();
         services.TryAddSingleton<WorkflowExecutionProjectionPort>();
         services.TryAddSingleton<ProjectionActivationPlanDispatcher>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
@@ -101,6 +103,8 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<WorkflowExecutionCurrentStateQueryPort>());
         services.TryAddSingleton<IWorkflowRunForkSeedQueryPort>(sp =>
             sp.GetRequiredService<WorkflowRunForkSeedQueryPort>());
+        services.TryAddSingleton<IWorkflowExternalApprovalContinuationLookupPort>(sp =>
+            sp.GetRequiredService<WorkflowExternalApprovalContinuationLookupPort>());
         services.TryAddSingleton<IWorkflowExecutionArtifactQueryPort>(sp =>
             sp.GetRequiredService<WorkflowExecutionArtifactQueryPort>());
         services.TryAddSingleton<IWorkflowChatRunObservationScopeLeasePreparationPort, WorkflowChatRunObservationScopeLeasePreparationPort>();
@@ -114,6 +118,9 @@ public static class ServiceCollectionExtensions
         services.AddCurrentStateProjectionMaterializer<
             WorkflowExecutionMaterializationContext,
             WorkflowExecutionCurrentStateProjector>();
+        services.AddProjectionArtifactMaterializer<
+            WorkflowExecutionMaterializationContext,
+            WorkflowExternalApprovalContinuationProjector>();
         services.AddProjectionArtifactMaterializer<
             WorkflowExecutionMaterializationContext,
             WorkflowRunInsightReportArtifactProjector>();
