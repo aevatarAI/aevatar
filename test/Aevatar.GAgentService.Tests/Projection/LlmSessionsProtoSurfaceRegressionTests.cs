@@ -40,6 +40,7 @@ public sealed class LlmSessionsProtoSurfaceRegressionTests
         var descriptor = LlmSessionsReflection.Descriptor;
 
         TopLevelMessageNames(descriptor).Should().Contain("LlmRunStartedEvent");
+        TopLevelMessageNames(descriptor).Should().Contain("LlmRunExecutionReadyEvent");
         TopLevelMessageNames(descriptor).Should().NotContain("LlmRunRecordAppliedEvent");
         TopLevelMessageNames(descriptor).Should().Contain(
             [

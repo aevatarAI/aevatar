@@ -239,6 +239,12 @@ message LlmRunStartedEvent {
   google.protobuf.Timestamp started_at = 4;
 }
 
+message LlmRunExecutionReadyEvent {
+  string response_id = 1;
+  string run_id = 2;
+  google.protobuf.Timestamp ready_at = 3;
+}
+
 message RecordLlmRunStarted {
   LlmRunRequested command = 1;
   google.protobuf.Timestamp started_at = 2;

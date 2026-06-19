@@ -523,6 +523,52 @@ public sealed class ResponsesCommandFacadeTests
     }
 
     [Fact]
+    public async Task StreamAsync_WhenOffActorFlagIsOn_ShouldUseExecutorStartAdmissionWithoutLegacyRunDispatch()
+    {
+        var sessions = new RecordingSessionPort();
+        var dispatch = new RecordingActorDispatchPort();
+        var executor = new BlockingLlmRunExecutor();
+        var observer = StaticLlmSessionRunObservationService.Completed("Hello");
+        var facade = CreateFacade(
+            sessionPort: sessions,
+            dispatchPort: dispatch,
+            observationService: observer,
+            llmRunExecutor: executor,
+            ingressOptions: new ResponsesIngressOptions
+            {
+                DefaultModel = "model",
+                OffActorLlmRunExecutorEnabled = true,
+            });
+        var deltas = new List<string>();
+
+        var result = await facade.StreamAsync(
+            BuildStreamPlan(),
+            (delta, _) =>
+            {
+                deltas.Add(delta);
+                return ValueTask.CompletedTask;
+            });
+
+        result.Error.Should().BeNull();
+        result.Completion.Should().NotBeNull();
+        result.Completion!.OutputText.Should().Be("Hello");
+        deltas.Should().Equal("Hello");
+        dispatch.Calls.Should().BeEmpty();
+        observer.LastAdmission.Should().Be(executor.StartAdmissions.Should().ContainSingle().Subject);
+        observer.LastAdmission!.CommandId.Should().Be("start-resp_stream");
+        var request = executor.StartedRequests.Should().ContainSingle().Subject;
+        request.SessionActorId.Should().Be("actor-resp_stream");
+        request.ResponseId.Should().Be("resp_stream");
+        request.RunId.Should().Be("resp_stream:llm-run");
+        request.Command.ResponseId.Should().Be("resp_stream");
+        request.Command.Model.Should().Be("model");
+        observer.LastRequest.Should().NotBeNull();
+        observer.LastRequest!.ResponseId.Should().Be("resp_stream");
+        observer.LastRequest.RunId.Should().Be("resp_stream:llm-run");
+        executor.ExecuteStarted.Task.IsCompleted.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task StreamAsync_ShouldReturnAuthenticationError_AndMarkSessionFailed()
     {
         var sessions = new RecordingSessionPort();
@@ -1165,6 +1211,8 @@ public sealed class ResponsesCommandFacadeTests
     {
         public LlmSessionRunObservationRequest? LastRequest { get; private set; }
 
+        public DispatchAdmission? LastAdmission { get; private set; }
+
         public static StaticLlmSessionRunObservationService Completed(string outputText) =>
             new(
                 new LlmSessionRunObservedResult(
@@ -1190,6 +1238,7 @@ public sealed class ResponsesCommandFacadeTests
         {
             LastRequest = request;
             var admission = await request.DispatchAsync(ct);
+            LastAdmission = admission;
             foreach (var delta in deltas ?? [])
             {
                 if (onDelta != null)

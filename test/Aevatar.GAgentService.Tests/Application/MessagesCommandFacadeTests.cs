@@ -248,6 +248,52 @@ public sealed class MessagesCommandFacadeTests
         observer.LastRequest.RunId.Should().Be("msg_stream:llm-run");
     }
 
+    [Fact]
+    public async Task StreamAsync_WhenOffActorFlagIsOn_ShouldUseExecutorStartAdmissionWithoutLegacyRunDispatch()
+    {
+        var sessions = new RecordingSessionPort();
+        var dispatch = new RecordingActorDispatchPort();
+        var executor = new BlockingLlmRunExecutor();
+        var observer = StaticLlmSessionRunObservationService.Completed("Hello");
+        var facade = CreateFacade(
+            sessionPort: sessions,
+            dispatchPort: dispatch,
+            observationService: observer,
+            llmRunExecutor: executor,
+            ingressOptions: new ResponsesIngressOptions
+            {
+                DefaultModel = "claude-sonnet",
+                OffActorLlmRunExecutorEnabled = true,
+            });
+        var deltas = new List<string>();
+
+        var result = await facade.StreamAsync(
+            BuildStreamPlan(),
+            (delta, _) =>
+            {
+                deltas.Add(delta);
+                return ValueTask.CompletedTask;
+            });
+
+        result.Error.Should().BeNull();
+        result.Completion.Should().NotBeNull();
+        result.Completion!.OutputText.Should().Be("Hello");
+        deltas.Should().Equal("Hello");
+        dispatch.Calls.Should().BeEmpty();
+        observer.LastAdmission.Should().Be(executor.StartAdmissions.Should().ContainSingle().Subject);
+        observer.LastAdmission!.CommandId.Should().Be("start-msg_stream");
+        var request = executor.StartedRequests.Should().ContainSingle().Subject;
+        request.SessionActorId.Should().Be("actor-msg_stream");
+        request.ResponseId.Should().Be("msg_stream");
+        request.RunId.Should().Be("msg_stream:llm-run");
+        request.Command.ResponseId.Should().Be("msg_stream");
+        request.Command.Model.Should().Be("claude-sonnet");
+        observer.LastRequest.Should().NotBeNull();
+        observer.LastRequest!.ResponseId.Should().Be("msg_stream");
+        observer.LastRequest.RunId.Should().Be("msg_stream:llm-run");
+        executor.ExecuteStarted.Task.IsCompleted.Should().BeFalse();
+    }
+
     [Theory]
     [InlineData(LlmSessionRunObservedTerminalKind.Failed, 500, "llm_run_failed", "provider crashed", LlmSessionStatus.Failed)]
     [InlineData(LlmSessionRunObservedTerminalKind.Cancelled, 409, "run_cancelled", "LLM run was cancelled.", LlmSessionStatus.Cancelled)]
@@ -509,6 +555,8 @@ public sealed class MessagesCommandFacadeTests
     {
         public LlmSessionRunObservationRequest? LastRequest { get; private set; }
 
+        public DispatchAdmission? LastAdmission { get; private set; }
+
         public static StaticLlmSessionRunObservationService Completed(string outputText) =>
             new(
                 new LlmSessionRunObservedResult(
@@ -534,6 +582,7 @@ public sealed class MessagesCommandFacadeTests
         {
             LastRequest = request;
             var admission = await request.DispatchAsync(ct);
+            LastAdmission = admission;
             foreach (var delta in deltas ?? [])
             {
                 if (onDelta != null)

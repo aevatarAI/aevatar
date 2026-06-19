@@ -84,6 +84,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ILlmSessionRunObservationService, LlmSessionRunObservationService>();
         services.TryAddSingleton<ILlmRunCore, LlmRunCore>();
         services.TryAddSingleton<ILlmRunExecutor, LlmRunExecutor>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<ICommittedStatePublicationHook, LlmRunExecutionReadyHook>());
         services.TryAddSingleton<IResponsesToolClassificationService, ResponsesToolClassificationService>();
         services.AddToolSetRegistry();
         services.TryAddSingleton<IResponsesDirectToolPlanService, ResponsesDirectToolPlanService>();

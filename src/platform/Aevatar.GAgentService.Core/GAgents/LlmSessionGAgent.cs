@@ -7,7 +7,6 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgentService.Core.GAgents;
@@ -287,17 +286,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             runId = $"{existing.ResponseId}:run";
 
         var startedAt = command.RequestedAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
-        if (!await TryCommitRunStartedAsync(existing, runId, startedAt, command.TimeoutAfter))
-            return;
-
-        var executor = Services.GetRequiredService<ILlmRunExecutor>();
-        var executorRequest = new LlmRunExecutorRequest(
-            Id,
-            existing.ResponseId,
-            runId,
-            command.Clone(),
-            existing.OriginKind.ToString());
-        _ = executor.ExecuteAsync(executorRequest, CancellationToken.None);
+        await TryCommitRunStartedAsync(existing, runId, startedAt, command.TimeoutAfter);
     }
 
     [EventHandler]
@@ -316,17 +305,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             runId = $"{existing.ResponseId}:run";
 
         var startedAt = command.StartedAt ?? runCommand.RequestedAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
-        if (!await TryCommitRunStartedAsync(existing, runId, startedAt, runCommand.TimeoutAfter))
-            return;
-
-        var executor = Services.GetRequiredService<ILlmRunExecutor>();
-        var executorRequest = new LlmRunExecutorRequest(
-            Id,
-            existing.ResponseId,
-            runId,
-            runCommand.Clone(),
-            existing.OriginKind.ToString());
-        _ = executor.ExecuteAsync(executorRequest, CancellationToken.None);
+        await TryCommitRunStartedAsync(existing, runId, startedAt, runCommand.TimeoutAfter);
     }
 
     [EventHandler]
@@ -379,7 +358,16 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             Sequence = 1,
             StartedAt = startedAt,
         });
-        return await TryScheduleRunTimeoutAsync(existing.ResponseId, runId, startedAt, ResolveRunTimeout(timeoutAfter, existing));
+        if (!await TryScheduleRunTimeoutAsync(existing.ResponseId, runId, startedAt, ResolveRunTimeout(timeoutAfter, existing)))
+            return false;
+
+        await PersistDomainEventAsync(new LlmRunExecutionReadyEvent
+        {
+            ResponseId = existing.ResponseId,
+            RunId = runId,
+            ReadyAt = Timestamp.FromDateTime(DateTime.UtcNow),
+        });
+        return true;
     }
 
     [EventHandler]
@@ -534,6 +522,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             .On<LlmSessionForwardedToolResultReceivedEvent>(ApplyForwardedToolResultReceived)
             .On<LlmSessionForwardedToolCallResolvedEvent>(ApplyForwardedToolCallResolved)
             .On<LlmRunStartedEvent>(ApplyRunStarted)
+            .On<LlmRunExecutionReadyEvent>(static (state, _) => state)
             .On<LlmStreamChunkObserved>(ApplyStreamChunkObserved)
             .On<LlmToolCallObserved>(ApplyToolCallObserved)
             .On<LlmRunCompleted>(ApplyRunCompleted)

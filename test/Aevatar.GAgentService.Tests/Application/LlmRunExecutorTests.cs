@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Application.Responses;
@@ -58,6 +59,59 @@ public sealed class LlmRunExecutorTests
         completed.RecordId.Should().Be("run_1:completed:2");
         completed.OutputText.Should().Be("done");
         AssertDirectEnvelope(dispatch.Calls[2], completed.RecordId, RecordLlmRunCompleted.Descriptor.FullName);
+    }
+
+    [Fact]
+    public async Task RunExecutionReadyHook_ShouldExecuteRunOnlyAfterCommittedReadyEvent()
+    {
+        var executor = new RecordingLlmRunExecutor();
+        var hook = new LlmRunExecutionReadyHook(executor, NullLogger<LlmRunExecutionReadyHook>.Instance);
+        var sourceCommand = BuildRunRequest("resp_hook");
+        sourceCommand.RunId = "stale-run";
+        var context = new CommittedStatePublicationContext
+        {
+            ActorId = "session-actor-hook",
+            ActorType = typeof(object),
+            Published = new CommittedStateEventPublished
+            {
+                StateEvent = new StateEvent
+                {
+                    EventData = Any.Pack(new LlmRunExecutionReadyEvent
+                    {
+                        ResponseId = "resp_hook",
+                        RunId = "run_hook",
+                        ReadyAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                    }),
+                },
+                StateRoot = Any.Pack(new LlmSessionState
+                {
+                    Record = new LlmSessionRecord
+                    {
+                        ResponseId = "resp_hook",
+                        OriginKind = LlmSessionOriginKind.ApiKey,
+                    },
+                }),
+            },
+            SourceEnvelope = new EventEnvelope
+            {
+                Payload = Any.Pack(new RecordLlmRunStarted
+                {
+                    Command = sourceCommand,
+                }),
+            },
+        };
+
+        await hook.BeforePublishAsync(context, CancellationToken.None);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await executor.WaitForExecuteAsync(cts.Token);
+        var request = executor.ExecuteRequests.Should().ContainSingle().Subject;
+        request.SessionActorId.Should().Be("session-actor-hook");
+        request.ResponseId.Should().Be("resp_hook");
+        request.RunId.Should().Be("run_hook");
+        request.Command.ResponseId.Should().Be("resp_hook");
+        request.Command.RunId.Should().Be("run_hook");
+        request.OriginPlatform.Should().Be(LlmSessionOriginKind.ApiKey.ToString());
     }
 
     [Fact]
@@ -539,6 +593,38 @@ public sealed class LlmRunExecutorTests
                     _attemptWaiters.Remove(waiter);
                 }
             }
+        }
+    }
+
+    private sealed class RecordingLlmRunExecutor : ILlmRunExecutor
+    {
+        private readonly TaskCompletionSource _executeStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public List<LlmRunExecutorRequest> ExecuteRequests { get; } = [];
+
+        public Task<DispatchAdmission> StartAsync(
+            LlmRunExecutorRequest request,
+            CancellationToken ct = default)
+        {
+            _ = request;
+            _ = ct;
+            throw new NotSupportedException();
+        }
+
+        public Task ExecuteAsync(
+            LlmRunExecutorRequest request,
+            CancellationToken ct = default)
+        {
+            ExecuteRequests.Add(request);
+            _executeStarted.SetResult();
+            return Task.CompletedTask;
+        }
+
+        public async Task WaitForExecuteAsync(CancellationToken ct)
+        {
+            using var registration = ct.Register(static state => ((TaskCompletionSource)state!).TrySetCanceled(), _executeStarted);
+            await _executeStarted.Task.ConfigureAwait(false);
         }
     }
 }
