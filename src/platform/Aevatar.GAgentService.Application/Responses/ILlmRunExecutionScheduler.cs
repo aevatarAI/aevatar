@@ -1,12 +1,10 @@
-using Aevatar.Foundation.Abstractions;
-using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Responses;
 
 namespace Aevatar.GAgentService.Application.Responses;
 
-public interface ILlmRunExecutor
+public interface ILlmRunExecutionScheduler
 {
-    Task<DispatchAdmission> StartAsync(
+    ValueTask ScheduleAsync(
         LlmRunExecutorRequest request,
         CancellationToken ct = default);
 }

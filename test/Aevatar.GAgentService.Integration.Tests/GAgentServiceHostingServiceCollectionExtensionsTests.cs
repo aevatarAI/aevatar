@@ -82,6 +82,14 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         services.Should().Contain(x =>
             x.ServiceType == typeof(ICommittedStatePublicationHook) &&
             x.ImplementationType == typeof(ScriptingServiceRevisionRepublishHook));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommittedStatePublicationHook) &&
+            x.ImplementationType != null &&
+            x.ImplementationType.FullName == "Aevatar.GAgentService.Application.Responses.LlmRunExecutionReadyHook");
+        services.Should().Contain(x =>
+            x.ServiceType.FullName == "Aevatar.GAgentService.Abstractions.Responses.ILlmRunExecutionTargetProvisioner" &&
+            x.ImplementationType != null &&
+            x.ImplementationType.FullName == "Aevatar.GAgentService.Infrastructure.Activation.LlmRunExecutionTargetProvisioner");
 
         using var provider = services.BuildServiceProvider();
         provider.GetRequiredService<IScopeBindingReadinessQueryPort>().Should().NotBeNull();

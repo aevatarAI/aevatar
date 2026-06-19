@@ -799,7 +799,7 @@ public sealed class LlmSessionGAgentTests
     }
 
     [Fact]
-    public async Task HandleRecordRunStartedAsync_ShouldPersistStartWithoutExecutingOffActorRun()
+    public async Task HandleRecordRunStartedAsync_ShouldPersistReadyExecutionRequest_AndExecuteFromCommittedFact()
     {
         var eventStore = new InMemoryEventStore();
         var observations = new List<string>();
@@ -825,17 +825,29 @@ public sealed class LlmSessionGAgentTests
 
         var runEvents = (await eventStore.GetEventsAsync(actor.Id))
             .Select(static evt => evt.EventData)
-            .Where(static payload => payload.Is(LlmRunStartedEvent.Descriptor))
+            .Where(static payload =>
+                payload.Is(LlmRunStartedEvent.Descriptor) ||
+                payload.Is(LlmRunExecutionReadyEvent.Descriptor))
             .ToArray();
-        runEvents.Should().ContainSingle();
+        runEvents.Should().HaveCount(2);
         var started = runEvents[0].Unpack<LlmRunStartedEvent>();
         started.ResponseId.Should().Be("resp_off_actor_started");
         started.RunId.Should().Be("run_1");
         started.StartedAt.Should().Be(requestedAt);
+        var ready = runEvents[1].Unpack<LlmRunExecutionReadyEvent>();
+        ready.ResponseId.Should().Be("resp_off_actor_started");
+        ready.RunId.Should().Be("run_1");
+        ready.ExecutionRequest.Should().NotBeNull();
+        ready.ExecutionRequest.ResponseId.Should().Be("resp_off_actor_started");
+        ready.ExecutionRequest.RunId.Should().Be("run_1");
+        ready.ExecutionRequest.Messages.Should().BeEquivalentTo(request.Messages);
+        ready.ExecutionRequest.BearerToken.Should().Be(request.BearerToken);
+        ready.ExecutionRequest.ToolContext.Should().BeEquivalentTo(request.ToolContext);
         actor.State.ActiveRun.Should().NotBeNull();
         actor.State.ActiveRun!.StartedAt.Should().Be(requestedAt);
-        executor.ExecuteRequests.Should().BeEmpty();
-        observations.Should().BeEmpty();
+        executor.ExecuteRequests.Should().ContainSingle()
+            .Which.RunId.Should().Be("run_1");
+        observations.Should().ContainSingle("executor:execute");
     }
 
     [Fact]
@@ -2145,7 +2157,7 @@ public sealed class LlmSessionGAgentTests
             Task.FromException<string>(exception);
     }
 
-    private sealed class NoOpLlmRunExecutor : ILlmRunExecutor
+    private sealed class NoOpLlmRunExecutor : ILlmRunExecutor, ILlmRunExecutionService
     {
         public Task<DispatchAdmission> StartAsync(
             LlmRunExecutorRequest request,
@@ -2174,7 +2186,7 @@ public sealed class LlmSessionGAgentTests
         }
     }
 
-    private sealed class RecordingLlmRunExecutor(List<string>? observations = null) : ILlmRunExecutor
+    private sealed class RecordingLlmRunExecutor(List<string>? observations = null) : ILlmRunExecutor, ILlmRunExecutionService
     {
         public List<LlmRunExecutorRequest> StartRequests { get; } = [];
 

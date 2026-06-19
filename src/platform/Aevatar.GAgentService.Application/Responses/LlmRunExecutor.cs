@@ -10,7 +10,7 @@ namespace Aevatar.GAgentService.Application.Responses;
 public sealed class LlmRunExecutor(
     ILlmRunCore runCore,
     IActorDispatchPort dispatchPort,
-    ILogger<LlmRunExecutor> logger) : ILlmRunExecutor
+    ILogger<LlmRunExecutor> logger) : ILlmRunExecutor, ILlmRunExecutionService
 {
     private const string PublisherId = "gagent-service.llm-run-executor";
 

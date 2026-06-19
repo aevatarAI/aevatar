@@ -15,6 +15,7 @@ using Aevatar.GAgentService.Application.Responses;
 using Aevatar.GAgentService.Core.GAgents;
 using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -147,14 +148,18 @@ internal static class GAgentServiceTestKit
             .AddSingleton<ILlmRunCore, LlmRunCore>()
             .AddSingleton<ILogger<LlmRunCore>>(NullLogger<LlmRunCore>.Instance)
             .AddSingleton<IEnumerable<IGAgentExecutionHook>>(Array.Empty<IGAgentExecutionHook>());
+        configureServices?.Invoke(services);
         if (agent is LlmSessionGAgent llmSession)
         {
-            services.AddSingleton<ILlmRunExecutor>(sp => new InlineLlmRunExecutor(
+            services.TryAddSingleton<InlineLlmRunExecutor>(sp => new InlineLlmRunExecutor(
                 sp.GetRequiredService<ILlmRunCore>(),
                 llmSession));
+            services.TryAddSingleton<ILlmRunExecutor>(sp => sp.GetRequiredService<InlineLlmRunExecutor>());
+            services.TryAddSingleton<ILlmRunExecutionService>(sp =>
+                sp.GetService<ILlmRunExecutor>() as ILlmRunExecutionService ??
+                sp.GetRequiredService<InlineLlmRunExecutor>());
             services.AddSingleton<ICommittedStatePublicationHook>(sp => new InlineLlmRunExecutionReadyHook(sp));
         }
-        configureServices?.Invoke(services);
         agent.Services = services.BuildServiceProvider();
         return agent;
     }
@@ -177,7 +182,7 @@ internal static class GAgentServiceTestKit
 
     private sealed class InlineLlmRunExecutor(
         ILlmRunCore runCore,
-        LlmSessionGAgent actor) : ILlmRunExecutor
+        LlmSessionGAgent actor) : ILlmRunExecutor, ILlmRunExecutionService
     {
         public Task<DispatchAdmission> StartAsync(
             LlmRunExecutorRequest request,
@@ -214,8 +219,7 @@ internal static class GAgentServiceTestKit
                 return Task.CompletedTask;
             }
 
-            var executor = serviceProvider.GetRequiredService<ILlmRunExecutor>();
-            return executor.ExecuteAsync(request, ct);
+            return serviceProvider.GetRequiredService<ILlmRunExecutionService>().ExecuteAsync(request, ct);
         }
 
         private static bool TryBuildRequest(
@@ -227,12 +231,12 @@ internal static class GAgentServiceTestKit
             if (string.IsNullOrWhiteSpace(ready.ResponseId) || string.IsNullOrWhiteSpace(ready.RunId))
                 return false;
 
-            if (!TryUnpackCommand(context.SourceEnvelope?.Payload, out var command))
+            if (ready.ExecutionRequest == null)
                 return false;
 
             var responseId = ready.ResponseId.Trim();
             var runId = ready.RunId.Trim();
-            var executionCommand = command.Clone();
+            var executionCommand = ready.ExecutionRequest.Clone();
             executionCommand.ResponseId = responseId;
             executionCommand.RunId = runId;
 
@@ -243,31 +247,6 @@ internal static class GAgentServiceTestKit
                 executionCommand,
                 ResolveOriginPlatform(context.Published.StateRoot));
             return true;
-        }
-
-        private static bool TryUnpackCommand(Google.Protobuf.WellKnownTypes.Any? sourcePayload, out LlmRunRequested command)
-        {
-            command = default!;
-            if (sourcePayload == null)
-                return false;
-
-            if (sourcePayload.Is(RecordLlmRunStarted.Descriptor))
-            {
-                var startedCommand = sourcePayload.Unpack<RecordLlmRunStarted>();
-                if (startedCommand.Command == null)
-                    return false;
-
-                command = startedCommand.Command;
-                return true;
-            }
-
-            if (sourcePayload.Is(LlmRunRequested.Descriptor))
-            {
-                command = sourcePayload.Unpack<LlmRunRequested>();
-                return true;
-            }
-
-            return false;
         }
 
         private static string? ResolveOriginPlatform(Google.Protobuf.WellKnownTypes.Any? stateRoot)

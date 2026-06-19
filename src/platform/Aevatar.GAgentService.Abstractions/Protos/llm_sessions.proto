@@ -243,11 +243,20 @@ message LlmRunExecutionReadyEvent {
   string response_id = 1;
   string run_id = 2;
   google.protobuf.Timestamp ready_at = 3;
+  LlmRunRequested execution_request = 4;
 }
 
 message RecordLlmRunStarted {
   LlmRunRequested command = 1;
   google.protobuf.Timestamp started_at = 2;
+}
+
+message ExecuteLlmRunRequested {
+  string session_actor_id = 1;
+  string response_id = 2;
+  string run_id = 3;
+  LlmRunRequested command = 4;
+  string origin_platform = 5;
 }
 
 message RecordLlmStreamChunkObserved {

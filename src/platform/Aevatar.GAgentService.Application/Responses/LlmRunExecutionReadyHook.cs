@@ -1,17 +1,16 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Responses;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
-using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgentService.Application.Responses;
 
 public sealed class LlmRunExecutionReadyHook(
-    ILlmRunExecutor executor,
-    ILogger<LlmRunExecutionReadyHook> logger) : ICommittedStatePublicationHook
+    ILlmRunExecutionScheduler scheduler) : ICommittedStatePublicationHook
 {
-    public Task BeforePublishAsync(CommittedStatePublicationContext context, CancellationToken ct)
+    public async Task BeforePublishAsync(CommittedStatePublicationContext context, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(context);
         ct.ThrowIfCancellationRequested();
@@ -19,30 +18,15 @@ public sealed class LlmRunExecutionReadyHook(
         if (context.Published.StateRoot?.Is(LlmSessionState.Descriptor) != true ||
             context.Published.StateEvent?.EventData?.Is(LlmRunExecutionReadyEvent.Descriptor) != true)
         {
-            return Task.CompletedTask;
+            return;
         }
 
         if (!TryBuildRequest(context, out var request))
-            return Task.CompletedTask;
-
-        _ = Task.Run(() => ExecuteAndLogAsync(request), CancellationToken.None);
-        return Task.CompletedTask;
-    }
-
-    private async Task ExecuteAndLogAsync(LlmRunExecutorRequest request)
-    {
-        try
         {
-            await executor.ExecuteAsync(request, CancellationToken.None).ConfigureAwait(false);
+            return;
         }
-        catch (Exception ex)
-        {
-            logger.LogError(
-                ex,
-                "Failed to start off-turn LLM execution for session actor {SessionActorId} run {RunId}.",
-                request.SessionActorId,
-                request.RunId);
-        }
+
+        await scheduler.ScheduleAsync(request, ct).ConfigureAwait(false);
     }
 
     private static bool TryBuildRequest(
@@ -54,12 +38,12 @@ public sealed class LlmRunExecutionReadyHook(
         if (string.IsNullOrWhiteSpace(ready.ResponseId) || string.IsNullOrWhiteSpace(ready.RunId))
             return false;
 
-        if (!TryUnpackCommand(context.SourceEnvelope?.Payload, out var command))
+        if (ready.ExecutionRequest == null)
             return false;
 
         var responseId = ready.ResponseId.Trim();
         var runId = ready.RunId.Trim();
-        var executionCommand = command.Clone();
+        var executionCommand = ready.ExecutionRequest.Clone();
         executionCommand.ResponseId = responseId;
         executionCommand.RunId = runId;
 
@@ -70,31 +54,6 @@ public sealed class LlmRunExecutionReadyHook(
             executionCommand,
             ResolveOriginPlatform(context.Published.StateRoot));
         return true;
-    }
-
-    private static bool TryUnpackCommand(Any? sourcePayload, out LlmRunRequested command)
-    {
-        command = default!;
-        if (sourcePayload == null)
-            return false;
-
-        if (sourcePayload.Is(RecordLlmRunStarted.Descriptor))
-        {
-            var startedCommand = sourcePayload.Unpack<RecordLlmRunStarted>();
-            if (startedCommand.Command == null)
-                return false;
-
-            command = startedCommand.Command;
-            return true;
-        }
-
-        if (sourcePayload.Is(LlmRunRequested.Descriptor))
-        {
-            command = sourcePayload.Unpack<LlmRunRequested>();
-            return true;
-        }
-
-        return false;
     }
 
     private static string? ResolveOriginPlatform(Any? stateRoot)

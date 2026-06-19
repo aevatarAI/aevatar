@@ -285,8 +285,11 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         if (string.IsNullOrWhiteSpace(runId))
             runId = $"{existing.ResponseId}:run";
 
-        var startedAt = command.RequestedAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
-        await TryCommitRunStartedAsync(existing, runId, startedAt, command.TimeoutAfter);
+        var runCommand = command.Clone();
+        runCommand.ResponseId = existing.ResponseId;
+        runCommand.RunId = runId;
+        var startedAt = runCommand.RequestedAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
+        await TryCommitRunStartedAsync(existing, runId, runCommand, startedAt);
     }
 
     [EventHandler]
@@ -304,8 +307,11 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         if (string.IsNullOrWhiteSpace(runId))
             runId = $"{existing.ResponseId}:run";
 
-        var startedAt = command.StartedAt ?? runCommand.RequestedAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
-        await TryCommitRunStartedAsync(existing, runId, startedAt, runCommand.TimeoutAfter);
+        var executionRequest = runCommand.Clone();
+        executionRequest.ResponseId = existing.ResponseId;
+        executionRequest.RunId = runId;
+        var startedAt = command.StartedAt ?? executionRequest.RequestedAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
+        await TryCommitRunStartedAsync(existing, runId, executionRequest, startedAt);
     }
 
     [EventHandler]
@@ -332,8 +338,8 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
     private async Task<bool> TryCommitRunStartedAsync(
         LlmSessionRecord existing,
         string runId,
-        Timestamp startedAt,
-        Duration? timeoutAfter)
+        LlmRunRequested executionRequest,
+        Timestamp startedAt)
     {
         if (State.ActiveRun is { Status: RunningStatus } active &&
             !string.Equals(active.RunId, runId, StringComparison.Ordinal))
@@ -358,7 +364,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             Sequence = 1,
             StartedAt = startedAt,
         });
-        if (!await TryScheduleRunTimeoutAsync(existing.ResponseId, runId, startedAt, ResolveRunTimeout(timeoutAfter, existing)))
+        if (!await TryScheduleRunTimeoutAsync(existing.ResponseId, runId, startedAt, ResolveRunTimeout(executionRequest.TimeoutAfter, existing)))
             return false;
 
         await PersistDomainEventAsync(new LlmRunExecutionReadyEvent
@@ -366,6 +372,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             ResponseId = existing.ResponseId,
             RunId = runId,
             ReadyAt = Timestamp.FromDateTime(DateTime.UtcNow),
+            ExecutionRequest = executionRequest.Clone(),
         });
         return true;
     }
