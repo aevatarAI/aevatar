@@ -469,9 +469,40 @@ public sealed class LlmSessionGAgentTests
         actor.State.Record!.Status.Should().Be(LlmSessionStatus.Completed);
         actor.State.Completion.Should().NotBeNull();
         actor.State.Completion!.OutputText.Should().Be("done");
-        actor.State.Completion.ToolCalls.Should().ContainSingle()
-            .Which.CallId.Should().Be("call_done");
+        actor.State.Completion.ToolCalls.Should().BeEmpty();
         actor.State.LastAppliedEventVersion.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task HandleRecordCompletionAsync_ShouldKeepOnlyPreviouslyForwardedToolCalls()
+    {
+        var actor = CreateActor("resp_1");
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_1"),
+        });
+        await actor.HandleRecordForwardedToolCallAsync(new RecordForwardedToolCallRequested
+        {
+            ResponseId = "resp_1",
+            Call = BuildToolCall("call_done"),
+        });
+
+        var completion = BuildCompletion("done");
+        completion.ToolCalls.Add(new LlmSessionCompletedToolCall
+        {
+            CallId = "call_owned",
+            ToolName = "aevatar_invoke_team",
+            Result = ResponsesJsonValues.ParseBoundaryPayload("""{"team_id":"team-1"}"""),
+        });
+
+        await actor.HandleRecordCompletionAsync(new RecordResponseSessionCompletionRequested
+        {
+            ResponseId = "resp_1",
+            Completion = completion,
+        });
+
+        actor.State.Completion!.ToolCalls.Should().ContainSingle()
+            .Which.CallId.Should().Be("call_done");
     }
 
     [Fact]

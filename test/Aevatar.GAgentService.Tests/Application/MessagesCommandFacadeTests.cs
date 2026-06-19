@@ -239,7 +239,8 @@ public sealed class MessagesCommandFacadeTests
                     ],
                     [],
                     [],
-                    [])));
+                    [],
+                    ["get_weather"])));
 
         var result = await facade.CreateAsync(
             BuildRequest(
@@ -275,6 +276,7 @@ public sealed class MessagesCommandFacadeTests
         command.Messages.Should().ContainSingle().Which.ToolCalls.Should().ContainSingle()
             .Which.Arguments.Fields["city"].StringValue.Should().Be("Paris");
         command.ToolSelection.ToolChoiceHintArguments.Fields["actor_id"].StringValue.Should().Be("member-1");
+        command.ToolSelection.OwnedToolNames.Should().ContainSingle("get_weather");
         var declaration = command.ToolSelection.ForwardedTools.Should().ContainSingle().Subject;
         declaration.Parameters.Fields["type"].StringValue.Should().Be("object");
         declaration.Parameters.Fields["properties"].StructValue.Fields["city"].StructValue.Fields["type"]
@@ -356,7 +358,7 @@ public sealed class MessagesCommandFacadeTests
                 ToolContext = BuildToolContext("msg_stream"),
             },
             BuildToolContext("msg_stream"),
-            new ResponsesToolClassification([], [], [], []),
+            new ResponsesToolClassification([], [], [], [], []),
             ResponsesToolChoiceHintPlan.Empty);
 
     private static AgentToolExecutionContext BuildToolContext(string responseId) =>
@@ -434,7 +436,7 @@ public sealed class MessagesCommandFacadeTests
             ResponsesToolProviderContext context,
             IEnumerable<IResponsesToolProvider>? additionalProviders = null,
             CancellationToken ct = default) =>
-            ValueTask.FromResult(classification ?? new ResponsesToolClassification([], [], [], []));
+            ValueTask.FromResult(classification ?? new ResponsesToolClassification([], [], [], [], []));
     }
 
     private sealed class StaticResponsesDirectToolPlanService : IResponsesDirectToolPlanService
@@ -459,7 +461,7 @@ public sealed class MessagesCommandFacadeTests
                     null,
                     new LlmSessionCompletionSnapshot(outputText, [], DateTimeOffset.UtcNow, null, null),
                     null),
-                [new LlmSessionRunObservedDelta(outputText, null, null)]);
+                [new LlmSessionRunObservedDelta(outputText, null)]);
 
         public static StaticLlmSessionRunObservationService Error(
             LlmSessionRunObservedTerminalKind kind,

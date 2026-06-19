@@ -208,6 +208,7 @@ message LlmSessionRuntimeToolSelection {
   string tool_choice_hint_name = 4;
   string tool_choice_hint_arguments_json = 5;
   google.protobuf.Struct tool_choice_hint_arguments = 6;
+  repeated string owned_tool_names = 7;
 }
 
 message LlmRunRequested {

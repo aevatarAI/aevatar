@@ -71,7 +71,7 @@ public sealed class LlmSessionRunObservationServiceTests
     }
 
     [Fact]
-    public async Task ObserveAsync_ShouldEmitToolDelta()
+    public async Task ObserveAsync_ShouldSuppressLiveToolDeltas_AndKeepTerminalToolSnapshot()
     {
         var ports = new RecordingObservationPorts([
             ChunkEnvelope("resp-1", toolCallDelta: RuntimeTool("call-1", "get_weather", """{"city":"SG"}""")),
@@ -89,7 +89,7 @@ public sealed class LlmSessionRunObservationServiceTests
 
         result.Error.Should().BeNull();
         result.Completion!.ToolCalls.Should().ContainSingle().Which.CallId.Should().Be("call-1");
-        deltas.Count(delta => delta.ToolCallDelta?.Id == "call-1").Should().Be(2);
+        deltas.Should().BeEmpty();
     }
 
     [Fact]

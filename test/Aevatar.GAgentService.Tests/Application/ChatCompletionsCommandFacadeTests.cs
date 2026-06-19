@@ -435,7 +435,7 @@ public sealed class ChatCompletionsCommandFacadeTests
     }
 
     [Fact]
-    public async Task StreamAsync_ShouldReturnCompletedObservation_AndReplayDeltas()
+    public async Task StreamAsync_ShouldReturnCompletedObservation_AndReplayTextOnlyDeltas()
     {
         var sessions = new RecordingSessionPort();
         var observation = ObservationScenarioBuilder.ForResponse("chatcmpl_stream")
@@ -465,7 +465,7 @@ public sealed class ChatCompletionsCommandFacadeTests
         result.Completion.Usage.Should().Be(new TokenUsage(4, 2, 6));
         deltas.Should().Contain(x => x.TextDelta == "Hel");
         deltas.Should().Contain(x => x.TextDelta == "lo");
-        deltas.Should().Contain(x => x.ToolCallDelta != null && x.ToolCallDelta.Id == "call_1");
+        deltas.All(static x => x.TextDelta != null || x.Usage != null).Should().BeTrue();
         sessions.RecordedCompletions.Should().BeEmpty();
         sessions.UpdatedStatuses.Should().BeEmpty();
         var call = dispatch.Calls.Should().ContainSingle().Subject;
@@ -684,7 +684,8 @@ public sealed class ChatCompletionsCommandFacadeTests
                     ],
                     [],
                     [],
-                    [])));
+                    [],
+                    ["get_weather"])));
 
         var result = await facade.CreateAsync(
             BuildRequest(
@@ -720,6 +721,7 @@ public sealed class ChatCompletionsCommandFacadeTests
         command.Messages.Should().ContainSingle().Which.ToolCalls.Should().ContainSingle()
             .Which.Arguments.Fields["city"].StringValue.Should().Be("Paris");
         command.ToolSelection.ToolChoiceHintArguments.Fields["actor_id"].StringValue.Should().Be("member-1");
+        command.ToolSelection.OwnedToolNames.Should().ContainSingle("get_weather");
         var declaration = command.ToolSelection.ForwardedTools.Should().ContainSingle().Subject;
         declaration.Parameters.Fields["type"].StringValue.Should().Be("object");
         declaration.Parameters.Fields["properties"].StructValue.Fields["city"].StructValue.Fields["type"]
@@ -815,7 +817,7 @@ public sealed class ChatCompletionsCommandFacadeTests
                 Messages = [ChatMessage.User("hello")],
                 ToolContext = BuildToolContext("chatcmpl_stream"),
             },
-            new ResponsesToolClassification([], [], [], []),
+            new ResponsesToolClassification([], [], [], [], []),
             ResponsesToolChoiceHintPlan.Empty,
             DateTimeOffset.UtcNow);
 
@@ -911,7 +913,7 @@ public sealed class ChatCompletionsCommandFacadeTests
             ResponsesToolProviderContext context,
             IEnumerable<IResponsesToolProvider>? additionalProviders = null,
             CancellationToken ct = default) =>
-            ValueTask.FromResult(classification ?? new ResponsesToolClassification([], [], [], []));
+            ValueTask.FromResult(classification ?? new ResponsesToolClassification([], [], [], [], []));
     }
 
     private sealed class RecordingResponsesToolClassificationService : IResponsesToolClassificationService
@@ -925,7 +927,7 @@ public sealed class ChatCompletionsCommandFacadeTests
             CancellationToken ct = default)
         {
             Calls++;
-            return ValueTask.FromResult(new ResponsesToolClassification([], [], [], []));
+            return ValueTask.FromResult(new ResponsesToolClassification([], [], [], [], []));
         }
     }
 

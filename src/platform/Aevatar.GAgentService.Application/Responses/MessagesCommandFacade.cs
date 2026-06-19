@@ -688,6 +688,7 @@ public sealed class MessagesCommandFacade(
         {
             SubstitutedToolNames = { classification.SubstitutedToolNames },
             AdditiveToolNames = { classification.AdditiveToolNames },
+            OwnedToolNames = { classification.OwnedToolNames },
         };
         if (!toolChoiceHintPlan.IsEmpty)
         {
