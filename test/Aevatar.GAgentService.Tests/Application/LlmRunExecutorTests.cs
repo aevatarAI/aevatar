@@ -6,9 +6,12 @@ using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Application.Responses;
+using Aevatar.GAgentService.Core.GAgents;
+using Aevatar.GAgentService.Infrastructure.Activation;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.GAgentService.Tests.Application;
@@ -160,6 +163,47 @@ public sealed class LlmRunExecutorTests
     }
 
     [Fact]
+    public async Task RunExecutionReadyHook_WhenSchedulerFails_ShouldLogAndKeepPublicationHookNonBlocking()
+    {
+        var scheduler = new ThrowingLlmRunExecutionScheduler(new InvalidOperationException("provision failed"));
+        var logger = new RecordingLogger<LlmRunExecutionReadyHook>();
+        var hook = new LlmRunExecutionReadyHook(scheduler, logger);
+        var context = new CommittedStatePublicationContext
+        {
+            ActorId = "session-actor-failing-hook",
+            ActorType = typeof(object),
+            Published = new CommittedStateEventPublished
+            {
+                StateEvent = new StateEvent
+                {
+                    EventData = Any.Pack(new LlmRunExecutionReadyEvent
+                    {
+                        ResponseId = "resp_failing_hook",
+                        RunId = "run_failing_hook",
+                        ReadyAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                        ExecutionRequest = BuildRunRequest("resp_failing_hook"),
+                    }),
+                },
+                StateRoot = Any.Pack(new LlmSessionState
+                {
+                    Record = new LlmSessionRecord
+                    {
+                        ResponseId = "resp_failing_hook",
+                        OriginKind = LlmSessionOriginKind.ApiKey,
+                    },
+                }),
+            },
+        };
+
+        await hook.BeforePublishAsync(context, CancellationToken.None);
+
+        logger.Entries.Should().ContainSingle(entry =>
+            entry.Level == LogLevel.Error &&
+            entry.Exception is InvalidOperationException &&
+            entry.Message.Contains("LLM run execution scheduling failed", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task RunExecutionScheduler_ShouldDispatchExecutionCommandToProvisionedActor()
     {
         var provisioner = new RecordingExecutionTargetProvisioner("llm-run-execution:resp_scheduler:run_1");
@@ -187,6 +231,52 @@ public sealed class LlmRunExecutorTests
         command.RunId.Should().Be("run_1");
         command.Command.ResponseId.Should().Be("resp_scheduler");
         command.OriginPlatform.Should().Be("ApiKey");
+    }
+
+    [Fact]
+    public async Task RunExecutionGAgent_ShouldMapExecuteCommandToExecutionServiceRequest()
+    {
+        var executionService = new RecordingLlmRunExecutor();
+        var actor = new LlmRunExecutionGAgent(executionService);
+        var command = BuildRunRequest("resp_execution_actor");
+        command.RunId = "stale-run";
+
+        await actor.HandleExecuteAsync(new ExecuteLlmRunRequested
+        {
+            SessionActorId = "session-actor-execution",
+            ResponseId = "resp_execution_actor",
+            RunId = "run_execution_actor",
+            Command = command,
+            OriginPlatform = "   ",
+        });
+
+        var request = executionService.ExecuteRequests.Should().ContainSingle().Subject;
+        request.SessionActorId.Should().Be("session-actor-execution");
+        request.ResponseId.Should().Be("resp_execution_actor");
+        request.RunId.Should().Be("run_execution_actor");
+        request.Command.Should().BeEquivalentTo(command);
+        request.Command.Should().NotBeSameAs(command);
+        request.OriginPlatform.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task LlmRunExecutionTargetProvisioner_ShouldCreateKindActorWithEscapedDeterministicActorId()
+    {
+        var runtime = new RecordingActorRuntime();
+        var provisioner = new LlmRunExecutionTargetProvisioner(runtime);
+        var request = new LlmRunExecutionRequest(
+            " session actor/with spaces ",
+            "resp_provisioner",
+            " run/id?x=1 ",
+            BuildRunRequest("resp_provisioner"),
+            "ApiKey");
+
+        var actorId = await provisioner.EnsureExecutionTargetAsync(request);
+
+        actorId.Should().Be("gagent-service:llm-run-execution:session%20actor%2Fwith%20spaces:run%2Fid%3Fx%3D1");
+        runtime.CreateByKindCalls.Should().ContainSingle().Which.Should().Be((
+            LlmRunExecutionGAgent.Kind,
+            "gagent-service:llm-run-execution:session%20actor%2Fwith%20spaces:run%2Fid%3Fx%3D1"));
     }
 
     [Fact]
@@ -716,6 +806,18 @@ public sealed class LlmRunExecutorTests
         }
     }
 
+    private sealed class ThrowingLlmRunExecutionScheduler(Exception exception) : ILlmRunExecutionScheduler
+    {
+        public ValueTask ScheduleAsync(
+            LlmRunExecutionRequest request,
+            CancellationToken ct = default)
+        {
+            _ = request;
+            _ = ct;
+            throw exception;
+        }
+    }
+
     private sealed class RecordingExecutionTargetProvisioner(string actorId) : ILlmRunExecutionTargetProvisioner
     {
         public List<LlmRunExecutionRequest> Requests { get; } = [];
@@ -727,6 +829,92 @@ public sealed class LlmRunExecutorTests
             _ = ct;
             Requests.Add(request);
             return Task.FromResult(actorId);
+        }
+    }
+
+    private sealed class RecordingActorRuntime : IActorRuntime
+    {
+        public List<(string AgentKind, string? ActorId)> CreateByKindCalls { get; } = [];
+
+        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
+            where TAgent : IAgent =>
+            throw new NotSupportedException();
+
+        public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<IActor> CreateByKindAsync(string agentKind, string? id = null, CancellationToken ct = default)
+        {
+            CreateByKindCalls.Add((agentKind, id));
+            return Task.FromResult<IActor>(new RecordingActor(id ?? "created"));
+        }
+
+        public Task DestroyAsync(string id, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<IActor?> GetAsync(string id) =>
+            throw new NotSupportedException();
+
+        public Task<bool> ExistsAsync(string id) =>
+            throw new NotSupportedException();
+
+        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task UnlinkAsync(string childId, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+    }
+
+    private sealed class RecordingActor(string id) : IActor
+    {
+        public string Id { get; } = id;
+
+        public IAgent Agent { get; } = new RecordingAgent();
+
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
+
+        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
+    }
+
+    private sealed class RecordingAgent : IAgent
+    {
+        public string Id => "recording-agent";
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<string> GetDescriptionAsync() => Task.FromResult(string.Empty);
+
+        public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() =>
+            Task.FromResult<IReadOnlyList<System.Type>>([]);
+
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class RecordingLogger<T> : ILogger<T>
+    {
+        public List<(LogLevel Level, string Message, Exception? Exception)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            _ = eventId;
+            Entries.Add((logLevel, formatter(state, exception), exception));
         }
     }
 }

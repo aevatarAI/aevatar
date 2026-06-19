@@ -4,12 +4,17 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.GAgentService.Application.Responses;
 
 public sealed class LlmRunExecutionReadyHook(
-    ILlmRunExecutionScheduler scheduler) : ICommittedStatePublicationHook
+    ILlmRunExecutionScheduler scheduler,
+    ILogger<LlmRunExecutionReadyHook>? logger = null) : ICommittedStatePublicationHook
 {
+    private readonly ILogger<LlmRunExecutionReadyHook> _logger = logger ?? NullLogger<LlmRunExecutionReadyHook>.Instance;
+
     public async Task BeforePublishAsync(CommittedStatePublicationContext context, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -26,7 +31,23 @@ public sealed class LlmRunExecutionReadyHook(
             return;
         }
 
-        await scheduler.ScheduleAsync(request, ct).ConfigureAwait(false);
+        try
+        {
+            await scheduler.ScheduleAsync(request, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "LLM run execution scheduling failed for session actor {SessionActorId} response {ResponseId} run {RunId}.",
+                request.SessionActorId,
+                request.ResponseId,
+                request.RunId);
+        }
     }
 
     private static bool TryBuildRequest(
