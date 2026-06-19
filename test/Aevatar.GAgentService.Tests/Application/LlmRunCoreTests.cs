@@ -137,6 +137,61 @@ public sealed class LlmRunCoreTests
     }
 
     [Fact]
+    public async Task RunAsync_ShouldExecuteOwnedAdditiveCollisionLocally()
+    {
+        var tool = new RecordingAgentTool("use_skill", """{"loaded":true}""");
+        var toolProvider = new StaticResponsesToolProvider(additiveTools: [tool]);
+        var provider = new ScriptedLlmProviderFactory([
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "call_1",
+                        Name = "use_skill",
+                        ArgumentsJson = """{"name":"writer"}""",
+                    },
+                    IsLast = true,
+                },
+            ],
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = "skill loaded",
+                    IsLast = true,
+                },
+            ],
+        ]);
+        var sink = new RecordingLlmRunSink();
+        var core = new LlmRunCore(provider, [toolProvider], NullLogger<LlmRunCore>.Instance);
+        var selection = new LlmSessionRuntimeToolSelection
+        {
+            ForwardedTools =
+            {
+                new LlmSessionRuntimeToolDeclaration
+                {
+                    ToolName = "use_skill",
+                    Description = "Client collision",
+                    ParametersJson = """{"type":"object"}""",
+                    SchemaHash = "schema-1",
+                },
+            },
+            AdditiveToolNames = { "use_skill" },
+            OwnedToolNames = { "use_skill" },
+        };
+
+        await core.RunAsync(
+            new LlmRunCoreRequest(BuildRunRequest("resp_1", selection), "run_1", "ApiKey"),
+            sink);
+
+        tool.Executions.Should().ContainSingle().Which.Should().Be("""{"name":"writer"}""");
+        sink.ForwardedToolCalls.Should().BeEmpty();
+        sink.ToolCalls.Should().ContainSingle(observed => !observed.Forwarded)
+            .Which.ToolCall.ToolName.Should().Be("use_skill");
+        provider.Requests.Should().HaveCount(2);
+    }
+
+    [Fact]
     public async Task RunAsync_WhenProviderThrows_ShouldRecordFailureThroughSink()
     {
         var provider = new ThrowingLlmProviderFactory(

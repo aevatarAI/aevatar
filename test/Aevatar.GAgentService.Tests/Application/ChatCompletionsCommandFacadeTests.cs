@@ -684,7 +684,8 @@ public sealed class ChatCompletionsCommandFacadeTests
                     ],
                     [],
                     [],
-                    [])));
+                    [],
+                    ["get_weather"])));
 
         var result = await facade.CreateAsync(
             BuildRequest(
@@ -720,6 +721,7 @@ public sealed class ChatCompletionsCommandFacadeTests
         command.Messages.Should().ContainSingle().Which.ToolCalls.Should().ContainSingle()
             .Which.Arguments.Fields["city"].StringValue.Should().Be("Paris");
         command.ToolSelection.ToolChoiceHintArguments.Fields["actor_id"].StringValue.Should().Be("member-1");
+        command.ToolSelection.OwnedToolNames.Should().ContainSingle("get_weather");
         var declaration = command.ToolSelection.ForwardedTools.Should().ContainSingle().Subject;
         declaration.Parameters.Fields["type"].StringValue.Should().Be("object");
         declaration.Parameters.Fields["properties"].StructValue.Fields["city"].StructValue.Fields["type"]
@@ -815,7 +817,7 @@ public sealed class ChatCompletionsCommandFacadeTests
                 Messages = [ChatMessage.User("hello")],
                 ToolContext = BuildToolContext("chatcmpl_stream"),
             },
-            new ResponsesToolClassification([], [], [], []),
+            new ResponsesToolClassification([], [], [], [], []),
             ResponsesToolChoiceHintPlan.Empty,
             DateTimeOffset.UtcNow);
 
@@ -911,7 +913,7 @@ public sealed class ChatCompletionsCommandFacadeTests
             ResponsesToolProviderContext context,
             IEnumerable<IResponsesToolProvider>? additionalProviders = null,
             CancellationToken ct = default) =>
-            ValueTask.FromResult(classification ?? new ResponsesToolClassification([], [], [], []));
+            ValueTask.FromResult(classification ?? new ResponsesToolClassification([], [], [], [], []));
     }
 
     private sealed class RecordingResponsesToolClassificationService : IResponsesToolClassificationService
@@ -925,7 +927,7 @@ public sealed class ChatCompletionsCommandFacadeTests
             CancellationToken ct = default)
         {
             Calls++;
-            return ValueTask.FromResult(new ResponsesToolClassification([], [], [], []));
+            return ValueTask.FromResult(new ResponsesToolClassification([], [], [], [], []));
         }
     }
 
