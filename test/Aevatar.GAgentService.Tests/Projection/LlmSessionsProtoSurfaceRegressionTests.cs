@@ -48,12 +48,12 @@ public sealed class LlmSessionsProtoSurfaceRegressionTests
                 "ExecuteLlmRunRequested",
                 "RecordLlmStreamChunkObserved",
                 "RecordLlmToolCallObserved",
-                "RecordLlmForwardedToolCallEmitted",
                 "RecordLlmRunCompleted",
                 "RecordLlmRunFailed",
                 "RecordLlmRunCancelled",
                 "FinalizeLlmRunTimedOut",
             ]);
+        TopLevelMessageNames(descriptor).Should().NotContain("RecordLlmForwardedToolCallEmitted");
         LlmRunRequested.Descriptor.FindFieldByName("timeout_after").Should().NotBeNull();
         LlmSessionRuntimeToolSelection.Descriptor.FindFieldByName("owned_tool_names").Should().NotBeNull();
         LlmRunExecutionReadyEvent.Descriptor.FindFieldByName("execution_request").Should().BeNull();
@@ -65,6 +65,16 @@ public sealed class LlmSessionsProtoSurfaceRegressionTests
         LlmRunCancelled.Descriptor.FindFieldByName("sequence").Should().NotBeNull();
         LlmSessionRunScope.Descriptor.FindFieldByName("last_applied_sequence").Should().NotBeNull();
         LlmSessionRunScope.Descriptor.FindFieldByName("applied_record_ids").Should().NotBeNull();
+    }
+
+    [Fact]
+    public void LlmSessionsProto_ShouldExposeActorOwnedCancelAndBatchedForwardedToolRecords()
+    {
+        var descriptor = LlmSessionsReflection.Descriptor;
+
+        TopLevelMessageNames(descriptor).Should().Contain("CancelLlmRunRequested");
+        CancelLlmRunRequested.Descriptor.FindFieldByName("run_id").Should().NotBeNull();
+        LlmRunCompleted.Descriptor.FindFieldByName("forwarded_tool_call_records").Should().NotBeNull();
     }
 
     private static IEnumerable<string> TopLevelMessageNames(FileDescriptor descriptor) =>

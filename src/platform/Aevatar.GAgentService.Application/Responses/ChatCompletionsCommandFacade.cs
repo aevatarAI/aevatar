@@ -125,12 +125,6 @@ public sealed class ChatCompletionsCommandFacade(
             var observed = await ObserveRunAsync(plan, onObservedDelta, ct).ConfigureAwait(false);
             if (observed.Error is not null)
             {
-                await TryUpdateSessionStatusAsync(
-                    plan.Session,
-                    observed.Error.Kind == LlmSessionRunObservedTerminalKind.Cancelled
-                        ? LlmSessionStatus.Cancelled
-                        : LlmSessionStatus.Failed,
-                    CancellationToken.None);
                 return ResponsesStreamCommandResult.FromError(
                     observed.Error.StatusCode,
                     observed.Error.Code,
@@ -156,7 +150,6 @@ public sealed class ChatCompletionsCommandFacade(
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            await TryUpdateSessionStatusAsync(plan.Session, LlmSessionStatus.Cancelled, CancellationToken.None);
             return ResponsesStreamCommandResult.FromError(499, "client_closed_request", "Client closed request.");
         }
         catch (Exception ex)
@@ -380,12 +373,6 @@ public sealed class ChatCompletionsCommandFacade(
             var observed = await ObserveRunAsync(plan, null, ct).ConfigureAwait(false);
             if (observed.Error is not null)
             {
-                await TryUpdateSessionStatusAsync(
-                    plan.Session,
-                    observed.Error.Kind == LlmSessionRunObservedTerminalKind.Cancelled
-                        ? LlmSessionStatus.Cancelled
-                        : LlmSessionStatus.Failed,
-                    CancellationToken.None);
                 return ChatCompletionsCreateCommandResult.FromError(
                     observed.Error.StatusCode,
                     observed.Error.Code,
@@ -419,7 +406,6 @@ public sealed class ChatCompletionsCommandFacade(
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            await TryUpdateSessionStatusAsync(plan.Session, LlmSessionStatus.Cancelled, CancellationToken.None);
             return ChatCompletionsCreateCommandResult.FromError(499, "client_closed_request", "Client closed request.");
         }
         catch (Exception ex)

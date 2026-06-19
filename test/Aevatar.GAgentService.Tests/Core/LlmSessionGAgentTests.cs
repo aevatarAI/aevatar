@@ -800,6 +800,37 @@ public sealed class LlmSessionGAgentTests
     }
 
     [Fact]
+    public async Task HandleCancelLlmRunRequestedAsync_ShouldRecordActorOwnedCancellation()
+    {
+        var eventStore = new InMemoryEventStore();
+        var actor = CreateActorWithStore("resp_cancel", eventStore);
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_cancel"),
+        });
+
+        await actor.HandleCancelLlmRunRequestedAsync(new CancelLlmRunRequested
+        {
+            ResponseId = "resp_cancel",
+            RunId = "resp_cancel:llm-run",
+            CancelledAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-06-19T00:00:00+00:00")),
+        });
+
+        actor.State.Record!.Status.Should().Be(LlmSessionStatus.Cancelled);
+        actor.State.ActiveRun!.RunId.Should().Be("resp_cancel:llm-run");
+        actor.State.ActiveRun.Status.Should().Be(4);
+        var cancelled = (await eventStore.GetEventsAsync(actor.Id))
+            .Select(static evt => evt.EventData)
+            .Where(static payload => payload.Is(LlmRunCancelled.Descriptor))
+            .Select(static payload => payload.Unpack<LlmRunCancelled>())
+            .Should()
+            .ContainSingle()
+            .Subject;
+        cancelled.ResponseId.Should().Be("resp_cancel");
+        cancelled.RunId.Should().Be("resp_cancel:llm-run");
+    }
+
+    [Fact]
     public async Task HandleRecordRunStartedAsync_ShouldPersistReadyFact_AndDispatchTransientExecutionCommand()
     {
         var eventStore = new InMemoryEventStore();
@@ -1527,6 +1558,55 @@ public sealed class LlmSessionGAgentTests
             .Subject;
         localObserved.LocalResultJson.Should().Be("""{"temperature":28}""");
         localObserved.LocalResult.StructValue.Fields["temperature"].NumberValue.Should().Be(28);
+    }
+
+    [Fact]
+    public async Task HandleLlmRunRequestedAsync_ShouldRecordForwardedToolCallAtomicallyWithCompletion()
+    {
+        var eventStore = new InMemoryEventStore();
+        var provider = new ScriptedLlmProviderFactory([
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "call_1",
+                        Name = "get_weather",
+                        ArgumentsJson = """{"city":"Singapore"}""",
+                    },
+                    IsLast = true,
+                },
+            ],
+        ]);
+        var actor = CreateActorWithStore(
+            "resp_forwarded_atomic",
+            eventStore,
+            services => services.AddSingleton<ILLMProviderFactory>(provider));
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_forwarded_atomic"),
+        });
+
+        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_forwarded_atomic", BuildForwardedSelection()));
+
+        var events = (await eventStore.GetEventsAsync(actor.Id))
+            .Select(static evt => evt.EventData)
+            .ToArray();
+        events.Should().NotContain(payload => payload.Is(LlmSessionForwardedToolCallEmittedEvent.Descriptor));
+        var completed = events
+            .Where(static payload => payload.Is(LlmRunCompleted.Descriptor))
+            .Select(static payload => payload.Unpack<LlmRunCompleted>())
+            .Should()
+            .ContainSingle()
+            .Subject;
+        completed.ForwardedToolCalls.Should().ContainSingle()
+            .Which.CallId.Should().Be("call_1");
+        completed.ForwardedToolCallRecords.Should().ContainSingle()
+            .Which.SchemaHash.Should().Be("schema-1");
+        actor.State.ForwardedToolCalls.Should().ContainSingle()
+            .Which.Status.Should().Be(LlmSessionForwardedToolCallStatus.Pending);
+        actor.State.Completion!.ToolCalls.Should().ContainSingle()
+            .Which.CallId.Should().Be("call_1");
     }
 
     [Fact]

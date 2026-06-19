@@ -378,7 +378,7 @@ public sealed class ChatCompletionsCommandFacadeTests
     }
 
     [Fact]
-    public async Task CreateAsync_WhenDispatchIsCancelled_ShouldMarkSessionCancelled()
+    public async Task CreateAsync_WhenDispatchIsCancelled_ShouldDetachWithoutWritingSessionStatus()
     {
         var sessions = new RecordingSessionPort();
         var dispatch = new RecordingActorDispatchPort(ct => new OperationCanceledException(ct));
@@ -392,7 +392,7 @@ public sealed class ChatCompletionsCommandFacadeTests
             499,
             "client_closed_request",
             "Client closed request."));
-        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Cancelled);
+        sessions.UpdatedStatuses.Should().BeEmpty();
     }
 
     [Fact]
@@ -535,7 +535,7 @@ public sealed class ChatCompletionsCommandFacadeTests
     }
 
     [Fact]
-    public async Task CreateAsync_WhenObservedRunFails_ShouldReturnFailureError_AndMarkSessionFailed()
+    public async Task CreateAsync_WhenObservedRunFails_ShouldReturnFailureError_WithoutWritingSessionStatus()
     {
         var sessions = new RecordingSessionPort();
         var observation = ObservationScenarioBuilder.ForResponse("chatcmpl_fail")
@@ -551,11 +551,11 @@ public sealed class ChatCompletionsCommandFacadeTests
             "llm_run_failed",
             "provider crashed"));
         result.Completed.Should().BeNull();
-        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Failed);
+        sessions.UpdatedStatuses.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task StreamAsync_WhenObservedRunIsCancelled_ShouldReturnCancelledError_AndMarkSessionCancelled()
+    public async Task StreamAsync_WhenObservedRunIsCancelled_ShouldReturnCancelledError_WithoutWritingSessionStatus()
     {
         var sessions = new RecordingSessionPort();
         var observation = ObservationScenarioBuilder.ForResponse("chatcmpl_stream")
@@ -571,11 +571,11 @@ public sealed class ChatCompletionsCommandFacadeTests
             "run_cancelled",
             "LLM run was cancelled."));
         result.Completion.Should().BeNull();
-        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Cancelled);
+        sessions.UpdatedStatuses.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task CreateAsync_WhenObservedRunDoesNotTerminate_ShouldReturnTimeout_AndMarkSessionFailed()
+    public async Task CreateAsync_WhenObservedRunDoesNotTerminate_ShouldReturnTimeout_WithoutWritingSessionStatus()
     {
         var sessions = new RecordingSessionPort();
         var observation = ObservationScenarioBuilder.ForResponse("chatcmpl_timeout")
@@ -595,7 +595,7 @@ public sealed class ChatCompletionsCommandFacadeTests
         result.Error.Code.Should().Be("response_timeout");
         result.Error.Message.Should().Contain("Timed out waiting");
         result.Completed.Should().BeNull();
-        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Failed);
+        sessions.UpdatedStatuses.Should().BeEmpty();
     }
 
     [Fact]
@@ -687,7 +687,7 @@ public sealed class ChatCompletionsCommandFacadeTests
     }
 
     [Fact]
-    public async Task StreamAsync_WhenDispatchIsCancelled_ShouldReturnClientClosedError_AndMarkSessionCancelled()
+    public async Task StreamAsync_WhenDispatchIsCancelled_ShouldReturnClientClosedError_WithoutWritingSessionStatus()
     {
         var sessions = new RecordingSessionPort();
         var dispatch = new RecordingActorDispatchPort(ct => new OperationCanceledException(ct));
@@ -705,7 +705,7 @@ public sealed class ChatCompletionsCommandFacadeTests
             "client_closed_request",
             "Client closed request."));
         result.Completion.Should().BeNull();
-        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Cancelled);
+        sessions.UpdatedStatuses.Should().BeEmpty();
     }
 
     [Fact]
@@ -1408,6 +1408,13 @@ public sealed class ChatCompletionsCommandFacadeTests
             UpdatedStatuses.Add((sessionActorId, responseId, status));
             return Task.CompletedTask;
         }
+
+        public Task CancelRunAsync(
+            string sessionActorId,
+            string responseId,
+            string runId,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
 
         public Task RecordForwardedToolCallAsync(
             string sessionActorId,

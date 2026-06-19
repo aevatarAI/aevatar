@@ -34,7 +34,7 @@ public sealed class LlmRunCore(
         }
         catch (OperationCanceledException)
         {
-            await sink.RecordRunCancelledAsync(new LlmRunCancelled
+            _ = await sink.RecordRunCancelledAsync(new LlmRunCancelled
             {
                 ResponseId = request.Command.ResponseId,
                 RunId = request.RunId,
@@ -43,7 +43,7 @@ public sealed class LlmRunCore(
         }
         catch (Exception ex)
         {
-            await sink.RecordRunFailedAsync(new LlmRunFailed
+            _ = await sink.RecordRunFailedAsync(new LlmRunFailed
             {
                 ResponseId = request.Command.ResponseId,
                 RunId = request.RunId,
@@ -117,7 +117,8 @@ public sealed class LlmRunCore(
                         Usage = chunk.Usage is null ? null : ToSessionUsage(chunk.Usage),
                         ObservedAt = Timestamp.FromDateTime(DateTime.UtcNow),
                     };
-                    await sink.RecordStreamChunkObservedAsync(observed, ct).ConfigureAwait(false);
+                    if (ShouldStop(await sink.RecordStreamChunkObservedAsync(observed, ct).ConfigureAwait(false)))
+                        return;
 
                     if (chunk.DeltaToolCall != null)
                         toolCalls.TrackDelta(chunk.DeltaToolCall);
@@ -130,27 +131,9 @@ public sealed class LlmRunCore(
             var builtToolCalls = ApplyToolChoiceHint(toolCalls.BuildToolCalls(), command.ToolSelection);
             var routedToolCalls = ownershipPlan.Route(builtToolCalls);
             var forwardedToolCalls = routedToolCalls.Forwarded;
-            foreach (var toolCall in forwardedToolCalls)
-            {
-                await sink.RecordToolCallObservedAsync(new LlmToolCallObserved
-                {
-                    ResponseId = command.ResponseId,
-                    RunId = request.RunId,
-                    Round = round,
-                    ToolCall = ToRuntimeToolCall(toolCall),
-                    Forwarded = true,
-                    ObservedAt = Timestamp.FromDateTime(DateTime.UtcNow),
-                }, ct).ConfigureAwait(false);
-                await sink.RecordForwardedToolCallEmittedAsync(new LlmSessionForwardedToolCallEmittedEvent
-                {
-                    ResponseId = command.ResponseId,
-                    Call = BuildForwardedToolCall(toolCall, command.ToolSelection),
-                }, ct).ConfigureAwait(false);
-            }
-
             if (forwardedToolCalls.Count > 0)
             {
-                await sink.RecordRunCompletedAsync(new LlmRunCompleted
+                var completed = new LlmRunCompleted
                 {
                     ResponseId = command.ResponseId,
                     RunId = request.RunId,
@@ -158,14 +141,17 @@ public sealed class LlmRunCore(
                     ForwardedToolCalls = { forwardedToolCalls.Select(ToRuntimeToolCall) },
                     Usage = usage is null ? null : ToSessionUsage(usage),
                     CompletedAt = Timestamp.FromDateTime(DateTime.UtcNow),
-                }, ct).ConfigureAwait(false);
+                };
+                completed.ForwardedToolCallRecords.AddRange(
+                    forwardedToolCalls.Select(call => BuildForwardedToolCall(call, command.ToolSelection)));
+                _ = await sink.RecordRunCompletedAsync(completed, ct).ConfigureAwait(false);
                 return;
             }
 
             var localToolCalls = routedToolCalls.Local;
             if (localToolCalls.Count == 0)
             {
-                await sink.RecordRunCompletedAsync(new LlmRunCompleted
+                _ = await sink.RecordRunCompletedAsync(new LlmRunCompleted
                 {
                     ResponseId = command.ResponseId,
                     RunId = request.RunId,
@@ -181,11 +167,22 @@ public sealed class LlmRunCore(
                 Role = "assistant",
                 ToolCalls = localToolCalls,
             });
-            await ExecuteLocalToolCallsAsync(command, request.RunId, round, localToolCalls, ownershipPlan, messages, toolContext, sink, ct)
-                .ConfigureAwait(false);
+            if (ShouldStop(await ExecuteLocalToolCallsAsync(
+                    command,
+                    request.RunId,
+                    round,
+                    localToolCalls,
+                    ownershipPlan,
+                    messages,
+                    toolContext,
+                    sink,
+                    ct).ConfigureAwait(false)))
+            {
+                return;
+            }
         }
 
-        await sink.RecordRunFailedAsync(new LlmRunFailed
+        _ = await sink.RecordRunFailedAsync(new LlmRunFailed
         {
             ResponseId = command.ResponseId,
             RunId = request.RunId,
@@ -294,7 +291,7 @@ public sealed class LlmRunCore(
         return effective;
     }
 
-    private static async Task ExecuteLocalToolCallsAsync(
+    private static async Task<LlmRunRecordDecision> ExecuteLocalToolCallsAsync(
         LlmRunRequested command,
         string runId,
         int round,
@@ -317,7 +314,7 @@ public sealed class LlmRunCore(
                     ? await ResponsesSafeToolExecutor.ExecuteAsync(tool, argumentsJson, ct).ConfigureAwait(false)
                     : BuildLocalToolUnavailableResult(ownershipPlan.ResolveUnavailableToolCode(toolCall.Name), toolCall.Name);
 
-                await sink.RecordToolCallObservedAsync(new LlmToolCallObserved
+                var decision = await sink.RecordToolCallObservedAsync(new LlmToolCallObserved
                 {
                     ResponseId = command.ResponseId,
                     RunId = runId,
@@ -328,10 +325,17 @@ public sealed class LlmRunCore(
                     LocalResult = ResponsesJsonValues.ParseBoundaryPayload(result),
                     ObservedAt = Timestamp.FromDateTime(DateTime.UtcNow),
                 }, ct).ConfigureAwait(false);
+                if (ShouldStop(decision))
+                    return decision;
                 messages.Add(ChatMessage.Tool(toolCall.Id, result));
             }
         }
+
+        return LlmRunRecordDecision.Continue;
     }
+
+    private static bool ShouldStop(LlmRunRecordDecision decision) =>
+        !decision.Accepted || decision.StopDispatching;
 
     private static AgentToolExecutionContext BuildToolContext(LlmRunRequested command)
     {

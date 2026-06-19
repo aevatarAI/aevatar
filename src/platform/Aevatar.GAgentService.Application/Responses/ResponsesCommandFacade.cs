@@ -182,10 +182,10 @@ public sealed class ResponsesCommandFacade(
         {
             try
             {
-                await responseSessionRegistrationPort.UpdateStatusAsync(
+                await responseSessionRegistrationPort.CancelRunAsync(
                     visibleSnapshot.ActorId,
                     visibleSnapshot.ResponseId,
-                    LlmSessionStatus.Cancelled,
+                    $"{visibleSnapshot.ResponseId}:llm-run",
                     ct);
             }
             catch (OperationCanceledException)
@@ -234,12 +234,6 @@ public sealed class ResponsesCommandFacade(
                 ct).ConfigureAwait(false);
             if (observed.Error is not null)
             {
-                await TryUpdateSessionStatusAsync(
-                    plan.Session,
-                    observed.Error.Kind == LlmSessionRunObservedTerminalKind.Cancelled
-                        ? LlmSessionStatus.Cancelled
-                        : LlmSessionStatus.Failed,
-                    CancellationToken.None);
                 return ResponsesStreamCommandResult.FromError(
                     observed.Error.StatusCode,
                     observed.Error.Code,
@@ -265,7 +259,6 @@ public sealed class ResponsesCommandFacade(
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            await TryUpdateSessionStatusAsync(plan.Session, LlmSessionStatus.Cancelled, CancellationToken.None);
             return ResponsesStreamCommandResult.FromError(408, "request_timeout", "Request timed out.");
         }
         catch (Exception ex)
@@ -539,12 +532,6 @@ public sealed class ResponsesCommandFacade(
                 ct).ConfigureAwait(false);
             if (observed.Error is not null)
             {
-                await TryUpdateSessionStatusAsync(
-                    plan.Session,
-                    observed.Error.Kind == LlmSessionRunObservedTerminalKind.Cancelled
-                        ? LlmSessionStatus.Cancelled
-                        : LlmSessionStatus.Failed,
-                    CancellationToken.None);
                 return ResponsesCreateCommandResult.FromError(
                     observed.Error.StatusCode,
                     observed.Error.Code,
@@ -588,7 +575,6 @@ public sealed class ResponsesCommandFacade(
         }
         catch (OperationCanceledException)
         {
-            await TryUpdateSessionStatusAsync(plan.Session, LlmSessionStatus.Cancelled, CancellationToken.None);
             return ResponsesCreateCommandResult.FromError(408, "request_timeout", "Request timed out.");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

@@ -271,13 +271,13 @@ internal static class GAgentServiceTestKit
     {
         private long _recordIndex;
 
-        public Task RecordStreamChunkObservedAsync(
+        public async Task<LlmRunRecordDecision> RecordStreamChunkObservedAsync(
             LlmStreamChunkObserved observed,
             CancellationToken ct = default)
         {
             _ = ct;
             var recordId = NextRecordId("chunk");
-            return actor.HandleRecordStreamChunkObservedAsync(new RecordLlmStreamChunkObserved
+            await actor.HandleRecordStreamChunkObservedAsync(new RecordLlmStreamChunkObserved
             {
                 ResponseId = observed.ResponseId,
                 RunId = ResolveRunId(observed.RunId),
@@ -287,16 +287,17 @@ internal static class GAgentServiceTestKit
                 ToolCallDelta = observed.ToolCallDelta?.Clone(),
                 Usage = observed.Usage?.Clone(),
                 ObservedAt = observed.ObservedAt?.Clone(),
-            });
+            }).ConfigureAwait(false);
+            return LlmRunRecordDecision.Continue;
         }
 
-        public Task RecordToolCallObservedAsync(
+        public async Task<LlmRunRecordDecision> RecordToolCallObservedAsync(
             LlmToolCallObserved observed,
             CancellationToken ct = default)
         {
             _ = ct;
             var recordId = NextRecordId("tool");
-            return actor.HandleRecordToolCallObservedAsync(new RecordLlmToolCallObserved
+            await actor.HandleRecordToolCallObservedAsync(new RecordLlmToolCallObserved
             {
                 ResponseId = observed.ResponseId,
                 RunId = ResolveRunId(observed.RunId),
@@ -307,25 +308,11 @@ internal static class GAgentServiceTestKit
                 LocalResultJson = observed.LocalResultJson ?? string.Empty,
                 ObservedAt = observed.ObservedAt?.Clone(),
                 LocalResult = observed.LocalResult?.Clone(),
-            });
+            }).ConfigureAwait(false);
+            return LlmRunRecordDecision.Continue;
         }
 
-        public Task RecordForwardedToolCallEmittedAsync(
-            LlmSessionForwardedToolCallEmittedEvent emitted,
-            CancellationToken ct = default)
-        {
-            _ = ct;
-            var recordId = NextRecordId("forwarded-tool");
-            return actor.HandleRecordForwardedToolCallEmittedAsync(new RecordLlmForwardedToolCallEmitted
-            {
-                ResponseId = emitted.ResponseId,
-                RunId = runId,
-                RecordId = recordId,
-                Call = emitted.Call?.Clone(),
-            });
-        }
-
-        public Task RecordRunCompletedAsync(
+        public async Task<LlmRunRecordDecision> RecordRunCompletedAsync(
             LlmRunCompleted completed,
             CancellationToken ct = default)
         {
@@ -341,16 +328,18 @@ internal static class GAgentServiceTestKit
                 CompletedAt = completed.CompletedAt?.Clone(),
             };
             command.ForwardedToolCalls.AddRange(completed.ForwardedToolCalls.Select(static call => call.Clone()));
-            return actor.HandleRecordRunCompletedAsync(command);
+            command.ForwardedToolCallRecords.AddRange(completed.ForwardedToolCallRecords.Select(static call => call.Clone()));
+            await actor.HandleRecordRunCompletedAsync(command).ConfigureAwait(false);
+            return LlmRunRecordDecision.Continue;
         }
 
-        public Task RecordRunFailedAsync(
+        public async Task<LlmRunRecordDecision> RecordRunFailedAsync(
             LlmRunFailed failed,
             CancellationToken ct = default)
         {
             _ = ct;
             var recordId = NextRecordId("failed");
-            return actor.HandleRecordRunFailedAsync(new RecordLlmRunFailed
+            await actor.HandleRecordRunFailedAsync(new RecordLlmRunFailed
             {
                 ResponseId = failed.ResponseId,
                 RunId = ResolveRunId(failed.RunId),
@@ -358,22 +347,24 @@ internal static class GAgentServiceTestKit
                 FailureCode = failed.FailureCode ?? string.Empty,
                 FailureMessage = failed.FailureMessage ?? string.Empty,
                 FailedAt = failed.FailedAt?.Clone(),
-            });
+            }).ConfigureAwait(false);
+            return LlmRunRecordDecision.Continue;
         }
 
-        public Task RecordRunCancelledAsync(
+        public async Task<LlmRunRecordDecision> RecordRunCancelledAsync(
             LlmRunCancelled cancelled,
             CancellationToken ct = default)
         {
             _ = ct;
             var recordId = NextRecordId("cancelled");
-            return actor.HandleRecordRunCancelledAsync(new RecordLlmRunCancelled
+            await actor.HandleRecordRunCancelledAsync(new RecordLlmRunCancelled
             {
                 ResponseId = cancelled.ResponseId,
                 RunId = ResolveRunId(cancelled.RunId),
                 RecordId = recordId,
                 CancelledAt = cancelled.CancelledAt?.Clone(),
-            });
+            }).ConfigureAwait(false);
+            return LlmRunRecordDecision.Continue;
         }
 
         private string NextRecordId(string kind)

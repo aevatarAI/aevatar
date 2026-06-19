@@ -1,7 +1,9 @@
 using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Application.Responses;
@@ -20,8 +22,9 @@ public sealed class LlmRunExecutorTests
     {
         var provider = new GateControlledLlmProviderFactory();
         var core = new LlmRunCore(provider, [], NullLogger<LlmRunCore>.Instance);
-        var dispatch = new RecordingDispatchPort();
-        var executor = new LlmRunExecutor(core, dispatch, NullLogger<LlmRunExecutor>.Instance);
+        var observation = new RecordingLlmRunObservation();
+        var dispatch = new RecordingDispatchPort(observation);
+        var executor = CreateExecutor(core, dispatch, observation);
 
         var request = new LlmRunExecutorRequest(
             "session-actor-1",
@@ -166,8 +169,9 @@ public sealed class LlmRunExecutorTests
             ],
         ]);
         var core = new LlmRunCore(provider, [], NullLogger<LlmRunCore>.Instance);
-        var dispatch = new RecordingDispatchPort();
-        var executor = new LlmRunExecutor(core, dispatch, NullLogger<LlmRunExecutor>.Instance);
+        var observation = new RecordingLlmRunObservation();
+        var dispatch = new RecordingDispatchPort(observation);
+        var executor = CreateExecutor(core, dispatch, observation);
 
         var request = new LlmRunExecutorRequest(
             "session-actor-2",
@@ -178,7 +182,7 @@ public sealed class LlmRunExecutorTests
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         var executeTask = executor.ExecuteAsync(ToExecutionRequest(request), cts.Token);
-        await dispatch.WaitForCallsAsync(5, cts.Token);
+        await dispatch.WaitForCallsAsync(3, cts.Token);
         await executeTask;
 
         dispatch.Calls.Select(call => call.ActorId).Should().OnlyContain(actorId => actorId == "session-actor-2");
@@ -190,23 +194,14 @@ public sealed class LlmRunExecutorTests
         secondChunk.RecordId.Should().Be("run_forwarded:chunk:2");
         secondChunk.Usage!.TotalTokens.Should().Be(12);
 
-        var observedTool = dispatch.Calls[2].Envelope.Payload!.Unpack<RecordLlmToolCallObserved>();
-        observedTool.RecordId.Should().Be("run_forwarded:tool:3");
-        observedTool.RunId.Should().Be("run_forwarded");
-        observedTool.Forwarded.Should().BeTrue();
-        observedTool.ToolCall!.Arguments.Fields["city"].StringValue.Should().Be("Singapore");
-
-        var forwarded = dispatch.Calls[3].Envelope.Payload!.Unpack<RecordLlmForwardedToolCallEmitted>();
-        forwarded.RecordId.Should().Be("run_forwarded:forwarded-tool:4");
-        forwarded.RunId.Should().Be("run_forwarded");
-        forwarded.Call!.SchemaHash.Should().Be("schema-1");
-        ResponsesJsonValues.ToBoundaryJson(forwarded.Call.Arguments).Should().Be("""{"city":"Singapore"}""");
-
-        var completed = dispatch.Calls[4].Envelope.Payload!.Unpack<RecordLlmRunCompleted>();
-        completed.RecordId.Should().Be("run_forwarded:completed:5");
+        var completed = dispatch.Calls[2].Envelope.Payload!.Unpack<RecordLlmRunCompleted>();
+        completed.RecordId.Should().Be("run_forwarded:completed:3");
         completed.ForwardedToolCalls.Should().ContainSingle()
             .Which.CallId.Should().Be("call_1");
-        AssertDirectEnvelope(dispatch.Calls[3], forwarded.RecordId, RecordLlmForwardedToolCallEmitted.Descriptor.FullName);
+        var forwarded = completed.ForwardedToolCallRecords.Should().ContainSingle().Subject;
+        forwarded.SchemaHash.Should().Be("schema-1");
+        ResponsesJsonValues.ToBoundaryJson(forwarded.Arguments).Should().Be("""{"city":"Singapore"}""");
+        AssertDirectEnvelope(dispatch.Calls[2], completed.RecordId, RecordLlmRunCompleted.Descriptor.FullName);
     }
 
     [Fact]
@@ -236,8 +231,9 @@ public sealed class LlmRunExecutorTests
             ],
         ]);
         var core = new LlmRunCore(provider, [toolProvider], NullLogger<LlmRunCore>.Instance);
-        var dispatch = new RecordingDispatchPort();
-        var executor = new LlmRunExecutor(core, dispatch, NullLogger<LlmRunExecutor>.Instance);
+        var observation = new RecordingLlmRunObservation();
+        var dispatch = new RecordingDispatchPort(observation);
+        var executor = CreateExecutor(core, dispatch, observation);
         var selection = BuildForwardedSelection();
         selection.SubstitutedToolNames.Add("get_weather");
 
@@ -270,8 +266,9 @@ public sealed class LlmRunExecutorTests
     {
         var provider = new ThrowingLlmProviderFactory(new NyxIdAuthenticationRequiredException("nyxid"));
         var core = new LlmRunCore(provider, [], NullLogger<LlmRunCore>.Instance);
-        var dispatch = new RecordingDispatchPort();
-        var executor = new LlmRunExecutor(core, dispatch, NullLogger<LlmRunExecutor>.Instance);
+        var observation = new RecordingLlmRunObservation();
+        var dispatch = new RecordingDispatchPort(observation);
+        var executor = CreateExecutor(core, dispatch, observation);
 
         var request = new LlmRunExecutorRequest(
             "session-actor-4",
@@ -298,8 +295,9 @@ public sealed class LlmRunExecutorTests
     {
         var provider = new ThrowingLlmProviderFactory(new OperationCanceledException());
         var core = new LlmRunCore(provider, [], NullLogger<LlmRunCore>.Instance);
-        var dispatch = new RecordingDispatchPort();
-        var executor = new LlmRunExecutor(core, dispatch, NullLogger<LlmRunExecutor>.Instance);
+        var observation = new RecordingLlmRunObservation();
+        var dispatch = new RecordingDispatchPort(observation);
+        var executor = CreateExecutor(core, dispatch, observation);
 
         var request = new LlmRunExecutorRequest(
             "session-actor-5",
@@ -333,8 +331,9 @@ public sealed class LlmRunExecutorTests
             ],
         ]);
         var core = new LlmRunCore(provider, [], NullLogger<LlmRunCore>.Instance);
-        var dispatch = new FailingThenRecordingDispatchPort(failuresBeforeSuccess: 2);
-        var executor = new LlmRunExecutor(core, dispatch, NullLogger<LlmRunExecutor>.Instance);
+        var observation = new RecordingLlmRunObservation();
+        var dispatch = new FailingThenRecordingDispatchPort(observation, failuresBeforeSuccess: 2);
+        var executor = CreateExecutor(core, dispatch, observation);
 
         var request = new LlmRunExecutorRequest(
             "session-actor-6",
@@ -354,6 +353,17 @@ public sealed class LlmRunExecutorTests
         failed.FailureCode.Should().Be("executor_failed");
         failed.FailureMessage.Should().Contain("Synthetic dispatch failure");
     }
+
+    private static LlmRunExecutor CreateExecutor(
+        ILlmRunCore core,
+        IActorDispatchPort dispatch,
+        RecordingLlmRunObservation observation) =>
+        new(
+            core,
+            dispatch,
+            observation.ScopePreparationPort,
+            observation.ProjectionPort,
+            NullLogger<LlmRunExecutor>.Instance);
 
     private static LlmRunRequested BuildRunRequest(
         string responseId,
@@ -531,8 +541,9 @@ public sealed class LlmRunExecutorTests
         }
     }
 
-    private sealed class RecordingDispatchPort : IActorDispatchPort
+    private sealed class RecordingDispatchPort(RecordingLlmRunObservation? observation = null) : IActorDispatchPort
     {
+        private readonly RecordingLlmRunObservation _observation = observation ?? new RecordingLlmRunObservation();
         private readonly List<(int Count, TaskCompletionSource Signal)> _waiters = [];
 
         public List<(string ActorId, EventEnvelope Envelope)> Calls { get; } = [];
@@ -545,6 +556,7 @@ public sealed class LlmRunExecutorTests
             lock (Calls)
             {
                 Calls.Add((actorId, envelope.Clone()));
+                _observation.PublishCommittedRecord(envelope);
                 foreach (var waiter in _waiters.Where(waiter => Calls.Count >= waiter.Count).ToArray())
                 {
                     waiter.Signal.TrySetResult();
@@ -570,7 +582,9 @@ public sealed class LlmRunExecutorTests
         }
     }
 
-    private sealed class FailingThenRecordingDispatchPort(int failuresBeforeSuccess) : IActorDispatchPort
+    private sealed class FailingThenRecordingDispatchPort(
+        RecordingLlmRunObservation observation,
+        int failuresBeforeSuccess) : IActorDispatchPort
     {
         private readonly List<(int Count, TaskCompletionSource Signal)> _attemptWaiters = [];
         private int _attempts;
@@ -592,6 +606,7 @@ public sealed class LlmRunExecutorTests
             lock (Calls)
             {
                 Calls.Add((actorId, envelope.Clone()));
+                observation.PublishCommittedRecord(envelope);
             }
 
             SignalAttemptWaiters(attempts);
@@ -625,6 +640,188 @@ public sealed class LlmRunExecutorTests
                     _attemptWaiters.Remove(waiter);
                 }
             }
+        }
+    }
+
+    private sealed class RecordingLlmRunObservation
+    {
+        public RecordingScopeLeasePreparationPort ScopePreparationPort { get; }
+
+        public RecordingProjectionPort ProjectionPort { get; }
+
+        public RecordingLlmRunObservation()
+        {
+            ScopePreparationPort = new RecordingScopeLeasePreparationPort();
+            ProjectionPort = new RecordingProjectionPort();
+        }
+
+        public void PublishCommittedRecord(EventEnvelope commandEnvelope)
+        {
+            if (ProjectionPort.Sink == null)
+                return;
+
+            if (!TryBuildCommittedRecord(commandEnvelope.Payload, out var committedPayload))
+                return;
+
+            ProjectionPort.Sink.Push(new EventEnvelope
+            {
+                Id = $"{commandEnvelope.Id}:committed",
+                Payload = Any.Pack(new CommittedStateEventPublished
+                {
+                    StateEvent = new StateEvent
+                    {
+                        EventData = committedPayload,
+                    },
+                }),
+                Propagation = commandEnvelope.Propagation?.Clone(),
+            });
+        }
+
+        private static bool TryBuildCommittedRecord(Any? commandPayload, out Any committedPayload)
+        {
+            if (commandPayload?.Is(RecordLlmStreamChunkObserved.Descriptor) == true)
+            {
+                var command = commandPayload.Unpack<RecordLlmStreamChunkObserved>();
+                committedPayload = Any.Pack(new LlmStreamChunkObserved
+                {
+                    ResponseId = command.ResponseId,
+                    RunId = command.RunId,
+                    Round = command.Round,
+                    DeltaText = command.DeltaText,
+                    ToolCallDelta = command.ToolCallDelta?.Clone(),
+                    Usage = command.Usage?.Clone(),
+                    ObservedAt = command.ObservedAt?.Clone(),
+                    RecordId = command.RecordId,
+                });
+                return true;
+            }
+
+            if (commandPayload?.Is(RecordLlmToolCallObserved.Descriptor) == true)
+            {
+                var command = commandPayload.Unpack<RecordLlmToolCallObserved>();
+                committedPayload = Any.Pack(new LlmToolCallObserved
+                {
+                    ResponseId = command.ResponseId,
+                    RunId = command.RunId,
+                    Round = command.Round,
+                    ToolCall = command.ToolCall?.Clone(),
+                    Forwarded = command.Forwarded,
+                    LocalResultJson = command.LocalResultJson,
+                    ObservedAt = command.ObservedAt?.Clone(),
+                    LocalResult = command.LocalResult?.Clone(),
+                    RecordId = command.RecordId,
+                });
+                return true;
+            }
+
+            if (commandPayload?.Is(RecordLlmRunCompleted.Descriptor) == true)
+            {
+                var command = commandPayload.Unpack<RecordLlmRunCompleted>();
+                var completed = new LlmRunCompleted
+                {
+                    ResponseId = command.ResponseId,
+                    RunId = command.RunId,
+                    OutputText = command.OutputText,
+                    Usage = command.Usage?.Clone(),
+                    CompletedAt = command.CompletedAt?.Clone(),
+                    RecordId = command.RecordId,
+                };
+                completed.ForwardedToolCalls.AddRange(command.ForwardedToolCalls.Select(static call => call.Clone()));
+                completed.ForwardedToolCallRecords.AddRange(command.ForwardedToolCallRecords.Select(static call => call.Clone()));
+                committedPayload = Any.Pack(completed);
+                return true;
+            }
+
+            if (commandPayload?.Is(RecordLlmRunFailed.Descriptor) == true)
+            {
+                var command = commandPayload.Unpack<RecordLlmRunFailed>();
+                committedPayload = Any.Pack(new LlmRunFailed
+                {
+                    ResponseId = command.ResponseId,
+                    RunId = command.RunId,
+                    FailureCode = command.FailureCode,
+                    FailureMessage = command.FailureMessage,
+                    FailedAt = command.FailedAt?.Clone(),
+                    RecordId = command.RecordId,
+                });
+                return true;
+            }
+
+            if (commandPayload?.Is(RecordLlmRunCancelled.Descriptor) == true)
+            {
+                var command = commandPayload.Unpack<RecordLlmRunCancelled>();
+                committedPayload = Any.Pack(new LlmRunCancelled
+                {
+                    ResponseId = command.ResponseId,
+                    RunId = command.RunId,
+                    CancelledAt = command.CancelledAt?.Clone(),
+                    RecordId = command.RecordId,
+                });
+                return true;
+            }
+
+            committedPayload = default!;
+            return false;
+        }
+
+        public sealed class RecordingScopeLeasePreparationPort : ILlmSessionObservationScopeLeasePreparationPort
+        {
+            public Task<LlmSessionObservationScopeLeasePreparation?> PrepareAsync(
+                string actorId,
+                string responseId,
+                CancellationToken ct = default) =>
+                Task.FromResult<LlmSessionObservationScopeLeasePreparation?>(
+                    new LlmSessionObservationScopeLeasePreparation(actorId, responseId));
+
+            public Task ReleaseAsync(
+                LlmSessionObservationScopeLeasePreparation preparation,
+                CancellationToken ct = default) =>
+                Task.CompletedTask;
+        }
+
+        public sealed class RecordingProjectionPort : ILlmSessionObservationProjectionPort
+        {
+            public IEventSink<EventEnvelope>? Sink { get; private set; }
+
+            public bool ProjectionEnabled => true;
+
+            public Task<EventSinkProjectionAttachment<ILlmSessionObservationProjectionLease>?> AttachExistingResponseProjectionAsync(
+                string actorId,
+                string responseId,
+                IEventSink<EventEnvelope> sink,
+                CancellationToken ct = default)
+            {
+                Sink = sink;
+                return Task.FromResult<EventSinkProjectionAttachment<ILlmSessionObservationProjectionLease>?>(
+                    new EventSinkProjectionAttachment<ILlmSessionObservationProjectionLease>(
+                        new ObservationLease(actorId, responseId),
+                        new NoOpAsyncDisposable()));
+            }
+
+            public Task<IAsyncDisposable?> AttachLiveSinkAsync(
+                ILlmSessionObservationProjectionLease lease,
+                IEventSink<EventEnvelope> sink,
+                CancellationToken ct = default) =>
+                Task.FromResult<IAsyncDisposable?>(new NoOpAsyncDisposable());
+
+            public Task DetachLiveSinkAsync(IAsyncDisposable? liveSinkLease, CancellationToken ct = default)
+            {
+                Sink = null;
+                return Task.CompletedTask;
+            }
+
+            public Task ReleaseActorProjectionAsync(
+                ILlmSessionObservationProjectionLease lease,
+                CancellationToken ct = default) =>
+                Task.CompletedTask;
+        }
+
+        private sealed record ObservationLease(string ActorId, string ResponseId)
+            : ILlmSessionObservationProjectionLease;
+
+        private sealed class NoOpAsyncDisposable : IAsyncDisposable
+        {
+            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
         }
     }
 
