@@ -119,7 +119,6 @@ public sealed class LlmRunCoreTests
         var core = new LlmRunCore(provider, [toolProvider], NullLogger<LlmRunCore>.Instance);
         var selection = BuildForwardedSelection();
         selection.SubstitutedToolNames.Add("get_weather");
-        selection.OwnedToolNames.Add("get_weather");
 
         await core.RunAsync(
             new LlmRunCoreRequest(BuildRunRequest("resp_1", selection), "run_1", "ApiKey"),
@@ -167,7 +166,6 @@ public sealed class LlmRunCoreTests
         var core = new LlmRunCore(provider, [toolProvider], NullLogger<LlmRunCore>.Instance);
         var selection = BuildForwardedSelection();
         selection.AdditiveToolNames.Add("aevatar_invoke_team");
-        selection.OwnedToolNames.Add("aevatar_invoke_team");
 
         await core.RunAsync(
             new LlmRunCoreRequest(BuildRunRequest("resp_owned", selection), "run_1", "ApiKey"),
@@ -237,11 +235,7 @@ public sealed class LlmRunCoreTests
     }
 
     [Fact]
-<<<<<<< HEAD
-    public async Task RunAsync_WhenOwnedToolInstanceIsMissing_ShouldRecordLocalErrorAndNotForward()
-=======
     public async Task RunAsync_WhenOwnedToolIsMissingFromDiscovery_ShouldReturnLocalToolUnavailableResult()
->>>>>>> origin/feature/integrate
     {
         var provider = new ScriptedLlmProviderFactory([
             [
@@ -249,11 +243,7 @@ public sealed class LlmRunCoreTests
                 {
                     DeltaToolCall = new ToolCall
                     {
-<<<<<<< HEAD
-                        Id = "call_1",
-=======
                         Id = "call_missing",
->>>>>>> origin/feature/integrate
                         Name = "use_skill",
                         ArgumentsJson = """{"name":"writer"}""",
                     },
@@ -272,32 +262,10 @@ public sealed class LlmRunCoreTests
         var core = new LlmRunCore(provider, [], NullLogger<LlmRunCore>.Instance);
         var selection = new LlmSessionRuntimeToolSelection
         {
-<<<<<<< HEAD
-            ForwardedTools =
-            {
-                new LlmSessionRuntimeToolDeclaration
-                {
-                    ToolName = "use_skill",
-                    Description = "Client collision",
-                    ParametersJson = """{"type":"object"}""",
-                    SchemaHash = "schema-1",
-                },
-            },
-=======
->>>>>>> origin/feature/integrate
             OwnedToolNames = { "use_skill" },
         };
 
         await core.RunAsync(
-<<<<<<< HEAD
-            new LlmRunCoreRequest(BuildRunRequest("resp_1", selection), "run_1", "ApiKey"),
-            sink);
-
-        sink.ForwardedToolCalls.Should().BeEmpty();
-        var observed = sink.ToolCalls.Should().ContainSingle(toolCall => !toolCall.Forwarded).Subject;
-        observed.ToolCall.ToolName.Should().Be("use_skill");
-        observed.LocalResultJson.Should().Contain("aevatar_substitute_tool_not_registered");
-=======
             new LlmRunCoreRequest(BuildRunRequest("resp_missing", selection), "run_1", "ApiKey"),
             sink);
 
@@ -306,23 +274,16 @@ public sealed class LlmRunCoreTests
         observed.ToolCall.ToolName.Should().Be("use_skill");
         observed.LocalResultJson.Should().Be("""{"error":"tool_not_available","tool_name":"use_skill"}""");
         observed.LocalResult.StructValue.Fields["error"].StringValue.Should().Be("tool_not_available");
->>>>>>> origin/feature/integrate
         provider.Requests.Should().HaveCount(2);
         provider.Requests[1].Messages.Should().Contain(message =>
             string.Equals(message.Role, "tool", StringComparison.Ordinal) &&
             message.Content != null &&
-<<<<<<< HEAD
-            message.Content.Contains("aevatar_substitute_tool_not_registered", StringComparison.Ordinal));
-=======
             message.Content.Contains("tool_not_available", StringComparison.Ordinal));
->>>>>>> origin/feature/integrate
         sink.Completed.Should().ContainSingle()
             .Which.OutputText.Should().Be("missing tool reported");
     }
 
     [Fact]
-<<<<<<< HEAD
-=======
     public async Task RunAsync_WhenModelCallsUnknownTool_ShouldReturnLocalToolNotDeclaredResult()
     {
         var provider = new ScriptedLlmProviderFactory([
@@ -404,7 +365,6 @@ public sealed class LlmRunCoreTests
     }
 
     [Fact]
->>>>>>> origin/feature/integrate
     public async Task RunAsync_WhenProviderThrows_ShouldRecordFailureThroughSink()
     {
         var provider = new ThrowingLlmProviderFactory(

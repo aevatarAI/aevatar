@@ -128,14 +128,9 @@ public sealed class LlmRunCore(
             }
 
             var builtToolCalls = ApplyToolChoiceHint(toolCalls.BuildToolCalls(), command.ToolSelection);
-<<<<<<< HEAD
-            var selectedToolCalls = SelectRuntimeToolCalls(builtToolCalls, command.ToolSelection, tools);
-            foreach (var toolCall in selectedToolCalls.Forwarded)
-=======
             var routedToolCalls = ownershipPlan.Route(builtToolCalls);
             var forwardedToolCalls = routedToolCalls.Forwarded;
             foreach (var toolCall in forwardedToolCalls)
->>>>>>> origin/feature/integrate
             {
                 await sink.RecordToolCallObservedAsync(new LlmToolCallObserved
                 {
@@ -153,26 +148,22 @@ public sealed class LlmRunCore(
                 }, ct).ConfigureAwait(false);
             }
 
-            if (selectedToolCalls.Forwarded.Count > 0)
+            if (forwardedToolCalls.Count > 0)
             {
                 await sink.RecordRunCompletedAsync(new LlmRunCompleted
                 {
                     ResponseId = command.ResponseId,
                     RunId = request.RunId,
                     OutputText = outputText.ToString(),
-                    ForwardedToolCalls = { selectedToolCalls.Forwarded.Select(ToRuntimeToolCall) },
+                    ForwardedToolCalls = { forwardedToolCalls.Select(ToRuntimeToolCall) },
                     Usage = usage is null ? null : ToSessionUsage(usage),
                     CompletedAt = Timestamp.FromDateTime(DateTime.UtcNow),
                 }, ct).ConfigureAwait(false);
                 return;
             }
 
-<<<<<<< HEAD
-            if (selectedToolCalls.Local.Count == 0)
-=======
             var localToolCalls = routedToolCalls.Local;
             if (localToolCalls.Count == 0)
->>>>>>> origin/feature/integrate
             {
                 await sink.RecordRunCompletedAsync(new LlmRunCompleted
                 {
@@ -188,13 +179,9 @@ public sealed class LlmRunCore(
             messages.Add(new ChatMessage
             {
                 Role = "assistant",
-                ToolCalls = selectedToolCalls.Local,
+                ToolCalls = localToolCalls,
             });
-<<<<<<< HEAD
-            await ExecuteLocalToolCallsAsync(command, request.RunId, round, selectedToolCalls.Local, tools, messages, toolContext, sink, ct)
-=======
             await ExecuteLocalToolCallsAsync(command, request.RunId, round, localToolCalls, ownershipPlan, messages, toolContext, sink, ct)
->>>>>>> origin/feature/integrate
                 .ConfigureAwait(false);
         }
 
@@ -572,56 +559,15 @@ public sealed class LlmRunCore(
             },
         });
 
-<<<<<<< HEAD
-    private static RuntimeToolCallSelection SelectRuntimeToolCalls(
-        IReadOnlyList<ToolCall> toolCalls,
-        LlmSessionRuntimeToolSelection? selection,
-        IReadOnlyList<IAgentTool> tools)
-    {
-        if (toolCalls.Count == 0)
-            return RuntimeToolCallSelection.Empty;
-
-        var ownedToolNames = BuildOwnedToolNameSet(selection);
-        var forwardedToolNames = (selection?.ForwardedTools ?? [])
-            .Select(static tool => tool.ToolName)
-            .Where(name => !ownedToolNames.Contains(name))
-            .ToHashSet(StringComparer.Ordinal);
-        var localNames = tools
-            .Where(static tool => tool is not ForwardedRuntimeTool)
-            .Select(static tool => tool.Name)
-            .ToHashSet(StringComparer.Ordinal);
-
-        var forwarded = new List<ToolCall>();
-        var local = new List<ToolCall>();
-        foreach (var call in toolCalls)
-        {
-            if (ownedToolNames.Contains(call.Name))
-            {
-                local.Add(call);
-                continue;
-            }
-
-            if (forwardedToolNames.Contains(call.Name))
-            {
-                forwarded.Add(call);
-                continue;
-            }
-
-            if (localNames.Contains(call.Name))
-                local.Add(call);
-        }
-
-        return new RuntimeToolCallSelection(forwarded, local);
-    }
-
-=======
->>>>>>> origin/feature/integrate
     private static HashSet<string> BuildOwnedToolNameSet(LlmSessionRuntimeToolSelection? selection)
     {
         if (selection is null)
             return new HashSet<string>(StringComparer.Ordinal);
 
-        return selection.OwnedToolNames.ToHashSet(StringComparer.Ordinal);
+        var ownedNames = selection.OwnedToolNames.Count > 0
+            ? selection.OwnedToolNames
+            : selection.SubstitutedToolNames.Concat(selection.AdditiveToolNames);
+        return ownedNames.ToHashSet(StringComparer.Ordinal);
     }
 
     private static LlmSessionForwardedToolCall BuildForwardedToolCall(
@@ -685,13 +631,6 @@ public sealed class LlmRunCore(
                 $"Forwarded Responses tool '{Name}' must be executed by the client, not by Aevatar.");
     }
 
-<<<<<<< HEAD
-    private sealed record RuntimeToolCallSelection(
-        IReadOnlyList<ToolCall> Forwarded,
-        IReadOnlyList<ToolCall> Local)
-    {
-        public static RuntimeToolCallSelection Empty { get; } = new([], []);
-=======
     private sealed class LlmToolOwnershipPlan
     {
         private readonly IReadOnlyDictionary<string, IAgentTool> _executableTools;
@@ -762,7 +701,6 @@ public sealed class LlmRunCore(
         IReadOnlyList<ToolCall> Forwarded)
     {
         public static RoutedToolCalls Empty { get; } = new([], []);
->>>>>>> origin/feature/integrate
     }
 
     private sealed class RuntimeToolCallAccumulator
