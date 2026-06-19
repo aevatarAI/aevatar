@@ -67,6 +67,7 @@ public class VoiceRealtimeSessionTests
         result.Receipt.PcmSampleRateHz.ShouldBe(16000);
         result.Receipt.ObservedStateVersion.ShouldBe(5);
         result.Receipt.LeaseHandle.LeaseEpoch.ShouldBe(7);
+        result.Receipt.AttachOutcome.ShouldBe(VoiceRealtimeAttachOutcome.NewSession);
         acceptedCallbacks.ShouldHaveSingleItem().SessionId.ShouldBe(result.Receipt.SessionId);
         var acquireRequest = leasePort.AcquireRequests.ShouldHaveSingleItem();
         acquireRequest.ModuleName.ShouldBe("voice_presence_openai");
@@ -198,6 +199,8 @@ public class VoiceRealtimeSessionTests
         result.Succeeded.ShouldBeTrue();
         mediaPort.DetachedHandles.ShouldHaveSingleItem().SessionId.ShouldBe("old-session");
         leasePort.AcquireRequests.ShouldHaveSingleItem();
+        result.Receipt.ShouldNotBeNull();
+        result.Receipt.AttachOutcome.ShouldBe(VoiceRealtimeAttachOutcome.Restarted);
     }
 
     [Fact]
@@ -260,6 +263,8 @@ public class VoiceRealtimeSessionTests
         attachResult.Succeeded.ShouldBeTrue();
         mediaPort.DetachedHandles.ShouldHaveSingleItem().SessionId.ShouldBe("session-1");
         leasePort.AcquireRequests.ShouldHaveSingleItem();
+        attachResult.Receipt.ShouldNotBeNull();
+        attachResult.Receipt.AttachOutcome.ShouldBe(VoiceRealtimeAttachOutcome.Restarted);
         detachResult.Succeeded.ShouldBeTrue();
         detachResult.Receipt.ShouldNotBeNull();
         detachResult.Receipt.SessionId.ShouldBe("session-1");
