@@ -7,6 +7,19 @@ public sealed record LlmRunCoreRequest(
     string RunId,
     string? OriginPlatform);
 
+public sealed record LlmRunExecutionRequest(
+    string SessionActorId,
+    LlmRunRequested Command,
+    string RunId,
+    string? OriginPlatform);
+
+public interface ILlmRunExecutor
+{
+    Task StartAsync(
+        LlmRunExecutionRequest request,
+        CancellationToken ct = default);
+}
+
 public interface ILlmRunCore
 {
     Task RunAsync(

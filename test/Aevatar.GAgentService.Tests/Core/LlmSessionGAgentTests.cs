@@ -766,6 +766,63 @@ public sealed class LlmSessionGAgentTests
     }
 
     [Fact]
+    public async Task RecordCommands_ShouldAssignActorOwnedSequence_AndIgnoreDuplicateRecordId()
+    {
+        var actor = CreateActor("resp_records", services => services.AddSingleton<ILlmRunExecutor, NoOpLlmRunExecutor>());
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_records"),
+        });
+        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_records"));
+
+        await actor.HandleRecordStreamChunkObservedAsync(new RecordLlmStreamChunkObserved
+        {
+            ResponseId = "resp_records",
+            RunId = "run_1",
+            RecordId = "run_1:manual:1",
+            Round = 0,
+            DeltaText = " late",
+        });
+        var versionAfterRecord = actor.State.LastAppliedEventVersion;
+
+        await actor.HandleRecordStreamChunkObservedAsync(new RecordLlmStreamChunkObserved
+        {
+            ResponseId = "resp_records",
+            RunId = "run_1",
+            RecordId = "run_1:manual:1",
+            Round = 0,
+            DeltaText = " duplicate",
+        });
+
+        actor.State.LastAppliedEventVersion.Should().Be(versionAfterRecord);
+        actor.State.ActiveRun!.AppliedRecordIds.Should().Contain("run_1:manual:1");
+        actor.State.ActiveRun.OutputText.Should().Be(" late");
+        actor.State.ActiveRun.LastAppliedSequence.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task RecordCommands_ShouldRejectOutOfRunRecord()
+    {
+        var actor = CreateActor("resp_records", services => services.AddSingleton<ILlmRunExecutor, NoOpLlmRunExecutor>());
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_records"),
+        });
+        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_records"));
+
+        var act = () => actor.HandleRecordStreamChunkObservedAsync(new RecordLlmStreamChunkObserved
+        {
+            ResponseId = "resp_records",
+            RunId = "foreign-run",
+            RecordId = "foreign-run:chunk:1",
+            DeltaText = "wrong",
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*active run is 'run_1' and cannot record run 'foreign-run'*");
+    }
+
+    [Fact]
     public async Task ActivateAsync_ShouldReplayOnlyConsecutiveRunEventSequences()
     {
         var eventStore = new InMemoryEventStore();
@@ -1877,5 +1934,17 @@ public sealed class LlmSessionGAgentTests
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
             Task.FromException<string>(exception);
+    }
+
+    private sealed class NoOpLlmRunExecutor : ILlmRunExecutor
+    {
+        public Task StartAsync(
+            LlmRunExecutionRequest request,
+            CancellationToken ct = default)
+        {
+            _ = request;
+            _ = ct;
+            return Task.CompletedTask;
+        }
     }
 }

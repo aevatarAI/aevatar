@@ -11,6 +11,7 @@ using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Application.Responses;
+using Aevatar.GAgentService.Core.GAgents;
 using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -145,6 +146,10 @@ internal static class GAgentServiceTestKit
             .AddSingleton<ILlmRunCore, LlmRunCore>()
             .AddSingleton<ILogger<LlmRunCore>>(NullLogger<LlmRunCore>.Instance)
             .AddSingleton<IEnumerable<IGAgentExecutionHook>>(Array.Empty<IGAgentExecutionHook>());
+        if (agent is LlmSessionGAgent llmSession)
+            services.AddSingleton<ILlmRunExecutor>(sp => new InlineLlmRunExecutor(
+                sp.GetRequiredService<ILlmRunCore>(),
+                llmSession));
         configureServices?.Invoke(services);
         agent.Services = services.BuildServiceProvider();
         return agent;
@@ -164,6 +169,140 @@ internal static class GAgentServiceTestKit
             EventEnvelope envelope,
             CancellationToken ct = default) =>
             Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
+    }
+
+    private sealed class InlineLlmRunExecutor(
+        ILlmRunCore runCore,
+        LlmSessionGAgent actor) : ILlmRunExecutor
+    {
+        public Task StartAsync(
+            LlmRunExecutionRequest request,
+            CancellationToken ct = default) =>
+            runCore.RunAsync(
+                new LlmRunCoreRequest(request.Command.Clone(), request.RunId, request.OriginPlatform),
+                new InlineLlmRunSink(actor, request.RunId),
+                ct);
+    }
+
+    private sealed class InlineLlmRunSink(
+        LlmSessionGAgent actor,
+        string runId) : ILlmRunSink
+    {
+        private long _recordIndex;
+
+        public Task RecordStreamChunkObservedAsync(
+            LlmStreamChunkObserved observed,
+            CancellationToken ct = default)
+        {
+            _ = ct;
+            var recordId = NextRecordId("chunk");
+            return actor.HandleRecordStreamChunkObservedAsync(new RecordLlmStreamChunkObserved
+            {
+                ResponseId = observed.ResponseId,
+                RunId = ResolveRunId(observed.RunId),
+                RecordId = recordId,
+                Round = observed.Round,
+                DeltaText = observed.DeltaText ?? string.Empty,
+                ToolCallDelta = observed.ToolCallDelta?.Clone(),
+                Usage = observed.Usage?.Clone(),
+                ObservedAt = observed.ObservedAt?.Clone(),
+            });
+        }
+
+        public Task RecordToolCallObservedAsync(
+            LlmToolCallObserved observed,
+            CancellationToken ct = default)
+        {
+            _ = ct;
+            var recordId = NextRecordId("tool");
+            return actor.HandleRecordToolCallObservedAsync(new RecordLlmToolCallObserved
+            {
+                ResponseId = observed.ResponseId,
+                RunId = ResolveRunId(observed.RunId),
+                RecordId = recordId,
+                Round = observed.Round,
+                ToolCall = observed.ToolCall?.Clone(),
+                Forwarded = observed.Forwarded,
+                LocalResultJson = observed.LocalResultJson ?? string.Empty,
+                ObservedAt = observed.ObservedAt?.Clone(),
+                LocalResult = observed.LocalResult?.Clone(),
+            });
+        }
+
+        public Task RecordForwardedToolCallEmittedAsync(
+            LlmSessionForwardedToolCallEmittedEvent emitted,
+            CancellationToken ct = default)
+        {
+            _ = ct;
+            var recordId = NextRecordId("forwarded-tool");
+            return actor.HandleRecordForwardedToolCallEmittedAsync(new RecordLlmForwardedToolCallEmitted
+            {
+                ResponseId = emitted.ResponseId,
+                RunId = runId,
+                RecordId = recordId,
+                Call = emitted.Call?.Clone(),
+            });
+        }
+
+        public Task RecordRunCompletedAsync(
+            LlmRunCompleted completed,
+            CancellationToken ct = default)
+        {
+            _ = ct;
+            var recordId = NextRecordId("completed");
+            var command = new RecordLlmRunCompleted
+            {
+                ResponseId = completed.ResponseId,
+                RunId = ResolveRunId(completed.RunId),
+                RecordId = recordId,
+                OutputText = completed.OutputText ?? string.Empty,
+                Usage = completed.Usage?.Clone(),
+                CompletedAt = completed.CompletedAt?.Clone(),
+            };
+            command.ForwardedToolCalls.AddRange(completed.ForwardedToolCalls.Select(static call => call.Clone()));
+            return actor.HandleRecordRunCompletedAsync(command);
+        }
+
+        public Task RecordRunFailedAsync(
+            LlmRunFailed failed,
+            CancellationToken ct = default)
+        {
+            _ = ct;
+            var recordId = NextRecordId("failed");
+            return actor.HandleRecordRunFailedAsync(new RecordLlmRunFailed
+            {
+                ResponseId = failed.ResponseId,
+                RunId = ResolveRunId(failed.RunId),
+                RecordId = recordId,
+                FailureCode = failed.FailureCode ?? string.Empty,
+                FailureMessage = failed.FailureMessage ?? string.Empty,
+                FailedAt = failed.FailedAt?.Clone(),
+            });
+        }
+
+        public Task RecordRunCancelledAsync(
+            LlmRunCancelled cancelled,
+            CancellationToken ct = default)
+        {
+            _ = ct;
+            var recordId = NextRecordId("cancelled");
+            return actor.HandleRecordRunCancelledAsync(new RecordLlmRunCancelled
+            {
+                ResponseId = cancelled.ResponseId,
+                RunId = ResolveRunId(cancelled.RunId),
+                RecordId = recordId,
+                CancelledAt = cancelled.CancelledAt?.Clone(),
+            });
+        }
+
+        private string NextRecordId(string kind)
+        {
+            var index = Interlocked.Increment(ref _recordIndex);
+            return $"{runId}:{kind}:{index}";
+        }
+
+        private string ResolveRunId(string? candidate) =>
+            string.IsNullOrWhiteSpace(candidate) ? runId : candidate.Trim();
     }
 }
 
