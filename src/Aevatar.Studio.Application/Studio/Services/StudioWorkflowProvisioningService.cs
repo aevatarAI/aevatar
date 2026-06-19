@@ -146,20 +146,30 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         {
             ct.ThrowIfCancellationRequested();
 
-            var run = await _memberService.GetBindingRunAsync(scopeId, memberId, bindingRunId, ct);
-
-            if (IsSucceeded(run.Status))
+            try
             {
-                return run.Result
-                    ?? throw new InvalidOperationException(
-                        $"binding run '{bindingRunId}' reported succeeded but exposed no published service result.");
+                var run = await _memberService.GetBindingRunAsync(scopeId, memberId, bindingRunId, ct);
+
+                if (IsSucceeded(run.Status))
+                {
+                    return run.Result
+                        ?? throw new InvalidOperationException(
+                            $"binding run '{bindingRunId}' reported succeeded but exposed no published service result.");
+                }
+
+                if (IsTerminalFailure(run.Status))
+                {
+                    var detail = run.Failure?.Message ?? run.Status;
+                    throw new InvalidOperationException(
+                        $"workflow binding for member '{memberId}' did not succeed (status '{run.Status}'): {detail}");
+                }
             }
-
-            if (IsTerminalFailure(run.Status))
+            catch (StudioMemberBindingRunNotFoundException)
             {
-                var detail = run.Failure?.Message ?? run.Status;
-                throw new InvalidOperationException(
-                    $"workflow binding for member '{memberId}' did not succeed (status '{run.Status}'): {detail}");
+                // The binding-run read model is eventually consistent: immediately after
+                // BindAsync the run record may not be queryable yet (the bind admission is
+                // still materializing). Treat the not-found window as "not ready" and keep
+                // polling until the deadline rather than surfacing it as a failure.
             }
 
             if (_timeProvider.GetUtcNow() >= deadline)

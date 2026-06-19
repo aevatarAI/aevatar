@@ -131,6 +131,53 @@ public sealed class StudioWorkflowProvisioningServiceTests
     }
 
     [Fact]
+    public async Task ProvisionAsync_BindingRunNotFoundInitially_KeepsPollingUntilMaterialized()
+    {
+        // Regression (live 500): the binding-run read model is eventually consistent.
+        // The first polls throw StudioMemberBindingRunNotFoundException before the run
+        // record materializes. The bounded poll must treat that not-found window as
+        // "not ready yet" and keep polling — NOT surface it as a failure.
+        var member = NewRecordingMemberService(
+            bindRunStatuses: [StudioMemberBindingRunStatusNames.Succeeded]);
+        member.NotFoundThrowsRemaining = 2;
+        var invocation = new RecordingInvocationPort
+        {
+            Receipt = new ServiceInvocationAcceptedReceipt { RunId = "run-late" },
+        };
+        var sut = NewService(member, invocation);
+
+        var response = await sut.ProvisionAsync(
+            ScopeId,
+            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "go"));
+
+        response.BindingStatus.Should().Be(ProvisionWorkflowBindingStatusNames.Succeeded);
+        response.RunId.Should().Be("run-late");
+        invocation.Invoked.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_BindingRunNotFoundUntilTimeout_ReturnsPendingNotError()
+    {
+        // If the binding run never materializes within the timeout, the service
+        // returns pending (202) — never a 500 from an uncaught not-found.
+        var member = NewRecordingMemberService(
+            bindRunStatuses: [StudioMemberBindingRunStatusNames.Succeeded]);
+        member.NotFoundThrowsRemaining = int.MaxValue;
+        var invocation = new RecordingInvocationPort();
+        var sut = NewService(member, invocation, out var time);
+        member.OnGetBindingRun = () => time.Advance(TimeSpan.FromSeconds(1));
+
+        var response = await sut.ProvisionAsync(
+            ScopeId,
+            new ProvisionWorkflowRequest(
+                DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "go", BindTimeoutSeconds: 2));
+
+        response.BindingStatus.Should().Be(ProvisionWorkflowBindingStatusNames.Pending);
+        response.RunId.Should().BeNull();
+        invocation.Invoked.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task ProvisionAsync_RunImmediatelyFalse_BindsButDoesNotInvoke()
     {
         var member = NewRecordingMemberService(
@@ -261,6 +308,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
         public string MemberId { get; set; } = "member-1";
         public string? TeamId { get; set; }
         public Action? OnGetBindingRun { get; set; }
+        public int NotFoundThrowsRemaining { get; set; }
 
         public bool CreateInvoked { get; private set; }
         public string? CreateScopeId { get; private set; }
@@ -309,6 +357,12 @@ public sealed class StudioWorkflowProvisioningServiceTests
         {
             OnGetBindingRun?.Invoke();
             GetBindingRunScopeId = scopeId;
+            if (NotFoundThrowsRemaining > 0)
+            {
+                NotFoundThrowsRemaining--;
+                throw new Application.Studio.Abstractions.StudioMemberBindingRunNotFoundException(
+                    scopeId, memberId, bindingRunId);
+            }
             var index = GetBindingRunCallCount;
             GetBindingRunCallCount++;
 
