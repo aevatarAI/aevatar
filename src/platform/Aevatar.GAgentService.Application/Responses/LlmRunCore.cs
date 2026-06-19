@@ -131,22 +131,6 @@ public sealed class LlmRunCore(
             var builtToolCalls = ApplyToolChoiceHint(toolCalls.BuildToolCalls(), command.ToolSelection);
             var routedToolCalls = ownershipPlan.Route(builtToolCalls);
             var forwardedToolCalls = routedToolCalls.Forwarded;
-            var forwardedToolCallRecords = new List<LlmSessionForwardedToolCall>(forwardedToolCalls.Count);
-            foreach (var toolCall in forwardedToolCalls)
-            {
-                if (ShouldStop(await sink.RecordToolCallObservedAsync(new LlmToolCallObserved
-                {
-                    ResponseId = command.ResponseId,
-                    RunId = request.RunId,
-                    Round = round,
-                    ToolCall = ToRuntimeToolCall(toolCall),
-                    Forwarded = true,
-                    ObservedAt = Timestamp.FromDateTime(DateTime.UtcNow),
-                }, ct).ConfigureAwait(false)))
-                    return;
-                forwardedToolCallRecords.Add(BuildForwardedToolCall(toolCall, command.ToolSelection));
-            }
-
             if (forwardedToolCalls.Count > 0)
             {
                 var completed = new LlmRunCompleted
@@ -158,7 +142,8 @@ public sealed class LlmRunCore(
                     Usage = usage is null ? null : ToSessionUsage(usage),
                     CompletedAt = Timestamp.FromDateTime(DateTime.UtcNow),
                 };
-                completed.ForwardedToolCallRecords.AddRange(forwardedToolCallRecords);
+                completed.ForwardedToolCallRecords.AddRange(
+                    forwardedToolCalls.Select(call => BuildForwardedToolCall(call, command.ToolSelection)));
                 _ = await sink.RecordRunCompletedAsync(completed, ct).ConfigureAwait(false);
                 return;
             }

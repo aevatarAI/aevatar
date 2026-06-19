@@ -77,7 +77,7 @@ public sealed class LlmRunCoreTests
             new LlmRunCoreRequest(BuildRunRequest("resp_1", BuildForwardedSelection()), "run_1", "ApiKey"),
             sink);
 
-        sink.ToolCalls.Should().ContainSingle(observed => observed.Forwarded);
+        sink.ToolCalls.Should().BeEmpty();
         sink.Completed.Should().ContainSingle();
         var forwarded = sink.Completed[0].ForwardedToolCallRecords.Should().ContainSingle().Subject;
         forwarded.CallId.Should().Be("call_1");
@@ -137,8 +137,10 @@ public sealed class LlmRunCoreTests
     }
 
     [Fact]
-    public async Task RunAsync_WhenSinkStopsAfterToolObservation_ShouldStopDispatchingTerminalRecords()
+    public async Task RunAsync_WhenSinkStopsAfterLocalToolObservation_ShouldStopDispatchingTerminalRecords()
     {
+        var tool = new RecordingAgentTool("get_weather", """{"temperature":28}""");
+        var toolProvider = new StaticResponsesToolProvider(substituteTools: [tool]);
         var provider = new ScriptedLlmProviderFactory([
             [
                 new LLMStreamChunk
@@ -153,17 +155,19 @@ public sealed class LlmRunCoreTests
                 },
             ],
         ]);
+        var selection = BuildForwardedSelection();
+        selection.SubstitutedToolNames.Add("get_weather");
         var sink = new RecordingLlmRunSink
         {
             StopAfterToolObservation = true,
         };
-        var core = new LlmRunCore(provider, [], NullLogger<LlmRunCore>.Instance);
+        var core = new LlmRunCore(provider, [toolProvider], NullLogger<LlmRunCore>.Instance);
 
         await core.RunAsync(
-            new LlmRunCoreRequest(BuildRunRequest("resp_1", BuildForwardedSelection()), "run_1", "ApiKey"),
+            new LlmRunCoreRequest(BuildRunRequest("resp_1", selection), "run_1", "ApiKey"),
             sink);
 
-        sink.ToolCalls.Should().ContainSingle(observed => observed.Forwarded);
+        sink.ToolCalls.Should().ContainSingle(observed => !observed.Forwarded);
         sink.Completed.Should().BeEmpty();
         sink.Failed.Should().BeEmpty();
         sink.Cancelled.Should().BeEmpty();

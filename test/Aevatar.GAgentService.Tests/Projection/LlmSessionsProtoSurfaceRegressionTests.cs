@@ -48,12 +48,12 @@ public sealed class LlmSessionsProtoSurfaceRegressionTests
                 "ExecuteLlmRunRequested",
                 "RecordLlmStreamChunkObserved",
                 "RecordLlmToolCallObserved",
-                "RecordLlmForwardedToolCallEmitted",
                 "RecordLlmRunCompleted",
                 "RecordLlmRunFailed",
                 "RecordLlmRunCancelled",
                 "FinalizeLlmRunTimedOut",
             ]);
+        TopLevelMessageNames(descriptor).Should().NotContain("RecordLlmForwardedToolCallEmitted");
         LlmRunRequested.Descriptor.FindFieldByName("timeout_after").Should().NotBeNull();
         LlmSessionRuntimeToolSelection.Descriptor.FindFieldByName("owned_tool_names").Should().NotBeNull();
         LlmRunExecutionReadyEvent.Descriptor.FindFieldByName("execution_request").Should().BeNull();

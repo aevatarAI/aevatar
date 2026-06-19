@@ -481,34 +481,6 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
     }
 
     [EventHandler]
-    public async Task HandleRecordForwardedToolCallEmittedAsync(RecordLlmForwardedToolCallEmitted command)
-    {
-        ArgumentNullException.ThrowIfNull(command);
-        ArgumentNullException.ThrowIfNull(command.Call);
-        if (!TryPrepareRunRecord(command.ResponseId, command.RunId, command.RecordId, out var existing, out _))
-            return;
-
-        var call = NormalizeToolCall(command.Call.Clone());
-        ValidateToolCall(call);
-
-        var existingCall = State.ForwardedToolCalls
-            .FirstOrDefault(x => string.Equals(x.CallId, call.CallId, StringComparison.Ordinal));
-        if (existingCall != null)
-        {
-            EnsureExistingToolCallMatches(existingCall, call);
-        }
-
-        await PersistDomainEventAsync(new LlmSessionForwardedToolCallEmittedEvent
-        {
-            ResponseId = existing.ResponseId,
-            Call = call,
-            RunId = State.ActiveRun!.RunId,
-            RecordId = NormalizeRequired(command.RecordId),
-            Sequence = NextRunSequence(State.ActiveRun.RunId),
-        });
-    }
-
-    [EventHandler]
     public async Task HandleRecordRunCompletedAsync(RecordLlmRunCompleted command)
     {
         ArgumentNullException.ThrowIfNull(command);
