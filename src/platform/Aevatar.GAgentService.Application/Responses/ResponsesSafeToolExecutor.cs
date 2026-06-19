@@ -1,7 +1,7 @@
 using System.Text.Json;
 using Aevatar.AI.Abstractions.ToolProviders;
 
-namespace Aevatar.GAgentService.Core.GAgents;
+namespace Aevatar.GAgentService.Application.Responses;
 
 internal static class ResponsesSafeToolExecutor
 {
