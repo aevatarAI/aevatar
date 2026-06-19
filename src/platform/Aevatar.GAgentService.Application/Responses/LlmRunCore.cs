@@ -39,7 +39,7 @@ public sealed class LlmRunCore(
                 ResponseId = request.Command.ResponseId,
                 RunId = request.RunId,
                 CancelledAt = Timestamp.FromDateTime(DateTime.UtcNow),
-            }, ct).ConfigureAwait(false);
+            }, CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception ex)
         {

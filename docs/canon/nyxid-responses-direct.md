@@ -117,6 +117,20 @@ llm-anthropic/claude-haiku-4-5
 
 这只是兼容无状态客户端的历史上下文折叠，不等于正式 continuation。
 
+### 4.1 Run 记录与 streaming 完成语义
+
+Responses、Messages 和 Chat Completions 三条直连入口都把模型调用收敛到 `LlmSessionGAgent` 的 typed run 记录链路。HTTP handler 只 dispatch run command 并观察 terminal projection；真正的 provider stream 不在 Host 或 session actor turn 内同步消费。
+
+执行边界如下：
+
+1. `LlmRunRequested` 进入 session actor 后先记录 `LlmRunStartedEvent`，ACK 只表示 run 已被 actor 接受。
+2. `ILlmRunCore` 在 actor turn 外连续消费 NyxID/provider 的 live `ChatStreamAsync`，并把每个 chunk/tool/terminal 结果作为 typed recorder command 回投给 session actor。
+3. session actor 是唯一权威状态源。它使用 `responseId + runId + sequence` 做幂等接受，重复 chunk、晚到 recorder command、重复 terminal dispatch、terminal 后失败重试都不会改写已提交 terminal 状态。
+4. provider stream 没有 terminal chunk 时，取消或观察超时必须落成 `LlmRunCancelled` / terminal failure 这类 typed fact；不能依赖 Host 临时拼 response，也不能用 query-time replay 修补。
+5. self-continuation 只适合持久化 actor 下一拍要处理的稳定事实，不适合保存 HTTP stream 枚举器。live provider stream 一旦离开当前 async consumption frame，就没有可重放的远端连接状态；因此不能设计为 actor self-message 小步恢复。
+
+这组约束保证 streaming 与非 streaming create 都从同一个 committed terminal fact 得到结果：成功映射为 completed response，provider failure 映射为非 2xx error envelope，取消映射为 `run_cancelled`。
+
 ## 5. 直连工具行为
 
 `/v1/responses`、`/v1/messages`、`/v1/chat/completions` 使用同一套 `IResponsesDirectToolPlanService` + `IResponsesToolClassificationService` 抽象组装 tool sources 并做工具分类。三条 create 入口都会合并同一批全局 `IResponsesToolProvider`，并按 chat-route `ForwardToModel.ToolSetRef` 追加同一个 route tool set。Mainnet 的 direct LLM ingress 默认补 `workspace.default`；`lark.self_notify`、`voice.realtime` 也必须组合 `workspace.default`，所以 NyxID/Aevatar workspace tools 是默认可见能力，不依赖调用方显式配置 route tool set。最终工具分成三类：

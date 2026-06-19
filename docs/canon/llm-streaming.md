@@ -35,6 +35,18 @@ owner: eanzhao
 - LLM streaming 链路消费的是 actor envelope 流；Event Sourcing 领域事件仍由 Actor 显式持久化。
 - Voice control/transcript frame 属于 projection-backed realtime stream；raw PCM 只有一条运行时路径：当前 transport lease 内的 `IVoiceVolatileMediaStreamPort` volatile relay 在 `IVoiceTransport` 与 `IRealtimeVoiceProvider` session 之间转发。raw PCM 不进入 actor/proto `VoiceModuleSignal`、`EventEnvelope`、projection、readmodel 或 committed event。
 
+### 2.1 Responses LlmSession 流式执行边界
+
+NyxID direct Responses / Messages / Chat Completions 的 `LlmSessionGAgent` 使用同一条 actor-owned run 记录语义：
+
+1. `LlmSessionGAgent` 只在 actor turn 内接受 `LlmRunRequested`、持久化 `LlmRunStartedEvent`，并保持 `responseId + runId + sequence` 的权威状态。
+2. live provider `ChatStreamAsync` / `IAsyncEnumerable<LLMStreamChunk>` 由 `ILlmRunCore` 在 actor turn 外连续消费；每个观察到的事实只以 typed recorder event 回到 session actor：`LlmStreamChunkObserved`、`LlmToolCallObserved`、`LlmSessionForwardedToolCallEmittedEvent`、`LlmRunCompleted`、`LlmRunFailed`、`LlmRunCancelled`。
+3. actor 对 recorder event 只按 typed run identity 与 monotonic `sequence` 接受事实；重复 chunk、晚到 chunk、重复 terminal dispatch、terminal 后 failed/cancelled flush 都是幂等 no-op，不用文本内容相等做 duplicate heuristic。
+4. terminal event 是 actor-owned finalizer：它可以跨过已丢失的中间 recorder event 完成 run，但 terminal 后不再接受新的 chunk/tool/failure 覆盖。
+5. cancel flush 必须写入 `LlmRunCancelled` typed fact；取消 token 只取消 provider stream，不应阻止 recorder sink 记录最终取消事实。
+
+不能把 live provider stream 拆成 actor self-continuation 小步恢复。`IAsyncEnumerable<LLMStreamChunk>` 的枚举器持有 HTTP 连接、provider SDK 状态和当前 async frame；actor self-message 只能持久化“下一拍需要处理的稳定事实”，不能持久化或恢复该枚举器。若 actor turn 结束后再尝试从 self-message 继续枚举，只会得到不可重放的本地运行态假象，分布式 runtime、retry 或 actor reactivation 都无法保证同一条 HTTP stream 仍可读。正确边界是：off-turn executor 持续读 live stream，actor 只消费可重放、可幂等的 typed recorder facts。
+
 相关架构基线：
 
 1. `docs/canon/cqrs-projection.md:43`
@@ -437,3 +449,4 @@ flowchart LR
 2. WS `command.ack -> agui.event*` 顺序稳定性（text/binary 两种帧类型）。
 3. `commandId` 会话隔离（同 actor 多 command 并发）。
 4. sink 背压异常下的 detach 与 run error 遥测。
+5. Responses `LlmSession` run 验收矩阵：duplicate chunks、late recorder commands、cancel flush、terminal dispatch retry、interleaving、no-terminal timeout/cancel。对应本地测试为 `LlmRunCoreTests`、`LlmRunExecutorTests`、`LlmRunEndToEndAcceptanceTests`、`LlmSessionGAgentTests`。

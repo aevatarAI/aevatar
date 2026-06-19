@@ -766,6 +766,82 @@ public sealed class LlmSessionGAgentTests
     }
 
     [Fact]
+    public async Task HandleLlmRunRequestedAsync_ShouldReturnAfterRunAcceptedWithoutWaitingForLiveProviderStream()
+    {
+        var streamEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseStream = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var provider = new LlmRunAcceptanceHarness.GatedLlmProviderFactory(
+            streamEntered,
+            releaseStream,
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = "done",
+                    IsLast = true,
+                },
+            ]);
+        var actor = CreateActor(
+            "resp_off_turn",
+            services =>
+            {
+                services.AddSingleton<ILLMProviderFactory>(provider);
+                services.AddSingleton<IActorDispatchPort>(new RecordingActorDispatchPort());
+            });
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_off_turn"),
+        });
+        var request = BuildRunRequest("resp_off_turn");
+
+        await actor.HandleLlmRunRequestedAsync(request);
+        await streamEntered.Task;
+
+        actor.State.Record!.Status.Should().Be(LlmSessionStatus.Accepted);
+        actor.State.ActiveRun.Should().NotBeNull();
+        actor.State.ActiveRun!.Status.Should().Be(1);
+        provider.Requests.Should().Be(1);
+        releaseStream.SetResult();
+    }
+
+    [Fact]
+    public async Task HandleLlmRunRequestedAsync_ShouldIgnoreDuplicateRunningRunAdmission()
+    {
+        var streamEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseStream = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var provider = new LlmRunAcceptanceHarness.GatedLlmProviderFactory(
+            streamEntered,
+            releaseStream,
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = "done",
+                    IsLast = true,
+                },
+            ]);
+        var actor = CreateActor(
+            "resp_duplicate_run",
+            services =>
+            {
+                services.AddSingleton<ILLMProviderFactory>(provider);
+                services.AddSingleton<IActorDispatchPort>(new RecordingActorDispatchPort());
+            });
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_duplicate_run"),
+        });
+        var request = BuildRunRequest("resp_duplicate_run");
+
+        await actor.HandleLlmRunRequestedAsync(request);
+        await streamEntered.Task;
+        var versionAfterFirstAdmission = actor.State.LastAppliedEventVersion;
+        await actor.HandleLlmRunRequestedAsync(request);
+
+        actor.State.LastAppliedEventVersion.Should().Be(versionAfterFirstAdmission);
+        provider.Requests.Should().Be(1);
+        releaseStream.SetResult();
+    }
+
+    [Fact]
     public async Task ActivateAsync_ShouldReplayOnlyConsecutiveRunEventSequences()
     {
         var eventStore = new InMemoryEventStore();
