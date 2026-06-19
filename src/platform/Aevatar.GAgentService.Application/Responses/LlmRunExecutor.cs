@@ -10,57 +10,88 @@ namespace Aevatar.GAgentService.Application.Responses;
 public sealed class LlmRunExecutor(
     ILlmRunCore runCore,
     IActorDispatchPort dispatchPort,
-    ILogger<LlmRunExecutor> logger) : ILlmRunExecutor
+    ILogger<LlmRunExecutor> logger) : ILlmRunExecutor, ILlmRunExecutionService
 {
     private const string PublisherId = "gagent-service.llm-run-executor";
 
-    public Task StartAsync(
+    public Task<DispatchAdmission> StartAsync(
+        LlmRunExecutorRequest request,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(request.Command);
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.SessionActorId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.ResponseId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.RunId);
+
+        ct.ThrowIfCancellationRequested();
+
+        var sessionActorId = request.SessionActorId.Trim();
+        var responseId = request.ResponseId.Trim();
+        var command = request.Command.Clone();
+        command.ResponseId = responseId;
+        command.RunId = request.RunId.Trim();
+        var startedAt = command.RequestedAt?.Clone() ?? Timestamp.FromDateTime(DateTime.UtcNow);
+        var envelope = new EventEnvelope
+        {
+            Id = $"start-{responseId}",
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(new RecordLlmRunStarted
+            {
+                Command = command,
+                StartedAt = startedAt,
+            }),
+            Route = EnvelopeRouteSemantics.CreateDirect(PublisherId, sessionActorId),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = responseId,
+            },
+        };
+        return dispatchPort.DispatchAsync(sessionActorId, envelope, ct);
+    }
+
+    public async Task ExecuteAsync(
         LlmRunExecutionRequest request,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(request.Command);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.SessionActorId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.ResponseId);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.RunId);
 
         var executionRequest = new LlmRunExecutionRequest(
             request.SessionActorId.Trim(),
-            request.Command.Clone(),
+            request.ResponseId.Trim(),
             request.RunId.Trim(),
+            request.Command.Clone(),
             request.OriginPlatform);
 
-        _ = Task.Run(
-            async () =>
-            {
-                try
-                {
-                    await runCore.RunAsync(
-                        new LlmRunCoreRequest(
-                            executionRequest.Command.Clone(),
-                            executionRequest.RunId,
-                            executionRequest.OriginPlatform),
-                        new DispatchingLlmRunSink(
-                            executionRequest.RunId,
-                            (recordId, command, token) => DispatchCommandAsync(
-                                executionRequest.SessionActorId,
-                                recordId,
-                                command,
-                                token)),
-                        CancellationToken.None).ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    await DispatchExecutorFailureAsync(executionRequest, ex).ConfigureAwait(false);
-                    logger.LogError(
-                        ex,
-                        "Off-turn LLM run executor failed for session actor {SessionActorId} run {RunId}.",
+        try
+        {
+            await runCore.RunAsync(
+                new LlmRunCoreRequest(
+                    executionRequest.Command.Clone(),
+                    executionRequest.RunId,
+                    executionRequest.OriginPlatform),
+                new DispatchingLlmRunSink(
+                    executionRequest.RunId,
+                    (recordId, command, token) => DispatchCommandAsync(
                         executionRequest.SessionActorId,
-                        executionRequest.RunId);
-                }
-            },
-            CancellationToken.None);
-
-        return Task.CompletedTask;
+                        recordId,
+                        command,
+                        token)),
+                ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            await DispatchExecutorFailureAsync(executionRequest, ex).ConfigureAwait(false);
+            logger.LogError(
+                ex,
+                "Off-turn LLM run executor failed for session actor {SessionActorId} run {RunId}.",
+                executionRequest.SessionActorId,
+                executionRequest.RunId);
+        }
     }
 
     private async Task DispatchExecutorFailureAsync(

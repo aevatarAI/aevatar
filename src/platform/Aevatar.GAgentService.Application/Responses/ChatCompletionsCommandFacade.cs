@@ -30,7 +30,8 @@ public sealed class ChatCompletionsCommandFacade(
     ILogger<ChatCompletionsCommandFacade> logger,
     TimeSpan? observationTimeout = null,
     IOptions<ResponsesIngressOptions>? ingressOptions = null,
-    IOwnerLlmConfigSource? ownerLlmConfigSource = null) : IChatCompletionsCommandFacade
+    IOwnerLlmConfigSource? ownerLlmConfigSource = null,
+    ILlmRunExecutor? llmRunExecutor = null) : IChatCompletionsCommandFacade
 {
     private static readonly TimeSpan DefaultObservationTimeout = TimeSpan.FromSeconds(30);
     private readonly TimeSpan _observationTimeout =
@@ -39,6 +40,8 @@ public sealed class ChatCompletionsCommandFacade(
     // Default model applied when a direct caller omits `model`; null preserves the
     // "model is required" contract (see ResponsesIngressOptions).
     private readonly string? _defaultIngressModel = ingressOptions?.Value?.NormalizedDefaultModel;
+    private readonly bool _offActorLlmRunExecutorEnabled =
+        ingressOptions?.Value?.OffActorLlmRunExecutorEnabled == true && llmRunExecutor is not null;
     public async Task<ChatCompletionsCreateCommandResult> CreateAsync(
         ChatCompletionsCommandRequest request,
         ResponsesCallerScopeResolutionContext callerScopeContext,
@@ -436,7 +439,9 @@ public sealed class ChatCompletionsCommandFacade(
                 plan.Session.ActorId,
                 plan.Session.ResponseId,
                 $"{plan.Session.ResponseId}:llm-run",
-                token => DispatchRunAsync(plan, token),
+                token => _offActorLlmRunExecutorEnabled
+                    ? StartOffActorRunAsync(plan, token)
+                    : DispatchRunAsync(plan, token),
                 _observationTimeout),
             onObservedDelta,
             ct);
@@ -613,6 +618,30 @@ public sealed class ChatCompletionsCommandFacade(
             command,
             plan.Session.ResponseId);
         return dispatchPort.DispatchAsync(plan.Session.ActorId, envelope, ct);
+    }
+
+    private async Task<DispatchAdmission> StartOffActorRunAsync(
+        ChatCompletionsCreateCommandPlan plan,
+        CancellationToken ct)
+    {
+        var request = BuildExecutorRequest(plan);
+        return await llmRunExecutor!.StartAsync(request, ct).ConfigureAwait(false);
+    }
+
+    private static LlmRunExecutorRequest BuildExecutorRequest(ChatCompletionsCreateCommandPlan plan)
+    {
+        var command = BuildRunRequested(
+            plan.Session.ResponseId,
+            plan.LlmRequest,
+            plan.ToolClassification,
+            plan.ToolChoiceHintPlan,
+            plan.CreatedAt);
+        return new LlmRunExecutorRequest(
+            plan.Session.ActorId,
+            plan.Session.ResponseId,
+            command.RunId,
+            command,
+            plan.LlmRequest.ToolContext?.Channel.Platform);
     }
 
     // Refactor (iter344/cluster-001):

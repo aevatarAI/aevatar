@@ -9,16 +9,10 @@ public sealed record LlmRunCoreRequest(
 
 public sealed record LlmRunExecutionRequest(
     string SessionActorId,
-    LlmRunRequested Command,
+    string ResponseId,
     string RunId,
+    LlmRunRequested Command,
     string? OriginPlatform);
-
-public interface ILlmRunExecutor
-{
-    Task StartAsync(
-        LlmRunExecutionRequest request,
-        CancellationToken ct = default);
-}
 
 public interface ILlmRunCore
 {
@@ -52,5 +46,26 @@ public interface ILlmRunSink
 
     Task RecordRunCancelledAsync(
         LlmRunCancelled cancelled,
+        CancellationToken ct = default);
+}
+
+public interface ILlmRunExecutionService
+{
+    Task ExecuteAsync(
+        LlmRunExecutionRequest request,
+        CancellationToken ct = default);
+}
+
+public interface ILlmRunExecutionScheduler
+{
+    ValueTask ScheduleAsync(
+        LlmRunExecutionRequest request,
+        CancellationToken ct = default);
+}
+
+public interface ILlmRunExecutionTargetProvisioner
+{
+    Task<string> EnsureExecutionTargetAsync(
+        LlmRunExecutionRequest request,
         CancellationToken ct = default);
 }

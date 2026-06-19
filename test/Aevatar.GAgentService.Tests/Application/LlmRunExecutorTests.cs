@@ -5,8 +5,9 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Application.Responses;
+using Aevatar.GAgentService.Core.GAgents;
+using Aevatar.GAgentService.Infrastructure.Activation;
 using FluentAssertions;
-using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -15,38 +16,126 @@ namespace Aevatar.GAgentService.Tests.Application;
 public sealed class LlmRunExecutorTests
 {
     [Fact]
-    public async Task StartAsync_ShouldReturnBeforeStreamingLoopDispatchesRecordCommands()
+    public async Task StartAsync_ShouldDispatchRunStartedCommand_AndReturnBeforeStreamingLoopDispatchesRecordCommands()
     {
         var provider = new GateControlledLlmProviderFactory();
         var core = new LlmRunCore(provider, [], NullLogger<LlmRunCore>.Instance);
         var dispatch = new RecordingDispatchPort();
         var executor = new LlmRunExecutor(core, dispatch, NullLogger<LlmRunExecutor>.Instance);
 
-        await executor.StartAsync(new LlmRunExecutionRequest(
+        var request = new LlmRunExecutorRequest(
             "session-actor-1",
-            BuildRunRequest("resp_executor"),
+            "resp_executor",
             "run_1",
-            "ApiKey"));
+            BuildRunRequest("resp_executor"),
+            "ApiKey");
 
-        dispatch.Calls.Should().BeEmpty();
+        var admission = await executor.StartAsync(request);
+        dispatch.Calls.Should().ContainSingle();
+        admission.Accepted.Should().BeTrue();
+        admission.ActorId.Should().Be("session-actor-1");
+        admission.CorrelationId.Should().Be("resp_executor");
+        admission.CommandId.Should().Be("start-resp_executor");
+        var started = dispatch.Calls[0].Envelope.Payload!.Unpack<RecordLlmRunStarted>();
+        started.Command.Should().BeEquivalentTo(request.Command);
+        started.StartedAt.Should().NotBeNull();
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var executeTask = executor.ExecuteAsync(ToExecutionRequest(request), cts.Token);
         provider.Release.SetResult();
-        await dispatch.WaitForCallsAsync(2, cts.Token);
+        await dispatch.WaitForCallsAsync(3, cts.Token);
+        await executeTask;
 
-        dispatch.Calls.Should().HaveCount(2);
+        dispatch.Calls.Should().HaveCount(3);
         dispatch.Calls.Select(call => call.ActorId).Should().OnlyContain(actorId => actorId == "session-actor-1");
-        var chunk = dispatch.Calls[0].Envelope.Payload!.Unpack<RecordLlmStreamChunkObserved>();
+        var chunk = dispatch.Calls[1].Envelope.Payload!.Unpack<RecordLlmStreamChunkObserved>();
         chunk.ResponseId.Should().Be("resp_executor");
         chunk.RunId.Should().Be("run_1");
         chunk.RecordId.Should().Be("run_1:chunk:1");
         chunk.DeltaText.Should().Be("done");
-        dispatch.Calls[0].Envelope.Propagation!.CorrelationId.Should().Be(chunk.RecordId);
+        dispatch.Calls[1].Envelope.Propagation!.CorrelationId.Should().Be(chunk.RecordId);
 
-        var completed = dispatch.Calls[1].Envelope.Payload!.Unpack<RecordLlmRunCompleted>();
+        var completed = dispatch.Calls[2].Envelope.Payload!.Unpack<RecordLlmRunCompleted>();
         completed.RecordId.Should().Be("run_1:completed:2");
         completed.OutputText.Should().Be("done");
-        AssertDirectEnvelope(dispatch.Calls[1], completed.RecordId, RecordLlmRunCompleted.Descriptor.FullName);
+        AssertDirectEnvelope(dispatch.Calls[2], completed.RecordId, RecordLlmRunCompleted.Descriptor.FullName);
+    }
+
+    [Fact]
+    public async Task RunExecutionScheduler_ShouldDispatchExecutionCommandToProvisionedActor()
+    {
+        var provisioner = new RecordingExecutionTargetProvisioner("llm-run-execution:resp_scheduler:run_1");
+        var dispatch = new RecordingDispatchPort();
+        var scheduler = new LlmRunExecutionScheduler(provisioner, dispatch);
+        var request = new LlmRunExecutionRequest(
+            " session-actor-scheduler ",
+            " resp_scheduler ",
+            " run_1 ",
+            BuildRunRequest("resp_scheduler"),
+            "ApiKey");
+
+        await scheduler.ScheduleAsync(request, CancellationToken.None);
+
+        provisioner.Requests.Should().ContainSingle().Which.Should().Be(request);
+        var call = dispatch.Calls.Should().ContainSingle().Subject;
+        call.ActorId.Should().Be("llm-run-execution:resp_scheduler:run_1");
+        call.Envelope.Id.Should().Be("execute-resp_scheduler-run_1");
+        call.Envelope.Route!.PublisherActorId.Should().Be("gagent-service.llm-run-executor");
+        call.Envelope.Route.GetTargetActorId().Should().Be("llm-run-execution:resp_scheduler:run_1");
+        call.Envelope.Propagation!.CorrelationId.Should().Be("resp_scheduler");
+        var command = call.Envelope.Payload!.Unpack<ExecuteLlmRunRequested>();
+        command.SessionActorId.Should().Be("session-actor-scheduler");
+        command.ResponseId.Should().Be("resp_scheduler");
+        command.RunId.Should().Be("run_1");
+        command.Command.ResponseId.Should().Be("resp_scheduler");
+        command.Command.BearerToken.Should().Be("token-1");
+        command.OriginPlatform.Should().Be("ApiKey");
+    }
+
+    [Fact]
+    public async Task RunExecutionGAgent_ShouldMapExecuteCommandToExecutionServiceRequest()
+    {
+        var executionService = new RecordingLlmRunExecutor();
+        var actor = new LlmRunExecutionGAgent(executionService);
+        var command = BuildRunRequest("resp_execution_actor");
+        command.RunId = "stale-run";
+
+        await actor.HandleExecuteAsync(new ExecuteLlmRunRequested
+        {
+            SessionActorId = "session-actor-execution",
+            ResponseId = "resp_execution_actor",
+            RunId = "run_execution_actor",
+            Command = command,
+            OriginPlatform = "   ",
+        });
+
+        var request = executionService.ExecuteRequests.Should().ContainSingle().Subject;
+        request.SessionActorId.Should().Be("session-actor-execution");
+        request.ResponseId.Should().Be("resp_execution_actor");
+        request.RunId.Should().Be("run_execution_actor");
+        request.Command.Should().BeEquivalentTo(command);
+        request.Command.Should().NotBeSameAs(command);
+        request.OriginPlatform.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task LlmRunExecutionTargetProvisioner_ShouldCreateKindActorWithEscapedDeterministicActorId()
+    {
+        var runtime = new RecordingActorRuntime();
+        var provisioner = new LlmRunExecutionTargetProvisioner(runtime);
+        var request = new LlmRunExecutionRequest(
+            " session actor/with spaces ",
+            "resp_provisioner",
+            " run/id?x=1 ",
+            BuildRunRequest("resp_provisioner"),
+            "ApiKey");
+
+        var actorId = await provisioner.EnsureExecutionTargetAsync(request);
+
+        actorId.Should().Be("gagent-service:llm-run-execution:session%20actor%2Fwith%20spaces:run%2Fid%3Fx%3D1");
+        runtime.CreateByKindCalls.Should().ContainSingle().Which.Should().Be((
+            LlmRunExecutionGAgent.Kind,
+            "gagent-service:llm-run-execution:session%20actor%2Fwith%20spaces:run%2Fid%3Fx%3D1"));
     }
 
     [Fact]
@@ -80,14 +169,17 @@ public sealed class LlmRunExecutorTests
         var dispatch = new RecordingDispatchPort();
         var executor = new LlmRunExecutor(core, dispatch, NullLogger<LlmRunExecutor>.Instance);
 
-        await executor.StartAsync(new LlmRunExecutionRequest(
+        var request = new LlmRunExecutorRequest(
             "session-actor-2",
-            BuildRunRequest("resp_forwarded", BuildForwardedSelection()),
+            "resp_forwarded",
             " run_forwarded ",
-            "ApiKey"));
+            BuildRunRequest("resp_forwarded", BuildForwardedSelection()),
+            "ApiKey");
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var executeTask = executor.ExecuteAsync(ToExecutionRequest(request), cts.Token);
         await dispatch.WaitForCallsAsync(5, cts.Token);
+        await executeTask;
 
         dispatch.Calls.Select(call => call.ActorId).Should().OnlyContain(actorId => actorId == "session-actor-2");
         var firstChunk = dispatch.Calls[0].Envelope.Payload!.Unpack<RecordLlmStreamChunkObserved>();
@@ -149,14 +241,17 @@ public sealed class LlmRunExecutorTests
         var selection = BuildForwardedSelection();
         selection.SubstitutedToolNames.Add("get_weather");
 
-        await executor.StartAsync(new LlmRunExecutionRequest(
+        var request = new LlmRunExecutorRequest(
             "session-actor-3",
-            BuildRunRequest("resp_local", selection),
+            "resp_local",
             "run_local",
-            "ApiKey"));
+            BuildRunRequest("resp_local", selection),
+            "ApiKey");
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var executeTask = executor.ExecuteAsync(ToExecutionRequest(request), cts.Token);
         await dispatch.WaitForCallsAsync(4, cts.Token);
+        await executeTask;
 
         tool.Executions.Should().ContainSingle().Which.Should().Be("""{"city":"Singapore"}""");
         var localResult = dispatch.Calls[1].Envelope.Payload!.Unpack<RecordLlmToolCallObserved>();
@@ -178,14 +273,17 @@ public sealed class LlmRunExecutorTests
         var dispatch = new RecordingDispatchPort();
         var executor = new LlmRunExecutor(core, dispatch, NullLogger<LlmRunExecutor>.Instance);
 
-        await executor.StartAsync(new LlmRunExecutionRequest(
+        var request = new LlmRunExecutorRequest(
             "session-actor-4",
-            BuildRunRequest("resp_failed"),
+            "resp_failed",
             "run_failed",
-            "ApiKey"));
+            BuildRunRequest("resp_failed"),
+            "ApiKey");
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var executeTask = executor.ExecuteAsync(ToExecutionRequest(request), cts.Token);
         await dispatch.WaitForCallsAsync(1, cts.Token);
+        await executeTask;
 
         var failed = dispatch.Calls[0].Envelope.Payload!.Unpack<RecordLlmRunFailed>();
         failed.RecordId.Should().Be("run_failed:failed:1");
@@ -203,14 +301,17 @@ public sealed class LlmRunExecutorTests
         var dispatch = new RecordingDispatchPort();
         var executor = new LlmRunExecutor(core, dispatch, NullLogger<LlmRunExecutor>.Instance);
 
-        await executor.StartAsync(new LlmRunExecutionRequest(
+        var request = new LlmRunExecutorRequest(
             "session-actor-5",
-            BuildRunRequest("resp_cancelled"),
+            "resp_cancelled",
             "run_cancelled",
-            "ApiKey"));
+            BuildRunRequest("resp_cancelled"),
+            "ApiKey");
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var executeTask = executor.ExecuteAsync(ToExecutionRequest(request), cts.Token);
         await dispatch.WaitForCallsAsync(1, cts.Token);
+        await executeTask;
 
         var cancelled = dispatch.Calls[0].Envelope.Payload!.Unpack<RecordLlmRunCancelled>();
         cancelled.RecordId.Should().Be("run_cancelled:cancelled:1");
@@ -235,14 +336,17 @@ public sealed class LlmRunExecutorTests
         var dispatch = new FailingThenRecordingDispatchPort(failuresBeforeSuccess: 2);
         var executor = new LlmRunExecutor(core, dispatch, NullLogger<LlmRunExecutor>.Instance);
 
-        await executor.StartAsync(new LlmRunExecutionRequest(
+        var request = new LlmRunExecutorRequest(
             "session-actor-6",
-            BuildRunRequest("resp_executor_failed"),
+            "resp_executor_failed",
             "run_executor_failed",
-            "ApiKey"));
+            BuildRunRequest("resp_executor_failed"),
+            "ApiKey");
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var executeTask = executor.ExecuteAsync(ToExecutionRequest(request), cts.Token);
         await dispatch.WaitForAttemptsAsync(3, cts.Token);
+        await executeTask;
 
         dispatch.Calls.Should().ContainSingle();
         var failed = dispatch.Calls[0].Envelope.Payload!.Unpack<RecordLlmRunFailed>();
@@ -272,6 +376,14 @@ public sealed class LlmRunExecutorTests
                 },
             },
         };
+
+    private static LlmRunExecutionRequest ToExecutionRequest(LlmRunExecutorRequest request) =>
+        new(
+            request.SessionActorId,
+            request.ResponseId,
+            request.RunId,
+            request.Command.Clone(),
+            request.OriginPlatform);
 
     private static LlmSessionRuntimeToolSelection BuildForwardedSelection() =>
         new()
@@ -515,4 +627,108 @@ public sealed class LlmRunExecutorTests
             }
         }
     }
+
+    private sealed class RecordingLlmRunExecutor : ILlmRunExecutionService
+    {
+        private readonly TaskCompletionSource _executeStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public List<LlmRunExecutionRequest> ExecuteRequests { get; } = [];
+
+        public Task ExecuteAsync(
+            LlmRunExecutionRequest request,
+            CancellationToken ct = default)
+        {
+            ExecuteRequests.Add(request);
+            _executeStarted.SetResult();
+            return Task.CompletedTask;
+        }
+
+        public async Task WaitForExecuteAsync(CancellationToken ct)
+        {
+            using var registration = ct.Register(static state => ((TaskCompletionSource)state!).TrySetCanceled(), _executeStarted);
+            await _executeStarted.Task.ConfigureAwait(false);
+        }
+    }
+
+    private sealed class RecordingExecutionTargetProvisioner(string actorId) : ILlmRunExecutionTargetProvisioner
+    {
+        public List<LlmRunExecutionRequest> Requests { get; } = [];
+
+        public Task<string> EnsureExecutionTargetAsync(
+            LlmRunExecutionRequest request,
+            CancellationToken ct = default)
+        {
+            _ = ct;
+            Requests.Add(request);
+            return Task.FromResult(actorId);
+        }
+    }
+
+    private sealed class RecordingActorRuntime : IActorRuntime
+    {
+        public List<(string AgentKind, string? ActorId)> CreateByKindCalls { get; } = [];
+
+        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
+            where TAgent : IAgent =>
+            throw new NotSupportedException();
+
+        public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<IActor> CreateByKindAsync(string agentKind, string? id = null, CancellationToken ct = default)
+        {
+            CreateByKindCalls.Add((agentKind, id));
+            return Task.FromResult<IActor>(new RecordingActor(id ?? "created"));
+        }
+
+        public Task DestroyAsync(string id, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<IActor?> GetAsync(string id) =>
+            throw new NotSupportedException();
+
+        public Task<bool> ExistsAsync(string id) =>
+            throw new NotSupportedException();
+
+        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task UnlinkAsync(string childId, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+    }
+
+    private sealed class RecordingActor(string id) : IActor
+    {
+        public string Id { get; } = id;
+
+        public IAgent Agent { get; } = new RecordingAgent();
+
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
+
+        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
+    }
+
+    private sealed class RecordingAgent : IAgent
+    {
+        public string Id => "recording-agent";
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<string> GetDescriptionAsync() => Task.FromResult(string.Empty);
+
+        public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() =>
+            Task.FromResult<IReadOnlyList<System.Type>>([]);
+
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+    }
+
 }

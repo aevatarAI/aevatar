@@ -1,4 +1,6 @@
 using System.Reflection;
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Hooks;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
@@ -14,6 +16,7 @@ using Aevatar.GAgentService.Application.Responses;
 using Aevatar.GAgentService.Core.GAgents;
 using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -135,6 +138,13 @@ internal static class GAgentServiceTestKit
         where TAgent : GAgentBase<TState>
         where TState : class, IMessage<TState>, new()
     {
+        TestBoundLlmRunExecutionScheduler? boundLlmRunExecutionScheduler = null;
+        if (typeof(TAgent) == typeof(LlmSessionGAgent))
+        {
+            boundLlmRunExecutionScheduler = new TestBoundLlmRunExecutionScheduler();
+            factory = () => (TAgent)(object)new LlmSessionGAgent(boundLlmRunExecutionScheduler);
+        }
+
         var agent = factory();
         AssignActorId(agent, actorId);
         agent.EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<TState>(eventStore);
@@ -143,15 +153,34 @@ internal static class GAgentServiceTestKit
             .AddSingleton<InMemoryActorRuntimeCallbackScheduler>()
             .AddSingleton<IActorRuntimeCallbackScheduler>(sp =>
                 sp.GetRequiredService<InMemoryActorRuntimeCallbackScheduler>())
-            .AddSingleton<ILlmRunCore, LlmRunCore>()
             .AddSingleton<ILogger<LlmRunCore>>(NullLogger<LlmRunCore>.Instance)
             .AddSingleton<IEnumerable<IGAgentExecutionHook>>(Array.Empty<IGAgentExecutionHook>());
+        configureServices?.Invoke(services);
         if (agent is LlmSessionGAgent llmSession)
-            services.AddSingleton<ILlmRunExecutor>(sp => new InlineLlmRunExecutor(
+        {
+            services.TryAddSingleton<ILlmRunCore>(sp =>
+            {
+                var providerFactory = sp.GetService<ILLMProviderFactory>();
+                return providerFactory is null
+                    ? new MissingLlmProviderRunCore()
+                    : new LlmRunCore(
+                        providerFactory,
+                        sp.GetServices<IResponsesToolProvider>(),
+                        sp.GetRequiredService<ILogger<LlmRunCore>>());
+            });
+            services.TryAddSingleton<InlineLlmRunExecutor>(sp => new InlineLlmRunExecutor(
                 sp.GetRequiredService<ILlmRunCore>(),
                 llmSession));
-        configureServices?.Invoke(services);
-        agent.Services = services.BuildServiceProvider();
+            services.TryAddSingleton<ILlmRunExecutor>(sp => sp.GetRequiredService<InlineLlmRunExecutor>());
+            services.TryAddSingleton<ILlmRunExecutionService>(sp =>
+                sp.GetService<ILlmRunExecutor>() as ILlmRunExecutionService ??
+                sp.GetRequiredService<InlineLlmRunExecutor>());
+            services.TryAddSingleton<ILlmRunExecutionScheduler>(sp =>
+                new InlineLlmRunExecutionScheduler(sp.GetRequiredService<ILlmRunExecutionService>()));
+        }
+        var serviceProvider = services.BuildServiceProvider();
+        boundLlmRunExecutionScheduler?.Bind(() => serviceProvider.GetRequiredService<ILlmRunExecutionScheduler>());
+        agent.Services = serviceProvider;
         return agent;
     }
 
@@ -173,15 +202,67 @@ internal static class GAgentServiceTestKit
 
     private sealed class InlineLlmRunExecutor(
         ILlmRunCore runCore,
-        LlmSessionGAgent actor) : ILlmRunExecutor
+        LlmSessionGAgent actor) : ILlmRunExecutor, ILlmRunExecutionService
     {
-        public Task StartAsync(
+        public Task<DispatchAdmission> StartAsync(
+            LlmRunExecutorRequest request,
+            CancellationToken ct = default) =>
+            Task.FromResult(DispatchAdmissionFactory.Create(
+                request.SessionActorId,
+                new EventEnvelope
+                {
+                    Id = $"start-{request.ResponseId}",
+                    Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new RecordLlmRunStarted
+                    {
+                        Command = request.Command.Clone(),
+                        StartedAt = request.Command.RequestedAt?.Clone(),
+                    }),
+                }));
+
+        public Task ExecuteAsync(
             LlmRunExecutionRequest request,
             CancellationToken ct = default) =>
             runCore.RunAsync(
                 new LlmRunCoreRequest(request.Command.Clone(), request.RunId, request.OriginPlatform),
                 new InlineLlmRunSink(actor, request.RunId),
                 ct);
+    }
+
+    private sealed class InlineLlmRunExecutionScheduler(
+        ILlmRunExecutionService executionService) : ILlmRunExecutionScheduler
+    {
+        public async ValueTask ScheduleAsync(
+            LlmRunExecutionRequest request,
+            CancellationToken ct = default) =>
+            await executionService.ExecuteAsync(request, ct).ConfigureAwait(false);
+    }
+
+    private sealed class TestBoundLlmRunExecutionScheduler : ILlmRunExecutionScheduler
+    {
+        private Func<ILlmRunExecutionScheduler>? _resolve;
+
+        public void Bind(Func<ILlmRunExecutionScheduler> resolve) =>
+            _resolve = resolve ?? throw new ArgumentNullException(nameof(resolve));
+
+        public ValueTask ScheduleAsync(
+            LlmRunExecutionRequest request,
+            CancellationToken ct = default)
+        {
+            if (_resolve is null)
+                throw new InvalidOperationException("LLM run execution scheduler has not been bound.");
+
+            return _resolve().ScheduleAsync(request, ct);
+        }
+    }
+
+    private sealed class MissingLlmProviderRunCore : ILlmRunCore
+    {
+        public Task RunAsync(
+            LlmRunCoreRequest request,
+            ILlmRunSink sink,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException(
+                "Tests that execute an LLM run must register ILLMProviderFactory or ILlmRunCore.");
     }
 
     private sealed class InlineLlmRunSink(

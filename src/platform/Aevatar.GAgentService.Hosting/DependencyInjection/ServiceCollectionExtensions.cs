@@ -83,7 +83,12 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IResponsesAgentToolStateCommandPort, ResponsesAgentToolStateCommandAdapter>();
         services.TryAddSingleton<ILlmSessionRunObservationService, LlmSessionRunObservationService>();
         services.TryAddSingleton<ILlmRunCore, LlmRunCore>();
-        services.TryAddSingleton<ILlmRunExecutor, LlmRunExecutor>();
+        services.TryAddSingleton<ILlmRunExecutionTargetProvisioner, LlmRunExecutionTargetProvisioner>();
+        services.TryAddSingleton<LlmRunExecutor>();
+        services.TryAddSingleton<ILlmRunExecutor>(sp => sp.GetRequiredService<LlmRunExecutor>());
+        services.TryAddSingleton<ILlmRunExecutionService>(sp => sp.GetRequiredService<LlmRunExecutor>());
+        services.TryAddSingleton<LlmRunExecutionScheduler>();
+        services.TryAddSingleton<ILlmRunExecutionScheduler>(sp => sp.GetRequiredService<LlmRunExecutionScheduler>());
         services.TryAddSingleton<IResponsesToolClassificationService, ResponsesToolClassificationService>();
         services.AddToolSetRegistry();
         services.TryAddSingleton<IResponsesDirectToolPlanService, ResponsesDirectToolPlanService>();

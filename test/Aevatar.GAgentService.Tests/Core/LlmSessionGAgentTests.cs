@@ -6,9 +6,11 @@ using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Responses;
+using Aevatar.GAgentService.Application.Responses;
 using Aevatar.GAgentService.Core.GAgents;
 using Aevatar.GAgentService.Tests.TestSupport;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -735,7 +737,7 @@ public sealed class LlmSessionGAgentTests
             Record = BuildRecord("resp_1"),
         });
 
-        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_1"));
+        await DispatchRunRequestedAsync(actor, BuildRunRequest("resp_1"));
 
         actor.State.Record!.Status.Should().Be(LlmSessionStatus.Completed);
         actor.State.ActiveRun.Should().NotBeNull();
@@ -773,7 +775,7 @@ public sealed class LlmSessionGAgentTests
 
         var request = BuildRunRequest("resp_started");
         request.RequestedAt = requestedAt;
-        await actor.HandleLlmRunRequestedAsync(request);
+        await DispatchRunRequestedAsync(actor, request);
 
         var runEvents = (await eventStore.GetEventsAsync(actor.Id))
             .Select(static evt => evt.EventData)
@@ -798,6 +800,60 @@ public sealed class LlmSessionGAgentTests
     }
 
     [Fact]
+    public async Task HandleRecordRunStartedAsync_ShouldPersistReadyFact_AndDispatchTransientExecutionCommand()
+    {
+        var eventStore = new InMemoryEventStore();
+        var observations = new List<string>();
+        var executor = new RecordingLlmRunExecutor(observations);
+        var actor = CreateActorWithStore(
+            "resp_off_actor_started",
+            eventStore,
+            services => services.AddSingleton<ILlmRunExecutor>(executor));
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_off_actor_started"),
+        });
+
+        var requestedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-06-19T00:00:00+00:00"));
+        var request = BuildRunRequest("resp_off_actor_started");
+        request.RequestedAt = requestedAt;
+
+        await actor.HandleRecordRunStartedAsync(new RecordLlmRunStarted
+        {
+            Command = request,
+            StartedAt = requestedAt,
+        });
+
+        var runEvents = (await eventStore.GetEventsAsync(actor.Id))
+            .Select(static evt => evt.EventData)
+            .Where(static payload =>
+                payload.Is(LlmRunStartedEvent.Descriptor) ||
+                payload.Is(LlmRunExecutionReadyEvent.Descriptor))
+            .ToArray();
+        runEvents.Should().HaveCount(2);
+        var started = runEvents[0].Unpack<LlmRunStartedEvent>();
+        started.ResponseId.Should().Be("resp_off_actor_started");
+        started.RunId.Should().Be("run_1");
+        started.StartedAt.Should().Be(requestedAt);
+        var ready = runEvents[1].Unpack<LlmRunExecutionReadyEvent>();
+        ready.ResponseId.Should().Be("resp_off_actor_started");
+        ready.RunId.Should().Be("run_1");
+        System.Text.Encoding.UTF8.GetString(runEvents[1].ToByteArray())
+            .Should()
+            .NotContain(request.BearerToken);
+        actor.State.ActiveRun.Should().NotBeNull();
+        actor.State.ActiveRun!.StartedAt.Should().Be(requestedAt);
+        var executionRequest = executor.ExecuteRequests.Should().ContainSingle().Subject;
+        executionRequest.ResponseId.Should().Be("resp_off_actor_started");
+        executionRequest.RunId.Should().Be("run_1");
+        executionRequest.Command.Should().NotBeSameAs(request);
+        executionRequest.Command.Messages.Should().BeEquivalentTo(request.Messages);
+        executionRequest.Command.BearerToken.Should().Be(request.BearerToken);
+        executionRequest.Command.ToolContext.Should().BeEquivalentTo(request.ToolContext);
+        observations.Should().ContainSingle("executor:execute");
+    }
+
+    [Fact]
     public async Task RecordCommands_ShouldAssignActorOwnedSequence_AndIgnoreDuplicateRecordId()
     {
         var actor = CreateActor("resp_records", services => services.AddSingleton<ILlmRunExecutor, NoOpLlmRunExecutor>());
@@ -805,7 +861,7 @@ public sealed class LlmSessionGAgentTests
         {
             Record = BuildRecord("resp_records"),
         });
-        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_records"));
+        await DispatchRunRequestedAsync(actor, BuildRunRequest("resp_records"));
 
         await actor.HandleRecordStreamChunkObservedAsync(new RecordLlmStreamChunkObserved
         {
@@ -840,7 +896,7 @@ public sealed class LlmSessionGAgentTests
         {
             Record = BuildRecord("resp_records"),
         });
-        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_records"));
+        await DispatchRunRequestedAsync(actor, BuildRunRequest("resp_records"));
 
         var act = () => actor.HandleRecordStreamChunkObservedAsync(new RecordLlmStreamChunkObserved
         {
@@ -877,7 +933,7 @@ public sealed class LlmSessionGAgentTests
         request.RequestedAt = requestedAt;
         request.TimeoutAfter = Duration.FromTimeSpan(TimeSpan.FromMinutes(5));
 
-        await actor.HandleLlmRunRequestedAsync(request);
+        await DispatchRunRequestedAsync(actor, request);
 
         var runTimeout = scheduler.TimeoutRequests.Should().ContainSingle(request =>
             string.Equals(
@@ -892,10 +948,10 @@ public sealed class LlmSessionGAgentTests
         payload.RecordId.Should().Be("run_1:timeout");
         payload.TimedOutAt.Should().Be(
             Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-06-19T00:05:00+00:00")));
-        executor.StartRequests.Should().ContainSingle()
+        executor.ExecuteRequests.Should().ContainSingle()
             .Which.RunId.Should().Be("run_1");
         observations.IndexOf("schedule:llm-run-timeout:resp_timeout_schedule:run_1")
-            .Should().BeLessThan(observations.IndexOf("executor:start"));
+            .Should().BeLessThan(observations.IndexOf("executor:execute"));
     }
 
     [Fact]
@@ -915,14 +971,14 @@ public sealed class LlmSessionGAgentTests
             Record = BuildRecord("resp_timeout_schedule_failure"),
         });
 
-        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_timeout_schedule_failure"));
+        await DispatchRunRequestedAsync(actor, BuildRunRequest("resp_timeout_schedule_failure"));
 
         scheduler.TimeoutRequests.Should().ContainSingle(request =>
             string.Equals(
                 request.CallbackId,
                 "llm-run-timeout:resp_timeout_schedule_failure:run_1",
                 StringComparison.Ordinal));
-        executor.StartRequests.Should().BeEmpty();
+        executor.ExecuteRequests.Should().BeEmpty();
         actor.State.Record!.Status.Should().Be(LlmSessionStatus.Failed);
         actor.State.ActiveRun.Should().NotBeNull();
         actor.State.ActiveRun!.Status.Should().Be(3);
@@ -943,7 +999,7 @@ public sealed class LlmSessionGAgentTests
         {
             Record = BuildRecord("resp_timeout"),
         });
-        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_timeout"));
+        await DispatchRunRequestedAsync(actor, BuildRunRequest("resp_timeout"));
 
         await actor.HandleFinalizeLlmRunTimedOutAsync(new FinalizeLlmRunTimedOut
         {
@@ -1081,7 +1137,7 @@ public sealed class LlmSessionGAgentTests
             Record = BuildRecord("resp_1"),
         });
 
-        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_1", BuildForwardedSelection()));
+        await DispatchRunRequestedAsync(actor, BuildRunRequest("resp_1", BuildForwardedSelection()));
 
         actor.State.Record!.Status.Should().Be(LlmSessionStatus.Completed);
         actor.State.ForwardedToolCalls.Should().ContainSingle();
@@ -1139,7 +1195,7 @@ public sealed class LlmSessionGAgentTests
             },
         });
 
-        await actor.HandleLlmRunRequestedAsync(request);
+        await DispatchRunRequestedAsync(actor, request);
 
         var requestMessage = provider.Requests.Should().ContainSingle().Subject.Messages
             .Single(message => message.ToolCalls != null && message.ToolCalls.Count == 1);
@@ -1181,7 +1237,7 @@ public sealed class LlmSessionGAgentTests
             },
         });
 
-        await actor.HandleLlmRunRequestedAsync(request);
+        await DispatchRunRequestedAsync(actor, request);
 
         var toolCall = provider.Requests.Should().ContainSingle().Subject.Messages
             .Single(message => message.ToolCalls != null && message.ToolCalls.Count == 1)
@@ -1217,7 +1273,7 @@ public sealed class LlmSessionGAgentTests
             },
         };
 
-        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_typed_parameters", selection));
+        await DispatchRunRequestedAsync(actor, BuildRunRequest("resp_typed_parameters", selection));
 
         provider.Requests.Should().ContainSingle().Subject.Tools
             .Should()
@@ -1246,7 +1302,7 @@ public sealed class LlmSessionGAgentTests
         selection.ForwardedTools[0].Parameters.Fields.Clear();
         selection.ForwardedTools[0].ParametersJson = """{"type":"object","legacy":true}""";
 
-        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_legacy_parameters", selection));
+        await DispatchRunRequestedAsync(actor, BuildRunRequest("resp_legacy_parameters", selection));
 
         provider.Requests.Should().ContainSingle().Subject.Tools
             .Should()
@@ -1287,7 +1343,7 @@ public sealed class LlmSessionGAgentTests
             },
         };
 
-        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_typed_hint", selection));
+        await DispatchRunRequestedAsync(actor, BuildRunRequest("resp_typed_hint", selection));
 
         var forwarded = actor.State.ForwardedToolCalls.Should().ContainSingle().Subject;
         forwarded.Arguments.StructValue.Fields["actor_id"].StringValue.Should().Be("actor-from-typed-hint");
@@ -1320,7 +1376,7 @@ public sealed class LlmSessionGAgentTests
         selection.ToolChoiceHintName = "get_weather";
         selection.ToolChoiceHintArgumentsJson = """{"actor_id":"actor-from-legacy-hint"}""";
 
-        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_legacy_hint", selection));
+        await DispatchRunRequestedAsync(actor, BuildRunRequest("resp_legacy_hint", selection));
 
         var forwarded = actor.State.ForwardedToolCalls.Should().ContainSingle().Subject;
         forwarded.Arguments.StructValue.Fields["actor_id"].StringValue.Should().Be("actor-from-legacy-hint");
@@ -1359,7 +1415,7 @@ public sealed class LlmSessionGAgentTests
             Record = BuildRecord("resp_merge_tool_deltas"),
         });
 
-        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_merge_tool_deltas", BuildForwardedSelection()));
+        await DispatchRunRequestedAsync(actor, BuildRunRequest("resp_merge_tool_deltas", BuildForwardedSelection()));
 
         var forwarded = actor.State.ForwardedToolCalls.Should().ContainSingle().Subject;
         forwarded.Arguments.StructValue.Fields["city"].StringValue.Should().Be("Singapore");
@@ -1406,7 +1462,7 @@ public sealed class LlmSessionGAgentTests
 
         var selection = BuildForwardedSelection();
         selection.SubstitutedToolNames.Add("get_weather");
-        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_1", selection));
+        await DispatchRunRequestedAsync(actor, BuildRunRequest("resp_1", selection));
 
         tool.Executions.Should().ContainSingle().Which.Should().Be("""{"city":"Singapore"}""");
         provider.Requests.Should().HaveCount(2);
@@ -1460,7 +1516,7 @@ public sealed class LlmSessionGAgentTests
         var selection = BuildForwardedSelection();
         selection.SubstitutedToolNames.Add("get_weather");
 
-        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_typed_local_result", selection));
+        await DispatchRunRequestedAsync(actor, BuildRunRequest("resp_typed_local_result", selection));
 
         var localObserved = (await eventStore.GetEventsAsync(actor.Id))
             .Select(static evt => evt.EventData)
@@ -1517,7 +1573,7 @@ public sealed class LlmSessionGAgentTests
         var selection = BuildForwardedSelection();
         selection.SubstitutedToolNames.Add("get_weather");
 
-        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_safe_tool_failure", selection));
+        await DispatchRunRequestedAsync(actor, BuildRunRequest("resp_safe_tool_failure", selection));
 
         actor.State.Record!.Status.Should().Be(LlmSessionStatus.Completed);
         actor.State.Completion!.OutputText.Should().Be("safe output accepted");
@@ -1581,7 +1637,7 @@ public sealed class LlmSessionGAgentTests
 
         var selection = BuildForwardedSelection();
         selection.SubstitutedToolNames.Add("get_weather");
-        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_1", selection));
+        await DispatchRunRequestedAsync(actor, BuildRunRequest("resp_1", selection));
 
         provider.Requests.Should().HaveCount(2);
         foreach (var request in provider.Requests)
@@ -1666,7 +1722,7 @@ public sealed class LlmSessionGAgentTests
         var selection = BuildForwardedSelection();
         selection.SubstitutedToolNames.Add("get_weather");
 
-        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_provider_discovery_failure", selection));
+        await DispatchRunRequestedAsync(actor, BuildRunRequest("resp_provider_discovery_failure", selection));
 
         actor.State.Record!.Status.Should().Be(LlmSessionStatus.Completed);
         tool.Executions.Should().ContainSingle();
@@ -1704,7 +1760,7 @@ public sealed class LlmSessionGAgentTests
             token: "typed-token",
             routePreference: "typed-route").ToPayload();
 
-        await actor.HandleLlmRunRequestedAsync(request);
+        await DispatchRunRequestedAsync(actor, request);
 
         var llmRequest = provider.Requests.Should().ContainSingle().Subject;
         llmRequest.ToolContext.Should().NotBeNull();
@@ -1740,7 +1796,7 @@ public sealed class LlmSessionGAgentTests
         var request = BuildRunRequest("resp_1");
         request.RoutePreference = "legacy-route";
 
-        await actor.HandleLlmRunRequestedAsync(request);
+        await DispatchRunRequestedAsync(actor, request);
 
         var llmRequest = provider.Requests.Should().ContainSingle().Subject;
         llmRequest.ToolContext.Should().NotBeNull();
@@ -1778,7 +1834,7 @@ public sealed class LlmSessionGAgentTests
             token: "typed-token",
             routePreference: "typed-route").ToPayload();
 
-        await actor.HandleLlmRunRequestedAsync(request);
+        await DispatchRunRequestedAsync(actor, request);
 
         var llmRequest = provider.Requests.Should().ContainSingle().Subject;
         llmRequest.Metadata.Should().NotBeNull();
@@ -1801,7 +1857,7 @@ public sealed class LlmSessionGAgentTests
             Record = BuildRecord("resp_1"),
         });
 
-        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_1"));
+        await DispatchRunRequestedAsync(actor, BuildRunRequest("resp_1"));
 
         actor.State.Record!.Status.Should().Be(LlmSessionStatus.Failed);
         actor.State.ActiveRun.Should().NotBeNull();
@@ -1822,7 +1878,7 @@ public sealed class LlmSessionGAgentTests
             Record = BuildRecord("resp_1"),
         });
 
-        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_1"));
+        await DispatchRunRequestedAsync(actor, BuildRunRequest("resp_1"));
 
         actor.State.Record!.Status.Should().Be(LlmSessionStatus.Cancelled);
         actor.State.Record.CancelledAt.Should().NotBeNull();
@@ -1839,7 +1895,7 @@ public sealed class LlmSessionGAgentTests
         GAgentServiceTestKit.CreateStatefulAgent<LlmSessionGAgent, LlmSessionState>(
             new InMemoryEventStore(),
             "response-session-actor-" + responseId,
-            static () => new LlmSessionGAgent(),
+            static () => throw new InvalidOperationException("LlmSessionGAgent test construction is owned by GAgentServiceTestKit."),
             configureServices);
 
     private static LlmSessionGAgent CreateActorWithStore(
@@ -1849,8 +1905,19 @@ public sealed class LlmSessionGAgentTests
         GAgentServiceTestKit.CreateStatefulAgent<LlmSessionGAgent, LlmSessionState>(
             eventStore,
             "response-session-actor-" + responseId,
-            static () => new LlmSessionGAgent(),
+            static () => throw new InvalidOperationException("LlmSessionGAgent test construction is owned by GAgentServiceTestKit."),
             configureServices);
+
+    private static Task DispatchRunRequestedAsync(LlmSessionGAgent actor, LlmRunRequested command) =>
+        actor.HandleEventAsync(new EventEnvelope
+        {
+            Id = "run-" + command.ResponseId,
+            Payload = Any.Pack(command),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = command.ResponseId,
+            },
+        });
 
     private static LlmSessionRecord BuildRecord(string responseId) =>
         new()
@@ -2093,9 +2160,26 @@ public sealed class LlmSessionGAgentTests
             Task.FromException<string>(exception);
     }
 
-    private sealed class NoOpLlmRunExecutor : ILlmRunExecutor
+    private sealed class NoOpLlmRunExecutor : ILlmRunExecutor, ILlmRunExecutionService
     {
-        public Task StartAsync(
+        public Task<DispatchAdmission> StartAsync(
+            LlmRunExecutorRequest request,
+            CancellationToken ct = default)
+        {
+            _ = ct;
+            var envelope = new EventEnvelope
+            {
+                Id = $"start-{request.ResponseId}",
+                Payload = Any.Pack(new RecordLlmRunStarted
+                {
+                    Command = request.Command.Clone(),
+                    StartedAt = request.Command.RequestedAt?.Clone(),
+                }),
+            };
+            return Task.FromResult(DispatchAdmissionFactory.Create(request.SessionActorId, envelope));
+        }
+
+        public Task ExecuteAsync(
             LlmRunExecutionRequest request,
             CancellationToken ct = default)
         {
@@ -2105,17 +2189,38 @@ public sealed class LlmSessionGAgentTests
         }
     }
 
-    private sealed class RecordingLlmRunExecutor(List<string>? observations = null) : ILlmRunExecutor
+    private sealed class RecordingLlmRunExecutor(List<string>? observations = null) : ILlmRunExecutor, ILlmRunExecutionService
     {
-        public List<LlmRunExecutionRequest> StartRequests { get; } = [];
+        public List<LlmRunExecutorRequest> StartRequests { get; } = [];
 
-        public Task StartAsync(
-            LlmRunExecutionRequest request,
+        public List<LlmRunExecutionRequest> ExecuteRequests { get; } = [];
+
+        public Task<DispatchAdmission> StartAsync(
+            LlmRunExecutorRequest request,
             CancellationToken ct = default)
         {
             _ = ct;
             StartRequests.Add(request);
             observations?.Add("executor:start");
+            var envelope = new EventEnvelope
+            {
+                Id = $"start-{request.ResponseId}",
+                Payload = Any.Pack(new RecordLlmRunStarted
+                {
+                    Command = request.Command.Clone(),
+                    StartedAt = request.Command.RequestedAt?.Clone(),
+                }),
+            };
+            return Task.FromResult(DispatchAdmissionFactory.Create(request.SessionActorId, envelope));
+        }
+
+        public Task ExecuteAsync(
+            LlmRunExecutionRequest request,
+            CancellationToken ct = default)
+        {
+            _ = ct;
+            ExecuteRequests.Add(request);
+            observations?.Add("executor:execute");
             return Task.CompletedTask;
         }
     }
