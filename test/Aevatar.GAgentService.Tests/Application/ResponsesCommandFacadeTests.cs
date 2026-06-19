@@ -524,6 +524,52 @@ public sealed class ResponsesCommandFacadeTests
     }
 
     [Fact]
+    public async Task StreamAsync_WhenOffActorFlagIsOn_ShouldUseExecutorStartAdmissionWithoutLegacyRunDispatch()
+    {
+        var sessions = new RecordingSessionPort();
+        var dispatch = new RecordingActorDispatchPort();
+        var executor = new BlockingLlmRunExecutor();
+        var observer = StaticLlmSessionRunObservationService.Completed("Hello");
+        var facade = CreateFacade(
+            sessionPort: sessions,
+            dispatchPort: dispatch,
+            observationService: observer,
+            llmRunExecutor: executor,
+            ingressOptions: new ResponsesIngressOptions
+            {
+                DefaultModel = "model",
+                OffActorLlmRunExecutorEnabled = true,
+            });
+        var deltas = new List<string>();
+
+        var result = await facade.StreamAsync(
+            BuildStreamPlan(),
+            (delta, _) =>
+            {
+                deltas.Add(delta);
+                return ValueTask.CompletedTask;
+            });
+
+        result.Error.Should().BeNull();
+        result.Completion.Should().NotBeNull();
+        result.Completion!.OutputText.Should().Be("Hello");
+        deltas.Should().Equal("Hello");
+        dispatch.Calls.Should().BeEmpty();
+        observer.LastAdmission.Should().Be(executor.StartAdmissions.Should().ContainSingle().Subject);
+        observer.LastAdmission!.CommandId.Should().Be("start-resp_stream");
+        var request = executor.StartedRequests.Should().ContainSingle().Subject;
+        request.SessionActorId.Should().Be("actor-resp_stream");
+        request.ResponseId.Should().Be("resp_stream");
+        request.RunId.Should().Be("resp_stream:llm-run");
+        request.Command.ResponseId.Should().Be("resp_stream");
+        request.Command.Model.Should().Be("model");
+        observer.LastRequest.Should().NotBeNull();
+        observer.LastRequest!.ResponseId.Should().Be("resp_stream");
+        observer.LastRequest.RunId.Should().Be("resp_stream:llm-run");
+        executor.ExecuteStarted.Task.IsCompleted.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task StreamAsync_ShouldReturnAuthenticationError_AndMarkSessionFailed()
     {
         var sessions = new RecordingSessionPort();
@@ -868,6 +914,75 @@ public sealed class ResponsesCommandFacadeTests
         sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Failed);
     }
 
+    [Fact]
+    public async Task CreateAsync_WhenOffActorFlagIsOff_ShouldKeepLegacyRunRequestedDispatch()
+    {
+        var dispatch = new RecordingActorDispatchPort();
+        var executor = new BlockingLlmRunExecutor();
+        var facade = CreateFacade(
+            dispatchPort: dispatch,
+            llmRunExecutor: executor,
+            ingressOptions: new ResponsesIngressOptions
+            {
+                DefaultModel = "model",
+                OffActorLlmRunExecutorEnabled = false,
+            });
+
+        var result = await facade.CreateAsync(new ResponsesCommandRequest(
+            "model",
+            "hello",
+            [],
+            false,
+            null,
+            null,
+            null,
+            []), CallerScopeContext("token"));
+
+        result.Error.Should().BeNull();
+        dispatch.Calls.Should().ContainSingle()
+            .Which.Envelope.Payload!.Is(LlmRunRequested.Descriptor).Should().BeTrue();
+        executor.StartedRequests.Should().BeEmpty();
+        executor.ExecuteStarted.Task.IsCompleted.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenOffActorFlagIsOn_ShouldAdmitExecutorStartWithoutLegacyRunDispatch()
+    {
+        var dispatch = new RecordingActorDispatchPort();
+        var executor = new BlockingLlmRunExecutor();
+        var observation = StaticLlmSessionRunObservationService.Completed("done");
+        var facade = CreateFacade(
+            dispatchPort: dispatch,
+            observationService: observation,
+            llmRunExecutor: executor,
+            ingressOptions: new ResponsesIngressOptions
+            {
+                DefaultModel = "model",
+                OffActorLlmRunExecutorEnabled = true,
+            });
+
+        var result = await facade.CreateAsync(new ResponsesCommandRequest(
+            "model",
+            "hello",
+            [],
+            false,
+            null,
+            null,
+            null,
+            []), CallerScopeContext("token"));
+
+        result.Error.Should().BeNull();
+        result.Completed!.Completion.OutputText.Should().Be("done");
+        dispatch.Calls.Should().BeEmpty();
+        var admission = executor.StartAdmissions.Should().ContainSingle().Subject;
+        admission.Accepted.Should().BeTrue();
+        admission.ActorId.Should().NotBeNullOrWhiteSpace();
+        admission.CorrelationId.Should().NotBeNullOrWhiteSpace();
+        admission.CommandId.Should().StartWith("start-");
+        executor.StartedRequests.Should().ContainSingle();
+        executor.ExecuteStarted.Task.IsCompleted.Should().BeFalse();
+    }
+
     private static ResponsesCommandFacade CreateFacade(
         ILlmSessionRegistrationPort? sessionPort = null,
         ILlmSessionQueryPort? queryPort = null,
@@ -878,9 +993,14 @@ public sealed class ResponsesCommandFacadeTests
         IActorDispatchPort? dispatchPort = null,
         ILlmSessionRunObservationService? observationService = null,
         string? defaultIngressModel = null,
-        IOwnerLlmConfigSource? ownerLlmConfigSource = null)
+        IOwnerLlmConfigSource? ownerLlmConfigSource = null,
+        ResponsesIngressOptions? ingressOptions = null,
+        ILlmRunExecutor? llmRunExecutor = null)
     {
         var effectiveSessionPort = sessionPort ?? new RecordingSessionPort();
+        var options = ingressOptions ?? (defaultIngressModel is null
+            ? null
+            : new ResponsesIngressOptions { DefaultModel = defaultIngressModel });
         return new ResponsesCommandFacade(
             callerScopeResolver ?? new StaticCallerScopeResolver(),
             chatRouteDecisionPort ?? new StaticResponsesChatRouteDecisionPort(ForwardToModelAction(string.Empty)),
@@ -892,10 +1012,9 @@ public sealed class ResponsesCommandFacadeTests
             new ResponsesDirectToolPlanService(toolSetRegistry ?? new EmptyToolSetRegistry()),
             observationService ?? StaticLlmSessionRunObservationService.Completed("ok"),
             NullLogger<ResponsesCommandFacade>.Instance,
-            defaultIngressModel is null
-                ? null
-                : Options.Create(new ResponsesIngressOptions { DefaultModel = defaultIngressModel }),
-            ownerLlmConfigSource);
+            options is null ? null : Options.Create(options),
+            ownerLlmConfigSource,
+            llmRunExecutor);
     }
 
     private sealed class StubOwnerLlmConfigSource(OwnerLlmConfig? config = null)
@@ -968,6 +1087,12 @@ public sealed class ResponsesCommandFacadeTests
 
     private static ResponsesCallerScopeResolutionContext CallerScopeContext(string bearerToken) =>
         new(bearerToken, null, null);
+
+    private static async Task WaitForCompletionAsync(TaskCompletionSource completion, CancellationToken ct)
+    {
+        using var registration = ct.Register(static state => ((TaskCompletionSource)state!).TrySetCanceled(), completion);
+        await completion.Task;
+    }
 
     private static ChatRouteAction GAgentToolHintAction(string actorId) => new()
     {
@@ -1087,6 +1212,8 @@ public sealed class ResponsesCommandFacadeTests
     {
         public LlmSessionRunObservationRequest? LastRequest { get; private set; }
 
+        public DispatchAdmission? LastAdmission { get; private set; }
+
         public static StaticLlmSessionRunObservationService Completed(string outputText) =>
             new(
                 new LlmSessionRunObservedResult(
@@ -1112,6 +1239,7 @@ public sealed class ResponsesCommandFacadeTests
         {
             LastRequest = request;
             var admission = await request.DispatchAsync(ct);
+            LastAdmission = admission;
             foreach (var delta in deltas ?? [])
             {
                 if (onDelta != null)
@@ -1120,6 +1248,53 @@ public sealed class ResponsesCommandFacadeTests
 
             return result with { Admission = admission };
         }
+    }
+
+    private sealed class BlockingLlmRunExecutor : ILlmRunExecutor
+    {
+        private readonly TaskCompletionSource _releaseExecute =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public List<LlmRunExecutorRequest> StartedRequests { get; } = [];
+
+        public List<DispatchAdmission> StartAdmissions { get; } = [];
+
+        public TaskCompletionSource ExecuteStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource ExecuteReleased { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<DispatchAdmission> StartAsync(
+            LlmRunExecutorRequest request,
+            CancellationToken ct = default)
+        {
+            StartedRequests.Add(request);
+            var envelope = new EventEnvelope
+            {
+                Id = "start-" + request.ResponseId,
+                Propagation = new EnvelopePropagation { CorrelationId = request.ResponseId },
+                Payload = Any.Pack(new RecordLlmRunStarted
+                {
+                    Command = request.Command.Clone(),
+                    StartedAt = request.Command.RequestedAt?.Clone(),
+                }),
+            };
+            var admission = DispatchAdmissionFactory.Create(request.SessionActorId, envelope);
+            StartAdmissions.Add(admission);
+            return Task.FromResult(admission);
+        }
+
+        public async Task ExecuteAsync(
+            LlmRunExecutorRequest request,
+            CancellationToken ct = default)
+        {
+            ExecuteStarted.SetResult();
+            await WaitForCompletionAsync(_releaseExecute, ct);
+            ExecuteReleased.SetResult();
+        }
+
+        public void ReleaseExecute() => _releaseExecute.SetResult();
     }
 
     private sealed class RecordingActorDispatchPort(

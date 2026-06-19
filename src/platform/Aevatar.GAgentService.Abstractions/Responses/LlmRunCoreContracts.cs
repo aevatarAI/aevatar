@@ -7,6 +7,13 @@ public sealed record LlmRunCoreRequest(
     string RunId,
     string? OriginPlatform);
 
+public sealed record LlmRunExecutionRequest(
+    string SessionActorId,
+    string ResponseId,
+    string RunId,
+    LlmRunRequested Command,
+    string? OriginPlatform);
+
 public interface ILlmRunCore
 {
     Task RunAsync(
@@ -43,4 +50,25 @@ public readonly record struct LlmRunRecordDecision(bool Accepted, bool StopDispa
     public static LlmRunRecordDecision Continue { get; } = new(true, false);
 
     public static LlmRunRecordDecision Stop { get; } = new(false, true);
+}
+
+public interface ILlmRunExecutionService
+{
+    Task ExecuteAsync(
+        LlmRunExecutionRequest request,
+        CancellationToken ct = default);
+}
+
+public interface ILlmRunExecutionScheduler
+{
+    ValueTask ScheduleAsync(
+        LlmRunExecutionRequest request,
+        CancellationToken ct = default);
+}
+
+public interface ILlmRunExecutionTargetProvisioner
+{
+    Task<string> EnsureExecutionTargetAsync(
+        LlmRunExecutionRequest request,
+        CancellationToken ct = default);
 }
