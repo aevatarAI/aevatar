@@ -199,15 +199,14 @@ public sealed class MessagesCommandFacadeTests
     }
 
     [Theory]
-    [InlineData(LlmSessionRunObservedTerminalKind.Failed, 500, "llm_run_failed", "provider crashed", LlmSessionStatus.Failed)]
-    [InlineData(LlmSessionRunObservedTerminalKind.Cancelled, 409, "run_cancelled", "LLM run was cancelled.", LlmSessionStatus.Cancelled)]
-    [InlineData(LlmSessionRunObservedTerminalKind.TimedOut, 504, "response_timeout", "Timed out waiting 30 seconds for the LLM run to emit a terminal event.", LlmSessionStatus.Failed)]
-    public async Task StreamAsync_WhenObservedTerminalError_ShouldReturnError_AndMarkSession(
+    [InlineData(LlmSessionRunObservedTerminalKind.Failed, 500, "llm_run_failed", "provider crashed")]
+    [InlineData(LlmSessionRunObservedTerminalKind.Cancelled, 409, "run_cancelled", "LLM run was cancelled.")]
+    [InlineData(LlmSessionRunObservedTerminalKind.TimedOut, 504, "response_timeout", "Timed out waiting 30 seconds for the LLM run to emit a terminal event.")]
+    public async Task StreamAsync_WhenObservedTerminalError_ShouldReturnError_WithoutWritingSessionStatus(
         LlmSessionRunObservedTerminalKind kind,
         int statusCode,
         string code,
-        string message,
-        LlmSessionStatus status)
+        string message)
     {
         var sessions = new RecordingSessionPort();
         var facade = CreateFacade(
@@ -218,7 +217,7 @@ public sealed class MessagesCommandFacadeTests
 
         result.Error.Should().BeEquivalentTo(new ResponsesCommandError(statusCode, code, message));
         result.Completion.Should().BeNull();
-        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(status);
+        sessions.UpdatedStatuses.Should().BeEmpty();
     }
 
     [Fact]
@@ -519,6 +518,13 @@ public sealed class MessagesCommandFacadeTests
             UpdatedStatuses.Add((sessionActorId, responseId, status));
             return Task.CompletedTask;
         }
+
+        public Task CancelRunAsync(
+            string sessionActorId,
+            string responseId,
+            string runId,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
 
         public Task RecordForwardedToolCallAsync(
             string sessionActorId,

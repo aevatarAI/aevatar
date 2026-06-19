@@ -1249,6 +1249,13 @@ public sealed class MainnetMessagesEndpointsTests
             return Task.CompletedTask;
         }
 
+        public Task CancelRunAsync(
+            string sessionActorId,
+            string responseId,
+            string runId,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
+
         public Task RecordForwardedToolCallAsync(
             string sessionActorId,
             string responseId,

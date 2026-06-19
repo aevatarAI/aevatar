@@ -78,14 +78,13 @@ public sealed class LlmRunCoreTests
             sink);
 
         sink.ToolCalls.Should().ContainSingle(observed => observed.Forwarded);
-        sink.ForwardedToolCalls.Should().ContainSingle();
-        var forwarded = sink.ForwardedToolCalls[0].Call!;
+        sink.Completed.Should().ContainSingle();
+        var forwarded = sink.Completed[0].ForwardedToolCallRecords.Should().ContainSingle().Subject;
         forwarded.CallId.Should().Be("call_1");
         forwarded.ToolName.Should().Be("get_weather");
         forwarded.SchemaHash.Should().Be("schema-1");
         ResponsesJsonValues.ToBoundaryJson(forwarded.Arguments).Should().Be("""{"city":"Singapore"}""");
-        sink.Completed.Should().ContainSingle()
-            .Which.ForwardedToolCalls.Should().ContainSingle()
+        sink.Completed[0].ForwardedToolCalls.Should().ContainSingle()
             .Which.Arguments.Fields["city"].StringValue.Should().Be("Singapore");
     }
 
@@ -125,7 +124,8 @@ public sealed class LlmRunCoreTests
             sink);
 
         tool.Executions.Should().ContainSingle().Which.Should().Be("""{"city":"Singapore"}""");
-        sink.ForwardedToolCalls.Should().BeEmpty();
+        sink.Completed.Should().ContainSingle()
+            .Which.ForwardedToolCallRecords.Should().BeEmpty();
         sink.ToolCalls.Should().ContainSingle(observed => !observed.Forwarded)
             .Which.LocalResult.StructValue.Fields["temperature"].NumberValue.Should().Be(28);
         provider.Requests.Should().HaveCount(2);
@@ -134,6 +134,39 @@ public sealed class LlmRunCoreTests
             string.Equals(message.Content, """{"temperature":28}""", StringComparison.Ordinal));
         sink.Completed.Should().ContainSingle()
             .Which.OutputText.Should().Be("local result accepted");
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenSinkStopsAfterToolObservation_ShouldStopDispatchingTerminalRecords()
+    {
+        var provider = new ScriptedLlmProviderFactory([
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "call_1",
+                        Name = "get_weather",
+                        ArgumentsJson = """{"city":"Singapore"}""",
+                    },
+                    IsLast = true,
+                },
+            ],
+        ]);
+        var sink = new RecordingLlmRunSink
+        {
+            StopAfterToolObservation = true,
+        };
+        var core = new LlmRunCore(provider, [], NullLogger<LlmRunCore>.Instance);
+
+        await core.RunAsync(
+            new LlmRunCoreRequest(BuildRunRequest("resp_1", BuildForwardedSelection()), "run_1", "ApiKey"),
+            sink);
+
+        sink.ToolCalls.Should().ContainSingle(observed => observed.Forwarded);
+        sink.Completed.Should().BeEmpty();
+        sink.Failed.Should().BeEmpty();
+        sink.Cancelled.Should().BeEmpty();
     }
 
     [Fact]
@@ -203,57 +236,52 @@ public sealed class LlmRunCoreTests
     {
         public List<LlmStreamChunkObserved> StreamChunks { get; } = [];
         public List<LlmToolCallObserved> ToolCalls { get; } = [];
-        public List<LlmSessionForwardedToolCallEmittedEvent> ForwardedToolCalls { get; } = [];
         public List<LlmRunCompleted> Completed { get; } = [];
         public List<LlmRunFailed> Failed { get; } = [];
         public List<LlmRunCancelled> Cancelled { get; } = [];
 
-        public Task RecordStreamChunkObservedAsync(
+        public bool StopAfterToolObservation { get; init; }
+
+        public Task<LlmRunRecordDecision> RecordStreamChunkObservedAsync(
             LlmStreamChunkObserved observed,
             CancellationToken ct = default)
         {
             StreamChunks.Add(observed.Clone());
-            return Task.CompletedTask;
+            return Task.FromResult(LlmRunRecordDecision.Continue);
         }
 
-        public Task RecordToolCallObservedAsync(
+        public Task<LlmRunRecordDecision> RecordToolCallObservedAsync(
             LlmToolCallObserved observed,
             CancellationToken ct = default)
         {
             ToolCalls.Add(observed.Clone());
-            return Task.CompletedTask;
+            return Task.FromResult(StopAfterToolObservation
+                ? LlmRunRecordDecision.Stop
+                : LlmRunRecordDecision.Continue);
         }
 
-        public Task RecordForwardedToolCallEmittedAsync(
-            LlmSessionForwardedToolCallEmittedEvent emitted,
-            CancellationToken ct = default)
-        {
-            ForwardedToolCalls.Add(emitted.Clone());
-            return Task.CompletedTask;
-        }
-
-        public Task RecordRunCompletedAsync(
+        public Task<LlmRunRecordDecision> RecordRunCompletedAsync(
             LlmRunCompleted completed,
             CancellationToken ct = default)
         {
             Completed.Add(completed.Clone());
-            return Task.CompletedTask;
+            return Task.FromResult(LlmRunRecordDecision.Continue);
         }
 
-        public Task RecordRunFailedAsync(
+        public Task<LlmRunRecordDecision> RecordRunFailedAsync(
             LlmRunFailed failed,
             CancellationToken ct = default)
         {
             Failed.Add(failed.Clone());
-            return Task.CompletedTask;
+            return Task.FromResult(LlmRunRecordDecision.Continue);
         }
 
-        public Task RecordRunCancelledAsync(
+        public Task<LlmRunRecordDecision> RecordRunCancelledAsync(
             LlmRunCancelled cancelled,
             CancellationToken ct = default)
         {
             Cancelled.Add(cancelled.Clone());
-            return Task.CompletedTask;
+            return Task.FromResult(LlmRunRecordDecision.Continue);
         }
     }
 

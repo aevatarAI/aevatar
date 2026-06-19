@@ -50,6 +50,16 @@ public sealed class LlmSessionsProtoSurfaceRegressionTests
         LlmSessionRunScope.Descriptor.FindFieldByName("last_applied_sequence").Should().NotBeNull();
     }
 
+    [Fact]
+    public void LlmSessionsProto_ShouldExposeActorOwnedCancelAndBatchedForwardedToolRecords()
+    {
+        var descriptor = LlmSessionsReflection.Descriptor;
+
+        TopLevelMessageNames(descriptor).Should().Contain("CancelLlmRunRequested");
+        CancelLlmRunRequested.Descriptor.FindFieldByName("run_id").Should().NotBeNull();
+        LlmRunCompleted.Descriptor.FindFieldByName("forwarded_tool_call_records").Should().NotBeNull();
+    }
+
     private static IEnumerable<string> TopLevelMessageNames(FileDescriptor descriptor) =>
         descriptor.MessageTypes.Select(x => x.Name);
 }

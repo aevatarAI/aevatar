@@ -242,7 +242,7 @@ public sealed class MainnetResponsesEndpointsTests
         GetErrorCode(body).Should().Be("response_timeout");
         body.Should().NotContain("\"status\":\"in_progress\"");
         body.Should().NotContain("\"object\":\"response\"");
-        sessions.StatusUpdates.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Failed);
+        sessions.StatusUpdates.Should().BeEmpty();
     }
 
     [Fact]
@@ -1341,7 +1341,7 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
-    public async Task PostResponsesCancel_ShouldMarkResponseAndPendingToolCallsCancelled()
+    public async Task PostResponsesCancel_ShouldCancelRunThroughSessionActor()
     {
         var provider = new RecordingLLMProvider();
         var sessions = new RecordingResponseSessionStore();
@@ -1351,7 +1351,7 @@ public sealed class MainnetResponsesEndpointsTests
             "user-1",
             LlmSessionOriginKind.ApiKey,
             null,
-            LlmSessionStatus.Completed,
+            LlmSessionStatus.Accepted,
             DateTimeOffset.UtcNow.AddMinutes(-1),
             TimeSpan.FromHours(1),
             null,
@@ -1386,7 +1386,8 @@ public sealed class MainnetResponsesEndpointsTests
         using var doc = JsonDocument.Parse(body);
         doc.RootElement.GetProperty("id").GetString().Should().Be("resp_previous");
         doc.RootElement.GetProperty("status").GetString().Should().Be("cancelled");
-        sessions.StatusUpdates.Should().ContainSingle(x => x.Status == LlmSessionStatus.Cancelled);
+        sessions.CancelledRuns.Should().ContainSingle()
+            .Which.Should().Be(("response-session:resp_previous", "resp_previous", "resp_previous:llm-run"));
         var snapshot = await sessions.GetByResponseIdAsync("resp_previous");
         snapshot!.Status.Should().Be(LlmSessionStatus.Cancelled);
         snapshot.ForwardedToolCalls.Should().ContainSingle()
@@ -3438,6 +3439,8 @@ public sealed class MainnetResponsesEndpointsTests
 
         public List<(string ActorId, string ResponseId, LlmSessionStatus Status)> StatusUpdates { get; } = [];
 
+        public List<(string ActorId, string ResponseId, string RunId)> CancelledRuns { get; } = [];
+
         public List<(string ActorId, string ResponseId, LlmSessionForwardedToolCall Call)> ForwardedToolCalls { get; } = [];
 
         public List<(string ActorId, string ResponseId, LlmSessionCompletion Completion)> RecordedCompletions { get; } = [];
@@ -3496,6 +3499,35 @@ public sealed class MainnetResponsesEndpointsTests
                     LastEventId = $"{responseId}:status:{(int)status}",
                 };
             }
+            return Task.CompletedTask;
+        }
+
+        public Task CancelRunAsync(
+            string sessionActorId,
+            string responseId,
+            string runId,
+            CancellationToken ct = default)
+        {
+            CancelledRuns.Add((sessionActorId, responseId, runId));
+            if (_snapshots.TryGetValue(responseId, out var current))
+            {
+                _snapshots[responseId] = current with
+                {
+                    Status = LlmSessionStatus.Cancelled,
+                    CancelledAt = DateTimeOffset.UtcNow,
+                    ForwardedToolCalls = MarkCallsForStatus(current.ForwardedToolCalls, LlmSessionStatus.Cancelled),
+                    StateVersion = current.StateVersion + 1,
+                    LastEventId = $"{responseId}:run:{runId}:cancelled",
+                    Completion = new LlmSessionCompletionSnapshot(
+                        current.Completion?.OutputText ?? string.Empty,
+                        current.Completion?.ToolCalls ?? [],
+                        DateTimeOffset.UtcNow,
+                        "request_cancelled",
+                        "LLM run was cancelled.",
+                        current.Completion?.Usage),
+                };
+            }
+
             return Task.CompletedTask;
         }
 

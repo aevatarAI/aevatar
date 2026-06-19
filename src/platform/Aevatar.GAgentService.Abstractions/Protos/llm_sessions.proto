@@ -178,6 +178,12 @@ message LlmSessionForwardedToolCallResolvedEvent {
   google.protobuf.Timestamp resolved_at = 3;
 }
 
+message CancelLlmRunRequested {
+  string response_id = 1;
+  string run_id = 2;
+  google.protobuf.Timestamp cancelled_at = 3;
+}
+
 message LlmSessionRuntimeChatMessage {
   string role = 1;
   string content = 2;
@@ -264,6 +270,7 @@ message LlmRunCompleted {
   LlmSessionTokenUsage usage = 5;
   google.protobuf.Timestamp completed_at = 6;
   int64 sequence = 7;
+  repeated LlmSessionForwardedToolCall forwarded_tool_call_records = 8;
 }
 
 message LlmRunFailed {

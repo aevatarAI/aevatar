@@ -273,6 +273,39 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
     }
 
     [EventHandler]
+    public async Task HandleCancelLlmRunRequestedAsync(CancelLlmRunRequested command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        var existing = EnsureRegisteredSession(command.ResponseId);
+        if (existing.Status == LlmSessionStatus.Cancelled)
+            return;
+        if (IsTerminal(existing.Status))
+        {
+            throw new InvalidOperationException(
+                $"Response session '{existing.ResponseId}' is {existing.Status} and cannot be cancelled.");
+        }
+
+        var runId = NormalizeRequired(command.RunId);
+        if (string.IsNullOrWhiteSpace(runId))
+            runId = $"{existing.ResponseId}:llm-run";
+
+        if (State.ActiveRun is { } active &&
+            !string.Equals(active.RunId, runId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Response session '{existing.ResponseId}' has active run '{active.RunId}' and cannot cancel run '{runId}'.");
+        }
+
+        await PersistRunCancelledAsync(new LlmRunCancelled
+        {
+            ResponseId = existing.ResponseId,
+            RunId = runId,
+            CancelledAt = command.CancelledAt ?? Timestamp.FromDateTime(DateTime.UtcNow),
+        }, CancellationToken.None, allowMissingRun: true);
+    }
+
+    [EventHandler]
     public async Task HandleLlmRunRequestedAsync(LlmRunRequested command)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -507,6 +540,9 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         run.ObservedToolCalls.Clear();
         run.ObservedToolCalls.AddRange(evt.ForwardedToolCalls.Select(static call => call.Clone()));
 
+        foreach (var record in evt.ForwardedToolCallRecords)
+            UpsertForwardedToolCallRecord(next, record);
+
         if (next.Record == null)
             next.Record = new LlmSessionRecord();
         next.Record.Status = LlmSessionStatus.Completed;
@@ -689,64 +725,157 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             existing.ArgumentsJson += incoming.ArgumentsJson;
     }
 
-    private Task PersistStreamChunkObservedAsync(LlmStreamChunkObserved observed, CancellationToken ct)
+    private static void UpsertForwardedToolCallRecord(
+        LlmSessionState state,
+        LlmSessionForwardedToolCall incoming)
     {
-        observed.Sequence = NextRunSequence(observed.RunId);
-        return PersistDomainEventAsync(observed, ct);
+        var call = incoming.Clone();
+        if (call.Status == LlmSessionForwardedToolCallStatus.Unspecified)
+            call.Status = LlmSessionForwardedToolCallStatus.Pending;
+        if (call.EmittedAt == null)
+            call.EmittedAt = Timestamp.FromDateTime(DateTime.UtcNow);
+
+        var existing = state.ForwardedToolCalls
+            .FirstOrDefault(x => string.Equals(x.CallId, call.CallId, StringComparison.Ordinal));
+        if (existing is null)
+        {
+            state.ForwardedToolCalls.Add(call);
+            return;
+        }
+
+        existing.ToolName = call.ToolName;
+        existing.SchemaHash = call.SchemaHash;
+        existing.Arguments = call.Arguments?.Clone();
+        existing.Status = call.Status;
+        existing.Expiry = call.Expiry?.Clone();
+        existing.Result = call.Result?.Clone();
+        existing.EmittedAt = call.EmittedAt?.Clone();
+        existing.ReceivedAt = call.ReceivedAt?.Clone();
+        existing.ResolvedAt = call.ResolvedAt?.Clone();
     }
 
-    private Task PersistToolCallObservedAsync(LlmToolCallObserved observed, CancellationToken ct)
+    private Task<LlmRunRecordDecision> PersistStreamChunkObservedAsync(LlmStreamChunkObserved observed, CancellationToken ct)
     {
+        var decision = DecideRunRecord(observed.ResponseId, observed.RunId);
+        if (decision.StopDispatching)
+            return Task.FromResult(decision);
         observed.Sequence = NextRunSequence(observed.RunId);
-        return PersistDomainEventAsync(observed, ct);
+        return PersistRunEventAsync(observed, decision, ct);
     }
 
-    private Task PersistRunCompletedAsync(LlmRunCompleted completed, CancellationToken ct)
+    private Task<LlmRunRecordDecision> PersistToolCallObservedAsync(LlmToolCallObserved observed, CancellationToken ct)
     {
+        var decision = DecideRunRecord(observed.ResponseId, observed.RunId);
+        if (decision.StopDispatching)
+            return Task.FromResult(decision);
+        observed.Sequence = NextRunSequence(observed.RunId);
+        return PersistRunEventAsync(observed, decision, ct);
+    }
+
+    private Task<LlmRunRecordDecision> PersistRunCompletedAsync(LlmRunCompleted completed, CancellationToken ct)
+    {
+        var decision = DecideRunRecord(completed.ResponseId, completed.RunId);
+        if (decision.StopDispatching)
+            return Task.FromResult(decision);
         completed.Sequence = NextRunSequence(completed.RunId);
-        return PersistDomainEventAsync(completed, ct);
+        return PersistRunEventAsync(completed, decision with { StopDispatching = true }, ct);
     }
 
-    private Task PersistRunFailedAsync(LlmRunFailed failed, CancellationToken ct)
+    private Task<LlmRunRecordDecision> PersistRunFailedAsync(LlmRunFailed failed, CancellationToken ct)
     {
+        var decision = DecideRunRecord(failed.ResponseId, failed.RunId);
+        if (decision.StopDispatching)
+            return Task.FromResult(decision);
         failed.Sequence = NextRunSequence(failed.RunId);
-        return PersistDomainEventAsync(failed, ct);
+        return PersistRunEventAsync(failed, decision with { StopDispatching = true }, ct);
     }
 
-    private Task PersistRunCancelledAsync(LlmRunCancelled cancelled, CancellationToken ct)
+    private Task<LlmRunRecordDecision> PersistRunCancelledAsync(
+        LlmRunCancelled cancelled,
+        CancellationToken ct,
+        bool allowMissingRun = false)
     {
+        var decision = allowMissingRun
+            ? DecideRunCancellationRecord(cancelled.ResponseId, cancelled.RunId)
+            : DecideRunRecord(cancelled.ResponseId, cancelled.RunId);
+        if (decision.StopDispatching)
+            return Task.FromResult(decision);
         cancelled.Sequence = NextRunSequence(cancelled.RunId);
-        return PersistDomainEventAsync(cancelled, ct);
+        return PersistRunEventAsync(cancelled, decision with { StopDispatching = true }, ct);
+    }
+
+    private async Task<LlmRunRecordDecision> PersistRunEventAsync(
+        IMessage evt,
+        LlmRunRecordDecision decision,
+        CancellationToken ct)
+    {
+        await PersistDomainEventAsync(evt, ct);
+        return decision;
+    }
+
+    private LlmRunRecordDecision DecideRunRecord(string responseId, string runId)
+    {
+        var existing = State.Record;
+        if (existing == null ||
+            !string.Equals(existing.ResponseId, responseId, StringComparison.Ordinal) ||
+            IsTerminal(existing.Status))
+        {
+            return LlmRunRecordDecision.Stop;
+        }
+
+        if (State.ActiveRun is not { } active ||
+            !string.Equals(active.RunId, runId, StringComparison.Ordinal) ||
+            IsRunTerminal(active.Status))
+        {
+            return LlmRunRecordDecision.Stop;
+        }
+
+        return LlmRunRecordDecision.Continue;
+    }
+
+    private LlmRunRecordDecision DecideRunCancellationRecord(string responseId, string runId)
+    {
+        var existing = State.Record;
+        if (existing == null ||
+            !string.Equals(existing.ResponseId, responseId, StringComparison.Ordinal) ||
+            IsTerminal(existing.Status))
+        {
+            return LlmRunRecordDecision.Stop;
+        }
+
+        if (State.ActiveRun is { } active &&
+            (!string.Equals(active.RunId, runId, StringComparison.Ordinal) ||
+             IsRunTerminal(active.Status)))
+        {
+            return LlmRunRecordDecision.Stop;
+        }
+
+        return LlmRunRecordDecision.Continue;
     }
 
     private sealed class InActorLlmRunSink(LlmSessionGAgent actor) : ILlmRunSink
     {
-        public Task RecordStreamChunkObservedAsync(
+        public Task<LlmRunRecordDecision> RecordStreamChunkObservedAsync(
             LlmStreamChunkObserved observed,
             CancellationToken ct = default) =>
             actor.PersistStreamChunkObservedAsync(observed, ct);
 
-        public Task RecordToolCallObservedAsync(
+        public Task<LlmRunRecordDecision> RecordToolCallObservedAsync(
             LlmToolCallObserved observed,
             CancellationToken ct = default) =>
             actor.PersistToolCallObservedAsync(observed, ct);
 
-        public Task RecordForwardedToolCallEmittedAsync(
-            LlmSessionForwardedToolCallEmittedEvent emitted,
-            CancellationToken ct = default) =>
-            actor.PersistDomainEventAsync(emitted, ct);
-
-        public Task RecordRunCompletedAsync(
+        public Task<LlmRunRecordDecision> RecordRunCompletedAsync(
             LlmRunCompleted completed,
             CancellationToken ct = default) =>
             actor.PersistRunCompletedAsync(completed, ct);
 
-        public Task RecordRunFailedAsync(
+        public Task<LlmRunRecordDecision> RecordRunFailedAsync(
             LlmRunFailed failed,
             CancellationToken ct = default) =>
             actor.PersistRunFailedAsync(failed, ct);
 
-        public Task RecordRunCancelledAsync(
+        public Task<LlmRunRecordDecision> RecordRunCancelledAsync(
             LlmRunCancelled cancelled,
             CancellationToken ct = default) =>
             actor.PersistRunCancelledAsync(cancelled, ct);

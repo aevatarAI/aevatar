@@ -137,12 +137,6 @@ public sealed class MessagesCommandFacade(
                 ct).ConfigureAwait(false);
             if (observed.Error is not null)
             {
-                await TryUpdateSessionStatusAsync(
-                    plan.Session,
-                    observed.Error.Kind == LlmSessionRunObservedTerminalKind.Cancelled
-                        ? LlmSessionStatus.Cancelled
-                        : LlmSessionStatus.Failed,
-                    CancellationToken.None);
                 return ResponsesStreamCommandResult.FromError(
                     observed.Error.StatusCode,
                     observed.Error.Code,
@@ -168,7 +162,6 @@ public sealed class MessagesCommandFacade(
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            await TryUpdateSessionStatusAsync(plan.Session, LlmSessionStatus.Cancelled, CancellationToken.None);
             return ResponsesStreamCommandResult.FromError(499, "client_closed_request", "Client closed request.");
         }
         catch (Exception ex)
@@ -393,7 +386,6 @@ public sealed class MessagesCommandFacade(
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            await TryUpdateSessionStatusAsync(plan.Session, LlmSessionStatus.Cancelled, CancellationToken.None);
             return MessagesCreateCommandResult.FromError(499, "client_closed_request", "Client closed request.");
         }
         catch (Exception ex)
