@@ -41,6 +41,18 @@ public sealed class LlmSessionsProtoSurfaceRegressionTests
 
         TopLevelMessageNames(descriptor).Should().Contain("LlmRunStartedEvent");
         TopLevelMessageNames(descriptor).Should().NotContain("LlmRunRecordAppliedEvent");
+        TopLevelMessageNames(descriptor).Should().Contain(
+            [
+                "RecordLlmStreamChunkObserved",
+                "RecordLlmToolCallObserved",
+                "RecordLlmForwardedToolCallEmitted",
+                "RecordLlmRunCompleted",
+                "RecordLlmRunFailed",
+                "RecordLlmRunCancelled",
+                "FinalizeLlmRunTimedOut",
+            ]);
+        LlmRunRequested.Descriptor.FindFieldByName("timeout_after").Should().NotBeNull();
+        LlmSessionRuntimeToolSelection.Descriptor.FindFieldByName("owned_tool_names").Should().NotBeNull();
         LlmRunStartedEvent.Descriptor.FindFieldByName("sequence").Should().NotBeNull();
         LlmStreamChunkObserved.Descriptor.FindFieldByName("sequence").Should().NotBeNull();
         LlmToolCallObserved.Descriptor.FindFieldByName("sequence").Should().NotBeNull();
@@ -48,6 +60,7 @@ public sealed class LlmSessionsProtoSurfaceRegressionTests
         LlmRunFailed.Descriptor.FindFieldByName("sequence").Should().NotBeNull();
         LlmRunCancelled.Descriptor.FindFieldByName("sequence").Should().NotBeNull();
         LlmSessionRunScope.Descriptor.FindFieldByName("last_applied_sequence").Should().NotBeNull();
+        LlmSessionRunScope.Descriptor.FindFieldByName("applied_record_ids").Should().NotBeNull();
     }
 
     private static IEnumerable<string> TopLevelMessageNames(FileDescriptor descriptor) =>

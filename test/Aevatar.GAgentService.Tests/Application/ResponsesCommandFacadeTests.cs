@@ -871,7 +871,7 @@ public sealed class ResponsesCommandFacadeTests
     public async Task CreateAsync_WhenOffActorFlagIsOff_ShouldKeepLegacyRunRequestedDispatch()
     {
         var dispatch = new RecordingActorDispatchPort();
-        var executor = new BlockingLlmRunExecutor(dispatch);
+        var executor = new BlockingLlmRunExecutor();
         var facade = CreateFacade(
             dispatchPort: dispatch,
             llmRunExecutor: executor,
@@ -902,7 +902,7 @@ public sealed class ResponsesCommandFacadeTests
     public async Task CreateAsync_WhenOffActorFlagIsOn_ShouldStartExecutorWithoutWaitingForExecution()
     {
         var dispatch = new RecordingActorDispatchPort();
-        var executor = new BlockingLlmRunExecutor(dispatch);
+        var executor = new BlockingLlmRunExecutor();
         var observation = StaticLlmSessionRunObservationService.Completed("done");
         var facade = CreateFacade(
             dispatchPort: dispatch,
@@ -926,8 +926,11 @@ public sealed class ResponsesCommandFacadeTests
 
         result.Error.Should().BeNull();
         result.Completed!.Completion.OutputText.Should().Be("done");
-        dispatch.Calls.Should().ContainSingle()
-            .Which.Envelope.Payload!.Is(RecordRunStartedRequested.Descriptor).Should().BeTrue();
+        var admission = executor.StartAdmissions.Should().ContainSingle().Subject;
+        admission.Accepted.Should().BeTrue();
+        admission.ActorId.Should().NotBeNullOrWhiteSpace();
+        admission.CorrelationId.Should().NotBeNullOrWhiteSpace();
+        admission.CommandId.Should().StartWith("start-");
         executor.StartedRequests.Should().ContainSingle();
         executor.ExecuteStarted.Task.IsCompleted.Should().BeTrue();
         executor.ExecuteReleased.Task.IsCompleted.Should().BeFalse();
@@ -1200,12 +1203,14 @@ public sealed class ResponsesCommandFacadeTests
         }
     }
 
-    private sealed class BlockingLlmRunExecutor(RecordingActorDispatchPort dispatchPort) : ILlmRunExecutor
+    private sealed class BlockingLlmRunExecutor : ILlmRunExecutor
     {
         private readonly TaskCompletionSource _releaseExecute =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public List<LlmRunExecutorRequest> StartedRequests { get; } = [];
+
+        public List<DispatchAdmission> StartAdmissions { get; } = [];
 
         public TaskCompletionSource ExecuteStarted { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1218,19 +1223,19 @@ public sealed class ResponsesCommandFacadeTests
             CancellationToken ct = default)
         {
             StartedRequests.Add(request);
-            return dispatchPort.DispatchAsync(
-                request.SessionActorId,
-                new EventEnvelope
+            var envelope = new EventEnvelope
+            {
+                Id = "start-" + request.ResponseId,
+                Propagation = new EnvelopePropagation { CorrelationId = request.ResponseId },
+                Payload = Any.Pack(new LlmRunStartedEvent
                 {
-                    Id = "start-" + request.ResponseId,
-                    Propagation = new EnvelopePropagation { CorrelationId = request.ResponseId },
-                    Payload = Any.Pack(new RecordRunStartedRequested
-                    {
-                        ResponseId = request.ResponseId,
-                        RunId = request.RunId,
-                    }),
-                },
-                ct);
+                    ResponseId = request.ResponseId,
+                    RunId = request.RunId,
+                }),
+            };
+            var admission = DispatchAdmissionFactory.Create(request.SessionActorId, envelope);
+            StartAdmissions.Add(admission);
+            return Task.FromResult(admission);
         }
 
         public async Task ExecuteAsync(
