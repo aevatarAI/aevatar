@@ -69,6 +69,35 @@ public sealed class LlmSessionGAgentTests
     }
 
     [Fact]
+    public async Task HandleUpdateStatusAsync_ShouldIgnoreUpdate_WhenAlreadyTerminal()
+    {
+        var actor = CreateActor("resp_1");
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_1"),
+        });
+        await actor.HandleUpdateStatusAsync(new UpdateResponseSessionStatusRequested
+        {
+            ResponseId = "resp_1",
+            Status = LlmSessionStatus.Completed,
+        });
+        var versionAfterCompletion = actor.State.LastAppliedEventVersion;
+
+        // A late Failed update (e.g. a streaming-observation timeout marking Failed after the run
+        // already Completed on a long turn) must be an idempotent no-op, not throw — otherwise the
+        // actor burns its runtime retry budget and logs "is Completed and cannot transition".
+        var act = () => actor.HandleUpdateStatusAsync(new UpdateResponseSessionStatusRequested
+        {
+            ResponseId = "resp_1",
+            Status = LlmSessionStatus.Failed,
+        });
+
+        await act.Should().NotThrowAsync();
+        actor.State.Record!.Status.Should().Be(LlmSessionStatus.Completed);
+        actor.State.LastAppliedEventVersion.Should().Be(versionAfterCompletion);
+    }
+
+    [Fact]
     public async Task HandleUpdateStatusAsync_ShouldRejectWhenNotRegistered()
     {
         var actor = CreateActor("resp_1");

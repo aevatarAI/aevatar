@@ -84,12 +84,18 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
 
         if (IsTerminal(existing.Status))
         {
-            // Terminal states are authoritative — a late Completed/Failed update
-            // from the original create path must not overwrite a Cancelled/Expired
-            // session, otherwise /cancel reports success while the session ends up
-            // Completed and forwarded tool calls stay open.
-            throw new InvalidOperationException(
-                $"Response session '{existing.ResponseId}' is {existing.Status} and cannot transition to {command.Status}.");
+            // Terminal states are authoritative and final — a late status update must NOT
+            // overwrite them (e.g. a streaming-observation timeout marking Failed after the run
+            // already Completed on a long turn, or a late Completed after /cancel). Treat it as an
+            // idempotent no-op rather than throwing: this is an actor event handler, so throwing
+            // only burns the runtime retry budget and logs noise ("is Completed and cannot
+            // transition to Failed") without changing the outcome.
+            Logger.LogDebug(
+                "Ignoring status update to {RequestedStatus} for response session {ResponseId}: already terminal ({TerminalStatus}).",
+                command.Status,
+                existing.ResponseId,
+                existing.Status);
+            return;
         }
 
         await PersistDomainEventAsync(new LlmSessionStatusUpdatedEvent
