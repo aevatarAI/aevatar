@@ -1017,6 +1017,7 @@ public sealed class ResponsesCommandFacade(
         {
             SubstitutedToolNames = { classification.SubstitutedToolNames },
             AdditiveToolNames = { classification.AdditiveToolNames },
+            OwnedToolNames = { classification.OwnedToolNames },
         };
         if (!toolChoiceHintPlan.IsEmpty)
         {

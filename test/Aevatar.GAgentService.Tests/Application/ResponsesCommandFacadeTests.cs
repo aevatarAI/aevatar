@@ -197,6 +197,7 @@ public sealed class ResponsesCommandFacadeTests
         sessions.UpdatedStatuses.Should().BeEmpty();
         var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
         command.ToolSelection.AdditiveToolNames.Should().Contain("aevatar_invoke_gagent");
+        command.ToolSelection.OwnedToolNames.Should().Contain("aevatar_invoke_gagent");
     }
 
     [Fact]
@@ -245,6 +246,7 @@ public sealed class ResponsesCommandFacadeTests
         result.Completed.Should().NotBeNull();
         var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
         command.ToolSelection.AdditiveToolNames.Should().Contain("aevatar_invoke_gagent");
+        command.ToolSelection.OwnedToolNames.Should().Contain("aevatar_invoke_gagent");
         command.ToolSelection.ToolChoiceHintArguments.Fields["actor_id"].StringValue.Should().Be("member-1");
         sessions.RecordedToolCalls.Should().BeEmpty("tool set tools execute locally and are not client-forwarded tools");
     }
@@ -926,7 +928,7 @@ public sealed class ResponsesCommandFacadeTests
                 ToolContext = BuildToolContext("resp_stream"),
             },
             BuildToolContext("resp_stream"),
-            new ResponsesToolClassification([], [], [], []),
+            new ResponsesToolClassification([], [], [], [], []),
             ResponsesToolChoiceHintPlan.Empty,
             DateTimeOffset.UtcNow);
 

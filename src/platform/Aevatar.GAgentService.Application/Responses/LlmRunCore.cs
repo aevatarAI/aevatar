@@ -262,17 +262,25 @@ public sealed class LlmRunCore(
             .ToHashSet(StringComparer.Ordinal);
         var additiveNames = (command.ToolSelection?.AdditiveToolNames ?? [])
             .ToHashSet(StringComparer.Ordinal);
+        var ownedToolNames = BuildOwnedToolNameSet(command.ToolSelection);
         var substitutesByName = substituteTools
             .GroupBy(static tool => tool.Name, StringComparer.Ordinal)
             .ToDictionary(static group => group.Key, static group => group.First(), StringComparer.Ordinal);
         var effective = new List<IAgentTool>();
         foreach (var declaration in command.ToolSelection?.ForwardedTools ?? [])
         {
-            if (substitutedNames.Contains(declaration.ToolName) &&
-                substitutesByName.TryGetValue(declaration.ToolName, out var substitute))
-                effective.Add(substitute);
+            if (ownedToolNames.Contains(declaration.ToolName))
+            {
+                if (substitutedNames.Contains(declaration.ToolName) &&
+                    substitutesByName.TryGetValue(declaration.ToolName, out var substitute))
+                {
+                    effective.Add(substitute);
+                }
+            }
             else
+            {
                 effective.Add(new ForwardedRuntimeTool(declaration));
+            }
         }
 
         var effectiveNames = new HashSet<string>(effective.Select(static tool => tool.Name), StringComparer.Ordinal);
@@ -421,9 +429,10 @@ public sealed class LlmRunCore(
         if (selection is null || toolCalls.Count == 0 || selection.ForwardedTools.Count == 0)
             return [];
 
+        var ownedToolNames = BuildOwnedToolNameSet(selection);
         var forwardedToolNames = selection.ForwardedTools
             .Select(static tool => tool.ToolName)
-            .Except(selection.SubstitutedToolNames, StringComparer.Ordinal)
+            .Where(name => !ownedToolNames.Contains(name))
             .ToHashSet(StringComparer.Ordinal);
         return toolCalls
             .Where(call => forwardedToolNames.Contains(call.Name))
@@ -601,9 +610,10 @@ public sealed class LlmRunCore(
         if (toolCalls.Count == 0 || tools.Count == 0)
             return [];
 
+        var ownedToolNames = BuildOwnedToolNameSet(selection);
         var forwardedNames = (selection?.ForwardedTools ?? [])
             .Select(static tool => tool.ToolName)
-            .Except(selection?.SubstitutedToolNames ?? [], StringComparer.Ordinal)
+            .Where(name => !ownedToolNames.Contains(name))
             .ToHashSet(StringComparer.Ordinal);
         var localNames = tools
             .Where(static tool => tool is not ForwardedRuntimeTool)
@@ -613,6 +623,17 @@ public sealed class LlmRunCore(
         return toolCalls
             .Where(call => localNames.Contains(call.Name))
             .ToArray();
+    }
+
+    private static HashSet<string> BuildOwnedToolNameSet(LlmSessionRuntimeToolSelection? selection)
+    {
+        if (selection is null)
+            return new HashSet<string>(StringComparer.Ordinal);
+
+        var ownedNames = selection.OwnedToolNames.Count > 0
+            ? selection.OwnedToolNames
+            : selection.SubstitutedToolNames.Concat(selection.AdditiveToolNames);
+        return ownedNames.ToHashSet(StringComparer.Ordinal);
     }
 
     private static LlmSessionForwardedToolCall BuildForwardedToolCall(

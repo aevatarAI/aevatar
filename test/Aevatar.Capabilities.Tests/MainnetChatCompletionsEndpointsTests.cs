@@ -406,6 +406,7 @@ public sealed class MainnetChatCompletionsEndpointsTests
             .Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
         command.ToolSelection.SubstitutedToolNames.Should().Contain("WebSearch");
         command.ToolSelection.AdditiveToolNames.Should().Contain(["use_skill", "ornn_search_skills", "ornn_publish_skill"]);
+        command.ToolSelection.OwnedToolNames.Should().Contain(["WebSearch", "use_skill", "ornn_search_skills", "ornn_publish_skill"]);
     }
 
     [Fact]
