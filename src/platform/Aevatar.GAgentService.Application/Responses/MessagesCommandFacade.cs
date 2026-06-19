@@ -370,7 +370,9 @@ public sealed class MessagesCommandFacade(
     {
         try
         {
-            var admission = await DispatchRunAsync(plan, ct);
+            var admission = _offActorLlmRunExecutorEnabled
+                ? await StartOffActorRunAsync(plan, ct).ConfigureAwait(false)
+                : await DispatchRunAsync(plan, ct).ConfigureAwait(false);
             return MessagesCreateCommandResult.FromAccepted(new MessagesCreateAcceptedCommandResult(
                 plan.Normalized,
                 plan.Session,
@@ -610,9 +612,7 @@ public sealed class MessagesCommandFacade(
         CancellationToken ct)
     {
         var request = BuildExecutorRequest(plan);
-        var admission = await llmRunExecutor!.StartAsync(request, ct).ConfigureAwait(false);
-        _ = llmRunExecutor.ExecuteAsync(request, CancellationToken.None);
-        return admission;
+        return await llmRunExecutor!.StartAsync(request, ct).ConfigureAwait(false);
     }
 
     private static LlmRunExecutorRequest BuildExecutorRequest(MessagesCreateCommandPlan plan)

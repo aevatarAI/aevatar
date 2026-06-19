@@ -625,9 +625,7 @@ public sealed class ChatCompletionsCommandFacade(
         CancellationToken ct)
     {
         var request = BuildExecutorRequest(plan);
-        var admission = await llmRunExecutor!.StartAsync(request, ct).ConfigureAwait(false);
-        _ = llmRunExecutor.ExecuteAsync(request, CancellationToken.None);
-        return admission;
+        return await llmRunExecutor!.StartAsync(request, ct).ConfigureAwait(false);
     }
 
     private static LlmRunExecutorRequest BuildExecutorRequest(ChatCompletionsCreateCommandPlan plan)

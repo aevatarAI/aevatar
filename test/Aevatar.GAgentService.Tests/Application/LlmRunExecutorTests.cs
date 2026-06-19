@@ -15,7 +15,7 @@ namespace Aevatar.GAgentService.Tests.Application;
 public sealed class LlmRunExecutorTests
 {
     [Fact]
-    public async Task StartAsync_ShouldReturnBeforeStreamingLoopDispatchesRecordCommands()
+    public async Task StartAsync_ShouldDispatchRunStartedCommand_AndReturnBeforeStreamingLoopDispatchesRecordCommands()
     {
         var provider = new GateControlledLlmProviderFactory();
         var core = new LlmRunCore(provider, [], NullLogger<LlmRunCore>.Instance);
@@ -30,30 +30,34 @@ public sealed class LlmRunExecutorTests
             "ApiKey");
 
         var admission = await executor.StartAsync(request);
-        dispatch.Calls.Should().BeEmpty();
+        dispatch.Calls.Should().ContainSingle();
         admission.Accepted.Should().BeTrue();
         admission.ActorId.Should().Be("session-actor-1");
         admission.CorrelationId.Should().Be("resp_executor");
+        admission.CommandId.Should().Be("start-resp_executor");
+        var started = dispatch.Calls[0].Envelope.Payload!.Unpack<RecordLlmRunStarted>();
+        started.Command.Should().BeEquivalentTo(request.Command);
+        started.StartedAt.Should().NotBeNull();
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         var executeTask = executor.ExecuteAsync(request, cts.Token);
         provider.Release.SetResult();
-        await dispatch.WaitForCallsAsync(2, cts.Token);
+        await dispatch.WaitForCallsAsync(3, cts.Token);
         await executeTask;
 
-        dispatch.Calls.Should().HaveCount(2);
+        dispatch.Calls.Should().HaveCount(3);
         dispatch.Calls.Select(call => call.ActorId).Should().OnlyContain(actorId => actorId == "session-actor-1");
-        var chunk = dispatch.Calls[0].Envelope.Payload!.Unpack<RecordLlmStreamChunkObserved>();
+        var chunk = dispatch.Calls[1].Envelope.Payload!.Unpack<RecordLlmStreamChunkObserved>();
         chunk.ResponseId.Should().Be("resp_executor");
         chunk.RunId.Should().Be("run_1");
         chunk.RecordId.Should().Be("run_1:chunk:1");
         chunk.DeltaText.Should().Be("done");
-        dispatch.Calls[0].Envelope.Propagation!.CorrelationId.Should().Be(chunk.RecordId);
+        dispatch.Calls[1].Envelope.Propagation!.CorrelationId.Should().Be(chunk.RecordId);
 
-        var completed = dispatch.Calls[1].Envelope.Payload!.Unpack<RecordLlmRunCompleted>();
+        var completed = dispatch.Calls[2].Envelope.Payload!.Unpack<RecordLlmRunCompleted>();
         completed.RecordId.Should().Be("run_1:completed:2");
         completed.OutputText.Should().Be("done");
-        AssertDirectEnvelope(dispatch.Calls[1], completed.RecordId, RecordLlmRunCompleted.Descriptor.FullName);
+        AssertDirectEnvelope(dispatch.Calls[2], completed.RecordId, RecordLlmRunCompleted.Descriptor.FullName);
     }
 
     [Fact]

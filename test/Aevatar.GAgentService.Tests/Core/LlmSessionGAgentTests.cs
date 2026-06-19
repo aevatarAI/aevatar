@@ -798,6 +798,47 @@ public sealed class LlmSessionGAgentTests
     }
 
     [Fact]
+    public async Task HandleRecordRunStartedAsync_ShouldPersistStartBeforeExecutingOffActorRun()
+    {
+        var eventStore = new InMemoryEventStore();
+        var observations = new List<string>();
+        var executor = new RecordingLlmRunExecutor(observations);
+        var actor = CreateActorWithStore(
+            "resp_off_actor_started",
+            eventStore,
+            services => services.AddSingleton<ILlmRunExecutor>(executor));
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_off_actor_started"),
+        });
+
+        var requestedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-06-19T00:00:00+00:00"));
+        var request = BuildRunRequest("resp_off_actor_started");
+        request.RequestedAt = requestedAt;
+
+        await actor.HandleRecordRunStartedAsync(new RecordLlmRunStarted
+        {
+            Command = request,
+            StartedAt = requestedAt,
+        });
+
+        var runEvents = (await eventStore.GetEventsAsync(actor.Id))
+            .Select(static evt => evt.EventData)
+            .Where(static payload => payload.Is(LlmRunStartedEvent.Descriptor))
+            .ToArray();
+        runEvents.Should().ContainSingle();
+        var started = runEvents[0].Unpack<LlmRunStartedEvent>();
+        started.ResponseId.Should().Be("resp_off_actor_started");
+        started.RunId.Should().Be("run_1");
+        started.StartedAt.Should().Be(requestedAt);
+        actor.State.ActiveRun.Should().NotBeNull();
+        actor.State.ActiveRun!.StartedAt.Should().Be(requestedAt);
+        executor.ExecuteRequests.Should().ContainSingle()
+            .Which.RunId.Should().Be("run_1");
+        observations.Should().ContainSingle("executor:execute");
+    }
+
+    [Fact]
     public async Task RecordCommands_ShouldAssignActorOwnedSequence_AndIgnoreDuplicateRecordId()
     {
         var actor = CreateActor("resp_records", services => services.AddSingleton<ILlmRunExecutor, NoOpLlmRunExecutor>());
@@ -892,10 +933,10 @@ public sealed class LlmSessionGAgentTests
         payload.RecordId.Should().Be("run_1:timeout");
         payload.TimedOutAt.Should().Be(
             Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-06-19T00:05:00+00:00")));
-        executor.StartRequests.Should().ContainSingle()
+        executor.ExecuteRequests.Should().ContainSingle()
             .Which.RunId.Should().Be("run_1");
         observations.IndexOf("schedule:llm-run-timeout:resp_timeout_schedule:run_1")
-            .Should().BeLessThan(observations.IndexOf("executor:start"));
+            .Should().BeLessThan(observations.IndexOf("executor:execute"));
     }
 
     [Fact]
@@ -922,7 +963,7 @@ public sealed class LlmSessionGAgentTests
                 request.CallbackId,
                 "llm-run-timeout:resp_timeout_schedule_failure:run_1",
                 StringComparison.Ordinal));
-        executor.StartRequests.Should().BeEmpty();
+        executor.ExecuteRequests.Should().BeEmpty();
         actor.State.Record!.Status.Should().Be(LlmSessionStatus.Failed);
         actor.State.ActiveRun.Should().NotBeNull();
         actor.State.ActiveRun!.Status.Should().Be(3);
@@ -2103,10 +2144,10 @@ public sealed class LlmSessionGAgentTests
             var envelope = new EventEnvelope
             {
                 Id = $"start-{request.ResponseId}",
-                Payload = Any.Pack(new LlmRunStartedEvent
+                Payload = Any.Pack(new RecordLlmRunStarted
                 {
-                    ResponseId = request.ResponseId,
-                    RunId = request.RunId,
+                    Command = request.Command.Clone(),
+                    StartedAt = request.Command.RequestedAt?.Clone(),
                 }),
             };
             return Task.FromResult(DispatchAdmissionFactory.Create(request.SessionActorId, envelope));
@@ -2126,6 +2167,8 @@ public sealed class LlmSessionGAgentTests
     {
         public List<LlmRunExecutorRequest> StartRequests { get; } = [];
 
+        public List<LlmRunExecutorRequest> ExecuteRequests { get; } = [];
+
         public Task<DispatchAdmission> StartAsync(
             LlmRunExecutorRequest request,
             CancellationToken ct = default)
@@ -2136,10 +2179,10 @@ public sealed class LlmSessionGAgentTests
             var envelope = new EventEnvelope
             {
                 Id = $"start-{request.ResponseId}",
-                Payload = Any.Pack(new LlmRunStartedEvent
+                Payload = Any.Pack(new RecordLlmRunStarted
                 {
-                    ResponseId = request.ResponseId,
-                    RunId = request.RunId,
+                    Command = request.Command.Clone(),
+                    StartedAt = request.Command.RequestedAt?.Clone(),
                 }),
             };
             return Task.FromResult(DispatchAdmissionFactory.Create(request.SessionActorId, envelope));
@@ -2149,8 +2192,9 @@ public sealed class LlmSessionGAgentTests
             LlmRunExecutorRequest request,
             CancellationToken ct = default)
         {
-            _ = request;
             _ = ct;
+            ExecuteRequests.Add(request);
+            observations?.Add("executor:execute");
             return Task.CompletedTask;
         }
     }

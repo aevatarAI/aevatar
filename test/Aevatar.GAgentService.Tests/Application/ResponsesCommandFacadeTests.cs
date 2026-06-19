@@ -899,7 +899,7 @@ public sealed class ResponsesCommandFacadeTests
     }
 
     [Fact]
-    public async Task CreateAsync_WhenOffActorFlagIsOn_ShouldStartExecutorWithoutWaitingForExecution()
+    public async Task CreateAsync_WhenOffActorFlagIsOn_ShouldAdmitExecutorStartWithoutLegacyRunDispatch()
     {
         var dispatch = new RecordingActorDispatchPort();
         var executor = new BlockingLlmRunExecutor();
@@ -926,17 +926,14 @@ public sealed class ResponsesCommandFacadeTests
 
         result.Error.Should().BeNull();
         result.Completed!.Completion.OutputText.Should().Be("done");
+        dispatch.Calls.Should().BeEmpty();
         var admission = executor.StartAdmissions.Should().ContainSingle().Subject;
         admission.Accepted.Should().BeTrue();
         admission.ActorId.Should().NotBeNullOrWhiteSpace();
         admission.CorrelationId.Should().NotBeNullOrWhiteSpace();
         admission.CommandId.Should().StartWith("start-");
         executor.StartedRequests.Should().ContainSingle();
-        executor.ExecuteStarted.Task.IsCompleted.Should().BeTrue();
-        executor.ExecuteReleased.Task.IsCompleted.Should().BeFalse();
-
-        executor.ReleaseExecute();
-        await executor.ExecuteReleased.Task;
+        executor.ExecuteStarted.Task.IsCompleted.Should().BeFalse();
     }
 
     private static ResponsesCommandFacade CreateFacade(
@@ -1227,10 +1224,10 @@ public sealed class ResponsesCommandFacadeTests
             {
                 Id = "start-" + request.ResponseId,
                 Propagation = new EnvelopePropagation { CorrelationId = request.ResponseId },
-                Payload = Any.Pack(new LlmRunStartedEvent
+                Payload = Any.Pack(new RecordLlmRunStarted
                 {
-                    ResponseId = request.ResponseId,
-                    RunId = request.RunId,
+                    Command = request.Command.Clone(),
+                    StartedAt = request.Command.RequestedAt?.Clone(),
                 }),
             };
             var admission = DispatchAdmissionFactory.Create(request.SessionActorId, envelope);

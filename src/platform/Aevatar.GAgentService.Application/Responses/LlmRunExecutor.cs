@@ -26,23 +26,28 @@ public sealed class LlmRunExecutor(
 
         ct.ThrowIfCancellationRequested();
 
+        var sessionActorId = request.SessionActorId.Trim();
+        var responseId = request.ResponseId.Trim();
+        var command = request.Command.Clone();
+        command.ResponseId = responseId;
+        command.RunId = request.RunId.Trim();
+        var startedAt = command.RequestedAt?.Clone() ?? Timestamp.FromDateTime(DateTime.UtcNow);
         var envelope = new EventEnvelope
         {
-            Id = $"start-{request.ResponseId.Trim()}",
+            Id = $"start-{responseId}",
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(new LlmRunStartedEvent
+            Payload = Any.Pack(new RecordLlmRunStarted
             {
-                ResponseId = request.ResponseId.Trim(),
-                RunId = request.RunId.Trim(),
-                StartedAt = request.Command.RequestedAt?.Clone() ?? Timestamp.FromDateTime(DateTime.UtcNow),
+                Command = command,
+                StartedAt = startedAt,
             }),
-            Route = EnvelopeRouteSemantics.CreateDirect(PublisherId, request.SessionActorId.Trim()),
+            Route = EnvelopeRouteSemantics.CreateDirect(PublisherId, sessionActorId),
             Propagation = new EnvelopePropagation
             {
-                CorrelationId = request.ResponseId.Trim(),
+                CorrelationId = responseId,
             },
         };
-        return Task.FromResult(DispatchAdmissionFactory.Create(request.SessionActorId, envelope));
+        return dispatchPort.DispatchAsync(sessionActorId, envelope, ct);
     }
 
     public async Task ExecuteAsync(

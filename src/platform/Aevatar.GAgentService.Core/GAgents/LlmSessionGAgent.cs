@@ -286,36 +286,9 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         if (string.IsNullOrWhiteSpace(runId))
             runId = $"{existing.ResponseId}:run";
 
-        if (State.ActiveRun is { Status: RunningStatus } active &&
-            !string.Equals(active.RunId, runId, StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException(
-                $"Response session '{existing.ResponseId}' already has active run '{active.RunId}'.");
-        }
-
-        if (State.Completion is { CompletedAt: not null })
-            return;
-
         var startedAt = command.RequestedAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
-        var shouldStartExecutor = State.ActiveRun == null ||
-            !string.Equals(State.ActiveRun.RunId, runId, StringComparison.Ordinal) ||
-            State.ActiveRun.LastAppliedSequence <= 0;
-        if (shouldStartExecutor)
-        {
-            await PersistDomainEventAsync(new LlmRunStartedEvent
-            {
-                ResponseId = existing.ResponseId,
-                RunId = runId,
-                Sequence = 1,
-                StartedAt = startedAt,
-            });
-            if (!await TryScheduleRunTimeoutAsync(existing.ResponseId, runId, startedAt, ResolveRunTimeout(command, existing)))
-                return;
-        }
-        else
-        {
+        if (!await TryCommitRunStartedAsync(existing, runId, startedAt, command.TimeoutAfter))
             return;
-        }
 
         var executor = Services.GetRequiredService<ILlmRunExecutor>();
         var executorRequest = new LlmRunExecutorRequest(
@@ -324,7 +297,35 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             runId,
             command.Clone(),
             existing.OriginKind.ToString());
-        await executor.StartAsync(executorRequest);
+        _ = executor.ExecuteAsync(executorRequest, CancellationToken.None);
+    }
+
+    [EventHandler]
+    public async Task HandleRecordRunStartedAsync(RecordLlmRunStarted command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        ArgumentNullException.ThrowIfNull(command.Command);
+
+        var runCommand = command.Command;
+        var existing = EnsureRegisteredSession(runCommand.ResponseId);
+        if (IsTerminal(existing.Status))
+            return;
+
+        var runId = NormalizeRequired(runCommand.RunId);
+        if (string.IsNullOrWhiteSpace(runId))
+            runId = $"{existing.ResponseId}:run";
+
+        var startedAt = command.StartedAt ?? runCommand.RequestedAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
+        if (!await TryCommitRunStartedAsync(existing, runId, startedAt, runCommand.TimeoutAfter))
+            return;
+
+        var executor = Services.GetRequiredService<ILlmRunExecutor>();
+        var executorRequest = new LlmRunExecutorRequest(
+            Id,
+            existing.ResponseId,
+            runId,
+            runCommand.Clone(),
+            existing.OriginKind.ToString());
         _ = executor.ExecuteAsync(executorRequest, CancellationToken.None);
     }
 
@@ -347,6 +348,38 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             Sequence = NextRunSequence(runId),
             RecordId = NormalizeRequired(command.RecordId),
         });
+    }
+
+    private async Task<bool> TryCommitRunStartedAsync(
+        LlmSessionRecord existing,
+        string runId,
+        Timestamp startedAt,
+        Duration? timeoutAfter)
+    {
+        if (State.ActiveRun is { Status: RunningStatus } active &&
+            !string.Equals(active.RunId, runId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Response session '{existing.ResponseId}' already has active run '{active.RunId}'.");
+        }
+
+        if (State.Completion is { CompletedAt: not null })
+            return false;
+
+        var shouldStartRun = State.ActiveRun == null ||
+            !string.Equals(State.ActiveRun.RunId, runId, StringComparison.Ordinal) ||
+            State.ActiveRun.LastAppliedSequence <= 0;
+        if (!shouldStartRun)
+            return false;
+
+        await PersistDomainEventAsync(new LlmRunStartedEvent
+        {
+            ResponseId = existing.ResponseId,
+            RunId = runId,
+            Sequence = 1,
+            StartedAt = startedAt,
+        });
+        return await TryScheduleRunTimeoutAsync(existing.ResponseId, runId, startedAt, ResolveRunTimeout(timeoutAfter, existing));
     }
 
     [EventHandler]
@@ -1248,12 +1281,12 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
     }
 
     private static TimeSpan ResolveRunTimeout(
-        LlmRunRequested command,
+        Duration? requestedTimeout,
         LlmSessionRecord record)
     {
-        var requestedTimeout = command.TimeoutAfter?.ToTimeSpan();
-        if (requestedTimeout is { } timeout && timeout > TimeSpan.Zero)
-            return timeout;
+        var timeout = requestedTimeout?.ToTimeSpan();
+        if (timeout is { } value && value > TimeSpan.Zero)
+            return value;
 
         var ttl = record.Ttl?.ToTimeSpan() ?? DefaultTtl.ToTimeSpan();
         return ttl > TimeSpan.Zero ? ttl : DefaultTtl.ToTimeSpan();

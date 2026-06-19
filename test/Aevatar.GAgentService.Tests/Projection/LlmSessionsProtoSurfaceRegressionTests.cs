@@ -43,6 +43,7 @@ public sealed class LlmSessionsProtoSurfaceRegressionTests
         TopLevelMessageNames(descriptor).Should().NotContain("LlmRunRecordAppliedEvent");
         TopLevelMessageNames(descriptor).Should().Contain(
             [
+                "RecordLlmRunStarted",
                 "RecordLlmStreamChunkObserved",
                 "RecordLlmToolCallObserved",
                 "RecordLlmForwardedToolCallEmitted",

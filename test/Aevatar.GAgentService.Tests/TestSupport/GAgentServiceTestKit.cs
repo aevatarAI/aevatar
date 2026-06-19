@@ -183,10 +183,10 @@ internal static class GAgentServiceTestKit
                 new EventEnvelope
                 {
                     Id = $"start-{request.ResponseId}",
-                    Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new LlmRunStartedEvent
+                    Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new RecordLlmRunStarted
                     {
-                        ResponseId = request.ResponseId,
-                        RunId = request.RunId,
+                        Command = request.Command.Clone(),
+                        StartedAt = request.Command.RequestedAt?.Clone(),
                     }),
                 }));
 

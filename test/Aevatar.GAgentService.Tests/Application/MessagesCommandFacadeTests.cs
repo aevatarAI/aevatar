@@ -8,6 +8,7 @@ using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Application.Responses;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -91,6 +92,55 @@ public sealed class MessagesCommandFacadeTests
         result.Completed.Should().BeNull();
         result.Error.Should().BeNull();
         result.Accepted.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenOffActorFlagIsOff_ShouldKeepLegacyRunRequestedDispatch()
+    {
+        var dispatch = new RecordingActorDispatchPort();
+        var executor = new BlockingLlmRunExecutor();
+        var facade = CreateFacade(
+            dispatchPort: dispatch,
+            llmRunExecutor: executor,
+            ingressOptions: new ResponsesIngressOptions
+            {
+                DefaultModel = "claude-sonnet",
+                OffActorLlmRunExecutorEnabled = false,
+            });
+
+        var result = await facade.CreateAsync(BuildRequest("claude-sonnet"), CallerScopeContext("token"));
+
+        result.Error.Should().BeNull();
+        result.Accepted.Should().NotBeNull();
+        dispatch.Calls.Should().ContainSingle()
+            .Which.Envelope.Payload!.Is(LlmRunRequested.Descriptor).Should().BeTrue();
+        executor.StartedRequests.Should().BeEmpty();
+        executor.ExecuteStarted.Task.IsCompleted.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenOffActorFlagIsOn_ShouldAdmitExecutorStartWithoutLegacyRunDispatch()
+    {
+        var dispatch = new RecordingActorDispatchPort();
+        var executor = new BlockingLlmRunExecutor();
+        var facade = CreateFacade(
+            dispatchPort: dispatch,
+            llmRunExecutor: executor,
+            ingressOptions: new ResponsesIngressOptions
+            {
+                DefaultModel = "claude-sonnet",
+                OffActorLlmRunExecutorEnabled = true,
+            });
+
+        var result = await facade.CreateAsync(BuildRequest("claude-sonnet"), CallerScopeContext("token"));
+
+        result.Error.Should().BeNull();
+        result.Accepted.Should().NotBeNull();
+        result.Accepted!.Admission.Should().Be(executor.StartAdmissions.Should().ContainSingle().Subject);
+        dispatch.Calls.Should().BeEmpty();
+        result.Accepted.Admission.CommandId.Should().StartWith("start-");
+        executor.StartedRequests.Should().ContainSingle();
+        executor.ExecuteStarted.Task.IsCompleted.Should().BeFalse();
     }
 
     [Fact]
@@ -309,9 +359,14 @@ public sealed class MessagesCommandFacadeTests
         IResponsesToolClassificationService? toolClassificationService = null,
         ILlmSessionRunObservationService? observationService = null,
         string? defaultIngressModel = null,
-        IOwnerLlmConfigSource? ownerLlmConfigSource = null)
+        IOwnerLlmConfigSource? ownerLlmConfigSource = null,
+        ResponsesIngressOptions? ingressOptions = null,
+        ILlmRunExecutor? llmRunExecutor = null)
     {
         var effectiveSessionPort = sessionPort ?? new RecordingSessionPort();
+        var options = ingressOptions ?? (defaultIngressModel is null
+            ? null
+            : new ResponsesIngressOptions { DefaultModel = defaultIngressModel });
         return new MessagesCommandFacade(
             new StaticCallerScopeResolver(),
             chatRouteDecisionPort ?? new StaticResponsesChatRouteDecisionPort(ForwardToModelAction(string.Empty)),
@@ -322,10 +377,9 @@ public sealed class MessagesCommandFacadeTests
             new StaticResponsesDirectToolPlanService(),
             observationService ?? StaticLlmSessionRunObservationService.Completed("ok"),
             NullLogger<MessagesCommandFacade>.Instance,
-            defaultIngressModel is null
-                ? null
-                : Options.Create(new ResponsesIngressOptions { DefaultModel = defaultIngressModel }),
-            ownerLlmConfigSource);
+            options is null ? null : Options.Create(options),
+            ownerLlmConfigSource,
+            llmRunExecutor);
     }
 
     private sealed class StubOwnerLlmConfigSource(OwnerLlmConfig? config = null)
@@ -487,6 +541,46 @@ public sealed class MessagesCommandFacadeTests
             }
 
             return result with { Admission = admission };
+        }
+    }
+
+    private sealed class BlockingLlmRunExecutor : ILlmRunExecutor
+    {
+        public List<LlmRunExecutorRequest> StartedRequests { get; } = [];
+
+        public List<DispatchAdmission> StartAdmissions { get; } = [];
+
+        public TaskCompletionSource ExecuteStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<DispatchAdmission> StartAsync(
+            LlmRunExecutorRequest request,
+            CancellationToken ct = default)
+        {
+            StartedRequests.Add(request);
+            var envelope = new EventEnvelope
+            {
+                Id = "start-" + request.ResponseId,
+                Propagation = new EnvelopePropagation { CorrelationId = request.ResponseId },
+                Payload = Any.Pack(new RecordLlmRunStarted
+                {
+                    Command = request.Command.Clone(),
+                    StartedAt = request.Command.RequestedAt?.Clone(),
+                }),
+            };
+            var admission = DispatchAdmissionFactory.Create(request.SessionActorId, envelope);
+            StartAdmissions.Add(admission);
+            return Task.FromResult(admission);
+        }
+
+        public Task ExecuteAsync(
+            LlmRunExecutorRequest request,
+            CancellationToken ct = default)
+        {
+            _ = request;
+            _ = ct;
+            ExecuteStarted.SetResult();
+            return Task.CompletedTask;
         }
     }
 

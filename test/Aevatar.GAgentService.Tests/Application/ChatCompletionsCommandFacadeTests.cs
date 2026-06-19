@@ -5,6 +5,7 @@ using Aevatar.ChatRouting.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Application.Responses;
 using FluentAssertions;
@@ -411,6 +412,62 @@ public sealed class ChatCompletionsCommandFacadeTests
     }
 
     [Fact]
+    public async Task CreateAsync_WhenOffActorFlagIsOff_ShouldKeepLegacyRunRequestedDispatch()
+    {
+        var observation = ObservationScenarioBuilder.ForResponse("chatcmpl_off_actor_off")
+            .WithCompletedText("ok")
+            .Build();
+        var dispatch = new RecordingActorDispatchPort(observation);
+        var executor = new BlockingLlmRunExecutor();
+        var facade = CreateFacade(
+            dispatchPort: dispatch,
+            observationRuntime: observation,
+            llmRunExecutor: executor,
+            ingressOptions: new ResponsesIngressOptions
+            {
+                DefaultModel = "gpt-4o-mini",
+                OffActorLlmRunExecutorEnabled = false,
+            });
+
+        var result = await facade.CreateAsync(BuildRequest("gpt-4o-mini"), CallerScopeContext("token"));
+
+        result.Error.Should().BeNull();
+        result.Completed.Should().NotBeNull();
+        dispatch.Calls.Should().ContainSingle()
+            .Which.Envelope.Payload!.Is(LlmRunRequested.Descriptor).Should().BeTrue();
+        executor.StartedRequests.Should().BeEmpty();
+        executor.ExecuteStarted.Task.IsCompleted.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenOffActorFlagIsOn_ShouldAdmitExecutorStartWithoutLegacyRunDispatch()
+    {
+        var dispatch = new RecordingActorDispatchPort();
+        var executor = new BlockingLlmRunExecutor();
+        var observation = StaticLlmSessionRunObservationService.Completed("done");
+        var facade = CreateFacade(
+            dispatchPort: dispatch,
+            observationService: observation,
+            llmRunExecutor: executor,
+            ingressOptions: new ResponsesIngressOptions
+            {
+                DefaultModel = "gpt-4o-mini",
+                OffActorLlmRunExecutorEnabled = true,
+            });
+
+        var result = await facade.CreateAsync(BuildRequest("gpt-4o-mini"), CallerScopeContext("token"));
+
+        result.Error.Should().BeNull();
+        result.Completed!.Completion.OutputText.Should().Be("done");
+        dispatch.Calls.Should().BeEmpty();
+        var admission = executor.StartAdmissions.Should().ContainSingle().Subject;
+        admission.Accepted.Should().BeTrue();
+        admission.CommandId.Should().StartWith("start-");
+        executor.StartedRequests.Should().ContainSingle();
+        executor.ExecuteStarted.Task.IsCompleted.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task CreateAsync_ShouldReturnStreamPlan_WhenRequestIsStreaming()
     {
         var sessions = new RecordingSessionPort();
@@ -762,18 +819,21 @@ public sealed class ChatCompletionsCommandFacadeTests
         IResponsesToolClassificationService? toolClassificationService = null,
         IResponsesDirectToolPlanService? directToolPlanService = null,
         ObservationScenarioRuntime? observationRuntime = null,
+        ILlmSessionRunObservationService? observationService = null,
         TimeSpan? observationTimeout = null,
         string? defaultIngressModel = null,
         int? observationTimeoutSeconds = null,
-        IOwnerLlmConfigSource? ownerLlmConfigSource = null)
+        IOwnerLlmConfigSource? ownerLlmConfigSource = null,
+        ResponsesIngressOptions? ingressOptions = null,
+        ILlmRunExecutor? llmRunExecutor = null)
     {
         var effectiveSessionPort = sessionPort ?? new RecordingSessionPort();
         var runtime = observationRuntime ?? ObservationScenarioBuilder.ForResponse("chatcmpl_default")
             .WithCompletedText("ok")
             .Build();
         dispatchPort?.BindObservationRuntime(runtime);
-        ResponsesIngressOptions? ingressOpts = null;
-        if (defaultIngressModel is not null || observationTimeoutSeconds is not null)
+        var ingressOpts = ingressOptions;
+        if (ingressOpts is null && (defaultIngressModel is not null || observationTimeoutSeconds is not null))
         {
             ingressOpts = new ResponsesIngressOptions();
             if (defaultIngressModel is not null) ingressOpts.DefaultModel = defaultIngressModel;
@@ -787,11 +847,12 @@ public sealed class ChatCompletionsCommandFacadeTests
             dispatchPort ?? new RecordingActorDispatchPort(runtime),
             toolClassificationService ?? new StaticResponsesToolClassificationService(),
             directToolPlanService ?? new StaticResponsesDirectToolPlanService(),
-            new LlmSessionRunObservationService(runtime.ScopePreparationPort, runtime.ProjectionPort),
+            observationService ?? new LlmSessionRunObservationService(runtime.ScopePreparationPort, runtime.ProjectionPort),
             NullLogger<ChatCompletionsCommandFacade>.Instance,
             observationTimeout,
             ingressOpts is null ? null : Options.Create(ingressOpts),
-            ownerLlmConfigSource);
+            ownerLlmConfigSource,
+            llmRunExecutor);
     }
 
     private static ResponsesCallerScopeResolutionContext CallerScopeContext(string bearerToken) =>
@@ -940,6 +1001,77 @@ public sealed class ChatCompletionsCommandFacadeTests
                 ResponsesToolChoiceHints.Create(
                     routeAction?.ForwardToModel?.ToolChoiceHint?.ToolName,
                     routeAction?.ForwardToModel?.ToolChoiceHint?.PrefilledArguments));
+    }
+
+    private sealed class StaticLlmSessionRunObservationService(
+        LlmSessionRunObservedResult result,
+        IReadOnlyList<LlmSessionRunObservedDelta>? deltas = null) : ILlmSessionRunObservationService
+    {
+        public LlmSessionRunObservationRequest? LastRequest { get; private set; }
+
+        public static StaticLlmSessionRunObservationService Completed(string outputText) =>
+            new(
+                new LlmSessionRunObservedResult(
+                    null,
+                    new LlmSessionCompletionSnapshot(outputText, [], DateTimeOffset.UtcNow, null, null),
+                    null),
+                [new LlmSessionRunObservedDelta(outputText, null)]);
+
+        public async Task<LlmSessionRunObservedResult> ObserveAsync(
+            LlmSessionRunObservationRequest request,
+            Func<LlmSessionRunObservedDelta, CancellationToken, ValueTask>? onDelta,
+            CancellationToken ct = default)
+        {
+            LastRequest = request;
+            var admission = await request.DispatchAsync(ct);
+            foreach (var delta in deltas ?? [])
+            {
+                if (onDelta != null)
+                    await onDelta(delta, ct);
+            }
+
+            return result with { Admission = admission };
+        }
+    }
+
+    private sealed class BlockingLlmRunExecutor : ILlmRunExecutor
+    {
+        public List<LlmRunExecutorRequest> StartedRequests { get; } = [];
+
+        public List<DispatchAdmission> StartAdmissions { get; } = [];
+
+        public TaskCompletionSource ExecuteStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<DispatchAdmission> StartAsync(
+            LlmRunExecutorRequest request,
+            CancellationToken ct = default)
+        {
+            StartedRequests.Add(request);
+            var envelope = new EventEnvelope
+            {
+                Id = "start-" + request.ResponseId,
+                Propagation = new EnvelopePropagation { CorrelationId = request.ResponseId },
+                Payload = Any.Pack(new RecordLlmRunStarted
+                {
+                    Command = request.Command.Clone(),
+                    StartedAt = request.Command.RequestedAt?.Clone(),
+                }),
+            };
+            var admission = DispatchAdmissionFactory.Create(request.SessionActorId, envelope);
+            StartAdmissions.Add(admission);
+            return Task.FromResult(admission);
+        }
+
+        public Task ExecuteAsync(
+            LlmRunExecutorRequest request,
+            CancellationToken ct = default)
+        {
+            _ = request;
+            _ = ct;
+            ExecuteStarted.SetResult();
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class RecordingActorDispatchPort : IActorDispatchPort
