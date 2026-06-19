@@ -435,7 +435,7 @@ public sealed class ChatCompletionsCommandFacadeTests
     }
 
     [Fact]
-    public async Task StreamAsync_ShouldReturnCompletedObservation_AndReplayDeltas()
+    public async Task StreamAsync_ShouldReturnCompletedObservation_AndReplayTextOnlyDeltas()
     {
         var sessions = new RecordingSessionPort();
         var observation = ObservationScenarioBuilder.ForResponse("chatcmpl_stream")
@@ -465,7 +465,7 @@ public sealed class ChatCompletionsCommandFacadeTests
         result.Completion.Usage.Should().Be(new TokenUsage(4, 2, 6));
         deltas.Should().Contain(x => x.TextDelta == "Hel");
         deltas.Should().Contain(x => x.TextDelta == "lo");
-        deltas.Should().Contain(x => x.ToolCallDelta != null && x.ToolCallDelta.Id == "call_1");
+        deltas.All(static x => x.TextDelta != null || x.Usage != null).Should().BeTrue();
         sessions.RecordedCompletions.Should().BeEmpty();
         sessions.UpdatedStatuses.Should().BeEmpty();
         var call = dispatch.Calls.Should().ContainSingle().Subject;
