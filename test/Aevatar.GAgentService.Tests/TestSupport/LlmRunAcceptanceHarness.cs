@@ -1,9 +1,9 @@
 using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Responses;
-using Aevatar.GAgentService.Application.Responses;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
@@ -157,85 +157,6 @@ internal sealed class LlmRunAcceptanceHarness
         {
             Cancelled.Add(cancelled.Clone());
             return Task.CompletedTask;
-        }
-    }
-
-    public sealed class DispatchingLlmRunSink(
-        string actorId,
-        IActorDispatchPort dispatchPort) : ILlmRunSink
-    {
-        public Task RecordStreamChunkObservedAsync(LlmStreamChunkObserved observed, CancellationToken ct = default) =>
-            DispatchAsync(observed, ct);
-
-        public Task RecordToolCallObservedAsync(LlmToolCallObserved observed, CancellationToken ct = default) =>
-            DispatchAsync(observed, ct);
-
-        public Task RecordForwardedToolCallEmittedAsync(
-            LlmSessionForwardedToolCallEmittedEvent emitted,
-            CancellationToken ct = default) =>
-            DispatchAsync(emitted, ct);
-
-        public Task RecordRunCompletedAsync(LlmRunCompleted completed, CancellationToken ct = default) =>
-            DispatchAsync(completed, ct);
-
-        public Task RecordRunFailedAsync(LlmRunFailed failed, CancellationToken ct = default) =>
-            DispatchAsync(failed, ct);
-
-        public Task RecordRunCancelledAsync(LlmRunCancelled cancelled, CancellationToken ct = default) =>
-            DispatchAsync(cancelled, ct);
-
-        private async Task DispatchAsync(IMessage payload, CancellationToken ct)
-        {
-            var envelope = new EventEnvelope
-            {
-                Id = Guid.NewGuid().ToString("N"),
-                Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                Payload = Any.Pack(payload),
-            };
-            await dispatchPort.DispatchAsync(actorId, envelope, ct);
-        }
-    }
-
-    public sealed class RecordingActorDispatchPort : IActorDispatchPort
-    {
-        public List<(string ActorId, EventEnvelope Envelope)> Calls { get; } = [];
-
-        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            Calls.Add((actorId, envelope.Clone()));
-            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
-        }
-    }
-
-    public sealed class GatedLlmProviderFactory(
-        TaskCompletionSource streamEntered,
-        TaskCompletionSource releaseStream,
-        IReadOnlyList<LLMStreamChunk> chunks) : ILLMProviderFactory, ILLMProvider
-    {
-        public int Requests { get; private set; }
-
-        public string Name => "test";
-
-        public ILLMProvider GetProvider(string name) => this;
-
-        public ILLMProvider GetDefault() => this;
-
-        public IReadOnlyList<string> GetAvailableProviders() => [Name];
-
-        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
-            LLMRequest request,
-            [EnumeratorCancellation] CancellationToken ct = default)
-        {
-            _ = request;
-            Requests++;
-            streamEntered.TrySetResult();
-            await releaseStream.Task.WaitAsync(ct);
-            foreach (var chunk in chunks)
-            {
-                ct.ThrowIfCancellationRequested();
-                yield return chunk;
-            }
         }
     }
 

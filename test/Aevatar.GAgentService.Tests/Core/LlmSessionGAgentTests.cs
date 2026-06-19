@@ -766,79 +766,36 @@ public sealed class LlmSessionGAgentTests
     }
 
     [Fact]
-    public async Task HandleLlmRunRequestedAsync_ShouldReturnAfterRunAcceptedWithoutWaitingForLiveProviderStream()
-    {
-        var streamEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var releaseStream = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var provider = new LlmRunAcceptanceHarness.GatedLlmProviderFactory(
-            streamEntered,
-            releaseStream,
-            [
-                new LLMStreamChunk
-                {
-                    DeltaContent = "done",
-                    IsLast = true,
-                },
-            ]);
-        var actor = CreateActor(
-            "resp_off_turn",
-            services =>
-            {
-                services.AddSingleton<ILLMProviderFactory>(provider);
-                services.AddSingleton<IActorDispatchPort>(new RecordingActorDispatchPort());
-            });
-        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
-        {
-            Record = BuildRecord("resp_off_turn"),
-        });
-        var request = BuildRunRequest("resp_off_turn");
-
-        await actor.HandleLlmRunRequestedAsync(request);
-        await streamEntered.Task;
-
-        actor.State.Record!.Status.Should().Be(LlmSessionStatus.Accepted);
-        actor.State.ActiveRun.Should().NotBeNull();
-        actor.State.ActiveRun!.Status.Should().Be(1);
-        provider.Requests.Should().Be(1);
-        releaseStream.SetResult();
-    }
-
-    [Fact]
     public async Task HandleLlmRunRequestedAsync_ShouldIgnoreDuplicateRunningRunAdmission()
     {
-        var streamEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var releaseStream = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var provider = new LlmRunAcceptanceHarness.GatedLlmProviderFactory(
-            streamEntered,
-            releaseStream,
+        var eventStore = new InMemoryEventStore();
+        await eventStore.AppendAsync(
+            "response-session-actor-resp_duplicate_run",
             [
-                new LLMStreamChunk
+                StateEvent(1, new LlmSessionRegisteredEvent { Record = BuildRecord("resp_duplicate_run") }),
+                StateEvent(2, new LlmRunStartedEvent
                 {
-                    DeltaContent = "done",
-                    IsLast = true,
-                },
-            ]);
-        var actor = CreateActor(
+                    ResponseId = "resp_duplicate_run",
+                    RunId = "run_1",
+                    Sequence = 1,
+                    StartedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-06-19T00:00:00+00:00")),
+                }),
+            ],
+            expectedVersion: 0);
+        var actor = CreateActorWithStore(
             "resp_duplicate_run",
-            services =>
-            {
-                services.AddSingleton<ILLMProviderFactory>(provider);
-                services.AddSingleton<IActorDispatchPort>(new RecordingActorDispatchPort());
-            });
-        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+            eventStore,
+            services => services.AddSingleton<ILLMProviderFactory, ThrowingLlmProviderFactory>());
+        await actor.ActivateAsync();
+        var versionAfterActivation = actor.State.LastAppliedEventVersion;
+
+        await actor.HandleLlmRunRequestedAsync(new LlmRunRequested
         {
-            Record = BuildRecord("resp_duplicate_run"),
+            ResponseId = "resp_duplicate_run",
+            RunId = "run_1",
         });
-        var request = BuildRunRequest("resp_duplicate_run");
 
-        await actor.HandleLlmRunRequestedAsync(request);
-        await streamEntered.Task;
-        var versionAfterFirstAdmission = actor.State.LastAppliedEventVersion;
-        await actor.HandleLlmRunRequestedAsync(request);
-
-        actor.State.LastAppliedEventVersion.Should().Be(versionAfterFirstAdmission);
-        provider.Requests.Should().Be(1);
-        releaseStream.SetResult();
+        actor.State.LastAppliedEventVersion.Should().Be(versionAfterActivation);
     }
 
     [Fact]
@@ -959,6 +916,33 @@ public sealed class LlmSessionGAgentTests
             .Which.ToolName.Should().Be("get_weather");
         ResponsesJsonValues.ToBoundaryJson(actor.State.Completion.ToolCalls[0].Result)
             .Should().Be("""{"city":"Singapore"}""");
+    }
+
+    [Fact]
+    public async Task HandleLlmSessionForwardedToolCallEmittedAsync_ShouldPersistForwardedToolCallAndIgnoreDuplicate()
+    {
+        var actor = CreateActor("resp_forwarded_recorder");
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_forwarded_recorder"),
+        });
+        var emitted = new LlmSessionForwardedToolCallEmittedEvent
+        {
+            ResponseId = "resp_forwarded_recorder",
+            Call = BuildToolCall("call_1"),
+        };
+
+        await actor.HandleLlmSessionForwardedToolCallEmittedAsync(emitted);
+        var versionAfterFirstEmission = actor.State.LastAppliedEventVersion;
+        await actor.HandleLlmSessionForwardedToolCallEmittedAsync(emitted.Clone());
+
+        actor.State.LastAppliedEventVersion.Should().Be(versionAfterFirstEmission);
+        actor.State.ForwardedToolCalls.Should().ContainSingle();
+        var forwarded = actor.State.ForwardedToolCalls[0];
+        forwarded.CallId.Should().Be("call_1");
+        forwarded.ToolName.Should().Be("get_weather");
+        forwarded.SchemaHash.Should().Be("schema-1");
+        forwarded.Status.Should().Be(LlmSessionForwardedToolCallStatus.Pending);
     }
 
     [Fact]

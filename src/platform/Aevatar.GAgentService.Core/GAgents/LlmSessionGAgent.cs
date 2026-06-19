@@ -1,4 +1,3 @@
-using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
@@ -314,22 +313,9 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
 
         var runCore = Services.GetRequiredService<ILlmRunCore>();
         var request = new LlmRunCoreRequest(command.Clone(), runId, existing.OriginKind.ToString());
-        if (Services.GetService<IActorDispatchPort>() is not { } dispatchPort)
-        {
-            await runCore.RunAsync(
-                request,
-                new InActorLlmRunSink(this),
-                CancellationToken.None);
-            return;
-        }
-
-        var initialSequence = State.ActiveRun?.LastAppliedSequence ?? 1;
-        _ = Task.Run(
-            () => ConsumeRunOffActorTurnAsync(
-                runCore,
-                request,
-                new SelfDispatchingLlmRunSink(Id, dispatchPort, initialSequence),
-                Logger),
+        await runCore.RunAsync(
+            request,
+            new InActorLlmRunSink(this),
             CancellationToken.None);
     }
 
@@ -408,26 +394,6 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             ResponseId = existing.ResponseId,
             Call = call,
         });
-    }
-
-    private static async Task ConsumeRunOffActorTurnAsync(
-        ILlmRunCore runCore,
-        LlmRunCoreRequest request,
-        ILlmRunSink sink,
-        ILogger logger)
-    {
-        try
-        {
-            await runCore.RunAsync(request, sink, CancellationToken.None).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(
-                ex,
-                "Off-turn LLM run consumption failed for response {ResponseId} run {RunId}.",
-                request.Command.ResponseId,
-                request.RunId);
-        }
     }
 
     protected override LlmSessionState TransitionState(LlmSessionState current, IMessage evt) =>
@@ -956,77 +922,6 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             LlmRunCancelled cancelled,
             CancellationToken ct = default) =>
             actor.PersistRunCancelledAsync(cancelled, ct);
-    }
-
-    private sealed class SelfDispatchingLlmRunSink(
-        string actorId,
-        IActorDispatchPort dispatchPort,
-        long initialSequence) : ILlmRunSink
-    {
-        private long _lastSequence = initialSequence;
-
-        public Task RecordStreamChunkObservedAsync(
-            LlmStreamChunkObserved observed,
-            CancellationToken ct = default)
-        {
-            var payload = observed.Clone();
-            payload.Sequence = NextSequence();
-            return DispatchAsync(payload, ct);
-        }
-
-        public Task RecordToolCallObservedAsync(
-            LlmToolCallObserved observed,
-            CancellationToken ct = default)
-        {
-            var payload = observed.Clone();
-            payload.Sequence = NextSequence();
-            return DispatchAsync(payload, ct);
-        }
-
-        public Task RecordForwardedToolCallEmittedAsync(
-            LlmSessionForwardedToolCallEmittedEvent emitted,
-            CancellationToken ct = default) =>
-            DispatchAsync(emitted.Clone(), ct);
-
-        public Task RecordRunCompletedAsync(
-            LlmRunCompleted completed,
-            CancellationToken ct = default)
-        {
-            var payload = completed.Clone();
-            payload.Sequence = NextSequence();
-            return DispatchAsync(payload, ct);
-        }
-
-        public Task RecordRunFailedAsync(
-            LlmRunFailed failed,
-            CancellationToken ct = default)
-        {
-            var payload = failed.Clone();
-            payload.Sequence = NextSequence();
-            return DispatchAsync(payload, ct);
-        }
-
-        public Task RecordRunCancelledAsync(
-            LlmRunCancelled cancelled,
-            CancellationToken ct = default)
-        {
-            var payload = cancelled.Clone();
-            payload.Sequence = NextSequence();
-            return DispatchAsync(payload, ct);
-        }
-
-        private long NextSequence() => Interlocked.Increment(ref _lastSequence);
-
-        private async Task DispatchAsync(IMessage payload, CancellationToken ct)
-        {
-            var envelope = new EventEnvelope
-            {
-                Id = Guid.NewGuid().ToString("N"),
-                Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-                Payload = Any.Pack(payload),
-            };
-            await dispatchPort.DispatchAsync(actorId, envelope, ct).ConfigureAwait(false);
-        }
     }
 
     private static LlmSessionRecord NormalizeRecord(LlmSessionRecord record)
