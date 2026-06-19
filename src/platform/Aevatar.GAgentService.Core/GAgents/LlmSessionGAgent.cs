@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -308,6 +309,8 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
                 Sequence = 1,
                 StartedAt = startedAt,
             });
+            if (!await TryScheduleRunTimeoutAsync(existing.ResponseId, runId, startedAt, ResolveRunTimeout(command, existing)))
+                return;
         }
         else
         {
@@ -448,6 +451,41 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             CancelledAt = command.CancelledAt ?? Timestamp.FromDateTime(DateTime.UtcNow),
             Sequence = NextRunSequence(runId),
             RecordId = NormalizeRequired(command.RecordId),
+        });
+    }
+
+    [EventHandler]
+    public async Task HandleFinalizeLlmRunTimedOutAsync(FinalizeLlmRunTimedOut command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        var existing = EnsureRegisteredSession(command.ResponseId);
+        var runId = NormalizeRequired(command.RunId);
+        if (string.IsNullOrWhiteSpace(runId))
+            throw new InvalidOperationException("run_id is required.");
+
+        if (State.ActiveRun == null ||
+            !string.Equals(State.ActiveRun.RunId, runId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (IsRunTerminal(State.ActiveRun.Status) || IsTerminal(existing.Status))
+            return;
+
+        var recordId = NormalizeOptional(command.RecordId) ?? BuildRunTimeoutRecordId(runId);
+        if (State.ActiveRun.AppliedRecordIds.Any(id => string.Equals(id, recordId, StringComparison.Ordinal)))
+            return;
+
+        await PersistDomainEventAsync(new LlmRunFailed
+        {
+            ResponseId = existing.ResponseId,
+            RunId = runId,
+            FailureCode = "run_timeout",
+            FailureMessage = "LLM run timed out.",
+            FailedAt = command.TimedOutAt ?? Timestamp.FromDateTime(DateTime.UtcNow),
+            Sequence = NextRunSequence(runId),
+            RecordId = recordId,
         });
     }
 
@@ -1143,6 +1181,68 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
                 ObservedAt = Timestamp.FromDateTimeOffset(expiresAt),
             });
     }
+
+    private async Task<bool> TryScheduleRunTimeoutAsync(
+        string responseId,
+        string runId,
+        Timestamp startedAt,
+        TimeSpan timeoutAfter)
+    {
+        try
+        {
+            var timeoutAt = startedAt.ToDateTimeOffset().Add(timeoutAfter);
+            var dueTime = timeoutAt - DateTimeOffset.UtcNow;
+            if (dueTime <= TimeSpan.Zero)
+                dueTime = TimeSpan.FromMilliseconds(1);
+
+            await ScheduleSelfDurableTimeoutAsync(
+                BuildRunTimeoutCallbackId(responseId, runId),
+                dueTime,
+                new FinalizeLlmRunTimedOut
+                {
+                    ResponseId = responseId,
+                    RunId = runId,
+                    RecordId = BuildRunTimeoutRecordId(runId),
+                    TimedOutAt = Timestamp.FromDateTimeOffset(timeoutAt),
+                });
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "LLM run timeout scheduling failed for response {ResponseId} run {RunId}.", responseId, runId);
+            await PersistDomainEventAsync(new LlmRunFailed
+            {
+                ResponseId = responseId,
+                RunId = runId,
+                FailureCode = "run_timeout_schedule_failed",
+                FailureMessage = string.IsNullOrWhiteSpace(ex.Message)
+                    ? "LLM run timeout scheduling failed."
+                    : ex.Message,
+                FailedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+                Sequence = NextRunSequence(runId),
+                RecordId = $"{runId}:timeout-schedule-failed",
+            });
+            return false;
+        }
+    }
+
+    private static TimeSpan ResolveRunTimeout(
+        LlmRunRequested command,
+        LlmSessionRecord record)
+    {
+        var requestedTimeout = command.TimeoutAfter?.ToTimeSpan();
+        if (requestedTimeout is { } timeout && timeout > TimeSpan.Zero)
+            return timeout;
+
+        var ttl = record.Ttl?.ToTimeSpan() ?? DefaultTtl.ToTimeSpan();
+        return ttl > TimeSpan.Zero ? ttl : DefaultTtl.ToTimeSpan();
+    }
+
+    private static string BuildRunTimeoutCallbackId(string responseId, string runId) =>
+        RuntimeCallbackKeyComposer.BuildCallbackId("llm-run-timeout", responseId, runId);
+
+    private static string BuildRunTimeoutRecordId(string runId) =>
+        $"{runId}:timeout";
 
     private static DateTimeOffset ResolveExpiry(LlmSessionRecord record)
     {

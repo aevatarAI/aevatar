@@ -823,6 +823,50 @@ public sealed class LlmSessionGAgentTests
     }
 
     [Fact]
+    public async Task FinalizeLlmRunTimedOutAsync_ShouldCommitRunTimeoutOnlyForActiveRun()
+    {
+        var actor = CreateActor("resp_timeout", services => services.AddSingleton<ILlmRunExecutor, NoOpLlmRunExecutor>());
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_timeout"),
+        });
+        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_timeout"));
+
+        await actor.HandleFinalizeLlmRunTimedOutAsync(new FinalizeLlmRunTimedOut
+        {
+            ResponseId = "resp_timeout",
+            RunId = "run_1",
+            RecordId = "run_1:timeout",
+            TimedOutAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-06-19T00:01:00+00:00")),
+        });
+        var versionAfterTimeout = actor.State.LastAppliedEventVersion;
+
+        await actor.HandleFinalizeLlmRunTimedOutAsync(new FinalizeLlmRunTimedOut
+        {
+            ResponseId = "resp_timeout",
+            RunId = "run_1",
+            RecordId = "run_1:timeout",
+            TimedOutAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-06-19T00:02:00+00:00")),
+        });
+        await actor.HandleFinalizeLlmRunTimedOutAsync(new FinalizeLlmRunTimedOut
+        {
+            ResponseId = "resp_timeout",
+            RunId = "stale-run",
+            RecordId = "stale-run:timeout",
+            TimedOutAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-06-19T00:03:00+00:00")),
+        });
+
+        actor.State.LastAppliedEventVersion.Should().Be(versionAfterTimeout);
+        actor.State.Record!.Status.Should().Be(LlmSessionStatus.Failed);
+        actor.State.ActiveRun!.Status.Should().Be(3);
+        actor.State.ActiveRun.FailureCode.Should().Be("run_timeout");
+        actor.State.ActiveRun.AppliedRecordIds.Should().Contain("run_1:timeout");
+        actor.State.ActiveRun.LastAppliedSequence.Should().Be(2);
+        actor.State.Completion!.FailureCode.Should().Be("run_timeout");
+        actor.State.Completion.FailureMessage.Should().Be("LLM run timed out.");
+    }
+
+    [Fact]
     public async Task ActivateAsync_ShouldReplayOnlyConsecutiveRunEventSequences()
     {
         var eventStore = new InMemoryEventStore();

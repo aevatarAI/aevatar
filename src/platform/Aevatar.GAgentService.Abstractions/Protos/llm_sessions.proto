@@ -228,6 +228,7 @@ message LlmRunRequested {
   LlmSessionRuntimeToolSelection tool_selection = 11;
   google.protobuf.Timestamp requested_at = 12;
   aevatar.ai.AgentToolExecutionContextPayload tool_context = 13;
+  google.protobuf.Duration timeout_after = 14;
 }
 
 message LlmRunStartedEvent {
@@ -337,6 +338,13 @@ message RecordLlmRunCancelled {
   string run_id = 2;
   string record_id = 3;
   google.protobuf.Timestamp cancelled_at = 4;
+}
+
+message FinalizeLlmRunTimedOut {
+  string response_id = 1;
+  string run_id = 2;
+  string record_id = 3;
+  google.protobuf.Timestamp timed_out_at = 4;
 }
 
 message LlmRunCancelled {

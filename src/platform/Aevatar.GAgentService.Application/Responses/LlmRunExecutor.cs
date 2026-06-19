@@ -40,13 +40,17 @@ public sealed class LlmRunExecutor(
                             executionRequest.RunId,
                             executionRequest.OriginPlatform),
                         new DispatchingLlmRunSink(
-                            executionRequest.SessionActorId,
                             executionRequest.RunId,
-                            dispatchPort),
+                            (recordId, command, token) => DispatchCommandAsync(
+                                executionRequest.SessionActorId,
+                                recordId,
+                                command,
+                                token)),
                         CancellationToken.None).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
+                    await DispatchExecutorFailureAsync(executionRequest, ex).ConfigureAwait(false);
                     logger.LogError(
                         ex,
                         "Off-turn LLM run executor failed for session actor {SessionActorId} run {RunId}.",
@@ -59,10 +63,62 @@ public sealed class LlmRunExecutor(
         return Task.CompletedTask;
     }
 
-    private sealed class DispatchingLlmRunSink(
+    private async Task DispatchExecutorFailureAsync(
+        LlmRunExecutionRequest request,
+        Exception exception)
+    {
+        var recordId = $"{request.RunId}:executor-failed";
+        try
+        {
+            await DispatchCommandAsync(
+                request.SessionActorId,
+                recordId,
+                new RecordLlmRunFailed
+                {
+                    ResponseId = request.Command.ResponseId,
+                    RunId = request.RunId,
+                    RecordId = recordId,
+                    FailureCode = "executor_failed",
+                    FailureMessage = string.IsNullOrWhiteSpace(exception.Message)
+                        ? "Off-turn LLM run executor failed."
+                        : exception.Message,
+                    FailedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+                },
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception dispatchException)
+        {
+            logger.LogError(
+                dispatchException,
+                "Off-turn LLM run executor could not dispatch failure record for session actor {SessionActorId} run {RunId}.",
+                request.SessionActorId,
+                request.RunId);
+        }
+    }
+
+    private Task DispatchCommandAsync(
         string sessionActorId,
+        string recordId,
+        IMessage command,
+        CancellationToken ct)
+    {
+        var envelope = new EventEnvelope
+        {
+            Id = recordId,
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(command),
+            Route = EnvelopeRouteSemantics.CreateDirect(PublisherId, sessionActorId),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = recordId,
+            },
+        };
+        return dispatchPort.DispatchAsync(sessionActorId, envelope, ct);
+    }
+
+    private sealed class DispatchingLlmRunSink(
         string runId,
-        IActorDispatchPort dispatchPort) : ILlmRunSink
+        Func<string, IMessage, CancellationToken, Task> dispatch) : ILlmRunSink
     {
         private long _recordIndex;
 
@@ -186,24 +242,8 @@ public sealed class LlmRunExecutor(
                 ct);
         }
 
-        private Task DispatchAsync(
-            string recordId,
-            IMessage command,
-            CancellationToken ct)
-        {
-            var envelope = new EventEnvelope
-            {
-                Id = recordId,
-                Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-                Payload = Any.Pack(command),
-                Route = EnvelopeRouteSemantics.CreateDirect(PublisherId, sessionActorId),
-                Propagation = new EnvelopePropagation
-                {
-                    CorrelationId = recordId,
-                },
-            };
-            return dispatchPort.DispatchAsync(sessionActorId, envelope, ct);
-        }
+        private Task DispatchAsync(string recordId, IMessage command, CancellationToken ct) =>
+            dispatch(recordId, command, ct);
 
         private string NextRecordId(string kind)
         {
