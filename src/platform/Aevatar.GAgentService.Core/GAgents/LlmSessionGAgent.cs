@@ -959,7 +959,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             throw new InvalidOperationException("expiry is required.");
     }
 
-    private static LlmSessionCompletion NormalizeCompletion(LlmSessionCompletion completion)
+    private LlmSessionCompletion NormalizeCompletion(LlmSessionCompletion completion)
     {
         completion.OutputText ??= string.Empty;
         completion.FailureCode = NormalizeOptional(completion.FailureCode) ?? string.Empty;
@@ -971,6 +971,25 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             completion.Usage.PromptTokens = Math.Max(0, completion.Usage.PromptTokens);
             completion.Usage.CompletionTokens = Math.Max(0, completion.Usage.CompletionTokens);
             completion.Usage.TotalTokens = Math.Max(0, completion.Usage.TotalTokens);
+        }
+
+        if (completion.ToolCalls.Count > 0)
+        {
+            var forwardedCallIds = State.ForwardedToolCalls
+                .Select(static call => call.CallId)
+                .ToHashSet(StringComparer.Ordinal);
+            var forwardedToolNames = State.ForwardedToolCalls
+                .ToDictionary(static call => call.CallId, static call => call.ToolName, StringComparer.Ordinal);
+            for (var i = completion.ToolCalls.Count - 1; i >= 0; i--)
+            {
+                var toolCall = completion.ToolCalls[i];
+                if (!forwardedCallIds.Contains(toolCall.CallId) ||
+                    !forwardedToolNames.TryGetValue(toolCall.CallId, out var toolName) ||
+                    !string.Equals(toolName, toolCall.ToolName, StringComparison.Ordinal))
+                {
+                    completion.ToolCalls.RemoveAt(i);
+                }
+            }
         }
 
         foreach (var toolCall in completion.ToolCalls)

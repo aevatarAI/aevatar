@@ -385,7 +385,9 @@ public sealed class MainnetResponsesEndpointsTests
         using var doc = JsonDocument.Parse(body);
         doc.RootElement.GetProperty("status").GetString().Should().Be("completed");
         AssertCompletedMessage(doc.RootElement, string.Empty);
-        doc.RootElement.GetProperty("output")[1].GetProperty("call_id").GetString().Should().Be("call_task_1");
+        doc.RootElement.GetProperty("output").GetArrayLength().Should().Be(1);
+        body.Should().NotContain("\"type\":\"function_call\"");
+        body.Should().NotContain("call_task_1");
     }
 
     [Fact]
@@ -2150,7 +2152,9 @@ public sealed class MainnetResponsesEndpointsTests
         var root = doc.RootElement;
         root.GetProperty("status").GetString().Should().Be("completed");
         AssertCompletedMessage(root, string.Empty);
-        root.GetProperty("output")[1].GetProperty("call_id").GetString().Should().Be("call_gagent_1");
+        root.GetProperty("output").GetArrayLength().Should().Be(1);
+        body.Should().NotContain("\"type\":\"function_call\"");
+        body.Should().NotContain("call_gagent_1");
     }
 
     [Fact]
@@ -2188,8 +2192,8 @@ public sealed class MainnetResponsesEndpointsTests
         body.Should().NotContain("event: response.output_text.delta");
         body.Should().Contain("event: response.output_text.done");
         body.Should().Contain("\"text\":\"\"");
-        body.Should().Contain("\"type\":\"function_call\"");
-        body.Should().Contain("\"call_id\":\"call_gagent_stream\"");
+        body.Should().NotContain("\"type\":\"function_call\"");
+        body.Should().NotContain("call_gagent_stream");
         body.Should().Contain("event: response.completed");
         var command = app.Services.GetRequiredService<ResponsesRecordingActorDispatchPort>()
             .Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
@@ -2242,7 +2246,8 @@ public sealed class MainnetResponsesEndpointsTests
         response.Content.Headers.ContentType!.MediaType.Should().Be("text/event-stream");
         body.Should().Contain("event: response.completed");
         responseSessions.ForwardedToolCalls.Should().BeEmpty();
-        body.Should().Contain("\"call_id\":\"call_gagent_conflict\"");
+        body.Should().NotContain("\"type\":\"function_call\"");
+        body.Should().NotContain("call_gagent_conflict");
     }
 
     [Fact]
@@ -2474,7 +2479,9 @@ public sealed class MainnetResponsesEndpointsTests
         var root = doc.RootElement;
         root.GetProperty("status").GetString().Should().Be("completed");
         AssertCompletedMessage(root, string.Empty);
-        root.GetProperty("output")[1].GetProperty("call_id").GetString().Should().Be("call_team_1");
+        root.GetProperty("output").GetArrayLength().Should().Be(1);
+        body.Should().NotContain("\"type\":\"function_call\"");
+        body.Should().NotContain("call_team_1");
     }
 
     [Fact]
@@ -2512,8 +2519,8 @@ public sealed class MainnetResponsesEndpointsTests
         body.Should().NotContain("event: response.output_text.delta");
         body.Should().Contain("event: response.output_text.done");
         body.Should().Contain("\"text\":\"\"");
-        body.Should().Contain("\"type\":\"function_call\"");
-        body.Should().Contain("\"call_id\":\"call_team_stream\"");
+        body.Should().NotContain("\"type\":\"function_call\"");
+        body.Should().NotContain("call_team_stream");
         body.Should().Contain("event: response.completed");
         var command = app.Services.GetRequiredService<ResponsesRecordingActorDispatchPort>()
             .Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
@@ -2739,6 +2746,10 @@ public sealed class MainnetResponsesEndpointsTests
             var outputText = new StringBuilder();
             TokenUsage? usage = null;
             var forwardedToolCalls = new List<LlmSessionRuntimeToolCall>();
+            var forwardedToolNames = command.ToolSelection?.ForwardedTools
+                .Select(static tool => tool.ToolName)
+                .Except(command.ToolSelection.SubstitutedToolNames, StringComparer.Ordinal)
+                .ToHashSet(StringComparer.Ordinal) ?? [];
 
             foreach (var chunk in chunks)
             {
@@ -2757,7 +2768,8 @@ public sealed class MainnetResponsesEndpointsTests
                 if (chunk.DeltaToolCall is not null)
                 {
                     var runtimeCall = ToRuntimeToolCall(chunk.DeltaToolCall);
-                    forwardedToolCalls.Add(runtimeCall.Clone());
+                    if (forwardedToolNames.Contains(runtimeCall.ToolName))
+                        forwardedToolCalls.Add(runtimeCall.Clone());
                     ProjectionPort.Sink.Push(ObservedEnvelope(new LlmStreamChunkObserved
                     {
                         ResponseId = command.ResponseId,
