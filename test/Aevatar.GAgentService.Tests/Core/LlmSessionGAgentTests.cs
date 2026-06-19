@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Responses;
@@ -820,6 +821,87 @@ public sealed class LlmSessionGAgentTests
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*active run is 'run_1' and cannot record run 'foreign-run'*");
+    }
+
+    [Fact]
+    public async Task HandleLlmRunRequestedAsync_ShouldScheduleRunTimeoutBeforeStartingExecutor()
+    {
+        var observations = new List<string>();
+        var scheduler = new RecordingRuntimeCallbackScheduler(observations);
+        var executor = new RecordingLlmRunExecutor(observations);
+        var requestedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-06-19T00:00:00+00:00"));
+        var actor = CreateActor(
+            "resp_timeout_schedule",
+            services =>
+            {
+                services.AddSingleton<IActorRuntimeCallbackScheduler>(scheduler);
+                services.AddSingleton<ILlmRunExecutor>(executor);
+            });
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_timeout_schedule"),
+        });
+
+        var request = BuildRunRequest("resp_timeout_schedule");
+        request.RequestedAt = requestedAt;
+        request.TimeoutAfter = Duration.FromTimeSpan(TimeSpan.FromMinutes(5));
+
+        await actor.HandleLlmRunRequestedAsync(request);
+
+        var runTimeout = scheduler.TimeoutRequests.Should().ContainSingle(request =>
+            string.Equals(
+                request.CallbackId,
+                "llm-run-timeout:resp_timeout_schedule:run_1",
+                StringComparison.Ordinal)).Subject;
+        runTimeout.ActorId.Should().Be(actor.Id);
+        runTimeout.DueTime.Should().BeGreaterThan(TimeSpan.Zero);
+        var payload = runTimeout.TriggerEnvelope.Payload.Unpack<FinalizeLlmRunTimedOut>();
+        payload.ResponseId.Should().Be("resp_timeout_schedule");
+        payload.RunId.Should().Be("run_1");
+        payload.RecordId.Should().Be("run_1:timeout");
+        payload.TimedOutAt.Should().Be(
+            Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-06-19T00:05:00+00:00")));
+        executor.StartRequests.Should().ContainSingle()
+            .Which.RunId.Should().Be("run_1");
+        observations.IndexOf("schedule:llm-run-timeout:resp_timeout_schedule:run_1")
+            .Should().BeLessThan(observations.IndexOf("executor:start"));
+    }
+
+    [Fact]
+    public async Task HandleLlmRunRequestedAsync_WhenRunTimeoutSchedulingFails_ShouldFailRunWithoutStartingExecutor()
+    {
+        var scheduler = new RunTimeoutFailingRuntimeCallbackScheduler();
+        var executor = new RecordingLlmRunExecutor();
+        var actor = CreateActor(
+            "resp_timeout_schedule_failure",
+            services =>
+            {
+                services.AddSingleton<IActorRuntimeCallbackScheduler>(scheduler);
+                services.AddSingleton<ILlmRunExecutor>(executor);
+            });
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_timeout_schedule_failure"),
+        });
+
+        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_timeout_schedule_failure"));
+
+        scheduler.TimeoutRequests.Should().ContainSingle(request =>
+            string.Equals(
+                request.CallbackId,
+                "llm-run-timeout:resp_timeout_schedule_failure:run_1",
+                StringComparison.Ordinal));
+        executor.StartRequests.Should().BeEmpty();
+        actor.State.Record!.Status.Should().Be(LlmSessionStatus.Failed);
+        actor.State.ActiveRun.Should().NotBeNull();
+        actor.State.ActiveRun!.Status.Should().Be(3);
+        actor.State.ActiveRun.FailureCode.Should().Be("run_timeout_schedule_failed");
+        actor.State.ActiveRun.FailureMessage.Should().Be("synthetic scheduler failure.");
+        actor.State.ActiveRun.AppliedRecordIds.Should().Contain("run_1:timeout-schedule-failed");
+        actor.State.ActiveRun.LastAppliedSequence.Should().Be(2);
+        actor.State.Completion.Should().NotBeNull();
+        actor.State.Completion!.FailureCode.Should().Be("run_timeout_schedule_failed");
+        actor.State.Completion.FailureMessage.Should().Be("synthetic scheduler failure.");
     }
 
     [Fact]
@@ -1989,6 +2071,96 @@ public sealed class LlmSessionGAgentTests
             _ = request;
             _ = ct;
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingLlmRunExecutor(List<string>? observations = null) : ILlmRunExecutor
+    {
+        public List<LlmRunExecutionRequest> StartRequests { get; } = [];
+
+        public Task StartAsync(
+            LlmRunExecutionRequest request,
+            CancellationToken ct = default)
+        {
+            _ = ct;
+            StartRequests.Add(request);
+            observations?.Add("executor:start");
+            return Task.CompletedTask;
+        }
+    }
+
+    private class RecordingRuntimeCallbackScheduler(List<string>? observations = null) : IActorRuntimeCallbackScheduler
+    {
+        public List<RuntimeCallbackTimeoutRequest> TimeoutRequests { get; } = [];
+
+        public virtual Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
+            RuntimeCallbackTimeoutRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            TimeoutRequests.Add(CloneRequest(request));
+            observations?.Add("schedule:" + request.CallbackId);
+            return Task.FromResult(new RuntimeCallbackLease(
+                request.ActorId,
+                request.CallbackId,
+                TimeoutRequests.Count,
+                RuntimeCallbackBackend.InMemory));
+        }
+
+        public Task<RuntimeCallbackLease> ScheduleTimerAsync(
+            RuntimeCallbackTimerRequest request,
+            CancellationToken ct = default)
+        {
+            _ = request;
+            ct.ThrowIfCancellationRequested();
+            throw new NotSupportedException();
+        }
+
+        public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default)
+        {
+            _ = lease;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task PurgeActorAsync(string actorId, CancellationToken ct = default)
+        {
+            _ = actorId;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        private static RuntimeCallbackTimeoutRequest CloneRequest(RuntimeCallbackTimeoutRequest request) =>
+            new()
+            {
+                ActorId = request.ActorId,
+                CallbackId = request.CallbackId,
+                TriggerEnvelope = request.TriggerEnvelope.Clone(),
+                DueTime = request.DueTime,
+                DeliveryMode = request.DeliveryMode,
+            };
+    }
+
+    private sealed class RunTimeoutFailingRuntimeCallbackScheduler : RecordingRuntimeCallbackScheduler
+    {
+        public override Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
+            RuntimeCallbackTimeoutRequest request,
+            CancellationToken ct = default)
+        {
+            if (request.CallbackId.StartsWith("llm-run-timeout:", StringComparison.Ordinal))
+            {
+                TimeoutRequests.Add(new RuntimeCallbackTimeoutRequest
+                {
+                    ActorId = request.ActorId,
+                    CallbackId = request.CallbackId,
+                    TriggerEnvelope = request.TriggerEnvelope.Clone(),
+                    DueTime = request.DueTime,
+                    DeliveryMode = request.DeliveryMode,
+                });
+                throw new InvalidOperationException("synthetic scheduler failure.");
+            }
+
+            return base.ScheduleTimeoutAsync(request, ct);
         }
     }
 }
