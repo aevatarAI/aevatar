@@ -316,6 +316,110 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             CancellationToken.None);
     }
 
+    [EventHandler]
+    public Task HandleRecordRunStartedAsync(RecordRunStartedRequested command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        var existing = EnsureRunnableSession(command.ResponseId);
+        var runId = NormalizeRunId(command.RunId, existing.ResponseId);
+        if (State.ActiveRun is { Status: RunningStatus } active &&
+            !string.Equals(active.RunId, runId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Response session '{existing.ResponseId}' already has active run '{active.RunId}'.");
+        }
+
+        if (State.Completion is { CompletedAt: not null })
+            return Task.CompletedTask;
+
+        if (State.ActiveRun != null &&
+            string.Equals(State.ActiveRun.RunId, runId, StringComparison.Ordinal) &&
+            State.ActiveRun.LastAppliedSequence > 0)
+        {
+            return Task.CompletedTask;
+        }
+
+        return PersistRunStartedAsync(new LlmRunStartedEvent
+        {
+            ResponseId = existing.ResponseId,
+            RunId = runId,
+            StartedAt = command.StartedAt ?? Timestamp.FromDateTime(DateTime.UtcNow),
+        }, CancellationToken.None);
+    }
+
+    [EventHandler]
+    public async Task HandleRecordStreamChunksObservedAsync(RecordStreamChunksObservedRequested command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        var existing = EnsureRunnableSession(command.ResponseId);
+        var runId = NormalizeRunId(command.RunId, existing.ResponseId);
+        foreach (var chunk in command.Chunks)
+        {
+            var observed = chunk.Clone();
+            observed.ResponseId = existing.ResponseId;
+            observed.RunId = NormalizeRunId(observed.RunId, existing.ResponseId, runId);
+            await PersistStreamChunkObservedAsync(observed, CancellationToken.None);
+        }
+    }
+
+    [EventHandler]
+    public Task HandleRecordToolCallObservedAsync(RecordToolCallObservedRequested command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        ArgumentNullException.ThrowIfNull(command.Observed);
+
+        var existing = EnsureRunnableSession(command.ResponseId);
+        var runId = NormalizeRunId(command.RunId, existing.ResponseId);
+        var observed = command.Observed.Clone();
+        observed.ResponseId = existing.ResponseId;
+        observed.RunId = NormalizeRunId(observed.RunId, existing.ResponseId, runId);
+        return PersistToolCallObservedAsync(observed, CancellationToken.None);
+    }
+
+    [EventHandler]
+    public Task HandleRecordRunCompletedAsync(RecordRunCompletedRequested command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        ArgumentNullException.ThrowIfNull(command.Completed);
+
+        var existing = EnsureRegisteredSession(command.ResponseId);
+        var runId = NormalizeRunId(command.RunId, existing.ResponseId);
+        var completed = command.Completed.Clone();
+        completed.ResponseId = existing.ResponseId;
+        completed.RunId = NormalizeRunId(completed.RunId, existing.ResponseId, runId);
+        return PersistRunCompletedAsync(completed, CancellationToken.None);
+    }
+
+    [EventHandler]
+    public Task HandleRecordRunFailedAsync(RecordRunFailedRequested command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        ArgumentNullException.ThrowIfNull(command.Failed);
+
+        var existing = EnsureRegisteredSession(command.ResponseId);
+        var runId = NormalizeRunId(command.RunId, existing.ResponseId);
+        var failed = command.Failed.Clone();
+        failed.ResponseId = existing.ResponseId;
+        failed.RunId = NormalizeRunId(failed.RunId, existing.ResponseId, runId);
+        return PersistRunFailedAsync(failed, CancellationToken.None);
+    }
+
+    [EventHandler]
+    public Task HandleRecordRunCancelledAsync(RecordRunCancelledRequested command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        ArgumentNullException.ThrowIfNull(command.Cancelled);
+
+        var existing = EnsureRegisteredSession(command.ResponseId);
+        var runId = NormalizeRunId(command.RunId, existing.ResponseId);
+        var cancelled = command.Cancelled.Clone();
+        cancelled.ResponseId = existing.ResponseId;
+        cancelled.RunId = NormalizeRunId(cancelled.RunId, existing.ResponseId, runId);
+        return PersistRunCancelledAsync(cancelled, CancellationToken.None);
+    }
+
     protected override LlmSessionState TransitionState(LlmSessionState current, IMessage evt) =>
         StateTransitionMatcher
             .Match(current, evt)
@@ -695,6 +799,12 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         return PersistDomainEventAsync(observed, ct);
     }
 
+    private Task PersistRunStartedAsync(LlmRunStartedEvent started, CancellationToken ct)
+    {
+        started.Sequence = NextRunSequence(started.RunId);
+        return PersistDomainEventAsync(started, ct);
+    }
+
     private Task PersistToolCallObservedAsync(LlmToolCallObserved observed, CancellationToken ct)
     {
         observed.Sequence = NextRunSequence(observed.RunId);
@@ -800,6 +910,28 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         }
 
         return existing;
+    }
+
+    private LlmSessionRecord EnsureRunnableSession(string? responseId)
+    {
+        var existing = EnsureRegisteredSession(responseId);
+        if (IsTerminal(existing.Status))
+        {
+            throw new InvalidOperationException(
+                $"Response session '{existing.ResponseId}' is {existing.Status} and cannot record new run events.");
+        }
+
+        return existing;
+    }
+
+    private static string NormalizeRunId(string? runId, string responseId, string? fallbackRunId = null)
+    {
+        var normalized = NormalizeRequired(runId);
+        if (!string.IsNullOrWhiteSpace(normalized))
+            return normalized;
+        if (!string.IsNullOrWhiteSpace(fallbackRunId))
+            return fallbackRunId.Trim();
+        return $"{responseId}:run";
     }
 
     private static LlmSessionForwardedToolCall NormalizeToolCall(LlmSessionForwardedToolCall call)

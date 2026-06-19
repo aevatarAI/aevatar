@@ -35,7 +35,8 @@ public sealed class ResponsesCommandFacade(
     ILlmSessionRunObservationService observationService,
     ILogger<ResponsesCommandFacade> logger,
     IOptions<ResponsesIngressOptions>? ingressOptions = null,
-    IOwnerLlmConfigSource? ownerLlmConfigSource = null) : IResponsesCommandFacade
+    IOwnerLlmConfigSource? ownerLlmConfigSource = null,
+    ILlmRunExecutor? llmRunExecutor = null) : IResponsesCommandFacade
 {
     private static readonly TimeSpan DefaultObservationTimeout = TimeSpan.FromSeconds(30);
 
@@ -47,6 +48,8 @@ public sealed class ResponsesCommandFacade(
     // agentic turns are not cut). See ResponsesIngressOptions.ObservationTimeout.
     private readonly TimeSpan _observationTimeout =
         ingressOptions?.Value?.ObservationTimeout ?? DefaultObservationTimeout;
+    private readonly bool _offActorLlmRunExecutorEnabled =
+        ingressOptions?.Value?.OffActorLlmRunExecutorEnabled == true && llmRunExecutor is not null;
 
     public async Task<ResponsesCreateCommandResult> CreateAsync(
         ResponsesCommandRequest request,
@@ -215,7 +218,9 @@ public sealed class ResponsesCommandFacade(
                     $"{plan.Session.ResponseId}:llm-run",
                     async token =>
                     {
-                        var admission = await DispatchRunAsync(plan, token).ConfigureAwait(false);
+                        var admission = _offActorLlmRunExecutorEnabled
+                            ? await StartOffActorRunAsync(plan, token).ConfigureAwait(false)
+                            : await DispatchRunAsync(plan, token).ConfigureAwait(false);
                         await TryResolveIncomingToolResultsAsync(plan.PreviousSnapshot, plan.Normalized, token)
                             .ConfigureAwait(false);
                         return admission;
@@ -522,7 +527,9 @@ public sealed class ResponsesCommandFacade(
                     $"{plan.Session.ResponseId}:llm-run",
                     async token =>
                     {
-                        var admission = await DispatchRunAsync(plan, token).ConfigureAwait(false);
+                        var admission = _offActorLlmRunExecutorEnabled
+                            ? await StartOffActorRunAsync(plan, token).ConfigureAwait(false)
+                            : await DispatchRunAsync(plan, token).ConfigureAwait(false);
                         await TryResolveIncomingToolResultsAsync(plan.PreviousSnapshot, plan.Normalized, token)
                             .ConfigureAwait(false);
                         return admission;
@@ -967,6 +974,32 @@ public sealed class ResponsesCommandFacade(
             command,
             plan.Session.ResponseId);
         return dispatchPort.DispatchAsync(plan.Session.ActorId, envelope, ct);
+    }
+
+    private async Task<DispatchAdmission> StartOffActorRunAsync(
+        ResponsesCreateCommandPlan plan,
+        CancellationToken ct)
+    {
+        var request = BuildExecutorRequest(plan);
+        var admission = await llmRunExecutor!.StartAsync(request, ct).ConfigureAwait(false);
+        _ = llmRunExecutor.ExecuteAsync(request, CancellationToken.None);
+        return admission;
+    }
+
+    private static LlmRunExecutorRequest BuildExecutorRequest(ResponsesCreateCommandPlan plan)
+    {
+        var command = BuildRunRequested(
+            plan.Session.ResponseId,
+            plan.LlmRequest,
+            plan.ToolClassification,
+            plan.ToolChoiceHintPlan,
+            plan.CreatedAt);
+        return new LlmRunExecutorRequest(
+            plan.Session.ActorId,
+            plan.Session.ResponseId,
+            command.RunId,
+            command,
+            plan.ToolContext.Channel.Platform);
     }
 
     private static LlmRunRequested BuildRunRequested(

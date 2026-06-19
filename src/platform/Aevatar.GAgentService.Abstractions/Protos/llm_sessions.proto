@@ -233,6 +233,12 @@ message LlmRunStartedEvent {
   google.protobuf.Timestamp started_at = 4;
 }
 
+message RecordRunStartedRequested {
+  string response_id = 1;
+  string run_id = 2;
+  google.protobuf.Timestamp started_at = 3;
+}
+
 message LlmStreamChunkObserved {
   string response_id = 1;
   string run_id = 2;
@@ -242,6 +248,12 @@ message LlmStreamChunkObserved {
   LlmSessionTokenUsage usage = 6;
   google.protobuf.Timestamp observed_at = 7;
   int64 sequence = 8;
+}
+
+message RecordStreamChunksObservedRequested {
+  string response_id = 1;
+  string run_id = 2;
+  repeated LlmStreamChunkObserved chunks = 3;
 }
 
 message LlmToolCallObserved {
@@ -256,6 +268,12 @@ message LlmToolCallObserved {
   int64 sequence = 9;
 }
 
+message RecordToolCallObservedRequested {
+  string response_id = 1;
+  string run_id = 2;
+  LlmToolCallObserved observed = 3;
+}
+
 message LlmRunCompleted {
   string response_id = 1;
   string run_id = 2;
@@ -264,6 +282,12 @@ message LlmRunCompleted {
   LlmSessionTokenUsage usage = 5;
   google.protobuf.Timestamp completed_at = 6;
   int64 sequence = 7;
+}
+
+message RecordRunCompletedRequested {
+  string response_id = 1;
+  string run_id = 2;
+  LlmRunCompleted completed = 3;
 }
 
 message LlmRunFailed {
@@ -275,11 +299,23 @@ message LlmRunFailed {
   int64 sequence = 6;
 }
 
+message RecordRunFailedRequested {
+  string response_id = 1;
+  string run_id = 2;
+  LlmRunFailed failed = 3;
+}
+
 message LlmRunCancelled {
   string response_id = 1;
   string run_id = 2;
   google.protobuf.Timestamp cancelled_at = 3;
   int64 sequence = 4;
+}
+
+message RecordRunCancelledRequested {
+  string response_id = 1;
+  string run_id = 2;
+  LlmRunCancelled cancelled = 3;
 }
 
 enum ChatRunSubRunWaitMode {

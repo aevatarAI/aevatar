@@ -766,6 +766,39 @@ public sealed class LlmSessionGAgentTests
     }
 
     [Fact]
+    public async Task HandleRecordRunStartedAsync_ShouldPersistTypedRunStartedEvent()
+    {
+        var eventStore = new InMemoryEventStore();
+        var actor = CreateActorWithStore("resp_record_started", eventStore);
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_record_started"),
+        });
+        var startedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-06-19T00:00:00+00:00"));
+
+        await actor.HandleRecordRunStartedAsync(new RecordRunStartedRequested
+        {
+            ResponseId = "resp_record_started",
+            RunId = "resp_record_started:llm-run",
+            StartedAt = startedAt,
+        });
+
+        var started = (await eventStore.GetEventsAsync(actor.Id))
+            .Select(static evt => evt.EventData)
+            .Where(static payload => payload.Is(LlmRunStartedEvent.Descriptor))
+            .Should()
+            .ContainSingle()
+            .Subject
+            .Unpack<LlmRunStartedEvent>();
+        started.ResponseId.Should().Be("resp_record_started");
+        started.RunId.Should().Be("resp_record_started:llm-run");
+        started.Sequence.Should().Be(1);
+        started.StartedAt.Should().Be(startedAt);
+        actor.State.ActiveRun!.Status.Should().Be(1);
+        actor.State.ActiveRun.LastAppliedSequence.Should().Be(1);
+    }
+
+    [Fact]
     public async Task ActivateAsync_ShouldReplayOnlyConsecutiveRunEventSequences()
     {
         var eventStore = new InMemoryEventStore();

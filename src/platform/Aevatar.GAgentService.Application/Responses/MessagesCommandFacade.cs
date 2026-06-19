@@ -31,7 +31,8 @@ public sealed class MessagesCommandFacade(
     ILlmSessionRunObservationService observationService,
     ILogger<MessagesCommandFacade> logger,
     IOptions<ResponsesIngressOptions>? ingressOptions = null,
-    IOwnerLlmConfigSource? ownerLlmConfigSource = null) : IMessagesCommandFacade
+    IOwnerLlmConfigSource? ownerLlmConfigSource = null,
+    ILlmRunExecutor? llmRunExecutor = null) : IMessagesCommandFacade
 {
     private static readonly TimeSpan DefaultObservationTimeout = TimeSpan.FromSeconds(30);
 
@@ -43,6 +44,8 @@ public sealed class MessagesCommandFacade(
     // agentic turns are not cut). See ResponsesIngressOptions.ObservationTimeout.
     private readonly TimeSpan _observationTimeout =
         ingressOptions?.Value?.ObservationTimeout ?? DefaultObservationTimeout;
+    private readonly bool _offActorLlmRunExecutorEnabled =
+        ingressOptions?.Value?.OffActorLlmRunExecutorEnabled == true && llmRunExecutor is not null;
 
     public async Task<MessagesCreateCommandResult> CreateAsync(
         MessagesCommandRequest request,
@@ -127,7 +130,9 @@ public sealed class MessagesCommandFacade(
                     plan.Session.ActorId,
                     plan.Session.ResponseId,
                     $"{plan.Session.ResponseId}:llm-run",
-                    token => DispatchRunAsync(plan, token),
+                    token => _offActorLlmRunExecutorEnabled
+                        ? StartOffActorRunAsync(plan, token)
+                        : DispatchRunAsync(plan, token),
                     _observationTimeout),
                 async (delta, token) =>
                 {
@@ -598,6 +603,31 @@ public sealed class MessagesCommandFacade(
             command,
             plan.Session.ResponseId);
         return dispatchPort.DispatchAsync(plan.Session.ActorId, envelope, ct);
+    }
+
+    private async Task<DispatchAdmission> StartOffActorRunAsync(
+        MessagesCreateCommandPlan plan,
+        CancellationToken ct)
+    {
+        var request = BuildExecutorRequest(plan);
+        var admission = await llmRunExecutor!.StartAsync(request, ct).ConfigureAwait(false);
+        _ = llmRunExecutor.ExecuteAsync(request, CancellationToken.None);
+        return admission;
+    }
+
+    private static LlmRunExecutorRequest BuildExecutorRequest(MessagesCreateCommandPlan plan)
+    {
+        var command = BuildRunRequested(
+            plan.Session.ResponseId,
+            plan.LlmRequest,
+            plan.ToolClassification,
+            plan.ToolChoiceHintPlan);
+        return new LlmRunExecutorRequest(
+            plan.Session.ActorId,
+            plan.Session.ResponseId,
+            command.RunId,
+            command,
+            plan.ToolContext.Channel.Platform);
     }
 
     private static LlmRunRequested BuildRunRequested(

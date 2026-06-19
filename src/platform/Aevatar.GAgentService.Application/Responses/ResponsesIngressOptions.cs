@@ -30,4 +30,6 @@ public sealed class ResponsesIngressOptions
 
     public TimeSpan ObservationTimeout =>
         ObservationTimeoutSeconds > 0 ? TimeSpan.FromSeconds(ObservationTimeoutSeconds) : TimeSpan.FromSeconds(300);
+
+    public bool OffActorLlmRunExecutorEnabled { get; set; }
 }
