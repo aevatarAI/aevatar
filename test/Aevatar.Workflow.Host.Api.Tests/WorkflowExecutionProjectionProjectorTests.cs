@@ -1062,6 +1062,53 @@ public sealed class WorkflowExecutionProjectionProjectorTests
     }
 
     [Fact]
+    public async Task WorkflowExecutionCurrentStateProjector_ShouldMapStartedAt_FromCommittedRunState()
+    {
+        // O2 (06-19-workflow-run-observatory): started_at is owned by the actor (WorkflowRunState.StartedAtUtc),
+        // set once when the run starts. The projector maps it straight through — no prior-readmodel read.
+        var startedAt = new DateTimeOffset(2026, 6, 19, 9, 0, 0, TimeSpan.Zero);
+        var dispatcher = new RecordingWriteDispatcher<WorkflowExecutionCurrentStateDocument>();
+        var projector = new WorkflowExecutionCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(new DateTimeOffset(2026, 6, 19, 10, 0, 0, TimeSpan.Zero)));
+
+        await projector.ProjectAsync(
+            CreateContext(),
+            WrapCommitted(
+                new WorkflowCompletedEvent { Success = true },
+                new WorkflowRunState
+                {
+                    RunId = "root-actor",
+                    Status = "completed",
+                    StartedAtUtc = Timestamp.FromDateTimeOffset(startedAt),
+                },
+                includeEnvelopeTimestamp: false));
+
+        var document = dispatcher.Upserts.Should().ContainSingle().Subject;
+        document.StartedAtUtcValue.Should().NotBeNull();
+        document.StartedAtUtcValue.ToDateTimeOffset().Should().Be(startedAt);
+    }
+
+    [Fact]
+    public async Task WorkflowExecutionCurrentStateProjector_ShouldLeaveStartedAtUnset_WhenStateHasNoStartFact()
+    {
+        var dispatcher = new RecordingWriteDispatcher<WorkflowExecutionCurrentStateDocument>();
+        var projector = new WorkflowExecutionCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(new DateTimeOffset(2026, 6, 19, 9, 0, 0, TimeSpan.Zero)));
+
+        await projector.ProjectAsync(
+            CreateContext(),
+            WrapCommitted(
+                new BindWorkflowRunDefinitionEvent { RunId = "root-actor" },
+                new WorkflowRunState { RunId = "root-actor", Status = "bound" },
+                includeEnvelopeTimestamp: false));
+
+        var document = dispatcher.Upserts.Should().ContainSingle().Subject;
+        document.StartedAtUtcValue.Should().BeNull();
+    }
+
+    [Fact]
     public void WorkflowRunGraphArtifactMaterializer_ShouldDeriveFromReportAndDeduplicateNodesAndEdges()
     {
         var readModel = new WorkflowRunInsightReportDocument

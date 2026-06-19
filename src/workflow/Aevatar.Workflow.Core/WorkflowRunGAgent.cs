@@ -451,6 +451,8 @@ public sealed class WorkflowRunGAgent
             ExecutionContextDelta = executionContextDelta,
             Attempt = Math.Max(0, request.ForkSeed?.Attempt ?? 0),
             InputFileRefs = { inputFileRefs.Select(static fileRef => fileRef.Clone()) },
+            // O2 (06-19-workflow-run-observatory): capture the run-start fact so the readmodel can sort by it.
+            StartedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         });
 
         var start = new StartWorkflowEvent
@@ -512,6 +514,8 @@ public sealed class WorkflowRunGAgent
             ScopeId = State.ScopeId ?? string.Empty,
             ExecutionContextDelta = WorkflowRunExecutionContextStateAccess.ClearWorkflowRuntimeDelta(),
             Attempt = State.ForkAttempt,
+            // O2 (06-19-workflow-run-observatory): capture the run-start fact so the readmodel can sort by it.
+            StartedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         });
 
         await PublishAsync(new StartWorkflowEvent
@@ -1250,6 +1254,9 @@ public sealed class WorkflowRunGAgent
             next.DefinitionActorId = evt.DefinitionActorId.Trim();
         if (string.IsNullOrWhiteSpace(next.ScopeId) && !string.IsNullOrWhiteSpace(evt.ScopeId))
             next.ScopeId = evt.ScopeId.Trim();
+        // O2 (06-19-workflow-run-observatory): record the run-start fact once; fork re-runs keep the original.
+        if (next.StartedAtUtc == null && evt.StartedAtUtc != null)
+            next.StartedAtUtc = evt.StartedAtUtc;
         return next;
     }
 

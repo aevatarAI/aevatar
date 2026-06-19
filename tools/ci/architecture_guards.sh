@@ -965,6 +965,7 @@ bash "${SCRIPT_DIR}/studio_projection_readmodel_registration_guard.sh"
 bash "${SCRIPT_DIR}/studio_fact_owner_guard.sh"
 bash "${SCRIPT_DIR}/studio_catalog_storage_serializer_guard.sh"
 bash "${SCRIPT_DIR}/frontend_static_boundary_guard.sh"
+bash "${SCRIPT_DIR}/workflow_observatory_readonly_guard.sh"
 
 studio_catalog_query_ports=(
   "src/Aevatar.Studio.Application/Studio/Abstractions/IConnectorCatalogQueryPort.cs"

@@ -46,6 +46,9 @@ public static class WorkflowCapabilityEndpoints
             .WithName("ForkWorkflowRun");
         WorkflowWebhookIngressEndpoints.Map(group);
         WorkflowExternalApprovalCallbackEndpoints.Map(group);
+        // 06-19-workflow-run-observatory (C2): read-only, scope-gated run viewer. Maps its own absolute
+        // routes (page /workflow/observatory + data /api/workflow/observatory/*) on the root app.
+        app.MapWorkflowRunObservatory();
 
         return app;
     }

@@ -425,11 +425,28 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
                 null,
                 null,
                 eventType,
-                new Dictionary<string, string>(StringComparer.Ordinal)
-                {
-                    ["call_id"] = toolCall.CallId ?? string.Empty,
-                });
+                BuildToolCallTimelineData(toolCall));
         }
+    }
+
+    // O1 (06-19-workflow-run-observatory): surface enriched tool detail (arguments/result/success/error)
+    // on the committed tool.call timeline entry. Redaction already happened at the fact-builder boundary.
+    private static Dictionary<string, string> BuildToolCallTimelineData(WorkflowRoleReplyToolCall toolCall)
+    {
+        var data = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["call_id"] = toolCall.CallId ?? string.Empty,
+            ["success"] = toolCall.Success ? "true" : "false",
+        };
+
+        if (!string.IsNullOrEmpty(toolCall.ArgumentsJson))
+            data["arguments_json"] = toolCall.ArgumentsJson;
+        if (!string.IsNullOrEmpty(toolCall.ResultJson))
+            data["result_json"] = toolCall.ResultJson;
+        if (!string.IsNullOrEmpty(toolCall.Error))
+            data["error"] = toolCall.Error;
+
+        return data;
     }
 
     private static void ApplyWorkflowCompleted(

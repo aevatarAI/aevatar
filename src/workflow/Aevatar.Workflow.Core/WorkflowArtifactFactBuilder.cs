@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Primitives;
@@ -7,6 +8,10 @@ namespace Aevatar.Workflow.Core;
 
 internal static class WorkflowArtifactFactBuilder
 {
+    // O1 (06-19-workflow-run-observatory): tool args/results may carry secrets; redact at the
+    // materialization boundary the same way step output_preview is truncated.
+    private const int ToolDetailMaxLength = 2000;
+
     public static bool TryBuild(
         EventEnvelope envelope,
         string actorId,
@@ -20,6 +25,14 @@ internal static class WorkflowArtifactFactBuilder
         var normalizedRunId = string.IsNullOrWhiteSpace(stateRunId)
             ? WorkflowRunIdNormalizer.Normalize(actorId)
             : WorkflowRunIdNormalizer.Normalize(stateRunId);
+
+        // O1: the committed RoleChatSessionCompletedEvent is the richer source — it carries tool_calls
+        // (arguments) plus tool_receipts (result/success/error). Prefer it so tool detail is surfaced.
+        if (TryBuildWorkflowRoleReplyFromRoleChatSession(envelope, normalizedRunId, out var roleChatReplyFact))
+        {
+            artifactFact = roleChatReplyFact;
+            return true;
+        }
 
         if (TryBuildWorkflowRoleReplyRecordedEvent(envelope, normalizedRunId, out var roleReplyFact))
         {
@@ -109,5 +122,103 @@ internal static class WorkflowArtifactFactBuilder
         };
 
         return true;
+    }
+
+    // O1 (06-19-workflow-run-observatory): build the role-reply artifact fact from the committed
+    // RoleChatSessionCompletedEvent so tool detail (arguments + result/success/error) is carried into
+    // the workflow run timeline. tool_calls (arguments) join tool_receipts (results) by call_id.
+    private static bool TryBuildWorkflowRoleReplyFromRoleChatSession(
+        EventEnvelope envelope,
+        string runId,
+        out WorkflowRoleReplyRecordedEvent evt)
+    {
+        evt = null!;
+
+        if (envelope.Payload?.Is(CommittedStateEventPublished.Descriptor) != true)
+            return false;
+
+        var published = envelope.Payload.Unpack<CommittedStateEventPublished>();
+        if (published?.StateEvent?.EventData == null ||
+            !published.StateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+        {
+            return false;
+        }
+
+        var completed = published.StateEvent.EventData.Unpack<RoleChatSessionCompletedEvent>();
+        var publisherActorId = envelope.Route?.PublisherActorId ?? string.Empty;
+        var roleId = string.IsNullOrWhiteSpace(completed.RoleId) ? publisherActorId : completed.RoleId;
+
+        evt = new WorkflowRoleReplyRecordedEvent
+        {
+            RunId = runId,
+            RoleActorId = publisherActorId,
+            RoleId = roleId,
+            SessionId = completed.SessionId ?? string.Empty,
+            Content = completed.Content ?? string.Empty,
+            ReasoningContent = completed.ReasoningContent ?? string.Empty,
+            ContentEmitted = completed.ContentEmitted,
+        };
+        evt.ToolCalls.AddRange(BuildEnrichedToolCalls(completed));
+        return true;
+    }
+
+    private static IReadOnlyList<WorkflowRoleReplyToolCall> BuildEnrichedToolCalls(
+        RoleChatSessionCompletedEvent completed)
+    {
+        if (completed.ToolCalls.Count == 0)
+            return [];
+
+        var receiptsByCallId = new Dictionary<string, AgentToolReceipt>(StringComparer.Ordinal);
+        foreach (var receipt in completed.ToolReceipts)
+        {
+            var callId = receipt.CallId ?? string.Empty;
+            if (callId.Length == 0)
+                continue;
+
+            receiptsByCallId[callId] = receipt;
+        }
+
+        var toolCalls = new List<WorkflowRoleReplyToolCall>(completed.ToolCalls.Count);
+        foreach (var toolCall in completed.ToolCalls)
+        {
+            var callId = toolCall.CallId ?? string.Empty;
+            var enriched = new WorkflowRoleReplyToolCall
+            {
+                ToolName = toolCall.ToolName ?? string.Empty,
+                CallId = callId,
+                ArgumentsJson = Redact(toolCall.ArgumentsJson),
+            };
+
+            if (callId.Length > 0 && receiptsByCallId.TryGetValue(callId, out var receipt))
+            {
+                enriched.ResultJson = Redact(receipt.ResultJson);
+                enriched.Success = receipt.Status == AgentToolReceiptStatus.Success;
+                enriched.Error = ResolveReceiptError(receipt);
+            }
+
+            toolCalls.Add(enriched);
+        }
+
+        return toolCalls;
+    }
+
+    private static string ResolveReceiptError(AgentToolReceipt receipt)
+    {
+        if (!string.IsNullOrWhiteSpace(receipt.ErrorMessage))
+            return Redact(receipt.ErrorMessage);
+        if (!string.IsNullOrWhiteSpace(receipt.ErrorCode))
+            return receipt.ErrorCode.Trim();
+
+        return string.Empty;
+    }
+
+    private static string Redact(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+            return string.Empty;
+
+        return value.Length <= ToolDetailMaxLength
+            ? value
+            : value[..ToolDetailMaxLength] + "...";
     }
 }

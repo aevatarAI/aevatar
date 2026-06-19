@@ -4,6 +4,7 @@ using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Core.Commands;
 using Aevatar.CQRS.Core.Interactions;
 using Aevatar.CQRS.Core.Streaming;
+using Aevatar.Workflow.Application.Abstractions.Observatory;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Reporting;
@@ -11,6 +12,7 @@ using Aevatar.Workflow.Application.Abstractions.RunForks;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Schedules;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
+using Aevatar.Workflow.Application.Observatory;
 using Aevatar.Workflow.Application.Queries;
 using Aevatar.Workflow.Application.Reporting;
 using Aevatar.Workflow.Application.RunForks;
@@ -142,6 +144,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IWorkflowCapabilitiesPort>(sp =>
             sp.GetRequiredService<RegistryBackedWorkflowCatalogPort>());
         services.AddSingleton<IWorkflowExecutionQueryApplicationService, WorkflowExecutionQueryApplicationService>();
+        // 06-19-workflow-run-observatory (C2): scope-enforcement seam for the read-only run viewer.
+        services.TryAddSingleton<IWorkflowRunObservatoryQueryService, WorkflowRunObservatoryQueryService>();
         services.TryAddSingleton<IWorkflowScheduleApplicationService, WorkflowScheduleApplicationService>();
         services.TryAddSingleton<IWorkflowScheduleCommandPort, WorkflowScheduleCommandPort>();
         return services;

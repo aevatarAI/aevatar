@@ -3,6 +3,7 @@ package aevatar.workflow;
 option csharp_namespace = "Aevatar.Workflow.Abstractions";
 
 import "google/protobuf/any.proto";
+import "google/protobuf/timestamp.proto";
 import "Interactions/interaction_spec.proto";
 
 enum WorkflowChatInputPartKind {
@@ -173,6 +174,7 @@ message WorkflowRunExecutionStartedEvent
   WorkflowRunExecutionContextDelta execution_context_delta = 6;
   int32 attempt = 7;
   repeated WorkflowFileRef input_file_refs = 8;
+  google.protobuf.Timestamp started_at_utc = 9;
 }
 message WorkflowRunExecutionContextDelta
 {
@@ -613,6 +615,10 @@ message WorkflowRoleReplyToolCall
 {
   string tool_name = 1;
   string call_id = 2;
+  string arguments_json = 3;
+  string result_json = 4;
+  bool success = 5;
+  string error = 6;
 }
 message WorkflowRoleReplyRecordedEvent
 {
