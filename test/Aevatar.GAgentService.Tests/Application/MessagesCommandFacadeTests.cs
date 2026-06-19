@@ -459,7 +459,7 @@ public sealed class MessagesCommandFacadeTests
                     null,
                     new LlmSessionCompletionSnapshot(outputText, [], DateTimeOffset.UtcNow, null, null),
                     null),
-                [new LlmSessionRunObservedDelta(outputText, null, null)]);
+                [new LlmSessionRunObservedDelta(outputText, null)]);
 
         public static StaticLlmSessionRunObservationService Error(
             LlmSessionRunObservedTerminalKind kind,

@@ -1,6 +1,5 @@
 using System.Text;
 using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Responses;
@@ -16,31 +15,28 @@ internal sealed class LlmSessionRunObservationAccumulator(string responseId)
     private TokenUsage? _usage;
     private DateTimeOffset? _completedAt;
 
-    public LlmSessionRunObservedDelta ObserveChunk(LlmStreamChunkObserved observed)
+    public LlmSessionRunObservedDelta? ObserveChunk(LlmStreamChunkObserved observed)
     {
         ArgumentNullException.ThrowIfNull(observed);
         if (!string.IsNullOrEmpty(observed.DeltaText))
             _outputText.Append(observed.DeltaText);
         if (observed.Usage != null)
             _usage = ToBoundaryUsage(observed.Usage);
+        if (string.IsNullOrEmpty(observed.DeltaText) && observed.Usage == null)
+            return null;
 
-        var toolCallDelta = observed.ToolCallDelta == null
-            ? null
-            : ToBoundaryToolCall(observed.ToolCallDelta);
         return new LlmSessionRunObservedDelta(
             string.IsNullOrEmpty(observed.DeltaText) ? null : observed.DeltaText,
-            toolCallDelta,
             observed.Usage == null ? null : ToBoundaryUsage(observed.Usage));
     }
 
-    public LlmSessionRunObservedDelta? ObserveToolCall(LlmToolCallObserved observed)
+    public void ObserveToolCall(LlmToolCallObserved observed)
     {
         ArgumentNullException.ThrowIfNull(observed);
         if (observed.ToolCall == null)
-            return null;
+            return;
 
         UpsertToolCall(observed.ToolCall);
-        return new LlmSessionRunObservedDelta(null, ToBoundaryToolCall(observed.ToolCall), null);
     }
 
     public void ObserveCompleted(LlmRunCompleted completed)
@@ -78,14 +74,6 @@ internal sealed class LlmSessionRunObservationAccumulator(string responseId)
         else
             _toolCalls.Add(call.Clone());
     }
-
-    private static ToolCall ToBoundaryToolCall(LlmSessionRuntimeToolCall call) =>
-        new()
-        {
-            Id = call.CallId,
-            Name = call.ToolName,
-            ArgumentsJson = RuntimeToolArgumentsJson(call),
-        };
 
     private static string RuntimeToolArgumentsJson(LlmSessionRuntimeToolCall call)
     {
