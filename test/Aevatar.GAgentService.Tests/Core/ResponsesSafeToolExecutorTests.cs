@@ -1,9 +1,9 @@
 using System.Text.Json;
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.GAgentService.Core.GAgents;
+using Aevatar.GAgentService.Application.Responses;
 using FluentAssertions;
 
-namespace Aevatar.GAgentService.Tests.Core;
+namespace Aevatar.GAgentService.Tests.Application;
 
 public sealed class ResponsesSafeToolExecutorTests
 {

@@ -1,0 +1,347 @@
+using System.Runtime.CompilerServices;
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Responses;
+using Aevatar.GAgentService.Application.Responses;
+using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.Logging.Abstractions;
+
+namespace Aevatar.GAgentService.Tests.Application;
+
+public sealed class LlmRunCoreTests
+{
+    [Fact]
+    public async Task RunAsync_ShouldRecordStreamingCompletionThroughSink()
+    {
+        var provider = new ScriptedLlmProviderFactory([
+            [
+                new LLMStreamChunk { DeltaContent = "hello " },
+                new LLMStreamChunk
+                {
+                    DeltaContent = "world",
+                    Usage = new TokenUsage(3, 2, 5),
+                    IsLast = true,
+                },
+            ],
+        ]);
+        var sink = new RecordingLlmRunSink();
+        var core = new LlmRunCore(provider, [], NullLogger<LlmRunCore>.Instance);
+
+        await core.RunAsync(
+            new LlmRunCoreRequest(BuildRunRequest("resp_1"), "run_1", "ApiKey"),
+            sink);
+
+        sink.StreamChunks.Should().HaveCount(2);
+        sink.Completed.Should().ContainSingle();
+        var completed = sink.Completed[0];
+        completed.ResponseId.Should().Be("resp_1");
+        completed.RunId.Should().Be("run_1");
+        completed.OutputText.Should().Be("hello world");
+        completed.Usage!.TotalTokens.Should().Be(5);
+        provider.Requests.Should().ContainSingle()
+            .Which.CallerContext!.ResponseId.Should().Be("resp_1");
+    }
+
+    [Fact]
+    public async Task RunAsync_ShouldEmitForwardedToolCallAndComplete()
+    {
+        var provider = new ScriptedLlmProviderFactory([
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "call_1",
+                        Name = "get_weather",
+                        ArgumentsJson = """{"city":""",
+                    },
+                },
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "call_1",
+                        Name = "get_weather",
+                        ArgumentsJson = "\"Singapore\"}",
+                    },
+                    IsLast = true,
+                },
+            ],
+        ]);
+        var sink = new RecordingLlmRunSink();
+        var core = new LlmRunCore(provider, [], NullLogger<LlmRunCore>.Instance);
+
+        await core.RunAsync(
+            new LlmRunCoreRequest(BuildRunRequest("resp_1", BuildForwardedSelection()), "run_1", "ApiKey"),
+            sink);
+
+        sink.ToolCalls.Should().ContainSingle(observed => observed.Forwarded);
+        sink.ForwardedToolCalls.Should().ContainSingle();
+        var forwarded = sink.ForwardedToolCalls[0].Call!;
+        forwarded.CallId.Should().Be("call_1");
+        forwarded.ToolName.Should().Be("get_weather");
+        forwarded.SchemaHash.Should().Be("schema-1");
+        ResponsesJsonValues.ToBoundaryJson(forwarded.Arguments).Should().Be("""{"city":"Singapore"}""");
+        sink.Completed.Should().ContainSingle()
+            .Which.ForwardedToolCalls.Should().ContainSingle()
+            .Which.Arguments.Fields["city"].StringValue.Should().Be("Singapore");
+    }
+
+    [Fact]
+    public async Task RunAsync_ShouldExecuteSubstitutedToolAndContinueNextRound()
+    {
+        var tool = new RecordingAgentTool("get_weather", """{"temperature":28}""");
+        var toolProvider = new StaticResponsesToolProvider(substituteTools: [tool]);
+        var provider = new ScriptedLlmProviderFactory([
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "call_1",
+                        Name = "get_weather",
+                        ArgumentsJson = """{"city":"Singapore"}""",
+                    },
+                    IsLast = true,
+                },
+            ],
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = "local result accepted",
+                    IsLast = true,
+                },
+            ],
+        ]);
+        var sink = new RecordingLlmRunSink();
+        var core = new LlmRunCore(provider, [toolProvider], NullLogger<LlmRunCore>.Instance);
+        var selection = BuildForwardedSelection();
+        selection.SubstitutedToolNames.Add("get_weather");
+
+        await core.RunAsync(
+            new LlmRunCoreRequest(BuildRunRequest("resp_1", selection), "run_1", "ApiKey"),
+            sink);
+
+        tool.Executions.Should().ContainSingle().Which.Should().Be("""{"city":"Singapore"}""");
+        sink.ForwardedToolCalls.Should().BeEmpty();
+        sink.ToolCalls.Should().ContainSingle(observed => !observed.Forwarded)
+            .Which.LocalResult.StructValue.Fields["temperature"].NumberValue.Should().Be(28);
+        provider.Requests.Should().HaveCount(2);
+        provider.Requests[1].Messages.Should().Contain(message =>
+            string.Equals(message.Role, "tool", StringComparison.Ordinal) &&
+            string.Equals(message.Content, """{"temperature":28}""", StringComparison.Ordinal));
+        sink.Completed.Should().ContainSingle()
+            .Which.OutputText.Should().Be("local result accepted");
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenProviderThrows_ShouldRecordFailureThroughSink()
+    {
+        var provider = new ThrowingLlmProviderFactory(
+            new NyxIdAuthenticationRequiredException("nyxid"));
+        var sink = new RecordingLlmRunSink();
+        var core = new LlmRunCore(provider, [], NullLogger<LlmRunCore>.Instance);
+
+        await core.RunAsync(
+            new LlmRunCoreRequest(BuildRunRequest("resp_1"), "run_1", "ApiKey"),
+            sink);
+
+        sink.Failed.Should().ContainSingle();
+        sink.Failed[0].FailureCode.Should().Be("authentication_required");
+        sink.Failed[0].FailureMessage.Should().Contain("NyxID authentication required");
+        sink.Completed.Should().BeEmpty();
+        sink.Cancelled.Should().BeEmpty();
+    }
+
+    private static LlmRunRequested BuildRunRequest(
+        string responseId,
+        LlmSessionRuntimeToolSelection? selection = null) =>
+        new()
+        {
+            ResponseId = responseId,
+            RunId = "run_1",
+            ScopeId = "user-1",
+            OwnerSubject = "user-1",
+            BearerToken = "token-1",
+            Model = "test-model",
+            ToolSelection = selection,
+            Messages =
+            {
+                new LlmSessionRuntimeChatMessage
+                {
+                    Role = "user",
+                    Content = "What is the weather?",
+                },
+            },
+        };
+
+    private static LlmSessionRuntimeToolSelection BuildForwardedSelection() =>
+        new()
+        {
+            ForwardedTools =
+            {
+                new LlmSessionRuntimeToolDeclaration
+                {
+                    ToolName = "get_weather",
+                    Description = "Get weather",
+                    ParametersJson = """{"type":"object"}""",
+                    Parameters = new Struct
+                    {
+                        Fields =
+                        {
+                            ["type"] = Google.Protobuf.WellKnownTypes.Value.ForString("object"),
+                        },
+                    },
+                    SchemaHash = "schema-1",
+                },
+            },
+        };
+
+    private sealed class RecordingLlmRunSink : ILlmRunSink
+    {
+        public List<LlmStreamChunkObserved> StreamChunks { get; } = [];
+        public List<LlmToolCallObserved> ToolCalls { get; } = [];
+        public List<LlmSessionForwardedToolCallEmittedEvent> ForwardedToolCalls { get; } = [];
+        public List<LlmRunCompleted> Completed { get; } = [];
+        public List<LlmRunFailed> Failed { get; } = [];
+        public List<LlmRunCancelled> Cancelled { get; } = [];
+
+        public Task RecordStreamChunkObservedAsync(
+            LlmStreamChunkObserved observed,
+            CancellationToken ct = default)
+        {
+            StreamChunks.Add(observed.Clone());
+            return Task.CompletedTask;
+        }
+
+        public Task RecordToolCallObservedAsync(
+            LlmToolCallObserved observed,
+            CancellationToken ct = default)
+        {
+            ToolCalls.Add(observed.Clone());
+            return Task.CompletedTask;
+        }
+
+        public Task RecordForwardedToolCallEmittedAsync(
+            LlmSessionForwardedToolCallEmittedEvent emitted,
+            CancellationToken ct = default)
+        {
+            ForwardedToolCalls.Add(emitted.Clone());
+            return Task.CompletedTask;
+        }
+
+        public Task RecordRunCompletedAsync(
+            LlmRunCompleted completed,
+            CancellationToken ct = default)
+        {
+            Completed.Add(completed.Clone());
+            return Task.CompletedTask;
+        }
+
+        public Task RecordRunFailedAsync(
+            LlmRunFailed failed,
+            CancellationToken ct = default)
+        {
+            Failed.Add(failed.Clone());
+            return Task.CompletedTask;
+        }
+
+        public Task RecordRunCancelledAsync(
+            LlmRunCancelled cancelled,
+            CancellationToken ct = default)
+        {
+            Cancelled.Add(cancelled.Clone());
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class ScriptedLlmProviderFactory(
+        IReadOnlyList<IReadOnlyList<LLMStreamChunk>> responses) : ILLMProviderFactory, ILLMProvider
+    {
+        private int _nextResponseIndex;
+
+        public List<LLMRequest> Requests { get; } = [];
+
+        public string Name => "test";
+
+        public ILLMProvider GetProvider(string name) => this;
+
+        public ILLMProvider GetDefault() => this;
+
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            Requests.Add(request);
+            var response = responses[Math.Min(_nextResponseIndex, responses.Count - 1)];
+            _nextResponseIndex++;
+            foreach (var chunk in response)
+            {
+                ct.ThrowIfCancellationRequested();
+                yield return chunk;
+            }
+
+            await Task.CompletedTask;
+        }
+    }
+
+    private sealed class ThrowingLlmProviderFactory(Exception exception) : ILLMProviderFactory, ILLMProvider
+    {
+        public string Name => "test";
+
+        public ILLMProvider GetProvider(string name) => this;
+
+        public ILLMProvider GetDefault() => this;
+
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            _ = request;
+            ct.ThrowIfCancellationRequested();
+            await Task.CompletedTask;
+            throw exception;
+            #pragma warning disable CS0162
+            yield return new LLMStreamChunk();
+            #pragma warning restore CS0162
+        }
+    }
+
+    private sealed class StaticResponsesToolProvider(
+        IReadOnlyList<IAgentTool>? substituteTools = null,
+        IReadOnlyList<IAgentTool>? additiveTools = null) : IResponsesToolProvider
+    {
+        public ValueTask<IReadOnlyList<IAgentTool>> GetSubstituteToolsAsync(
+            ResponsesToolProviderContext context,
+            CancellationToken ct = default) =>
+            ValueTask.FromResult(substituteTools ?? []);
+
+        public ValueTask<IReadOnlyList<IAgentTool>> GetAdditiveToolsAsync(
+            ResponsesToolProviderContext context,
+            CancellationToken ct = default) =>
+            ValueTask.FromResult(additiveTools ?? []);
+    }
+
+    private sealed class RecordingAgentTool(string name, string resultJson) : IAgentTool
+    {
+        public List<string> Executions { get; } = [];
+
+        public string Name { get; } = name;
+
+        public string Description => "test tool";
+
+        public string ParametersSchema => """{"type":"object"}""";
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            Executions.Add(argumentsJson);
+            return Task.FromResult(resultJson);
+        }
+    }
+}
