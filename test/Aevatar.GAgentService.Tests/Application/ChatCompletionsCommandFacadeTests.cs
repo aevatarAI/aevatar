@@ -542,6 +542,30 @@ public sealed class ChatCompletionsCommandFacadeTests
     }
 
     [Fact]
+    public async Task CreateAsync_ShouldHonorIngressObservationTimeout_WhenNoExplicitTimeoutGiven()
+    {
+        // The observation timeout is configurable via ResponsesIngressOptions (raised from the old
+        // hardcoded 30s so long agentic turns aren't cut at 30s). With no explicit ctor timeout, the
+        // facade must use the ingress-configured one — here 1s + a non-terminating run → 504.
+        var sessions = new RecordingSessionPort();
+        var observation = ObservationScenarioBuilder.ForResponse("chatcmpl_ingress_timeout")
+            .WithoutTerminal()
+            .Build();
+        var dispatch = new RecordingActorDispatchPort(observation);
+        var facade = CreateFacade(
+            sessionPort: sessions,
+            dispatchPort: dispatch,
+            observationRuntime: observation,
+            observationTimeoutSeconds: 1);
+
+        var result = await facade.CreateAsync(BuildRequest("gpt-4o-mini"), CallerScopeContext("token"));
+
+        result.Error.Should().NotBeNull();
+        result.Error!.StatusCode.Should().Be(504);
+        result.Error.Code.Should().Be("response_timeout");
+    }
+
+    [Fact]
     public async Task StreamAsync_WhenDispatchFails_ShouldReturnError_AndMarkSessionFailed()
     {
         var sessions = new RecordingSessionPort();
@@ -738,6 +762,7 @@ public sealed class ChatCompletionsCommandFacadeTests
         ObservationScenarioRuntime? observationRuntime = null,
         TimeSpan? observationTimeout = null,
         string? defaultIngressModel = null,
+        int? observationTimeoutSeconds = null,
         IOwnerLlmConfigSource? ownerLlmConfigSource = null)
     {
         var effectiveSessionPort = sessionPort ?? new RecordingSessionPort();
@@ -745,6 +770,13 @@ public sealed class ChatCompletionsCommandFacadeTests
             .WithCompletedText("ok")
             .Build();
         dispatchPort?.BindObservationRuntime(runtime);
+        ResponsesIngressOptions? ingressOpts = null;
+        if (defaultIngressModel is not null || observationTimeoutSeconds is not null)
+        {
+            ingressOpts = new ResponsesIngressOptions();
+            if (defaultIngressModel is not null) ingressOpts.DefaultModel = defaultIngressModel;
+            if (observationTimeoutSeconds is not null) ingressOpts.ObservationTimeoutSeconds = observationTimeoutSeconds.Value;
+        }
         return new ChatCompletionsCommandFacade(
             callerScopeResolver ?? new StaticCallerScopeResolver(),
             chatRouteDecisionPort ?? new StaticResponsesChatRouteDecisionPort(ForwardToModelAction(string.Empty)),
@@ -756,9 +788,7 @@ public sealed class ChatCompletionsCommandFacadeTests
             new LlmSessionRunObservationService(runtime.ScopePreparationPort, runtime.ProjectionPort),
             NullLogger<ChatCompletionsCommandFacade>.Instance,
             observationTimeout,
-            defaultIngressModel is null
-                ? null
-                : Options.Create(new ResponsesIngressOptions { DefaultModel = defaultIngressModel }),
+            ingressOpts is null ? null : Options.Create(ingressOpts),
             ownerLlmConfigSource);
     }
 

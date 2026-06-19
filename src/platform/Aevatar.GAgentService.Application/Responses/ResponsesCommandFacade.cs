@@ -43,6 +43,11 @@ public sealed class ResponsesCommandFacade(
     // "model is required" contract (see ResponsesIngressOptions).
     private readonly string? _defaultIngressModel = ingressOptions?.Value?.NormalizedDefaultModel;
 
+    // Configurable client-facing wait for a terminal event (raised from a hardcoded 30s so long
+    // agentic turns are not cut). See ResponsesIngressOptions.ObservationTimeout.
+    private readonly TimeSpan _observationTimeout =
+        ingressOptions?.Value?.ObservationTimeout ?? DefaultObservationTimeout;
+
     public async Task<ResponsesCreateCommandResult> CreateAsync(
         ResponsesCommandRequest request,
         ResponsesCallerScopeResolutionContext callerScopeContext,
@@ -215,7 +220,7 @@ public sealed class ResponsesCommandFacade(
                             .ConfigureAwait(false);
                         return admission;
                     },
-                    DefaultObservationTimeout),
+                    _observationTimeout),
                 async (delta, token) =>
                 {
                     if (!string.IsNullOrEmpty(delta.TextDelta))
@@ -522,7 +527,7 @@ public sealed class ResponsesCommandFacade(
                             .ConfigureAwait(false);
                         return admission;
                     },
-                    DefaultObservationTimeout),
+                    _observationTimeout),
                 null,
                 ct).ConfigureAwait(false);
             if (observed.Error is not null)

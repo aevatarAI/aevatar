@@ -39,6 +39,11 @@ public sealed class MessagesCommandFacade(
     // "model is required" contract (see ResponsesIngressOptions).
     private readonly string? _defaultIngressModel = ingressOptions?.Value?.NormalizedDefaultModel;
 
+    // Configurable client-facing wait for a terminal event (raised from a hardcoded 30s so long
+    // agentic turns are not cut). See ResponsesIngressOptions.ObservationTimeout.
+    private readonly TimeSpan _observationTimeout =
+        ingressOptions?.Value?.ObservationTimeout ?? DefaultObservationTimeout;
+
     public async Task<MessagesCreateCommandResult> CreateAsync(
         MessagesCommandRequest request,
         ResponsesCallerScopeResolutionContext callerScopeContext,
@@ -123,7 +128,7 @@ public sealed class MessagesCommandFacade(
                     plan.Session.ResponseId,
                     $"{plan.Session.ResponseId}:llm-run",
                     token => DispatchRunAsync(plan, token),
-                    DefaultObservationTimeout),
+                    _observationTimeout),
                 async (delta, token) =>
                 {
                     if (!string.IsNullOrEmpty(delta.TextDelta))

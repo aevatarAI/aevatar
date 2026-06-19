@@ -19,4 +19,15 @@ public sealed class ResponsesIngressOptions
 
     public string? NormalizedDefaultModel =>
         string.IsNullOrWhiteSpace(DefaultModel) ? null : DefaultModel.Trim();
+
+    // Total time the ingress waits for an LLM run to emit a terminal event before returning
+    // response_timeout. Long agentic turns (multiple tool rounds, large formatted answers) can run
+    // well past the old hardcoded 30s; cutting them surfaced to users as the run being interrupted.
+    // Configurable as a host fact (Aevatar:Responses:Ingress:ObservationTimeoutSeconds); the wider
+    // default lets normal long turns finish. NOTE: this only governs the client-facing wait — it does
+    // not change the per-actor execution model (see the deblock-session-actor task for the root fix).
+    public int ObservationTimeoutSeconds { get; set; } = 300;
+
+    public TimeSpan ObservationTimeout =>
+        ObservationTimeoutSeconds > 0 ? TimeSpan.FromSeconds(ObservationTimeoutSeconds) : TimeSpan.FromSeconds(300);
 }

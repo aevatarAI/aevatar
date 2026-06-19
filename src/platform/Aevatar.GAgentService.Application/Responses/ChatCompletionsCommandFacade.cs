@@ -33,7 +33,8 @@ public sealed class ChatCompletionsCommandFacade(
     IOwnerLlmConfigSource? ownerLlmConfigSource = null) : IChatCompletionsCommandFacade
 {
     private static readonly TimeSpan DefaultObservationTimeout = TimeSpan.FromSeconds(30);
-    private readonly TimeSpan _observationTimeout = observationTimeout ?? DefaultObservationTimeout;
+    private readonly TimeSpan _observationTimeout =
+        observationTimeout ?? ingressOptions?.Value?.ObservationTimeout ?? DefaultObservationTimeout;
 
     // Default model applied when a direct caller omits `model`; null preserves the
     // "model is required" contract (see ResponsesIngressOptions).
