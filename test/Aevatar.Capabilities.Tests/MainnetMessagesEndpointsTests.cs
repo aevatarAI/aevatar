@@ -711,7 +711,12 @@ public sealed class MainnetMessagesEndpointsTests
             [
                 new LLMStreamChunk
                 {
-                    DeltaContent = "routed through model",
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "call_gagent_1",
+                        Name = "aevatar_invoke_gagent",
+                        ArgumentsJson = """{"actor_id":"target-agent"}""",
+                    },
                     IsLast = true,
                 },
             ],
@@ -746,6 +751,8 @@ public sealed class MainnetMessagesEndpointsTests
         using var doc = JsonDocument.Parse(body);
         doc.RootElement.GetProperty("content").GetArrayLength().Should().Be(0);
         doc.RootElement.GetProperty("stop_reason").ValueKind.Should().Be(JsonValueKind.Null);
+        body.Should().NotContain("\"type\":\"tool_use\"");
+        body.Should().NotContain("call_gagent_1");
         var command = app.Services.GetRequiredService<MessagesRecordingActorDispatchPort>()
             .Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
         command.ToolSelection.ToolChoiceHintName.Should().Be("aevatar_invoke_gagent");
@@ -855,6 +862,10 @@ public sealed class MainnetMessagesEndpointsTests
             var outputText = new StringBuilder();
             TokenUsage? usage = null;
             var forwardedToolCalls = new List<LlmSessionRuntimeToolCall>();
+            var forwardedToolNames = command.ToolSelection?.ForwardedTools
+                .Select(static tool => tool.ToolName)
+                .Except(command.ToolSelection.SubstitutedToolNames, StringComparer.Ordinal)
+                .ToHashSet(StringComparer.Ordinal) ?? [];
 
             foreach (var chunk in chunks)
             {
@@ -873,7 +884,8 @@ public sealed class MainnetMessagesEndpointsTests
                 if (chunk.DeltaToolCall is not null)
                 {
                     var runtimeCall = ToRuntimeToolCall(chunk.DeltaToolCall);
-                    forwardedToolCalls.Add(runtimeCall.Clone());
+                    if (forwardedToolNames.Contains(runtimeCall.ToolName))
+                        forwardedToolCalls.Add(runtimeCall.Clone());
                     ProjectionPort.Sink.Push(ObservedEnvelope(new LlmStreamChunkObserved
                     {
                         ResponseId = command.ResponseId,
