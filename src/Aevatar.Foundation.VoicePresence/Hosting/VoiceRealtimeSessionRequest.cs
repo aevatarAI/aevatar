@@ -24,7 +24,8 @@ public sealed record VoiceRealtimeSessionAccepted(
     long ObservedStateVersion,
     VoicePresenceSessionLeaseHandle LeaseHandle,
     string WireContractVersion = VoiceWireContractDefaults.CurrentWireContractVersion,
-    VoiceInputImagePolicy? InputImagePolicy = null)
+    VoiceInputImagePolicy? InputImagePolicy = null,
+    VoiceRealtimeAttachOutcome AttachOutcome = VoiceRealtimeAttachOutcome.NewSession)
 {
     public string EffectiveWireContractVersion =>
         string.IsNullOrWhiteSpace(WireContractVersion)
@@ -33,6 +34,12 @@ public sealed record VoiceRealtimeSessionAccepted(
 
     public VoiceInputImagePolicy CreateEffectiveInputImagePolicy() =>
         InputImagePolicy?.Clone() ?? VoiceWireContractDefaults.CreateInputImagePolicy();
+}
+
+public enum VoiceRealtimeAttachOutcome
+{
+    NewSession = 0,
+    Restarted = 1,
 }
 
 public enum VoiceRealtimeSessionStartError

@@ -38,12 +38,13 @@ public class VoicePresenceProtoTests
             {
                 ActorId = "agent-1",
                 ModuleName = "voice_presence",
-                SessionId = "session-1",
-                PcmSampleRateHz = 24000,
-                ObservedStateVersion = 5,
-                WireContractVersion = VoiceWireContractDefaults.CurrentWireContractVersion,
-                InputImagePolicy = VoiceWireContractDefaults.CreateInputImagePolicy(),
-            },
+            SessionId = "session-1",
+            PcmSampleRateHz = 24000,
+            ObservedStateVersion = 5,
+            WireContractVersion = VoiceWireContractDefaults.CurrentWireContractVersion,
+            InputImagePolicy = VoiceWireContractDefaults.CreateInputImagePolicy(),
+            AttachOutcome = VoiceTransportAttachOutcome.NewSession,
+        },
         };
         var providerConfig = new VoiceProviderConfig
         {
@@ -73,6 +74,7 @@ public class VoicePresenceProtoTests
         parsedControl.SessionAccepted.InputImagePolicy.MaxBytes.ShouldBe(VoiceWireContractDefaults.MaxInputImageBytes);
         parsedControl.SessionAccepted.InputImagePolicy.AllowedMediaTypes
             .ShouldBe(VoiceWireContractDefaults.SupportedInputImageMediaTypes);
+        parsedControl.SessionAccepted.AttachOutcome.ShouldBe(VoiceTransportAttachOutcome.NewSession);
 
         providerConfig.Clone().ShouldBe(providerConfig);
         sessionConfig.Clone().ShouldBe(sessionConfig);
@@ -92,6 +94,10 @@ public class VoicePresenceProtoTests
         VoiceTransportSessionAccepted.Descriptor.Fields.InDeclarationOrder()
             .Select(static field => field.Name)
             .ShouldContain("input_image_policy");
+        VoiceTransportSessionAccepted.Descriptor.Fields["attach_outcome"].FieldNumber.ShouldBe(8);
+        ((int)VoiceTransportAttachOutcome.Unspecified).ShouldBe(0);
+        ((int)VoiceTransportAttachOutcome.NewSession).ShouldBe(1);
+        ((int)VoiceTransportAttachOutcome.Restarted).ShouldBe(2);
         VoiceInputImagePolicy.Descriptor.Fields.InDeclarationOrder()
             .Select(static field => field.Name)
             .ShouldBe([
