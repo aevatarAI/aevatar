@@ -52,6 +52,7 @@ public sealed class LlmSessionsProtoSurfaceRegressionTests
                 "FinalizeLlmRunTimedOut",
             ]);
         LlmRunRequested.Descriptor.FindFieldByName("timeout_after").Should().NotBeNull();
+        LlmSessionRuntimeToolSelection.Descriptor.FindFieldByName("owned_tool_names").Should().NotBeNull();
         LlmRunStartedEvent.Descriptor.FindFieldByName("sequence").Should().NotBeNull();
         LlmStreamChunkObserved.Descriptor.FindFieldByName("sequence").Should().NotBeNull();
         LlmToolCallObserved.Descriptor.FindFieldByName("sequence").Should().NotBeNull();

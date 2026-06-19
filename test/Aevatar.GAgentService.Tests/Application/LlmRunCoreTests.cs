@@ -237,7 +237,11 @@ public sealed class LlmRunCoreTests
     }
 
     [Fact]
+<<<<<<< HEAD
     public async Task RunAsync_WhenOwnedToolInstanceIsMissing_ShouldRecordLocalErrorAndNotForward()
+=======
+    public async Task RunAsync_WhenOwnedToolIsMissingFromDiscovery_ShouldReturnLocalToolUnavailableResult()
+>>>>>>> origin/feature/integrate
     {
         var provider = new ScriptedLlmProviderFactory([
             [
@@ -245,7 +249,11 @@ public sealed class LlmRunCoreTests
                 {
                     DeltaToolCall = new ToolCall
                     {
+<<<<<<< HEAD
                         Id = "call_1",
+=======
+                        Id = "call_missing",
+>>>>>>> origin/feature/integrate
                         Name = "use_skill",
                         ArgumentsJson = """{"name":"writer"}""",
                     },
@@ -264,6 +272,7 @@ public sealed class LlmRunCoreTests
         var core = new LlmRunCore(provider, [], NullLogger<LlmRunCore>.Instance);
         var selection = new LlmSessionRuntimeToolSelection
         {
+<<<<<<< HEAD
             ForwardedTools =
             {
                 new LlmSessionRuntimeToolDeclaration
@@ -274,10 +283,13 @@ public sealed class LlmRunCoreTests
                     SchemaHash = "schema-1",
                 },
             },
+=======
+>>>>>>> origin/feature/integrate
             OwnedToolNames = { "use_skill" },
         };
 
         await core.RunAsync(
+<<<<<<< HEAD
             new LlmRunCoreRequest(BuildRunRequest("resp_1", selection), "run_1", "ApiKey"),
             sink);
 
@@ -285,16 +297,114 @@ public sealed class LlmRunCoreTests
         var observed = sink.ToolCalls.Should().ContainSingle(toolCall => !toolCall.Forwarded).Subject;
         observed.ToolCall.ToolName.Should().Be("use_skill");
         observed.LocalResultJson.Should().Contain("aevatar_substitute_tool_not_registered");
+=======
+            new LlmRunCoreRequest(BuildRunRequest("resp_missing", selection), "run_1", "ApiKey"),
+            sink);
+
+        sink.ForwardedToolCalls.Should().BeEmpty();
+        var observed = sink.ToolCalls.Should().ContainSingle(observed => !observed.Forwarded).Subject;
+        observed.ToolCall.ToolName.Should().Be("use_skill");
+        observed.LocalResultJson.Should().Be("""{"error":"tool_not_available","tool_name":"use_skill"}""");
+        observed.LocalResult.StructValue.Fields["error"].StringValue.Should().Be("tool_not_available");
+>>>>>>> origin/feature/integrate
         provider.Requests.Should().HaveCount(2);
         provider.Requests[1].Messages.Should().Contain(message =>
             string.Equals(message.Role, "tool", StringComparison.Ordinal) &&
             message.Content != null &&
+<<<<<<< HEAD
             message.Content.Contains("aevatar_substitute_tool_not_registered", StringComparison.Ordinal));
+=======
+            message.Content.Contains("tool_not_available", StringComparison.Ordinal));
+>>>>>>> origin/feature/integrate
         sink.Completed.Should().ContainSingle()
             .Which.OutputText.Should().Be("missing tool reported");
     }
 
     [Fact]
+<<<<<<< HEAD
+=======
+    public async Task RunAsync_WhenModelCallsUnknownTool_ShouldReturnLocalToolNotDeclaredResult()
+    {
+        var provider = new ScriptedLlmProviderFactory([
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "call_unknown",
+                        Name = "unknown_tool",
+                        ArgumentsJson = """{"value":1}""",
+                    },
+                    IsLast = true,
+                },
+            ],
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = "unknown tool reported",
+                    IsLast = true,
+                },
+            ],
+        ]);
+        var sink = new RecordingLlmRunSink();
+        var core = new LlmRunCore(provider, [], NullLogger<LlmRunCore>.Instance);
+
+        await core.RunAsync(
+            new LlmRunCoreRequest(BuildRunRequest("resp_unknown"), "run_1", "ApiKey"),
+            sink);
+
+        sink.ForwardedToolCalls.Should().BeEmpty();
+        var observed = sink.ToolCalls.Should().ContainSingle(observed => !observed.Forwarded).Subject;
+        observed.ToolCall.ToolName.Should().Be("unknown_tool");
+        observed.LocalResultJson.Should().Be("""{"error":"tool_not_declared","tool_name":"unknown_tool"}""");
+        observed.LocalResult.StructValue.Fields["error"].StringValue.Should().Be("tool_not_declared");
+        provider.Requests.Should().HaveCount(2);
+        provider.Requests[1].Messages.Should().Contain(message =>
+            string.Equals(message.Role, "tool", StringComparison.Ordinal) &&
+            message.Content != null &&
+            message.Content.Contains("tool_not_declared", StringComparison.Ordinal));
+        sink.Completed.Should().ContainSingle()
+            .Which.OutputText.Should().Be("unknown tool reported");
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenToolCallsExhaustMaximumRounds_ShouldRecordFailure()
+    {
+        var tool = new RecordingAgentTool("get_weather", """{"temperature":28}""");
+        var toolProvider = new StaticResponsesToolProvider(substituteTools: [tool]);
+        var provider = new ScriptedLlmProviderFactory([
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "call_1",
+                        Name = "get_weather",
+                        ArgumentsJson = """{"city":"Singapore"}""",
+                    },
+                    IsLast = true,
+                },
+            ],
+        ]);
+        var sink = new RecordingLlmRunSink();
+        var core = new LlmRunCore(provider, [toolProvider], NullLogger<LlmRunCore>.Instance);
+        var selection = BuildForwardedSelection();
+        selection.OwnedToolNames.Add("get_weather");
+        selection.SubstitutedToolNames.Add("get_weather");
+
+        await core.RunAsync(
+            new LlmRunCoreRequest(BuildRunRequest("resp_rounds", selection), "run_1", "ApiKey"),
+            sink);
+
+        tool.Executions.Should().HaveCount(8);
+        provider.Requests.Should().HaveCount(8);
+        sink.Completed.Should().BeEmpty();
+        sink.Failed.Should().ContainSingle()
+            .Which.FailureCode.Should().Be("max_tool_rounds_exhausted");
+    }
+
+    [Fact]
+>>>>>>> origin/feature/integrate
     public async Task RunAsync_WhenProviderThrows_ShouldRecordFailureThroughSink()
     {
         var provider = new ThrowingLlmProviderFactory(
