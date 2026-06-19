@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 
 namespace Aevatar.GAgentService.Application.Schedules;
@@ -241,10 +242,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
     {
         var invocation = target.ServiceInvocation
             ?? throw new ArgumentException("Service invocation scheduled dispatch target is required.", nameof(target));
-        if (invocation.Identity == null)
-            throw new ArgumentException("Service invocation identity is required.", nameof(target));
-        if (string.IsNullOrWhiteSpace(invocation.Identity.ServiceId))
-            throw new ArgumentException("Service invocation service id is required.", nameof(target));
+        var identity = NormalizeServiceInvocationIdentity(invocation.Identity);
         if (string.IsNullOrWhiteSpace(invocation.EndpointId))
             throw new ArgumentException("Service invocation endpoint id is required.", nameof(target));
         if (invocation.Payload == null)
@@ -258,12 +256,37 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             {
                 EndpointId = NormalizeRequired(invocation.EndpointId, nameof(invocation.EndpointId)),
                 RevisionId = NormalizeNullable(invocation.RevisionId),
-                Identity = invocation.Identity.Clone(),
+                Identity = identity,
                 Payload = invocation.Payload.Clone(),
                 Caller = invocation.Caller?.Clone(),
                 Auth = NormalizeServiceInvocationAuth(invocation.Auth),
             },
         };
+    }
+
+    private static ServiceIdentity NormalizeServiceInvocationIdentity(ServiceIdentity? identity)
+    {
+        if (identity == null)
+            throw new ArgumentException("Service invocation identity is required.", nameof(identity));
+
+        return new ServiceIdentity
+        {
+            TenantId = NormalizeRequiredServiceIdentityField(identity.TenantId, "tenant id", nameof(identity.TenantId)),
+            AppId = NormalizeRequiredServiceIdentityField(identity.AppId, "app id", nameof(identity.AppId)),
+            Namespace = NormalizeRequiredServiceIdentityField(identity.Namespace, "namespace", nameof(identity.Namespace)),
+            ServiceId = NormalizeRequiredServiceIdentityField(identity.ServiceId, "service id", nameof(identity.ServiceId)),
+        };
+    }
+
+    private static string NormalizeRequiredServiceIdentityField(
+        string? value,
+        string fieldDescription,
+        string parameterName)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            throw new ArgumentException($"Service invocation {fieldDescription} is required.", parameterName);
+
+        return value.Trim();
     }
 
     private static ScheduledServiceInvocationAuth? NormalizeServiceInvocationAuth(

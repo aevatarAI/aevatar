@@ -74,7 +74,7 @@ public sealed class ScheduledDispatchCurrentStateProjector
             LastError = state.LastError ?? string.Empty,
             FireCount = state.FireCount,
             FailureCount = state.FailureCount,
-            ServiceKey = serviceIdentity == null ? string.Empty : ServiceKeys.Build(serviceIdentity),
+            ServiceKey = BuildServiceKey(serviceIdentity),
             ServiceId = serviceIdentity?.ServiceId ?? string.Empty,
             ServiceEndpointId = target.ServiceInvocation?.EndpointId ?? string.Empty,
             TargetActorId = state.TargetActorId ?? string.Empty,
@@ -91,6 +91,20 @@ public sealed class ScheduledDispatchCurrentStateProjector
             .ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal);
         document.FireRecords.Add(CreateFireRecords(state));
         return document;
+    }
+
+    private static string BuildServiceKey(ServiceIdentity? serviceIdentity)
+    {
+        if (serviceIdentity == null ||
+            string.IsNullOrWhiteSpace(serviceIdentity.TenantId) ||
+            string.IsNullOrWhiteSpace(serviceIdentity.AppId) ||
+            string.IsNullOrWhiteSpace(serviceIdentity.Namespace) ||
+            string.IsNullOrWhiteSpace(serviceIdentity.ServiceId))
+        {
+            return string.Empty;
+        }
+
+        return ServiceKeys.Build(serviceIdentity);
     }
 
     private static ScheduledDispatchFireRecordDocument[] CreateFireRecords(ScheduledDispatchState state) =>
