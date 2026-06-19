@@ -94,6 +94,7 @@ message LlmSessionRunScope {
   string failure_code = 9;
   string failure_message = 10;
   int64 last_applied_sequence = 11;
+  repeated string applied_record_ids = 12;
 }
 
 message LlmSessionState {
@@ -148,6 +149,9 @@ message RecordForwardedToolCallRequested {
 message LlmSessionForwardedToolCallEmittedEvent {
   string response_id = 1;
   LlmSessionForwardedToolCall call = 2;
+  string run_id = 3;
+  int64 sequence = 4;
+  string record_id = 5;
 }
 
 message ReceiveForwardedToolResultRequested {
@@ -225,6 +229,7 @@ message LlmRunRequested {
   LlmSessionRuntimeToolSelection tool_selection = 11;
   google.protobuf.Timestamp requested_at = 12;
   aevatar.ai.AgentToolExecutionContextPayload tool_context = 13;
+  google.protobuf.Duration timeout_after = 14;
 }
 
 message LlmRunStartedEvent {
@@ -232,6 +237,17 @@ message LlmRunStartedEvent {
   string run_id = 2;
   int64 sequence = 3;
   google.protobuf.Timestamp started_at = 4;
+}
+
+message RecordLlmStreamChunkObserved {
+  string response_id = 1;
+  string run_id = 2;
+  string record_id = 3;
+  int32 round = 4;
+  string delta_text = 5;
+  LlmSessionRuntimeToolCall tool_call_delta = 6;
+  LlmSessionTokenUsage usage = 7;
+  google.protobuf.Timestamp observed_at = 8;
 }
 
 message LlmStreamChunkObserved {
@@ -243,6 +259,19 @@ message LlmStreamChunkObserved {
   LlmSessionTokenUsage usage = 6;
   google.protobuf.Timestamp observed_at = 7;
   int64 sequence = 8;
+  string record_id = 9;
+}
+
+message RecordLlmToolCallObserved {
+  string response_id = 1;
+  string run_id = 2;
+  string record_id = 3;
+  int32 round = 4;
+  LlmSessionRuntimeToolCall tool_call = 5;
+  bool forwarded = 6;
+  string local_result_json = 7;
+  google.protobuf.Timestamp observed_at = 8;
+  google.protobuf.Value local_result = 9;
 }
 
 message LlmToolCallObserved {
@@ -255,6 +284,24 @@ message LlmToolCallObserved {
   google.protobuf.Timestamp observed_at = 7;
   google.protobuf.Value local_result = 8;
   int64 sequence = 9;
+  string record_id = 10;
+}
+
+message RecordLlmForwardedToolCallEmitted {
+  string response_id = 1;
+  string run_id = 2;
+  string record_id = 3;
+  LlmSessionForwardedToolCall call = 4;
+}
+
+message RecordLlmRunCompleted {
+  string response_id = 1;
+  string run_id = 2;
+  string record_id = 3;
+  string output_text = 4;
+  repeated LlmSessionRuntimeToolCall forwarded_tool_calls = 5;
+  LlmSessionTokenUsage usage = 6;
+  google.protobuf.Timestamp completed_at = 7;
 }
 
 message LlmRunCompleted {
@@ -265,6 +312,16 @@ message LlmRunCompleted {
   LlmSessionTokenUsage usage = 5;
   google.protobuf.Timestamp completed_at = 6;
   int64 sequence = 7;
+  string record_id = 8;
+}
+
+message RecordLlmRunFailed {
+  string response_id = 1;
+  string run_id = 2;
+  string record_id = 3;
+  string failure_code = 4;
+  string failure_message = 5;
+  google.protobuf.Timestamp failed_at = 6;
 }
 
 message LlmRunFailed {
@@ -274,6 +331,21 @@ message LlmRunFailed {
   string failure_message = 4;
   google.protobuf.Timestamp failed_at = 5;
   int64 sequence = 6;
+  string record_id = 7;
+}
+
+message RecordLlmRunCancelled {
+  string response_id = 1;
+  string run_id = 2;
+  string record_id = 3;
+  google.protobuf.Timestamp cancelled_at = 4;
+}
+
+message FinalizeLlmRunTimedOut {
+  string response_id = 1;
+  string run_id = 2;
+  string record_id = 3;
+  google.protobuf.Timestamp timed_out_at = 4;
 }
 
 message LlmRunCancelled {
@@ -281,6 +353,7 @@ message LlmRunCancelled {
   string run_id = 2;
   google.protobuf.Timestamp cancelled_at = 3;
   int64 sequence = 4;
+  string record_id = 5;
 }
 
 enum ChatRunSubRunWaitMode {
