@@ -9,7 +9,7 @@ public sealed class LlmRunExecutionTargetProvisioner(IActorRuntime runtime) : IL
     private readonly IActorRuntime _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
 
     public async Task<string> EnsureExecutionTargetAsync(
-        LlmRunExecutorRequest request,
+        LlmRunExecutionRequest request,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);

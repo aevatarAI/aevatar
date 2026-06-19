@@ -7,7 +7,7 @@ public sealed record LlmRunCoreRequest(
     string RunId,
     string? OriginPlatform);
 
-public sealed record LlmRunExecutorRequest(
+public sealed record LlmRunExecutionRequest(
     string SessionActorId,
     string ResponseId,
     string RunId,
@@ -52,13 +52,13 @@ public interface ILlmRunSink
 public interface ILlmRunExecutionService
 {
     Task ExecuteAsync(
-        LlmRunExecutorRequest request,
+        LlmRunExecutionRequest request,
         CancellationToken ct = default);
 }
 
 public interface ILlmRunExecutionTargetProvisioner
 {
     Task<string> EnsureExecutionTargetAsync(
-        LlmRunExecutorRequest request,
+        LlmRunExecutionRequest request,
         CancellationToken ct = default);
 }

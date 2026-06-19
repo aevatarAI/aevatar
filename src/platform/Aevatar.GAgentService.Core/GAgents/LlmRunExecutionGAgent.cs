@@ -26,7 +26,7 @@ public sealed class LlmRunExecutionGAgent : GAgentBase
         ArgumentNullException.ThrowIfNull(command.Command);
 
         return _executionService.ExecuteAsync(
-            new LlmRunExecutorRequest(
+            new LlmRunExecutionRequest(
                 command.SessionActorId,
                 command.ResponseId,
                 command.RunId,

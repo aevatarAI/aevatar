@@ -12,7 +12,7 @@ public sealed class LlmRunExecutionScheduler(
     private const string PublisherId = "gagent-service.llm-run-executor";
 
     public async ValueTask ScheduleAsync(
-        LlmRunExecutorRequest request,
+        LlmRunExecutionRequest request,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);

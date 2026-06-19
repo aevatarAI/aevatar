@@ -200,7 +200,7 @@ internal static class GAgentServiceTestKit
                 }));
 
         public Task ExecuteAsync(
-            LlmRunExecutorRequest request,
+            LlmRunExecutionRequest request,
             CancellationToken ct = default) =>
             runCore.RunAsync(
                 new LlmRunCoreRequest(request.Command.Clone(), request.RunId, request.OriginPlatform),
@@ -224,7 +224,7 @@ internal static class GAgentServiceTestKit
 
         private static bool TryBuildRequest(
             CommittedStatePublicationContext context,
-            out LlmRunExecutorRequest request)
+            out LlmRunExecutionRequest request)
         {
             request = default!;
             var ready = context.Published.StateEvent!.EventData.Unpack<LlmRunExecutionReadyEvent>();
@@ -240,7 +240,7 @@ internal static class GAgentServiceTestKit
             executionCommand.ResponseId = responseId;
             executionCommand.RunId = runId;
 
-            request = new LlmRunExecutorRequest(
+            request = new LlmRunExecutionRequest(
                 context.ActorId,
                 responseId,
                 runId,

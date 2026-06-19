@@ -5,6 +5,6 @@ namespace Aevatar.GAgentService.Application.Responses;
 public interface ILlmRunExecutionScheduler
 {
     ValueTask ScheduleAsync(
-        LlmRunExecutorRequest request,
+        LlmRunExecutionRequest request,
         CancellationToken ct = default);
 }

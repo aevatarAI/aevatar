@@ -2177,7 +2177,7 @@ public sealed class LlmSessionGAgentTests
         }
 
         public Task ExecuteAsync(
-            LlmRunExecutorRequest request,
+            LlmRunExecutionRequest request,
             CancellationToken ct = default)
         {
             _ = request;
@@ -2190,7 +2190,7 @@ public sealed class LlmSessionGAgentTests
     {
         public List<LlmRunExecutorRequest> StartRequests { get; } = [];
 
-        public List<LlmRunExecutorRequest> ExecuteRequests { get; } = [];
+        public List<LlmRunExecutionRequest> ExecuteRequests { get; } = [];
 
         public Task<DispatchAdmission> StartAsync(
             LlmRunExecutorRequest request,
@@ -2212,7 +2212,7 @@ public sealed class LlmSessionGAgentTests
         }
 
         public Task ExecuteAsync(
-            LlmRunExecutorRequest request,
+            LlmRunExecutionRequest request,
             CancellationToken ct = default)
         {
             _ = ct;

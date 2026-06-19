@@ -41,7 +41,7 @@ public sealed class LlmRunExecutorTests
         started.StartedAt.Should().NotBeNull();
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        var executeTask = executor.ExecuteAsync(request, cts.Token);
+        var executeTask = executor.ExecuteAsync(ToExecutionRequest(request), cts.Token);
         provider.Release.SetResult();
         await dispatch.WaitForCallsAsync(3, cts.Token);
         await executeTask;
@@ -165,7 +165,7 @@ public sealed class LlmRunExecutorTests
         var provisioner = new RecordingExecutionTargetProvisioner("llm-run-execution:resp_scheduler:run_1");
         var dispatch = new RecordingDispatchPort();
         var scheduler = new LlmRunExecutionScheduler(provisioner, dispatch);
-        var request = new LlmRunExecutorRequest(
+        var request = new LlmRunExecutionRequest(
             " session-actor-scheduler ",
             " resp_scheduler ",
             " run_1 ",
@@ -228,7 +228,7 @@ public sealed class LlmRunExecutorTests
             "ApiKey");
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        var executeTask = executor.ExecuteAsync(request, cts.Token);
+        var executeTask = executor.ExecuteAsync(ToExecutionRequest(request), cts.Token);
         await dispatch.WaitForCallsAsync(5, cts.Token);
         await executeTask;
 
@@ -300,7 +300,7 @@ public sealed class LlmRunExecutorTests
             "ApiKey");
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        var executeTask = executor.ExecuteAsync(request, cts.Token);
+        var executeTask = executor.ExecuteAsync(ToExecutionRequest(request), cts.Token);
         await dispatch.WaitForCallsAsync(4, cts.Token);
         await executeTask;
 
@@ -332,7 +332,7 @@ public sealed class LlmRunExecutorTests
             "ApiKey");
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        var executeTask = executor.ExecuteAsync(request, cts.Token);
+        var executeTask = executor.ExecuteAsync(ToExecutionRequest(request), cts.Token);
         await dispatch.WaitForCallsAsync(1, cts.Token);
         await executeTask;
 
@@ -360,7 +360,7 @@ public sealed class LlmRunExecutorTests
             "ApiKey");
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        var executeTask = executor.ExecuteAsync(request, cts.Token);
+        var executeTask = executor.ExecuteAsync(ToExecutionRequest(request), cts.Token);
         await dispatch.WaitForCallsAsync(1, cts.Token);
         await executeTask;
 
@@ -395,7 +395,7 @@ public sealed class LlmRunExecutorTests
             "ApiKey");
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        var executeTask = executor.ExecuteAsync(request, cts.Token);
+        var executeTask = executor.ExecuteAsync(ToExecutionRequest(request), cts.Token);
         await dispatch.WaitForAttemptsAsync(3, cts.Token);
         await executeTask;
 
@@ -427,6 +427,14 @@ public sealed class LlmRunExecutorTests
                 },
             },
         };
+
+    private static LlmRunExecutionRequest ToExecutionRequest(LlmRunExecutorRequest request) =>
+        new(
+            request.SessionActorId,
+            request.ResponseId,
+            request.RunId,
+            request.Command.Clone(),
+            request.OriginPlatform);
 
     private static LlmSessionRuntimeToolSelection BuildForwardedSelection() =>
         new()
@@ -676,10 +684,10 @@ public sealed class LlmRunExecutorTests
         private readonly TaskCompletionSource _executeStarted =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public List<LlmRunExecutorRequest> ExecuteRequests { get; } = [];
+        public List<LlmRunExecutionRequest> ExecuteRequests { get; } = [];
 
         public Task ExecuteAsync(
-            LlmRunExecutorRequest request,
+            LlmRunExecutionRequest request,
             CancellationToken ct = default)
         {
             ExecuteRequests.Add(request);
@@ -696,10 +704,10 @@ public sealed class LlmRunExecutorTests
 
     private sealed class RecordingLlmRunExecutionScheduler : ILlmRunExecutionScheduler
     {
-        public List<LlmRunExecutorRequest> ScheduledRequests { get; } = [];
+        public List<LlmRunExecutionRequest> ScheduledRequests { get; } = [];
 
         public ValueTask ScheduleAsync(
-            LlmRunExecutorRequest request,
+            LlmRunExecutionRequest request,
             CancellationToken ct = default)
         {
             _ = ct;
@@ -710,10 +718,10 @@ public sealed class LlmRunExecutorTests
 
     private sealed class RecordingExecutionTargetProvisioner(string actorId) : ILlmRunExecutionTargetProvisioner
     {
-        public List<LlmRunExecutorRequest> Requests { get; } = [];
+        public List<LlmRunExecutionRequest> Requests { get; } = [];
 
         public Task<string> EnsureExecutionTargetAsync(
-            LlmRunExecutorRequest request,
+            LlmRunExecutionRequest request,
             CancellationToken ct = default)
         {
             _ = ct;

@@ -51,7 +51,7 @@ public sealed class LlmRunExecutor(
     }
 
     public async Task ExecuteAsync(
-        LlmRunExecutorRequest request,
+        LlmRunExecutionRequest request,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -60,7 +60,7 @@ public sealed class LlmRunExecutor(
         ArgumentException.ThrowIfNullOrWhiteSpace(request.ResponseId);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.RunId);
 
-        var executionRequest = new LlmRunExecutorRequest(
+        var executionRequest = new LlmRunExecutionRequest(
             request.SessionActorId.Trim(),
             request.ResponseId.Trim(),
             request.RunId.Trim(),
@@ -95,7 +95,7 @@ public sealed class LlmRunExecutor(
     }
 
     private async Task DispatchExecutorFailureAsync(
-        LlmRunExecutorRequest request,
+        LlmRunExecutionRequest request,
         Exception exception)
     {
         var recordId = $"{request.RunId}:executor-failed";

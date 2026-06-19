@@ -31,7 +31,7 @@ public sealed class LlmRunExecutionReadyHook(
 
     private static bool TryBuildRequest(
         CommittedStatePublicationContext context,
-        out LlmRunExecutorRequest request)
+        out LlmRunExecutionRequest request)
     {
         request = default!;
         var ready = context.Published.StateEvent!.EventData.Unpack<LlmRunExecutionReadyEvent>();
@@ -47,7 +47,7 @@ public sealed class LlmRunExecutionReadyHook(
         executionCommand.ResponseId = responseId;
         executionCommand.RunId = runId;
 
-        request = new LlmRunExecutorRequest(
+        request = new LlmRunExecutionRequest(
             context.ActorId,
             responseId,
             runId,
