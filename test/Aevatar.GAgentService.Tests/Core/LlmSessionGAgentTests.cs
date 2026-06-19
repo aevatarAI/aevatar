@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Responses;
@@ -713,6 +714,125 @@ public sealed class LlmSessionGAgentTests
         actor.State.Completion.Usage!.PromptTokens.Should().Be(3);
         provider.Requests.Should().ContainSingle()
             .Which.CallerContext!.ResponseId.Should().Be("resp_1");
+    }
+
+    [Fact]
+    public async Task HandleLlmRunRequestedAsync_ShouldPersistTypedRunStartedEventBeforeOutput()
+    {
+        var eventStore = new InMemoryEventStore();
+        var provider = new ScriptedLlmProviderFactory([
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = "done",
+                    IsLast = true,
+                },
+            ],
+        ]);
+        var requestedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-06-19T00:00:00+00:00"));
+        var actor = CreateActorWithStore(
+            "resp_started",
+            eventStore,
+            services => services.AddSingleton<ILLMProviderFactory>(provider));
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_started"),
+        });
+
+        var request = BuildRunRequest("resp_started");
+        request.RequestedAt = requestedAt;
+        await actor.HandleLlmRunRequestedAsync(request);
+
+        var runEvents = (await eventStore.GetEventsAsync(actor.Id))
+            .Select(static evt => evt.EventData)
+            .Where(static payload =>
+                payload.Is(LlmRunStartedEvent.Descriptor) ||
+                payload.Is(LlmStreamChunkObserved.Descriptor) ||
+                payload.Is(LlmRunCompleted.Descriptor))
+            .ToArray();
+        runEvents.Should().HaveCount(3);
+        runEvents[0].Is(LlmRunStartedEvent.Descriptor).Should().BeTrue();
+        var started = runEvents[0].Unpack<LlmRunStartedEvent>();
+        started.ResponseId.Should().Be("resp_started");
+        started.RunId.Should().Be("run_1");
+        started.Sequence.Should().Be(1);
+        started.StartedAt.Should().Be(requestedAt);
+        runEvents[1].Unpack<LlmStreamChunkObserved>().Sequence.Should().Be(2);
+        runEvents[2].Unpack<LlmRunCompleted>().Sequence.Should().Be(3);
+
+        actor.State.ActiveRun.Should().NotBeNull();
+        actor.State.ActiveRun!.StartedAt.Should().Be(requestedAt);
+        actor.State.ActiveRun.LastAppliedSequence.Should().Be(3);
+    }
+
+    [Fact]
+    public async Task ActivateAsync_ShouldReplayOnlyConsecutiveRunEventSequences()
+    {
+        var eventStore = new InMemoryEventStore();
+        var actorId = "response-session-actor-resp_sequence";
+        await eventStore.AppendAsync(
+            actorId,
+            [
+                StateEvent(1, new LlmSessionRegisteredEvent { Record = BuildRecord("resp_sequence") }),
+                StateEvent(2, new LlmRunStartedEvent
+                {
+                    ResponseId = "resp_sequence",
+                    RunId = "run_1",
+                    Sequence = 1,
+                    StartedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-06-19T00:00:00+00:00")),
+                }),
+                StateEvent(3, new LlmStreamChunkObserved
+                {
+                    ResponseId = "resp_sequence",
+                    RunId = "run_1",
+                    Sequence = 2,
+                    DeltaText = "first",
+                    ObservedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-06-19T00:00:01+00:00")),
+                }),
+                StateEvent(4, new LlmStreamChunkObserved
+                {
+                    ResponseId = "resp_sequence",
+                    RunId = "run_1",
+                    Sequence = 2,
+                    DeltaText = "duplicate",
+                    ObservedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-06-19T00:00:02+00:00")),
+                }),
+                StateEvent(5, new LlmStreamChunkObserved
+                {
+                    ResponseId = "resp_sequence",
+                    RunId = "run_1",
+                    Sequence = 4,
+                    DeltaText = "out-of-order",
+                    ObservedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-06-19T00:00:03+00:00")),
+                }),
+                StateEvent(6, new LlmRunCompleted
+                {
+                    ResponseId = "resp_sequence",
+                    RunId = "run_1",
+                    Sequence = 3,
+                    OutputText = "first",
+                    CompletedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-06-19T00:00:04+00:00")),
+                }),
+                StateEvent(7, new LlmStreamChunkObserved
+                {
+                    ResponseId = "resp_sequence",
+                    RunId = "run_1",
+                    Sequence = 4,
+                    DeltaText = "late",
+                    ObservedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-06-19T00:00:05+00:00")),
+                }),
+            ],
+            expectedVersion: 0);
+        var actor = CreateActorWithStore("resp_sequence", eventStore);
+
+        await actor.ActivateAsync();
+
+        actor.State.LastAppliedEventVersion.Should().Be(4);
+        actor.State.ActiveRun.Should().NotBeNull();
+        actor.State.ActiveRun!.OutputText.Should().Be("first");
+        actor.State.ActiveRun.Status.Should().Be(2);
+        actor.State.ActiveRun.LastAppliedSequence.Should().Be(3);
+        actor.State.Completion!.OutputText.Should().Be("first");
     }
 
     [Fact]
@@ -1583,6 +1703,15 @@ public sealed class LlmSessionGAgentTests
                     Content = "What is the weather?",
                 },
             },
+        };
+
+    private static StateEvent StateEvent(long version, Google.Protobuf.IMessage payload) =>
+        new()
+        {
+            EventId = $"event-{version}",
+            Version = version,
+            EventData = Any.Pack(payload),
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-06-19T00:00:00+00:00")),
         };
 
     private static AgentToolExecutionContext NewCommandToolContext(

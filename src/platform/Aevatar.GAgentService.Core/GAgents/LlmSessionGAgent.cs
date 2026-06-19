@@ -296,12 +296,18 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             return;
 
         var startedAt = command.RequestedAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
-        await PersistDomainEventAsync(new LlmStreamChunkObserved
+        if (State.ActiveRun == null ||
+            !string.Equals(State.ActiveRun.RunId, runId, StringComparison.Ordinal) ||
+            State.ActiveRun.LastAppliedSequence <= 0)
         {
-            ResponseId = existing.ResponseId,
-            RunId = runId,
-            ObservedAt = startedAt,
-        });
+            await PersistDomainEventAsync(new LlmRunStartedEvent
+            {
+                ResponseId = existing.ResponseId,
+                RunId = runId,
+                Sequence = 1,
+                StartedAt = startedAt,
+            });
+        }
 
         var runCore = Services.GetRequiredService<ILlmRunCore>();
         await runCore.RunAsync(
@@ -319,6 +325,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             .On<LlmSessionForwardedToolCallEmittedEvent>(ApplyForwardedToolCallEmitted)
             .On<LlmSessionForwardedToolResultReceivedEvent>(ApplyForwardedToolResultReceived)
             .On<LlmSessionForwardedToolCallResolvedEvent>(ApplyForwardedToolCallResolved)
+            .On<LlmRunStartedEvent>(ApplyRunStarted)
             .On<LlmStreamChunkObserved>(ApplyStreamChunkObserved)
             .On<LlmToolCallObserved>(ApplyToolCallObserved)
             .On<LlmRunCompleted>(ApplyRunCompleted)
@@ -429,12 +436,32 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         return next;
     }
 
+    private static LlmSessionState ApplyRunStarted(
+        LlmSessionState state,
+        LlmRunStartedEvent evt)
+    {
+        var next = state.Clone();
+        var startedAt = evt.StartedAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
+        var run = EnsureRun(next, evt.RunId, evt.ResponseId, startedAt);
+        if (!TryAcceptRunSequence(run, evt.Sequence))
+            return state;
+
+        run.Status = RunningStatus;
+        run.StartedAt = startedAt.Clone();
+        TouchRecord(next, startedAt);
+        Bump(next, $"{evt.ResponseId}:run:{evt.RunId}:started");
+        return next;
+    }
+
     private static LlmSessionState ApplyStreamChunkObserved(
         LlmSessionState state,
         LlmStreamChunkObserved evt)
     {
         var next = state.Clone();
         var run = EnsureRun(next, evt.RunId, evt.ResponseId, evt.ObservedAt);
+        if (!TryAcceptRunSequence(run, evt.Sequence))
+            return state;
+
         run.Round = Math.Max(run.Round, evt.Round);
         if (!string.IsNullOrEmpty(evt.DeltaText))
             run.OutputText += evt.DeltaText;
@@ -451,6 +478,9 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
     {
         var next = state.Clone();
         var run = EnsureRun(next, evt.RunId, evt.ResponseId, evt.ObservedAt);
+        if (!TryAcceptRunSequence(run, evt.Sequence))
+            return state;
+
         run.Round = Math.Max(run.Round, evt.Round);
         if (evt.ToolCall != null)
             UpsertRuntimeToolCall(run, evt.ToolCall);
@@ -466,6 +496,9 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         var next = state.Clone();
         var completedAt = evt.CompletedAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
         var run = EnsureRun(next, evt.RunId, evt.ResponseId, completedAt);
+        if (!TryAcceptRunSequence(run, evt.Sequence))
+            return state;
+
         run.Status = CompletedStatus;
         run.OutputText = evt.OutputText ?? string.Empty;
         run.CompletedAt = completedAt.Clone();
@@ -505,6 +538,9 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         var next = state.Clone();
         var failedAt = evt.FailedAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
         var run = EnsureRun(next, evt.RunId, evt.ResponseId, failedAt);
+        if (!TryAcceptRunSequence(run, evt.Sequence))
+            return state;
+
         run.Status = FailedStatus;
         run.CompletedAt = failedAt.Clone();
         run.FailureCode = NormalizeOptional(evt.FailureCode) ?? "execution_failed";
@@ -532,6 +568,9 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         var next = state.Clone();
         var cancelledAt = evt.CancelledAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
         var run = EnsureRun(next, evt.RunId, evt.ResponseId, cancelledAt);
+        if (!TryAcceptRunSequence(run, evt.Sequence))
+            return state;
+
         run.Status = CancelledStatus;
         run.CompletedAt = cancelledAt.Clone();
         if (next.Record == null)
@@ -590,6 +629,30 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         return state.ActiveRun;
     }
 
+    private long NextRunSequence(string runId)
+    {
+        if (State.ActiveRun == null ||
+            !string.Equals(State.ActiveRun.RunId, runId, StringComparison.Ordinal))
+        {
+            return 1;
+        }
+
+        return State.ActiveRun.LastAppliedSequence + 1;
+    }
+
+    private static bool TryAcceptRunSequence(LlmSessionRunScope run, long sequence)
+    {
+        if (IsRunTerminal(run.Status))
+            return false;
+        if (sequence <= 0)
+            return true;
+        if (sequence != run.LastAppliedSequence + 1)
+            return false;
+
+        run.LastAppliedSequence = sequence;
+        return true;
+    }
+
     private static void TouchRecord(LlmSessionState state, Timestamp? updatedAt)
     {
         if (state.Record == null)
@@ -602,6 +665,9 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         state.LastAppliedEventVersion++;
         state.LastEventId = eventId;
     }
+
+    private static bool IsRunTerminal(int status) =>
+        status is CompletedStatus or FailedStatus or CancelledStatus;
 
     private static void UpsertRuntimeToolCall(
         LlmSessionRunScope run,
@@ -623,41 +689,67 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             existing.ArgumentsJson += incoming.ArgumentsJson;
     }
 
-    private Task PersistLlmRunEventAsync<TEvent>(TEvent evt, CancellationToken ct)
-        where TEvent : IMessage =>
-        PersistDomainEventAsync(evt, ct);
+    private Task PersistStreamChunkObservedAsync(LlmStreamChunkObserved observed, CancellationToken ct)
+    {
+        observed.Sequence = NextRunSequence(observed.RunId);
+        return PersistDomainEventAsync(observed, ct);
+    }
+
+    private Task PersistToolCallObservedAsync(LlmToolCallObserved observed, CancellationToken ct)
+    {
+        observed.Sequence = NextRunSequence(observed.RunId);
+        return PersistDomainEventAsync(observed, ct);
+    }
+
+    private Task PersistRunCompletedAsync(LlmRunCompleted completed, CancellationToken ct)
+    {
+        completed.Sequence = NextRunSequence(completed.RunId);
+        return PersistDomainEventAsync(completed, ct);
+    }
+
+    private Task PersistRunFailedAsync(LlmRunFailed failed, CancellationToken ct)
+    {
+        failed.Sequence = NextRunSequence(failed.RunId);
+        return PersistDomainEventAsync(failed, ct);
+    }
+
+    private Task PersistRunCancelledAsync(LlmRunCancelled cancelled, CancellationToken ct)
+    {
+        cancelled.Sequence = NextRunSequence(cancelled.RunId);
+        return PersistDomainEventAsync(cancelled, ct);
+    }
 
     private sealed class InActorLlmRunSink(LlmSessionGAgent actor) : ILlmRunSink
     {
         public Task RecordStreamChunkObservedAsync(
             LlmStreamChunkObserved observed,
             CancellationToken ct = default) =>
-            actor.PersistLlmRunEventAsync(observed, ct);
+            actor.PersistStreamChunkObservedAsync(observed, ct);
 
         public Task RecordToolCallObservedAsync(
             LlmToolCallObserved observed,
             CancellationToken ct = default) =>
-            actor.PersistLlmRunEventAsync(observed, ct);
+            actor.PersistToolCallObservedAsync(observed, ct);
 
         public Task RecordForwardedToolCallEmittedAsync(
             LlmSessionForwardedToolCallEmittedEvent emitted,
             CancellationToken ct = default) =>
-            actor.PersistLlmRunEventAsync(emitted, ct);
+            actor.PersistDomainEventAsync(emitted, ct);
 
         public Task RecordRunCompletedAsync(
             LlmRunCompleted completed,
             CancellationToken ct = default) =>
-            actor.PersistLlmRunEventAsync(completed, ct);
+            actor.PersistRunCompletedAsync(completed, ct);
 
         public Task RecordRunFailedAsync(
             LlmRunFailed failed,
             CancellationToken ct = default) =>
-            actor.PersistLlmRunEventAsync(failed, ct);
+            actor.PersistRunFailedAsync(failed, ct);
 
         public Task RecordRunCancelledAsync(
             LlmRunCancelled cancelled,
             CancellationToken ct = default) =>
-            actor.PersistLlmRunEventAsync(cancelled, ct);
+            actor.PersistRunCancelledAsync(cancelled, ct);
     }
 
     private static LlmSessionRecord NormalizeRecord(LlmSessionRecord record)

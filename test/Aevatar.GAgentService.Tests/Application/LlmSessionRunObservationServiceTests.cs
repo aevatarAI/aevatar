@@ -48,6 +48,29 @@ public sealed class LlmSessionRunObservationServiceTests
     }
 
     [Fact]
+    public async Task ObserveAsync_ShouldIgnoreRunStartedEventForOutput()
+    {
+        var ports = new RecordingObservationPorts([
+            StartedEnvelope("resp-1"),
+            ChunkEnvelope("resp-1", "done"),
+            CompletedEnvelope("resp-1", "done"),
+        ]);
+        var service = ports.CreateService();
+        var deltas = new List<LlmSessionRunObservedDelta>();
+
+        var result = await service.ObserveAsync(Request(ports), (delta, _) =>
+        {
+            deltas.Add(delta);
+            return ValueTask.CompletedTask;
+        });
+
+        result.Error.Should().BeNull();
+        result.Completion!.OutputText.Should().Be("done");
+        deltas.Should().ContainSingle();
+        deltas[0].TextDelta.Should().Be("done");
+    }
+
+    [Fact]
     public async Task ObserveAsync_ShouldEmitToolDelta()
     {
         var ports = new RecordingObservationPorts([
@@ -283,6 +306,15 @@ public sealed class LlmSessionRunObservationServiceTests
             RunId = $"{responseId}:llm-run",
             DeltaText = text ?? string.Empty,
             ToolCallDelta = toolCallDelta,
+        });
+
+    private static EventEnvelope StartedEnvelope(string responseId) =>
+        Envelope(responseId, new LlmRunStartedEvent
+        {
+            ResponseId = responseId,
+            RunId = $"{responseId}:llm-run",
+            Sequence = 1,
+            StartedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         });
 
     private static EventEnvelope ToolEnvelope(string responseId, LlmSessionRuntimeToolCall toolCall) =>
