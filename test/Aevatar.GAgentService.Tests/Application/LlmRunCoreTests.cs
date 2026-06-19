@@ -119,6 +119,7 @@ public sealed class LlmRunCoreTests
         var core = new LlmRunCore(provider, [toolProvider], NullLogger<LlmRunCore>.Instance);
         var selection = BuildForwardedSelection();
         selection.SubstitutedToolNames.Add("get_weather");
+        selection.OwnedToolNames.Add("get_weather");
 
         await core.RunAsync(
             new LlmRunCoreRequest(BuildRunRequest("resp_1", selection), "run_1", "ApiKey"),
@@ -166,6 +167,7 @@ public sealed class LlmRunCoreTests
         var core = new LlmRunCore(provider, [toolProvider], NullLogger<LlmRunCore>.Instance);
         var selection = BuildForwardedSelection();
         selection.AdditiveToolNames.Add("aevatar_invoke_team");
+        selection.OwnedToolNames.Add("aevatar_invoke_team");
 
         await core.RunAsync(
             new LlmRunCoreRequest(BuildRunRequest("resp_owned", selection), "run_1", "ApiKey"),
@@ -232,6 +234,64 @@ public sealed class LlmRunCoreTests
         sink.ToolCalls.Should().ContainSingle(observed => !observed.Forwarded)
             .Which.ToolCall.ToolName.Should().Be("use_skill");
         provider.Requests.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenOwnedToolInstanceIsMissing_ShouldRecordLocalErrorAndNotForward()
+    {
+        var provider = new ScriptedLlmProviderFactory([
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "call_1",
+                        Name = "use_skill",
+                        ArgumentsJson = """{"name":"writer"}""",
+                    },
+                    IsLast = true,
+                },
+            ],
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = "missing tool reported",
+                    IsLast = true,
+                },
+            ],
+        ]);
+        var sink = new RecordingLlmRunSink();
+        var core = new LlmRunCore(provider, [], NullLogger<LlmRunCore>.Instance);
+        var selection = new LlmSessionRuntimeToolSelection
+        {
+            ForwardedTools =
+            {
+                new LlmSessionRuntimeToolDeclaration
+                {
+                    ToolName = "use_skill",
+                    Description = "Client collision",
+                    ParametersJson = """{"type":"object"}""",
+                    SchemaHash = "schema-1",
+                },
+            },
+            OwnedToolNames = { "use_skill" },
+        };
+
+        await core.RunAsync(
+            new LlmRunCoreRequest(BuildRunRequest("resp_1", selection), "run_1", "ApiKey"),
+            sink);
+
+        sink.ForwardedToolCalls.Should().BeEmpty();
+        var observed = sink.ToolCalls.Should().ContainSingle(toolCall => !toolCall.Forwarded).Subject;
+        observed.ToolCall.ToolName.Should().Be("use_skill");
+        observed.LocalResultJson.Should().Contain("aevatar_substitute_tool_not_registered");
+        provider.Requests.Should().HaveCount(2);
+        provider.Requests[1].Messages.Should().Contain(message =>
+            string.Equals(message.Role, "tool", StringComparison.Ordinal) &&
+            message.Content != null &&
+            message.Content.Contains("aevatar_substitute_tool_not_registered", StringComparison.Ordinal));
+        sink.Completed.Should().ContainSingle()
+            .Which.OutputText.Should().Be("missing tool reported");
     }
 
     [Fact]
