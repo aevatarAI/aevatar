@@ -31,7 +31,8 @@ public sealed class MessagesCommandFacade(
     ILlmSessionRunObservationService observationService,
     ILogger<MessagesCommandFacade> logger,
     IOptions<ResponsesIngressOptions>? ingressOptions = null,
-    IOwnerLlmConfigSource? ownerLlmConfigSource = null) : IMessagesCommandFacade
+    IOwnerLlmConfigSource? ownerLlmConfigSource = null,
+    ILlmRunExecutor? llmRunExecutor = null) : IMessagesCommandFacade
 {
     private static readonly TimeSpan DefaultObservationTimeout = TimeSpan.FromSeconds(30);
 
@@ -43,6 +44,8 @@ public sealed class MessagesCommandFacade(
     // agentic turns are not cut). See ResponsesIngressOptions.ObservationTimeout.
     private readonly TimeSpan _observationTimeout =
         ingressOptions?.Value?.ObservationTimeout ?? DefaultObservationTimeout;
+    private readonly bool _offActorLlmRunExecutorEnabled =
+        ingressOptions?.Value?.OffActorLlmRunExecutorEnabled == true && llmRunExecutor is not null;
 
     public async Task<MessagesCreateCommandResult> CreateAsync(
         MessagesCommandRequest request,
@@ -127,7 +130,9 @@ public sealed class MessagesCommandFacade(
                     plan.Session.ActorId,
                     plan.Session.ResponseId,
                     $"{plan.Session.ResponseId}:llm-run",
-                    token => DispatchRunAsync(plan, token),
+                    token => _offActorLlmRunExecutorEnabled
+                        ? StartOffActorRunAsync(plan, token)
+                        : DispatchRunAsync(plan, token),
                     _observationTimeout),
                 async (delta, token) =>
                 {
@@ -137,12 +142,6 @@ public sealed class MessagesCommandFacade(
                 ct).ConfigureAwait(false);
             if (observed.Error is not null)
             {
-                await TryUpdateSessionStatusAsync(
-                    plan.Session,
-                    observed.Error.Kind == LlmSessionRunObservedTerminalKind.Cancelled
-                        ? LlmSessionStatus.Cancelled
-                        : LlmSessionStatus.Failed,
-                    CancellationToken.None);
                 return ResponsesStreamCommandResult.FromError(
                     observed.Error.StatusCode,
                     observed.Error.Code,
@@ -168,7 +167,6 @@ public sealed class MessagesCommandFacade(
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            await TryUpdateSessionStatusAsync(plan.Session, LlmSessionStatus.Cancelled, CancellationToken.None);
             return ResponsesStreamCommandResult.FromError(499, "client_closed_request", "Client closed request.");
         }
         catch (Exception ex)
@@ -365,7 +363,9 @@ public sealed class MessagesCommandFacade(
     {
         try
         {
-            var admission = await DispatchRunAsync(plan, ct);
+            var admission = _offActorLlmRunExecutorEnabled
+                ? await StartOffActorRunAsync(plan, ct).ConfigureAwait(false)
+                : await DispatchRunAsync(plan, ct).ConfigureAwait(false);
             return MessagesCreateCommandResult.FromAccepted(new MessagesCreateAcceptedCommandResult(
                 plan.Normalized,
                 plan.Session,
@@ -393,7 +393,6 @@ public sealed class MessagesCommandFacade(
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            await TryUpdateSessionStatusAsync(plan.Session, LlmSessionStatus.Cancelled, CancellationToken.None);
             return MessagesCreateCommandResult.FromError(499, "client_closed_request", "Client closed request.");
         }
         catch (Exception ex)
@@ -600,6 +599,29 @@ public sealed class MessagesCommandFacade(
         return dispatchPort.DispatchAsync(plan.Session.ActorId, envelope, ct);
     }
 
+    private async Task<DispatchAdmission> StartOffActorRunAsync(
+        MessagesCreateCommandPlan plan,
+        CancellationToken ct)
+    {
+        var request = BuildExecutorRequest(plan);
+        return await llmRunExecutor!.StartAsync(request, ct).ConfigureAwait(false);
+    }
+
+    private static LlmRunExecutorRequest BuildExecutorRequest(MessagesCreateCommandPlan plan)
+    {
+        var command = BuildRunRequested(
+            plan.Session.ResponseId,
+            plan.LlmRequest,
+            plan.ToolClassification,
+            plan.ToolChoiceHintPlan);
+        return new LlmRunExecutorRequest(
+            plan.Session.ActorId,
+            plan.Session.ResponseId,
+            command.RunId,
+            command,
+            plan.ToolContext.Channel.Platform);
+    }
+
     private static LlmRunRequested BuildRunRequested(
         string responseId,
         LLMRequest request,
@@ -658,6 +680,7 @@ public sealed class MessagesCommandFacade(
         {
             SubstitutedToolNames = { classification.SubstitutedToolNames },
             AdditiveToolNames = { classification.AdditiveToolNames },
+            OwnedToolNames = { classification.OwnedToolNames },
         };
         if (!toolChoiceHintPlan.IsEmpty)
         {

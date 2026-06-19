@@ -711,7 +711,12 @@ public sealed class MainnetMessagesEndpointsTests
             [
                 new LLMStreamChunk
                 {
-                    DeltaContent = "routed through model",
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "call_gagent_1",
+                        Name = "aevatar_invoke_gagent",
+                        ArgumentsJson = """{"actor_id":"target-agent"}""",
+                    },
                     IsLast = true,
                 },
             ],
@@ -746,6 +751,8 @@ public sealed class MainnetMessagesEndpointsTests
         using var doc = JsonDocument.Parse(body);
         doc.RootElement.GetProperty("content").GetArrayLength().Should().Be(0);
         doc.RootElement.GetProperty("stop_reason").ValueKind.Should().Be(JsonValueKind.Null);
+        body.Should().NotContain("\"type\":\"tool_use\"");
+        body.Should().NotContain("call_gagent_1");
         var command = app.Services.GetRequiredService<MessagesRecordingActorDispatchPort>()
             .Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
         command.ToolSelection.ToolChoiceHintName.Should().Be("aevatar_invoke_gagent");
@@ -855,6 +862,10 @@ public sealed class MainnetMessagesEndpointsTests
             var outputText = new StringBuilder();
             TokenUsage? usage = null;
             var forwardedToolCalls = new List<LlmSessionRuntimeToolCall>();
+            var forwardedToolNames = command.ToolSelection?.ForwardedTools
+                .Select(static tool => tool.ToolName)
+                .Except(command.ToolSelection.SubstitutedToolNames, StringComparer.Ordinal)
+                .ToHashSet(StringComparer.Ordinal) ?? [];
 
             foreach (var chunk in chunks)
             {
@@ -873,7 +884,8 @@ public sealed class MainnetMessagesEndpointsTests
                 if (chunk.DeltaToolCall is not null)
                 {
                     var runtimeCall = ToRuntimeToolCall(chunk.DeltaToolCall);
-                    forwardedToolCalls.Add(runtimeCall.Clone());
+                    if (forwardedToolNames.Contains(runtimeCall.ToolName))
+                        forwardedToolCalls.Add(runtimeCall.Clone());
                     ProjectionPort.Sink.Push(ObservedEnvelope(new LlmStreamChunkObserved
                     {
                         ResponseId = command.ResponseId,
@@ -1107,8 +1119,13 @@ public sealed class MainnetMessagesEndpointsTests
                 return [];
 
             var tools = new List<IAgentTool>();
-            tools.AddRange(selection.ForwardedTools.Select(static tool =>
-                new MessagesStubAgentTool(tool.ToolName, tool.Description, tool.ParametersJson)));
+            var ownedToolNames = selection.OwnedToolNames.Count > 0
+                ? selection.OwnedToolNames.ToHashSet(StringComparer.Ordinal)
+                : selection.SubstitutedToolNames.Concat(selection.AdditiveToolNames).ToHashSet(StringComparer.Ordinal);
+            tools.AddRange(selection.ForwardedTools
+                .Where(tool => !ownedToolNames.Contains(tool.ToolName))
+                .Select(static tool =>
+                    new MessagesStubAgentTool(tool.ToolName, tool.Description, tool.ParametersJson)));
             tools.AddRange(selection.SubstitutedToolNames.Select(static name =>
                 new MessagesStubAgentTool(name, $"{name} substitute")));
             tools.AddRange(selection.AdditiveToolNames.Select(static name =>
@@ -1248,6 +1265,13 @@ public sealed class MainnetMessagesEndpointsTests
             StatusUpdates.Add((actorId, responseId, status));
             return Task.CompletedTask;
         }
+
+        public Task CancelRunAsync(
+            string sessionActorId,
+            string responseId,
+            string runId,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
 
         public Task RecordForwardedToolCallAsync(
             string sessionActorId,

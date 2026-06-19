@@ -197,6 +197,7 @@ public sealed class ResponsesCommandFacadeTests
         sessions.UpdatedStatuses.Should().BeEmpty();
         var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
         command.ToolSelection.AdditiveToolNames.Should().Contain("aevatar_invoke_gagent");
+        command.ToolSelection.OwnedToolNames.Should().Contain("aevatar_invoke_gagent");
     }
 
     [Fact]
@@ -245,6 +246,7 @@ public sealed class ResponsesCommandFacadeTests
         result.Completed.Should().NotBeNull();
         var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
         command.ToolSelection.AdditiveToolNames.Should().Contain("aevatar_invoke_gagent");
+        command.ToolSelection.OwnedToolNames.Should().Contain("aevatar_invoke_gagent");
         command.ToolSelection.ToolChoiceHintArguments.Fields["actor_id"].StringValue.Should().Be("member-1");
         sessions.RecordedToolCalls.Should().BeEmpty("tool set tools execute locally and are not client-forwarded tools");
     }
@@ -422,7 +424,7 @@ public sealed class ResponsesCommandFacadeTests
     }
 
     [Fact]
-    public async Task CancelAsync_ShouldRejectInvisibleResponse_AndUpdateVisibleResponse()
+    public async Task CancelAsync_ShouldRejectInvisibleResponse_AndCancelVisibleResponseThroughActor()
     {
         var queryPort = new RecordingSessionQueryPort
         {
@@ -441,7 +443,8 @@ public sealed class ResponsesCommandFacadeTests
 
         cancelled.Error.Should().BeNull();
         cancelled.ResponseId.Should().Be("resp_1");
-        sessionPort.UpdatedStatuses.Should().ContainSingle(update => update.Status == LlmSessionStatus.Cancelled);
+        sessionPort.CancelledRuns.Should().ContainSingle()
+            .Which.Should().Be(("actor-1", "resp_1", "resp_1:llm-run"));
     }
 
     [Fact]
@@ -472,7 +475,7 @@ public sealed class ResponsesCommandFacadeTests
         };
         var sessionPort = new RecordingSessionPort
         {
-            UpdateStatusException = new InvalidOperationException("cannot cancel completed response"),
+            CancelRunException = new InvalidOperationException("cannot cancel completed response"),
         };
         var facade = CreateFacade(sessionPort: sessionPort, queryPort: queryPort);
 
@@ -518,6 +521,52 @@ public sealed class ResponsesCommandFacadeTests
         observer.LastRequest!.ResponseId.Should().Be("resp_stream");
         observer.LastRequest.RunId.Should().Be("resp_stream:llm-run");
         sessions.UpdatedStatuses.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task StreamAsync_WhenOffActorFlagIsOn_ShouldUseExecutorStartAdmissionWithoutLegacyRunDispatch()
+    {
+        var sessions = new RecordingSessionPort();
+        var dispatch = new RecordingActorDispatchPort();
+        var executor = new BlockingLlmRunExecutor();
+        var observer = StaticLlmSessionRunObservationService.Completed("Hello");
+        var facade = CreateFacade(
+            sessionPort: sessions,
+            dispatchPort: dispatch,
+            observationService: observer,
+            llmRunExecutor: executor,
+            ingressOptions: new ResponsesIngressOptions
+            {
+                DefaultModel = "model",
+                OffActorLlmRunExecutorEnabled = true,
+            });
+        var deltas = new List<string>();
+
+        var result = await facade.StreamAsync(
+            BuildStreamPlan(),
+            (delta, _) =>
+            {
+                deltas.Add(delta);
+                return ValueTask.CompletedTask;
+            });
+
+        result.Error.Should().BeNull();
+        result.Completion.Should().NotBeNull();
+        result.Completion!.OutputText.Should().Be("Hello");
+        deltas.Should().Equal("Hello");
+        dispatch.Calls.Should().BeEmpty();
+        observer.LastAdmission.Should().Be(executor.StartAdmissions.Should().ContainSingle().Subject);
+        observer.LastAdmission!.CommandId.Should().Be("start-resp_stream");
+        var request = executor.StartedRequests.Should().ContainSingle().Subject;
+        request.SessionActorId.Should().Be("actor-resp_stream");
+        request.ResponseId.Should().Be("resp_stream");
+        request.RunId.Should().Be("resp_stream:llm-run");
+        request.Command.ResponseId.Should().Be("resp_stream");
+        request.Command.Model.Should().Be("model");
+        observer.LastRequest.Should().NotBeNull();
+        observer.LastRequest!.ResponseId.Should().Be("resp_stream");
+        observer.LastRequest.RunId.Should().Be("resp_stream:llm-run");
+        executor.ExecuteStarted.Task.IsCompleted.Should().BeFalse();
     }
 
     [Fact]
@@ -630,7 +679,7 @@ public sealed class ResponsesCommandFacadeTests
     }
 
     [Fact]
-    public async Task CreateAsync_WhenObservedRunFails_ShouldReturnFailure_AndMarkSessionFailed()
+    public async Task CreateAsync_WhenObservedRunFails_ShouldReturnFailure_WithoutWritingSessionStatus()
     {
         var sessions = new RecordingSessionPort();
         var facade = CreateFacade(
@@ -656,11 +705,11 @@ public sealed class ResponsesCommandFacadeTests
             "provider_failed",
             "provider crashed"));
         result.Completed.Should().BeNull();
-        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Failed);
+        sessions.UpdatedStatuses.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task CreateAsync_WhenObservedRunIsCancelled_ShouldReturnCancel_AndMarkSessionCancelled()
+    public async Task CreateAsync_WhenObservedRunIsCancelled_ShouldReturnCancel_WithoutWritingSessionStatus()
     {
         var sessions = new RecordingSessionPort();
         var facade = CreateFacade(
@@ -686,11 +735,11 @@ public sealed class ResponsesCommandFacadeTests
             "run_cancelled",
             "LLM run was cancelled."));
         result.Completed.Should().BeNull();
-        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Cancelled);
+        sessions.UpdatedStatuses.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task CreateAsync_WhenObservationTimesOut_ShouldReturnTimeout_AndMarkSessionFailed()
+    public async Task CreateAsync_WhenObservationTimesOut_ShouldReturnTimeout_WithoutWritingSessionStatus()
     {
         var sessions = new RecordingSessionPort();
         var facade = CreateFacade(
@@ -716,11 +765,11 @@ public sealed class ResponsesCommandFacadeTests
             "response_timeout",
             "Timed out waiting 30 seconds for the LLM run to emit a terminal event."));
         result.Completed.Should().BeNull();
-        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Failed);
+        sessions.UpdatedStatuses.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task CreateAsync_WhenRequestIsCancelled_ShouldReturnTimeout_AndMarkSessionCancelled()
+    public async Task CreateAsync_WhenRequestIsCancelled_ShouldReturnTimeout_WithoutWritingSessionStatus()
     {
         var sessions = new RecordingSessionPort();
         var dispatch = new RecordingActorDispatchPort(ct => new OperationCanceledException(ct));
@@ -741,11 +790,11 @@ public sealed class ResponsesCommandFacadeTests
             "request_timeout",
             "Request timed out."));
         result.Completed.Should().BeNull();
-        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Cancelled);
+        sessions.UpdatedStatuses.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task StreamAsync_WhenObservedRunFails_ShouldReturnFailure_AndMarkSessionFailed()
+    public async Task StreamAsync_WhenObservedRunFails_ShouldReturnFailure_WithoutWritingSessionStatus()
     {
         var sessions = new RecordingSessionPort();
         var facade = CreateFacade(
@@ -763,11 +812,11 @@ public sealed class ResponsesCommandFacadeTests
             "llm_run_failed",
             "provider crashed"));
         result.Completion.Should().BeNull();
-        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Failed);
+        sessions.UpdatedStatuses.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task StreamAsync_WhenObservedRunIsCancelled_ShouldReturnCancel_AndMarkSessionCancelled()
+    public async Task StreamAsync_WhenObservedRunIsCancelled_ShouldReturnCancel_WithoutWritingSessionStatus()
     {
         var sessions = new RecordingSessionPort();
         var facade = CreateFacade(
@@ -785,11 +834,11 @@ public sealed class ResponsesCommandFacadeTests
             "run_cancelled",
             "LLM run was cancelled."));
         result.Completion.Should().BeNull();
-        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Cancelled);
+        sessions.UpdatedStatuses.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task StreamAsync_WhenObservationTimesOut_ShouldReturnTimeout_AndMarkSessionFailed()
+    public async Task StreamAsync_WhenObservationTimesOut_ShouldReturnTimeout_WithoutWritingSessionStatus()
     {
         var sessions = new RecordingSessionPort();
         var facade = CreateFacade(
@@ -807,7 +856,7 @@ public sealed class ResponsesCommandFacadeTests
             "response_timeout",
             "Timed out waiting 30 seconds for the LLM run to emit a terminal event."));
         result.Completion.Should().BeNull();
-        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Failed);
+        sessions.UpdatedStatuses.Should().BeEmpty();
     }
 
     [Fact]
@@ -832,7 +881,7 @@ public sealed class ResponsesCommandFacadeTests
     }
 
     [Fact]
-    public async Task StreamAsync_ShouldReturnTimeout_AndMarkSessionCancelled()
+    public async Task StreamAsync_ShouldReturnTimeout_WithoutWritingSessionStatus()
     {
         var sessions = new RecordingSessionPort();
         var dispatch = new RecordingActorDispatchPort(ct => new OperationCanceledException(ct));
@@ -846,7 +895,7 @@ public sealed class ResponsesCommandFacadeTests
             408,
             "request_timeout",
             "Request timed out."));
-        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Cancelled);
+        sessions.UpdatedStatuses.Should().BeEmpty();
     }
 
     [Fact]
@@ -865,6 +914,75 @@ public sealed class ResponsesCommandFacadeTests
         sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Failed);
     }
 
+    [Fact]
+    public async Task CreateAsync_WhenOffActorFlagIsOff_ShouldKeepLegacyRunRequestedDispatch()
+    {
+        var dispatch = new RecordingActorDispatchPort();
+        var executor = new BlockingLlmRunExecutor();
+        var facade = CreateFacade(
+            dispatchPort: dispatch,
+            llmRunExecutor: executor,
+            ingressOptions: new ResponsesIngressOptions
+            {
+                DefaultModel = "model",
+                OffActorLlmRunExecutorEnabled = false,
+            });
+
+        var result = await facade.CreateAsync(new ResponsesCommandRequest(
+            "model",
+            "hello",
+            [],
+            false,
+            null,
+            null,
+            null,
+            []), CallerScopeContext("token"));
+
+        result.Error.Should().BeNull();
+        dispatch.Calls.Should().ContainSingle()
+            .Which.Envelope.Payload!.Is(LlmRunRequested.Descriptor).Should().BeTrue();
+        executor.StartedRequests.Should().BeEmpty();
+        executor.ExecuteStarted.Task.IsCompleted.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenOffActorFlagIsOn_ShouldAdmitExecutorStartWithoutLegacyRunDispatch()
+    {
+        var dispatch = new RecordingActorDispatchPort();
+        var executor = new BlockingLlmRunExecutor();
+        var observation = StaticLlmSessionRunObservationService.Completed("done");
+        var facade = CreateFacade(
+            dispatchPort: dispatch,
+            observationService: observation,
+            llmRunExecutor: executor,
+            ingressOptions: new ResponsesIngressOptions
+            {
+                DefaultModel = "model",
+                OffActorLlmRunExecutorEnabled = true,
+            });
+
+        var result = await facade.CreateAsync(new ResponsesCommandRequest(
+            "model",
+            "hello",
+            [],
+            false,
+            null,
+            null,
+            null,
+            []), CallerScopeContext("token"));
+
+        result.Error.Should().BeNull();
+        result.Completed!.Completion.OutputText.Should().Be("done");
+        dispatch.Calls.Should().BeEmpty();
+        var admission = executor.StartAdmissions.Should().ContainSingle().Subject;
+        admission.Accepted.Should().BeTrue();
+        admission.ActorId.Should().NotBeNullOrWhiteSpace();
+        admission.CorrelationId.Should().NotBeNullOrWhiteSpace();
+        admission.CommandId.Should().StartWith("start-");
+        executor.StartedRequests.Should().ContainSingle();
+        executor.ExecuteStarted.Task.IsCompleted.Should().BeFalse();
+    }
+
     private static ResponsesCommandFacade CreateFacade(
         ILlmSessionRegistrationPort? sessionPort = null,
         ILlmSessionQueryPort? queryPort = null,
@@ -875,9 +993,14 @@ public sealed class ResponsesCommandFacadeTests
         IActorDispatchPort? dispatchPort = null,
         ILlmSessionRunObservationService? observationService = null,
         string? defaultIngressModel = null,
-        IOwnerLlmConfigSource? ownerLlmConfigSource = null)
+        IOwnerLlmConfigSource? ownerLlmConfigSource = null,
+        ResponsesIngressOptions? ingressOptions = null,
+        ILlmRunExecutor? llmRunExecutor = null)
     {
         var effectiveSessionPort = sessionPort ?? new RecordingSessionPort();
+        var options = ingressOptions ?? (defaultIngressModel is null
+            ? null
+            : new ResponsesIngressOptions { DefaultModel = defaultIngressModel });
         return new ResponsesCommandFacade(
             callerScopeResolver ?? new StaticCallerScopeResolver(),
             chatRouteDecisionPort ?? new StaticResponsesChatRouteDecisionPort(ForwardToModelAction(string.Empty)),
@@ -889,10 +1012,9 @@ public sealed class ResponsesCommandFacadeTests
             new ResponsesDirectToolPlanService(toolSetRegistry ?? new EmptyToolSetRegistry()),
             observationService ?? StaticLlmSessionRunObservationService.Completed("ok"),
             NullLogger<ResponsesCommandFacade>.Instance,
-            defaultIngressModel is null
-                ? null
-                : Options.Create(new ResponsesIngressOptions { DefaultModel = defaultIngressModel }),
-            ownerLlmConfigSource);
+            options is null ? null : Options.Create(options),
+            ownerLlmConfigSource,
+            llmRunExecutor);
     }
 
     private sealed class StubOwnerLlmConfigSource(OwnerLlmConfig? config = null)
@@ -925,7 +1047,7 @@ public sealed class ResponsesCommandFacadeTests
                 ToolContext = BuildToolContext("resp_stream"),
             },
             BuildToolContext("resp_stream"),
-            new ResponsesToolClassification([], [], [], []),
+            new ResponsesToolClassification([], [], [], [], []),
             ResponsesToolChoiceHintPlan.Empty,
             DateTimeOffset.UtcNow);
 
@@ -965,6 +1087,12 @@ public sealed class ResponsesCommandFacadeTests
 
     private static ResponsesCallerScopeResolutionContext CallerScopeContext(string bearerToken) =>
         new(bearerToken, null, null);
+
+    private static async Task WaitForCompletionAsync(TaskCompletionSource completion, CancellationToken ct)
+    {
+        using var registration = ct.Register(static state => ((TaskCompletionSource)state!).TrySetCanceled(), completion);
+        await completion.Task;
+    }
 
     private static ChatRouteAction GAgentToolHintAction(string actorId) => new()
     {
@@ -1084,13 +1212,15 @@ public sealed class ResponsesCommandFacadeTests
     {
         public LlmSessionRunObservationRequest? LastRequest { get; private set; }
 
+        public DispatchAdmission? LastAdmission { get; private set; }
+
         public static StaticLlmSessionRunObservationService Completed(string outputText) =>
             new(
                 new LlmSessionRunObservedResult(
                     null,
                     new LlmSessionCompletionSnapshot(outputText, [], DateTimeOffset.UtcNow, null, null),
                     null),
-                [new LlmSessionRunObservedDelta(outputText, null, null)]);
+                [new LlmSessionRunObservedDelta(outputText, null)]);
 
         public static StaticLlmSessionRunObservationService Error(
             LlmSessionRunObservedTerminalKind kind,
@@ -1109,6 +1239,7 @@ public sealed class ResponsesCommandFacadeTests
         {
             LastRequest = request;
             var admission = await request.DispatchAsync(ct);
+            LastAdmission = admission;
             foreach (var delta in deltas ?? [])
             {
                 if (onDelta != null)
@@ -1117,6 +1248,53 @@ public sealed class ResponsesCommandFacadeTests
 
             return result with { Admission = admission };
         }
+    }
+
+    private sealed class BlockingLlmRunExecutor : ILlmRunExecutor
+    {
+        private readonly TaskCompletionSource _releaseExecute =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public List<LlmRunExecutorRequest> StartedRequests { get; } = [];
+
+        public List<DispatchAdmission> StartAdmissions { get; } = [];
+
+        public TaskCompletionSource ExecuteStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource ExecuteReleased { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<DispatchAdmission> StartAsync(
+            LlmRunExecutorRequest request,
+            CancellationToken ct = default)
+        {
+            StartedRequests.Add(request);
+            var envelope = new EventEnvelope
+            {
+                Id = "start-" + request.ResponseId,
+                Propagation = new EnvelopePropagation { CorrelationId = request.ResponseId },
+                Payload = Any.Pack(new RecordLlmRunStarted
+                {
+                    Command = request.Command.Clone(),
+                    StartedAt = request.Command.RequestedAt?.Clone(),
+                }),
+            };
+            var admission = DispatchAdmissionFactory.Create(request.SessionActorId, envelope);
+            StartAdmissions.Add(admission);
+            return Task.FromResult(admission);
+        }
+
+        public async Task ExecuteAsync(
+            LlmRunExecutorRequest request,
+            CancellationToken ct = default)
+        {
+            ExecuteStarted.SetResult();
+            await WaitForCompletionAsync(_releaseExecute, ct);
+            ExecuteReleased.SetResult();
+        }
+
+        public void ReleaseExecute() => _releaseExecute.SetResult();
     }
 
     private sealed class RecordingActorDispatchPort(
@@ -1139,6 +1317,8 @@ public sealed class ResponsesCommandFacadeTests
 
         public List<(string ActorId, string ResponseId, LlmSessionStatus Status)> UpdatedStatuses { get; } = [];
 
+        public List<(string ActorId, string ResponseId, string RunId)> CancelledRuns { get; } = [];
+
         public List<LlmSessionForwardedToolCall> RecordedToolCalls { get; } = [];
 
         public List<LlmSessionCompletion> RecordedCompletions { get; } = [];
@@ -1151,6 +1331,8 @@ public sealed class ResponsesCommandFacadeTests
 
         public Exception? UpdateStatusException { get; init; }
 
+        public Exception? CancelRunException { get; init; }
+
         public Task<LlmSessionRegistrationResult> RegisterAsync(LlmSessionRecord record, CancellationToken ct = default)
         {
             Registered.Add(record);
@@ -1162,6 +1344,18 @@ public sealed class ResponsesCommandFacadeTests
             if (UpdateStatusException is not null)
                 throw UpdateStatusException;
             UpdatedStatuses.Add((sessionActorId, responseId, status));
+            return Task.CompletedTask;
+        }
+
+        public Task CancelRunAsync(
+            string sessionActorId,
+            string responseId,
+            string runId,
+            CancellationToken ct = default)
+        {
+            if (CancelRunException is not null)
+                throw CancelRunException;
+            CancelledRuns.Add((sessionActorId, responseId, runId));
             return Task.CompletedTask;
         }
 

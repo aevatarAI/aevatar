@@ -242,7 +242,7 @@ public sealed class MainnetResponsesEndpointsTests
         GetErrorCode(body).Should().Be("response_timeout");
         body.Should().NotContain("\"status\":\"in_progress\"");
         body.Should().NotContain("\"object\":\"response\"");
-        sessions.StatusUpdates.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Failed);
+        sessions.StatusUpdates.Should().BeEmpty();
     }
 
     [Fact]
@@ -385,7 +385,9 @@ public sealed class MainnetResponsesEndpointsTests
         using var doc = JsonDocument.Parse(body);
         doc.RootElement.GetProperty("status").GetString().Should().Be("completed");
         AssertCompletedMessage(doc.RootElement, string.Empty);
-        doc.RootElement.GetProperty("output")[1].GetProperty("call_id").GetString().Should().Be("call_task_1");
+        doc.RootElement.GetProperty("output").GetArrayLength().Should().Be(1);
+        body.Should().NotContain("\"type\":\"function_call\"");
+        body.Should().NotContain("call_task_1");
     }
 
     [Fact]
@@ -1341,7 +1343,7 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
-    public async Task PostResponsesCancel_ShouldMarkResponseAndPendingToolCallsCancelled()
+    public async Task PostResponsesCancel_ShouldCancelRunThroughSessionActor()
     {
         var provider = new RecordingLLMProvider();
         var sessions = new RecordingResponseSessionStore();
@@ -1351,7 +1353,7 @@ public sealed class MainnetResponsesEndpointsTests
             "user-1",
             LlmSessionOriginKind.ApiKey,
             null,
-            LlmSessionStatus.Completed,
+            LlmSessionStatus.Accepted,
             DateTimeOffset.UtcNow.AddMinutes(-1),
             TimeSpan.FromHours(1),
             null,
@@ -1386,7 +1388,8 @@ public sealed class MainnetResponsesEndpointsTests
         using var doc = JsonDocument.Parse(body);
         doc.RootElement.GetProperty("id").GetString().Should().Be("resp_previous");
         doc.RootElement.GetProperty("status").GetString().Should().Be("cancelled");
-        sessions.StatusUpdates.Should().ContainSingle(x => x.Status == LlmSessionStatus.Cancelled);
+        sessions.CancelledRuns.Should().ContainSingle()
+            .Which.Should().Be(("response-session:resp_previous", "resp_previous", "resp_previous:llm-run"));
         var snapshot = await sessions.GetByResponseIdAsync("resp_previous");
         snapshot!.Status.Should().Be(LlmSessionStatus.Cancelled);
         snapshot.ForwardedToolCalls.Should().ContainSingle()
@@ -2149,7 +2152,9 @@ public sealed class MainnetResponsesEndpointsTests
         var root = doc.RootElement;
         root.GetProperty("status").GetString().Should().Be("completed");
         AssertCompletedMessage(root, string.Empty);
-        root.GetProperty("output")[1].GetProperty("call_id").GetString().Should().Be("call_gagent_1");
+        root.GetProperty("output").GetArrayLength().Should().Be(1);
+        body.Should().NotContain("\"type\":\"function_call\"");
+        body.Should().NotContain("call_gagent_1");
     }
 
     [Fact]
@@ -2187,8 +2192,8 @@ public sealed class MainnetResponsesEndpointsTests
         body.Should().NotContain("event: response.output_text.delta");
         body.Should().Contain("event: response.output_text.done");
         body.Should().Contain("\"text\":\"\"");
-        body.Should().Contain("\"type\":\"function_call\"");
-        body.Should().Contain("\"call_id\":\"call_gagent_stream\"");
+        body.Should().NotContain("\"type\":\"function_call\"");
+        body.Should().NotContain("call_gagent_stream");
         body.Should().Contain("event: response.completed");
         var command = app.Services.GetRequiredService<ResponsesRecordingActorDispatchPort>()
             .Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
@@ -2241,7 +2246,8 @@ public sealed class MainnetResponsesEndpointsTests
         response.Content.Headers.ContentType!.MediaType.Should().Be("text/event-stream");
         body.Should().Contain("event: response.completed");
         responseSessions.ForwardedToolCalls.Should().BeEmpty();
-        body.Should().Contain("\"call_id\":\"call_gagent_conflict\"");
+        body.Should().NotContain("\"type\":\"function_call\"");
+        body.Should().NotContain("call_gagent_conflict");
     }
 
     [Fact]
@@ -2473,7 +2479,9 @@ public sealed class MainnetResponsesEndpointsTests
         var root = doc.RootElement;
         root.GetProperty("status").GetString().Should().Be("completed");
         AssertCompletedMessage(root, string.Empty);
-        root.GetProperty("output")[1].GetProperty("call_id").GetString().Should().Be("call_team_1");
+        root.GetProperty("output").GetArrayLength().Should().Be(1);
+        body.Should().NotContain("\"type\":\"function_call\"");
+        body.Should().NotContain("call_team_1");
     }
 
     [Fact]
@@ -2511,8 +2519,8 @@ public sealed class MainnetResponsesEndpointsTests
         body.Should().NotContain("event: response.output_text.delta");
         body.Should().Contain("event: response.output_text.done");
         body.Should().Contain("\"text\":\"\"");
-        body.Should().Contain("\"type\":\"function_call\"");
-        body.Should().Contain("\"call_id\":\"call_team_stream\"");
+        body.Should().NotContain("\"type\":\"function_call\"");
+        body.Should().NotContain("call_team_stream");
         body.Should().Contain("event: response.completed");
         var command = app.Services.GetRequiredService<ResponsesRecordingActorDispatchPort>()
             .Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
@@ -2738,6 +2746,10 @@ public sealed class MainnetResponsesEndpointsTests
             var outputText = new StringBuilder();
             TokenUsage? usage = null;
             var forwardedToolCalls = new List<LlmSessionRuntimeToolCall>();
+            var forwardedToolNames = command.ToolSelection?.ForwardedTools
+                .Select(static tool => tool.ToolName)
+                .Except(command.ToolSelection.SubstitutedToolNames, StringComparer.Ordinal)
+                .ToHashSet(StringComparer.Ordinal) ?? [];
 
             foreach (var chunk in chunks)
             {
@@ -2756,7 +2768,8 @@ public sealed class MainnetResponsesEndpointsTests
                 if (chunk.DeltaToolCall is not null)
                 {
                     var runtimeCall = ToRuntimeToolCall(chunk.DeltaToolCall);
-                    forwardedToolCalls.Add(runtimeCall.Clone());
+                    if (forwardedToolNames.Contains(runtimeCall.ToolName))
+                        forwardedToolCalls.Add(runtimeCall.Clone());
                     ProjectionPort.Sink.Push(ObservedEnvelope(new LlmStreamChunkObserved
                     {
                         ResponseId = command.ResponseId,
@@ -3063,8 +3076,13 @@ public sealed class MainnetResponsesEndpointsTests
                 return [];
 
             var tools = new List<IAgentTool>();
-            tools.AddRange(selection.ForwardedTools.Select(static tool =>
-                new StubAgentTool(tool.ToolName, tool.Description, tool.ParametersJson)));
+            var ownedToolNames = selection.OwnedToolNames.Count > 0
+                ? selection.OwnedToolNames.ToHashSet(StringComparer.Ordinal)
+                : selection.SubstitutedToolNames.Concat(selection.AdditiveToolNames).ToHashSet(StringComparer.Ordinal);
+            tools.AddRange(selection.ForwardedTools
+                .Where(tool => !ownedToolNames.Contains(tool.ToolName))
+                .Select(static tool =>
+                    new StubAgentTool(tool.ToolName, tool.Description, tool.ParametersJson)));
             tools.AddRange(selection.SubstitutedToolNames.Select(static name =>
                 new StubAgentTool(name, $"{name} substitute")));
             tools.AddRange(selection.AdditiveToolNames.Select(static name =>
@@ -3438,6 +3456,8 @@ public sealed class MainnetResponsesEndpointsTests
 
         public List<(string ActorId, string ResponseId, LlmSessionStatus Status)> StatusUpdates { get; } = [];
 
+        public List<(string ActorId, string ResponseId, string RunId)> CancelledRuns { get; } = [];
+
         public List<(string ActorId, string ResponseId, LlmSessionForwardedToolCall Call)> ForwardedToolCalls { get; } = [];
 
         public List<(string ActorId, string ResponseId, LlmSessionCompletion Completion)> RecordedCompletions { get; } = [];
@@ -3496,6 +3516,35 @@ public sealed class MainnetResponsesEndpointsTests
                     LastEventId = $"{responseId}:status:{(int)status}",
                 };
             }
+            return Task.CompletedTask;
+        }
+
+        public Task CancelRunAsync(
+            string sessionActorId,
+            string responseId,
+            string runId,
+            CancellationToken ct = default)
+        {
+            CancelledRuns.Add((sessionActorId, responseId, runId));
+            if (_snapshots.TryGetValue(responseId, out var current))
+            {
+                _snapshots[responseId] = current with
+                {
+                    Status = LlmSessionStatus.Cancelled,
+                    CancelledAt = DateTimeOffset.UtcNow,
+                    ForwardedToolCalls = MarkCallsForStatus(current.ForwardedToolCalls, LlmSessionStatus.Cancelled),
+                    StateVersion = current.StateVersion + 1,
+                    LastEventId = $"{responseId}:run:{runId}:cancelled",
+                    Completion = new LlmSessionCompletionSnapshot(
+                        current.Completion?.OutputText ?? string.Empty,
+                        current.Completion?.ToolCalls ?? [],
+                        DateTimeOffset.UtcNow,
+                        "request_cancelled",
+                        "LLM run was cancelled.",
+                        current.Completion?.Usage),
+                };
+            }
+
             return Task.CompletedTask;
         }
 

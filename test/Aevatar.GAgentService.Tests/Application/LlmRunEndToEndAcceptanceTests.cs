@@ -100,7 +100,7 @@ public sealed class LlmRunEndToEndAcceptanceTests
             responseId is null
                 ? LlmRunAcceptanceHarness.ActorId
                 : "response-session-actor-" + responseId,
-            static () => new LlmSessionGAgent(),
+            static () => null!,
             services => services.AddSingleton<ILlmRunCore, ThrowingRunCore>());
 
     private static EventEnvelope Envelope(Google.Protobuf.IMessage payload) =>

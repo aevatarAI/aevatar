@@ -35,7 +35,8 @@ public sealed class ResponsesCommandFacade(
     ILlmSessionRunObservationService observationService,
     ILogger<ResponsesCommandFacade> logger,
     IOptions<ResponsesIngressOptions>? ingressOptions = null,
-    IOwnerLlmConfigSource? ownerLlmConfigSource = null) : IResponsesCommandFacade
+    IOwnerLlmConfigSource? ownerLlmConfigSource = null,
+    ILlmRunExecutor? llmRunExecutor = null) : IResponsesCommandFacade
 {
     private static readonly TimeSpan DefaultObservationTimeout = TimeSpan.FromSeconds(30);
 
@@ -47,6 +48,8 @@ public sealed class ResponsesCommandFacade(
     // agentic turns are not cut). See ResponsesIngressOptions.ObservationTimeout.
     private readonly TimeSpan _observationTimeout =
         ingressOptions?.Value?.ObservationTimeout ?? DefaultObservationTimeout;
+    private readonly bool _offActorLlmRunExecutorEnabled =
+        ingressOptions?.Value?.OffActorLlmRunExecutorEnabled == true && llmRunExecutor is not null;
 
     public async Task<ResponsesCreateCommandResult> CreateAsync(
         ResponsesCommandRequest request,
@@ -179,10 +182,10 @@ public sealed class ResponsesCommandFacade(
         {
             try
             {
-                await responseSessionRegistrationPort.UpdateStatusAsync(
+                await responseSessionRegistrationPort.CancelRunAsync(
                     visibleSnapshot.ActorId,
                     visibleSnapshot.ResponseId,
-                    LlmSessionStatus.Cancelled,
+                    $"{visibleSnapshot.ResponseId}:llm-run",
                     ct);
             }
             catch (OperationCanceledException)
@@ -215,7 +218,9 @@ public sealed class ResponsesCommandFacade(
                     $"{plan.Session.ResponseId}:llm-run",
                     async token =>
                     {
-                        var admission = await DispatchRunAsync(plan, token).ConfigureAwait(false);
+                        var admission = _offActorLlmRunExecutorEnabled
+                            ? await StartOffActorRunAsync(plan, token).ConfigureAwait(false)
+                            : await DispatchRunAsync(plan, token).ConfigureAwait(false);
                         await TryResolveIncomingToolResultsAsync(plan.PreviousSnapshot, plan.Normalized, token)
                             .ConfigureAwait(false);
                         return admission;
@@ -229,12 +234,6 @@ public sealed class ResponsesCommandFacade(
                 ct).ConfigureAwait(false);
             if (observed.Error is not null)
             {
-                await TryUpdateSessionStatusAsync(
-                    plan.Session,
-                    observed.Error.Kind == LlmSessionRunObservedTerminalKind.Cancelled
-                        ? LlmSessionStatus.Cancelled
-                        : LlmSessionStatus.Failed,
-                    CancellationToken.None);
                 return ResponsesStreamCommandResult.FromError(
                     observed.Error.StatusCode,
                     observed.Error.Code,
@@ -260,7 +259,6 @@ public sealed class ResponsesCommandFacade(
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            await TryUpdateSessionStatusAsync(plan.Session, LlmSessionStatus.Cancelled, CancellationToken.None);
             return ResponsesStreamCommandResult.FromError(408, "request_timeout", "Request timed out.");
         }
         catch (Exception ex)
@@ -522,7 +520,9 @@ public sealed class ResponsesCommandFacade(
                     $"{plan.Session.ResponseId}:llm-run",
                     async token =>
                     {
-                        var admission = await DispatchRunAsync(plan, token).ConfigureAwait(false);
+                        var admission = _offActorLlmRunExecutorEnabled
+                            ? await StartOffActorRunAsync(plan, token).ConfigureAwait(false)
+                            : await DispatchRunAsync(plan, token).ConfigureAwait(false);
                         await TryResolveIncomingToolResultsAsync(plan.PreviousSnapshot, plan.Normalized, token)
                             .ConfigureAwait(false);
                         return admission;
@@ -532,12 +532,6 @@ public sealed class ResponsesCommandFacade(
                 ct).ConfigureAwait(false);
             if (observed.Error is not null)
             {
-                await TryUpdateSessionStatusAsync(
-                    plan.Session,
-                    observed.Error.Kind == LlmSessionRunObservedTerminalKind.Cancelled
-                        ? LlmSessionStatus.Cancelled
-                        : LlmSessionStatus.Failed,
-                    CancellationToken.None);
                 return ResponsesCreateCommandResult.FromError(
                     observed.Error.StatusCode,
                     observed.Error.Code,
@@ -581,7 +575,6 @@ public sealed class ResponsesCommandFacade(
         }
         catch (OperationCanceledException)
         {
-            await TryUpdateSessionStatusAsync(plan.Session, LlmSessionStatus.Cancelled, CancellationToken.None);
             return ResponsesCreateCommandResult.FromError(408, "request_timeout", "Request timed out.");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -969,6 +962,30 @@ public sealed class ResponsesCommandFacade(
         return dispatchPort.DispatchAsync(plan.Session.ActorId, envelope, ct);
     }
 
+    private async Task<DispatchAdmission> StartOffActorRunAsync(
+        ResponsesCreateCommandPlan plan,
+        CancellationToken ct)
+    {
+        var request = BuildExecutorRequest(plan);
+        return await llmRunExecutor!.StartAsync(request, ct).ConfigureAwait(false);
+    }
+
+    private static LlmRunExecutorRequest BuildExecutorRequest(ResponsesCreateCommandPlan plan)
+    {
+        var command = BuildRunRequested(
+            plan.Session.ResponseId,
+            plan.LlmRequest,
+            plan.ToolClassification,
+            plan.ToolChoiceHintPlan,
+            plan.CreatedAt);
+        return new LlmRunExecutorRequest(
+            plan.Session.ActorId,
+            plan.Session.ResponseId,
+            command.RunId,
+            command,
+            plan.ToolContext.Channel.Platform);
+    }
+
     private static LlmRunRequested BuildRunRequested(
         string responseId,
         LLMRequest request,
@@ -1031,6 +1048,7 @@ public sealed class ResponsesCommandFacade(
         {
             SubstitutedToolNames = { classification.SubstitutedToolNames },
             AdditiveToolNames = { classification.AdditiveToolNames },
+            OwnedToolNames = { classification.OwnedToolNames },
         };
         if (!toolChoiceHintPlan.IsEmpty)
         {

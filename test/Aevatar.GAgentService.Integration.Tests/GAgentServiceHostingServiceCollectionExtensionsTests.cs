@@ -28,6 +28,8 @@ using Aevatar.Workflow.Projection.Projectors;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
+using Aevatar.GAgentService.Abstractions.Responses;
+using Aevatar.GAgentService.Application.Responses;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Routing;
@@ -82,6 +84,15 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         services.Should().Contain(x =>
             x.ServiceType == typeof(ICommittedStatePublicationHook) &&
             x.ImplementationType == typeof(ScriptingServiceRevisionRepublishHook));
+        services.Should().NotContain(x =>
+            x.ServiceType == typeof(ICommittedStatePublicationHook) &&
+            x.ImplementationType == typeof(LlmRunExecutionScheduler));
+        services.Should().Contain(x => x.ServiceType == typeof(LlmRunExecutionScheduler));
+        services.Should().Contain(x => x.ServiceType == typeof(ILlmRunExecutionScheduler));
+        services.Should().Contain(x =>
+            x.ServiceType.FullName == "Aevatar.GAgentService.Abstractions.Responses.ILlmRunExecutionTargetProvisioner" &&
+            x.ImplementationType != null &&
+            x.ImplementationType.FullName == "Aevatar.GAgentService.Infrastructure.Activation.LlmRunExecutionTargetProvisioner");
 
         using var provider = services.BuildServiceProvider();
         provider.GetRequiredService<IScopeBindingReadinessQueryPort>().Should().NotBeNull();

@@ -121,16 +121,20 @@ internal sealed class LlmRunAcceptanceHarness
         public List<LlmRunFailed> Failed { get; } = [];
         public List<LlmRunCancelled> Cancelled { get; } = [];
 
-        public Task RecordStreamChunkObservedAsync(LlmStreamChunkObserved observed, CancellationToken ct = default)
+        public Task<LlmRunRecordDecision> RecordStreamChunkObservedAsync(
+            LlmStreamChunkObserved observed,
+            CancellationToken ct = default)
         {
             StreamChunks.Add(observed.Clone());
-            return Task.CompletedTask;
+            return Task.FromResult(LlmRunRecordDecision.Continue);
         }
 
-        public Task RecordToolCallObservedAsync(LlmToolCallObserved observed, CancellationToken ct = default)
+        public Task<LlmRunRecordDecision> RecordToolCallObservedAsync(
+            LlmToolCallObserved observed,
+            CancellationToken ct = default)
         {
             ToolCalls.Add(observed.Clone());
-            return Task.CompletedTask;
+            return Task.FromResult(LlmRunRecordDecision.Continue);
         }
 
         public Task RecordForwardedToolCallEmittedAsync(
@@ -141,22 +145,28 @@ internal sealed class LlmRunAcceptanceHarness
             return Task.CompletedTask;
         }
 
-        public Task RecordRunCompletedAsync(LlmRunCompleted completed, CancellationToken ct = default)
+        public Task<LlmRunRecordDecision> RecordRunCompletedAsync(
+            LlmRunCompleted completed,
+            CancellationToken ct = default)
         {
             Completed.Add(completed.Clone());
-            return Task.CompletedTask;
+            return Task.FromResult(LlmRunRecordDecision.Continue);
         }
 
-        public Task RecordRunFailedAsync(LlmRunFailed failed, CancellationToken ct = default)
+        public Task<LlmRunRecordDecision> RecordRunFailedAsync(
+            LlmRunFailed failed,
+            CancellationToken ct = default)
         {
             Failed.Add(failed.Clone());
-            return Task.CompletedTask;
+            return Task.FromResult(LlmRunRecordDecision.Continue);
         }
 
-        public Task RecordRunCancelledAsync(LlmRunCancelled cancelled, CancellationToken ct = default)
+        public Task<LlmRunRecordDecision> RecordRunCancelledAsync(
+            LlmRunCancelled cancelled,
+            CancellationToken ct = default)
         {
             Cancelled.Add(cancelled.Clone());
-            return Task.CompletedTask;
+            return Task.FromResult(LlmRunRecordDecision.Continue);
         }
     }
 

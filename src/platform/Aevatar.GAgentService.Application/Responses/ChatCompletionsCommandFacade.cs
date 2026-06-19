@@ -30,7 +30,8 @@ public sealed class ChatCompletionsCommandFacade(
     ILogger<ChatCompletionsCommandFacade> logger,
     TimeSpan? observationTimeout = null,
     IOptions<ResponsesIngressOptions>? ingressOptions = null,
-    IOwnerLlmConfigSource? ownerLlmConfigSource = null) : IChatCompletionsCommandFacade
+    IOwnerLlmConfigSource? ownerLlmConfigSource = null,
+    ILlmRunExecutor? llmRunExecutor = null) : IChatCompletionsCommandFacade
 {
     private static readonly TimeSpan DefaultObservationTimeout = TimeSpan.FromSeconds(30);
     private readonly TimeSpan _observationTimeout =
@@ -39,6 +40,8 @@ public sealed class ChatCompletionsCommandFacade(
     // Default model applied when a direct caller omits `model`; null preserves the
     // "model is required" contract (see ResponsesIngressOptions).
     private readonly string? _defaultIngressModel = ingressOptions?.Value?.NormalizedDefaultModel;
+    private readonly bool _offActorLlmRunExecutorEnabled =
+        ingressOptions?.Value?.OffActorLlmRunExecutorEnabled == true && llmRunExecutor is not null;
     public async Task<ChatCompletionsCreateCommandResult> CreateAsync(
         ChatCompletionsCommandRequest request,
         ResponsesCallerScopeResolutionContext callerScopeContext,
@@ -122,12 +125,6 @@ public sealed class ChatCompletionsCommandFacade(
             var observed = await ObserveRunAsync(plan, onObservedDelta, ct).ConfigureAwait(false);
             if (observed.Error is not null)
             {
-                await TryUpdateSessionStatusAsync(
-                    plan.Session,
-                    observed.Error.Kind == LlmSessionRunObservedTerminalKind.Cancelled
-                        ? LlmSessionStatus.Cancelled
-                        : LlmSessionStatus.Failed,
-                    CancellationToken.None);
                 return ResponsesStreamCommandResult.FromError(
                     observed.Error.StatusCode,
                     observed.Error.Code,
@@ -153,7 +150,6 @@ public sealed class ChatCompletionsCommandFacade(
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            await TryUpdateSessionStatusAsync(plan.Session, LlmSessionStatus.Cancelled, CancellationToken.None);
             return ResponsesStreamCommandResult.FromError(499, "client_closed_request", "Client closed request.");
         }
         catch (Exception ex)
@@ -377,12 +373,6 @@ public sealed class ChatCompletionsCommandFacade(
             var observed = await ObserveRunAsync(plan, null, ct).ConfigureAwait(false);
             if (observed.Error is not null)
             {
-                await TryUpdateSessionStatusAsync(
-                    plan.Session,
-                    observed.Error.Kind == LlmSessionRunObservedTerminalKind.Cancelled
-                        ? LlmSessionStatus.Cancelled
-                        : LlmSessionStatus.Failed,
-                    CancellationToken.None);
                 return ChatCompletionsCreateCommandResult.FromError(
                     observed.Error.StatusCode,
                     observed.Error.Code,
@@ -416,7 +406,6 @@ public sealed class ChatCompletionsCommandFacade(
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            await TryUpdateSessionStatusAsync(plan.Session, LlmSessionStatus.Cancelled, CancellationToken.None);
             return ChatCompletionsCreateCommandResult.FromError(499, "client_closed_request", "Client closed request.");
         }
         catch (Exception ex)
@@ -436,7 +425,9 @@ public sealed class ChatCompletionsCommandFacade(
                 plan.Session.ActorId,
                 plan.Session.ResponseId,
                 $"{plan.Session.ResponseId}:llm-run",
-                token => DispatchRunAsync(plan, token),
+                token => _offActorLlmRunExecutorEnabled
+                    ? StartOffActorRunAsync(plan, token)
+                    : DispatchRunAsync(plan, token),
                 _observationTimeout),
             onObservedDelta,
             ct);
@@ -615,6 +606,30 @@ public sealed class ChatCompletionsCommandFacade(
         return dispatchPort.DispatchAsync(plan.Session.ActorId, envelope, ct);
     }
 
+    private async Task<DispatchAdmission> StartOffActorRunAsync(
+        ChatCompletionsCreateCommandPlan plan,
+        CancellationToken ct)
+    {
+        var request = BuildExecutorRequest(plan);
+        return await llmRunExecutor!.StartAsync(request, ct).ConfigureAwait(false);
+    }
+
+    private static LlmRunExecutorRequest BuildExecutorRequest(ChatCompletionsCreateCommandPlan plan)
+    {
+        var command = BuildRunRequested(
+            plan.Session.ResponseId,
+            plan.LlmRequest,
+            plan.ToolClassification,
+            plan.ToolChoiceHintPlan,
+            plan.CreatedAt);
+        return new LlmRunExecutorRequest(
+            plan.Session.ActorId,
+            plan.Session.ResponseId,
+            command.RunId,
+            command,
+            plan.LlmRequest.ToolContext?.Channel.Platform);
+    }
+
     // Refactor (iter344/cluster-001):
     //   Old pattern: Chat Completions had no typed actor command payload for its direct LLM loop.
     //   New principle: The facade maps the compatibility request into the shared LlmRunRequested contract.
@@ -677,6 +692,7 @@ public sealed class ChatCompletionsCommandFacade(
         {
             SubstitutedToolNames = { classification.SubstitutedToolNames },
             AdditiveToolNames = { classification.AdditiveToolNames },
+            OwnedToolNames = { classification.OwnedToolNames },
         };
         if (!toolChoiceHintPlan.IsEmpty)
         {
