@@ -76,6 +76,75 @@ public sealed class ChatCompletionsCommandFacadeTests
     }
 
     [Fact]
+    public async Task CreateAsync_ShouldUseExplicitCallerModel_OverRoutePolicyForwardToModel()
+    {
+        // Regression for the deepseek incident: a stale per-owner route-policy ForwardToModel
+        // must NOT override the caller's explicit model.
+        var dispatch = new RecordingActorDispatchPort();
+        var facade = CreateFacade(
+            dispatchPort: dispatch,
+            chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(
+                ForwardToModelAction("deepseek/deepseek-chat")));
+
+        var result = await facade.CreateAsync(BuildRequest("chrono-llm/gpt-5.5"), CallerScopeContext("token"));
+
+        result.Error.Should().BeNull();
+        var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
+        command.Model.Should().Be("gpt-5.5");
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldUseAccountPreferredModel_WhenCallerOmits_OverRoutePolicy()
+    {
+        var dispatch = new RecordingActorDispatchPort();
+        var facade = CreateFacade(
+            dispatchPort: dispatch,
+            chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(
+                ForwardToModelAction("deepseek/deepseek-chat")),
+            defaultIngressModel: "fallback-vendor/fallback-model",
+            ownerLlmConfigSource: new StubOwnerLlmConfigSource(
+                new OwnerLlmConfig("chrono-llm/gpt-5.5", null, 0)));
+
+        var result = await facade.CreateAsync(BuildRequest("  "), CallerScopeContext("token"));
+
+        result.Error.Should().BeNull();
+        var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
+        command.Model.Should().Be("gpt-5.5");
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldPreferExplicitCallerModel_OverAccountPreferredModel()
+    {
+        var dispatch = new RecordingActorDispatchPort();
+        var facade = CreateFacade(
+            dispatchPort: dispatch,
+            ownerLlmConfigSource: new StubOwnerLlmConfigSource(
+                new OwnerLlmConfig("chrono-llm/gpt-5.5", null, 0)));
+
+        var result = await facade.CreateAsync(BuildRequest("openai/gpt-4o"), CallerScopeContext("token"));
+
+        result.Error.Should().BeNull();
+        var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
+        command.Model.Should().Be("gpt-4o");
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldSwallowOwnerConfigFailure_AndFallBackToDeploymentDefault()
+    {
+        var dispatch = new RecordingActorDispatchPort();
+        var facade = CreateFacade(
+            dispatchPort: dispatch,
+            defaultIngressModel: "chrono-llm-public/gpt-5.5",
+            ownerLlmConfigSource: new StubOwnerLlmConfigSource(throwOnGet: true));
+
+        var result = await facade.CreateAsync(BuildRequest("  "), CallerScopeContext("token"));
+
+        result.Error.Should().BeNull();
+        var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
+        command.Model.Should().Be("gpt-5.5");
+    }
+
+    [Fact]
     public async Task CreateAsync_WhenNamedSkillTriggerProvided_ShouldRouteCommandAndCarryRecoveryContext()
     {
         var sessions = new RecordingSessionPort();
@@ -668,7 +737,8 @@ public sealed class ChatCompletionsCommandFacadeTests
         IResponsesDirectToolPlanService? directToolPlanService = null,
         ObservationScenarioRuntime? observationRuntime = null,
         TimeSpan? observationTimeout = null,
-        string? defaultIngressModel = null)
+        string? defaultIngressModel = null,
+        IOwnerLlmConfigSource? ownerLlmConfigSource = null)
     {
         var effectiveSessionPort = sessionPort ?? new RecordingSessionPort();
         var runtime = observationRuntime ?? ObservationScenarioBuilder.ForResponse("chatcmpl_default")
@@ -688,7 +758,8 @@ public sealed class ChatCompletionsCommandFacadeTests
             observationTimeout,
             defaultIngressModel is null
                 ? null
-                : Options.Create(new ResponsesIngressOptions { DefaultModel = defaultIngressModel }));
+                : Options.Create(new ResponsesIngressOptions { DefaultModel = defaultIngressModel }),
+            ownerLlmConfigSource);
     }
 
     private static ResponsesCallerScopeResolutionContext CallerScopeContext(string bearerToken) =>
@@ -771,6 +842,17 @@ public sealed class ChatCompletionsCommandFacadeTests
     {
         public Task<string?> ResolveRouteValueAsync(string slug, string bearerToken, CancellationToken ct) =>
             Task.FromResult(routeValue);
+    }
+
+    private sealed class StubOwnerLlmConfigSource(OwnerLlmConfig? config = null, bool throwOnGet = false)
+        : IOwnerLlmConfigSource
+    {
+        public Task<OwnerLlmConfig> GetForScopeAsync(string scopeId, CancellationToken ct = default)
+        {
+            if (throwOnGet)
+                throw new InvalidOperationException("simulated owner-config lookup failure");
+            return Task.FromResult(config ?? OwnerLlmConfig.Empty);
+        }
     }
 
     private sealed class StaticResponsesChatRouteDecisionPort(ChatRouteAction action)

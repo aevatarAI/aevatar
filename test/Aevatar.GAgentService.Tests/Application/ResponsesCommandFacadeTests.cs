@@ -85,6 +85,35 @@ public sealed class ResponsesCommandFacadeTests
     }
 
     [Fact]
+    public async Task CreateAsync_ShouldUseAccountPreferredModel_WhenCallerOmits_OverRoutePolicy()
+    {
+        // Account UserConfig beats a stale per-owner route-policy ForwardToModel on the ingress.
+        var dispatch = new RecordingActorDispatchPort();
+        var facade = CreateFacade(
+            dispatchPort: dispatch,
+            routeResolver: new StaticResponsesRouteResolver("/api/v1/proxy/s/chrono-llm"),
+            chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(
+                ForwardToModelAction("deepseek/deepseek-chat")),
+            defaultIngressModel: "fallback-vendor/fallback-model",
+            ownerLlmConfigSource: new StubOwnerLlmConfigSource(
+                new OwnerLlmConfig("chrono-llm/gpt-5.5", null, 0)));
+
+        var result = await facade.CreateAsync(new ResponsesCommandRequest(
+            "  ",
+            "hi without a model",
+            [],
+            false,
+            null,
+            null,
+            null,
+            []), CallerScopeContext("token"));
+
+        result.Error.Should().BeNull();
+        var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
+        command.Model.Should().Be("gpt-5.5");
+    }
+
+    [Fact]
     public async Task CreateAsync_WhenFallbackRouteHasModel_ShouldPreserveExplicitPrefixedRequestModel()
     {
         var dispatch = new RecordingActorDispatchPort();
@@ -845,7 +874,8 @@ public sealed class ResponsesCommandFacadeTests
         IToolSetRegistry? toolSetRegistry = null,
         IActorDispatchPort? dispatchPort = null,
         ILlmSessionRunObservationService? observationService = null,
-        string? defaultIngressModel = null)
+        string? defaultIngressModel = null,
+        IOwnerLlmConfigSource? ownerLlmConfigSource = null)
     {
         var effectiveSessionPort = sessionPort ?? new RecordingSessionPort();
         return new ResponsesCommandFacade(
@@ -861,7 +891,15 @@ public sealed class ResponsesCommandFacadeTests
             NullLogger<ResponsesCommandFacade>.Instance,
             defaultIngressModel is null
                 ? null
-                : Options.Create(new ResponsesIngressOptions { DefaultModel = defaultIngressModel }));
+                : Options.Create(new ResponsesIngressOptions { DefaultModel = defaultIngressModel }),
+            ownerLlmConfigSource);
+    }
+
+    private sealed class StubOwnerLlmConfigSource(OwnerLlmConfig? config = null)
+        : IOwnerLlmConfigSource
+    {
+        public Task<OwnerLlmConfig> GetForScopeAsync(string scopeId, CancellationToken ct = default) =>
+            Task.FromResult(config ?? OwnerLlmConfig.Empty);
     }
 
     private static ResponsesCreateCommandPlan BuildStreamPlan() =>

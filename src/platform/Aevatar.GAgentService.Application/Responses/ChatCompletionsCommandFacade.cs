@@ -29,7 +29,8 @@ public sealed class ChatCompletionsCommandFacade(
     ILlmSessionRunObservationService observationService,
     ILogger<ChatCompletionsCommandFacade> logger,
     TimeSpan? observationTimeout = null,
-    IOptions<ResponsesIngressOptions>? ingressOptions = null) : IChatCompletionsCommandFacade
+    IOptions<ResponsesIngressOptions>? ingressOptions = null,
+    IOwnerLlmConfigSource? ownerLlmConfigSource = null) : IChatCompletionsCommandFacade
 {
     private static readonly TimeSpan DefaultObservationTimeout = TimeSpan.FromSeconds(30);
     private readonly TimeSpan _observationTimeout = observationTimeout ?? DefaultObservationTimeout;
@@ -62,8 +63,15 @@ public sealed class ChatCompletionsCommandFacade(
                 callerScopeResult.Error.Code,
                 callerScopeResult.Error.Message);
 
+        // Single preferred-model source: an explicit caller model wins (standard OpenAI
+        // semantics); otherwise the account's UserConfig preference; otherwise the route
+        // policy / deployment default. See IngressModelPreference.
+        var explicitCallerModel = IngressModelPreference.Normalize(request.Model);
+        var ownerConfig = await TryLoadOwnerConfigAsync(callerScopeResult.Scope!.ScopeId, ct);
+
         var trigger = ParseSkillInvocationTrigger(BuildRouteContentHint(normalized));
-        var routedModelResult = await ResolveRouteTargetAsync(normalized, callerScopeResult.Scope!, trigger, ct);
+        var routedModelResult = await ResolveRouteTargetAsync(
+            normalized, callerScopeResult.Scope!, explicitCallerModel, ownerConfig, trigger, ct);
         if (routedModelResult.Error is not null)
             return ChatCompletionsCreateCommandResult.FromError(
                 routedModelResult.Error.StatusCode,
@@ -83,6 +91,7 @@ public sealed class ChatCompletionsCommandFacade(
             callerScopeResult.Scope!,
             routedModelResult.Model!,
             routedModelResult.Action!,
+            ownerConfig,
             trigger,
             callerScopeContext.InboundBearerToken,
             sessionResult.Session!,
@@ -206,12 +215,37 @@ public sealed class ChatCompletionsCommandFacade(
         }
     }
 
+    // Account UserConfig is the single "preferred model" source for ingress. Reads are
+    // swallow-and-logged (mirroring OwnerLlmConfigApplier) so a flaky projection never fails a
+    // request — resolution then falls through to the route policy / deployment default.
+    private async Task<OwnerLlmConfig?> TryLoadOwnerConfigAsync(string scopeId, CancellationToken ct)
+    {
+        if (ownerLlmConfigSource is null || string.IsNullOrWhiteSpace(scopeId))
+            return null;
+
+        try
+        {
+            return await ownerLlmConfigSource.GetForScopeAsync(scopeId, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to load owner LLM config for scope {ScopeId}; using request/deployment default model", scopeId);
+            return null;
+        }
+    }
+
     // Refactor (iter344/cluster-001):
     //   Old pattern: Host queried route policy and rewrote the model inline before opening a session.
     //   New principle: Application resolves the command target and returns either a routed model/action or a typed rejection.
     private async Task<RouteTargetResult> ResolveRouteTargetAsync(
         NormalizedChatCompletionsCommand normalized,
         ResponsesCallerScope callerScope,
+        string? explicitCallerModel,
+        OwnerLlmConfig? ownerConfig,
         SkillInvocationTrigger? trigger,
         CancellationToken ct)
     {
@@ -235,9 +269,14 @@ public sealed class ChatCompletionsCommandFacade(
         }
 
         var action = routeDecision.Action.Clone();
-        var routedModel = !string.IsNullOrWhiteSpace(action.ForwardToModel?.ModelName)
-            ? action.ForwardToModel.ModelName.Trim()
-            : normalized.Model;
+        // Preferred-model precedence: explicit caller > account UserConfig > route-policy
+        // ForwardToModel > deployment default. The route policy keeps Reject (above) and its
+        // tool-set selection on `action`; it can no longer silently swap an explicit/preferred model.
+        var routedModel = IngressModelPreference.ResolveModel(
+            explicitCallerModel,
+            ownerConfig?.DefaultModel,
+            action.ForwardToModel?.ModelName,
+            normalized.Model);
         if (action.ForwardToModel is null)
             action.ForwardToModel = new ForwardToModel();
 
@@ -280,6 +319,7 @@ public sealed class ChatCompletionsCommandFacade(
         ResponsesCallerScope callerScope,
         string routedModel,
         ChatRouteAction routeAction,
+        OwnerLlmConfig? ownerConfig,
         SkillInvocationTrigger? trigger,
         string bearerToken,
         LlmSessionRegistrationResult session,
@@ -296,7 +336,8 @@ public sealed class ChatCompletionsCommandFacade(
             toolProviderContext,
             toolPlan.AdditionalToolProviders,
             ct: ct);
-        var (effectiveModel, resolvedRouteValue) = await ResolveModelRouteAsync(routedModel, bearerToken, ct);
+        var (effectiveModel, resolvedRouteValue) = await ResolveModelRouteAsync(
+            routedModel, ownerConfig?.PreferredLlmRoute, bearerToken, ct);
         var toolContext = toolProviderContext.ToolContext with
         {
             Routing = toolProviderContext.ToolContext.Routing with
@@ -404,6 +445,7 @@ public sealed class ChatCompletionsCommandFacade(
     //   New principle: Application resolves model-route command context behind the route resolver port.
     private async Task<(string EffectiveModel, string? ResolvedRouteValue)> ResolveModelRouteAsync(
         string routedModel,
+        string? accountPreferredRoute,
         string bearerToken,
         CancellationToken ct)
     {
@@ -417,6 +459,12 @@ public sealed class ChatCompletionsCommandFacade(
                 .ConfigureAwait(false);
             if (resolvedRouteValue is not null)
                 effectiveModel = modelRoute.Model;
+        }
+        else
+        {
+            // Bare model (no vendor slug): honor the account's PreferredLlmRoute so the account
+            // preference is fully expressed even when its model carries no slug.
+            resolvedRouteValue = IngressModelPreference.Normalize(accountPreferredRoute);
         }
 
         return (effectiveModel, resolvedRouteValue);

@@ -34,7 +34,8 @@ public sealed class ResponsesCommandFacade(
     IResponsesDirectToolPlanService directToolPlanService,
     ILlmSessionRunObservationService observationService,
     ILogger<ResponsesCommandFacade> logger,
-    IOptions<ResponsesIngressOptions>? ingressOptions = null) : IResponsesCommandFacade
+    IOptions<ResponsesIngressOptions>? ingressOptions = null,
+    IOwnerLlmConfigSource? ownerLlmConfigSource = null) : IResponsesCommandFacade
 {
     private static readonly TimeSpan DefaultObservationTimeout = TimeSpan.FromSeconds(30);
 
@@ -68,8 +69,13 @@ public sealed class ResponsesCommandFacade(
                 callerScopeResult.Error.Message);
 
         var callerScope = callerScopeResult.Scope!;
+        // Single preferred-model source: explicit caller model > account UserConfig > route
+        // policy / deployment default. See IngressModelPreference.
+        var explicitCallerModel = IngressModelPreference.Normalize(request.Model);
+        var ownerConfig = await TryLoadOwnerConfigAsync(callerScope.ScopeId, ct);
         var trigger = ParseSkillInvocationTrigger(normalized.Prompt);
-        var routedModelResult = await ResolveRouteTargetAsync(normalized, callerScope, trigger, ct);
+        var routedModelResult = await ResolveRouteTargetAsync(
+            normalized, callerScope, explicitCallerModel, ownerConfig, trigger, ct);
         if (routedModelResult.Error is not null)
             return ResponsesCreateCommandResult.FromError(
                 routedModelResult.Error.StatusCode,
@@ -111,6 +117,7 @@ public sealed class ResponsesCommandFacade(
             continuation.PreviousSnapshot,
             callerScope,
             routedModelResult.Action!,
+            ownerConfig,
             trigger,
             callerScopeContext.InboundBearerToken,
             sessionResult.Session!,
@@ -274,9 +281,34 @@ public sealed class ResponsesCommandFacade(
         }
     }
 
+    // Account UserConfig is the single "preferred model" source for ingress. Reads are
+    // swallow-and-logged (mirroring OwnerLlmConfigApplier) so a flaky projection never fails a
+    // request — resolution then falls through to the route policy / deployment default.
+    private async Task<OwnerLlmConfig?> TryLoadOwnerConfigAsync(string scopeId, CancellationToken ct)
+    {
+        if (ownerLlmConfigSource is null || string.IsNullOrWhiteSpace(scopeId))
+            return null;
+
+        try
+        {
+            return await ownerLlmConfigSource.GetForScopeAsync(scopeId, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to load owner LLM config for scope {ScopeId}; using request/deployment default model", scopeId);
+            return null;
+        }
+    }
+
     private async Task<RouteTargetResult> ResolveRouteTargetAsync(
         NormalizedResponsesRequest normalized,
         ResponsesCallerScope callerScope,
+        string? explicitCallerModel,
+        OwnerLlmConfig? ownerConfig,
         SkillInvocationTrigger? trigger,
         CancellationToken ct)
     {
@@ -299,9 +331,18 @@ public sealed class ResponsesCommandFacade(
         }
 
         var action = routeDecision.Action.Clone();
-        var routedModel = ShouldUseRouteModel(routeDecision, normalized.Model)
-            ? action.ForwardToModel.ModelName.Trim()
-            : normalized.Model;
+        // Preferred-model precedence: explicit caller > account UserConfig > route-policy
+        // ForwardToModel (gated by ShouldUseRouteModel) > deployment default. The route policy
+        // keeps Reject (above) and its tool-set selection; it can no longer silently swap an
+        // explicit/preferred model.
+        var routePolicyForwardModel = ShouldUseRouteModel(routeDecision, normalized.Model)
+            ? action.ForwardToModel?.ModelName
+            : null;
+        var routedModel = IngressModelPreference.ResolveModel(
+            explicitCallerModel,
+            ownerConfig?.DefaultModel,
+            routePolicyForwardModel,
+            normalized.Model);
         if (action.ForwardToModel is null)
         {
             action.ForwardToModel = new ForwardToModel();
@@ -411,6 +452,7 @@ public sealed class ResponsesCommandFacade(
         LlmSessionSnapshot? previousSnapshot,
         ResponsesCallerScope callerScope,
         ChatRouteAction routeAction,
+        OwnerLlmConfig? ownerConfig,
         SkillInvocationTrigger? trigger,
         string bearerToken,
         LlmSessionRegistrationResult responseSession,
@@ -431,7 +473,8 @@ public sealed class ResponsesCommandFacade(
         var routedModel = string.IsNullOrWhiteSpace(forwardToModel?.ModelName)
             ? normalized.Model
             : forwardToModel.ModelName.Trim();
-        var (effectiveModel, resolvedRouteValue) = await ResolveModelRouteAsync(routedModel, bearerToken, ct);
+        var (effectiveModel, resolvedRouteValue) = await ResolveModelRouteAsync(
+            routedModel, ownerConfig?.PreferredLlmRoute, bearerToken, ct);
         var toolContext = toolProviderContext.ToolContext with
         {
             Routing = toolProviderContext.ToolContext.Routing with
@@ -549,6 +592,7 @@ public sealed class ResponsesCommandFacade(
 
     private async Task<(string EffectiveModel, string? ResolvedRouteValue)> ResolveModelRouteAsync(
         string routedModel,
+        string? accountPreferredRoute,
         string bearerToken,
         CancellationToken ct)
     {
@@ -562,6 +606,12 @@ public sealed class ResponsesCommandFacade(
                 .ConfigureAwait(false);
             if (resolvedRouteValue is not null)
                 effectiveModel = modelRoute.Model;
+        }
+        else
+        {
+            // Bare model (no vendor slug): honor the account's PreferredLlmRoute so the account
+            // preference is fully expressed even when its model carries no slug.
+            resolvedRouteValue = IngressModelPreference.Normalize(accountPreferredRoute);
         }
 
         return (effectiveModel, resolvedRouteValue);

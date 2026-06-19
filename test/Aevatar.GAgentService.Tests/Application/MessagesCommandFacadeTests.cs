@@ -63,6 +63,23 @@ public sealed class MessagesCommandFacadeTests
     }
 
     [Fact]
+    public async Task CreateAsync_ShouldUseAccountPreferredModel_WhenCallerOmitsModel()
+    {
+        var dispatch = new RecordingActorDispatchPort();
+        var facade = CreateFacade(
+            dispatchPort: dispatch,
+            defaultIngressModel: "fallback-vendor/fallback-model",
+            ownerLlmConfigSource: new StubOwnerLlmConfigSource(
+                new OwnerLlmConfig("chrono-llm/gpt-5.5", null, 0)));
+
+        var result = await facade.CreateAsync(BuildRequest("  "), CallerScopeContext("token"));
+
+        result.Error.Should().BeNull();
+        var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
+        command.Model.Should().Be("gpt-5.5");
+    }
+
+    [Fact]
     public async Task CreateAsync_WhenDispatchAccepted_ShouldNotReadCompletionReadModel()
     {
         var sessions = new RecordingSessionPort();
@@ -289,7 +306,8 @@ public sealed class MessagesCommandFacadeTests
         RecordingActorDispatchPort? dispatchPort = null,
         IResponsesToolClassificationService? toolClassificationService = null,
         ILlmSessionRunObservationService? observationService = null,
-        string? defaultIngressModel = null)
+        string? defaultIngressModel = null,
+        IOwnerLlmConfigSource? ownerLlmConfigSource = null)
     {
         var effectiveSessionPort = sessionPort ?? new RecordingSessionPort();
         return new MessagesCommandFacade(
@@ -304,7 +322,15 @@ public sealed class MessagesCommandFacadeTests
             NullLogger<MessagesCommandFacade>.Instance,
             defaultIngressModel is null
                 ? null
-                : Options.Create(new ResponsesIngressOptions { DefaultModel = defaultIngressModel }));
+                : Options.Create(new ResponsesIngressOptions { DefaultModel = defaultIngressModel }),
+            ownerLlmConfigSource);
+    }
+
+    private sealed class StubOwnerLlmConfigSource(OwnerLlmConfig? config = null)
+        : IOwnerLlmConfigSource
+    {
+        public Task<OwnerLlmConfig> GetForScopeAsync(string scopeId, CancellationToken ct = default) =>
+            Task.FromResult(config ?? OwnerLlmConfig.Empty);
     }
 
     private static ResponsesCallerScopeResolutionContext CallerScopeContext(string bearerToken) =>

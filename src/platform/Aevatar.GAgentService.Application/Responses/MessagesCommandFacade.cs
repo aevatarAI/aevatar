@@ -30,7 +30,8 @@ public sealed class MessagesCommandFacade(
     IResponsesDirectToolPlanService directToolPlanService,
     ILlmSessionRunObservationService observationService,
     ILogger<MessagesCommandFacade> logger,
-    IOptions<ResponsesIngressOptions>? ingressOptions = null) : IMessagesCommandFacade
+    IOptions<ResponsesIngressOptions>? ingressOptions = null,
+    IOwnerLlmConfigSource? ownerLlmConfigSource = null) : IMessagesCommandFacade
 {
     private static readonly TimeSpan DefaultObservationTimeout = TimeSpan.FromSeconds(30);
 
@@ -63,8 +64,14 @@ public sealed class MessagesCommandFacade(
                 "authentication_error",
                 callerScopeResult.Error.Message);
 
+        // Single preferred-model source: explicit caller model > account UserConfig > route
+        // policy / deployment default. See IngressModelPreference.
+        var explicitCallerModel = IngressModelPreference.Normalize(request.Model);
+        var ownerConfig = await TryLoadOwnerConfigAsync(callerScopeResult.Scope!.ScopeId, ct);
+
         var trigger = ParseSkillInvocationTrigger(BuildRouteContentHint(normalized));
-        var routedModelResult = await ResolveRouteTargetAsync(normalized, callerScopeResult.Scope!, trigger, ct);
+        var routedModelResult = await ResolveRouteTargetAsync(
+            normalized, callerScopeResult.Scope!, explicitCallerModel, ownerConfig, trigger, ct);
         if (routedModelResult.Error is not null)
             return MessagesCreateCommandResult.FromError(
                 routedModelResult.Error.StatusCode,
@@ -83,6 +90,7 @@ public sealed class MessagesCommandFacade(
             callerScopeResult.Scope!,
             routedModelResult.Model!,
             routedModelResult.Action!,
+            ownerConfig,
             trigger,
             callerScopeContext.InboundBearerToken,
             sessionResult.Session!,
@@ -181,9 +189,34 @@ public sealed class MessagesCommandFacade(
         }
     }
 
+    // Account UserConfig is the single "preferred model" source for ingress. Reads are
+    // swallow-and-logged (mirroring OwnerLlmConfigApplier) so a flaky projection never fails a
+    // request — resolution then falls through to the route policy / deployment default.
+    private async Task<OwnerLlmConfig?> TryLoadOwnerConfigAsync(string scopeId, CancellationToken ct)
+    {
+        if (ownerLlmConfigSource is null || string.IsNullOrWhiteSpace(scopeId))
+            return null;
+
+        try
+        {
+            return await ownerLlmConfigSource.GetForScopeAsync(scopeId, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to load owner LLM config for scope {ScopeId}; using request/deployment default model", scopeId);
+            return null;
+        }
+    }
+
     private async Task<RouteTargetResult> ResolveRouteTargetAsync(
         NormalizedMessagesRequest normalized,
         ResponsesCallerScope callerScope,
+        string? explicitCallerModel,
+        OwnerLlmConfig? ownerConfig,
         SkillInvocationTrigger? trigger,
         CancellationToken ct)
     {
@@ -206,9 +239,18 @@ public sealed class MessagesCommandFacade(
         }
 
         var action = routeDecision.Action.Clone();
-        var routedModel = ShouldUseRouteModel(routeDecision, normalized.Model)
-            ? action.ForwardToModel.ModelName.Trim()
-            : normalized.Model;
+        // Preferred-model precedence: explicit caller > account UserConfig > route-policy
+        // ForwardToModel (gated by ShouldUseRouteModel) > deployment default. The route policy
+        // keeps Reject (above) and its tool-set selection; it can no longer silently swap an
+        // explicit/preferred model.
+        var routePolicyForwardModel = ShouldUseRouteModel(routeDecision, normalized.Model)
+            ? action.ForwardToModel?.ModelName
+            : null;
+        var routedModel = IngressModelPreference.ResolveModel(
+            explicitCallerModel,
+            ownerConfig?.DefaultModel,
+            routePolicyForwardModel,
+            normalized.Model);
         if (action.ForwardToModel is null)
         {
             action.ForwardToModel = new ForwardToModel();
@@ -262,6 +304,7 @@ public sealed class MessagesCommandFacade(
         ResponsesCallerScope callerScope,
         string routedModel,
         ChatRouteAction routeAction,
+        OwnerLlmConfig? ownerConfig,
         SkillInvocationTrigger? trigger,
         string bearerToken,
         LlmSessionRegistrationResult session,
@@ -277,7 +320,8 @@ public sealed class MessagesCommandFacade(
             toolProviderContext,
             toolPlan.AdditionalToolProviders,
             ct: ct);
-        var (effectiveModel, resolvedRouteValue) = await ResolveModelRouteAsync(routedModel, bearerToken, ct);
+        var (effectiveModel, resolvedRouteValue) = await ResolveModelRouteAsync(
+            routedModel, ownerConfig?.PreferredLlmRoute, bearerToken, ct);
         var toolContext = toolProviderContext.ToolContext with
         {
             Routing = toolProviderContext.ToolContext.Routing with
@@ -357,9 +401,18 @@ public sealed class MessagesCommandFacade(
 
     private async Task<(string EffectiveModel, string? ResolvedRouteValue)> ResolveModelRouteAsync(
         string routedModel,
+        string? accountPreferredRoute,
         string bearerToken,
         CancellationToken ct)
     {
+        // Bare model + account PreferredLlmRoute → honor the account route (single preference
+        // source) instead of defaulting to the anthropic vendor route.
+        if (!routedModel.Contains('/', StringComparison.Ordinal)
+            && IngressModelPreference.Normalize(accountPreferredRoute) is { } accountRoute)
+        {
+            return (routedModel, accountRoute);
+        }
+
         var anthropicPrefixed = false;
         if (!routedModel.Contains('/', StringComparison.Ordinal))
         {
