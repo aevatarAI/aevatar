@@ -34,6 +34,22 @@ public sealed class LlmSessionsProtoSurfaceRegressionTests
             .BeNull();
     }
 
+    [Fact]
+    public void LlmSessionsProto_ShouldExposeTypedRunStartedSequenceSurface()
+    {
+        var descriptor = LlmSessionsReflection.Descriptor;
+
+        TopLevelMessageNames(descriptor).Should().Contain("LlmRunStartedEvent");
+        TopLevelMessageNames(descriptor).Should().NotContain("LlmRunRecordAppliedEvent");
+        LlmRunStartedEvent.Descriptor.FindFieldByName("sequence").Should().NotBeNull();
+        LlmStreamChunkObserved.Descriptor.FindFieldByName("sequence").Should().NotBeNull();
+        LlmToolCallObserved.Descriptor.FindFieldByName("sequence").Should().NotBeNull();
+        LlmRunCompleted.Descriptor.FindFieldByName("sequence").Should().NotBeNull();
+        LlmRunFailed.Descriptor.FindFieldByName("sequence").Should().NotBeNull();
+        LlmRunCancelled.Descriptor.FindFieldByName("sequence").Should().NotBeNull();
+        LlmSessionRunScope.Descriptor.FindFieldByName("last_applied_sequence").Should().NotBeNull();
+    }
+
     private static IEnumerable<string> TopLevelMessageNames(FileDescriptor descriptor) =>
         descriptor.MessageTypes.Select(x => x.Name);
 }

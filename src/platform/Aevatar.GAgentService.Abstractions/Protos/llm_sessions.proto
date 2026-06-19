@@ -93,6 +93,7 @@ message LlmSessionRunScope {
   google.protobuf.Timestamp completed_at = 8;
   string failure_code = 9;
   string failure_message = 10;
+  int64 last_applied_sequence = 11;
 }
 
 message LlmSessionState {
@@ -225,6 +226,13 @@ message LlmRunRequested {
   aevatar.ai.AgentToolExecutionContextPayload tool_context = 13;
 }
 
+message LlmRunStartedEvent {
+  string response_id = 1;
+  string run_id = 2;
+  int64 sequence = 3;
+  google.protobuf.Timestamp started_at = 4;
+}
+
 message LlmStreamChunkObserved {
   string response_id = 1;
   string run_id = 2;
@@ -233,6 +241,7 @@ message LlmStreamChunkObserved {
   LlmSessionRuntimeToolCall tool_call_delta = 5;
   LlmSessionTokenUsage usage = 6;
   google.protobuf.Timestamp observed_at = 7;
+  int64 sequence = 8;
 }
 
 message LlmToolCallObserved {
@@ -244,6 +253,7 @@ message LlmToolCallObserved {
   string local_result_json = 6;
   google.protobuf.Timestamp observed_at = 7;
   google.protobuf.Value local_result = 8;
+  int64 sequence = 9;
 }
 
 message LlmRunCompleted {
@@ -253,6 +263,7 @@ message LlmRunCompleted {
   repeated LlmSessionRuntimeToolCall forwarded_tool_calls = 4;
   LlmSessionTokenUsage usage = 5;
   google.protobuf.Timestamp completed_at = 6;
+  int64 sequence = 7;
 }
 
 message LlmRunFailed {
@@ -261,12 +272,14 @@ message LlmRunFailed {
   string failure_code = 3;
   string failure_message = 4;
   google.protobuf.Timestamp failed_at = 5;
+  int64 sequence = 6;
 }
 
 message LlmRunCancelled {
   string response_id = 1;
   string run_id = 2;
   google.protobuf.Timestamp cancelled_at = 3;
+  int64 sequence = 4;
 }
 
 enum ChatRunSubRunWaitMode {

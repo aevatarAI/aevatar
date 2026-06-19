@@ -64,6 +64,11 @@ public sealed class LlmSessionRunObservationService(
                 if (!TryGetObservedPayload(envelope, out var payload))
                     continue;
 
+                if (payload.Is(LlmRunStartedEvent.Descriptor))
+                {
+                    continue;
+                }
+
                 if (payload.Is(LlmStreamChunkObserved.Descriptor))
                 {
                     var delta = accumulator.ObserveChunk(payload.Unpack<LlmStreamChunkObserved>());
