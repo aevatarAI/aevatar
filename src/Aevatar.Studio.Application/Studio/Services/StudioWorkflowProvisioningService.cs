@@ -1,6 +1,6 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.GAgentService.Abstractions;
-using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Google.Protobuf.WellKnownTypes;
@@ -8,62 +8,73 @@ using Google.Protobuf.WellKnownTypes;
 namespace Aevatar.Studio.Application.Studio.Services;
 
 /// <summary>
-/// One-call workflow provisioning facade (C1). Composes the existing
-/// member-first services — it reinvents nothing: create a member via
+/// One-call workflow provisioning facade (C1). Composes the existing member-first
+/// services — it reinvents nothing: create a member via
 /// <see cref="IStudioMemberService.CreateAsync"/>, bind the inline workflow YAML
-/// via <see cref="IStudioMemberService.BindAsync"/>, poll the binding run via
-/// <see cref="IStudioMemberService.GetBindingRunAsync"/> until it succeeds, then
-/// (optionally) invoke the bound member once via
-/// <see cref="IServiceInvocationPort"/> to produce a run stamped with the caller
-/// scope.
+/// via <see cref="IStudioMemberService.BindAsync"/>, then create a
+/// <b>scheduled-dispatch</b> (via <see cref="IScheduledDispatchApplicationService"/>)
+/// that produces the run under the caller scope.
 ///
-/// The bind is asynchronous, so the single real design point here is the bounded
-/// poll: the service never blocks indefinitely (capped by
-/// <see cref="ProvisionWorkflowRequest.BindTimeoutSeconds"/>) and never invokes
-/// before the member is bound. On timeout it returns
-/// <see cref="ProvisionWorkflowBindingStatusNames.Pending"/> with no run; on a
-/// terminal bind failure it throws so the endpoint can surface the error.
+/// The flow is deliberately NON-BLOCKING. Binding a workflow member is an
+/// asynchronous pipeline that can take minutes, so a synchronous handler that
+/// polled the bind to completion would exhaust the gateway timeout and never
+/// invoke. Instead the run is produced by a scheduled-dispatch:
+/// <list type="bullet">
+///   <item>it fires after the bind publishes the deterministic
+///   <c>member-{memberId}</c> service (an early fire simply retries on the
+///   schedule's recurrence);</item>
+///   <item>because the schedule kind is <see cref="ScheduledDispatchScheduleKind.Workflow"/>,
+///   the dispatch projects a freshly re-minted caller NyxID token onto the run's
+///   <c>ChatRequestEvent</c> (<c>LlmControl.SenderNyxIdAccessToken</c>), so the
+///   run's LLM calls authenticate — the one thing a direct
+///   <c>IServiceInvocationPort.InvokeAsync</c> could not provide.</item>
+/// </list>
 ///
-/// <paramref name="scopeId"/> is always an input parameter — the service holds
-/// no HttpContext and no infrastructure dependency, only ports.
+/// The caller credential is a NyxID <b>subject reference</b> (not a raw token):
+/// the scheduled dispatch exchanges it for a short-lived token on every fire, so a
+/// recurring monitor schedule keeps working past the caller's session-token
+/// expiry. <paramref name="scopeId"/> and the caller credential are always input
+/// parameters — the service holds no HttpContext and no infrastructure
+/// dependency, only application ports.
 /// </summary>
 public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvisioningService
 {
-    // Workflow members publish a single "chat" endpoint; invoking it produces a
-    // workflow run (mirrors ExecutionService.StartAsync, the canonical invoke).
+    // Workflow members publish a single "chat" endpoint; a scheduled dispatch to
+    // it produces a workflow run (mirrors the workflow-schedule mapper).
     private const string WorkflowInvokeEndpointId = "chat";
 
     private const string ObservatoryPath = "/workflow/observatory";
 
-    private static readonly TimeSpan BindPollInterval = TimeSpan.FromMilliseconds(500);
-
     private readonly IStudioMemberService _memberService;
-    private readonly IServiceInvocationPort _serviceInvocationPort;
+    private readonly IScheduledDispatchApplicationService _scheduleService;
     private readonly TimeProvider _timeProvider;
 
     public StudioWorkflowProvisioningService(
         IStudioMemberService memberService,
-        IServiceInvocationPort serviceInvocationPort,
+        IScheduledDispatchApplicationService scheduleService,
         TimeProvider? timeProvider = null)
     {
         _memberService = memberService ?? throw new ArgumentNullException(nameof(memberService));
-        _serviceInvocationPort = serviceInvocationPort
-            ?? throw new ArgumentNullException(nameof(serviceInvocationPort));
+        _scheduleService = scheduleService ?? throw new ArgumentNullException(nameof(scheduleService));
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public async Task<ProvisionWorkflowResponse> ProvisionAsync(
         string scopeId,
+        ProvisionWorkflowCallerCredential callerCredential,
         ProvisionWorkflowRequest request,
         CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(callerCredential);
         ArgumentNullException.ThrowIfNull(request);
         var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
         var displayName = NormalizeRequired(request.DisplayName, nameof(request.DisplayName));
         var workflowYaml = NormalizeRequired(request.WorkflowYaml, nameof(request.WorkflowYaml));
+        var auth = BuildSenderNyxIdAuth(callerCredential);
 
-        // 1. Create the member (kind = workflow). The published service surfaces
-        //    only once the member is bound, so we do not read it here.
+        // 1. Create the member (kind = workflow). The actor stamps the rename-safe
+        //    published service id at creation, so we read it straight back — no
+        //    poll, no recompute of the convention.
         var member = await _memberService.CreateAsync(
             normalizedScopeId,
             new CreateStudioMemberRequest(
@@ -72,9 +83,12 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
             ct);
 
         var memberId = member.MemberId;
+        var publishedServiceId = NormalizeRequired(
+            member.PublishedServiceId, nameof(member.PublishedServiceId));
 
         // 2. Bind the inline workflow YAML. WorkflowId is a stable identifier the
         //    bind contract requires; we mint one so the caller only supplies YAML.
+        //    The bind is asynchronous — we do NOT poll it to completion.
         var bindReceipt = await _memberService.BindAsync(
             normalizedScopeId,
             memberId,
@@ -84,152 +98,129 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
                     WorkflowYamls: [workflowYaml])),
             ct);
 
-        // 3. Poll the binding run until a terminal state, bounded by the timeout.
-        var binding = await WaitForBindingAsync(
-            normalizedScopeId,
-            memberId,
-            bindReceipt.BindingRunId,
-            ResolveBindTimeout(request.BindTimeoutSeconds),
-            ct);
-
-        if (binding == null)
+        // 3. Create the scheduled-dispatch that produces the run. The Workflow kind
+        //    is what flips on caller-token projection; the dispatch re-mints the
+        //    token from the subject ref on every fire. A schedule is created when
+        //    there is something to fire — a recurring monitor (caller Cron) or a
+        //    one-shot demo (RunImmediately). RunImmediately=false with no Cron is an
+        //    honest "bind only": no schedule, no run.
+        string? scheduleId = null;
+        if (ShouldSchedule(request))
         {
-            // Timed out before terminal: the member exists and will bind. Return
-            // pending with no run — never fire-and-forget an invoke before bound.
-            return BuildResponse(
-                normalizedScopeId,
-                memberId,
-                member.TeamId,
-                ProvisionWorkflowBindingStatusNames.Pending,
-                publishedServiceId: null,
-                revisionId: null,
-                runId: null);
-        }
-
-        // 4. Bound. Optionally invoke once to produce a scope-stamped run.
-        string? runId = null;
-        if (request.RunImmediately)
-        {
-            runId = await InvokeWorkflowAsync(
-                normalizedScopeId,
-                binding.PublishedServiceId,
-                request.Prompt ?? string.Empty,
+            var schedule = await _scheduleService.CreateAsync(
+                BuildScheduleConfiguration(
+                    normalizedScopeId,
+                    publishedServiceId,
+                    request.Prompt ?? string.Empty,
+                    auth,
+                    ResolveCron(request, out var timezone),
+                    timezone),
                 ct);
+            scheduleId = NormalizeOptional(schedule.ScheduleId);
         }
 
-        return BuildResponse(
-            normalizedScopeId,
-            memberId,
-            member.TeamId,
-            ProvisionWorkflowBindingStatusNames.Succeeded,
-            publishedServiceId: binding.PublishedServiceId,
-            revisionId: binding.RevisionId,
-            runId: runId);
+        return new ProvisionWorkflowResponse(
+            MemberId: memberId,
+            ScopeId: normalizedScopeId,
+            BindingStatus: ProvisionWorkflowBindingStatusNames.Accepted,
+            ObservatoryUrl: ObservatoryPath)
+        {
+            BindingRunId = NormalizeOptional(bindReceipt.BindingRunId),
+            ScheduleId = scheduleId,
+            // The editable Studio page is team-scoped; a freshly provisioned
+            // member has no team yet, so the link is only built once one exists.
+            StudioUrl = BuildStudioUrl(normalizedScopeId, member.TeamId, memberId),
+        };
     }
 
     /// <summary>
-    /// Polls the binding run until it reaches a terminal state. Returns the
-    /// successful binding result, <c>null</c> on timeout, or throws on terminal
-    /// failure. The wait is driven by an injected <see cref="TimeProvider"/> so
-    /// tests advance time deterministically rather than sleeping wall-clock.
+    /// Builds the scheduled-dispatch configuration: a Workflow-kind service
+    /// invocation targeting the bound member's <c>chat</c> endpoint with the
+    /// caller's prompt, carrying the caller subject ref so the dispatch re-mints a
+    /// token to project onto the run.
     /// </summary>
-    private async Task<StudioMemberBindingRunResultResponse?> WaitForBindingAsync(
-        string scopeId,
-        string memberId,
-        string bindingRunId,
-        TimeSpan timeout,
-        CancellationToken ct)
-    {
-        var deadline = _timeProvider.GetUtcNow() + timeout;
-
-        while (true)
-        {
-            ct.ThrowIfCancellationRequested();
-
-            try
-            {
-                var run = await _memberService.GetBindingRunAsync(scopeId, memberId, bindingRunId, ct);
-
-                if (IsSucceeded(run.Status))
-                {
-                    return run.Result
-                        ?? throw new InvalidOperationException(
-                            $"binding run '{bindingRunId}' reported succeeded but exposed no published service result.");
-                }
-
-                if (IsTerminalFailure(run.Status))
-                {
-                    var detail = run.Failure?.Message ?? run.Status;
-                    throw new InvalidOperationException(
-                        $"workflow binding for member '{memberId}' did not succeed (status '{run.Status}'): {detail}");
-                }
-            }
-            catch (StudioMemberBindingRunNotFoundException)
-            {
-                // The binding-run read model is eventually consistent: immediately after
-                // BindAsync the run record may not be queryable yet (the bind admission is
-                // still materializing). Treat the not-found window as "not ready" and keep
-                // polling until the deadline rather than surfacing it as a failure.
-            }
-
-            if (_timeProvider.GetUtcNow() >= deadline)
-                return null;
-
-            await Task.Delay(BindPollInterval, _timeProvider, ct);
-        }
-    }
-
-    private async Task<string?> InvokeWorkflowAsync(
+    private static ScheduledDispatchConfiguration BuildScheduleConfiguration(
         string scopeId,
         string publishedServiceId,
         string prompt,
-        CancellationToken ct)
-    {
-        var commandId = Guid.NewGuid().ToString("N");
-        var receipt = await _serviceInvocationPort.InvokeAsync(
-            new ServiceInvocationRequest
-            {
-                Identity = new ServiceIdentity
-                {
-                    TenantId = scopeId,
-                    ServiceId = publishedServiceId,
-                },
-                EndpointId = WorkflowInvokeEndpointId,
-                Payload = Any.Pack(new ChatRequestEvent
-                {
-                    Prompt = prompt,
-                    ScopeId = scopeId,
-                }),
-                CommandId = commandId,
-                CorrelationId = commandId,
-            },
-            ct);
+        ScheduledServiceInvocationAuth auth,
+        string cronExpression,
+        string timezone) =>
+        new(
+            ScheduleId: string.Empty, // minted by the schedule service
+            DisplayName: $"provision-{publishedServiceId}",
+            Target: new ScheduledDispatchTargetDescriptor(
+                ScheduledDispatchTargetKind.ServiceInvocation,
+                ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
+                    Identity: new ServiceIdentity
+                    {
+                        TenantId = scopeId,
+                        ServiceId = publishedServiceId,
+                    },
+                    EndpointId: WorkflowInvokeEndpointId,
+                    Payload: Any.Pack(new ChatRequestEvent
+                    {
+                        Prompt = prompt,
+                        ScopeId = scopeId,
+                    }),
+                    Auth: auth)),
+            CronExpression: cronExpression,
+            Timezone: timezone,
+            Enabled: true,
+            Headers: new Dictionary<string, string>(StringComparer.Ordinal),
+            ScheduleKind: ScheduledDispatchScheduleKind.Workflow);
 
-        var runId = NormalizeOptional(receipt.RunId) ?? NormalizeOptional(receipt.CommandId);
-        return runId;
+    /// <summary>
+    /// A schedule (and therefore a run) is created when there is something to
+    /// fire: a recurring monitor (caller-supplied <see cref="ProvisionWorkflowRequest.Cron"/>)
+    /// or a one-shot demo (<see cref="ProvisionWorkflowRequest.RunImmediately"/>).
+    /// </summary>
+    private static bool ShouldSchedule(ProvisionWorkflowRequest request) =>
+        request.RunImmediately || !string.IsNullOrWhiteSpace(request.Cron);
+
+    /// <summary>
+    /// Resolves the cron expression. A caller-supplied recurring cron is a
+    /// monitor; otherwise a one-shot cron pinned to a near-future minute is
+    /// synthesized so a single demo run fires shortly after the bind. The minute
+    /// granularity matches the standard 5-field cron the dispatch validator
+    /// accepts; the dispatch's recurrence harmlessly re-fires if the bind has not
+    /// completed by the first tick.
+    /// </summary>
+    private string ResolveCron(ProvisionWorkflowRequest request, out string timezone)
+    {
+        var callerCron = NormalizeOptional(request.Cron);
+        if (callerCron != null)
+        {
+            timezone = ScheduledDispatchCalculator.NormalizeTimezone(request.Timezone);
+            return callerCron;
+        }
+
+        // Demo fire: pin a fixed minute/hour/day/month in UTC at the next whole
+        // minute at/after now+delay. Standard 5-field cron has no year field, so
+        // this technically recurs on that calendar date annually — acceptable for
+        // a throwaway demo schedule (it fires once in the current run window; the
+        // caller deletes it, and a recurring monitor supplies its own Cron). The
+        // round-up is required because a cron never fires within the current
+        // partial minute.
+        timezone = ScheduledDispatchCalculator.DefaultTimezone;
+        var fireAt = _timeProvider
+            .GetUtcNow()
+            .AddSeconds(ProvisionWorkflowRequest.DefaultOneShotDelaySeconds)
+            .UtcDateTime;
+        var fireMinute = new DateTime(
+            fireAt.Year, fireAt.Month, fireAt.Day, fireAt.Hour, fireAt.Minute, 0, DateTimeKind.Utc)
+            .AddMinutes(1);
+        return $"{fireMinute.Minute} {fireMinute.Hour} {fireMinute.Day} {fireMinute.Month} *";
     }
 
-    private static ProvisionWorkflowResponse BuildResponse(
-        string scopeId,
-        string memberId,
-        string? teamId,
-        string bindingStatus,
-        string? publishedServiceId,
-        string? revisionId,
-        string? runId) =>
-        new(
-            MemberId: memberId,
-            ScopeId: scopeId,
-            BindingStatus: bindingStatus,
-            ObservatoryUrl: ObservatoryPath)
-        {
-            PublishedServiceId = publishedServiceId,
-            RevisionId = revisionId,
-            RunId = runId,
-            // The editable Studio page is team-scoped; a freshly provisioned
-            // member has no team yet, so the link is only built once one exists.
-            StudioUrl = BuildStudioUrl(scopeId, teamId, memberId),
-        };
+    private static ScheduledServiceInvocationAuth BuildSenderNyxIdAuth(
+        ProvisionWorkflowCallerCredential credential) =>
+        new(new ScheduledServiceInvocationNyxIdCredentialSource(
+            new ScheduledServiceInvocationNyxIdSubjectRef(
+                Platform: NormalizeRequired(credential.Platform, nameof(credential.Platform)),
+                Tenant: NormalizeOptional(credential.Tenant) ?? string.Empty,
+                ExternalUserId: NormalizeRequired(credential.ExternalUserId, nameof(credential.ExternalUserId))),
+            Scope: NormalizeRequired(credential.Scope, nameof(credential.Scope))));
 
     private static string? BuildStudioUrl(string scopeId, string? teamId, string memberId)
     {
@@ -239,21 +230,6 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
 
         return $"/scopes/{Uri.EscapeDataString(scopeId)}/teams/{Uri.EscapeDataString(normalizedTeamId)}/members/{Uri.EscapeDataString(memberId)}/workflow";
     }
-
-    private static TimeSpan ResolveBindTimeout(int bindTimeoutSeconds)
-    {
-        var seconds = bindTimeoutSeconds > 0
-            ? bindTimeoutSeconds
-            : ProvisionWorkflowRequest.DefaultBindTimeoutSeconds;
-        return TimeSpan.FromSeconds(seconds);
-    }
-
-    private static bool IsSucceeded(string status) =>
-        string.Equals(status, StudioMemberBindingRunStatusNames.Succeeded, StringComparison.Ordinal);
-
-    private static bool IsTerminalFailure(string status) =>
-        string.Equals(status, StudioMemberBindingRunStatusNames.Failed, StringComparison.Ordinal) ||
-        string.Equals(status, StudioMemberBindingRunStatusNames.Rejected, StringComparison.Ordinal);
 
     private static string GenerateWorkflowId() => $"workflow-{Guid.NewGuid():N}";
 

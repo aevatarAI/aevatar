@@ -11,20 +11,35 @@ namespace Aevatar.Studio.Hosting.Endpoints;
 /// <summary>
 /// One-call workflow provisioning HTTP surface (C1) mounted at
 /// <c>POST /api/scopes/{scopeId}/provision-workflow</c>. Composes member
-/// create + bind + invoke behind a single proxied call so a Claude Code session
-/// reaching aevatar through the nyxid downstream provisions a runnable,
-/// scope-owned workflow without orchestrating the multi-step member flow itself.
+/// create + bind + scheduled-dispatch behind a single proxied call so a Claude
+/// Code session reaching aevatar through the nyxid downstream provisions a
+/// runnable, scope-owned workflow without orchestrating the multi-step member
+/// flow itself.
+///
+/// The flow is NON-BLOCKING: binding a workflow member is a multi-minute async
+/// pipeline, so the handler never polls the bind to completion (that would
+/// exhaust the gateway timeout). It creates the member, accepts the bind, and
+/// creates a Workflow-kind scheduled-dispatch that produces the run — the
+/// scheduled path is also the only one that projects the caller's re-minted NyxID
+/// token onto the run so its LLM calls authenticate. The endpoint therefore
+/// always returns 202 Accepted; runs appear in the Observatory as the schedule
+/// fires.
 ///
 /// The endpoint depends only on <see cref="IStudioWorkflowProvisioningService"/>;
-/// it never reaches for the platform invocation or member ports directly. It
+/// it never reaches for the platform invocation or schedule ports directly. It
 /// mirrors <see cref="StudioMemberEndpoints"/>: the same scope-access guard
 /// short-circuits before the service is touched, and domain validation failures
 /// map to a stable 400 code.
 ///
+/// The caller's NyxID subject reference (<see cref="ProvisionWorkflowRequest.Caller"/>)
+/// is supplied in the request body, mirroring the workflow-schedule path. A
+/// forwarded bearer token cannot be converted into the subject reference the
+/// scheduled dispatch needs to re-mint a token on every fire, so the subject ref
+/// is an explicit body field rather than derived from an ambient claim.
+///
 /// Response status:
-///   - bound in time → 200 with the run id + links
-///   - bind accepted but still pending at the timeout → 202 (no run id)
-///   - validation / terminal bind failure → 400
+///   - accepted (member created, bind accepted, schedule created) → 202 + links
+///   - validation / missing caller subject ref → 400
 ///   - cross-scope / unauthenticated → 403 / 401 (via the guard)
 ///
 /// IMPORTANT: the <see cref="IStudioWorkflowProvisioningService"/> parameter must
@@ -56,27 +71,65 @@ internal static class StudioProvisioningEndpoints
         if (request == null)
             return BadRequest("INVALID_PROVISION_WORKFLOW_REQUEST", "request body is required.");
 
+        if (!TryResolveCallerCredential(request, out var callerCredential, out var credentialError))
+            return BadRequest("INVALID_PROVISION_WORKFLOW_REQUEST", credentialError);
+
         try
         {
-            var response = await provisioningService.ProvisionAsync(scopeId, request, ct);
+            var response = await provisioningService.ProvisionAsync(scopeId, callerCredential, request, ct);
 
-            // The bind is asynchronous: a member that did not bind within the
-            // timeout is honestly reported as 202 Accepted (it exists and will
-            // bind), distinct from the 200 that carries a started run.
-            return string.Equals(
-                    response.BindingStatus,
-                    ProvisionWorkflowBindingStatusNames.Pending,
-                    StringComparison.Ordinal)
-                ? Results.Accepted(
-                    $"/api/scopes/{Uri.EscapeDataString(scopeId)}/members/{Uri.EscapeDataString(response.MemberId)}",
-                    response)
-                : Results.Ok(response);
+            // The bind and the run are both asynchronous, so provisioning always
+            // ACKs with 202 Accepted: the member + bind + schedule were accepted
+            // and the run is produced by the schedule. The Location points at the
+            // schedule so the caller can poll/manage it.
+            return Results.Accepted(
+                BuildScheduleLocation(response.ScheduleId),
+                response);
         }
         catch (InvalidOperationException ex)
         {
             return BadRequest("INVALID_PROVISION_WORKFLOW_REQUEST", ex.Message);
         }
     }
+
+    /// <summary>
+    /// Resolves the caller NyxID subject reference from the request body. The
+    /// scope (capability) defaults to the nyxid proxy scope when omitted so the
+    /// common CC-via-proxy case needs only the subject identity.
+    /// </summary>
+    private static bool TryResolveCallerCredential(
+        ProvisionWorkflowRequest request,
+        out ProvisionWorkflowCallerCredential callerCredential,
+        out string error)
+    {
+        callerCredential = null!;
+        error = string.Empty;
+
+        var caller = request.Caller;
+        if (caller == null
+            || string.IsNullOrWhiteSpace(caller.Platform)
+            || string.IsNullOrWhiteSpace(caller.ExternalUserId))
+        {
+            error = "caller.platform and caller.externalUserId are required (the NyxID subject the scheduled run re-mints a token for).";
+            return false;
+        }
+
+        var scope = string.IsNullOrWhiteSpace(caller.Scope)
+            ? ProvisionWorkflowCallerCredential.DefaultScope
+            : caller.Scope.Trim();
+
+        callerCredential = new ProvisionWorkflowCallerCredential(
+            Platform: caller.Platform.Trim(),
+            ExternalUserId: caller.ExternalUserId.Trim(),
+            Scope: scope,
+            Tenant: string.IsNullOrWhiteSpace(caller.Tenant) ? null : caller.Tenant.Trim());
+        return true;
+    }
+
+    private static string BuildScheduleLocation(string? scheduleId) =>
+        string.IsNullOrWhiteSpace(scheduleId)
+            ? "/api/schedules"
+            : $"/api/schedules/{Uri.EscapeDataString(scheduleId)}";
 
     private static IResult BadRequest(string code, string message) =>
         Results.BadRequest(new { code, message });

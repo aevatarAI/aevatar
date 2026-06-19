@@ -13,58 +13,106 @@ using Microsoft.Extensions.Hosting;
 namespace Aevatar.Studio.Tests;
 
 /// <summary>
-/// HTTP-handler invariants for the one-call provisioning endpoint (C1):
+/// HTTP-handler invariants for the one-call provisioning endpoint (C1, v2 async):
 /// <list type="bullet">
 ///   <item>the scope-access guard short-circuits with 403 before the service is
-///   touched (cross-scope) and 401 when unauthenticated;</item>
-///   <item>a bound provision returns 200 with the run id + links;</item>
-///   <item>a still-pending provision (bind timed out) returns 202;</item>
+///   touched (cross-scope / unauthenticated);</item>
+///   <item>a successful provision always returns 202 Accepted (the bind + run are
+///   asynchronous) carrying the schedule id + Observatory link, with the
+///   Location pointing at the created schedule;</item>
+///   <item>the caller NyxID subject reference is required and threaded into the
+///   service as an input parameter; a missing subject maps to a stable 400;</item>
 ///   <item>domain validation failures map to a stable 400 code.</item>
 /// </list>
 /// </summary>
 public sealed class StudioProvisioningEndpointsTests
 {
     private const string ScopeId = "scope-1";
+    private const string ScheduleId = "schedule-xyz";
+
+    private static ProvisionWorkflowCallerCredential Caller =>
+        new(Platform: "nyxid", ExternalUserId: "user-42", Scope: "proxy");
 
     [Fact]
-    public async Task HandleProvisionWorkflowAsync_ShouldReturnOk_WhenBound()
+    public async Task HandleProvisionWorkflowAsync_ShouldReturnAccepted_WithScheduleLocation()
     {
-        var response = NewResponse(ProvisionWorkflowBindingStatusNames.Succeeded) with
-        {
-            RunId = "run-1",
-        };
+        var response = NewResponse();
         var service = new RecordingProvisioningService { Response = response };
 
         var result = await InvokeHandle<IResult>(
             CreateAuthenticatedContext(ScopeId),
             ScopeId,
-            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "go"),
+            new ProvisionWorkflowRequest(
+                DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "go", Caller: Caller),
             service,
             CancellationToken.None);
 
-        result.Should().BeOfType<Ok<ProvisionWorkflowResponse>>()
-            .Which.Value.Should().BeSameAs(response);
+        var accepted = result.Should().BeOfType<Accepted<ProvisionWorkflowResponse>>().Subject;
+        accepted.Value.Should().BeSameAs(response);
+        accepted.Value!.BindingStatus.Should().Be(ProvisionWorkflowBindingStatusNames.Accepted);
+        accepted.Location.Should().Be($"/api/schedules/{ScheduleId}");
         service.ProvisionInvoked.Should().BeTrue();
         service.ProvisionScopeId.Should().Be(ScopeId);
     }
 
     [Fact]
-    public async Task HandleProvisionWorkflowAsync_ShouldReturnAccepted_WhenPending()
+    public async Task HandleProvisionWorkflowAsync_ShouldThreadCallerCredential_IntoService()
     {
-        var response = NewResponse(ProvisionWorkflowBindingStatusNames.Pending);
-        var service = new RecordingProvisioningService { Response = response };
+        var service = new RecordingProvisioningService { Response = NewResponse() };
+
+        await InvokeHandle<IResult>(
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            new ProvisionWorkflowRequest(
+                DisplayName: "Monitor",
+                WorkflowYaml: "name: monitor",
+                Caller: new ProvisionWorkflowCallerCredential(
+                    Platform: "lark", ExternalUserId: "ou-1", Scope: "proxy", Tenant: "t-1")),
+            service,
+            CancellationToken.None);
+
+        service.ProvisionCaller.Should().NotBeNull();
+        service.ProvisionCaller!.Platform.Should().Be("lark");
+        service.ProvisionCaller.ExternalUserId.Should().Be("ou-1");
+        service.ProvisionCaller.Scope.Should().Be("proxy");
+        service.ProvisionCaller.Tenant.Should().Be("t-1");
+    }
+
+    [Fact]
+    public async Task HandleProvisionWorkflowAsync_ShouldDefaultScope_WhenCallerScopeOmitted()
+    {
+        var service = new RecordingProvisioningService { Response = NewResponse() };
+
+        await InvokeHandle<IResult>(
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            new ProvisionWorkflowRequest(
+                DisplayName: "Monitor",
+                WorkflowYaml: "name: monitor",
+                Caller: new ProvisionWorkflowCallerCredential(
+                    Platform: "nyxid", ExternalUserId: "user-42", Scope: "")),
+            service,
+            CancellationToken.None);
+
+        service.ProvisionCaller!.Scope.Should().Be(ProvisionWorkflowCallerCredential.DefaultScope);
+    }
+
+    [Fact]
+    public async Task HandleProvisionWorkflowAsync_ShouldReturnBadRequest_WhenCallerSubjectMissing()
+    {
+        var service = new RecordingProvisioningService { Response = NewResponse() };
 
         var result = await InvokeHandle<IResult>(
             CreateAuthenticatedContext(ScopeId),
             ScopeId,
-            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor"),
+            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Caller: null),
             service,
             CancellationToken.None);
 
-        var accepted = result.Should().BeOfType<Accepted<ProvisionWorkflowResponse>>().Subject;
-        accepted.Value!.BindingStatus.Should().Be(ProvisionWorkflowBindingStatusNames.Pending);
-        accepted.Value.RunId.Should().BeNull();
-        accepted.Location.Should().Be($"/api/scopes/{ScopeId}/members/{response.MemberId}");
+        // No subject ref → the dispatch could not re-mint a token; reject before
+        // touching the service.
+        service.ProvisionInvoked.Should().BeFalse();
+        AssertBadRequestResult(result, "INVALID_PROVISION_WORKFLOW_REQUEST");
     }
 
     [Fact]
@@ -78,7 +126,8 @@ public sealed class StudioProvisioningEndpointsTests
         var result = await InvokeHandle<IResult>(
             CreateAuthenticatedContext(ScopeId),
             ScopeId,
-            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: string.Empty),
+            new ProvisionWorkflowRequest(
+                DisplayName: "Monitor", WorkflowYaml: string.Empty, Caller: Caller),
             service,
             CancellationToken.None);
 
@@ -93,7 +142,7 @@ public sealed class StudioProvisioningEndpointsTests
         var result = await InvokeHandle<IResult>(
             CreateAuthenticatedContext("other-scope"),
             ScopeId,
-            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor"),
+            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Caller: Caller),
             service,
             CancellationToken.None);
 
@@ -110,7 +159,7 @@ public sealed class StudioProvisioningEndpointsTests
         var result = await InvokeHandle<IResult>(
             CreateUnauthenticatedContext(),
             ScopeId,
-            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor"),
+            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Caller: Caller),
             service,
             CancellationToken.None);
 
@@ -118,16 +167,14 @@ public sealed class StudioProvisioningEndpointsTests
         AssertIsJsonStatus(result, StatusCodes.Status403Forbidden);
     }
 
-    private static ProvisionWorkflowResponse NewResponse(string bindingStatus) => new(
+    private static ProvisionWorkflowResponse NewResponse() => new(
         MemberId: "member-1",
         ScopeId: ScopeId,
-        BindingStatus: bindingStatus,
+        BindingStatus: ProvisionWorkflowBindingStatusNames.Accepted,
         ObservatoryUrl: "/workflow/observatory")
     {
-        PublishedServiceId = bindingStatus == ProvisionWorkflowBindingStatusNames.Succeeded
-            ? "published-svc-1"
-            : null,
-        RevisionId = bindingStatus == ProvisionWorkflowBindingStatusNames.Succeeded ? "rev-1" : null,
+        BindingRunId = "bind-run-1",
+        ScheduleId = ScheduleId,
     };
 
     private static async Task<TResult> InvokeHandle<TResult>(params object?[] args)
@@ -192,13 +239,18 @@ public sealed class StudioProvisioningEndpointsTests
         public Exception? ProvisionException { get; set; }
         public bool ProvisionInvoked { get; private set; }
         public string? ProvisionScopeId { get; private set; }
+        public ProvisionWorkflowCallerCredential? ProvisionCaller { get; private set; }
         public ProvisionWorkflowRequest? ProvisionRequest { get; private set; }
 
         public Task<ProvisionWorkflowResponse> ProvisionAsync(
-            string scopeId, ProvisionWorkflowRequest request, CancellationToken ct = default)
+            string scopeId,
+            ProvisionWorkflowCallerCredential callerCredential,
+            ProvisionWorkflowRequest request,
+            CancellationToken ct = default)
         {
             ProvisionInvoked = true;
             ProvisionScopeId = scopeId;
+            ProvisionCaller = callerCredential;
             ProvisionRequest = request;
             if (ProvisionException != null) throw ProvisionException;
             return Task.FromResult(Response!);
