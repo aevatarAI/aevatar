@@ -137,15 +137,8 @@ public sealed class LlmRunCoreTests
     }
 
     [Fact]
-<<<<<<< HEAD
     public async Task RunAsync_WhenSinkStopsAfterToolObservation_ShouldStopDispatchingTerminalRecords()
     {
-=======
-    public async Task RunAsync_ShouldExecuteOwnedAdditiveCollisionLocally()
-    {
-        var tool = new RecordingAgentTool("use_skill", """{"loaded":true}""");
-        var toolProvider = new StaticResponsesToolProvider(additiveTools: [tool]);
->>>>>>> origin/feature/integrate
         var provider = new ScriptedLlmProviderFactory([
             [
                 new LLMStreamChunk
@@ -153,18 +146,12 @@ public sealed class LlmRunCoreTests
                     DeltaToolCall = new ToolCall
                     {
                         Id = "call_1",
-<<<<<<< HEAD
                         Name = "get_weather",
                         ArgumentsJson = """{"city":"Singapore"}""",
-=======
-                        Name = "use_skill",
-                        ArgumentsJson = """{"name":"writer"}""",
->>>>>>> origin/feature/integrate
                     },
                     IsLast = true,
                 },
             ],
-<<<<<<< HEAD
         ]);
         var sink = new RecordingLlmRunSink
         {
@@ -180,7 +167,26 @@ public sealed class LlmRunCoreTests
         sink.Completed.Should().BeEmpty();
         sink.Failed.Should().BeEmpty();
         sink.Cancelled.Should().BeEmpty();
-=======
+    }
+
+    [Fact]
+    public async Task RunAsync_ShouldExecuteOwnedAdditiveCollisionLocally()
+    {
+        var tool = new RecordingAgentTool("use_skill", """{"loaded":true}""");
+        var toolProvider = new StaticResponsesToolProvider(additiveTools: [tool]);
+        var provider = new ScriptedLlmProviderFactory([
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "call_1",
+                        Name = "use_skill",
+                        ArgumentsJson = """{"name":"writer"}""",
+                    },
+                    IsLast = true,
+                },
+            ],
             [
                 new LLMStreamChunk
                 {
@@ -212,11 +218,11 @@ public sealed class LlmRunCoreTests
             sink);
 
         tool.Executions.Should().ContainSingle().Which.Should().Be("""{"name":"writer"}""");
-        sink.ForwardedToolCalls.Should().BeEmpty();
+        sink.Completed.Should().ContainSingle()
+            .Which.ForwardedToolCallRecords.Should().BeEmpty();
         sink.ToolCalls.Should().ContainSingle(observed => !observed.Forwarded)
             .Which.ToolCall.ToolName.Should().Be("use_skill");
         provider.Requests.Should().HaveCount(2);
->>>>>>> origin/feature/integrate
     }
 
     [Fact]
