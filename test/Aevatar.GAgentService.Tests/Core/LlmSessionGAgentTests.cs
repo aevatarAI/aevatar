@@ -1895,7 +1895,7 @@ public sealed class LlmSessionGAgentTests
         GAgentServiceTestKit.CreateStatefulAgent<LlmSessionGAgent, LlmSessionState>(
             new InMemoryEventStore(),
             "response-session-actor-" + responseId,
-            static () => new LlmSessionGAgent(),
+            static () => throw new InvalidOperationException("LlmSessionGAgent test construction is owned by GAgentServiceTestKit."),
             configureServices);
 
     private static LlmSessionGAgent CreateActorWithStore(
@@ -1905,7 +1905,7 @@ public sealed class LlmSessionGAgentTests
         GAgentServiceTestKit.CreateStatefulAgent<LlmSessionGAgent, LlmSessionState>(
             eventStore,
             "response-session-actor-" + responseId,
-            static () => new LlmSessionGAgent(),
+            static () => throw new InvalidOperationException("LlmSessionGAgent test construction is owned by GAgentServiceTestKit."),
             configureServices);
 
     private static Task DispatchRunRequestedAsync(LlmSessionGAgent actor, LlmRunRequested command) =>

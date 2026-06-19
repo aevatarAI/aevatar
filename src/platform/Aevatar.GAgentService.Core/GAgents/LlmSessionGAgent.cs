@@ -23,9 +23,11 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
     private const int CompletedStatus = 2;
     private const int FailedStatus = 3;
     private const int CancelledStatus = 4;
+    private readonly ILlmRunExecutionScheduler _executionScheduler;
 
-    public LlmSessionGAgent()
+    public LlmSessionGAgent(ILlmRunExecutionScheduler executionScheduler)
     {
+        _executionScheduler = executionScheduler ?? throw new ArgumentNullException(nameof(executionScheduler));
         InitializeId();
     }
 
@@ -382,12 +384,9 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         string runId,
         LlmRunRequested executionRequest)
     {
-        if (Services.GetService(typeof(ILlmRunExecutionScheduler)) is not ILlmRunExecutionScheduler scheduler)
-            return;
-
         try
         {
-            await scheduler.ScheduleAsync(
+            await _executionScheduler.ScheduleAsync(
                 new LlmRunExecutionRequest(
                     Id,
                     responseId,
