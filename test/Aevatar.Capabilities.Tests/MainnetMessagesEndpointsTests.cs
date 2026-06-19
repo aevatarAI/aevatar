@@ -1119,8 +1119,13 @@ public sealed class MainnetMessagesEndpointsTests
                 return [];
 
             var tools = new List<IAgentTool>();
-            tools.AddRange(selection.ForwardedTools.Select(static tool =>
-                new MessagesStubAgentTool(tool.ToolName, tool.Description, tool.ParametersJson)));
+            var ownedToolNames = selection.OwnedToolNames.Count > 0
+                ? selection.OwnedToolNames.ToHashSet(StringComparer.Ordinal)
+                : selection.SubstitutedToolNames.Concat(selection.AdditiveToolNames).ToHashSet(StringComparer.Ordinal);
+            tools.AddRange(selection.ForwardedTools
+                .Where(tool => !ownedToolNames.Contains(tool.ToolName))
+                .Select(static tool =>
+                    new MessagesStubAgentTool(tool.ToolName, tool.Description, tool.ParametersJson)));
             tools.AddRange(selection.SubstitutedToolNames.Select(static name =>
                 new MessagesStubAgentTool(name, $"{name} substitute")));
             tools.AddRange(selection.AdditiveToolNames.Select(static name =>
