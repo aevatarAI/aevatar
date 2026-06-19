@@ -10,6 +10,7 @@ using Aevatar.GAgentService.Application.Responses;
 using Aevatar.GAgentService.Core.GAgents;
 using Aevatar.GAgentService.Tests.TestSupport;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -799,7 +800,7 @@ public sealed class LlmSessionGAgentTests
     }
 
     [Fact]
-    public async Task HandleRecordRunStartedAsync_ShouldPersistReadyExecutionRequest_AndExecuteFromCommittedFact()
+    public async Task HandleRecordRunStartedAsync_ShouldPersistReadyFact_AndDispatchTransientExecutionCommand()
     {
         var eventStore = new InMemoryEventStore();
         var observations = new List<string>();
@@ -837,16 +838,18 @@ public sealed class LlmSessionGAgentTests
         var ready = runEvents[1].Unpack<LlmRunExecutionReadyEvent>();
         ready.ResponseId.Should().Be("resp_off_actor_started");
         ready.RunId.Should().Be("run_1");
-        ready.ExecutionRequest.Should().NotBeNull();
-        ready.ExecutionRequest.ResponseId.Should().Be("resp_off_actor_started");
-        ready.ExecutionRequest.RunId.Should().Be("run_1");
-        ready.ExecutionRequest.Messages.Should().BeEquivalentTo(request.Messages);
-        ready.ExecutionRequest.BearerToken.Should().Be(request.BearerToken);
-        ready.ExecutionRequest.ToolContext.Should().BeEquivalentTo(request.ToolContext);
+        System.Text.Encoding.UTF8.GetString(runEvents[1].ToByteArray())
+            .Should()
+            .NotContain(request.BearerToken);
         actor.State.ActiveRun.Should().NotBeNull();
         actor.State.ActiveRun!.StartedAt.Should().Be(requestedAt);
-        executor.ExecuteRequests.Should().ContainSingle()
-            .Which.RunId.Should().Be("run_1");
+        var executionRequest = executor.ExecuteRequests.Should().ContainSingle().Subject;
+        executionRequest.ResponseId.Should().Be("resp_off_actor_started");
+        executionRequest.RunId.Should().Be("run_1");
+        executionRequest.Command.Should().NotBeSameAs(request);
+        executionRequest.Command.Messages.Should().BeEquivalentTo(request.Messages);
+        executionRequest.Command.BearerToken.Should().Be(request.BearerToken);
+        executionRequest.Command.ToolContext.Should().BeEquivalentTo(request.ToolContext);
         observations.Should().ContainSingle("executor:execute");
     }
 

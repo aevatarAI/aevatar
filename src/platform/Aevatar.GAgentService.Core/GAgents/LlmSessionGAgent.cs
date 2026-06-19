@@ -372,9 +372,58 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             ResponseId = existing.ResponseId,
             RunId = runId,
             ReadyAt = Timestamp.FromDateTime(DateTime.UtcNow),
-            ExecutionRequest = executionRequest.Clone(),
         });
+        await TryDispatchTransientExecutionCommandAsync(existing.ResponseId, runId, executionRequest);
         return true;
+    }
+
+    private async Task TryDispatchTransientExecutionCommandAsync(
+        string responseId,
+        string runId,
+        LlmRunRequested executionRequest)
+    {
+        if (Services.GetService(typeof(ILlmRunExecutionScheduler)) is not ILlmRunExecutionScheduler scheduler)
+            return;
+
+        try
+        {
+            await scheduler.ScheduleAsync(
+                new LlmRunExecutionRequest(
+                    Id,
+                    responseId,
+                    runId,
+                    executionRequest.Clone(),
+                    ResolveExecutionOriginPlatform()),
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(
+                ex,
+                "LLM run execution dispatch failed for response {ResponseId} run {RunId}.",
+                responseId,
+                runId);
+            await PersistDomainEventAsync(new LlmRunFailed
+            {
+                ResponseId = responseId,
+                RunId = runId,
+                FailureCode = "execution_dispatch_failed",
+                FailureMessage = string.IsNullOrWhiteSpace(ex.Message)
+                    ? "LLM run execution dispatch failed."
+                    : ex.Message,
+                FailedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+                Sequence = NextRunSequence(runId),
+                RecordId = $"{runId}:execution-dispatch-failed",
+            });
+        }
+    }
+
+    private string? ResolveExecutionOriginPlatform()
+    {
+        if (State.Record == null || State.Record.OriginKind == LlmSessionOriginKind.Unspecified)
+            return null;
+
+        return State.Record.OriginKind.ToString();
     }
 
     [EventHandler]

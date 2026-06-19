@@ -2,16 +2,13 @@ using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Application.Responses;
 using Aevatar.GAgentService.Core.GAgents;
 using Aevatar.GAgentService.Infrastructure.Activation;
 using FluentAssertions;
-using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.GAgentService.Tests.Application;
@@ -65,145 +62,6 @@ public sealed class LlmRunExecutorTests
     }
 
     [Fact]
-    public async Task RunExecutionReadyHook_ShouldExecuteRunOnlyAfterCommittedReadyEvent()
-    {
-        var scheduler = new RecordingLlmRunExecutionScheduler();
-        var hook = new LlmRunExecutionReadyHook(scheduler);
-        var sourceCommand = BuildRunRequest("resp_hook");
-        sourceCommand.RunId = "stale-run";
-        var context = new CommittedStatePublicationContext
-        {
-            ActorId = "session-actor-hook",
-            ActorType = typeof(object),
-            Published = new CommittedStateEventPublished
-            {
-                StateEvent = new StateEvent
-                {
-                    EventData = Any.Pack(new LlmRunExecutionReadyEvent
-                    {
-                        ResponseId = "resp_hook",
-                        RunId = "run_hook",
-                        ReadyAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                        ExecutionRequest = sourceCommand,
-                    }),
-                },
-                StateRoot = Any.Pack(new LlmSessionState
-                {
-                    Record = new LlmSessionRecord
-                    {
-                        ResponseId = "resp_hook",
-                        OriginKind = LlmSessionOriginKind.ApiKey,
-                    },
-                }),
-            },
-        };
-
-        await hook.BeforePublishAsync(context, CancellationToken.None);
-
-        var request = scheduler.ScheduledRequests.Should().ContainSingle().Subject;
-        request.SessionActorId.Should().Be("session-actor-hook");
-        request.ResponseId.Should().Be("resp_hook");
-        request.RunId.Should().Be("run_hook");
-        request.Command.ResponseId.Should().Be("resp_hook");
-        request.Command.RunId.Should().Be("run_hook");
-        request.OriginPlatform.Should().Be(LlmSessionOriginKind.ApiKey.ToString());
-    }
-
-    [Fact]
-    public async Task RunExecutionReadyHook_WhenExecutionRequestComesFromLegacyLlmRunRequested_ShouldScheduleRun()
-    {
-        var scheduler = new RecordingLlmRunExecutionScheduler();
-        var hook = new LlmRunExecutionReadyHook(scheduler);
-        var executionRequest = BuildRunRequest("resp_legacy_hook");
-        executionRequest.RunId = "stale-run";
-        executionRequest.ToolContext = new Aevatar.AI.Abstractions.AgentToolExecutionContextPayload
-        {
-            Channel = new Aevatar.AI.Abstractions.AgentToolChannelContextPayload
-            {
-                Platform = "LegacyPlatform",
-            },
-        };
-        var context = new CommittedStatePublicationContext
-        {
-            ActorId = "session-actor-legacy-hook",
-            ActorType = typeof(object),
-            Published = new CommittedStateEventPublished
-            {
-                StateEvent = new StateEvent
-                {
-                    EventData = Any.Pack(new LlmRunExecutionReadyEvent
-                    {
-                        ResponseId = "resp_legacy_hook",
-                        RunId = "run_legacy_hook",
-                        ReadyAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                        ExecutionRequest = executionRequest,
-                    }),
-                },
-                StateRoot = Any.Pack(new LlmSessionState
-                {
-                    Record = new LlmSessionRecord
-                    {
-                        ResponseId = "resp_legacy_hook",
-                        OriginKind = LlmSessionOriginKind.Channel,
-                    },
-                }),
-            },
-        };
-
-        await hook.BeforePublishAsync(context, CancellationToken.None);
-
-        var request = scheduler.ScheduledRequests.Should().ContainSingle().Subject;
-        request.SessionActorId.Should().Be("session-actor-legacy-hook");
-        request.ResponseId.Should().Be("resp_legacy_hook");
-        request.RunId.Should().Be("run_legacy_hook");
-        request.Command.ResponseId.Should().Be("resp_legacy_hook");
-        request.Command.RunId.Should().Be("run_legacy_hook");
-        request.Command.ToolContext.Should().BeEquivalentTo(executionRequest.ToolContext);
-        request.OriginPlatform.Should().Be(LlmSessionOriginKind.Channel.ToString());
-    }
-
-    [Fact]
-    public async Task RunExecutionReadyHook_WhenSchedulerFails_ShouldLogAndKeepPublicationHookNonBlocking()
-    {
-        var scheduler = new ThrowingLlmRunExecutionScheduler(new InvalidOperationException("provision failed"));
-        var logger = new RecordingLogger<LlmRunExecutionReadyHook>();
-        var hook = new LlmRunExecutionReadyHook(scheduler, logger);
-        var context = new CommittedStatePublicationContext
-        {
-            ActorId = "session-actor-failing-hook",
-            ActorType = typeof(object),
-            Published = new CommittedStateEventPublished
-            {
-                StateEvent = new StateEvent
-                {
-                    EventData = Any.Pack(new LlmRunExecutionReadyEvent
-                    {
-                        ResponseId = "resp_failing_hook",
-                        RunId = "run_failing_hook",
-                        ReadyAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                        ExecutionRequest = BuildRunRequest("resp_failing_hook"),
-                    }),
-                },
-                StateRoot = Any.Pack(new LlmSessionState
-                {
-                    Record = new LlmSessionRecord
-                    {
-                        ResponseId = "resp_failing_hook",
-                        OriginKind = LlmSessionOriginKind.ApiKey,
-                    },
-                }),
-            },
-        };
-
-        await hook.BeforePublishAsync(context, CancellationToken.None);
-
-        logger.Entries.Should().ContainSingle(entry =>
-            entry.Level == LogLevel.Error &&
-            entry.Exception is InvalidOperationException &&
-            entry.Message.Contains("LLM run execution scheduling failed", StringComparison.Ordinal));
-    }
-
-    [Fact]
     public async Task RunExecutionScheduler_ShouldDispatchExecutionCommandToProvisionedActor()
     {
         var provisioner = new RecordingExecutionTargetProvisioner("llm-run-execution:resp_scheduler:run_1");
@@ -230,6 +88,7 @@ public sealed class LlmRunExecutorTests
         command.ResponseId.Should().Be("resp_scheduler");
         command.RunId.Should().Be("run_1");
         command.Command.ResponseId.Should().Be("resp_scheduler");
+        command.Command.BearerToken.Should().Be("token-1");
         command.OriginPlatform.Should().Be("ApiKey");
     }
 
@@ -792,32 +651,6 @@ public sealed class LlmRunExecutorTests
         }
     }
 
-    private sealed class RecordingLlmRunExecutionScheduler : ILlmRunExecutionScheduler
-    {
-        public List<LlmRunExecutionRequest> ScheduledRequests { get; } = [];
-
-        public ValueTask ScheduleAsync(
-            LlmRunExecutionRequest request,
-            CancellationToken ct = default)
-        {
-            _ = ct;
-            ScheduledRequests.Add(request);
-            return ValueTask.CompletedTask;
-        }
-    }
-
-    private sealed class ThrowingLlmRunExecutionScheduler(Exception exception) : ILlmRunExecutionScheduler
-    {
-        public ValueTask ScheduleAsync(
-            LlmRunExecutionRequest request,
-            CancellationToken ct = default)
-        {
-            _ = request;
-            _ = ct;
-            throw exception;
-        }
-    }
-
     private sealed class RecordingExecutionTargetProvisioner(string actorId) : ILlmRunExecutionTargetProvisioner
     {
         public List<LlmRunExecutionRequest> Requests { get; } = [];
@@ -898,23 +731,4 @@ public sealed class LlmRunExecutorTests
         public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 
-    private sealed class RecordingLogger<T> : ILogger<T>
-    {
-        public List<(LogLevel Level, string Message, Exception? Exception)> Entries { get; } = [];
-
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(
-            LogLevel logLevel,
-            EventId eventId,
-            TState state,
-            Exception? exception,
-            Func<TState, Exception?, string> formatter)
-        {
-            _ = eventId;
-            Entries.Add((logLevel, formatter(state, exception), exception));
-        }
-    }
 }

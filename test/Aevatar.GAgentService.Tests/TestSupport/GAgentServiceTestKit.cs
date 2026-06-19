@@ -1,6 +1,5 @@
 using System.Reflection;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Abstractions.Hooks;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.TypeSystem;
@@ -158,7 +157,8 @@ internal static class GAgentServiceTestKit
             services.TryAddSingleton<ILlmRunExecutionService>(sp =>
                 sp.GetService<ILlmRunExecutor>() as ILlmRunExecutionService ??
                 sp.GetRequiredService<InlineLlmRunExecutor>());
-            services.AddSingleton<ICommittedStatePublicationHook>(sp => new InlineLlmRunExecutionReadyHook(sp));
+            services.TryAddSingleton<ILlmRunExecutionScheduler>(sp =>
+                new InlineLlmRunExecutionScheduler(sp.GetRequiredService<ILlmRunExecutionService>()));
         }
         agent.Services = services.BuildServiceProvider();
         return agent;
@@ -208,57 +208,13 @@ internal static class GAgentServiceTestKit
                 ct);
     }
 
-    private sealed class InlineLlmRunExecutionReadyHook(IServiceProvider serviceProvider) : ICommittedStatePublicationHook
+    private sealed class InlineLlmRunExecutionScheduler(
+        ILlmRunExecutionService executionService) : ILlmRunExecutionScheduler
     {
-        public Task BeforePublishAsync(CommittedStatePublicationContext context, CancellationToken ct)
-        {
-            if (context.Published.StateRoot?.Is(LlmSessionState.Descriptor) != true ||
-                context.Published.StateEvent?.EventData?.Is(LlmRunExecutionReadyEvent.Descriptor) != true ||
-                !TryBuildRequest(context, out var request))
-            {
-                return Task.CompletedTask;
-            }
-
-            return serviceProvider.GetRequiredService<ILlmRunExecutionService>().ExecuteAsync(request, ct);
-        }
-
-        private static bool TryBuildRequest(
-            CommittedStatePublicationContext context,
-            out LlmRunExecutionRequest request)
-        {
-            request = default!;
-            var ready = context.Published.StateEvent!.EventData.Unpack<LlmRunExecutionReadyEvent>();
-            if (string.IsNullOrWhiteSpace(ready.ResponseId) || string.IsNullOrWhiteSpace(ready.RunId))
-                return false;
-
-            if (ready.ExecutionRequest == null)
-                return false;
-
-            var responseId = ready.ResponseId.Trim();
-            var runId = ready.RunId.Trim();
-            var executionCommand = ready.ExecutionRequest.Clone();
-            executionCommand.ResponseId = responseId;
-            executionCommand.RunId = runId;
-
-            request = new LlmRunExecutionRequest(
-                context.ActorId,
-                responseId,
-                runId,
-                executionCommand,
-                ResolveOriginPlatform(context.Published.StateRoot));
-            return true;
-        }
-
-        private static string? ResolveOriginPlatform(Google.Protobuf.WellKnownTypes.Any? stateRoot)
-        {
-            if (stateRoot?.Is(LlmSessionState.Descriptor) != true)
-                return null;
-
-            var state = stateRoot.Unpack<LlmSessionState>();
-            return state.Record == null || state.Record.OriginKind == LlmSessionOriginKind.Unspecified
-                ? null
-                : state.Record.OriginKind.ToString();
-        }
+        public async ValueTask ScheduleAsync(
+            LlmRunExecutionRequest request,
+            CancellationToken ct = default) =>
+            await executionService.ExecuteAsync(request, ct).ConfigureAwait(false);
     }
 
     private sealed class InlineLlmRunSink(

@@ -56,7 +56,7 @@ public sealed class LlmSessionsProtoSurfaceRegressionTests
             ]);
         LlmRunRequested.Descriptor.FindFieldByName("timeout_after").Should().NotBeNull();
         LlmSessionRuntimeToolSelection.Descriptor.FindFieldByName("owned_tool_names").Should().NotBeNull();
-        LlmRunExecutionReadyEvent.Descriptor.FindFieldByName("execution_request").Should().NotBeNull();
+        LlmRunExecutionReadyEvent.Descriptor.FindFieldByName("execution_request").Should().BeNull();
         LlmRunStartedEvent.Descriptor.FindFieldByName("sequence").Should().NotBeNull();
         LlmStreamChunkObserved.Descriptor.FindFieldByName("sequence").Should().NotBeNull();
         LlmToolCallObserved.Descriptor.FindFieldByName("sequence").Should().NotBeNull();

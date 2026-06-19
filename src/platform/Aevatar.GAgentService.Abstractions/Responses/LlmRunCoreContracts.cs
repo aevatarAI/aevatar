@@ -56,6 +56,13 @@ public interface ILlmRunExecutionService
         CancellationToken ct = default);
 }
 
+public interface ILlmRunExecutionScheduler
+{
+    ValueTask ScheduleAsync(
+        LlmRunExecutionRequest request,
+        CancellationToken ct = default);
+}
+
 public interface ILlmRunExecutionTargetProvisioner
 {
     Task<string> EnsureExecutionTargetAsync(
