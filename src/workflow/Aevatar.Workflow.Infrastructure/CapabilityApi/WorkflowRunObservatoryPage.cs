@@ -482,40 +482,57 @@ internal static class WorkflowRunObservatoryPage
   .tl-tail .dot { width: 7px; height: 7px; background: var(--run); animation: pulse 2.4s ease-out infinite; }
 
   /* =========================================================================
-     Usage footer
-     ========================================================================= */
-  .usage-foot {
-    margin-top: 26px; padding-top: 14px; border-top: 1px solid var(--border);
-    display: flex; flex-wrap: wrap; gap: 8px 22px; align-items: center;
-    font-family: var(--mono); font-size: 12px; color: var(--muted);
-  }
-  .usage-foot .uf { display: inline-flex; gap: 6px; align-items: baseline; }
-  .usage-foot .uf b { color: var(--fg); font-weight: 600; }
-  .usage-foot .uf .lab { color: var(--muted-2); font-family: var(--sans); }
-  .usage-foot .sv { margin-left: auto; color: var(--muted-2); }
-
-  /* =========================================================================
      Graph (DAG)
      ========================================================================= */
-  .graph-wrap { border: 1px solid var(--border); border-radius: var(--r-lg); background:
+  .graph-wrap {
+    border: 1px solid var(--border); border-radius: var(--r-lg);
+    background:
       linear-gradient(0deg, transparent 0, transparent 23px, var(--border-soft) 23px, var(--border-soft) 24px),
       linear-gradient(90deg, transparent 0, transparent 23px, var(--border-soft) 23px, var(--border-soft) 24px);
     background-size: 24px 24px; background-color: var(--panel);
-    overflow: auto; position: relative; padding: 8px;
+    overflow: hidden; position: relative; height: 480px; max-height: 70dvh;
+    touch-action: none; user-select: none; cursor: grab;
   }
+  .graph-wrap.is-panning { cursor: grabbing; }
+  .graph-viewport { position: absolute; top: 0; left: 0; transform-origin: 0 0; will-change: transform; }
   .graph-canvas { position: relative; }
   .graph-canvas svg { position: absolute; inset: 0; overflow: visible; pointer-events: none; }
-  .gnode {
-    position: absolute; width: 200px; box-sizing: border-box;
-    background: var(--panel-2); border: 1.5px solid var(--border); border-radius: var(--r);
-    padding: 10px 12px; box-shadow: var(--shadow-sm); cursor: default;
+
+  /* zoom / fit controls (overlay) */
+  .graph-controls {
+    position: absolute; top: 10px; right: 10px; z-index: 7;
+    display: flex; flex-direction: column; gap: 4px; padding: 4px;
+    background: color-mix(in oklab, var(--panel) 86%, transparent);
+    border: 1px solid var(--border); border-radius: var(--r);
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
   }
-  .gnode .gn-top { display: flex; align-items: center; gap: 8px; }
-  .gnode .gn-ic { width: 24px; height: 24px; border-radius: 6px; display: grid; place-items: center; background: var(--panel-3); color: var(--muted); flex: 0 0 auto; }
+  .graph-controls button {
+    width: 30px; height: 30px; display: grid; place-items: center;
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--muted);
+  }
+  .graph-controls button:hover { color: var(--fg); border-color: var(--muted-2); }
+  .graph-zoom-label { text-align: center; font-family: var(--mono); font-size: 10px; color: var(--muted-2); }
+
+  .gnode {
+    position: absolute; width: 244px; box-sizing: border-box; text-align: left;
+    background: var(--panel-2); border: 1.5px solid var(--border); border-radius: var(--r);
+    padding: 12px 14px; box-shadow: var(--shadow-sm); cursor: pointer; color: inherit; font: inherit;
+    transition: border-color .12s, box-shadow .12s, transform .12s;
+  }
+  .gnode:hover { border-color: var(--muted-2); transform: translateY(-1px); }
+  .gnode .gn-top { display: flex; align-items: center; gap: 10px; }
+  .gnode .gn-ic { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; background: var(--panel-3); color: var(--muted); flex: 0 0 auto; }
   .gnode .gn-main { min-width: 0; flex: 1 1 auto; }
-  .gnode .gn-id { font-family: var(--mono); font-size: 12.5px; font-weight: 600; color: var(--fg-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .gnode .gn-type { font-family: var(--mono); font-size: 11px; color: var(--muted-2); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .gnode .gn-foot { margin-top: 9px; display: flex; align-items: center; gap: 6px; font-size: 11px; }
+  .gnode .gn-id { font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--fg-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .gnode .gn-type { font-family: var(--mono); font-size: 11px; color: var(--muted-2); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .gnode .gn-foot { margin-top: 11px; display: flex; align-items: center; gap: 6px; font-size: 11px; }
+  /* category tint on the icon chip only — status border/color stays authoritative */
+  .gnode[data-cat="data"]        .gn-ic { color: var(--run);  background: var(--run-soft); }
+  .gnode[data-cat="control"]     .gn-ic { color: #a78bfa; background: rgba(167,139,250,.16); }
+  .gnode[data-cat="ai"]          .gn-ic { color: #f472b6; background: rgba(244,114,182,.16); }
+  .gnode[data-cat="composition"] .gn-ic { color: var(--warn); background: var(--warn-soft); }
+  .gnode[data-cat="integration"] .gn-ic { color: var(--ok);  background: var(--ok-soft); }
+  .gnode[data-cat="human"]       .gn-ic { color: #22d3ee; background: rgba(34,211,238,.16); }
   .gnode.st-done   { border-color: color-mix(in oklab, var(--ok) 45%, var(--border)); }
   .gnode.st-done .gn-ic { color: var(--ok); background: var(--ok-soft); }
   .gnode.st-current{ border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
@@ -525,6 +542,7 @@ internal static class WorkflowRunObservatoryPage
   .gnode.st-stopped{ border-color: color-mix(in oklab, var(--warn) 50%, var(--border)); }
   .gnode.st-stopped .gn-ic { color: var(--warn); background: var(--warn-soft); }
   .gnode.st-pending{ opacity: .72; border-style: dashed; }
+  .gnode.selected { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft), var(--shadow); }
   .gn-state { font-size: 11px; font-weight: 600; }
   .gnode.st-done .gn-state { color: var(--ok); } .gnode.st-current .gn-state { color: var(--accent); }
   .gnode.st-failed .gn-state { color: var(--err); } .gnode.st-stopped .gn-state { color: var(--warn); }
@@ -535,6 +553,29 @@ internal static class WorkflowRunObservatoryPage
     background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-pill);
     padding: 1px 7px; white-space: nowrap;
   }
+
+  /* node detail drawer (right on desktop, bottom sheet on mobile) */
+  .gnode-detail {
+    position: absolute; top: 8px; right: 8px; bottom: 8px; width: 324px; max-width: calc(100% - 16px);
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--r);
+    box-shadow: var(--shadow); display: flex; flex-direction: column; overflow: hidden; z-index: 8;
+  }
+  .gnode-detail .nd-head { display: flex; align-items: center; gap: 9px; padding: 12px; border-bottom: 1px solid var(--border-soft); }
+  .gnode-detail .nd-ic { width: 28px; height: 28px; border-radius: 7px; display: grid; place-items: center; background: var(--panel-3); color: var(--muted); flex: 0 0 auto; }
+  .gnode-detail .nd-id { font-family: var(--mono); font-size: 13px; font-weight: 650; color: var(--fg-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; }
+  .gnode-detail .nd-close { width: 26px; height: 26px; flex: 0 0 auto; display: grid; place-items: center; background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--muted); }
+  .gnode-detail .nd-close:hover { color: var(--fg); border-color: var(--muted-2); }
+  .gnode-detail .nd-body { overflow-y: auto; padding: 12px; display: grid; gap: 13px; }
+  .nd-meta { display: grid; grid-template-columns: auto 1fr; gap: 5px 12px; font-size: 12.5px; align-items: baseline; }
+  .nd-meta .k { color: var(--muted-2); }
+  .nd-meta .v { color: var(--fg); font-family: var(--mono); word-break: break-word; }
+  .nd-sec-title { font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: var(--muted-2); font-weight: 600; margin-bottom: 6px; }
+  .nd-ev { padding: 8px 10px; border: 1px solid var(--border-soft); border-radius: var(--r-sm); background: var(--panel-2); margin-bottom: 6px; }
+  .nd-ev-head { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+  .nd-ev-ts { font-family: var(--mono); font-size: 11px; color: var(--muted-2); margin-left: auto; }
+  .nd-ev-msg { font-size: 12.5px; color: var(--fg); margin-top: 5px; line-height: 1.5; }
+  .nd-ev-msg.err { color: var(--err); font-weight: 600; }
+  .nd-empty { color: var(--muted); font-size: 12.5px; text-align: center; padding: 18px 8px; }
   .graph-legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 14px; font-size: 12px; color: var(--muted); }
   .graph-legend .lg { display: inline-flex; align-items: center; gap: 6px; }
   .graph-legend .sw { width: 11px; height: 11px; border-radius: 3px; border: 1.5px solid var(--border); }
@@ -609,6 +650,9 @@ internal static class WorkflowRunObservatoryPage
     .usage-strip { flex-direction: column; }
     .usage-cell { border-right: 0; border-bottom: 1px solid var(--border-soft); }
     .usage-cell:last-child { border-bottom: 0; }
+    .graph-wrap { height: 62dvh; }
+    /* node detail becomes a bottom sheet */
+    .gnode-detail { top: auto; left: 8px; right: 8px; bottom: 8px; width: auto; max-width: none; max-height: 64%; }
   }
   @media (min-width: 761px) { .backbar { display: none !important; } }
 
@@ -864,6 +908,8 @@ const state = {
   activeTab: "timeline",
   expanded: new Set(),  // tool-call ids expanded by default for the running run
   theme: localStorage.getItem("wro-theme") || null, // null = follow system
+  selectedNodeId: null, // graph node whose detail drawer is open
+  graphView: { zoom: 1, panX: 0, panY: 0, fitted: false }, // pan/zoom transform, survives polling re-renders
 };
 function nowMs(){ return Date.now(); }
 
@@ -1083,7 +1129,6 @@ function renderDetail(){
   tp.appendChild(graphPanel);
   inner.appendChild(tp);
 
-  inner.appendChild(renderUsageFooter(detail));
   pane.appendChild(inner);
   return pane;
 }
@@ -1105,8 +1150,6 @@ function renderRunHeader(detail){
       <span class="grp"><span class="k">运行 ID</span><span class="v">${esc(s.runId)}</span></span>
       <span class="grp"><span class="k">用时</span><span class="v" ${isRunning?`data-duration="${s.startedAtUtc}"`:""}>${fmtDur(endMs-started)}</span></span>
       <span class="grp"><span class="k">开始</span><span class="v">${clockUTC(s.startedAtUtc)} UTC</span></span>
-      <span class="grp"><span class="k">Token</span><span class="v">${fmtNum(u.totalTokens)}</span></span>
-      <span class="grp"><span class="k">花费</span><span class="v">${fmtCost(u.cost)}</span></span>
     </div>`;
 
   // usage strip (compact summary cards)
@@ -1249,28 +1292,187 @@ function jsonField(label, raw){
   return f;
 }
 
-/* ---- Graph (DAG) ---- */
+/* ---- Graph (DAG) — interactive: zoom / pan / fit-to-view + click-a-node detail ----
+   Vanilla-JS reimagining of the console-web Studio graph (no React / no @xyflow). The API graph
+   carries only nodes/edges; per-node status comes from deriveNodeStatus (committed timeline, never
+   invented). Node detail is a pure client-side join of the node against the run timeline events for
+   the same stepId — no extra backend call. */
+const GRAPH_CATEGORY = {
+  transform:"data", assign:"data", retrieve_facts:"data", cache:"data",
+  guard:"control", conditional:"control", switch:"control", while:"control", delay:"control", wait_signal:"control", checkpoint:"control",
+  llm:"ai", llm_call:"ai", tool:"ai", tool_call:"ai", evaluate:"ai", reflect:"ai",
+  foreach:"composition", parallel:"composition", race:"composition", map_reduce:"composition", workflow_call:"composition", dynamic_workflow:"composition", vote:"composition",
+  connector_call:"integration", emit:"integration",
+  human:"human", human_input:"human", human_approval:"human"
+};
+function nodeCategory(t){ return GRAPH_CATEGORY[String(t||"").toLowerCase()] || ""; }
+const GRAPH_ZOOM_MIN = 0.3, GRAPH_ZOOM_MAX = 2.0;
+const clampZoom = z => Math.max(GRAPH_ZOOM_MIN, Math.min(GRAPH_ZOOM_MAX, z));
+const ST_LABEL = { done:"已完成", current:"进行中", failed:"失败", stopped:"已停止", pending:"待执行" };
+const ST_BADGE = { done:"completed", current:"running", failed:"failed", stopped:"stopped", pending:"unknown" };
+
+function applyGraphTransform(viewport){
+  const v = state.graphView;
+  viewport.style.transform = `translate(${v.panX}px,${v.panY}px) scale(${v.zoom})`;
+  const lab = document.getElementById("graphZoomLabel");
+  if(lab) lab.textContent = Math.round(v.zoom*100) + "%";
+}
+/* Fit the whole graph into the viewport. readableFloor (optional) keeps the FIRST view legible: a wide
+   horizontal flow in a narrow pane would otherwise fit at ~30% (unreadable), so when the true-fit zoom
+   falls below the floor we open at the floor zoom anchored to the flow start and let the user pan. The
+   explicit Fit control passes no floor → true fit-everything overview. */
+function fitGraphView(wrap, viewport, W, H, readableFloor){
+  const vw = wrap.clientWidth, vh = wrap.clientHeight;
+  if(!vw || !vh) return;
+  const pad = 28;
+  const fit = clampZoom(Math.min((vw-pad*2)/W, (vh-pad*2)/H, 1));
+  if(readableFloor && fit < readableFloor){
+    const zoom = readableFloor;
+    state.graphView = { zoom, panX: pad, panY: Math.max(pad, (vh - H*zoom)/2), fitted:true };
+  } else {
+    state.graphView = { zoom: fit, panX:(vw - W*fit)/2, panY:(vh - H*fit)/2, fitted:true };
+  }
+  applyGraphTransform(viewport);
+}
+/* Auto-fit once the graph first becomes visible. Deferred via setTimeout (not rAF — rAF is paused on
+   hidden/background tabs, which would leave the graph unfitted); the node is attached after the
+   synchronous render so reading clientWidth forces layout. Retry until the viewport is measurable. */
+function scheduleAutoFit(host, viewport, W, H){
+  let tries = 0;
+  const tick = () => {
+    if(state.graphView.fitted || state.activeTab !== "graph") return;
+    if(host.clientWidth > 0 && host.clientHeight > 0){ fitGraphView(host, viewport, W, H, 0.55); return; }
+    if(++tries < 12) setTimeout(tick, 30);
+  };
+  setTimeout(tick, 0);
+}
+function zoomGraphAt(viewport, factor, cx, cy){
+  const v = state.graphView;
+  const nz = clampZoom(v.zoom * factor);
+  const k = nz / v.zoom;
+  v.panX = cx - (cx - v.panX) * k;
+  v.panY = cy - (cy - v.panY) * k;
+  v.zoom = nz; v.fitted = true;
+  applyGraphTransform(viewport);
+}
+function attachGraphInteractions(wrap, viewport){
+  wrap.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const rect = wrap.getBoundingClientRect();
+    zoomGraphAt(viewport, e.deltaY < 0 ? 1.1 : 1/1.1, e.clientX - rect.left, e.clientY - rect.top);
+  }, { passive:false });
+
+  let dragging=false, pid=null, sx=0, sy=0, ox=0, oy=0;
+  wrap.addEventListener("pointerdown", (e) => {
+    if(e.button!==0 || e.target.closest(".gnode, .graph-controls, .gnode-detail")) return;
+    dragging=true; pid=e.pointerId; sx=e.clientX; sy=e.clientY; ox=state.graphView.panX; oy=state.graphView.panY;
+    wrap.classList.add("is-panning");
+    try { wrap.setPointerCapture(e.pointerId); } catch(_){}
+  });
+  wrap.addEventListener("pointermove", (e) => {
+    if(!dragging || e.pointerId!==pid) return;
+    state.graphView.panX = ox + (e.clientX - sx);
+    state.graphView.panY = oy + (e.clientY - sy);
+    state.graphView.fitted = true;
+    applyGraphTransform(viewport);
+  });
+  const end = () => { if(!dragging) return; dragging=false; wrap.classList.remove("is-panning"); try { wrap.releasePointerCapture(pid); } catch(_){} };
+  wrap.addEventListener("pointerup", end);
+  wrap.addEventListener("pointercancel", end);
+}
+
+function openNodeDetail(nodeId){ state.selectedNodeId = nodeId; syncNodeDetail(); }
+function closeNodeDetail(){ state.selectedNodeId = null; syncNodeDetail(); }
+/* Toggle the drawer + node halo in place so an open panel and the zoom/pan transform survive without a
+   full page re-render. */
+function syncNodeDetail(){
+  const host = document.querySelector(".graph-wrap");
+  if(!host) return;
+  host.querySelectorAll(".gnode").forEach(nd => nd.classList.toggle("selected", nd.getAttribute("data-node")===state.selectedNodeId));
+  const existing = host.querySelector(".gnode-detail");
+  if(existing) existing.remove();
+  const detail = currentDetail();
+  const g = detail && DataSource.getGraph(detail.summary.runId);
+  if(state.selectedNodeId && detail && g && g.nodes.some(nd => nd.nodeId === state.selectedNodeId))
+    host.appendChild(renderNodeDetailPanel(detail, g, state.selectedNodeId));
+}
+
+function renderNodeDetailPanel(detail, g, nodeId){
+  const node = g.nodes.find(nd => nd.nodeId === nodeId);
+  const st = (g.nodeStatus && g.nodeStatus[nodeId]) || "pending";
+  const events = (detail.timeline || []).filter(e => e.stepId === nodeId)
+    .slice().sort((a,b) => parseT(a.timestampUtc) - parseT(b.timestampUtc));
+  const tsList = events.map(e => parseT(e.timestampUtc)).filter(x => !isNaN(x));
+  const startTs = tsList.length ? Math.min.apply(null, tsList) : null;
+  const endTs = tsList.length ? Math.max.apply(null, tsList) : null;
+  const cat = nodeCategory(node && node.nodeType);
+
+  const panel = el("aside", { class:"gnode-detail", role:"region", "aria-label":`节点详情 ${nodeId}`, tabindex:"-1" });
+  panel.addEventListener("keydown", (e) => { if(e.key === "Escape"){ e.stopPropagation(); closeNodeDetail(); } });
+
+  const head = el("div", { class:"nd-head" });
+  head.innerHTML = `<span class="nd-ic" data-cat="${cat}" aria-hidden="true">${stepTypeIcon(node && node.nodeType)}</span>
+    <span class="nd-id" title="${esc(nodeId)}">${esc(nodeId)}</span>`;
+  const close = el("button", { class:"nd-close", type:"button", "aria-label":"关闭节点详情" }, ICON.x);
+  close.addEventListener("click", (ev) => { ev.stopPropagation(); closeNodeDetail(); });
+  head.appendChild(close);
+  panel.appendChild(head);
+
+  const body = el("div", { class:"nd-body scroll" });
+  const meta = el("div", { class:"nd-meta" });
+  meta.innerHTML = `
+    <span class="k">状态</span><span class="v"><span class="badge b-${ST_BADGE[st]}">${ST_LABEL[st]}</span></span>
+    <span class="k">类型</span><span class="v">${esc((node && node.nodeType) || "—")}</span>
+    ${startTs!=null ? `<span class="k">开始</span><span class="v">${clockUTC(new Date(startTs).toISOString())} UTC</span>` : ""}
+    ${(startTs!=null && endTs!=null && endTs>startTs) ? `<span class="k">用时</span><span class="v">${fmtDur(endTs-startTs)}</span>` : ""}`;
+  body.appendChild(meta);
+
+  const sec = el("div", {});
+  sec.appendChild(el("div", { class:"nd-sec-title" }, `执行事件 · ${events.length}`));
+  if(events.length === 0){
+    sec.appendChild(el("div", { class:"nd-empty" }, "该节点尚无执行事件（待执行，或无可观察记录）。"));
+  } else {
+    events.forEach(ev => {
+      const row = el("div", { class:"nd-ev" });
+      const evHead = el("div", { class:"nd-ev-head" });
+      evHead.innerHTML = `<span class="kind k-${ev.kind}">${kindIcon(ev.kind)}<span>${KIND[ev.kind]?.label||ev.kind}</span></span><span class="nd-ev-ts">${clockUTC(ev.timestampUtc)}</span>`;
+      row.appendChild(evHead);
+      if(ev.kind === "ToolCall" && ev.toolCall){
+        row.appendChild(renderToolCall(ev.toolCall));
+      } else if(ev.message){
+        row.appendChild(el("div", { class:"nd-ev-msg"+(ev.kind==="RunError"?" err":"") }, esc(ev.message)));
+      }
+      sec.appendChild(row);
+    });
+  }
+  body.appendChild(sec);
+  panel.appendChild(body);
+  requestAnimationFrame(() => { try { panel.focus(); } catch(_){} });
+  return panel;
+}
+
 function renderGraph(detail){
   const g = DataSource.getGraph(detail.summary.runId);
   const wrap = el("div", {});
   if(!g){ wrap.appendChild(el("div", { class:"detail-empty" }, `<div class="dt">暂无拓扑数据</div>`)); return wrap; }
 
-  const canvasWrap = el("div", { class:"graph-wrap scroll" });
+  const host = el("div", { class:"graph-wrap", role:"application", "aria-label":"工作流拓扑图：滚轮缩放、拖拽平移、点击节点查看详情" });
+  const viewport = el("div", { class:"graph-viewport" });
   const canvas = el("div", { class:"graph-canvas" });
 
   const horizontal = window.innerWidth > 720;
-  const NW = 200, NH = 76, GX = 132, GY = 64, PAD = 16;
+  const NW = 244, NH = 96, GX = 150, GY = 84, PAD = 28;
   const n = g.nodes.length;
   const pos = {};
   let W, H;
   if(horizontal){
     W = PAD*2 + n*NW + (n-1)*GX;
-    H = PAD*2 + NH + 26;
-    g.nodes.forEach((nd,i) => pos[nd.nodeId] = { x: PAD + i*(NW+GX), y: PAD+13 });
+    H = PAD*2 + NH;
+    g.nodes.forEach((nd,i) => pos[nd.nodeId] = { x: PAD + i*(NW+GX), y: PAD });
   } else {
-    W = PAD*2 + NW + 40;
+    W = PAD*2 + NW;
     H = PAD*2 + n*NH + (n-1)*GY;
-    g.nodes.forEach((nd,i) => pos[nd.nodeId] = { x: PAD+20, y: PAD + i*(NH+GY) });
+    g.nodes.forEach((nd,i) => pos[nd.nodeId] = { x: PAD, y: PAD + i*(NH+GY) });
   }
   canvas.style.width = W+"px"; canvas.style.height = H+"px";
 
@@ -1299,24 +1501,31 @@ function renderGraph(detail){
     path.setAttribute("stroke","var(--muted-2)");
     path.setAttribute("stroke-width","1.6");
     path.setAttribute("marker-end","url(#arrow)");
-    const failedEdge = g.nodeStatus && (g.nodeStatus[e.fromNodeId]==="failed" || g.nodeStatus[e.toNodeId]==="pending");
     if(g.nodeStatus && g.nodeStatus[e.toNodeId]==="pending"){ path.setAttribute("stroke-dasharray","4 4"); path.setAttribute("opacity",".6"); }
     svg.appendChild(path);
     edgeLabels.push({ mx, my, type:e.edgeType });
   });
   canvas.appendChild(svg);
 
-  // nodes
+  // nodes (clickable buttons → detail drawer)
   g.nodes.forEach(nd => {
     const st = (g.nodeStatus && g.nodeStatus[nd.nodeId]) || "pending";
-    const stLabel = { done:"已完成", current:"进行中", failed:"失败", stopped:"已停止", pending:"待执行" }[st];
-    const node = el("div", { class:`gnode st-${st}`, title:`${nd.nodeId}${nd.nodeType?" · "+nd.nodeType:""}`, style:`left:${pos[nd.nodeId].x}px;top:${pos[nd.nodeId].y}px` });
+    const cat = nodeCategory(nd.nodeType);
+    const node = el("button", {
+      type:"button",
+      class:`gnode st-${st}${state.selectedNodeId===nd.nodeId?" selected":""}`,
+      "data-cat": cat || null,
+      "data-node": nd.nodeId,
+      "aria-label":`节点 ${nd.nodeId}，${ST_LABEL[st]}，点击查看详情`,
+      style:`left:${pos[nd.nodeId].x}px;top:${pos[nd.nodeId].y}px`
+    });
     node.innerHTML = `
       <div class="gn-top">
         <span class="gn-ic" aria-hidden="true">${stepTypeIcon(nd.nodeType)}</span>
-        <div class="gn-main"><div class="gn-id">${esc(midTrunc(nd.nodeId, 20))}</div><div class="gn-type">${esc(midTrunc(nd.nodeType, 22) || "—")}</div></div>
+        <div class="gn-main"><div class="gn-id">${esc(midTrunc(nd.nodeId, 26))}</div><div class="gn-type">${esc(midTrunc(nd.nodeType, 28) || "—")}</div></div>
       </div>
-      <div class="gn-foot"><span class="gn-state">${stLabel}</span></div>`;
+      <div class="gn-foot"><span class="gn-state">${ST_LABEL[st]}</span></div>`;
+    node.addEventListener("click", (ev) => { ev.stopPropagation(); openNodeDetail(nd.nodeId); });
     canvas.appendChild(node);
   });
 
@@ -1325,8 +1534,30 @@ function renderGraph(detail){
     canvas.appendChild(el("span", { class:"edge-label", style:`left:${L.mx}px;top:${L.my}px` }, esc(L.type)));
   });
 
-  canvasWrap.appendChild(canvas);
-  wrap.appendChild(canvasWrap);
+  viewport.appendChild(canvas);
+  host.appendChild(viewport);
+
+  // zoom / fit controls
+  const controls = el("div", { class:"graph-controls", role:"group", "aria-label":"缩放控制" });
+  const fitIcon = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4M20 15v4a1 1 0 0 0-1 1h-4"/></svg>';
+  const mkBtn = (label, title, fn) => { const b = el("button", { type:"button", "aria-label":title, title }, label); b.addEventListener("click", (ev) => { ev.stopPropagation(); fn(); }); return b; };
+  controls.appendChild(mkBtn("+", "放大", () => zoomGraphAt(viewport, 1.2, host.clientWidth/2, host.clientHeight/2)));
+  controls.appendChild(el("div", { class:"graph-zoom-label", id:"graphZoomLabel" }, Math.round(state.graphView.zoom*100)+"%"));
+  controls.appendChild(mkBtn("−", "缩小", () => zoomGraphAt(viewport, 1/1.2, host.clientWidth/2, host.clientHeight/2)));
+  controls.appendChild(mkBtn(fitIcon, "适应窗口", () => fitGraphView(host, viewport, W, H)));
+  controls.appendChild(mkBtn("1:1", "实际大小", () => { state.graphView.zoom = 1; state.graphView.fitted = true; applyGraphTransform(viewport); }));
+  host.appendChild(controls);
+
+  // node detail drawer (re-opened after a polling re-render when a node stays selected)
+  if(state.selectedNodeId && g.nodes.some(nd => nd.nodeId === state.selectedNodeId))
+    host.appendChild(renderNodeDetailPanel(detail, g, state.selectedNodeId));
+
+  attachGraphInteractions(host, viewport);
+  applyGraphTransform(viewport);
+  // auto-fit once when the graph first becomes visible; keep the first view legible on narrow panes.
+  if(!state.graphView.fitted) scheduleAutoFit(host, viewport, W, H);
+
+  wrap.appendChild(host);
 
   const legend = el("div", { class:"graph-legend", "aria-hidden":"false" });
   legend.innerHTML = `
@@ -1337,18 +1568,6 @@ function renderGraph(detail){
     <span class="lg"><span class="sw pending"></span>待执行</span>`;
   wrap.appendChild(legend);
   return wrap;
-}
-
-function renderUsageFooter(detail){
-  const u = detail.usageTotals, s = detail.summary;
-  const f = el("div", { class:"usage-foot", "aria-label":"用量合计" });
-  f.innerHTML = `
-    <span class="uf"><span class="lab">输入</span><b>${fmtNum(u.promptTokens)}</b></span>
-    <span class="uf"><span class="lab">输出</span><b>${fmtNum(u.completionTokens)}</b></span>
-    <span class="uf"><span class="lab">合计</span><b>${fmtNum(u.totalTokens)}</b><span class="lab">tokens</span></span>
-    <span class="uf"><span class="lab">花费</span><b>${fmtCost(u.cost)}</b></span>
-    <span class="sv">状态 v${s.stateVersion}</span>`;
-  return f;
 }
 
 /* ===========================================================================
@@ -1380,6 +1599,8 @@ function selectRun(runId){
   state.selectedRunId = runId;
   state.scenario = "detailLoading";
   state.activeTab = "timeline";
+  state.selectedNodeId = null;
+  state.graphView = { zoom: 1, panX: 0, panY: 0, fitted: false };
   document.body.setAttribute("data-mobile-view","detail");
   render();
   loadDetail(runId);
