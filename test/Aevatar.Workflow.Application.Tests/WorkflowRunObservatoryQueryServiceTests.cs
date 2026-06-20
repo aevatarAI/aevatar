@@ -208,6 +208,64 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         graph.Edges.Should().ContainSingle().Which.EdgeType.Should().Be("child");
     }
 
+    // 06-20-observatory-admin-cross-scope (G3/G4): cross-scope admin overview.
+    [Fact]
+    public async Task ListAllRunsAsync_ShouldReturnRunsAcrossAllScopes_WithoutScopeFilter()
+    {
+        var currentState = new FakeCurrentStateQueryPort
+        {
+            ListResult =
+            [
+                Snapshot("run-a", CallerScope, WorkflowRunCompletionStatus.Running, started: 300, updated: 300),
+                Snapshot("run-b", OtherScope, WorkflowRunCompletionStatus.Completed, started: 100, updated: 100),
+            ],
+        };
+        var service = new WorkflowRunObservatoryQueryService(currentState, new FakeArtifactQueryPort());
+
+        var runs = await service.ListAllRunsAsync(new ObservatoryRunListFilter());
+
+        // No scope filter is pushed to the readmodel — this is the cross-scope path.
+        string.IsNullOrEmpty(currentState.LastListQuery!.ScopeId).Should().BeTrue();
+        runs.Should().HaveCount(2);
+        runs[0].RunId.Should().Be("run-a"); // sorted by started desc
+        runs[1].RunId.Should().Be("run-b");
+        // Every row carries its owning scope so the admin overview can attribute it.
+        runs.Single(r => r.RunId == "run-a").ScopeId.Should().Be(CallerScope);
+        runs.Single(r => r.RunId == "run-b").ScopeId.Should().Be(OtherScope);
+    }
+
+    [Fact]
+    public async Task ListAllRunsAsync_ShouldFilterByStatus_WithinWindow()
+    {
+        var currentState = new FakeCurrentStateQueryPort
+        {
+            ListResult =
+            [
+                Snapshot("run-running", CallerScope, WorkflowRunCompletionStatus.Running),
+                Snapshot("run-failed", OtherScope, WorkflowRunCompletionStatus.Failed),
+            ],
+        };
+        var service = new WorkflowRunObservatoryQueryService(currentState, new FakeArtifactQueryPort());
+
+        var runs = await service.ListAllRunsAsync(new ObservatoryRunListFilter { Status = "failed" });
+
+        runs.Should().ContainSingle().Which.RunId.Should().Be("run-failed");
+    }
+
+    [Fact]
+    public async Task ListRunsForScopeAsync_ShouldPopulateScopeIdOnSummaries()
+    {
+        var currentState = new FakeCurrentStateQueryPort
+        {
+            ListResult = [Snapshot("run-1", CallerScope, WorkflowRunCompletionStatus.Running)],
+        };
+        var service = new WorkflowRunObservatoryQueryService(currentState, new FakeArtifactQueryPort());
+
+        var runs = await service.ListRunsForScopeAsync(CallerScope, new ObservatoryRunListFilter());
+
+        runs.Should().ContainSingle().Which.ScopeId.Should().Be(CallerScope);
+    }
+
     private static WorkflowActorSnapshot Snapshot(
         string runId,
         string scopeId,

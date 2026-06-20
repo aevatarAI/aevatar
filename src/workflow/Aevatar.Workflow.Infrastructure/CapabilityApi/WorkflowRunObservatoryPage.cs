@@ -235,6 +235,29 @@ internal static class WorkflowRunObservatoryPage
   .linkbtn:hover { text-decoration: underline; }
 
   /* =========================================================================
+     Admin cross-scope bar (06-20-observatory-admin-cross-scope)
+     ========================================================================= */
+  .adminbar {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 8px 16px; border-bottom: 1px solid var(--border); background: var(--panel);
+  }
+  .adminbar .ab-badge {
+    font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+    padding: 2px 8px; border-radius: var(--r-pill);
+    color: var(--accent-ink); background: var(--accent-soft); border: 1px solid var(--accent-line);
+  }
+  .adminbar .ab-view { font-size: 12.5px; color: var(--muted); }
+  .adminbar .ab-view b { color: var(--fg-strong); font-family: var(--mono); font-weight: 600; }
+  .adminbar input.ab-input {
+    font: inherit; font-size: 12.5px; padding: 5px 9px; min-width: 180px; flex: 0 1 280px;
+    border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--panel-2); color: var(--fg);
+  }
+  .adminbar input.ab-input:focus { outline: none; border-color: var(--accent); }
+  .adminbar .ab-msg { font-size: 12px; color: var(--err); }
+  .adminbar .ab-cands { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 6px; }
+  .adminbar .ab-hint { flex-basis: 100%; font-size: 11.5px; color: var(--muted); margin-top: 1px; }
+
+  /* =========================================================================
      Error banner (role=alert)
      ========================================================================= */
   .banner {
@@ -766,7 +789,28 @@ const DataSource = {
   getGraph: (runId) => cache.graphs[runId] || null
 };
 
-function clearSession(){ cache.account=null; cache.runs=[]; cache.details={}; cache.graphs={}; }
+/* 06-20-observatory-admin-cross-scope: cross-scope admin view state (drives the admin bar + API scope params). */
+const ALL_SCOPES = "__all__";
+const adminState = { isAdmin:false, role:"", email:"", ownScope:"", currentScope:null, inputDraft:"", candidates:null, message:"" };
+function listScopeParam(){ return (adminState.isAdmin && adminState.currentScope) ? "?scope=" + encodeURIComponent(adminState.currentScope) : ""; }
+function runScopeParam(runId){
+  if(!adminState.isAdmin) return "";
+  const run = cache.runs.find(r => r.runId === runId);
+  const scope = run ? run.scopeId : ((adminState.currentScope && adminState.currentScope !== ALL_SCOPES) ? adminState.currentScope : "");
+  return (scope && scope !== adminState.ownScope) ? "?scope=" + encodeURIComponent(scope) : "";
+}
+function readScopeHash(){ const m = /(?:^#|&)scope=([^&]+)/.exec(location.hash || ""); return m ? decodeURIComponent(m[1]) : null; }
+function writeScopeHash(){
+  try {
+    if(adminState.currentScope) location.hash = "scope=" + encodeURIComponent(adminState.currentScope);
+    else if(location.hash) history.replaceState(null, "", location.pathname + location.search);
+  } catch(e){ /* hash persistence is best-effort */ }
+}
+function clearSession(){
+  cache.account=null; cache.runs=[]; cache.details={}; cache.graphs={};
+  adminState.isAdmin=false; adminState.role=""; adminState.email=""; adminState.ownScope="";
+  adminState.currentScope=null; adminState.inputDraft=""; adminState.candidates=null; adminState.message="";
+}
 function signOut(){ clearToken(); clearSession(); beginLogin(); }
 function signOutSilent(){ clearToken(); clearSession(); state.signedIn=false; state.scenario="login"; render(); }
 
@@ -1049,13 +1093,16 @@ function renderList(){
   runs.forEach(r => {
     const sel = state.selectedRunId === r.runId && state.scenario==="normal";
     const row = el("button", { class:"run-row", role:"listitem", "aria-current": String(sel) });
+    const scopeCol = (adminState.isAdmin && adminState.currentScope)
+      ? `<span class="sep">·</span><span class="id" title="scope id">${esc(r.scopeId||"")}</span>`
+      : "";
     row.innerHTML = `
       <span class="dot s-${r.status}" aria-hidden="true"></span>
       <span class="rn">${esc(r.workflowName)}</span>
       <span class="rm">
         <span>${STATUS_LABEL[r.status]||r.status}</span><span class="sep">·</span>
         <span class="id">${esc(r.runId)}</span><span class="sep">·</span>
-        <span data-since="${r.updatedAtUtc}">${relTime(parseT(r.updatedAtUtc), nowMs())}</span>
+        <span data-since="${r.updatedAtUtc}">${relTime(parseT(r.updatedAtUtc), nowMs())}</span>${scopeCol}
       </span>`;
     row.addEventListener("click", () => selectRun(r.runId));
     listbox.appendChild(row);
@@ -1586,6 +1633,8 @@ function render(){
     return;
   }
 
+  if(adminState.isAdmin) app.appendChild(renderAdminBar());
+
   const shell = el("div", { class:"shell"+(showBanner?" has-banner":"") });
   shell.appendChild(renderList());
   shell.appendChild(renderDetail());
@@ -1606,9 +1655,83 @@ function selectRun(runId){
   loadDetail(runId);
 }
 
+/* ---- 06-20-observatory-admin-cross-scope: admin cross-scope controls ---- */
+async function fetchMe(){
+  try {
+    const me = await api("/api/workflow/observatory/me");
+    if(me){ adminState.isAdmin = !!me.isAdmin; adminState.role = me.role || ""; adminState.email = me.email || ""; adminState.ownScope = me.scopeId || ""; }
+  } catch(e){ /* admin UI stays hidden if /me is unavailable */ }
+}
+
+function setScope(scope){
+  adminState.currentScope = scope;       // null = my runs · ALL_SCOPES · or a concrete scope id
+  adminState.candidates = null; adminState.message = ""; adminState.inputDraft = "";
+  state.selectedRunId = null;
+  cache.runs = []; cache.details = {}; cache.graphs = {};
+  lastRunsSig = ""; lastDetailSig = "";
+  state.scenario = "listLoading";
+  writeScopeHash();
+  render();
+  (async () => { await refreshRuns(); lastRunsSig = runsSig(cache.runs); render(); })();
+}
+
+function goToInput(){
+  const raw = (adminState.inputDraft || "").trim();
+  adminState.message = ""; adminState.candidates = null;
+  if(!raw) return;
+  if(raw.indexOf("@") >= 0) resolveEmail(raw); else setScope(raw);
+}
+
+async function resolveEmail(email){
+  adminState.message = "解析中…"; render();
+  try {
+    const res = await api("/api/workflow/observatory/resolve-scope?email=" + encodeURIComponent(email));
+    const cands = (res && res.candidates) || [];
+    if(cands.length === 0){ adminState.message = "未找到匹配的用户。"; adminState.candidates = null; render(); }
+    else if(cands.length === 1){ setScope(cands[0].scopeId); }
+    else { adminState.message = ""; adminState.candidates = cands; render(); }
+  } catch(e){ adminState.message = "解析失败，请重试。"; render(); }
+}
+
+function renderAdminBar(){
+  const bar = el("div", { class:"adminbar", role:"region", "aria-label":"管理员跨 scope 查看" });
+  bar.appendChild(el("span", { class:"ab-badge", title:"NyxID 平台角色：" + esc(adminState.role) }, "ADMIN"));
+
+  const view = el("span", { class:"ab-view" });
+  view.innerHTML = adminState.currentScope === ALL_SCOPES
+    ? "正在查看 <b>全部 scope</b>"
+    : (adminState.currentScope ? "正在查看 scope <b>" + esc(adminState.currentScope) + "</b>" : "正在查看 <b>我的运行</b>");
+  bar.appendChild(view);
+
+  const input = el("input", { class:"ab-input", type:"text", placeholder:"输入邮箱或 scope id 前往…", "aria-label":"邮箱或 scope id", value: adminState.inputDraft || "" });
+  input.addEventListener("input", e => { adminState.inputDraft = e.target.value; });
+  input.addEventListener("keydown", e => { if(e.key === "Enter"){ e.preventDefault(); goToInput(); } });
+  bar.appendChild(input);
+
+  const go = el("button", { class:"chip" }, "前往"); go.addEventListener("click", goToInput); bar.appendChild(go);
+  const all = el("button", { class:"chip", "aria-pressed": String(adminState.currentScope === ALL_SCOPES) }, "全部 scope");
+  all.addEventListener("click", () => setScope(ALL_SCOPES)); bar.appendChild(all);
+  if(adminState.currentScope){
+    const back = el("button", { class:"linkbtn" }, "返回我的运行");
+    back.addEventListener("click", () => setScope(null)); bar.appendChild(back);
+  }
+  if(adminState.message) bar.appendChild(el("span", { class:"ab-msg", role:"status" }, esc(adminState.message)));
+  if(adminState.candidates && adminState.candidates.length){
+    const cands = el("div", { class:"ab-cands", "aria-label":"候选 scope" });
+    adminState.candidates.forEach(c => {
+      const b = el("button", { class:"chip", title:"角色：" + esc(c.role || "") }, esc((c.email || c.scopeId) + " · " + c.scopeId));
+      b.addEventListener("click", () => setScope(c.scopeId));
+      cands.appendChild(b);
+    });
+    bar.appendChild(cands);
+  }
+  bar.appendChild(el("div", { class:"ab-hint" }, "邮箱解析为该 NyxID 用户的 scope id（≈用户 id），并非“该用户的全部运行”；全部 scope 为最近若干条视图。"));
+  return bar;
+}
+
 async function refreshRuns(){
   try {
-    const runs = await api("/api/workflow/observatory/runs");
+    const runs = await api("/api/workflow/observatory/runs" + listScopeParam());
     cache.runs = runs || [];
     if(state.scenario === "listLoading" || state.scenario === "empty" || state.scenario === "globalError"){
       state.scenario = (cache.runs.length === 0) ? "empty" : "normal";
@@ -1622,7 +1745,7 @@ async function refreshRuns(){
 
 async function refreshDetail(runId){
   try {
-    const detail = await api("/api/workflow/observatory/runs/" + encodeURIComponent(runId));
+    const detail = await api("/api/workflow/observatory/runs/" + encodeURIComponent(runId) + runScopeParam(runId));
     if(detail === null){
       delete cache.details[runId];
       if(state.selectedRunId === runId) state.scenario = "notFound";
@@ -1647,7 +1770,7 @@ async function loadDetail(runId){
 async function loadGraph(runId){
   if(!runId || cache.graphs[runId]) return;
   try {
-    const g = await api("/api/workflow/observatory/runs/" + encodeURIComponent(runId) + "/graph");
+    const g = await api("/api/workflow/observatory/runs/" + encodeURIComponent(runId) + "/graph" + runScopeParam(runId));
     if(g){
       g.nodeStatus = deriveNodeStatus(g, cache.details[runId]);
       cache.graphs[runId] = g;
@@ -1711,6 +1834,8 @@ applyTheme();
   state.scenario = "listLoading";
   render();
   cache.account = toAccount(await fetchUserInfo()) || cache.account;
+  await fetchMe();
+  if(adminState.isAdmin){ const h = readScopeHash(); if(h) adminState.currentScope = h; }
   await refreshRuns();
   lastRunsSig = runsSig(cache.runs);
   render();

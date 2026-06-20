@@ -11,7 +11,8 @@ namespace Aevatar.Workflow.Application.Observatory;
 //   - Per-run ownership is authoritative via the scope-stamped current-state snapshot: assert
 //     snapshot.ScopeId == scopeId, else return null so the endpoint maps it to 404 (D8 — no existence
 //     disclosure). Only then serve the timeline / graph (reused, runId-only, pure-read ports).
-public sealed class WorkflowRunObservatoryQueryService : IWorkflowRunObservatoryQueryService
+public sealed class WorkflowRunObservatoryQueryService
+    : IWorkflowRunObservatoryQueryService, IWorkflowRunAdminOverviewQueryService
 {
     private const int DefaultRunListTake = 100;
     private const int MaxRunListTake = 500;
@@ -56,6 +57,33 @@ public sealed class WorkflowRunObservatoryQueryService : IWorkflowRunObservatory
             .ToList();
 
         return summaries;
+    }
+
+    // 06-20-observatory-admin-cross-scope (G3/G4): cross-scope overview. No ScopeId in the query => the projection
+    //   returns runs across ALL scopes (recent-N, bounded by Take). No ownership gate. Authorization is enforced
+    //   upstream at the endpoint (admin/operator only) BEFORE this is called. Status filter is applied within the
+    //   recent-N window, mirroring the scope-bound list.
+    public async Task<IReadOnlyList<ObservatoryRunSummary>> ListAllRunsAsync(
+        ObservatoryRunListFilter filter,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(filter);
+
+        var take = Math.Clamp(filter.Take <= 0 ? DefaultRunListTake : filter.Take, 1, MaxRunListTake);
+        var snapshots = await _currentStateQueryPort.ListWorkflowActorCurrentStatesAsync(
+            new WorkflowActorCurrentStateListQuery
+            {
+                Take = take,
+            },
+            ct);
+
+        var statusFilter = filter.Status?.Trim();
+        return snapshots
+            .Select(ToRunSummary)
+            .Where(summary => string.IsNullOrEmpty(statusFilter) ||
+                              string.Equals(summary.Status, statusFilter, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(summary => summary.StartedAtUtc ?? summary.UpdatedAtUtc)
+            .ToList();
     }
 
     public async Task<ObservatoryRunDetail?> GetRunForScopeAsync(
@@ -160,6 +188,7 @@ public sealed class WorkflowRunObservatoryQueryService : IWorkflowRunObservatory
             StartedAtUtc = snapshot.StartedAtUtc?.ToDateTimeOffset(),
             UpdatedAtUtc = snapshot.LastUpdatedAt,
             StateVersion = snapshot.StateVersion,
+            ScopeId = snapshot.ScopeId,
         };
     }
 

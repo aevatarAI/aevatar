@@ -48,6 +48,10 @@ public sealed class ObservatoryRunSummary
     public DateTimeOffset UpdatedAtUtc { get; init; }
 
     public long StateVersion { get; init; }
+
+    // 06-20-observatory-admin-cross-scope: the run's owning scope. Populated for every read; the page only
+    // surfaces it in admin cross-scope mode (own-scope callers already know their scope).
+    public string ScopeId { get; init; } = string.Empty;
 }
 
 public sealed class ObservatoryRunDetail
