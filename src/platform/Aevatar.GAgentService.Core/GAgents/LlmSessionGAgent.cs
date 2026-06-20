@@ -585,7 +585,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         ArgumentNullException.ThrowIfNull(observed);
         var accepted = CanPersistRunFact(observed.ResponseId, observed.RunId, observed.Sequence, terminal: false);
         return accepted
-            ? PersistStreamChunkObservedAsync(observed.Clone(), CancellationToken.None)
+            ? PersistDomainEventAsync(observed.Clone(), CancellationToken.None)
             : Task.CompletedTask;
     }
 
@@ -595,7 +595,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         ArgumentNullException.ThrowIfNull(observed);
         var accepted = CanPersistRunFact(observed.ResponseId, observed.RunId, observed.Sequence, terminal: false);
         return accepted
-            ? PersistToolCallObservedAsync(observed.Clone(), CancellationToken.None)
+            ? PersistDomainEventAsync(observed.Clone(), CancellationToken.None)
             : Task.CompletedTask;
     }
 
@@ -605,7 +605,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         ArgumentNullException.ThrowIfNull(completed);
         var accepted = CanPersistRunFact(completed.ResponseId, completed.RunId, completed.Sequence, terminal: true);
         return accepted
-            ? PersistRunCompletedAsync(completed.Clone(), CancellationToken.None)
+            ? PersistDomainEventAsync(completed.Clone(), CancellationToken.None)
             : Task.CompletedTask;
     }
 
@@ -615,7 +615,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         ArgumentNullException.ThrowIfNull(failed);
         var accepted = CanPersistRunFact(failed.ResponseId, failed.RunId, failed.Sequence, terminal: true);
         return accepted
-            ? PersistRunFailedAsync(failed.Clone(), CancellationToken.None)
+            ? PersistDomainEventAsync(failed.Clone(), CancellationToken.None)
             : Task.CompletedTask;
     }
 
@@ -625,7 +625,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         ArgumentNullException.ThrowIfNull(cancelled);
         var accepted = CanPersistRunFact(cancelled.ResponseId, cancelled.RunId, cancelled.Sequence, terminal: true);
         return accepted
-            ? PersistRunCancelledAsync(cancelled.Clone(), CancellationToken.None)
+            ? PersistDomainEventAsync(cancelled.Clone(), CancellationToken.None)
             : Task.CompletedTask;
     }
 
@@ -854,7 +854,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         var next = state.Clone();
         var completedAt = evt.CompletedAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
         var run = EnsureRun(next, evt.RunId, evt.ResponseId, completedAt);
-        if (!TryAcceptRunRecord(run, evt.Sequence, evt.RecordId))
+        if (!TryAcceptRunRecord(run, evt.Sequence, evt.RecordId, allowTerminalGap: true))
             return state;
 
         run.Status = CompletedStatus;
@@ -899,7 +899,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         var next = state.Clone();
         var failedAt = evt.FailedAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
         var run = EnsureRun(next, evt.RunId, evt.ResponseId, failedAt);
-        if (!TryAcceptRunRecord(run, evt.Sequence, evt.RecordId))
+        if (!TryAcceptRunRecord(run, evt.Sequence, evt.RecordId, allowTerminalGap: true))
             return state;
 
         run.Status = FailedStatus;
@@ -929,7 +929,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         var next = state.Clone();
         var cancelledAt = evt.CancelledAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
         var run = EnsureRun(next, evt.RunId, evt.ResponseId, cancelledAt);
-        if (!TryAcceptRunRecord(run, evt.Sequence, evt.RecordId))
+        if (!TryAcceptRunRecord(run, evt.Sequence, evt.RecordId, allowTerminalGap: true))
             return state;
 
         run.Status = CancelledStatus;
@@ -1017,7 +1017,8 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
     private static bool TryAcceptRunRecord(
         LlmSessionRunScope run,
         long sequence,
-        string? recordId)
+        string? recordId,
+        bool allowTerminalGap = false)
     {
         if (IsRunTerminal(run.Status))
             return false;
@@ -1029,8 +1030,16 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             return false;
         }
 
-        if (!TryAcceptRunSequence(run, sequence))
+        if (allowTerminalGap && sequence > 0)
+        {
+            if (sequence <= run.LastAppliedSequence)
+                return false;
+            run.LastAppliedSequence = sequence;
+        }
+        else if (!TryAcceptRunSequence(run, sequence))
+        {
             return false;
+        }
 
         if (normalizedRecordId != null)
             run.AppliedRecordIds.Add(normalizedRecordId);
@@ -1232,28 +1241,6 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
 
         return LlmRunRecordDecision.Continue;
     }
-
-    private bool CompletionAlreadyRecorded(LlmRunCompleted completed)
-    {
-        if (State.Completion is not { CompletedAt: not null } existingCompletion)
-            return false;
-        if (!string.IsNullOrWhiteSpace(existingCompletion.FailureCode))
-            return false;
-        if (!string.Equals(existingCompletion.OutputText ?? string.Empty, completed.OutputText ?? string.Empty, StringComparison.Ordinal))
-            return false;
-        if (!UsageEquals(existingCompletion.Usage, completed.Usage))
-            return false;
-
-        var run = State.ActiveRun;
-        return run == null ||
-            !string.Equals(run.RunId, completed.RunId, StringComparison.Ordinal) ||
-            run.Status == CompletedStatus;
-    }
-
-    private bool RunTerminalAlreadyRecorded(string runId) =>
-        State.ActiveRun is { } run &&
-        string.Equals(run.RunId, runId, StringComparison.Ordinal) &&
-        IsRunTerminal(run.Status);
 
     private sealed class InActorLlmRunSink(LlmSessionGAgent actor) : ILlmRunSink
     {
