@@ -48,15 +48,18 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
 
     private readonly IStudioMemberService _memberService;
     private readonly IScheduledDispatchApplicationService _scheduleService;
+    private readonly IStudioRunCredentialIssuer? _runCredentialIssuer;
     private readonly TimeProvider _timeProvider;
 
     public StudioWorkflowProvisioningService(
         IStudioMemberService memberService,
         IScheduledDispatchApplicationService scheduleService,
+        IStudioRunCredentialIssuer? runCredentialIssuer = null,
         TimeProvider? timeProvider = null)
     {
         _memberService = memberService ?? throw new ArgumentNullException(nameof(memberService));
         _scheduleService = scheduleService ?? throw new ArgumentNullException(nameof(scheduleService));
+        _runCredentialIssuer = runCredentialIssuer;
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
@@ -64,6 +67,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         string scopeId,
         ProvisionWorkflowCallerCredential callerCredential,
         ProvisionWorkflowRequest request,
+        string? callerBearerToken = null,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(callerCredential);
@@ -71,7 +75,8 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
         var displayName = NormalizeRequired(request.DisplayName, nameof(request.DisplayName));
         var workflowYaml = NormalizeRequired(request.WorkflowYaml, nameof(request.WorkflowYaml));
-        var auth = BuildSenderNyxIdAuth(callerCredential);
+        var subjectRef = BuildSenderNyxIdCredentialSource(callerCredential);
+        var normalizedCallerToken = NormalizeOptional(callerBearerToken);
 
         // 1. Create the member (kind = workflow). The actor stamps the rename-safe
         //    published service id at creation, so we read it straight back — no
@@ -100,14 +105,22 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
             ct);
 
         // 3. Create the scheduled-dispatch that produces the run. The Workflow kind
-        //    is what flips on caller-token projection; the dispatch re-mints the
-        //    token from the subject ref on every fire. A schedule is created when
+        //    is what flips on caller-token projection. A schedule is created when
         //    there is something to fire — a recurring monitor (caller Cron) or a
         //    one-shot demo (RunImmediately). RunImmediately=false with no Cron is an
-        //    honest "bind only": no schedule, no run.
+        //    honest "bind only": no schedule, no run (and nothing to credential).
+        //
+        //    The schedule carries a DURABLE bearer credential so the run's LLM call
+        //    authenticates without a re-mintable NyxID binding (the gap a raw nyxid
+        //    caller hits): a minted agent key when a credential issuer is wired
+        //    (mirroring the SkillRunner scheduled-agent pattern), else the caller's
+        //    forwarded token directly. The subject ref stays as a fallback for hosts
+        //    whose callers do have a re-mintable binding.
         string? scheduleId = null;
         if (ShouldSchedule(request))
         {
+            var auth = await BuildScheduleAuthAsync(
+                subjectRef, normalizedCallerToken, memberId, normalizedScopeId, ct);
             var schedule = await _scheduleService.CreateAsync(
                 BuildScheduleConfiguration(
                     normalizedScopeId,
@@ -137,8 +150,9 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
     /// <summary>
     /// Builds the scheduled-dispatch configuration: a Workflow-kind service
     /// invocation targeting the bound member's <c>chat</c> endpoint with the
-    /// caller's prompt, carrying the caller subject ref so the dispatch re-mints a
-    /// token to project onto the run.
+    /// caller's prompt, carrying the resolved auth (a durable credential when
+    /// available, with the caller subject ref as fallback) that the dispatch
+    /// projects onto the run.
     /// </summary>
     private static ScheduledDispatchConfiguration BuildScheduleConfiguration(
         string scopeId,
@@ -216,14 +230,64 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         return $"{fireMinute.Minute} {fireMinute.Hour} {fireMinute.Day} {fireMinute.Month} *";
     }
 
-    private static ScheduledServiceInvocationAuth BuildSenderNyxIdAuth(
+    /// <summary>
+    /// Builds the scheduled-dispatch auth. Resolves a DURABLE bearer credential so
+    /// the run's LLM call authenticates without a re-mintable NyxID subject binding
+    /// (the gap a raw nyxid caller hits): a minted agent key when a
+    /// <see cref="IStudioRunCredentialIssuer"/> is wired, else the caller's
+    /// forwarded token. The subject ref is always retained as a fallback for hosts
+    /// whose callers do have a re-mintable binding (the dispatch prefers the durable
+    /// token when present and exchanges the subject otherwise).
+    /// </summary>
+    private async Task<ScheduledServiceInvocationAuth> BuildScheduleAuthAsync(
+        ScheduledServiceInvocationNyxIdCredentialSource subjectRef,
+        string? callerBearerToken,
+        string memberId,
+        string scopeId,
+        CancellationToken ct)
+    {
+        var durableToken = await ResolveDurableRunCredentialAsync(callerBearerToken, memberId, scopeId, ct);
+        return new ScheduledServiceInvocationAuth(subjectRef, durableToken);
+    }
+
+    /// <summary>
+    /// Mints a durable agent key under the caller's account (the proven SkillRunner
+    /// scheduled-agent pattern) when a credential issuer is registered and returns
+    /// one; otherwise falls back to the caller's forwarded bearer token. Returns
+    /// <c>null</c> when neither is available (the dispatch then falls back to the
+    /// subject token-exchange).
+    /// </summary>
+    private async Task<string?> ResolveDurableRunCredentialAsync(
+        string? callerBearerToken,
+        string memberId,
+        string scopeId,
+        CancellationToken ct)
+    {
+        if (callerBearerToken == null)
+            return null;
+
+        if (_runCredentialIssuer != null)
+        {
+            var mintedKey = NormalizeOptional(await _runCredentialIssuer.IssueDurableRunCredentialAsync(
+                callerBearerToken, memberId, scopeId, ct));
+            if (mintedKey != null)
+                return mintedKey;
+        }
+
+        // No durable agent key was minted (no issuer wired, or it could not mint a
+        // key for this caller/scope). Thread the forwarded caller token directly —
+        // valid for a soon-firing one-shot run; a recurring monitor benefits from a
+        // minted key but the forwarded token still unblocks the demo path.
+        return callerBearerToken;
+    }
+
+    private static ScheduledServiceInvocationNyxIdCredentialSource BuildSenderNyxIdCredentialSource(
         ProvisionWorkflowCallerCredential credential) =>
-        new(new ScheduledServiceInvocationNyxIdCredentialSource(
-            new ScheduledServiceInvocationNyxIdSubjectRef(
+        new(new ScheduledServiceInvocationNyxIdSubjectRef(
                 Platform: NormalizeRequired(credential.Platform, nameof(credential.Platform)),
                 Tenant: NormalizeOptional(credential.Tenant) ?? string.Empty,
                 ExternalUserId: NormalizeRequired(credential.ExternalUserId, nameof(credential.ExternalUserId))),
-            Scope: NormalizeRequired(credential.Scope, nameof(credential.Scope))));
+            Scope: NormalizeRequired(credential.Scope, nameof(credential.Scope)));
 
     private static string? BuildStudioUrl(string scopeId, string? teamId, string memberId)
     {

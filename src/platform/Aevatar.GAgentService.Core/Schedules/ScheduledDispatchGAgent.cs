@@ -471,15 +471,25 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
     private static ScheduledServiceInvocationAuth? ToRuntimeAuth(ScheduledServiceInvocationAuthState? auth)
     {
-        if (auth?.SenderNyxId == null)
+        if (auth == null)
             return null;
 
-        return new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationNyxIdCredentialSource(
-            new ScheduledServiceInvocationNyxIdSubjectRef(
-                auth.SenderNyxId.Subject?.Platform ?? string.Empty,
-                auth.SenderNyxId.Subject?.Tenant ?? string.Empty,
-                auth.SenderNyxId.Subject?.ExternalUserId ?? string.Empty),
-            auth.SenderNyxId.Scope ?? string.Empty));
+        var durableToken = string.IsNullOrWhiteSpace(auth.DurableSenderBearerToken)
+            ? null
+            : auth.DurableSenderBearerToken.Trim();
+        if (auth.SenderNyxId == null && durableToken == null)
+            return null;
+
+        var senderNyxId = auth.SenderNyxId == null
+            ? null
+            : new ScheduledServiceInvocationNyxIdCredentialSource(
+                new ScheduledServiceInvocationNyxIdSubjectRef(
+                    auth.SenderNyxId.Subject?.Platform ?? string.Empty,
+                    auth.SenderNyxId.Subject?.Tenant ?? string.Empty,
+                    auth.SenderNyxId.Subject?.ExternalUserId ?? string.Empty),
+                auth.SenderNyxId.Scope ?? string.Empty);
+
+        return new ScheduledServiceInvocationAuth(senderNyxId, durableToken);
     }
 
     private static IReadOnlyDictionary<string, string> ReadOnlyCopy(IReadOnlyDictionary<string, string> headers) =>
@@ -757,12 +767,21 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     private static ScheduledServiceInvocationAuthState? NormalizeServiceInvocationAuth(
         ScheduledServiceInvocationAuthState? auth)
     {
-        if (auth?.SenderNyxId == null)
+        if (auth == null)
             return null;
 
-        return new ScheduledServiceInvocationAuthState
+        var durableToken = NormalizeOptional(auth.DurableSenderBearerToken);
+        if (auth.SenderNyxId == null && string.IsNullOrEmpty(durableToken))
+            return null;
+
+        var normalized = new ScheduledServiceInvocationAuthState
         {
-            SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceState
+            DurableSenderBearerToken = durableToken,
+        };
+
+        if (auth.SenderNyxId != null)
+        {
+            normalized.SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceState
             {
                 Subject = new ScheduledServiceInvocationNyxIdSubjectRefState
                 {
@@ -771,8 +790,10 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                     ExternalUserId = NormalizeOptional(auth.SenderNyxId.Subject?.ExternalUserId),
                 },
                 Scope = NormalizeOptional(auth.SenderNyxId.Scope),
-            },
-        };
+            };
+        }
+
+        return normalized;
     }
 
     private ScheduledDispatchState ApplyConfigured(

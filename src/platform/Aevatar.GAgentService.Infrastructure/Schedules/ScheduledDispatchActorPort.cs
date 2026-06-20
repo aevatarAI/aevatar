@@ -284,12 +284,21 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
 
     private static ScheduledServiceInvocationAuthState? CreateAuthState(ScheduledServiceInvocationAuth? auth)
     {
-        if (auth?.SenderNyxId == null)
+        if (auth == null)
             return null;
 
-        return new ScheduledServiceInvocationAuthState
+        var durableToken = auth.DurableSenderBearerToken?.Trim() ?? string.Empty;
+        if (auth.SenderNyxId == null && durableToken.Length == 0)
+            return null;
+
+        var state = new ScheduledServiceInvocationAuthState
         {
-            SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceState
+            DurableSenderBearerToken = durableToken,
+        };
+
+        if (auth.SenderNyxId != null)
+        {
+            state.SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceState
             {
                 Subject = new ScheduledServiceInvocationNyxIdSubjectRefState
                 {
@@ -298,7 +307,9 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
                     ExternalUserId = auth.SenderNyxId.Subject.ExternalUserId,
                 },
                 Scope = auth.SenderNyxId.Scope,
-            },
-        };
+            };
+        }
+
+        return state;
     }
 }

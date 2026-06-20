@@ -44,6 +44,22 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         ScheduledServiceInvocationDispatchRequest dispatch,
         CancellationToken ct)
     {
+        // A durable bearer credential (e.g. a minted agent key or a forwarded
+        // caller token) is projected directly onto the run — used when the sender
+        // has no re-mintable NyxID binding (a raw nyxid caller), so the subject
+        // token-exchange is skipped. Takes precedence over a subject ref if both
+        // are present; the subject-exchange path stays the default for bound
+        // subjects (SkillRunner / team automations).
+        var durableToken = dispatch.Auth?.DurableSenderBearerToken;
+        if (!string.IsNullOrWhiteSpace(durableToken))
+        {
+            return EnrichChatPayload(
+                dispatch.Request,
+                dispatch.Headers,
+                NormalizeSenderNyxIdAccessToken(durableToken),
+                dispatch.ProjectSenderNyxIdAccessTokenToWorkflowCallerCredential);
+        }
+
         if (dispatch.Auth?.SenderNyxId == null)
         {
             return EnrichChatPayload(

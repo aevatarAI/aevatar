@@ -24,9 +24,18 @@ namespace Aevatar.Studio.Application.Studio.Abstractions;
 /// </summary>
 public interface IStudioWorkflowProvisioningService
 {
+    /// <param name="callerBearerToken">
+    /// The caller's forwarded NyxID bearer token (the <c>aevatar</c> nyxid
+    /// downstream sets <c>forward_access_token</c>, so the caller's token is on the
+    /// request). Threaded as the run's durable credential — or used to mint a
+    /// durable agent key when a <see cref="IStudioRunCredentialIssuer"/> is wired —
+    /// so the scheduled run's LLM call authenticates without a re-mintable subject
+    /// binding. Optional: when absent, the flow falls back to the subject ref.
+    /// </param>
     Task<ProvisionWorkflowResponse> ProvisionAsync(
         string scopeId,
         ProvisionWorkflowCallerCredential callerCredential,
         ProvisionWorkflowRequest request,
+        string? callerBearerToken = null,
         CancellationToken ct = default);
 }

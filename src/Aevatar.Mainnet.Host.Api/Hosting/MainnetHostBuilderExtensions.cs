@@ -47,11 +47,13 @@ using Aevatar.Mainnet.Host.Api.Responses;
 using Aevatar.Mainnet.Host.Api.Scheduled;
 using Aevatar.Mainnet.Host.Api.Status;
 using Aevatar.Mainnet.Host.Api.Voice;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Hosting;
 using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Integration.AI;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
@@ -200,6 +202,22 @@ public static class MainnetHostBuilderExtensions
         // layer between Studio and the AI/agent packages that consume the port.
         builder.Services.TryAddSingleton<IOwnerLlmConfigSource, StudioUserConfigOwnerLlmConfigSource>();
         builder.Services.AddLarkAgentAuthoring();
+        // Bridge the scheduled-agent key issuer (registered by AddLarkAgentAuthoring)
+        // onto the Studio IStudioRunCredentialIssuer port so C1-provisioned scheduled
+        // workflow runs mint a durable run credential under the caller's account.
+        // Lives here for the same reason as the LLM-config bridge: the host is the
+        // only layer that depends on both Studio.Application and the issuer. When no
+        // outbound slug is configured, the adapter mints nothing and provisioning
+        // falls back to the caller's forwarded token (C1 stays slug-free).
+        builder.Services.TryAddSingleton(sp =>
+        {
+            var options = new StudioRunCredentialIssuerOptions();
+            builder.Configuration
+                .GetSection(StudioRunCredentialIssuerOptions.ConfigurationSection)
+                .Bind(options);
+            return options;
+        });
+        builder.Services.TryAddSingleton<IStudioRunCredentialIssuer, ScheduledAgentKeyStudioRunCredentialIssuer>();
         builder.Services.AddSkillBackedHumanInteractionDelivery();
         builder.Services.AddChannelBackedHumanInteractionTools();
         builder.Services.AddNyxIdRelayChannel();

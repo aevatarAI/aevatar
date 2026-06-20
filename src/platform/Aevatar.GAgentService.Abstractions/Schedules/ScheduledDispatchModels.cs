@@ -40,7 +40,8 @@ public sealed record ScheduledServiceInvocationNyxIdCredentialSource(
     string Scope);
 
 public sealed record ScheduledServiceInvocationAuth(
-    ScheduledServiceInvocationNyxIdCredentialSource? SenderNyxId = null);
+    ScheduledServiceInvocationNyxIdCredentialSource? SenderNyxId = null,
+    string? DurableSenderBearerToken = null);
 
 public sealed record ScheduledServiceInvocationCredentialExchangeResult(
     bool Succeeded,

@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
 using FluentAssertions;
@@ -108,6 +109,118 @@ public sealed class StudioWorkflowProvisioningServiceTests
         auth.SenderNyxId.Subject.ExternalUserId.Should().Be("ou-user-1");
         auth.SenderNyxId.Subject.Tenant.Should().Be("tenant-9");
         auth.SenderNyxId.Scope.Should().Be("proxy");
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_ThreadsForwardedCallerToken_AsDurableRunCredential_WhenNoIssuer()
+    {
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var sut = NewService(member, schedule);
+
+        await sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "p"),
+            callerBearerToken: CallerBearerToken);
+
+        // With no credential issuer wired, the forwarded caller token is threaded
+        // directly as the run's durable credential so the scheduled run's LLM call
+        // authenticates without a re-mintable subject binding. The subject ref is
+        // retained as a fallback.
+        var auth = schedule.Configuration!.Target.ServiceInvocation!.Auth;
+        auth.Should().NotBeNull();
+        auth!.DurableSenderBearerToken.Should().Be(CallerBearerToken);
+        auth.SenderNyxId.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_MintsDurableKey_AndThreadsItAsRunCredential_WhenIssuerWired()
+    {
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var issuer = new RecordingRunCredentialIssuer { MintedKey = MintedKey };
+        var sut = NewService(member, schedule, issuer);
+
+        await sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "p"),
+            callerBearerToken: CallerBearerToken);
+
+        // The issuer minted a durable key under the caller's account, keyed by the
+        // member id and scope, using the caller bearer token.
+        issuer.IssueInvoked.Should().BeTrue();
+        issuer.CallerBearerToken.Should().Be(CallerBearerToken);
+        issuer.AgentId.Should().Be(MemberId);
+        issuer.ScopeId.Should().Be(ScopeId);
+
+        // The minted key (NOT the forwarded token) is threaded as the run credential.
+        var auth = schedule.Configuration!.Target.ServiceInvocation!.Auth;
+        auth!.DurableSenderBearerToken.Should().Be(MintedKey);
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_FallsBackToForwardedToken_WhenIssuerMintsNothing()
+    {
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var issuer = new RecordingRunCredentialIssuer { MintedKey = null };
+        var sut = NewService(member, schedule, issuer);
+
+        await sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "p"),
+            callerBearerToken: CallerBearerToken);
+
+        issuer.IssueInvoked.Should().BeTrue();
+        // The issuer minted nothing (e.g. no host slug configured); the forwarded
+        // caller token is used so provisioning still produces an authenticatable run.
+        var auth = schedule.Configuration!.Target.ServiceInvocation!.Auth;
+        auth!.DurableSenderBearerToken.Should().Be(CallerBearerToken);
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_NoDurableCredential_WhenNoBearerToken()
+    {
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var issuer = new RecordingRunCredentialIssuer { MintedKey = MintedKey };
+        var sut = NewService(member, schedule, issuer);
+
+        await sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "p"));
+
+        // No forwarded token → nothing to mint from and nothing to thread; the
+        // subject ref is the only auth (the dispatch falls back to subject exchange).
+        issuer.IssueInvoked.Should().BeFalse();
+        var auth = schedule.Configuration!.Target.ServiceInvocation!.Auth;
+        auth!.DurableSenderBearerToken.Should().BeNull();
+        auth.SenderNyxId.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_WithBearerToken_StillReturnsAcceptedAndScheduleId_WithoutPollingBind()
+    {
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var issuer = new RecordingRunCredentialIssuer { MintedKey = MintedKey };
+        var sut = NewService(member, schedule, issuer);
+
+        var response = await sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "go"),
+            callerBearerToken: CallerBearerToken);
+
+        response.BindingStatus.Should().Be(ProvisionWorkflowBindingStatusNames.Accepted);
+        response.ScheduleId.Should().Be(ScheduleId);
+        // Minting a durable credential must not turn the non-blocking flow into a
+        // bind poll.
+        member.GetBindingRunCallCount.Should().Be(0);
     }
 
     [Fact]
@@ -267,18 +380,23 @@ public sealed class StudioWorkflowProvisioningServiceTests
         schedule.Created.Should().BeFalse();
     }
 
-    private static StudioWorkflowProvisioningService NewService(
-        RecordingMemberService member,
-        RecordingScheduleService schedule) =>
-        NewService(member, schedule, out _);
+    private const string CallerBearerToken = "caller-bearer-token";
+    private const string MintedKey = "minted-durable-agent-key";
 
     private static StudioWorkflowProvisioningService NewService(
         RecordingMemberService member,
         RecordingScheduleService schedule,
-        out FakeTimeProvider time)
+        IStudioRunCredentialIssuer? credentialIssuer = null) =>
+        NewService(member, schedule, out _, credentialIssuer);
+
+    private static StudioWorkflowProvisioningService NewService(
+        RecordingMemberService member,
+        RecordingScheduleService schedule,
+        out FakeTimeProvider time,
+        IStudioRunCredentialIssuer? credentialIssuer = null)
     {
         time = new FakeTimeProvider();
-        return new StudioWorkflowProvisioningService(member, schedule, time);
+        return new StudioWorkflowProvisioningService(member, schedule, credentialIssuer, time);
     }
 
     private static RecordingMemberService NewMemberService() =>
@@ -452,6 +570,29 @@ public sealed class StudioWorkflowProvisioningServiceTests
         public Task<ScheduledDispatchRunNowReceipt> RunNowAsync(
             string scheduleId, CancellationToken ct = default) =>
             throw new NotSupportedException();
+    }
+
+    /// <summary>
+    /// Records the durable run-credential mint request and returns a fixed minted
+    /// key (or null to simulate "could not mint", e.g. no host slug configured).
+    /// </summary>
+    private sealed class RecordingRunCredentialIssuer : IStudioRunCredentialIssuer
+    {
+        public string? MintedKey { get; set; }
+        public bool IssueInvoked { get; private set; }
+        public string? CallerBearerToken { get; private set; }
+        public string? AgentId { get; private set; }
+        public string? ScopeId { get; private set; }
+
+        public Task<string?> IssueDurableRunCredentialAsync(
+            string callerBearerToken, string agentId, string scopeId, CancellationToken ct = default)
+        {
+            IssueInvoked = true;
+            CallerBearerToken = callerBearerToken;
+            AgentId = agentId;
+            ScopeId = scopeId;
+            return Task.FromResult(MintedKey);
+        }
     }
 
     /// <summary>
