@@ -1910,6 +1910,49 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
+    public async Task PostResponses_WithNonObjectToolEntries_ShouldSkipThemAndAdmitRequest()
+    {
+        // Some OpenAI-compatible clients emit non-object entries in `tools` (null
+        // padding, stray strings) alongside real tool objects. aevatar only owns
+        // function-typed tool declarations, so a non-object entry — exactly like a
+        // built-in tool object it doesn't own — must be passed over and the request
+        // admitted, never failing the whole request. In particular a bare greeting that
+        // needs no tools must still succeed even when the client ships a malformed entry.
+        var provider = new RecordingLLMProvider
+        {
+            StreamChunks =
+            [
+                new LLMStreamChunk { DeltaContent = "ok", IsLast = true, Usage = new TokenUsage(1, 1, 2) },
+            ],
+        };
+        await using var app = await CreateAppAsync(provider);
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
+        {
+            Content = JsonContent("""
+            {
+              "model": "chrono-llm/gpt-5.5",
+              "input": "你好",
+              "stream": false,
+              "tools": [
+                "not_an_object",
+                null,
+                {"type": "function", "name": "Bash", "description": "Run shell", "parameters": {"type":"object","properties":{}}}
+              ]
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "tools-secret");
+        var response = await app.GetTestClient().SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        // Non-object entries are dropped; the function-typed tool still reaches the LLM provider.
+        provider.LastRequest!.Tools.Should().NotBeNull();
+        provider.LastRequest.Tools!.Select(static tool => tool.Name).Should().Contain("Bash");
+    }
+
+    [Fact]
     public async Task PostResponses_WithFunctionToolMissingName_ShouldStillReturnIndexedInvalidTools()
     {
         // Built-ins are accepted because they have a non-function type. A function-typed
