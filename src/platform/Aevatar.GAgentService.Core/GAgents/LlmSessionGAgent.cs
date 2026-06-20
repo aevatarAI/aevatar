@@ -383,6 +383,12 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
                 $"Response session '{existing.ResponseId}' already has active run '{active.RunId}'.");
         }
 
+        if (State.ActiveRun is { Status: RunningStatus } sameActive &&
+            string.Equals(sameActive.RunId, runId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
         if (State.Completion is { CompletedAt: not null })
             return false;
 
@@ -573,6 +579,83 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         });
     }
 
+    [EventHandler]
+    public Task HandleLlmStreamChunkObservedAsync(LlmStreamChunkObserved observed)
+    {
+        ArgumentNullException.ThrowIfNull(observed);
+        var accepted = CanPersistRunFact(observed.ResponseId, observed.RunId, observed.Sequence, terminal: false);
+        return accepted
+            ? PersistDomainEventAsync(observed.Clone(), CancellationToken.None)
+            : Task.CompletedTask;
+    }
+
+    [EventHandler]
+    public Task HandleLlmToolCallObservedAsync(LlmToolCallObserved observed)
+    {
+        ArgumentNullException.ThrowIfNull(observed);
+        var accepted = CanPersistRunFact(observed.ResponseId, observed.RunId, observed.Sequence, terminal: false);
+        return accepted
+            ? PersistDomainEventAsync(observed.Clone(), CancellationToken.None)
+            : Task.CompletedTask;
+    }
+
+    [EventHandler]
+    public Task HandleLlmRunCompletedAsync(LlmRunCompleted completed)
+    {
+        ArgumentNullException.ThrowIfNull(completed);
+        var accepted = CanPersistRunFact(completed.ResponseId, completed.RunId, completed.Sequence, terminal: true);
+        return accepted
+            ? PersistDomainEventAsync(completed.Clone(), CancellationToken.None)
+            : Task.CompletedTask;
+    }
+
+    [EventHandler]
+    public Task HandleLlmRunFailedAsync(LlmRunFailed failed)
+    {
+        ArgumentNullException.ThrowIfNull(failed);
+        var accepted = CanPersistRunFact(failed.ResponseId, failed.RunId, failed.Sequence, terminal: true);
+        return accepted
+            ? PersistDomainEventAsync(failed.Clone(), CancellationToken.None)
+            : Task.CompletedTask;
+    }
+
+    [EventHandler]
+    public Task HandleLlmRunCancelledAsync(LlmRunCancelled cancelled)
+    {
+        ArgumentNullException.ThrowIfNull(cancelled);
+        var accepted = CanPersistRunFact(cancelled.ResponseId, cancelled.RunId, cancelled.Sequence, terminal: true);
+        return accepted
+            ? PersistDomainEventAsync(cancelled.Clone(), CancellationToken.None)
+            : Task.CompletedTask;
+    }
+
+    [EventHandler]
+    public async Task HandleLlmSessionForwardedToolCallEmittedAsync(LlmSessionForwardedToolCallEmittedEvent emitted)
+    {
+        ArgumentNullException.ThrowIfNull(emitted);
+        ArgumentNullException.ThrowIfNull(emitted.Call);
+
+        var existing = EnsureRegisteredSession(emitted.ResponseId);
+        if (IsTerminal(existing.Status))
+            return;
+
+        var call = NormalizeToolCall(emitted.Call.Clone());
+        ValidateToolCall(call);
+        var existingCall = State.ForwardedToolCalls
+            .FirstOrDefault(x => string.Equals(x.CallId, call.CallId, StringComparison.Ordinal));
+        if (existingCall != null)
+        {
+            EnsureExistingToolCallMatches(existingCall, call);
+            return;
+        }
+
+        await PersistDomainEventAsync(new LlmSessionForwardedToolCallEmittedEvent
+        {
+            ResponseId = existing.ResponseId,
+            Call = call,
+        });
+    }
+
     protected override LlmSessionState TransitionState(LlmSessionState current, IMessage evt) =>
         StateTransitionMatcher
             .Match(current, evt)
@@ -656,10 +739,14 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         if (run != null && !TryAcceptRunRecord(run, evt.Sequence, evt.RecordId))
             return state;
 
-        if (evt.Call != null &&
-            !next.ForwardedToolCalls.Any(call => string.Equals(call.CallId, evt.Call.CallId, StringComparison.Ordinal)))
+        if (evt.Call != null)
         {
-            next.ForwardedToolCalls.Add(evt.Call.Clone());
+            var existing = next.ForwardedToolCalls
+                .FirstOrDefault(x => string.Equals(x.CallId, evt.Call.CallId, StringComparison.Ordinal));
+            if (existing != null)
+                EnsureExistingToolCallMatches(existing, evt.Call);
+            else
+                next.ForwardedToolCalls.Add(evt.Call.Clone());
         }
 
         if (run != null && evt.Call != null)
@@ -767,7 +854,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         var next = state.Clone();
         var completedAt = evt.CompletedAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
         var run = EnsureRun(next, evt.RunId, evt.ResponseId, completedAt);
-        if (!TryAcceptRunRecord(run, evt.Sequence, evt.RecordId))
+        if (!TryAcceptRunRecord(run, evt.Sequence, evt.RecordId, allowTerminalGap: true))
             return state;
 
         run.Status = CompletedStatus;
@@ -812,7 +899,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         var next = state.Clone();
         var failedAt = evt.FailedAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
         var run = EnsureRun(next, evt.RunId, evt.ResponseId, failedAt);
-        if (!TryAcceptRunRecord(run, evt.Sequence, evt.RecordId))
+        if (!TryAcceptRunRecord(run, evt.Sequence, evt.RecordId, allowTerminalGap: true))
             return state;
 
         run.Status = FailedStatus;
@@ -842,7 +929,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         var next = state.Clone();
         var cancelledAt = evt.CancelledAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
         var run = EnsureRun(next, evt.RunId, evt.ResponseId, cancelledAt);
-        if (!TryAcceptRunRecord(run, evt.Sequence, evt.RecordId))
+        if (!TryAcceptRunRecord(run, evt.Sequence, evt.RecordId, allowTerminalGap: true))
             return state;
 
         run.Status = CancelledStatus;
@@ -930,7 +1017,8 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
     private static bool TryAcceptRunRecord(
         LlmSessionRunScope run,
         long sequence,
-        string? recordId)
+        string? recordId,
+        bool allowTerminalGap = false)
     {
         if (IsRunTerminal(run.Status))
             return false;
@@ -942,8 +1030,16 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             return false;
         }
 
-        if (!TryAcceptRunSequence(run, sequence))
+        if (allowTerminalGap && sequence > 0)
+        {
+            if (sequence <= run.LastAppliedSequence)
+                return false;
+            run.LastAppliedSequence = sequence;
+        }
+        else if (!TryAcceptRunSequence(run, sequence))
+        {
             return false;
+        }
 
         if (normalizedRecordId != null)
             run.AppliedRecordIds.Add(normalizedRecordId);
@@ -965,6 +1061,30 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
 
     private static bool IsRunTerminal(int status) =>
         status is CompletedStatus or FailedStatus or CancelledStatus;
+
+    private bool CanPersistRunFact(string responseId, string runId, long sequence, bool terminal)
+    {
+        var existing = EnsureRegisteredSession(responseId);
+        if (IsTerminal(existing.Status))
+            return false;
+
+        if (State.ActiveRun == null ||
+            !string.Equals(State.ActiveRun.RunId, runId, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (IsRunTerminal(State.ActiveRun.Status))
+            return false;
+
+        if (sequence <= 0)
+            return true;
+
+        var nextSequence = State.ActiveRun.LastAppliedSequence + 1;
+        return terminal
+            ? sequence >= nextSequence
+            : sequence == nextSequence;
+    }
 
     private static void UpsertRuntimeToolCall(
         LlmSessionRunScope run,

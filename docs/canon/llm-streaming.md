@@ -35,6 +35,19 @@ owner: eanzhao
 - LLM streaming 链路消费的是 actor envelope 流；Event Sourcing 领域事件仍由 Actor 显式持久化。
 - Voice control/transcript frame 属于 projection-backed realtime stream；raw PCM 只有一条运行时路径：当前 transport lease 内的 `IVoiceVolatileMediaStreamPort` volatile relay 在 `IVoiceTransport` 与 `IRealtimeVoiceProvider` session 之间转发。raw PCM 不进入 actor/proto `VoiceModuleSignal`、`EventEnvelope`、projection、readmodel 或 committed event。
 
+### 2.1 Responses LlmSession 流式执行边界
+
+NyxID direct Responses / Messages / Chat Completions 的 `LlmSessionGAgent` 使用同一条 actor-owned run 记录语义；live provider stream 由短生命周期执行 actor/service 连续消费，不能占用 session actor command turn：
+
+1. `LlmSessionGAgent` 在 actor turn 内接受 `LlmRunRequested`、持久化 `LlmRunStartedEvent`，并保持 `responseId + runId + sequence` 的权威状态。
+2. `LlmSessionGAgent` 持久化 `LlmRunExecutionReadyEvent` 后调度 transient `LlmRunExecutionGAgent`；`LlmRunExecutionGAgent` 通过 `ILlmRunExecutionService` / `ILlmRunExecutor` 调用 `ILlmRunCore`，由执行侧在 session actor turn 之外连续消费 live provider `ChatStreamAsync` / `IAsyncEnumerable<LLMStreamChunk>`。
+3. 执行侧 `DispatchingLlmRunSink` 不直接改写 session 状态；每个观察到的 provider fact 都通过 `IActorDispatchPort` 进入 session actor inbox，并由 actor handler 持久化为 typed recorder event：`LlmStreamChunkObserved`、`LlmToolCallObserved`、`LlmSessionForwardedToolCallEmittedEvent`、`LlmRunCompleted`、`LlmRunFailed`、`LlmRunCancelled`。
+4. actor 对 recorder event 只按 typed run identity 与 monotonic `sequence` 接受事实；重复 chunk、晚到 chunk、重复 terminal dispatch、terminal 后 failed/cancelled flush 都是幂等 no-op，不用文本内容相等做 duplicate heuristic，也不用执行侧或进程内 counter 冒充事实源。
+5. terminal event 是 actor-owned finalizer：它可以跨过已丢失的中间 recorder event 完成 run，但 terminal 后不再接受新的 chunk/tool/failure 覆盖。
+6. cancel flush 必须写入 `LlmRunCancelled` typed fact；取消 token 只取消 provider stream，不应阻止 recorder sink 记录最终取消事实。
+
+不能把 live provider stream 拆成 session actor self-continuation 小步恢复，也不能把 stream ownership 放进无权威状态的 `Task.Run` callback。`IAsyncEnumerable<LLMStreamChunk>` 的枚举器持有 HTTP 连接、provider SDK 状态和当前 async frame；actor self-message 只能持久化“下一拍需要处理的稳定事实”，不能持久化或恢复该枚举器。当前边界已经把 provider consumption 建模为 run-scoped transient execution actor/service，session actor 仍是 sequence/watermark、retry、cancellation 和 terminal facts 的唯一权威接受方；若未来继续拆分执行器，新的执行组件必须保持同样的 typed recorder command 与 actor-owned finalizer 契约。
+
 相关架构基线：
 
 1. `docs/canon/cqrs-projection.md:43`
@@ -437,3 +450,4 @@ flowchart LR
 2. WS `command.ack -> agui.event*` 顺序稳定性（text/binary 两种帧类型）。
 3. `commandId` 会话隔离（同 actor 多 command 并发）。
 4. sink 背压异常下的 detach 与 run error 遥测。
+5. Responses `LlmSession` run 验收矩阵：duplicate chunks、late recorder commands、cancel flush、terminal dispatch retry、interleaving、no-terminal timeout/cancel。对应本地测试为 `LlmRunCoreTests`、`LlmRunEndToEndAcceptanceTests`、`LlmSessionGAgentTests`。

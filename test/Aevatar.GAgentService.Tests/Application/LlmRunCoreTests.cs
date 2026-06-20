@@ -4,6 +4,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Application.Responses;
+using Aevatar.GAgentService.Tests.TestSupport;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -420,6 +421,49 @@ public sealed class LlmRunCoreTests
         sink.Cancelled.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task RunAsync_WhenCancellationTokenIsCancelled_ShouldFlushCancelledFactThroughSink()
+    {
+        using var cts = new CancellationTokenSource();
+        var provider = new CancellableLlmProviderFactory();
+        var sink = new CancellationSensitiveLlmRunSink();
+        var core = new LlmRunCore(provider, [], NullLogger<LlmRunCore>.Instance);
+        cts.Cancel();
+
+        await core.RunAsync(
+            new LlmRunCoreRequest(BuildRunRequest("resp_1"), "run_1", "ApiKey"),
+            sink,
+            cts.Token);
+
+        sink.Cancelled.Should().ContainSingle();
+        sink.SinkCancellationTokens.Should().ContainSingle().Which.IsCancellationRequested.Should().BeFalse();
+        sink.Completed.Should().BeEmpty();
+        sink.Failed.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenProviderNeverEmitsTerminalChunk_ShouldRecordCancelledFactWhenCancelled()
+    {
+        var streamEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var provider = new LlmRunAcceptanceHarness.NeverTerminalLlmProviderFactory(streamEntered);
+        var sink = new LlmRunAcceptanceHarness.RecordingLlmRunSink();
+        var core = new LlmRunCore(provider, [], NullLogger<LlmRunCore>.Instance);
+        using var cts = new CancellationTokenSource();
+
+        var runTask = core.RunAsync(
+            new LlmRunCoreRequest(BuildRunRequest("resp_1"), "run_1", "ApiKey"),
+            sink,
+            cts.Token);
+        await streamEntered.Task;
+        await cts.CancelAsync();
+        await runTask;
+
+        sink.StreamChunks.Should().ContainSingle().Which.DeltaText.Should().Be("partial");
+        sink.Cancelled.Should().ContainSingle().Which.RunId.Should().Be("run_1");
+        sink.Completed.Should().BeEmpty();
+        sink.Failed.Should().BeEmpty();
+    }
+
     private static LlmRunRequested BuildRunRequest(
         string responseId,
         LlmSessionRuntimeToolSelection? selection = null) =>
@@ -570,6 +614,87 @@ public sealed class LlmRunCoreTests
             #pragma warning disable CS0162
             yield return new LLMStreamChunk();
             #pragma warning restore CS0162
+        }
+    }
+
+    private sealed class CancellableLlmProviderFactory : ILLMProviderFactory, ILLMProvider
+    {
+        public string Name => "test";
+
+        public ILLMProvider GetProvider(string name) => this;
+
+        public ILLMProvider GetDefault() => this;
+
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            _ = request;
+            ct.ThrowIfCancellationRequested();
+            await Task.CompletedTask;
+            yield break;
+        }
+    }
+
+    private sealed class CancellationSensitiveLlmRunSink : ILlmRunSink
+    {
+        public List<LlmRunCompleted> Completed { get; } = [];
+        public List<LlmRunFailed> Failed { get; } = [];
+        public List<LlmRunCancelled> Cancelled { get; } = [];
+        public List<CancellationToken> SinkCancellationTokens { get; } = [];
+
+        public Task<LlmRunRecordDecision> RecordStreamChunkObservedAsync(
+            LlmStreamChunkObserved observed,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(LlmRunRecordDecision.Continue);
+        }
+
+        public Task<LlmRunRecordDecision> RecordToolCallObservedAsync(
+            LlmToolCallObserved observed,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(LlmRunRecordDecision.Continue);
+        }
+
+        public Task RecordForwardedToolCallEmittedAsync(
+            LlmSessionForwardedToolCallEmittedEvent emitted,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task<LlmRunRecordDecision> RecordRunCompletedAsync(
+            LlmRunCompleted completed,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Completed.Add(completed.Clone());
+            return Task.FromResult(LlmRunRecordDecision.Continue);
+        }
+
+        public Task<LlmRunRecordDecision> RecordRunFailedAsync(
+            LlmRunFailed failed,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Failed.Add(failed.Clone());
+            return Task.FromResult(LlmRunRecordDecision.Continue);
+        }
+
+        public Task<LlmRunRecordDecision> RecordRunCancelledAsync(
+            LlmRunCancelled cancelled,
+            CancellationToken ct = default)
+        {
+            SinkCancellationTokens.Add(ct);
+            ct.ThrowIfCancellationRequested();
+            Cancelled.Add(cancelled.Clone());
+            return Task.FromResult(LlmRunRecordDecision.Continue);
         }
     }
 

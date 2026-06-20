@@ -800,6 +800,39 @@ public sealed class LlmSessionGAgentTests
     }
 
     [Fact]
+    public async Task HandleLlmRunRequestedAsync_ShouldIgnoreDuplicateRunningRunAdmission()
+    {
+        var eventStore = new InMemoryEventStore();
+        await eventStore.AppendAsync(
+            "response-session-actor-resp_duplicate_run",
+            [
+                StateEvent(1, new LlmSessionRegisteredEvent { Record = BuildRecord("resp_duplicate_run") }),
+                StateEvent(2, new LlmRunStartedEvent
+                {
+                    ResponseId = "resp_duplicate_run",
+                    RunId = "run_1",
+                    Sequence = 1,
+                    StartedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-06-19T00:00:00+00:00")),
+                }),
+            ],
+            expectedVersion: 0);
+        var actor = CreateActorWithStore(
+            "resp_duplicate_run",
+            eventStore,
+            services => services.AddSingleton<ILLMProviderFactory, ThrowingLlmProviderFactory>());
+        await actor.ActivateAsync();
+        var versionAfterActivation = actor.State.LastAppliedEventVersion;
+
+        await actor.HandleLlmRunRequestedAsync(new LlmRunRequested
+        {
+            ResponseId = "resp_duplicate_run",
+            RunId = "run_1",
+        });
+
+        actor.State.LastAppliedEventVersion.Should().Be(versionAfterActivation);
+    }
+
+    [Fact]
     public async Task HandleCancelLlmRunRequestedAsync_ShouldRecordActorOwnedCancellation()
     {
         var eventStore = new InMemoryEventStore();
@@ -1184,6 +1217,33 @@ public sealed class LlmSessionGAgentTests
             .Which.ToolName.Should().Be("get_weather");
         ResponsesJsonValues.ToBoundaryJson(actor.State.Completion.ToolCalls[0].Result)
             .Should().Be("""{"city":"Singapore"}""");
+    }
+
+    [Fact]
+    public async Task HandleLlmSessionForwardedToolCallEmittedAsync_ShouldPersistForwardedToolCallAndIgnoreDuplicate()
+    {
+        var actor = CreateActor("resp_forwarded_recorder");
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_forwarded_recorder"),
+        });
+        var emitted = new LlmSessionForwardedToolCallEmittedEvent
+        {
+            ResponseId = "resp_forwarded_recorder",
+            Call = BuildToolCall("call_1"),
+        };
+
+        await actor.HandleLlmSessionForwardedToolCallEmittedAsync(emitted);
+        var versionAfterFirstEmission = actor.State.LastAppliedEventVersion;
+        await actor.HandleLlmSessionForwardedToolCallEmittedAsync(emitted.Clone());
+
+        actor.State.LastAppliedEventVersion.Should().Be(versionAfterFirstEmission);
+        actor.State.ForwardedToolCalls.Should().ContainSingle();
+        var forwarded = actor.State.ForwardedToolCalls[0];
+        forwarded.CallId.Should().Be("call_1");
+        forwarded.ToolName.Should().Be("get_weather");
+        forwarded.SchemaHash.Should().Be("schema-1");
+        forwarded.Status.Should().Be(LlmSessionForwardedToolCallStatus.Pending);
     }
 
     [Fact]
