@@ -31,5 +31,14 @@ public sealed class ResponsesIngressOptions
     public TimeSpan ObservationTimeout =>
         ObservationTimeoutSeconds > 0 ? TimeSpan.FromSeconds(ObservationTimeoutSeconds) : TimeSpan.FromSeconds(300);
 
-    public bool OffActorLlmRunExecutorEnabled { get; set; }
+    // Runs each LLM stream/tool loop in the off-actor ILlmRunExecutor (epic #2271, B1-B5
+    // #2272-#2276) instead of on the session actor's own turn. The on-actor path holds a
+    // single Orleans grain turn for the whole upstream call, so a slow/large run exceeds the
+    // 30s stream-delivery timeout, breaks delivery, and truncates the client SSE with no
+    // terminal frame — OpenAI-compatible clients (e.g. chrono-app) then report "cannot parse
+    // response". Graduated to on-by-default now that the staged rollout has landed; the value
+    // is the code default because no deployed config layer sets the key, and changing the
+    // default is the reliable way to enable it in production. Set false (config/env) to roll
+    // back to the legacy on-actor path instantly.
+    public bool OffActorLlmRunExecutorEnabled { get; set; } = true;
 }
