@@ -506,14 +506,15 @@ internal static class WorkflowRunObservatoryPage
   .graph-canvas { position: relative; }
   .graph-canvas svg { position: absolute; inset: 0; overflow: visible; pointer-events: none; }
   .gnode {
-    position: absolute; width: 150px; box-sizing: border-box;
+    position: absolute; width: 200px; box-sizing: border-box;
     background: var(--panel-2); border: 1.5px solid var(--border); border-radius: var(--r);
-    padding: 10px 12px; box-shadow: var(--shadow-sm);
+    padding: 10px 12px; box-shadow: var(--shadow-sm); cursor: default;
   }
   .gnode .gn-top { display: flex; align-items: center; gap: 8px; }
   .gnode .gn-ic { width: 24px; height: 24px; border-radius: 6px; display: grid; place-items: center; background: var(--panel-3); color: var(--muted); flex: 0 0 auto; }
-  .gnode .gn-id { font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--fg-strong); }
-  .gnode .gn-type { font-family: var(--mono); font-size: 11px; color: var(--muted-2); margin-top: 1px; }
+  .gnode .gn-main { min-width: 0; flex: 1 1 auto; }
+  .gnode .gn-id { font-family: var(--mono); font-size: 12.5px; font-weight: 600; color: var(--fg-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .gnode .gn-type { font-family: var(--mono); font-size: 11px; color: var(--muted-2); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .gnode .gn-foot { margin-top: 9px; display: flex; align-items: center; gap: 6px; font-size: 11px; }
   .gnode.st-done   { border-color: color-mix(in oklab, var(--ok) 45%, var(--border)); }
   .gnode.st-done .gn-ic { color: var(--ok); background: var(--ok-soft); }
@@ -796,6 +797,7 @@ function fmtDur(ms){
 function fmtNum(n){ return n==null ? "—" : n.toLocaleString("en-US"); }
 function fmtCost(c){ return c==null ? "—" : "$"+Number(c).toFixed(3); }
 function initials(label){ return (label||"?").trim().charAt(0).toUpperCase(); }
+function midTrunc(s, max){ s = String(s==null?"":s); if(s.length <= max) return s; const h = Math.ceil((max-1)*0.62), t = (max-1) - h; return s.slice(0, h) + "…" + s.slice(s.length - t); }
 
 /* JSON 着色（仅用于显示）。注意：先 esc() 转义，引号已变成 &quot;，
    因此高亮要匹配 &quot; 而非字面引号。本数据中字符串均为单行且不含 & 实体。 */
@@ -1257,7 +1259,7 @@ function renderGraph(detail){
   const canvas = el("div", { class:"graph-canvas" });
 
   const horizontal = window.innerWidth > 720;
-  const NW = 150, NH = 74, GX = 84, GY = 56, PAD = 16;
+  const NW = 200, NH = 76, GX = 132, GY = 64, PAD = 16;
   const n = g.nodes.length;
   const pos = {};
   let W, H;
@@ -1308,11 +1310,11 @@ function renderGraph(detail){
   g.nodes.forEach(nd => {
     const st = (g.nodeStatus && g.nodeStatus[nd.nodeId]) || "pending";
     const stLabel = { done:"已完成", current:"进行中", failed:"失败", stopped:"已停止", pending:"待执行" }[st];
-    const node = el("div", { class:`gnode st-${st}`, style:`left:${pos[nd.nodeId].x}px;top:${pos[nd.nodeId].y}px` });
+    const node = el("div", { class:`gnode st-${st}`, title:`${nd.nodeId}${nd.nodeType?" · "+nd.nodeType:""}`, style:`left:${pos[nd.nodeId].x}px;top:${pos[nd.nodeId].y}px` });
     node.innerHTML = `
       <div class="gn-top">
         <span class="gn-ic" aria-hidden="true">${stepTypeIcon(nd.nodeType)}</span>
-        <div><div class="gn-id">${esc(nd.nodeId)}</div><div class="gn-type">${esc(nd.nodeType)}</div></div>
+        <div class="gn-main"><div class="gn-id">${esc(midTrunc(nd.nodeId, 20))}</div><div class="gn-type">${esc(midTrunc(nd.nodeType, 22) || "—")}</div></div>
       </div>
       <div class="gn-foot"><span class="gn-state">${stLabel}</span></div>`;
     canvas.appendChild(node);
