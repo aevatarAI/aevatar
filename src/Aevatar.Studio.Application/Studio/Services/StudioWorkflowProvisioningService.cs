@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Google.Protobuf.WellKnownTypes;
@@ -155,6 +156,8 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
                     Identity: new ServiceIdentity
                     {
                         TenantId = scopeId,
+                        AppId = ScopeServiceIdentityDefaults.ServiceAppId,
+                        Namespace = ScopeServiceIdentityDefaults.ServiceNamespace,
                         ServiceId = publishedServiceId,
                     },
                     EndpointId: WorkflowInvokeEndpointId,
