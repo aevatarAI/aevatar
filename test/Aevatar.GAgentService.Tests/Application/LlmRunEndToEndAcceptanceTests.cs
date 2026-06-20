@@ -55,6 +55,28 @@ public sealed class LlmRunEndToEndAcceptanceTests
     }
 
     [Fact]
+    public async Task RecorderCommands_ShouldKeepFailedAuthoritativeAndIgnoreLaterTerminalFacts()
+    {
+        var actor = await CreateRegisteredActorAsync();
+        await actor.HandleEventAsync(Envelope(LlmRunAcceptanceHarness.Chunk("partial", sequence: 1)));
+        await actor.HandleEventAsync(Envelope(LlmRunAcceptanceHarness.Failed("provider_unavailable", sequence: 2)));
+        var versionAfterFailure = actor.State.LastAppliedEventVersion;
+
+        await actor.HandleEventAsync(Envelope(LlmRunAcceptanceHarness.Chunk("late", sequence: 3)));
+        await actor.HandleEventAsync(Envelope(LlmRunAcceptanceHarness.Completed("partial late", sequence: 4)));
+        await actor.HandleEventAsync(Envelope(LlmRunAcceptanceHarness.Cancelled(sequence: 5)));
+
+        actor.State.LastAppliedEventVersion.Should().Be(versionAfterFailure);
+        actor.State.Record!.Status.Should().Be(LlmSessionStatus.Failed);
+        actor.State.ActiveRun!.Status.Should().Be(3);
+        actor.State.ActiveRun.OutputText.Should().Be("partial");
+        actor.State.ActiveRun.FailureCode.Should().Be("provider_unavailable");
+        actor.State.ActiveRun.LastAppliedSequence.Should().Be(2);
+        actor.State.Completion!.FailureCode.Should().Be("provider_unavailable");
+        actor.State.Completion.OutputText.Should().Be("partial");
+    }
+
+    [Fact]
     public async Task Replay_ShouldApplyTerminalEventDespiteMissingIntermediateRecorderCommand()
     {
         var eventStore = new InMemoryEventStore();
