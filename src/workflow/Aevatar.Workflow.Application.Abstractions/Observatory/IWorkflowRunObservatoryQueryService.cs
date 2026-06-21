@@ -139,4 +139,8 @@ public sealed class ObservatoryGraphEdge
     public string ToNodeId { get; init; } = string.Empty;
 
     public string EdgeType { get; init; } = string.Empty;
+
+    // For NEXT (step-flow) edges, the branch taken (e.g. success / error); empty for unconditional flow
+    // and for non-flow edges. Lets the viewer label conditional branches.
+    public string BranchKey { get; init; } = string.Empty;
 }

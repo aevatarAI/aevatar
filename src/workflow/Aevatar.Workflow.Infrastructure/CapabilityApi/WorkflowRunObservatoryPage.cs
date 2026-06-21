@@ -601,6 +601,7 @@ internal static class WorkflowRunObservatoryPage
     background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-pill);
     padding: 1px 7px; white-space: nowrap;
   }
+  .edge-label.flow { color: var(--accent); border-color: var(--accent-line); font-weight: 600; }
 
   /* node detail drawer (right on desktop, bottom sheet on mobile) */
   .gnode-detail {
@@ -1636,28 +1637,43 @@ function renderGraph(detail){
   svg.setAttribute("width", W); svg.setAttribute("height", H);
   const defs = document.createElementNS(svgNS,"defs");
   defs.innerHTML = `<marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M0 0 L10 5 L0 10 z" fill="var(--muted-2)"/></marker>`;
+      <path d="M0 0 L10 5 L0 10 z" fill="var(--muted-2)"/></marker>
+    <marker id="arrowFlow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="var(--accent)"/></marker>`;
   svg.appendChild(defs);
+
+  // Step flow (NEXT, from each step's NextStepId) is the meaningful relationship — render it prominently;
+  // the run -> step CONTAINS_STEP edges are membership scaffolding, so fade them and hide the ones the flow
+  // already reaches (leaving just run -> entry-step). With no NEXT edges (older graph data) nothing is
+  // hidden and the prior look is preserved.
+  const nextTargets = new Set();
+  g.edges.forEach(e => { if(e.edgeType === "NEXT") nextTargets.add(e.toNodeId); });
 
   const edgeLabels = [];
   g.edges.forEach(e => {
+    if(e.edgeType === "CONTAINS_STEP" && nextTargets.has(e.toNodeId)) return; // redundant with the flow edge
     const a = pos[e.fromNodeId], b = pos[e.toNodeId];
     if(!a||!b) return;
     let x1,y1,x2,y2,mx,my;
     if(horizontal){ x1=a.x+NW; y1=a.y+NH/2; x2=b.x; y2=b.y+NH/2; mx=(x1+x2)/2; my=y1; }
     else { x1=a.x+NW/2; y1=a.y+NH; x2=b.x+NW/2; y2=b.y; mx=x1; my=(y1+y2)/2; }
+    const isFlow = e.edgeType === "NEXT";
+    const isContains = e.edgeType === "CONTAINS_STEP";
     const path = document.createElementNS(svgNS,"path");
     let d;
     if(horizontal){ const cx=(x1+x2)/2; d=`M${x1},${y1} C${cx},${y1} ${cx},${y2} ${x2},${y2}`; }
     else { const cy=(y1+y2)/2; d=`M${x1},${y1} C${x1},${cy} ${x2},${cy} ${x2},${y2}`; }
     path.setAttribute("d", d);
     path.setAttribute("fill","none");
-    path.setAttribute("stroke","var(--muted-2)");
-    path.setAttribute("stroke-width","1.6");
-    path.setAttribute("marker-end","url(#arrow)");
-    if(g.nodeStatus && g.nodeStatus[e.toNodeId]==="pending"){ path.setAttribute("stroke-dasharray","4 4"); path.setAttribute("opacity",".6"); }
+    path.setAttribute("stroke", isFlow ? "var(--accent)" : "var(--muted-2)");
+    path.setAttribute("stroke-width", isFlow ? "2" : "1.6");
+    path.setAttribute("marker-end", isFlow ? "url(#arrowFlow)" : "url(#arrow)");
+    if(isContains){ path.setAttribute("stroke-dasharray","3 4"); path.setAttribute("opacity",".32"); }
+    else if(g.nodeStatus && g.nodeStatus[e.toNodeId]==="pending"){ path.setAttribute("stroke-dasharray","4 4"); path.setAttribute("opacity",".6"); }
     svg.appendChild(path);
-    edgeLabels.push({ mx, my, type:e.edgeType });
+    // label: branch key on conditional flow edges; type for OWNS/CHILD_OF; none for the faded containment
+    const label = isFlow ? (e.branchKey || "") : (isContains ? "" : e.edgeType);
+    if(label) edgeLabels.push({ mx, my, type: label, flow: isFlow });
   });
   canvas.appendChild(svg);
 
@@ -1685,7 +1701,7 @@ function renderGraph(detail){
 
   // edge labels
   edgeLabels.forEach(L => {
-    canvas.appendChild(el("span", { class:"edge-label", style:`left:${L.mx}px;top:${L.my}px` }, esc(L.type)));
+    canvas.appendChild(el("span", { class:"edge-label"+(L.flow?" flow":""), style:`left:${L.mx}px;top:${L.my}px` }, esc(L.type)));
   });
 
   viewport.appendChild(canvas);

@@ -156,6 +156,9 @@ public sealed class WorkflowRunObservatoryQueryService
                     FromNodeId = edge.FromNodeId,
                     ToNodeId = edge.ToNodeId,
                     EdgeType = edge.EdgeType,
+                    BranchKey = edge.Properties != null && edge.Properties.TryGetValue("branchKey", out var branchKey)
+                        ? branchKey
+                        : string.Empty,
                 })
                 .ToList(),
         };

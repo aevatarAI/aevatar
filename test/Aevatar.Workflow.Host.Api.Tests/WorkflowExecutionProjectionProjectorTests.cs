@@ -1158,6 +1158,37 @@ public sealed class WorkflowExecutionProjectionProjectorTests
             .Be(1);
     }
 
+    // 06-21: the graph carries the real run order — a step's NextStepId becomes a NEXT edge to that step
+    // (with the branch taken as branchKey), but only when the next step is a known step node.
+    [Fact]
+    public void WorkflowRunGraphArtifactMaterializer_ShouldEmitNextEdgesFromStepFlow()
+    {
+        var readModel = new WorkflowRunInsightReportDocument
+        {
+            RootActorId = "actor-1",
+            CommandId = "cmd-1",
+            WorkflowName = "wf-flow",
+            Steps =
+            [
+                new WorkflowExecutionStepTrace { StepId = "a", StepType = "tool_call", Success = true, NextStepId = "b", BranchKey = "success" },
+                new WorkflowExecutionStepTrace { StepId = "b", StepType = "llm_call", Success = true, NextStepId = "missing" },
+            ],
+        };
+
+        var materialization = new WorkflowRunGraphArtifactMaterializer().Materialize(readModel);
+
+        materialization.Edges.Should().Contain(x =>
+            x.EdgeType == WorkflowExecutionGraphConstants.EdgeTypeNext &&
+            x.FromNodeId == "step:actor-1:cmd-1:a" &&
+            x.ToNodeId == "step:actor-1:cmd-1:b" &&
+            x.Properties.ContainsKey("branchKey") &&
+            x.Properties["branchKey"] == "success");
+        // b -> "missing" is dropped because the target is not a known step node
+        materialization.Edges.Should().NotContain(x =>
+            x.EdgeType == WorkflowExecutionGraphConstants.EdgeTypeNext &&
+            x.FromNodeId == "step:actor-1:cmd-1:b");
+    }
+
     [Fact]
     public void WorkflowExecutionReadModelMapper_ShouldMapReportAndGraphData()
     {
