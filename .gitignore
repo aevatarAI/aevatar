@@ -522,8 +522,11 @@ entities.json
 FIX_REPORT.md
 .implement-loop/
 
-# codex-refactor-loop ephemeral review artifacts (per-PR/per-cluster, regenerated)
-runs/
+# Per-PR/per-cluster reviewer artifacts at the repo root (regenerated; e.g. quality-reviewer output).
+# Leading slash is REQUIRED: a bare "runs/" also matches source dirs named Runs/ (case-insensitive
+# macOS FS) and any nested runs/, silently ignoring NEW source files. Keep it anchored to the root.
+# Nested artifact dirs (.refactor-loop/runs, .implement-loop/runs, dist/runs) are covered by their own rules.
+/runs/
 # misrouted per-PR quality reviewer artifacts (should land in runs/, not docs/audit-scorecard/)
 /docs/audit-scorecard/[0-9]*-*.md
 .alma-snapshots/
