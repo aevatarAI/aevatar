@@ -55,12 +55,12 @@ public sealed class LlmRunExecutorTests
         chunk.RunId.Should().Be("run_1");
         chunk.RecordId.Should().Be("run_1:chunk:1");
         chunk.DeltaText.Should().Be("done");
-        dispatch.Calls[1].Envelope.Propagation!.CorrelationId.Should().Be(chunk.RecordId);
+        dispatch.Calls[1].Envelope.Propagation!.CorrelationId.Should().Be(chunk.ResponseId);
 
         var completed = dispatch.Calls[2].Envelope.Payload!.Unpack<RecordLlmRunCompleted>();
         completed.RecordId.Should().Be("run_1:completed:2");
         completed.OutputText.Should().Be("done");
-        AssertDirectEnvelope(dispatch.Calls[2], completed.RecordId, RecordLlmRunCompleted.Descriptor.FullName);
+        AssertDirectEnvelope(dispatch.Calls[2], completed.RecordId, completed.ResponseId, RecordLlmRunCompleted.Descriptor.FullName);
     }
 
     [Fact]
@@ -199,7 +199,7 @@ public sealed class LlmRunExecutorTests
         var forwarded = completed.ForwardedToolCallRecords.Should().ContainSingle().Subject;
         forwarded.SchemaHash.Should().Be("schema-1");
         ResponsesJsonValues.ToBoundaryJson(forwarded.Arguments).Should().Be("""{"city":"Singapore"}""");
-        AssertDirectEnvelope(dispatch.Calls[2], completed.RecordId, RecordLlmRunCompleted.Descriptor.FullName);
+        AssertDirectEnvelope(dispatch.Calls[2], completed.RecordId, completed.ResponseId, RecordLlmRunCompleted.Descriptor.FullName);
     }
 
     [Fact]
@@ -285,7 +285,7 @@ public sealed class LlmRunExecutorTests
         failed.RunId.Should().Be("run_failed");
         failed.FailureCode.Should().Be("authentication_required");
         failed.FailureMessage.Should().Contain("NyxID authentication required");
-        AssertDirectEnvelope(dispatch.Calls[0], failed.RecordId, RecordLlmRunFailed.Descriptor.FullName);
+        AssertDirectEnvelope(dispatch.Calls[0], failed.RecordId, failed.ResponseId, RecordLlmRunFailed.Descriptor.FullName);
     }
 
     [Fact]
@@ -313,7 +313,7 @@ public sealed class LlmRunExecutorTests
         cancelled.RecordId.Should().Be("run_cancelled:cancelled:1");
         cancelled.RunId.Should().Be("run_cancelled");
         cancelled.CancelledAt.Should().NotBeNull();
-        AssertDirectEnvelope(dispatch.Calls[0], cancelled.RecordId, RecordLlmRunCancelled.Descriptor.FullName);
+        AssertDirectEnvelope(dispatch.Calls[0], cancelled.RecordId, cancelled.ResponseId, RecordLlmRunCancelled.Descriptor.FullName);
     }
 
     [Fact]
@@ -440,13 +440,17 @@ public sealed class LlmRunExecutorTests
     private static void AssertDirectEnvelope(
         (string ActorId, EventEnvelope Envelope) call,
         string recordId,
+        string responseId,
         string payloadFullName)
     {
         call.Envelope.Id.Should().Be(recordId);
         call.Envelope.Payload!.TypeUrl.Should().EndWith(payloadFullName);
         call.Envelope.Route!.PublisherActorId.Should().Be("gagent-service.llm-run-executor");
         call.Envelope.Route.GetTargetActorId().Should().Be(call.ActorId);
-        call.Envelope.Propagation!.CorrelationId.Should().Be(recordId);
+        // CorrelationId is the response/session id (not the record id): the observation
+        // projector only fans a committed event out to the client hub when CorrelationId
+        // equals the session id.
+        call.Envelope.Propagation!.CorrelationId.Should().Be(responseId);
     }
 
     private sealed class GateControlledLlmProviderFactory : ILLMProviderFactory, ILLMProvider

@@ -78,6 +78,7 @@ public sealed class LlmRunExecutor(
                     executionRequest.RunId,
                     (recordId, command, token) => DispatchCommandAsync(
                         executionRequest.SessionActorId,
+                        executionRequest.ResponseId,
                         recordId,
                         command,
                         token)),
@@ -103,6 +104,7 @@ public sealed class LlmRunExecutor(
         {
             await DispatchCommandAsync(
                 request.SessionActorId,
+                request.ResponseId,
                 recordId,
                 new RecordLlmRunFailed
                 {
@@ -129,6 +131,7 @@ public sealed class LlmRunExecutor(
 
     private Task DispatchCommandAsync(
         string sessionActorId,
+        string responseId,
         string recordId,
         IMessage command,
         CancellationToken ct)
@@ -141,7 +144,15 @@ public sealed class LlmRunExecutor(
             Route = EnvelopeRouteSemantics.CreateDirect(PublisherId, sessionActorId),
             Propagation = new EnvelopePropagation
             {
-                CorrelationId = recordId,
+                // CorrelationId MUST be the response/session id, not the per-record id. The
+                // session-observation projector only fans a committed event out to the client
+                // observation hub when its CorrelationId equals the session id
+                // (LlmSessionObservationSessionEventProjector); the committed event inherits
+                // this inbound CorrelationId (GAgentBase publishes with ActiveInboundEnvelope as
+                // source). Using recordId here filtered every chunk/tool/terminal out of the hub,
+                // so the facade observation delivered nothing to the client SSE and the request
+                // timed out at the gateway. Id stays recordId for dispatch idempotency.
+                CorrelationId = responseId,
             },
         };
         return dispatchPort.DispatchAsync(sessionActorId, envelope, ct);
