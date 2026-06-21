@@ -13,7 +13,8 @@ internal static class ChatWebSocketRunCoordinator
         ApiRequestScope scope,
         CancellationToken ct = default,
         IReadOnlyDictionary<string, string>? defaultMetadata = null,
-        IWorkflowFileIngressPort? fileIngressPort = null)
+        IWorkflowFileIngressPort? fileIngressPort = null,
+        string? trustedScopeId = null)
     {
         var responseMessageType = ChatWebSocketProtocol.NormalizeMessageType(command.ResponseMessageType);
         var correlationId = string.Empty;
@@ -24,7 +25,8 @@ internal static class ChatWebSocketRunCoordinator
             command.Input,
             fileIngressPort,
             defaultMetadata,
-            cancellationToken: ct);
+            cancellationToken: ct,
+            trustedScopeId: trustedScopeId);
         if (!normalizedRequest.Succeeded)
         {
             var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);

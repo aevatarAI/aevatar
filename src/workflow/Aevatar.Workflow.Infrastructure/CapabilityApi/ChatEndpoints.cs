@@ -144,12 +144,20 @@ public static class WorkflowCapabilityEndpoints
             }
 
             fileIngressPort ??= serviceProvider?.GetService<IWorkflowFileIngressPort>();
+            // 06-20-observatory-run-state-feed (R2d): derive the run scope_id from the authenticated caller
+            // claim so the materialized current-state doc is attributed to the caller's observatory (and the
+            // body-supplied scopeId cannot spoof another scope). When auth is disabled or no single scope
+            // claim is present, the run is simply not claim-attributed (body scopeId is used as before).
+            var trustedScopeId = Aevatar.Capabilities.AevatarScopeAccessGuard.TryGetCallerScopeId(http, out var callerScopeId)
+                ? callerScopeId
+                : null;
             var normalizedRequest = await ChatRunRequestNormalizer.NormalizeAsync(
                 input,
                 fileIngressPort,
                 defaultMetadata,
                 trustedCallerCredential: callerCredential.Credential,
-                cancellationToken: ct);
+                cancellationToken: ct,
+                trustedScopeId: trustedScopeId);
             if (!normalizedRequest.Succeeded)
             {
                 var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);
@@ -219,6 +227,10 @@ public static class WorkflowCapabilityEndpoints
         using var scope = ApiRequestScope.BeginHttp();
         var logger = loggerFactory.CreateLogger("Aevatar.Workflow.Host.Api.Command");
 
+        // 06-20-observatory-run-state-feed (R2d): the /command path has no HttpContext, so the run scope
+        // cannot be derived from a caller claim — runs created here are explicitly out of AC3 (no per-caller
+        // observatory attribution unless an explicit body scopeId is supplied). Intentional, not silently
+        // mis-scoped.
         var normalizedRequest = await ChatRunRequestNormalizer.NormalizeAsync(
             input,
             fileIngressPort,
@@ -887,6 +899,14 @@ public static class WorkflowCapabilityEndpoints
             return;
         }
 
+        // 06-20-observatory-run-state-feed (R2d): derive the run scope_id from the authenticated WS principal
+        // (read before accepting the socket, while the HTTP context still carries the claims), mirroring the
+        // SSE path. When no single scope claim is present, the run is not claim-attributed (body scopeId is
+        // used as before).
+        var trustedScopeId = Aevatar.Capabilities.AevatarScopeAccessGuard.TryGetCallerScopeId(http, out var callerScopeId)
+            ? callerScopeId
+            : null;
+
         using var socket = await http.WebSockets.AcceptWebSocketAsync();
         var logger = loggerFactory?.CreateLogger("Aevatar.Workflow.Host.Api.Chat.WebSocket");
         var responseMessageType = WebSocketMessageType.Text;
@@ -924,7 +944,8 @@ public static class WorkflowCapabilityEndpoints
                 scope,
                 ct,
                 defaultMetadata,
-                fileIngressPort);
+                fileIngressPort,
+                trustedScopeId);
         }
         catch (OperationCanceledException)
         {

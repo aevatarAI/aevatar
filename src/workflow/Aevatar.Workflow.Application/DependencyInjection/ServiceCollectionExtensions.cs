@@ -88,6 +88,16 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<WorkflowRunDurableCompletionResolver>();
         services.TryAddSingleton<ICommandDurableCompletionResolver<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus>>(sp =>
             sp.GetRequiredService<WorkflowRunDurableCompletionResolver>());
+        // 06-20-observatory-run-state-feed (R2): gate that confirms an ad-hoc run's current-state doc has
+        // materialized before its throwaway actors are reclaimed. Built from the head-version + durable
+        // materialization-watermark read ports (supplied by Infrastructure); options bound by the host.
+        services.TryAddSingleton<WorkflowRunReclaimOptions>();
+        services.TryAddSingleton<WorkflowRunMaterializationReclaimGate>(sp =>
+            new WorkflowRunMaterializationReclaimGate(
+                sp.GetRequiredService<IWorkflowRunCommittedVersionPort>(),
+                sp.GetRequiredService<IWorkflowRunMaterializationWatermarkPort>(),
+                sp.GetRequiredService<WorkflowRunReclaimOptions>(),
+                logger: sp.GetService<Microsoft.Extensions.Logging.ILogger<WorkflowRunMaterializationReclaimGate>>()));
         services.TryAddSingleton<ICommandObservationScopeLeasePreparation<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>, WorkflowRunObservationScopeLeasePreparation>();
         services.TryAddSingleton<ICommandObservationLifecycle<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>, WorkflowRunObservationLifecycle>();
         services.TryAddSingleton<IEventFrameMapper<WorkflowRunEventEnvelope, WorkflowRunEventEnvelope>, IdentityEventFrameMapper<WorkflowRunEventEnvelope>>();
