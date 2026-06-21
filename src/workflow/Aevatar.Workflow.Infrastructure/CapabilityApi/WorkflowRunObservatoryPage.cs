@@ -1072,7 +1072,7 @@ function renderList(){
   const filters = el("div", { class:"filters", role:"group", "aria-label":"按状态筛选" });
   FILTERS.forEach(([val,lab]) => {
     const c = el("button", { class:"chip", "aria-pressed": String(state.filter===val) }, lab);
-    c.addEventListener("click", () => { state.filter = val; render(); });
+    c.addEventListener("click", () => { state.filter = val; pendingListScrollReset = true; render(); });
     filters.appendChild(c);
   });
   head.appendChild(filters);
@@ -1641,8 +1641,15 @@ function renderGraph(detail){
 /* ===========================================================================
    Compose
    =========================================================================== */
+// Filter / scope changes opt into a run-list scroll reset; selection and polling preserve the position.
+let pendingListScrollReset = false;
+
 function render(){
   const app = $("#app");
+  // Preserve the run-list scroll across the wholesale rebuild so selecting a run lower in the list (or a
+  // poll refresh) doesn't snap the list back to the top.
+  const prevListScroll = pendingListScrollReset ? 0 : (app.querySelector(".runlist")?.scrollTop || 0);
+  pendingListScrollReset = false;
   app.innerHTML = "";
   app.appendChild(renderTopbar());
 
@@ -1660,6 +1667,9 @@ function render(){
   shell.appendChild(renderList());
   shell.appendChild(renderDetail());
   app.appendChild(shell);
+
+  const listEl = app.querySelector(".runlist");
+  if(listEl) listEl.scrollTop = prevListScroll;
 }
 
 /* ===========================================================================
@@ -1687,6 +1697,7 @@ async function fetchMe(){
 function setScope(scope){
   adminState.currentScope = scope;       // null = my runs · ALL_SCOPES · or a concrete scope id
   adminState.candidates = null; adminState.message = ""; adminState.inputDraft = "";
+  pendingListScrollReset = true;         // new scope → fresh list, start at the top
   state.selectedRunId = null;
   cache.runs = []; cache.details = {}; cache.graphs = {};
   lastRunsSig = ""; lastDetailSig = "";
