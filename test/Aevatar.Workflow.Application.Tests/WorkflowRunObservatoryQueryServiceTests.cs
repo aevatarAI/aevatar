@@ -208,6 +208,31 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         graph.Edges.Should().ContainSingle().Which.EdgeType.Should().Be("child");
     }
 
+    // 06-21: graph node ids are composite (step:{actor}:{cmd}:{stepId}); the viewer can only join a node
+    // to its timeline steps if the bare stepId is surfaced. WorkflowStep nodes carry it in properties;
+    // run / actor nodes have none.
+    [Fact]
+    public async Task GetRunGraphForScopeAsync_ShouldExposeBareStepId_ForStepNodesOnly()
+    {
+        var currentState = new FakeCurrentStateQueryPort
+        {
+            SingleResult = Snapshot("run-1", CallerScope, WorkflowRunCompletionStatus.Completed),
+        };
+        var subgraph = new WorkflowRunGraphExportSubgraph { RootNodeId = "run-1" };
+        var stepNode = new WorkflowRunGraphExportNode { NodeId = "step:run-1:cmd:answer", NodeType = "WorkflowStep" };
+        stepNode.Properties.Add("stepId", "answer");
+        subgraph.Nodes.Add(stepNode);
+        subgraph.Nodes.Add(new WorkflowRunGraphExportNode { NodeId = "run:run-1:cmd", NodeType = "WorkflowRun" });
+        var artifact = new FakeArtifactQueryPort { Subgraph = subgraph };
+        var service = new WorkflowRunObservatoryQueryService(currentState, artifact);
+
+        var graph = await service.GetRunGraphForScopeAsync(CallerScope, "run-1");
+
+        graph.Should().NotBeNull();
+        graph!.Nodes.Single(node => node.NodeType == "WorkflowStep").StepId.Should().Be("answer");
+        graph.Nodes.Single(node => node.NodeType == "WorkflowRun").StepId.Should().BeEmpty();
+    }
+
     // 06-20-observatory-admin-cross-scope (G3/G4): cross-scope admin overview.
     [Fact]
     public async Task ListAllRunsAsync_ShouldReturnRunsAcrossAllScopes_WithoutScopeFilter()

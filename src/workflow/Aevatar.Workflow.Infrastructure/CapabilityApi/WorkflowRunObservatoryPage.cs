@@ -826,25 +826,32 @@ function deriveNodeStatus(graph, detail){
   if(!graph || !graph.nodes) return status;
   const events = (detail && detail.timeline) || [];
   const started=new Set(), finished=new Set(), failedStep=new Set(), stoppedStep=new Set();
-  let runFailed=false, runStopped=false;
   for(const e of events){
-    if(e.stepId){
-      if(e.kind === "StepStarted" || e.kind === "HumanInputRequest") started.add(e.stepId);
-      else if(e.kind === "StepFinished") finished.add(e.stepId);
-      else if(e.kind === "RunError") failedStep.add(e.stepId);
-      else if(e.kind === "RunStopped") stoppedStep.add(e.stepId);
-    }
-    if(e.kind === "RunError") runFailed=true;
-    if(e.kind === "RunStopped") runStopped=true;
+    if(!e.stepId) continue;
+    if(e.kind === "StepStarted" || e.kind === "HumanInputRequest") started.add(e.stepId);
+    else if(e.kind === "StepFinished") finished.add(e.stepId);
+    else if(e.kind === "RunError") failedStep.add(e.stepId);
+    else if(e.kind === "RunStopped") stoppedStep.add(e.stepId);
   }
-  const running = detail && detail.summary && detail.summary.status === "running";
+  const runStatus = (detail && detail.summary && detail.summary.status) || "";
+  const running = runStatus === "running";
+  const runFailed = runStatus === "failed" || runStatus === "timed_out";
+  const runStopped = runStatus === "stopped";
+  // run / actor topology nodes carry no stepId — they reflect the overall run state.
+  const topologyStatus = running ? "current"
+    : runStatus === "completed" ? "done"
+    : runFailed ? "failed"
+    : runStopped ? "stopped" : "pending";
   for(const nd of graph.nodes){
-    const id = nd.nodeId;
-    if(failedStep.has(id)) status[id] = "failed";
-    else if(stoppedStep.has(id)) status[id] = "stopped";
-    else if(finished.has(id)) status[id] = "done";
-    else if(started.has(id)) status[id] = running ? "current" : (runFailed ? "failed" : runStopped ? "stopped" : "done");
-    else status[id] = "pending";
+    // Graph node ids are composite (step:{actor}:{cmd}:{stepId}); match WorkflowStep nodes by the bare
+    // stepId the API now surfaces — NOT the node id, which never equals the timeline's bare stepId.
+    const sid = nd.stepId;
+    if(!sid){ status[nd.nodeId] = topologyStatus; continue; }
+    if(failedStep.has(sid)) status[nd.nodeId] = "failed";
+    else if(stoppedStep.has(sid)) status[nd.nodeId] = "stopped";
+    else if(finished.has(sid)) status[nd.nodeId] = "done";
+    else if(started.has(sid)) status[nd.nodeId] = running ? "current" : (runFailed ? "failed" : runStopped ? "stopped" : "done");
+    else status[nd.nodeId] = "pending";
   }
   return status;
 }
@@ -1455,9 +1462,12 @@ function syncNodeDetail(){
 
 function renderNodeDetailPanel(detail, g, nodeId){
   const node = g.nodes.find(nd => nd.nodeId === nodeId);
+  const sid = (node && node.stepId) || "";
   const st = (g.nodeStatus && g.nodeStatus[nodeId]) || "pending";
-  const events = (detail.timeline || []).filter(e => e.stepId === nodeId)
-    .slice().sort((a,b) => parseT(a.timestampUtc) - parseT(b.timestampUtc));
+  // Join by the bare stepId (WorkflowStep nodes); topology nodes (run/actor) have none → no step events.
+  const events = sid
+    ? (detail.timeline || []).filter(e => e.stepId === sid).slice().sort((a,b) => parseT(a.timestampUtc) - parseT(b.timestampUtc))
+    : [];
   const tsList = events.map(e => parseT(e.timestampUtc)).filter(x => !isNaN(x));
   const startTs = tsList.length ? Math.min.apply(null, tsList) : null;
   const endTs = tsList.length ? Math.max.apply(null, tsList) : null;
@@ -1468,7 +1478,7 @@ function renderNodeDetailPanel(detail, g, nodeId){
 
   const head = el("div", { class:"nd-head" });
   head.innerHTML = `<span class="nd-ic" data-cat="${cat}" aria-hidden="true">${stepTypeIcon(node && node.nodeType)}</span>
-    <span class="nd-id" title="${esc(nodeId)}">${esc(nodeId)}</span>`;
+    <span class="nd-id" title="${esc(nodeId)}">${esc(sid || nodeId)}</span>`;
   const close = el("button", { class:"nd-close", type:"button", "aria-label":"关闭节点详情" }, ICON.x);
   close.addEventListener("click", (ev) => { ev.stopPropagation(); closeNodeDetail(); });
   head.appendChild(close);
@@ -1486,7 +1496,9 @@ function renderNodeDetailPanel(detail, g, nodeId){
   const sec = el("div", {});
   sec.appendChild(el("div", { class:"nd-sec-title" }, `执行事件 · ${events.length}`));
   if(events.length === 0){
-    sec.appendChild(el("div", { class:"nd-empty" }, "该节点尚无执行事件（待执行，或无可观察记录）。"));
+    sec.appendChild(el("div", { class:"nd-empty" }, sid
+      ? "该步骤尚无执行事件（待执行，或本次运行未经过此步骤）。"
+      : "拓扑节点（运行 / Actor）· 无独立步骤事件，状态反映整体运行。"));
   } else {
     events.forEach(ev => {
       const row = el("div", { class:"nd-ev" });
@@ -1572,13 +1584,13 @@ function renderGraph(detail){
       class:`gnode st-${st}${state.selectedNodeId===nd.nodeId?" selected":""}`,
       "data-cat": cat || null,
       "data-node": nd.nodeId,
-      "aria-label":`节点 ${nd.nodeId}，${ST_LABEL[st]}，点击查看详情`,
+      "aria-label":`节点 ${nd.stepId || nd.nodeId}，${ST_LABEL[st]}，点击查看详情`,
       style:`left:${pos[nd.nodeId].x}px;top:${pos[nd.nodeId].y}px`
     });
     node.innerHTML = `
       <div class="gn-top">
         <span class="gn-ic" aria-hidden="true">${stepTypeIcon(nd.nodeType)}</span>
-        <div class="gn-main"><div class="gn-id">${esc(midTrunc(nd.nodeId, 26))}</div><div class="gn-type">${esc(midTrunc(nd.nodeType, 28) || "—")}</div></div>
+        <div class="gn-main"><div class="gn-id" title="${esc(nd.nodeId)}">${esc(nd.stepId || midTrunc(nd.nodeId, 26))}</div><div class="gn-type">${esc(midTrunc(nd.nodeType, 28) || "—")}</div></div>
       </div>
       <div class="gn-foot"><span class="gn-state">${ST_LABEL[st]}</span></div>`;
     node.addEventListener("click", (ev) => { ev.stopPropagation(); openNodeDetail(nd.nodeId); });

@@ -123,6 +123,11 @@ public sealed class ObservatoryGraphNode
     public string NodeId { get; init; } = string.Empty;
 
     public string NodeType { get; init; } = string.Empty;
+
+    // Bare workflow step id for WorkflowStep nodes (empty for run / actor topology nodes). The graph node
+    // id is a composite key (step:{actor}:{cmd}:{stepId}); this surfaces the plain stepId so the viewer can
+    // join a node to its committed timeline step events (status + detail) without parsing the composite id.
+    public string StepId { get; init; } = string.Empty;
 }
 
 public sealed class ObservatoryGraphEdge

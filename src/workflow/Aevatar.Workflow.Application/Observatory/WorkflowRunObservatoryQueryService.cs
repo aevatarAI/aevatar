@@ -142,6 +142,11 @@ public sealed class WorkflowRunObservatoryQueryService
                 {
                     NodeId = node.NodeId,
                     NodeType = node.NodeType,
+                    // WorkflowStep nodes carry the bare stepId in their properties; surface it so the
+                    // viewer can join the node to its committed timeline steps (run / actor nodes have none).
+                    StepId = node.Properties != null && node.Properties.TryGetValue("stepId", out var stepId)
+                        ? stepId
+                        : string.Empty,
                 })
                 .ToList(),
             Edges = subgraph.Edges
