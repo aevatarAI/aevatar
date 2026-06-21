@@ -335,7 +335,17 @@ public sealed class WorkflowRunGAgent
         RebuildCompiledWorkflowCache();
         await base.OnActivateAsync(ct);
         InstallCognitiveModules();
-        await _subWorkflowOrchestrator.RecoverPendingSubWorkflowInvocationsAsync(State, ct);
+
+        // C4 (06-20-observatory-run-state-feed): a terminal run must never drive in-flight child handoffs.
+        // ApplyWorkflowCompleted (unlike ApplyWorkflowStopped/RunStopped) does NOT clear
+        // PendingSubWorkflowInvocations — those are cleared by HandleWorkflowCompleted's
+        // CleanupPendingInvocationsForRunAsync, which the status-only completion-adopt path (R1) skips. So an
+        // adopted-completed run can carry stale pending invocations into activation. Guard the forward
+        // recovery on non-terminal; compensation recovery (ResumeCompensationAsync, below) is independent and
+        // keyed off CompensationCursor/ledger, not pending invocations, so it still runs.
+        if (!IsTerminalStatus(State.Status))
+            await _subWorkflowOrchestrator.RecoverPendingSubWorkflowInvocationsAsync(State, ct);
+
         await ResumeCompensationAsync(ct);
     }
 
@@ -676,6 +686,12 @@ public sealed class WorkflowRunGAgent
 
         if (!string.Equals(publisherActorId, Id, StringComparison.Ordinal))
         {
+            if (TryAdoptOwnRunRelayedTerminal(completed.RunId))
+            {
+                await AdoptRelayedWorkflowCompletedAsync(completed);
+                return;
+            }
+
             Logger.LogDebug(
                 "Ignore external WorkflowCompletedEvent from publisher={PublisherId} run={RunId}.",
                 publisherActorId,
@@ -793,6 +809,64 @@ public sealed class WorkflowRunGAgent
         }, TopologyAudience.Parent);
 
         await PublishManagedParentInvocationCompletionAsync(evt, stateBeforeCompletion, CancellationToken.None);
+    }
+
+    // R1 (06-20-observatory-run-state-feed): a provisioned run delegates execution to an inner child
+    // WorkflowRunGAgent that self-commits the COMPLETION; the relayed WorkflowCompletedEvent carries
+    // publisher = inner, so the current-state projector gate skips it and the outer projection-root never
+    // advances its own committed Status (stuck "running"). HandleWorkflowCompleted is not an [EventHandler],
+    // so HandleWorkflowCompletionEnvelope ignores the non-self relay — hence the outer must adopt it.
+    // (STOP/RUN-STOP are NOT affected: their typed [EventHandler]s fire for non-self publishers and run the
+    // full CompleteStopAsync path, so they are not adopted here.) R1a enforces that a child sub-workflow run
+    // id never equals the parent run id (SubWorkflowOrchestrator), so a relayed terminal whose RunId == this
+    // run's RunId is necessarily this run's own.
+    private bool TryAdoptOwnRunRelayedTerminal(string? relayedRunId)
+    {
+        // R1c started precondition: only adopt once the projection-root has applied bind/start, so the
+        // adopted terminal does not set Status while RunId/ScopeId/StartedAtUtc are still blank.
+        if (string.IsNullOrWhiteSpace(State.RunId) ||
+            string.IsNullOrWhiteSpace(State.ScopeId) ||
+            State.StartedAtUtc == null)
+        {
+            return false;
+        }
+
+        return string.Equals(
+            WorkflowRunIdNormalizer.Normalize(relayedRunId),
+            RunId,
+            StringComparison.Ordinal);
+    }
+
+    // R1b status-only adopt: advance only the terminal WorkflowRunState (via the ApplyWorkflowCompleted
+    // reducer) so the current-state projector gate passes (publisher becomes the root). It MUST NOT run
+    // any HandleWorkflowCompleted cross-actor side effects (parent completion publish, fork handling,
+    // sub-workflow/role cleanup, runtime clear, module disable, LLM-completion publish, managed-parent
+    // completion) — the inner executor already emitted those for the actual execution.
+    private async Task AdoptRelayedWorkflowCompletedAsync(WorkflowCompletedEvent evt)
+    {
+        if (ShouldIgnoreWorkflowCompleted(State))
+        {
+            Logger.LogDebug(
+                "Skip adopting relayed WorkflowCompletedEvent for terminal run={RunId} status={Status}.",
+                RunId,
+                State.Status);
+            return;
+        }
+
+        Logger.LogInformation(
+            "Adopt relayed WorkflowCompletedEvent for own run={RunId} success={Success}.",
+            RunId,
+            evt.Success);
+        await PersistDomainEventAsync(NormalizeAdoptedCompleted(evt));
+    }
+
+    private WorkflowCompletedEvent NormalizeAdoptedCompleted(WorkflowCompletedEvent evt)
+    {
+        var normalized = evt.Clone();
+        normalized.RunId = RunId;
+        if (string.IsNullOrWhiteSpace(normalized.WorkflowName))
+            normalized.WorkflowName = State.WorkflowName;
+        return normalized;
     }
 
     private static bool ShouldSuppressGenericParentCompletion(WorkflowRunState stateBeforeCompletion) =>
