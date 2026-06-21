@@ -23,7 +23,7 @@ public sealed class LlmRunExecutorTests
         var core = new LlmRunCore(provider, [], NullLogger<LlmRunCore>.Instance);
         var observation = new RecordingLlmRunObservation();
         var dispatch = new RecordingDispatchPort(observation);
-        var executor = CreateExecutor(core, dispatch, observation);
+        var executor = CreateExecutor(core, dispatch);
 
         var request = new LlmRunExecutorRequest(
             "session-actor-1",
@@ -169,7 +169,7 @@ public sealed class LlmRunExecutorTests
         var core = new LlmRunCore(provider, [], NullLogger<LlmRunCore>.Instance);
         var observation = new RecordingLlmRunObservation();
         var dispatch = new RecordingDispatchPort(observation);
-        var executor = CreateExecutor(core, dispatch, observation);
+        var executor = CreateExecutor(core, dispatch);
 
         var request = new LlmRunExecutorRequest(
             "session-actor-2",
@@ -231,7 +231,7 @@ public sealed class LlmRunExecutorTests
         var core = new LlmRunCore(provider, [toolProvider], NullLogger<LlmRunCore>.Instance);
         var observation = new RecordingLlmRunObservation();
         var dispatch = new RecordingDispatchPort(observation);
-        var executor = CreateExecutor(core, dispatch, observation);
+        var executor = CreateExecutor(core, dispatch);
         var selection = BuildForwardedSelection();
         selection.SubstitutedToolNames.Add("get_weather");
 
@@ -266,7 +266,7 @@ public sealed class LlmRunExecutorTests
         var core = new LlmRunCore(provider, [], NullLogger<LlmRunCore>.Instance);
         var observation = new RecordingLlmRunObservation();
         var dispatch = new RecordingDispatchPort(observation);
-        var executor = CreateExecutor(core, dispatch, observation);
+        var executor = CreateExecutor(core, dispatch);
 
         var request = new LlmRunExecutorRequest(
             "session-actor-4",
@@ -295,7 +295,7 @@ public sealed class LlmRunExecutorTests
         var core = new LlmRunCore(provider, [], NullLogger<LlmRunCore>.Instance);
         var observation = new RecordingLlmRunObservation();
         var dispatch = new RecordingDispatchPort(observation);
-        var executor = CreateExecutor(core, dispatch, observation);
+        var executor = CreateExecutor(core, dispatch);
 
         var request = new LlmRunExecutorRequest(
             "session-actor-5",
@@ -331,7 +331,7 @@ public sealed class LlmRunExecutorTests
         var core = new LlmRunCore(provider, [], NullLogger<LlmRunCore>.Instance);
         var observation = new RecordingLlmRunObservation();
         var dispatch = new FailingThenRecordingDispatchPort(observation, failuresBeforeSuccess: 2);
-        var executor = CreateExecutor(core, dispatch, observation);
+        var executor = CreateExecutor(core, dispatch);
 
         var request = new LlmRunExecutorRequest(
             "session-actor-6",
@@ -352,16 +352,14 @@ public sealed class LlmRunExecutorTests
         failed.FailureMessage.Should().Contain("Synthetic dispatch failure");
     }
 
+    // The dispatch-only executor takes no observation ports: the run loop dispatches Record*
+    // commands and the facade's single long-lived observation serves the client. Constructing
+    // it here without any observation port is itself the proof that the run no longer does a
+    // per-record observation round-trip.
     private static LlmRunExecutor CreateExecutor(
         ILlmRunCore core,
-        IActorDispatchPort dispatch,
-        RecordingLlmRunObservation observation) =>
-        new(
-            core,
-            dispatch,
-            observation.ScopePreparationPort,
-            observation.ProjectionPort,
-            NullLogger<LlmRunExecutor>.Instance);
+        IActorDispatchPort dispatch) =>
+        new(core, dispatch, NullLogger<LlmRunExecutor>.Instance);
 
     private static LlmRunRequested BuildRunRequest(
         string responseId,

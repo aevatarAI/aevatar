@@ -1,28 +1,18 @@
-using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
-using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgentService.Application.Responses;
 
 public sealed class LlmRunExecutor(
     ILlmRunCore runCore,
     IActorDispatchPort dispatchPort,
-    ILlmSessionObservationScopeLeasePreparationPort observationScopeLeasePreparationPort,
-    ILlmSessionObservationProjectionPort observationProjectionPort,
-    ILogger<LlmRunExecutor> logger,
-    IOptions<ResponsesIngressOptions>? ingressOptions = null) : ILlmRunExecutor, ILlmRunExecutionService
+    ILogger<LlmRunExecutor> logger) : ILlmRunExecutor, ILlmRunExecutionService
 {
     private const string PublisherId = "gagent-service.llm-run-executor";
-    private const int SinkCapacity = 64;
-    private static readonly TimeSpan DefaultRecordObservationTimeout = TimeSpan.FromSeconds(300);
-    private readonly TimeSpan _recordObservationTimeout =
-        ingressOptions?.Value?.ObservationTimeout ?? DefaultRecordObservationTimeout;
 
     public Task<DispatchAdmission> StartAsync(
         LlmRunExecutorRequest request,
@@ -85,17 +75,12 @@ public sealed class LlmRunExecutor(
                     executionRequest.RunId,
                     executionRequest.OriginPlatform),
                 new DispatchingLlmRunSink(
-                    executionRequest.SessionActorId,
-                    executionRequest.ResponseId,
                     executionRequest.RunId,
                     (recordId, command, token) => DispatchCommandAsync(
                         executionRequest.SessionActorId,
                         recordId,
                         command,
-                        token),
-                    observationScopeLeasePreparationPort,
-                    observationProjectionPort,
-                    _recordObservationTimeout),
+                        token)),
                 ct).ConfigureAwait(false);
         }
         catch (Exception ex)
@@ -162,14 +147,17 @@ public sealed class LlmRunExecutor(
         return dispatchPort.DispatchAsync(sessionActorId, envelope, ct);
     }
 
+    // Dispatch-only sink (mirrors the workflow producer pattern: WorkflowRunGAgent commits
+    // run facts and does NOT observe its own committed records). Each Record* command is
+    // dispatched to the session actor's FIFO inbox; ordering + idempotency are owned by the
+    // session actor, and the client SSE is served by the facade's single long-lived
+    // LlmSessionRunObservationService.ObserveAsync. The previous per-record
+    // attach/dispatch/ReadAllAsync round-trip is removed: it subscribed an Orleans-stream
+    // hub just before dispatching and missed the publish off-grain, blocking the run at the
+    // first chunk. See task 06-21-executor-dispatch-only-sink.
     private sealed class DispatchingLlmRunSink(
-        string sessionActorId,
-        string responseId,
         string runId,
-        Func<string, IMessage, CancellationToken, Task> dispatch,
-        ILlmSessionObservationScopeLeasePreparationPort observationScopeLeasePreparationPort,
-        ILlmSessionObservationProjectionPort observationProjectionPort,
-        TimeSpan recordObservationTimeout) : ILlmRunSink
+        Func<string, IMessage, CancellationToken, Task> dispatch) : ILlmRunSink
     {
         private long _recordIndex;
 
@@ -276,118 +264,18 @@ public sealed class LlmRunExecutor(
                 ct);
         }
 
+        // Dispatch the record to the session actor's FIFO inbox and continue. We await only
+        // the dispatch admission (the actor accepted the command), NOT a projection round-trip:
+        // the session actor commits the record idempotently and the facade observation streams
+        // it to the client. Returning Continue is correct — RunLlmLoopAsync returns on its own
+        // right after dispatching a terminal record, and post-terminal/cancel records are
+        // idempotent no-ops on the actor. An executor exception (e.g. dispatch failure) is
+        // turned into a terminal RecordLlmRunFailed by ExecuteAsync's catch.
         private async Task<LlmRunRecordDecision> DispatchAsync(string recordId, IMessage command, CancellationToken ct)
         {
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            if (recordObservationTimeout > TimeSpan.Zero)
-                timeoutCts.CancelAfter(recordObservationTimeout);
-            var observeCt = timeoutCts.Token;
-            LlmSessionObservationScopeLeasePreparation? preparation = null;
-            await using var sink = new EventChannel<EventEnvelope>(SinkCapacity);
-            EventSinkProjectionAttachment<ILlmSessionObservationProjectionLease>? attachment = null;
-
-            try
-            {
-                preparation = await observationScopeLeasePreparationPort
-                    .PrepareAsync(sessionActorId, responseId, observeCt)
-                    .ConfigureAwait(false);
-                if (preparation == null)
-                    throw new InvalidOperationException(
-                        $"LLM run record observation is unavailable for response '{responseId}'.");
-
-                attachment = await observationProjectionPort
-                    .AttachExistingResponseProjectionAsync(sessionActorId, responseId, sink, observeCt)
-                    .ConfigureAwait(false);
-                if (attachment == null)
-                    throw new InvalidOperationException(
-                        $"LLM run record observation attachment is unavailable for response '{responseId}'.");
-
-                await dispatch(recordId, command, observeCt).ConfigureAwait(false);
-                await foreach (var envelope in sink.ReadAllAsync(observeCt).ConfigureAwait(false))
-                {
-                    if (!TryGetObservedPayload(envelope, out var payload))
-                        continue;
-
-                    var decision = TryResolveDecision(payload, recordId);
-                    if (decision.HasValue)
-                    {
-                        sink.Complete();
-                        return decision.Value;
-                    }
-                }
-
-                throw new InvalidOperationException(
-                    $"LLM run record observation ended before record '{recordId}' was committed.");
-            }
-            catch (OperationCanceledException) when (!ct.IsCancellationRequested && timeoutCts.IsCancellationRequested)
-            {
-                throw new TimeoutException($"Timed out waiting for LLM run record '{recordId}' to be committed.");
-            }
-            finally
-            {
-                if (attachment != null)
-                {
-                    await observationProjectionPort
-                        .DetachLiveSinkAsync(attachment.LiveSinkLease, CancellationToken.None)
-                        .ConfigureAwait(false);
-                    await observationProjectionPort
-                        .ReleaseActorProjectionAsync(attachment.ProjectionLease, CancellationToken.None)
-                        .ConfigureAwait(false);
-                }
-
-                if (preparation != null)
-                {
-                    await observationScopeLeasePreparationPort
-                        .ReleaseAsync(preparation, CancellationToken.None)
-                        .ConfigureAwait(false);
-                }
-            }
+            await dispatch(recordId, command, ct).ConfigureAwait(false);
+            return LlmRunRecordDecision.Continue;
         }
-
-        private static bool TryGetObservedPayload(EventEnvelope envelope, out Any payload)
-        {
-            if (envelope.Payload?.Is(CommittedStateEventPublished.Descriptor) == true)
-            {
-                var published = envelope.Payload.Unpack<CommittedStateEventPublished>();
-                if (published.StateEvent?.EventData != null)
-                {
-                    payload = published.StateEvent.EventData;
-                    return true;
-                }
-            }
-
-            if (envelope.Payload != null)
-            {
-                payload = envelope.Payload;
-                return true;
-            }
-
-            payload = default!;
-            return false;
-        }
-
-        private static LlmRunRecordDecision? TryResolveDecision(Any payload, string recordId)
-        {
-            if (payload.Is(LlmStreamChunkObserved.Descriptor))
-                return RecordDecision(payload.Unpack<LlmStreamChunkObserved>().RecordId, recordId, false);
-            if (payload.Is(LlmToolCallObserved.Descriptor))
-                return RecordDecision(payload.Unpack<LlmToolCallObserved>().RecordId, recordId, false);
-            if (payload.Is(LlmRunCompleted.Descriptor))
-                return RecordDecision(payload.Unpack<LlmRunCompleted>().RecordId, recordId, true);
-            if (payload.Is(LlmRunFailed.Descriptor))
-                return RecordDecision(payload.Unpack<LlmRunFailed>().RecordId, recordId, true);
-            if (payload.Is(LlmRunCancelled.Descriptor))
-                return RecordDecision(payload.Unpack<LlmRunCancelled>().RecordId, recordId, true);
-
-            return null;
-        }
-
-        private static LlmRunRecordDecision? RecordDecision(string payloadRecordId, string expectedRecordId, bool terminal) =>
-            string.Equals(payloadRecordId, expectedRecordId, StringComparison.Ordinal)
-                ? LlmRunRecordDecision.Continue with { StopDispatching = terminal }
-                : terminal
-                    ? LlmRunRecordDecision.Stop
-                    : null;
 
         private string NextRecordId(string kind)
         {
