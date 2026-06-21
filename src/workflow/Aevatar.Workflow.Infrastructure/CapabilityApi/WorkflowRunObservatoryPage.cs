@@ -358,6 +358,26 @@ internal static class WorkflowRunObservatoryPage
   .rh-meta .k { color: var(--muted-2); }
   .rh-meta .v { font-family: var(--mono); color: var(--fg); }
   .rh-meta .grp { display: inline-flex; gap: 6px; align-items: baseline; }
+  .rh-meta .rid-grp { align-items: center; }
+
+  /* run id, broken into color-coded semantic chips (scope / 定义 / 运行) for legibility */
+  .rid { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .rid-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 2px 9px; border-radius: var(--r-pill); border: 1px solid transparent; font-size: 11.5px;
+  }
+  .rid-chip .rid-lab { font-weight: 650; letter-spacing: .02em; }
+  .rid-chip .rid-val { font-family: var(--mono); color: var(--fg); font-variant-numeric: tabular-nums; }
+  .rid-chip.def   { color: #a78bfa;    background: rgba(167,139,250,.13); border-color: color-mix(in oklab, #a78bfa 32%, transparent); }
+  .rid-chip.run   { color: var(--run); background: var(--run-soft);       border-color: color-mix(in oklab, var(--run) 32%, transparent); }
+  .rid-chip.scope { color: var(--muted); background: var(--neutral-soft); border-color: var(--border); }
+  .rid-chip.plain { color: var(--muted-2); background: var(--panel-2); border-color: var(--border); }
+  .rid-copy {
+    display: inline-grid; place-items: center; width: 24px; height: 22px; flex: 0 0 auto;
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--muted);
+  }
+  .rid-copy:hover { color: var(--fg); border-color: var(--muted-2); }
+  .rid-copy.done { color: var(--ok); border-color: color-mix(in oklab, var(--ok) 40%, transparent); }
 
   .usage-strip {
     display: flex; gap: 0; flex-wrap: wrap;
@@ -1196,11 +1216,40 @@ function renderDetail(){
   return pane;
 }
 
+/* Run ids are composite (e.g. [scope:]workflow.definition:{defHash}:run:{runHash}). Break them into
+   labelled, color-coded chips so the id reads clearly instead of as one wall of hex; fall back to a
+   single truncated chip when the shape is unfamiliar. */
+function parseRunId(runId){
+  const id = String(runId || "");
+  const out = { full: id, scope: "", def: "", run: "" };
+  const runM = /:run:([^:]+)\s*$/i.exec(id);
+  if(runM) out.run = runM[1];
+  const defM = /workflow\.definition:([^:]+)/i.exec(id);
+  if(defM) out.def = defM[1];
+  const dIdx = id.indexOf("workflow.definition:");
+  if(dIdx > 0) out.scope = id.slice(0, dIdx).replace(/:+$/, "");
+  return out;
+}
+function renderRunIdChips(rid){
+  const chips = [];
+  if(rid.scope) chips.push(`<span class="rid-chip scope" title="scope: ${esc(rid.scope)}"><span class="rid-lab">scope</span><span class="rid-val">${esc(midTrunc(rid.scope, 14))}</span></span>`);
+  if(rid.def)   chips.push(`<span class="rid-chip def" title="workflow.definition: ${esc(rid.def)}"><span class="rid-lab">定义</span><span class="rid-val">${esc(midTrunc(rid.def, 16))}</span></span>`);
+  if(rid.run)   chips.push(`<span class="rid-chip run" title="run: ${esc(rid.run)}"><span class="rid-lab">运行</span><span class="rid-val">${esc(midTrunc(rid.run, 16))}</span></span>`);
+  if(chips.length === 0) chips.push(`<span class="rid-chip plain" title="${esc(rid.full)}"><span class="rid-val">${esc(midTrunc(rid.full, 30))}</span></span>`);
+  chips.push(`<button class="rid-copy" type="button" aria-label="复制完整运行 ID" title="复制完整运行 ID">${ICON.copy}</button>`);
+  return chips.join("");
+}
+
 function renderRunHeader(detail){
   const s = detail.summary;
   const started = parseT(s.startedAtUtc);
+  const hasStart = !isNaN(started);
   const isRunning = s.status === "running";
   const endMs = isRunning ? nowMs() : parseT(s.updatedAtUtc);
+  // startedAtUtc can be null (old runs / terminal-adopted failures that never recorded a start) — degrade
+  // to — instead of "NaN秒" / "null UTC".
+  const durStr = (hasStart && !isNaN(endMs)) ? fmtDur(endMs - started) : "—";
+  const startStr = hasStart ? (clockUTC(s.startedAtUtc) + " UTC") : "—";
   const u = detail.usageTotals;
 
   const head = el("header", { class:"run-header" });
@@ -1210,10 +1259,17 @@ function renderRunHeader(detail){
       <span class="badge b-${s.status}"><span class="dot s-${s.status}" aria-hidden="true"></span>${STATUS_LABEL[s.status]||s.status}</span>
     </div>
     <div class="rh-meta">
-      <span class="grp"><span class="k">运行 ID</span><span class="v">${esc(s.runId)}</span></span>
-      <span class="grp"><span class="k">用时</span><span class="v" ${isRunning?`data-duration="${s.startedAtUtc}"`:""}>${fmtDur(endMs-started)}</span></span>
-      <span class="grp"><span class="k">开始</span><span class="v">${clockUTC(s.startedAtUtc)} UTC</span></span>
+      <span class="grp rid-grp"><span class="k">运行 ID</span><span class="rid">${renderRunIdChips(parseRunId(s.runId))}</span></span>
+      <span class="grp"><span class="k">用时</span><span class="v" ${(hasStart&&isRunning)?`data-duration="${s.startedAtUtc}"`:""}>${durStr}</span></span>
+      <span class="grp"><span class="k">开始</span><span class="v">${startStr}</span></span>
     </div>`;
+
+  const copyBtn = head.querySelector(".rid-copy");
+  if(copyBtn) copyBtn.addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(s.runId || ""); }
+    catch(e){ const ta=document.createElement("textarea"); ta.value=s.runId||""; document.body.appendChild(ta); ta.select(); try{document.execCommand("copy");}catch(_){ } ta.remove(); }
+    copyBtn.classList.add("done"); setTimeout(() => copyBtn.classList.remove("done"), 1300);
+  });
 
   // usage strip (compact summary cards)
   const strip = el("div", { class:"usage-strip", "aria-label":"用量汇总" });
