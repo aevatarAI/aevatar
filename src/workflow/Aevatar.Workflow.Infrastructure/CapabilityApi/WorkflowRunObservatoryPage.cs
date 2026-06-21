@@ -1530,18 +1530,48 @@ function renderGraph(detail){
 
   const horizontal = window.innerWidth > 720;
   const NW = 244, NH = 96, GX = 150, GY = 84, PAD = 28;
-  const n = g.nodes.length;
   const pos = {};
-  let W, H;
-  if(horizontal){
-    W = PAD*2 + n*NW + (n-1)*GX;
-    H = PAD*2 + NH;
-    g.nodes.forEach((nd,i) => pos[nd.nodeId] = { x: PAD + i*(NW+GX), y: PAD });
-  } else {
-    W = PAD*2 + NW;
-    H = PAD*2 + n*NH + (n-1)*GY;
-    g.nodes.forEach((nd,i) => pos[nd.nodeId] = { x: PAD, y: PAD + i*(NH+GY) });
+
+  // Layered layout from the edges (OWNS / CONTAINS_STEP / CHILD_OF). Depth = longest path from the roots,
+  // so the run's steps fan out as CHILD nodes one column over instead of forming a fake left-to-right
+  // sequence. This is what makes "running run containing an already-done step" read as containment, not
+  // a contradictory timeline. depth = primary axis; siblings stack on the secondary axis.
+  const ids = g.nodes.map(nd => nd.nodeId);
+  const idSet = new Set(ids);
+  const outAdj = {}; const indeg = {};
+  ids.forEach(id => { outAdj[id] = []; indeg[id] = 0; });
+  g.edges.forEach(e => {
+    if(idSet.has(e.fromNodeId) && idSet.has(e.toNodeId) && e.fromNodeId !== e.toNodeId){
+      outAdj[e.fromNodeId].push(e.toNodeId);
+      indeg[e.toNodeId] += 1;
+    }
+  });
+  let roots = ids.filter(id => indeg[id] === 0);
+  if(roots.length === 0) roots = [(g.rootNodeId && idSet.has(g.rootNodeId)) ? g.rootNodeId : ids[0]];
+  const depth = {}; ids.forEach(id => depth[id] = 0);
+  const queue = roots.slice();
+  let guard = 0; const cap = ids.length * ids.length + 16; // cycle defense
+  while(queue.length && guard++ < cap){
+    const id = queue.shift();
+    for(const c of outAdj[id]){
+      if(depth[c] < depth[id] + 1){ depth[c] = depth[id] + 1; queue.push(c); }
+    }
   }
+  const rowByDepth = {};
+  g.nodes.forEach(nd => {
+    const d = depth[nd.nodeId] || 0;
+    const r = rowByDepth[d] === undefined ? 0 : rowByDepth[d] + 1;
+    rowByDepth[d] = r;
+    pos[nd.nodeId] = horizontal
+      ? { x: PAD + d*(NW+GX), y: PAD + r*(NH+GY) }
+      : { x: PAD + r*(NW+GX), y: PAD + d*(NH+GY) };
+  });
+  const maxDepth = ids.reduce((m,id) => Math.max(m, depth[id] || 0), 0);
+  const maxRow = Object.values(rowByDepth).reduce((m,r) => Math.max(m, r), 0);
+  const cols = horizontal ? maxDepth : maxRow;     // along X
+  const rows = horizontal ? maxRow : maxDepth;     // along Y
+  const W = PAD*2 + (cols+1)*NW + cols*GX;
+  const H = PAD*2 + (rows+1)*NH + rows*GY;
   canvas.style.width = W+"px"; canvas.style.height = H+"px";
 
   // SVG edges
