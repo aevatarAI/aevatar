@@ -7,11 +7,10 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Application.Responses;
-using Aevatar.GAgentService.Core.GAgents;
-using Aevatar.GAgentService.Infrastructure.Activation;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgentService.Tests.Application;
 
@@ -65,11 +64,10 @@ public sealed class LlmRunExecutorTests
     }
 
     [Fact]
-    public async Task RunExecutionScheduler_ShouldDispatchExecutionCommandToProvisionedActor()
+    public async Task RunExecutionScheduler_ShouldEnqueueRequest_WithoutBlockingTheActorTurn()
     {
-        var provisioner = new RecordingExecutionTargetProvisioner("llm-run-execution:resp_scheduler:run_1");
-        var dispatch = new RecordingDispatchPort();
-        var scheduler = new LlmRunExecutionScheduler(provisioner, dispatch);
+        var queue = new RecordingExecutionQueue();
+        var scheduler = new LlmRunExecutionScheduler(queue);
         var request = new LlmRunExecutionRequest(
             " session-actor-scheduler ",
             " resp_scheduler ",
@@ -77,68 +75,68 @@ public sealed class LlmRunExecutorTests
             BuildRunRequest("resp_scheduler"),
             "ApiKey");
 
-        await scheduler.ScheduleAsync(request, CancellationToken.None);
+        // The scheduler runs inside the session actor's turn; it must complete synchronously
+        // (enqueue only) and never await execution.
+        var schedule = scheduler.ScheduleAsync(request, CancellationToken.None);
+        schedule.IsCompleted.Should().BeTrue();
+        await schedule;
 
-        provisioner.Requests.Should().ContainSingle().Which.Should().Be(request);
-        var call = dispatch.Calls.Should().ContainSingle().Subject;
-        call.ActorId.Should().Be("llm-run-execution:resp_scheduler:run_1");
-        call.Envelope.Id.Should().Be("execute-resp_scheduler-run_1");
-        call.Envelope.Route!.PublisherActorId.Should().Be("gagent-service.llm-run-executor");
-        call.Envelope.Route.GetTargetActorId().Should().Be("llm-run-execution:resp_scheduler:run_1");
-        call.Envelope.Propagation!.CorrelationId.Should().Be("resp_scheduler");
-        var command = call.Envelope.Payload!.Unpack<ExecuteLlmRunRequested>();
-        command.SessionActorId.Should().Be("session-actor-scheduler");
-        command.ResponseId.Should().Be("resp_scheduler");
-        command.RunId.Should().Be("run_1");
-        command.Command.ResponseId.Should().Be("resp_scheduler");
-        command.Command.BearerToken.Should().Be("token-1");
-        command.OriginPlatform.Should().Be("ApiKey");
+        var enqueued = queue.Enqueued.Should().ContainSingle().Subject;
+        enqueued.SessionActorId.Should().Be("session-actor-scheduler");
+        enqueued.ResponseId.Should().Be("resp_scheduler");
+        enqueued.RunId.Should().Be("run_1");
+        enqueued.Command.ResponseId.Should().Be("resp_scheduler");
+        enqueued.Command.BearerToken.Should().Be("token-1");
+        enqueued.OriginPlatform.Should().Be("ApiKey");
+        enqueued.Command.Should().NotBeSameAs(
+            request.Command,
+            "the request crosses from the actor turn to a worker thread and must be cloned");
     }
 
     [Fact]
-    public async Task RunExecutionGAgent_ShouldMapExecuteCommandToExecutionServiceRequest()
+    public async Task LlmRunExecutionQueue_ShouldRoundTripRequestsInFifoOrder()
     {
-        var executionService = new RecordingLlmRunExecutor();
-        var actor = new LlmRunExecutionGAgent(executionService);
-        var command = BuildRunRequest("resp_execution_actor");
-        command.RunId = "stale-run";
+        var queue = new LlmRunExecutionQueue(
+            Options.Create(new LlmRunExecutionWorkerOptions { QueueCapacity = 8 }));
+        queue.Enqueue(BuildExecutionRequest("resp_a", "run_a"));
+        queue.Enqueue(BuildExecutionRequest("resp_b", "run_b"));
 
-        await actor.HandleExecuteAsync(new ExecuteLlmRunRequested
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var drained = await DrainAsync(queue, 2, cts.Token);
+
+        drained.Select(static request => request.RunId).Should().ContainInOrder("run_a", "run_b");
+    }
+
+    [Fact]
+    public void LlmRunExecutionQueue_WhenFull_ShouldThrowQueueFull_WithoutBlocking()
+    {
+        var queue = new LlmRunExecutionQueue(
+            Options.Create(new LlmRunExecutionWorkerOptions { QueueCapacity = 1 }));
+        queue.Enqueue(BuildExecutionRequest("resp_1", "run_1"));
+
+        var overflow = () => queue.Enqueue(BuildExecutionRequest("resp_2", "run_2"));
+
+        overflow.Should().Throw<LlmRunExecutionQueueFullException>()
+            .WithMessage("*resp_2*run_2*");
+    }
+
+    [Fact]
+    public async Task LlmRunExecutionQueue_Drain_ShouldHandRequestToExecutorOffTheEnqueueStack()
+    {
+        var queue = new LlmRunExecutionQueue(
+            Options.Create(new LlmRunExecutionWorkerOptions { QueueCapacity = 8 }));
+        var executor = new RecordingLlmRunExecutor();
+        queue.Enqueue(BuildExecutionRequest("resp_drain", "run_drain"));
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await foreach (var request in queue.DequeueAllAsync(cts.Token))
         {
-            SessionActorId = "session-actor-execution",
-            ResponseId = "resp_execution_actor",
-            RunId = "run_execution_actor",
-            Command = command,
-            OriginPlatform = "   ",
-        });
+            await executor.ExecuteAsync(request, CancellationToken.None);
+            break;
+        }
 
-        var request = executionService.ExecuteRequests.Should().ContainSingle().Subject;
-        request.SessionActorId.Should().Be("session-actor-execution");
-        request.ResponseId.Should().Be("resp_execution_actor");
-        request.RunId.Should().Be("run_execution_actor");
-        request.Command.Should().BeEquivalentTo(command);
-        request.Command.Should().NotBeSameAs(command);
-        request.OriginPlatform.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task LlmRunExecutionTargetProvisioner_ShouldCreateKindActorWithEscapedDeterministicActorId()
-    {
-        var runtime = new RecordingActorRuntime();
-        var provisioner = new LlmRunExecutionTargetProvisioner(runtime);
-        var request = new LlmRunExecutionRequest(
-            " session actor/with spaces ",
-            "resp_provisioner",
-            " run/id?x=1 ",
-            BuildRunRequest("resp_provisioner"),
-            "ApiKey");
-
-        var actorId = await provisioner.EnsureExecutionTargetAsync(request);
-
-        actorId.Should().Be("gagent-service:llm-run-execution:session%20actor%2Fwith%20spaces:run%2Fid%3Fx%3D1");
-        runtime.CreateByKindCalls.Should().ContainSingle().Which.Should().Be((
-            LlmRunExecutionGAgent.Kind,
-            "gagent-service:llm-run-execution:session%20actor%2Fwith%20spaces:run%2Fid%3Fx%3D1"));
+        executor.ExecuteRequests.Should().ContainSingle()
+            .Which.RunId.Should().Be("run_drain");
     }
 
     [Fact]
@@ -394,6 +392,30 @@ public sealed class LlmRunExecutorTests
             request.RunId,
             request.Command.Clone(),
             request.OriginPlatform);
+
+    private static LlmRunExecutionRequest BuildExecutionRequest(string responseId, string runId) =>
+        new(
+            $"session-actor-{responseId}",
+            responseId,
+            runId,
+            BuildRunRequest(responseId),
+            "ApiKey");
+
+    private static async Task<List<LlmRunExecutionRequest>> DrainAsync(
+        ILlmRunExecutionQueue queue,
+        int count,
+        CancellationToken ct)
+    {
+        var drained = new List<LlmRunExecutionRequest>();
+        await foreach (var request in queue.DequeueAllAsync(ct).ConfigureAwait(false))
+        {
+            drained.Add(request);
+            if (drained.Count >= count)
+                break;
+        }
+
+        return drained;
+    }
 
     private static LlmSessionRuntimeToolSelection BuildForwardedSelection() =>
         new()
@@ -848,84 +870,14 @@ public sealed class LlmRunExecutorTests
         }
     }
 
-    private sealed class RecordingExecutionTargetProvisioner(string actorId) : ILlmRunExecutionTargetProvisioner
+    private sealed class RecordingExecutionQueue : ILlmRunExecutionQueue
     {
-        public List<LlmRunExecutionRequest> Requests { get; } = [];
+        public List<LlmRunExecutionRequest> Enqueued { get; } = [];
 
-        public Task<string> EnsureExecutionTargetAsync(
-            LlmRunExecutionRequest request,
-            CancellationToken ct = default)
-        {
-            _ = ct;
-            Requests.Add(request);
-            return Task.FromResult(actorId);
-        }
-    }
+        public void Enqueue(LlmRunExecutionRequest request) => Enqueued.Add(request);
 
-    private sealed class RecordingActorRuntime : IActorRuntime
-    {
-        public List<(string AgentKind, string? ActorId)> CreateByKindCalls { get; } = [];
-
-        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
-            where TAgent : IAgent =>
+        public IAsyncEnumerable<LlmRunExecutionRequest> DequeueAllAsync(CancellationToken ct = default) =>
             throw new NotSupportedException();
-
-        public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task<IActor> CreateByKindAsync(string agentKind, string? id = null, CancellationToken ct = default)
-        {
-            CreateByKindCalls.Add((agentKind, id));
-            return Task.FromResult<IActor>(new RecordingActor(id ?? "created"));
-        }
-
-        public Task DestroyAsync(string id, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task<IActor?> GetAsync(string id) =>
-            throw new NotSupportedException();
-
-        public Task<bool> ExistsAsync(string id) =>
-            throw new NotSupportedException();
-
-        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task UnlinkAsync(string childId, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-    }
-
-    private sealed class RecordingActor(string id) : IActor
-    {
-        public string Id { get; } = id;
-
-        public IAgent Agent { get; } = new RecordingAgent();
-
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
-
-        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
-    }
-
-    private sealed class RecordingAgent : IAgent
-    {
-        public string Id => "recording-agent";
-
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task<string> GetDescriptionAsync() => Task.FromResult(string.Empty);
-
-        public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() =>
-            Task.FromResult<IReadOnlyList<System.Type>>([]);
-
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 
 }

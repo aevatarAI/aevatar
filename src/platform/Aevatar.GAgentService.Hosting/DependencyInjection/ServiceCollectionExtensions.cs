@@ -26,6 +26,7 @@ using Aevatar.GAgentService.Infrastructure.Dispatch;
 using Aevatar.GAgentService.Infrastructure.Orchestration;
 using Aevatar.GAgentService.Infrastructure.Schedules;
 using Aevatar.GAgentService.Hosting.Demo;
+using Aevatar.GAgentService.Hosting.Responses;
 using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Hosting.DependencyInjection;
@@ -83,12 +84,19 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IResponsesAgentToolStateCommandPort, ResponsesAgentToolStateCommandAdapter>();
         services.TryAddSingleton<ILlmSessionRunObservationService, LlmSessionRunObservationService>();
         services.TryAddSingleton<ILlmRunCore, LlmRunCore>();
-        services.TryAddSingleton<ILlmRunExecutionTargetProvisioner, LlmRunExecutionTargetProvisioner>();
         services.TryAddSingleton<LlmRunExecutor>();
         services.TryAddSingleton<ILlmRunExecutor>(sp => sp.GetRequiredService<LlmRunExecutor>());
         services.TryAddSingleton<ILlmRunExecutionService>(sp => sp.GetRequiredService<LlmRunExecutor>());
+        // Off-grain run execution (epic #2271 root fix): the scheduler enqueues to an
+        // in-process bounded queue that a hosted background worker drains off any Orleans
+        // grain turn, instead of provisioning a per-run execution grain that blocked its
+        // own event-handler turn for the whole run.
+        services.AddOptions<LlmRunExecutionWorkerOptions>()
+            .Bind(configuration.GetSection(LlmRunExecutionWorkerOptions.SectionName));
+        services.TryAddSingleton<ILlmRunExecutionQueue, LlmRunExecutionQueue>();
         services.TryAddSingleton<LlmRunExecutionScheduler>();
         services.TryAddSingleton<ILlmRunExecutionScheduler>(sp => sp.GetRequiredService<LlmRunExecutionScheduler>());
+        services.AddHostedService<LlmRunExecutionWorker>();
         services.TryAddSingleton<IResponsesToolClassificationService, ResponsesToolClassificationService>();
         services.AddToolSetRegistry();
         services.TryAddSingleton<IResponsesDirectToolPlanService, ResponsesDirectToolPlanService>();

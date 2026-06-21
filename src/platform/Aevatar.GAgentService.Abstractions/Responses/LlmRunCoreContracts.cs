@@ -66,9 +66,23 @@ public interface ILlmRunExecutionScheduler
         CancellationToken ct = default);
 }
 
-public interface ILlmRunExecutionTargetProvisioner
+// Off-grain hand-off queue between the session actor's short scheduling turn and the
+// background run executor. Enqueue MUST be non-blocking so it never occupies the actor
+// turn (epic #2271: the whole bug was holding a grain turn for the run). A full queue is
+// surfaced as LlmRunExecutionQueueFullException so the caller can record a terminal
+// failure instead of blocking. The worker that drains this queue runs the run loop off
+// any Orleans turn.
+public interface ILlmRunExecutionQueue
 {
-    Task<string> EnsureExecutionTargetAsync(
-        LlmRunExecutionRequest request,
-        CancellationToken ct = default);
+    void Enqueue(LlmRunExecutionRequest request);
+
+    IAsyncEnumerable<LlmRunExecutionRequest> DequeueAllAsync(CancellationToken ct = default);
+}
+
+public sealed class LlmRunExecutionQueueFullException : Exception
+{
+    public LlmRunExecutionQueueFullException(string message)
+        : base(message)
+    {
+    }
 }

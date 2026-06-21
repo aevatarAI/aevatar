@@ -19,6 +19,14 @@ namespace Aevatar.GAgentService.Core.GAgents;
 public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
 {
     private static readonly Duration DefaultTtl = Duration.FromTimeSpan(TimeSpan.FromHours(24));
+
+    // Crash/abandon finalizer bound for a run that never emits a terminal (e.g. the off-grain
+    // executor host died mid-run). This is the RUN-execution timeout and is intentionally
+    // decoupled from the 24h session TTL — the TTL governs session expiry, not how long an
+    // in-flight run may stay un-terminated. Kept above the 300s ingress observation timeout so
+    // the client-facing wait fires first under normal slowness; an explicit LlmRunRequested
+    // TimeoutAfter still wins. See task 06-21-offgrain-llm-run-executor.
+    private static readonly TimeSpan DefaultRunExecutionTimeout = TimeSpan.FromMinutes(10);
     private const int RunningStatus = 1;
     private const int CompletedStatus = 2;
     private const int FailedStatus = 3;
@@ -405,7 +413,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             Sequence = 1,
             StartedAt = startedAt,
         });
-        if (!await TryScheduleRunTimeoutAsync(existing.ResponseId, runId, startedAt, ResolveRunTimeout(executionRequest.TimeoutAfter, existing)))
+        if (!await TryScheduleRunTimeoutAsync(existing.ResponseId, runId, startedAt, ResolveRunTimeout(executionRequest.TimeoutAfter)))
             return false;
 
         await PersistDomainEventAsync(new LlmRunExecutionReadyEvent
@@ -1609,16 +1617,15 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         }
     }
 
-    private static TimeSpan ResolveRunTimeout(
-        Duration? requestedTimeout,
-        LlmSessionRecord record)
+    private static TimeSpan ResolveRunTimeout(Duration? requestedTimeout)
     {
         var timeout = requestedTimeout?.ToTimeSpan();
         if (timeout is { } value && value > TimeSpan.Zero)
             return value;
 
-        var ttl = record.Ttl?.ToTimeSpan() ?? DefaultTtl.ToTimeSpan();
-        return ttl > TimeSpan.Zero ? ttl : DefaultTtl.ToTimeSpan();
+        // Decoupled from the session TTL on purpose: an abandoned/crashed run must be
+        // finalized in minutes, not after the 24h session lifetime.
+        return DefaultRunExecutionTimeout;
     }
 
     private static string BuildRunTimeoutCallbackId(string responseId, string runId) =>

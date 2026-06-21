@@ -119,12 +119,12 @@ llm-anthropic/claude-haiku-4-5
 
 ### 4.1 Run 记录与 streaming 完成语义
 
-Responses、Messages 和 Chat Completions 三条直连入口都把模型调用收敛到 `LlmSessionGAgent` 的 typed run 记录链路。HTTP handler 只 dispatch run command 并观察 terminal projection；真正的 provider stream 不在 Host 内同步消费，也不占用 session actor command turn，当前由 transient execution actor/service 连续消费。
+Responses、Messages 和 Chat Completions 三条直连入口都把模型调用收敛到 `LlmSessionGAgent` 的 typed run 记录链路。HTTP handler 只 dispatch run command 并观察 terminal projection；真正的 provider stream 不在 Host 内同步消费，也不占用 session actor command turn，当前由 off-grain hosted run executor（`LlmRunExecutionWorker`，普通线程池任务，不占用任何 Orleans grain turn）连续消费。
 
 执行边界如下：
 
 1. `LlmRunRequested` 进入 session actor 后先记录 `LlmRunStartedEvent`，ACK 只表示 run 已被 actor 接受。
-2. session actor 持久化 `LlmRunExecutionReadyEvent` 后调度 transient `LlmRunExecutionGAgent`；该 execution actor 通过 `ILlmRunExecutionService` / `ILlmRunExecutor` 调用 `ILlmRunCore`，在 session actor turn 之外连续消费 NyxID/provider 的 live `ChatStreamAsync`。
+2. session actor 持久化 `LlmRunExecutionReadyEvent` 后，在自身 turn 内通过 `ILlmRunExecutionScheduler` 把 run 非阻塞入队到有界 `ILlmRunExecutionQueue`（满则抛 `LlmRunExecutionQueueFullException` → actor 落 `execution_dispatch_failed` 终态，不阻塞 actor turn）；host 注册的 `LlmRunExecutionWorker`（`BackgroundService`）取出后通过 `ILlmRunExecutionService` / `ILlmRunExecutor` 调用 `ILlmRunCore`，在任何 grain turn 之外连续消费 NyxID/provider 的 live `ChatStreamAsync`。run 的 crash/abandon 兜底由 session actor 自持久 run-timeout finalizer（分钟级，与 24h session TTL 解耦）负责。
 3. 执行侧 sink 不直接写 session 状态，而是通过 `IActorDispatchPort` 把 chunk/tool/terminal 结果作为 typed `Record*` recorder commands 发回 session actor；session actor handler 再提交 `LlmStreamChunkObserved`、`LlmToolCallObserved`、`LlmSessionForwardedToolCallEmittedEvent`、`LlmRunCompleted`、`LlmRunFailed`、`LlmRunCancelled`。
 4. session actor 是唯一权威状态源。它使用 `responseId + runId + sequence` 做幂等接受，重复 chunk、晚到 recorder command、重复 terminal dispatch、terminal 后失败重试都不会改写已提交 terminal 状态，也不依赖执行侧或进程内 sequence counter。
 5. provider stream 没有 terminal chunk 时，取消或观察超时必须落成 `LlmRunCancelled` / terminal failure 这类 typed fact；不能依赖 Host 临时拼 response，也不能用 query-time replay 修补。

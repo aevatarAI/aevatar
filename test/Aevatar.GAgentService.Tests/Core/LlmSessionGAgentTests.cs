@@ -1019,6 +1019,47 @@ public sealed class LlmSessionGAgentTests
     }
 
     [Fact]
+    public async Task HandleLlmRunRequestedAsync_WithoutTimeoutAfter_ShouldScheduleRunTimeoutInMinutes_NotSessionTtl()
+    {
+        // Crash/abandon finalizer regression guard: when a run carries no explicit
+        // TimeoutAfter, the scheduled run timeout must fall back to the run-execution
+        // timeout (minutes), NOT the 24h session TTL. Otherwise an abandoned/crashed
+        // off-grain run would only be finalized ~24h later.
+        var scheduler = new RecordingRuntimeCallbackScheduler(new List<string>());
+        var executor = new RecordingLlmRunExecutor();
+        var requestedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-06-19T00:00:00+00:00"));
+        var actor = CreateActor(
+            "resp_timeout_default",
+            services =>
+            {
+                services.AddSingleton<IActorRuntimeCallbackScheduler>(scheduler);
+                services.AddSingleton<ILlmRunExecutor>(executor);
+            });
+        // BuildRecord pins a 24h session TTL; the run timeout must not inherit it.
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_timeout_default"),
+        });
+
+        var request = BuildRunRequest("resp_timeout_default");
+        request.RequestedAt = requestedAt;
+        // Intentionally no request.TimeoutAfter.
+
+        await DispatchRunRequestedAsync(actor, request);
+
+        var runTimeout = scheduler.TimeoutRequests.Should().ContainSingle(timeout =>
+            string.Equals(
+                timeout.CallbackId,
+                "llm-run-timeout:resp_timeout_default:run_1",
+                StringComparison.Ordinal)).Subject;
+        var payload = runTimeout.TriggerEnvelope.Payload.Unpack<FinalizeLlmRunTimedOut>();
+        payload.TimedOutAt.Should().Be(
+            Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-06-19T00:10:00+00:00")));
+        (payload.TimedOutAt.ToDateTimeOffset() - requestedAt.ToDateTimeOffset())
+            .Should().BeLessThan(TimeSpan.FromHours(1));
+    }
+
+    [Fact]
     public async Task HandleLlmRunRequestedAsync_WhenRunTimeoutSchedulingFails_ShouldFailRunWithoutStartingExecutor()
     {
         var scheduler = new RunTimeoutFailingRuntimeCallbackScheduler();

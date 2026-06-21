@@ -1,17 +1,18 @@
-using Aevatar.Foundation.Abstractions;
-using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Responses;
-using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Application.Responses;
 
-public sealed class LlmRunExecutionScheduler(
-    ILlmRunExecutionTargetProvisioner executionTargetProvisioner,
-    IActorDispatchPort dispatchPort) : ILlmRunExecutionScheduler
+// Hands an LLM run off to the off-grain background executor. Called from the session
+// actor's short scheduling turn (LlmSessionGAgent.TryDispatchTransientExecutionCommandAsync),
+// so it MUST return immediately and never block: enqueueing is a non-blocking TryWrite. A
+// full queue throws LlmRunExecutionQueueFullException, which the session actor records as an
+// execution_dispatch_failed terminal. The actual run loop runs in LlmRunExecutionWorker, off
+// any Orleans grain turn (epic #2271 root fix; replaces the prior per-run execution grain).
+public sealed class LlmRunExecutionScheduler(ILlmRunExecutionQueue queue) : ILlmRunExecutionScheduler
 {
-    private const string PublisherId = "gagent-service.llm-run-executor";
+    private readonly ILlmRunExecutionQueue _queue = queue ?? throw new ArgumentNullException(nameof(queue));
 
-    public async ValueTask ScheduleAsync(
+    public ValueTask ScheduleAsync(
         LlmRunExecutionRequest request,
         CancellationToken ct = default)
     {
@@ -21,29 +22,16 @@ public sealed class LlmRunExecutionScheduler(
         ArgumentException.ThrowIfNullOrWhiteSpace(request.ResponseId);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.RunId);
 
-        var executionActorId = await executionTargetProvisioner
-            .EnsureExecutionTargetAsync(request, ct)
-            .ConfigureAwait(false);
-        var responseId = request.ResponseId.Trim();
-        var runId = request.RunId.Trim();
-        var envelope = new EventEnvelope
-        {
-            Id = $"execute-{responseId}-{runId}",
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new ExecuteLlmRunRequested
-            {
-                SessionActorId = request.SessionActorId.Trim(),
-                ResponseId = responseId,
-                RunId = runId,
-                Command = request.Command.Clone(),
-                OriginPlatform = request.OriginPlatform ?? string.Empty,
-            }),
-            Route = EnvelopeRouteSemantics.CreateDirect(PublisherId, executionActorId),
-            Propagation = new EnvelopePropagation
-            {
-                CorrelationId = responseId,
-            },
-        };
-        await dispatchPort.DispatchAsync(executionActorId, envelope, ct).ConfigureAwait(false);
+        ct.ThrowIfCancellationRequested();
+
+        // Defensive clone + trim: the request crosses from the actor turn to a worker thread.
+        _queue.Enqueue(new LlmRunExecutionRequest(
+            request.SessionActorId.Trim(),
+            request.ResponseId.Trim(),
+            request.RunId.Trim(),
+            request.Command.Clone(),
+            request.OriginPlatform));
+
+        return ValueTask.CompletedTask;
     }
 }
