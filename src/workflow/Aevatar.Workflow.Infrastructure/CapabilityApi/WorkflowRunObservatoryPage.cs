@@ -312,9 +312,14 @@ internal static class WorkflowRunObservatoryPage
   .run-row:hover { background: var(--panel-2); }
   .run-row .dot { margin-top: 5px; grid-row: span 2; }
   .run-row .rn { font-weight: 640; color: var(--fg-strong); letter-spacing: -.005em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .run-row .rm { font-size: 12px; color: var(--muted); display: flex; gap: 7px; align-items: center; flex-wrap: wrap; }
-  .run-row .rm .id { font-family: var(--mono); font-size: 11.5px; color: var(--muted-2); }
+  .run-row .rm { font-size: 12px; color: var(--muted); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .run-row .rm .id { font-family: var(--mono); font-size: 11.5px; color: var(--muted-2); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .run-row .rm .sep { color: var(--border); }
+  .run-row .rm .rm-status { font-weight: 600; color: var(--muted); }
+  .run-row .rm .rm-status.s-running { color: var(--run); }
+  .run-row .rm .rm-status.s-completed { color: var(--ok); }
+  .run-row .rm .rm-status.s-failed, .run-row .rm .rm-status.s-timed_out { color: var(--err); }
+  .run-row .rm .rm-status.s-stopped, .run-row .rm .rm-status.s-disabled { color: var(--warn); }
   .run-row[aria-current="true"] {
     background: var(--accent-soft);
     border-color: var(--accent-line);
@@ -885,6 +890,8 @@ function fmtDur(ms){
 function fmtNum(n){ return n==null ? "—" : n.toLocaleString("en-US"); }
 function fmtCost(c){ return c==null ? "—" : "$"+Number(c).toFixed(3); }
 function initials(label){ return (label||"?").trim().charAt(0).toUpperCase(); }
+/* compact id for list rows: keep the unique tail (the run/scope hash); full id stays in the title */
+function tailId(s, keep){ s = String(s==null?"":s); return s.length > keep+2 ? "…" + s.slice(-keep) : s; }
 function midTrunc(s, max){ s = String(s==null?"":s); if(s.length <= max) return s; const h = Math.ceil((max-1)*0.62), t = (max-1) - h; return s.slice(0, h) + "…" + s.slice(s.length - t); }
 
 /* JSON 着色（仅用于显示）。注意：先 esc() 转义，引号已变成 &quot;，
@@ -992,7 +999,7 @@ function renderTopbar(){
     const live = el("div", { class:"live"+(isRunning?" is-live":""), role:"status", "aria-live":"polite", id:"liveChip", title:"页面每约 3 秒轮询一次" });
     live.innerHTML = `<span class="dot" aria-hidden="true"></span>
       <span>${isRunning?"实时":"已暂停"}</span>
-      <span class="freshness" data-since="${sel?sel.summary.updatedAtUtc:DataSource.now()}">${sel?relTime(parseT(sel.summary.updatedAtUtc), nowMs()):""} 更新</span>`;
+      <span class="freshness" data-since="${sel?sel.summary.updatedAtUtc:DataSource.now()}">${sel?relTime(sel.summary.updatedAtUtc, nowMs()):""} 更新</span>`;
     bar.appendChild(live);
   }
 
@@ -1094,15 +1101,17 @@ function renderList(){
     const sel = state.selectedRunId === r.runId && state.scenario==="normal";
     const row = el("button", { class:"run-row", role:"listitem", "aria-current": String(sel) });
     const scopeCol = (adminState.isAdmin && adminState.currentScope)
-      ? `<span class="sep">·</span><span class="id" title="scope id">${esc(r.scopeId||"")}</span>`
+      ? `<span class="sep">·</span><span class="id" title="scope id: ${esc(r.scopeId||"")}">${esc(tailId(r.scopeId, 14))}</span>`
       : "";
     row.innerHTML = `
       <span class="dot s-${r.status}" aria-hidden="true"></span>
-      <span class="rn">${esc(r.workflowName)}</span>
+      <span class="rn" title="${esc(r.workflowName)}">${esc(r.workflowName)}</span>
       <span class="rm">
-        <span>${STATUS_LABEL[r.status]||r.status}</span><span class="sep">·</span>
-        <span class="id">${esc(r.runId)}</span><span class="sep">·</span>
-        <span data-since="${r.updatedAtUtc}">${relTime(parseT(r.updatedAtUtc), nowMs())}</span>${scopeCol}
+        <span class="rm-status s-${r.status}">${STATUS_LABEL[r.status]||r.status}</span>
+        <span class="sep">·</span>
+        <span data-since="${r.updatedAtUtc}">${relTime(r.updatedAtUtc, nowMs())}</span>
+        <span class="sep">·</span>
+        <span class="id" title="run id: ${esc(r.runId)}">${esc(tailId(r.runId, 18))}</span>${scopeCol}
       </span>`;
     row.addEventListener("click", () => selectRun(r.runId));
     listbox.appendChild(row);
@@ -1811,7 +1820,7 @@ function updateRelTimes(){
   const now = nowMs();
   document.querySelectorAll("[data-since]").forEach(node => {
     const iso = node.getAttribute("data-since");
-    const base = relTime(parseT(iso), now);
+    const base = relTime(iso, now);
     node.textContent = node.classList.contains("freshness") ? base + " 更新" : base;
   });
   document.querySelectorAll("[data-duration]").forEach(node => {
