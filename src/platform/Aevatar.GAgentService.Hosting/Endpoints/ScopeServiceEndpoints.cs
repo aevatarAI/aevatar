@@ -3326,14 +3326,32 @@ const response = await fetch("{{invokePath}}", {
             return null;
 
         if (string.IsNullOrWhiteSpace(externalExposure.NyxidSlug) &&
-            externalExposure.RegisteredAt == null)
+            externalExposure.RegisteredAt == null &&
+            externalExposure.Status == ServiceRegistrationStatus.Unspecified &&
+            string.IsNullOrWhiteSpace(externalExposure.NyxidServiceId) &&
+            string.IsNullOrWhiteSpace(externalExposure.DesiredSpecHash) &&
+            string.IsNullOrWhiteSpace(externalExposure.RegisteredSpecHash) &&
+            string.IsNullOrWhiteSpace(externalExposure.LastError) &&
+            externalExposure.Attempt == 0 &&
+            externalExposure.NextAttemptAt == null &&
+            string.IsNullOrWhiteSpace(externalExposure.CredentialKid) &&
+            !externalExposure.ExposureDesired)
         {
             return null;
         }
 
         return new ExternalExposureHttpResponse(
             externalExposure.NyxidSlug ?? string.Empty,
-            externalExposure.RegisteredAt);
+            externalExposure.RegisteredAt,
+            externalExposure.Status.ToString(),
+            externalExposure.NyxidServiceId ?? string.Empty,
+            externalExposure.DesiredSpecHash ?? string.Empty,
+            externalExposure.RegisteredSpecHash ?? string.Empty,
+            externalExposure.LastError ?? string.Empty,
+            externalExposure.Attempt,
+            externalExposure.NextAttemptAt,
+            externalExposure.CredentialKid ?? string.Empty,
+            externalExposure.ExposureDesired);
     }
 
     private static ServiceBindingKind ParseBindingKind(string? rawValue)
@@ -4311,7 +4329,16 @@ const response = await fetch("{{invokePath}}", {
 
     public sealed record ExternalExposureHttpResponse(
         string NyxidSlug,
-        DateTimeOffset? RegisteredAt);
+        DateTimeOffset? RegisteredAt,
+        string Status = "",
+        string NyxidServiceId = "",
+        string DesiredSpecHash = "",
+        string RegisteredSpecHash = "",
+        string LastError = "",
+        int Attempt = 0,
+        DateTimeOffset? NextAttemptAt = null,
+        string CredentialKid = "",
+        bool ExposureDesired = false);
 
     public sealed record ScopeServiceRevisionActionHttpResponse(
         string ScopeId,

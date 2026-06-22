@@ -17,6 +17,7 @@
     <ProjectReference Include="..\..\Aevatar.CQRS.Projection.Providers.InMemory\Aevatar.CQRS.Projection.Providers.InMemory.csproj" />
     <ProjectReference Include="..\..\Aevatar.Capabilities\Aevatar.Capabilities.csproj" />
     <ProjectReference Include="..\..\Aevatar.AGUI.Contracts\Aevatar.AGUI.Contracts.csproj" />
+    <ProjectReference Include="..\..\Aevatar.AI.ToolProviders.ServiceInvoke\Aevatar.AI.ToolProviders.ServiceInvoke.csproj" />
     <ProjectReference Include="..\..\Aevatar.Studio.Application\Aevatar.Studio.Application.csproj" />
     <ProjectReference Include="..\..\Aevatar.Studio.Projection\Aevatar.Studio.Projection.csproj" />
     <ProjectReference Include="..\..\Aevatar.Scripting.Hosting\Aevatar.Scripting.Hosting.csproj" />

@@ -7,6 +7,7 @@ option csharp_namespace = "Aevatar.GAgentService.Projection.ReadModels";
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/struct.proto";
 import "llm_sessions.proto";
+import "service_definition.proto";
 import "service_invocation_catalog.proto";
 import "service_revision.proto";
 
@@ -42,6 +43,15 @@ message ServiceCatalogEndpointReadModel {
 message ServiceCatalogExternalExposureReadModel {
   string nyxid_slug = 1;
   google.protobuf.Timestamp registered_at_utc_value = 2;
+  aevatar.gagentservice.ServiceRegistrationStatus status = 3;
+  string nyxid_service_id = 4;
+  string desired_spec_hash = 5;
+  string registered_spec_hash = 6;
+  string last_error = 7;
+  int32 attempt = 8;
+  google.protobuf.Timestamp next_attempt_at_utc_value = 9;
+  string credential_kid = 10;
+  bool exposure_desired = 11;
 }
 
 // --- ServiceDeploymentCatalogReadModel ---

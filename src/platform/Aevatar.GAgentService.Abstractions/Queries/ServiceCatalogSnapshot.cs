@@ -27,4 +27,13 @@ public sealed record ServiceEndpointSnapshot(
 
 public sealed record ServiceExternalExposureSnapshot(
     string NyxidSlug,
-    DateTimeOffset? RegisteredAt);
+    DateTimeOffset? RegisteredAt,
+    ServiceRegistrationStatus Status = ServiceRegistrationStatus.Unspecified,
+    string NyxidServiceId = "",
+    string DesiredSpecHash = "",
+    string RegisteredSpecHash = "",
+    string LastError = "",
+    int Attempt = 0,
+    DateTimeOffset? NextAttemptAt = null,
+    string CredentialKid = "",
+    bool ExposureDesired = false);

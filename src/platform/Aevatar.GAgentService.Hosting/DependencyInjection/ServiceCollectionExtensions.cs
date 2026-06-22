@@ -4,6 +4,7 @@ using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.AI.ToolProviders.Skills;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -70,6 +71,10 @@ public static class ServiceCollectionExtensions
         services.AddAevatarAgentKindRegistry(builder => builder.ScanAssemblies(typeof(Aevatar.GAgentService.Core.GAgents.ServiceDefinitionGAgent).Assembly));
         services.AddOptions<GAgentServiceDemoOptions>()
             .Bind(configuration.GetSection("GAgentService:Demo"));
+        services.AddOptions<ServiceExternalExposureOptions>()
+            .Bind(configuration.GetSection(ServiceExternalExposureOptions.SectionName));
+        services.AddOptions<NyxIdRegistrationTokenOptions>()
+            .Bind(configuration.GetSection(NyxIdRegistrationTokenOptions.SectionName));
         services.AddGAgentServiceProjection();
         services.AddGAgentServiceProjectionReadModelProviders(configuration);
         services.AddGAgentServiceGovernanceCapability(configuration);
@@ -79,6 +84,11 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IServiceCommandTargetProvisioner, DefaultServiceCommandTargetProvisioner>();
         services.TryAddSingleton<IServiceRuntimeActivator, DefaultServiceRuntimeActivator>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<ICommittedStatePublicationHook, ScriptingServiceRevisionRepublishHook>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<ICommittedStatePublicationHook, ServiceExposureReconcileHook>());
+        services.TryAddSingleton<NyxIdToolOptions>();
+        services.AddHttpClient<NyxIdApiClient>();
+        services.TryAddSingleton<INyxIdServiceRegistrationPort, NyxIdServiceRegistrationAdapter>();
+        services.TryAddSingleton<INyxIdRegistrationTokenAccessor, ConfiguredNyxIdRegistrationTokenAccessor>();
         services.TryAddSingleton<IServiceRunRegistrationPort, ServiceRunRegistrationAdapter>();
         services.TryAddSingleton<ILlmSessionRegistrationPort, LlmSessionRegistrationAdapter>();
         services.TryAddSingleton<IResponsesAgentToolStateCommandPort, ResponsesAgentToolStateCommandAdapter>();

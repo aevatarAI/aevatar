@@ -21,7 +21,6 @@ public static partial class ServiceEndpoints
     {
         var group = app.MapGroup("/api/services");
         group.MapPost(string.Empty, HandleCreateServiceAsync);
-        group.MapPut("/{serviceId}/external-exposure", HandleUpdateServiceExternalExposureAsync);
         group.MapPost("/{serviceId}/revisions", HandleCreateRevisionAsync);
         group.MapPost("/{serviceId}/revisions/{revisionId}:prepare", HandlePrepareRevisionAsync);
         group.MapPost("/{serviceId}/revisions/{revisionId}:publish", HandlePublishRevisionAsync);
@@ -31,6 +30,7 @@ public static partial class ServiceEndpoints
         group.MapGet(string.Empty, HandleListServicesAsync);
         group.MapGet("/{serviceId}", HandleGetServiceAsync);
         group.MapGet("/{serviceId}/revisions", HandleGetRevisionsAsync);
+        group.MapGAgentServiceOpenApiEndpoints();
         group.MapPost("/{serviceId}/invoke/{endpointId}", HandleInvokeAsync);
         group.MapGAgentServiceServingEndpoints();
         group.MapGAgentServiceGovernanceEndpoints();
@@ -83,39 +83,10 @@ public static partial class ServiceEndpoints
             Endpoints = { request.Endpoints.Select(ToEndpointSpec) },
             PolicyIds = { request.PolicyIds ?? [] },
         };
-        ApplyExternalExposure(spec, request.ExternalExposure);
 
         var receipt = await commandPort.CreateServiceAsync(new CreateServiceDefinitionCommand
         {
             Spec = spec,
-        }, ct);
-        return Results.Accepted($"/api/services/{identity.ServiceId}", receipt);
-    }
-
-    private static async Task<IResult> HandleUpdateServiceExternalExposureAsync(
-        HttpContext http,
-        string serviceId,
-        UpdateServiceExternalExposureHttpRequest request,
-        [FromServices] IServiceIdentityContextResolver identityResolver,
-        [FromServices] IServiceCommandPort commandPort,
-        CancellationToken ct)
-    {
-        if (!ServiceIdentityEndpointAccess.TryResolveIdentity(
-                identityResolver,
-                request.TenantId,
-                request.AppId,
-                request.Namespace,
-                serviceId,
-                out var identity,
-                out var denied))
-        {
-            return denied;
-        }
-
-        var receipt = await commandPort.UpdateServiceExternalExposureAsync(new UpdateServiceExternalExposureCommand
-        {
-            Identity = identity,
-            ExternalExposure = ToExternalExposure(request),
         }, ct);
         return Results.Accepted($"/api/services/{identity.ServiceId}", receipt);
     }
@@ -647,37 +618,6 @@ public static partial class ServiceEndpoints
             Description = request.Description ?? string.Empty,
         };
 
-    private static void ApplyExternalExposure(
-        ServiceDefinitionSpec spec,
-        ExternalExposureHttpRequest? externalExposure)
-    {
-        var mapped = ToExternalExposure(externalExposure);
-        if (mapped != null)
-            spec.ExternalExposure = mapped;
-    }
-
-    private static ExternalExposure? ToExternalExposure(ExternalExposureHttpRequest? request)
-    {
-        if (request == null)
-            return null;
-
-        var slug = request.NyxidSlug?.Trim() ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(slug) && request.RegisteredAt == null)
-            return null;
-
-        return new ExternalExposure
-        {
-            NyxidSlug = slug,
-            RegisteredAt = request.RegisteredAt.HasValue
-                ? Timestamp.FromDateTimeOffset(request.RegisteredAt.Value)
-                : null,
-        };
-    }
-
-    private static ExternalExposure ToExternalExposure(UpdateServiceExternalExposureHttpRequest request) =>
-        ToExternalExposure(new ExternalExposureHttpRequest(request.NyxidSlug, request.RegisteredAt))
-        ?? new ExternalExposure();
-
     private static ExternalExposureHttpResponse? MapExternalExposure(
         ServiceExternalExposureSnapshot? externalExposure)
     {
@@ -685,14 +625,32 @@ public static partial class ServiceEndpoints
             return null;
 
         if (string.IsNullOrWhiteSpace(externalExposure.NyxidSlug) &&
-            externalExposure.RegisteredAt == null)
+            externalExposure.RegisteredAt == null &&
+            externalExposure.Status == ServiceRegistrationStatus.Unspecified &&
+            string.IsNullOrWhiteSpace(externalExposure.NyxidServiceId) &&
+            string.IsNullOrWhiteSpace(externalExposure.DesiredSpecHash) &&
+            string.IsNullOrWhiteSpace(externalExposure.RegisteredSpecHash) &&
+            string.IsNullOrWhiteSpace(externalExposure.LastError) &&
+            externalExposure.Attempt == 0 &&
+            externalExposure.NextAttemptAt == null &&
+            string.IsNullOrWhiteSpace(externalExposure.CredentialKid) &&
+            !externalExposure.ExposureDesired)
         {
             return null;
         }
 
         return new ExternalExposureHttpResponse(
             externalExposure.NyxidSlug ?? string.Empty,
-            externalExposure.RegisteredAt);
+            externalExposure.RegisteredAt,
+            externalExposure.Status.ToString(),
+            externalExposure.NyxidServiceId ?? string.Empty,
+            externalExposure.DesiredSpecHash ?? string.Empty,
+            externalExposure.RegisteredSpecHash ?? string.Empty,
+            externalExposure.LastError ?? string.Empty,
+            externalExposure.Attempt,
+            externalExposure.NextAttemptAt,
+            externalExposure.CredentialKid ?? string.Empty,
+            externalExposure.ExposureDesired);
     }
 
     private static ServiceImplementationKind ParseImplementationKind(string? rawValue)
@@ -755,13 +713,18 @@ public static partial class ServiceEndpoints
         string ResponseTypeUrl,
         string Description);
 
-    public sealed record ExternalExposureHttpRequest(
-        string? NyxidSlug,
-        DateTimeOffset? RegisteredAt = null);
-
     public sealed record ExternalExposureHttpResponse(
         string NyxidSlug,
-        DateTimeOffset? RegisteredAt);
+        DateTimeOffset? RegisteredAt,
+        string Status = "",
+        string NyxidServiceId = "",
+        string DesiredSpecHash = "",
+        string RegisteredSpecHash = "",
+        string LastError = "",
+        int Attempt = 0,
+        DateTimeOffset? NextAttemptAt = null,
+        string CredentialKid = "",
+        bool ExposureDesired = false);
 
     public sealed record CreateServiceHttpRequest(
         string TenantId,
@@ -770,15 +733,7 @@ public static partial class ServiceEndpoints
         string ServiceId,
         string DisplayName,
         IReadOnlyList<ServiceEndpointHttpRequest> Endpoints,
-        IReadOnlyList<string>? PolicyIds = null,
-        ExternalExposureHttpRequest? ExternalExposure = null);
-
-    public sealed record UpdateServiceExternalExposureHttpRequest(
-        string TenantId,
-        string AppId,
-        string Namespace,
-        string? NyxidSlug,
-        DateTimeOffset? RegisteredAt = null);
+        IReadOnlyList<string>? PolicyIds = null);
 
     public sealed record StaticRevisionHttpRequest(
         string ActorTypeName,
