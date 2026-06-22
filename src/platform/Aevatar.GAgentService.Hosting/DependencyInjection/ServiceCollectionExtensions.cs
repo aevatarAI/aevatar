@@ -3,6 +3,7 @@ using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Authentication.ScopeServiceTokens;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
@@ -75,6 +76,8 @@ public static class ServiceCollectionExtensions
             .Bind(configuration.GetSection(ServiceExternalExposureOptions.SectionName));
         services.AddOptions<NyxIdRegistrationTokenOptions>()
             .Bind(configuration.GetSection(NyxIdRegistrationTokenOptions.SectionName));
+        if (configuration.GetSection(ScopeServiceTokenOptions.SectionName).Get<ScopeServiceTokenOptions>()?.Enabled == true)
+            services.AddScopeServiceTokens(configuration);
         services.AddGAgentServiceProjection();
         services.AddGAgentServiceProjectionReadModelProviders(configuration);
         services.AddGAgentServiceGovernanceCapability(configuration);
@@ -93,7 +96,17 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ILlmSessionRegistrationPort, LlmSessionRegistrationAdapter>();
         services.TryAddSingleton<IResponsesAgentToolStateCommandPort, ResponsesAgentToolStateCommandAdapter>();
         services.TryAddSingleton<ILlmSessionRunObservationService, LlmSessionRunObservationService>();
-        services.TryAddSingleton<ILlmRunCore, LlmRunCore>();
+        services.TryAddSingleton<ILlmRunCore>(sp =>
+        {
+            var providerFactory = sp.GetService<Aevatar.AI.Abstractions.LLMProviders.ILLMProviderFactory>();
+            return providerFactory == null
+                ? MissingLlmProviderRunCore.Instance
+                : new LlmRunCore(
+                    providerFactory,
+                    sp.GetServices<IResponsesToolProvider>(),
+                    sp.GetRequiredService<IToolSetRegistry>(),
+                    sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<LlmRunCore>>());
+        });
         services.TryAddSingleton<LlmRunExecutor>();
         services.TryAddSingleton<ILlmRunExecutor>(sp => sp.GetRequiredService<LlmRunExecutor>());
         services.TryAddSingleton<ILlmRunExecutionService>(sp => sp.GetRequiredService<LlmRunExecutor>());
@@ -340,5 +353,35 @@ internal sealed class ScheduledDispatchInvokeAdmissionAuthorizer : IInvokeAdmiss
     {
         ct.ThrowIfCancellationRequested();
         return Task.CompletedTask;
+    }
+}
+
+internal sealed class MissingLlmProviderRunCore : ILlmRunCore
+{
+    public static MissingLlmProviderRunCore Instance { get; } = new();
+
+    private MissingLlmProviderRunCore()
+    {
+    }
+
+    public async Task RunAsync(
+        LlmRunCoreRequest request,
+        ILlmRunSink sink,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(sink);
+        ArgumentNullException.ThrowIfNull(request.Command);
+
+        _ = await sink.RecordRunFailedAsync(
+            new LlmRunFailed
+            {
+                ResponseId = request.Command.ResponseId,
+                RunId = request.RunId,
+                FailureCode = "llm_provider_factory_missing",
+                FailureMessage = "ILLMProviderFactory is not registered. Configure an AI provider before executing LLM runs.",
+                FailedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow),
+            },
+            ct).ConfigureAwait(false);
     }
 }

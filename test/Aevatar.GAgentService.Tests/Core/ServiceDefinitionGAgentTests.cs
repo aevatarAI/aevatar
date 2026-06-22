@@ -194,6 +194,7 @@ public sealed class ServiceDefinitionGAgentTests
         agent.State.Spec.ExternalExposure.ExposureDesired.Should().BeTrue();
         registrationPort.RegisterRequests.Should().ContainSingle()
             .Which.AccessToken.Should().Be("owner-token");
+        registrationPort.RegisterRequests.Single().ServiceCredential.Should().Be("scope-token:kid-1");
         dispatchPort.Calls.Should().Contain(x =>
             x.ActorId == ServiceActorIds.Definition(identity) &&
             x.Envelope.Payload.Is(RunRegistrationAttemptCommand.Descriptor));
@@ -298,6 +299,65 @@ public sealed class ServiceDefinitionGAgentTests
         agent.State.Spec.ExternalExposure.Status.Should().Be(ServiceRegistrationStatus.Registered);
         agent.State.Spec.ExternalExposure.DesiredSpecHash.Should().Be("hash-2");
         agent.State.Spec.ExternalExposure.RegisteredSpecHash.Should().Be("hash-2");
+    }
+
+    [Fact]
+    public async Task ReconcileExternalExposureAsync_ShouldUpdateCredential_WhenCredentialKidRotates()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var registrationPort = new RecordingNyxIdServiceRegistrationPort
+        {
+            RegisterResult = NyxIdServiceRegistrationResult.Success("nyx-svc-1", "aevatar-orders", "hash-1"),
+            UpdateResult = NyxIdServiceRegistrationResult.Success("nyx-svc-1", "aevatar-orders", "hash-1"),
+        };
+        var tokenAccessor = new RotatingNyxIdRegistrationTokenAccessor("owner-token", "kid-1");
+        var agent = GAgentServiceTestKit.CreateStatefulAgent<ServiceDefinitionGAgent, ServiceDefinitionState>(
+            new InMemoryEventStore(),
+            ServiceActorIds.Definition(identity),
+            () => new ServiceDefinitionGAgent(
+                GAgentServiceTestKit.NoOpDispatchPort,
+                registrationPort,
+                tokenAccessor));
+        await agent.HandleCreateAsync(new CreateServiceDefinitionCommand
+        {
+            Spec = GAgentServiceTestKit.CreateDefinitionSpec(identity),
+        });
+        await agent.HandleReconcileExternalExposureAsync(new ReconcileExternalExposureCommand
+        {
+            Identity = identity.Clone(),
+            OpenapiUrl = "https://api.test/openapi.json",
+            DesiredSpecHash = "hash-1",
+            CredentialKid = "kid-1",
+        });
+        await agent.HandleRunRegistrationAttemptAsync(new RunRegistrationAttemptCommand
+        {
+            Identity = identity.Clone(),
+            ExpectedAttempt = 1,
+            DesiredSpecHash = "hash-1",
+            OpenapiUrl = "https://api.test/openapi.json",
+        });
+
+        tokenAccessor.CredentialKid = "kid-2";
+        await agent.HandleReconcileExternalExposureAsync(new ReconcileExternalExposureCommand
+        {
+            Identity = identity.Clone(),
+            OpenapiUrl = "https://api.test/openapi.json",
+            DesiredSpecHash = "hash-1",
+            CredentialKid = "kid-2",
+        });
+        await agent.HandleRunRegistrationAttemptAsync(new RunRegistrationAttemptCommand
+        {
+            Identity = identity.Clone(),
+            ExpectedAttempt = 2,
+            DesiredSpecHash = "hash-1",
+            OpenapiUrl = "https://api.test/openapi.json",
+        });
+
+        registrationPort.RegisterRequests.Should().ContainSingle();
+        registrationPort.UpdateRequests.Should().ContainSingle()
+            .Which.ServiceCredential.Should().Be("scope-token:kid-2");
+        agent.State.Spec.ExternalExposure.Status.Should().Be(ServiceRegistrationStatus.Registered);
+        agent.State.Spec.ExternalExposure.CredentialKid.Should().Be("kid-2");
     }
 
     [Fact]
@@ -595,11 +655,26 @@ public sealed class ServiceDefinitionGAgentTests
         {
             _token = string.IsNullOrWhiteSpace(accessToken)
                 ? null
-                : new NyxIdRegistrationToken(accessToken, credentialKid);
+                : new NyxIdRegistrationToken(accessToken, $"scope-token:{credentialKid}", credentialKid);
         }
 
-        public Task<NyxIdRegistrationToken?> GetTokenAsync(CancellationToken ct = default) =>
+        public Task<NyxIdRegistrationToken?> GetTokenAsync(
+            ServiceIdentity identity,
+            CancellationToken ct = default) =>
             Task.FromResult(_token);
+    }
+
+    private sealed class RotatingNyxIdRegistrationTokenAccessor(
+        string ownerAccessToken,
+        string credentialKid) : INyxIdRegistrationTokenAccessor
+    {
+        public string CredentialKid { get; set; } = credentialKid;
+
+        public Task<NyxIdRegistrationToken?> GetTokenAsync(
+            ServiceIdentity identity,
+            CancellationToken ct = default) =>
+            Task.FromResult<NyxIdRegistrationToken?>(
+                new NyxIdRegistrationToken(ownerAccessToken, $"scope-token:{CredentialKid}", CredentialKid));
     }
 
     private sealed class RecordingNyxIdServiceRegistrationPort : INyxIdServiceRegistrationPort

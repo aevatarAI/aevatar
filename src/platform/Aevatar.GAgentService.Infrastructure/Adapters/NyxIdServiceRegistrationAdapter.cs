@@ -113,7 +113,7 @@ public sealed class NyxIdServiceRegistrationAdapter : INyxIdServiceRegistrationP
             ["endpoint_url"] = request.OpenApiUrl.Trim(),
             ["openapi_spec_url"] = request.OpenApiUrl.Trim(),
             ["openapi_url"] = request.OpenApiUrl.Trim(),
-            ["credential"] = string.Empty,
+            ["credential"] = request.ServiceCredential?.Trim() ?? string.Empty,
             ["forward_access_token"] = false,
             ["aevatar_desired_spec_hash"] = request.DesiredSpecHash.Trim(),
         };

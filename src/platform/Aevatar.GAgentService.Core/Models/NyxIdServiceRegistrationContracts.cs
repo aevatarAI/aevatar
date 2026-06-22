@@ -8,6 +8,7 @@ public sealed record NyxIdServiceRegistrationRequest(
     string OpenApiUrl,
     string DesiredSpecHash,
     string AccessToken,
+    string ServiceCredential,
     string CredentialKid,
     string? ExistingNyxIdServiceId = null,
     string? ExistingNyxIdSlug = null);

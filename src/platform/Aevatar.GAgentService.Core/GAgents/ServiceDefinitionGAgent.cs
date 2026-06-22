@@ -72,11 +72,14 @@ public sealed class ServiceDefinitionGAgent : GAgentBase<ServiceDefinitionState>
 
         var exposure = State.Spec.ExternalExposure;
         var desiredHash = NormalizeRequired(command.DesiredSpecHash, nameof(command.DesiredSpecHash));
+        var requestedCredentialKid = command.CredentialKid?.Trim() ?? string.Empty;
         if (exposure != null &&
             exposure.Status == ServiceRegistrationStatus.Registered &&
             exposure.ExposureDesired &&
             string.Equals(exposure.DesiredSpecHash, desiredHash, StringComparison.Ordinal) &&
             string.Equals(exposure.RegisteredSpecHash, desiredHash, StringComparison.Ordinal) &&
+            (string.IsNullOrWhiteSpace(requestedCredentialKid) ||
+             string.Equals(exposure.CredentialKid, requestedCredentialKid, StringComparison.Ordinal)) &&
             !string.IsNullOrWhiteSpace(exposure.NyxidServiceId))
         {
             return;
@@ -88,7 +91,9 @@ public sealed class ServiceDefinitionGAgent : GAgentBase<ServiceDefinitionState>
             Identity = command.Identity.Clone(),
             OpenapiUrl = command.OpenapiUrl.Trim(),
             DesiredSpecHash = desiredHash,
-            CredentialKid = command.CredentialKid?.Trim() ?? string.Empty,
+            CredentialKid = string.IsNullOrWhiteSpace(requestedCredentialKid)
+                ? exposure?.CredentialKid ?? string.Empty
+                : requestedCredentialKid,
             Attempt = nextAttempt,
             RequestedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         });
@@ -117,11 +122,11 @@ public sealed class ServiceDefinitionGAgent : GAgentBase<ServiceDefinitionState>
             return;
         }
 
-        var token = await _tokenAccessor.GetTokenAsync(CancellationToken.None);
+        var token = await _tokenAccessor.GetTokenAsync(command.Identity, CancellationToken.None);
         if (token != null)
         {
             await _registrationPort.RetireAsync(
-                new NyxIdServiceRetirementRequest(token.AccessToken, exposure.NyxidServiceId),
+                new NyxIdServiceRetirementRequest(token.OwnerAccessToken, exposure.NyxidServiceId),
                 CancellationToken.None);
         }
 
@@ -184,8 +189,8 @@ public sealed class ServiceDefinitionGAgent : GAgentBase<ServiceDefinitionState>
         });
         await DispatchInvocationCatalogObservationAsync(CancellationToken.None);
 
-        var token = await _tokenAccessor.GetTokenAsync(CancellationToken.None);
-        if (token == null || string.IsNullOrWhiteSpace(token.AccessToken))
+        var token = await _tokenAccessor.GetTokenAsync(command.Identity, CancellationToken.None);
+        if (token == null || string.IsNullOrWhiteSpace(token.OwnerAccessToken))
         {
             await PersistRegistrationFailureAsync(
                 command,
@@ -203,7 +208,8 @@ public sealed class ServiceDefinitionGAgent : GAgentBase<ServiceDefinitionState>
             State.Spec.DisplayName ?? string.Empty,
             command.OpenapiUrl ?? string.Empty,
             command.DesiredSpecHash.Trim(),
-            token.AccessToken,
+            token.OwnerAccessToken,
+            token.ServiceCredential,
             string.IsNullOrWhiteSpace(token.CredentialKid)
                 ? State.Spec.ExternalExposure?.CredentialKid ?? string.Empty
                 : token.CredentialKid.Trim(),
@@ -675,7 +681,9 @@ public sealed class ServiceDefinitionGAgent : GAgentBase<ServiceDefinitionState>
     {
         public static NullNyxIdRegistrationTokenAccessor Instance { get; } = new();
 
-        public Task<NyxIdRegistrationToken?> GetTokenAsync(CancellationToken ct = default) =>
+        public Task<NyxIdRegistrationToken?> GetTokenAsync(
+            ServiceIdentity identity,
+            CancellationToken ct = default) =>
             Task.FromResult<NyxIdRegistrationToken?>(null);
     }
 }

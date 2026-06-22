@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using Aevatar.Authentication.ScopeServiceTokens;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -15,6 +16,7 @@ public sealed class ServiceExposureReconcileHook : ICommittedStatePublicationHoo
 {
     private readonly IServiceCatalogQueryReader _catalogReader;
     private readonly IServiceCommandPort _commandPort;
+    private readonly IScopeServiceTokenKeyProvider? _scopeTokenKeyProvider;
     private readonly ServiceExternalExposureOptions _options;
     private readonly ILogger<ServiceExposureReconcileHook> _logger;
 
@@ -22,10 +24,12 @@ public sealed class ServiceExposureReconcileHook : ICommittedStatePublicationHoo
         IServiceCatalogQueryReader catalogReader,
         IServiceCommandPort commandPort,
         IOptions<ServiceExternalExposureOptions> options,
+        IScopeServiceTokenKeyProvider? scopeTokenKeyProvider = null,
         ILogger<ServiceExposureReconcileHook>? logger = null)
     {
         _catalogReader = catalogReader ?? throw new ArgumentNullException(nameof(catalogReader));
         _commandPort = commandPort ?? throw new ArgumentNullException(nameof(commandPort));
+        _scopeTokenKeyProvider = scopeTokenKeyProvider;
         ArgumentNullException.ThrowIfNull(options);
         _options = options.Value;
         _logger = logger ?? NullLogger<ServiceExposureReconcileHook>.Instance;
@@ -71,7 +75,7 @@ public sealed class ServiceExposureReconcileHook : ICommittedStatePublicationHoo
                 Identity = evt.Identity.Clone(),
                 OpenapiUrl = openApiUrl,
                 DesiredSpecHash = desiredHash,
-                CredentialKid = string.Empty,
+                CredentialKid = _scopeTokenKeyProvider?.CurrentSigningKey.Kid ?? string.Empty,
             },
             ct);
     }
