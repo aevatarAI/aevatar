@@ -1836,6 +1836,22 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 metadata[ChannelMetadataKeys.LarkSubjectEmployeeId] = subjectContactIds.EmployeeId;
         }
 
+        // Surface resolved @-mentions (canonical id + name) so the agent can target a third party by a
+        // real id instead of the literal "@_user_N" text placeholder. Placeholder numbering follows the
+        // mention order, so the list order is preserved. The bot's own mention may be included; the
+        // prompt instructs the agent to pick the non-bot entry.
+        if (activity?.Mentions is { Count: > 0 } mentions)
+        {
+            var formattedMentions = string.Join(
+                "; ",
+                mentions
+                    .Where(mention => !string.IsNullOrWhiteSpace(mention.CanonicalId))
+                    .Select(mention =>
+                        $"{(string.IsNullOrWhiteSpace(mention.DisplayName) ? "?" : mention.DisplayName)} <{mention.CanonicalId}>"));
+            if (!string.IsNullOrWhiteSpace(formattedMentions))
+                metadata[ChannelMetadataKeys.Mentions] = formattedMentions;
+        }
+
         return metadata;
     }
 

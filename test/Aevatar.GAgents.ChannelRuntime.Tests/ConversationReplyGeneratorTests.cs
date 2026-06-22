@@ -669,6 +669,72 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
+    public async Task GenerateReplyAsync_WithChannelContextMiddleware_IncludesResolvedMentionsLine()
+    {
+        var providerFactory = new RecordingProviderFactory();
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            llmMiddlewares: [new ChannelContextMiddleware(NullLogger<ChannelContextMiddleware>.Instance)]);
+
+        var reply = await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-lark-mentions-context",
+                ChannelId = ChannelId.From("lark"),
+                Conversation = new ConversationReference { CanonicalKey = "lark:group:oc_1" },
+                Content = new MessageContent { Text = "@_user_1 给 @_user_2 加一下权限" },
+            },
+            new Dictionary<string, string>
+            {
+                [ChannelMetadataKeys.Platform] = "lark",
+                [ChannelMetadataKeys.ChatType] = "group",
+                [ChannelMetadataKeys.SenderId] = "ou_sender_1",
+                [ChannelMetadataKeys.ConversationId] = "oc_1",
+                [ChannelMetadataKeys.Mentions] = "Aevatar <ou_bot_1>; 张三 <ou_zhangsan>",
+            },
+            streamingSink: null,
+            CancellationToken.None);
+
+        reply.Text.Should().Be("ok");
+        var systemPrompt = providerFactory.Requests.Should().ContainSingle().Subject
+            .Messages.First(message => message.Role == "system").Content;
+        // Emitted raw (not JSON-escaped) so the open_id delimiters and CJK display name stay readable.
+        systemPrompt.Should().Contain("mentions: Aevatar <ou_bot_1>; 张三 <ou_zhangsan>");
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_WithChannelContextMiddleware_OmitsMentionsLineWhenNoneMentioned()
+    {
+        var providerFactory = new RecordingProviderFactory();
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            llmMiddlewares: [new ChannelContextMiddleware(NullLogger<ChannelContextMiddleware>.Instance)]);
+
+        var reply = await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-lark-no-mentions-context",
+                ChannelId = ChannelId.From("lark"),
+                Conversation = new ConversationReference { CanonicalKey = "lark:group:oc_1" },
+                Content = new MessageContent { Text = "hello" },
+            },
+            new Dictionary<string, string>
+            {
+                [ChannelMetadataKeys.Platform] = "lark",
+                [ChannelMetadataKeys.ChatType] = "group",
+                [ChannelMetadataKeys.SenderId] = "ou_sender_1",
+                [ChannelMetadataKeys.ConversationId] = "oc_1",
+            },
+            streamingSink: null,
+            CancellationToken.None);
+
+        reply.Text.Should().Be("ok");
+        var systemPrompt = providerFactory.Requests.Should().ContainSingle().Subject
+            .Messages.First(message => message.Role == "system").Content;
+        systemPrompt.Should().NotContain("mentions: ");
+    }
+
+    [Fact]
     public async Task GenerateReplyAsync_AggregatesUsageAndFinishReasonAtActorEdge()
     {
         // ADR-0021 §6 / canon §8: the actor-edge closeout returned by GenerateReplyAsync

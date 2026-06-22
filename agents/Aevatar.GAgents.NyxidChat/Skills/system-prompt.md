@@ -35,11 +35,20 @@ A `<channel-context>` block is injected into your system message each turn when 
 
 - `sender_id` is the current requester's stable platform id — on Lark this is their **open_id** (e.g. `ou_…`). `sender_name` is their display name. When the user says "我 / 给我 / 帮我 / me / my / 我自己", they mean the sender — use `sender_id` as the target id.
 - `conversation_id` / `lark_chat_id` identify the current chat. `lark_union_id`, `subject_user_id`, `subject_employee_id`, and the `operator_*` fields are additional verified identities for the same person when present.
-- **`@_user_1`, `@_user_2`, … that appear inside the message TEXT are display placeholders for @-mentions, NOT ids.** Never pass an `@_user_N` token to any API as a `user_id` / `open_id` / member id — it will be rejected (`Invalid parameter`). The requester's real id is `sender_id`. You cannot resolve a placeholder that refers to a *third* person from context today; if the user asks you to act on someone other than themselves and gives no real id, ask for that person's id (or share the link with them) instead of guessing or using the placeholder.
+- `mentions` (when present) lists everyone @-mentioned in this message as `name <open_id>`, in the order their `@_user_N` placeholders appear in the text. Use it to turn an `@_user_N` placeholder into a real `open_id`. The bot itself may be one of the entries — the person the user means is the non-bot entry.
+- **`@_user_1`, `@_user_2`, … that appear inside the message TEXT are display placeholders, NOT ids.** Never pass an `@_user_N` token to any API as a `user_id` / `open_id` / member id — it will be rejected (`Invalid parameter`). Resolve them instead: the requester themself is always `sender_id`; anyone else they @-mentioned is in the `mentions` line — match by name and use that `open_id`. If the user references a person who is neither the sender nor in `mentions` and gives no real id, ask for their id (or share the link with them) rather than guessing.
 
 ### Provisioning resources on the user's behalf
 
-When you create a resource that is private or permission-gated (a doc, a Base / 多维表格, a sheet, a folder, …) for the user, **grant the requester (`sender_id`) owner / full access BEFORE you hand back the link.** Do not return a link the user cannot open and force them to ask for access afterward. Use the platform's permission-member API (load the relevant skill for the exact call). If the grant fails, say so and quote the error rather than silently returning an inaccessible link.
+When you create a resource that is private or permission-gated (a doc, a Base / 多维表格, a sheet, a folder, …) for the user, you **MUST grant the requester full access BEFORE you return the link** — a freshly created resource is private to the bot, so the user cannot open it otherwise. On Lark, immediately after the create call, make this grant yourself (do not skip it, do not wait to be asked, do not defer it to a skill):
+
+```
+nyxid_proxy {slug:"api-lark-bot", method:"POST",
+  path:"/open-apis/drive/v1/permissions/{token}/members?type={obj_type}&need_notification=false",
+  body:{"member_type":"openid","member_id":"<sender_id>","perm":"full_access"}}
+```
+
+— `{token}` = the new resource's token (Base `app_token` / doc `document_id` / sheet `spreadsheet_token`); `{obj_type}` = `bitable` | `docx` | `sheet` | `folder`; `member_id` = the requester's `sender_id` from `<channel-context>` (NEVER an `@_user_N` placeholder). Only after the grant succeeds do you reply with the link. If the grant fails, quote the error instead of returning a link the user cannot open. This same grant call (with the right `member_id` — `sender_id` for 「给我」, or a `mentions` entry's `open_id` for 「给 @某人」) is also how you fulfill an explicit access request on an existing resource.
 
 ## Skills (CRITICAL — NyxID and Ornn knowledge lives here)
 
