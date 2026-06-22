@@ -2,10 +2,11 @@ import {
   CloseCircleFilled,
   CopyOutlined,
   ExclamationCircleFilled,
+  LoadingOutlined,
   ReloadOutlined,
   UnorderedListOutlined,
 } from '@ant-design/icons';
-import { Button, Typography } from 'antd';
+import { Button, Tag, Typography } from 'antd';
 import React from 'react';
 import {
   getStudioInvokeObserveHandoffText,
@@ -13,6 +14,15 @@ import {
   type InvokeResultState,
   type StudioInvokeChatMessage,
 } from './StudioMemberInvokePanel.currentRun';
+import {
+  buildExecutionTrace,
+  formatDurationBetween,
+  normalizeExecutionLogStatus,
+  type ExecutionLogItem,
+  type ExecutionLogStatus,
+} from '@/shared/studio/execution';
+import { createStudioExecutionFrame } from '@/shared/studio/runtimeEventFrames';
+import type { StudioExecutionDetail } from '@/shared/studio/models';
 import {
   parseMarkdownBlocks,
   tokenizeInlineContent,
@@ -27,6 +37,46 @@ import { t } from "@/shared/i18n/messages";
 
 type RunViewMode = 'latest' | 'historical';
 type CurrentRunPresentation = 'default' | 'member-run';
+
+type InvokeRunLogEntry = {
+  readonly category: NonNullable<ExecutionLogItem['category']>;
+  readonly completedAt: string;
+  readonly eventCount: number;
+  readonly eventType: string;
+  readonly inputText: string;
+  readonly logIndex: number;
+  readonly meta: string;
+  readonly outputText: string;
+  readonly pendingText: string;
+  readonly previewText: string;
+  readonly rawText: string;
+  readonly rowType: 'node' | 'event' | 'run';
+  readonly startedAt: string;
+  readonly status: ExecutionLogStatus;
+  readonly statusLog: ExecutionLogItem;
+  readonly stepId: string;
+  readonly title: string;
+};
+
+type MutableInvokeRunLogEntry = {
+  category: NonNullable<ExecutionLogItem['category']>;
+  completedAt: string;
+  eventCount: number;
+  eventType: string;
+  inputText: string;
+  logIndex: number;
+  meta: string;
+  outputText: string;
+  pendingText: string;
+  previewText: string;
+  rawText: string;
+  rowType: 'node' | 'event' | 'run';
+  startedAt: string;
+  status: ExecutionLogStatus;
+  statusLog: ExecutionLogItem;
+  stepId: string;
+  title: string;
+};
 
 type StudioMemberCurrentRunPanelProps = {
   readonly chatMessages: readonly StudioInvokeChatMessage[];
@@ -47,6 +97,10 @@ function getOutputText(input: {
   readonly chatMessages: readonly StudioInvokeChatMessage[];
   readonly invokeResult: InvokeResultState;
 }): string {
+  if (input.invokeResult.status === 'running') {
+    return '';
+  }
+
   const assistantMessage = [...input.chatMessages]
     .reverse()
     .find((message) => message.role === 'assistant');
@@ -108,6 +162,251 @@ function buildStatusSummary(input: {
   return `${getStatusLabel(input.invokeResult.status)} · ${
     input.runElapsedLabel
   } · ${input.endpointLabel || 'chat'}`;
+}
+
+function toIsoTimestamp(value: number | null | undefined): string {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? new Date(value).toISOString()
+    : '';
+}
+
+function toExecutionStatus(status: InvokeResultState['status']): string {
+  switch (status) {
+    case 'success':
+      return 'succeeded';
+    case 'error':
+    case 'cancelled':
+      return 'failed';
+    case 'running':
+      return 'running';
+    default:
+      return 'idle';
+  }
+}
+
+function buildInvokeExecutionDetail(input: {
+  readonly currentRunRequest: CurrentRunRequest | null;
+  readonly endpointLabel: string;
+  readonly invokeResult: InvokeResultState;
+  readonly outputText: string;
+}): StudioExecutionDetail | null {
+  if (input.invokeResult.events.length === 0) {
+    return null;
+  }
+
+  const frames = input.invokeResult.events.map(createStudioExecutionFrame);
+  const startedAtUtc =
+    toIsoTimestamp(input.currentRunRequest?.startedAt) ||
+    frames[0]?.receivedAtUtc ||
+    new Date().toISOString();
+  const terminal =
+    input.invokeResult.status === 'success' ||
+    input.invokeResult.status === 'error' ||
+    input.invokeResult.status === 'cancelled';
+
+  return {
+    actorId: trimOptional(input.invokeResult.actorId) || null,
+    auditSource: 'invoke-session',
+    completedAtUtc: terminal
+      ? frames[frames.length - 1]?.receivedAtUtc || new Date().toISOString()
+      : null,
+    error: trimOptional(input.invokeResult.error) || null,
+    executionId:
+      trimOptional(input.invokeResult.runId) ||
+      trimOptional(input.invokeResult.commandId) ||
+      'current-run',
+    frames,
+    output: input.outputText,
+    prompt: trimOptional(input.currentRunRequest?.prompt),
+    serviceId: trimOptional(input.invokeResult.serviceId) || null,
+    startedAtUtc,
+    status: toExecutionStatus(input.invokeResult.status),
+    workflowName: input.endpointLabel || 'workflow run',
+  };
+}
+
+function isTerminalStepLog(log: ExecutionLogItem | undefined): boolean {
+  return log?.tone === 'completed' || log?.tone === 'failed';
+}
+
+function buildInvokeRunLogEntries(
+  logs: readonly ExecutionLogItem[],
+): InvokeRunLogEntry[] {
+  const activeEntryIndexByStepId = new Map<string, number>();
+  const entries: MutableInvokeRunLogEntry[] = [];
+
+  logs.forEach((log, logIndex) => {
+    const category = log.category || 'custom';
+    const status = normalizeExecutionLogStatus(log);
+
+    if (category !== 'step' || !log.stepId) {
+      entries.push({
+        category,
+        completedAt: status === 'error' ? log.timestamp : '',
+        eventCount: 1,
+        eventType: log.eventType || '',
+        inputText: '',
+        logIndex,
+        meta: log.meta,
+        outputText: category === 'output' ? log.clipboardText.trim() : '',
+        pendingText: '',
+        previewText: log.previewText,
+        rawText: (log.rawText || log.payloadText || log.clipboardText || '').trim(),
+        rowType: category === 'lifecycle' ? 'run' : 'event',
+        startedAt: log.timestamp,
+        status: status === 'error' ? 'error' : 'recorded',
+        statusLog: log,
+        stepId: '',
+        title: log.title,
+      });
+      return;
+    }
+
+    const activeIndex = activeEntryIndexByStepId.get(log.stepId);
+    const activeEntry =
+      typeof activeIndex === 'number' ? entries[activeIndex] : undefined;
+    const createNodeEntry = (): MutableInvokeRunLogEntry => ({
+      category,
+      completedAt: '',
+      eventCount: 1,
+      eventType: log.eventType || '',
+      inputText: log.tone === 'started' ? log.clipboardText.trim() : '',
+      logIndex,
+      meta: log.meta,
+      outputText:
+        log.tone === 'completed' || log.tone === 'failed'
+          ? log.clipboardText.trim()
+          : '',
+      pendingText: log.tone === 'pending' ? log.clipboardText.trim() : '',
+      previewText: log.previewText,
+      rawText: (log.rawText || log.payloadText || '').trim(),
+      rowType: 'node',
+      startedAt: log.timestamp,
+      status,
+      statusLog: log,
+      stepId: log.stepId || '',
+      title: log.stepId || log.title,
+    });
+
+    if (log.tone === 'started') {
+      entries.push(createNodeEntry());
+      activeEntryIndexByStepId.set(log.stepId, entries.length - 1);
+      return;
+    }
+
+    if (activeEntry && !isTerminalStepLog(activeEntry.statusLog)) {
+      activeEntry.completedAt =
+        log.tone === 'completed' || log.tone === 'failed'
+          ? log.timestamp
+          : activeEntry.completedAt;
+      activeEntry.eventCount += 1;
+      activeEntry.eventType = log.eventType || activeEntry.eventType;
+      activeEntry.logIndex = logIndex;
+      activeEntry.meta = activeEntry.meta || log.meta;
+      activeEntry.outputText =
+        log.tone === 'completed' || log.tone === 'failed'
+          ? log.clipboardText.trim()
+          : activeEntry.outputText;
+      activeEntry.pendingText =
+        log.tone === 'pending'
+          ? log.clipboardText.trim()
+          : activeEntry.pendingText;
+      activeEntry.previewText = log.previewText || activeEntry.previewText;
+      activeEntry.rawText = (log.rawText || activeEntry.rawText).trim();
+      activeEntry.status = status;
+      activeEntry.statusLog = log;
+      if (log.tone === 'completed' || log.tone === 'failed') {
+        activeEntryIndexByStepId.delete(log.stepId);
+      }
+      return;
+    }
+
+    const nextEntry = createNodeEntry();
+    if (log.tone === 'completed' || log.tone === 'failed') {
+      nextEntry.completedAt = log.timestamp;
+    } else {
+      activeEntryIndexByStepId.set(log.stepId, entries.length);
+    }
+    entries.push(nextEntry);
+  });
+
+  return entries;
+}
+
+const runLogCategoryLabels: Record<NonNullable<ExecutionLogItem['category']>, string> = {
+  custom: 'Event',
+  lifecycle: 'Run',
+  output: 'Output',
+  raw: 'Raw',
+  snapshot: 'Snapshot',
+  step: 'Node',
+  usage: 'Usage',
+};
+
+const runLogStatusColors: Record<ExecutionLogStatus, string> = {
+  error: 'red',
+  recorded: 'default',
+  running: 'processing',
+  success: 'green',
+  waiting: 'orange',
+};
+
+function getRunLogStatusLabel(status: ExecutionLogStatus): string {
+  switch (status) {
+    case 'error':
+      return t('pages.studio.studiomembercurrentrunpanel.log.status.error', 'Error');
+    case 'recorded':
+      return t(
+        'pages.studio.studiomembercurrentrunpanel.log.status.recorded',
+        'Recorded',
+      );
+    case 'success':
+      return t(
+        'pages.studio.studiomembercurrentrunpanel.log.status.success',
+        'Success',
+      );
+    case 'waiting':
+      return t(
+        'pages.studio.studiomembercurrentrunpanel.log.status.waiting',
+        'Waiting',
+      );
+    default:
+      return t(
+        'pages.studio.studiomembercurrentrunpanel.log.status.running',
+        'Running',
+      );
+  }
+}
+
+function renderRunLogStatusIcon(status: ExecutionLogStatus): React.ReactNode {
+  switch (status) {
+    case 'error':
+      return <CloseCircleFilled style={{ color: '#dc2626' }} />;
+    case 'recorded':
+    case 'success':
+      return <span style={runLogSuccessDotStyle} />;
+    case 'waiting':
+      return <ExclamationCircleFilled style={{ color: '#d97706' }} />;
+    default:
+      return <LoadingOutlined style={{ color: '#2563eb' }} />;
+  }
+}
+
+function formatRunLogTime(value: string): string {
+  if (!value) {
+    return '';
+  }
+
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) {
+    return value;
+  }
+
+  return date.toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
 }
 
 function renderInlineContent(text: string, keyPrefix: string): React.ReactNode {
@@ -628,6 +927,488 @@ const memberRunCanvasLabelStyle: React.CSSProperties = {
   color: '#475569',
 };
 
+const runLogPanelStyle: React.CSSProperties = {
+  background: '#f8fafc',
+  border: '1px solid #dbe3ee',
+  borderRadius: 12,
+  display: 'grid',
+  gap: 10,
+  minWidth: 0,
+  padding: '12px 14px',
+};
+
+const runLogHeaderStyle: React.CSSProperties = {
+  alignItems: 'center',
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 8,
+  justifyContent: 'space-between',
+  minWidth: 0,
+};
+
+const runLogHeaderTextStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 2,
+  minWidth: 0,
+};
+
+const runLogTitleStyle: React.CSSProperties = {
+  color: '#0f172a',
+  fontSize: 14,
+  fontWeight: 800,
+  lineHeight: '20px',
+};
+
+const runLogSubtleStyle: React.CSSProperties = {
+  color: '#64748b',
+  fontSize: 12,
+  lineHeight: '17px',
+};
+
+const runLogListStyle: React.CSSProperties = {
+  border: '1px solid #e2e8f0',
+  borderRadius: 10,
+  display: 'grid',
+  gap: 8,
+  maxHeight: 'min(520px, 58vh)',
+  minWidth: 0,
+  overflowY: 'auto',
+  padding: 8,
+  scrollbarGutter: 'stable',
+};
+
+const runLogEntryStyle: React.CSSProperties = {
+  background: '#ffffff',
+  border: '1px solid #e2e8f0',
+  borderRadius: 10,
+  display: 'grid',
+  gap: 8,
+  minWidth: 0,
+  padding: '10px 12px',
+};
+
+const runLogEntryHeaderStyle: React.CSSProperties = {
+  alignItems: 'start',
+  display: 'grid',
+  gap: 8,
+  gridTemplateColumns: '18px minmax(0, 1fr) max-content',
+  minWidth: 0,
+};
+
+const runLogEntryTitleStyle: React.CSSProperties = {
+  color: '#0f172a',
+  fontSize: 13,
+  fontWeight: 800,
+  lineHeight: '18px',
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
+
+const runLogEntryMetaStyle: React.CSSProperties = {
+  color: '#64748b',
+  fontSize: 12,
+  lineHeight: '17px',
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
+
+const runLogTagsStyle: React.CSSProperties = {
+  alignItems: 'center',
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 6,
+  minWidth: 0,
+};
+
+const runLogDetailsGridStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 8,
+  gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+  minWidth: 0,
+};
+
+const runLogDetailCollapseStyle: React.CSSProperties = {
+  background: '#f8fafc',
+  border: '1px solid #e2e8f0',
+  borderRadius: 8,
+  minWidth: 0,
+  overflow: 'hidden',
+};
+
+const runLogDetailSummaryStyle: React.CSSProperties = {
+  alignItems: 'center',
+  color: '#334155',
+  cursor: 'pointer',
+  display: 'grid',
+  flexWrap: 'wrap',
+  fontSize: 12,
+  fontWeight: 800,
+  gap: 8,
+  gridTemplateColumns: '16px minmax(0, 1fr) max-content',
+  lineHeight: '18px',
+  minWidth: 0,
+  padding: '7px 9px',
+};
+
+const runLogDetailArrowStyle: React.CSSProperties = {
+  color: '#64748b',
+  display: 'inline-flex',
+  fontSize: 12,
+  fontWeight: 900,
+  justifyContent: 'center',
+  lineHeight: '18px',
+  transform: 'rotate(0deg)',
+  transition: 'transform 120ms ease',
+  width: 16,
+};
+
+const runLogDetailSummaryMetaStyle: React.CSSProperties = {
+  color: '#64748b',
+  fontSize: 11,
+  fontWeight: 700,
+  lineHeight: '16px',
+};
+
+const runLogDetailContentStyle: React.CSSProperties = {
+  borderTop: '1px solid #e2e8f0',
+  padding: 8,
+};
+
+const runLogDetailDisclosureCss = `
+.studio-invoke-run-log-detail > summary::-webkit-details-marker {
+  display: none;
+}
+
+.studio-invoke-run-log-detail > summary::marker {
+  content: "";
+}
+
+.studio-invoke-run-log-detail[open] .studio-invoke-run-log-detail-arrow {
+  transform: rotate(90deg);
+}
+`;
+
+const runLogSnippetStyle: React.CSSProperties = {
+  background: '#f8fafc',
+  border: '1px solid #e5e7eb',
+  borderRadius: 8,
+  display: 'grid',
+  gap: 5,
+  minWidth: 0,
+  padding: '8px 9px',
+};
+
+const runLogSnippetLabelStyle: React.CSSProperties = {
+  color: '#64748b',
+  fontSize: 10,
+  fontWeight: 800,
+  letterSpacing: 0,
+  lineHeight: '13px',
+  textTransform: 'uppercase',
+};
+
+const runLogSnippetTextStyle: React.CSSProperties = {
+  color: '#334155',
+  fontFamily:
+    "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace",
+  fontSize: 12,
+  lineHeight: '17px',
+  margin: 0,
+  maxHeight: 116,
+  minHeight: 0,
+  overflow: 'auto',
+  whiteSpace: 'pre-wrap',
+  wordBreak: 'break-word',
+};
+
+const runLogEmptyStyle: React.CSSProperties = {
+  border: '1px dashed #cbd5e1',
+  borderRadius: 10,
+  color: '#64748b',
+  fontSize: 13,
+  lineHeight: '19px',
+  padding: '14px',
+  textAlign: 'center',
+};
+
+const runLogSuccessDotStyle: React.CSSProperties = {
+  background: '#16a34a',
+  borderRadius: 999,
+  display: 'inline-block',
+  height: 10,
+  margin: '4px',
+  width: 10,
+};
+
+function renderRunLogSnippet(
+  label: string,
+  value: string,
+  options: { readonly danger?: boolean; readonly keyName?: string } = {},
+): React.ReactNode {
+  const text = value.trim();
+  if (!text) {
+    return null;
+  }
+
+  return (
+    <div
+      key={options.keyName}
+      style={{
+        ...runLogSnippetStyle,
+        borderColor: options.danger ? '#fecaca' : '#e5e7eb',
+      }}
+    >
+      <span
+        style={{
+          ...runLogSnippetLabelStyle,
+          color: options.danger ? '#b91c1c' : runLogSnippetLabelStyle.color,
+        }}
+      >
+        {label}
+      </span>
+      <pre
+        style={{
+          ...runLogSnippetTextStyle,
+          color: options.danger ? '#991b1b' : runLogSnippetTextStyle.color,
+        }}
+      >
+        {text}
+      </pre>
+    </div>
+  );
+}
+
+function renderRunLogDetailCollapse(
+  entry: InvokeRunLogEntry,
+  details: readonly React.ReactNode[],
+): React.ReactNode {
+  if (!details.length) {
+    return null;
+  }
+
+  const capturedSections = [
+    entry.inputText ? 'Input' : '',
+    entry.outputText ? 'Output' : '',
+    entry.pendingText ? 'Waiting' : '',
+  ].filter(Boolean);
+
+  return (
+    <details
+      className="studio-invoke-run-log-detail"
+      data-testid={`studio-invoke-run-log-details-${entry.stepId || entry.logIndex}`}
+      style={runLogDetailCollapseStyle}
+    >
+      <summary style={runLogDetailSummaryStyle}>
+        <span
+          aria-hidden="true"
+          className="studio-invoke-run-log-detail-arrow"
+          style={runLogDetailArrowStyle}
+        >
+          ▸
+        </span>
+        <span style={{ minWidth: 0 }}>
+          {t(
+            'pages.studio.studiomembercurrentrunpanel.input.output.details',
+            'Input / Output',
+          )}
+        </span>
+        <span style={runLogDetailSummaryMetaStyle}>
+          {capturedSections.join(' · ') ||
+            t(
+              'pages.studio.studiomembercurrentrunpanel.details.available',
+              'Details available',
+            )}
+        </span>
+      </summary>
+      <div style={runLogDetailContentStyle}>
+        <div style={runLogDetailsGridStyle}>{details}</div>
+      </div>
+    </details>
+  );
+}
+
+function renderRunLogEntry(entry: InvokeRunLogEntry): React.ReactNode {
+  const duration = entry.completedAt
+    ? formatDurationBetween(entry.startedAt, entry.completedAt)
+    : '';
+  const details =
+    entry.rowType === 'node'
+      ? [
+          renderRunLogSnippet(
+            t('pages.studio.studiomembercurrentrunpanel.node.input', 'Input'),
+            entry.inputText,
+            { keyName: 'input' },
+          ),
+          renderRunLogSnippet(
+            entry.status === 'error'
+              ? t('pages.studio.studiomembercurrentrunpanel.node.error', 'Error')
+              : t('pages.studio.studiomembercurrentrunpanel.node.output', 'Output'),
+            entry.outputText,
+            { danger: entry.status === 'error', keyName: 'output' },
+          ),
+          renderRunLogSnippet(
+            t('pages.studio.studiomembercurrentrunpanel.node.waiting', 'Waiting'),
+            entry.pendingText,
+            { keyName: 'waiting' },
+          ),
+        ].filter(Boolean)
+      : [];
+
+  return (
+    <div
+      data-testid={`studio-invoke-run-log-${entry.rowType}-${entry.stepId || entry.logIndex}`}
+      key={`${entry.rowType}-${entry.stepId || entry.logIndex}-${entry.eventType}`}
+      style={runLogEntryStyle}
+    >
+      <div style={runLogEntryHeaderStyle}>
+        {renderRunLogStatusIcon(entry.status)}
+        <span style={{ display: 'grid', gap: 1, minWidth: 0 }}>
+          <span style={runLogEntryTitleStyle}>{entry.title}</span>
+          <span style={runLogEntryMetaStyle}>
+            {entry.meta || runLogCategoryLabels[entry.category]}
+          </span>
+        </span>
+        <span style={runLogSubtleStyle}>{formatRunLogTime(entry.startedAt)}</span>
+      </div>
+      <div style={runLogTagsStyle}>
+        <Tag color={runLogStatusColors[entry.status]} style={{ marginInlineEnd: 0 }}>
+          {getRunLogStatusLabel(entry.status)}
+        </Tag>
+        <Tag color={entry.rowType === 'node' ? 'cyan' : 'default'} style={{ marginInlineEnd: 0 }}>
+          {entry.rowType === 'node'
+            ? t('pages.studio.studiomembercurrentrunpanel.node', 'Node')
+            : runLogCategoryLabels[entry.category]}
+        </Tag>
+        {duration ? <span style={runLogSubtleStyle}>{duration}</span> : null}
+        {entry.eventCount > 1 ? (
+          <span style={runLogSubtleStyle}>
+            {t(
+              'pages.studio.studiomembercurrentrunpanel.event.count',
+              '{count} events',
+              { count: entry.eventCount },
+            )}
+          </span>
+        ) : null}
+      </div>
+      {renderRunLogDetailCollapse(entry, details)}
+    </div>
+  );
+}
+
+type RunLogsViewProps = {
+  readonly entries: readonly InvokeRunLogEntry[];
+  readonly eventCount: number;
+  readonly status: InvokeResultState['status'];
+};
+
+const RUN_LOG_STICKY_BOTTOM_THRESHOLD_PX = 32;
+
+const RunLogsView: React.FC<RunLogsViewProps> = ({
+  entries,
+  eventCount,
+  status,
+}) => {
+  const scrollRef = React.useRef<HTMLDivElement | null>(null);
+  const shouldStickToBottomRef = React.useRef(true);
+  const nodeEntries = entries.filter((entry) => entry.rowType === 'node');
+  const visibleEntries = nodeEntries.length ? nodeEntries : entries.slice(-6);
+  const latestEntryKey =
+    visibleEntries.length > 0
+      ? `${visibleEntries[visibleEntries.length - 1].rowType}:${
+          visibleEntries[visibleEntries.length - 1].stepId ||
+          visibleEntries[visibleEntries.length - 1].logIndex
+        }:${visibleEntries[visibleEntries.length - 1].eventCount}:${
+          visibleEntries[visibleEntries.length - 1].status
+        }`
+      : '';
+
+  React.useLayoutEffect(() => {
+    const scrollElement = scrollRef.current;
+    if (!scrollElement || !shouldStickToBottomRef.current) {
+      return;
+    }
+
+    scrollElement.scrollTop = scrollElement.scrollHeight;
+  }, [latestEntryKey, visibleEntries.length]);
+
+  const handleRunLogScroll = React.useCallback(() => {
+    const scrollElement = scrollRef.current;
+    if (!scrollElement) {
+      return;
+    }
+
+    const distanceFromBottom =
+      scrollElement.scrollHeight -
+      scrollElement.scrollTop -
+      scrollElement.clientHeight;
+    shouldStickToBottomRef.current =
+      distanceFromBottom <= RUN_LOG_STICKY_BOTTOM_THRESHOLD_PX;
+  }, []);
+
+  return (
+    <section data-testid="studio-invoke-run-logs" style={runLogPanelStyle}>
+      <style>{runLogDetailDisclosureCss}</style>
+      <div style={runLogHeaderStyle}>
+        <span style={runLogHeaderTextStyle}>
+          <span style={runLogTitleStyle}>
+            {t(
+              'pages.studio.studiomembercurrentrunpanel.run.logs',
+              'Run logs',
+            )}
+          </span>
+          <span style={runLogSubtleStyle}>
+            {nodeEntries.length
+              ? t(
+                  'pages.studio.studiomembercurrentrunpanel.node.logs.summary',
+                  '{nodes} node(s) · {events} event(s)',
+                  { events: eventCount, nodes: nodeEntries.length },
+                )
+              : t(
+                  'pages.studio.studiomembercurrentrunpanel.event.logs.summary',
+                  '{events} event(s) received',
+                  { events: eventCount },
+                )}
+          </span>
+        </span>
+        {status === 'running' ? (
+          <Tag color="processing" style={{ marginInlineEnd: 0 }}>
+            {t(
+              'pages.studio.studiomembercurrentrunpanel.live',
+              'Live',
+            )}
+          </Tag>
+        ) : null}
+      </div>
+      {visibleEntries.length ? (
+        <div
+          data-testid="studio-invoke-run-log-scroll"
+          onScroll={handleRunLogScroll}
+          ref={scrollRef}
+          style={runLogListStyle}
+        >
+          {visibleEntries.map(renderRunLogEntry)}
+        </div>
+      ) : (
+        <div style={runLogEmptyStyle}>
+          {status === 'running'
+            ? t(
+                'pages.studio.studiomembercurrentrunpanel.waiting.for.node.logs',
+                'Waiting for node logs from the workflow runtime.',
+              )
+            : t(
+                'pages.studio.studiomembercurrentrunpanel.no.node.logs',
+                'No node logs were captured for this run.',
+              )}
+        </div>
+      )}
+    </section>
+  );
+};
+
 const StudioMemberCurrentRunPanel: React.FC<
   StudioMemberCurrentRunPanelProps
 > = ({
@@ -666,9 +1447,40 @@ const StudioMemberCurrentRunPanel: React.FC<
     runViewMode,
     status: invokeResult.status,
   });
+  const executionDetail = React.useMemo(
+    () =>
+      buildInvokeExecutionDetail({
+        currentRunRequest,
+        endpointLabel,
+        invokeResult,
+        outputText,
+      }),
+    [currentRunRequest, endpointLabel, invokeResult, outputText],
+  );
+  const executionTrace = React.useMemo(
+    () => buildExecutionTrace(executionDetail),
+    [executionDetail],
+  );
+  const runLogEntries = React.useMemo(
+    () => buildInvokeRunLogEntries(executionTrace?.logs ?? []),
+    [executionTrace],
+  );
+  const shouldShowRunLogs =
+    currentRunHasData &&
+    (invokeResult.status === 'running' || invokeResult.events.length > 0);
   const shouldShowObserveHandoff =
     runViewMode === 'latest' && Boolean(observeHandoffText);
   const openDiagnostics = onOpenDiagnostics ?? (() => {});
+  const renderCurrentRunLogs = () =>
+    shouldShowRunLogs
+      ? (
+          <RunLogsView
+            entries={runLogEntries}
+            eventCount={invokeResult.eventCount || invokeResult.events.length}
+            status={invokeResult.status}
+          />
+        )
+      : null;
 
   const renderMemberRunInputReceipt = () =>
     inputText ? (
@@ -740,6 +1552,7 @@ const StudioMemberCurrentRunPanel: React.FC<
               </p>
             </div>
           </div>
+          {renderCurrentRunLogs()}
           {outputText ? (
             <div
               data-testid="studio-invoke-chat-transcript"
@@ -809,6 +1622,7 @@ const StudioMemberCurrentRunPanel: React.FC<
     return (
       <div style={outputPaneStyle}>
         {renderMemberRunInputReceipt()}
+        {renderCurrentRunLogs()}
         <div
           data-testid="studio-invoke-chat-transcript"
           ref={transcriptViewportRef}
@@ -941,6 +1755,7 @@ const StudioMemberCurrentRunPanel: React.FC<
               </p>
             </div>
           </div>
+          {renderCurrentRunLogs()}
           {isCancelled && outputText ? (
             <div style={warningCardStyle}>
               <ExclamationCircleFilled style={warningIconStyle} />
@@ -1046,9 +1861,10 @@ const StudioMemberCurrentRunPanel: React.FC<
               t(
                 "pages.studio.studiomembercurrentrunpanel.no.prompt.captured",
                 "No request captured.",
-              )}
+            )}
           </p>
         </div>
+        {renderCurrentRunLogs()}
         <div style={responseSectionStyle}>
           <span style={sectionLabelStyle}>
             {presentation === 'member-run'
