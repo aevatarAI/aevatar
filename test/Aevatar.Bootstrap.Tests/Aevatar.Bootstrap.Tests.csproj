@@ -13,6 +13,7 @@
     <ProjectReference Include="..\..\src\Aevatar.Bootstrap.Extensions.AI\Aevatar.Bootstrap.Extensions.AI.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Authentication.Hosting\Aevatar.Authentication.Hosting.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Authentication.Providers.NyxId\Aevatar.Authentication.Providers.NyxId.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Authentication.ScopeServiceTokens\Aevatar.Authentication.ScopeServiceTokens.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.MCP\Aevatar.AI.ToolProviders.MCP.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.NyxId\Aevatar.AI.ToolProviders.NyxId.csproj" />

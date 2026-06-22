@@ -44,10 +44,7 @@ public sealed class ServiceEndpointsTests
                     "type.googleapis.com/demo.Submit",
                     string.Empty,
                     "submit command"),
-            ],
-            ExternalExposure: new ServiceEndpoints.ExternalExposureHttpRequest(
-                " aevatar-orders ",
-                DateTimeOffset.Parse("2026-06-11T01:02:03+00:00"))));
+            ]));
 
         response.StatusCode.Should().Be(HttpStatusCode.Accepted);
         host.CommandPort.CreateServiceCommand.Should().NotBeNull();
@@ -60,53 +57,59 @@ public sealed class ServiceEndpointsTests
         });
         host.CommandPort.CreateServiceCommand.Spec.Endpoints.Should().ContainSingle();
         host.CommandPort.CreateServiceCommand.Spec.Endpoints[0].Kind.Should().Be(ServiceEndpointKind.Command);
-        host.CommandPort.CreateServiceCommand.Spec.ExternalExposure.Should().NotBeNull();
-        host.CommandPort.CreateServiceCommand.Spec.ExternalExposure.NyxidSlug.Should().Be("aevatar-orders");
-        host.CommandPort.CreateServiceCommand.Spec.ExternalExposure.RegisteredAt.ToDateTimeOffset()
-            .Should().Be(DateTimeOffset.Parse("2026-06-11T01:02:03+00:00"));
+        host.CommandPort.CreateServiceCommand.Spec.ExternalExposure.Should().BeNull();
     }
 
     [Fact]
-    public async Task UpdateServiceAsync_ShouldDispatchTypedExternalExposure()
+    public async Task UpdateExternalExposureAsync_ShouldReturnNotFound()
     {
         await using var host = await EndpointTestHost.StartAsync();
 
-        var response = await host.Client.PutAsJsonAsync("/api/services/orders/external-exposure", new ServiceEndpoints.UpdateServiceExternalExposureHttpRequest(
-            "tenant",
-            "app",
-            "ns",
-            "aevatar-orders",
-            DateTimeOffset.Parse("2026-06-11T01:02:03+00:00")));
-
-        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
-        host.CommandPort.UpdateExternalExposureCommand.Should().NotBeNull();
-        host.CommandPort.UpdateExternalExposureCommand!.Identity.Should().BeEquivalentTo(new ServiceIdentity
+        var response = await host.Client.PutAsJsonAsync("/api/services/orders/external-exposure", new
         {
-            TenantId = "tenant",
-            AppId = "app",
-            Namespace = "ns",
-            ServiceId = "orders",
+            tenantId = "tenant",
+            appId = "app",
+            @namespace = "ns",
+            nyxidSlug = "aevatar-orders",
         });
-        host.CommandPort.UpdateExternalExposureCommand.ExternalExposure.Should().NotBeNull();
-        host.CommandPort.UpdateExternalExposureCommand.ExternalExposure.NyxidSlug.Should().Be("aevatar-orders");
-        host.CommandPort.UpdateExternalExposureCommand.ExternalExposure.RegisteredAt.ToDateTimeOffset()
-            .Should().Be(DateTimeOffset.Parse("2026-06-11T01:02:03+00:00"));
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        host.CommandPort.ReconcileExternalExposureCommand.Should().BeNull();
     }
 
     [Fact]
-    public async Task UpdateServiceAsync_WhenReadModelMissing_ShouldStillDispatchAuthoritativeCommand()
+    public async Task CreateServiceAsync_ShouldIgnoreInlineExternalExposureJson()
     {
         await using var host = await EndpointTestHost.StartAsync();
 
-        var response = await host.Client.PutAsJsonAsync("/api/services/orders/external-exposure", new ServiceEndpoints.UpdateServiceExternalExposureHttpRequest(
-            "tenant",
-            "app",
-            "ns",
-            "aevatar-orders",
-            DateTimeOffset.Parse("2026-06-11T01:02:03+00:00")));
+        var response = await host.Client.PostAsJsonAsync("/api/services/", new
+        {
+            tenantId = "tenant",
+            appId = "app",
+            @namespace = "ns",
+            serviceId = "orders",
+            displayName = "Orders",
+            endpoints = new[]
+            {
+                new
+                {
+                    endpointId = "submit",
+                    displayName = "Submit",
+                    kind = "command",
+                    requestTypeUrl = "type.googleapis.com/demo.Submit",
+                    responseTypeUrl = "",
+                    description = "submit command",
+                },
+            },
+            externalExposure = new
+            {
+                nyxidSlug = "aevatar-orders",
+            },
+        });
 
         response.StatusCode.Should().Be(HttpStatusCode.Accepted);
-        host.CommandPort.UpdateExternalExposureCommand.Should().NotBeNull();
+        host.CommandPort.CreateServiceCommand.Should().NotBeNull();
+        host.CommandPort.CreateServiceCommand!.Spec.ExternalExposure.Should().BeNull();
     }
 
     [Fact]
@@ -545,7 +548,16 @@ public sealed class ServiceEndpointsTests
                 DateTimeOffset.Parse("2026-03-14T00:00:00+00:00"),
                 new ServiceExternalExposureSnapshot(
                     "aevatar-orders",
-                    DateTimeOffset.Parse("2026-06-11T01:02:03+00:00"))),
+                    DateTimeOffset.Parse("2026-06-11T01:02:03+00:00"),
+                    ServiceRegistrationStatus.Registered,
+                    "nyx-svc-1",
+                    "hash-1",
+                    "hash-1",
+                    "",
+                    2,
+                    null,
+                    "kid-1",
+                    true)),
             new ServiceCatalogSnapshot(
                 "tenant/app/ns/billing",
                 "tenant",
@@ -640,6 +652,13 @@ public sealed class ServiceEndpointsTests
         getResponse.ExternalExposure.Should().NotBeNull();
         getResponse.ExternalExposure!.NyxidSlug.Should().Be("aevatar-orders");
         getResponse.ExternalExposure.RegisteredAt.Should().Be(DateTimeOffset.Parse("2026-06-11T01:02:03+00:00"));
+        getResponse.ExternalExposure.Status.Should().Be(ServiceRegistrationStatus.Registered.ToString());
+        getResponse.ExternalExposure.NyxidServiceId.Should().Be("nyx-svc-1");
+        getResponse.ExternalExposure.DesiredSpecHash.Should().Be("hash-1");
+        getResponse.ExternalExposure.RegisteredSpecHash.Should().Be("hash-1");
+        getResponse.ExternalExposure.Attempt.Should().Be(2);
+        getResponse.ExternalExposure.CredentialKid.Should().Be("kid-1");
+        getResponse.ExternalExposure.ExposureDesired.Should().BeTrue();
         revisionResponse!.Revisions.Should().ContainSingle();
         host.QueryPort.LastListServicesTake.Should().Be(10);
         host.QueryPort.LastGetServiceIdentity!.ServiceId.Should().Be("orders");
@@ -868,6 +887,68 @@ public sealed class ServiceEndpointsTests
         var decoded = ServiceIdentity.Parser.ParseFrom(host.InvocationPort.LastRequest.Payload.Value);
         decoded.TenantId.Should().Be("hello-tenant");
         decoded.ServiceId.Should().Be("orders");
+    }
+
+    [Fact]
+    public async Task OpenApiAsync_ShouldReturnAnonymousReadOnlyToolDocument()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+        host.CatalogReader.Service = new ServiceCatalogSnapshot(
+            ServiceKey: "tenant:app:ns:orders",
+            TenantId: "tenant",
+            AppId: "app",
+            Namespace: "ns",
+            ServiceId: "orders",
+            DisplayName: "Orders",
+            DefaultServingRevisionId: "rev-active",
+            ActiveServingRevisionId: "rev-active",
+            DeploymentId: "dep-1",
+            PrimaryActorId: "actor-1",
+            DeploymentStatus: "Active",
+            Endpoints:
+            [
+                new ServiceEndpointSnapshot(
+                    "submit",
+                    "Submit",
+                    "Command",
+                    "type.googleapis.com/aevatar.gagentservice.ServiceIdentity",
+                    string.Empty,
+                    "submit command"),
+            ],
+            PolicyIds: [],
+            UpdatedAt: DateTimeOffset.UtcNow);
+        await host.RevisionCatalog.UpsertRevisionAsync(
+            "tenant:app:ns:orders",
+            "rev-active",
+            new PreparedServiceRevisionArtifact
+            {
+                RevisionId = "rev-active",
+                ImplementationKind = ServiceImplementationKind.Static,
+                ProtocolDescriptorSet = BuildProtocolDescriptorSetFor(ServiceIdentity.Descriptor),
+            });
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/services/orders/openapi.json?tenantId=tenant&appId=app&namespace=ns");
+        request.Headers.Add("X-Test-Authenticated", "false");
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var root = document.RootElement;
+        root.GetProperty("openapi").GetString().Should().Be("3.1.0");
+        var operation = root.GetProperty("paths")
+            .GetProperty("/api/services/orders/invoke/submit")
+            .GetProperty("post");
+        operation.GetProperty("operationId").GetString().Should().Be("orders_submit");
+        operation.GetProperty("x-aevatar-tool").GetProperty("serviceKey").GetString().Should().Be("tenant:app:ns:orders");
+        operation.GetProperty("x-aevatar-tool").GetProperty("endpointId").GetString().Should().Be("submit");
+        operation.GetProperty("requestBody")
+            .GetProperty("content")
+            .GetProperty("application/json")
+            .GetProperty("schema")
+            .GetProperty("properties")
+            .TryGetProperty("tenantId", out _)
+            .Should()
+            .BeTrue();
     }
 
     [Fact]
@@ -1511,7 +1592,9 @@ public sealed class ServiceEndpointsTests
 
         public UpdateServiceDefinitionCommand? UpdateServiceCommand { get; private set; }
 
-        public UpdateServiceExternalExposureCommand? UpdateExternalExposureCommand { get; private set; }
+        public ReconcileExternalExposureCommand? ReconcileExternalExposureCommand { get; private set; }
+
+        public RetireExternalExposureCommand? RetireExternalExposureCommand { get; private set; }
 
         public CreateServiceRevisionCommand? CreateRevisionCommand { get; private set; }
 
@@ -1551,10 +1634,16 @@ public sealed class ServiceEndpointsTests
             return Task.FromResult(new ServiceCommandAcceptedReceipt("definition-actor", "cmd-update-service", "corr-update-service"));
         }
 
-        public Task<ServiceCommandAcceptedReceipt> UpdateServiceExternalExposureAsync(UpdateServiceExternalExposureCommand command, CancellationToken ct = default)
+        public Task<ServiceCommandAcceptedReceipt> ReconcileExternalExposureAsync(ReconcileExternalExposureCommand command, CancellationToken ct = default)
         {
-            UpdateExternalExposureCommand = command;
-            return Task.FromResult(new ServiceCommandAcceptedReceipt("definition-actor", "cmd-update-external-exposure", "corr-update-external-exposure"));
+            ReconcileExternalExposureCommand = command;
+            return Task.FromResult(new ServiceCommandAcceptedReceipt("definition-actor", "cmd-reconcile-external-exposure", "corr-reconcile-external-exposure"));
+        }
+
+        public Task<ServiceCommandAcceptedReceipt> RetireExternalExposureAsync(RetireExternalExposureCommand command, CancellationToken ct = default)
+        {
+            RetireExternalExposureCommand = command;
+            return Task.FromResult(new ServiceCommandAcceptedReceipt("definition-actor", "cmd-retire-external-exposure", "corr-retire-external-exposure"));
         }
 
         public Task<ServiceCommandAcceptedReceipt> CreateRevisionAsync(CreateServiceRevisionCommand command, CancellationToken ct = default)
