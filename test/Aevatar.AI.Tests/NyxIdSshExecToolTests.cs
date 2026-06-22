@@ -447,7 +447,7 @@ public class NyxIdSshExecToolTests
     [Fact]
     public async Task ExecuteAsync_ThrowsConfiguredBaseUrlError_AfterResolverLookupsFail()
     {
-        var tool = new NyxIdSshExecTool(new NyxIdApiClient(new NyxIdToolOptions()));
+        var tool = new NyxIdSshExecTool(new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = null }));
         SetMetadata("test-token");
         try
         {

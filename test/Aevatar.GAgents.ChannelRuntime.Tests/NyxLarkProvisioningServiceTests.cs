@@ -126,11 +126,11 @@ public class NyxLarkProvisioningServiceTests
     public async Task ProvisionAsync_ShouldReject_WhenNyxBaseUrlIsNotConfigured()
     {
         var handler = new RecordingHandler();
-        var nyxClient = new NyxIdApiClient(new NyxIdToolOptions(), new HttpClient(handler));
+        var nyxClient = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = null }, new HttpClient(handler));
         var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
         var service = new NyxLarkProvisioningService(
             nyxClient,
-            new NyxIdToolOptions(),
+            new NyxIdToolOptions { BaseUrl = null },
             ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
             new RecordingSecretsStore(),
             Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxLarkProvisioningService>>());
