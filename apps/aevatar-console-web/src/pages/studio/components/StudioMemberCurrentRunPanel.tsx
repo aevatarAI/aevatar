@@ -1287,8 +1287,8 @@ function renderRunLogEntry(entry: InvokeRunLogEntry): React.ReactNode {
         {entry.eventCount > 1 ? (
           <span style={runLogSubtleStyle}>
             {t(
-              'pages.studio.studiomembercurrentrunpanel.event.count',
-              '{count} events',
+              'pages.studio.studiomembercurrentrunpanel.events.count',
+              'Events ({count})',
               { count: entry.eventCount },
             )}
           </span>
