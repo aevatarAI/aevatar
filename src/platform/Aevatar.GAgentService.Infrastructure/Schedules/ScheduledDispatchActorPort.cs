@@ -286,28 +286,35 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
     {
         if (auth == null)
             return null;
-        if (auth.ScopeOwnerNyxId != null)
-        {
-            return new ScheduledServiceInvocationAuthState
-            {
-                ScopeOwnerNyxId = new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState
-                {
-                    Scope = auth.ScopeOwnerNyxId.Scope,
-                    OwnerSubject = CreateSubjectState(auth.ScopeOwnerNyxId.OwnerSubject),
-                },
-            };
-        }
-        if (auth.SenderNyxId == null)
+
+        var durableToken = auth.DurableSenderBearerToken?.Trim() ?? string.Empty;
+        if (auth.SenderNyxId == null && durableToken.Length == 0 && auth.ScopeOwnerNyxId == null)
             return null;
 
-        return new ScheduledServiceInvocationAuthState
+        var state = new ScheduledServiceInvocationAuthState
         {
-            SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceState
+            DurableSenderBearerToken = durableToken,
+        };
+
+        if (auth.SenderNyxId != null)
+        {
+            state.SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceState
             {
                 Subject = CreateSubjectState(auth.SenderNyxId.Subject),
                 Scope = auth.SenderNyxId.Scope,
-            },
-        };
+            };
+        }
+
+        if (auth.ScopeOwnerNyxId != null)
+        {
+            state.ScopeOwnerNyxId = new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState
+            {
+                Scope = auth.ScopeOwnerNyxId.Scope,
+                OwnerSubject = CreateSubjectState(auth.ScopeOwnerNyxId.OwnerSubject),
+            };
+        }
+
+        return state;
     }
 
     private static ScheduledServiceInvocationNyxIdSubjectRefState? CreateSubjectState(

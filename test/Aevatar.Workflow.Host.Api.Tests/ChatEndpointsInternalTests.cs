@@ -17,6 +17,8 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -594,6 +596,8 @@ public sealed class ChatEndpointsInternalTests
         http.RequestServices = new ServiceCollection()
             .AddLogging()
             .AddOptions()
+            .AddSingleton<IConfiguration>(new ConfigurationBuilder().Build())
+            .AddSingleton<IHostEnvironment>(new StubHostEnvironment())
             .AddSingleton<IWorkflowFileIngressPort>(ingressPort)
             .BuildServiceProvider();
         var input = JsonSerializer.Deserialize<ChatInput>(
@@ -1841,15 +1845,31 @@ public sealed class ChatEndpointsInternalTests
     {
         var http = new DefaultHttpContext
         {
+            // 06-20-observatory-run-state-feed (R2d): HandleChat now derives the run scope from the caller
+            // claim via AevatarScopeAccessGuard, which resolves auth-enablement from IConfiguration +
+            // IHostEnvironment (always present in real HTTP hosting). Register both so the harness mirrors
+            // production; with no authenticated user the guard yields no scope and the run falls back to the
+            // body scopeId, preserving these tests' expectations.
             RequestServices = new ServiceCollection()
                 .AddLogging()
                 .AddOptions()
+                .AddSingleton<IConfiguration>(new ConfigurationBuilder().Build())
+                .AddSingleton<IHostEnvironment>(new StubHostEnvironment())
                 .BuildServiceProvider(),
         };
         if (!string.IsNullOrWhiteSpace(authorization))
             http.Request.Headers.Authorization = authorization;
         http.Response.Body = new MemoryStream();
         return http;
+    }
+
+    private sealed class StubHostEnvironment : IHostEnvironment
+    {
+        public string EnvironmentName { get; set; } = Environments.Production;
+        public string ApplicationName { get; set; } = "Aevatar.Workflow.Host.Api.Tests";
+        public string ContentRootPath { get; set; } = AppContext.BaseDirectory;
+        public IFileProvider ContentRootFileProvider { get; set; } =
+            new NullFileProvider();
     }
 
     private static IFormFile CreateFormFile(

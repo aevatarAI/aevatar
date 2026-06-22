@@ -92,7 +92,13 @@ message ScheduledServiceInvocationTargetState
 message ScheduledServiceInvocationAuthState
 {
   ScheduledServiceInvocationNyxIdCredentialSourceState sender_nyx_id = 1;
-  ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState scope_owner_nyx_id = 2;
+  // Optional durable bearer credential projected directly onto the run when the
+  // sender has no re-mintable NyxID binding (e.g. a raw nyxid caller). When set,
+  // the dispatch uses it as-is and skips the subject token-exchange. Mutually
+  // exclusive with sender_nyx_id in practice; sender_nyx_id stays the path for
+  // bound subjects (SkillRunner / team automations).
+  string durable_sender_bearer_token = 2;
+  ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState scope_owner_nyx_id = 3;
 }
 
 message ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState

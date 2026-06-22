@@ -121,6 +121,28 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
+    public async Task HandleConfigureAsync_WhenNextFireIsBeyondRuntimeRange_ShouldRegisterBoundedCallbackHop()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(eventStore, dispatch, scheduler);
+        await agent.ActivateAsync();
+
+        await agent.HandleConfigureAsync(CreateConfigureCommand(
+            cronExpression: CreateFarFutureCronExpression(),
+            enabled: true));
+
+        scheduler.TimeoutRequests.Should().ContainSingle();
+        var request = scheduler.TimeoutRequests[0];
+        request.DueTime.Should().Be(TimeSpan.FromDays(7));
+        var fireCommand = request.TriggerEnvelope.Payload.Unpack<ScheduledDispatchFireCommand>();
+        var scheduledFireAt = fireCommand.ScheduledFireAt.ToDateTimeOffset();
+        scheduledFireAt.Should().Be(agent.State.NextFireAt);
+        scheduledFireAt.Should().BeAfter(DateTimeOffset.UtcNow.AddDays(7));
+    }
+
+    [Fact]
     public async Task HandleEnsureAsync_WhenUnconfigured_ShouldCreateScheduleState()
     {
         var eventStore = new TestEventStore();
@@ -530,7 +552,11 @@ public sealed class ScheduledDispatchGAgentTests
         var firstFireCommand = firstRequest.TriggerEnvelope.Payload.Unpack<ScheduledDispatchFireCommand>();
         var firstScheduledFireAt = firstFireCommand.ScheduledFireAt.ToDateTimeOffset();
 
-        await agent.HandleEventAsync(CreateFiredCallbackEnvelope(firstRequest, generation: 1, fireIndex: 1));
+        await agent.HandleEventAsync(CreateFiredCallbackEnvelope(
+            firstRequest,
+            generation: 1,
+            fireIndex: 1,
+            firedAt: firstScheduledFireAt));
 
         var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", firstScheduledFireAt);
         dispatch.Dispatches.Should().ContainSingle();
@@ -565,6 +591,40 @@ public sealed class ScheduledDispatchGAgentTests
         nextFireCommand.Manual.Should().BeFalse();
         nextFireCommand.ScheduledFireAt.ToDateTimeOffset().Should().BeAfter(firstScheduledFireAt);
         agent.State.NextFireLease!.Generation.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task HandleEventAsync_WhenBoundedCallbackArrivesEarly_ShouldRearmWithoutDispatching()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(eventStore, dispatch, scheduler);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(
+            cronExpression: CreateFarFutureCronExpression(),
+            enabled: true));
+        var firstRequest = scheduler.TimeoutRequests.Single();
+        var firstFireCommand = firstRequest.TriggerEnvelope.Payload.Unpack<ScheduledDispatchFireCommand>();
+        var scheduledFireAt = firstFireCommand.ScheduledFireAt.ToDateTimeOffset();
+
+        await agent.HandleEventAsync(CreateFiredCallbackEnvelope(firstRequest, generation: 1, fireIndex: 1));
+
+        dispatch.Dispatches.Should().BeEmpty();
+        agent.State.FireRecords.Should().BeEmpty();
+        agent.State.FireCount.Should().Be(0);
+        scheduler.TimeoutRequests.Should().HaveCount(2);
+        scheduler.TimeoutRequests[1].DueTime.Should().Be(TimeSpan.FromDays(7));
+        var rearmedFireCommand = scheduler.TimeoutRequests[1].TriggerEnvelope.Payload.Unpack<ScheduledDispatchFireCommand>();
+        rearmedFireCommand.ScheduledFireAt.ToDateTimeOffset().Should().Be(scheduledFireAt);
+        agent.State.NextFireAt.Should().Be(scheduledFireAt);
+        agent.State.NextFireLease!.Generation.Should().Be(2);
+        scheduler.Canceled.Should().ContainSingle()
+            .Which.Generation.Should().Be(1);
+        eventStore.GetEvents(ScheduleActorId)
+            .Where(x => string.Equals(x.EventType, ScheduledDispatchFireStartedEvent.Descriptor.FullName, StringComparison.Ordinal))
+            .Should()
+            .BeEmpty();
     }
 
     [Fact]
@@ -1022,6 +1082,55 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
+    public async Task HandleFireAsync_ForDurableBearerTokenAuth_ShouldCarryDurableTokenToRuntimeAuth()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var serviceInvocationDispatch = new RecordingScheduledServiceInvocationDispatchPort();
+        var agent = CreateAgent(
+            eventStore,
+            dispatch,
+            serviceInvocationDispatch: serviceInvocationDispatch);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(
+            enabled: false,
+            scheduleKind: ScheduledDispatchScheduleKindState.Workflow,
+            target: new ScheduledDispatchTargetState
+            {
+                Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
+                ServiceInvocation = new ScheduledServiceInvocationTargetState
+                {
+                    Identity = new ServiceIdentity { ServiceId = "configured-service" },
+                    EndpointId = "chat",
+                    Payload = Any.Pack(new ChatRequestEvent { Prompt = "configured" }),
+                    // A C1-provisioned run carries a durable credential (minted agent
+                    // key or forwarded caller token) instead of a re-mintable subject.
+                    Auth = new ScheduledServiceInvocationAuthState
+                    {
+                        DurableSenderBearerToken = "durable-run-key",
+                    },
+                },
+            }));
+
+        var scheduledFireAt = new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero);
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
+            Manual = true,
+        });
+
+        // The durable token survives the proto state round-trip and reaches the
+        // dispatch runtime auth (which projects it directly, no subject exchange).
+        var auth = serviceInvocationDispatch.Auths.Should().ContainSingle().Which;
+        auth.Should().NotBeNull();
+        auth!.DurableSenderBearerToken.Should().Be("durable-run-key");
+        auth.SenderNyxId.Should().BeNull();
+        serviceInvocationDispatch.Requests.Should().ContainSingle();
+        agent.State.FireCount.Should().Be(1);
+        agent.State.FailureCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task HandleFireAsync_ForServiceInvocationAuthDispatchFailure_ShouldRecordFailure()
     {
         var eventStore = new TestEventStore();
@@ -1457,7 +1566,8 @@ public sealed class ScheduledDispatchGAgentTests
     private static EventEnvelope CreateFiredCallbackEnvelope(
         RuntimeCallbackTimeoutRequest request,
         long generation,
-        long fireIndex)
+        long fireIndex,
+        DateTimeOffset? firedAt = null)
     {
         var envelope = request.TriggerEnvelope.Clone();
         envelope.Id = Guid.NewGuid().ToString("N");
@@ -1466,7 +1576,7 @@ public sealed class ScheduledDispatchGAgentTests
         callback.CallbackId = request.CallbackId;
         callback.Generation = generation;
         callback.FireIndex = fireIndex;
-        callback.FiredAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        callback.FiredAtUnixTimeMs = (firedAt ?? DateTimeOffset.UtcNow).ToUnixTimeMilliseconds();
         return envelope;
     }
 
@@ -1556,6 +1666,12 @@ public sealed class ScheduledDispatchGAgentTests
             Enabled = enabled,
             Target = target ?? CreateTargetState(targetActorId, triggerEnvelope),
         };
+    }
+
+    private static string CreateFarFutureCronExpression()
+    {
+        var farFutureMonth = DateTimeOffset.UtcNow.AddMonths(2).Month;
+        return $"0 0 1 {farFutureMonth} *";
     }
 
     private static ScheduledDispatchTargetState CreateTargetState(string targetActorId, EventEnvelope? triggerEnvelope) =>

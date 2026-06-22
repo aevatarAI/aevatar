@@ -20,6 +20,7 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Xunit;
 using RoutingOwnerScope = Aevatar.Foundation.Abstractions.OwnerScope;
 using ScheduledOwnerScope = Aevatar.Foundation.Abstractions.OwnerScope;
@@ -471,6 +472,9 @@ public sealed class PolicyAwareVoiceEndpointsTests
         await GetEndpoint(app, "/ws/voice").RequestDelegate!(context);
 
         context.Response.StatusCode.Should().Be(expectedStatusCode);
+        if (expectedStatusCode == StatusCodes.Status409Conflict)
+            context.Response.Headers.RetryAfter.ToString().Should().Be("1");
+
         (await ReadBodyAsync(context)).Should().Be(expectedBody);
         wsFeature.AcceptCalls.Should().Be(0);
         session.Requests.Should().ContainSingle()
@@ -654,7 +658,7 @@ public sealed class PolicyAwareVoiceEndpointsTests
         RecordingCatalogQueryPort catalog,
         RecordingVoiceRealtimeSession session,
         RecordingVolatileMediaStreamPort? mediaPort = null,
-        Action<PolicyAwareVoiceEndpointOptions>? configureOptions = null,
+        Action<VoiceWebSocketAttachOptions>? configureOptions = null,
         IProjectionSessionEventHub<VoiceRealtimeFrame>? realtimeHub = null,
         IVoiceToolCredentialIssuer? toolCredentialIssuer = null)
     {
@@ -664,6 +668,9 @@ public sealed class PolicyAwareVoiceEndpointsTests
         });
         if (configureOptions != null)
             builder.Services.Configure(configureOptions);
+        builder.Services.AddOptions<VoiceWebSocketAttachOptions>();
+        builder.Services.AddSingleton<IValidateOptions<VoiceWebSocketAttachOptions>, VoiceWebSocketAttachOptionsValidator>();
+        builder.Services.AddSingleton<VoiceWebSocketAttachExecutor>();
         builder.Services.AddSingleton<IChatRoutePolicyQueryPort>(policyPort);
         builder.Services.AddSingleton(new ChatRouteResolver(new StaticFallbackProvider("fallback-model")));
         builder.Services.AddSingleton<IUserAgentCatalogQueryPort>(catalog);
@@ -883,10 +890,27 @@ public sealed class PolicyAwareVoiceEndpointsTests
 
         public List<VoiceToolCredentialTransportBinding?> AttachedCredentialBindings { get; } = [];
 
+        public Task<bool> TryCancelResponseAsync(
+            string transportLeaseId,
+            CancellationToken ct = default) =>
+            Task.FromResult(false);
+
+        public Task<bool> TrySendInputImageAsync(
+            string transportLeaseId,
+            VoiceInputImage inputImage,
+            CancellationToken ct = default) =>
+            Task.FromResult(false);
+
         public Task<bool> TrySendToolResultAsync(
             string transportLeaseId,
             string callId,
             string resultJson,
+            CancellationToken ct = default) =>
+            Task.FromResult(false);
+
+        public Task<bool> TryInjectEventAsync(
+            string transportLeaseId,
+            VoiceConversationEventInjection injection,
             CancellationToken ct = default) =>
             Task.FromResult(false);
 

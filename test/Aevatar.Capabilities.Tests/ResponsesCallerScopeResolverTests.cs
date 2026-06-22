@@ -3,6 +3,7 @@ using System.Net;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text.Json;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Application.Responses;
@@ -206,6 +207,52 @@ public sealed class ResponsesCallerScopeResolverTests
     }
 
     [Fact]
+    public async Task ResolveAsync_WithIssuerDerivedFromNyxIdAuthority_ShouldResolveScope_WhenAudienceUnconfigured()
+    {
+        // Production shape (regression guard for the IOptions<NyxIdToolOptions> bug that
+        // surfaced as "NyxID identity assertion issuer is not configured."): the Responses
+        // section carries no explicit Issuer/ExpectedAudience, so issuer is derived from the
+        // NyxID authority on NyxIdToolOptions and audience validation is skipped.
+        using var fixture = new IdentityAssertionFixture();
+        var currentUserResolver = new StubUserResolver(returnUserId: "fallback-user");
+        var resolver = new NyxIdResponsesCallerScopeResolver(
+            currentUserResolver,
+            fixture.CreateValidatorWithAuthorityFallback());
+
+        var scope = await resolver.ResolveAsync(CreateContext(
+            "bearer-token",
+            identityToken: fixture.CreateToken(subject: "identity-user")));
+
+        scope.ScopeId.Should().Be("identity-user");
+        scope.OwnerSubject.Should().Be("identity-user");
+        scope.OriginKind.Should().Be(LlmSessionOriginKind.ApiKey);
+        currentUserResolver.CallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_WithDefaultIssuer_ShouldResolveScope_WhenIssuerConfigOmitted()
+    {
+        // Directly covers the in-code DefaultIssuer: no Issuer in config and no NyxIdToolOptions,
+        // yet an assertion whose iss == DefaultIssuer still validates. Guards against the
+        // "issuer is not configured" production failure recurring when the config section is absent.
+        using var fixture = new IdentityAssertionFixture();
+        var currentUserResolver = new StubUserResolver(returnUserId: "fallback-user");
+        var resolver = new NyxIdResponsesCallerScopeResolver(
+            currentUserResolver,
+            fixture.CreateValidatorWithDefaultIssuer());
+
+        var scope = await resolver.ResolveAsync(CreateContext(
+            "bearer-token",
+            identityToken: fixture.CreateToken(
+                subject: "identity-user",
+                issuer: ResponsesNyxIdIdentityAssertionOptions.DefaultIssuer)));
+
+        scope.ScopeId.Should().Be("identity-user");
+        scope.OwnerSubject.Should().Be("identity-user");
+        currentUserResolver.CallCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task ResolveAsync_WithMissingIdentityAssertion_ShouldFallbackToCurrentUserLookup()
     {
         using var fixture = new IdentityAssertionFixture();
@@ -326,6 +373,36 @@ public sealed class ResponsesCallerScopeResolverTests
                 ExpectedAudience = Audience,
                 JwksUri = "https://nyxid.example/jwks",
                 ExpectedServiceId = _expectedServiceId,
+                ClockSkewSeconds = _clockSkewSeconds,
+            });
+            return new NyxIdIdentityAssertionValidator(
+                new StaticHttpClientFactory(_jwksJson),
+                options);
+        }
+
+        public NyxIdIdentityAssertionValidator CreateValidatorWithAuthorityFallback()
+        {
+            // Issuer explicitly cleared (overriding the in-code DefaultIssuer) so issuer falls
+            // back to the NyxID authority carried by NyxIdToolOptions; audience is skipped.
+            var options = Options.Create(new ResponsesNyxIdIdentityAssertionOptions
+            {
+                Issuer = null,
+                JwksUri = "https://nyxid.example/jwks",
+                ClockSkewSeconds = _clockSkewSeconds,
+            });
+            return new NyxIdIdentityAssertionValidator(
+                new StaticHttpClientFactory(_jwksJson),
+                options,
+                new NyxIdToolOptions { BaseUrl = Issuer });
+        }
+
+        public NyxIdIdentityAssertionValidator CreateValidatorWithDefaultIssuer()
+        {
+            // Issuer omitted from config → falls back to the in-code DefaultIssuer; no
+            // NyxIdToolOptions and no ExpectedAudience (audience validation skipped).
+            var options = Options.Create(new ResponsesNyxIdIdentityAssertionOptions
+            {
+                JwksUri = "https://nyxid.example/jwks",
                 ClockSkewSeconds = _clockSkewSeconds,
             });
             return new NyxIdIdentityAssertionValidator(

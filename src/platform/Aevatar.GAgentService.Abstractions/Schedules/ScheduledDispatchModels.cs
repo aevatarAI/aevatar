@@ -45,6 +45,7 @@ public sealed record ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
 
 public sealed record ScheduledServiceInvocationAuth(
     ScheduledServiceInvocationNyxIdCredentialSource? SenderNyxId = null,
+    string? DurableSenderBearerToken = null,
     ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource? ScopeOwnerNyxId = null);
 
 public sealed record ScheduledServiceInvocationCredentialExchangeResult(

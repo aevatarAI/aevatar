@@ -64,6 +64,7 @@ message WorkflowExecutionCurrentStateDocument {
   string dead_letter_failed_compensation_step_id = 27;
   int32 dead_letter_remaining_uncompensated = 28;
   string dead_letter_error = 29;
+  google.protobuf.Timestamp started_at_utc_value = 30;
 }
 
 message WorkflowExternalApprovalContinuationDocument {

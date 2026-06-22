@@ -194,11 +194,16 @@ internal static class ResponsesProtocolMapper
         foreach (var tool in tools.EnumerateArray())
         {
             toolIndex++;
+            // aevatar only owns function-typed tool declarations (forward / substitute /
+            // additive). Entries it doesn't own are passed over so the request is still
+            // admitted and the model sees the remaining tools. That covers both built-in
+            // tool objects (handled below via the type check) and non-object entries that
+            // some OpenAI-compatible clients emit (null padding / stray strings). Hard-
+            // failing the whole request on a non-object entry would, e.g., reject a bare
+            // greeting that needs no tools. A malformed *function* tool (an object with no
+            // name) is still rejected below with an indexed, actionable error.
             if (tool.ValueKind != JsonValueKind.Object)
-            {
-                error = $"tool at index {toolIndex} must be an object.";
-                return false;
-            }
+                continue;
 
             var toolType = GetStringProperty(tool, "type");
             var isFunctionType = string.IsNullOrWhiteSpace(toolType) ||

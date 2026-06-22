@@ -148,10 +148,10 @@ public sealed class ScheduledDispatchApplicationServiceTests
                     ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
                         new ServiceIdentity
                         {
-                            TenantId = "tenant",
-                            AppId = "app",
-                            Namespace = "default",
-                            ServiceId = "svc",
+                            TenantId = " tenant ",
+                            AppId = " app ",
+                            Namespace = " default ",
+                            ServiceId = " svc ",
                         },
                         " run ",
                         payload,
@@ -170,8 +170,17 @@ public sealed class ScheduledDispatchApplicationServiceTests
         updated.Configuration.Target.ServiceInvocation.Should().NotBeNull();
         updated.Configuration.Target.ServiceInvocation!.EndpointId.Should().Be("run");
         updated.Configuration.Target.ServiceInvocation.RevisionId.Should().Be("rev-1");
+        updated.Configuration.Target.ServiceInvocation.Identity.TenantId.Should().Be("tenant");
+        updated.Configuration.Target.ServiceInvocation.Identity.AppId.Should().Be("app");
+        updated.Configuration.Target.ServiceInvocation.Identity.Namespace.Should().Be("default");
+        updated.Configuration.Target.ServiceInvocation.Identity.ServiceId.Should().Be("svc");
         updated.Configuration.Timezone.Should().Be("UTC");
         updated.Dispatch.TargetActorId.Should().Be(ScheduledDispatchAdapterConventions.ServiceInvocationTargetActorId);
+        var invocation = updated.Dispatch.TriggerEnvelope.Payload.Unpack<ServiceInvocationRequest>();
+        invocation.Identity.TenantId.Should().Be("tenant");
+        invocation.Identity.AppId.Should().Be("app");
+        invocation.Identity.Namespace.Should().Be("default");
+        invocation.Identity.ServiceId.Should().Be("svc");
     }
 
     [Fact]
@@ -280,7 +289,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
             new ScheduledDispatchTargetDescriptor(
                 ScheduledDispatchTargetKind.ServiceInvocation,
                 ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
-                    new ServiceIdentity { TenantId = "tenant" },
+                    new ServiceIdentity { TenantId = "tenant", AppId = "app", Namespace = "default" },
                     "run",
                     Any.Pack(new Empty()))),
             "0 9 * * *",
@@ -293,7 +302,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
             new ScheduledDispatchTargetDescriptor(
                 ScheduledDispatchTargetKind.ServiceInvocation,
                 ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
-                    new ServiceIdentity { ServiceId = "svc" },
+                    new ServiceIdentity { TenantId = "tenant", AppId = "app", Namespace = "default", ServiceId = "svc" },
                     " ",
                     Any.Pack(new Empty()))),
             "0 9 * * *",
@@ -307,6 +316,44 @@ public sealed class ScheduledDispatchApplicationServiceTests
             .WithMessage("*service id*");
         await missingEndpoint.Should().ThrowAsync<ArgumentException>()
             .WithMessage("*endpoint id*");
+    }
+
+    [Theory]
+    [InlineData(" ", "app", "default", "svc", "tenant id")]
+    [InlineData("tenant", " ", "default", "svc", "app id")]
+    [InlineData("tenant", "app", " ", "svc", "namespace")]
+    [InlineData("tenant", "app", "default", " ", "service id")]
+    public async Task CreateAsync_ShouldRejectIncompleteServiceInvocationIdentity(
+        string tenantId,
+        string appId,
+        string serviceNamespace,
+        string serviceId,
+        string expectedMessage)
+    {
+        var service = CreateService();
+
+        var act = () => service.CreateAsync(new ScheduledDispatchConfiguration(
+            "schedule-identity",
+            string.Empty,
+            new ScheduledDispatchTargetDescriptor(
+                ScheduledDispatchTargetKind.ServiceInvocation,
+                ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
+                    new ServiceIdentity
+                    {
+                        TenantId = tenantId,
+                        AppId = appId,
+                        Namespace = serviceNamespace,
+                        ServiceId = serviceId,
+                    },
+                    "run",
+                    Any.Pack(new Empty()))),
+            "0 9 * * *",
+            "UTC",
+            true,
+            new Dictionary<string, string>()));
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage($"*{expectedMessage}*");
     }
 
     [Fact]

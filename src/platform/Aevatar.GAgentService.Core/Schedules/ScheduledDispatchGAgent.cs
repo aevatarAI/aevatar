@@ -17,6 +17,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 {
     private const string NextFireCallbackId = "scheduled-dispatch-next-fire";
     private const int MaxFireRecordCount = 128;
+    private static readonly TimeSpan MaxNextFireCallbackHop = TimeSpan.FromDays(7);
     private readonly IActorDispatchPort _dispatchPort;
     private readonly IScheduledServiceInvocationDispatchPort _serviceInvocationDispatchPort;
 
@@ -264,6 +265,14 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         }
 
         var scheduledFireAt = ResolveScheduledFireAt(command);
+        if (!command.Manual && ResolveCallbackFiredAt(inboundEnvelope) < scheduledFireAt)
+        {
+            var previousLease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
+            await RecordNextFireIntentAsync(scheduledFireAt, ct);
+            await ActivateNextFireIntentAsync(scheduledFireAt, previousLease, ct);
+            return;
+        }
+
         var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey(ResolveScheduleId(), scheduledFireAt);
         if (HasTerminalFireRecord(idempotencyKey))
         {
@@ -464,22 +473,29 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     {
         if (auth == null)
             return null;
-        if (auth.ScopeOwnerNyxId != null)
-        {
-            return new ScheduledServiceInvocationAuth(
-                ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
-                    auth.ScopeOwnerNyxId.Scope ?? string.Empty,
-                    ToRuntimeSubject(auth.ScopeOwnerNyxId.OwnerSubject)));
-        }
-        if (auth.SenderNyxId == null)
+
+        var durableToken = string.IsNullOrWhiteSpace(auth.DurableSenderBearerToken)
+            ? null
+            : auth.DurableSenderBearerToken.Trim();
+        if (auth.SenderNyxId == null && durableToken == null && auth.ScopeOwnerNyxId == null)
             return null;
 
-        return new ScheduledServiceInvocationAuth(SenderNyxId: new ScheduledServiceInvocationNyxIdCredentialSource(
-            ToRuntimeSubject(auth.SenderNyxId.Subject) ?? new ScheduledServiceInvocationNyxIdSubjectRef(
-                string.Empty,
-                string.Empty,
-                string.Empty),
-            auth.SenderNyxId.Scope ?? string.Empty));
+        var senderNyxId = auth.SenderNyxId == null
+            ? null
+            : new ScheduledServiceInvocationNyxIdCredentialSource(
+                ToRuntimeSubject(auth.SenderNyxId.Subject) ?? new ScheduledServiceInvocationNyxIdSubjectRef(
+                    string.Empty,
+                    string.Empty,
+                    string.Empty),
+                auth.SenderNyxId.Scope ?? string.Empty);
+
+        var scopeOwnerNyxId = auth.ScopeOwnerNyxId == null
+            ? null
+            : new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
+                auth.ScopeOwnerNyxId.Scope ?? string.Empty,
+                ToRuntimeSubject(auth.ScopeOwnerNyxId.OwnerSubject));
+
+        return new ScheduledServiceInvocationAuth(senderNyxId, durableToken, scopeOwnerNyxId);
     }
 
     private static ScheduledServiceInvocationNyxIdSubjectRef? ToRuntimeSubject(
@@ -539,15 +555,18 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         var previousLease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
         var pendingNextFireAt = State.PendingNextFireAt?.ToDateTimeOffset();
         if (pendingNextFireAt != nextFireAtUtc)
-        {
-            await PersistDomainEventAsync(new ScheduledDispatchNextFireIntentRecordedEvent
-            {
-                NextFireAt = Timestamp.FromDateTimeOffset(nextFireAtUtc),
-                RequestedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            }, ct);
-        }
+            await RecordNextFireIntentAsync(nextFireAtUtc, ct);
 
         await ActivateNextFireIntentAsync(nextFireAtUtc, previousLease, ct);
+    }
+
+    private async Task RecordNextFireIntentAsync(DateTimeOffset nextFireAtUtc, CancellationToken ct)
+    {
+        await PersistDomainEventAsync(new ScheduledDispatchNextFireIntentRecordedEvent
+        {
+            NextFireAt = Timestamp.FromDateTimeOffset(nextFireAtUtc),
+            RequestedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        }, ct);
     }
 
     private async Task ActivateNextFireIntentAsync(
@@ -555,7 +574,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         RuntimeCallbackLease? previousLease,
         CancellationToken ct)
     {
-        var dueTime = ScheduledDispatchCalculator.ComputeDueTime(nextFireAtUtc, DateTimeOffset.UtcNow);
+        var dueTime = ComputeNextFireCallbackDueTime(nextFireAtUtc, DateTimeOffset.UtcNow);
         var lease = await ScheduleSelfDurableTimeoutAsync(
             NextFireCallbackId,
             dueTime,
@@ -582,6 +601,14 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         }
 
         await CancelNextFireLeaseAsync(previousLease, CancellationToken.None);
+    }
+
+    private static TimeSpan ComputeNextFireCallbackDueTime(
+        DateTimeOffset nextFireAtUtc,
+        DateTimeOffset nowUtc)
+    {
+        var dueTime = ScheduledDispatchCalculator.ComputeDueTime(nextFireAtUtc, nowUtc);
+        return dueTime <= MaxNextFireCallbackHop ? dueTime : MaxNextFireCallbackHop;
     }
 
     private async Task CancelNextFireLeaseAsync(CancellationToken ct)
@@ -619,6 +646,18 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     {
         if (command.ScheduledFireAt != null)
             return command.ScheduledFireAt.ToDateTimeOffset().ToUniversalTime();
+
+        return DateTimeOffset.UtcNow;
+    }
+
+    private static DateTimeOffset ResolveCallbackFiredAt(EventEnvelope? envelope)
+    {
+        if (envelope != null &&
+            RuntimeCallbackEnvelopeStateReader.TryRead(envelope, out var state) &&
+            state.FiredAtUnixTimeMs > 0)
+        {
+            return DateTimeOffset.FromUnixTimeMilliseconds(state.FiredAtUnixTimeMs);
+        }
 
         return DateTimeOffset.UtcNow;
     }
@@ -745,28 +784,35 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     {
         if (auth == null)
             return null;
-        if (auth.ScopeOwnerNyxId != null)
-        {
-            return new ScheduledServiceInvocationAuthState
-            {
-                ScopeOwnerNyxId = new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState
-                {
-                    Scope = NormalizeOptional(auth.ScopeOwnerNyxId.Scope),
-                    OwnerSubject = NormalizeSubject(auth.ScopeOwnerNyxId.OwnerSubject),
-                },
-            };
-        }
-        if (auth.SenderNyxId == null)
+
+        var durableToken = NormalizeOptional(auth.DurableSenderBearerToken);
+        if (auth.SenderNyxId == null && string.IsNullOrEmpty(durableToken) && auth.ScopeOwnerNyxId == null)
             return null;
 
-        return new ScheduledServiceInvocationAuthState
+        var normalized = new ScheduledServiceInvocationAuthState
         {
-            SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceState
+            DurableSenderBearerToken = durableToken,
+        };
+
+        if (auth.SenderNyxId != null)
+        {
+            normalized.SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceState
             {
                 Subject = NormalizeSubject(auth.SenderNyxId.Subject),
                 Scope = NormalizeOptional(auth.SenderNyxId.Scope),
-            },
-        };
+            };
+        }
+
+        if (auth.ScopeOwnerNyxId != null)
+        {
+            normalized.ScopeOwnerNyxId = new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState
+            {
+                Scope = NormalizeOptional(auth.ScopeOwnerNyxId.Scope),
+                OwnerSubject = NormalizeSubject(auth.ScopeOwnerNyxId.OwnerSubject),
+            };
+        }
+
+        return normalized;
     }
 
     private static ScheduledServiceInvocationNyxIdSubjectRefState? NormalizeSubject(

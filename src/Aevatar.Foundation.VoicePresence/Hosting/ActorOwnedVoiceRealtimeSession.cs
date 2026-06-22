@@ -48,6 +48,7 @@ public sealed class ActorOwnedVoiceRealtimeSession
         if (!capability.Initialized)
             return Failure(VoiceRealtimeSessionStartError.NotInitialized);
 
+        var attachOutcome = VoiceRealtimeAttachOutcome.NewSession;
         if (capability.TransportAttached || IsActive(capability.LeaseExpiresAt, capability.ActiveSessionId))
         {
             if (inbound.Purpose == VoiceRealtimeSessionPurpose.Detach)
@@ -96,6 +97,7 @@ public sealed class ActorOwnedVoiceRealtimeSession
                     capability.LeaseEpoch,
                     inbound.ToolContext?.Clone());
                 await _mediaStreamPort.DetachAsync(evictHandle, expectedTransport: null, ct);
+                attachOutcome = VoiceRealtimeAttachOutcome.Restarted;
                 _logger?.LogInformation(
                     "voice takeover: evicted prior session {EvictedSessionId} (transportLease={TransportLeaseId}, epoch={LeaseEpoch}) on actor {ActorId}/{ModuleName}; proceeding to acquire",
                     capability.ActiveSessionId,
@@ -127,7 +129,7 @@ public sealed class ActorOwnedVoiceRealtimeSession
             inbound.ToolContext?.Clone());
 
         var leaseHandle = await _leasePort.AcquireAsync(leaseRequest, ct);
-        var accepted = BuildAccepted(capability, leaseHandle);
+        var accepted = BuildAccepted(capability, leaseHandle, attachOutcome);
         if (onAcceptedAsync != null)
             await onAcceptedAsync(accepted, ct);
 
@@ -142,7 +144,8 @@ public sealed class ActorOwnedVoiceRealtimeSession
 
     private static VoiceRealtimeSessionAccepted BuildAccepted(
         VoicePresenceCapabilitySnapshot capability,
-        VoicePresenceSessionLeaseHandle leaseHandle) =>
+        VoicePresenceSessionLeaseHandle leaseHandle,
+        VoiceRealtimeAttachOutcome attachOutcome = VoiceRealtimeAttachOutcome.NewSession) =>
         new(
             capability.ActorId,
             capability.ModuleName,
@@ -151,7 +154,8 @@ public sealed class ActorOwnedVoiceRealtimeSession
             leaseHandle.ObservedStateVersion,
             leaseHandle,
             VoiceWireContractDefaults.CurrentWireContractVersion,
-            VoiceWireContractDefaults.CreateInputImagePolicy());
+            VoiceWireContractDefaults.CreateInputImagePolicy(),
+            attachOutcome);
 
     private DateTimeOffset UtcNow => _timeProvider.GetUtcNow();
 

@@ -15,7 +15,10 @@ import type {
   StudioExecutionSummary,
   StudioMemberBindingContract,
   StudioMemberBindingAcceptedResponse,
+  StudioMemberBindingAckStage,
   StudioMemberBindingFailure,
+  StudioMemberBindingRunResult,
+  StudioMemberBindingRunRole,
   StudioMemberBindingRunStatus,
   StudioMemberBindingRunStatusResponse,
   StudioMemberBindingViewResponse,
@@ -47,6 +50,8 @@ import type {
   StudioSettings,
   StudioStartExecutionInput,
   StudioTeamCreateInput,
+  StudioTeamCommandResponse,
+  StudioTeamCommandStatus,
   StudioTeamLifecycleStage,
   StudioTeamRoster,
   StudioTeamSummary,
@@ -146,6 +151,11 @@ async function createStudioApiError(response: Response): Promise<StudioApiError>
 function isJsonContentType(contentType: string | null): boolean {
   const value = String(contentType || "").toLowerCase();
   return value.includes("application/json") || value.includes("+json");
+}
+
+function readContentType(response: Response): string | null {
+  const headers = (response as Response & { headers?: Headers }).headers;
+  return headers?.get?.("content-type") ?? null;
 }
 
 function trimOptional(value: string | null | undefined): string | undefined {
@@ -546,7 +556,14 @@ async function requestDecodedJsonOrAccepted<T>(
     throw await createStudioApiError(response);
   }
 
-  if (response.status === 202 || response.status === 204) {
+  if (response.status === 204) {
+    return undefined;
+  }
+
+  if (
+    response.status === 202 &&
+    !isJsonContentType(readContentType(response))
+  ) {
     return undefined;
   }
 
@@ -576,7 +593,7 @@ async function request<T>(input: string, init?: RequestInit): Promise<T> {
     return undefined as T;
   }
 
-  if (!isJsonContentType(response.headers.get("content-type"))) {
+  if (!isJsonContentType(readContentType(response))) {
     throw new Error("Studio API returned an unexpected response format.");
   }
 
@@ -1246,6 +1263,77 @@ function decodeStudioTeamSummary(value: unknown): StudioTeamSummary {
   };
 }
 
+function decodeStudioTeamCommandResponse(
+  value: unknown
+): StudioTeamCommandResponse {
+  const record = expectRecord(value, "StudioTeamCommandResponse");
+  const status = readOptionalScalar(record, ["status", "Status"]);
+  if (status === undefined) {
+    throw new Error("StudioTeamCommandResponse.status is required.");
+  }
+
+  return {
+    status: normalizeStudioTeamCommandStatus(status),
+    scopeId: readString(
+      record,
+      ["scopeId", "ScopeId"],
+      "StudioTeamCommandResponse.scopeId"
+    ),
+    teamId: readString(
+      record,
+      ["teamId", "TeamId"],
+      "StudioTeamCommandResponse.teamId"
+    ),
+    commandId:
+      readNullableString(
+        record,
+        ["commandId", "CommandId"],
+        "StudioTeamCommandResponse.commandId"
+      ) ?? null,
+    correlationId:
+      readNullableString(
+        record,
+        ["correlationId", "CorrelationId"],
+        "StudioTeamCommandResponse.correlationId"
+      ) ?? null,
+    ackedAt:
+      readNullableString(
+        record,
+        ["ackedAt", "AckedAt"],
+        "StudioTeamCommandResponse.ackedAt"
+      ) ?? null,
+  };
+}
+
+function synthesizeStudioTeamCommandResponseFromSummary(
+  summary: StudioTeamSummary
+): StudioTeamCommandResponse {
+  return {
+    status: "accepted",
+    scopeId: summary.scopeId,
+    teamId: summary.teamId,
+    commandId: null,
+    correlationId: null,
+    ackedAt: null,
+  };
+}
+
+function decodeCompatibleStudioTeamCommandResponse(
+  value: unknown
+): StudioTeamCommandResponse {
+  try {
+    return decodeStudioTeamCommandResponse(value);
+  } catch (commandResponseError) {
+    try {
+      return synthesizeStudioTeamCommandResponseFromSummary(
+        decodeStudioTeamSummary(value)
+      );
+    } catch {
+      throw commandResponseError;
+    }
+  }
+}
+
 function decodeStudioTeamRoster(value: unknown): StudioTeamRoster {
   const record = expectRecord(value, "StudioTeamRoster");
   return {
@@ -1365,6 +1453,34 @@ function decodeStudioMemberBindingContract(
   };
 }
 
+function decodeStudioMemberBindingRunResult(
+  value: unknown
+): StudioMemberBindingRunResult {
+  const record = expectRecord(value, "StudioMemberBindingRunResult");
+  return {
+    publishedServiceId: readString(
+      record,
+      ["publishedServiceId", "PublishedServiceId"],
+      "StudioMemberBindingRunResult.publishedServiceId"
+    ),
+    revisionId: readString(
+      record,
+      ["revisionId", "RevisionId"],
+      "StudioMemberBindingRunResult.revisionId"
+    ),
+    implementationKind: readStudioMemberImplementationKind(record, [
+      "implementationKind",
+      "ImplementationKind",
+    ]),
+    expectedActorId:
+      readNullableString(
+        record,
+        ["expectedActorId", "ExpectedActorId"],
+        "StudioMemberBindingRunResult.expectedActorId"
+      ) ?? null,
+  };
+}
+
 function normalizeStudioMemberBindingRunStatus(
   value: string | number | null | undefined
 ): StudioMemberBindingRunStatus {
@@ -1403,9 +1519,50 @@ function normalizeStudioMemberBindingRunStatus(
   }) as StudioMemberBindingRunStatus;
 }
 
+function normalizeStudioMemberBindingAckStage(
+  value: string | number | null | undefined
+): StudioMemberBindingAckStage {
+  if (value == null) {
+    return "unknown";
+  }
+
+  const normalized = normalizeEnumValue(value, "ackStage", {
+    "0": "unknown",
+    "1": "dispatch_accepted",
+    dispatch_accepted: "dispatch_accepted",
+    dispatchaccepted: "dispatch_accepted",
+    unknown: "unknown",
+  });
+
+  return normalized === "dispatch_accepted" ? normalized : "unknown";
+}
+
+function normalizeStudioMemberBindingRunRole(
+  value: string | number | null | undefined
+): StudioMemberBindingRunRole {
+  if (value == null) {
+    return "unknown";
+  }
+
+  const normalized = normalizeEnumValue(value, "bindingRunRole", {
+    "0": "unknown",
+    "1": "candidate",
+    candidate: "candidate",
+    unknown: "unknown",
+  });
+
+  return normalized === "candidate" ? normalized : "unknown";
+}
+
 function normalizeStudioMemberCommandStatus(
   value: string | number | null | undefined
 ): StudioMemberCommandStatus {
+  return normalizeCommandReceiptStatus(value);
+}
+
+function normalizeCommandReceiptStatus(
+  value: string | number | null | undefined
+): StudioMemberCommandStatus | StudioTeamCommandStatus {
   if (value == null) {
     return "unknown";
   }
@@ -1424,6 +1581,12 @@ function normalizeStudioMemberCommandStatus(
   return normalized === "accepted" || normalized === "no_change"
     ? normalized
     : "unknown";
+}
+
+function normalizeStudioTeamCommandStatus(
+  value: string | number | null | undefined
+): StudioTeamCommandStatus {
+  return normalizeCommandReceiptStatus(value);
 }
 
 function decodeStudioMemberBindingFailure(
@@ -1451,6 +1614,10 @@ function decodeStudioMemberBindingRunStatusResponse(
   value: unknown
 ): StudioMemberBindingRunStatusResponse {
   const record = expectRecord(value, "StudioMemberBindingRunStatusResponse");
+  const result =
+    record.result == null && record.Result == null
+      ? undefined
+      : decodeStudioMemberBindingRunResult(record.result ?? record.Result);
   return {
     status: normalizeStudioMemberBindingRunStatus(
       readOptionalScalar(record, ["status", "Status"])
@@ -1478,6 +1645,7 @@ function decodeStudioMemberBindingRunStatusResponse(
         ["platformBindingCommandId", "PlatformBindingCommandId"],
         "StudioMemberBindingRunStatusResponse.platformBindingCommandId"
       ) ?? null,
+    ...(result === undefined ? {} : { result }),
     failure:
       record.failure == null && record.Failure == null
         ? null
@@ -1513,6 +1681,12 @@ function decodeStudioMemberBindingAcceptedResponse(
       record,
       ["memberId", "MemberId"],
       "StudioMemberBindingAcceptedResponse.memberId"
+    ),
+    ackStage: normalizeStudioMemberBindingAckStage(
+      readOptionalScalar(record, ["ackStage", "AckStage"])
+    ),
+    bindingRunRole: normalizeStudioMemberBindingRunRole(
+      readOptionalScalar(record, ["bindingRunRole", "BindingRunRole"])
     ),
   };
 }
@@ -1665,10 +1839,12 @@ export const studioApi = {
     );
   },
 
-  updateTeam(input: StudioTeamUpdateInput): Promise<StudioTeamSummary> {
-    return requestDecodedJson(
+  updateTeam(
+    input: StudioTeamUpdateInput
+  ): Promise<StudioTeamCommandResponse | undefined> {
+    return requestDecodedJsonOrAccepted(
       `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/teams/${encodeURIComponent(input.teamId.trim())}`,
-      decodeStudioTeamSummary,
+      decodeCompatibleStudioTeamCommandResponse,
       {
         method: "PATCH",
         headers: JSON_HEADERS,
@@ -1684,10 +1860,13 @@ export const studioApi = {
     );
   },
 
-  archiveTeam(scopeId: string, teamId: string): Promise<StudioTeamSummary> {
-    return requestDecodedJson(
+  archiveTeam(
+    scopeId: string,
+    teamId: string
+  ): Promise<StudioTeamCommandResponse | undefined> {
+    return requestDecodedJsonOrAccepted(
       `/api/scopes/${encodeURIComponent(scopeId.trim())}/teams/${encodeURIComponent(teamId.trim())}/archive`,
-      decodeStudioTeamSummary,
+      decodeCompatibleStudioTeamCommandResponse,
       {
         method: "POST",
         headers: JSON_HEADERS,

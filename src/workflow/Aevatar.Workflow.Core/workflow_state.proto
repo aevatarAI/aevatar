@@ -164,6 +164,7 @@ message WorkflowRunState
   string dead_letter_error = 31;
   string compensation_origin_failed_step_id = 32;
   bool terminal_workflow_completion_recorded = 33;
+  google.protobuf.Timestamp started_at_utc = 34;
 }
 
 message WorkflowRunExecutionContextState

@@ -1,7 +1,9 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Core;
 using Aevatar.GAgentService.Core.GAgents;
@@ -10,6 +12,8 @@ using Aevatar.GAgentService.Governance.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Tests.TestSupport;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.GAgentService.Tests.Core;
 
@@ -170,22 +174,118 @@ public sealed class ServiceDeploymentManagerGAgentTests
     }
 
     [Fact]
-    public async Task HandleActivateAsync_ShouldRejectMissingPreparedArtifact()
+    public async Task HandleActivateAsync_ShouldTolerateProjectionLag_ByReArmingInsteadOfThrowing()
+    {
+        // The bind chain dispatches prepare->publish->activate fire-and-forget, so the revision-catalog
+        // projection can lag behind the committed prepare event when activation runs. Activation must NOT
+        // fail terminally; it must re-arm a bounded self-continuation until the prepared artifact appears.
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        var activator = new RecordingRuntimeActivator();
+        activator.ActivationResults.Enqueue(new ServiceRuntimeActivationResult("dep-r1", "actor-r1", "active"));
+        var dispatchPort = new RecordingDispatchPort();
+        var scheduler = new RecordingCallbackScheduler();
+        var actorId = ServiceActorIds.Deployment(identity);
+        var agent = CreateAgent(new InMemoryEventStore(), revisionCatalog, activator, actorId, dispatchPort, scheduler);
+        await agent.ActivateAsync();
+
+        // Projection not yet materialized -> tolerated, re-armed (no throw, no serving-set write yet).
+        await agent.HandleActivateAsync(new ActivateServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r1",
+        });
+
+        activator.ActivationRequests.Should().BeEmpty("activation must wait until the prepared artifact is visible");
+        dispatchPort.Commands.Should().BeEmpty("serving set must not be written before activation succeeds");
+        scheduler.ScheduledTimeouts.Should().ContainSingle("activation should re-arm a bounded self-continuation");
+        var rearmed = scheduler.ScheduledTimeouts[0].Payload.Unpack<ActivateServiceRevisionCommand>();
+        rearmed.RevisionId.Should().Be("r1");
+        rearmed.ActivationDeadlineAt.Should().NotBeNull("the bounded retry deadline must be stamped onto the re-armed command");
+
+        // Projection catches up; the re-fired continuation now succeeds and writes the serving set.
+        await revisionCatalog.UpsertRevisionAsync(
+            ServiceKeys.Build(identity),
+            "r1",
+            GAgentServiceTestKit.CreatePreparedStaticArtifact(
+                identity,
+                "r1",
+                GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "chat")));
+
+        await agent.HandleActivateAsync(rearmed);
+
+        activator.ActivationRequests.Should().ContainSingle();
+        agent.State.Deployments.Should().ContainKey("dep-r1");
+        agent.State.Deployments["dep-r1"].Status.Should().Be(ServiceDeploymentStatus.Active);
+        dispatchPort.Commands.Should().ContainSingle();
+        dispatchPort.Commands[0].actorId.Should().Be(ServiceActorIds.ServingSet(identity));
+        dispatchPort.Commands[0].command.Targets[0].DeploymentId.Should().Be("dep-r1");
+    }
+
+    [Fact]
+    public async Task HandleActivateAsync_ShouldFailTerminally_WhenProjectionLagExceedsDeadline()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
+        var scheduler = new RecordingCallbackScheduler();
         var agent = CreateAgent(
             new InMemoryEventStore(),
             new FakeServiceRevisionCatalogQueryReader(),
             new RecordingRuntimeActivator(),
-            ServiceActorIds.Deployment(identity));
+            ServiceActorIds.Deployment(identity),
+            scheduler: scheduler);
+        await agent.ActivateAsync();
 
         var act = () => agent.HandleActivateAsync(new ActivateServiceRevisionCommand
         {
             Identity = identity.Clone(),
-            RevisionId = "missing",
+            RevisionId = "r1",
+            // Deadline already in the past -> the retry budget is exhausted, so the honest failure surfaces.
+            ActivationDeadlineAt = Timestamp.FromDateTime(DateTime.UtcNow.AddMinutes(-1)),
         });
 
         await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*was not found before the activation deadline*");
+        scheduler.ScheduledTimeouts.Should().BeEmpty("an exhausted budget must not keep re-arming");
+    }
+
+    [Fact]
+    public async Task HandleActivateAsync_ShouldFailTerminally_WhenRevisionPreparationFailed()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var scheduler = new RecordingCallbackScheduler();
+        var agent = CreateAgent(
+            new InMemoryEventStore(),
+            new FakePreparationFailedRevisionCatalogQueryReader(identity, "r1"),
+            new RecordingRuntimeActivator(),
+            ServiceActorIds.Deployment(identity),
+            scheduler: scheduler);
+        await agent.ActivateAsync();
+
+        var act = () => agent.HandleActivateAsync(new ActivateServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r1",
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*failed preparation*");
+        scheduler.ScheduledTimeouts.Should().BeEmpty("a terminally failed revision must not be re-armed");
+    }
+
+    [Fact]
+    public void GetRequiredPreparedArtifact_ShouldThrow_WhenRevisionMissing()
+    {
+        // The terminal "missing prepared artifact" failure now lives in the snapshot extension that other
+        // (non-activation) callers still use; activation itself tolerates the same gap as projection lag.
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var catalog = new ServiceRevisionCatalogSnapshot(
+            ServiceKeys.Build(identity),
+            Revisions: [],
+            UpdatedAt: DateTimeOffset.UtcNow);
+
+        var act = () => catalog.GetRequiredPreparedArtifact(identity, "missing");
+
+        act.Should().Throw<InvalidOperationException>()
             .WithMessage("*Prepared artifact*was not found*");
     }
 
@@ -318,10 +418,11 @@ public sealed class ServiceDeploymentManagerGAgentTests
 
     private static ServiceDeploymentManagerGAgent CreateAgent(
         InMemoryEventStore eventStore,
-        FakeServiceRevisionCatalogQueryReader revisionCatalog,
+        IServiceRevisionCatalogQueryReader revisionCatalog,
         RecordingRuntimeActivator activator,
         string actorId,
-        RecordingDispatchPort? dispatchPort = null)
+        RecordingDispatchPort? dispatchPort = null,
+        RecordingCallbackScheduler? scheduler = null)
     {
         return GAgentServiceTestKit.CreateStatefulAgent<ServiceDeploymentManagerGAgent, ServiceDeploymentState>(
             eventStore,
@@ -331,7 +432,10 @@ public sealed class ServiceDeploymentManagerGAgentTests
                 revisionCatalog,
                 new AlwaysReadyCapabilityViewReader(),
                 new AllowActivationAdmissionEvaluator(),
-                activator));
+                activator),
+            scheduler == null
+                ? null
+                : services => services.AddSingleton<IActorRuntimeCallbackScheduler>(scheduler));
     }
 
     private sealed class RecordingDispatchPort : IActorDispatchPort
@@ -396,6 +500,59 @@ public sealed class ServiceDeploymentManagerGAgentTests
         {
             DeactivateRequests.Add(request);
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingCallbackScheduler : IActorRuntimeCallbackScheduler
+    {
+        public List<EventEnvelope> ScheduledTimeouts { get; } = [];
+
+        public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(RuntimeCallbackTimeoutRequest request, CancellationToken ct = default)
+        {
+            ScheduledTimeouts.Add(request.TriggerEnvelope.Clone());
+            return Task.FromResult(new RuntimeCallbackLease(
+                request.ActorId,
+                request.CallbackId,
+                ScheduledTimeouts.Count,
+                RuntimeCallbackBackend.InMemory));
+        }
+
+        public Task<RuntimeCallbackLease> ScheduleTimerAsync(RuntimeCallbackTimerRequest request, CancellationToken ct = default) =>
+            Task.FromResult(new RuntimeCallbackLease(request.ActorId, request.CallbackId, 1, RuntimeCallbackBackend.InMemory));
+
+        public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task PurgeActorAsync(string actorId, CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class FakePreparationFailedRevisionCatalogQueryReader : IServiceRevisionCatalogQueryReader
+    {
+        private readonly ServiceIdentity _identity;
+        private readonly string _revisionId;
+
+        public FakePreparationFailedRevisionCatalogQueryReader(ServiceIdentity identity, string revisionId)
+        {
+            _identity = identity;
+            _revisionId = revisionId;
+        }
+
+        public Task<ServiceRevisionCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default)
+        {
+            var revision = new ServiceRevisionSnapshot(
+                _revisionId,
+                ServiceImplementationKind.Static.ToString(),
+                ServiceRevisionStatus.PreparationFailed.ToString(),
+                ArtifactHash: string.Empty,
+                FailureReason: "boom",
+                Endpoints: [],
+                CreatedAt: DateTimeOffset.UtcNow,
+                PreparedAt: null,
+                PublishedAt: null,
+                RetiredAt: null);
+            return Task.FromResult<ServiceRevisionCatalogSnapshot?>(new ServiceRevisionCatalogSnapshot(
+                ServiceKeys.Build(_identity),
+                [revision],
+                DateTimeOffset.UtcNow));
         }
     }
 }

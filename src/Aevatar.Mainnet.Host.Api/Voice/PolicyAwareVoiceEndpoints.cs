@@ -6,13 +6,13 @@ using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.Abstractions.Sessions;
 using Aevatar.Foundation.VoicePresence.Hosting;
-using Aevatar.Foundation.VoicePresence.Transport;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.Mainnet.Host.Api.Voice;
 
@@ -20,7 +20,6 @@ public static class PolicyAwareVoiceEndpoints
 {
     private const string DefaultPattern = "/ws/voice";
     internal const string VoiceNotConfiguredReason = "voice_not_configured";
-    private const string RemoteAudioTransportUnavailableReason = "remote_audio_transport_unavailable";
     private const string VoiceCredentialUnavailableReason = "voice_credential_unavailable";
 
     public static IEndpointConventionBuilder MapPolicyAwareVoiceEndpoint(this IEndpointRouteBuilder app) =>
@@ -61,7 +60,9 @@ public static class PolicyAwareVoiceEndpoints
         [FromServices] IChatRoutePolicyQueryPort queryPort,
         [FromServices] ChatRouteResolver resolver,
         [FromServices] IRealtimeSession<VoiceRealtimeSessionRequest, VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeFrame, VoiceRealtimeSessionCompletion> voiceRealtimeSession,
-        [FromServices] IVoiceVolatileMediaStreamPort mediaStreamPort)
+        [FromServices] IVoiceVolatileMediaStreamPort mediaStreamPort,
+        [FromServices] VoiceWebSocketAttachExecutor attachExecutor,
+        [FromServices] IOptions<VoiceWebSocketAttachOptions> attachOptions)
     {
         if (!http.WebSockets.IsWebSocketRequest)
         {
@@ -91,7 +92,13 @@ public static class PolicyAwareVoiceEndpoints
             case ChatRouteAction.ActionOneofCase.ForwardToModel:
                 if (ChatRouteActionTargets.TryGetVoiceAttachTarget(action, out var voiceTarget))
                 {
-                    await AttachVoiceTargetAsync(http, voiceRealtimeSession, mediaStreamPort, voiceTarget);
+                    await AttachVoiceTargetAsync(
+                        http,
+                        voiceRealtimeSession,
+                        mediaStreamPort,
+                        attachExecutor,
+                        attachOptions.Value,
+                        voiceTarget);
                     return;
                 }
 
@@ -111,6 +118,8 @@ public static class PolicyAwareVoiceEndpoints
         HttpContext http,
         IRealtimeSession<VoiceRealtimeSessionRequest, VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeFrame, VoiceRealtimeSessionCompletion> voiceRealtimeSession,
         IVoiceVolatileMediaStreamPort mediaStreamPort,
+        VoiceWebSocketAttachExecutor attachExecutor,
+        VoiceWebSocketAttachOptions attachOptions,
         ChatRouteVoiceAttachTarget voiceTarget)
     {
         var toolContextAdmission = await TryBuildToolContextAsync(http);
@@ -129,75 +138,15 @@ public static class PolicyAwareVoiceEndpoints
                 static (_, _) => ValueTask.CompletedTask,
                 ct: http.RequestAborted);
 
-            var accepted = await WriteNonAcceptedResolutionAsync(http, result);
+            var accepted = await VoiceWebSocketAttachExecutor.WriteNonAcceptedResolutionAsync(http, result, attachOptions);
             if (accepted is null)
                 return;
 
-            var ws = await http.WebSockets.AcceptWebSocketAsync();
-            var logger = GetLogger(http);
-            var transport = new WebSocketVoiceTransport(ws, logger);
-            var attached = false;
-            // AcquireAsync returns a handle with an empty ActiveTransportLeaseId (the id is only known
-            // post-attach). Carry the resolved id so the close-time DetachAsync can stop the right relay
-            // and detach the transport — without it StopRelay/transport-detach are no-ops.
-            var detachHandle = accepted.LeaseHandle;
-            IAsyncDisposable? realtimeSubscription = null;
-            try
-            {
-                realtimeSubscription = await VoiceRealtimeTransportControlBridge.SubscribeAsync(
-                    http.RequestServices,
-                    accepted,
-                    transport,
-                    logger,
-                    http.RequestAborted);
-                try
-                {
-                    await VoiceRealtimeTransportControlBridge.SendSessionAcceptedAsync(
-                        transport,
-                        accepted,
-                        http.RequestAborted);
-                }
-                catch
-                {
-                    await CleanupAcceptedTransportAsync(http, mediaStreamPort, accepted.LeaseHandle, transport);
-                    throw;
-                }
-
-                var lifetimeCompleted = await mediaStreamPort.AttachAsync(
-                    accepted.LeaseHandle,
-                    transport,
-                    toolContextAdmission.TransportBinding,
-                    http.RequestAborted);
-                if (!string.IsNullOrWhiteSpace(lifetimeCompleted?.TransportLeaseId))
-                    detachHandle = detachHandle with { ActiveTransportLeaseId = lifetimeCompleted!.TransportLeaseId };
-
-                attached = true;
-                await WaitUntilClosedAsync(transport, http.RequestAborted);
-            }
-            catch (VoiceVolatileMediaStreamUnavailableException)
-            {
-                await TryCloseAsync(http, ws, RemoteAudioTransportUnavailableReason);
-            }
-            catch (VoiceVolatileToolCredentialUnavailableException)
-            {
-                await TryCloseAsync(http, ws, VoiceCredentialUnavailableReason);
-            }
-            catch (InvalidOperationException) when (!attached)
-            {
-                await TryCloseAsync(http, ws, "Voice transport already attached.");
-            }
-            finally
-            {
-                if (realtimeSubscription != null)
-                    await realtimeSubscription.DisposeAsync();
-
-                if (attached)
-                    // CancellationToken.None: on a normal browser close http.RequestAborted is ALREADY
-                    // cancelled, and the dispatch port throws on a cancelled token before producing the
-                    // release signal — so the lease would never be released and TransportAttached would
-                    // stay stuck true (blocking the next session with 409). Detach must run uncancelled.
-                    await mediaStreamPort.DetachAsync(detachHandle, transport, CancellationToken.None);
-            }
+            await attachExecutor.ExecuteAsync(
+                http,
+                accepted,
+                mediaStreamPort,
+                toolContextAdmission.TransportBinding);
         }
         finally
         {
@@ -348,101 +297,6 @@ public static class PolicyAwareVoiceEndpoints
 
         var queryToken = http.Request.Query["access_token"].ToString();
         return string.IsNullOrWhiteSpace(queryToken) ? null : queryToken.Trim();
-    }
-
-    private static async Task<VoiceRealtimeSessionAccepted?> WriteNonAcceptedResolutionAsync(
-        HttpContext http,
-        RealtimeSessionResult<VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeSessionCompletion> result)
-    {
-        if (result.Succeeded)
-            return result.Receipt ?? throw new InvalidOperationException("Accepted voice realtime session requires a receipt.");
-
-        switch (result.Error)
-        {
-            case VoiceRealtimeSessionStartError.Unsupported:
-                http.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-                await http.Response.WriteAsync(RemoteAudioTransportUnavailableReason, http.RequestAborted);
-                return null;
-            case VoiceRealtimeSessionStartError.NotFound:
-            case VoiceRealtimeSessionStartError.NotInitialized:
-            case VoiceRealtimeSessionStartError.TransportAlreadyAttached:
-                await WritePreflightFailureAsync(http, result.Error);
-                return null;
-            default:
-                http.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-                await http.Response.WriteAsync("Voice realtime session failed.", http.RequestAborted);
-                return null;
-        }
-    }
-
-    private static async Task WritePreflightFailureAsync(
-        HttpContext http,
-        VoiceRealtimeSessionStartError failure)
-    {
-        switch (failure)
-        {
-            case VoiceRealtimeSessionStartError.NotFound:
-                http.Response.StatusCode = StatusCodes.Status404NotFound;
-                await http.Response.WriteAsync("Voice session not found for this agent.", http.RequestAborted);
-                break;
-            case VoiceRealtimeSessionStartError.NotInitialized:
-                http.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-                await http.Response.WriteAsync("Voice module not initialized.", http.RequestAborted);
-                break;
-            case VoiceRealtimeSessionStartError.TransportAlreadyAttached:
-                http.Response.StatusCode = StatusCodes.Status409Conflict;
-                await http.Response.WriteAsync("Voice transport already attached.", http.RequestAborted);
-                break;
-            default:
-                http.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-                await http.Response.WriteAsync("Voice session preflight failed.", http.RequestAborted);
-                break;
-        }
-    }
-
-    private static async Task TryCloseAsync(HttpContext http, System.Net.WebSockets.WebSocket ws, string reason)
-    {
-        if (ws.State is not System.Net.WebSockets.WebSocketState.Open and not System.Net.WebSockets.WebSocketState.CloseReceived)
-            return;
-
-        try
-        {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-            await ws.CloseAsync(System.Net.WebSockets.WebSocketCloseStatus.PolicyViolation, reason, cts.Token);
-        }
-        catch (Exception ex)
-        {
-            GetLogger(http).LogWarning(ex, "Failed to close voice WebSocket after upgrade.");
-        }
-    }
-
-    private static async Task WaitUntilClosedAsync(WebSocketVoiceTransport transport, CancellationToken ct)
-    {
-        try
-        {
-            await transport.Completion.WaitAsync(ct);
-        }
-        catch (OperationCanceledException)
-        {
-        }
-    }
-
-    private static async Task CleanupAcceptedTransportAsync(
-        HttpContext http,
-        IVoiceVolatileMediaStreamPort mediaStreamPort,
-        VoicePresenceSessionLeaseHandle handle,
-        WebSocketVoiceTransport transport)
-    {
-        try
-        {
-            await mediaStreamPort.DetachAsync(handle, transport, CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            GetLogger(http).LogWarning(ex, "Failed to detach accepted voice transport during control-channel cleanup.");
-        }
-
-        await transport.DisposeAsync();
     }
 
     private static ILogger GetLogger(HttpContext http) =>

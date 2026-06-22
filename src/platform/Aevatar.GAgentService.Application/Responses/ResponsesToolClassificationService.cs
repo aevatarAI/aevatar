@@ -16,7 +16,8 @@ public sealed record ResponsesToolClassification(
     IReadOnlyList<ResponsesApplicationToolDeclaration> ForwardedTools,
     IReadOnlyList<IAgentTool> EffectiveTools,
     IReadOnlyList<string> SubstitutedToolNames,
-    IReadOnlyList<string> AdditiveToolNames);
+    IReadOnlyList<string> AdditiveToolNames,
+    IReadOnlyList<string> OwnedToolNames);
 
 public interface IResponsesToolClassificationService
 {
@@ -94,7 +95,6 @@ public static class ResponsesToolClassifier
         var substituteTools = discoveredSubstituteTools
             .GroupBy(static tool => tool.Name, StringComparer.Ordinal)
             .ToDictionary(static group => group.Key, static group => group.First(), StringComparer.Ordinal);
-        var substituteNames = new HashSet<string>(substituteTools.Keys, StringComparer.Ordinal);
 
         var discoveredAdditiveTools = new List<IAgentTool>();
         foreach (var provider in providerList)
@@ -122,6 +122,12 @@ public static class ResponsesToolClassifier
             .GroupBy(static tool => tool.Name, StringComparer.Ordinal)
             .Select(static group => group.First())
             .ToArray();
+        var ownedToolNames = discoveredSubstituteTools
+            .Concat(discoveredAdditiveTools)
+            .Select(static tool => tool.Name)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var ownedToolNameSet = ownedToolNames.ToHashSet(StringComparer.Ordinal);
 
         var forwarded = new List<ResponsesApplicationToolDeclaration>();
         var effective = new List<IAgentTool>();
@@ -129,26 +135,28 @@ public static class ResponsesToolClassifier
 
         foreach (var declaration in declaredTools)
         {
-            if (!substituteNames.Contains(declaration.Name))
+            if (!ownedToolNameSet.Contains(declaration.Name))
             {
                 forwarded.Add(declaration);
                 effective.Add(new ResponsesForwardedTool(declaration));
                 continue;
             }
 
-            substitutedNames.Add(declaration.Name);
-            var substitute = substituteTools[declaration.Name];
-            if (!string.Equals(
-                    ResponsesToolSchemaHasher.Compute(substitute.ParametersSchema),
-                    declaration.SchemaHash,
-                    StringComparison.Ordinal))
+            if (substituteTools.TryGetValue(declaration.Name, out var substitute))
             {
-                logger.LogWarning(
-                    "Responses substitute tool {ToolName} schema differs from client declaration; using Aevatar tool schema.",
-                    declaration.Name);
-            }
+                substitutedNames.Add(declaration.Name);
+                if (!string.Equals(
+                        ResponsesToolSchemaHasher.Compute(substitute.ParametersSchema),
+                        declaration.SchemaHash,
+                        StringComparison.Ordinal))
+                {
+                    logger.LogWarning(
+                        "Responses substitute tool {ToolName} schema differs from client declaration; using Aevatar tool schema.",
+                        declaration.Name);
+                }
 
-            effective.Add(substitute);
+                effective.Add(substitute);
+            }
         }
 
         var effectiveNames = new HashSet<string>(
@@ -173,7 +181,8 @@ public static class ResponsesToolClassifier
             forwarded,
             effective,
             substitutedNames,
-            addedAdditiveNames);
+            addedAdditiveNames,
+            ownedToolNames);
     }
 }
 

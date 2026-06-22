@@ -109,6 +109,21 @@ public sealed class LlmSessionRegistrationAdapterTests
         dispatch.Calls.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task CancelRunAsync_ShouldDispatchActorOwnedCancellationEnvelope()
+    {
+        var (adapter, _, dispatch) = CreateAdapter();
+
+        await adapter.CancelRunAsync("session-actor-1", "resp_1", "resp_1:llm-run");
+
+        dispatch.Calls.Should().ContainSingle();
+        dispatch.Calls[0].actorId.Should().Be("session-actor-1");
+        var packed = dispatch.Calls[0].envelope.Payload.Unpack<CancelLlmRunRequested>();
+        packed.ResponseId.Should().Be("resp_1");
+        packed.RunId.Should().Be("resp_1:llm-run");
+        packed.CancelledAt.Should().NotBeNull();
+    }
+
     [Theory]
     [InlineData("", "resp_1", "sessionActorId")]
     [InlineData("actor-1", "", "responseId")]
@@ -117,6 +132,19 @@ public sealed class LlmSessionRegistrationAdapterTests
         var (adapter, _, _) = CreateAdapter();
 
         var act = () => adapter.UpdateStatusAsync(actorId, respId, LlmSessionStatus.Completed);
+
+        await act.Should().ThrowAsync<ArgumentException>().Where(ex => ex.ParamName == param);
+    }
+
+    [Theory]
+    [InlineData("", "resp_1", "run-1", "sessionActorId")]
+    [InlineData("actor-1", "", "run-1", "responseId")]
+    [InlineData("actor-1", "resp_1", "", "runId")]
+    public async Task CancelRunAsync_ShouldRejectMissingArguments(string actorId, string respId, string runId, string param)
+    {
+        var (adapter, _, _) = CreateAdapter();
+
+        var act = () => adapter.CancelRunAsync(actorId, respId, runId);
 
         await act.Should().ThrowAsync<ArgumentException>().Where(ex => ex.ParamName == param);
     }

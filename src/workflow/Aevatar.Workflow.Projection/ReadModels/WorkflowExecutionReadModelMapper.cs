@@ -11,11 +11,13 @@ public sealed class WorkflowExecutionReadModelMapper
         {
             ActorId = source.RootActorId,
             WorkflowName = source.WorkflowName,
+            ScopeId = source.ScopeId,
             LastCommandId = source.CommandId,
             CompletionStatus = MapCompletionStatus(source.Status),
             StateVersion = source.StateVersion,
             LastEventId = source.LastEventId,
             LastUpdatedAt = source.UpdatedAt,
+            StartedAtUtc = source.StartedAtUtcValue,
             LastSuccess = source.Success,
             LastOutput = source.FinalOutput,
             LastError = source.FinalError,

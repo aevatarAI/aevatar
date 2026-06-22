@@ -1,17 +1,13 @@
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
-using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using System.Text.Json;
-using System.Text.Json.Nodes;
 
 namespace Aevatar.GAgentService.Core.GAgents;
 
@@ -23,14 +19,23 @@ namespace Aevatar.GAgentService.Core.GAgents;
 public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
 {
     private static readonly Duration DefaultTtl = Duration.FromTimeSpan(TimeSpan.FromHours(24));
+
+    // Crash/abandon finalizer bound for a run that never emits a terminal (e.g. the off-grain
+    // executor host died mid-run). This is the RUN-execution timeout and is intentionally
+    // decoupled from the 24h session TTL — the TTL governs session expiry, not how long an
+    // in-flight run may stay un-terminated. Kept above the 300s ingress observation timeout so
+    // the client-facing wait fires first under normal slowness; an explicit LlmRunRequested
+    // TimeoutAfter still wins. See task 06-21-offgrain-llm-run-executor.
+    private static readonly TimeSpan DefaultRunExecutionTimeout = TimeSpan.FromMinutes(10);
     private const int RunningStatus = 1;
     private const int CompletedStatus = 2;
     private const int FailedStatus = 3;
     private const int CancelledStatus = 4;
-    private const int MaxToolRounds = 8;
+    private readonly ILlmRunExecutionScheduler _executionScheduler;
 
-    public LlmSessionGAgent()
+    public LlmSessionGAgent(ILlmRunExecutionScheduler executionScheduler)
     {
+        _executionScheduler = executionScheduler ?? throw new ArgumentNullException(nameof(executionScheduler));
         InitializeId();
     }
 
@@ -84,12 +89,18 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
 
         if (IsTerminal(existing.Status))
         {
-            // Terminal states are authoritative — a late Completed/Failed update
-            // from the original create path must not overwrite a Cancelled/Expired
-            // session, otherwise /cancel reports success while the session ends up
-            // Completed and forwarded tool calls stay open.
-            throw new InvalidOperationException(
-                $"Response session '{existing.ResponseId}' is {existing.Status} and cannot transition to {command.Status}.");
+            // Terminal states are authoritative and final — a late status update must NOT
+            // overwrite them (e.g. a streaming-observation timeout marking Failed after the run
+            // already Completed on a long turn, or a late Completed after /cancel). Treat it as an
+            // idempotent no-op rather than throwing: this is an actor event handler, so throwing
+            // only burns the runtime retry budget and logs noise ("is Completed and cannot
+            // transition to Failed") without changing the outcome.
+            Logger.LogDebug(
+                "Ignoring status update to {RequestedStatus} for response session {ResponseId}: already terminal ({TerminalStatus}).",
+                command.Status,
+                existing.ResponseId,
+                existing.Status);
+            return;
         }
 
         await PersistDomainEventAsync(new LlmSessionStatusUpdatedEvent
@@ -271,9 +282,39 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         });
     }
 
-    // Refactor (iter103/cluster-1):
-    //   Old pattern: Application facade ran LLM stream loop, tool execution, and accumulation locally.
-    //   New principle: Application dispatches LlmRunRequested; LlmSessionGAgent owns run progression through typed events.
+    [EventHandler]
+    public async Task HandleCancelLlmRunRequestedAsync(CancelLlmRunRequested command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        var existing = EnsureRegisteredSession(command.ResponseId);
+        if (existing.Status == LlmSessionStatus.Cancelled)
+            return;
+        if (IsTerminal(existing.Status))
+        {
+            throw new InvalidOperationException(
+                $"Response session '{existing.ResponseId}' is {existing.Status} and cannot be cancelled.");
+        }
+
+        var runId = NormalizeRequired(command.RunId);
+        if (string.IsNullOrWhiteSpace(runId))
+            runId = $"{existing.ResponseId}:llm-run";
+
+        if (State.ActiveRun is { } active &&
+            !string.Equals(active.RunId, runId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Response session '{existing.ResponseId}' has active run '{active.RunId}' and cannot cancel run '{runId}'.");
+        }
+
+        await PersistRunCancelledAsync(new LlmRunCancelled
+        {
+            ResponseId = existing.ResponseId,
+            RunId = runId,
+            CancelledAt = command.CancelledAt ?? Timestamp.FromDateTime(DateTime.UtcNow),
+        }, CancellationToken.None, allowMissingRun: true);
+    }
+
     [EventHandler]
     public async Task HandleLlmRunRequestedAsync(LlmRunRequested command)
     {
@@ -287,6 +328,62 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         if (string.IsNullOrWhiteSpace(runId))
             runId = $"{existing.ResponseId}:run";
 
+        var runCommand = command.Clone();
+        runCommand.ResponseId = existing.ResponseId;
+        runCommand.RunId = runId;
+        var startedAt = runCommand.RequestedAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
+        await TryCommitRunStartedAsync(existing, runId, runCommand, startedAt);
+    }
+
+    [EventHandler]
+    public async Task HandleRecordRunStartedAsync(RecordLlmRunStarted command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        ArgumentNullException.ThrowIfNull(command.Command);
+
+        var runCommand = command.Command;
+        var existing = EnsureRegisteredSession(runCommand.ResponseId);
+        if (IsTerminal(existing.Status))
+            return;
+
+        var runId = NormalizeRequired(runCommand.RunId);
+        if (string.IsNullOrWhiteSpace(runId))
+            runId = $"{existing.ResponseId}:run";
+
+        var executionRequest = runCommand.Clone();
+        executionRequest.ResponseId = existing.ResponseId;
+        executionRequest.RunId = runId;
+        var startedAt = command.StartedAt ?? executionRequest.RequestedAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
+        await TryCommitRunStartedAsync(existing, runId, executionRequest, startedAt);
+    }
+
+    [EventHandler]
+    public async Task HandleRecordStreamChunkObservedAsync(RecordLlmStreamChunkObserved command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (!TryPrepareRunRecord(command.ResponseId, command.RunId, command.RecordId, out var existing, out var runId))
+            return;
+
+        await PersistDomainEventAsync(new LlmStreamChunkObserved
+        {
+            ResponseId = existing.ResponseId,
+            RunId = runId,
+            Round = command.Round,
+            DeltaText = command.DeltaText ?? string.Empty,
+            ToolCallDelta = command.ToolCallDelta?.Clone(),
+            Usage = command.Usage?.Clone(),
+            ObservedAt = command.ObservedAt ?? Timestamp.FromDateTime(DateTime.UtcNow),
+            Sequence = NextRunSequence(runId),
+            RecordId = NormalizeRequired(command.RecordId),
+        });
+    }
+
+    private async Task<bool> TryCommitRunStartedAsync(
+        LlmSessionRecord existing,
+        string runId,
+        LlmRunRequested executionRequest,
+        Timestamp startedAt)
+    {
         if (State.ActiveRun is { Status: RunningStatus } active &&
             !string.Equals(active.RunId, runId, StringComparison.Ordinal))
         {
@@ -294,41 +391,277 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
                 $"Response session '{existing.ResponseId}' already has active run '{active.RunId}'.");
         }
 
-        if (State.Completion is { CompletedAt: not null })
-            return;
+        if (State.ActiveRun is { Status: RunningStatus } sameActive &&
+            string.Equals(sameActive.RunId, runId, StringComparison.Ordinal))
+        {
+            return false;
+        }
 
-        var startedAt = command.RequestedAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
-        await PersistDomainEventAsync(new LlmStreamChunkObserved
+        if (State.Completion is { CompletedAt: not null })
+            return false;
+
+        var shouldStartRun = State.ActiveRun == null ||
+            !string.Equals(State.ActiveRun.RunId, runId, StringComparison.Ordinal) ||
+            State.ActiveRun.LastAppliedSequence <= 0;
+        if (!shouldStartRun)
+            return false;
+
+        await PersistDomainEventAsync(new LlmRunStartedEvent
         {
             ResponseId = existing.ResponseId,
             RunId = runId,
-            ObservedAt = startedAt,
+            Sequence = 1,
+            StartedAt = startedAt,
         });
+        if (!await TryScheduleRunTimeoutAsync(existing.ResponseId, runId, startedAt, ResolveRunTimeout(executionRequest.TimeoutAfter)))
+            return false;
 
+        await PersistDomainEventAsync(new LlmRunExecutionReadyEvent
+        {
+            ResponseId = existing.ResponseId,
+            RunId = runId,
+            ReadyAt = Timestamp.FromDateTime(DateTime.UtcNow),
+        });
+        await TryDispatchTransientExecutionCommandAsync(existing.ResponseId, runId, executionRequest);
+        return true;
+    }
+
+    private async Task TryDispatchTransientExecutionCommandAsync(
+        string responseId,
+        string runId,
+        LlmRunRequested executionRequest)
+    {
         try
         {
-            await RunLlmLoopAsync(command, runId, CancellationToken.None);
-        }
-        catch (OperationCanceledException)
-        {
-            await PersistDomainEventAsync(new LlmRunCancelled
-            {
-                ResponseId = existing.ResponseId,
-                RunId = runId,
-                CancelledAt = Timestamp.FromDateTime(DateTime.UtcNow),
-            });
+            await _executionScheduler.ScheduleAsync(
+                new LlmRunExecutionRequest(
+                    Id,
+                    responseId,
+                    runId,
+                    executionRequest.Clone(),
+                    ResolveExecutionOriginPlatform()),
+                CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
+            Logger.LogError(
+                ex,
+                "LLM run execution dispatch failed for response {ResponseId} run {RunId}.",
+                responseId,
+                runId);
             await PersistDomainEventAsync(new LlmRunFailed
             {
-                ResponseId = existing.ResponseId,
+                ResponseId = responseId,
                 RunId = runId,
-                FailureCode = MapFailureCode(ex),
-                FailureMessage = string.IsNullOrWhiteSpace(ex.Message) ? "LLM run failed." : ex.Message,
+                FailureCode = "execution_dispatch_failed",
+                FailureMessage = string.IsNullOrWhiteSpace(ex.Message)
+                    ? "LLM run execution dispatch failed."
+                    : ex.Message,
                 FailedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+                Sequence = NextRunSequence(runId),
+                RecordId = $"{runId}:execution-dispatch-failed",
             });
         }
+    }
+
+    private string? ResolveExecutionOriginPlatform()
+    {
+        if (State.Record == null || State.Record.OriginKind == LlmSessionOriginKind.Unspecified)
+            return null;
+
+        return State.Record.OriginKind.ToString();
+    }
+
+    [EventHandler]
+    public async Task HandleRecordToolCallObservedAsync(RecordLlmToolCallObserved command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (!TryPrepareRunRecord(command.ResponseId, command.RunId, command.RecordId, out var existing, out var runId))
+            return;
+
+        await PersistDomainEventAsync(new LlmToolCallObserved
+        {
+            ResponseId = existing.ResponseId,
+            RunId = runId,
+            Round = command.Round,
+            ToolCall = command.ToolCall?.Clone(),
+            Forwarded = command.Forwarded,
+            LocalResultJson = command.LocalResultJson ?? string.Empty,
+            ObservedAt = command.ObservedAt ?? Timestamp.FromDateTime(DateTime.UtcNow),
+            LocalResult = command.LocalResult?.Clone(),
+            Sequence = NextRunSequence(runId),
+            RecordId = NormalizeRequired(command.RecordId),
+        });
+    }
+
+    [EventHandler]
+    public async Task HandleRecordRunCompletedAsync(RecordLlmRunCompleted command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (!TryPrepareRunRecord(command.ResponseId, command.RunId, command.RecordId, out var existing, out var runId))
+            return;
+
+        var completed = new LlmRunCompleted
+        {
+            ResponseId = existing.ResponseId,
+            RunId = runId,
+            OutputText = command.OutputText ?? string.Empty,
+            Usage = command.Usage?.Clone(),
+            CompletedAt = command.CompletedAt ?? Timestamp.FromDateTime(DateTime.UtcNow),
+            Sequence = NextRunSequence(runId),
+            RecordId = NormalizeRequired(command.RecordId),
+        };
+        completed.ForwardedToolCalls.AddRange(command.ForwardedToolCalls.Select(static call => call.Clone()));
+        completed.ForwardedToolCallRecords.AddRange(command.ForwardedToolCallRecords.Select(static call => call.Clone()));
+        await PersistDomainEventAsync(completed);
+    }
+
+    [EventHandler]
+    public async Task HandleRecordRunFailedAsync(RecordLlmRunFailed command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (!TryPrepareRunRecord(command.ResponseId, command.RunId, command.RecordId, out var existing, out var runId))
+            return;
+
+        await PersistDomainEventAsync(new LlmRunFailed
+        {
+            ResponseId = existing.ResponseId,
+            RunId = runId,
+            FailureCode = NormalizeOptional(command.FailureCode) ?? "execution_failed",
+            FailureMessage = NormalizeOptional(command.FailureMessage) ?? "LLM run failed.",
+            FailedAt = command.FailedAt ?? Timestamp.FromDateTime(DateTime.UtcNow),
+            Sequence = NextRunSequence(runId),
+            RecordId = NormalizeRequired(command.RecordId),
+        });
+    }
+
+    [EventHandler]
+    public async Task HandleRecordRunCancelledAsync(RecordLlmRunCancelled command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (!TryPrepareRunRecord(command.ResponseId, command.RunId, command.RecordId, out var existing, out var runId))
+            return;
+
+        await PersistDomainEventAsync(new LlmRunCancelled
+        {
+            ResponseId = existing.ResponseId,
+            RunId = runId,
+            CancelledAt = command.CancelledAt ?? Timestamp.FromDateTime(DateTime.UtcNow),
+            Sequence = NextRunSequence(runId),
+            RecordId = NormalizeRequired(command.RecordId),
+        });
+    }
+
+    [EventHandler]
+    public async Task HandleFinalizeLlmRunTimedOutAsync(FinalizeLlmRunTimedOut command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        var existing = EnsureRegisteredSession(command.ResponseId);
+        var runId = NormalizeRequired(command.RunId);
+        if (string.IsNullOrWhiteSpace(runId))
+            throw new InvalidOperationException("run_id is required.");
+
+        if (State.ActiveRun == null ||
+            !string.Equals(State.ActiveRun.RunId, runId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (IsRunTerminal(State.ActiveRun.Status) || IsTerminal(existing.Status))
+            return;
+
+        var recordId = NormalizeOptional(command.RecordId) ?? BuildRunTimeoutRecordId(runId);
+        if (State.ActiveRun.AppliedRecordIds.Any(id => string.Equals(id, recordId, StringComparison.Ordinal)))
+            return;
+
+        await PersistDomainEventAsync(new LlmRunFailed
+        {
+            ResponseId = existing.ResponseId,
+            RunId = runId,
+            FailureCode = "run_timeout",
+            FailureMessage = "LLM run timed out.",
+            FailedAt = command.TimedOutAt ?? Timestamp.FromDateTime(DateTime.UtcNow),
+            Sequence = NextRunSequence(runId),
+            RecordId = recordId,
+        });
+    }
+
+    [EventHandler]
+    public Task HandleLlmStreamChunkObservedAsync(LlmStreamChunkObserved observed)
+    {
+        ArgumentNullException.ThrowIfNull(observed);
+        var accepted = CanPersistRunFact(observed.ResponseId, observed.RunId, observed.Sequence, terminal: false);
+        return accepted
+            ? PersistDomainEventAsync(observed.Clone(), CancellationToken.None)
+            : Task.CompletedTask;
+    }
+
+    [EventHandler]
+    public Task HandleLlmToolCallObservedAsync(LlmToolCallObserved observed)
+    {
+        ArgumentNullException.ThrowIfNull(observed);
+        var accepted = CanPersistRunFact(observed.ResponseId, observed.RunId, observed.Sequence, terminal: false);
+        return accepted
+            ? PersistDomainEventAsync(observed.Clone(), CancellationToken.None)
+            : Task.CompletedTask;
+    }
+
+    [EventHandler]
+    public Task HandleLlmRunCompletedAsync(LlmRunCompleted completed)
+    {
+        ArgumentNullException.ThrowIfNull(completed);
+        var accepted = CanPersistRunFact(completed.ResponseId, completed.RunId, completed.Sequence, terminal: true);
+        return accepted
+            ? PersistDomainEventAsync(completed.Clone(), CancellationToken.None)
+            : Task.CompletedTask;
+    }
+
+    [EventHandler]
+    public Task HandleLlmRunFailedAsync(LlmRunFailed failed)
+    {
+        ArgumentNullException.ThrowIfNull(failed);
+        var accepted = CanPersistRunFact(failed.ResponseId, failed.RunId, failed.Sequence, terminal: true);
+        return accepted
+            ? PersistDomainEventAsync(failed.Clone(), CancellationToken.None)
+            : Task.CompletedTask;
+    }
+
+    [EventHandler]
+    public Task HandleLlmRunCancelledAsync(LlmRunCancelled cancelled)
+    {
+        ArgumentNullException.ThrowIfNull(cancelled);
+        var accepted = CanPersistRunFact(cancelled.ResponseId, cancelled.RunId, cancelled.Sequence, terminal: true);
+        return accepted
+            ? PersistDomainEventAsync(cancelled.Clone(), CancellationToken.None)
+            : Task.CompletedTask;
+    }
+
+    [EventHandler]
+    public async Task HandleLlmSessionForwardedToolCallEmittedAsync(LlmSessionForwardedToolCallEmittedEvent emitted)
+    {
+        ArgumentNullException.ThrowIfNull(emitted);
+        ArgumentNullException.ThrowIfNull(emitted.Call);
+
+        var existing = EnsureRegisteredSession(emitted.ResponseId);
+        if (IsTerminal(existing.Status))
+            return;
+
+        var call = NormalizeToolCall(emitted.Call.Clone());
+        ValidateToolCall(call);
+        var existingCall = State.ForwardedToolCalls
+            .FirstOrDefault(x => string.Equals(x.CallId, call.CallId, StringComparison.Ordinal));
+        if (existingCall != null)
+        {
+            EnsureExistingToolCallMatches(existingCall, call);
+            return;
+        }
+
+        await PersistDomainEventAsync(new LlmSessionForwardedToolCallEmittedEvent
+        {
+            ResponseId = existing.ResponseId,
+            Call = call,
+        });
     }
 
     protected override LlmSessionState TransitionState(LlmSessionState current, IMessage evt) =>
@@ -340,6 +673,8 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             .On<LlmSessionForwardedToolCallEmittedEvent>(ApplyForwardedToolCallEmitted)
             .On<LlmSessionForwardedToolResultReceivedEvent>(ApplyForwardedToolResultReceived)
             .On<LlmSessionForwardedToolCallResolvedEvent>(ApplyForwardedToolCallResolved)
+            .On<LlmRunStartedEvent>(ApplyRunStarted)
+            .On<LlmRunExecutionReadyEvent>(static (state, _) => state)
             .On<LlmStreamChunkObserved>(ApplyStreamChunkObserved)
             .On<LlmToolCallObserved>(ApplyToolCallObserved)
             .On<LlmRunCompleted>(ApplyRunCompleted)
@@ -406,8 +741,25 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         LlmSessionForwardedToolCallEmittedEvent evt)
     {
         var next = state.Clone();
+        var run = string.IsNullOrWhiteSpace(evt.RunId)
+            ? null
+            : EnsureRun(next, evt.RunId, evt.ResponseId, evt.Call?.EmittedAt);
+        if (run != null && !TryAcceptRunRecord(run, evt.Sequence, evt.RecordId))
+            return state;
+
         if (evt.Call != null)
-            next.ForwardedToolCalls.Add(evt.Call.Clone());
+        {
+            var existing = next.ForwardedToolCalls
+                .FirstOrDefault(x => string.Equals(x.CallId, evt.Call.CallId, StringComparison.Ordinal));
+            if (existing != null)
+                EnsureExistingToolCallMatches(existing, evt.Call);
+            else
+                next.ForwardedToolCalls.Add(evt.Call.Clone());
+        }
+
+        if (run != null && evt.Call != null)
+            UpsertRuntimeToolCall(run, ToRuntimeToolCall(evt.Call));
+        TouchRecord(next, evt.Call?.EmittedAt);
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         next.LastEventId = $"{evt.ResponseId}:tool:{evt.Call?.CallId}:emitted";
         return next;
@@ -450,12 +802,32 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         return next;
     }
 
+    private static LlmSessionState ApplyRunStarted(
+        LlmSessionState state,
+        LlmRunStartedEvent evt)
+    {
+        var next = state.Clone();
+        var startedAt = evt.StartedAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
+        var run = EnsureRun(next, evt.RunId, evt.ResponseId, startedAt);
+        if (!TryAcceptRunSequence(run, evt.Sequence))
+            return state;
+
+        run.Status = RunningStatus;
+        run.StartedAt = startedAt.Clone();
+        TouchRecord(next, startedAt);
+        Bump(next, $"{evt.ResponseId}:run:{evt.RunId}:started");
+        return next;
+    }
+
     private static LlmSessionState ApplyStreamChunkObserved(
         LlmSessionState state,
         LlmStreamChunkObserved evt)
     {
         var next = state.Clone();
         var run = EnsureRun(next, evt.RunId, evt.ResponseId, evt.ObservedAt);
+        if (!TryAcceptRunRecord(run, evt.Sequence, evt.RecordId))
+            return state;
+
         run.Round = Math.Max(run.Round, evt.Round);
         if (!string.IsNullOrEmpty(evt.DeltaText))
             run.OutputText += evt.DeltaText;
@@ -472,6 +844,9 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
     {
         var next = state.Clone();
         var run = EnsureRun(next, evt.RunId, evt.ResponseId, evt.ObservedAt);
+        if (!TryAcceptRunRecord(run, evt.Sequence, evt.RecordId))
+            return state;
+
         run.Round = Math.Max(run.Round, evt.Round);
         if (evt.ToolCall != null)
             UpsertRuntimeToolCall(run, evt.ToolCall);
@@ -487,6 +862,9 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         var next = state.Clone();
         var completedAt = evt.CompletedAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
         var run = EnsureRun(next, evt.RunId, evt.ResponseId, completedAt);
+        if (!TryAcceptRunRecord(run, evt.Sequence, evt.RecordId, allowTerminalGap: true))
+            return state;
+
         run.Status = CompletedStatus;
         run.OutputText = evt.OutputText ?? string.Empty;
         run.CompletedAt = completedAt.Clone();
@@ -494,6 +872,9 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             run.Usage = evt.Usage.Clone();
         run.ObservedToolCalls.Clear();
         run.ObservedToolCalls.AddRange(evt.ForwardedToolCalls.Select(static call => call.Clone()));
+
+        foreach (var record in evt.ForwardedToolCallRecords)
+            UpsertForwardedToolCallRecord(next, record);
 
         if (next.Record == null)
             next.Record = new LlmSessionRecord();
@@ -526,6 +907,9 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         var next = state.Clone();
         var failedAt = evt.FailedAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
         var run = EnsureRun(next, evt.RunId, evt.ResponseId, failedAt);
+        if (!TryAcceptRunRecord(run, evt.Sequence, evt.RecordId, allowTerminalGap: true))
+            return state;
+
         run.Status = FailedStatus;
         run.CompletedAt = failedAt.Clone();
         run.FailureCode = NormalizeOptional(evt.FailureCode) ?? "execution_failed";
@@ -553,6 +937,9 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         var next = state.Clone();
         var cancelledAt = evt.CancelledAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
         var run = EnsureRun(next, evt.RunId, evt.ResponseId, cancelledAt);
+        if (!TryAcceptRunRecord(run, evt.Sequence, evt.RecordId, allowTerminalGap: true))
+            return state;
+
         run.Status = CancelledStatus;
         run.CompletedAt = cancelledAt.Clone();
         if (next.Record == null)
@@ -573,485 +960,6 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         return next;
     }
 
-    private async Task RunLlmLoopAsync(
-        LlmRunRequested command,
-        string runId,
-        CancellationToken ct)
-    {
-        var provider = Services.GetRequiredService<ILLMProviderFactory>().GetDefault();
-        var toolContext = BuildToolContext(command);
-        var tools = await BuildEffectiveToolsAsync(command, toolContext, ct);
-        var messages = command.Messages.Select(ToChatMessage).ToList();
-        var outputText = new System.Text.StringBuilder();
-        TokenUsage? usage = null;
-
-        for (var round = 0; round < MaxToolRounds; round++)
-        {
-            var roundRequest = new LLMRequest
-            {
-                Messages = [.. messages],
-                RequestId = command.ResponseId,
-                Metadata = toolContext.ExternalMetadata,
-                CallerContext = new LLMRequestCallerContext(
-                    toolContext.Caller.ScopeId ?? string.Empty,
-                    toolContext.Caller.OwnerSubject ?? string.Empty,
-                    toolContext.Caller.ResponseId,
-                    new LLMRequestCallerCredentials(toolContext.Credentials.NyxIdAccessToken)),
-                Tools = tools,
-                ToolContext = toolContext,
-                LlmControl = new LLMControlContext(
-                    NyxIdAccessToken: toolContext.Credentials.NyxIdAccessToken,
-                    NyxIdOrgToken: toolContext.Credentials.NyxIdOrgToken,
-                    SenderNyxIdAccessToken: toolContext.Credentials.SenderNyxIdAccessToken,
-                    ModelOverride: toolContext.Routing.ModelOverride,
-                    NyxIdRoutePreference: toolContext.Routing.NyxIdRoutePreference,
-                    MaxToolRoundsOverride: null,
-                    UserMemoryPrompt: toolContext.Routing.UserMemoryPrompt),
-                Model = NormalizeOptional(command.Model),
-                Temperature = command.HasTemperature ? command.Temperature : null,
-                MaxTokens = command.HasMaxTokens ? command.MaxTokens : null,
-            };
-
-            var toolCalls = new RuntimeToolCallAccumulator();
-            using (AgentToolContextScope.Push(toolContext))
-            {
-                await foreach (var chunk in provider.ChatStreamAsync(roundRequest, ct))
-                {
-                    var delta = ExtractChunkText(chunk);
-                    if (!string.IsNullOrEmpty(delta))
-                        outputText.Append(delta);
-
-                    if (chunk.Usage is not null)
-                        usage = chunk.Usage;
-
-                    var observed = new LlmStreamChunkObserved
-                    {
-                        ResponseId = command.ResponseId,
-                        RunId = runId,
-                        Round = round,
-                        DeltaText = delta ?? string.Empty,
-                        ToolCallDelta = chunk.DeltaToolCall is null ? null : ToRuntimeToolCall(chunk.DeltaToolCall),
-                        Usage = chunk.Usage is null ? null : ToSessionUsage(chunk.Usage),
-                        ObservedAt = Timestamp.FromDateTime(DateTime.UtcNow),
-                    };
-                    await PersistDomainEventAsync(observed);
-
-                    if (chunk.DeltaToolCall != null)
-                        toolCalls.TrackDelta(chunk.DeltaToolCall);
-
-                    if (chunk.IsLast)
-                        break;
-                }
-            }
-
-            var builtToolCalls = ApplyToolChoiceHint(toolCalls.BuildToolCalls(), command.ToolSelection);
-            var forwardedToolCalls = SelectForwardedToolCalls(builtToolCalls, command.ToolSelection);
-            foreach (var toolCall in forwardedToolCalls)
-            {
-                await PersistDomainEventAsync(new LlmToolCallObserved
-                {
-                    ResponseId = command.ResponseId,
-                    RunId = runId,
-                    Round = round,
-                    ToolCall = ToRuntimeToolCall(toolCall),
-                    Forwarded = true,
-                    ObservedAt = Timestamp.FromDateTime(DateTime.UtcNow),
-                });
-                await PersistDomainEventAsync(new LlmSessionForwardedToolCallEmittedEvent
-                {
-                    ResponseId = command.ResponseId,
-                    Call = BuildForwardedToolCall(toolCall, command.ToolSelection),
-                });
-            }
-
-            if (forwardedToolCalls.Count > 0)
-            {
-                await PersistDomainEventAsync(new LlmRunCompleted
-                {
-                    ResponseId = command.ResponseId,
-                    RunId = runId,
-                    OutputText = outputText.ToString(),
-                    ForwardedToolCalls = { forwardedToolCalls.Select(ToRuntimeToolCall) },
-                    Usage = usage is null ? null : ToSessionUsage(usage),
-                    CompletedAt = Timestamp.FromDateTime(DateTime.UtcNow),
-                });
-                return;
-            }
-
-            var localToolCalls = SelectLocalToolCalls(builtToolCalls, command.ToolSelection, tools);
-            if (localToolCalls.Count == 0)
-            {
-                await PersistDomainEventAsync(new LlmRunCompleted
-                {
-                    ResponseId = command.ResponseId,
-                    RunId = runId,
-                    OutputText = outputText.ToString(),
-                    Usage = usage is null ? null : ToSessionUsage(usage),
-                    CompletedAt = Timestamp.FromDateTime(DateTime.UtcNow),
-                });
-                return;
-            }
-
-            messages.Add(new ChatMessage
-            {
-                Role = "assistant",
-                ToolCalls = localToolCalls,
-            });
-            await ExecuteLocalToolCallsAsync(command, runId, round, localToolCalls, tools, messages, toolContext, ct);
-        }
-
-        await PersistDomainEventAsync(new LlmRunCompleted
-        {
-            ResponseId = command.ResponseId,
-            RunId = runId,
-            OutputText = outputText.ToString(),
-            Usage = usage is null ? null : ToSessionUsage(usage),
-            CompletedAt = Timestamp.FromDateTime(DateTime.UtcNow),
-        });
-    }
-
-    private async Task<IReadOnlyList<IAgentTool>> BuildEffectiveToolsAsync(
-        LlmRunRequested command,
-        AgentToolExecutionContext toolContext,
-        CancellationToken ct)
-    {
-        var providers = Services.GetServices<IResponsesToolProvider>().ToArray();
-        var context = new ResponsesToolProviderContext(
-            toolContext with
-            {
-                Channel = toolContext.Channel with
-                {
-                    Platform = State.Record?.OriginKind.ToString(),
-                },
-            });
-
-        var substituteTools = new List<IAgentTool>();
-        var additiveTools = new List<IAgentTool>();
-        foreach (var provider in providers)
-        {
-            ct.ThrowIfCancellationRequested();
-            try
-            {
-                substituteTools.AddRange(await provider.GetSubstituteToolsAsync(context, ct).ConfigureAwait(false));
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                Logger.LogWarning(
-                    ex,
-                    "Responses substitute tool discovery failed for provider {ProviderType}; continuing without that provider.",
-                    provider.GetType().Name);
-            }
-
-            try
-            {
-                additiveTools.AddRange(await provider.GetAdditiveToolsAsync(context, ct).ConfigureAwait(false));
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                Logger.LogWarning(
-                    ex,
-                    "Responses additive tool discovery failed for provider {ProviderType}; continuing without that provider.",
-                    provider.GetType().Name);
-            }
-        }
-
-        var substitutedNames = (command.ToolSelection?.SubstitutedToolNames ?? [])
-            .ToHashSet(StringComparer.Ordinal);
-        var additiveNames = (command.ToolSelection?.AdditiveToolNames ?? [])
-            .ToHashSet(StringComparer.Ordinal);
-        var substitutesByName = substituteTools
-            .GroupBy(static tool => tool.Name, StringComparer.Ordinal)
-            .ToDictionary(static group => group.Key, static group => group.First(), StringComparer.Ordinal);
-        var effective = new List<IAgentTool>();
-        foreach (var declaration in command.ToolSelection?.ForwardedTools ?? [])
-        {
-            if (substitutedNames.Contains(declaration.ToolName) &&
-                substitutesByName.TryGetValue(declaration.ToolName, out var substitute))
-                effective.Add(substitute);
-            else
-                effective.Add(new ForwardedRuntimeTool(declaration));
-        }
-
-        var effectiveNames = new HashSet<string>(effective.Select(static tool => tool.Name), StringComparer.Ordinal);
-        foreach (var substitutedName in substitutedNames)
-        {
-            if (effectiveNames.Contains(substitutedName))
-                continue;
-            if (substitutesByName.TryGetValue(substitutedName, out var substitute) &&
-                effectiveNames.Add(substitute.Name))
-            {
-                effective.Add(substitute);
-            }
-        }
-
-        foreach (var additive in additiveTools)
-        {
-            if (additiveNames.Contains(additive.Name) && effectiveNames.Add(additive.Name))
-                effective.Add(additive);
-        }
-
-        return effective;
-    }
-
-    private async Task ExecuteLocalToolCallsAsync(
-        LlmRunRequested command,
-        string runId,
-        int round,
-        IReadOnlyList<ToolCall> localToolCalls,
-        IReadOnlyList<IAgentTool> tools,
-        List<ChatMessage> messages,
-        AgentToolExecutionContext toolContext,
-        CancellationToken ct)
-    {
-        var toolsByName = tools
-            .Where(static tool => tool is not ForwardedRuntimeTool)
-            .GroupBy(static tool => tool.Name, StringComparer.Ordinal)
-            .ToDictionary(static group => group.Key, static group => group.First(), StringComparer.Ordinal);
-
-        using (AgentToolContextScope.Push(toolContext))
-        {
-            foreach (var toolCall in localToolCalls)
-            {
-                using var _ = AgentToolContextScope.Push(toolContext.WithCallId(toolCall.Id));
-                var argumentsJson = string.IsNullOrWhiteSpace(toolCall.ArgumentsJson)
-                    ? "{}"
-                    : toolCall.ArgumentsJson;
-                var result = toolsByName.TryGetValue(toolCall.Name, out var tool)
-                    ? await ResponsesSafeToolExecutor.ExecuteAsync(
-                        tool,
-                        argumentsJson,
-                        ct)
-                    : System.Text.Json.JsonSerializer.Serialize(new
-                    {
-                        error = "aevatar_substitute_tool_not_registered",
-                        tool_name = toolCall.Name,
-                    });
-
-                await PersistDomainEventAsync(new LlmToolCallObserved
-                {
-                    ResponseId = command.ResponseId,
-                    RunId = runId,
-                    Round = round,
-                    ToolCall = ToRuntimeToolCall(toolCall),
-                    Forwarded = false,
-                    LocalResultJson = result,
-                    LocalResult = ResponsesJsonValues.ParseBoundaryPayload(result),
-                    ObservedAt = Timestamp.FromDateTime(DateTime.UtcNow),
-                });
-                messages.Add(ChatMessage.Tool(toolCall.Id, result));
-            }
-        }
-    }
-
-    // Refactor (issue1521):
-    //   Old pattern: LlmRunRequested split tool control authority into scalars and provider metadata.
-    //   New principle: the command carries the existing typed AgentToolExecutionContextPayload; scalars remain legacy fallback only.
-    private static AgentToolExecutionContext BuildToolContext(LlmRunRequested command)
-    {
-        if (command.ToolContext is not null)
-            return AgentToolExecutionContextMapper.FromPayload(command.ToolContext);
-
-        return new(
-            new AgentToolRequestIdentity(command.ResponseId, null),
-            new AgentToolCredentials(command.BearerToken, null, null),
-            new AgentToolCallerContext(command.ScopeId, command.OwnerSubject, command.ResponseId),
-            AgentToolChannelContext.Empty,
-            AgentToolSenderBindingContext.Empty,
-            new LLMRequestRoutingContext(null, NormalizeOptional(command.RoutePreference), null, null),
-            AgentToolConnectedServicesContext.Empty,
-            AgentSkillRecoveryContext.Empty,
-            new Dictionary<string, string>(StringComparer.Ordinal));
-    }
-
-    private static ChatMessage ToChatMessage(LlmSessionRuntimeChatMessage message) =>
-        new()
-        {
-            Role = string.IsNullOrWhiteSpace(message.Role) ? "user" : message.Role,
-            Content = message.Content,
-            ReasoningContent = NormalizeOptional(message.ReasoningContent),
-            ToolCallId = NormalizeOptional(message.ToolCallId),
-            ToolCalls = message.ToolCalls.Count == 0
-                ? null
-                : message.ToolCalls.Select(ToToolCall).ToArray(),
-        };
-
-    private static ToolCall ToToolCall(LlmSessionRuntimeToolCall call) =>
-        new()
-        {
-            Id = call.CallId,
-            Name = call.ToolName,
-            ArgumentsJson = RuntimeToolArgumentsJson(call),
-        };
-
-    private static LlmSessionRuntimeToolCall ToRuntimeToolCall(ToolCall call) =>
-        new()
-        {
-            CallId = call.Id,
-            ToolName = call.Name,
-            ArgumentsJson = call.ArgumentsJson,
-            Arguments = ParseStruct(call.ArgumentsJson),
-        };
-
-    private static LlmSessionTokenUsage ToSessionUsage(TokenUsage usage) =>
-        new()
-        {
-            PromptTokens = usage.PromptTokens,
-            CompletionTokens = usage.CompletionTokens,
-            TotalTokens = usage.TotalTokens,
-        };
-
-    private static string? ExtractChunkText(LLMStreamChunk chunk)
-    {
-        if (!string.IsNullOrWhiteSpace(chunk.DeltaContent))
-            return chunk.DeltaContent;
-        if (chunk.DeltaContentPart is { Kind: ContentPartKind.Text } part && !string.IsNullOrWhiteSpace(part.Text))
-            return part.Text;
-        return null;
-    }
-
-    private static IReadOnlyList<ToolCall> SelectForwardedToolCalls(
-        IReadOnlyList<ToolCall> toolCalls,
-        LlmSessionRuntimeToolSelection? selection)
-    {
-        if (selection is null || toolCalls.Count == 0 || selection.ForwardedTools.Count == 0)
-            return [];
-
-        var forwardedToolNames = selection.ForwardedTools
-            .Select(static tool => tool.ToolName)
-            .Except(selection.SubstitutedToolNames, StringComparer.Ordinal)
-            .ToHashSet(StringComparer.Ordinal);
-        return toolCalls
-            .Where(call => forwardedToolNames.Contains(call.Name))
-            .ToArray();
-    }
-
-    private static IReadOnlyList<ToolCall> ApplyToolChoiceHint(
-        IReadOnlyList<ToolCall> toolCalls,
-        LlmSessionRuntimeToolSelection? selection)
-    {
-        if (toolCalls.Count == 0 ||
-            selection is null ||
-            string.IsNullOrWhiteSpace(selection.ToolChoiceHintName))
-        {
-            return toolCalls;
-        }
-
-        return toolCalls
-            .Select(call => ApplyToolChoiceHint(call, selection))
-            .ToArray();
-    }
-
-    private static ToolCall ApplyToolChoiceHint(
-        ToolCall call,
-        LlmSessionRuntimeToolSelection selection)
-    {
-        var toolName = selection.ToolChoiceHintName.Trim();
-        if (!string.Equals(call.Name, toolName, StringComparison.Ordinal))
-        {
-            return CloneWithArguments(
-                call,
-                BuildStructuredToolChoiceError(
-                    "tool_choice_hint_mismatch",
-                    $"Tool choice hint requires '{toolName}', but the model called '{call.Name}'.",
-                    "tool_name"));
-        }
-
-        JsonObject prefilled;
-        try
-        {
-            prefilled = ParseJsonObject(ToolChoiceHintArgumentsJson(selection));
-        }
-        catch (JsonException ex)
-        {
-            return CloneWithArguments(
-                call,
-                BuildStructuredToolChoiceError(
-                    "invalid_tool_choice_prefill",
-                    $"Tool choice prefilled arguments must be a JSON object: {ex.Message}",
-                    "tool_choice_hint_arguments_json"));
-        }
-
-        JsonObject modelArguments;
-        try
-        {
-            modelArguments = ParseJsonObject(call.ArgumentsJson);
-        }
-        catch (JsonException ex)
-        {
-            return CloneWithArguments(
-                call,
-                BuildStructuredToolChoiceError(
-                    "invalid_tool_arguments",
-                    $"Arguments must be a JSON object: {ex.Message}",
-                    "arguments"));
-        }
-
-        var merged = new JsonObject();
-        foreach (var (key, value) in prefilled)
-            merged[key] = value?.DeepClone();
-
-        foreach (var (key, value) in modelArguments)
-        {
-            if (prefilled.TryGetPropertyValue(key, out var prefilledValue) &&
-                !JsonNode.DeepEquals(prefilledValue, value))
-            {
-                return CloneWithArguments(
-                    call,
-                    BuildStructuredToolChoiceError(
-                        "tool_choice_prefill_conflict",
-                        $"Tool argument '{key}' conflicts with server-trusted prefilled_arguments.",
-                        key));
-            }
-
-            if (!prefilled.ContainsKey(key))
-                merged[key] = value?.DeepClone();
-        }
-
-        return CloneWithArguments(
-            call,
-            merged.ToJsonString(new JsonSerializerOptions { WriteIndented = false }));
-    }
-
-    private static JsonObject ParseJsonObject(string? json)
-    {
-        if (string.IsNullOrWhiteSpace(json))
-            return new JsonObject();
-
-        return JsonNode.Parse(json) as JsonObject
-               ?? throw new JsonException("Root value must be an object.");
-    }
-
-    // Refactor (iter355/issue1438-first): Old pattern: durable LlmSession tool arguments were reconstructed from *_json strings. New principle: actor payload helpers prefer typed Struct writes and keep empty Struct as legacy fallback.
-    private static Struct ParseStruct(string? json)
-    {
-        if (string.IsNullOrWhiteSpace(json))
-            return new Struct();
-
-        try
-        {
-            return JsonParser.Default.Parse<Struct>(json);
-        }
-        catch
-        {
-            return new Struct();
-        }
-    }
-
-    private static string RuntimeToolArgumentsJson(LlmSessionRuntimeToolCall call)
-    {
-        if (call.Arguments is { Fields.Count: > 0 })
-            return JsonFormatter.Default.Format(call.Arguments);
-        return string.IsNullOrWhiteSpace(call.ArgumentsJson) ? "{}" : call.ArgumentsJson;
-    }
-
     private static Value RuntimeToolArgumentsValue(LlmSessionRuntimeToolCall call)
     {
         if (call.Arguments is { Fields.Count: > 0 })
@@ -1060,97 +968,12 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             string.IsNullOrWhiteSpace(call.ArgumentsJson) ? "{}" : call.ArgumentsJson);
     }
 
-    private static Value ToolCallArgumentsValue(ToolCall call)
-    {
-        var arguments = ParseStruct(call.ArgumentsJson);
-        if (arguments.Fields.Count > 0)
-            return Value.ForStruct(arguments);
-        return ResponsesJsonValues.ParseBoundaryPayload(
-            string.IsNullOrWhiteSpace(call.ArgumentsJson) ? "{}" : call.ArgumentsJson);
-    }
-
-    private static string ToolChoiceHintArgumentsJson(LlmSessionRuntimeToolSelection selection)
-    {
-        if (selection.ToolChoiceHintArguments is { Fields.Count: > 0 })
-            return JsonFormatter.Default.Format(selection.ToolChoiceHintArguments);
-        return selection.ToolChoiceHintArgumentsJson;
-    }
-
-    private static string ToolDeclarationParametersJson(LlmSessionRuntimeToolDeclaration declaration)
-    {
-        if (declaration.Parameters is { Fields.Count: > 0 })
-            return JsonFormatter.Default.Format(declaration.Parameters);
-        return declaration.ParametersJson;
-    }
-
     private static Struct MergeStruct(Struct? existing, Struct incoming)
     {
         var merged = existing?.Clone() ?? new Struct();
         foreach (var (key, value) in incoming.Fields)
             merged.Fields[key] = value.Clone();
         return merged;
-    }
-
-    private static ToolCall CloneWithArguments(ToolCall call, string argumentsJson) =>
-        new()
-        {
-            Id = call.Id,
-            Name = call.Name,
-            ArgumentsJson = argumentsJson,
-        };
-
-    private static string BuildStructuredToolChoiceError(
-        string code,
-        string message,
-        string field) =>
-        JsonSerializer.Serialize(new
-        {
-            error = new
-            {
-                code,
-                message,
-                field,
-            },
-        });
-
-    private static IReadOnlyList<ToolCall> SelectLocalToolCalls(
-        IReadOnlyList<ToolCall> toolCalls,
-        LlmSessionRuntimeToolSelection? selection,
-        IReadOnlyList<IAgentTool> tools)
-    {
-        if (toolCalls.Count == 0 || tools.Count == 0)
-            return [];
-
-        var forwardedNames = (selection?.ForwardedTools ?? [])
-            .Select(static tool => tool.ToolName)
-            .Except(selection?.SubstitutedToolNames ?? [], StringComparer.Ordinal)
-            .ToHashSet(StringComparer.Ordinal);
-        var localNames = tools
-            .Where(static tool => tool is not ForwardedRuntimeTool)
-            .Select(static tool => tool.Name)
-            .Where(name => !forwardedNames.Contains(name))
-            .ToHashSet(StringComparer.Ordinal);
-        return toolCalls
-            .Where(call => localNames.Contains(call.Name))
-            .ToArray();
-    }
-
-    private static LlmSessionForwardedToolCall BuildForwardedToolCall(
-        ToolCall toolCall,
-        LlmSessionRuntimeToolSelection? selection)
-    {
-        var declaration = selection?.ForwardedTools
-            .FirstOrDefault(tool => string.Equals(tool.ToolName, toolCall.Name, StringComparison.Ordinal));
-        return new LlmSessionForwardedToolCall
-        {
-            CallId = toolCall.Id,
-            ToolName = toolCall.Name,
-            SchemaHash = declaration?.SchemaHash ?? string.Empty,
-            Arguments = ToolCallArgumentsValue(toolCall),
-            Status = LlmSessionForwardedToolCallStatus.Pending,
-            EmittedAt = Timestamp.FromDateTime(DateTime.UtcNow),
-            Expiry = Timestamp.FromDateTime(DateTime.UtcNow.Add(DefaultTtl.ToTimeSpan())),
-        };
     }
 
     private static LlmSessionRunScope EnsureRun(
@@ -1175,6 +998,62 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         return state.ActiveRun;
     }
 
+    private long NextRunSequence(string runId)
+    {
+        if (State.ActiveRun == null ||
+            !string.Equals(State.ActiveRun.RunId, runId, StringComparison.Ordinal))
+        {
+            return 1;
+        }
+
+        return State.ActiveRun.LastAppliedSequence + 1;
+    }
+
+    private static bool TryAcceptRunSequence(LlmSessionRunScope run, long sequence)
+    {
+        if (IsRunTerminal(run.Status))
+            return false;
+        if (sequence <= 0)
+            return true;
+        if (sequence != run.LastAppliedSequence + 1)
+            return false;
+
+        run.LastAppliedSequence = sequence;
+        return true;
+    }
+
+    private static bool TryAcceptRunRecord(
+        LlmSessionRunScope run,
+        long sequence,
+        string? recordId,
+        bool allowTerminalGap = false)
+    {
+        if (IsRunTerminal(run.Status))
+            return false;
+
+        var normalizedRecordId = NormalizeOptional(recordId);
+        if (normalizedRecordId != null &&
+            run.AppliedRecordIds.Any(id => string.Equals(id, normalizedRecordId, StringComparison.Ordinal)))
+        {
+            return false;
+        }
+
+        if (allowTerminalGap && sequence > 0)
+        {
+            if (sequence <= run.LastAppliedSequence)
+                return false;
+            run.LastAppliedSequence = sequence;
+        }
+        else if (!TryAcceptRunSequence(run, sequence))
+        {
+            return false;
+        }
+
+        if (normalizedRecordId != null)
+            run.AppliedRecordIds.Add(normalizedRecordId);
+        return true;
+    }
+
     private static void TouchRecord(LlmSessionState state, Timestamp? updatedAt)
     {
         if (state.Record == null)
@@ -1186,6 +1065,33 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
     {
         state.LastAppliedEventVersion++;
         state.LastEventId = eventId;
+    }
+
+    private static bool IsRunTerminal(int status) =>
+        status is CompletedStatus or FailedStatus or CancelledStatus;
+
+    private bool CanPersistRunFact(string responseId, string runId, long sequence, bool terminal)
+    {
+        var existing = EnsureRegisteredSession(responseId);
+        if (IsTerminal(existing.Status))
+            return false;
+
+        if (State.ActiveRun == null ||
+            !string.Equals(State.ActiveRun.RunId, runId, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (IsRunTerminal(State.ActiveRun.Status))
+            return false;
+
+        if (sequence <= 0)
+            return true;
+
+        var nextSequence = State.ActiveRun.LastAppliedSequence + 1;
+        return terminal
+            ? sequence >= nextSequence
+            : sequence == nextSequence;
     }
 
     private static void UpsertRuntimeToolCall(
@@ -1208,140 +1114,206 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             existing.ArgumentsJson += incoming.ArgumentsJson;
     }
 
-    private static string MapFailureCode(Exception ex) =>
-        ex switch
-        {
-            NyxIdAuthenticationRequiredException => "authentication_required",
-            NyxIdUpstreamException upstream => upstream.Kind.ToString().ToLowerInvariant(),
-            _ => "execution_failed",
-        };
-
-    private sealed class ForwardedRuntimeTool : IAgentTool
+    private static void UpsertForwardedToolCallRecord(
+        LlmSessionState state,
+        LlmSessionForwardedToolCall incoming)
     {
-        public ForwardedRuntimeTool(LlmSessionRuntimeToolDeclaration declaration)
+        var call = incoming.Clone();
+        if (call.Status == LlmSessionForwardedToolCallStatus.Unspecified)
+            call.Status = LlmSessionForwardedToolCallStatus.Pending;
+        if (call.EmittedAt == null)
+            call.EmittedAt = Timestamp.FromDateTime(DateTime.UtcNow);
+
+        var existing = state.ForwardedToolCalls
+            .FirstOrDefault(x => string.Equals(x.CallId, call.CallId, StringComparison.Ordinal));
+        if (existing is null)
         {
-            ArgumentNullException.ThrowIfNull(declaration);
-            Name = declaration.ToolName;
-            Description = declaration.Description;
-            ParametersSchema = ToolDeclarationParametersJson(declaration);
+            state.ForwardedToolCalls.Add(call);
+            return;
         }
 
-        public string Name { get; }
-
-        public string Description { get; }
-
-        public string ParametersSchema { get; }
-
-        public bool IsReadOnly => true;
-
-        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
-            throw new InvalidOperationException(
-                $"Forwarded Responses tool '{Name}' must be executed by the client, not by Aevatar.");
+        existing.ToolName = call.ToolName;
+        existing.SchemaHash = call.SchemaHash;
+        existing.Arguments = call.Arguments?.Clone();
+        existing.Status = call.Status;
+        existing.Expiry = call.Expiry?.Clone();
+        existing.Result = call.Result?.Clone();
+        existing.EmittedAt = call.EmittedAt?.Clone();
+        existing.ReceivedAt = call.ReceivedAt?.Clone();
+        existing.ResolvedAt = call.ResolvedAt?.Clone();
     }
 
-    private sealed class RuntimeToolCallAccumulator
+    private static LlmSessionRuntimeToolCall ToRuntimeToolCall(LlmSessionForwardedToolCall call) =>
+        new()
+        {
+            CallId = call.CallId,
+            ToolName = call.ToolName,
+            Arguments = call.Arguments?.StructValue?.Clone(),
+        };
+
+    private Task<LlmRunRecordDecision> PersistStreamChunkObservedAsync(LlmStreamChunkObserved observed, CancellationToken ct)
     {
-        private readonly Dictionary<string, ToolCallAggregate> _aggregates = new(StringComparer.Ordinal);
-        private readonly List<string> _order = [];
-        private int _anonymousCounter;
-        private string? _activeAnonymousKey;
+        var decision = DecideRunRecord(observed.ResponseId, observed.RunId);
+        if (decision.StopDispatching)
+            return Task.FromResult(decision);
+        observed.Sequence = NextRunSequence(observed.RunId);
+        return PersistRunEventAsync(observed, decision, ct);
+    }
 
-        public void TrackDelta(ToolCall delta)
+    private Task<LlmRunRecordDecision> PersistToolCallObservedAsync(LlmToolCallObserved observed, CancellationToken ct)
+    {
+        var decision = DecideRunRecord(observed.ResponseId, observed.RunId);
+        if (decision.StopDispatching)
+            return Task.FromResult(decision);
+        observed.Sequence = NextRunSequence(observed.RunId);
+        return PersistRunEventAsync(observed, decision, ct);
+    }
+
+    private Task<LlmRunRecordDecision> PersistRunCompletedAsync(LlmRunCompleted completed, CancellationToken ct)
+    {
+        var decision = DecideRunRecord(completed.ResponseId, completed.RunId);
+        if (decision.StopDispatching)
+            return Task.FromResult(decision);
+        completed.Sequence = NextRunSequence(completed.RunId);
+        return PersistRunEventAsync(completed, decision with { StopDispatching = true }, ct);
+    }
+
+    private Task<LlmRunRecordDecision> PersistRunFailedAsync(LlmRunFailed failed, CancellationToken ct)
+    {
+        var decision = DecideRunRecord(failed.ResponseId, failed.RunId);
+        if (decision.StopDispatching)
+            return Task.FromResult(decision);
+        failed.Sequence = NextRunSequence(failed.RunId);
+        return PersistRunEventAsync(failed, decision with { StopDispatching = true }, ct);
+    }
+
+    private Task<LlmRunRecordDecision> PersistRunCancelledAsync(
+        LlmRunCancelled cancelled,
+        CancellationToken ct,
+        bool allowMissingRun = false)
+    {
+        var decision = allowMissingRun
+            ? DecideRunCancellationRecord(cancelled.ResponseId, cancelled.RunId)
+            : DecideRunRecord(cancelled.ResponseId, cancelled.RunId);
+        if (decision.StopDispatching)
+            return Task.FromResult(decision);
+        cancelled.Sequence = NextRunSequence(cancelled.RunId);
+        return PersistRunEventAsync(cancelled, decision with { StopDispatching = true }, ct);
+    }
+
+    private async Task<LlmRunRecordDecision> PersistRunEventAsync(
+        IMessage evt,
+        LlmRunRecordDecision decision,
+        CancellationToken ct)
+    {
+        await PersistDomainEventAsync(evt, ct);
+        return decision;
+    }
+
+    private LlmRunRecordDecision DecideRunRecord(string responseId, string runId)
+    {
+        var existing = State.Record;
+        if (existing == null ||
+            !string.Equals(existing.ResponseId, responseId, StringComparison.Ordinal) ||
+            IsTerminal(existing.Status))
         {
-            ArgumentNullException.ThrowIfNull(delta);
-            var aggregate = ResolveAggregate(delta);
-            if (!string.IsNullOrWhiteSpace(delta.Name))
-                aggregate.Name = delta.Name;
-            if (!string.IsNullOrEmpty(delta.ArgumentsJson))
-                aggregate.Arguments.Append(delta.ArgumentsJson);
+            return LlmRunRecordDecision.Stop;
         }
 
-        public IReadOnlyList<ToolCall> BuildToolCalls()
+        if (State.ActiveRun is not { } active ||
+            !string.Equals(active.RunId, runId, StringComparison.Ordinal) ||
+            IsRunTerminal(active.Status))
         {
-            var result = new List<ToolCall>(_order.Count);
-            foreach (var key in _order)
-            {
-                var aggregate = _aggregates[key];
-                result.Add(new ToolCall
-                {
-                    Id = aggregate.Id,
-                    Name = aggregate.Name ?? string.Empty,
-                    ArgumentsJson = aggregate.Arguments.ToString(),
-                });
-            }
-
-            return result;
+            return LlmRunRecordDecision.Stop;
         }
 
-        private ToolCallAggregate ResolveAggregate(ToolCall delta)
-        {
-            if (!string.IsNullOrWhiteSpace(delta.Id))
-                return ResolveKnownIdAggregate(delta.Id);
+        return LlmRunRecordDecision.Continue;
+    }
 
-            return ResolveAnonymousAggregate();
+    private LlmRunRecordDecision DecideRunCancellationRecord(string responseId, string runId)
+    {
+        var existing = State.Record;
+        if (existing == null ||
+            !string.Equals(existing.ResponseId, responseId, StringComparison.Ordinal) ||
+            IsTerminal(existing.Status))
+        {
+            return LlmRunRecordDecision.Stop;
         }
 
-        private ToolCallAggregate ResolveKnownIdAggregate(string id)
+        if (State.ActiveRun is { } active &&
+            (!string.Equals(active.RunId, runId, StringComparison.Ordinal) ||
+             IsRunTerminal(active.Status)))
         {
-            var knownKey = $"id:{id}";
-            if (TryPromoteActiveAnonymousAggregate(knownKey, id, out var promoted))
-            {
-                _activeAnonymousKey = null;
-                return promoted;
-            }
-
-            _activeAnonymousKey = null;
-            if (!_aggregates.TryGetValue(knownKey, out var aggregate))
-            {
-                aggregate = new ToolCallAggregate(id);
-                _aggregates[knownKey] = aggregate;
-                _order.Add(knownKey);
-            }
-
-            return aggregate;
+            return LlmRunRecordDecision.Stop;
         }
 
-        private ToolCallAggregate ResolveAnonymousAggregate()
-        {
-            if (!string.IsNullOrWhiteSpace(_activeAnonymousKey))
-                return _aggregates[_activeAnonymousKey];
+        return LlmRunRecordDecision.Continue;
+    }
 
-            _anonymousCounter++;
-            var anonymousKey = $"anon:{_anonymousCounter}";
-            var aggregate = new ToolCallAggregate($"stream-tool-call-{_anonymousCounter}");
-            _aggregates[anonymousKey] = aggregate;
-            _order.Add(anonymousKey);
-            _activeAnonymousKey = anonymousKey;
-            return aggregate;
+    private sealed class InActorLlmRunSink(LlmSessionGAgent actor) : ILlmRunSink
+    {
+        public Task<LlmRunRecordDecision> RecordStreamChunkObservedAsync(
+            LlmStreamChunkObserved observed,
+            CancellationToken ct = default) =>
+            actor.PersistStreamChunkObservedAsync(observed, ct);
+
+        public Task<LlmRunRecordDecision> RecordToolCallObservedAsync(
+            LlmToolCallObserved observed,
+            CancellationToken ct = default) =>
+            actor.PersistToolCallObservedAsync(observed, ct);
+
+        public Task<LlmRunRecordDecision> RecordRunCompletedAsync(
+            LlmRunCompleted completed,
+            CancellationToken ct = default) =>
+            actor.PersistRunCompletedAsync(completed, ct);
+
+        public Task<LlmRunRecordDecision> RecordRunFailedAsync(
+            LlmRunFailed failed,
+            CancellationToken ct = default) =>
+            actor.PersistRunFailedAsync(failed, ct);
+
+        public Task<LlmRunRecordDecision> RecordRunCancelledAsync(
+            LlmRunCancelled cancelled,
+            CancellationToken ct = default) =>
+            actor.PersistRunCancelledAsync(cancelled, ct);
+    }
+
+    private bool TryPrepareRunRecord(
+        string? responseId,
+        string? requestedRunId,
+        string? recordId,
+        out LlmSessionRecord existing,
+        out string runId)
+    {
+        existing = EnsureRegisteredSession(responseId);
+        runId = NormalizeRequired(requestedRunId);
+        var normalizedRecordId = NormalizeRequired(recordId);
+        if (string.IsNullOrWhiteSpace(normalizedRecordId))
+            throw new InvalidOperationException("record_id is required.");
+
+        if (State.ActiveRun == null || string.IsNullOrWhiteSpace(State.ActiveRun.RunId))
+            throw new InvalidOperationException(
+                $"Response session '{existing.ResponseId}' has no active LLM run.");
+
+        if (string.IsNullOrWhiteSpace(runId))
+            runId = State.ActiveRun.RunId;
+
+        if (!string.Equals(State.ActiveRun.RunId, runId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Response session '{existing.ResponseId}' active run is '{State.ActiveRun.RunId}' and cannot record run '{runId}'.");
         }
 
-        private bool TryPromoteActiveAnonymousAggregate(
-            string knownKey,
-            string knownId,
-            out ToolCallAggregate aggregate)
-        {
-            aggregate = default!;
-            if (string.IsNullOrWhiteSpace(_activeAnonymousKey))
-                return false;
-            var anonymousAggregate = _aggregates[_activeAnonymousKey];
-            if (_aggregates.ContainsKey(knownKey))
-                return false;
-            anonymousAggregate.Id = knownId;
-            _aggregates.Remove(_activeAnonymousKey);
-            _aggregates[knownKey] = anonymousAggregate;
-            _order[_order.IndexOf(_activeAnonymousKey)] = knownKey;
-            aggregate = anonymousAggregate;
-            return true;
-        }
+        if (IsRunTerminal(State.ActiveRun.Status))
+            return false;
 
-        private sealed class ToolCallAggregate(string id)
-        {
-            public string Id { get; set; } = id;
+        if (State.ActiveRun.AppliedRecordIds.Any(id => string.Equals(id, normalizedRecordId, StringComparison.Ordinal)))
+            return false;
 
-            public string? Name { get; set; }
+        if (IsTerminal(existing.Status))
+            return false;
 
-            public System.Text.StringBuilder Arguments { get; } = new();
-        }
+        return true;
     }
 
     private static LlmSessionRecord NormalizeRecord(LlmSessionRecord record)
@@ -1422,7 +1394,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             throw new InvalidOperationException("expiry is required.");
     }
 
-    private static LlmSessionCompletion NormalizeCompletion(LlmSessionCompletion completion)
+    private LlmSessionCompletion NormalizeCompletion(LlmSessionCompletion completion)
     {
         completion.OutputText ??= string.Empty;
         completion.FailureCode = NormalizeOptional(completion.FailureCode) ?? string.Empty;
@@ -1434,6 +1406,25 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             completion.Usage.PromptTokens = Math.Max(0, completion.Usage.PromptTokens);
             completion.Usage.CompletionTokens = Math.Max(0, completion.Usage.CompletionTokens);
             completion.Usage.TotalTokens = Math.Max(0, completion.Usage.TotalTokens);
+        }
+
+        if (completion.ToolCalls.Count > 0)
+        {
+            var forwardedCallIds = State.ForwardedToolCalls
+                .Select(static call => call.CallId)
+                .ToHashSet(StringComparer.Ordinal);
+            var forwardedToolNames = State.ForwardedToolCalls
+                .ToDictionary(static call => call.CallId, static call => call.ToolName, StringComparer.Ordinal);
+            for (var i = completion.ToolCalls.Count - 1; i >= 0; i--)
+            {
+                var toolCall = completion.ToolCalls[i];
+                if (!forwardedCallIds.Contains(toolCall.CallId) ||
+                    !forwardedToolNames.TryGetValue(toolCall.CallId, out var toolName) ||
+                    !string.Equals(toolName, toolCall.ToolName, StringComparison.Ordinal))
+                {
+                    completion.ToolCalls.RemoveAt(i);
+                }
+            }
         }
 
         foreach (var toolCall in completion.ToolCalls)
@@ -1581,6 +1572,67 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
                 ObservedAt = Timestamp.FromDateTimeOffset(expiresAt),
             });
     }
+
+    private async Task<bool> TryScheduleRunTimeoutAsync(
+        string responseId,
+        string runId,
+        Timestamp startedAt,
+        TimeSpan timeoutAfter)
+    {
+        try
+        {
+            var timeoutAt = startedAt.ToDateTimeOffset().Add(timeoutAfter);
+            var dueTime = timeoutAt - DateTimeOffset.UtcNow;
+            if (dueTime <= TimeSpan.Zero)
+                dueTime = TimeSpan.FromMilliseconds(1);
+
+            await ScheduleSelfDurableTimeoutAsync(
+                BuildRunTimeoutCallbackId(responseId, runId),
+                dueTime,
+                new FinalizeLlmRunTimedOut
+                {
+                    ResponseId = responseId,
+                    RunId = runId,
+                    RecordId = BuildRunTimeoutRecordId(runId),
+                    TimedOutAt = Timestamp.FromDateTimeOffset(timeoutAt),
+                });
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "LLM run timeout scheduling failed for response {ResponseId} run {RunId}.", responseId, runId);
+            await PersistDomainEventAsync(new LlmRunFailed
+            {
+                ResponseId = responseId,
+                RunId = runId,
+                FailureCode = "run_timeout_schedule_failed",
+                FailureMessage = string.IsNullOrWhiteSpace(ex.Message)
+                    ? "LLM run timeout scheduling failed."
+                    : ex.Message,
+                FailedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+                Sequence = NextRunSequence(runId),
+                RecordId = $"{runId}:timeout-schedule-failed",
+            });
+            return false;
+        }
+    }
+
+    private static TimeSpan ResolveRunTimeout(Duration? requestedTimeout)
+    {
+        var timeout = requestedTimeout?.ToTimeSpan();
+        if (timeout is { } value && value > TimeSpan.Zero)
+            return value;
+
+        // Decoupled from the session TTL on purpose: an abandoned/crashed run must be
+        // finalized in minutes, not after the 24h session lifetime.
+        return DefaultRunExecutionTimeout;
+    }
+
+    private static string BuildRunTimeoutCallbackId(string responseId, string runId) =>
+        RuntimeCallbackKeyComposer.BuildCallbackId("llm-run-timeout", responseId, runId);
+
+    private static string BuildRunTimeoutRecordId(string runId) =>
+        $"{runId}:timeout";
 
     private static DateTimeOffset ResolveExpiry(LlmSessionRecord record)
     {

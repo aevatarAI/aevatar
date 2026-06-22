@@ -181,7 +181,8 @@ public sealed record ResponsesCreateCommandPlan(
     AgentToolExecutionContext ToolContext,
     ResponsesToolClassification ToolClassification,
     ResponsesToolChoiceHintPlan ToolChoiceHintPlan,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt,
+    string ResolvedToolSetName = "");
 
 public sealed record ResponsesCreateCommandResult(
     ResponsesCommandError? Error,
@@ -240,7 +241,8 @@ public sealed record MessagesCreateCommandPlan(
     LLMRequest LlmRequest,
     AgentToolExecutionContext ToolContext,
     ResponsesToolClassification ToolClassification,
-    ResponsesToolChoiceHintPlan ToolChoiceHintPlan);
+    ResponsesToolChoiceHintPlan ToolChoiceHintPlan,
+    string ResolvedToolSetName = "");
 
 public sealed record ChatCompletionsCreateCommandPlan(
     NormalizedChatCompletionsCommand Normalized,
@@ -248,7 +250,8 @@ public sealed record ChatCompletionsCreateCommandPlan(
     LLMRequest LlmRequest,
     ResponsesToolClassification ToolClassification,
     ResponsesToolChoiceHintPlan ToolChoiceHintPlan,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt,
+    string ResolvedToolSetName = "");
 
 public sealed record MessagesCreateCommandResult(
     ResponsesCommandError? Error,

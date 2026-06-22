@@ -28,6 +28,7 @@ public static class VoiceRealtimeTransportControlBridge
                 ObservedStateVersion = accepted.ObservedStateVersion,
                 WireContractVersion = accepted.EffectiveWireContractVersion,
                 InputImagePolicy = accepted.CreateEffectiveInputImagePolicy(),
+                AttachOutcome = MapAttachOutcome(accepted.AttachOutcome),
             },
         }, ct);
     }
@@ -105,6 +106,13 @@ public static class VoiceRealtimeTransportControlBridge
         sendCts.CancelAfter(ControlSendTimeout);
         await transport.SendControlAsync(frame, sendCts.Token);
     }
+
+    private static VoiceTransportAttachOutcome MapAttachOutcome(VoiceRealtimeAttachOutcome outcome) =>
+        outcome switch
+        {
+            VoiceRealtimeAttachOutcome.Restarted => VoiceTransportAttachOutcome.Restarted,
+            _ => VoiceTransportAttachOutcome.NewSession,
+        };
 
     private sealed class NoOpAsyncDisposable : IAsyncDisposable
     {

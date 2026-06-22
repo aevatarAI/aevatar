@@ -93,13 +93,19 @@ public class WorkflowRoleGAgent(
             if (managedHandoff != null)
                 completed.ManagedHandoff = managedHandoff;
             await PublishAsync(completed, TopologyAudience.Parent);
+            // O1 (06-19-workflow-run-observatory): the committed RoleChatSessionCompletedEvent is the only
+            // committed fact carrying both tool_calls (arguments) and tool_receipts (result/success/error);
+            // persist the receipts (previously dropped) so the run-artifact fact builder can enrich tool detail.
             await PersistRoleChatSessionCompletionAsync(
                 chatRequest,
                 replayRecord.Content,
                 replayRecord.ReasoningContent,
                 replayRecord.ToolCalls,
                 replayRecord.ContentParts,
-                replayRecord.ContentEmitted);
+                replayRecord.ContentEmitted,
+                replayRecord.Usage,
+                replayRecord.Model,
+                replayRecord.ToolReceipts);
         }
         catch (OperationCanceledException) when (timeoutCts is { IsCancellationRequested: true })
         {

@@ -28,6 +28,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ScriptAuthoringPreviewGenerator>();
         services.TryAddSingleton<IStudioAuthoringPreviewApplicationService, StudioAuthoringPreviewApplicationService>();
         services.TryAddSingleton<IStudioMemberService, StudioMemberService>();
+        services.TryAddSingleton<IStudioWorkflowProvisioningService, StudioWorkflowProvisioningService>();
         services.TryAddSingleton<IStudioTeamService, StudioTeamService>();
         services.TryAddSingleton<IStudioTeamGAgentStreamInvocationService, StudioTeamGAgentStreamInvocationService>();
         services.AddOptions<UserLlmSettingsOptions>();
