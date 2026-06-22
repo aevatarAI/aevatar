@@ -18,6 +18,12 @@ public static class NyxIdLoginFinalizationEndpoints
 {
     public static void Map(IEndpointRouteBuilder app)
     {
+        app.MapGet("/api/auth/nyxid/config", HandleConfigAsync)
+            .WithTags("Auth")
+            .AllowAnonymous()
+            .Produces<NyxIdLoginConfigurationResponse>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status503ServiceUnavailable);
+
         app.MapPost("/api/auth/nyxid/finalize", HandleFinalizeAsync)
             .WithTags("Auth")
             .AllowAnonymous()
@@ -25,6 +31,30 @@ public static class NyxIdLoginFinalizationEndpoints
             .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status409Conflict)
             .Produces(StatusCodes.Status503ServiceUnavailable);
+    }
+
+    internal static async Task<IResult> HandleConfigAsync(
+        [FromServices] IAevatarOAuthClientProvider oauthClientProvider,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            var snapshot = await oauthClientProvider.GetAsync(ct).ConfigureAwait(false);
+            return Results.Ok(new NyxIdLoginConfigurationResponse(
+                BaseUrl: snapshot.NyxIdAuthority.TrimEnd('/'),
+                ClientId: snapshot.ClientId,
+                Scope: string.IsNullOrWhiteSpace(snapshot.OauthScope)
+                    ? AevatarOAuthClientScopes.AuthorizationScope
+                    : snapshot.OauthScope.Trim()));
+        }
+        catch (AevatarOAuthClientNotProvisionedException)
+        {
+            return Results.Json(new
+            {
+                error = "oauth_client_not_provisioned",
+                detail = "Aevatar OAuth client has not been provisioned at NyxID yet.",
+            }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
     }
 
     internal static async Task<IResult> HandleFinalizeAsync(
@@ -255,6 +285,11 @@ public static class NyxIdLoginFinalizationEndpoints
         }
     }
 }
+
+public sealed record NyxIdLoginConfigurationResponse(
+    string BaseUrl,
+    string ClientId,
+    string Scope);
 
 public sealed record NyxIdLoginFinalizationRequest
 {
