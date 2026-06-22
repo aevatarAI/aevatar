@@ -134,7 +134,7 @@ public static class NyxIdLoginFinalizationEndpoints
             if (!string.Equals(existingBinding.Value, exchange.BindingId, StringComparison.Ordinal))
                 await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
 
-            return Results.Ok(BuildResponse(exchange, user, bindingCommitted: false));
+            return Results.Ok(BuildResponse(exchange, user, bindingDispatchAccepted: false));
         }
 
         CommandDispatchResult<ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> accepted;
@@ -171,13 +171,13 @@ public static class NyxIdLoginFinalizationEndpoints
             }, statusCode: StatusCodes.Status503ServiceUnavailable);
         }
 
-        return Results.Ok(BuildResponse(exchange, user, bindingCommitted: true));
+        return Results.Ok(BuildResponse(exchange, user, bindingDispatchAccepted: true));
     }
 
     private static NyxIdLoginFinalizationResponse BuildResponse(
         BrokerAuthorizationCodeResult exchange,
         NyxIdFinalizedUserInfo user,
-        bool bindingCommitted) =>
+        bool bindingDispatchAccepted) =>
         new(
             Tokens: new NyxIdFinalizedTokenSet(
                 AccessToken: exchange.AccessToken ?? string.Empty,
@@ -186,7 +186,7 @@ public static class NyxIdLoginFinalizationEndpoints
                 IdToken: exchange.IdToken,
                 Scope: exchange.Scope),
             User: user,
-            BindingCommitted: bindingCommitted);
+            BindingDispatchAccepted: bindingDispatchAccepted);
 
     private static NyxIdFinalizedUserInfo ResolveUserInfo(string? idToken)
     {
@@ -301,7 +301,7 @@ public sealed record NyxIdLoginFinalizationRequest
 public sealed record NyxIdLoginFinalizationResponse(
     NyxIdFinalizedTokenSet Tokens,
     NyxIdFinalizedUserInfo User,
-    bool BindingCommitted);
+    bool BindingDispatchAccepted);
 
 public sealed record NyxIdFinalizedTokenSet(
     string AccessToken,

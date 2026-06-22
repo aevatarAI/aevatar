@@ -105,7 +105,7 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
         broker.Exchanges.Should().ContainSingle().Which.Should().Be(("auth-code", "pkce-verifier", "http://localhost/auth/callback"));
         statusCode.Should().Be(StatusCodes.Status200OK);
         payload.Should().NotBeNull();
-        payload!.BindingCommitted.Should().BeTrue();
+        payload!.BindingDispatchAccepted.Should().BeTrue();
         payload.Tokens.AccessToken.Should().Be("access-token");
         payload.Tokens.ExpiresIn.Should().Be(1800);
         payload.User.Sub.Should().Be("owner-user-1");
@@ -143,7 +143,7 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
         var (statusCode, payload) = await ExecuteJsonAsync<NyxIdLoginFinalizationResponse>(result);
 
         statusCode.Should().Be(StatusCodes.Status200OK);
-        payload!.BindingCommitted.Should().BeFalse();
+        payload!.BindingDispatchAccepted.Should().BeFalse();
         dispatch.Commands.Should().BeEmpty();
         broker.RevokedBindingIds.Should().ContainSingle().Which.Should().Be("bnd-new");
     }
