@@ -367,7 +367,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
             new ScheduledDispatchTargetDescriptor(
                 ScheduledDispatchTargetKind.ServiceInvocation,
                 ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
-                    new ServiceIdentity { ServiceId = "svc" },
+                    new ServiceIdentity { TenantId = "tenant", AppId = "app", Namespace = "default", ServiceId = "svc" },
                     "run",
                     Any.Pack(new Empty()),
                     Auth: new ScheduledServiceInvocationAuth())),
@@ -390,14 +390,14 @@ public sealed class ScheduledDispatchApplicationServiceTests
             new ScheduledDispatchTargetDescriptor(
                 ScheduledDispatchTargetKind.ServiceInvocation,
                 ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
-                    new ServiceIdentity { ServiceId = "svc" },
+                    new ServiceIdentity { TenantId = "tenant", AppId = "app", Namespace = "default", ServiceId = "svc" },
                     "run",
                     Any.Pack(new Empty()),
                     Auth: new ScheduledServiceInvocationAuth(
-                        new ScheduledServiceInvocationNyxIdCredentialSource(
+                        SenderNyxId: new ScheduledServiceInvocationNyxIdCredentialSource(
                             new ScheduledServiceInvocationNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
                             "proxy"),
-                        new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
+                        ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
                             "owner-proxy",
                             new ScheduledServiceInvocationNyxIdSubjectRef(OwnerScope.NyxIdPlatform, string.Empty, "owner-nyx-user"))))),
             "0 9 * * *",
@@ -420,7 +420,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
             new ScheduledDispatchTargetDescriptor(
                 ScheduledDispatchTargetKind.ServiceInvocation,
                 ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
-                    new ServiceIdentity { ServiceId = "svc" },
+                    new ServiceIdentity { TenantId = "tenant", AppId = "app", Namespace = "default", ServiceId = "svc" },
                     "run",
                     Any.Pack(new Empty()),
                     Auth: new ScheduledServiceInvocationAuth(

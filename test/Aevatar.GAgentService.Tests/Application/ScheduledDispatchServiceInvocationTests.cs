@@ -467,7 +467,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
             original,
             auth,
             Headers: null,
-            ProjectSenderNyxIdAccessTokenToWorkflowCallerCredential: true));
+            ProjectNyxIdAccessTokenToWorkflowCallerCredential: true));
 
         // The subject token-exchange port was never called — no re-mint, no
         // BindingNotFound throw for a raw nyxid caller.

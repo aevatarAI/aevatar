@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
@@ -89,10 +90,8 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
             x.ImplementationType == typeof(LlmRunExecutionScheduler));
         services.Should().Contain(x => x.ServiceType == typeof(LlmRunExecutionScheduler));
         services.Should().Contain(x => x.ServiceType == typeof(ILlmRunExecutionScheduler));
-        services.Should().Contain(x =>
-            x.ServiceType.FullName == "Aevatar.GAgentService.Abstractions.Responses.ILlmRunExecutionTargetProvisioner" &&
-            x.ImplementationType != null &&
-            x.ImplementationType.FullName == "Aevatar.GAgentService.Infrastructure.Activation.LlmRunExecutionTargetProvisioner");
+        services.Should().Contain(x => x.ServiceType == typeof(ILlmRunExecutionQueue));
+        services.Should().Contain(x => x.ServiceType == typeof(ILlmRunExecutionService));
 
         using var provider = services.BuildServiceProvider();
         provider.GetRequiredService<IScopeBindingReadinessQueryPort>().Should().NotBeNull();
@@ -266,6 +265,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
             options.EnableOpenApiDocument = false;
             options.AutoMapCapabilities = false;
         });
+        builder.Services.AddSingleton<ILLMProviderFactory, UnusedLlmProviderFactory>();
         builder.AddGAgentServiceCapabilityBundle();
 
         await using var app = builder.Build();
@@ -316,6 +316,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
             options.EnableAIFeatures = false;
             options.EnableScriptingCapability = false;
         });
+        builder.Services.AddSingleton<ILLMProviderFactory, UnusedLlmProviderFactory>();
         builder.AddGAgentServiceCapabilityBundle();
 
         await using var app = builder.Build();
@@ -606,5 +607,16 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         //   New principle: tests protect against service registration by symbol name without keeping the deleted type alive.
         services.Should().NotContain(service =>
             ServiceTypeContains(service.ServiceType, "WorkflowCapabilitiesStartupArtifact"));
+    }
+
+    private sealed class UnusedLlmProviderFactory : ILLMProviderFactory
+    {
+        public ILLMProvider GetProvider(string name) =>
+            throw new InvalidOperationException("The hosting startup test must not execute LLM requests.");
+
+        public ILLMProvider GetDefault() =>
+            throw new InvalidOperationException("The hosting startup test must not execute LLM requests.");
+
+        public IReadOnlyList<string> GetAvailableProviders() => [];
     }
 }
