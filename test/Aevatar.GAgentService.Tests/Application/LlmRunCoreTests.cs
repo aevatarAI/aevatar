@@ -47,6 +47,33 @@ public sealed class LlmRunCoreTests
     }
 
     [Fact]
+    public async Task RunAsync_ShouldPreserveWhitespaceOnlyStreamChunks()
+    {
+        // Whitespace-only chunks ("\n", "    ") carry the newline + indentation of
+        // code/YAML output; dropping them corrupts any structured text the model emits.
+        var provider = new ScriptedLlmProviderFactory([
+            [
+                new LLMStreamChunk { DeltaContent = "def add(a, b):" },
+                new LLMStreamChunk { DeltaContent = "\n" },
+                new LLMStreamChunk { DeltaContent = "    " },
+                new LLMStreamChunk { DeltaContent = "return a + b", IsLast = true },
+            ],
+        ]);
+        var sink = new RecordingLlmRunSink();
+        var core = new LlmRunCore(provider, [], TestToolSetRegistry.Empty, NullLogger<LlmRunCore>.Instance);
+
+        await core.RunAsync(
+            new LlmRunCoreRequest(BuildRunRequest("resp_ws"), "run_1", "ApiKey"),
+            sink);
+
+        sink.StreamChunks.Should().HaveCount(4);
+        sink.StreamChunks[1].DeltaText.Should().Be("\n");
+        sink.StreamChunks[2].DeltaText.Should().Be("    ");
+        sink.Completed.Should().ContainSingle()
+            .Which.OutputText.Should().Be("def add(a, b):\n    return a + b");
+    }
+
+    [Fact]
     public async Task RunAsync_ShouldEmitForwardedToolCallAndComplete()
     {
         var provider = new ScriptedLlmProviderFactory([

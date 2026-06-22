@@ -435,9 +435,11 @@ public sealed class LlmRunCore(
 
     private static string? ExtractChunkText(LLMStreamChunk chunk)
     {
-        if (!string.IsNullOrWhiteSpace(chunk.DeltaContent))
+        // Use IsNullOrEmpty (not IsNullOrWhiteSpace): whitespace-only deltas carry
+        // newlines and indentation that must survive for code/YAML output to stay intact.
+        if (!string.IsNullOrEmpty(chunk.DeltaContent))
             return chunk.DeltaContent;
-        if (chunk.DeltaContentPart is { Kind: ContentPartKind.Text } part && !string.IsNullOrWhiteSpace(part.Text))
+        if (chunk.DeltaContentPart is { Kind: ContentPartKind.Text } part && !string.IsNullOrEmpty(part.Text))
             return part.Text;
         return null;
     }
