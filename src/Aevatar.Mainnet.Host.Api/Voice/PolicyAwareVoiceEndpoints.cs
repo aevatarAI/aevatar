@@ -58,6 +58,7 @@ public static class PolicyAwareVoiceEndpoints
     private static async Task HandlePolicyAwareVoiceAsync(
         HttpContext http,
         [FromServices] IChatRoutePolicyQueryPort queryPort,
+        [FromServices] IChatRoutePolicyProjectionRecoveryPort recoveryPort,
         [FromServices] ChatRouteResolver resolver,
         [FromServices] IRealtimeSession<VoiceRealtimeSessionRequest, VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeFrame, VoiceRealtimeSessionCompletion> voiceRealtimeSession,
         [FromServices] IVoiceVolatileMediaStreamPort mediaStreamPort,
@@ -80,6 +81,25 @@ public static class PolicyAwareVoiceEndpoints
 
         var routeInput = BuildRouteInput(http, routingScope, channel);
         var snapshot = await queryPort.LookupForCallerAsync(routingScope, http.RequestAborted);
+
+        // Self-heal a stale/missing read-model row before failing closed. /ws/voice returns 501 after the
+        // chat-route policy grain sits idle for days: the grain still holds the policy, but its ES projection
+        // row went missing, so LookupForCallerAsync returns null and the resolver falls to the text default
+        // (ForwardToModel without a voiceAttachTarget). Re-fire the committed-state activation plan to
+        // re-materialize the row from already-committed events (no new commit, no grain mutation), then
+        // re-read with a short bounded window (materialization may complete asynchronously). Gated on a null
+        // snapshot, so the happy path is untouched and text routing — which never runs this handler — is
+        // unaffected.
+        if (snapshot is null && await recoveryPort.TryRematerializeAsync(routingScope, http.RequestAborted))
+        {
+            for (var attempt = 0; attempt < 5 && snapshot is null; attempt++)
+            {
+                if (attempt > 0)
+                    await Task.Delay(TimeSpan.FromMilliseconds(400), http.RequestAborted);
+                snapshot = await queryPort.LookupForCallerAsync(routingScope, http.RequestAborted);
+            }
+        }
+
         var decision = resolver.Resolve(snapshot, routeInput);
 
         var action = decision.Action;
