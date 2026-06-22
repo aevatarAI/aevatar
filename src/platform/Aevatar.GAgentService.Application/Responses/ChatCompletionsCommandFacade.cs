@@ -358,7 +358,8 @@ public sealed class ChatCompletionsCommandFacade(
             llmRequest,
             toolClassification,
             toolPlan.ToolChoiceHintPlan,
-            createdAt));
+            createdAt,
+            toolPlan.ResolvedToolSetName));
     }
 
     // Refactor (iter344/cluster-001):
@@ -598,7 +599,8 @@ public sealed class ChatCompletionsCommandFacade(
             plan.LlmRequest,
             plan.ToolClassification,
             plan.ToolChoiceHintPlan,
-            plan.CreatedAt);
+            plan.CreatedAt,
+            plan.ResolvedToolSetName);
         var envelope = ServiceCommandEnvelopeFactory.Create(
             plan.Session.ActorId,
             command,
@@ -621,7 +623,8 @@ public sealed class ChatCompletionsCommandFacade(
             plan.LlmRequest,
             plan.ToolClassification,
             plan.ToolChoiceHintPlan,
-            plan.CreatedAt);
+            plan.CreatedAt,
+            plan.ResolvedToolSetName);
         return new LlmRunExecutorRequest(
             plan.Session.ActorId,
             plan.Session.ResponseId,
@@ -638,7 +641,8 @@ public sealed class ChatCompletionsCommandFacade(
         LLMRequest request,
         ResponsesToolClassification toolClassification,
         ResponsesToolChoiceHintPlan toolChoiceHintPlan,
-        DateTimeOffset requestedAt)
+        DateTimeOffset requestedAt,
+        string toolSetName)
     {
         var command = new LlmRunRequested
         {
@@ -657,7 +661,8 @@ public sealed class ChatCompletionsCommandFacade(
         if (request.MaxTokens is not null)
             command.MaxTokens = request.MaxTokens.Value;
         command.Messages.AddRange(request.Messages.Select(ToRuntimeMessage));
-        command.ToolSelection = ToToolSelection(toolClassification, toolChoiceHintPlan);
+        command.ToolSelection = ResponsesRuntimeToolSelectionFactory.Create(
+            toolClassification, toolChoiceHintPlan, toolSetName);
         return command;
     }
 
@@ -684,35 +689,6 @@ public sealed class ChatCompletionsCommandFacade(
     // Refactor (iter355/issue1438-first):
     //   Old pattern: Chat Completions LlmRunRequested persisted tool schemas and hints as JSON strings.
     //   New principle: typed Struct fields carry new writes; JSON strings remain legacy fallback.
-    private static LlmSessionRuntimeToolSelection ToToolSelection(
-        ResponsesToolClassification classification,
-        ResponsesToolChoiceHintPlan toolChoiceHintPlan)
-    {
-        var selection = new LlmSessionRuntimeToolSelection
-        {
-            SubstitutedToolNames = { classification.SubstitutedToolNames },
-            AdditiveToolNames = { classification.AdditiveToolNames },
-            OwnedToolNames = { classification.OwnedToolNames },
-        };
-        if (!toolChoiceHintPlan.IsEmpty)
-        {
-            selection.ToolChoiceHintName = toolChoiceHintPlan.ToolName;
-            selection.ToolChoiceHintArgumentsJson = toolChoiceHintPlan.PrefilledArgumentsJson();
-            selection.ToolChoiceHintArguments = toolChoiceHintPlan.PrefilledArgumentsStruct();
-        }
-
-        selection.ForwardedTools.AddRange(classification.ForwardedTools.Select(static tool =>
-            new LlmSessionRuntimeToolDeclaration
-            {
-                ToolName = tool.Name,
-                Description = tool.Description,
-                ParametersJson = tool.ParametersJson,
-                Parameters = ResponsesProtoPayloads.ParseStruct(tool.ParametersJson),
-                SchemaHash = tool.SchemaHash,
-            }));
-        return selection;
-    }
-
     private static int ResolveUpstreamStatusCode(NyxIdUpstreamException ex) =>
         ex.Status switch
         {

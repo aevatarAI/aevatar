@@ -354,7 +354,8 @@ public sealed class MessagesCommandFacade(
             llmRequest,
             toolContext,
             toolClassification,
-            toolPlan.ToolChoiceHintPlan));
+            toolPlan.ToolChoiceHintPlan,
+            toolPlan.ResolvedToolSetName));
     }
 
     private async Task<MessagesCreateCommandResult> ExecuteNonStreamingAsync(
@@ -591,7 +592,8 @@ public sealed class MessagesCommandFacade(
             plan.Session.ResponseId,
             plan.LlmRequest,
             plan.ToolClassification,
-            plan.ToolChoiceHintPlan);
+            plan.ToolChoiceHintPlan,
+            plan.ResolvedToolSetName);
         var envelope = ServiceCommandEnvelopeFactory.Create(
             plan.Session.ActorId,
             command,
@@ -613,7 +615,8 @@ public sealed class MessagesCommandFacade(
             plan.Session.ResponseId,
             plan.LlmRequest,
             plan.ToolClassification,
-            plan.ToolChoiceHintPlan);
+            plan.ToolChoiceHintPlan,
+            plan.ResolvedToolSetName);
         return new LlmRunExecutorRequest(
             plan.Session.ActorId,
             plan.Session.ResponseId,
@@ -626,7 +629,8 @@ public sealed class MessagesCommandFacade(
         string responseId,
         LLMRequest request,
         ResponsesToolClassification toolClassification,
-        ResponsesToolChoiceHintPlan toolChoiceHintPlan)
+        ResponsesToolChoiceHintPlan toolChoiceHintPlan,
+        string toolSetName)
     {
         var command = new LlmRunRequested
         {
@@ -645,7 +649,8 @@ public sealed class MessagesCommandFacade(
         if (request.MaxTokens is not null)
             command.MaxTokens = request.MaxTokens.Value;
         command.Messages.AddRange(request.Messages.Select(ToRuntimeMessage));
-        command.ToolSelection = ToToolSelection(toolClassification, toolChoiceHintPlan);
+        command.ToolSelection = ResponsesRuntimeToolSelectionFactory.Create(
+            toolClassification, toolChoiceHintPlan, toolSetName);
         return command;
     }
 
@@ -672,35 +677,6 @@ public sealed class MessagesCommandFacade(
     // Refactor (iter355/issue1438-first):
     //   Old pattern: Messages LlmRunRequested persisted tool schemas and hints as JSON strings.
     //   New principle: typed Struct fields carry new writes; JSON strings remain legacy fallback.
-    private static LlmSessionRuntimeToolSelection ToToolSelection(
-        ResponsesToolClassification classification,
-        ResponsesToolChoiceHintPlan toolChoiceHintPlan)
-    {
-        var selection = new LlmSessionRuntimeToolSelection
-        {
-            SubstitutedToolNames = { classification.SubstitutedToolNames },
-            AdditiveToolNames = { classification.AdditiveToolNames },
-            OwnedToolNames = { classification.OwnedToolNames },
-        };
-        if (!toolChoiceHintPlan.IsEmpty)
-        {
-            selection.ToolChoiceHintName = toolChoiceHintPlan.ToolName;
-            selection.ToolChoiceHintArgumentsJson = toolChoiceHintPlan.PrefilledArgumentsJson();
-            selection.ToolChoiceHintArguments = toolChoiceHintPlan.PrefilledArgumentsStruct();
-        }
-
-        selection.ForwardedTools.AddRange(classification.ForwardedTools.Select(static tool =>
-            new LlmSessionRuntimeToolDeclaration
-            {
-                ToolName = tool.Name,
-                Description = tool.Description,
-                ParametersJson = tool.ParametersJson,
-                Parameters = ResponsesProtoPayloads.ParseStruct(tool.ParametersJson),
-                SchemaHash = tool.SchemaHash,
-            }));
-        return selection;
-    }
-
     private sealed record CallerScopeResult(
         ResponsesCallerScope? Scope,
         ResponsesCommandError? Error);

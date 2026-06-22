@@ -811,6 +811,29 @@ public sealed class ChatCompletionsCommandFacadeTests
             declaredTools ?? [],
             responseFormat);
 
+    [Fact]
+    public async Task CreateAsync_ShouldPersistRouteToolSetNameIntoRunCommand()
+    {
+        var dispatch = new RecordingActorDispatchPort();
+        var facade = CreateFacade(
+            dispatchPort: dispatch,
+            chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(new ChatRouteAction
+            {
+                ForwardToModel = new ForwardToModel
+                {
+                    ModelName = "chrono/gpt-5-chat",
+                    ToolSetRef = new ChatRouteToolSetRef { Name = "workspace.default" },
+                },
+            }));
+
+        var result = await facade.CreateAsync(BuildRequest("chrono/gpt-5-chat"), CallerScopeContext("token"));
+
+        result.Error.Should().BeNull();
+        var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
+        // Off-grain run re-resolves this name to re-materialize the route tool set.
+        command.ToolSelection.ToolSetName.Should().Be("workspace.default");
+    }
+
     private static ChatCompletionsCommandFacade CreateFacade(
         ILlmSessionRegistrationPort? sessionPort = null,
         IResponsesChatRouteDecisionPort? chatRouteDecisionPort = null,
@@ -1000,7 +1023,8 @@ public sealed class ChatCompletionsCommandFacadeTests
                 [],
                 ResponsesToolChoiceHints.Create(
                     routeAction?.ForwardToModel?.ToolChoiceHint?.ToolName,
-                    routeAction?.ForwardToModel?.ToolChoiceHint?.PrefilledArguments));
+                    routeAction?.ForwardToModel?.ToolChoiceHint?.PrefilledArguments),
+                routeAction?.ForwardToModel?.ToolSetRef?.Name ?? string.Empty);
     }
 
     private sealed class StaticLlmSessionRunObservationService(

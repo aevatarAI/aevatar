@@ -219,6 +219,11 @@ message LlmSessionRuntimeToolSelection {
   string tool_choice_hint_arguments_json = 5;
   google.protobuf.Struct tool_choice_hint_arguments = 6;
   repeated string owned_tool_names = 7;
+  // Route-selected tool set in effect for this run (e.g. "workspace.default"), so the
+  // off-grain run executor can re-resolve the same sources the facade classified against.
+  // Empty = no route tool set (run uses only the always-on DI providers). See task
+  // 06-21-offgrain-run-route-toolset-drop.
+  string tool_set_name = 8;
 }
 
 message LlmRunRequested {

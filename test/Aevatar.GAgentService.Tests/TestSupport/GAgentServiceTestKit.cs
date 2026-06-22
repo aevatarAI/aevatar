@@ -1,6 +1,7 @@
 using System.Reflection;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Hooks;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
@@ -166,6 +167,7 @@ internal static class GAgentServiceTestKit
                     : new LlmRunCore(
                         providerFactory,
                         sp.GetServices<IResponsesToolProvider>(),
+                        sp.GetService<IToolSetRegistry>() ?? TestToolSetRegistry.Empty,
                         sp.GetRequiredService<ILogger<LlmRunCore>>());
             });
             services.TryAddSingleton<InlineLlmRunExecutor>(sp => new InlineLlmRunExecutor(

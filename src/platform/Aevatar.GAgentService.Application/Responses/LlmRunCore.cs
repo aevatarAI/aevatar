@@ -3,6 +3,8 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.ToolSetRegistry;
+using Aevatar.ChatRouting.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Google.Protobuf;
@@ -14,6 +16,7 @@ namespace Aevatar.GAgentService.Application.Responses;
 public sealed class LlmRunCore(
     ILLMProviderFactory providerFactory,
     IEnumerable<IResponsesToolProvider> toolProviders,
+    IToolSetRegistry toolSetRegistry,
     ILogger<LlmRunCore> logger) : ILlmRunCore
 {
     private static readonly Duration DefaultTtl = Duration.FromTimeSpan(TimeSpan.FromHours(24));
@@ -192,6 +195,36 @@ public sealed class LlmRunCore(
         }, ct).ConfigureAwait(false);
     }
 
+    private IEnumerable<IResponsesToolProvider> ResolveRunToolProviders(string? toolSetName)
+    {
+        if (string.IsNullOrWhiteSpace(toolSetName))
+            return toolProviders;
+
+        try
+        {
+            var resolved = toolSetRegistry.Resolve(new ChatRouteToolSetRef { Name = toolSetName });
+            if (resolved.IsSuccess)
+                return toolProviders.Append(new ToolSetResponsesToolProvider(resolved.Sources, logger));
+
+            logger.LogWarning(
+                "Run tool set '{ToolSetName}' did not resolve ({Code}); using DI providers only.",
+                toolSetName,
+                resolved.Error?.Code);
+        }
+        catch (Exception ex)
+        {
+            // IToolSetRegistry.Resolve THROWS on unknown-include / cycle (not just a failure
+            // result). Never fail the whole run over a tool-set config problem — degrade to the
+            // always-on DI providers (pre-fix behavior).
+            logger.LogWarning(
+                ex,
+                "Run tool set '{ToolSetName}' resolution threw; using DI providers only.",
+                toolSetName);
+        }
+
+        return toolProviders;
+    }
+
     private async Task<IReadOnlyList<IAgentTool>> BuildEffectiveToolsAsync(
         LlmRunRequested command,
         AgentToolExecutionContext toolContext,
@@ -207,9 +240,18 @@ public sealed class LlmRunCore(
                 },
             });
 
+        // The DI-injected providers are only the always-on ones (Aevatar substitute + user skills).
+        // The route-selected tool set (e.g. workspace.default, carrying nyxid_*/invoke_*/lark_* ...)
+        // was a per-request transient provider on the facade; its live tool objects can't cross the
+        // command boundary, so the command persists only the tool-set *name* (tool_set_name) plus the
+        // selected tool names. Re-resolve that tool set here from the same registry so the run
+        // materializes the same sources the facade classified against; otherwise every route-tool-set
+        // tool is silently dropped before the model call.
+        var providers = ResolveRunToolProviders(command.ToolSelection?.ToolSetName);
+
         var substituteTools = new List<IAgentTool>();
         var additiveTools = new List<IAgentTool>();
-        foreach (var provider in toolProviders)
+        foreach (var provider in providers)
         {
             ct.ThrowIfCancellationRequested();
             try

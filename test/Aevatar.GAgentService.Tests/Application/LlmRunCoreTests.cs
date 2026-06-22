@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Application.Responses;
@@ -28,7 +29,7 @@ public sealed class LlmRunCoreTests
             ],
         ]);
         var sink = new RecordingLlmRunSink();
-        var core = new LlmRunCore(provider, [], NullLogger<LlmRunCore>.Instance);
+        var core = new LlmRunCore(provider, [], TestToolSetRegistry.Empty, NullLogger<LlmRunCore>.Instance);
 
         await core.RunAsync(
             new LlmRunCoreRequest(BuildRunRequest("resp_1"), "run_1", "ApiKey"),
@@ -72,7 +73,7 @@ public sealed class LlmRunCoreTests
             ],
         ]);
         var sink = new RecordingLlmRunSink();
-        var core = new LlmRunCore(provider, [], NullLogger<LlmRunCore>.Instance);
+        var core = new LlmRunCore(provider, [], TestToolSetRegistry.Empty, NullLogger<LlmRunCore>.Instance);
 
         await core.RunAsync(
             new LlmRunCoreRequest(BuildRunRequest("resp_1", BuildForwardedSelection()), "run_1", "ApiKey"),
@@ -116,7 +117,7 @@ public sealed class LlmRunCoreTests
             ],
         ]);
         var sink = new RecordingLlmRunSink();
-        var core = new LlmRunCore(provider, [toolProvider], NullLogger<LlmRunCore>.Instance);
+        var core = new LlmRunCore(provider, [toolProvider], TestToolSetRegistry.Empty, NullLogger<LlmRunCore>.Instance);
         var selection = BuildForwardedSelection();
         selection.SubstitutedToolNames.Add("get_weather");
 
@@ -162,7 +163,7 @@ public sealed class LlmRunCoreTests
         {
             StopAfterToolObservation = true,
         };
-        var core = new LlmRunCore(provider, [toolProvider], NullLogger<LlmRunCore>.Instance);
+        var core = new LlmRunCore(provider, [toolProvider], TestToolSetRegistry.Empty, NullLogger<LlmRunCore>.Instance);
 
         await core.RunAsync(
             new LlmRunCoreRequest(BuildRunRequest("resp_1", selection), "run_1", "ApiKey"),
@@ -201,7 +202,7 @@ public sealed class LlmRunCoreTests
             ],
         ]);
         var sink = new RecordingLlmRunSink();
-        var core = new LlmRunCore(provider, [toolProvider], NullLogger<LlmRunCore>.Instance);
+        var core = new LlmRunCore(provider, [toolProvider], TestToolSetRegistry.Empty, NullLogger<LlmRunCore>.Instance);
         var selection = BuildForwardedSelection();
         selection.AdditiveToolNames.Add("aevatar_invoke_team");
 
@@ -243,7 +244,7 @@ public sealed class LlmRunCoreTests
             ],
         ]);
         var sink = new RecordingLlmRunSink();
-        var core = new LlmRunCore(provider, [toolProvider], NullLogger<LlmRunCore>.Instance);
+        var core = new LlmRunCore(provider, [toolProvider], TestToolSetRegistry.Empty, NullLogger<LlmRunCore>.Instance);
         var selection = new LlmSessionRuntimeToolSelection
         {
             ForwardedTools =
@@ -297,7 +298,7 @@ public sealed class LlmRunCoreTests
             ],
         ]);
         var sink = new RecordingLlmRunSink();
-        var core = new LlmRunCore(provider, [], NullLogger<LlmRunCore>.Instance);
+        var core = new LlmRunCore(provider, [], TestToolSetRegistry.Empty, NullLogger<LlmRunCore>.Instance);
         var selection = new LlmSessionRuntimeToolSelection
         {
             OwnedToolNames = { "use_skill" },
@@ -346,7 +347,7 @@ public sealed class LlmRunCoreTests
             ],
         ]);
         var sink = new RecordingLlmRunSink();
-        var core = new LlmRunCore(provider, [], NullLogger<LlmRunCore>.Instance);
+        var core = new LlmRunCore(provider, [], TestToolSetRegistry.Empty, NullLogger<LlmRunCore>.Instance);
 
         await core.RunAsync(
             new LlmRunCoreRequest(BuildRunRequest("resp_unknown"), "run_1", "ApiKey"),
@@ -386,7 +387,7 @@ public sealed class LlmRunCoreTests
             ],
         ]);
         var sink = new RecordingLlmRunSink();
-        var core = new LlmRunCore(provider, [toolProvider], NullLogger<LlmRunCore>.Instance);
+        var core = new LlmRunCore(provider, [toolProvider], TestToolSetRegistry.Empty, NullLogger<LlmRunCore>.Instance);
         var selection = BuildForwardedSelection();
         selection.OwnedToolNames.Add("get_weather");
         selection.SubstitutedToolNames.Add("get_weather");
@@ -408,7 +409,7 @@ public sealed class LlmRunCoreTests
         var provider = new ThrowingLlmProviderFactory(
             new NyxIdAuthenticationRequiredException("nyxid"));
         var sink = new RecordingLlmRunSink();
-        var core = new LlmRunCore(provider, [], NullLogger<LlmRunCore>.Instance);
+        var core = new LlmRunCore(provider, [], TestToolSetRegistry.Empty, NullLogger<LlmRunCore>.Instance);
 
         await core.RunAsync(
             new LlmRunCoreRequest(BuildRunRequest("resp_1"), "run_1", "ApiKey"),
@@ -427,7 +428,7 @@ public sealed class LlmRunCoreTests
         using var cts = new CancellationTokenSource();
         var provider = new CancellableLlmProviderFactory();
         var sink = new CancellationSensitiveLlmRunSink();
-        var core = new LlmRunCore(provider, [], NullLogger<LlmRunCore>.Instance);
+        var core = new LlmRunCore(provider, [], TestToolSetRegistry.Empty, NullLogger<LlmRunCore>.Instance);
         cts.Cancel();
 
         await core.RunAsync(
@@ -447,7 +448,7 @@ public sealed class LlmRunCoreTests
         var streamEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var provider = new LlmRunAcceptanceHarness.NeverTerminalLlmProviderFactory(streamEntered);
         var sink = new LlmRunAcceptanceHarness.RecordingLlmRunSink();
-        var core = new LlmRunCore(provider, [], NullLogger<LlmRunCore>.Instance);
+        var core = new LlmRunCore(provider, [], TestToolSetRegistry.Empty, NullLogger<LlmRunCore>.Instance);
         using var cts = new CancellationTokenSource();
 
         var runTask = core.RunAsync(
@@ -461,6 +462,110 @@ public sealed class LlmRunCoreTests
         sink.StreamChunks.Should().ContainSingle().Which.DeltaText.Should().Be("partial");
         sink.Cancelled.Should().ContainSingle().Which.RunId.Should().Be("run_1");
         sink.Completed.Should().BeEmpty();
+        sink.Failed.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenRouteToolSetNameSet_ShouldMaterializeRouteToolSetToolEvenWithoutDiProviders()
+    {
+        // Regression for the off-grain executor dropping the route tool set: the tool is NOT a DI
+        // provider, so it can only reach the model if LlmRunCore re-resolves the persisted
+        // tool_set_name from the registry.
+        var tool = new RecordingAgentTool("nyxid_services", """{"services":[]}""");
+        var registry = new TestToolSetRegistry(name =>
+            string.Equals(name, "workspace.default", StringComparison.Ordinal)
+                ? ToolSetResolveResult.Success(name, [new StaticAgentToolSource([tool])])
+                : ToolSetResolveResult.Failure(new ToolSetResolveError(
+                    ToolSetResolveError.UnknownNameCode, name, "unknown", [])));
+        var provider = new ScriptedLlmProviderFactory([
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "call_1",
+                        Name = "nyxid_services",
+                        ArgumentsJson = """{"action":"list"}""",
+                    },
+                    IsLast = true,
+                },
+            ],
+            [
+                new LLMStreamChunk { DeltaContent = "listed", IsLast = true },
+            ],
+        ]);
+        var sink = new RecordingLlmRunSink();
+        // DI tool providers intentionally empty — the tool can only come from the route tool set.
+        var core = new LlmRunCore(provider, [], registry, NullLogger<LlmRunCore>.Instance);
+        var selection = new LlmSessionRuntimeToolSelection
+        {
+            ToolSetName = "workspace.default",
+            AdditiveToolNames = { "nyxid_services" },
+        };
+
+        await core.RunAsync(
+            new LlmRunCoreRequest(BuildRunRequest("resp_toolset", selection), "run_1", "ApiKey"),
+            sink);
+
+        tool.Executions.Should().ContainSingle().Which.Should().Be("""{"action":"list"}""");
+        sink.ToolCalls.Should().ContainSingle(observed => !observed.Forwarded)
+            .Which.ToolCall.ToolName.Should().Be("nyxid_services");
+        sink.Completed.Should().ContainSingle()
+            .Which.ForwardedToolCalls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenRouteToolSetResolutionThrows_ShouldDegradeToDiProvidersWithoutFailing()
+    {
+        // IToolSetRegistry.Resolve throws on unknown-include / cycle. A tool-set config problem
+        // must degrade to DI-only providers, never fail the whole run.
+        var registry = new TestToolSetRegistry(_ =>
+            throw new InvalidOperationException("tool set cycle"));
+        var provider = new ScriptedLlmProviderFactory([
+            [
+                new LLMStreamChunk { DeltaContent = "ok", IsLast = true },
+            ],
+        ]);
+        var sink = new RecordingLlmRunSink();
+        var core = new LlmRunCore(provider, [], registry, NullLogger<LlmRunCore>.Instance);
+        var selection = new LlmSessionRuntimeToolSelection
+        {
+            ToolSetName = "workspace.default",
+        };
+
+        await core.RunAsync(
+            new LlmRunCoreRequest(BuildRunRequest("resp_throw", selection), "run_1", "ApiKey"),
+            sink);
+
+        sink.Completed.Should().ContainSingle().Which.OutputText.Should().Be("ok");
+        sink.Failed.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenRouteToolSetResolutionReturnsFailure_ShouldDegradeToDiProvidersWithoutFailing()
+    {
+        // Failure result (not an exception) — e.g. unknown tool set name. Must also degrade to
+        // DI-only, never fail the run.
+        var registry = new TestToolSetRegistry(name =>
+            ToolSetResolveResult.Failure(new ToolSetResolveError(
+                ToolSetResolveError.UnknownNameCode, name, "unknown", [])));
+        var provider = new ScriptedLlmProviderFactory([
+            [
+                new LLMStreamChunk { DeltaContent = "ok", IsLast = true },
+            ],
+        ]);
+        var sink = new RecordingLlmRunSink();
+        var core = new LlmRunCore(provider, [], registry, NullLogger<LlmRunCore>.Instance);
+        var selection = new LlmSessionRuntimeToolSelection
+        {
+            ToolSetName = "workspace.default",
+        };
+
+        await core.RunAsync(
+            new LlmRunCoreRequest(BuildRunRequest("resp_fail", selection), "run_1", "ApiKey"),
+            sink);
+
+        sink.Completed.Should().ContainSingle().Which.OutputText.Should().Be("ok");
         sink.Failed.Should().BeEmpty();
     }
 
@@ -696,6 +801,12 @@ public sealed class LlmRunCoreTests
             Cancelled.Add(cancelled.Clone());
             return Task.FromResult(LlmRunRecordDecision.Continue);
         }
+    }
+
+    private sealed class StaticAgentToolSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource
+    {
+        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
+            Task.FromResult(tools);
     }
 
     private sealed class StaticResponsesToolProvider(

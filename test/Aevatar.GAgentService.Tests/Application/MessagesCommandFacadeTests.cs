@@ -64,6 +64,28 @@ public sealed class MessagesCommandFacadeTests
     }
 
     [Fact]
+    public async Task CreateAsync_ShouldPersistRouteToolSetNameIntoRunCommand()
+    {
+        var dispatch = new RecordingActorDispatchPort();
+        var routeDecisionPort = new StaticResponsesChatRouteDecisionPort(new ChatRouteAction
+        {
+            ForwardToModel = new ForwardToModel
+            {
+                ModelName = "anthropic/claude",
+                ToolSetRef = new ChatRouteToolSetRef { Name = "workspace.default" },
+            },
+        });
+        var facade = CreateFacade(dispatchPort: dispatch, chatRouteDecisionPort: routeDecisionPort);
+
+        var result = await facade.CreateAsync(BuildRequest("anthropic/claude"), CallerScopeContext("token"));
+
+        result.Error.Should().BeNull();
+        var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
+        // Off-grain run re-resolves this name to re-materialize the route tool set.
+        command.ToolSelection.ToolSetName.Should().Be("workspace.default");
+    }
+
+    [Fact]
     public async Task CreateAsync_ShouldUseAccountPreferredModel_WhenCallerOmitsModel()
     {
         var dispatch = new RecordingActorDispatchPort();
@@ -545,7 +567,8 @@ public sealed class MessagesCommandFacadeTests
                 [],
                 ResponsesToolChoiceHints.Create(
                     routeAction?.ForwardToModel?.ToolChoiceHint?.ToolName,
-                    routeAction?.ForwardToModel?.ToolChoiceHint?.PrefilledArguments));
+                    routeAction?.ForwardToModel?.ToolChoiceHint?.PrefilledArguments),
+                routeAction?.ForwardToModel?.ToolSetRef?.Name ?? string.Empty);
     }
 
     private sealed class StaticLlmSessionRunObservationService(

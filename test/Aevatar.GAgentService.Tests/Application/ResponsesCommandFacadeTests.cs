@@ -198,6 +198,8 @@ public sealed class ResponsesCommandFacadeTests
         var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
         command.ToolSelection.AdditiveToolNames.Should().Contain("aevatar_invoke_gagent");
         command.ToolSelection.OwnedToolNames.Should().Contain("aevatar_invoke_gagent");
+        // Off-grain run re-resolves this name to re-materialize the route tool set.
+        command.ToolSelection.ToolSetName.Should().Be("workspace.default");
     }
 
     [Fact]

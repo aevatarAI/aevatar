@@ -504,7 +504,8 @@ public sealed class ResponsesCommandFacade(
             toolContext,
             toolClassification,
             toolPlan.ToolChoiceHintPlan,
-            createdAt));
+            createdAt,
+            toolPlan.ResolvedToolSetName));
     }
 
     private async Task<ResponsesCreateCommandResult> ExecuteNonStreamingAsync(
@@ -954,7 +955,8 @@ public sealed class ResponsesCommandFacade(
             plan.LlmRequest,
             plan.ToolClassification,
             plan.ToolChoiceHintPlan,
-            plan.CreatedAt);
+            plan.CreatedAt,
+            plan.ResolvedToolSetName);
         var envelope = ServiceCommandEnvelopeFactory.Create(
             plan.Session.ActorId,
             command,
@@ -977,7 +979,8 @@ public sealed class ResponsesCommandFacade(
             plan.LlmRequest,
             plan.ToolClassification,
             plan.ToolChoiceHintPlan,
-            plan.CreatedAt);
+            plan.CreatedAt,
+            plan.ResolvedToolSetName);
         return new LlmRunExecutorRequest(
             plan.Session.ActorId,
             plan.Session.ResponseId,
@@ -991,7 +994,8 @@ public sealed class ResponsesCommandFacade(
         LLMRequest request,
         ResponsesToolClassification toolClassification,
         ResponsesToolChoiceHintPlan toolChoiceHintPlan,
-        DateTimeOffset requestedAt)
+        DateTimeOffset requestedAt,
+        string toolSetName)
     {
         var command = new LlmRunRequested
         {
@@ -1010,7 +1014,8 @@ public sealed class ResponsesCommandFacade(
         if (request.MaxTokens is not null)
             command.MaxTokens = request.MaxTokens.Value;
         command.Messages.AddRange(request.Messages.Select(ToRuntimeMessage));
-        command.ToolSelection = ToToolSelection(toolClassification, toolChoiceHintPlan);
+        command.ToolSelection = ResponsesRuntimeToolSelectionFactory.Create(
+            toolClassification, toolChoiceHintPlan, toolSetName);
         return command;
     }
 
@@ -1036,38 +1041,6 @@ public sealed class ResponsesCommandFacade(
             ArgumentsJson = call.ArgumentsJson,
             Arguments = ResponsesProtoPayloads.ParseStruct(call.ArgumentsJson),
         };
-
-    // Refactor (iter355/issue1438-first):
-    //   Old pattern: durable LlmSession tool declarations and choice hints wrote only *_json strings.
-    //   New principle: typed Struct fields are the write path; legacy strings stay populated for fallback reads.
-    private static LlmSessionRuntimeToolSelection ToToolSelection(
-        ResponsesToolClassification classification,
-        ResponsesToolChoiceHintPlan toolChoiceHintPlan)
-    {
-        var selection = new LlmSessionRuntimeToolSelection
-        {
-            SubstitutedToolNames = { classification.SubstitutedToolNames },
-            AdditiveToolNames = { classification.AdditiveToolNames },
-            OwnedToolNames = { classification.OwnedToolNames },
-        };
-        if (!toolChoiceHintPlan.IsEmpty)
-        {
-            selection.ToolChoiceHintName = toolChoiceHintPlan.ToolName;
-            selection.ToolChoiceHintArgumentsJson = toolChoiceHintPlan.PrefilledArgumentsJson();
-            selection.ToolChoiceHintArguments = toolChoiceHintPlan.PrefilledArgumentsStruct();
-        }
-
-        selection.ForwardedTools.AddRange(classification.ForwardedTools.Select(static tool =>
-            new LlmSessionRuntimeToolDeclaration
-            {
-                ToolName = tool.Name,
-                Description = tool.Description,
-                ParametersJson = tool.ParametersJson,
-                Parameters = ResponsesProtoPayloads.ParseStruct(tool.ParametersJson),
-                SchemaHash = tool.SchemaHash,
-            }));
-        return selection;
-    }
 
     private static LlmSessionCompletion BuildSessionCompletion(
         string outputText,

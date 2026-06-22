@@ -7,6 +7,7 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Application.Responses;
+using Aevatar.GAgentService.Tests.TestSupport;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -20,7 +21,7 @@ public sealed class LlmRunExecutorTests
     public async Task StartAsync_ShouldDispatchRunStartedCommand_AndReturnBeforeStreamingLoopDispatchesRecordCommands()
     {
         var provider = new GateControlledLlmProviderFactory();
-        var core = new LlmRunCore(provider, [], NullLogger<LlmRunCore>.Instance);
+        var core = new LlmRunCore(provider, [], TestToolSetRegistry.Empty, NullLogger<LlmRunCore>.Instance);
         var observation = new RecordingLlmRunObservation();
         var dispatch = new RecordingDispatchPort(observation);
         var executor = CreateExecutor(core, dispatch);
@@ -166,7 +167,7 @@ public sealed class LlmRunExecutorTests
                 },
             ],
         ]);
-        var core = new LlmRunCore(provider, [], NullLogger<LlmRunCore>.Instance);
+        var core = new LlmRunCore(provider, [], TestToolSetRegistry.Empty, NullLogger<LlmRunCore>.Instance);
         var observation = new RecordingLlmRunObservation();
         var dispatch = new RecordingDispatchPort(observation);
         var executor = CreateExecutor(core, dispatch);
@@ -228,7 +229,7 @@ public sealed class LlmRunExecutorTests
                 },
             ],
         ]);
-        var core = new LlmRunCore(provider, [toolProvider], NullLogger<LlmRunCore>.Instance);
+        var core = new LlmRunCore(provider, [toolProvider], TestToolSetRegistry.Empty, NullLogger<LlmRunCore>.Instance);
         var observation = new RecordingLlmRunObservation();
         var dispatch = new RecordingDispatchPort(observation);
         var executor = CreateExecutor(core, dispatch);
@@ -263,7 +264,7 @@ public sealed class LlmRunExecutorTests
     public async Task StartAsync_WhenProviderFails_ShouldDispatchRunFailedRecordCommand()
     {
         var provider = new ThrowingLlmProviderFactory(new NyxIdAuthenticationRequiredException("nyxid"));
-        var core = new LlmRunCore(provider, [], NullLogger<LlmRunCore>.Instance);
+        var core = new LlmRunCore(provider, [], TestToolSetRegistry.Empty, NullLogger<LlmRunCore>.Instance);
         var observation = new RecordingLlmRunObservation();
         var dispatch = new RecordingDispatchPort(observation);
         var executor = CreateExecutor(core, dispatch);
@@ -292,7 +293,7 @@ public sealed class LlmRunExecutorTests
     public async Task StartAsync_WhenProviderCancels_ShouldDispatchRunCancelledRecordCommand()
     {
         var provider = new ThrowingLlmProviderFactory(new OperationCanceledException());
-        var core = new LlmRunCore(provider, [], NullLogger<LlmRunCore>.Instance);
+        var core = new LlmRunCore(provider, [], TestToolSetRegistry.Empty, NullLogger<LlmRunCore>.Instance);
         var observation = new RecordingLlmRunObservation();
         var dispatch = new RecordingDispatchPort(observation);
         var executor = CreateExecutor(core, dispatch);
@@ -328,7 +329,7 @@ public sealed class LlmRunExecutorTests
                 },
             ],
         ]);
-        var core = new LlmRunCore(provider, [], NullLogger<LlmRunCore>.Instance);
+        var core = new LlmRunCore(provider, [], TestToolSetRegistry.Empty, NullLogger<LlmRunCore>.Instance);
         var observation = new RecordingLlmRunObservation();
         var dispatch = new FailingThenRecordingDispatchPort(observation, failuresBeforeSuccess: 2);
         var executor = CreateExecutor(core, dispatch);
