@@ -114,6 +114,7 @@
     <Project Path="src/Aevatar.Authentication.Abstractions/Aevatar.Authentication.Abstractions.csproj" />
     <Project Path="src/Aevatar.Authentication.Hosting/Aevatar.Authentication.Hosting.csproj" />
     <Project Path="src/Aevatar.Authentication.Providers.NyxId/Aevatar.Authentication.Providers.NyxId.csproj" />
+    <Project Path="src/Aevatar.Authentication.ScopeServiceTokens/Aevatar.Authentication.ScopeServiceTokens.csproj" />
   </Folder>
   <Folder Name="/src/studio/">
     <Project Path="src/Aevatar.Studio.Domain/Aevatar.Studio.Domain.csproj" />

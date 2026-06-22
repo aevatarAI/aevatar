@@ -37,6 +37,7 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Aevatar.GAgentService.Hosting.Responses;
 
 namespace Aevatar.GAgentService.Integration.Tests;
 
@@ -90,10 +91,16 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
             x.ImplementationType == typeof(LlmRunExecutionScheduler));
         services.Should().Contain(x => x.ServiceType == typeof(LlmRunExecutionScheduler));
         services.Should().Contain(x => x.ServiceType == typeof(ILlmRunExecutionScheduler));
-        services.Should().Contain(x => x.ServiceType == typeof(ILlmRunExecutionQueue));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ILlmRunExecutionQueue) &&
+            x.ImplementationType == typeof(LlmRunExecutionQueue));
         services.Should().Contain(x => x.ServiceType == typeof(ILlmRunExecutionService));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IHostedService) &&
+            x.ImplementationType == typeof(LlmRunExecutionWorker));
 
         using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<ILlmRunCore>().Should().NotBeNull();
         provider.GetRequiredService<IScopeBindingReadinessQueryPort>().Should().NotBeNull();
         provider.GetRequiredService<IServiceRolloutCommandObservationQueryReader>().Should().NotBeNull();
         provider.GetRequiredService<IGAgentRunTerminalQueryPort>().Should().NotBeNull();

@@ -80,7 +80,6 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         {
             var updateSpec = CloneServiceDefinition(desiredBinding.ServiceDefinition);
             updateSpec.PolicyIds.Add(existingService.PolicyIds);
-            ApplyExistingExternalExposure(updateSpec, existingService.ExternalExposure);
             await _serviceCommandPort.UpdateServiceAsync(new UpdateServiceDefinitionCommand
             {
                 Spec = updateSpec,
@@ -617,22 +616,6 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         if (source.ExternalExposure != null)
             clone.ExternalExposure = source.ExternalExposure.Clone();
         return clone;
-    }
-
-    private static void ApplyExistingExternalExposure(
-        ServiceDefinitionSpec spec,
-        ServiceExternalExposureSnapshot? existingExternalExposure)
-    {
-        if (existingExternalExposure == null)
-            return;
-
-        spec.ExternalExposure = new ExternalExposure
-        {
-            NyxidSlug = existingExternalExposure.NyxidSlug ?? string.Empty,
-            RegisteredAt = existingExternalExposure.RegisteredAt.HasValue
-                ? Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(existingExternalExposure.RegisteredAt.Value)
-                : null,
-        };
     }
 
     private static ServiceEndpointSpec CloneEndpointSpec(ServiceEndpointSpec spec) =>
