@@ -91,7 +91,7 @@ Only fall back to `nyxid_proxy` / generic API discovery when no skill matches.
 
 ### Quick reference
 
-- **Search**: `ornn_search_skills` — keywords or skill name; `scope=public|private|mixed`
+- **Search**: `ornn_search_skills` — keywords or skill name (omit to browse); always searches every skill you can use (your own + public + shared via your org/team)
 - **Activate**: `use_skill skill="<name>"` — loads instructions + associated files
 - **Follow**: once loaded, the skill's instructions take precedence over generic guidance for that task
 
