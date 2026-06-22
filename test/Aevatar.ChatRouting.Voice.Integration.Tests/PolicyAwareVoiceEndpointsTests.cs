@@ -155,6 +155,104 @@ public sealed class PolicyAwareVoiceEndpointsTests
             .Which.Should().BeSameAs(attachedTransports.Single());
     }
 
+    [Fact]
+    public async Task PolicyAwareVoice_WhenProjectionStaleButRecoveryRematerializes_ShouldAttach()
+    {
+        // The voice-attach policy the grain still holds; its read-model row starts "missing" (idle-grain
+        // staleness). The handler must self-heal via the recovery port, re-read, and attach — not 501.
+        var healed = new ChatRoutePolicySnapshot(
+            ForwardToModel("fallback-model"),
+            [
+                new ChatRouteRule
+                {
+                    RuleId = "lark-voice",
+                    Priority = 10,
+                    Match = new ChatRouteMatch { SourceKind = ChatSourceKind.Voice, Channel = "lark" },
+                    Action = VoiceAttachTarget("voice-agent-lark", "voice_presence_openai"),
+                },
+            ]);
+        var policyPort = new HealablePolicyPort();
+        var recovery = new RecordingProjectionRecoveryPort(
+            result: true, onHeal: () => policyPort.Heal(healed));
+        var catalog = new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent-lark"]);
+        var session = new RecordingVoiceRealtimeSession();
+        var mediaPort = new RecordingVolatileMediaStreamPort(
+            attachAsync: transport => transport.DisposeAsync().AsTask(),
+            detachAsync: _ => Task.CompletedTask);
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        using var app = CreatePolicyAwareApp(policyPort, catalog, session, mediaPort, recoveryPort: recovery);
+        var context = CreateVoiceContext(app, "/ws/voice?channel=lark&registration_scope_id=bot-1&sender_id=sender-1");
+        var wsFeature = new FakeHttpWebSocketFeature(socket);
+        context.Features.Set<IHttpWebSocketFeature>(wsFeature);
+
+        await GetEndpoint(app, "/ws/voice").RequestDelegate!(context);
+
+        recovery.Calls.Should().Be(1);                          // self-heal fired exactly once
+        policyPort.Lookups.Should().BeGreaterThanOrEqualTo(2);  // initial null + re-read after heal
+        context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        wsFeature.AcceptCalls.Should().Be(1);                   // attached, not 501
+        session.Requests.Should().ContainSingle()
+            .Which.ActorId.Should().Be("voice-agent-lark");
+    }
+
+    [Fact]
+    public async Task PolicyAwareVoice_WhenProjectionMissingAndNoPolicyExists_ShouldStillReturn501()
+    {
+        // Genuinely-missing policy: re-materialize finds nothing, the row stays null, so the existing
+        // 501 fires unchanged. Proves the self-heal does not mask a real no-voice-policy condition.
+        var policyPort = new HealablePolicyPort();
+        var recovery = new RecordingProjectionRecoveryPort(result: false);
+        var catalog = new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent-lark"]);
+        var session = new RecordingVoiceRealtimeSession();
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        using var app = CreatePolicyAwareApp(policyPort, catalog, session, recoveryPort: recovery);
+        var context = CreateVoiceContext(app, "/ws/voice?codec=pcm16&sample_rate_hz=24000");
+        var wsFeature = new FakeHttpWebSocketFeature(socket);
+        context.Features.Set<IHttpWebSocketFeature>(wsFeature);
+
+        await GetEndpoint(app, "/ws/voice").RequestDelegate!(context);
+
+        recovery.Calls.Should().Be(1);                          // attempted self-heal once...
+        context.Response.StatusCode.Should().Be(StatusCodes.Status501NotImplemented); // ...still fails closed
+        wsFeature.AcceptCalls.Should().Be(0);
+        session.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task PolicyAwareVoice_WhenProjectionFresh_ShouldNotInvokeRecovery()
+    {
+        // Happy path: a fresh projection returns a snapshot on the first read, so the recovery port is
+        // never touched — zero added latency / behavior on the common case.
+        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(
+            ForwardToModel("fallback-model"),
+            [
+                new ChatRouteRule
+                {
+                    RuleId = "lark-voice",
+                    Priority = 10,
+                    Match = new ChatRouteMatch { SourceKind = ChatSourceKind.Voice, Channel = "lark" },
+                    Action = VoiceAttachTarget("voice-agent-lark", "voice_presence_openai"),
+                },
+            ]));
+        var recovery = new RecordingProjectionRecoveryPort(result: true);
+        var catalog = new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent-lark"]);
+        var session = new RecordingVoiceRealtimeSession();
+        var mediaPort = new RecordingVolatileMediaStreamPort(
+            attachAsync: transport => transport.DisposeAsync().AsTask(),
+            detachAsync: _ => Task.CompletedTask);
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        using var app = CreatePolicyAwareApp(policyPort, catalog, session, mediaPort, recoveryPort: recovery);
+        var context = CreateVoiceContext(app, "/ws/voice?channel=lark&registration_scope_id=bot-1&sender_id=sender-1");
+        var wsFeature = new FakeHttpWebSocketFeature(socket);
+        context.Features.Set<IHttpWebSocketFeature>(wsFeature);
+
+        await GetEndpoint(app, "/ws/voice").RequestDelegate!(context);
+
+        recovery.Calls.Should().Be(0);                          // recovery never invoked on the fresh path
+        context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        wsFeature.AcceptCalls.Should().Be(1);
+    }
+
     [Theory]
     [InlineData("authorization")]
     [InlineData("query")]
@@ -654,13 +752,14 @@ public sealed class PolicyAwareVoiceEndpointsTests
         };
 
     private static WebApplication CreatePolicyAwareApp(
-        StaticPolicyPort policyPort,
+        IChatRoutePolicyQueryPort policyPort,
         RecordingCatalogQueryPort catalog,
         RecordingVoiceRealtimeSession session,
         RecordingVolatileMediaStreamPort? mediaPort = null,
         Action<VoiceWebSocketAttachOptions>? configureOptions = null,
         IProjectionSessionEventHub<VoiceRealtimeFrame>? realtimeHub = null,
-        IVoiceToolCredentialIssuer? toolCredentialIssuer = null)
+        IVoiceToolCredentialIssuer? toolCredentialIssuer = null,
+        IChatRoutePolicyProjectionRecoveryPort? recoveryPort = null)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -672,6 +771,8 @@ public sealed class PolicyAwareVoiceEndpointsTests
         builder.Services.AddSingleton<IValidateOptions<VoiceWebSocketAttachOptions>, VoiceWebSocketAttachOptionsValidator>();
         builder.Services.AddSingleton<VoiceWebSocketAttachExecutor>();
         builder.Services.AddSingleton<IChatRoutePolicyQueryPort>(policyPort);
+        builder.Services.AddSingleton<IChatRoutePolicyProjectionRecoveryPort>(
+            recoveryPort ?? new RecordingProjectionRecoveryPort());
         builder.Services.AddSingleton(new ChatRouteResolver(new StaticFallbackProvider("fallback-model")));
         builder.Services.AddSingleton<IUserAgentCatalogQueryPort>(catalog);
         builder.Services.AddSingleton<IRealtimeSession<VoiceRealtimeSessionRequest, VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeFrame, VoiceRealtimeSessionCompletion>>(session);
@@ -758,6 +859,50 @@ public sealed class PolicyAwareVoiceEndpointsTests
             _ = ct;
             LastCallerScope = callerScope;
             return Task.FromResult<ChatRoutePolicySnapshot?>(snapshot);
+        }
+    }
+
+    // A query port whose read-model row is "missing" (returns null) until a recovery
+    // re-materializes it via Heal(...), modelling the idle-grain projection staleness.
+    private sealed class HealablePolicyPort : IChatRoutePolicyQueryPort
+    {
+        private ChatRoutePolicySnapshot? _snapshot;
+
+        public int Lookups { get; private set; }
+        public RoutingOwnerScope? LastCallerScope { get; private set; }
+
+        public void Heal(ChatRoutePolicySnapshot snapshot) => _snapshot = snapshot;
+
+        public Task<ChatRoutePolicySnapshot?> LookupForCallerAsync(RoutingOwnerScope callerScope, CancellationToken ct = default)
+        {
+            _ = ct;
+            Lookups++;
+            LastCallerScope = callerScope;
+            return Task.FromResult(_snapshot);
+        }
+    }
+
+    // Recovery port double. result controls TryRematerializeAsync's return; onHeal lets a test
+    // simulate the projection row re-materializing (so a subsequent lookup succeeds).
+    private sealed class RecordingProjectionRecoveryPort : IChatRoutePolicyProjectionRecoveryPort
+    {
+        private readonly bool _result;
+        private readonly Action? _onHeal;
+
+        public RecordingProjectionRecoveryPort(bool result = false, Action? onHeal = null)
+        {
+            _result = result;
+            _onHeal = onHeal;
+        }
+
+        public int Calls { get; private set; }
+
+        public Task<bool> TryRematerializeAsync(RoutingOwnerScope callerScope, CancellationToken ct = default)
+        {
+            _ = (callerScope, ct);
+            Calls++;
+            _onHeal?.Invoke();
+            return Task.FromResult(_result);
         }
     }
 
