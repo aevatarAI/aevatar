@@ -84,6 +84,209 @@ public class LarkToolsTests
     }
 
     [Fact]
+    public async Task LarkBaseCreateTool_ShouldGrantSenderFullAccess_AndNotCallPublic()
+    {
+        var client = new StubLarkNyxClient
+        {
+            BitableCreateResponse = """{"code":0,"data":{"app":{"app_token":"bascn_123","url":"https://example.feishu.cn/base/bascn_123","default_table_id":"tbl_1"}}}""",
+            GrantResourceMemberResponse = """{"code":0,"data":{"member":{"member_id":"ou_req","perm":"full_access"}}}""",
+        };
+        var tool = new LarkBaseCreateTool(client);
+
+        using var _ = new AgentToolRequestMetadataScope(
+            "token-123",
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["channel.sender_id"] = "ou_req",
+            });
+
+        var result = await tool.ExecuteAsync("""{"name":"项目跟踪"}""");
+
+        using var document = JsonDocument.Parse(result);
+        var root = document.RootElement;
+        root.GetProperty("success").GetBoolean().Should().BeTrue();
+        root.GetProperty("granted").GetBoolean().Should().BeTrue();
+        root.GetProperty("app_token").GetString().Should().Be("bascn_123");
+        root.GetProperty("grantee").GetString().Should().Be("ou_req");
+
+        client.LastBitableCreateRequest.Should().Be(new LarkBitableCreateRequest("项目跟踪"));
+        client.GrantCallCount.Should().Be(1);
+        client.LastGrantRequest.Should().Be(
+            new LarkResourceMemberGrantRequest("bascn_123", "bitable", "ou_req", "openid", "full_access"));
+        client.LastDrivePermissionRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task LarkBaseCreateTool_ShouldFallBackToPublic_WhenMemberGrantFails()
+    {
+        var client = new StubLarkNyxClient
+        {
+            BitableCreateResponse = """{"code":0,"data":{"app":{"app_token":"bascn_123","url":"https://example.feishu.cn/base/bascn_123"}}}""",
+            GrantResourceMemberResponse = """{"code":1254000,"msg":"grant failed"}""",
+            DrivePermissionResponse = """{"code":0,"data":{"link_share_entity":"tenant_editable"}}""",
+        };
+        var tool = new LarkBaseCreateTool(client);
+
+        using var _ = new AgentToolRequestMetadataScope(
+            "token-123",
+            new Dictionary<string, string>(StringComparer.Ordinal) { ["channel.sender_id"] = "ou_req" });
+
+        var result = await tool.ExecuteAsync("""{"name":"Tracker"}""");
+
+        using var document = JsonDocument.Parse(result);
+        var root = document.RootElement;
+        root.GetProperty("success").GetBoolean().Should().BeTrue();
+        root.GetProperty("granted").GetBoolean().Should().BeFalse();
+        root.GetProperty("fallback_to_public").GetBoolean().Should().BeTrue();
+        client.LastGrantRequest.Should().NotBeNull();
+        client.LastDrivePermissionRequest.Should().NotBeNull();
+        client.LastDrivePermissionRequest!.ObjType.Should().Be("bitable");
+    }
+
+    [Fact]
+    public async Task LarkBaseCreateTool_ShouldFallBackToPublic_WhenNoSender()
+    {
+        var client = new StubLarkNyxClient
+        {
+            BitableCreateResponse = """{"code":0,"data":{"app":{"app_token":"bascn_123","url":"https://example.feishu.cn/base/bascn_123"}}}""",
+            DrivePermissionResponse = """{"code":0,"data":{"link_share_entity":"tenant_editable"}}""",
+        };
+        var tool = new LarkBaseCreateTool(client);
+
+        using var _ = new AgentToolRequestMetadataScope("token-123");
+
+        var result = await tool.ExecuteAsync("""{"name":"Tracker"}""");
+
+        using var document = JsonDocument.Parse(result);
+        var root = document.RootElement;
+        root.GetProperty("granted").GetBoolean().Should().BeFalse();
+        root.GetProperty("fallback_to_public").GetBoolean().Should().BeTrue();
+        root.GetProperty("reason").GetString().Should().Be("no_sender");
+        client.GrantCallCount.Should().Be(0);
+        client.LastDrivePermissionRequest.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task LarkBaseCreateTool_ShouldFail_WhenNameMissing()
+    {
+        var tool = new LarkBaseCreateTool(new StubLarkNyxClient());
+        using var _ = new AgentToolRequestMetadataScope("token-123");
+
+        var result = await tool.ExecuteAsync("""{"name":"  "}""");
+
+        result.Should().Contain("\"success\":false");
+        result.Should().Contain("name is required");
+    }
+
+    [Fact]
+    public async Task LarkDocxCreateTool_ShouldAlsoGrantSender_AndKeepTenantShare()
+    {
+        var client = new StubLarkNyxClient
+        {
+            DocxCreateResponse = """{"code":0,"data":{"document":{"document_id":"doccn_123","url":"https://example.feishu.cn/docx/doccn_123"}}}""",
+            DocxAppendResponse = """{"code":0,"data":{"children":[]}}""",
+            DrivePermissionResponse = """{"code":0,"data":{"link_share_entity":"tenant_readable"}}""",
+            GrantResourceMemberResponse = """{"code":0,"data":{"member":{"member_id":"ou_req","perm":"full_access"}}}""",
+        };
+        var tool = new LarkDocxCreateTool(client);
+
+        using var _ = new AgentToolRequestMetadataScope(
+            "token-123",
+            new Dictionary<string, string>(StringComparer.Ordinal) { ["channel.sender_id"] = "ou_req" });
+
+        var result = await tool.ExecuteAsync("""{"title":"Daily","markdown_text":"# Daily"}""");
+
+        using var document = JsonDocument.Parse(result);
+        var root = document.RootElement;
+        root.GetProperty("success").GetBoolean().Should().BeTrue();
+        root.GetProperty("granted_to_sender").GetBoolean().Should().BeTrue();
+        client.LastDrivePermissionRequest.Should().NotBeNull();
+        client.LastDrivePermissionRequest!.ObjType.Should().Be("docx");
+        client.GrantCallCount.Should().Be(1);
+        client.LastGrantRequest.Should().Be(
+            new LarkResourceMemberGrantRequest("doccn_123", "docx", "ou_req", "openid", "full_access"));
+    }
+
+    [Fact]
+    public async Task LarkResourceGrantTool_ShouldDefaultToSender_AndGrant()
+    {
+        var client = new StubLarkNyxClient
+        {
+            GrantResourceMemberResponse = """{"code":0,"data":{"member":{"member_id":"ou_req","perm":"full_access"}}}""",
+        };
+        var tool = new LarkResourceGrantTool(client);
+
+        using var _ = new AgentToolRequestMetadataScope(
+            "token-123",
+            new Dictionary<string, string>(StringComparer.Ordinal) { ["channel.sender_id"] = "ou_req" });
+
+        var result = await tool.ExecuteAsync("""{"token":"bascn_123","obj_type":"bitable"}""");
+
+        using var document = JsonDocument.Parse(result);
+        var root = document.RootElement;
+        root.GetProperty("success").GetBoolean().Should().BeTrue();
+        root.GetProperty("member_id").GetString().Should().Be("ou_req");
+        client.LastGrantRequest.Should().Be(
+            new LarkResourceMemberGrantRequest("bascn_123", "bitable", "ou_req", "openid", "full_access"));
+        tool.RequiresApproval("""{"token":"bascn_123","obj_type":"bitable"}""").Should().BeNull();
+    }
+
+    [Fact]
+    public async Task LarkResourceGrantTool_ShouldRejectMentionPlaceholderAndBadShape()
+    {
+        var client = new StubLarkNyxClient();
+        var tool = new LarkResourceGrantTool(client);
+        using var _ = new AgentToolRequestMetadataScope("token-123");
+
+        var placeholder = await tool.ExecuteAsync("""{"token":"bascn_1","obj_type":"bitable","member_id":"@_user_1"}""");
+        placeholder.Should().Contain("\"success\":false");
+        placeholder.Should().Contain("@_user_N");
+
+        var displayName = await tool.ExecuteAsync("""{"token":"bascn_1","obj_type":"bitable","member_id":"Zhang San"}""");
+        displayName.Should().Contain("\"success\":false");
+
+        var notOpenId = await tool.ExecuteAsync("""{"token":"bascn_1","obj_type":"bitable","member_id":"abc123"}""");
+        notOpenId.Should().Contain("\"success\":false");
+        notOpenId.Should().Contain("ou_");
+
+        client.GrantCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public void LarkResourceGrantTool_ShouldRequireApproval_ForNonSenderOrNonDefault()
+    {
+        var tool = new LarkResourceGrantTool(new StubLarkNyxClient());
+        using var _ = new AgentToolRequestMetadataScope(
+            "token-123",
+            new Dictionary<string, string>(StringComparer.Ordinal) { ["channel.sender_id"] = "ou_req" });
+
+        tool.RequiresApproval("""{"token":"t","obj_type":"bitable","member_id":"ou_other"}""").Should().BeTrue();
+        tool.RequiresApproval("""{"token":"t","obj_type":"bitable","perm":"edit"}""").Should().BeTrue();
+        tool.RequiresApproval("""{"token":"t","obj_type":"bitable","member_type":"email"}""").Should().BeTrue();
+        tool.RequiresApproval("""{"token":"t","obj_type":"bitable"}""").Should().BeNull();
+    }
+
+    [Fact]
+    public async Task LarkResourceGrantTool_ShouldValidateObjTypeAndPerm()
+    {
+        var client = new StubLarkNyxClient();
+        var tool = new LarkResourceGrantTool(client);
+        using var _ = new AgentToolRequestMetadataScope(
+            "token-123",
+            new Dictionary<string, string>(StringComparer.Ordinal) { ["channel.sender_id"] = "ou_req" });
+
+        var badObjType = await tool.ExecuteAsync("""{"token":"t","obj_type":"banana"}""");
+        badObjType.Should().Contain("\"success\":false");
+        badObjType.Should().Contain("obj_type");
+
+        var badPerm = await tool.ExecuteAsync("""{"token":"t","obj_type":"bitable","perm":"god_mode"}""");
+        badPerm.Should().Contain("\"success\":false");
+        badPerm.Should().Contain("perm");
+
+        client.GrantCallCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task LarkDocxCreateTool_ShouldFail_WhenPermissionOrUrlMissing()
     {
         using var _ = new AgentToolRequestMetadataScope("token-123");
@@ -1570,7 +1773,7 @@ public class LarkToolsTests
 
         var tools = await source.DiscoverToolsAsync();
 
-        tools.Should().HaveCount(12);
+        tools.Should().HaveCount(14);
         tools.Should().Contain(tool => tool is LarkMessagesSendTool);
         tools.Should().Contain(tool => tool is LarkMessagesReplyTool);
         tools.Should().Contain(tool => tool is LarkMessagesReactTool);
@@ -1584,6 +1787,8 @@ public class LarkToolsTests
         tools.Should().Contain(tool => tool is LarkApprovalsGetTool);
         tools.Should().Contain(tool => tool is LarkApprovalsActTool);
         tools.Should().Contain(tool => tool is LarkDocxCreateTool);
+        tools.Should().Contain(tool => tool is LarkBaseCreateTool);
+        tools.Should().Contain(tool => tool is LarkResourceGrantTool);
     }
 
     [Fact]
@@ -2560,6 +2765,8 @@ public class LarkToolsTests
         public string DrivePermissionResponse { get; set; } = """{"code":0,"data":{}}""";
         public string DriveMediaUploadResponse { get; set; } = """{"code":0,"data":{"file_token":"file_default"}}""";
         public string ApprovalFileUploadResponse { get; set; } = """{"code":0,"data":{"code":"approval_file_default"}}""";
+        public string BitableCreateResponse { get; set; } = """{"code":0,"data":{"app":{"app_token":"bascn_default","url":"https://example.feishu.cn/base/bascn_default","default_table_id":"tbl_default"}}}""";
+        public string GrantResourceMemberResponse { get; set; } = """{"code":0,"data":{"member":{"member_id":"ou_default","perm":"full_access"}}}""";
         public Exception? DriveMediaUploadException { get; set; }
         public Exception? ApprovalFileUploadException { get; set; }
 
@@ -2585,6 +2792,11 @@ public class LarkToolsTests
         public LarkDrivePermissionRequest? LastDrivePermissionRequest { get; private set; }
         public LarkDriveMediaUploadRequest? LastDriveMediaUploadRequest { get; private set; }
         public LarkApprovalFileUploadRequest? LastApprovalFileUploadRequest { get; private set; }
+        public string? LastBitableCreateToken { get; private set; }
+        public LarkBitableCreateRequest? LastBitableCreateRequest { get; private set; }
+        public string? LastGrantToken { get; private set; }
+        public LarkResourceMemberGrantRequest? LastGrantRequest { get; private set; }
+        public int GrantCallCount { get; private set; }
 
         public Task<string> SendMessageAsync(string token, LarkSendMessageRequest request, CancellationToken ct)
         {
@@ -2680,6 +2892,21 @@ public class LarkToolsTests
         {
             LastDrivePermissionRequest = request;
             return Task.FromResult(DrivePermissionResponse);
+        }
+
+        public Task<string> CreateBitableAppAsync(string token, LarkBitableCreateRequest request, CancellationToken ct)
+        {
+            LastBitableCreateToken = token;
+            LastBitableCreateRequest = request;
+            return Task.FromResult(BitableCreateResponse);
+        }
+
+        public Task<string> GrantResourceMemberAsync(string token, LarkResourceMemberGrantRequest request, CancellationToken ct)
+        {
+            LastGrantToken = token;
+            LastGrantRequest = request;
+            GrantCallCount++;
+            return Task.FromResult(GrantResourceMemberResponse);
         }
 
         public Task<string> UploadDriveMediaAsync(string token, LarkDriveMediaUploadRequest request, CancellationToken ct)

@@ -20,6 +20,8 @@ public interface ILarkNyxClient
     Task<string> CreateDocxDocumentAsync(string token, LarkDocxCreateRequest request, CancellationToken ct);
     Task<string> AppendDocxTextBlocksAsync(string token, LarkDocxAppendBlocksRequest request, CancellationToken ct);
     Task<string> SetDrivePermissionAsync(string token, LarkDrivePermissionRequest request, CancellationToken ct);
+    Task<string> CreateBitableAppAsync(string token, LarkBitableCreateRequest request, CancellationToken ct);
+    Task<string> GrantResourceMemberAsync(string token, LarkResourceMemberGrantRequest request, CancellationToken ct);
     Task<string> UploadDriveMediaAsync(string token, LarkDriveMediaUploadRequest request, CancellationToken ct);
     Task<string> UploadApprovalFileAsync(string token, LarkApprovalFileUploadRequest request, CancellationToken ct);
 }
@@ -141,7 +143,27 @@ public sealed record LarkDrivePermissionRequest(
     string DocumentToken,
     LarkDocxVisibility Visibility,
     string? ReceiveId,
-    string? ReceiveIdType);
+    string? ReceiveIdType,
+    string ObjType = "docx");
+
+/// <summary>Create a Lark Bitable app (多维表格). <c>POST /open-apis/bitable/v1/apps</c>.</summary>
+public sealed record LarkBitableCreateRequest(
+    string Name,
+    string? FolderToken = null);
+
+/// <summary>
+/// Grant a single member access to a Drive resource via
+/// <c>POST /open-apis/drive/v1/permissions/{token}/members?type={ObjType}</c>.
+/// <paramref name="MemberType"/> is the Lark id kind (e.g. <c>openid</c>); <paramref name="Perm"/> is
+/// <c>view | edit | full_access</c>.
+/// </summary>
+public sealed record LarkResourceMemberGrantRequest(
+    string Token,
+    string ObjType,
+    string MemberId,
+    string MemberType = "openid",
+    string Perm = "full_access",
+    bool NeedNotification = false);
 
 public sealed record LarkDriveMediaUploadRequest(
     string FileName,

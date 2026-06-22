@@ -436,6 +436,22 @@ public sealed class LarkCoverageTests
             return Task.FromResult("""{"code":0,"data":{}}""");
         }
 
+        public Task<string> CreateBitableAppAsync(string token, LarkBitableCreateRequest request, CancellationToken ct)
+        {
+            _ = token;
+            _ = request;
+            _ = ct;
+            return Task.FromResult("""{"code":0,"data":{"app":{"app_token":"bascn_default","url":"https://example.feishu.cn/base/bascn_default"}}}""");
+        }
+
+        public Task<string> GrantResourceMemberAsync(string token, LarkResourceMemberGrantRequest request, CancellationToken ct)
+        {
+            _ = token;
+            _ = request;
+            _ = ct;
+            return Task.FromResult("""{"code":0,"data":{"member":{"member_id":"ou_default","perm":"full_access"}}}""");
+        }
+
         public Task<string> UploadDriveMediaAsync(string token, LarkDriveMediaUploadRequest request, CancellationToken ct)
         {
             _ = token;
