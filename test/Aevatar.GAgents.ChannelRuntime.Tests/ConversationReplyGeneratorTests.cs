@@ -518,7 +518,7 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
-    public async Task GenerateReplyAsync_WhenPriorHistoryWindowIsFull_StillExportsCurrentTurnHistory()
+    public async Task GenerateReplyAsync_CapsPriorHistoryToTenMostRecent_AndStillExportsCurrentTurnHistory()
     {
         var providerFactory = new SequentialResponseProviderFactory("window assistant");
         var generator = new NyxIdConversationReplyGenerator(providerFactory);
@@ -546,11 +546,18 @@ public sealed class ConversationReplyGeneratorTests
             CancellationToken.None);
 
         providerFactory.Requests.Should().HaveCount(1);
-        providerFactory.Requests[0].Messages
+        var promptHistory = providerFactory.Requests[0].Messages
             .Where(message => message.Role is "user" or "assistant")
             .Select(message => (message.Role, message.Content))
-            .Should()
-            .ContainInOrder(("user", "prior 0"), ("assistant", "prior 1"), ("user", "current user"));
+            .ToList();
+        // R1: never send the full group history. Only the 10 MOST RECENT prior entries (prior 90..99)
+        // reach the prompt, in order, followed by the current turn. The oldest (prior 0..89) are dropped.
+        promptHistory.Should().NotContain(("user", "prior 0"), "the oldest prior history must be dropped");
+        promptHistory.Should().NotContain(("user", "prior 88"), "only the 10 most recent prior entries are kept");
+        promptHistory.Should().ContainInOrder(
+            ("user", "prior 90"), ("assistant", "prior 91"), ("assistant", "prior 99"), ("user", "current user"));
+        promptHistory.Count(entry => entry.Content.StartsWith("prior ", StringComparison.Ordinal))
+            .Should().BeLessThanOrEqualTo(10, "prior history sent to the prompt is capped at the 10 most recent entries");
         reply.AppendedHistory.Should().NotBeNull();
         reply.AppendedHistory!.Select(message => (message.Role, message.Content))
             .Should()

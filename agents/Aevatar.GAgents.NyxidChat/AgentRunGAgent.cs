@@ -698,9 +698,10 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     // observed reasoning trace (the 2026-06-12 prod incident: deepseek skill turns
     // completed empty with ReasoningContent never captured, the reasoning-gated retry
     // refused to fire, and every run terminated as the generic apology). Any completed
-    // empty step gets exactly one no-tools retry (FinalNoToolsStep guarantees the
-    // retry itself terminates) before failing as empty_reply.
-    private const int EmptyRetryRecentMessagesFloor = 6;
+    // empty step gets exactly one recovery retry (EmptyReplyRetry gates re-recovery so the retry
+    // itself terminates) before failing as empty_reply. The retry KEEPS tools + the user's routing +
+    // channel-context; it only trims history to this recent floor.
+    private const int RecentHistoryFloor = 10;
 
     private static bool IsSystemRole(string role) =>
         string.Equals(role, "system", StringComparison.OrdinalIgnoreCase);
@@ -737,7 +738,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
     private static bool ShouldRecoverEmptyLlmStep(AgentRunReplyStepState stepState)
     {
-        if (stepState.FinalNoToolsStep)
+        if (stepState.FinalNoToolsStep || stepState.EmptyReplyRetry)
             return false;
 
         return string.IsNullOrWhiteSpace(stepState.AccumulatedText) &&
@@ -756,30 +757,37 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
     private async Task<AgentRunReplyStepState> AdvanceToFinalNoToolsStepAsync(
         AgentRunReplyStepState stepState,
-        AgentRunChatMessage? llmVisibleNudge = null,
-        bool useOwnerFallbackRouting = false,
-        bool trimHistoryToRecent = false)
+        AgentRunChatMessage? llmVisibleNudge = null)
     {
         var next = stepState.Clone();
         next.FinalNoToolsStep = true;
         next.NextStepIndex++;
-        if (useOwnerFallbackRouting)
-        {
-            next.LlmControl = ResolveOwnerFallbackControl(stepState).ToPayload();
-            next.ToolContext = ResolveOwnerFallbackToolContext(stepState).ToPayload();
-            StripServerDefaultFallbackMetadata(next.ExternalMetadata);
-        }
-        if (trimHistoryToRecent)
-        {
-            var dropped = TrimMessagesToRecentFloor(next.Messages, EmptyRetryRecentMessagesFloor);
-            if (dropped > 0)
-                _logger.LogWarning(
-                    "Empty reply recovery: trimmed {Dropped} oldest history messages to the recent floor before retry: runId={RunId} correlation={CorrelationId}",
-                    dropped, next.RunId, next.CorrelationId);
-        }
         // The nudge is LLM-visible plumbing for the retry step only: it is deliberately
         // NOT mirrored into AppendedHistory, so it never lands in the durable
         // conversation history.
+        if (llmVisibleNudge is not null)
+            next.Messages.Add(llmVisibleNudge);
+        await PersistStepStateAsync(next);
+        return next;
+    }
+
+    // One-shot empty-reply recovery. A first attempt that produced nothing is usually a
+    // history-too-large problem, so retry on a trimmed history — but KEEP tools + the user's routing
+    // + channel-context (do NOT set FinalNoToolsStep, do NOT switch to server-default routing) so the
+    // retry can still do the task (e.g. actually create the resource) instead of apologizing.
+    // EmptyReplyRetry gates re-recovery so this terminates after one retry.
+    private async Task<AgentRunReplyStepState> AdvanceToEmptyReplyRetryStepAsync(
+        AgentRunReplyStepState stepState,
+        AgentRunChatMessage? llmVisibleNudge = null)
+    {
+        var next = stepState.Clone();
+        next.EmptyReplyRetry = true;
+        next.NextStepIndex++;
+        var dropped = TrimMessagesToRecentFloor(next.Messages, RecentHistoryFloor);
+        if (dropped > 0)
+            _logger.LogWarning(
+                "Empty reply recovery: trimmed {Dropped} oldest history messages to the recent floor; retrying WITH tools: runId={RunId} correlation={CorrelationId}",
+                dropped, next.RunId, next.CorrelationId);
         if (llmVisibleNudge is not null)
             next.Messages.Add(llmVisibleNudge);
         await PersistStepStateAsync(next);
@@ -866,18 +874,13 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             if (hasResult && ShouldRecoverEmptyLlmStep(stepState))
             {
                 _logger.LogWarning(
-                    "Agent run LLM step completed with no reply text, no tool calls and no outbound intent; retrying once with a final no-tools step: runId={RunId} correlation={CorrelationId} step={StepIndex}",
+                    "Agent run LLM step completed with no reply text, no tool calls and no outbound intent; retrying once WITH tools on a trimmed history (keep user routing + channel-context): runId={RunId} correlation={CorrelationId} step={StepIndex}",
                     stepState.RunId,
                     stepState.CorrelationId,
                     command.StepIndex);
-                request.LlmControl = ResolveOwnerFallbackControl(stepState).ToPayload();
-                request.ToolContext = ResolveOwnerFallbackToolContext(stepState).ToPayload();
-                StripServerDefaultFallbackMetadata(request.Metadata);
-                stepState = await AdvanceToFinalNoToolsStepAsync(
+                stepState = await AdvanceToEmptyReplyRetryStepAsync(
                     stepState,
-                    BuildEmptyStepRecoveryNudge(),
-                    useOwnerFallbackRouting: true,
-                    trimHistoryToRecent: true);
+                    BuildEmptyStepRecoveryNudge());
                 await DispatchLlmStepExecutorAsync(request, stepState);
                 return;
             }
