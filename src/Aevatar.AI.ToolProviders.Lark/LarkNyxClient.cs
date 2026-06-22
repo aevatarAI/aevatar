@@ -350,20 +350,38 @@ public sealed class LarkNyxClient : ILarkNyxClient
         var linkShareEntity = request.Visibility == LarkDocxVisibility.Editable
             ? "tenant_editable"
             : "tenant_readable";
-        var body = new Dictionary<string, object?>
+
+        Dictionary<string, object?> body;
+        if (string.Equals(request.ObjType, "docx", StringComparison.OrdinalIgnoreCase))
         {
-            ["link_share_entity"] = linkShareEntity,
-            ["external_access"] = false,
-            ["security_entity"] = "anyone_can_view",
-            ["comment_entity"] = "anyone_can_view",
-            // Lark's share_entity uses a DISTINCT enum (anyone | same_tenant | only_full_access),
-            // NOT the security/comment/copy "anyone_can_view" vocabulary. Sending "anyone_can_view"
-            // here fails Lark param validation (400) and aborts the entire public-permission PATCH,
-            // so even link_share_entity never applies and the doc stays private. "same_tenant"
-            // matches the tenant_readable/editable link scope.
-            ["share_entity"] = "same_tenant",
-            ["copy_entity"] = "anyone_can_view",
-        };
+            body = new Dictionary<string, object?>
+            {
+                ["link_share_entity"] = linkShareEntity,
+                ["external_access"] = false,
+                ["security_entity"] = "anyone_can_view",
+                ["comment_entity"] = "anyone_can_view",
+                // Lark's share_entity uses a DISTINCT enum (anyone | same_tenant | only_full_access),
+                // NOT the security/comment/copy "anyone_can_view" vocabulary. Sending "anyone_can_view"
+                // here fails Lark param validation (400) and aborts the entire public-permission PATCH,
+                // so even link_share_entity never applies and the doc stays private. "same_tenant"
+                // matches the tenant_readable/editable link scope.
+                ["share_entity"] = "same_tenant",
+                ["copy_entity"] = "anyone_can_view",
+            };
+        }
+        else
+        {
+            // Non-docx (e.g. bitable) public-permission PATCH: send ONLY the link-share scope. The
+            // doc-specific security/comment/copy/share entities above are tuned for docx and are not
+            // guaranteed valid for every obj type — sending them risks a 400 that aborts the whole
+            // PATCH. This branch is the rare grant-failure fallback for lark_base_create; the exact
+            // bitable /public body must be confirmed against a live call before relying on it broadly.
+            body = new Dictionary<string, object?>
+            {
+                ["link_share_entity"] = linkShareEntity,
+                ["external_access"] = false,
+            };
+        }
 
         if (!string.IsNullOrWhiteSpace(request.ReceiveId) &&
             !string.IsNullOrWhiteSpace(request.ReceiveIdType))
@@ -378,8 +396,51 @@ public sealed class LarkNyxClient : ILarkNyxClient
         return _nyxClient.ProxyRequestAsync(
             token,
             _options.ProviderSlug,
-            $"open-apis/drive/v1/permissions/{Uri.EscapeDataString(request.DocumentToken)}/public?type=docx",
+            $"open-apis/drive/v1/permissions/{Uri.EscapeDataString(request.DocumentToken)}/public?type={Uri.EscapeDataString(request.ObjType)}",
             "PATCH",
+            JsonSerializer.Serialize(body, JsonOptions),
+            extraHeaders: null,
+            ct);
+    }
+
+    public Task<string> CreateBitableAppAsync(string token, LarkBitableCreateRequest request, CancellationToken ct)
+    {
+        var body = new Dictionary<string, object?>
+        {
+            ["name"] = request.Name,
+        };
+        if (!string.IsNullOrWhiteSpace(request.FolderToken))
+            body["folder_token"] = request.FolderToken.Trim();
+
+        return _nyxClient.ProxyRequestAsync(
+            token,
+            _options.ProviderSlug,
+            "open-apis/bitable/v1/apps",
+            "POST",
+            JsonSerializer.Serialize(body, JsonOptions),
+            extraHeaders: null,
+            ct);
+    }
+
+    public Task<string> GrantResourceMemberAsync(string token, LarkResourceMemberGrantRequest request, CancellationToken ct)
+    {
+        var body = new Dictionary<string, object?>
+        {
+            ["member_type"] = request.MemberType,
+            ["member_id"] = request.MemberId,
+            ["perm"] = request.Perm,
+        };
+
+        var path =
+            $"open-apis/drive/v1/permissions/{Uri.EscapeDataString(request.Token)}/members" +
+            $"?type={Uri.EscapeDataString(request.ObjType)}" +
+            $"&need_notification={(request.NeedNotification ? "true" : "false")}";
+
+        return _nyxClient.ProxyRequestAsync(
+            token,
+            _options.ProviderSlug,
+            path,
+            "POST",
             JsonSerializer.Serialize(body, JsonOptions),
             extraHeaders: null,
             ct);
