@@ -1796,7 +1796,7 @@ public class LarkToolsTests
     {
         var source = new LarkAgentToolSource(
             new LarkToolOptions(),
-            new NyxIdToolOptions(),
+            new NyxIdToolOptions { BaseUrl = null },
             new StubLarkNyxClient());
 
         var tools = await source.DiscoverToolsAsync();
