@@ -1,11 +1,13 @@
 using System.Security.Cryptography;
 using Aevatar.Authentication.Hosting;
 using Aevatar.Authentication.ScopeServiceTokens;
+using Aevatar.Bootstrap.Hosting;
 using Aevatar.Capabilities;
 using FluentAssertions;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -48,6 +50,49 @@ public sealed class ScopeServiceTokenAuthenticationTests
             .Which.KeyId.Should().Be("scope-kid-1");
         jwtOptions.TokenValidationParameters.IssuerSigningKeyResolver.Should().BeNull();
         jwtOptions.TokenValidationParameters.ValidAudiences.Should().Contain("aevatar-scope-services");
+    }
+
+    [Fact]
+    public void UseAevatarDefaultHost_WhenScopeServiceTokensEnabled_ShouldNotExposeJwksRoute()
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = Environments.Development,
+        });
+
+        builder.Configuration["Aevatar:Authentication:Enabled"] = "true";
+        builder.Configuration["Aevatar:Authentication:Authority"] = "https://nyxid.example.com/";
+        builder.Configuration["Aevatar:Authentication:ScopeServiceTokens:Enabled"] = "true";
+        builder.Configuration["Aevatar:Authentication:ScopeServiceTokens:Issuer"] = "https://aevatar.example.com";
+        builder.Configuration["Aevatar:Authentication:ScopeServiceTokens:Audience"] = "aevatar-scope-services";
+        builder.Configuration["Aevatar:Authentication:ScopeServiceTokens:JwksPath"] = "/custom-jwks.json";
+        builder.Configuration["Aevatar:Authentication:ScopeServiceTokens:SigningKeys:0:Kid"] = "scope-kid-1";
+        builder.Configuration["Aevatar:Authentication:ScopeServiceTokens:SigningKeys:0:Algorithm"] = "HS256";
+        builder.Configuration["Aevatar:Authentication:ScopeServiceTokens:SigningKeys:0:Key"] =
+            "0123456789abcdef0123456789abcdef";
+        builder.AddAevatarDefaultHost(options =>
+        {
+            options.AllowLocalFileSecretsStore = false;
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+            options.EnableOpenApiDocument = false;
+            options.AutoMapCapabilities = false;
+        });
+        builder.AddAevatarAuthentication();
+
+        using var app = builder.Build();
+        app.UseAevatarDefaultHost();
+
+        var routeEndpoints = ((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(x => x.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Select(x => x.RoutePattern.RawText)
+            .ToList();
+
+        routeEndpoints.Should().Contain("/");
+        routeEndpoints.Should().Contain("/health/live");
+        routeEndpoints.Should().NotContain("/.well-known/aevatar-scope-service-jwks.json");
+        routeEndpoints.Should().NotContain("/custom-jwks.json");
     }
 
     [Fact]

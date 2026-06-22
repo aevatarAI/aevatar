@@ -40,5 +40,9 @@ public sealed class NyxIdServiceRegistrationAdapterTests
         root.GetProperty("forward_access_token").GetBoolean().Should().BeFalse();
         root.GetProperty("service_slug").GetString().Should().Be("orders-service");
         root.GetProperty("aevatar_desired_spec_hash").GetString().Should().Be("hash-1");
+        root.EnumerateObject()
+            .Select(x => x.Name)
+            .Should()
+            .NotContain(["jwks_url", "jwks_uri", "jwks_path"]);
     }
 }
