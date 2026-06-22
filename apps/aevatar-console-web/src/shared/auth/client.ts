@@ -21,19 +21,7 @@ interface PendingAuthState {
   readonly returnTo: string;
 }
 
-interface LoginFinalizationResponse {
-  readonly tokens: {
-    readonly accessToken: string;
-    readonly tokenType: string;
-    readonly expiresIn: number;
-    readonly idToken?: string;
-    readonly scope?: string;
-  };
-  readonly user: NyxIDUserInfo;
-  readonly bindingCommitted: boolean;
-}
-
-interface RefreshTokenResponse {
+interface TokenResponse {
   readonly access_token: string;
   readonly token_type: string;
   readonly expires_in: number;
@@ -176,17 +164,20 @@ export class NyxIDAuthClient {
       throw new Error('State mismatch');
     }
 
+    const form = new URLSearchParams();
+    form.set('grant_type', 'authorization_code');
+    form.set('code', code);
+    form.set('redirect_uri', pending.redirectUri);
+    form.set('client_id', this.config.clientId);
+    form.set('code_verifier', pending.codeVerifier);
+
     try {
-      const response = await fetch('/api/auth/nyxid/finalize', {
+      const response = await fetch(`${this.config.baseUrl}/oauth/token`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
+          'Content-Type': 'application/x-www-form-urlencoded',
         },
-        body: JSON.stringify({
-          code,
-          codeVerifier: pending.codeVerifier,
-          redirectUri: pending.redirectUri,
-        }),
+        body: form.toString(),
       });
 
       if (!response.ok) {
@@ -194,22 +185,24 @@ export class NyxIDAuthClient {
           | Record<string, unknown>
           | null;
         throw new Error(
-          `Login finalization failed: ${readErrorDetail(payload, response.statusText)}`,
+          `Token exchange failed: ${readErrorDetail(payload, response.statusText)}`,
         );
       }
 
-      const body = (await response.json()) as LoginFinalizationResponse;
+      const body = (await response.json()) as TokenResponse;
       const tokens: NyxIDTokenSet = {
-        accessToken: body.tokens.accessToken,
-        tokenType: body.tokens.tokenType,
-        expiresIn: body.tokens.expiresIn,
-        expiresAt: Date.now() + body.tokens.expiresIn * 1000,
-        idToken: body.tokens.idToken,
-        scope: body.tokens.scope,
+        accessToken: body.access_token,
+        tokenType: body.token_type,
+        expiresIn: body.expires_in,
+        expiresAt: Date.now() + body.expires_in * 1000,
+        refreshToken: body.refresh_token,
+        idToken: body.id_token,
+        scope: body.scope,
       };
+      const user = await this.getUserInfo(tokens.accessToken);
       const session: NyxIDAuthSession = {
         tokens,
-        user: body.user,
+        user,
       };
 
       persistAuthSession(session);
@@ -267,7 +260,7 @@ export class NyxIDAuthClient {
       );
     }
 
-    const body = (await response.json()) as RefreshTokenResponse;
+    const body = (await response.json()) as TokenResponse;
     const tokens: NyxIDTokenSet = {
       accessToken: body.access_token,
       tokenType: body.token_type,
