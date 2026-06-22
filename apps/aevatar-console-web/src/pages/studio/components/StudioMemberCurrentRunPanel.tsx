@@ -16,12 +16,12 @@ import {
 } from './StudioMemberInvokePanel.currentRun';
 import {
   buildExecutionTrace,
+  createStudioExecutionFrame,
   formatDurationBetween,
   normalizeExecutionLogStatus,
   type ExecutionLogItem,
   type ExecutionLogStatus,
 } from '@/shared/studio/execution';
-import { createStudioExecutionFrame } from '@/shared/studio/runtimeEventFrames';
 import type { StudioExecutionDetail } from '@/shared/studio/models';
 import {
   parseMarkdownBlocks,

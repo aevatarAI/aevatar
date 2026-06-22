@@ -31,12 +31,12 @@ import {
 } from "@/shared/studio/document";
 import {
   buildExecutionTrace,
+  createStudioExecutionFrame,
   decorateEdgesForExecution,
   decorateNodesForExecution,
   findExecutionLogIndexForStep,
   type ExecutionTrace,
 } from "@/shared/studio/execution";
-import { createStudioExecutionFrame } from "@/shared/studio/runtimeEventFrames";
 import {
   buildStudioGraphElements,
   buildStudioWorkflowLayout,
