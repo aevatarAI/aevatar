@@ -19,13 +19,16 @@ internal sealed class ChatRoutePolicyProjectionRecoveryPort : IChatRoutePolicyPr
     // Must match ChatRoutePolicyCommandPort's actor-id derivation ("chat-route-policy:{scopeId}").
     private const string ActorIdPrefix = "chat-route-policy:";
 
+    private readonly IActorRuntime _actorRuntime;
     private readonly ProjectionActivationPlanDispatcher _dispatcher;
     private readonly ILogger<ChatRoutePolicyProjectionRecoveryPort> _logger;
 
     public ChatRoutePolicyProjectionRecoveryPort(
+        IActorRuntime actorRuntime,
         ProjectionActivationPlanDispatcher dispatcher,
         ILogger<ChatRoutePolicyProjectionRecoveryPort>? logger = null)
     {
+        _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
         _logger = logger ?? NullLogger<ChatRoutePolicyProjectionRecoveryPort>.Instance;
     }
@@ -44,6 +47,16 @@ internal sealed class ChatRoutePolicyProjectionRecoveryPort : IChatRoutePolicyPr
         var actorId = $"{ActorIdPrefix}{scopeId.Trim()}";
         try
         {
+            // Only re-materialize policies that ACTUALLY EXIST. The materialization dispatch durably
+            // creates a projection-scope grain for the actor; firing it for a scope that never had a
+            // policy (the source grain has no committed events) would leave an empty, useless scope grain
+            // behind for every policyless caller. Gate on the same cheap, non-activating existence check
+            // the projection runtime itself uses (ProjectionScopeActorRuntime.EnsureExistsAsync). This
+            // never creates the source grain — ExistsAsync is a read; the heal only re-projects
+            // already-committed events (no new commit, no grain mutation, no version bump).
+            if (!await _actorRuntime.ExistsAsync(actorId))
+                return false;
+
             // Identical to the plan ChatRoutePolicyCommittedStateProjectionActivationPlanProvider yields
             // on a commit, re-fired for the known actor id. It re-projects from already-committed events:
             // no new commit, no grain mutation, no State.Version bump.
