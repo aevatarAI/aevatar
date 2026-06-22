@@ -55,7 +55,7 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
                     new ExchangedCredential(
                         CredentialRole.Sender,
                         NormalizeNyxIdAccessToken(durableToken, ToErrorSubject(CredentialRole.Sender))),
-                    dispatch.ProjectSenderNyxIdAccessTokenToWorkflowCallerCredential);
+                    dispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredential);
             }
         }
 

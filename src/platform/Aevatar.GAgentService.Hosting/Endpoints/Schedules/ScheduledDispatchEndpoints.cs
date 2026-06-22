@@ -1,8 +1,6 @@
 using System.Security.Claims;
-using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
-using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -70,14 +68,13 @@ public static class ScheduledDispatchEndpoints
         [FromServices] IServiceCatalogQueryReader catalogReader,
         [FromServices] IServiceRevisionCatalogQueryReader revisionCatalogReader,
         [FromServices] IExternalIdentityBindingQueryPort bindingQueryPort,
-        [FromServices] ICommandDispatchService<CommitBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> bindingDispatch,
         CancellationToken ct = default)
     {
         ScheduledDispatchConfiguration configuration;
         try
         {
             var ownerSubject = ResolveAuthenticatedNyxIdOwnerSubject(http);
-            await EnsureCurrentNyxIdOwnerBindingAsync(input, http, ownerSubject, bindingQueryPort, bindingDispatch, ct)
+            await EnsureScopeOwnerNyxIdBindingExistsAsync(input, ownerSubject, bindingQueryPort, ct)
                 .ConfigureAwait(false);
             configuration = await input.ToConfigurationAsync(input.ScheduleId, catalogReader, revisionCatalogReader, ownerSubject, ct);
         }
@@ -105,14 +102,13 @@ public static class ScheduledDispatchEndpoints
         [FromServices] IServiceCatalogQueryReader catalogReader,
         [FromServices] IServiceRevisionCatalogQueryReader revisionCatalogReader,
         [FromServices] IExternalIdentityBindingQueryPort bindingQueryPort,
-        [FromServices] ICommandDispatchService<CommitBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> bindingDispatch,
         CancellationToken ct = default)
     {
         ScheduledDispatchConfiguration configuration;
         try
         {
             var ownerSubject = ResolveAuthenticatedNyxIdOwnerSubject(http);
-            await EnsureCurrentNyxIdOwnerBindingAsync(input, http, ownerSubject, bindingQueryPort, bindingDispatch, ct)
+            await EnsureScopeOwnerNyxIdBindingExistsAsync(input, ownerSubject, bindingQueryPort, ct)
                 .ConfigureAwait(false);
             configuration = await input.ToConfigurationAsync(scheduleId, catalogReader, revisionCatalogReader, ownerSubject, ct);
         }
@@ -246,18 +242,14 @@ public static class ScheduledDispatchEndpoints
         }
     }
 
-    private static async Task EnsureCurrentNyxIdOwnerBindingAsync(
+    private static async Task EnsureScopeOwnerNyxIdBindingExistsAsync(
         ScheduledDispatchConfigurationHttpRequest input,
-        HttpContext http,
         ScheduledServiceInvocationNyxIdSubjectRef? ownerSubject,
         IExternalIdentityBindingQueryPort bindingQueryPort,
-        ICommandDispatchService<CommitBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> bindingDispatch,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(input);
-        ArgumentNullException.ThrowIfNull(http);
         ArgumentNullException.ThrowIfNull(bindingQueryPort);
-        ArgumentNullException.ThrowIfNull(bindingDispatch);
 
         if (input.ServiceInvocation?.Auth?.ScopeOwnerNyxId == null)
             return;
@@ -274,21 +266,9 @@ public static class ScheduledDispatchEndpoints
         if (await bindingQueryPort.ResolveAsync(externalSubject, ct).ConfigureAwait(false) != null)
             return;
 
-        var bindingId = ReadFirstClaim(http.User, "binding_id", "broker_binding_id", "nyxid_binding_id");
-        if (string.IsNullOrWhiteSpace(bindingId))
-        {
-            throw new ArgumentException(
-                "Current NyxID session does not include a broker binding id; create or refresh the owner binding before creating a scope owner schedule.",
-                nameof(input));
-        }
-
-        var result = await bindingDispatch.DispatchAsync(new CommitBindingCommand
-        {
-            ExternalSubject = externalSubject,
-            BindingId = bindingId.Trim(),
-        }, ct).ConfigureAwait(false);
-        if (!result.Succeeded || result.Receipt == null)
-            throw new InvalidOperationException("Current NyxID owner binding could not be committed for scope owner schedule auth.");
+        throw new ArgumentException(
+            "Authenticated NyxID owner binding is required for scope owner schedule auth; complete or refresh NyxID login before creating a scope owner schedule.",
+            nameof(input));
     }
 
     private static ScheduledServiceInvocationNyxIdSubjectRef? ResolveAuthenticatedNyxIdOwnerSubject(HttpContext http)
