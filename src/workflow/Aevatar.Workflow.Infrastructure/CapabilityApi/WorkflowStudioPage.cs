@@ -527,14 +527,15 @@ async function api(path){
 function signOut(){ clearToken(); beginLogin(); }
 function signOutSilent(){ clearToken(); state.signedIn = false; render(); }
 
-/* Account label shown in the top-bar chip: decoded from the signed-in identity when
-   available, falling back to the mock constant. (Scope chip stays mock this increment.) */
-let accountLabel = ACCOUNT.label;
-
 const STUDIO_CONTEXT = { scopeId:"scope_alice_personal", scopeResolved:true, scopeSource:"nyxid" };
 const ACCOUNT = { label:"alice@example.com" };
 const NOW = "2026-06-23T03:05:00Z";   // 快照参考时刻（今天 2026-06-23），相对时间据此计算
 const OBS = "/workflow/observatory";   // 运行观测台路由
+
+/* Account label shown in the top-bar chip: decoded from the signed-in identity when
+   available, falling back to the mock constant. (Scope chip stays mock this increment.)
+   Declared AFTER ACCOUNT so its initializer does not hit ACCOUNT's TDZ. */
+let accountLabel = ACCOUNT.label;
 
 /* ---- 工作流图：tech-news-digest（6 节点）---- */
 const WF_TECH = {
