@@ -137,28 +137,41 @@ public sealed class ScopeWorkflowApplicationServicesTests
         var options = new ScopeWorkflowCapabilityOptions();
         const string definitionActorId = "scope-workflow:def-1";
         const string runActorId = "workflow-run:run-1";
+        var updatedAt = DateTimeOffset.UtcNow;
+        var serviceKey = ServiceKeys.Build("external-user-3", options.ServiceAppId, options.ServiceNamespace, "approval-flow");
+        var serviceSnapshot = new ServiceCatalogSnapshot(
+            serviceKey,
+            "external-user-3",
+            options.ServiceAppId,
+            options.ServiceNamespace,
+            "approval-flow",
+            "Approval Flow",
+            "rev-1",
+            "rev-1",
+            "dep-1",
+            definitionActorId,
+            "active",
+            [],
+            [],
+            updatedAt);
         var queryPort = new FakeServiceLifecycleQueryPort
         {
-            ListServicesResult =
-            [
-                new ServiceCatalogSnapshot(
-                    ServiceKeys.Build("external-user-3", options.ServiceAppId, options.ServiceNamespace, "approval-flow"),
-                    "external-user-3",
-                    options.ServiceAppId,
-                    options.ServiceNamespace,
-                    "approval-flow",
-                    "Approval Flow",
-                    "rev-1",
-                    "rev-1",
-                    "dep-1",
-                    definitionActorId,
-                    "active",
-                    [],
-                    [],
-                    DateTimeOffset.UtcNow),
-            ],
+            ListServicesResult = [serviceSnapshot],
+            GetServiceResult = serviceSnapshot,
+            DeploymentResult = new ServiceDeploymentCatalogSnapshot(
+                serviceKey,
+                [new ServiceDeploymentSnapshot("dep-1", "rev-1", definitionActorId, "active", updatedAt, updatedAt)],
+                updatedAt),
         };
         var bindingReader = new FakeWorkflowActorBindingReader();
+        bindingReader.Bindings[definitionActorId] = new WorkflowActorBinding(
+            WorkflowActorKind.Definition,
+            definitionActorId,
+            definitionActorId,
+            string.Empty,
+            "approval",
+            string.Empty,
+            new Dictionary<string, string>());
         bindingReader.Bindings[runActorId] = new WorkflowActorBinding(
             WorkflowActorKind.Run,
             runActorId,
@@ -250,12 +263,17 @@ public sealed class ScopeWorkflowApplicationServicesTests
     {
         public readonly Queue<ServiceCatalogSnapshot?> GetServiceResults = new();
         public IReadOnlyList<ServiceCatalogSnapshot> ListServicesResult { get; set; } = [];
+        public ServiceCatalogSnapshot? GetServiceResult { get; set; }
+        public ServiceDeploymentCatalogSnapshot? DeploymentResult { get; set; }
         public ListRequest? LastListRequest { get; private set; }
 
         public Task<ServiceCatalogSnapshot?> GetServiceAsync(ServiceIdentity identity, CancellationToken ct = default)
         {
             _ = identity;
-            return Task.FromResult(GetServiceResults.Count > 0 ? GetServiceResults.Dequeue() : null);
+            if (GetServiceResults.Count > 0)
+                return Task.FromResult(GetServiceResults.Dequeue());
+
+            return Task.FromResult(GetServiceResult);
         }
 
         public Task<IReadOnlyList<ServiceCatalogSnapshot>> ListServicesAsync(string tenantId, string appId, string @namespace, int take = 200, CancellationToken ct = default)
@@ -268,7 +286,7 @@ public sealed class ScopeWorkflowApplicationServicesTests
             Task.FromResult<ServiceRevisionCatalogSnapshot?>(null);
 
         public Task<ServiceDeploymentCatalogSnapshot?> GetServiceDeploymentsAsync(ServiceIdentity identity, CancellationToken ct = default) =>
-            Task.FromResult<ServiceDeploymentCatalogSnapshot?>(null);
+            Task.FromResult<ServiceDeploymentCatalogSnapshot?>(DeploymentResult);
 
         public sealed record ListRequest(string TenantId, string AppId, string Namespace, int Take);
     }
