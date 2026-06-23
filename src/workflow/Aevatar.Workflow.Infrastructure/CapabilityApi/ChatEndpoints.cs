@@ -128,10 +128,10 @@ public static class WorkflowCapabilityEndpoints
         IWorkflowFileIngressPort? fileIngressPort = null)
     {
         using var scope = ApiRequestScope.BeginHttp();
-        var writer = new ChatSseResponseWriter(http.Response);
         var serviceProvider = http.Features.Get<IServiceProvidersFeature>()?.RequestServices;
         var loggerFactory = serviceProvider?.GetService(typeof(ILoggerFactory)) as ILoggerFactory;
         var logger = loggerFactory?.CreateLogger("Aevatar.Workflow.Host.Api.Chat");
+        await using var writer = new ChatSseResponseWriter(http.Response, logger: logger);
 
         try
         {
