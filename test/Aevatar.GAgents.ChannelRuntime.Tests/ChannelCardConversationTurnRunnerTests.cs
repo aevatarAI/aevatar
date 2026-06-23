@@ -389,10 +389,5 @@ public sealed class ChannelCardConversationTurnRunnerTests
         public Task<string> SetDrivePermissionAsync(string token, LarkDrivePermissionRequest request, CancellationToken ct) =>
             throw new NotSupportedException();
 
-        public Task<string> UploadDriveMediaAsync(string token, LarkDriveMediaUploadRequest request, CancellationToken ct) =>
-            throw new NotSupportedException();
-
-        public Task<string> UploadApprovalFileAsync(string token, LarkApprovalFileUploadRequest request, CancellationToken ct) =>
-            throw new NotSupportedException();
     }
 }

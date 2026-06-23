@@ -13,7 +13,6 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Options;
 
 namespace Aevatar.Workflow.Infrastructure.DependencyInjection;
 
@@ -35,24 +34,12 @@ public static class ServiceCollectionExtensions
         }
 
         ConfigureWorkflowFileArtifacts(services, configuration);
-        var submitOptions = services.AddOptions<WorkflowConnectedServiceFileSubmitOptions>();
-        if (configuration != null)
-        {
-            submitOptions.Bind(
-                configuration.GetSection(WorkflowConnectedServiceFileSubmitOptions.SectionName));
-        }
-
-        submitOptions.ValidateOnStart();
         var spreadsheetOptions = services.AddOptions<WorkflowSpreadsheetExtractOptions>();
         if (configuration != null)
         {
             spreadsheetOptions.Bind(
                 configuration.GetSection(WorkflowSpreadsheetExtractOptions.SectionName));
         }
-
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IValidateOptions<WorkflowConnectedServiceFileSubmitOptions>,
-            WorkflowConnectedServiceFileSubmitOptionsValidator>());
 
         // Replace the Noop fallback from Application layer with the real file export adapter.
         services.Replace(ServiceDescriptor.Singleton<IWorkflowRunReportExportPort, FileSystemWorkflowRunReportExporter>());
@@ -61,6 +48,12 @@ public static class ServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowToolSource, WorkflowSpreadsheetExtractToolSource>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowToolSource, WorkflowConnectedServiceResourceFetchToolSource>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowToolSource, WorkflowFileSubmitToolSource>());
+        services.TryAddSingleton<
+            IWorkflowFileMultipartUploadPolicyResolver,
+            UnavailableWorkflowFileMultipartUploadPolicyResolver>();
+        services.TryAddSingleton<
+            IWorkflowFileMultipartUploadPort,
+            UnavailableWorkflowFileMultipartUploadPort>();
         services.TryAddSingleton<WorkflowRunActorPort>();
         services.TryAddSingleton<IWorkflowDefinitionProvisioningPort>(sp =>
             sp.GetRequiredService<WorkflowRunActorPort>());

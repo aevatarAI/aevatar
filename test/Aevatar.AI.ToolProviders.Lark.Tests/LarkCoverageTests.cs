@@ -141,7 +141,8 @@ public sealed class LarkCoverageTests
             descriptor.ServiceType == typeof(IAgentToolSource) &&
             descriptor.ImplementationType == typeof(LarkAgentToolSource));
         services.Should().NotContain(descriptor =>
-            descriptor.ServiceType == typeof(IWorkflowConnectedServiceFileSubmitAdapter));
+            descriptor.ServiceType.FullName != null &&
+            descriptor.ServiceType.FullName.Contains("WorkflowConnectedServiceFileSubmit", StringComparison.Ordinal));
 
         services.Single(descriptor => descriptor.ServiceType == typeof(LarkToolOptions))
             .ImplementationInstance.Should().BeOfType<LarkToolOptions>()
@@ -436,21 +437,6 @@ public sealed class LarkCoverageTests
             return Task.FromResult("""{"code":0,"data":{}}""");
         }
 
-        public Task<string> UploadDriveMediaAsync(string token, LarkDriveMediaUploadRequest request, CancellationToken ct)
-        {
-            _ = token;
-            _ = request;
-            _ = ct;
-            return Task.FromResult("""{"code":0,"data":{"file_token":"file_default"}}""");
-        }
-
-        public Task<string> UploadApprovalFileAsync(string token, LarkApprovalFileUploadRequest request, CancellationToken ct)
-        {
-            _ = token;
-            _ = request;
-            _ = ct;
-            return Task.FromResult("""{"code":0,"data":{"code":"approval_file_default"}}""");
-        }
     }
 
     private sealed class RecordingHandler : HttpMessageHandler

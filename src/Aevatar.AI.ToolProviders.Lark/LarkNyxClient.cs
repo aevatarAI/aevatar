@@ -385,60 +385,6 @@ public sealed class LarkNyxClient : ILarkNyxClient
             ct);
     }
 
-    public Task<string> UploadDriveMediaAsync(string token, LarkDriveMediaUploadRequest request, CancellationToken ct)
-    {
-        var formFields = new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            ["file_name"] = request.FileName,
-            ["parent_type"] = request.ParentType,
-            ["parent_node"] = request.ParentNode,
-            ["size"] = request.Size.ToString(System.Globalization.CultureInfo.InvariantCulture),
-        };
-
-        if (!string.IsNullOrWhiteSpace(request.Checksum))
-            formFields["checksum"] = request.Checksum.Trim();
-        if (!string.IsNullOrWhiteSpace(request.Extra))
-            formFields["extra"] = request.Extra.Trim();
-
-        return _nyxClient.ProxyRequestMultipartAsync(
-            token,
-            _options.ProviderSlug,
-            "open-apis/drive/v1/medias/upload_all",
-            "POST",
-            formFields,
-            fileFieldName: "file",
-            fileName: request.FileName,
-            fileContentType: request.ContentType,
-            fileContent: request.Content,
-            extraHeaders: null,
-            ct);
-    }
-
-    public Task<string> UploadApprovalFileAsync(string token, LarkApprovalFileUploadRequest request, CancellationToken ct)
-    {
-        var formFields = new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            ["name"] = request.FileName,
-            ["type"] = request.FileType,
-        };
-
-        // Approval attachments only upload through the legacy surface
-        // /approval/openapi/v2/file/upload (no open-apis/ prefix; same host serves it);
-        // open-apis/approval/v4/files/upload is not a real endpoint.
-        return _nyxClient.ProxyRequestMultipartAsync(
-            token,
-            _options.ProviderSlug,
-            "approval/openapi/v2/file/upload",
-            "POST",
-            formFields,
-            fileFieldName: "content",
-            fileName: request.FileName,
-            fileContentType: request.ContentType,
-            fileContent: request.Content,
-            extraHeaders: null,
-            ct);
-    }
-
     private static void ValidateMessageResourceRequest(LarkMessageResourceDownloadRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);

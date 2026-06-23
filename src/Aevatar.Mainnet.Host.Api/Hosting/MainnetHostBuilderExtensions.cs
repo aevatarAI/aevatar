@@ -49,6 +49,7 @@ using Aevatar.Mainnet.Host.Api.Scheduled;
 using Aevatar.Mainnet.Host.Api.Status;
 using Aevatar.Mainnet.Host.Api.Voice;
 using Aevatar.Studio.Hosting;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Integration.AI;
 using Microsoft.AspNetCore.Builder;
@@ -243,11 +244,12 @@ public static class MainnetHostBuilderExtensions
             if (long.TryParse(builder.Configuration["Aevatar:NyxId:ProxyFileArtifactMaxBytes"], out var maxBytes))
                 o.ProxyFileArtifactMaxBytes = maxBytes;
         });
+        builder.Services.Replace(ServiceDescriptor.Singleton<
+            IWorkflowFileMultipartUploadPolicyResolver,
+            MainnetWorkflowFileMultipartUploadSafetyPolicyResolver>());
         builder.Services.AddLarkTools(o =>
         {
             o.ProviderSlug = builder.Configuration["Aevatar:Lark:NyxProviderSlug"] ?? "api-lark-bot";
-            if (bool.TryParse(builder.Configuration["Aevatar:Lark:EnableWorkflowFileSubmit"], out var enableWorkflowFileSubmit))
-                o.EnableWorkflowFileSubmit = enableWorkflowFileSubmit;
         });
         builder.Services.AddTelegramTools(o =>
         {
