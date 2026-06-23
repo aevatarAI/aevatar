@@ -17,6 +17,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgentService.Hosting.Endpoints;
@@ -670,9 +671,11 @@ public static class ScopeWorkflowEndpoints
                     NyxIdRoutePreference = route,
                 };
             }
-            catch (InvalidOperationException)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                // Best-effort; fall back to provider defaults if config unavailable.
+                var loggerFactory = http.RequestServices.GetService<ILoggerFactory>();
+                var logger = loggerFactory?.CreateLogger("Aevatar.GAgentService.ScopeWorkflowEndpoints");
+                logger?.LogWarning(ex, "Failed to resolve scoped user LLM configuration; falling back to provider defaults.");
             }
         }
 

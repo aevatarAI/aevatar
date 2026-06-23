@@ -427,6 +427,18 @@ public sealed class ScopeWorkflowEndpointsTests
     }
 
     [Fact]
+    public async Task BuildScopedLlmControlInputAsync_ShouldFallBackToProviderDefaults_WhenUserConfigFails()
+    {
+        var http = CreateHttpContext(userConfigQueryPort: new ThrowingUserConfigStore());
+
+        var scopedControlInput = await ScopeWorkflowEndpoints.BuildScopedLlmControlInputAsync(
+            http,
+            CancellationToken.None);
+
+        scopedControlInput.Should().BeNull();
+    }
+
+    [Fact]
     public async Task HandleRunWorkflowByIdStreamAsync_ShouldPropagateScopedPreferredLlmRouteToAguiRequest()
     {
         var snapshot = new ServiceCatalogSnapshot(
@@ -931,6 +943,13 @@ public sealed class ScopeWorkflowEndpointsTests
     private sealed class StubUserConfigStore(UserConfig config) : IUserConfigQueryPort
     {
         public Task<UserConfig> GetAsync(CancellationToken ct = default) => Task.FromResult(config);
+
+        public Task<UserConfig> GetAsync(string scopeId, CancellationToken ct = default) => GetAsync(ct);
+    }
+
+    private sealed class ThrowingUserConfigStore : IUserConfigQueryPort
+    {
+        public Task<UserConfig> GetAsync(CancellationToken ct = default) => throw new HttpRequestException("config backend unavailable");
 
         public Task<UserConfig> GetAsync(string scopeId, CancellationToken ct = default) => GetAsync(ct);
     }
