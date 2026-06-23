@@ -11,6 +11,7 @@ using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.AGUI.Contracts;
+using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
@@ -460,6 +461,306 @@ public sealed class AevatarInvocationToolSourceTests
         result.GetProperty("run_id").GetString().Should().Be("team-command");
         result.GetProperty("service_id").GetString().Should().Be("service-1");
         result.GetProperty("stream_topic").GetString().Should().Be("aevatar://scopes/scope-1/services/service-1/runs/team-command");
+    }
+
+    [Fact]
+    public async Task InvokeTeam_WhenEntryServiceIsWorkflow_DispatchesServiceInvocationAndUsesAcceptedReceipt()
+    {
+        var harness = new Harness();
+        harness.TeamResolver.Resolution = new TeamEntryMemberResolution(
+            "scope-1",
+            "team-1",
+            "member-1",
+            "workflow-service");
+        harness.ConfigureServiceTarget(
+            ServiceImplementationKind.Workflow,
+            serviceId: "workflow-service",
+            endpointId: "chat",
+            primaryActorId: "workflow-definition-actor");
+        harness.ServiceInvocationDispatcher.Receipt = new ServiceInvocationAcceptedReceipt
+        {
+            RequestId = "workflow-command",
+            ServiceKey = "tenant:aevatar-service:default:workflow-service",
+            DeploymentId = "deployment-workflow-service",
+            TargetActorId = "workflow-run-actor",
+            EndpointId = "chat",
+            CommandId = "workflow-command",
+            CorrelationId = "workflow-correlation",
+            RunId = "workflow-service-run",
+        };
+        var dispatcher = harness.CreateDispatcher();
+
+        using var _ = PushContext(callId: "call-team-workflow");
+        var request = BuildChatRunRequest(
+            "response-team-workflow",
+            "call-team-workflow-tool",
+            "aevatar_invoke_team",
+            """
+            {
+              "team_id": "team-1",
+              "endpoint_id": "chat",
+              "payload": {
+                "prompt": "run team workflow",
+                "input_parts": [
+                  { "kind": "text", "text": "typed input" }
+                ],
+                "headers": { "x-workflow": "yes" }
+              },
+              "wait": "stream"
+            }
+            """);
+
+        var result = await dispatcher.InvokeTeamForChatRunAsync(request, request.ArgumentsJson);
+
+        result.ErrorCode.Should().BeEmpty(result.ToolExecutionResultJson);
+        result.RunId.Should().Be("workflow-service-run");
+        result.ScopeId.Should().Be("scope-1");
+        result.WaitMode.Should().Be(ChatRunSubRunWaitMode.Stream);
+        result.Status.Should().Be("streaming");
+        result.ActorId.Should().Be("workflow-run-actor");
+        result.ServiceId.Should().Be("workflow-service");
+        result.EndpointId.Should().Be("chat");
+        result.StreamTopic.Should().Be("aevatar://scopes/scope-1/services/workflow-service/runs/workflow-service-run");
+
+        harness.TeamInvocation.Request.Should().BeNull();
+        harness.WorkflowDispatch.Command.Should().BeNull();
+        harness.ServiceInvocationDispatcher.Calls.Should().ContainSingle();
+        var serviceDispatch = harness.ServiceInvocationDispatcher.Calls.Single();
+        serviceDispatch.Target.Service.PrimaryActorId.Should().Be("workflow-definition-actor");
+        serviceDispatch.Request.Identity!.TenantId.Should().Be("scope-1");
+        serviceDispatch.Request.Identity.ServiceId.Should().Be("workflow-service");
+        serviceDispatch.Request.EndpointId.Should().Be("chat");
+        serviceDispatch.Request.RunOrigin.Should().Be(WorkflowRunOrigins.ServiceInvoke);
+        var chatPayload = serviceDispatch.Request.Payload!.Unpack<ChatRequestEvent>();
+        chatPayload.Prompt.Should().Be("run team workflow");
+        chatPayload.SessionId.Should().Be("response-1");
+        chatPayload.ScopeId.Should().Be("scope-1");
+        chatPayload.Headers.Should().Contain("x-workflow", "yes");
+        chatPayload.Metadata.Should().Contain("x-workflow", "yes");
+        chatPayload.InputParts.Should().ContainSingle();
+        chatPayload.InputParts[0].Text.Should().Be("typed input");
+        chatPayload.ToolContext.Caller.ScopeId.Should().Be("scope-1");
+        chatPayload.ToolContext.Caller.OwnerSubject.Should().Be("owner-1");
+        chatPayload.ToolContext.Credentials.NyxIdAccessToken.Should().Be("access-token");
+        chatPayload.ToolContext.Credentials.SenderNyxIdAccessToken.Should().Be("sender-token");
+        chatPayload.LlmControl.ModelOverride.Should().Be("model-1");
+        chatPayload.LlmControl.NyxIdRoutePreference.Should().Be("route-1");
+        chatPayload.LlmControl.SenderNyxIdAccessToken.Should().Be("sender-token");
+        ShouldNotCarryTrustedCallerValues(chatPayload.Headers);
+        ShouldNotCarryTrustedCallerValues(chatPayload.Metadata);
+
+        harness.AdmissionAuthorizer.Calls.Should().ContainSingle();
+        harness.AdmissionAuthorizer.Calls[0].ServiceKey.Should().Contain("workflow-service");
+        harness.AdmissionAuthorizer.Calls[0].Endpoint.EndpointId.Should().Be("chat");
+        harness.ServiceRunRegistration.Records.Should().BeEmpty();
+        harness.WorkflowRunDelivery.Registrations.Should().ContainSingle();
+        harness.WorkflowRunDelivery.Registrations[0].StreamTopic.Should().Be(result.StreamTopic);
+        harness.WorkflowRunDelivery.Registrations[0].WorkflowActorId.Should().Be("workflow-run-actor");
+        harness.WorkflowRunDelivery.Registrations[0].WorkflowRunId.Should().Be("workflow-command");
+        harness.WorkflowRunDelivery.Registrations[0].WorkflowCommandId.Should().Be("workflow-command");
+        harness.WorkflowRunDelivery.Registrations[0].WorkflowCorrelationId.Should().Be("workflow-correlation");
+
+        using var output = JsonDocument.Parse(result.ToolExecutionResultJson);
+        output.RootElement.GetProperty("run_id").GetString().Should().Be("workflow-service-run");
+        output.RootElement.GetProperty("actor_id").GetString().Should().Be("workflow-run-actor");
+        output.RootElement.GetProperty("command_id").GetString().Should().Be("workflow-command");
+        output.RootElement.GetProperty("correlation_id").GetString().Should().Be("workflow-correlation");
+        output.RootElement.GetProperty("service_id").GetString().Should().Be("workflow-service");
+        output.RootElement.GetProperty("stream_topic").GetString().Should().Be(result.StreamTopic);
+    }
+
+    [Fact]
+    public async Task InvokeTeam_WhenEntryServiceIsWorkflow_UsesServiceInvocationDispatcherArtifactAuthority()
+    {
+        var harness = new Harness();
+        harness.TeamResolver.Resolution = new TeamEntryMemberResolution(
+            "scope-1",
+            "team-1",
+            "member-1",
+            "workflow-service");
+        harness.ConfigureServiceTarget(
+            ServiceImplementationKind.Workflow,
+            serviceId: "workflow-service",
+            endpointId: "chat",
+            primaryActorId: "deployed-workflow-definition-actor");
+        var target = harness.ServiceInvocationResolution.Result!;
+        target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
+        {
+            WorkflowName = "published-workflow",
+            WorkflowYaml = "name: published-workflow",
+            DefinitionActorId = "published-definition-actor",
+            InlineWorkflowYamls =
+            {
+                ["helper"] = "name: helper",
+            },
+        };
+        harness.ServiceInvocationDispatcher.Receipt = new ServiceInvocationAcceptedReceipt
+        {
+            RequestId = "service-command",
+            ServiceKey = target.Service.ServiceKey,
+            DeploymentId = target.Service.DeploymentId,
+            TargetActorId = "service-workflow-run-actor",
+            EndpointId = "chat",
+            CommandId = "service-command",
+            CorrelationId = "service-correlation",
+            RunId = "service-run",
+        };
+        var dispatcher = harness.CreateDispatcher();
+
+        using var _ = PushContext(callId: "call-team-workflow-authority");
+        var request = BuildChatRunRequest(
+            "response-team-workflow-authority",
+            "call-team-workflow-authority-tool",
+            "aevatar_invoke_team",
+            """
+            {
+              "team_id": "team-1",
+              "endpoint_id": "chat",
+              "payload": {
+                "prompt": "run published workflow",
+                "headers": { "x-workflow": "yes" }
+              },
+              "wait": "stream"
+            }
+            """);
+
+        var result = await dispatcher.InvokeTeamForChatRunAsync(request, request.ArgumentsJson);
+
+        result.ErrorCode.Should().BeEmpty(result.ToolExecutionResultJson);
+        result.RunId.Should().Be("service-run");
+        result.ActorId.Should().Be("service-workflow-run-actor");
+        result.StreamTopic.Should().Be("aevatar://scopes/scope-1/services/workflow-service/runs/service-run");
+        harness.WorkflowDispatch.Command.Should().BeNull();
+        harness.ServiceRunRegistration.Records.Should().BeEmpty();
+        harness.ServiceInvocationDispatcher.Calls.Should().ContainSingle();
+        var dispatch = harness.ServiceInvocationDispatcher.Calls.Single();
+        dispatch.Target.Artifact.DeploymentPlan.WorkflowPlan.WorkflowName.Should().Be("published-workflow");
+        dispatch.Target.Artifact.DeploymentPlan.WorkflowPlan.WorkflowYaml.Should().Be("name: published-workflow");
+        dispatch.Target.Artifact.DeploymentPlan.WorkflowPlan.DefinitionActorId.Should().Be("published-definition-actor");
+        dispatch.Target.Artifact.DeploymentPlan.WorkflowPlan.InlineWorkflowYamls.Should().Contain("helper", "name: helper");
+        dispatch.Request.Identity!.ServiceId.Should().Be("workflow-service");
+        dispatch.Request.EndpointId.Should().Be("chat");
+        dispatch.Request.RunOrigin.Should().Be(WorkflowRunOrigins.ServiceInvoke);
+        dispatch.Request.Payload!.Unpack<ChatRequestEvent>().Prompt.Should().Be("run published workflow");
+
+        using var output = JsonDocument.Parse(result.ToolExecutionResultJson);
+        output.RootElement.GetProperty("command_id").GetString().Should().Be("service-command");
+        output.RootElement.GetProperty("correlation_id").GetString().Should().Be("service-correlation");
+    }
+
+    [Fact]
+    public async Task InvokeTeam_WhenEntryServiceIsStatic_KeepsStaticInvocationPathAfterServiceResolution()
+    {
+        var harness = new Harness();
+        harness.ConfigureServiceTarget(
+            ServiceImplementationKind.Static,
+            serviceId: "service-1",
+            endpointId: "entry",
+            primaryActorId: "static-actor");
+        var dispatcher = harness.CreateDispatcher();
+
+        using var _ = PushContext(callId: "call-team-static");
+        var request = BuildChatRunRequest(
+            "response-team-static",
+            "call-team-static-tool",
+            "aevatar_invoke_team",
+            """
+            {
+              "team_id": "team-1",
+              "endpoint_id": "entry",
+              "payload": { "prompt": "go" },
+              "wait": "stream"
+            }
+            """);
+
+        var result = await dispatcher.InvokeTeamForChatRunAsync(request, request.ArgumentsJson);
+
+        result.ErrorCode.Should().BeEmpty(result.ToolExecutionResultJson);
+        result.RunId.Should().Be("team-command");
+        result.ServiceId.Should().Be("service-1");
+        result.StreamTopic.Should().Be("aevatar://scopes/scope-1/services/service-1/runs/team-command");
+        harness.TeamInvocation.Request.Should().NotBeNull();
+        harness.WorkflowDispatch.Command.Should().BeNull();
+        harness.ServiceRunRegistration.Records.Should().BeEmpty();
+        harness.AdmissionAuthorizer.Calls.Should().ContainSingle();
+        harness.AdmissionAuthorizer.Calls[0].Artifact.ImplementationKind.Should().Be(ServiceImplementationKind.Static);
+    }
+
+    [Fact]
+    public async Task InvokeTeam_WhenEntryServiceIsScripting_ReturnsUnsupportedKind()
+    {
+        var harness = new Harness();
+        harness.TeamResolver.Resolution = new TeamEntryMemberResolution(
+            "scope-1",
+            "team-1",
+            "member-1",
+            "script-service");
+        harness.ConfigureServiceTarget(
+            ServiceImplementationKind.Scripting,
+            serviceId: "script-service",
+            endpointId: "chat",
+            primaryActorId: "script-runtime-actor");
+        var dispatcher = harness.CreateDispatcher();
+
+        using var _ = PushContext(callId: "call-team-scripting");
+        var request = BuildChatRunRequest(
+            "response-team-scripting",
+            "call-team-scripting-tool",
+            "aevatar_invoke_team",
+            """
+            {
+              "team_id": "team-1",
+              "endpoint_id": "chat",
+              "payload": { "prompt": "go" },
+              "wait": "stream"
+            }
+            """);
+
+        var result = await dispatcher.InvokeTeamForChatRunAsync(request, request.ArgumentsJson);
+
+        result.ErrorCode.Should().Be("unsupported_team_entry_service_kind");
+        result.ToolExecutionResultJson.Should().Contain("currently supports Static and Workflow");
+        result.ToolExecutionResultJson.Should().NotContain("Only static GAgent services support stream invocation");
+        harness.TeamInvocation.Request.Should().BeNull();
+        harness.WorkflowDispatch.Command.Should().BeNull();
+        harness.ServiceRunRegistration.Records.Should().BeEmpty();
+        harness.AdmissionAuthorizer.Calls.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task InvokeTeam_ShouldResolveTeamInSenderNyxUserScope_WhenChannelSenderIsBound()
+    {
+        var harness = new Harness();
+        harness.TeamResolver.Resolution = new TeamEntryMemberResolution(
+            "nyx-user-scope",
+            "team-1",
+            "member-1",
+            "service-1");
+        var tool = await harness.DiscoverToolAsync("aevatar_invoke_team");
+
+        using var _ = PushContext(
+            callId: "call-team-bound-sender",
+            scopeId: "registration-scope-1",
+            senderNyxUserId: "nyx-user-scope");
+        var output = await tool.ExecuteAsync("""
+            {
+              "team_id": "team-1",
+              "endpoint_id": "entry",
+              "payload": { "prompt": "go" },
+              "wait": "stream"
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.TeamResolver.LastScopeId.Should().Be("nyx-user-scope");
+        harness.TeamInvocation.Request.Should().NotBeNull();
+        harness.TeamInvocation.Request!.Identity.TenantId.Should().Be("nyx-user-scope");
+        harness.TeamInvocation.Request.Input.Caller!.TenantId.Should().Be("nyx-user-scope");
+        harness.TeamInvocation.Request.Input.ToolContext!.Caller.ScopeId.Should().Be("registration-scope-1");
+        harness.TeamInvocation.Request.Input.ToolContext.SenderBinding.NyxUserId.Should().Be("nyx-user-scope");
+
+        var result = Read(output);
+        result.GetProperty("stream_topic").GetString().Should().Be("aevatar://scopes/nyx-user-scope/services/service-1/runs/team-command");
     }
 
     [Fact]
@@ -2189,11 +2490,24 @@ public sealed class AevatarInvocationToolSourceTests
         public RecordingTeamEntryMemberResolver TeamResolver { get; } = new();
         public RecordingStaticGAgentInvocationPort TeamInvocation { get; } = new();
         public RecordingWorkflowDispatchService WorkflowDispatch { get; } = new();
+        public RecordingServiceInvocationDispatcher ServiceInvocationDispatcher { get; } = new();
         public RecordingWorkflowRunBackgroundDeliveryRegistrationPort WorkflowRunDelivery { get; } = new();
+        public RecordingServiceInvocationResolutionPort ServiceInvocationResolution { get; } = new();
+        public RecordingInvokeAdmissionAuthorizer AdmissionAuthorizer { get; } = new();
+        public RecordingServiceRunRegistrationPort ServiceRunRegistration { get; } = new();
         public RecordingServiceRunQueryPort ServiceRunQuery { get; } = new();
         public RecordingTerminalQueryPort TerminalQuery { get; } = new();
         public StubWorkflowExecutionQueryService WorkflowQuery { get; } = new();
         public RecordingWorkflowRunBindingReader RunBindingReader { get; } = new();
+
+        public Harness()
+        {
+            ConfigureServiceTarget(
+                ServiceImplementationKind.Static,
+                serviceId: "service-1",
+                endpointId: "entry",
+                primaryActorId: "team-actor");
+        }
 
         public AevatarInvocationDispatcher CreateDispatcher(bool withWorkflowRunDeliveryRegistrationPort = true) =>
             new(
@@ -2202,10 +2516,84 @@ public sealed class AevatarInvocationToolSourceTests
                 TeamResolver,
                 TeamInvocation,
                 WorkflowDispatch,
+                ServiceInvocationResolution,
+                ServiceInvocationDispatcher,
+                AdmissionAuthorizer,
                 ServiceRunQuery,
                 TerminalQuery,
                 WorkflowQuery,
                 withWorkflowRunDeliveryRegistrationPort ? WorkflowRunDelivery : null);
+
+        public void ConfigureServiceTarget(
+            ServiceImplementationKind implementationKind,
+            string serviceId,
+            string endpointId,
+            string primaryActorId)
+        {
+            var identity = new ServiceIdentity
+            {
+                TenantId = "scope-1",
+                AppId = ScopeServiceIdentityDefaults.ServiceAppId,
+                Namespace = ScopeServiceIdentityDefaults.ServiceNamespace,
+                ServiceId = serviceId,
+            };
+            var serviceKey = ServiceKeys.Build(identity);
+            var revisionId = $"revision-{serviceId}";
+            var deploymentId = $"deployment-{serviceId}";
+            var endpoint = new ServiceEndpointDescriptor
+            {
+                EndpointId = endpointId,
+                DisplayName = endpointId,
+                Kind = ServiceEndpointKind.Chat,
+                RequestTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                ResponseTypeUrl = Any.Pack(new AGUIEvent()).TypeUrl,
+                Description = "chat endpoint",
+            };
+            var artifact = new PreparedServiceRevisionArtifact
+            {
+                Identity = identity.Clone(),
+                RevisionId = revisionId,
+                ImplementationKind = implementationKind,
+                ArtifactHash = $"artifact-{serviceId}",
+                DeploymentPlan = new ServiceDeploymentPlan(),
+            };
+            artifact.Endpoints.Add(endpoint);
+            switch (implementationKind)
+            {
+                case ServiceImplementationKind.Static:
+                    artifact.DeploymentPlan.StaticPlan = new StaticServiceDeploymentPlan
+                    {
+                        PreferredActorId = primaryActorId,
+                        AgentKind = "RoleGAgent",
+                    };
+                    break;
+                case ServiceImplementationKind.Scripting:
+                    artifact.DeploymentPlan.ScriptingPlan = new ScriptingServiceDeploymentPlan
+                    {
+                        Revision = revisionId,
+                        DefinitionActorId = "script-definition-actor",
+                    };
+                    break;
+                case ServiceImplementationKind.Workflow:
+                    artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
+                    {
+                        WorkflowName = "wf-main",
+                        DefinitionActorId = primaryActorId,
+                    };
+                    break;
+            }
+
+            ServiceInvocationResolution.Result = new ServiceInvocationResolvedTarget(
+                new ServiceInvocationResolvedService(
+                    serviceKey,
+                    revisionId,
+                    deploymentId,
+                    primaryActorId,
+                    ServiceServingState.Active.ToString(),
+                    []),
+                artifact,
+                endpoint);
+        }
 
         public void RegisterDependencies(IServiceCollection services)
         {
@@ -2214,6 +2602,10 @@ public sealed class AevatarInvocationToolSourceTests
             services.AddSingleton<ITeamEntryMemberResolver>(TeamResolver);
             services.AddSingleton<IStaticGAgentStreamInvocationPort<AGUIEvent>>(TeamInvocation);
             services.AddSingleton<ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>>(WorkflowDispatch);
+            services.AddSingleton<IServiceInvocationDispatcher>(ServiceInvocationDispatcher);
+            services.AddSingleton<IServiceInvocationResolutionPort>(ServiceInvocationResolution);
+            services.AddSingleton<IInvokeAdmissionAuthorizer>(AdmissionAuthorizer);
+            services.AddSingleton<IServiceRunRegistrationPort>(ServiceRunRegistration);
             services.AddSingleton<IServiceRunQueryPort>(ServiceRunQuery);
             services.AddSingleton<IGAgentRunTerminalQueryPort>(TerminalQuery);
             services.AddSingleton<IWorkflowExecutionQueryApplicationService>(WorkflowQuery);
@@ -2361,6 +2753,38 @@ public sealed class AevatarInvocationToolSourceTests
         }
     }
 
+    private sealed class RecordingServiceInvocationDispatcher : IServiceInvocationDispatcher
+    {
+        public List<(ServiceInvocationResolvedTarget Target, ServiceInvocationRequest Request)> Calls { get; } = [];
+
+        public ServiceInvocationAcceptedReceipt Receipt { get; set; } = new()
+        {
+            RequestId = "service-command",
+            ServiceKey = "tenant:app:default:service-1",
+            DeploymentId = "deployment-service-1",
+            TargetActorId = "service-target-actor",
+            EndpointId = "chat",
+            CommandId = "service-command",
+            CorrelationId = "service-correlation",
+            RunId = "service-run",
+        };
+
+        public Task<ServiceInvocationAcceptedReceipt> DispatchAsync(
+            ServiceInvocationResolvedTarget target,
+            ServiceInvocationRequest request,
+            CancellationToken ct = default)
+        {
+            Calls.Add((CloneTarget(target), request.Clone()));
+            return Task.FromResult(Receipt);
+        }
+
+        private static ServiceInvocationResolvedTarget CloneTarget(ServiceInvocationResolvedTarget target) =>
+            new(
+                target.Service,
+                target.Artifact.Clone(),
+                target.Endpoint.Clone());
+    }
+
     private sealed class RecordingWorkflowRunBackgroundDeliveryRegistrationPort
         : IWorkflowRunBackgroundDeliveryRegistrationPort
     {
@@ -2389,6 +2813,95 @@ public sealed class AevatarInvocationToolSourceTests
                 RegistrationScopeId = registration.RegistrationScopeId,
                 DurableReplyCredentialRef = registration.DurableReplyCredentialRef,
             });
+        }
+    }
+
+    private sealed class RecordingServiceInvocationResolutionPort : IServiceInvocationResolutionPort
+    {
+        public ServiceIdentity? LastIdentity { get; private set; }
+        public ServiceInvocationRequest? LastRequest { get; private set; }
+        public ServiceInvocationResolvedTarget? Result { get; set; }
+        public Exception? Failure { get; set; }
+
+        public Task<bool> HasServiceAsync(
+            ServiceIdentity identity,
+            CancellationToken ct = default)
+        {
+            LastIdentity = identity.Clone();
+            return Task.FromResult(Result != null);
+        }
+
+        public Task<ServiceInvocationResolvedTarget> ResolveAsync(
+            ServiceInvocationRequest request,
+            CancellationToken ct = default)
+        {
+            if (Failure != null)
+                throw Failure;
+
+            LastRequest = request.Clone();
+            LastIdentity = request.Identity?.Clone();
+            return Task.FromResult(Result ?? throw new InvalidOperationException("No service invocation target configured."));
+        }
+    }
+
+    private sealed class RecordingInvokeAdmissionAuthorizer : IInvokeAdmissionAuthorizer
+    {
+        public List<AdmissionCall> Calls { get; } = [];
+        public Exception? Failure { get; set; }
+
+        public Task AuthorizeAsync(
+            string serviceKey,
+            string deploymentId,
+            PreparedServiceRevisionArtifact artifact,
+            ServiceEndpointDescriptor endpoint,
+            ServiceInvocationRequest request,
+            CancellationToken ct = default)
+        {
+            if (Failure != null)
+                throw Failure;
+
+            Calls.Add(new AdmissionCall(
+                serviceKey,
+                deploymentId,
+                artifact.Clone(),
+                endpoint.Clone(),
+                request.Clone()));
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed record AdmissionCall(
+        string ServiceKey,
+        string DeploymentId,
+        PreparedServiceRevisionArtifact Artifact,
+        ServiceEndpointDescriptor Endpoint,
+        ServiceInvocationRequest Request);
+
+    private sealed class RecordingServiceRunRegistrationPort : IServiceRunRegistrationPort
+    {
+        public List<ServiceRunRecord> Records { get; } = [];
+        public List<(string RunActorId, string RunId, ServiceRunStatus Status)> StatusUpdates { get; } = [];
+        public Exception? Failure { get; set; }
+
+        public Task<ServiceRunRegistrationResult> RegisterAsync(
+            ServiceRunRecord record,
+            CancellationToken ct = default)
+        {
+            if (Failure != null)
+                throw Failure;
+
+            Records.Add(record.Clone());
+            return Task.FromResult(new ServiceRunRegistrationResult(record.TargetActorId, record.RunId));
+        }
+
+        public Task UpdateStatusAsync(
+            string runActorId,
+            string runId,
+            ServiceRunStatus status,
+            CancellationToken ct = default)
+        {
+            StatusUpdates.Add((runActorId, runId, status));
+            return Task.CompletedTask;
         }
     }
 

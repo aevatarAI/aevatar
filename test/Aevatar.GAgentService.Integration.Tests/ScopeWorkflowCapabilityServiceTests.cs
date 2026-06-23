@@ -137,28 +137,35 @@ public sealed class ScopeWorkflowApplicationServicesTests
         var options = new ScopeWorkflowCapabilityOptions();
         const string definitionActorId = "scope-workflow:def-1";
         const string runActorId = "workflow-run:run-1";
+        var serviceSnapshot = new ServiceCatalogSnapshot(
+            ServiceKeys.Build("external-user-3", options.ServiceAppId, options.ServiceNamespace, "approval-flow"),
+            "external-user-3",
+            options.ServiceAppId,
+            options.ServiceNamespace,
+            "approval-flow",
+            "Approval Flow",
+            "rev-1",
+            "rev-1",
+            "dep-1",
+            definitionActorId,
+            ServiceDeploymentStatus.Active.ToString(),
+            [],
+            [],
+            DateTimeOffset.UtcNow);
         var queryPort = new FakeServiceLifecycleQueryPort
         {
-            ListServicesResult =
-            [
-                new ServiceCatalogSnapshot(
-                    ServiceKeys.Build("external-user-3", options.ServiceAppId, options.ServiceNamespace, "approval-flow"),
-                    "external-user-3",
-                    options.ServiceAppId,
-                    options.ServiceNamespace,
-                    "approval-flow",
-                    "Approval Flow",
-                    "rev-1",
-                    "rev-1",
-                    "dep-1",
-                    definitionActorId,
-                    "active",
-                    [],
-                    [],
-                    DateTimeOffset.UtcNow),
-            ],
+            ListServicesResult = [serviceSnapshot],
         };
+        queryPort.GetServiceResults.Enqueue(serviceSnapshot);
         var bindingReader = new FakeWorkflowActorBindingReader();
+        bindingReader.Bindings[definitionActorId] = new WorkflowActorBinding(
+            WorkflowActorKind.Definition,
+            definitionActorId,
+            definitionActorId,
+            string.Empty,
+            "approval",
+            "name: approval",
+            new Dictionary<string, string>());
         bindingReader.Bindings[runActorId] = new WorkflowActorBinding(
             WorkflowActorKind.Run,
             runActorId,
@@ -267,8 +274,25 @@ public sealed class ScopeWorkflowApplicationServicesTests
         public Task<ServiceRevisionCatalogSnapshot?> GetServiceRevisionsAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             Task.FromResult<ServiceRevisionCatalogSnapshot?>(null);
 
-        public Task<ServiceDeploymentCatalogSnapshot?> GetServiceDeploymentsAsync(ServiceIdentity identity, CancellationToken ct = default) =>
-            Task.FromResult<ServiceDeploymentCatalogSnapshot?>(null);
+        public Task<ServiceDeploymentCatalogSnapshot?> GetServiceDeploymentsAsync(ServiceIdentity identity, CancellationToken ct = default)
+        {
+            var serviceKey = ServiceKeys.Build(identity);
+            var service = ListServicesResult.FirstOrDefault(x =>
+                string.Equals(x.ServiceKey, serviceKey, StringComparison.Ordinal));
+            if (service == null || string.IsNullOrWhiteSpace(service.DeploymentId))
+                return Task.FromResult<ServiceDeploymentCatalogSnapshot?>(null);
+
+            return Task.FromResult<ServiceDeploymentCatalogSnapshot?>(new ServiceDeploymentCatalogSnapshot(
+                service.ServiceKey,
+                [new ServiceDeploymentSnapshot(
+                    service.DeploymentId,
+                    service.ActiveServingRevisionId,
+                    service.PrimaryActorId,
+                    service.DeploymentStatus,
+                    service.UpdatedAt,
+                    service.UpdatedAt)],
+                service.UpdatedAt));
+        }
 
         public sealed record ListRequest(string TenantId, string AppId, string Namespace, int Take);
     }

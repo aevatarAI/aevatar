@@ -10,6 +10,7 @@ using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.AGUI.Contracts;
+using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Abstractions;
@@ -70,6 +71,9 @@ public sealed class AevatarInvocationDispatcher
     private readonly ITeamEntryMemberResolver _teamEntryMemberResolver;
     private readonly IStaticGAgentStreamInvocationPort<AGUIEvent> _teamInvocationPort;
     private readonly ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> _workflowDispatchService;
+    private readonly IServiceInvocationResolutionPort _serviceInvocationResolutionPort;
+    private readonly IServiceInvocationDispatcher _serviceInvocationDispatcher;
+    private readonly IInvokeAdmissionAuthorizer _admissionAuthorizer;
     private readonly IServiceRunQueryPort _serviceRunQueryPort;
     private readonly IGAgentRunTerminalQueryPort _terminalQueryPort;
     private readonly IWorkflowExecutionQueryApplicationService _workflowQueryService;
@@ -82,6 +86,9 @@ public sealed class AevatarInvocationDispatcher
         ITeamEntryMemberResolver teamEntryMemberResolver,
         IStaticGAgentStreamInvocationPort<AGUIEvent> teamInvocationPort,
         ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> workflowDispatchService,
+        IServiceInvocationResolutionPort serviceInvocationResolutionPort,
+        IServiceInvocationDispatcher serviceInvocationDispatcher,
+        IInvokeAdmissionAuthorizer admissionAuthorizer,
         IServiceRunQueryPort serviceRunQueryPort,
         IGAgentRunTerminalQueryPort terminalQueryPort,
         IWorkflowExecutionQueryApplicationService workflowQueryService,
@@ -93,6 +100,9 @@ public sealed class AevatarInvocationDispatcher
         _teamEntryMemberResolver = teamEntryMemberResolver ?? throw new ArgumentNullException(nameof(teamEntryMemberResolver));
         _teamInvocationPort = teamInvocationPort ?? throw new ArgumentNullException(nameof(teamInvocationPort));
         _workflowDispatchService = workflowDispatchService ?? throw new ArgumentNullException(nameof(workflowDispatchService));
+        _serviceInvocationResolutionPort = serviceInvocationResolutionPort ?? throw new ArgumentNullException(nameof(serviceInvocationResolutionPort));
+        _serviceInvocationDispatcher = serviceInvocationDispatcher ?? throw new ArgumentNullException(nameof(serviceInvocationDispatcher));
+        _admissionAuthorizer = admissionAuthorizer ?? throw new ArgumentNullException(nameof(admissionAuthorizer));
         _serviceRunQueryPort = serviceRunQueryPort ?? throw new ArgumentNullException(nameof(serviceRunQueryPort));
         _terminalQueryPort = terminalQueryPort ?? throw new ArgumentNullException(nameof(terminalQueryPort));
         _workflowQueryService = workflowQueryService ?? throw new ArgumentNullException(nameof(workflowQueryService));
@@ -206,10 +216,46 @@ public sealed class AevatarInvocationDispatcher
                 request.TeamId.Trim(),
                 request.EndpointId.Trim(),
                 ct);
-            var invocation = BuildStaticInvocationRequest(resolution, request);
-            // Refactor (v1/issue1470-first): InvokeTeam wait=complete must return the dispatch receipt only;
-            // terminal completion is observed through the service-run readmodel instead of folding live AGUI frames.
-            return await InvokeTeamToAcceptanceAsync(chatRunRequest, invocation, resolution, request.EndpointId, wait, ct);
+            var invocationRequest = BuildServiceInvocationRequest(resolution, request);
+            var target = await _serviceInvocationResolutionPort.ResolveAsync(invocationRequest, ct);
+            await _admissionAuthorizer.AuthorizeAsync(
+                target.Service.ServiceKey,
+                target.Service.DeploymentId,
+                target.Artifact,
+                target.Endpoint,
+                invocationRequest,
+                ct);
+
+            // TODO(aevatar-team-invoke): fully align this with HTTP Team stream by moving the
+            // ImplementationKind splitter into an application-layer Team invocation service.
+            // Workflow / Static / Scripting should share the same branching service so
+            // aevatar_invoke_team and HTTP /teams/{teamId}/invoke/{endpointId}:stream keep one
+            // accepted receipt, service-run registration, stream topic, and observe semantics.
+            return target.Artifact.ImplementationKind switch
+            {
+                ServiceImplementationKind.Static =>
+                    await InvokeStaticTeamToAcceptanceAsync(
+                        chatRunRequest,
+                        resolution,
+                        request,
+                        wait,
+                        ct),
+
+                ServiceImplementationKind.Workflow =>
+                    await InvokeWorkflowTeamToAcceptanceAsync(
+                        chatRunRequest,
+                        resolution,
+                        request,
+                        invocationRequest,
+                        target,
+                        wait,
+                        ct),
+
+                _ => UnsupportedTeamEntryServiceKind(
+                    chatRunRequest,
+                    resolution.ScopeId,
+                    target.Artifact.ImplementationKind),
+            };
         }
         catch (TeamEntryMemberResolutionException ex)
         {
@@ -534,6 +580,181 @@ public sealed class AevatarInvocationDispatcher
             wait), resolution.ScopeId);
     }
 
+    private async Task<ChatRunToolCompletionRequest> InvokeStaticTeamToAcceptanceAsync(
+        ChatRunToolCompletionRequest? chatRunRequest,
+        TeamEntryMemberResolution resolution,
+        InvokeTeamToolRequest request,
+        InvocationWaitMode wait,
+        CancellationToken ct)
+    {
+        var invocation = BuildStaticInvocationRequest(resolution, request);
+        // Refactor (v1/issue1470-first): InvokeTeam wait=complete must return the dispatch receipt only;
+        // terminal completion is observed through the service-run readmodel instead of folding live AGUI frames.
+        return await InvokeTeamToAcceptanceAsync(
+            chatRunRequest,
+            invocation,
+            resolution,
+            request.EndpointId,
+            wait,
+            ct);
+    }
+
+    private async Task<ChatRunToolCompletionRequest> InvokeWorkflowTeamToAcceptanceAsync(
+        ChatRunToolCompletionRequest? chatRunRequest,
+        TeamEntryMemberResolution resolution,
+        InvokeTeamToolRequest request,
+        ServiceInvocationRequest invocationRequest,
+        ServiceInvocationResolvedTarget target,
+        InvocationWaitMode wait,
+        CancellationToken ct)
+    {
+        EnsureWorkflowTeamChatTarget(target, invocationRequest);
+
+        var backgroundDelivery = ResolveWorkflowBackgroundDelivery(wait, AgentToolRequestContext.Current);
+        if (backgroundDelivery.Error != null)
+        {
+            return ToChatRunRequest(
+                chatRunRequest,
+                AevatarInvocationJson.Error(backgroundDelivery.Error),
+                backgroundDelivery.Error);
+        }
+
+        var callerCredential = ResolveWorkflowCallerCredential(AgentToolRequestContext.Current);
+        if (callerCredential.Error != null)
+        {
+            return ToChatRunRequest(
+                chatRunRequest,
+                AevatarInvocationJson.Error(callerCredential.Error),
+                callerCredential.Error);
+        }
+
+        ApplyWorkflowServiceInvocationContext(invocationRequest, callerCredential.Value);
+
+        var serviceReceipt = await _serviceInvocationDispatcher.DispatchAsync(target, invocationRequest, ct);
+        var serviceRunId = ResolveServiceRunId(serviceReceipt);
+        var receipt = ToWorkflowAcceptedReceipt(serviceReceipt);
+
+        var streamTopic = wait == InvocationWaitMode.Stream
+            ? AevatarInvocationStreamTopics.ForServiceRun(
+                resolution.ScopeId,
+                resolution.PublishedServiceId,
+                serviceRunId)
+            : string.Empty;
+
+        WorkflowRunBackgroundDeliveryReceipt? workflowRunDeliveryReceipt = null;
+        if (wait == InvocationWaitMode.Stream && backgroundDelivery.ShouldRegister)
+        {
+            var registration = await RegisterWorkflowRunBackgroundDeliveryAsync(
+                    receipt,
+                    streamTopic,
+                    backgroundDelivery.DurableReplyCredentialRef!,
+                    AgentToolRequestContext.Current,
+                    ct)
+                .ConfigureAwait(false);
+            if (registration.Error != null)
+            {
+                return ToChatRunRequest(
+                    chatRunRequest,
+                    new InvocationToolResult
+                    {
+                        RunId = serviceRunId,
+                        Status = "background_delivery_failed",
+                        StreamTopic = string.Empty,
+                        ActorId = receipt.ActorId,
+                        CommandId = receipt.CommandId,
+                        CorrelationId = receipt.CorrelationId,
+                        ServiceId = resolution.PublishedServiceId,
+                        EndpointId = request.EndpointId.Trim(),
+                        Wait = wait,
+                        Error = registration.Error,
+                    },
+                    resolution.ScopeId);
+            }
+
+            workflowRunDeliveryReceipt = registration.Receipt;
+        }
+
+        return ToChatRunRequest(
+            chatRunRequest,
+            new InvocationToolResult
+            {
+                RunId = serviceRunId,
+                Status = wait == InvocationWaitMode.Ack ? "accepted" : "streaming",
+                StreamTopic = streamTopic,
+                ActorId = receipt.ActorId,
+                CommandId = receipt.CommandId,
+                CorrelationId = receipt.CorrelationId,
+                ServiceId = resolution.PublishedServiceId,
+                EndpointId = request.EndpointId.Trim(),
+                Wait = wait,
+                WorkflowRunDelivery = workflowRunDeliveryReceipt,
+            },
+            resolution.ScopeId);
+    }
+
+    private static void EnsureWorkflowTeamChatTarget(
+        ServiceInvocationResolvedTarget target,
+        ServiceInvocationRequest invocationRequest)
+    {
+        if (target.Artifact.ImplementationKind != ServiceImplementationKind.Workflow)
+            throw new InvalidOperationException("Only workflow services support workflow team invocation.");
+        if (target.Endpoint.Kind != ServiceEndpointKind.Chat)
+            throw new InvalidOperationException("Only chat endpoints support workflow team invocation.");
+        if (!string.IsNullOrWhiteSpace(target.Endpoint.RequestTypeUrl) &&
+            !string.Equals(
+                target.Endpoint.RequestTypeUrl,
+                invocationRequest.Payload?.TypeUrl,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Endpoint '{target.Endpoint.EndpointId}' expects payload '{target.Endpoint.RequestTypeUrl}', but got '{invocationRequest.Payload?.TypeUrl}'.");
+        }
+
+        var plan = target.Artifact.DeploymentPlan.WorkflowPlan;
+        if (string.IsNullOrWhiteSpace(target.Service.PrimaryActorId) &&
+            string.IsNullOrWhiteSpace(plan.DefinitionActorId))
+            throw new InvalidOperationException("Workflow service does not have a definition actor.");
+    }
+
+    private static WorkflowChatRunAcceptedReceipt ToWorkflowAcceptedReceipt(
+        ServiceInvocationAcceptedReceipt receipt)
+    {
+        var commandId = string.IsNullOrWhiteSpace(receipt.CommandId)
+            ? receipt.RequestId
+            : receipt.CommandId;
+        var correlationId = string.IsNullOrWhiteSpace(receipt.CorrelationId)
+            ? commandId
+            : receipt.CorrelationId;
+        return new WorkflowChatRunAcceptedReceipt(
+            receipt.TargetActorId ?? string.Empty,
+            "workflow",
+            commandId ?? string.Empty,
+            correlationId ?? string.Empty);
+    }
+
+    private static string ResolveServiceRunId(ServiceInvocationAcceptedReceipt receipt) =>
+        string.IsNullOrWhiteSpace(receipt.RunId)
+            ? receipt.CommandId ?? string.Empty
+            : receipt.RunId.Trim();
+
+    private static ChatRunToolCompletionRequest UnsupportedTeamEntryServiceKind(
+        ChatRunToolCompletionRequest? chatRunRequest,
+        string scopeId,
+        ServiceImplementationKind kind)
+    {
+        var error = Error(
+            "unsupported_team_entry_service_kind",
+            $"aevatar_invoke_team currently supports Static and Workflow team entry services, but the resolved service is {kind}.");
+
+        return ToChatRunRequest(
+            chatRunRequest,
+            AevatarInvocationJson.Error(error),
+            error) with
+        {
+            ScopeId = scopeId,
+        };
+    }
+
     private InvocationToolResult BuildTeamAcceptedResult(
         TeamEntryMemberResolution resolution,
         string endpointId,
@@ -791,6 +1012,65 @@ public sealed class AevatarInvocationDispatcher
             ToolContext: AgentToolRequestContext.Current ?? AgentToolExecutionContext.Empty,
             LlmControl: ToLlmControlContext(AgentToolRequestContext.Current));
         return new StaticGAgentStreamInvocationRequest(identity, request.EndpointId.Trim(), input);
+    }
+
+    private ServiceInvocationRequest BuildServiceInvocationRequest(
+        TeamEntryMemberResolution resolution,
+        InvokeTeamToolRequest request)
+    {
+        var identity = new ServiceIdentity
+        {
+            TenantId = resolution.ScopeId,
+            AppId = ScopeServiceIdentityDefaults.ServiceAppId,
+            Namespace = ScopeServiceIdentityDefaults.ServiceNamespace,
+            ServiceId = resolution.PublishedServiceId,
+        };
+        var chatRequest = new ChatRequestEvent
+        {
+            Prompt = request.Payload.Prompt,
+            SessionId = ResolveSessionId(),
+            ScopeId = resolution.ScopeId,
+            ToolContext = AgentToolExecutionContextMapper.ToPayload(
+                AgentToolRequestContext.Current ?? AgentToolExecutionContext.Empty),
+            LlmControl = ToLlmControlPayload(AgentToolRequestContext.Current),
+        };
+        chatRequest.InputParts.AddRange(ToChatInputParts(request.Payload));
+        var headers = BuildPayloadHeaders(request.Payload.Headers);
+        AppendMetadata(chatRequest.Metadata, headers);
+        AppendMetadata(chatRequest.Headers, headers);
+
+        return new ServiceInvocationRequest
+        {
+            Identity = identity,
+            EndpointId = request.EndpointId.Trim(),
+            Payload = Any.Pack(chatRequest),
+            Caller = new ServiceInvocationCaller
+            {
+                TenantId = resolution.ScopeId,
+                AppId = ScopeServiceIdentityDefaults.ServiceAppId,
+                ServiceKey = string.Empty,
+            },
+        };
+    }
+
+    private static void ApplyWorkflowServiceInvocationContext(
+        ServiceInvocationRequest invocationRequest,
+        WorkflowRunCallerCredential? callerCredential)
+    {
+        invocationRequest.RunOrigin = WorkflowRunOrigins.ServiceInvoke;
+        if (invocationRequest.Payload?.TryUnpack<ChatRequestEvent>(out var chatRequest) != true)
+            return;
+
+        chatRequest.ConnectorHttpAuthorization = ToConnectorHttpAuthorization(callerCredential);
+        invocationRequest.Payload = Any.Pack(chatRequest);
+    }
+
+    private static string ToConnectorHttpAuthorization(WorkflowRunCallerCredential? callerCredential)
+    {
+        var token = callerCredential?.BearerToken?.Trim();
+        return string.IsNullOrWhiteSpace(token)
+            ? string.Empty
+            : $"Bearer {token}";
     }
 
     private async Task<ActorTargetResolution> ResolveGAgentActorIdAsync(

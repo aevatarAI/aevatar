@@ -579,17 +579,22 @@ public sealed class DefaultServiceInvocationDispatcherTests
             ServiceImplementationKind.Workflow,
             endpointId: "chat",
             requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
-        target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
-        {
-            WorkflowName = "wf",
-            WorkflowYaml = "name: wf",
-        };
         var request = new ServiceInvocationRequest
         {
             Identity = GAgentServiceTestKit.CreateIdentity(),
             EndpointId = "chat",
             CommandId = "cmd-wf",
             Payload = Any.Pack(new ChatRequestEvent { Prompt = "hi" }),
+        };
+        target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
+        {
+            WorkflowName = "artifact-wf",
+            WorkflowYaml = "name: artifact-wf",
+            DefinitionActorId = "artifact-definition-actor",
+            InlineWorkflowYamls =
+            {
+                ["helper"] = "name: helper",
+            },
         };
 
         await dispatcher.DispatchAsync(target, request);
@@ -598,6 +603,12 @@ public sealed class DefaultServiceInvocationDispatcherTests
         registry.Calls[0].ImplementationKind.Should().Be(ServiceImplementationKind.Workflow);
         registry.Calls[0].TargetActorId.Should().Be(workflowPort.RunActor.Id);
         registry.Calls[0].CommandId.Should().Be("cmd-wf");
+        workflowPort.CreateRunCalls.Should().ContainSingle();
+        workflowPort.CreateRunCalls[0].DefinitionActorId.Should().Be("artifact-definition-actor");
+        workflowPort.CreateRunCalls[0].WorkflowName.Should().Be("artifact-wf");
+        workflowPort.CreateRunCalls[0].WorkflowYaml.Should().Be("name: artifact-wf");
+        workflowPort.CreateRunCalls[0].InlineWorkflowYamls.Should().Contain("helper", "name: helper");
+        workflowPort.CreateRunCalls[0].RunOrigin.Should().Be(WorkflowRunOrigins.ServiceInvoke);
     }
 
     [Fact]
