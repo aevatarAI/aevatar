@@ -349,7 +349,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                     request,
                     ToRuntimeAuth(State.Target?.ServiceInvocation?.Auth),
                     ReadOnlyCopy(prepared.Headers ?? EmptyHeaders),
-                    ProjectSenderNyxIdAccessTokenToWorkflowCallerCredential:
+                    ProjectNyxIdAccessTokenToWorkflowCallerCredential:
                         State.ScheduleKind == ScheduledDispatchScheduleKindState.Workflow),
                 ct);
             return new ScheduledDispatchReceipt(
@@ -477,20 +477,35 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         var durableToken = string.IsNullOrWhiteSpace(auth.DurableSenderBearerToken)
             ? null
             : auth.DurableSenderBearerToken.Trim();
-        if (auth.SenderNyxId == null && durableToken == null)
+        if (auth.SenderNyxId == null && durableToken == null && auth.ScopeOwnerNyxId == null)
             return null;
 
         var senderNyxId = auth.SenderNyxId == null
             ? null
             : new ScheduledServiceInvocationNyxIdCredentialSource(
-                new ScheduledServiceInvocationNyxIdSubjectRef(
-                    auth.SenderNyxId.Subject?.Platform ?? string.Empty,
-                    auth.SenderNyxId.Subject?.Tenant ?? string.Empty,
-                    auth.SenderNyxId.Subject?.ExternalUserId ?? string.Empty),
+                ToRuntimeSubject(auth.SenderNyxId.Subject) ?? new ScheduledServiceInvocationNyxIdSubjectRef(
+                    string.Empty,
+                    string.Empty,
+                    string.Empty),
                 auth.SenderNyxId.Scope ?? string.Empty);
 
-        return new ScheduledServiceInvocationAuth(senderNyxId, durableToken);
+        var scopeOwnerNyxId = auth.ScopeOwnerNyxId == null
+            ? null
+            : new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
+                auth.ScopeOwnerNyxId.Scope ?? string.Empty,
+                ToRuntimeSubject(auth.ScopeOwnerNyxId.OwnerSubject));
+
+        return new ScheduledServiceInvocationAuth(senderNyxId, durableToken, scopeOwnerNyxId);
     }
+
+    private static ScheduledServiceInvocationNyxIdSubjectRef? ToRuntimeSubject(
+        ScheduledServiceInvocationNyxIdSubjectRefState? subject) =>
+        subject == null
+            ? null
+            : new ScheduledServiceInvocationNyxIdSubjectRef(
+                subject.Platform ?? string.Empty,
+                subject.Tenant ?? string.Empty,
+                subject.ExternalUserId ?? string.Empty);
 
     private static IReadOnlyDictionary<string, string> ReadOnlyCopy(IReadOnlyDictionary<string, string> headers) =>
         new Dictionary<string, string>(headers, StringComparer.Ordinal);
@@ -771,7 +786,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             return null;
 
         var durableToken = NormalizeOptional(auth.DurableSenderBearerToken);
-        if (auth.SenderNyxId == null && string.IsNullOrEmpty(durableToken))
+        if (auth.SenderNyxId == null && string.IsNullOrEmpty(durableToken) && auth.ScopeOwnerNyxId == null)
             return null;
 
         var normalized = new ScheduledServiceInvocationAuthState
@@ -783,18 +798,33 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         {
             normalized.SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceState
             {
-                Subject = new ScheduledServiceInvocationNyxIdSubjectRefState
-                {
-                    Platform = NormalizeOptional(auth.SenderNyxId.Subject?.Platform),
-                    Tenant = NormalizeOptional(auth.SenderNyxId.Subject?.Tenant),
-                    ExternalUserId = NormalizeOptional(auth.SenderNyxId.Subject?.ExternalUserId),
-                },
+                Subject = NormalizeSubject(auth.SenderNyxId.Subject),
                 Scope = NormalizeOptional(auth.SenderNyxId.Scope),
+            };
+        }
+
+        if (auth.ScopeOwnerNyxId != null)
+        {
+            normalized.ScopeOwnerNyxId = new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState
+            {
+                Scope = NormalizeOptional(auth.ScopeOwnerNyxId.Scope),
+                OwnerSubject = NormalizeSubject(auth.ScopeOwnerNyxId.OwnerSubject),
             };
         }
 
         return normalized;
     }
+
+    private static ScheduledServiceInvocationNyxIdSubjectRefState? NormalizeSubject(
+        ScheduledServiceInvocationNyxIdSubjectRefState? subject) =>
+        subject == null
+            ? null
+            : new ScheduledServiceInvocationNyxIdSubjectRefState
+            {
+                Platform = NormalizeOptional(subject.Platform),
+                Tenant = NormalizeOptional(subject.Tenant),
+                ExternalUserId = NormalizeOptional(subject.ExternalUserId),
+            };
 
     private ScheduledDispatchState ApplyConfigured(
         ScheduledDispatchState current,

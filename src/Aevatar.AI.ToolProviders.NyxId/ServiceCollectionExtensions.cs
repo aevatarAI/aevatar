@@ -28,7 +28,8 @@ public static class ServiceCollectionExtensions
         // New: stateless API calls use AddHttpClient<T>; stateful caches use named clients through IHttpClientFactory.
         var options = new NyxIdToolOptions();
         configure(options);
-        services.TryAddSingleton(options);
+        services.RemoveAll<NyxIdToolOptions>();
+        services.AddSingleton(options);
         services.AddHttpClient<NyxIdApiClient>();
         services.TryAddSingleton<INyxIdApiClientFactory, HttpClientFactoryNyxIdApiClientFactory>();
         services.AddHttpClient(ConnectedServiceSpecCache.HttpClientName, _ => { });

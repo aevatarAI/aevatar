@@ -288,7 +288,7 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
             return null;
 
         var durableToken = auth.DurableSenderBearerToken?.Trim() ?? string.Empty;
-        if (auth.SenderNyxId == null && durableToken.Length == 0)
+        if (auth.SenderNyxId == null && durableToken.Length == 0 && auth.ScopeOwnerNyxId == null)
             return null;
 
         var state = new ScheduledServiceInvocationAuthState
@@ -300,16 +300,31 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         {
             state.SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceState
             {
-                Subject = new ScheduledServiceInvocationNyxIdSubjectRefState
-                {
-                    Platform = auth.SenderNyxId.Subject.Platform,
-                    Tenant = auth.SenderNyxId.Subject.Tenant,
-                    ExternalUserId = auth.SenderNyxId.Subject.ExternalUserId,
-                },
+                Subject = CreateSubjectState(auth.SenderNyxId.Subject),
                 Scope = auth.SenderNyxId.Scope,
+            };
+        }
+
+        if (auth.ScopeOwnerNyxId != null)
+        {
+            state.ScopeOwnerNyxId = new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState
+            {
+                Scope = auth.ScopeOwnerNyxId.Scope,
+                OwnerSubject = CreateSubjectState(auth.ScopeOwnerNyxId.OwnerSubject),
             };
         }
 
         return state;
     }
+
+    private static ScheduledServiceInvocationNyxIdSubjectRefState? CreateSubjectState(
+        ScheduledServiceInvocationNyxIdSubjectRef? subject) =>
+        subject == null
+            ? null
+            : new ScheduledServiceInvocationNyxIdSubjectRefState
+            {
+                Platform = subject.Platform,
+                Tenant = subject.Tenant,
+                ExternalUserId = subject.ExternalUserId,
+            };
 }

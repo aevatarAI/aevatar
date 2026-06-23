@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
@@ -28,7 +29,6 @@ using Aevatar.Workflow.Projection.Projectors;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
-using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Application.Responses;
 using Microsoft.AspNetCore.Builder;
@@ -94,6 +94,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         services.Should().Contain(x =>
             x.ServiceType == typeof(ILlmRunExecutionQueue) &&
             x.ImplementationType == typeof(LlmRunExecutionQueue));
+        services.Should().Contain(x => x.ServiceType == typeof(ILlmRunExecutionService));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IHostedService) &&
             x.ImplementationType == typeof(LlmRunExecutionWorker));
@@ -290,6 +291,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
             options.EnableOpenApiDocument = false;
             options.AutoMapCapabilities = false;
         });
+        builder.Services.AddSingleton<ILLMProviderFactory, UnusedLlmProviderFactory>();
         builder.AddGAgentServiceCapabilityBundle();
 
         await using var app = builder.Build();
@@ -340,6 +342,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
             options.EnableAIFeatures = false;
             options.EnableScriptingCapability = false;
         });
+        builder.Services.AddSingleton<ILLMProviderFactory, UnusedLlmProviderFactory>();
         builder.AddGAgentServiceCapabilityBundle();
 
         await using var app = builder.Build();
@@ -639,6 +642,17 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
 
         public ILLMProvider GetDefault() =>
             throw new NotSupportedException("The DI test only asserts provider-backed ILlmRunCore composition.");
+
+        public IReadOnlyList<string> GetAvailableProviders() => [];
+    }
+
+    private sealed class UnusedLlmProviderFactory : ILLMProviderFactory
+    {
+        public ILLMProvider GetProvider(string name) =>
+            throw new InvalidOperationException("The hosting startup test must not execute LLM requests.");
+
+        public ILLMProvider GetDefault() =>
+            throw new InvalidOperationException("The hosting startup test must not execute LLM requests.");
 
         public IReadOnlyList<string> GetAvailableProviders() => [];
     }

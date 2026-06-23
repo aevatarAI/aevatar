@@ -173,6 +173,68 @@ public sealed class WorkflowScheduleApplicationServiceTests
     }
 
     [Fact]
+    public async Task CreateAsync_ShouldMapWorkflowScheduleScopeOwnerAuthToServiceInvocationAuth()
+    {
+        var actorPort = new FakeWorkflowScheduleActorPort
+        {
+            ResolveActorId = string.Empty,
+        };
+        var service = CreateService(actorPort);
+
+        await service.CreateAsync(CreateConfiguration("owner-auth-schedule") with
+        {
+            Auth = new WorkflowScheduleAuth(
+                ScopeOwnerNyxId: new WorkflowScheduleScopeOwnerNyxIdCredentialSource(
+                    " owner-proxy ",
+                    new WorkflowScheduleNyxIdSubjectRef(" nyx ", " tenant-1 ", " owner-user-1 "))),
+        });
+
+        var invocation = actorPort.Created.Single().Configuration.Target.ServiceInvocation!;
+        invocation.Auth.Should().NotBeNull();
+        invocation.Auth!.SenderNyxId.Should().BeNull();
+        invocation.Auth.ScopeOwnerNyxId!.Scope.Should().Be("owner-proxy");
+        invocation.Auth.ScopeOwnerNyxId.OwnerSubject.Should().BeEquivalentTo(
+            new ScheduledServiceInvocationNyxIdSubjectRef("nyx", "tenant-1", "owner-user-1"));
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldRejectWorkflowScheduleAuthWithBothNyxIdSources()
+    {
+        var service = CreateService();
+
+        var act = () => service.CreateAsync(CreateConfiguration("auth-schedule") with
+        {
+            Auth = new WorkflowScheduleAuth(
+                new WorkflowScheduleNyxIdCredentialSource(
+                    new WorkflowScheduleNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
+                    "proxy"),
+                new WorkflowScheduleScopeOwnerNyxIdCredentialSource(
+                    "owner-proxy",
+                    new WorkflowScheduleNyxIdSubjectRef("nyx", string.Empty, "owner-user-1"))),
+        });
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*Exactly one workflow schedule NyxID credential source*");
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldRejectEmptyWorkflowScheduleScopeOwnerAuth()
+    {
+        var service = CreateService();
+
+        var act = () => service.CreateAsync(CreateConfiguration("auth-schedule") with
+        {
+            Auth = new WorkflowScheduleAuth(
+                ScopeOwnerNyxId: new WorkflowScheduleScopeOwnerNyxIdCredentialSource(
+                    " ",
+                    new WorkflowScheduleNyxIdSubjectRef("nyx", string.Empty, "owner-user-1"))),
+        });
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*Scope*required*");
+    }
+
+    [Fact]
     public async Task CreateAsync_ShouldRejectEmptyWorkflowScheduleAuth()
     {
         var service = CreateService();
