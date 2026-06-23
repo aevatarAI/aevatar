@@ -239,7 +239,7 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
             result.Payload.PkceVerifier);
     }
 
-    public async Task<BrokerAuthorizationCodeResult> ExchangeAuthorizationCodeAsync(
+    public Task<BrokerAuthorizationCodeResult> ExchangeAuthorizationCodeAsync(
         string authorizationCode,
         string codeVerifier,
         CancellationToken ct = default)
@@ -247,9 +247,42 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         ArgumentException.ThrowIfNullOrWhiteSpace(authorizationCode);
         ArgumentException.ThrowIfNullOrWhiteSpace(codeVerifier);
 
+        return ExchangeAuthorizationCodeCoreAsync(
+            authorizationCode,
+            codeVerifier,
+            ResolveRedirectUri(),
+            requireProvisionedRedirectUri: true,
+            ct);
+    }
+
+    public Task<BrokerAuthorizationCodeResult> ExchangeAuthorizationCodeAsync(
+        string authorizationCode,
+        string codeVerifier,
+        string redirectUri,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(authorizationCode);
+        ArgumentException.ThrowIfNullOrWhiteSpace(codeVerifier);
+        ArgumentException.ThrowIfNullOrWhiteSpace(redirectUri);
+
+        return ExchangeAuthorizationCodeCoreAsync(
+            authorizationCode,
+            codeVerifier,
+            redirectUri.Trim(),
+            requireProvisionedRedirectUri: false,
+            ct);
+    }
+
+    private async Task<BrokerAuthorizationCodeResult> ExchangeAuthorizationCodeCoreAsync(
+        string authorizationCode,
+        string codeVerifier,
+        string redirectUri,
+        bool requireProvisionedRedirectUri,
+        CancellationToken ct)
+    {
         var snapshot = await _clientProvider.GetAsync(ct).ConfigureAwait(false);
-        var redirectUri = ResolveRedirectUri();
-        EnsureClientCurrent(snapshot, redirectUri);
+        if (requireProvisionedRedirectUri)
+            EnsureClientCurrent(snapshot, redirectUri);
 
         var form = new List<KeyValuePair<string, string>>
         {
@@ -288,7 +321,12 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         // client at NyxID. We surface the gap to the caller (callback handler)
         // rather than throwing — the user-visible error message guides ops to
         // toggle the flag at NyxID admin (one-time per cluster).
-        return new BrokerAuthorizationCodeResult(payload.BindingId, payload.IdToken, payload.AccessToken);
+        return new BrokerAuthorizationCodeResult(payload.BindingId, payload.IdToken, payload.AccessToken)
+        {
+            TokenType = payload.TokenType,
+            ExpiresIn = payload.ExpiresIn,
+            Scope = payload.Scope,
+        };
     }
 
     private string BuildAuthorizeUrl(

@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
@@ -93,6 +94,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         services.Should().Contain(x =>
             x.ServiceType == typeof(ILlmRunExecutionQueue) &&
             x.ImplementationType == typeof(LlmRunExecutionQueue));
+        services.Should().Contain(x => x.ServiceType == typeof(ILlmRunExecutionService));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IHostedService) &&
             x.ImplementationType == typeof(LlmRunExecutionWorker));
@@ -270,6 +272,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
             options.EnableOpenApiDocument = false;
             options.AutoMapCapabilities = false;
         });
+        builder.Services.AddSingleton<ILLMProviderFactory, UnusedLlmProviderFactory>();
         builder.AddGAgentServiceCapabilityBundle();
 
         await using var app = builder.Build();
@@ -320,6 +323,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
             options.EnableAIFeatures = false;
             options.EnableScriptingCapability = false;
         });
+        builder.Services.AddSingleton<ILLMProviderFactory, UnusedLlmProviderFactory>();
         builder.AddGAgentServiceCapabilityBundle();
 
         await using var app = builder.Build();
@@ -610,5 +614,16 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         //   New principle: tests protect against service registration by symbol name without keeping the deleted type alive.
         services.Should().NotContain(service =>
             ServiceTypeContains(service.ServiceType, "WorkflowCapabilitiesStartupArtifact"));
+    }
+
+    private sealed class UnusedLlmProviderFactory : ILLMProviderFactory
+    {
+        public ILLMProvider GetProvider(string name) =>
+            throw new InvalidOperationException("The hosting startup test must not execute LLM requests.");
+
+        public ILLMProvider GetDefault() =>
+            throw new InvalidOperationException("The hosting startup test must not execute LLM requests.");
+
+        public IReadOnlyList<string> GetAvailableProviders() => [];
     }
 }
