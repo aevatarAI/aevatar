@@ -110,7 +110,63 @@ public sealed class ScopeBindingCommandApplicationServiceTests
     }
 
     [Fact]
-    public async Task UpsertAsync_ShouldRetireExternalExposure_WhenExistingIntentIsDisabled()
+    public async Task UpsertAsync_ShouldRetireExternalExposure_WhenExposureIsExplicitlyDisabled()
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(new ServiceCatalogSnapshot(
+            "scope-a:default:default:default",
+            ScopeId,
+            DefaultOptions.ServiceAppId,
+            DefaultOptions.ServiceNamespace,
+            DefaultOptions.DefaultServiceId,
+            "main",
+            "rev-old",
+            "rev-old",
+            "dep-old",
+            "actor-old",
+            "Active",
+            [
+                new ServiceEndpointSnapshot(
+                    "chat",
+                    "chat",
+                    ServiceEndpointKind.Chat.ToString(),
+                    GetTypeUrl(ChatRequestEvent.Descriptor),
+                    GetTypeUrl(ChatResponseEvent.Descriptor),
+                    "Default chat endpoint."),
+            ],
+            [],
+            DateTimeOffset.UtcNow,
+            new ServiceExternalExposureSnapshot(
+                string.Empty,
+                null,
+                ServiceRegistrationStatus.Pending,
+                DesiredSpecHash: "hash-1",
+                ExposureDesired: true)));
+        var service = CreateService(
+            commandPort,
+            lifecyclePort,
+            new FakeScopeScriptQueryPort(),
+            new FakeScriptDefinitionSnapshotPort(),
+            new FakeWorkflowRunActorPort());
+
+        await service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeId,
+            ScopeBindingImplementationKind.Workflow,
+            Workflow: new ScopeBindingWorkflowSpec([
+                "name: main\nsteps:\n  - run: echo hello",
+            ]),
+            ExposureDesired: false));
+
+        commandPort.Calls.Should().ContainSingle(call => call.Method == "RetireExternalExposureAsync");
+        var retireCommand = commandPort.Calls
+            .Single(call => call.Method == "RetireExternalExposureAsync")
+            .Command.Should().BeOfType<RetireExternalExposureCommand>().Subject;
+        retireCommand.Identity.ServiceId.Should().Be(DefaultOptions.DefaultServiceId);
+        retireCommand.DesiredSpecHash.Should().Be("hash-1");
+    }
+
+    [Fact]
+    public async Task UpsertAsync_ShouldPreserveExternalExposure_WhenIntentIsOmitted()
     {
         var commandPort = new RecordingServiceCommandPort();
         var lifecyclePort = new FakeServiceLifecycleQueryPort(new ServiceCatalogSnapshot(
@@ -156,12 +212,8 @@ public sealed class ScopeBindingCommandApplicationServiceTests
                 "name: main\nsteps:\n  - run: echo hello",
             ])));
 
-        commandPort.Calls.Should().ContainSingle(call => call.Method == "RetireExternalExposureAsync");
-        var retireCommand = commandPort.Calls
-            .Single(call => call.Method == "RetireExternalExposureAsync")
-            .Command.Should().BeOfType<RetireExternalExposureCommand>().Subject;
-        retireCommand.Identity.ServiceId.Should().Be(DefaultOptions.DefaultServiceId);
-        retireCommand.DesiredSpecHash.Should().Be("hash-1");
+        commandPort.Calls.Should().NotContain(call => call.Method == "RetireExternalExposureAsync");
+        commandPort.Calls.Should().NotContain(call => call.Method == "UpdateServiceAsync");
     }
 
     [Fact]

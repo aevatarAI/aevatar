@@ -23,11 +23,11 @@ Create/update service commands may carry only `exposure_desired` as caller inten
 
 ## Bind Intent
 
-Scope binding exposes a typed `ExposureDesired` request field.
+Scope binding exposes a typed tri-state `ExposureDesired` request field.
 
+- omitted/null leaves the existing exposure intent unchanged.
 - `true` records canonical opt-in intent on the service definition.
-- `false` leaves non-exposed services unchanged.
-- `false` for an already opted-in service dispatches the existing retire command.
+- explicit `false` dispatches the existing retire command for an existing service. `ServiceDefinitionGAgent` commits the resulting `Retired` receipt even when no NyxID service id has been returned yet.
 
 Binding does not build OpenAPI URLs, hashes, or registration payloads. Activation committed hooks remain the single reconcile entry point for external registration.
 

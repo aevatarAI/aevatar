@@ -4044,7 +4044,7 @@ const response = await fetch("{{invokePath}}", {
         string? RevisionId = null,
         string? AppId = null,
         string? ServiceId = null,
-        bool ExposureDesired = false);
+        bool? ExposureDesired = null);
 
     public sealed record ScopeBindingWorkflowHttpRequest(
         string? WorkflowId,

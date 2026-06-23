@@ -120,24 +120,27 @@ public sealed class ServiceDefinitionGAgent : GAgentBase<ServiceDefinitionState>
 
         var exposure = State.Spec.ExternalExposure;
         if (exposure == null ||
-            exposure.Status == ServiceRegistrationStatus.Retired ||
-            string.IsNullOrWhiteSpace(exposure.NyxidServiceId))
+            (exposure.Status == ServiceRegistrationStatus.Retired && !exposure.ExposureDesired))
         {
             return;
         }
 
-        var token = await _tokenAccessor.GetTokenAsync(command.Identity, CancellationToken.None);
-        if (token != null)
+        var nyxidServiceId = exposure.NyxidServiceId ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(nyxidServiceId))
         {
-            await _registrationPort.RetireAsync(
-                new NyxIdServiceRetirementRequest(token.OwnerAccessToken, exposure.NyxidServiceId),
-                CancellationToken.None);
+            var token = await _tokenAccessor.GetTokenAsync(command.Identity, CancellationToken.None);
+            if (token != null && !string.IsNullOrWhiteSpace(token.OwnerAccessToken))
+            {
+                await _registrationPort.RetireAsync(
+                    new NyxIdServiceRetirementRequest(token.OwnerAccessToken, nyxidServiceId),
+                    CancellationToken.None);
+            }
         }
 
         await PersistDomainEventAsync(new ServiceRegistrationRetiredEvent
         {
             Identity = command.Identity.Clone(),
-            NyxidServiceId = exposure.NyxidServiceId,
+            NyxidServiceId = nyxidServiceId,
             NyxidSlug = exposure.NyxidSlug,
             DesiredSpecHash = string.IsNullOrWhiteSpace(command.DesiredSpecHash)
                 ? exposure.DesiredSpecHash

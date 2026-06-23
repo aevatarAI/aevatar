@@ -571,6 +571,89 @@ public sealed class ServiceDefinitionGAgentTests
         agent.State.LastAppliedEventVersion.Should().Be(versionAfterFailure);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RetireExternalExposureAsync_ShouldPersistOptOutWithoutNyxId_AndRejectStaleAttempts(
+        bool failBeforeRetire)
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var registrationPort = new RecordingNyxIdServiceRegistrationPort();
+        var agent = GAgentServiceTestKit.CreateStatefulAgent<ServiceDefinitionGAgent, ServiceDefinitionState>(
+            new InMemoryEventStore(),
+            ServiceActorIds.Definition(identity),
+            () => new ServiceDefinitionGAgent(
+                GAgentServiceTestKit.NoOpDispatchPort,
+                registrationPort,
+                new StubNyxIdRegistrationTokenAccessor("owner-token", "kid-1")));
+        await agent.HandleCreateAsync(new CreateServiceDefinitionCommand
+        {
+            Spec = GAgentServiceTestKit.CreateDefinitionSpec(identity),
+        });
+        await agent.HandleReconcileExternalExposureAsync(new ReconcileExternalExposureCommand
+        {
+            Identity = identity.Clone(),
+            OpenapiUrl = "https://api.test/openapi.json",
+            DesiredSpecHash = "hash-1",
+            CredentialKid = "kid-1",
+        });
+
+        if (failBeforeRetire)
+        {
+            await agent.HandleRunRegistrationAttemptAsync(new RunRegistrationAttemptCommand
+            {
+                Identity = identity.Clone(),
+                ExpectedAttempt = 1,
+                DesiredSpecHash = "hash-1",
+                OpenapiUrl = "https://api.test/openapi.json",
+            });
+
+            agent.State.Spec.ExternalExposure.Status.Should().Be(ServiceRegistrationStatus.Failed);
+            agent.State.Spec.ExternalExposure.ExposureDesired.Should().BeTrue();
+            agent.State.Spec.ExternalExposure.NyxidServiceId.Should().BeEmpty();
+        }
+        else
+        {
+            agent.State.Spec.ExternalExposure.Status.Should().Be(ServiceRegistrationStatus.Pending);
+            agent.State.Spec.ExternalExposure.ExposureDesired.Should().BeTrue();
+            agent.State.Spec.ExternalExposure.NyxidServiceId.Should().BeEmpty();
+        }
+
+        await agent.HandleRetireExternalExposureAsync(new RetireExternalExposureCommand
+        {
+            Identity = identity.Clone(),
+        });
+
+        agent.State.Spec.ExternalExposure.Status.Should().Be(ServiceRegistrationStatus.Retired);
+        agent.State.Spec.ExternalExposure.ExposureDesired.Should().BeFalse();
+        agent.State.Spec.ExternalExposure.NyxidServiceId.Should().BeEmpty();
+        agent.State.Spec.ExternalExposure.NextAttemptAt.Should().BeNull();
+        registrationPort.RetireRequests.Should().BeEmpty();
+        var versionAfterRetire = agent.State.LastAppliedEventVersion;
+        var registerRequestCount = registrationPort.RegisterRequests.Count;
+
+        await agent.HandleRunRegistrationAttemptAsync(new RunRegistrationAttemptCommand
+        {
+            Identity = identity.Clone(),
+            ExpectedAttempt = 1,
+            DesiredSpecHash = "hash-1",
+            OpenapiUrl = "https://api.test/openapi.json",
+        });
+        await agent.HandleRegistrationRetryDueAsync(new RegistrationRetryDueCommand
+        {
+            Identity = identity.Clone(),
+            ExpectedAttempt = 1,
+            DesiredSpecHash = "hash-1",
+            OpenapiUrl = "https://api.test/openapi.json",
+        });
+
+        agent.State.LastAppliedEventVersion.Should().Be(versionAfterRetire);
+        agent.State.Spec.ExternalExposure.Status.Should().Be(ServiceRegistrationStatus.Retired);
+        agent.State.Spec.ExternalExposure.ExposureDesired.Should().BeFalse();
+        registrationPort.RegisterRequests.Should().HaveCount(registerRequestCount);
+        registrationPort.RetireRequests.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task RetireExternalExposureAsync_ShouldMarkRegistrationRetired()
     {

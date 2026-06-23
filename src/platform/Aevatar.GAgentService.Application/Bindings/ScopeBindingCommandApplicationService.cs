@@ -137,7 +137,10 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         ServiceCatalogSnapshot? existingService,
         CancellationToken ct)
     {
-        if (request.ExposureDesired)
+        if (request.ExposureDesired == null)
+            return;
+
+        if (request.ExposureDesired == true)
         {
             serviceDefinition.ExternalExposure = new ExternalExposure
             {
@@ -146,13 +149,13 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
             return;
         }
 
-        if (existingService?.ExternalExposure?.ExposureDesired != true)
+        if (existingService == null)
             return;
 
         await _serviceCommandPort.RetireExternalExposureAsync(new RetireExternalExposureCommand
         {
             Identity = identity.Clone(),
-            DesiredSpecHash = existingService.ExternalExposure.DesiredSpecHash ?? string.Empty,
+            DesiredSpecHash = existingService.ExternalExposure?.DesiredSpecHash ?? string.Empty,
         }, ct);
     }
 
