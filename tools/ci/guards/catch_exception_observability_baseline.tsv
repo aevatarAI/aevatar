@@ -63,7 +63,6 @@ src/Aevatar.Studio.Infrastructure/Storage/FileAevatarSettingsStore.cs	452	broad 
 src/platform/Aevatar.GAgentService.Application/ScopeGAgents/ScopeGAgentActorTypeResolver.cs	27	empty broad catch block
 src/platform/Aevatar.GAgentService.Hosting/Endpoints/ScopeGAgentEndpoints.cs	186	empty broad catch block
 src/platform/Aevatar.GAgentService.Hosting/Endpoints/ScopeGAgentEndpoints.cs	213	empty broad catch block
-src/platform/Aevatar.GAgentService.Hosting/Endpoints/ScopeWorkflowEndpoints.cs	649	empty broad catch block
 src/platform/Aevatar.GAgentService.Projection/Orchestration/GAgentDraftRunObservationScopeActivationPort.cs	71	broad catch returns null without visible failure signal
 src/platform/Aevatar.GAgentService.Projection/Orchestration/LlmSessionObservationScopeLeasePreparationPort.cs	47	broad catch returns null without visible failure signal
 src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunFinalizeEmitter.cs	65	broad catch returns null without visible failure signal

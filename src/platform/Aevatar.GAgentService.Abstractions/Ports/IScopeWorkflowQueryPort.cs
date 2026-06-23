@@ -6,6 +6,11 @@ public interface IScopeWorkflowQueryPort
         string scopeId,
         CancellationToken ct = default);
 
+    Task<ScopeWorkflowLookupResult> LookupByWorkflowIdAsync(
+        string scopeId,
+        string workflowId,
+        CancellationToken ct = default);
+
     Task<ScopeWorkflowSummary?> GetByWorkflowIdAsync(
         string scopeId,
         string workflowId,

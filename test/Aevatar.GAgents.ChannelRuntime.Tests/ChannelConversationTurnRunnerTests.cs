@@ -4113,6 +4113,24 @@ public sealed class ChannelConversationTurnRunnerTests
         public Task<IReadOnlyList<ScopeWorkflowSummary>> ListAsync(string scopeId, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<ScopeWorkflowSummary>>(workflow is null ? [] : [workflow]);
 
+        public Task<ScopeWorkflowLookupResult> LookupByWorkflowIdAsync(
+            string scopeId,
+            string workflowId,
+            CancellationToken ct = default)
+        {
+            var summary = workflow is not null &&
+                          string.Equals(workflow.ScopeId, scopeId, StringComparison.Ordinal) &&
+                          string.Equals(workflow.WorkflowId, workflowId, StringComparison.Ordinal)
+                ? workflow
+                : null;
+            return Task.FromResult(summary switch
+            {
+                null => new ScopeWorkflowLookupResult(ScopeWorkflowLookupStatus.NotFound, null, "test_not_found"),
+                { ActorId.Length: 0 } => new ScopeWorkflowLookupResult(ScopeWorkflowLookupStatus.NotReady, null, "test_not_ready"),
+                _ => new ScopeWorkflowLookupResult(ScopeWorkflowLookupStatus.Runnable, summary, "test_runnable"),
+            });
+        }
+
         public Task<ScopeWorkflowSummary?> GetByWorkflowIdAsync(
             string scopeId,
             string workflowId,
