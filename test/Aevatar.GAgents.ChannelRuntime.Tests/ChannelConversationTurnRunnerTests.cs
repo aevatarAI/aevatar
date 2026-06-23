@@ -201,12 +201,43 @@ public sealed class ChannelConversationTurnRunnerTests
         result.Success.Should().BeTrue();
         result.WorkflowDraftRunRequest.Should().NotBeNull();
         result.LlmReplyRequest.Should().BeNull();
-        result.WorkflowDraftRunRequest!.WorkflowSource.WorkflowId.Should().Be("daily-greeting");
+        result.WorkflowDraftRunRequest!.WorkflowSource.Kind.Should().Be(ChannelWorkflowDraftRunSourceKind.DefinitionActor);
+        result.WorkflowDraftRunRequest.WorkflowSource.WorkflowId.Should().Be("daily-greeting");
         result.WorkflowDraftRunRequest.WorkflowSource.DefinitionActorId.Should().Be("actor-daily-greeting");
         result.WorkflowDraftRunRequest.RunId.Should().StartWith("workflow-draft-run-");
         result.WorkflowDraftRunRequest.TargetActorId.Should().BeEmpty();
         result.WorkflowDraftRunRequest.NyxUserAccessToken.Should().Be("user-token-1");
         adapter.Replies.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldReplyAndNotFallbackToLlm_WhenScopeWorkflowLookupIsNotRunnable()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var services = BuildAgentBuilderToolServices(new StubScopeWorkflowQueryPort(
+            BuildWorkflowSummary("scope-1", "daily-greeting", actorId: string.Empty)));
+        var runner = CreateRunner(registrationQueryPort, adapter, services);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "/workflow run daily-greeting",
+                "msg-workflow-not-ready",
+                transportExtras: new TransportExtras
+                {
+                    NyxRegistrationScopeId = "scope-1",
+                    NyxUserAccessToken = "user-token-1",
+                }),
+            RelayRuntimeContext(
+                "msg-workflow-not-ready",
+                nyxUserAccessToken: "user-token-1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.WorkflowDraftRunRequest.Should().BeNull();
+        result.LlmReplyRequest.Should().BeNull();
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().Contain("暂未绑定可运行的 actor");
     }
 
     [Fact]
@@ -4107,14 +4138,15 @@ public sealed class ChannelConversationTurnRunnerTests
 
     private static ScopeWorkflowSummary BuildWorkflowSummary(
         string scopeId,
-        string workflowId) =>
+        string workflowId,
+        string? actorId = null) =>
         new(
             scopeId,
             workflowId,
             $"Display {workflowId}",
             $"service-key-{workflowId}",
             workflowId,
-            $"actor-{workflowId}",
+            actorId ?? $"actor-{workflowId}",
             "rev-active",
             "deployment-1",
             "active",

@@ -439,6 +439,51 @@ public sealed class ScopeWorkflowEndpointsTests
     }
 
     [Fact]
+    public async Task HandleRunWorkflowByIdStreamAsync_ShouldReturnNotReady_WhenRunnableReadmodelIsMissing()
+    {
+        var queryPort = new FakeServiceLifecycleQueryPort
+        {
+            ListServicesResult =
+            [
+                new ServiceCatalogSnapshot(
+                    "tenant-a:workflow-app:user:token:approval",
+                    "tenant-a",
+                    "workflow-app",
+                    "user:user-1-token",
+                    "approval",
+                    "Approval",
+                    "rev-1",
+                    "rev-1",
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    [],
+                    [],
+                    DateTimeOffset.UtcNow),
+            ],
+        };
+        queryPort.GetServiceResults.Enqueue(queryPort.ListServicesResult[0]);
+        var interactionService = new FakeCommandInteractionService();
+        var http = CreateHttpContext();
+
+        await ScopeWorkflowEndpoints.HandleRunWorkflowByIdStreamAsync(
+            http,
+            "user-1",
+            "approval",
+            new ScopeWorkflowEndpoints.RunScopeWorkflowByIdStreamHttpRequest(
+                "hello",
+                EventFormat: "agui"),
+            BuildQueryPort(queryPort: queryPort),
+            interactionService,
+            CancellationToken.None);
+
+        var body = await ReadBodyAsync(http.Response);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
+        body.Should().Contain("USER_WORKFLOW_NOT_READY");
+        interactionService.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
     public async Task HandleRunWorkflowByIdStreamAsync_ShouldPropagateScopedPreferredLlmRouteToAguiRequest()
     {
         var snapshot = new ServiceCatalogSnapshot(
