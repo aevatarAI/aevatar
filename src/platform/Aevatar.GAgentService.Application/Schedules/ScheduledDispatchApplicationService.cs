@@ -326,20 +326,45 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
     {
         if (auth == null)
             return null;
-        if (auth.SenderNyxId == null)
-            throw new ArgumentException("Service invocation sender NyxID credential source is required.", nameof(auth));
 
-        var source = auth.SenderNyxId;
+        var hasSenderNyxId = auth.SenderNyxId != null;
+        var hasScopeOwnerNyxId = auth.ScopeOwnerNyxId != null;
+        if (hasSenderNyxId == hasScopeOwnerNyxId)
+            throw new ArgumentException("Exactly one service invocation NyxID credential source is required.", nameof(auth));
+
+        if (hasScopeOwnerNyxId)
+        {
+            var ownerSource = auth.ScopeOwnerNyxId!;
+            return new ScheduledServiceInvocationAuth(
+                ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
+                    NormalizeRequired(ownerSource.Scope, nameof(ownerSource.Scope)),
+                    NormalizeOwnerSubject(ownerSource.OwnerSubject)));
+        }
+
+        var source = auth.SenderNyxId!;
         if (source.Subject == null)
             throw new ArgumentException("Service invocation sender NyxID subject is required.", nameof(auth));
 
-        return new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationNyxIdCredentialSource(
-            new ScheduledServiceInvocationNyxIdSubjectRef(
-                NormalizeRequired(source.Subject.Platform, nameof(source.Subject.Platform)),
-                NormalizeOptional(source.Subject.Tenant),
-                NormalizeRequired(source.Subject.ExternalUserId, nameof(source.Subject.ExternalUserId))),
+        return new ScheduledServiceInvocationAuth(SenderNyxId: new ScheduledServiceInvocationNyxIdCredentialSource(
+            NormalizeSubject(source.Subject),
             NormalizeRequired(source.Scope, nameof(source.Scope))));
     }
+
+    private static ScheduledServiceInvocationNyxIdSubjectRef NormalizeOwnerSubject(
+        ScheduledServiceInvocationNyxIdSubjectRef? subject)
+    {
+        if (subject == null)
+            throw new ArgumentException("Service invocation scope owner NyxID subject is required.", nameof(subject));
+
+        return NormalizeSubject(subject);
+    }
+
+    private static ScheduledServiceInvocationNyxIdSubjectRef NormalizeSubject(
+        ScheduledServiceInvocationNyxIdSubjectRef subject) =>
+        new(
+            NormalizeRequired(subject.Platform, nameof(subject.Platform)),
+            NormalizeOptional(subject.Tenant),
+            NormalizeRequired(subject.ExternalUserId, nameof(subject.ExternalUserId)));
 
     private static void ValidateSchedule(ScheduledDispatchConfiguration configuration)
     {

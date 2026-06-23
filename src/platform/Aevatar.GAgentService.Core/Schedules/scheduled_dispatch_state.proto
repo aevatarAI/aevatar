@@ -98,6 +98,13 @@ message ScheduledServiceInvocationAuthState
   // exclusive with sender_nyx_id in practice; sender_nyx_id stays the path for
   // bound subjects (SkillRunner / team automations).
   string durable_sender_bearer_token = 2;
+  ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState scope_owner_nyx_id = 3;
+}
+
+message ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState
+{
+  string scope = 1;
+  ScheduledServiceInvocationNyxIdSubjectRefState owner_subject = 2;
 }
 
 message ScheduledServiceInvocationNyxIdCredentialSourceState

@@ -62,6 +62,7 @@ public static class StudioCapabilityExtensions
                 StudioMemberEndpoints.Map(app);
                 StudioProvisioningEndpoints.Map(app);
                 StudioTeamEndpoints.Map(app);
+                NyxIdLoginFinalizationEndpoints.Map(app);
                 Controllers.ChatHistoryEndpoints.MapChatHistoryEndpoints(app);
                 app.MapExplorerEndpoints();
             });

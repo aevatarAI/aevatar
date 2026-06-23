@@ -1,3 +1,5 @@
+using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
@@ -67,5 +69,29 @@ public sealed class NyxIdScheduledServiceInvocationCredentialExchangePort : ISch
             return ScheduledServiceInvocationCredentialExchangeResult.Failure(
                 "NyxID credential exchange failed.");
         }
+    }
+
+    public Task<ScheduledServiceInvocationCredentialExchangeResult> IssueScopeOwnerNyxIdAsync(
+        ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource source,
+        ServiceIdentity serviceIdentity,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(serviceIdentity);
+        ct.ThrowIfCancellationRequested();
+
+        var ownerSubject = new ScheduledServiceInvocationNyxIdCredentialSource(
+            ResolveScopeOwnerSubject(source),
+            source.Scope);
+        return IssueSenderNyxIdAsync(ownerSubject, ct);
+    }
+
+    private static ScheduledServiceInvocationNyxIdSubjectRef ResolveScopeOwnerSubject(
+        ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource source)
+    {
+        if (source.OwnerSubject == null)
+            throw new ArgumentException("Schedule scope owner NyxID subject is required for scope owner credential exchange.", nameof(source));
+
+        return source.OwnerSubject;
     }
 }

@@ -202,6 +202,79 @@ public sealed class ScheduledDispatchServiceInvocationTests
     }
 
     [Fact]
+    public async Task ScheduledServiceInvocationDispatchPort_WithScopeOwnerAuth_ShouldInjectOwnerTokenIntoOwnerLlmControlFields()
+    {
+        var invocationPort = new RecordingServiceInvocationPort();
+        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("owner-token");
+        var port = new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange);
+        var original = new ServiceInvocationRequest
+        {
+            CommandId = "cmd-invoke",
+            CorrelationId = "corr-invoke",
+            Identity = new ServiceIdentity { TenantId = "owner-nyx-user", ServiceId = "svc" },
+            Payload = Any.Pack(new ChatRequestEvent { Prompt = "hello" }),
+        };
+        var auth = new ScheduledServiceInvocationAuth(
+            ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource("proxy"));
+
+        await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(original, auth));
+
+        credentialExchange.Sources.Should().BeEmpty();
+        credentialExchange.ScopeOwnerSources.Should().ContainSingle()
+            .Which.Scope.Should().Be("proxy");
+        credentialExchange.ScopeOwnerServiceIdentities.Should().ContainSingle()
+            .Which.TenantId.Should().Be("owner-nyx-user");
+        var invokedChat = invocationPort.Requests.Should().ContainSingle().Which.Payload.Unpack<ChatRequestEvent>();
+        invokedChat.LlmControl.NyxIdAccessToken.Should().Be("owner-token");
+        invokedChat.LlmControl.NyxIdOrgToken.Should().Be("owner-token");
+        invokedChat.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
+        invokedChat.ConnectorHttpAuthorization.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ScheduledServiceInvocationDispatchPort_WithScopeOwnerAuthAndWorkflowProjection_ShouldProjectOwnerTokenToConnectorAuthorization()
+    {
+        var invocationPort = new RecordingServiceInvocationPort();
+        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("owner-token");
+        var port = new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange);
+        var original = new ServiceInvocationRequest
+        {
+            CommandId = "cmd-invoke",
+            CorrelationId = "corr-invoke",
+            Identity = new ServiceIdentity { TenantId = "owner-nyx-user", ServiceId = "svc" },
+            Payload = Any.Pack(new ChatRequestEvent
+            {
+                Prompt = "hello",
+                ConnectorHttpAuthorization = "Bearer stored-token",
+                LlmControl = new LLMControlContextPayload
+                {
+                    ModelOverride = "sonnet",
+                    SenderNyxIdAccessToken = "existing-sender-token",
+                },
+            }),
+        };
+        var auth = new ScheduledServiceInvocationAuth(
+            ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource("proxy"));
+
+        await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
+            original,
+            auth,
+            ProjectNyxIdAccessTokenToWorkflowCallerCredential: true));
+
+        var invokedChat = invocationPort.Requests.Should().ContainSingle().Which.Payload.Unpack<ChatRequestEvent>();
+        invokedChat.LlmControl.NyxIdAccessToken.Should().Be("owner-token");
+        invokedChat.LlmControl.NyxIdOrgToken.Should().Be("owner-token");
+        invokedChat.LlmControl.SenderNyxIdAccessToken.Should().Be("existing-sender-token");
+        invokedChat.LlmControl.ModelOverride.Should().Be("sonnet");
+        invokedChat.ConnectorHttpAuthorization.Should().Be("Bearer owner-token");
+        var originalChat = original.Payload.Unpack<ChatRequestEvent>();
+        originalChat.LlmControl.NyxIdAccessToken.Should().BeEmpty();
+        originalChat.LlmControl.NyxIdOrgToken.Should().BeEmpty();
+        originalChat.LlmControl.SenderNyxIdAccessToken.Should().Be("existing-sender-token");
+        originalChat.ConnectorHttpAuthorization.Should().Be("Bearer stored-token");
+    }
+
+    [Fact]
     public async Task ScheduledServiceInvocationDispatchPort_WithAuth_ShouldExchangeAndInjectSenderTokenIntoClonedChatPayload()
     {
         var invocationPort = new RecordingServiceInvocationPort();
@@ -237,7 +310,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
                 ["connector.http.authorization"] = "Bearer header-token",
                 ["schedule"] = "scheduled",
             },
-            ProjectSenderNyxIdAccessTokenToWorkflowCallerCredential: true));
+            ProjectNyxIdAccessTokenToWorkflowCallerCredential: true));
 
         credentialExchange.Sources.Should().ContainSingle()
             .Which.Subject.ExternalUserId.Should().Be("ou-user-1");
@@ -394,7 +467,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
             original,
             auth,
             Headers: null,
-            ProjectSenderNyxIdAccessTokenToWorkflowCallerCredential: true));
+            ProjectNyxIdAccessTokenToWorkflowCallerCredential: true));
 
         // The subject token-exchange port was never called — no re-mint, no
         // BindingNotFound throw for a raw nyxid caller.
@@ -500,6 +573,46 @@ public sealed class ScheduledDispatchServiceInvocationTests
     }
 
     [Fact]
+    public async Task NyxIdScheduledServiceInvocationCredentialExchangePort_ShouldIssueTokenForScopeOwnerAndScope()
+    {
+        var broker = new RecordingCapabilityBroker { AccessToken = " owner-token " };
+        var port = new NyxIdScheduledServiceInvocationCredentialExchangePort(
+            broker,
+            NullLogger<NyxIdScheduledServiceInvocationCredentialExchangePort>.Instance);
+
+        var result = await port.IssueScopeOwnerNyxIdAsync(
+            new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
+                "proxy",
+                new ScheduledServiceInvocationNyxIdSubjectRef(OwnerScope.NyxIdPlatform, string.Empty, "owner-nyx-user")),
+            new ServiceIdentity { TenantId = "tenant-should-not-be-used", ServiceId = "svc" });
+
+        result.Succeeded.Should().BeTrue();
+        result.AccessToken.Should().Be(" owner-token ");
+        broker.Subjects.Should().ContainSingle().Which.Should().BeEquivalentTo(new ExternalSubjectRef
+        {
+            Platform = OwnerScope.NyxIdPlatform,
+            Tenant = string.Empty,
+            ExternalUserId = "owner-nyx-user",
+        });
+        broker.Scopes.Should().ContainSingle().Which.Value.Should().Be("proxy");
+    }
+
+    [Fact]
+    public async Task NyxIdScheduledServiceInvocationCredentialExchangePort_ShouldRejectScopeOwnerWithoutPersistedSubject()
+    {
+        var port = new NyxIdScheduledServiceInvocationCredentialExchangePort(
+            new RecordingCapabilityBroker(),
+            NullLogger<NyxIdScheduledServiceInvocationCredentialExchangePort>.Instance);
+
+        var act = () => port.IssueScopeOwnerNyxIdAsync(
+            new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource("proxy"),
+            new ServiceIdentity { TenantId = "owner-nyx-user", ServiceId = "svc" });
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*scope owner NyxID subject is required*");
+    }
+
+    [Fact]
     public async Task NyxIdScheduledServiceInvocationCredentialExchangePort_ShouldIssueTokenForSubjectAndScope()
     {
         var broker = new RecordingCapabilityBroker { AccessToken = " sender-token " };
@@ -599,6 +712,8 @@ public sealed class ScheduledDispatchServiceInvocationTests
         string? error = null) : IScheduledServiceInvocationCredentialExchangePort
     {
         public List<ScheduledServiceInvocationNyxIdCredentialSource> Sources { get; } = [];
+        public List<ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource> ScopeOwnerSources { get; } = [];
+        public List<ServiceIdentity> ScopeOwnerServiceIdentities { get; } = [];
 
         public Task<ScheduledServiceInvocationCredentialExchangeResult> IssueSenderNyxIdAsync(
             ScheduledServiceInvocationNyxIdCredentialSource source,
@@ -606,10 +721,24 @@ public sealed class ScheduledDispatchServiceInvocationTests
         {
             ct.ThrowIfCancellationRequested();
             Sources.Add(source);
-            return Task.FromResult(error == null
-                ? ScheduledServiceInvocationCredentialExchangeResult.Success(accessToken ?? "sender-token")
-                : ScheduledServiceInvocationCredentialExchangeResult.Failure(error));
+            return Task.FromResult(CreateResult());
         }
+
+        public Task<ScheduledServiceInvocationCredentialExchangeResult> IssueScopeOwnerNyxIdAsync(
+            ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource source,
+            ServiceIdentity serviceIdentity,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ScopeOwnerSources.Add(source);
+            ScopeOwnerServiceIdentities.Add(serviceIdentity.Clone());
+            return Task.FromResult(CreateResult());
+        }
+
+        private ScheduledServiceInvocationCredentialExchangeResult CreateResult() =>
+            error == null
+                ? ScheduledServiceInvocationCredentialExchangeResult.Success(accessToken ?? "sender-token")
+                : ScheduledServiceInvocationCredentialExchangeResult.Failure(error);
     }
 
     private sealed class RecordingCapabilityBroker : INyxIdCapabilityBroker
