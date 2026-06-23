@@ -1080,12 +1080,16 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     expect(
-      await screen.findByText((_, node) => {
-        return node?.textContent === "Aevatar / 团队 / 团队详情 / 概览";
-      }),
+      await screen.findByRole("heading", { name: "Alpha Support Team" }),
     ).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Aevatar" })).toBeTruthy();
+    expect(await screen.findByRole("navigation", { name: "Breadcrumb" }))
+      .toHaveTextContent("团队");
+    expect(screen.getByRole("navigation", { name: "Breadcrumb" }))
+      .toHaveTextContent("Alpha Support Team");
+    expect(screen.getByRole("navigation", { name: "Breadcrumb" }))
+      .toHaveTextContent("概览");
     expect(screen.getByRole("link", { name: "团队" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "返回团队列表" })).toBeTruthy();
     expect(screen.queryByText("工作区 ID")).toBeNull();
     expect(screen.queryByText("scope-1")).toBeNull();
     const currentPostureHeading = screen.getByText("启动状态");
@@ -1292,11 +1296,11 @@ describe("TeamDetailPage", () => {
     });
   });
 
-  it("returns to the teams list when clicking the breadcrumb aevatar link", async () => {
+  it("returns to the teams list when clicking the page back button", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     await screen.findByRole("button", { name: "编辑团队" });
-    fireEvent.click(screen.getByRole("link", { name: "Aevatar" }));
+    fireEvent.click(screen.getByRole("button", { name: "返回团队列表" }));
 
     await waitFor(() => {
       expect(window.location.pathname).toBe("/scopes/scope-1/teams");
@@ -3120,7 +3124,9 @@ describe("TeamDetailPage", () => {
       screen.queryByText("当前仍会显示运行时视图；Team summary 暂时无法读取。"),
     ).toBeNull();
     expect(screen.queryByText("信任态势")).toBeNull();
-    expect(screen.getByText("Support Escalation Triage")).toBeTruthy();
+    expect(
+      screen.getByRole("heading", { name: "Support Escalation Triage" }),
+    ).toBeTruthy();
 
     await waitFor(() => {
       expect(studioApi.getTeam).toHaveBeenCalledWith("scope-1", "t-alpha");
@@ -3144,7 +3150,9 @@ describe("TeamDetailPage", () => {
     );
     renderWithQueryClient(React.createElement(TeamDetailPage), queryClient);
 
-    expect(await screen.findByText("Alpha Support Team")).toBeTruthy();
+    expect(
+      await screen.findByRole("heading", { name: "Alpha Support Team" }),
+    ).toBeTruthy();
     expect(await screen.findByText("成员清单正在同步")).toBeTruthy();
 
     await act(async () => {

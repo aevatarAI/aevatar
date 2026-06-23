@@ -1,6 +1,7 @@
 import { ArrowLeftOutlined, InfoCircleOutlined } from '@ant-design/icons';
 import { PageContainer, ProCard } from '@ant-design/pro-components';
 import {
+  Breadcrumb,
   Button,
   Drawer,
   Empty,
@@ -31,6 +32,9 @@ const AevatarLayoutModeContext =
   React.createContext<AevatarLayoutMode>('viewport');
 
 type AevatarPageShellProps = {
+  backAriaLabel?: string;
+  backTitle?: React.ReactNode;
+  breadcrumbItems?: readonly AevatarBreadcrumbItem[];
   breadcrumbRender?: false;
   children: React.ReactNode;
   content?: React.ReactNode;
@@ -94,6 +98,31 @@ type AevatarBackButtonProps = {
   onBack: () => void;
   style?: React.CSSProperties;
   title?: React.ReactNode;
+};
+
+export type AevatarBreadcrumbItem = {
+  readonly current?: boolean;
+  readonly href?: string;
+  readonly key?: string;
+  readonly onClick?: (event: React.MouseEvent<HTMLAnchorElement>) => void;
+  readonly title: React.ReactNode;
+};
+
+type AevatarBreadcrumbProps = {
+  readonly ariaLabel?: string;
+  readonly className?: string;
+  readonly items?: readonly AevatarBreadcrumbItem[];
+  readonly maxItemWidth?: number | string;
+  readonly style?: React.CSSProperties;
+};
+
+type AevatarPageTitleBlockProps = {
+  readonly backAriaLabel?: string;
+  readonly backTitle?: React.ReactNode;
+  readonly breadcrumbItems?: readonly AevatarBreadcrumbItem[];
+  readonly onBack?: () => void;
+  readonly title: React.ReactNode;
+  readonly titleHelp?: React.ReactNode;
 };
 
 const pageContentViewportStyle: React.CSSProperties = {
@@ -211,6 +240,20 @@ const titleRowStyle: React.CSSProperties = {
   maxWidth: '100%',
 };
 
+const titleBlockStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 8,
+  minWidth: 0,
+};
+
+const titleNavigationRowStyle: React.CSSProperties = {
+  alignItems: 'center',
+  display: 'flex',
+  gap: 8,
+  minWidth: 0,
+};
+
 const backButtonStyle: React.CSSProperties = {
   alignItems: 'center',
   display: 'inline-flex',
@@ -218,6 +261,144 @@ const backButtonStyle: React.CSSProperties = {
   height: 32,
   justifyContent: 'center',
   width: 32,
+};
+
+const breadcrumbStyle: React.CSSProperties = {
+  minWidth: 0,
+};
+
+const breadcrumbLabelStyle: React.CSSProperties = {
+  display: 'inline-block',
+  maxWidth: 'var(--aevatar-breadcrumb-item-max-width, 180px)',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  verticalAlign: 'bottom',
+  whiteSpace: 'nowrap',
+};
+
+const breadcrumbCss = `
+.aevatar-breadcrumb {
+  color: var(--aevatar-breadcrumb-color);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 22px;
+  min-width: 0;
+}
+
+.aevatar-breadcrumb .ant-breadcrumb {
+  color: inherit;
+  min-width: 0;
+}
+
+.aevatar-breadcrumb .ant-breadcrumb ol {
+  align-items: center;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.aevatar-breadcrumb .ant-breadcrumb li {
+  min-width: 0;
+}
+
+.aevatar-breadcrumb .ant-breadcrumb-link,
+.aevatar-breadcrumb .ant-breadcrumb-separator {
+  color: inherit;
+}
+
+.aevatar-breadcrumb__link {
+  color: var(--aevatar-breadcrumb-link-color);
+  text-decoration: none;
+}
+
+.aevatar-breadcrumb__link:hover {
+  color: var(--aevatar-breadcrumb-link-hover-color);
+}
+
+.aevatar-breadcrumb__current {
+  color: var(--aevatar-breadcrumb-current-color);
+}
+`;
+
+export const AevatarBreadcrumb: React.FC<AevatarBreadcrumbProps> = ({
+  ariaLabel,
+  className,
+  items,
+  maxItemWidth = 180,
+  style,
+}) => {
+  const { token } = theme.useToken();
+  const visibleItems = (items ?? []).filter((item) => Boolean(item.title));
+
+  if (visibleItems.length === 0) {
+    return null;
+  }
+
+  return (
+    <>
+      <style>{breadcrumbCss}</style>
+      <nav
+        aria-label={ariaLabel ?? t("shared.ui.aevatarpageshells.breadcrumb", "Breadcrumb")}
+        className={["aevatar-breadcrumb", className].filter(Boolean).join(" ")}
+        style={
+          {
+            ...breadcrumbStyle,
+            "--aevatar-breadcrumb-color": token.colorTextTertiary,
+            "--aevatar-breadcrumb-current-color": token.colorTextSecondary,
+            "--aevatar-breadcrumb-item-max-width":
+              typeof maxItemWidth === "number" ? `${maxItemWidth}px` : maxItemWidth,
+            "--aevatar-breadcrumb-link-color": token.colorTextTertiary,
+            "--aevatar-breadcrumb-link-hover-color": token.colorPrimary,
+            ...style,
+          } as React.CSSProperties
+        }
+      >
+        <Breadcrumb
+          items={visibleItems.map((item, index) => {
+            const current = item.current ?? index === visibleItems.length - 1;
+            const label = (
+              <span
+                className="aevatar-breadcrumb__label"
+                style={breadcrumbLabelStyle}
+                title={typeof item.title === "string" ? item.title : undefined}
+              >
+                {item.title}
+              </span>
+            );
+
+            if (!current && (item.href || item.onClick)) {
+              return {
+                title: (
+                  <a
+                    className="aevatar-breadcrumb__link"
+                    href={item.href ?? "#"}
+                    onClick={(event) => {
+                      if (item.onClick || !item.href) {
+                        event.preventDefault();
+                      }
+                      item.onClick?.(event);
+                    }}
+                  >
+                    {label}
+                  </a>
+                ),
+              };
+            }
+
+            return {
+              title: (
+                <span
+                  aria-current={current ? "page" : undefined}
+                  className={current ? "aevatar-breadcrumb__current" : undefined}
+                >
+                  {label}
+                </span>
+              ),
+            };
+          })}
+        />
+      </nav>
+    </>
+  );
 };
 
 export const AevatarBackButton: React.FC<AevatarBackButtonProps> = ({
@@ -242,6 +423,41 @@ export const AevatarBackButton: React.FC<AevatarBackButtonProps> = ({
         type="text"
       />
     </Tooltip>
+  );
+};
+
+export const AevatarPageTitleBlock: React.FC<AevatarPageTitleBlockProps> = ({
+  backAriaLabel,
+  backTitle,
+  breadcrumbItems,
+  onBack,
+  title,
+  titleHelp,
+}) => {
+  const renderedTitle = titleHelp ? (
+    <AevatarTitleWithHelp help={titleHelp} title={title} />
+  ) : (
+    title
+  );
+
+  if (!onBack && !breadcrumbItems?.length) {
+    return renderedTitle;
+  }
+
+  return (
+    <div style={titleBlockStyle}>
+      <div style={titleNavigationRowStyle}>
+        {onBack ? (
+          <AevatarBackButton
+            ariaLabel={backAriaLabel}
+            onBack={onBack}
+            title={backTitle}
+          />
+        ) : null}
+        <AevatarBreadcrumb items={breadcrumbItems} />
+      </div>
+      {renderedTitle}
+    </div>
   );
 };
 
@@ -279,6 +495,9 @@ export const AevatarTitleWithHelp: React.FC<{
 );
 
 export const AevatarPageShell: React.FC<AevatarPageShellProps> = ({
+  backAriaLabel,
+  backTitle,
+  breadcrumbItems,
   breadcrumbRender,
   children,
   content,
@@ -295,7 +514,7 @@ export const AevatarPageShell: React.FC<AevatarPageShellProps> = ({
   return (
     <AevatarLayoutModeContext.Provider value={layoutMode}>
       <PageContainer
-        breadcrumbRender={breadcrumbRender}
+        breadcrumbRender={breadcrumbRender ?? false}
         className={
           layoutMode === 'document'
             ? 'aevatar-page-shell aevatar-page-shell-document'
@@ -310,7 +529,6 @@ export const AevatarPageShell: React.FC<AevatarPageShellProps> = ({
         }
         content={content}
         extra={extra}
-        onBack={onBack}
         pageHeaderRender={pageHeaderRender}
         style={
           layoutMode === 'document'
@@ -318,11 +536,14 @@ export const AevatarPageShell: React.FC<AevatarPageShellProps> = ({
             : pageContainerViewportStyle
         }
         title={
-          titleHelp ? (
-            <AevatarTitleWithHelp help={titleHelp} title={title} />
-          ) : (
-            title
-          )
+          <AevatarPageTitleBlock
+            backAriaLabel={backAriaLabel}
+            backTitle={backTitle}
+            breadcrumbItems={breadcrumbItems}
+            onBack={onBack}
+            title={title}
+            titleHelp={titleHelp}
+          />
         }
       >
         <div

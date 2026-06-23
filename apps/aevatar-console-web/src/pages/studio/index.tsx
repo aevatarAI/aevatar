@@ -138,6 +138,11 @@ import {
 } from '@/shared/studio/observeSession';
 import { embeddedPanelStyle } from '@/shared/ui/proComponents';
 import {
+  AevatarBackButton,
+  AevatarBreadcrumb,
+  type AevatarBreadcrumbItem,
+} from '@/shared/ui/aevatarPageShells';
+import {
   AEVATAR_INTERACTIVE_BUTTON_CLASS,
   AEVATAR_INTERACTIVE_CHIP_CLASS,
 } from '@/shared/ui/interactionStandards';
@@ -10379,6 +10384,35 @@ const StudioPage: React.FC = () => {
           }))
     : buildTeamsHref();
   const studioReturnLabel = t("pages.studio.index.copy.18", "Back to Team");
+  const studioTeamLabel =
+    trimOptional(studioTeamSummaryQuery.data?.displayName) ||
+    (routeState.teamId ? t("pages.studio.index.teamBreadcrumb", "Team") : "");
+  const studioBreadcrumbItems: AevatarBreadcrumbItem[] = [
+    {
+      href: buildTeamsHref(),
+      onClick: (event) => {
+        event.preventDefault();
+        history.push(buildTeamsHref());
+      },
+      title: t("pages.studio.index.teamsBreadcrumb", "Teams"),
+    },
+    ...(studioTeamLabel
+      ? [
+          {
+            href: studioReturnHref,
+            onClick: (event: React.MouseEvent<HTMLAnchorElement>) => {
+              event.preventDefault();
+              history.push(studioReturnHref);
+            },
+            title: studioTeamLabel,
+          } satisfies AevatarBreadcrumbItem,
+        ]
+      : []),
+    {
+      current: true,
+      title: t("pages.studio.index.studioBreadcrumb", "Studio"),
+    },
+  ];
   const currentStudioReturnTo =
     routeState.returnTo ||
     (typeof window === 'undefined'
@@ -10557,28 +10591,12 @@ const StudioPage: React.FC = () => {
         padding: '8px 16px 4px',
       }}
     >
-      <button
-        aria-label={studioReturnLabel}
-        className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
-        type="button"
-        onClick={() => history.push(studioReturnHref)}
-        style={{
-          alignItems: 'center',
-          background: 'transparent',
-          border: 'none',
-          color: '#2452b5',
-          cursor: 'pointer',
-          display: 'inline-flex',
-          flexShrink: 0,
-          fontSize: 11,
-          fontWeight: 700,
-          gap: 4,
-          letterSpacing: 0,
-          padding: 0,
-        }}
-      >
-        ← {studioReturnLabel}
-      </button>
+      <AevatarBackButton
+        ariaLabel={studioReturnLabel}
+        onBack={() => history.push(studioReturnHref)}
+        title={studioReturnLabel}
+      />
+      <AevatarBreadcrumb items={studioBreadcrumbItems} />
       <div
         style={{
           alignItems: 'center',
@@ -10879,6 +10897,7 @@ const StudioPage: React.FC = () => {
 
   return (
     <PageContainer
+      breadcrumbRender={false}
       childrenContentStyle={{
         margin: 0,
         minHeight: '100%',

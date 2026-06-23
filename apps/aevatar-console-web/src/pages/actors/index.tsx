@@ -40,6 +40,7 @@ import {
   buildRuntimeRunsHref,
 } from "@/shared/navigation/runtimeRoutes";
 import {
+  type AevatarBreadcrumbItem,
   AevatarInspectorEmpty,
   AevatarPanel,
   AevatarStatusTag,
@@ -86,6 +87,15 @@ const actorPageStackStyle: React.CSSProperties = {
   minWidth: 0,
   width: "100%",
 };
+const platformBreadcrumbItems: AevatarBreadcrumbItem[] = [
+  {
+    title: "Platform",
+  },
+  {
+    current: true,
+    title: "Topology",
+  },
+];
 const actorTableShellStyle: React.CSSProperties = {
   maxWidth: "100%",
   minWidth: 0,
@@ -1260,7 +1270,7 @@ export const TopologyExplorerPage: React.FC<{
 
   return (
     <ConsoleMenuPageShell
-      breadcrumb="Aevatar / Platform"
+      breadcrumbItems={platformBreadcrumbItems}
       extra={
         <Tag color="blue">{t("pages.actors.index.real.data", "real data")}</Tag>
       }

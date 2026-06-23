@@ -44,6 +44,7 @@ import {
   type AevatarThemeSurfaceToken,
 } from "@/shared/ui/aevatarWorkbench";
 import { AevatarCompactText } from "@/shared/ui/compactText";
+import type { AevatarBreadcrumbItem } from "@/shared/ui/aevatarPageShells";
 import ConsoleMenuPageShell from "@/shared/ui/ConsoleMenuPageShell";
 import GovernanceAuditTimeline, {
   type GovernanceAuditEvent,
@@ -140,6 +141,15 @@ const governanceViewMeta: Record<GovernanceWorkbenchView, GovernanceViewMeta> = 
     },
   },
 };
+const platformBreadcrumbItems: AevatarBreadcrumbItem[] = [
+  {
+    title: "Platform",
+  },
+  {
+    current: true,
+    title: "Governance",
+  },
+];
 
 function pickPreferredRevision(
   revisions: readonly ServiceRevisionSnapshot[],
@@ -1912,7 +1922,7 @@ const GovernanceWorkbench: React.FC = () => {
 
   return (
     <ConsoleMenuPageShell
-      breadcrumb="Aevatar / Platform"
+      breadcrumbItems={platformBreadcrumbItems}
       title="Governance"
     >
       <div style={buildAevatarViewportStyle(surfaceToken)}>

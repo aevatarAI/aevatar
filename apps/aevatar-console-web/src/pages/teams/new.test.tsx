@@ -59,7 +59,8 @@ describe('TeamCreatePage', () => {
   it('renders the simplified Team create page', async () => {
     renderWithQueryClient(React.createElement(TeamCreatePage));
 
-    expect(await screen.findByText('阿凡达/团队')).toBeTruthy();
+    expect(await screen.findByRole('navigation', { name: 'Breadcrumb' })).toHaveTextContent('团队');
+    expect(screen.getByRole('navigation', { name: 'Breadcrumb' })).toHaveTextContent('创建团队');
     expect(screen.getByRole('heading', { level: 2, name: '创建团队' })).toBeTruthy();
     expect(screen.getByText('团队信息')).toBeTruthy();
     expect(screen.getByLabelText('队名')).toBeTruthy();

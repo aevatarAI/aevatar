@@ -3,7 +3,6 @@ import {
   ClockCircleOutlined,
   ReloadOutlined,
 } from '@ant-design/icons';
-import { PageContainer } from '@ant-design/pro-components';
 import {
   Badge,
   Button,
@@ -28,6 +27,11 @@ import React, {
 import { history } from '@/shared/navigation/history';
 import { buildRuntimeRunsHref } from '@/shared/navigation/runtimeRoutes';
 import { buildTeamDetailHref } from '@/shared/navigation/teamRoutes';
+import {
+  AevatarBackButton,
+  AevatarPageShell,
+  type AevatarBreadcrumbItem,
+} from '@/shared/ui/aevatarPageShells';
 import { AEVATAR_INTERACTIVE_BUTTON_CLASS } from '@/shared/ui/interactionStandards';
 import { useMissionControlRuntime, type UseMissionControlRuntimeResult } from './hooks/useMissionControlRuntime';
 import InspectorPanel from './InspectorPanel';
@@ -69,6 +73,16 @@ const monoStyle: React.CSSProperties = {
 type MissionStageView = 'topology' | 'execution_flow';
 type MissionDockTab = 'timeline' | 'logs';
 
+const missionControlBreadcrumbItems: AevatarBreadcrumbItem[] = [
+  {
+    title: 'Platform',
+  },
+  {
+    current: true,
+    title: 'Mission Control',
+  },
+];
+
 type MissionControlUiContextValue = {
   activeNodeId?: string;
   closeInspector: () => void;
@@ -97,7 +111,8 @@ function buildMissionShellStyle(token: MissionThemeToken): React.CSSProperties {
     display: 'flex',
     flexDirection: 'column',
     gap: 12,
-    height: 'calc(100vh - 64px)',
+    flex: 1,
+    height: '100%',
     minHeight: 0,
     overflow: 'hidden',
     padding: 12,
@@ -359,8 +374,9 @@ function MissionHeaderBar({
         ) : (
           <>
             {routeContext.scopeId ? (
-              <Button
-                onClick={() =>
+              <AevatarBackButton
+                ariaLabel={t("pages.missioncontrol.index.back.to.team.2", "Back to Team")}
+                onBack={() =>
                   history.push(
                     buildTeamDetailHref({
                       scopeId: routeContext.scopeId ?? '',
@@ -368,8 +384,8 @@ function MissionHeaderBar({
                     }),
                   )
                 }
-              >
-                {t("pages.missioncontrol.index.back.to.team.2", "Back to Team")}</Button>
+                title={t("pages.missioncontrol.index.back.to.team.2", "Back to Team")}
+              />
             ) : null}
             <Button
               type="primary"
@@ -994,21 +1010,21 @@ const MissionControlPage: React.FC = () => {
   const { token } = theme.useToken();
   const runtime = useMissionControlRuntime();
   const shellStyle = useMemo(() => buildMissionShellStyle(token), [token]);
-  const pageHeaderProps = {
-    subTitle: t(
-      'pages.missioncontrol.index.header.subtitle',
-      'Observe, explain, and intervene in critical live runs.',
-    ),
-    title: t('pages.missioncontrol.index.header.title', 'Mission Control'),
-  };
 
   return (
     <MissionControlUiProvider intervention={runtime.snapshot.intervention}>
-      <PageContainer header={pageHeaderProps}>
+      <AevatarPageShell
+        breadcrumbItems={missionControlBreadcrumbItems}
+        content={t(
+          'pages.missioncontrol.index.header.subtitle',
+          'Observe, explain, and intervene in critical live runs.',
+        )}
+        title={t('pages.missioncontrol.index.header.title', 'Mission Control')}
+      >
         <div style={shellStyle}>
           <MissionControlCanvas runtime={runtime} />
         </div>
-      </PageContainer>
+      </AevatarPageShell>
     </MissionControlUiProvider>
   );
 };

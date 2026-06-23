@@ -5,6 +5,7 @@ import {
   resolveAevatarMetricVisual,
   type AevatarThemeSurfaceToken,
 } from "@/shared/ui/aevatarWorkbench";
+import type { AevatarBreadcrumbItem } from "@/shared/ui/aevatarPageShells";
 import ConsoleMenuPageShell from "@/shared/ui/ConsoleMenuPageShell";
 import {
   summaryFieldLabelStyle,
@@ -152,10 +153,19 @@ export const SettingsPageShell: React.FC<SettingsPageShellProps> = ({
   title = "Account Settings",
 }) => {
   const { token } = theme.useToken();
+  const breadcrumbItems: AevatarBreadcrumbItem[] = [
+    {
+      title: "Settings",
+    },
+    {
+      current: true,
+      title,
+    },
+  ];
 
   return (
     <ConsoleMenuPageShell
-      breadcrumb="Aevatar / Settings"
+      breadcrumbItems={breadcrumbItems}
       description={content}
       extra={
         extra ? (

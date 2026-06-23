@@ -163,7 +163,9 @@ describe("TeamsHomePage", () => {
     expect(await screen.findByRole("button", { name: "调试入口工作流" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "查看团队" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "查看成员" })).toBeTruthy();
-    expect(screen.getByText("阿凡达/团队")).toBeTruthy();
+    expect(screen.getByRole("navigation", { name: "Breadcrumb" })).toHaveTextContent(
+      "团队",
+    );
     expect(screen.getByText("我的 AI 团队")).toBeTruthy();
     expect(screen.queryByText("当前工作空间")).toBeNull();
     expect(screen.getByText("AI 团队总数")).toBeTruthy();

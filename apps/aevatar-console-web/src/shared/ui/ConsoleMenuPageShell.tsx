@@ -1,8 +1,13 @@
 import { Typography } from 'antd';
 import React from 'react';
+import {
+  AevatarBreadcrumb,
+  type AevatarBreadcrumbItem,
+} from '@/shared/ui/aevatarPageShells';
 
 type ConsoleMenuPageShellProps = {
-  readonly breadcrumb: React.ReactNode;
+  readonly breadcrumb?: React.ReactNode;
+  readonly breadcrumbItems?: readonly AevatarBreadcrumbItem[];
   readonly children: React.ReactNode;
   readonly description?: React.ReactNode;
   readonly extra?: React.ReactNode;
@@ -81,6 +86,7 @@ const defaultSurfaceStyle: React.CSSProperties = {
 
 export const ConsoleMenuPageShell: React.FC<ConsoleMenuPageShellProps> = ({
   breadcrumb,
+  breadcrumbItems,
   children,
   description,
   extra,
@@ -91,7 +97,11 @@ export const ConsoleMenuPageShell: React.FC<ConsoleMenuPageShellProps> = ({
   <div style={rootStyle}>
     <div style={headerStyle}>
       <div style={headerTextStyle}>
-        <Typography.Text style={breadcrumbStyle}>{breadcrumb}</Typography.Text>
+        {breadcrumbItems?.length ? (
+          <AevatarBreadcrumb items={breadcrumbItems} />
+        ) : breadcrumb ? (
+          <Typography.Text style={breadcrumbStyle}>{breadcrumb}</Typography.Text>
+        ) : null}
         <Typography.Title level={2} style={titleStyle}>
           {title}
         </Typography.Title>

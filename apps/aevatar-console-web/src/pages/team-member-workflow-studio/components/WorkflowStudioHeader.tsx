@@ -1,4 +1,5 @@
 import {
+  ArrowLeftOutlined,
   ClockCircleOutlined,
   CloudUploadOutlined,
   CodeOutlined,
@@ -12,14 +13,13 @@ import {
   PlusOutlined,
   ReloadOutlined,
   SaveOutlined,
-} from "@ant-design/icons";
-import { Breadcrumb, Button, Dropdown, Input, Tag, Tooltip } from "antd";
-import type { InputRef, MenuProps } from "antd";
-import React from "react";
-import { t } from "@/shared/i18n/messages";
-import { AevatarBackButton } from "@/shared/ui/aevatarPageShells";
+} from '@ant-design/icons';
+import type { InputRef, MenuProps } from 'antd';
+import { Button, Dropdown, Input, Tag, Tooltip } from 'antd';
+import React from 'react';
+import { t } from '@/shared/i18n/messages';
 
-type WorkflowHeaderMenuItem = NonNullable<MenuProps["items"]>[number];
+type WorkflowHeaderMenuItem = NonNullable<MenuProps['items']>[number];
 
 type WorkflowStudioHeaderProps = {
   readonly automationsHref: string;
@@ -33,7 +33,12 @@ type WorkflowStudioHeaderProps = {
   readonly publishNotice: string;
   readonly publishPending: boolean;
   readonly publishPlaceholderReason?: string;
-  readonly publishTone: "default" | "processing" | "success" | "warning" | "error";
+  readonly publishTone:
+    | 'default'
+    | 'processing'
+    | 'success'
+    | 'warning'
+    | 'error';
   readonly refreshPublishStatusPending: boolean;
   readonly showRefreshPublishStatus: boolean;
   readonly canOpenDraftRunPanel: boolean;
@@ -73,13 +78,13 @@ const workflowStudioHeaderCss = `
   border-bottom: 1px solid #e5e7eb;
   display: block;
   flex: 0 0 auto;
-  padding: 10px 20px;
+  padding: 8px 16px;
 }
 
 .workflow-studio-header__row {
   align-items: center;
   display: grid;
-  gap: 16px;
+  gap: 12px;
   grid-template-columns: minmax(0, 1fr) auto;
   min-width: 0;
 }
@@ -87,47 +92,69 @@ const workflowStudioHeaderCss = `
 .workflow-studio-header__identity {
   align-items: center;
   display: flex;
+  gap: 10px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.workflow-studio-header__back-button {
+  align-items: center;
+  border: 0;
+  color: #374151;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 30px;
+  justify-content: center;
+  width: 30px;
+}
+
+.workflow-studio-header__back-button:hover {
+  background: #f3f4f6;
+  color: #111827;
+}
+
+.workflow-studio-header__title-zone {
+  align-items: center;
+  display: flex;
+  flex: 1 1 auto;
   gap: 8px;
   min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
 }
 
-.workflow-studio-header__breadcrumb {
+.workflow-studio-header__breadcrumbs {
+  align-items: center;
+  color: #6b7280;
+  display: inline-flex;
   flex: 0 1 auto;
-  max-width: clamp(120px, 22vw, 280px);
-  min-width: 72px;
-  overflow: hidden;
-}
-
-.workflow-studio-header__breadcrumb .ant-breadcrumb {
-  min-width: 0;
-  white-space: nowrap;
-}
-
-.workflow-studio-header__breadcrumb .ant-breadcrumb ol {
-  flex-wrap: nowrap;
-  min-width: 0;
-}
-
-.workflow-studio-header__breadcrumb .ant-breadcrumb li {
+  font-size: 13px;
+  font-weight: 600;
+  gap: 6px;
   min-width: 0;
 }
 
 .workflow-studio-header__breadcrumb-link {
-  color: #4b5563;
-  cursor: pointer;
-  display: inline-block;
+  color: #6b7280;
   max-width: 140px;
   overflow: hidden;
   text-decoration: none;
   text-overflow: ellipsis;
-  vertical-align: bottom;
-  white-space: nowrap;
 }
 
-.workflow-studio-header__breadcrumb-link--muted {
-  color: #6b7280;
+.workflow-studio-header__breadcrumb-link:hover {
+  color: #111827;
+}
+
+.workflow-studio-header__breadcrumb-separator {
+  color: #9ca3af;
+  flex: 0 0 auto;
+}
+
+.workflow-studio-header__title-divider {
+  background: #d1d5db;
+  flex: 0 0 auto;
+  height: 18px;
+  width: 1px;
 }
 
 .workflow-studio-header__title-shell {
@@ -137,25 +164,64 @@ const workflowStudioHeaderCss = `
   border-radius: 6px;
   display: inline-flex;
   flex: 1 1 220px;
-  gap: 2px;
-  max-width: 460px;
+  gap: 4px;
+  max-width: 360px;
   min-width: 96px;
-  padding: 0 2px;
+  padding: 0 2px 0 6px;
 }
 
 .workflow-studio-header__title-shell--focused {
   background: #f9fafb;
-  border-color: #93c5fd;
+  border-color: #a7c6f9;
+  box-shadow: 0 0 0 2px rgba(47, 109, 246, 0.1);
 }
 
 .workflow-studio-header__title-input {
   min-width: 0;
 }
 
+.workflow-studio-header__title-input.ant-input {
+  background: transparent;
+  color: #111827;
+  font-size: 14px;
+  font-weight: 700;
+  height: 28px;
+  line-height: 24px;
+  padding: 0;
+}
+
 .workflow-studio-header__title-input input {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.workflow-studio-header__edit-button {
+  align-items: center;
+  border: 0;
+  color: #6b7280;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 26px;
+  justify-content: center;
+  opacity: 0;
+  width: 26px;
+}
+
+.workflow-studio-header__title-shell:hover .workflow-studio-header__edit-button,
+.workflow-studio-header__title-shell--focused .workflow-studio-header__edit-button {
+  opacity: 1;
+}
+
+.workflow-studio-header__badges {
+  align-items: center;
+  border: 0;
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 6px;
+  margin: 0;
+  min-inline-size: 0;
+  padding: 0;
 }
 
 .workflow-studio-header__status {
@@ -165,18 +231,35 @@ const workflowStudioHeaderCss = `
   margin-inline-end: 0;
 }
 
+.workflow-studio-header__status.ant-tag {
+  border-radius: 5px;
+  font-size: 12px;
+  line-height: 20px;
+  margin-inline-end: 0;
+  padding-inline: 8px;
+}
+
 .workflow-studio-header__actions {
   align-items: center;
   display: flex;
   flex-wrap: nowrap;
-  gap: 6px;
+  gap: 4px;
   justify-content: flex-end;
   min-width: max-content;
   white-space: nowrap;
 }
 
 .workflow-studio-header__actions .ant-btn {
+  border-color: #d8dce3;
+  box-shadow: none;
   flex: 0 0 auto;
+  font-weight: 500;
+  height: 30px;
+}
+
+.workflow-studio-header__actions .ant-btn-primary {
+  background: #2f6df6;
+  border-color: #2f6df6;
 }
 
 .workflow-studio-header__primary-button {
@@ -201,12 +284,16 @@ const workflowStudioHeaderCss = `
 }
 
 @media (max-width: 1080px) {
-  .workflow-studio-header__breadcrumb {
-    max-width: 180px;
+  .workflow-studio-header__breadcrumbs {
+    display: none;
+  }
+
+  .workflow-studio-header__title-divider {
+    display: none;
   }
 
   .workflow-studio-header__title-shell {
-    max-width: 360px;
+    max-width: 320px;
   }
 
   .workflow-studio-header__action-label--secondary {
@@ -221,19 +308,23 @@ const workflowStudioHeaderCss = `
 
 @media (max-width: 760px) {
   .workflow-studio-header {
-    padding-inline: 12px;
+    padding-inline: 10px;
   }
 
   .workflow-studio-header__row {
     gap: 10px;
-  }
-
-  .workflow-studio-header__breadcrumb {
-    display: none;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .workflow-studio-header__title-shell {
     max-width: none;
+  }
+
+  .workflow-studio-header__actions {
+    justify-content: flex-start;
+    min-width: 0;
+    overflow-x: auto;
+    padding-bottom: 2px;
   }
 
   .workflow-studio-header__action-label {
@@ -252,24 +343,76 @@ const workflowStudioHeaderCss = `
 function formatPublishStatusLabel(input: {
   readonly checked: boolean;
   readonly pending: boolean;
-  readonly tone: WorkflowStudioHeaderProps["publishTone"];
+  readonly tone: WorkflowStudioHeaderProps['publishTone'];
 }): string {
   if (input.pending) {
-    return t("teamMemberWorkflowStudio.header.publish.binding", "Binding");
+    return t('teamMemberWorkflowStudio.header.publish.binding', 'Binding');
   }
 
-  if (input.tone === "error") {
-    return t("teamMemberWorkflowStudio.header.publish.error", "Error");
+  if (input.tone === 'error') {
+    return t('teamMemberWorkflowStudio.header.publish.error', 'Error');
   }
 
-  if (input.tone === "processing") {
-    return t("teamMemberWorkflowStudio.header.publish.bindingStatus", "Binding");
+  if (input.tone === 'processing') {
+    return t('teamMemberWorkflowStudio.header.publish.bindingStatus', 'Binding');
   }
 
   return input.checked
-    ? t("teamMemberWorkflowStudio.header.publish.published", "Published")
-    : t("teamMemberWorkflowStudio.header.publish.draft", "Draft");
+    ? t('teamMemberWorkflowStudio.header.publish.published', 'Published')
+    : t('teamMemberWorkflowStudio.header.publish.draft', 'Draft');
 }
+
+type HeaderBreadcrumbProps = {
+  readonly onNavigateToTeam: () => void;
+  readonly onNavigateToTeams: () => void;
+  readonly teamHref: string;
+  readonly teamName: string;
+  readonly teamsHref: string;
+};
+
+const HeaderBreadcrumb: React.FC<HeaderBreadcrumbProps> = ({
+  onNavigateToTeam,
+  onNavigateToTeams,
+  teamHref,
+  teamName,
+  teamsHref,
+}) => (
+  <nav
+    aria-label={t(
+      'teamMemberWorkflowStudio.header.breadcrumbAria',
+      'Workflow location',
+    )}
+    className="workflow-studio-header__breadcrumbs"
+  >
+    <a
+      className="workflow-studio-header__breadcrumb-link"
+      href={teamsHref}
+      onClick={(event) => {
+        event.preventDefault();
+        onNavigateToTeams();
+      }}
+    >
+      {t('teamMemberWorkflowStudio.header.teamBreadcrumb', 'Team')}
+    </a>
+    <span
+      aria-hidden="true"
+      className="workflow-studio-header__breadcrumb-separator"
+    >
+      /
+    </span>
+    <a
+      className="workflow-studio-header__breadcrumb-link"
+      href={teamHref}
+      onClick={(event) => {
+        event.preventDefault();
+        onNavigateToTeam();
+      }}
+    >
+      {teamName ||
+        t('teamMemberWorkflowStudio.header.currentTeam', 'Current team')}
+    </a>
+  </nav>
+);
 
 type HeaderIdentityProps = {
   readonly dirty: boolean;
@@ -277,7 +420,9 @@ type HeaderIdentityProps = {
   readonly onNavigateToTeam: () => void;
   readonly onNavigateToTeams: () => void;
   readonly onTitleChange: (title: string) => void;
-  readonly publishStatusColor: WorkflowStudioHeaderProps["publishTone"] | "default";
+  readonly publishStatusColor:
+    | WorkflowStudioHeaderProps['publishTone']
+    | 'default';
   readonly publishStatusLabel: string;
   readonly publishStatusTitle: string;
   readonly teamHref: string;
@@ -302,133 +447,112 @@ const HeaderIdentity: React.FC<HeaderIdentityProps> = ({
 }) => {
   const titleInputRef = React.useRef<InputRef>(null);
   const [titleFocused, setTitleFocused] = React.useState(false);
+  const workflowTitleNode = (
+    <div
+      className={[
+        'workflow-studio-header__title-shell',
+        titleFocused ? 'workflow-studio-header__title-shell--focused' : '',
+      ]
+        .filter(Boolean)
+        .join(' ')}
+    >
+      <Input
+        aria-label={t(
+          'teamMemberWorkflowStudio.header.workflowTitleAria',
+          'Workflow title',
+        )}
+        className="workflow-studio-header__title-input"
+        onBlur={() => setTitleFocused(false)}
+        onChange={(event) => onTitleChange(event.target.value)}
+        onFocus={() => setTitleFocused(true)}
+        ref={titleInputRef}
+        title={t(
+          'teamMemberWorkflowStudio.header.editWorkflowName',
+          'Edit workflow name',
+        )}
+        value={workflowTitle}
+        variant="borderless"
+      />
+      <Tooltip
+        title={t(
+          'teamMemberWorkflowStudio.header.editWorkflowName',
+          'Edit workflow name',
+        )}
+      >
+        <Button
+          aria-label={t(
+            'teamMemberWorkflowStudio.header.editWorkflowName',
+            'Edit workflow name',
+          )}
+          className="workflow-studio-header__edit-button"
+          icon={<EditOutlined />}
+          onClick={() => titleInputRef.current?.focus()}
+          size="small"
+          type="text"
+        />
+      </Tooltip>
+    </div>
+  );
 
   return (
     <section
       aria-label={t(
-        "teamMemberWorkflowStudio.header.identityAria",
-        "Workflow identity",
+        'teamMemberWorkflowStudio.header.identityAria',
+        'Workflow identity',
       )}
       className="workflow-studio-header__identity"
       data-testid="workflow-header-identity"
     >
-      <AevatarBackButton
-        ariaLabel={t("teamMemberWorkflowStudio.header.back", "Back")}
-        onBack={onNavigateBack}
-        title={t("teamMemberWorkflowStudio.header.back", "Back")}
-      />
-      <div className="workflow-studio-header__breadcrumb">
-        <Breadcrumb
-          items={[
-            {
-              title: (
-                <a
-                  className="workflow-studio-header__breadcrumb-link workflow-studio-header__breadcrumb-link--muted"
-                  href={teamsHref}
-                  onClick={(event) => {
-                    event.preventDefault();
-                    onNavigateToTeams();
-                  }}
-                >
-                  {t("teamMemberWorkflowStudio.header.teamBreadcrumb", "Team")}
-                </a>
-              ),
-            },
-            {
-              title: (
-                <a
-                  className="workflow-studio-header__breadcrumb-link"
-                  href={teamHref}
-                  onClick={(event) => {
-                    event.preventDefault();
-                    onNavigateToTeam();
-                  }}
-                >
-                  {teamName ||
-                    t("teamMemberWorkflowStudio.header.currentTeam", "Current team")}
-                </a>
-              ),
-            },
-          ]}
+      <Tooltip title={t('teamMemberWorkflowStudio.header.back', 'Back')}>
+        <Button
+          aria-label={t('teamMemberWorkflowStudio.header.back', 'Back')}
+          className="workflow-studio-header__back-button"
+          data-aevatar-back-button="true"
+          icon={<ArrowLeftOutlined />}
+          onClick={onNavigateBack}
+          size="small"
+          type="text"
         />
+      </Tooltip>
+      <div className="workflow-studio-header__title-zone">
+        <HeaderBreadcrumb
+          onNavigateToTeam={onNavigateToTeam}
+          onNavigateToTeams={onNavigateToTeams}
+          teamHref={teamHref}
+          teamName={teamName}
+          teamsHref={teamsHref}
+        />
+        <span
+          aria-hidden="true"
+          className="workflow-studio-header__title-divider"
+        />
+        {workflowTitleNode}
       </div>
-      <div
-        className={[
-          "workflow-studio-header__title-shell",
-          titleFocused ? "workflow-studio-header__title-shell--focused" : "",
-        ]
-          .filter(Boolean)
-          .join(" ")}
+      <fieldset
+        aria-label={t(
+          'teamMemberWorkflowStudio.header.statusAria',
+          'Workflow status',
+        )}
+        className="workflow-studio-header__badges"
       >
-        <Input
-          aria-label={t(
-            "teamMemberWorkflowStudio.header.workflowTitleAria",
-            "Workflow title",
-          )}
-          className="workflow-studio-header__title-input"
-          onBlur={() => setTitleFocused(false)}
-          onChange={(event) => onTitleChange(event.target.value)}
-          onFocus={() => setTitleFocused(true)}
-          ref={titleInputRef}
-          style={{
-            background: "transparent",
-            color: "#111827",
-            fontSize: 20,
-            fontWeight: 700,
-            height: 34,
-            lineHeight: "28px",
-            padding: 0,
-            width: "100%",
-          }}
-          title={t(
-            "teamMemberWorkflowStudio.header.editWorkflowName",
-            "Edit workflow name",
-          )}
-          value={workflowTitle}
-          variant="borderless"
-        />
-        <Tooltip
-          title={t(
-            "teamMemberWorkflowStudio.header.editWorkflowName",
-            "Edit workflow name",
-          )}
+        <Tag
+          className="workflow-studio-header__status"
+          color={
+            publishStatusColor === 'default' ? 'default' : publishStatusColor
+          }
+          title={publishStatusTitle}
         >
-          <Button
-            aria-label={t(
-              "teamMemberWorkflowStudio.header.editWorkflowName",
-              "Edit workflow name",
-            )}
-            icon={<EditOutlined />}
-            onClick={() => titleInputRef.current?.focus()}
-            size="small"
-            style={{
-              alignItems: "center",
-              borderColor: "#d1d5db",
-              color: "#4b5563",
-              display: "inline-flex",
-              flex: "0 0 auto",
-              height: 28,
-              justifyContent: "center",
-              width: 28,
-            }}
-          />
-        </Tooltip>
-      </div>
-      <Tag
-        className="workflow-studio-header__status"
-        color={publishStatusColor === "default" ? "default" : publishStatusColor}
-        title={publishStatusTitle}
-      >
-        {publishStatusLabel}
-      </Tag>
-      {dirty ? (
-        <Tag className="workflow-studio-header__status" color="gold">
-          {t(
-            "teamMemberWorkflowStudio.header.unsavedChanges",
-            "Unsaved changes",
-          )}
+          {publishStatusLabel}
         </Tag>
-      ) : null}
+        {dirty ? (
+          <Tag className="workflow-studio-header__status" color="gold">
+            {t(
+              'teamMemberWorkflowStudio.header.unsavedChanges',
+              'Unsaved changes',
+            )}
+          </Tag>
+        ) : null}
+      </fieldset>
     </section>
   );
 };
@@ -507,31 +631,31 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
   const showStatusAction = showPublishAction || showRefreshPublishStatus;
   const deleteSelectionLabel = hasSelectedConnection
     ? t(
-        "teamMemberWorkflowStudio.header.deleteSelectedConnection",
-        "Delete selected connection",
+        'teamMemberWorkflowStudio.header.deleteSelectedConnection',
+        'Delete selected connection',
       )
     : t(
-        "teamMemberWorkflowStudio.header.deleteSelectedNode",
-        "Delete selected node",
+        'teamMemberWorkflowStudio.header.deleteSelectedNode',
+        'Delete selected node',
       );
   const yamlMenuItems: WorkflowHeaderMenuItem[] = [
     {
       disabled: !canViewYaml,
       icon: <CodeOutlined />,
-      key: "view-yaml",
-      label: t("teamMemberWorkflowStudio.header.viewYaml", "View YAML"),
+      key: 'view-yaml',
+      label: t('teamMemberWorkflowStudio.header.viewYaml', 'View YAML'),
       title: canViewYaml
         ? undefined
         : t(
-            "teamMemberWorkflowStudio.header.viewYamlUnavailable",
-            "Load the workflow draft before viewing YAML.",
+            'teamMemberWorkflowStudio.header.viewYamlUnavailable',
+            'Load the workflow draft before viewing YAML.',
           ),
     },
     {
       disabled: pasteYamlPending,
       icon: <FileTextOutlined />,
-      key: "paste-yaml",
-      label: t("teamMemberWorkflowStudio.header.pasteYaml", "Paste YAML"),
+      key: 'paste-yaml',
+      label: t('teamMemberWorkflowStudio.header.pasteYaml', 'Paste YAML'),
     },
   ];
   const moreMenuItems: WorkflowHeaderMenuItem[] = [
@@ -539,7 +663,7 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
       ? {
           danger: true,
           icon: <DeleteOutlined />,
-          key: hasSelectedConnection ? "delete-connection" : "delete-node",
+          key: hasSelectedConnection ? 'delete-connection' : 'delete-node',
           label: deleteSelectionLabel,
         }
       : null,
@@ -549,15 +673,15 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
   return (
     <section
       aria-label={t(
-        "teamMemberWorkflowStudio.header.primaryActionsAria",
-        "Workflow primary actions",
+        'teamMemberWorkflowStudio.header.primaryActionsAria',
+        'Workflow primary actions',
       )}
       className="workflow-studio-header__actions"
       data-nowrap="true"
       data-testid="workflow-header-primary-actions"
     >
       <Button
-        aria-label={t("teamMemberWorkflowStudio.header.run", "Run")}
+        aria-label={t('teamMemberWorkflowStudio.header.run', 'Run')}
         className="workflow-studio-header__compact-button"
         disabled={!canOpenDraftRunPanel}
         icon={<PlayCircleOutlined />}
@@ -566,31 +690,31 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
         title={
           canOpenDraftRunPanel
             ? t(
-                "teamMemberWorkflowStudio.header.prepareDraftRun",
-                "Prepare draft run",
+                'teamMemberWorkflowStudio.header.prepareDraftRun',
+                'Prepare draft run',
               )
             : currentDraftRunPlaceholderReason
         }
       >
         <span className="workflow-studio-header__action-label">
-          {t("teamMemberWorkflowStudio.header.run", "Run")}
+          {t('teamMemberWorkflowStudio.header.run', 'Run')}
         </span>
       </Button>
       <Button
-        aria-label={t("teamMemberWorkflowStudio.header.addNode", "Add node")}
+        aria-label={t('teamMemberWorkflowStudio.header.addNode', 'Add node')}
         className="workflow-studio-header__compact-button"
         icon={<PlusOutlined />}
         onClick={onAddNode}
         size="small"
       >
         <span className="workflow-studio-header__action-label workflow-studio-header__action-label--secondary">
-          {t("teamMemberWorkflowStudio.header.addNode", "Add node")}
+          {t('teamMemberWorkflowStudio.header.addNode', 'Add node')}
         </span>
       </Button>
       <Button
         aria-label={t(
-          "teamMemberWorkflowStudio.header.publishedRuns",
-          "Published runs",
+          'teamMemberWorkflowStudio.header.publishedRuns',
+          'Published runs',
         )}
         className="workflow-studio-header__compact-button"
         disabled={!canOpenPublishedRuns}
@@ -604,13 +728,13 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
         title={publishedRunsPlaceholderReason}
       >
         <span className="workflow-studio-header__action-label workflow-studio-header__action-label--secondary">
-          {t("teamMemberWorkflowStudio.header.publishedRuns", "Published runs")}
+          {t('teamMemberWorkflowStudio.header.publishedRuns', 'Published runs')}
         </span>
       </Button>
       <Button
         aria-label={t(
-          "teamMemberWorkflowStudio.header.recurringWork",
-          "Recurring work",
+          'teamMemberWorkflowStudio.header.recurringWork',
+          'Recurring work',
         )}
         className="workflow-studio-header__compact-button"
         disabled={!canOpenAutomations}
@@ -624,18 +748,18 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
         title={
           canOpenAutomations
             ? t(
-                "teamMemberWorkflowStudio.header.openAutomations",
-                "Open recurring work for this member",
+                'teamMemberWorkflowStudio.header.openAutomations',
+                'Open recurring work for this member',
               )
             : automationsPlaceholderReason
         }
       >
         <span className="workflow-studio-header__action-label workflow-studio-header__action-label--secondary">
-          {t("teamMemberWorkflowStudio.header.recurringWork", "Recurring work")}
+          {t('teamMemberWorkflowStudio.header.recurringWork', 'Recurring work')}
         </span>
       </Button>
       <Button
-        aria-label={t("teamMemberWorkflowStudio.header.save", "Save")}
+        aria-label={t('teamMemberWorkflowStudio.header.save', 'Save')}
         className="workflow-studio-header__primary-button"
         disabled={!canSave}
         icon={<SaveOutlined />}
@@ -644,22 +768,19 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
         size="small"
         title={
           canSave
-            ? t(
-                "teamMemberWorkflowStudio.header.saveDraft",
-                "Save draft",
-              )
+            ? t('teamMemberWorkflowStudio.header.saveDraft', 'Save draft')
             : savePlaceholderReason
         }
-        type={canSave ? "primary" : "default"}
+        type={canSave ? 'primary' : 'default'}
       >
         <span className="workflow-studio-header__action-label">
-          {t("teamMemberWorkflowStudio.header.save", "Save")}
+          {t('teamMemberWorkflowStudio.header.save', 'Save')}
         </span>
       </Button>
       {showStatusAction ? (
         showPublishAction ? (
           <Button
-            aria-label={t("teamMemberWorkflowStudio.header.publish", "Publish")}
+            aria-label={t('teamMemberWorkflowStudio.header.publish', 'Publish')}
             className="workflow-studio-header__status-button"
             disabled={publishDisabled}
             icon={<CloudUploadOutlined />}
@@ -670,20 +791,20 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
               publishDisabled
                 ? publishPlaceholderReason
                 : t(
-                    "teamMemberWorkflowStudio.header.publishMember",
-                    "Publish member workflow",
+                    'teamMemberWorkflowStudio.header.publishMember',
+                    'Publish member workflow',
                   )
             }
           >
             <span className="workflow-studio-header__action-label">
-              {t("teamMemberWorkflowStudio.header.publish", "Publish")}
+              {t('teamMemberWorkflowStudio.header.publish', 'Publish')}
             </span>
           </Button>
         ) : (
           <Button
             aria-label={t(
-              "teamMemberWorkflowStudio.header.refreshPublishStatus",
-              "Refresh status",
+              'teamMemberWorkflowStudio.header.refreshPublishStatus',
+              'Refresh status',
             )}
             className="workflow-studio-header__status-button"
             disabled={refreshPublishStatusPending}
@@ -692,14 +813,14 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
             onClick={onRefreshPublishStatus}
             size="small"
             title={t(
-              "teamMemberWorkflowStudio.header.refreshPublishStatus",
-              "Refresh status",
+              'teamMemberWorkflowStudio.header.refreshPublishStatus',
+              'Refresh status',
             )}
           >
             <span className="workflow-studio-header__action-label">
               {t(
-                "teamMemberWorkflowStudio.header.refreshPublishStatus",
-                "Refresh status",
+                'teamMemberWorkflowStudio.header.refreshPublishStatus',
+                'Refresh status',
               )}
             </span>
           </Button>
@@ -709,32 +830,32 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
         menu={{
           items: yamlMenuItems,
           onClick: ({ key }) => {
-            if (key === "view-yaml" && canViewYaml) {
+            if (key === 'view-yaml' && canViewYaml) {
               onViewYaml();
               return;
             }
 
-            if (key === "paste-yaml" && !pasteYamlPending) {
+            if (key === 'paste-yaml' && !pasteYamlPending) {
               onPasteYamlClick();
             }
           },
         }}
         placement="bottomRight"
-        trigger={["click"]}
+        trigger={['click']}
       >
         <Button
-          aria-label={t("teamMemberWorkflowStudio.header.yamlActions", "YAML")}
+          aria-label={t('teamMemberWorkflowStudio.header.yamlActions', 'YAML')}
           className="workflow-studio-header__compact-button"
           icon={<FileTextOutlined />}
           loading={pasteYamlPending}
           size="small"
           title={t(
-            "teamMemberWorkflowStudio.header.yamlActionsTitle",
-            "View or import workflow YAML",
+            'teamMemberWorkflowStudio.header.yamlActionsTitle',
+            'View or import workflow YAML',
           )}
         >
           <span className="workflow-studio-header__action-label workflow-studio-header__action-label--secondary">
-            {t("teamMemberWorkflowStudio.header.yaml", "YAML")}
+            {t('teamMemberWorkflowStudio.header.yaml', 'YAML')}
           </span>
           <DownOutlined style={{ fontSize: 10 }} />
         </Button>
@@ -744,13 +865,13 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
           menu={{
             items: moreMenuItems,
             onClick: ({ key }) => {
-              if (key === "delete-node") {
+              if (key === 'delete-node') {
                 const confirmed =
-                  typeof window === "undefined" ||
+                  typeof window === 'undefined' ||
                   window.confirm(
                     t(
-                      "teamMemberWorkflowStudio.header.confirmDeleteNode",
-                      "Delete the selected node? This cannot be undone.",
+                      'teamMemberWorkflowStudio.header.confirmDeleteNode',
+                      'Delete the selected node? This cannot be undone.',
                     ),
                   );
                 if (confirmed) {
@@ -759,13 +880,13 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
                 return;
               }
 
-              if (key === "delete-connection") {
+              if (key === 'delete-connection') {
                 const confirmed =
-                  typeof window === "undefined" ||
+                  typeof window === 'undefined' ||
                   window.confirm(
                     t(
-                      "teamMemberWorkflowStudio.header.confirmDeleteConnection",
-                      "Delete the selected connection? This cannot be undone.",
+                      'teamMemberWorkflowStudio.header.confirmDeleteConnection',
+                      'Delete the selected connection? This cannot be undone.',
                     ),
                   );
                 if (confirmed) {
@@ -775,17 +896,17 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
             },
           }}
           placement="bottomRight"
-          trigger={["click"]}
+          trigger={['click']}
         >
           <Button
             aria-label={t(
-              "teamMemberWorkflowStudio.header.moreActions",
-              "More workflow actions",
+              'teamMemberWorkflowStudio.header.moreActions',
+              'More workflow actions',
             )}
             className="workflow-studio-header__icon-button"
             icon={<MoreOutlined />}
             size="small"
-            title={t("teamMemberWorkflowStudio.header.more", "More")}
+            title={t('teamMemberWorkflowStudio.header.more', 'More')}
           />
         </Dropdown>
       ) : null}
@@ -843,18 +964,27 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
     pending: publishPending,
     tone: publishTone,
   });
-  const publishStatusTitle = [publishNotice, publishPlaceholderReason]
-    .filter(Boolean)
-    .join(" · ");
   const showPublishAction =
     publishPending ||
     (dirty && !publishDisabled) ||
     (!showRefreshPublishStatus &&
-      (publishTone === "processing" ||
-        publishTone === "error" ||
+      (publishTone === 'processing' ||
+        publishTone === 'error' ||
         dirty ||
         !memberPublished ||
         !publishDisabled));
+  const stablePublishedStatusVisible = Boolean(
+    memberPublished && publishTone === 'success' && !publishPending && !dirty,
+  );
+  const publishStatusTitle = [
+    publishNotice,
+    stablePublishedStatusVisible ? '' : publishPlaceholderReason,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  const showRefreshStatusAction = Boolean(
+    showRefreshPublishStatus && !stablePublishedStatusVisible,
+  );
 
   return (
     <header className="workflow-studio-header">
@@ -909,7 +1039,7 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
           selectedEdgeId={selectedEdgeId}
           selectedNodeId={selectedNodeId}
           showPublishAction={showPublishAction}
-          showRefreshPublishStatus={showRefreshPublishStatus}
+          showRefreshPublishStatus={showRefreshStatusAction}
         />
       </div>
     </header>

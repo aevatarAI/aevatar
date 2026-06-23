@@ -140,6 +140,7 @@ const enUSMessages = {
   'teams.detail.archive.modal.title': 'Archive this team?',
   'teams.detail.breadcrumb.detail': 'Team detail',
   'teams.detail.breadcrumb.teams': 'Teams',
+  'teams.detail.backToTeams': 'Back to teams',
   'teams.detail.edit.hint.noTeam': 'Select a real team before editing.',
   'teams.detail.edit.hint.ready': 'The team summary must be loaded before editing.',
   'teams.detail.edit.modal.description': 'Team description',

@@ -52,6 +52,7 @@ import type {
 } from '@/shared/models/services';
 import {
   AevatarContextDrawer,
+  type AevatarBreadcrumbItem,
   AevatarInspectorEmpty,
 } from '@/shared/ui/aevatarPageShells';
 import {
@@ -193,6 +194,15 @@ const compactHintTagStyle: React.CSSProperties = {
   fontWeight: 600,
   marginInlineEnd: 0,
 };
+const platformBreadcrumbItems: AevatarBreadcrumbItem[] = [
+  {
+    title: 'Platform',
+  },
+  {
+    current: true,
+    title: 'Deployments',
+  },
+];
 const compactMonoValueStyle: React.CSSProperties = {
   color: 'var(--ant-color-text-secondary)',
   fontFamily: aevatarMonoFontFamily,
@@ -2088,7 +2098,7 @@ const DeploymentsPage: React.FC = () => {
 
   return (
     <ConsoleMenuPageShell
-      breadcrumb="Aevatar / Platform"
+      breadcrumbItems={platformBreadcrumbItems}
       description={t("pages.deployments.index.deployments.is.platform.release.2", "Deployments is Platform's release workbench, focusing on current serving, rollout progress and traffic distribution.")}
       title="Deployments"
     >

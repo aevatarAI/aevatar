@@ -1663,6 +1663,7 @@ const TeamDetailPage: React.FC = () => {
       }
       activeTab={activeTab}
       activeTabLabel={formatTeamTabLabel(activeTab, intl)}
+      breadcrumbTeamTitle={teamTitle}
       initialLoading={initialLoading}
       onOpenTeamsList={handleOpenTeamsList}
       onSelectTab={pushTeamTab}

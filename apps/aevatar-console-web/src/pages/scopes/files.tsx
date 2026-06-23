@@ -13,7 +13,8 @@ import {
 } from '@/shared/studio/navigation';
 import {
   AevatarPageShell,
-  AevatarTitleWithHelp,
+  AevatarPageTitleBlock,
+  type AevatarBreadcrumbItem,
 } from '@/shared/ui/aevatarPageShells';
 import StudioFilesPage from '@/pages/studio/components/StudioFilesPage';
 import { resolveStudioScopeContext } from './components/resolvedScope';
@@ -56,6 +57,16 @@ const filesViewportStyle: React.CSSProperties = {
   overflow: 'hidden',
   width: '100%',
 };
+
+const filesBreadcrumbItems: AevatarBreadcrumbItem[] = [
+  {
+    title: "Build",
+  },
+  {
+    current: true,
+    title: "Files",
+  },
+];
 
 const ProjectFilesPage: React.FC = () => {
   const locationSnapshot = React.useSyncExternalStore(
@@ -139,9 +150,10 @@ const ProjectFilesPage: React.FC = () => {
     <AevatarPageShell pageHeaderRender={false} title="Files">
       <div style={filesShellStyle}>
         <header style={filesHeaderStyle}>
-          <AevatarTitleWithHelp
+          <AevatarPageTitleBlock
+            breadcrumbItems={filesBreadcrumbItems}
             title="Files"
-            help="Browse workspace workflows, scope-backed scripts, and reusable Studio catalogs from one structured entry point."
+            titleHelp="Browse workspace workflows, scope-backed scripts, and reusable Studio catalogs from one structured entry point."
           />
         </header>
 

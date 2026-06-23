@@ -298,7 +298,7 @@ describe('DeploymentsPage', () => {
   it('shows the service deployment list before an operator opens a service', async () => {
     renderDeploymentsPage();
 
-    expect(await screen.findByText('Aevatar / Platform')).toBeInTheDocument();
+    expect(await screen.findByText('Platform')).toBeInTheDocument();
     expect(
       await screen.findByRole('heading', { name: 'Deployments' }),
     ).toBeInTheDocument();

@@ -5,7 +5,6 @@ import {
 import {
   ApiOutlined,
   AppstoreOutlined,
-  ArrowLeftOutlined,
   ClearOutlined,
   CodeOutlined,
   DeploymentUnitOutlined,
@@ -63,9 +62,10 @@ import {
 import { buildStudioWorkflowWorkspaceRoute } from '@/shared/studio/navigation';
 import {
   AevatarContextDrawer,
-  AevatarHelpTooltip,
+  AevatarPageTitleBlock,
   AevatarPageShell,
   AevatarStatusTag,
+  type AevatarBreadcrumbItem,
 } from '@/shared/ui/aevatarPageShells';
 import {
   ChatInput,
@@ -1148,6 +1148,21 @@ const ScopeInvokePage: React.FC = () => {
   const defaultRouteStatus =
     defaultRouteQuery.data?.deploymentStatus ||
     (defaultRouteQuery.data?.available ? 'ready' : 'missing');
+  const teamHomeHref = buildTeamWorkspaceRoute(activeDraft.scopeId);
+  const breadcrumbItems: AevatarBreadcrumbItem[] = [
+    {
+      href: teamHomeHref,
+      onClick: (event) => {
+        event.preventDefault();
+        history.push(teamHomeHref);
+      },
+      title: t("pages.scopes.invoke.teamsBreadcrumb", "Teams"),
+    },
+    {
+      current: true,
+      title: t("pages.scopes.invoke.legacyInvokeBreadcrumb", "Legacy Invoke"),
+    },
+  ];
 
   return (
     <AevatarPageShell pageHeaderRender={false} title={t("pages.scopes.invoke.legacy.invoke.lab", "Legacy Invoke Lab")}>
@@ -1168,29 +1183,14 @@ const ScopeInvokePage: React.FC = () => {
           `}
         </style>
         <div style={pageHeaderStyle}>
-          <Space size={12}>
-            <Button
-              icon={<ArrowLeftOutlined />}
-              onClick={() => history.push(buildTeamWorkspaceRoute(activeDraft.scopeId))}
-              type="text"
-            >
-              {t("pages.scopes.invoke.team.home", "Team Home")}</Button>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <div
-                style={{
-                  alignItems: 'center',
-                  display: 'inline-flex',
-                  flexWrap: 'wrap',
-                  gap: 6,
-                  maxWidth: '100%',
-                }}
-              >
-                <Typography.Text strong style={{ fontSize: 16 }}>
-                  {t("pages.scopes.invoke.legacy.invoke.lab.2", "Legacy Invoke Lab")}</Typography.Text>
-                <AevatarHelpTooltip content="Legacy deep-link playground for direct endpoint probing. Team home stays the primary surface, while this lab handles raw payloads and older operator flows." />
-              </div>
-            </div>
-          </Space>
+          <AevatarPageTitleBlock
+            backAriaLabel={t("pages.scopes.invoke.team.home", "Team Home")}
+            backTitle={t("pages.scopes.invoke.team.home", "Team Home")}
+            breadcrumbItems={breadcrumbItems}
+            onBack={() => history.push(teamHomeHref)}
+            title={t("pages.scopes.invoke.legacy.invoke.lab.2", "Legacy Invoke Lab")}
+            titleHelp="Legacy deep-link playground for direct endpoint probing. Team home stays the primary surface, while this lab handles raw payloads and older operator flows."
+          />
           <Space size={[8, 8]} wrap>
             <AevatarStatusTag domain="run" status={invokeResult.status} />
             {scopeId ? (

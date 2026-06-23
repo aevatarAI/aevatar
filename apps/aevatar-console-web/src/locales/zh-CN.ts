@@ -133,6 +133,7 @@ const zhCNMessages = {
   'teams.detail.archive.modal.title': '归档这支团队？',
   'teams.detail.breadcrumb.detail': '团队详情',
   'teams.detail.breadcrumb.teams': '团队',
+  'teams.detail.backToTeams': '返回团队列表',
   'teams.detail.edit.hint.noTeam': '当前路由还没有选中真实团队。',
   'teams.detail.edit.hint.ready': '团队摘要读取完成后才能编辑。',
   'teams.detail.edit.modal.description': '团队说明',
