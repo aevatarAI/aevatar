@@ -968,7 +968,7 @@ function renderWelcome(){
   const chips=el("div",{class:"prompt-chips"});
   ["帮我做个每天汇总科技新闻的 workflow","把一个 PDF 发票录入流程发布成可调用的 service","给现有 workflow 配一个每周一早上的定时任务"].forEach(t=>{
     const c=el("button",{class:"prompt-chip"},`${ICON.spark}<span>${esc(t)}</span>`);
-    c.addEventListener("click",()=>{ const ta=$("#composerInput"); if(ta){ ta.value=t; ta.focus(); } });
+    c.addEventListener("click",()=>{ const ta=$("#composerInput"); if(ta){ ta.value=t; ta.focus(); ta.dispatchEvent(new Event("input",{bubbles:true})); } });
     chips.appendChild(c);
   });
   w.appendChild(chips);
