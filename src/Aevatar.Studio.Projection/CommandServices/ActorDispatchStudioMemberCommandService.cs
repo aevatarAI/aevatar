@@ -39,6 +39,11 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
     {
         ArgumentNullException.ThrowIfNull(request);
 
+        if (request.ImplementationRef != null)
+        {
+            throw new StudioMemberCreateImplementationRefNotAllowedException(scopeId);
+        }
+
         // Length caps + slug pattern are enforced at the Application
         // boundary (StudioMemberCreateRequestValidator). The transport-
         // level guards here only ensure the actor-id remains derivable —
@@ -67,8 +72,6 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
             PublishedServiceId = publishedServiceId,
             CreatedAtUtc = Timestamp.FromDateTimeOffset(createdAt),
         };
-        if (request.ImplementationRef != null)
-            evt.ImplementationRef = BuildImplementationRefMessage(request.ImplementationRef);
 
         await DispatchAsync(normalizedScopeId, memberId, evt, ct);
 
@@ -100,16 +103,14 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
             DisplayName: displayName,
             Description: evt.Description,
             ImplementationKind: MemberImplementationKindMapper.ToWireName(implementationKind),
-            LifecycleStage: request.ImplementationRef == null
-                ? MemberLifecycleStageNames.Created
-                : MemberLifecycleStageNames.BuildReady,
+            LifecycleStage: MemberLifecycleStageNames.Created,
             PublishedServiceId: publishedServiceId,
             LastBoundRevisionId: null,
             CreatedAt: createdAt,
             UpdatedAt: createdAt)
         {
             TeamId = responseTeamId,
-            ImplementationRef = request.ImplementationRef,
+            ImplementationRef = null,
         };
     }
 

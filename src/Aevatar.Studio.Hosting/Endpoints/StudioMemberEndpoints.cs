@@ -86,6 +86,10 @@ internal static class StudioMemberEndpoints
             var summary = await memberService.CreateAsync(scopeId, request, ct);
             return Results.Created($"/api/scopes/{scopeId}/members/{summary.MemberId}", summary);
         }
+        catch (StudioMemberCreateImplementationRefNotAllowedException ex)
+        {
+            return CreateImplementationRefNotAllowed(ex);
+        }
         catch (InvalidOperationException ex)
         {
             return BadRequest("INVALID_STUDIO_MEMBER_REQUEST", ex.Message);
@@ -441,6 +445,16 @@ internal static class StudioMemberEndpoints
 
     private static IResult BadRequest(string code, string message) =>
         Results.BadRequest(new { code, message });
+
+    private static IResult CreateImplementationRefNotAllowed(
+        StudioMemberCreateImplementationRefNotAllowedException ex) =>
+        Results.BadRequest(new
+        {
+            code = StudioMemberCreateImplementationRefNotAllowedException.ErrorCode,
+            message = ex.Message,
+            scopeId = ex.ScopeId,
+            field = ex.Field,
+        });
 
     private static IResult NotFound(StudioMemberNotFoundException ex) =>
         Results.Json(
