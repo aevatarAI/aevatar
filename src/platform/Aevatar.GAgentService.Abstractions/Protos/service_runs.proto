@@ -35,6 +35,7 @@ message ServiceRunRecord {
   ServiceIdentity identity = 15;
   string last_output = 16;
   string last_error = 17;
+  string schedule_id = 18;
 }
 
 message ServiceRunState {

@@ -350,7 +350,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                     ToRuntimeAuth(State.Target?.ServiceInvocation?.Auth),
                     ReadOnlyCopy(prepared.Headers ?? EmptyHeaders),
                     ProjectNyxIdAccessTokenToWorkflowCallerCredential:
-                        State.ScheduleKind == ScheduledDispatchScheduleKindState.Workflow),
+                        State.ScheduleKind == ScheduledDispatchScheduleKindState.Workflow,
+                    ScheduleId: ResolveScheduleId()),
                 ct);
             return new ScheduledDispatchReceipt(
                 receipt.Accepted,
@@ -442,6 +443,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             CommandId = idempotencyKey,
             CorrelationId = idempotencyKey,
             RevisionId = target.RevisionId ?? string.Empty,
+            ScheduleId = ResolveScheduleId(),
         };
         if (target.Caller != null)
             request.Caller = target.Caller.Clone();

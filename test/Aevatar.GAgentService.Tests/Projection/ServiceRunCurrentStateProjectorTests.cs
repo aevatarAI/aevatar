@@ -52,6 +52,7 @@ public sealed class ServiceRunCurrentStateProjectorTests
         doc.ScopeId.Should().Be("tenant-1");
         doc.ServiceId.Should().Be("svc-1");
         doc.ActorId.Should().Be("service-run:run-1");
+        doc.ScheduleId.Should().Be("schedule-1");
         doc.ImplementationKind.Should().Be((int)ServiceImplementationKind.Workflow);
         doc.TargetActorId.Should().Be("workflow-run:abc");
         doc.Status.Should().Be((int)ServiceRunStatus.Accepted);
@@ -135,6 +136,93 @@ public sealed class ServiceRunCurrentStateProjectorTests
     }
 
     [Fact]
+    public async Task QueryReader_ShouldFilterByScheduleStatusAndUpdatedRange_BeforeTake()
+    {
+        var store = new RecordingDocumentStore<ServiceRunCurrentStateReadModel>(x => x.Id);
+        var projector = new ServiceRunCurrentStateProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-04-27T00:00:00+00:00")));
+        var reader = new ServiceRunQueryReader(store);
+
+        await projector.ProjectAsync(
+            CreateContext("service-run:run-a"),
+            WrapCommittedRunState(
+                BuildRecord(
+                    "tenant-1",
+                    "svc-1",
+                    "run-a",
+                    "cmd-a",
+                    ServiceImplementationKind.Static,
+                    "actor-a",
+                    DateTimeOffset.Parse("2026-04-27T01:00:00+00:00"),
+                    ServiceRunStatus.Completed,
+                    "schedule-a"),
+                stateVersion: 1,
+                eventId: "evt-a",
+                observedAt: DateTimeOffset.Parse("2026-04-27T01:00:00+00:00")));
+        await projector.ProjectAsync(
+            CreateContext("service-run:run-b"),
+            WrapCommittedRunState(
+                BuildRecord(
+                    "tenant-1",
+                    "svc-1",
+                    "run-b",
+                    "cmd-b",
+                    ServiceImplementationKind.Workflow,
+                    "actor-b",
+                    DateTimeOffset.Parse("2026-04-27T02:00:00+00:00"),
+                    ServiceRunStatus.Accepted,
+                    "schedule-a"),
+                stateVersion: 1,
+                eventId: "evt-b",
+                observedAt: DateTimeOffset.Parse("2026-04-27T02:00:00+00:00")));
+        await projector.ProjectAsync(
+            CreateContext("service-run:run-c"),
+            WrapCommittedRunState(
+                BuildRecord(
+                    "tenant-1",
+                    "svc-1",
+                    "run-c",
+                    "cmd-c",
+                    ServiceImplementationKind.Workflow,
+                    "actor-c",
+                    DateTimeOffset.Parse("2026-04-27T03:00:00+00:00"),
+                    ServiceRunStatus.Completed,
+                    "schedule-b"),
+                stateVersion: 1,
+                eventId: "evt-c",
+                observedAt: DateTimeOffset.Parse("2026-04-27T03:00:00+00:00")));
+        await projector.ProjectAsync(
+            CreateContext("service-run:run-d"),
+            WrapCommittedRunState(
+                BuildRecord(
+                    "tenant-1",
+                    "svc-1",
+                    "run-d",
+                    "cmd-d",
+                    ServiceImplementationKind.Workflow,
+                    "actor-d",
+                    DateTimeOffset.Parse("2026-04-27T04:00:00+00:00"),
+                    ServiceRunStatus.Completed,
+                    "schedule-a"),
+                stateVersion: 1,
+                eventId: "evt-d",
+                observedAt: DateTimeOffset.Parse("2026-04-27T04:00:00+00:00")));
+
+        var results = await reader.ListAsync(new ServiceRunQuery(
+            "tenant-1",
+            "svc-1",
+            Take: 1,
+            ScheduleId: "schedule-a",
+            Status: ServiceRunStatus.Completed,
+            UpdatedFrom: DateTimeOffset.Parse("2026-04-27T00:30:00+00:00"),
+            UpdatedTo: DateTimeOffset.Parse("2026-04-27T03:30:00+00:00")));
+
+        results.Select(x => x.RunId).Should().Equal("run-a");
+        results.Single().ScheduleId.Should().Be("schedule-a");
+    }
+
+    [Fact]
     public async Task ProjectAsync_ShouldNotCollide_WhenSameRunIdAcrossDifferentScopes()
     {
         var store = new RecordingDocumentStore<ServiceRunCurrentStateReadModel>(x => x.Id);
@@ -197,7 +285,9 @@ public sealed class ServiceRunCurrentStateProjectorTests
         string commandId,
         ServiceImplementationKind implementation,
         string targetActorId,
-        DateTimeOffset? createdAt = null) =>
+        DateTimeOffset? createdAt = null,
+        ServiceRunStatus status = ServiceRunStatus.Accepted,
+        string scheduleId = "schedule-1") =>
         new()
         {
             ScopeId = scopeId,
@@ -211,7 +301,8 @@ public sealed class ServiceRunCurrentStateProjectorTests
             TargetActorId = targetActorId,
             RevisionId = "r1",
             DeploymentId = "dep-1",
-            Status = ServiceRunStatus.Accepted,
+            Status = status,
+            ScheduleId = scheduleId,
             CreatedAt = createdAt.HasValue ? Timestamp.FromDateTimeOffset(createdAt.Value) : null,
             UpdatedAt = createdAt.HasValue ? Timestamp.FromDateTimeOffset(createdAt.Value) : null,
             Identity = new ServiceIdentity
