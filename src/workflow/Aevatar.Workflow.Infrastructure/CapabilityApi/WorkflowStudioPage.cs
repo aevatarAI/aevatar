@@ -16,7 +16,7 @@ internal static class WorkflowStudioPage
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>工作室 · Workflow Studio · aevatar</title>
+<title>Studio · Workflow Studio · aevatar</title>
 <style>
   /* =========================================================================
      aevatar 工作室 / Workflow Studio — 对话式编排页（高保真视觉交互稿）
@@ -153,7 +153,7 @@ internal static class WorkflowStudioPage
   .sess-row:hover { background:var(--panel-2); }
   .sess-row .dot { margin-top:6px; }
   .sess-row .st { font-weight:640; color:var(--fg-strong); letter-spacing:-.005em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding-right:18px; }
-  .sess-row .sm { font-size:12px; color:var(--muted); }
+  .sess-row .sm { grid-column:2; font-size:12px; color:var(--muted); }
   .sess-badges { grid-column:2; display:flex; gap:5px; flex-wrap:wrap; margin-top:5px; }
   .pbadge { font-family:var(--mono); font-size:10px; font-weight:600; letter-spacing:.02em; padding:1px 6px; border-radius:5px; background:var(--panel-3); color:var(--muted); border:1px solid var(--border-soft); display:inline-flex; align-items:center; gap:3px; }
   .pbadge.wf  { color:var(--cat-ai); border-color:color-mix(in oklab,var(--cat-ai) 30%,transparent); background:color-mix(in oklab,var(--cat-ai) 12%,transparent); }
@@ -838,7 +838,7 @@ function renderTopbar(){
     <button class="mobnav" id="navBtn" aria-label="会话列表">${ICON.menu}</button>
     <div class="brand">
       <div class="brand-mark" aria-hidden="true">${ICON.studio}</div>
-      <div><div class="brand-name">工作室 <span class="brand-sub">Workflow Studio</span></div></div>
+      <div><div class="brand-name">Studio <span class="brand-sub">Workflow Studio</span></div></div>
     </div>
     ${state.signedIn?scopeChipHtml():""}
     <div class="spacer"></div>
@@ -979,7 +979,7 @@ function renderMessage(m){
   const wrap=el("div",{class:"msg "+(m.role==="user"?"user":"agent")});
   wrap.innerHTML=`<div class="m-avatar" aria-hidden="true">${m.role==="user"?initials(accountLabel):ICON.studio}</div>`;
   const body=el("div",{class:"m-body"});
-  body.appendChild(el("div",{class:"m-name"}, m.role==="user"?`<b>你</b>`:`<b>aevatar</b> · 工作室 agent`));
+  body.appendChild(el("div",{class:"m-name"}, m.role==="user"?`<b>你</b>`:`<b>aevatar</b> · Studio agent`));
   if(m.role==="user"){
     body.appendChild(el("div",{class:"bubble-user"}, esc(m.text)));
   } else {
@@ -1306,7 +1306,7 @@ function renderLogin(){
   const card = el("section", { class:"login-card", role:"region", "aria-label":"登录" });
   card.innerHTML = `
     <div class="login-mark" aria-hidden="true">${ICON.lock}</div>
-    <h1>登录以进入工作室</h1>
+    <h1>登录以进入 Studio</h1>
     <p>通过对话装配、发布与编排工作流 —— 登录后即可开始。</p>`;
   const btn = el("button", { class:"btn-primary", id:"signinBtn" }, "使用 nyxid 登录");
   btn.addEventListener("click", () => { beginLogin(); });
