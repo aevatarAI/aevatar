@@ -30,7 +30,8 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
                 NyxIdAuthority: "https://nyx.example/",
                 BrokerCapabilityObserved: true,
                 BrokerCapabilityObservedAt: DateTimeOffset.UnixEpoch,
-                OauthScope: "openid broker proxy")));
+                OauthScope: "openid broker proxy",
+                StudioLoginRedirectUri: "https://dashboard.example/auth/callback")));
 
         var (statusCode, payload) = await ExecuteJsonAsync<NyxIdLoginConfigurationResponse>(result);
 
@@ -38,7 +39,8 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
         payload.Should().BeEquivalentTo(new NyxIdLoginConfigurationResponse(
             "https://nyx.example",
             "broker-client-1",
-            "openid broker proxy"));
+            "openid broker proxy",
+            "https://dashboard.example/auth/callback"));
     }
 
     [Fact]
@@ -61,9 +63,10 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
             {
                 Code = "auth-code",
                 CodeVerifier = "pkce-verifier",
-                RedirectUri = "http://localhost/auth/callback",
+                RedirectUri = "https://dashboard.example/auth/callback",
             },
             broker,
+            StudioLoginProvider(),
             queryPort,
             dispatch,
             NullLoggerFactory.Instance);
@@ -72,7 +75,7 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
 
         statusCode.Should().Be(StatusCodes.Status200OK);
         broker.Exchanges.Should().ContainSingle().Which.Should()
-            .Be(("auth-code", "pkce-verifier", "http://localhost/auth/callback"));
+            .Be(("auth-code", "pkce-verifier", "https://dashboard.example/auth/callback"));
         payload.Should().NotBeNull();
         payload!.BindingDispatchAccepted.Should().BeTrue();
         payload.Tokens.AccessToken.Should().Be("access-token");
@@ -107,9 +110,10 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
             {
                 Code = "auth-code",
                 CodeVerifier = "pkce-verifier",
-                RedirectUri = "http://localhost/auth/callback",
+                RedirectUri = "https://dashboard.example/auth/callback",
             },
             broker,
+            StudioLoginProvider(),
             queryPort,
             dispatch,
             NullLoggerFactory.Instance);
@@ -120,6 +124,37 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
         payload!.BindingDispatchAccepted.Should().BeFalse();
         dispatch.Commands.Should().BeEmpty();
         broker.RevokedBindingIds.Should().ContainSingle().Which.Should().Be("bnd-new");
+    }
+
+    [Fact]
+    public async Task Finalize_ShouldRejectRedirectUriMismatch_BeforeAuthorizationCodeExchange()
+    {
+        var broker = new RecordingBrokerCallback(new BrokerAuthorizationCodeResult(
+            BindingId: "bnd-owner-1",
+            IdToken: CreateIdToken(new { uid = "owner-user-1" }),
+            AccessToken: "access-token"));
+        var queryPort = new FakeExternalIdentityBindingQueryPort();
+        var dispatch = new RecordingBindingDispatch();
+
+        var result = await NyxIdLoginFinalizationEndpoints.HandleFinalizeAsync(
+            new NyxIdLoginFinalizationRequest
+            {
+                Code = "auth-code",
+                CodeVerifier = "pkce-verifier",
+                RedirectUri = "http://localhost/auth/callback",
+            },
+            broker,
+            StudioLoginProvider(),
+            queryPort,
+            dispatch,
+            NullLoggerFactory.Instance);
+
+        var (statusCode, payload) = await ExecuteJsonAsync<JsonElement>(result);
+
+        statusCode.Should().Be(StatusCodes.Status400BadRequest);
+        payload.GetProperty("error").GetString().Should().Be("redirect_uri_mismatch");
+        broker.Exchanges.Should().BeEmpty();
+        dispatch.Commands.Should().BeEmpty();
     }
 
     private static string CreateIdToken(object payload)
@@ -164,6 +199,19 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
 
     private static string SubjectKey(ExternalSubjectRef subject) =>
         $"{subject.Platform}:{subject.Tenant}:{subject.ExternalUserId}";
+
+    private static StubAevatarOAuthClientProvider StudioLoginProvider() =>
+        new(new AevatarOAuthClientSnapshot(
+            ClientId: "broker-client-1",
+            ClientIdIssuedAt: DateTimeOffset.UnixEpoch,
+            HmacKid: "kid",
+            HmacKey: [1, 2, 3],
+            HmacKeyRotatedAt: DateTimeOffset.UnixEpoch,
+            NyxIdAuthority: "https://nyx.example/",
+            BrokerCapabilityObserved: true,
+            BrokerCapabilityObservedAt: DateTimeOffset.UnixEpoch,
+            OauthScope: "openid broker proxy",
+            StudioLoginRedirectUri: "https://dashboard.example/auth/callback"));
 
     private sealed class StubAevatarOAuthClientProvider(AevatarOAuthClientSnapshot snapshot) : IAevatarOAuthClientProvider
     {

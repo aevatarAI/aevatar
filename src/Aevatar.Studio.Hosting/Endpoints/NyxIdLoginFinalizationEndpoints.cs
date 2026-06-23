@@ -45,7 +45,8 @@ public static class NyxIdLoginFinalizationEndpoints
                 ClientId: snapshot.ClientId,
                 Scope: string.IsNullOrWhiteSpace(snapshot.OauthScope)
                     ? AevatarOAuthClientScopes.AuthorizationScope
-                    : snapshot.OauthScope.Trim()));
+                    : snapshot.OauthScope.Trim(),
+                RedirectUri: ResolveStudioLoginRedirectUri(snapshot)));
         }
         catch (AevatarOAuthClientNotProvisionedException)
         {
@@ -60,6 +61,7 @@ public static class NyxIdLoginFinalizationEndpoints
     internal static async Task<IResult> HandleFinalizeAsync(
         NyxIdLoginFinalizationRequest request,
         [FromServices] INyxIdBrokerCallbackClient brokerCallback,
+        [FromServices] IAevatarOAuthClientProvider oauthClientProvider,
         [FromServices] IExternalIdentityBindingQueryPort bindingQueryPort,
         [FromServices] ICommandDispatchService<CommitBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> bindingDispatch,
         [FromServices] ILoggerFactory loggerFactory,
@@ -75,11 +77,39 @@ public static class NyxIdLoginFinalizationEndpoints
         if (string.IsNullOrWhiteSpace(request.RedirectUri))
             return Results.BadRequest(new { error = "redirect_uri_missing" });
 
+        string expectedRedirectUri;
+        try
+        {
+            expectedRedirectUri = ResolveStudioLoginRedirectUri(await oauthClientProvider.GetAsync(ct).ConfigureAwait(false));
+        }
+        catch (AevatarOAuthClientNotProvisionedException)
+        {
+            return Results.Json(new
+            {
+                error = "oauth_client_not_provisioned",
+                detail = "Aevatar OAuth client has not been provisioned at NyxID yet.",
+            }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+
+        var postedRedirectUri = request.RedirectUri.Trim();
+        if (!string.Equals(postedRedirectUri, expectedRedirectUri, StringComparison.Ordinal))
+        {
+            logger.LogWarning(
+                "NyxID login finalization rejected redirect URI mismatch: posted='{Posted}', expected='{Expected}'.",
+                postedRedirectUri,
+                expectedRedirectUri);
+            return Results.BadRequest(new
+            {
+                error = "redirect_uri_mismatch",
+                detail = "NyxID login redirect_uri does not match the registered Studio login callback for the broker client.",
+            });
+        }
+
         BrokerAuthorizationCodeResult exchange;
         try
         {
             exchange = await brokerCallback
-                .ExchangeAuthorizationCodeAsync(request.Code.Trim(), request.CodeVerifier.Trim(), request.RedirectUri.Trim(), ct)
+                .ExchangeAuthorizationCodeAsync(request.Code.Trim(), request.CodeVerifier.Trim(), postedRedirectUri, ct)
                 .ConfigureAwait(false);
         }
         catch (Exception ex)
@@ -284,12 +314,24 @@ public static class NyxIdLoginFinalizationEndpoints
             logger.LogWarning(ex, "Failed to revoke orphan NyxID login binding {BindingId}.", bindingId);
         }
     }
+
+    private static string ResolveStudioLoginRedirectUri(AevatarOAuthClientSnapshot snapshot)
+    {
+        if (string.IsNullOrWhiteSpace(snapshot.StudioLoginRedirectUri))
+        {
+            throw new AevatarOAuthClientNotProvisionedException(
+                "Aevatar OAuth client is missing the registered Studio login redirect URI. Bootstrap must re-run DCR.");
+        }
+
+        return snapshot.StudioLoginRedirectUri.Trim();
+    }
 }
 
 public sealed record NyxIdLoginConfigurationResponse(
     string BaseUrl,
     string ClientId,
-    string Scope);
+    string Scope,
+    string RedirectUri);
 
 public sealed record NyxIdLoginFinalizationRequest
 {

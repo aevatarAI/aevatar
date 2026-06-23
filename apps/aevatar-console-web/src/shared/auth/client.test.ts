@@ -69,6 +69,7 @@ describe("NyxIDAuthClient", () => {
       json: async () => ({
         baseUrl: "https://nyx.example",
         clientId: "broker-client-1",
+        redirectUri: "https://dashboard.example/auth/callback",
         scope: "openid urn:nyxid:scope:broker_binding proxy",
       }),
     } as Response);
@@ -90,7 +91,7 @@ describe("NyxIDAuthClient", () => {
     );
     expect(authorizeUrl.searchParams.get("client_id")).toBe("broker-client-1");
     expect(authorizeUrl.searchParams.get("redirect_uri")).toBe(
-      "http://localhost:8000/auth/callback",
+      "https://dashboard.example/auth/callback",
     );
     expect(authorizeUrl.searchParams.get("scope")).toBe(
       "openid urn:nyxid:scope:broker_binding proxy",
@@ -104,7 +105,7 @@ describe("NyxIDAuthClient", () => {
     expect(pending).toEqual(
       expect.objectContaining({
         clientId: "broker-client-1",
-        redirectUri: "http://localhost:8000/auth/callback",
+        redirectUri: "https://dashboard.example/auth/callback",
         returnTo: "/scopes/scope-1/teams",
         scope: "openid urn:nyxid:scope:broker_binding proxy",
         state: authorizeUrl.searchParams.get("state"),

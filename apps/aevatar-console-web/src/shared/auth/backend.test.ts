@@ -22,6 +22,7 @@ describe("NyxID backend auth API", () => {
       json: async () => ({
         baseUrl: "https://nyx.example/",
         clientId: "broker-client-1",
+        redirectUri: "https://dashboard.example/auth/callback",
         scope: "openid urn:nyxid:scope:broker_binding proxy",
       }),
     } as Response);
@@ -30,6 +31,7 @@ describe("NyxID backend auth API", () => {
     await expect(loadBackendNyxIDLoginConfig()).resolves.toEqual({
       baseUrl: "https://nyx.example",
       clientId: "broker-client-1",
+      redirectUri: "https://dashboard.example/auth/callback",
       scope: "openid urn:nyxid:scope:broker_binding proxy",
     });
 

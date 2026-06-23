@@ -17,16 +17,20 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
 public sealed class NyxIdRedirectUriResolverTests : IDisposable
 {
     private readonly string? _savedOverride;
+    private readonly string? _savedStudioLoginOverride;
 
     public NyxIdRedirectUriResolverTests()
     {
         _savedOverride = Environment.GetEnvironmentVariable(NyxIdRedirectUriResolver.OverrideEnvVar);
+        _savedStudioLoginOverride = Environment.GetEnvironmentVariable(NyxIdStudioLoginRedirectUriResolver.OverrideEnvVar);
         Environment.SetEnvironmentVariable(NyxIdRedirectUriResolver.OverrideEnvVar, null);
+        Environment.SetEnvironmentVariable(NyxIdStudioLoginRedirectUriResolver.OverrideEnvVar, null);
     }
 
     public void Dispose()
     {
         Environment.SetEnvironmentVariable(NyxIdRedirectUriResolver.OverrideEnvVar, _savedOverride);
+        Environment.SetEnvironmentVariable(NyxIdStudioLoginRedirectUriResolver.OverrideEnvVar, _savedStudioLoginOverride);
     }
 
     [Fact]
@@ -110,5 +114,37 @@ public sealed class NyxIdRedirectUriResolverTests : IDisposable
         {
             Environment.SetEnvironmentVariable("ASPNETCORE_URLS", savedAspnet);
         }
+    }
+
+    [Fact]
+    public void StudioLoginRedirect_DefaultsToProductionDashboardCallback()
+    {
+        var url = NyxIdStudioLoginRedirectUriResolver.Resolve();
+
+        url.Should().Be(
+            $"{NyxIdStudioLoginRedirectUriResolver.DefaultPublicBaseUrl}{NyxIdStudioLoginRedirectUriResolver.CallbackPath}");
+    }
+
+    [Fact]
+    public void StudioLoginRedirect_HonorsOverride()
+    {
+        Environment.SetEnvironmentVariable(NyxIdStudioLoginRedirectUriResolver.OverrideEnvVar, "https://dashboard.staging.example/");
+
+        var url = NyxIdStudioLoginRedirectUriResolver.Resolve();
+
+        url.Should().Be("https://dashboard.staging.example" + NyxIdStudioLoginRedirectUriResolver.CallbackPath);
+    }
+
+    [Theory]
+    [InlineData("http://+:8080")]
+    [InlineData("http://0.0.0.0:8080")]
+    public void StudioLoginRedirect_RejectsWildcardListenAddress(string wildcardOverride)
+    {
+        Environment.SetEnvironmentVariable(NyxIdStudioLoginRedirectUriResolver.OverrideEnvVar, wildcardOverride);
+
+        var url = NyxIdStudioLoginRedirectUriResolver.Resolve(NullLogger.Instance);
+
+        url.Should().Be(
+            $"{NyxIdStudioLoginRedirectUriResolver.DefaultPublicBaseUrl}{NyxIdStudioLoginRedirectUriResolver.CallbackPath}");
     }
 }

@@ -59,6 +59,11 @@ message AevatarOAuthClientState {
   // means legacy/unknown and forces one re-DCR on the next EnsureProvisioned
   // command so existing clients missing the proxy scope are healed.
   string oauth_scope = 13;
+  // Redirect URI registered for Studio Console login. Distinct from
+  // redirect_uri, which is the Lark/channel binding callback that consumes a
+  // backend-signed state token. Studio login uses browser PKCE state and must
+  // post the same registered URI back to /api/auth/nyxid/finalize.
+  string studio_login_redirect_uri = 22;
   // Actor-owned OAuth provisioning retry facts. Empty/zero means no retry is
   // pending. These facts are control-flow state, so they are typed fields
   // instead of a generic bag.
@@ -70,6 +75,7 @@ message AevatarOAuthClientState {
   string provisioning_retry_callback_id = 19;
   int64 provisioning_retry_callback_generation = 20;
   string provisioning_retry_last_error = 21;
+  string provisioning_retry_studio_login_redirect_uri = 23;
 }
 
 // Issued by the bootstrap startup service from every silo on cluster cold-
@@ -82,6 +88,7 @@ message EnsureAevatarOAuthClientProvisionedCommand {
   string redirect_uri = 2;
   // Optional override for the DCR <c>client_name</c>; bootstrap leaves blank.
   string client_name = 3;
+  string studio_login_redirect_uri = 4;
 }
 
 // Durable self-callback payload fired when an actor-owned OAuth provisioning
@@ -96,6 +103,7 @@ message AevatarOAuthClientProvisioningRetryFiredEvent {
   string callback_id = 6;
   int64 callback_generation = 7;
   int64 fired_at_unix_ms = 8;
+  string studio_login_redirect_uri = 9;
 }
 
 // Issued by tests / manual operator scripts that already hold a client_id
@@ -118,6 +126,7 @@ message ProvisionAevatarOAuthClientCommand {
   // client. Tests / fixture seeds may leave it empty when they don't care
   // about drift detection on a subsequent bootstrap pass.
   string redirect_uri = 5;
+  string studio_login_redirect_uri = 6;
 }
 
 // Issued by ops to force a fresh HMAC key rotation. Old tokens signed with
@@ -150,6 +159,7 @@ message AevatarOAuthClientProvisioningRetryScheduledEvent {
   int64 callback_generation = 7;
   string last_error = 8;
   google.protobuf.Timestamp scheduled_at = 9;
+  string studio_login_redirect_uri = 10;
 }
 
 // Persisted when provisioning reaches a terminal successful branch and the
@@ -186,6 +196,7 @@ message AevatarOAuthClientProvisionedEvent {
   // an older event predates scope tracking; the actor treats empty as
   // legacy/unknown and re-DCRs once so proxy-capable bindings can be minted.
   string oauth_scope = 6;
+  string studio_login_redirect_uri = 7;
 }
 
 // Persisted when the actor seeds or rotates its HMAC key. On rotation, the
@@ -250,4 +261,7 @@ message AevatarOAuthClientDocument {
   // Mirror of AevatarOAuthClientState.oauth_scope for diagnostics and
   // bootstrap drift detection.
   string oauth_scope = 17;
+  // Mirror of AevatarOAuthClientState.studio_login_redirect_uri for Studio
+  // login config/finalize validation.
+  string studio_login_redirect_uri = 18;
 }
