@@ -4,8 +4,10 @@ namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 // /workflow/observatory precedent. Browser OIDC Authorization Code + PKCE against nyxid (reuse of the
 // console-web client; same authority/clientId/scope as observatory, isolated PKCE storage + callback
 // route). The page is the anonymous static shell; the app is gated behind login exactly like observatory.
-// This increment is mount + login only: the chat/cards still render from in-page mock data until the live
-// data wiring (/api/chat, /api/studio/context, /api/schedules) lands in a later increment.
+// Increment 2a wires the signed-in app to live backend data: the scope chip from GET /api/studio/context,
+// chat from POST /api/chat (SSE), the session list from localStorage, and the Schedules card from
+// GET /api/schedules (polled). The right-pane workflow graph / Team / Service cards are deferred to
+// Increment 2b and render honest empty states (no mock data).
 internal static class WorkflowStudioPage
 {
     public const string Html = """
@@ -201,6 +203,14 @@ internal static class WorkflowStudioPage
   .bubble-agent code { font-family:var(--mono); font-size:12.5px; background:var(--panel-2); border:1px solid var(--border-soft); border-radius:5px; padding:1px 5px; }
   .stream-cursor { display:inline-block; width:7px; height:15px; vertical-align:-2px; margin-left:2px; background:var(--accent); animation:blink 1s steps(2) infinite; border-radius:1px; }
   @keyframes blink { 50% { opacity:0; } }
+  .agent-working { margin:0; }
+
+  /* in-flight step / status activity (live chat run) */
+  .step-activity { display:flex; flex-direction:column; gap:6px; margin:4px 0 13px; }
+  .step-activity .sa-row { display:inline-flex; align-items:center; gap:8px; font-size:12.5px; color:var(--muted); }
+  .step-activity .sa-label { font-family:var(--mono); font-size:11.5px; color:var(--muted); }
+  .step-activity .spin { width:11px; height:11px; border-radius:50%; border:1.6px solid color-mix(in oklab,var(--run) 35%,transparent); border-top-color:var(--run); animation:spin .7s linear infinite; flex:0 0 auto; }
+  .step-activity .sa-ok { color:var(--ok); display:inline-flex; flex:0 0 auto; }
 
   /* tool-call block (observatory) */
   .toolcall { margin:13px 0; border:1px solid var(--border); border-radius:var(--r); background:var(--panel); overflow:hidden; }
@@ -433,11 +443,13 @@ internal static class WorkflowStudioPage
 
 <script>
 /* ===========================================================================
-   数据契约（§7）——本页为视觉稿，用真实字段名 + 合理示例数据。
-   接真实前端时：
-     - chat 走 SSE：/api/studio/chat（text_message_content / tool_call_* / usage / run_*）
-     - GET /api/studio/context → {scopeId, scopeResolved, scopeSource}
-     - 会话↔产物关联由前端本地维护（这里用 SESSIONS 常量模拟）
+   数据契约（Increment 2a，已接真实后端）：
+     - chat 走 SSE：POST /api/chat（runFinished / usage / aevatar.run.context /
+       aevatar.step.* / aevatar.raw.observed[RoleChatSessionCompleted|RoleReplyRecorded]）
+     - GET /api/studio/context → {scopeId, scopeResolved, scopeSource}（scope chip）
+     - GET /api/schedules → {items:[...]}（Schedules 卡，~3s 轮询）
+     - 会话↔产物关联由前端在 localStorage 本地维护（aevatar-studio:sessions）
+   右侧 workflow 图 / Team / Service 卡为 Increment 2b 待接，本增量显示诚实空态。
    动作（写 workflow / 发布 / 建 team / draft-run / 配 cron）全部由 agent 在对话里用工具完成，
    UI 仅以只读卡片/面板反映状态——本页不出现这些动作按钮。
    =========================================================================== */
@@ -527,134 +539,208 @@ async function api(path){
 function signOut(){ clearToken(); beginLogin(); }
 function signOutSilent(){ clearToken(); state.signedIn = false; render(); }
 
-const STUDIO_CONTEXT = { scopeId:"scope_alice_personal", scopeResolved:true, scopeSource:"nyxid" };
-const ACCOUNT = { label:"alice@example.com" };
-const NOW = "2026-06-23T03:05:00Z";   // 快照参考时刻（今天 2026-06-23），相对时间据此计算
 const OBS = "/workflow/observatory";   // 运行观测台路由
 
-/* Account label shown in the top-bar chip: decoded from the signed-in identity when
-   available, falling back to the mock constant. (Scope chip stays mock this increment.)
-   Declared AFTER ACCOUNT so its initializer does not hit ACCOUNT's TDZ. */
-let accountLabel = ACCOUNT.label;
+/* Account label shown in the top-bar chip: decoded from the signed-in identity once
+   available; until then we show a neutral placeholder. */
+let accountLabel = "已登录";
 
-/* ---- 工作流图：tech-news-digest（6 节点）---- */
-const WF_TECH = {
-  name:"tech-news-digest",
-  nodes:[
-    { nodeId:"fetch_rss",     nodeType:"tool",        category:"integration", label:"抓取科技源",   stepId:"s1", x:40,   y:230 },
-    { nodeId:"foreach_item",  nodeType:"foreach",     category:"composition", label:"遍历每条新闻", stepId:"s2", x:360,  y:230 },
-    { nodeId:"summarize",     nodeType:"llm",         category:"ai",          label:"逐条摘要",     stepId:"s3", x:440,  y:40  },
-    { nodeId:"rank_filter",   nodeType:"conditional", category:"control",     label:"按热度筛选",   stepId:"s4", x:760,  y:230 },
-    { nodeId:"compose_digest",nodeType:"llm",         category:"ai",          label:"编排中文日报", stepId:"s5", x:1080, y:230 },
-    { nodeId:"deliver",       nodeType:"tool",        category:"integration", label:"投递日报",     stepId:"s6", x:1400, y:230 }
-  ],
-  edges:[
-    { edgeId:"e1", fromNodeId:"fetch_rss",      toNodeId:"foreach_item",   edgeType:"NEXT" },
-    { edgeId:"e2", fromNodeId:"foreach_item",   toNodeId:"summarize",      edgeType:"CONTAINS_STEP" },
-    { edgeId:"e3", fromNodeId:"foreach_item",   toNodeId:"rank_filter",    edgeType:"NEXT" },
-    { edgeId:"e4", fromNodeId:"rank_filter",    toNodeId:"compose_digest", edgeType:"NEXT", branchKey:"selected" },
-    { edgeId:"e5", fromNodeId:"compose_digest", toNodeId:"deliver",        edgeType:"NEXT" }
-  ]
-};
-// 不同阶段的节点状态映射
-const NODE_STATES = {
-  authored:{ fetch_rss:"ready", foreach_item:"ready", summarize:"ready", rank_filter:"ready", compose_digest:"ready", deliver:"ready" },
-  running: { fetch_rss:"done", foreach_item:"done", summarize:"done", rank_filter:"current", compose_digest:"pending", deliver:"pending" },
-  done:    { fetch_rss:"done", foreach_item:"done", summarize:"done", rank_filter:"done", compose_digest:"done", deliver:"done" }
-};
+/* ===========================================================================
+   Live data layer (Increment 2a) — replaces the in-page mock constants.
+     - Scope chip   ← GET /api/studio/context
+     - Chat (core)  ← POST /api/chat (SSE), streamed per-frame below
+     - Sessions     ← localStorage (this page owns conversation↔artifact correlation)
+     - Schedules    ← GET /api/schedules (polled while signed in)
+   The right-pane workflow graph / Team / Service cards are deferred (Increment 2b)
+   and render honest empty states for now — no fake data.
+   =========================================================================== */
 
-/* ---- 完整对话（tech 会话）：每条 agent 消息由 blocks 组成 ---- */
-const J = (o) => JSON.stringify(o, null, 2);
-const CONVO = [
-  { role:"user", text:"帮我做个每天汇总科技新闻的 workflow，每天早上 9 点把当天的科技要闻整理成一份中文日报。" },
-  { role:"agent", produces:[], usage:{promptTokens:512, completionTokens:96, totalTokens:608, model:"claude-opus", cost:0.004, latencyMs:1840}, blocks:[
-    { t:"text", v:"好的。我先在技能市场上找找可复用的抓取与摘要技能，再把它们组装成一条 workflow。" },
-    { t:"tool", call:{ toolName:"ornn_search_skills", callId:"call_8f21", status:"ok",
-        args:J({ query:"news rss fetch summarize", tags:["aevatar"], take:5 }),
-        result:J({ matches:[ {slug:"rss_fetch", score:0.91}, {slug:"llm_summarize", score:0.88}, {slug:"html_clean", score:0.71} ] }) } },
-    { t:"text", v:"找到了 `rss_fetch` 和 `llm_summarize`，足够覆盖抓取和摘要。开始装配 workflow。" }
-  ]},
-  { role:"agent", produces:["workflow"], usage:{promptTokens:1340, completionTokens:402, totalTokens:1742, model:"claude-opus", cost:0.011, latencyMs:5210}, blocks:[
-    { t:"tool", call:{ toolName:"use_skill", callId:"call_9a02", status:"ok",
-        args:J({ skill:"rss_fetch", as:"node", nodeId:"fetch_rss" }),
-        result:J({ ok:true, nodeType:"tool" }) } },
-    { t:"tool", call:{ toolName:"save_workflow", callId:"call_9a07", status:"ok",
-        args:J({ name:"tech-news-digest", entry:"fetch_rss" }),
-        result:J({ workflowId:"wf_tech_5c1", nodes:6, edges:5, valid:true }) } },
-    { t:"text", v:"workflow `tech-news-digest` 已生成，共 6 个节点。右侧拓扑图已更新——可以缩放/平移查看。" }
-  ]},
-  { role:"agent", produces:["service"], usage:{promptTokens:880, completionTokens:150, totalTokens:1030, model:"claude-opus", cost:0.006, latencyMs:3120}, blocks:[
-    { t:"text", v:"接着把它发布成可调用的 service，并注册到 NyxID。" },
-    { t:"tool", call:{ toolName:"ornn_publish_skill", callId:"call_b110", status:"ok",
-        args:J({ target:"workflow:tech-news-digest", visibility:"scope" }),
-        result:J({ serviceSlug:"tech-news-digest-svc", nyx:"pending" }) } },
-    { t:"text", v:"发布请求已提交，NyxID 注册中（通常几秒完成）。" }
-  ]},
-  { role:"agent", produces:["draftrun"], usage:{promptTokens:760, completionTokens:120, totalTokens:880, model:"claude-opus", cost:0.005, latencyMs:2600}, blocks:[
-    { t:"text", v:"先跑一次 dry-run 验证流程是否通畅。" },
-    { t:"tool", call:{ toolName:"draft_run", callId:"call_c220", status:"ok",
-        args:J({ workflowId:"wf_tech_5c1", input:{ sources:["hn","36kr"] } }),
-        result:J({ runId:"run_d3f1a2", status:"submitted", threadId:"th_71b" }) } },
-    { t:"text", v:"dry-run 已提交（runId `run_d3f1a2`）。到**运行观测台**可以看时间线和拓扑。" }
-  ]},
-  { role:"agent", produces:["team"], usage:{promptTokens:1020, completionTokens:240, totalTokens:1260, model:"claude-opus", cost:0.008, latencyMs:4400}, blocks:[
-    { t:"text", v:"现在建一个 team，把这条 workflow 作为入口 member 绑进去。" },
-    { t:"tool", call:{ toolName:"create_team", callId:"call_d301", status:"ok",
-        args:J({ displayName:"科技日报团队", description:"每日科技要闻自动汇总" }),
-        result:J({ teamId:"team_77af" }) } },
-    { t:"tool", call:{ toolName:"create_member", callId:"call_d305", status:"ok",
-        args:J({ displayName:"digest-writer", implementationKind:"workflow" }),
-        result:J({ memberId:"mem_12c", binding:"pending" }) } },
-    { t:"tool", call:{ toolName:"bind_member", callId:"call_d309", status:"ok",
-        args:J({ memberId:"mem_12c", workflow:"tech-news-digest" }),
-        result:J({ status:"pending", revisions:[] }) } },
-    { t:"text", v:"member `digest-writer` 正在绑定 workflow（异步，通常几秒完成）。绑定成功后我会设它为入口。" }
-  ]},
-  { role:"agent", produces:["teamdone"], usage:{promptTokens:540, completionTokens:80, totalTokens:620, model:"claude-opus", cost:0.004, latencyMs:2100}, blocks:[
-    { t:"tool", call:{ toolName:"set_entry_member", callId:"call_e410", status:"ok",
-        args:J({ teamId:"team_77af", memberId:"mem_12c" }),
-        result:J({ entryMemberId:"mem_12c" }) } },
-    { t:"text", v:"绑定完成，并已设为入口 member。团队就绪。" }
-  ]},
-  { role:"agent", produces:["schedule"], usage:{promptTokens:690, completionTokens:160, totalTokens:850, model:"claude-opus", cost:0.005, latencyMs:2900}, blocks:[
-    { t:"text", v:"最后配一个每天早上 9 点的定时任务。" },
-    { t:"tool", call:{ toolName:"create_schedule", callId:"call_f520", status:"ok",
-        args:J({ service:"tech-news-digest-svc", cronExpression:"0 0 9 * * *", timezone:"Asia/Shanghai", displayName:"每日 09:00 科技日报" }),
-        result:J({ scheduleId:"sch_9a1", enabled:true, nextFireAt:"2026-06-24T01:00:00Z" }) } },
-    { t:"text", v:"定时任务已创建：每天 09:00（Asia/Shanghai）触发，下一次在明早 9 点。整条流水线完成 ✅" }
-  ]},
-  { role:"user", text:"定时任务最近跑得怎么样？" },
-  { role:"agent", produces:["schedrefresh"], usage:{promptTokens:430, completionTokens:140, totalTokens:570, model:"claude-opus", cost:0.004, latencyMs:1700}, blocks:[
-    { t:"tool", call:{ toolName:"list_schedules", callId:"call_1630", status:"ok",
-        args:J({ workflowId:"wf_tech_5c1" }),
-        result:J({ schedules:[
-          { scheduleId:"sch_9a1", fireCount:5, failureCount:0, lastFireAt:"2026-06-23T01:00:00Z" },
-          { scheduleId:"sch_4b7", fireCount:5, failureCount:1, lastFireAt:"2026-06-23T01:30:12Z", lastError:"upstream 502 from rss_fetch" }
-        ] }) } },
-    { t:"text", v:"拉到了最近触发记录：主任务连续 5 次成功；补偿任务有 1 次失败（上游 502），已在下一次恢复。详情见右侧 **Schedules** 卡，或到观测台看每次触发的运行。" }
-  ]}
-];
+/* ---- Session persistence (localStorage) -------------------------------- */
+const SESSIONS_KEY = "aevatar-studio:sessions";
+/* Session schema:
+   { id, title, createdAt(ms), updatedAt(ms),
+     messages: [
+       { role:"user", text },
+       { role:"agent", text, status:"working"|"done"|"error",
+         actorId?, error?, usage?:{promptTokens,completionTokens,totalTokens,model,cost,latencyMs},
+         steps:[{stepId,stepType,status:"running"|"done",output?}],
+         toolCalls:[{toolName,callId,argumentsJson}] }
+     ] } */
 
-/* ---- 右侧产物对象（按状态显式给出，便于逐态呈现）---- */
-const SERVICE = { slug:"tech-news-digest-svc", scopeId:"scope_alice_personal", definitionId:"wf_tech_5c1" };
-const TEAM = { teamId:"team_77af", displayName:"科技日报团队", entryMemberId:"mem_12c",
-  members:[ { memberId:"mem_12c", displayName:"digest-writer", implementationKind:"workflow", publishedServiceId:"tech-news-digest-svc" } ] };
-const SCHEDULES_FULL = [
-  { scheduleId:"sch_9a1", displayName:"每日 09:00 科技日报", cronExpression:"0 0 9 * * *", timezone:"Asia/Shanghai", enabled:true,
-    nextFireAt:"2026-06-24T01:00:00Z", lastFireAt:"2026-06-23T01:00:00Z", fireCount:5, failureCount:0, lastError:"" },
-  { scheduleId:"sch_4b7", displayName:"补偿重试 · 09:30", cronExpression:"0 30 9 * * *", timezone:"Asia/Shanghai", enabled:true,
-    nextFireAt:"2026-06-24T01:30:00Z", lastFireAt:"2026-06-23T01:30:12Z", fireCount:5, failureCount:1, lastError:"upstream 502 from rss_fetch" }
-];
+function loadSessions(){
+  try {
+    const raw = localStorage.getItem(SESSIONS_KEY);
+    if(!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch(e){ console.warn("studio: sessions parse failed", e); return []; }
+}
+function saveSessions(){
+  try { localStorage.setItem(SESSIONS_KEY, JSON.stringify(state.sessions)); }
+  catch(e){ console.warn("studio: sessions save failed", e); }
+}
+function newSessionId(){ return "s_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2,7); }
+function makeSession(){ const now=Date.now(); return { id:newSessionId(), title:"新会话", createdAt:now, updatedAt:now, messages:[] }; }
+function activeSession(){ return state.sessions.find(s=>s.id===state.selectedSession) || null; }
+function sessionTitleFrom(text){ const t=(text||"").trim().replace(/\s+/g," "); if(!t) return "新会话"; return t.length>26 ? t.slice(0,26)+"…" : t; }
 
-/* ---- 会话列表 ---- */
-const SESSIONS = [
-  { id:"sess_tech", title:"每日科技新闻日报", updatedAtUtc:"2026-06-23T03:02:00Z", status:"completed",
-    badges:{ wf:true, team:true, svc:true, cron:2 } },
-  { id:"sess_invoice", title:"发票录入助手", updatedAtUtc:"2026-06-22T08:14:00Z", status:"completed",
-    badges:{ wf:true, team:false, svc:true, cron:0 } },
-  { id:"sess_lead", title:"线索补全 · 草稿", updatedAtUtc:"2026-06-21T11:40:00Z", status:"stopped",
-    badges:{ wf:true, team:false, svc:false, cron:0 } }
-];
+/* ---- Chat streaming (POST /api/chat, SSE) ------------------------------ */
+// Reads the response body as a stream, buffers, splits on the SSE record
+// separator (\n\n), and invokes onFrame(parsedJson) per `data:` line.
+async function streamChat(prompt, sessionId, onFrame, signal){
+  const token = getToken(); if(!token) throw new Error("not-authenticated");
+  const body = { prompt, sessionId };
+  if(state.scopeId) body.scopeId = state.scopeId;
+  const res = await fetch("/api/chat", {
+    method:"POST",
+    headers:{ Authorization:"Bearer " + token.access_token, "Content-Type":"application/json", "Accept":"text/event-stream" },
+    body: JSON.stringify(body),
+    signal
+  });
+  if(res.status === 401){ signOutSilent(); throw new Error("unauthorized"); }
+  if(!res.ok || !res.body) throw new Error("chat-http-" + res.status);
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  for(;;){
+    const { value, done } = await reader.read();
+    if(done) break;
+    buf += decoder.decode(value, { stream:true });
+    let sep;
+    while((sep = buf.indexOf("\n\n")) >= 0){
+      const chunk = buf.slice(0, sep);
+      buf = buf.slice(sep + 2);
+      emitSseChunk(chunk, onFrame);
+    }
+  }
+  buf += decoder.decode();
+  if(buf.trim()) emitSseChunk(buf, onFrame);
+}
+function emitSseChunk(chunk, onFrame){
+  // A chunk may contain multiple `data:` lines; join continuation lines per SSE spec.
+  const dataLines = [];
+  for(const line of chunk.split("\n")){
+    if(line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
+  }
+  if(!dataLines.length) return;
+  const payload = dataLines.join("\n");
+  if(payload === "[DONE]") return;
+  let frame;
+  try { frame = JSON.parse(payload); } catch(e){ return; }
+  onFrame(frame);
+}
+
+// Apply one SSE frame to an agent message object (mutates msg in place).
+// Returns true when the run reached a terminal state (finished or errored).
+function applyFrameToMessage(frame, msg){
+  // top-level run completion → final assistant text
+  if(frame.runFinished){
+    const out = frame.runFinished.result && frame.runFinished.result.output;
+    if(typeof out === "string" && out.length) msg.text = out;
+    msg.status = "error" === msg.status ? "error" : "done";
+    return true;
+  }
+  // explicit run error variants
+  if(frame.runError || frame.run_error){
+    const e = frame.runError || frame.run_error;
+    msg.status = "error";
+    msg.error = (e && (e.message || e.error || e.reason)) || "run_error";
+    return true;
+  }
+  // top-level usage frame (often empty {})
+  if(frame.usage && typeof frame.usage === "object"){
+    const u = frame.usage;
+    if(u.totalTokens != null || u.promptTokens != null || u.model || u.cost != null || u.latencyMs != null){
+      msg.usage = {
+        promptTokens: u.promptTokens || 0,
+        completionTokens: u.completionTokens || 0,
+        totalTokens: u.totalTokens || 0,
+        model: u.model || "",
+        cost: u.cost || 0,
+        latencyMs: u.latencyMs || 0
+      };
+    }
+  }
+  // step lifecycle
+  if(frame.stepStarted && frame.stepStarted.stepName){ upsertStep(msg, frame.stepStarted.stepName, "running"); }
+  if(frame.stepFinished && frame.stepFinished.stepName){ upsertStep(msg, frame.stepFinished.stepName, "done"); }
+  // custom frames
+  const custom = frame.custom;
+  if(custom && custom.name){
+    const p = custom.payload || {};
+    if(custom.name === "aevatar.run.context"){ if(p.actorId) msg.actorId = p.actorId; }
+    else if(custom.name === "aevatar.step.request"){ upsertStep(msg, p.stepId || p.stepType || "step", "running", p.stepType); }
+    else if(custom.name === "aevatar.step.completed"){ upsertStep(msg, p.stepId || "step", "done", null, p.output); }
+    else if(custom.name === "aevatar.raw.observed"){
+      const inner = p.payload || {};
+      const url = p.payloadTypeUrl || (inner["@type"] || "");
+      // assistant reply + tool usage live on RoleChatSessionCompleted / RoleReplyRecorded
+      if(url.indexOf("RoleChatSessionCompletedEvent") >= 0 || url.indexOf("WorkflowRoleReplyRecordedEvent") >= 0){
+        if(typeof inner.content === "string" && inner.content.length) msg.text = inner.content;
+        if(Array.isArray(inner.toolCalls)) mergeToolCalls(msg, inner.toolCalls);
+        if(inner.usage && (inner.usage.totalTokens != null)){
+          msg.usage = Object.assign({ promptTokens:0, completionTokens:0, totalTokens:0, model:"", cost:0, latencyMs:0 }, msg.usage || {}, {
+            promptTokens: inner.usage.promptTokens || 0,
+            completionTokens: inner.usage.completionTokens || 0,
+            totalTokens: inner.usage.totalTokens || 0
+          });
+        }
+      }
+    }
+  }
+  return false;
+}
+function upsertStep(msg, stepId, status, stepType, output){
+  msg.steps = msg.steps || [];
+  let s = msg.steps.find(x=>x.stepId===stepId);
+  if(!s){ s = { stepId, status, stepType: stepType||"" }; msg.steps.push(s); }
+  if(status) s.status = status;
+  if(stepType) s.stepType = stepType;
+  if(output != null) s.output = output;
+}
+function mergeToolCalls(msg, calls){
+  msg.toolCalls = msg.toolCalls || [];
+  for(const c of calls){
+    if(!c || !c.toolName) continue;
+    const id = c.callId || (c.toolName + ":" + (msg.toolCalls.length));
+    if(msg.toolCalls.some(x=>x.callId===id)) continue;
+    msg.toolCalls.push({ toolName:c.toolName, callId:id, argumentsJson:c.argumentsJson || c.arguments || "" });
+  }
+}
+
+/* ---- Schedules (GET /api/schedules) ------------------------------------ */
+const TARGET_KIND_LABEL = { 0:"Envelope", 1:"ServiceInvocation" };
+const SCHEDULE_KIND_LABEL = { 0:"Generic", 1:"Workflow", 2:"SkillRunner" };
+function targetKindLabel(k){ return TARGET_KIND_LABEL[k] != null ? TARGET_KIND_LABEL[k] : ("kind " + k); }
+function scheduleKindLabel(k){ return SCHEDULE_KIND_LABEL[k] != null ? SCHEDULE_KIND_LABEL[k] : ("kind " + k); }
+
+async function loadSchedules(){
+  try {
+    const data = await api("/api/schedules?take=50");
+    const items = (data && Array.isArray(data.items)) ? data.items.filter(s=>!s.deleted) : [];
+    const sig = JSON.stringify(items);
+    if(sig !== state.schedulesSig){
+      state.schedules = items;
+      state.schedulesSig = sig;
+      state.schedulesLoaded = true;
+      if(state.signedIn && state.ctxTab==="schedules") render();
+    } else if(!state.schedulesLoaded){
+      state.schedulesLoaded = true;
+    }
+  } catch(e){ /* leave last-known schedules; chip stays as-is */ }
+}
+function startSchedulePolling(){
+  if(state.schedTimer) return;
+  loadSchedules();
+  state.schedTimer = setInterval(()=>{ if(state.signedIn) loadSchedules(); }, 3000);
+}
+
+async function loadContext(){
+  try {
+    const ctx = await api("/api/studio/context");
+    if(ctx){ state.scopeId = ctx.scopeId || ""; state.scopeResolved = !!ctx.scopeResolved; state.scopeSource = ctx.scopeSource || ""; render(); }
+  } catch(e){ /* scope chip falls back to a neutral state */ }
+}
 
 /* ===========================================================================
    工具函数
@@ -662,10 +748,10 @@ const SESSIONS = [
 const $ = (s,r=document)=>r.querySelector(s);
 const el=(t,a={},h)=>{const n=document.createElement(t);for(const k in a){if(k==="class")n.className=a[k];else if(k.startsWith("on")&&typeof a[k]==="function")n.addEventListener(k.slice(2),a[k]);else if(a[k]!=null)n.setAttribute(k,a[k]);}if(h!=null)n.innerHTML=h;return n;};
 const esc=(s)=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-const parseT=(iso)=>Date.parse(iso);
-function nowMs(){ return parseT(NOW); }
-function relPast(iso){ let d=Math.max(0,Math.round((nowMs()-parseT(iso))/1000)); if(d<=1)return"刚刚"; if(d<60)return d+" 秒前"; if(d<3600)return Math.floor(d/60)+" 分钟前"; if(d<86400)return Math.floor(d/3600)+" 小时前"; return Math.floor(d/86400)+" 天前"; }
-function relFuture(iso){ let d=Math.max(0,Math.round((parseT(iso)-nowMs())/1000)); if(d<60)return"即将"; if(d<3600)return"约 "+Math.floor(d/60)+" 分钟后"; if(d<86400)return"约 "+Math.floor(d/3600)+" 小时后"; return"约 "+Math.floor(d/86400)+" 天后"; }
+const parseT=(iso)=>typeof iso==="number"?iso:Date.parse(iso);
+function nowMs(){ return Date.now(); }
+function relPast(iso){ const t=parseT(iso); if(!t&&t!==0||isNaN(t))return"—"; let d=Math.max(0,Math.round((nowMs()-t)/1000)); if(d<=1)return"刚刚"; if(d<60)return d+" 秒前"; if(d<3600)return Math.floor(d/60)+" 分钟前"; if(d<86400)return Math.floor(d/3600)+" 小时前"; return Math.floor(d/86400)+" 天前"; }
+function relFuture(iso){ const t=parseT(iso); if(isNaN(t))return"—"; let d=Math.max(0,Math.round((t-nowMs())/1000)); if(d<60)return"即将"; if(d<3600)return"约 "+Math.floor(d/60)+" 分钟后"; if(d<86400)return"约 "+Math.floor(d/3600)+" 小时后"; return"约 "+Math.floor(d/86400)+" 天后"; }
 function clockUTC(iso){ const m=/T(\d{2}:\d{2})/.exec(iso); return m?m[1]:iso; }
 function initials(s){ return (s||"?").trim().charAt(0).toUpperCase(); }
 
@@ -717,10 +803,19 @@ function catIcon(t){ return t==="llm"?ICON.chat : t==="tool"?ICON.tool : t==="fo
    =========================================================================== */
 const state = {
   signedIn:false,
-  scenario:"full",
   theme: localStorage.getItem("studio-theme") || null,
   expanded:new Set(),       // 展开的 tool-call / card
-  selectedSession:"sess_tech",
+  sessions:[],              // localStorage-backed conversation list (loaded in init)
+  selectedSession:null,     // active session id
+  streaming:false,          // a chat run is in flight
+  abort:null,               // AbortController for the in-flight run
+  scopeId:"",               // live scope (GET /api/studio/context)
+  scopeResolved:false,
+  scopeSource:"",
+  schedules:[],             // live schedules (GET /api/schedules)
+  schedulesSig:"",
+  schedulesLoaded:false,
+  schedTimer:null,
   ctxTab:"graph",           // graph | workflow | team | service | schedules
   ctxW: (parseInt(localStorage.getItem("studio-ctxw"),10) || null),  // 用户拖拽过的右栏宽度（px）
   zoom:1, panX:0, panY:0
@@ -728,27 +823,15 @@ const state = {
 function applyTheme(){ if(state.theme==="light"||state.theme==="dark")document.documentElement.setAttribute("data-theme",state.theme); else document.documentElement.removeAttribute("data-theme"); }
 function effDark(){ if(state.theme)return state.theme==="dark"; return !window.matchMedia||!window.matchMedia("(prefers-color-scheme: light)").matches; }
 
-/* ---- 场景定义：每个场景描述本会话进行到哪、右侧产物状态 ---- */
-const SCN = {
-  "no-sessions": { sessions:false },
-  "new-session": { session:"new", end:0, intro:true },
-  "streaming":   { session:"tech", end:2, streamLast:true, graph:null },
-  "tool-ok":     { session:"tech", end:3, graph:"authored", arts:{wf:"idle"} },
-  "tool-failed": { session:"tech", end:4, graph:"authored", failLastTool:true, arts:{wf:"idle", svcFail:true} },
-  "workflow":    { session:"tech", end:3, graph:"authored", arts:{wf:"idle"} },
-  "publishing":  { session:"tech", end:4, graph:"authored", arts:{wf:"idle", svc:"pending"} },
-  "draftrun":    { session:"tech", end:5, graph:"running", arts:{wf:"running", svc:"registered"} },
-  "binding":     { session:"tech", end:6, graph:"done", arts:{wf:"completed", svc:"registered", team:"pending"} },
-  "scheduled":   { session:"tech", end:8, graph:"done", arts:{wf:"completed", svc:"registered", team:"bound", sched:"fresh"} },
-  "sched-status":{ session:"tech", end:10, graph:"done", arts:{wf:"completed", svc:"registered", team:"bound", sched:"full"} },
-  "full":        { session:"tech", end:10, graph:"done", arts:{wf:"completed", svc:"registered", team:"bound", sched:"full"} },
-  "chat-error":  { session:"tech", end:5, graph:"authored", chatError:true, arts:{wf:"idle", svc:"registered"} }
-};
-function scn(){ return SCN[state.scenario] || SCN.full; }
-
 /* ===========================================================================
    Topbar
    =========================================================================== */
+function scopeChipHtml(){
+  if(state.scopeId){
+    return `<div class="scope-chip" title="scope 已解析（来源：${esc(state.scopeSource||"")}）">${ICON.check}<span>scope</span><span class="sid">${esc(state.scopeId)}</span></div>`;
+  }
+  return `<div class="scope-chip" title="正在解析 scope">${ICON.spark}<span>scope</span><span class="sid">解析中…</span></div>`;
+}
 function renderTopbar(){
   const bar=el("header",{class:"topbar",role:"banner"});
   bar.innerHTML=`
@@ -757,7 +840,7 @@ function renderTopbar(){
       <div class="brand-mark" aria-hidden="true">${ICON.studio}</div>
       <div><div class="brand-name">工作室 <span class="brand-sub">Workflow Studio</span></div></div>
     </div>
-    ${state.signedIn?`<div class="scope-chip" title="scope 已解析（来源：${STUDIO_CONTEXT.scopeSource}）">${ICON.check}<span>scope</span><span class="sid">${esc(STUDIO_CONTEXT.scopeId)}</span></div>`:""}
+    ${state.signedIn?scopeChipHtml():""}
     <div class="spacer"></div>
     ${state.signedIn?`<a class="obs-link" href="${OBS}" title="跳转到运行观测台（只读查看运行结果）">${ICON.ext}<span>运行观测台</span></a>`:""}`;
   const tbtn=el("button",{class:"iconbtn",id:"themeBtn","aria-label":"切换主题",title:"切换主题"});
@@ -778,68 +861,101 @@ function renderTopbar(){
 /* ===========================================================================
    Left — sessions
    =========================================================================== */
+function sessionStatus(se){
+  const last = se.messages && se.messages.length ? se.messages[se.messages.length-1] : null;
+  if(!last) return "unknown";
+  if(last.role==="agent"){
+    if(last.status==="working") return "running";
+    if(last.status==="error") return "failed";
+    return "completed";
+  }
+  return "running";
+}
 function renderSessions(){
   const pane=el("aside",{class:"sess-pane","aria-label":"会话列表"});
   const head=el("div",{class:"sess-head"});
   const nb=el("button",{class:"new-sess"},`${ICON.plus}<span>新建会话</span>`);
-  nb.addEventListener("click",()=>{ state.scenario="new-session"; render(); });
+  nb.addEventListener("click",()=>{ createSession(); });
   head.appendChild(nb);
   pane.appendChild(head);
 
   const list=el("div",{class:"sess-list scroll",role:"list"});
-  const s=scn();
-  if(s.sessions===false){
+  if(!state.sessions.length){
     list.appendChild(el("div",{class:"empty"},`<div class="ic" aria-hidden="true">${ICON.chat}</div><div class="et">还没有会话</div><div class="es">开始对话来创建你的第一个工作流。</div>`));
     pane.appendChild(list); return pane;
   }
-  const rows = s.session==="new" ? [{id:"sess_new",title:"新会话",updatedAtUtc:NOW,status:"unknown",badges:{}}, ...SESSIONS] : SESSIONS;
-  const selId = s.session==="new" ? "sess_new" : "sess_tech";
+  const rows = state.sessions.slice().sort((a,b)=>(b.updatedAt||0)-(a.updatedAt||0));
   rows.forEach(se=>{
-    const cur = se.id===selId;
+    const cur = se.id===state.selectedSession;
     const row=el("button",{class:"sess-row",role:"listitem","aria-current":String(cur)});
-    const b=se.badges||{};
-    const badges=[];
-    if(b.wf)badges.push('<span class="pbadge wf">WF</span>');
-    if(b.team)badges.push('<span class="pbadge team">TEAM</span>');
-    if(b.svc)badges.push('<span class="pbadge svc">SVC</span>');
-    if(b.cron)badges.push(`<span class="pbadge cron">${ICON.clock.replace('width="14" height="14"','width="10" height="10"')} ${b.cron}</span>`);
     row.innerHTML=`
-      <span class="dot s-${se.status}" aria-hidden="true"></span>
-      <span class="st">${esc(se.title)}</span>
-      <span class="sm">${relPast(se.updatedAtUtc)}</span>
-      ${badges.length?`<span class="sess-badges">${badges.join("")}</span>`:""}
-      <span class="sess-actions"><button title="重命名" aria-label="重命名会话">${ICON.edit}</button><button class="del" title="删除" aria-label="删除会话">${ICON.trash}</button></span>`;
-    row.addEventListener("click",(e)=>{ if(e.target.closest(".sess-actions"))return; document.body.classList.remove("nav-open"); });
+      <span class="dot s-${sessionStatus(se)}" aria-hidden="true"></span>
+      <span class="st">${esc(se.title||"新会话")}</span>
+      <span class="sm">${relPast(se.updatedAt)}</span>
+      <span class="sess-actions"><button class="ren" title="重命名" aria-label="重命名会话">${ICON.edit}</button><button class="del" title="删除" aria-label="删除会话">${ICON.trash}</button></span>`;
+    row.addEventListener("click",(e)=>{
+      if(e.target.closest(".sess-actions")) return;
+      if(state.streaming) return;
+      state.selectedSession = se.id;
+      document.body.classList.remove("nav-open");
+      render();
+    });
+    const ren=row.querySelector(".ren");
+    if(ren) ren.addEventListener("click",(e)=>{ e.stopPropagation(); renameSession(se.id); });
+    const del=row.querySelector(".del");
+    if(del) del.addEventListener("click",(e)=>{ e.stopPropagation(); deleteSession(se.id); });
     list.appendChild(row);
   });
   pane.appendChild(list);
   return pane;
 }
 
+function createSession(){
+  if(state.streaming) return;
+  const s = makeSession();
+  state.sessions.push(s);
+  state.selectedSession = s.id;
+  saveSessions();
+  document.body.classList.remove("nav-open");
+  render();
+  const ta=$("#composerInput"); if(ta) ta.focus();
+}
+function renameSession(id){
+  const s = state.sessions.find(x=>x.id===id); if(!s) return;
+  const next = window.prompt("重命名会话", s.title||"新会话");
+  if(next==null) return;
+  s.title = next.trim() || s.title;
+  s.updatedAt = Date.now();
+  saveSessions();
+  render();
+}
+function deleteSession(id){
+  if(state.streaming) return;
+  const s = state.sessions.find(x=>x.id===id); if(!s) return;
+  if(!window.confirm("删除会话「" + (s.title||"新会话") + "」？此操作无法撤销。")) return;
+  state.sessions = state.sessions.filter(x=>x.id!==id);
+  if(state.selectedSession===id) state.selectedSession = state.sessions.length ? state.sessions[0].id : null;
+  saveSessions();
+  render();
+}
+
 /* ===========================================================================
    Center — chat
    =========================================================================== */
-let streamTimer=null;
 function renderChat(){
   const pane=el("section",{class:"chat-pane","aria-label":"对话"});
   const scrollArea=el("div",{class:"chat-scroll scroll",id:"chatScroll"});
   const inner=el("div",{class:"chat-inner"});
-  const s=scn();
+  const sess=activeSession();
 
-  const isEmpty = s.sessions===false || (s.session==="new");
-  if(isEmpty){
+  if(!sess || !sess.messages.length){
     inner.appendChild(renderWelcome());
   } else {
-    const msgs = CONVO.slice(0, s.end);
-    msgs.forEach((m,i)=>{
-      const isLastAgent = (i===msgs.length-1) && m.role==="agent";
-      inner.appendChild(renderMessage(m, isLastAgent && s.streamLast, s.failLastTool && isLastAgent));
-    });
-    if(s.chatError) inner.appendChild(renderChatError());
+    sess.messages.forEach((m)=>{ inner.appendChild(renderMessage(m)); });
   }
   scrollArea.appendChild(inner);
   pane.appendChild(scrollArea);
-  pane.appendChild(renderComposer(s.streamLast));
+  pane.appendChild(renderComposer());
   return pane;
 }
 
@@ -859,47 +975,67 @@ function renderWelcome(){
   return w;
 }
 
-function renderMessage(m, streamLast, failLast){
+function renderMessage(m){
   const wrap=el("div",{class:"msg "+(m.role==="user"?"user":"agent")});
-  wrap.innerHTML=`<div class="m-avatar" aria-hidden="true">${m.role==="user"?initials(ACCOUNT.label):ICON.studio}</div>`;
+  wrap.innerHTML=`<div class="m-avatar" aria-hidden="true">${m.role==="user"?initials(accountLabel):ICON.studio}</div>`;
   const body=el("div",{class:"m-body"});
   body.appendChild(el("div",{class:"m-name"}, m.role==="user"?`<b>你</b>`:`<b>aevatar</b> · 工作室 agent`));
   if(m.role==="user"){
     body.appendChild(el("div",{class:"bubble-user"}, esc(m.text)));
   } else {
+    const working = m.status==="working";
     const agentBox=el("div",{class:"bubble-agent"});
-    const blocks=m.blocks||[];
-    if(streamLast){
-      // 流式生成中：首段文本逐字出现（打字光标）+ 首个工具调用「进行中」（spinner），后续内容尚未到达
-      let streamed=false, toolShown=false;
-      for(const blk of blocks){
-        if(blk.t==="text" && !streamed){
-          const p=el("p",{}); p.setAttribute("data-stream", encodeURIComponent(blk.v)); p.innerHTML='<span class="stream-cursor"></span>';
-          agentBox.appendChild(p); streamed=true;
-        } else if(blk.t==="tool" && !toolShown){
-          agentBox.appendChild(renderToolCall(blk.call, true)); toolShown=true; break;
-        }
-      }
-    } else {
-      const firstToolIdx = blocks.findIndex(x=>x.t==="tool");
-      blocks.forEach((blk,bi)=>{
-        if(blk.t==="text"){ agentBox.appendChild(el("p",{}, mdInline(blk.v))); }
-        else if(blk.t==="tool"){
-          let call=blk.call;
-          if(failLast && bi===firstToolIdx){ call={...call, status:"failed", result:"", error:"NyxID 注册失败：registry timeout (504)"}; }
-          agentBox.appendChild(renderToolCall(call));
-        }
-      });
+    // tool calls observed during the run (reuse the observatory .toolcall component)
+    (m.toolCalls||[]).forEach(tc=>{ agentBox.appendChild(renderToolCall({ toolName:tc.toolName, callId:tc.callId, status:working?"running":"ok", args:tc.argumentsJson||"", result:"" })); });
+    // in-flight step/status activity
+    if(working) agentBox.appendChild(renderStepActivity(m));
+    // assistant text (whole output; arrives via runFinished / RoleReplyRecorded)
+    if(m.text){
+      mdBlocks(m.text).forEach(p=>agentBox.appendChild(p));
+    } else if(working && !(m.toolCalls||[]).length){
+      agentBox.appendChild(el("p",{class:"agent-working"},`<span class="stream-cursor"></span>`));
     }
     body.appendChild(agentBox);
-    if(m.usage && !streamLast){
+    if(m.status==="error"){ body.appendChild(renderChatError(m)); }
+    if(m.usage){
       const u=m.usage;
-      body.appendChild(el("div",{class:"usage-line"},
-        `<span><b>${u.totalTokens.toLocaleString()}</b> tokens</span><span>$${u.cost.toFixed(3)}</span><span>${u.model}</span><span>${u.latencyMs} ms</span>`));
+      const parts=[`<span><b>${(u.totalTokens||0).toLocaleString()}</b> tokens</span>`];
+      if(u.promptTokens||u.completionTokens) parts.push(`<span>${(u.promptTokens||0).toLocaleString()} in · ${(u.completionTokens||0).toLocaleString()} out</span>`);
+      if(u.cost) parts.push(`<span>$${Number(u.cost).toFixed(3)}</span>`);
+      if(u.model) parts.push(`<span>${esc(u.model)}</span>`);
+      if(u.latencyMs) parts.push(`<span>${u.latencyMs} ms</span>`);
+      body.appendChild(el("div",{class:"usage-line"}, parts.join("")));
+    }
+    if(m.actorId && m.status!=="working"){
+      body.appendChild(el("a",{class:"deeplink",style:"margin-top:6px",href:OBS,title:"到运行观测台查看本次运行（run: "+esc(m.actorId)+"）"},`${ICON.ext}<span>到运行观测台查看本次运行</span>`));
     }
   }
   wrap.appendChild(body);
   return wrap;
+}
+
+// 渲染助手段落（按空行分段；行内支持 `code` 与 **bold**）
+function mdBlocks(text){
+  return String(text).split(/\n{2,}/).filter(s=>s.trim().length).map(seg=>{
+    const p=el("p",{}); p.innerHTML=mdInline(seg).replace(/\n/g,"<br>"); return p;
+  });
+}
+
+// 运行中的轻量步骤/状态活动条
+function renderStepActivity(m){
+  const box=el("div",{class:"step-activity"});
+  const steps=m.steps||[];
+  if(!steps.length){
+    box.innerHTML=`<span class="sa-row"><span class="spin"></span><span class="sa-label">正在处理…</span></span>`;
+    return box;
+  }
+  box.innerHTML = steps.map(s=>{
+    const running = s.status!=="done";
+    const ic = running ? `<span class="spin"></span>` : `<span class="sa-ok">${ICON.check}</span>`;
+    const label = (s.stepType?esc(s.stepType)+" · ":"") + esc(s.stepId);
+    return `<span class="sa-row">${ic}<span class="sa-label">${label}</span></span>`;
+  }).join("");
+  return box;
 }
 
 function renderToolCall(tc, forceRunning){
@@ -926,7 +1062,7 @@ function renderToolCall(tc, forceRunning){
     const f=el("div",{}); f.innerHTML=`<div class="tc-field-head"><span class="tc-field-label">result</span></div>`;
     f.appendChild(el("pre",{class:"json"},`<span class="j-null">… 等待返回</span>`));
     body.appendChild(f);
-  } else {
+  } else if(tc.result){
     body.appendChild(jsonField("result", tc.result));
   }
   box.appendChild(body);
@@ -943,24 +1079,30 @@ function jsonField(label,raw){
   return f;
 }
 
-function renderChatError(){
+function renderChatError(m){
   const e=el("div",{class:"chat-error",role:"alert"});
-  e.innerHTML=`${ICON.alert}<div><div class="ce-l">生成出错 · run_error</div><div class="ce-m">与 agent 的连接中断（code: stream_closed）。已收到的内容已保留，可重试这条消息。</div></div>`;
-  const r=el("button",{class:"ce-retry"},`${ICON.retry}<span>重试</span>`);
-  e.querySelector("div").appendChild(r);
+  const detail = (m && m.error) ? esc(m.error) : "与 agent 的连接中断。已收到的内容已保留，可重试这条消息。";
+  e.innerHTML=`${ICON.alert}<div><div class="ce-l">生成出错 · run_error</div><div class="ce-m">${detail}</div></div>`;
+  if(!state.streaming){
+    const r=el("button",{class:"ce-retry"},`${ICON.retry}<span>重试</span>`);
+    r.addEventListener("click",()=>{ retryLastRun(); });
+    e.querySelector("div").appendChild(r);
+  }
   return e;
 }
 
-function renderComposer(streaming){
+function renderComposer(){
   const wrap=el("div",{class:"composer-wrap"});
   const c=el("div",{class:"composer"});
   const box=el("div",{class:"composer-box"});
   const ta=el("textarea",{id:"composerInput",rows:"1",placeholder:"描述你想要的工作流，或问问当前编排状态…","aria-label":"消息输入框"});
+  if(state.streaming) ta.setAttribute("disabled","true");
   ta.addEventListener("input",()=>{ ta.style.height="auto"; ta.style.height=Math.min(ta.scrollHeight,140)+"px"; const sb=$("#sendBtn"); if(sb)sb.disabled=!ta.value.trim(); });
+  ta.addEventListener("keydown",(e)=>{ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); if(!state.streaming) sendComposer(); } });
   box.appendChild(ta);
-  if(streaming){
+  if(state.streaming){
     const stop=el("button",{class:"stop-btn",type:"button"},`${ICON.stop}<span>停止生成</span>`);
-    stop.addEventListener("click",()=>{ if(streamTimer){clearInterval(streamTimer);streamTimer=null;} document.querySelectorAll(".stream-cursor").forEach(n=>n.remove()); const t=document.querySelector("[data-stream]"); if(t){t.innerHTML=mdInline(decodeURIComponent(t.getAttribute("data-stream")));t.removeAttribute("data-stream");} stop.replaceWith(makeSend(ta)); });
+    stop.addEventListener("click",()=>{ stopRun(); });
     box.appendChild(stop);
   } else {
     box.appendChild(makeSend(ta));
@@ -972,26 +1114,77 @@ function renderComposer(streaming){
 }
 function makeSend(ta){
   const sb=el("button",{class:"send-btn",id:"sendBtn",type:"button","aria-label":"发送",disabled:"true"},ICON.send);
+  sb.addEventListener("click",()=>{ sendComposer(); });
   return sb;
 }
 
-/* typewriter for streaming scenario */
-function startStream(){
-  if(streamTimer){clearInterval(streamTimer);streamTimer=null;}
-  const target=document.querySelector("[data-stream]");
-  if(!target)return;
-  const full=decodeURIComponent(target.getAttribute("data-stream"));
-  const reduce=window.matchMedia&&window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  if(reduce){ target.innerHTML=mdInline(full)+'<span class="stream-cursor"></span>'; return; }
-  let i=0;
-  streamTimer=setInterval(()=>{
-    i+=2;
-    const slice=full.slice(0,i);
-    target.innerHTML=mdInline(slice)+'<span class="stream-cursor"></span>';
-    const sc=$("#chatScroll"); if(sc)sc.scrollTop=sc.scrollHeight;
-    if(i>=full.length){ clearInterval(streamTimer); streamTimer=null; }
-  },36);
+/* ---- send / stop / retry (live chat) ----------------------------------- */
+function sendComposer(){
+  const ta=$("#composerInput");
+  const text = ta ? ta.value.trim() : "";
+  if(!text || state.streaming) return;
+  let sess = activeSession();
+  if(!sess){ sess = makeSession(); state.sessions.push(sess); state.selectedSession = sess.id; }
+  sess.messages.push({ role:"user", text });
+  if(!sess.title || sess.title==="新会话") sess.title = sessionTitleFrom(text);
+  sess.updatedAt = Date.now();
+  saveSessions();
+  runChat(sess, text);
 }
+function retryLastRun(){
+  const sess = activeSession(); if(!sess || state.streaming) return;
+  // drop the failed agent message, re-run from the preceding user prompt
+  if(sess.messages.length && sess.messages[sess.messages.length-1].role==="agent") sess.messages.pop();
+  const lastUser = [...sess.messages].reverse().find(x=>x.role==="user");
+  if(!lastUser){ render(); return; }
+  saveSessions();
+  runChat(sess, lastUser.text);
+}
+function runChat(sess, prompt){
+  const agent = { role:"agent", text:"", status:"working", steps:[], toolCalls:[] };
+  sess.messages.push(agent);
+  state.streaming = true;
+  state.abort = new AbortController();
+  render();
+  scrollChatToBottom();
+  let rafPending = false;
+  const scheduleRender = ()=>{ if(rafPending) return; rafPending = true; requestAnimationFrame(()=>{ rafPending=false; if(state.streaming){ patchActiveAgent(agent); scrollChatToBottom(); } }); };
+  streamChat(prompt, sess.id, (frame)=>{
+    const terminal = applyFrameToMessage(frame, agent);
+    sess.updatedAt = Date.now();
+    if(terminal){ finishRun(sess, agent); } else { scheduleRender(); }
+  }, state.abort.signal)
+    .then(()=>{ if(state.streaming){ if(agent.status==="working") agent.status = agent.text ? "done" : "error"; if(agent.status==="error" && !agent.error) agent.error="连接结束但未收到完整结果。"; finishRun(sess, agent); } })
+    .catch((err)=>{
+      if(err && err.name==="AbortError"){ agent.status="done"; if(!agent.text) agent.text="（已停止生成）"; }
+      else { agent.status="error"; agent.error=(err&&err.message)?String(err.message):"请求失败"; }
+      finishRun(sess, agent);
+    });
+}
+function finishRun(sess, agent){
+  if(!state.streaming) return;
+  state.streaming = false;
+  state.abort = null;
+  sess.updatedAt = Date.now();
+  saveSessions();
+  render();
+  scrollChatToBottom();
+}
+function stopRun(){
+  if(state.abort){ try{ state.abort.abort(); }catch(_){ } }
+}
+// In-place DOM patch of the in-flight agent message (avoids full re-render churn while streaming).
+function patchActiveAgent(agent){
+  const sess = activeSession(); if(!sess) return;
+  if(sess.messages[sess.messages.length-1] !== agent) return;
+  const scroll = $("#chatScroll"); if(!scroll) return;
+  const msgs = scroll.querySelectorAll(".msg.agent");
+  const node = msgs[msgs.length-1];
+  if(!node) return;
+  const fresh = renderMessage(agent);
+  node.replaceWith(fresh);
+}
+function scrollChatToBottom(){ const sc=$("#chatScroll"); if(sc) sc.scrollTop=sc.scrollHeight; }
 
 /* ===========================================================================
    Right — context (graph + artifact cards)
@@ -1002,16 +1195,11 @@ function renderContext(){
   attachResizer(rez);
   pane.appendChild(rez);
 
-  const s=scn();
-  const hasWF = s.graph!=null && !(s.session==="new") && s.sessions!==false;
-  const a=s.arts||{};
-  const has={ team:!!a.team, service:!!(a.svc||a.svcFail), schedules:!!a.sched };
-  const dot={
-    workflow: hasWF ? (a.wf==="running"?"running":a.wf==="completed"?"completed":a.wf==="failed"?"failed":"unknown") : null,
-    team: has.team ? (a.team==="bound"?"completed":a.team==="failed"?"failed":"pending") : null,
-    service: has.service ? (a.svcFail?"failed":a.svc==="registered"?"completed":"pending") : null,
-    schedules: has.schedules ? "running" : null
-  };
+  // Increment 2a: workflow graph / Team / Service are deferred (2b) — honest empty
+  // states until those artifacts are wired from agent tool-call results.
+  // Schedules are LIVE (GET /api/schedules); show its dot when schedules exist.
+  const hasSchedules = state.schedules.length>0;
+  const dot={ workflow:null, team:null, service:null, schedules: hasSchedules ? "running" : null };
 
   // 多 tab：图 / Workflow / Team / Service / Schedules
   const head=el("div",{class:"ctx-head"});
@@ -1033,128 +1221,29 @@ function renderContext(){
   const body=el("div",{class:"ctx-body"});
   const tab=state.ctxTab;
   if(tab==="graph"){
-    if(hasWF) body.appendChild(renderGraph(s.graph));
-    else body.appendChild(el("div",{style:"position:absolute;inset:0;display:grid;place-items:center"},`<div class="empty"><div class="ic" aria-hidden="true">${ICON.graph}</div><div class="et">当前会话还没有 workflow</div><div class="es">在左侧对话中描述你的需求，agent 会在这里生成拓扑图。</div></div>`));
+    body.appendChild(el("div",{style:"position:absolute;inset:0;display:grid;place-items:center"},`<div class="empty"><div class="ic" aria-hidden="true">${ICON.graph}</div><div class="et">workflow 出现后在此显示</div><div class="es">在左侧对话中描述需求，agent 用工具生成 workflow 后，拓扑图会在这里呈现。</div></div>`));
   } else if(tab==="workflow"){
-    body.appendChild(hasWF ? renderWorkflowPanel(a.wf||"idle") : panelEmpty(ICON.graph,"还没有 workflow","在对话中描述需求，agent 会生成 workflow，拓扑会出现在「图」标签。"));
+    body.appendChild(panelEmpty(ICON.graph,"workflow 出现后在此显示","agent 用工具生成 workflow 后，详情会出现在这里，拓扑见「图」标签。"));
   } else if(tab==="team"){
-    body.appendChild(has.team ? renderTeamPanel(a.team) : panelEmpty(ICON.team,"还没有 team","agent 建好 team / member 后会出现在这里。"));
+    body.appendChild(panelEmpty(ICON.team,"team 出现后在此显示","agent 建好 team / member 后会出现在这里。"));
   } else if(tab==="service"){
-    body.appendChild(has.service ? renderServicePanel(a.svcFail?"failed":a.svc) : panelEmpty(ICON.svc,"还没有 service","workflow 发布成 service 后会出现在这里。"));
+    body.appendChild(panelEmpty(ICON.svc,"service 出现后在此显示","workflow 发布成 service 后会出现在这里。"));
   } else {
-    body.appendChild(has.schedules ? renderSchedulesPanel(a.sched) : panelEmpty(ICON.clock,"还没有定时任务","为 service 配置 cron 后会出现在这里。"));
+    body.appendChild(renderSchedulesPanel());
   }
   pane.appendChild(body);
   return pane;
 }
 function panelEmpty(icon,t,sub){ const p=el("div",{class:"ctx-panel"}); p.appendChild(el("div",{class:"empty"},`<div class="ic" aria-hidden="true">${icon}</div><div class="et">${t}</div><div class="es">${sub}</div>`)); return p; }
 
-/* ---- SVG DAG ---- */
-function renderGraph(phase){
-  const wrap=el("div",{style:"position:absolute;inset:0"});
-  const vp=el("div",{class:"graph-viewport",id:"graphVp"});
-  const layer=el("div",{class:"graph-layer",id:"graphLayer"});
-  const W=1700, H=380;
-  layer.style.width=W+"px"; layer.style.height=H+"px";
-  const stMap=NODE_STATES[phase]||NODE_STATES.authored;
-  const pos={}; WF_TECH.nodes.forEach(n=>pos[n.nodeId]={x:n.x,y:n.y});
-
-  const svgNS="http://www.w3.org/2000/svg";
-  const svg=document.createElementNS(svgNS,"svg"); svg.setAttribute("width",W); svg.setAttribute("height",H);
-  const defs=document.createElementNS(svgNS,"defs");
-  defs.innerHTML=`<marker id="arr" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--muted-2)"/></marker>`;
-  svg.appendChild(defs);
-  const NW=244, NH=96;
-  const labels=[];
-  WF_TECH.edges.forEach(e=>{
-    const a=pos[e.fromNodeId], b=pos[e.toNodeId]; if(!a||!b)return;
-    const contains = e.edgeType==="CONTAINS_STEP";
-    let x1,y1,x2,y2;
-    if(contains){ x1=a.x+NW/2; y1=a.y; x2=b.x; y2=b.y+NH/2; } // foreach 顶 → body 左
-    else { x1=a.x+NW; y1=a.y+NH/2; x2=b.x; y2=b.y+NH/2; }
-    const p=document.createElementNS(svgNS,"path");
-    let d;
-    if(contains){ d=`M${x1},${y1} C${x1},${y1-50} ${x2-60},${y2} ${x2},${y2}`; }
-    else { const cx=(x1+x2)/2; d=`M${x1},${y1} C${cx},${y1} ${cx},${y2} ${x2},${y2}`; }
-    p.setAttribute("d",d); p.setAttribute("fill","none");
-    p.setAttribute("stroke", contains?"var(--cat-composition)":"var(--muted-2)");
-    p.setAttribute("stroke-width", contains?"1.4":"1.6");
-    if(contains) p.setAttribute("stroke-dasharray","5 4");
-    if(stMap[e.toNodeId]==="pending"){ p.setAttribute("stroke-dasharray","4 4"); p.setAttribute("opacity",".55"); }
-    p.setAttribute("marker-end","url(#arr)");
-    svg.appendChild(p);
-    const mx=contains?(x1+x2)/2-30:(x1+x2)/2, my=contains?(y1+y2)/2-10:y1;
-    labels.push({mx,my,text:e.branchKey?`${e.edgeType}:${e.branchKey}`:e.edgeType});
-  });
-  layer.appendChild(svg);
-
-  WF_TECH.nodes.forEach(n=>{
-    const st=stMap[n.nodeId]||"ready";
-    const stLabel={ready:"已就绪",done:"已完成",current:"运行中",failed:"失败",stopped:"已停止",pending:"待执行"}[st];
-    const node=el("div",{class:`gnode st-${st}`,style:`left:${n.x}px;top:${n.y}px;--cat:var(--cat-${n.category})`});
-    node.innerHTML=`
-      <div class="gn-top">
-        <span class="gn-ic" aria-hidden="true">${catIcon(n.nodeType)}</span>
-        <div><div class="gn-label">${esc(n.label)}</div><div class="gn-id">${esc(n.nodeId)}</div></div>
-      </div>
-      <div class="gn-foot"><span class="gn-type">${esc(n.nodeType)}</span><span class="gn-state">${st==="current"?'<span class="dot s-running"></span>':""}${stLabel}</span></div>`;
-    layer.appendChild(node);
-  });
-  labels.forEach(L=> layer.appendChild(el("span",{class:"edge-label",style:`left:${L.mx}px;top:${L.my}px`},esc(L.text))));
-
-  vp.appendChild(layer);
-  wrap.appendChild(vp);
-
-  // legend (categories)
-  const cats=[["integration","集成"],["composition","编排"],["ai","AI"],["control","控制"]];
-  const legend=el("div",{class:"graph-legend"});
-  legend.innerHTML=cats.map(([c,l])=>`<span class="lg" style="--cat:var(--cat-${c})"><span class="sw"></span>${l}</span>`).join("");
-  wrap.appendChild(legend);
-
-  // zoom/pan/fit/1:1 controls
-  const ctr=el("div",{class:"graph-ctrls"});
-  ctr.innerHTML=`<button data-z="out" aria-label="缩小">−</button><span class="zlabel" id="zlabel">100%</span><button data-z="in" aria-label="放大">+</button><button data-z="fit" aria-label="适应">⤢</button><button data-z="one" aria-label="1:1">1:1</button>`;
-  wrap.appendChild(ctr);
-  ctr.addEventListener("click",(e)=>{ const z=e.target.closest("button")?.getAttribute("data-z"); if(!z)return;
-    if(z==="in")state.zoom=Math.min(2,state.zoom*1.2);
-    else if(z==="out")state.zoom=Math.max(.3,state.zoom/1.2);
-    else if(z==="one"){state.zoom=1;state.panX=0;state.panY=0;}
-    else if(z==="fit")fitGraph(W,H);
-    applyTransform();
-  });
-
-  // pan by drag
-  let dragging=false,sx,sy;
-  vp.addEventListener("pointerdown",(e)=>{ dragging=true; sx=e.clientX-state.panX; sy=e.clientY-state.panY; vp.setPointerCapture(e.pointerId); });
-  vp.addEventListener("pointermove",(e)=>{ if(!dragging)return; state.panX=e.clientX-sx; state.panY=e.clientY-sy; applyTransform(); });
-  vp.addEventListener("pointerup",()=>dragging=false);
-  vp.addEventListener("pointercancel",()=>dragging=false);
-  vp.addEventListener("wheel",(e)=>{ e.preventDefault(); const f=e.deltaY<0?1.08:1/1.08; state.zoom=Math.max(.3,Math.min(2,state.zoom*f)); applyTransform(); },{passive:false});
-
-  setTimeout(()=>{ if(state.zoom===1&&state.panX===0&&state.panY===0) fitGraph(W,H); else applyTransform(); },0);
-  return wrap;
-}
-function fitGraph(W,H){
-  const vp=$("#graphVp"); if(!vp)return;
-  const pad=28; const s=Math.min((vp.clientWidth-pad)/W,(vp.clientHeight-pad)/H);
-  state.zoom=Math.max(.3,Math.min(1,s));
-  state.panX=(vp.clientWidth-W*state.zoom)/2;
-  state.panY=(vp.clientHeight-H*state.zoom)/2;
-  applyTransform();
-}
-function applyTransform(){
-  const layer=$("#graphLayer"); if(!layer)return;
-  layer.style.transform=`translate(${state.panX}px,${state.panY}px) scale(${state.zoom})`;
-  const zl=$("#zlabel"); if(zl)zl.textContent=Math.round(state.zoom*100)+"%";
-}
-
 /* ---- artifact cards ---- */
-function badge(status,label){ return `<span class="badge b-${status}"><span class="dot s-${status}"></span>${label}</span>`; }
+// Increment 2b will reintroduce the live workflow DAG renderer driven by the run
+// graph projection; for now the graph tab shows an honest empty state.
 
 /* 右栏宽度拖拽 */
 function attachResizer(handle){
   let startX, startW, dragging=false;
-  const onMove=(e)=>{ if(!dragging)return; const dx=startX-e.clientX; const max=Math.min(680,Math.round(window.innerWidth*0.5)); const w=Math.max(340,Math.min(max,startW+dx)); state.ctxW=w; document.documentElement.style.setProperty("--ctx-w",w+"px"); applyTransform(); };
+  const onMove=(e)=>{ if(!dragging)return; const dx=startX-e.clientX; const max=Math.min(680,Math.round(window.innerWidth*0.5)); const w=Math.max(340,Math.min(max,startW+dx)); state.ctxW=w; document.documentElement.style.setProperty("--ctx-w",w+"px"); };
   const onUp=()=>{ if(!dragging)return; dragging=false; handle.classList.remove("dragging"); document.body.classList.remove("resizing"); try{ localStorage.setItem("studio-ctxw",String(state.ctxW)); }catch(_){ } window.removeEventListener("pointermove",onMove); window.removeEventListener("pointerup",onUp); };
   handle.addEventListener("pointerdown",(e)=>{ e.preventDefault(); dragging=true; startX=e.clientX;
     startW=state.ctxW || parseInt(getComputedStyle(document.documentElement).getPropertyValue("--ctx-w"),10) || 460;
@@ -1172,78 +1261,35 @@ function ctxPanel(icon,color,title,metaHtml,bodyNode){
   return p;
 }
 
-function renderWorkflowPanel(draftStatus){
-  const map={ idle:["unknown","未运行"], submitted:["pending","已提交"], running:["running","运行中"], completed:["completed","已完成"], failed:["failed","失败"] };
-  const [st,lab]=map[draftStatus]||map.idle;
+// Live schedules (GET /api/schedules) — reuses the existing .sched component.
+function renderSchedulesPanel(){
+  if(!state.schedulesLoaded){
+    const p=el("div",{class:"ctx-panel scroll"});
+    p.appendChild(el("div",{class:"sched"},`<div class="sched-top"><span class="sk" style="width:9px;height:9px;border-radius:50%"></span><span class="sk" style="height:13px;width:160px"></span></div><div class="sched-grid" style="margin-top:8px"><span class="sk" style="height:12px"></span><span class="sk" style="height:12px"></span><span class="sk" style="height:12px"></span><span class="sk" style="height:12px"></span></div>`));
+    return p;
+  }
+  if(!state.schedules.length){
+    return panelEmpty(ICON.clock,"还没有定时任务","为 service 配置 cron 后会出现在这里。");
+  }
   const b=el("div",{});
-  const c=el("div",{class:"panel-card"});
-  c.innerHTML=`
-    <div class="kv"><span class="k">名称</span><span class="v">${esc(WF_TECH.name)}</span></div>
-    <div class="kv"><span class="k">workflowId</span><span class="v">wf_tech_5c1</span></div>
-    <div class="kv"><span class="k">节点 / 边</span><span class="v">${WF_TECH.nodes.length} 节点 · ${WF_TECH.edges.length} 边</span></div>
-    <div class="kv"><span class="k">draft-run</span><span class="v plain">${badge(st,lab)}</span></div>`;
-  b.appendChild(c);
-  if(draftStatus!=="idle") b.appendChild(el("a",{class:"deeplink",href:`${OBS}/run_d3f1a2`},`${ICON.ext}<span>到观测台看本次 draft-run</span>`));
-  return ctxPanel(ICON.graph,"var(--cat-ai)","Workflow",badge(st,lab),b);
-}
-function renderTeamPanel(bindStatus){
-  const map={ pending:["pending","绑定中"], bound:["bound","已绑定"], failed:["failed","绑定失败"] };
-  const [st,lab]=map[bindStatus]||map.pending;
-  const b=el("div",{});
-  const c1=el("div",{class:"panel-card"});
-  c1.innerHTML=`
-    <div class="kv"><span class="k">team</span><span class="v plain" style="color:var(--fg-strong);font-weight:600">${esc(TEAM.displayName)}</span></div>
-    <div class="kv"><span class="k">teamId</span><span class="v">${esc(TEAM.teamId)}</span></div>`;
-  b.appendChild(c1);
-  b.appendChild(el("div",{class:"panel-sub"},`Members · ${TEAM.members.length}`));
-  const c2=el("div",{class:"panel-card"});
-  TEAM.members.forEach(m=>{
-    const isEntry=m.memberId===TEAM.entryMemberId;
-    const row=el("div",{class:"member"});
-    row.innerHTML=`<span class="mi">${ICON.team}</span>
-      <div style="min-width:0;flex:1"><div class="mname">${esc(m.displayName)} ${isEntry&&st==="bound"?'<span class="entry">ENTRY</span>':""}</div><div class="mkind">${esc(m.implementationKind)} · ${esc(m.memberId)}</div></div>
-      ${badge(st,lab)}`;
-    c2.appendChild(row);
-  });
-  b.appendChild(c2);
-  if(st==="pending") b.appendChild(el("div",{style:"margin-top:10px"},`<span class="poll-tag"><span class="dot"></span>异步绑定中，约几秒完成…</span>`));
-  return ctxPanel(ICON.team,"var(--cat-composition)","Team & Member",badge(st,lab),b);
-}
-function renderServicePanel(nyx){
-  const map={ pending:["pending","注册中"], registered:["registered","已注册"], failed:["failed","未注册"] };
-  const [st,lab]=map[nyx]||map.pending;
-  const b=el("div",{});
-  const c=el("div",{class:"panel-card"});
-  c.innerHTML=`
-    <div class="kv"><span class="k">service slug</span><span class="v">${esc(SERVICE.slug)}</span></div>
-    <div class="kv"><span class="k">NyxID</span><span class="v plain">${badge(st,lab)}</span></div>
-    <div class="kv"><span class="k">definitionId</span><span class="v">${esc(SERVICE.definitionId)}</span></div>`;
-  b.appendChild(c);
-  if(st==="pending") b.appendChild(el("div",{style:"margin-top:10px"},`<span class="poll-tag"><span class="dot"></span>NyxID 注册中…</span>`));
-  if(st==="registered") b.appendChild(el("a",{class:"deeplink",href:`${OBS}?scope=${SERVICE.scopeId}&definition=${SERVICE.definitionId}`},`${ICON.ext}<span>到观测台看该 service 的运行</span>`));
-  if(st==="failed") b.appendChild(el("div",{class:"sched-err",style:"margin-top:10px"},"registry timeout (504) — 将自动重试"));
-  return ctxPanel(ICON.svc,"var(--cat-integration)","Service",badge(st,lab),b);
-}
-function renderSchedulesPanel(mode){
-  const list = mode==="fresh"
-    ? [ {...SCHEDULES_FULL[0], fireCount:0, failureCount:0, lastFireAt:"", lastError:""} ]
-    : SCHEDULES_FULL;
-  const b=el("div",{});
-  list.forEach(s=>{
+  state.schedules.forEach(s=>{
     const sc=el("div",{class:"sched"});
-    const hasFail = s.failureCount>0;
+    const hasFail = (s.failureCount||0)>0;
+    const deepHref = state.scopeId ? `${OBS}#scope=${encodeURIComponent(state.scopeId)}` : OBS;
     sc.innerHTML=`
-      <div class="sched-top"><span class="dot s-${s.enabled?(hasFail?"failed":"completed"):"stopped"}"></span><span class="sname">${esc(s.displayName)}</span><span class="sched-cron">${esc(s.cronExpression)}</span></div>
+      <div class="sched-top"><span class="dot s-${s.enabled?(hasFail?"failed":"completed"):"stopped"}"></span><span class="sname">${esc(s.displayName||s.scheduleId)}</span><span class="sched-cron">${esc(s.cronExpression||"")}</span></div>
       <div class="sched-grid">
-        <div class="sg"><span class="gk">timezone</span><span class="gv">${esc(s.timezone)}</span></div>
+        <div class="sg"><span class="gk">timezone</span><span class="gv">${esc(s.timezone||"—")}</span></div>
         <div class="sg"><span class="gk">enabled</span><span class="gv">${s.enabled?"true":"false"}</span></div>
         <div class="sg"><span class="gk">下次触发</span><span class="gv">${s.nextFireAt?relFuture(s.nextFireAt):"—"}</span></div>
         <div class="sg"><span class="gk">上次触发</span><span class="gv">${s.lastFireAt?relPast(s.lastFireAt):"—"}</span></div>
-        <div class="sg"><span class="gk">fireCount</span><span class="gv">${s.fireCount}</span></div>
-        <div class="sg"><span class="gk">failureCount</span><span class="gv ${hasFail?"bad":""}">${s.failureCount}</span></div>
+        <div class="sg"><span class="gk">fireCount</span><span class="gv">${s.fireCount||0}</span></div>
+        <div class="sg"><span class="gk">failureCount</span><span class="gv ${hasFail?"bad":""}">${s.failureCount||0}</span></div>
+        <div class="sg"><span class="gk">kind</span><span class="gv">${esc(scheduleKindLabel(s.scheduleKind))}</span></div>
+        <div class="sg"><span class="gk">target</span><span class="gv">${esc(targetKindLabel(s.targetKind))}</span></div>
       </div>
       ${s.lastError?`<div class="sched-err">lastError: ${esc(s.lastError)}</div>`:""}
-      <a class="deeplink" style="margin-top:9px" href="${OBS}?scope=${SERVICE.scopeId}&definition=${SERVICE.definitionId}">${ICON.ext}<span>到观测台看触发运行</span></a>`;
+      <a class="deeplink" style="margin-top:9px" href="${deepHref}">${ICON.ext}<span>到观测台看触发运行</span></a>`;
     b.appendChild(sc);
   });
   return ctxPanel(ICON.clock,"var(--warn)","Schedules",`<span class="poll-tag"><span class="dot"></span>实时</span>`,b);
@@ -1284,13 +1330,11 @@ function render(){
   // mobile scrims + toggles
   const navBtn=$("#navBtn"); if(navBtn) navBtn.addEventListener("click",()=>{ document.body.classList.toggle("nav-open"); ensureScrim(); });
 
-  // restore textarea height
-  const ta=$("#composerInput"); if(ta){ ta.style.height="auto"; ta.style.height=Math.min(ta.scrollHeight,140)+"px"; }
+  // restore textarea height + initial enable state
+  const ta=$("#composerInput"); if(ta){ ta.style.height="auto"; ta.style.height=Math.min(ta.scrollHeight,140)+"px"; const sb=$("#sendBtn"); if(sb)sb.disabled=!ta.value.trim(); }
 
-  // streaming
-  if(scn().streamLast) setTimeout(startStream,30);
   // scroll chat to bottom on populated states
-  const sc=$("#chatScroll"); if(sc && !scn().streamLast) sc.scrollTop=sc.scrollHeight;
+  const sc=$("#chatScroll"); if(sc) sc.scrollTop=sc.scrollHeight;
 }
 function ensureScrim(){
   let sc=$(".scrim");
@@ -1311,15 +1355,20 @@ document.body.appendChild(ctxToggleBtn);
   catch(e){ console.warn("studio: login callback failed", e); }
   if(!getToken()){ state.signedIn = false; render(); return; }
   state.signedIn = true;
+  // Sessions are owned by this page (localStorage); restore + pick the most recent.
+  state.sessions = loadSessions();
+  if(state.sessions.length){
+    const recent = state.sessions.slice().sort((a,b)=>(b.updatedAt||0)-(a.updatedAt||0))[0];
+    state.selectedSession = recent.id;
+  }
   render();
-  // The chat/cards render from mock constants this increment; only the account label
-  // is upgraded from the signed-in identity once available.
+  // Live: scope chip + schedules poll; account label from the signed-in identity.
+  loadContext();
+  startSchedulePolling();
   const acct = toAccount(await fetchUserInfo());
   if(acct){ accountLabel = acct.label; render(); }
 })();
 if(window.matchMedia){ window.matchMedia("(prefers-color-scheme: light)").addEventListener?.("change",()=>{ if(!state.theme)render(); }); }
-window.addEventListener("keydown",(e)=>{ if(e.key==="Enter"&&!e.shiftKey&&document.activeElement&&document.activeElement.id==="composerInput"){ e.preventDefault(); /* 视觉稿：发送为占位，不真正改对话状态 */ } });
-let _rw; window.addEventListener("resize",()=>{ clearTimeout(_rw); _rw=setTimeout(()=>{ const W=1700,H=380; if($("#graphVp"))fitGraph(W,H); },160); });
 </script>
 </body>
 </html>
