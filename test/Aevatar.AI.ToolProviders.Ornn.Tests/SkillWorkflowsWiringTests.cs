@@ -397,7 +397,7 @@ public sealed class SkillWorkflowsWiringTests
         commandPort.Requests[0].ScopeId.Should().Be("scope-1");
         commandPort.Requests[0].WorkflowId.Should().Be("translate_flow");
         commandPort.Requests[0].WorkflowYaml.Should().Be("name: translate_flow\nsteps: []\n");
-        commandPort.Requests[0].WorkflowName.Should().Be("translate_flow");
+        commandPort.Requests[0].WorkflowName.Should().BeNull();
         commandPort.Requests[0].DisplayName.Should().Be("translate_flow");
         commandPort.Requests[0].InlineWorkflowYamls.Should().ContainSingle()
             .Which.Should().Be(new KeyValuePair<string, string>("workflow_1", "name: helper_flow\nsteps: []\n"));
@@ -411,6 +411,38 @@ public sealed class SkillWorkflowsWiringTests
         output.Should().Contain("\"command_handles\"");
         output.Should().NotContain("already visible");
         output.Should().NotContain("strongly consistent");
+    }
+
+    [Fact]
+    public async Task UseSkillTool_MountWorkflowsTrue_PreservesDescriptorWorkflowIdAndLetsCommandPortParseYamlName()
+    {
+        using var _ = BeginContextScope(scopeId: "scope-1");
+        var catalog = new LocalSkillCatalog();
+        catalog.Register(new SkillDefinition
+        {
+            Name = "packaged-skill",
+            Description = "Uses packaged workflow identity",
+            Instructions = "Follow these steps.",
+            Source = SkillSource.Local,
+            Workflows =
+            [
+                new SkillWorkflowDescriptor
+                {
+                    WorkflowId = "packaged-entry",
+                    WorkflowYamls = ["name: parsed_entry\nsteps: []\n"],
+                },
+            ],
+        });
+        var commandPort = new RecordingScopeWorkflowCommandPort();
+        var tool = new UseSkillTool(catalog, scopeWorkflowCommandPort: commandPort);
+
+        await tool.ExecuteAsync("""{"skill":"packaged-skill","mount_workflows":true}""");
+
+        commandPort.Requests.Should().ContainSingle();
+        commandPort.Requests[0].WorkflowId.Should().Be("packaged-entry");
+        commandPort.Requests[0].WorkflowYaml.Should().Be("name: parsed_entry\nsteps: []\n");
+        commandPort.Requests[0].WorkflowName.Should().BeNull();
+        commandPort.Requests[0].DisplayName.Should().Be("packaged-entry");
     }
 
     [Fact]

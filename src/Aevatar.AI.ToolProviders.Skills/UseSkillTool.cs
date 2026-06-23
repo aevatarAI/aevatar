@@ -295,7 +295,6 @@ public sealed class UseSkillTool : IAgentTool
                     scopeId.Trim(),
                     workflow.WorkflowId.Trim(),
                     workflowYamls[0],
-                    WorkflowName: workflow.WorkflowId.Trim(),
                     DisplayName: workflow.WorkflowId.Trim(),
                     InlineWorkflowYamls: BuildInlineWorkflowYamls(workflowYamls)),
                 ct);
