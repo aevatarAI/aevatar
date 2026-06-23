@@ -36,4 +36,5 @@ public sealed record ServiceExternalExposureSnapshot(
     int Attempt = 0,
     DateTimeOffset? NextAttemptAt = null,
     string CredentialKid = "",
-    bool ExposureDesired = false);
+    bool ExposureDesired = false,
+    long SourceStateVersion = 0);

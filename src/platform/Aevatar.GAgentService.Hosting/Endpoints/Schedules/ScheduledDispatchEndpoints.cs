@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using System.Text.Json.Serialization;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
@@ -361,6 +362,8 @@ public sealed record ScheduledDispatchConfigurationHttpRequest
 {
     public string? ScheduleId { get; init; }
     public string? DisplayName { get; init; }
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public ScheduledDispatchScheduleKind ScheduleKind { get; init; } = ScheduledDispatchScheduleKind.Generic;
     public required string CronExpression { get; init; }
     public string? Timezone { get; init; }
     public bool Enabled { get; init; } = true;
@@ -381,7 +384,8 @@ public sealed record ScheduledDispatchConfigurationHttpRequest
             CronExpression: CronExpression,
             Timezone: Timezone ?? string.Empty,
             Enabled: Enabled,
-            Headers: Headers ?? new Dictionary<string, string>(StringComparer.Ordinal));
+            Headers: Headers ?? new Dictionary<string, string>(StringComparer.Ordinal),
+            ScheduleKind: ScheduleKind);
 
     private async Task<ScheduledDispatchTargetDescriptor> ResolveTargetAsync(
         IServiceCatalogQueryReader catalogReader,

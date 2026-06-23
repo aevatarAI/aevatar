@@ -557,7 +557,8 @@ public sealed class ServiceEndpointsTests
                     2,
                     null,
                     "kid-1",
-                    true)),
+                    true,
+                    42)),
             new ServiceCatalogSnapshot(
                 "tenant/app/ns/billing",
                 "tenant",
@@ -659,6 +660,7 @@ public sealed class ServiceEndpointsTests
         getResponse.ExternalExposure.Attempt.Should().Be(2);
         getResponse.ExternalExposure.CredentialKid.Should().Be("kid-1");
         getResponse.ExternalExposure.ExposureDesired.Should().BeTrue();
+        getResponse.ExternalExposure.SourceStateVersion.Should().Be(42);
         revisionResponse!.Revisions.Should().ContainSingle();
         host.QueryPort.LastListServicesTake.Should().Be(10);
         host.QueryPort.LastGetServiceIdentity!.ServiceId.Should().Be("orders");

@@ -8,6 +8,7 @@ public sealed record ServiceRunSnapshot(
     string CommandId,
     string CorrelationId,
     string EndpointId,
+    string ScheduleId,
     ServiceImplementationKind ImplementationKind,
     string TargetActorId,
     string RevisionId,
@@ -27,4 +28,8 @@ public sealed record ServiceRunSnapshot(
 public sealed record ServiceRunQuery(
     string ScopeId,
     string ServiceId,
-    int Take = 50);
+    int Take = 50,
+    string? ScheduleId = null,
+    ServiceRunStatus? Status = null,
+    DateTimeOffset? UpdatedFrom = null,
+    DateTimeOffset? UpdatedTo = null);

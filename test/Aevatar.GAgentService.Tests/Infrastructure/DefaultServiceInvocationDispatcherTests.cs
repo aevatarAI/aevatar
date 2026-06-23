@@ -522,6 +522,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
             Identity = GAgentServiceTestKit.CreateIdentity(),
             EndpointId = "run",
             CommandId = "cmd-static",
+            ScheduleId = "schedule-1",
             Payload = Any.Pack(new StringValue { Value = "payload" }),
         };
 
@@ -531,6 +532,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
         registry.Calls[0].RunId.Should().Be(receipt.CommandId);
         registry.Calls[0].CommandId.Should().Be("cmd-static");
         registry.Calls[0].ImplementationKind.Should().Be(ServiceImplementationKind.Static);
+        registry.Calls[0].ScheduleId.Should().Be("schedule-1");
         registry.Calls[0].TargetActorId.Should().Be("primary-actor");
         registry.Calls[0].ScopeId.Should().Be("tenant");
         registry.Calls[0].ServiceId.Should().Be("svc");

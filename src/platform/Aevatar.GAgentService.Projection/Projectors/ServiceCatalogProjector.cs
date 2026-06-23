@@ -91,9 +91,7 @@ public sealed class ServiceCatalogProjector
 
     private static ServiceCatalogExternalExposureReadModel? MapExternalExposure(ExternalExposure? externalExposure)
     {
-        if (externalExposure == null ||
-            string.IsNullOrWhiteSpace(externalExposure.NyxidSlug) &&
-            externalExposure.RegisteredAt == null)
+        if (externalExposure == null)
         {
             return null;
         }
