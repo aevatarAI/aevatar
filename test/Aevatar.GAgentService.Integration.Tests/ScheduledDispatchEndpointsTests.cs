@@ -301,6 +301,20 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
+    public async Task Create_ShouldDefaultMissingScheduleKindToGeneric()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+
+        var result = await CreateAsync(CreateEnvelopeRequest(scheduleId: "schedule-1"), service);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        service.Created.Should().ContainSingle().Which.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Generic);
+    }
+
+    [Fact]
     public async Task Update_ShouldRejectScopeOwnerNyxId_WhenDurableOwnerBindingIsMissing()
     {
         var service = new RecordingScheduledDispatchApplicationService();
@@ -718,6 +732,47 @@ public sealed class ScheduledDispatchEndpointsTests
         invocation.Payload.TypeUrl.Should().Be("type.googleapis.com/aevatar.ai.ChatRequestEvent");
         invocation.Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("summarize status");
         invocation.RevisionId.Should().Be("rev-chat");
+    }
+
+    [Fact]
+    public async Task Create_WithWorkflowScheduleKindAndDurableSenderBearerToken_ShouldForwardScheduleKind()
+    {
+        await using var host = await ScheduleEndpointTestHost.StartAsync();
+        var chat = new ChatRequestEvent { Prompt = "run durable workflow" };
+
+        var response = await host.Client.PostAsJsonAsync("/api/schedules", new
+        {
+            scheduleId = "schedule-chat",
+            displayName = "Workflow chat",
+            scheduleKind = "Workflow",
+            cronExpression = "0 9 * * *",
+            timezone = "UTC",
+            serviceInvocation = new
+            {
+                identity = new
+                {
+                    tenantId = "tenant",
+                    appId = "app",
+                    @namespace = "default",
+                    serviceId = "workflow",
+                },
+                endpointId = "chat",
+                payloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                payloadBase64 = Convert.ToBase64String(chat.ToByteArray()),
+                revisionId = "rev-chat",
+                auth = new
+                {
+                    durableSenderBearerToken = " durable-sender-token ",
+                },
+            },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        var configuration = host.Schedules.Created.Should().ContainSingle().Which;
+        configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
+        var auth = configuration.Target.ServiceInvocation!.Auth;
+        auth.Should().NotBeNull();
+        auth!.DurableSenderBearerToken.Should().Be("durable-sender-token");
     }
 
     [Fact]
