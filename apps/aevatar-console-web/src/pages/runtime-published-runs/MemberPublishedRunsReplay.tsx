@@ -1,4 +1,5 @@
 import {
+  ArrowLeftOutlined,
   CheckCircleFilled,
   ClockCircleOutlined,
   CloseCircleFilled,
@@ -15,7 +16,6 @@ import {
   Button,
   Empty,
   Space,
-  Spin,
   Tabs,
   Tag,
   Tooltip,
@@ -33,6 +33,7 @@ import type {
 } from "@/shared/models/runtime/scopeServices";
 import { history } from "@/shared/navigation/history";
 import {
+  buildTeamDetailHref,
   buildTeamMemberPublishedRunsHref,
   buildTeamMemberWorkflowStudioHref,
 } from "@/shared/navigation/teamRoutes";
@@ -77,8 +78,58 @@ const memberPublishedRunsReplayCss = `
   border-bottom: 1px solid #e5e7eb;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 18px 18px 14px;
+  gap: 10px;
+  padding: 12px 18px 14px;
+}
+
+.member-published-runs-replay__navigation {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.member-published-runs-replay__back-button {
+  border-color: #d1d5db;
+  color: #374151;
+  flex: 0 0 auto;
+}
+
+.member-published-runs-replay__breadcrumbs {
+  align-items: center;
+  color: #667085;
+  display: inline-flex;
+  flex: 1 1 auto;
+  font-size: 12px;
+  font-weight: 700;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.member-published-runs-replay__breadcrumb-link {
+  color: #667085;
+  min-width: 0;
+  overflow: hidden;
+  text-decoration: none;
+  text-overflow: ellipsis;
+}
+
+.member-published-runs-replay__breadcrumb-link:hover {
+  color: #1677ff;
+}
+
+.member-published-runs-replay__breadcrumb-current {
+  color: #111827;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.member-published-runs-replay__breadcrumb-separator {
+  color: #98a2b3;
+  flex: 0 0 auto;
 }
 
 .member-published-runs-replay__rail-title {
@@ -147,6 +198,31 @@ const memberPublishedRunsReplayCss = `
   min-width: 0;
 }
 
+.member-published-runs-replay__run-skeleton {
+  border: 1px solid transparent;
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+}
+
+.member-published-runs-replay__skeleton-line {
+  animation: member-published-runs-replay-skeleton-shimmer 1.35s ease-in-out infinite;
+  background: linear-gradient(90deg, #eef2f7 0%, #f8fafc 48%, #eef2f7 100%);
+  background-size: 180% 100%;
+  border-radius: 999px;
+  display: block;
+  height: 12px;
+  min-width: 0;
+}
+
+.member-published-runs-replay__skeleton-card {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.06);
+}
+
 .member-published-runs-replay__stage {
   display: grid;
   grid-template-rows: auto minmax(280px, 1fr) minmax(220px, 34vh);
@@ -192,6 +268,42 @@ const memberPublishedRunsReplayCss = `
 .member-published-runs-replay__graph-inner {
   height: 100%;
   min-height: 0;
+}
+
+.member-published-runs-replay__graph-skeleton {
+  align-items: center;
+  display: flex;
+  height: 100%;
+  justify-content: center;
+  min-height: 0;
+  position: relative;
+}
+
+.member-published-runs-replay__graph-skeleton-card {
+  display: grid;
+  gap: 12px;
+  max-width: 320px;
+  padding: 20px;
+  width: min(320px, 72%);
+}
+
+.member-published-runs-replay__graph-skeleton-card::before,
+.member-published-runs-replay__graph-skeleton-card::after {
+  background: #8b5cf6;
+  border-radius: 999px;
+  content: "";
+  height: 8px;
+  position: absolute;
+  top: 50%;
+  width: 8px;
+}
+
+.member-published-runs-replay__graph-skeleton-card::before {
+  left: calc(50% - 172px);
+}
+
+.member-published-runs-replay__graph-skeleton-card::after {
+  right: calc(50% - 172px);
 }
 
 .member-published-runs-replay__details {
@@ -321,7 +433,48 @@ const memberPublishedRunsReplayCss = `
   min-height: 180px;
 }
 
+.member-published-runs-replay__details-skeleton {
+  display: contents;
+}
+
+.member-published-runs-replay__step-skeleton {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  padding: 8px 10px;
+}
+
+.member-published-runs-replay__step-skeleton-dot {
+  background: #e5e7eb;
+  border-radius: 999px;
+  height: 14px;
+  margin-top: 2px;
+  width: 14px;
+}
+
+.member-published-runs-replay__inspector-skeleton-body {
+  display: grid;
+  gap: 12px;
+}
+
+@keyframes member-published-runs-replay-skeleton-shimmer {
+  0% {
+    background-position: 120% 0;
+  }
+
+  100% {
+    background-position: -80% 0;
+  }
+}
+
 @media (max-width: 900px) {
+  .member-published-runs-replay__breadcrumbs {
+    flex-wrap: wrap;
+    white-space: normal;
+  }
+
   .member-published-runs-replay {
     grid-template-columns: 1fr;
     grid-template-rows: minmax(180px, 34vh) minmax(0, 1fr);
@@ -597,6 +750,96 @@ function renderStepStatusIcon(step: ScopeServiceRunAuditStep): React.ReactNode {
   return <ClockCircleOutlined style={{ color: "#94a3b8" }} />;
 }
 
+function renderSkeletonLine(
+  width: number | string,
+  height = 12,
+): React.ReactNode {
+  return (
+    <span
+      className="member-published-runs-replay__skeleton-line"
+      style={{ height, width }}
+    />
+  );
+}
+
+function renderRunListSkeleton(): React.ReactNode {
+  return (
+    <div data-testid="member-published-runs-list-skeleton">
+      {[0, 1, 2, 3].map((index) => (
+        <div
+          className="member-published-runs-replay__run-skeleton"
+          key={`run-skeleton-${index}`}
+        >
+          <div className="member-published-runs-replay__run-title">
+            {renderSkeletonLine(72, 24)}
+            {renderSkeletonLine(index === 0 ? "62%" : "54%")}
+          </div>
+          {renderSkeletonLine(index === 0 ? "48%" : "40%")}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function renderGraphSkeleton(): React.ReactNode {
+  return (
+    <div
+      className="member-published-runs-replay__graph-skeleton"
+      data-testid="member-published-runs-graph-skeleton"
+    >
+      <div className="member-published-runs-replay__skeleton-card member-published-runs-replay__graph-skeleton-card">
+        {renderSkeletonLine("44%", 18)}
+        {renderSkeletonLine("70%")}
+        {renderSkeletonLine("58%")}
+      </div>
+    </div>
+  );
+}
+
+function renderDetailsSkeleton(): React.ReactNode {
+  return (
+    <div
+      className="member-published-runs-replay__details-skeleton"
+      data-testid="member-published-runs-details-skeleton"
+    >
+      <section className="member-published-runs-replay__logs">
+        <div className="member-published-runs-replay__logs-header">
+          {renderSkeletonLine(68, 16)}
+          {renderSkeletonLine(52)}
+        </div>
+        <div className="member-published-runs-replay__step-list">
+          {[0, 1, 2].map((index) => (
+            <div
+              className="member-published-runs-replay__step-skeleton"
+              key={`step-skeleton-${index}`}
+            >
+              <span className="member-published-runs-replay__step-skeleton-dot" />
+              <span style={{ display: "grid", gap: 6, minWidth: 0 }}>
+                {renderSkeletonLine(index === 0 ? "58%" : "46%")}
+                {renderSkeletonLine(index === 0 ? "38%" : "30%", 10)}
+              </span>
+              {renderSkeletonLine(42, 10)}
+            </div>
+          ))}
+        </div>
+      </section>
+      <section className="member-published-runs-replay__inspector">
+        <div className="member-published-runs-replay__inspector-header">
+          {renderSkeletonLine(180, 16)}
+          {renderSkeletonLine(128)}
+        </div>
+        <div className="member-published-runs-replay__inspector-body">
+          <div className="member-published-runs-replay__inspector-skeleton-body">
+            {renderSkeletonLine(160, 18)}
+            {renderSkeletonLine("100%", 56)}
+            {renderSkeletonLine("88%", 56)}
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function summarizeStepParameters(step: ScopeServiceRunAuditStep): string {
   const entries = Object.entries(step.requestParameters).filter(
     ([key, value]) => trimOptional(key) || trimOptional(value),
@@ -864,6 +1107,9 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
   const audit = auditQuery.data?.audit ?? null;
   const displayRuns =
     runs.length || !selectedRun ? runs : [selectedRun];
+  const showReplaySkeleton = Boolean(
+    runsQuery.isLoading || (selectedRun && auditQuery.isLoading),
+  );
   const graph = React.useMemo(
     () => buildExecutionGraph(audit, selectedStepId),
     [audit, selectedStepId],
@@ -929,12 +1175,80 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
   const selectedRunTime = selectedRun ? formatRunTime(selectedRun) : "n/a";
   const auditDuration = getAuditDurationMs(audit);
   const selectedRunDuration = formatDurationMs(auditDuration);
+  const teamOverviewHref = buildTeamDetailHref({
+    scopeId,
+    tab: "overview",
+    teamId: normalizedTeamId,
+  });
+  const teamMembersHref = buildTeamDetailHref({
+    memberId,
+    scopeId,
+    tab: "members",
+    teamId: normalizedTeamId,
+  });
+  const backToTeamMembersLabel = t(
+    "pages.runs.memberPublishedRuns.backToTeamMembers",
+    "Back to team members",
+  );
+  const navigateToTeamOverview = React.useCallback(
+    (event: React.MouseEvent<HTMLElement>) => {
+      event.preventDefault();
+      history.push(teamOverviewHref);
+    },
+    [teamOverviewHref],
+  );
+  const navigateToTeamMembers = React.useCallback(
+    (event?: React.MouseEvent<HTMLElement>) => {
+      event?.preventDefault();
+      history.push(teamMembersHref);
+    },
+    [teamMembersHref],
+  );
 
   return (
     <div className="member-published-runs-replay" data-testid="member-published-runs-replay">
       <style>{memberPublishedRunsReplayCss}</style>
       <aside className="member-published-runs-replay__rail">
         <div className="member-published-runs-replay__rail-header">
+          <nav
+            aria-label={t(
+              "pages.runs.memberPublishedRuns.navigation",
+              "Published runs navigation",
+            )}
+            className="member-published-runs-replay__navigation"
+          >
+            <Tooltip title={backToTeamMembersLabel}>
+              <Button
+                aria-label={backToTeamMembersLabel}
+                className="member-published-runs-replay__back-button"
+                icon={<ArrowLeftOutlined />}
+                onClick={() => navigateToTeamMembers()}
+                shape="circle"
+                size="small"
+              />
+            </Tooltip>
+            <div className="member-published-runs-replay__breadcrumbs">
+              <a
+                className="member-published-runs-replay__breadcrumb-link"
+                href={teamOverviewHref}
+                onClick={navigateToTeamOverview}
+              >
+                {t("teams.detail.breadcrumb.teams", "Teams")}
+              </a>
+              <span className="member-published-runs-replay__breadcrumb-separator">/</span>
+              <a
+                className="member-published-runs-replay__breadcrumb-link"
+                href={teamMembersHref}
+                onClick={navigateToTeamMembers}
+              >
+                {runsQuery.data?.displayName || memberId}
+              </a>
+              <span className="member-published-runs-replay__breadcrumb-separator">/</span>
+              <span className="member-published-runs-replay__breadcrumb-current">
+                {t("pages.runs.memberPublishedRuns.publishedRuns", "Published runs")}
+              </span>
+            </div>
+          </nav>
           <div className="member-published-runs-replay__rail-title">
             <div className="member-published-runs-replay__rail-title-main">
               <div style={{ minWidth: 0 }}>
@@ -964,9 +1278,7 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
         </div>
         <div className="member-published-runs-replay__list">
           {runsQuery.isLoading ? (
-            <div className="member-published-runs-replay__empty">
-              <Spin />
-            </div>
+            renderRunListSkeleton()
           ) : runsQuery.error ? (
             <Alert
               showIcon
@@ -1030,26 +1342,39 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
       <section className="member-published-runs-replay__stage">
         <header className="member-published-runs-replay__stage-header">
           <div className="member-published-runs-replay__stage-title">
-            <Space wrap size={8}>
-              <Typography.Title level={4} style={{ margin: 0 }}>
-                {selectedRunTime}
-              </Typography.Title>
-              {selectedRun ? (
-                <Tag color={runStatusTone} style={{ marginInlineEnd: 0 }}>
-                  {formatRunStatus(selectedRun.completionStatus)}
-                </Tag>
-              ) : null}
-              {audit ? <Tag>{selectedRunDuration}</Tag> : null}
-            </Space>
-            {selectedRun?.workflowName ? (
-              <Typography.Text ellipsis type="secondary">
-                {selectedRun.workflowName}
-              </Typography.Text>
-            ) : !selectedRun ? (
-              <Typography.Text ellipsis type="secondary">
-                {t("pages.runs.memberPublishedRuns.selectPublishedRun", "Select a published run")}
-              </Typography.Text>
-            ) : null}
+            {showReplaySkeleton ? (
+              <>
+                <Space wrap size={8}>
+                  {renderSkeletonLine(220, 24)}
+                  {renderSkeletonLine(68, 24)}
+                  {renderSkeletonLine(56, 24)}
+                </Space>
+                {renderSkeletonLine(180, 14)}
+              </>
+            ) : (
+              <>
+                <Space wrap size={8}>
+                  <Typography.Title level={4} style={{ margin: 0 }}>
+                    {selectedRunTime}
+                  </Typography.Title>
+                  {selectedRun ? (
+                    <Tag color={runStatusTone} style={{ marginInlineEnd: 0 }}>
+                      {formatRunStatus(selectedRun.completionStatus)}
+                    </Tag>
+                  ) : null}
+                  {audit ? <Tag>{selectedRunDuration}</Tag> : null}
+                </Space>
+                {selectedRun?.workflowName ? (
+                  <Typography.Text ellipsis type="secondary">
+                    {selectedRun.workflowName}
+                  </Typography.Text>
+                ) : !selectedRun ? (
+                  <Typography.Text ellipsis type="secondary">
+                    {t("pages.runs.memberPublishedRuns.selectPublishedRun", "Select a published run")}
+                  </Typography.Text>
+                ) : null}
+              </>
+            )}
           </div>
           <div className="member-published-runs-replay__stage-actions">
             <Button
@@ -1089,10 +1414,8 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
                     : String(auditQuery.error)
                 }
               />
-            ) : auditQuery.isLoading && selectedRun ? (
-              <div className="member-published-runs-replay__empty">
-                <Spin />
-              </div>
+            ) : showReplaySkeleton ? (
+              renderGraphSkeleton()
             ) : graph.nodes.length ? (
               <GraphCanvas
                 autoFitKey={selectedRunId}
@@ -1118,129 +1441,135 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
           </div>
         </div>
         <div className="member-published-runs-replay__details">
-          <section className="member-published-runs-replay__logs">
-            <div className="member-published-runs-replay__logs-header">
-              <Typography.Text strong>
-                {t("pages.runs.memberPublishedRuns.logs", "Logs")}
-              </Typography.Text>
-              {audit ? (
-                <Typography.Text type="secondary">
-                  {selectedRunDuration}
-                </Typography.Text>
-              ) : null}
-            </div>
-            <div className="member-published-runs-replay__step-list">
-              {graph.orderedSteps.length ? (
-                graph.orderedSteps.map((step) => (
-                  <button
-                    className={`member-published-runs-replay__step${
-                      selectedStep?.stepId === step.stepId
-                        ? " member-published-runs-replay__step--selected"
-                        : ""
-                    }`}
-                    key={step.stepId}
-                    onClick={() => setSelectedStepId(step.stepId)}
-                    type="button"
-                  >
-                    {renderStepStatusIcon(step)}
-                    <span style={{ minWidth: 0 }}>
-                      <Typography.Text ellipsis style={{ display: "block" }}>
-                        {step.stepId}
-                      </Typography.Text>
-                      <Typography.Text ellipsis type="secondary">
-                        {step.stepType || "step"}
-                      </Typography.Text>
-                    </span>
+          {showReplaySkeleton ? (
+            renderDetailsSkeleton()
+          ) : (
+            <>
+              <section className="member-published-runs-replay__logs">
+                <div className="member-published-runs-replay__logs-header">
+                  <Typography.Text strong>
+                    {t("pages.runs.memberPublishedRuns.logs", "Logs")}
+                  </Typography.Text>
+                  {audit ? (
                     <Typography.Text type="secondary">
-                      {formatDurationMs(step.durationMs)}
+                      {selectedRunDuration}
                     </Typography.Text>
-                  </button>
-                ))
-              ) : (
-                <div className="member-published-runs-replay__empty">
-                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                  ) : null}
                 </div>
-              )}
-            </div>
-          </section>
-          <section className="member-published-runs-replay__inspector">
-            <div className="member-published-runs-replay__inspector-header">
-              <Space size={8} style={{ minWidth: 0 }}>
-                <NodeIndexOutlined style={{ color: "#1677ff" }} />
-                <Typography.Text ellipsis strong style={{ maxWidth: 360 }}>
-                  {selectedStep?.stepId ||
-                    t("pages.runs.memberPublishedRuns.details", "Details")}
-                </Typography.Text>
-                {selectedStep ? (
-                  <Tag
-                    color={getStepStatusTone(selectedStep)}
-                    style={{ marginInlineEnd: 0 }}
-                  >
-                    {getStepStatusLabel(selectedStep)}
-                  </Tag>
-                ) : null}
-              </Space>
-              {selectedStep ? (
-                <Typography.Text type="secondary">
-                  {formatDateTime(selectedStep.completedAt || selectedStep.requestedAt)}
-                </Typography.Text>
-              ) : null}
-            </div>
-            <div className="member-published-runs-replay__inspector-body">
-              <Tabs
-                size="small"
-                items={[
-                  {
-                    key: "output",
-                    label: t("pages.runs.memberPublishedRuns.output", "Output"),
-                    children: selectedStep
-                      ? renderTextBlock(
-                          selectedStep.error ||
-                            selectedStep.outputPreview ||
-                            JSON.stringify(selectedStep.completionAnnotations, null, 2),
-                        )
-                      : renderTextBlock(audit?.finalError || audit?.finalOutput || ""),
-                  },
-                  {
-                    key: "input",
-                    label: t("pages.runs.memberPublishedRuns.input", "Input"),
-                    children: selectedStep
-                      ? renderKeyValueRows(selectedStep.requestParameters)
-                      : renderTextBlock(audit?.input || ""),
-                  },
-                  {
-                    key: "timeline",
-                    label: t("pages.runs.memberPublishedRuns.timeline", "Timeline"),
-                    children: scopedTimeline.length ? (
-                      <div className="member-published-runs-replay__kv">
-                        {scopedTimeline.map((event, index) => (
-                          <div
-                            className="member-published-runs-replay__kv-row"
-                            key={`${event.timestamp ?? "event"}-${event.stage}-${index}`}
-                          >
-                            <div className="member-published-runs-replay__kv-key">
-                              {formatDateTime(event.timestamp)}
-                            </div>
-                            <div className="member-published-runs-replay__kv-value">
-                              <Typography.Text strong>
-                                {event.stage || event.eventType || "event"}
-                              </Typography.Text>
-                              <br />
-                              <Typography.Text type="secondary">
-                                {event.message || event.agentId || "n/a"}
-                              </Typography.Text>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
+                <div className="member-published-runs-replay__step-list">
+                  {graph.orderedSteps.length ? (
+                    graph.orderedSteps.map((step) => (
+                      <button
+                        className={`member-published-runs-replay__step${
+                          selectedStep?.stepId === step.stepId
+                            ? " member-published-runs-replay__step--selected"
+                            : ""
+                        }`}
+                        key={step.stepId}
+                        onClick={() => setSelectedStepId(step.stepId)}
+                        type="button"
+                      >
+                        {renderStepStatusIcon(step)}
+                        <span style={{ minWidth: 0 }}>
+                          <Typography.Text ellipsis style={{ display: "block" }}>
+                            {step.stepId}
+                          </Typography.Text>
+                          <Typography.Text ellipsis type="secondary">
+                            {step.stepType || "step"}
+                          </Typography.Text>
+                        </span>
+                        <Typography.Text type="secondary">
+                          {formatDurationMs(step.durationMs)}
+                        </Typography.Text>
+                      </button>
+                    ))
+                  ) : (
+                    <div className="member-published-runs-replay__empty">
                       <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} />
-                    ),
-                  },
-                ]}
-              />
-            </div>
-          </section>
+                    </div>
+                  )}
+                </div>
+              </section>
+              <section className="member-published-runs-replay__inspector">
+                <div className="member-published-runs-replay__inspector-header">
+                  <Space size={8} style={{ minWidth: 0 }}>
+                    <NodeIndexOutlined style={{ color: "#1677ff" }} />
+                    <Typography.Text ellipsis strong style={{ maxWidth: 360 }}>
+                      {selectedStep?.stepId ||
+                        t("pages.runs.memberPublishedRuns.details", "Details")}
+                    </Typography.Text>
+                    {selectedStep ? (
+                      <Tag
+                        color={getStepStatusTone(selectedStep)}
+                        style={{ marginInlineEnd: 0 }}
+                      >
+                        {getStepStatusLabel(selectedStep)}
+                      </Tag>
+                    ) : null}
+                  </Space>
+                  {selectedStep ? (
+                    <Typography.Text type="secondary">
+                      {formatDateTime(selectedStep.completedAt || selectedStep.requestedAt)}
+                    </Typography.Text>
+                  ) : null}
+                </div>
+                <div className="member-published-runs-replay__inspector-body">
+                  <Tabs
+                    size="small"
+                    items={[
+                      {
+                        key: "output",
+                        label: t("pages.runs.memberPublishedRuns.output", "Output"),
+                        children: selectedStep
+                          ? renderTextBlock(
+                              selectedStep.error ||
+                                selectedStep.outputPreview ||
+                                JSON.stringify(selectedStep.completionAnnotations, null, 2),
+                            )
+                          : renderTextBlock(audit?.finalError || audit?.finalOutput || ""),
+                      },
+                      {
+                        key: "input",
+                        label: t("pages.runs.memberPublishedRuns.input", "Input"),
+                        children: selectedStep
+                          ? renderKeyValueRows(selectedStep.requestParameters)
+                          : renderTextBlock(audit?.input || ""),
+                      },
+                      {
+                        key: "timeline",
+                        label: t("pages.runs.memberPublishedRuns.timeline", "Timeline"),
+                        children: scopedTimeline.length ? (
+                          <div className="member-published-runs-replay__kv">
+                            {scopedTimeline.map((event, index) => (
+                              <div
+                                className="member-published-runs-replay__kv-row"
+                                key={`${event.timestamp ?? "event"}-${event.stage}-${index}`}
+                              >
+                                <div className="member-published-runs-replay__kv-key">
+                                  {formatDateTime(event.timestamp)}
+                                </div>
+                                <div className="member-published-runs-replay__kv-value">
+                                  <Typography.Text strong>
+                                    {event.stage || event.eventType || "event"}
+                                  </Typography.Text>
+                                  <br />
+                                  <Typography.Text type="secondary">
+                                    {event.message || event.agentId || "n/a"}
+                                  </Typography.Text>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                        ),
+                      },
+                    ]}
+                  />
+                </div>
+              </section>
+            </>
+          )}
         </div>
       </section>
     </div>

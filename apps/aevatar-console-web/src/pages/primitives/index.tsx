@@ -8,6 +8,7 @@ import { buildRuntimeWorkflowsHref } from "@/shared/navigation/runtimeRoutes";
 import type { WorkflowPrimitiveDescriptor } from "@/shared/models/runtime/query";
 import {
   AevatarContextDrawer,
+  type AevatarBreadcrumbItem,
   AevatarInspectorEmpty,
   AevatarPageShell,
   AevatarPanel,
@@ -24,6 +25,15 @@ import {
 import { t } from "@/shared/i18n/messages";
 
 const primitiveCatalogPageSize = 8;
+const breadcrumbItems: AevatarBreadcrumbItem[] = [
+  {
+    title: "Platform",
+  },
+  {
+    current: true,
+    title: "Connectors",
+  },
+];
 
 function readPrimitiveSelection(): string {
   if (typeof window === "undefined") {
@@ -242,6 +252,7 @@ const PrimitivesPage: React.FC = () => {
 
   return (
     <AevatarPageShell
+      breadcrumbItems={breadcrumbItems}
       layoutMode="document"
       title={t("pages.primitives.index.connector.catalog", "Connector catalog")}
       titleHelp={t("pages.primitives.index.the.runtime.primitive.data", "The runtime primitive data continues to be reused here, but is displayed externally as a connector capability directory that can be reused by the team.")}

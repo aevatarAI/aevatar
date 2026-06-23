@@ -20,6 +20,7 @@ import {
   buildTeamDetailHref,
   buildTeamMemberAutomationsHref,
   buildTeamMemberInvokeHref,
+  buildTeamMemberPublishedRunsHref,
   buildTeamMemberWorkflowStudioHref,
   readTeamDetailRouteState,
   type TeamDetailTab,
@@ -806,12 +807,18 @@ const TeamDetailPage: React.FC = () => {
           scopeId,
           teamId: selectedTeamId,
         });
+        const memberPublishedRunsHref = buildTeamMemberPublishedRunsHref({
+          memberId: member.memberId,
+          scopeId,
+          teamId: selectedTeamId,
+        });
 
         return {
           buildStudioHref: isWorkflowMember ? workflowStudioHref : "",
           description: trimText(member.description),
           canInvokeAsEntry: isBoundMember,
           canInvokeMember: isWorkflowMember && isBoundMember,
+          canOpenPublishedRuns: isWorkflowMember && isBoundMember,
           canSetAsEntry: Boolean(trimText(member.memberId)),
           editStudioHref: isWorkflowMember ? workflowStudioHref : "",
           automationsHref: memberAutomationsHref,
@@ -827,6 +834,12 @@ const TeamDetailPage: React.FC = () => {
           name:
             trimText(member.displayName) ||
             intl.formatMessage({ id: "teams.members.unnamed" }),
+          publishedRunsDisabledReason: !isWorkflowMember
+            ? t("teams.members.actions.workflowOnlyTitle", "This console currently supports workflow members only.")
+            : !isBoundMember
+              ? t("teams.members.actions.publishedRuns.publishFirst", "Publish this member before viewing published runs.")
+              : "",
+          publishedRunsHref: memberPublishedRunsHref,
           serviceId: publishedServiceId || "--",
           serviceIdentity: automationServiceRuntime?.identity,
           serviceRevisionId:
@@ -1663,6 +1676,7 @@ const TeamDetailPage: React.FC = () => {
       }
       activeTab={activeTab}
       activeTabLabel={formatTeamTabLabel(activeTab, intl)}
+      breadcrumbTeamTitle={teamTitle}
       initialLoading={initialLoading}
       onOpenTeamsList={handleOpenTeamsList}
       onSelectTab={pushTeamTab}

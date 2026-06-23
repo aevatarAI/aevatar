@@ -1,6 +1,7 @@
 import {
   CheckCircleOutlined,
   ClockCircleOutlined,
+  HistoryOutlined,
   PlayCircleOutlined,
   PlusOutlined,
   StopOutlined,
@@ -24,6 +25,7 @@ type TeamRosterMemberRow = {
   readonly canAutomateMember: boolean;
   readonly canInvokeAsEntry: boolean;
   readonly canInvokeMember: boolean;
+  readonly canOpenPublishedRuns: boolean;
   readonly canSetAsEntry: boolean;
   readonly description: string;
   readonly implementationKind: string;
@@ -38,6 +40,8 @@ type TeamRosterMemberRow = {
   readonly invokeHref: string;
   readonly memberId: string;
   readonly name: string;
+  readonly publishedRunsDisabledReason: string;
+  readonly publishedRunsHref: string;
   readonly serviceId: string;
   readonly studioHref: string;
   readonly workflowSupported: boolean;
@@ -65,7 +69,7 @@ const ellipsisTextStyle: React.CSSProperties = {
 };
 
 const tableGridTemplateColumns =
-  "minmax(260px, 1.4fr) minmax(140px, 0.45fr) minmax(180px, 0.7fr) 180px";
+  "minmax(260px, 1.4fr) minmax(140px, 0.45fr) minmax(180px, 0.7fr) 220px";
 
 const tableShellStyle: React.CSSProperties = {
   borderRadius: 8,
@@ -107,6 +111,7 @@ const responsiveTableStyle = `
   }
 
   .team-members-table-invoke-action,
+  .team-members-table-published-runs-action,
   .team-members-table-automate-action,
   .team-members-table-studio-action,
   .team-members-table-entry-action {
@@ -399,6 +404,12 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                       />
                       <Skeleton.Button
                         active
+                        className="team-members-table-published-runs-action"
+                        size="small"
+                        style={memberActionButtonBaseStyle}
+                      />
+                      <Skeleton.Button
+                        active
                         className="team-members-table-studio-action"
                         size="small"
                         style={memberActionButtonBaseStyle}
@@ -505,6 +516,9 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                   const automateActionLabel = intl.formatMessage({
                     defaultMessage: "Automate",
                     id: "teams.members.actions.automate",
+                  });
+                  const publishedRunsActionLabel = intl.formatMessage({
+                    id: "teams.members.actions.publishedRuns",
                   });
                   const studioActionLabel = intl.formatMessage({
                     id: "teams.members.actions.workflowStudio",
@@ -660,6 +674,33 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                               style={buildMemberActionButtonStyle(
                                 row.canInvokeMember ? "success" : "default",
                               )}
+                              type="default"
+                            />
+                          </Tooltip>
+                          <Tooltip
+                            title={
+                              row.canOpenPublishedRuns
+                                ? publishedRunsActionLabel
+                                : row.publishedRunsDisabledReason
+                            }
+                          >
+                            <Button
+                              aria-label={publishedRunsActionLabel}
+                              className="team-members-table-action-button team-members-table-published-runs-action"
+                              disabled={!row.canOpenPublishedRuns}
+                              href={
+                                row.canOpenPublishedRuns
+                                  ? row.publishedRunsHref
+                                  : undefined
+                              }
+                              icon={<HistoryOutlined />}
+                              onClick={
+                                row.canOpenPublishedRuns
+                                  ? handleNavigate(row.publishedRunsHref)
+                                  : undefined
+                              }
+                              size="small"
+                              style={buildMemberActionButtonStyle()}
                               type="default"
                             />
                           </Tooltip>

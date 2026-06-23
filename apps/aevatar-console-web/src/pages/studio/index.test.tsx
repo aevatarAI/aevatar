@@ -4633,6 +4633,19 @@ describe("StudioPage", () => {
     expect(searchParams.get("tab")).toBe("overview");
   });
 
+  it("keeps the Studio Teams breadcrumb in the scoped Team collection", async () => {
+    renderStudioPage("/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Aworkspace-demo&focus=workflow%3Aworkflow-1&tab=studio");
+
+    const breadcrumb = await screen.findByRole("navigation", { name: "Breadcrumb" });
+    const teamsBreadcrumbLink = within(breadcrumb).getByRole("link", { name: "Teams" });
+    expect(teamsBreadcrumbLink).toHaveAttribute("href", "/scopes/scope-1/teams");
+
+    fireEvent.click(teamsBreadcrumbLink);
+
+    expect(window.location.pathname).toBe("/scopes/scope-1/teams");
+    expect(window.location.search).toBe("");
+  });
+
   it("returns to the explicit Team handoff target after Studio settles its route", async () => {
     renderStudioPage(
       "/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Aworkspace-demo&step=build&tab=studio&returnTo=%2Fscopes%2Fscope-1%2Fteams%2Ft-alpha%3FmemberId%3Dworkspace-demo%26tab%3Dmembers"

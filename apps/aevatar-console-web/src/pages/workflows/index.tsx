@@ -33,6 +33,7 @@ import type {
 } from "@/shared/models/runtime/catalog";
 import {
   AevatarContextDrawer,
+  type AevatarBreadcrumbItem,
   AevatarInspectorEmpty,
   AevatarPageShell,
   AevatarPanel,
@@ -520,9 +521,19 @@ const WorkflowsPage: React.FC = () => {
     ],
     [intl],
   );
+  const breadcrumbItems: AevatarBreadcrumbItem[] = [
+    {
+      title: t("pages.workflows.index.platformBreadcrumb", "Platform"),
+    },
+    {
+      current: true,
+      title: t("pages.workflows.index.workflowLibraryBreadcrumb", "Workflow Library"),
+    },
+  ];
 
   return (
     <AevatarPageShell
+      breadcrumbItems={breadcrumbItems}
       layoutMode="document"
       title={t("pages.workflows.index.workflow.library", "Workflow Library")}
       titleHelp={t("pages.workflows.index.browse.runtime.exposed.workflow.definitions", "Browse runtime-exposed workflow definitions, inspect how they are wired, then jump into run or editor from the same catalog.")}

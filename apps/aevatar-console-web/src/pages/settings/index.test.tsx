@@ -153,7 +153,7 @@ describe("SettingsPage", () => {
   it("renders the full-body LLM tab by default", async () => {
     renderWithQueryClient(React.createElement(SettingsPage));
 
-    expect(await screen.findByText("Settings")).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Settings" })).toBeTruthy();
     expect(await screen.findByText("Edit defaults")).toBeTruthy();
     expect(screen.getByText("How defaults work")).toBeTruthy();
     expect(screen.getByText("Technical preview")).toBeTruthy();

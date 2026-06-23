@@ -35,6 +35,41 @@ const enUSMessages = {
   'nav.items.services': 'Services',
   'nav.items.settings': 'Settings',
   'nav.items.topology': 'Topology',
+  'pages.gagents.index.platformBreadcrumb': 'Platform',
+  'pages.gagents.index.teamMembersBreadcrumb': 'Team members',
+  'pages.missioncontrol.index.missionControlBreadcrumb': 'Mission Control',
+  'pages.missioncontrol.index.platformBreadcrumb': 'Platform',
+  'pages.scopes.assets.legacyAssetsBreadcrumb': 'Legacy Assets',
+  'pages.scopes.assets.legacyAssetsContent':
+    'Team home now lives under /scopes/:scopeId/teams. Keep this page for older asset deep links, source inspection, and catalog detail while the scoped team flow finishes taking over.',
+  'pages.scopes.assets.legacyAssetsTitleHelp':
+    'This is the legacy deep-link asset workspace. Use it for source inspection and catalog detail, but go back to team home for the main team narrative.',
+  'pages.scopes.assets.teamHome': 'Team Home',
+  'pages.scopes.assets.teamsBreadcrumb': 'Teams',
+  'pages.scopes.files.title': 'Files',
+  'pages.scopes.files.titleHelp':
+    'Browse workspace workflows, scope-backed scripts, and reusable Studio catalogs from one structured entry point.',
+  'pages.scopes.invoke.legacyInvokeBreadcrumb': 'Legacy Invoke',
+  'pages.scopes.invoke.legacyInvokeTitleHelp':
+    'Legacy deep-link playground for direct endpoint probing. Team home stays the primary surface, while this lab handles raw payloads and older operator flows.',
+  'pages.scopes.invoke.teamsBreadcrumb': 'Teams',
+  'pages.settings.index.accountContent':
+    'Identity, session, and access details for this browser.',
+  'pages.settings.index.llmContent': 'Personal defaults for Chat and Studio.',
+  'pages.settings.index.title': 'Settings',
+  'pages.studio.index.studioBreadcrumb': 'Studio',
+  'pages.studio.index.teamBreadcrumb': 'Team',
+  'pages.studio.index.teamsBreadcrumb': 'Teams',
+  'pages.teammemberinvoke.backToTeam': 'Back to team',
+  'pages.teammemberinvoke.invokeBreadcrumb': 'Invoke',
+  'pages.teammemberinvoke.memberBreadcrumb': 'Member',
+  'pages.teammemberinvoke.teamsBreadcrumb': 'Teams',
+  'pages.teams.new.teamsBreadcrumb': 'Teams',
+  'pages.workflows.index.platformBreadcrumb': 'Platform',
+  'pages.workflows.index.workflowLibraryBreadcrumb': 'Workflow Library',
+  'shared.ui.aevatarpageshells.breadcrumb': 'Breadcrumb',
+  'teamMemberWorkflowStudio.header.breadcrumbAria': 'Workflow location',
+  'teamMemberWorkflowStudio.header.statusAria': 'Workflow status',
   'teams.home.actions.createTeam': 'Create team',
   'teams.home.actions.createMember': 'Create member',
   'teams.home.actions.createWorkflowMember': 'Create workflow member',
@@ -140,6 +175,7 @@ const enUSMessages = {
   'teams.detail.archive.modal.title': 'Archive this team?',
   'teams.detail.breadcrumb.detail': 'Team detail',
   'teams.detail.breadcrumb.teams': 'Teams',
+  'teams.detail.backToTeams': 'Back to teams',
   'teams.detail.edit.hint.noTeam': 'Select a real team before editing.',
   'teams.detail.edit.hint.ready': 'The team summary must be loaded before editing.',
   'teams.detail.edit.modal.description': 'Team description',
@@ -565,6 +601,9 @@ const enUSMessages = {
   'teams.members.actions.invokeRequiresBinding':
     'Bind this workflow member before invoking it.',
   'teams.members.actions.invokeWorkflow': 'Invoke',
+  'teams.members.actions.publishedRuns': 'Published runs',
+  'teams.members.actions.publishedRuns.publishFirst':
+    'Publish this member before viewing published runs.',
   'teams.members.actions.setEntry': 'Set as entry member',
   'teams.members.actions.workflowOnly': 'Workflow only',
   'teams.members.actions.workflowOnlyTitle':
@@ -810,6 +849,7 @@ const enUSMessages = {
     "This page only runs workflow members. Use the member's own surface for other implementation kinds.",
   'pages.runs.memberPublishedRuns.auditUnavailable':
     'Published run audit is unavailable.',
+  'pages.runs.memberPublishedRuns.backToTeamMembers': 'Back to team members',
   'pages.runs.memberPublishedRuns.details': 'Details',
   'pages.runs.memberPublishedRuns.input': 'Input',
   'pages.runs.memberPublishedRuns.listUnavailable':
@@ -817,6 +857,7 @@ const enUSMessages = {
   'pages.runs.memberPublishedRuns.logs': 'Logs',
   'pages.runs.memberPublishedRuns.noAuditSteps':
     'No audit steps were recorded for this published run.',
+  'pages.runs.memberPublishedRuns.navigation': 'Published runs navigation',
   'pages.runs.memberPublishedRuns.noRuns': 'No published runs yet.',
   'pages.runs.memberPublishedRuns.openEditor': 'Open editor',
   'pages.runs.memberPublishedRuns.output': 'Output',

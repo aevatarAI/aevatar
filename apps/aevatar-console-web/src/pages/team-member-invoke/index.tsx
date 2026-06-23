@@ -26,6 +26,7 @@ import {
 } from "@/shared/studio/models";
 import {
   AevatarInspectorEmpty,
+  type AevatarBreadcrumbItem,
   AevatarPageShell,
   AevatarPanel,
 } from "@/shared/ui/aevatarPageShells";
@@ -132,6 +133,27 @@ const TeamMemberInvokePage: React.FC = () => {
         appId: scopeServiceAppId,
       }),
   });
+  const memberBreadcrumbLabel =
+    trimOptional(memberQuery.data?.summary.displayName) ||
+    trimOptional(route.memberId) ||
+    t("pages.teammemberinvoke.memberBreadcrumb", "Member");
+  const breadcrumbItems: AevatarBreadcrumbItem[] = [
+    {
+      href: backHref,
+      onClick: (event) => {
+        event.preventDefault();
+        history.push(backHref);
+      },
+      title: t("pages.teammemberinvoke.teamsBreadcrumb", "Teams"),
+    },
+    {
+      title: memberBreadcrumbLabel,
+    },
+    {
+      current: true,
+      title: t("pages.teammemberinvoke.invokeBreadcrumb", "Invoke"),
+    },
+  ];
 
   const memberSummary = memberQuery.data?.summary ?? null;
   const memberKind = normalizeStudioMemberBindingImplementationKind(
@@ -312,6 +334,9 @@ const TeamMemberInvokePage: React.FC = () => {
 
   return (
     <AevatarPageShell
+      backAriaLabel={t("pages.teammemberinvoke.backToTeam", "Back to team")}
+      backTitle={t("pages.teammemberinvoke.backToTeam", "Back to team")}
+      breadcrumbItems={breadcrumbItems}
       breadcrumbRender={false}
       extra={
         <Space data-testid="team-member-invoke-header-actions" size={8} wrap>

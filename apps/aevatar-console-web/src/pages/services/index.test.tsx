@@ -132,7 +132,7 @@ describe('ServicesPage', () => {
   it('renders the reframed services authority workbench with inventory and empty detail state', async () => {
     renderWithQueryClient(React.createElement(ServicesPage));
 
-    expect(await screen.findByText('Aevatar / Platform')).toBeTruthy();
+    expect(await screen.findByText('Platform')).toBeTruthy();
     expect(screen.getAllByText('Services').length).toBeGreaterThan(0);
     expect(await screen.findByText('可见服务')).toBeTruthy();
     expect((await screen.findAllByText('已挂服务态')).length).toBeGreaterThan(0);
