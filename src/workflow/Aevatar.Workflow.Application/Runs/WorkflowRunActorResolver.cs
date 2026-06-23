@@ -1,3 +1,4 @@
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 
@@ -97,7 +98,8 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                 workflowNameForRun,
                 workflowYamlForRun,
                 inlineWorkflowYamlMapForRun,
-                scopeIdForRun),
+                scopeIdForRun,
+                hasInlineWorkflowYamls ? WorkflowRunOrigins.Draft : WorkflowRunOrigins.AdHocChat),
             wrapAsFallbackTrigger: !hasInlineWorkflowYamls,
             ct);
 
@@ -144,7 +146,8 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                     workflowNameForRun,
                     workflowYamlForRun,
                     inlineWorkflowYamlMapForRun,
-                    ResolveScopeId(sourceBinding.ScopeId, scopeIdHint)),
+                    ResolveScopeId(sourceBinding.ScopeId, scopeIdHint),
+                    WorkflowRunOrigins.Draft),
                 wrapAsFallbackTrigger: false,
                 ct);
             return new WorkflowActorResolutionResult(
@@ -186,7 +189,8 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                 boundWorkflowName,
                 workflowYamlFromSource,
                 sourceBinding.InlineWorkflowYamls,
-                ResolveScopeId(sourceBinding.ScopeId, scopeIdHint)),
+                ResolveScopeId(sourceBinding.ScopeId, scopeIdHint),
+                WorkflowRunOrigins.AdHocChat),
             wrapAsFallbackTrigger: true,
             ct);
 
