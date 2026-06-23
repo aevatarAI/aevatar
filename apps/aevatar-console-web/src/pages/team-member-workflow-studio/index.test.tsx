@@ -2181,7 +2181,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     });
     expect(publishedRunsButton).toHaveAttribute(
       "href",
-      "/runtime/runs?scopeId=scope-1&teamId=t-alpha&memberId=m-alpha",
+      "/scopes/scope-1/teams/t-alpha/members/m-alpha/runs",
     );
     expect(publishedRunsButton).toHaveAttribute(
       "title",

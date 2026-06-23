@@ -222,16 +222,10 @@ describe("TeamMemberInvokePage", () => {
       "View runs from the published member service.",
     );
     fireEvent.click(publishedRunsButton);
-    expect(window.location.pathname).toBe("/runtime/runs");
-    expect(new URLSearchParams(window.location.search).get("scopeId")).toBe(
-      "scope-1",
+    expect(window.location.pathname).toBe(
+      "/scopes/scope-1/teams/team-1/members/member-alpha/runs",
     );
-    expect(new URLSearchParams(window.location.search).get("teamId")).toBe(
-      "team-1",
-    );
-    expect(new URLSearchParams(window.location.search).get("memberId")).toBe(
-      "member-alpha",
-    );
+    expect(window.location.search).toBe("");
     expect(scopeRuntimeApi.listServices).toHaveBeenCalledWith("scope-1", {
       appId: "default",
     });

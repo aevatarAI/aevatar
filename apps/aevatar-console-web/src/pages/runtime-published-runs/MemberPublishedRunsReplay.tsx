@@ -32,8 +32,10 @@ import type {
   ScopeServiceRunAuditTimelineEvent,
 } from "@/shared/models/runtime/scopeServices";
 import { history } from "@/shared/navigation/history";
-import { buildRuntimeRunsHref } from "@/shared/navigation/runtimeRoutes";
-import { buildTeamMemberWorkflowStudioHref } from "@/shared/navigation/teamRoutes";
+import {
+  buildTeamMemberPublishedRunsHref,
+  buildTeamMemberWorkflowStudioHref,
+} from "@/shared/navigation/teamRoutes";
 import GraphCanvas from "@/shared/graphs/GraphCanvas";
 import type {
   StudioGraphEdgeData,
@@ -822,12 +824,12 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
     }
 
     history.replace(
-      buildRuntimeRunsHref({
+      buildTeamMemberPublishedRunsHref({
         actorId: selectedCatalogRun.actorId || undefined,
         memberId,
         runId: selectedCatalogRun.runId,
         scopeId,
-        teamId: normalizedTeamId || undefined,
+        teamId: normalizedTeamId,
       }),
     );
   }, [memberId, normalizedInitialRunId, normalizedTeamId, scopeId, selectedCatalogRun]);
@@ -905,11 +907,12 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
   const handleSelectRun = React.useCallback(
     (run: ScopeMemberRunSummary) => {
       history.push(
-        buildRuntimeRunsHref({
+        buildTeamMemberPublishedRunsHref({
+          actorId: run.actorId || undefined,
           memberId,
           runId: run.runId,
           scopeId,
-          teamId: normalizedTeamId || undefined,
+          teamId: normalizedTeamId,
         }),
       );
       setSelectedStepId("");
@@ -1232,15 +1235,6 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
                       </div>
                     ) : (
                       <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} />
-                    ),
-                  },
-                  {
-                    key: "raw",
-                    label: t("pages.runs.memberPublishedRuns.raw", "Raw"),
-                    children: (
-                      <pre className="member-published-runs-replay__pre">
-                        {JSON.stringify(selectedStep ?? audit ?? {}, null, 2)}
-                      </pre>
                     ),
                   },
                 ]}

@@ -60,6 +60,7 @@ describe("console routes", () => {
     expect(hasRoute(routes, "/teams/:scopeId/:teamId/members/new/workflow")).toBe(false);
     expect(hasRoute(routes, "/teams/:scopeId/:teamId/members/:memberId/workflow")).toBe(false);
     expect(hasRoute(routes, "/teams/:scopeId/:teamId/members/:memberId/invoke")).toBe(false);
+    expect(hasRoute(routes, "/teams/:scopeId/:teamId/members/:memberId/runs")).toBe(false);
     expect(findRoute(routes, "/scopes/:scopeId/teams").component).toBe("./teams");
     expect(findRoute(routes, "/scopes/:scopeId/teams").parentKeys).toEqual([
       "/scopes",
@@ -85,6 +86,9 @@ describe("console routes", () => {
     expect(findRoute(routes, "/scopes/:scopeId/teams/:teamId/members/:memberId/invoke").component).toBe(
       "./team-member-invoke",
     );
+    expect(findRoute(routes, "/scopes/:scopeId/teams/:teamId/members/:memberId/runs").component).toBe(
+      "./runtime-published-runs",
+    );
     expect(findRoute(routes, "/scopes/:scopeId/teams/:teamId/members/:memberId/automations").component).toBe(
       "./teams/detail",
     );
@@ -93,6 +97,9 @@ describe("console routes", () => {
     ).toBeLessThan(findRouteIndex(routes, "/scopes/:scopeId/teams/:teamId"));
     expect(
       findRouteIndex(routes, "/scopes/:scopeId/teams/:teamId/members/:memberId/workflow"),
+    ).toBeLessThan(findRouteIndex(routes, "/scopes/:scopeId/teams/:teamId"));
+    expect(
+      findRouteIndex(routes, "/scopes/:scopeId/teams/:teamId/members/:memberId/runs"),
     ).toBeLessThan(findRouteIndex(routes, "/scopes/:scopeId/teams/:teamId"));
     expect(
       findRouteIndex(routes, "/scopes/:scopeId/teams/:teamId/members/:memberId/automations"),

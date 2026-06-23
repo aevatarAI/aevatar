@@ -24,9 +24,7 @@ import {
 } from "@ant-design/pro-components";
 import { useQuery } from "@tanstack/react-query";
 import {
-  getLocationSnapshot,
   history,
-  subscribeToLocationChanges,
 } from "@/shared/navigation/history";
 import { sanitizeReturnTo } from "@/shared/auth/session";
 import { buildTeamDetailHref } from "@/shared/navigation/teamRoutes";
@@ -94,7 +92,6 @@ import RunsInspectorPane from "./components/RunsInspectorPane";
 import RunsActionRequiredPanel from "./components/RunsActionRequiredPanel";
 import RunsEventsView from "./components/RunsEventsView";
 import RunsLaunchRail from "./components/RunsLaunchRail";
-import MemberPublishedRunsReplay from "../runtime-published-runs/MemberPublishedRunsReplay";
 import RunsMessagesView from "./components/RunsMessagesView";
 import RunsStatusStrip from "./components/RunsStatusStrip";
 import RunsTracePane from "./components/RunsTracePane";
@@ -548,26 +545,7 @@ function resolveConsoleViewForEndpoint(
   return endpointKind === "chat" ? "messages" : "timeline";
 }
 
-function readMemberPublishedRunsRouteState(
-  search = typeof window === "undefined" ? "" : window.location.search
-): {
-  actorId: string;
-  memberId: string;
-  runId: string;
-  scopeId: string;
-  teamId: string;
-} {
-  const params = new URLSearchParams(search);
-  return {
-    actorId: params.get("actorId")?.trim() ?? "",
-    memberId: params.get("memberId")?.trim() ?? "",
-    runId: params.get("runId")?.trim() ?? "",
-    scopeId: params.get("scopeId")?.trim() ?? "",
-    teamId: params.get("teamId")?.trim() ?? "",
-  };
-}
-
-const RunsConsolePage: React.FC = () => {
+const RunsPage: React.FC = () => {
   const screens = Grid.useBreakpoint();
   const hasResolvedBreakpoint = Object.values(screens).some(Boolean);
   const useCompactChatLayout = hasResolvedBreakpoint && screens.md === false;
@@ -2518,32 +2496,6 @@ const RunsConsolePage: React.FC = () => {
       </div>
     </PageContainer>
   );
-};
-
-const RunsPage: React.FC = () => {
-  const locationSnapshot = React.useSyncExternalStore(
-    subscribeToLocationChanges,
-    getLocationSnapshot,
-    () => "",
-  );
-  const route = useMemo(
-    () => readMemberPublishedRunsRouteState(),
-    [locationSnapshot],
-  );
-
-  if (route.scopeId && route.memberId) {
-    return (
-      <MemberPublishedRunsReplay
-        initialActorId={route.actorId || undefined}
-        initialRunId={route.runId || undefined}
-        memberId={route.memberId}
-        scopeId={route.scopeId}
-        teamId={route.teamId || undefined}
-      />
-    );
-  }
-
-  return <RunsConsolePage />;
 };
 
 export default RunsPage;

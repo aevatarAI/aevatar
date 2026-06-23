@@ -14,10 +14,10 @@ import {
   subscribeToLocationChanges,
 } from "@/shared/navigation/history";
 import { t } from "@/shared/i18n/messages";
-import { buildRuntimeRunsHref } from "@/shared/navigation/runtimeRoutes";
 import {
   buildTeamDetailHref,
   buildTeamMemberAutomationsHref,
+  buildTeamMemberPublishedRunsHref,
   buildTeamMemberWorkflowStudioHref,
   buildTeamsHref,
 } from "@/shared/navigation/teamRoutes";
@@ -1865,10 +1865,10 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const memberPublishedServiceId = trimOptional(
     memberQuery.data?.summary.publishedServiceId,
   );
-  const publishedRunsHref = buildRuntimeRunsHref({
+  const publishedRunsHref = buildTeamMemberPublishedRunsHref({
     memberId: route.memberId || undefined,
     scopeId: route.scopeId,
-    teamId: route.teamId || undefined,
+    teamId: route.teamId,
   });
   const canOpenPublishedRuns = Boolean(
     route.mode === "existing" &&

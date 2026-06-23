@@ -9,9 +9,9 @@ import {
   history,
   subscribeToLocationChanges,
 } from "@/shared/navigation/history";
-import { buildRuntimeRunsHref } from "@/shared/navigation/runtimeRoutes";
 import {
   buildTeamDetailHref,
+  buildTeamMemberPublishedRunsHref,
   buildTeamMemberWorkflowStudioHref,
 } from "@/shared/navigation/teamRoutes";
 import {
@@ -108,10 +108,10 @@ const TeamMemberInvokePage: React.FC = () => {
     scopeId: route.scopeId,
     teamId: route.teamId,
   });
-  const publishedRunsHref = buildRuntimeRunsHref({
+  const publishedRunsHref = buildTeamMemberPublishedRunsHref({
     memberId: route.memberId || undefined,
-    scopeId: route.scopeId || undefined,
-    teamId: route.teamId || undefined,
+    scopeId: route.scopeId,
+    teamId: route.teamId,
   });
 
   const memberQuery = useQuery({
