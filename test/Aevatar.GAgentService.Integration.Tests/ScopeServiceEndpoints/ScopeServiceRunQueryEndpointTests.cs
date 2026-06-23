@@ -222,6 +222,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
         response.Runs[0].RunId.Should().Be("run-member-list-1");
         response.Runs[0].MemberId.Should().Be("member-a");
         response.Runs[0].PublishedServiceId.Should().Be("member-a");
+        response.Runs[0].DefinitionActorId.Should().Be("def-member-old");
         response.Runs[0].RevisionId.Should().Be("rev-1");
         response.Runs[0].DeploymentId.Should().Be("dep-member-old");
         response.Runs[0].StateVersion.Should().Be(13);
@@ -621,8 +622,8 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
     public async Task ListMemberRunsEndpoint_ShouldApplyRegistryFilters()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
-        host.LifecycleQueryPort.Service = BuildService("scope-a", "member-a", "member-actor-1");
-        host.LifecycleQueryPort.Deployments = BuildDeployments("scope-a:default:default:member-a", "dep-1", "rev-1", "member-actor-1");
+        host.LifecycleQueryPort.Service = BuildService("scope-a", "member-a", "def-member-registry");
+        host.LifecycleQueryPort.Deployments = BuildDeployments("scope-a:default:default:member-a", "dep-1", "rev-1", "def-member-registry");
         var baseTime = DateTimeOffset.Parse("2026-04-27T00:00:00+00:00");
         host.ServiceRunQueryPort.Upsert(BuildRunSnapshot(
             "scope-a",
@@ -630,7 +631,23 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
             "run-member-match",
             "schedule-member",
             ServiceRunStatus.Completed,
-            baseTime.AddHours(1)));
+            baseTime.AddHours(1),
+            ServiceImplementationKind.Workflow,
+            "run-actor-member-registry"));
+        host.RunBindingReader.BindingsByRunId["run-member-match"] =
+        [
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                "run-actor-member-registry",
+                "def-member-registry",
+                "run-member-match",
+                "member-flow",
+                "yaml",
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                "scope-a",
+                CreatedAt: baseTime.AddMinutes(10),
+                UpdatedAt: baseTime.AddHours(1)),
+        ];
         host.ServiceRunQueryPort.Upsert(BuildRunSnapshot(
             "scope-a",
             "member-a",
@@ -651,6 +668,8 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
         httpResponse.StatusCode.Should().Be(HttpStatusCode.OK);
         response.Should().NotBeNull();
         response!.Runs.Select(x => x.RunId).Should().Equal("run-member-match");
+        response.Runs[0].ActorId.Should().Be("run-actor-member-registry");
+        response.Runs[0].DefinitionActorId.Should().Be("def-member-registry");
     }
 
     [Fact]
@@ -986,7 +1005,9 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
         string runId,
         string scheduleId,
         ServiceRunStatus status,
-        DateTimeOffset updatedAt) =>
+        DateTimeOffset updatedAt,
+        ServiceImplementationKind implementationKind = ServiceImplementationKind.Static,
+        string targetActorId = "static-actor-1") =>
         new(
             ScopeId: scopeId,
             ServiceId: serviceId,
@@ -996,8 +1017,8 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
             CorrelationId: $"corr-{runId}",
             EndpointId: "run",
             ScheduleId: scheduleId,
-            ImplementationKind: ServiceImplementationKind.Static,
-            TargetActorId: "static-actor-1",
+            ImplementationKind: implementationKind,
+            TargetActorId: targetActorId,
             RevisionId: "rev-1",
             DeploymentId: "dep-1",
             Status: status,

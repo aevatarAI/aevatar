@@ -1176,6 +1176,7 @@ public static class ScopeServiceEndpoints
         [FromServices] IMemberPublishedServiceResolver memberPublishedServiceResolver,
         [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
         [FromServices] IServiceRunQueryPort serviceRunQueryPort,
+        [FromServices] IWorkflowRunBindingReader workflowRunBindingReader,
         [FromServices] IWorkflowExecutionQueryApplicationService workflowExecutionQueryService,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
@@ -1222,6 +1223,7 @@ public static class ScopeServiceEndpoints
                     memberResolution.ScopeId,
                     memberResolution.PublishedServiceId,
                     snapshot,
+                    workflowRunBindingReader,
                     workflowExecutionQueryService,
                     ct);
                 summaries.Add(BuildMemberRunSummaryResponse(memberResolution, serviceSummary));
@@ -1584,6 +1586,7 @@ public static class ScopeServiceEndpoints
                 scopeId,
                 serviceId,
                 snapshot,
+                workflowRunBindingReader: null,
                 workflowExecutionQueryService,
                 ct));
         }
@@ -1625,6 +1628,7 @@ public static class ScopeServiceEndpoints
             scopeId,
             serviceId,
             snapshot,
+            workflowRunBindingReader: null,
             workflowExecutionQueryService,
             ct));
     }
@@ -1658,6 +1662,7 @@ public static class ScopeServiceEndpoints
             scopeId,
             serviceId,
             snapshot,
+            workflowRunBindingReader: null,
             workflowExecutionQueryService,
             ct);
 
@@ -3226,9 +3231,11 @@ const response = await fetch("{{invokePath}}", {
         string scopeId,
         string serviceId,
         ServiceRunSnapshot snapshot,
+        IWorkflowRunBindingReader? workflowRunBindingReader,
         IWorkflowExecutionQueryApplicationService workflowExecutionQueryService,
         CancellationToken ct)
     {
+        var workflowBinding = await ResolveWorkflowRunBindingAsync(snapshot, workflowRunBindingReader, ct);
         var workflowSnapshot = snapshot.ImplementationKind == ServiceImplementationKind.Workflow &&
                                !string.IsNullOrWhiteSpace(snapshot.TargetActorId)
             ? await workflowExecutionQueryService.GetWorkflowActorCurrentStateAsync(snapshot.TargetActorId, ct)
@@ -3242,7 +3249,7 @@ const response = await fetch("{{invokePath}}", {
             // ActorId stays the controllable target so existing resume/signal/stop
             // round-trips keep working; the registry actor is internal infra.
             snapshot.TargetActorId,
-            string.Empty,
+            workflowBinding?.EffectiveDefinitionActorId ?? string.Empty,
             snapshot.RevisionId,
             snapshot.DeploymentId,
             workflowSnapshot?.WorkflowName ?? string.Empty,
@@ -3268,6 +3275,24 @@ const response = await fetch("{{invokePath}}", {
             snapshot.EndpointId,
             snapshot.TargetActorId,
             snapshot.CreatedAt);
+    }
+
+    private static async Task<WorkflowActorBinding?> ResolveWorkflowRunBindingAsync(
+        ServiceRunSnapshot snapshot,
+        IWorkflowRunBindingReader? workflowRunBindingReader,
+        CancellationToken ct)
+    {
+        if (workflowRunBindingReader == null ||
+            snapshot.ImplementationKind != ServiceImplementationKind.Workflow ||
+            string.IsNullOrWhiteSpace(snapshot.RunId))
+        {
+            return null;
+        }
+
+        var bindings = await workflowRunBindingReader.ListByRunIdAsync(snapshot.RunId, take: 20, ct);
+        return bindings.FirstOrDefault(binding =>
+            binding.ActorKind == WorkflowActorKind.Run &&
+            string.Equals(binding.ActorId, snapshot.TargetActorId, StringComparison.Ordinal));
     }
 
     private static WorkflowRunCompletionStatus MapServiceRunCompletionStatus(ServiceRunStatus status) =>
