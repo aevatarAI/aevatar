@@ -69,6 +69,13 @@ export default [
     parentKeys: ["/scopes"],
   },
   {
+    path: "/scopes/:scopeId/teams/:teamId/members/:memberId/runs",
+    name: "Team Member Published Runs",
+    component: "./runtime-published-runs",
+    hideInMenu: true,
+    parentKeys: ["/scopes"],
+  },
+  {
     path: "/scopes/:scopeId/teams/:teamId/members/:memberId/automations",
     component: "./teams/detail",
     hideInMenu: true,

@@ -101,6 +101,8 @@ import {
 } from '@/shared/models/runtime/gagents';
 import {
   getScopeServiceCurrentRevision,
+  toScopeServiceRunAuditSnapshot,
+  toScopeServiceRunSummary,
   type ScopeServiceRunAuditSnapshot,
   type ScopeServiceRunAuditStep,
   type ScopeServiceRunSummary,
@@ -8420,7 +8422,13 @@ const StudioPage: React.FC = () => {
             {
               take: 12,
             },
-          ),
+          ).then((catalog) => ({
+            displayName: catalog.displayName,
+            runs: catalog.runs.map(toScopeServiceRunSummary),
+            scopeId: catalog.scopeId,
+            serviceId: catalog.publishedServiceId,
+            serviceKey: catalog.publishedServiceKey,
+          })),
     retry: false,
   });
   const observeServiceRuns = useMemo(() => {
@@ -8493,7 +8501,7 @@ const StudioPage: React.FC = () => {
               actorId:
                 trimOptional(selectedObserveBackendRunSummary?.actorId) || undefined,
             },
-          ),
+          ).then(toScopeServiceRunAuditSnapshot),
     retry: false,
   });
   useEffect(() => {

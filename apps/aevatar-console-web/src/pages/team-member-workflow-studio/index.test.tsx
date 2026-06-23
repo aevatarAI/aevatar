@@ -2176,6 +2176,17 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(screen.getByText("Published")).toBeTruthy();
     expect(screen.queryByText("Draft")).toBeNull();
     expect(screen.getByRole("button", { name: "Refresh status" })).toBeTruthy();
+    const publishedRunsButton = screen.getByRole("link", {
+      name: "Published runs",
+    });
+    expect(publishedRunsButton).toHaveAttribute(
+      "href",
+      "/scopes/scope-1/teams/t-alpha/members/m-alpha/runs",
+    );
+    expect(publishedRunsButton).toHaveAttribute(
+      "title",
+      "View runs from the published member service.",
+    );
     expect(screen.queryByRole("button", { name: "Publish" })).toBeNull();
     expect(studioApi.bindMemberWorkflow).not.toHaveBeenCalled();
     expect(studioApi.getWorkflow).not.toHaveBeenCalled();
@@ -3756,6 +3767,14 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(
       within(headerPrimaryActions).getByRole("button", { name: "Add node" }),
     ).toBeTruthy();
+    const publishedRunsButton = within(headerPrimaryActions).getByRole("button", {
+      name: "Published runs",
+    });
+    expect(publishedRunsButton).toBeDisabled();
+    expect(publishedRunsButton).toHaveAttribute(
+      "title",
+      "Publish this member to start recording published runs.",
+    );
     expect(
       within(headerPrimaryActions).getByRole("button", { name: "Save" }),
     ).toBeTruthy();
@@ -3864,6 +3883,10 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(runtimeRunsApi.streamChat).not.toHaveBeenCalled();
     await waitFor(() => {
       expect(consolePanel).toHaveTextContent("succeeded");
+    });
+    await waitFor(() => {
+      expect(publishedRunsButton).toBeDisabled();
+      expect(publishedRunsButton).not.toHaveAttribute("href");
     });
     expect(within(consolePanel).getByLabelText("Logs overview")).toBeTruthy();
     expect(within(consolePanel).getByLabelText("Log details")).toBeTruthy();

@@ -23,7 +23,9 @@ import {
   PageContainer,
 } from "@ant-design/pro-components";
 import { useQuery } from "@tanstack/react-query";
-import { history } from "@/shared/navigation/history";
+import {
+  history,
+} from "@/shared/navigation/history";
 import { sanitizeReturnTo } from "@/shared/auth/session";
 import { buildTeamDetailHref } from "@/shared/navigation/teamRoutes";
 import {

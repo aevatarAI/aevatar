@@ -410,13 +410,15 @@ describe("scopeRuntimeApi", () => {
       status: 200,
       json: async () => ({
         scopeId: "scope-a",
-        serviceId: "joker",
-        serviceKey: "scope-a:default:joker",
+        memberId: "joker",
+        publishedServiceId: "svc-joker",
+        publishedServiceKey: "scope-a:default:default:svc-joker",
         displayName: "joker",
         runs: [
           {
             scopeId: "scope-a",
-            serviceId: "joker",
+            memberId: "joker",
+            publishedServiceId: "svc-joker",
             runId: "run-42",
             actorId: "actor://scope-a/joker",
             definitionActorId: "definition://joker",
@@ -445,8 +447,15 @@ describe("scopeRuntimeApi", () => {
       scopeRuntimeApi.listMemberRuns("scope-a", "joker", { take: 5 }),
     ).resolves.toEqual(
       expect.objectContaining({
-        serviceId: "joker",
-        runs: [expect.objectContaining({ runId: "run-42" })],
+        memberId: "joker",
+        publishedServiceId: "svc-joker",
+        runs: [
+          expect.objectContaining({
+            memberId: "joker",
+            publishedServiceId: "svc-joker",
+            runId: "run-42",
+          }),
+        ],
       }),
     );
 
@@ -562,7 +571,8 @@ describe("scopeRuntimeApi", () => {
       json: async () => ({
         summary: {
           scopeId: "scope-a",
-          serviceId: "joker",
+          memberId: "joker",
+          publishedServiceId: "svc-joker",
           runId: "run-42",
           actorId: "actor://scope-a/joker",
           definitionActorId: "definition://joker",
@@ -624,8 +634,9 @@ describe("scopeRuntimeApi", () => {
     ).resolves.toEqual(
       expect.objectContaining({
         summary: expect.objectContaining({
+          memberId: "joker",
+          publishedServiceId: "svc-joker",
           runId: "run-42",
-          serviceId: "joker",
         }),
       }),
     );

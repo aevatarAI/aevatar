@@ -6,6 +6,7 @@ import {
   DownOutlined,
   EditOutlined,
   FileTextOutlined,
+  HistoryOutlined,
   MoreOutlined,
   PlayCircleOutlined,
   PlusOutlined,
@@ -24,7 +25,10 @@ type WorkflowStudioHeaderProps = {
   readonly automationsHref: string;
   readonly automationsPlaceholderReason?: string;
   readonly canOpenAutomations: boolean;
+  readonly canOpenPublishedRuns: boolean;
   readonly memberPublished: boolean;
+  readonly publishedRunsHref: string;
+  readonly publishedRunsPlaceholderReason?: string;
   readonly publishDisabled: boolean;
   readonly publishNotice: string;
   readonly publishPending: boolean;
@@ -39,6 +43,7 @@ type WorkflowStudioHeaderProps = {
   readonly currentDraftRunPlaceholderReason?: string;
   readonly onPublishMember: () => void;
   readonly onOpenAutomations: () => void;
+  readonly onOpenPublishedRuns: () => void;
   readonly onRefreshPublishStatus: () => void;
   readonly onAddNode: () => void;
   readonly onDeleteConnection: () => void;
@@ -434,6 +439,7 @@ type HeaderActionsProps = {
   readonly automationsPlaceholderReason?: string;
   readonly canOpenAutomations: boolean;
   readonly canOpenDraftRunPanel: boolean;
+  readonly canOpenPublishedRuns: boolean;
   readonly canSave: boolean;
   readonly canViewYaml: boolean;
   readonly onAddNode: () => void;
@@ -441,6 +447,7 @@ type HeaderActionsProps = {
   readonly onDeleteNode: () => void;
   readonly onOpenAutomations: () => void;
   readonly onOpenDraftRunPanel: () => void;
+  readonly onOpenPublishedRuns: () => void;
   readonly onPasteYamlClick: () => void;
   readonly onPublishMember: () => void;
   readonly onRefreshPublishStatus: () => void;
@@ -450,6 +457,8 @@ type HeaderActionsProps = {
   readonly publishDisabled: boolean;
   readonly publishPending: boolean;
   readonly publishPlaceholderReason?: string;
+  readonly publishedRunsHref: string;
+  readonly publishedRunsPlaceholderReason?: string;
   readonly refreshPublishStatusPending: boolean;
   readonly savePending: boolean;
   readonly savePlaceholderReason?: string;
@@ -465,6 +474,7 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
   automationsPlaceholderReason,
   canOpenAutomations,
   canOpenDraftRunPanel,
+  canOpenPublishedRuns,
   canSave,
   canViewYaml,
   onAddNode,
@@ -472,6 +482,7 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
   onDeleteNode,
   onOpenAutomations,
   onOpenDraftRunPanel,
+  onOpenPublishedRuns,
   onPasteYamlClick,
   onPublishMember,
   onRefreshPublishStatus,
@@ -481,6 +492,8 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
   publishDisabled,
   publishPending,
   publishPlaceholderReason,
+  publishedRunsHref,
+  publishedRunsPlaceholderReason,
   refreshPublishStatusPending,
   savePending,
   savePlaceholderReason,
@@ -572,6 +585,26 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
       >
         <span className="workflow-studio-header__action-label workflow-studio-header__action-label--secondary">
           {t("teamMemberWorkflowStudio.header.addNode", "Add node")}
+        </span>
+      </Button>
+      <Button
+        aria-label={t(
+          "teamMemberWorkflowStudio.header.publishedRuns",
+          "Published runs",
+        )}
+        className="workflow-studio-header__compact-button"
+        disabled={!canOpenPublishedRuns}
+        href={canOpenPublishedRuns ? publishedRunsHref : undefined}
+        icon={<HistoryOutlined />}
+        onClick={(event) => {
+          event.preventDefault();
+          onOpenPublishedRuns();
+        }}
+        size="small"
+        title={publishedRunsPlaceholderReason}
+      >
+        <span className="workflow-studio-header__action-label workflow-studio-header__action-label--secondary">
+          {t("teamMemberWorkflowStudio.header.publishedRuns", "Published runs")}
         </span>
       </Button>
       <Button
@@ -764,7 +797,10 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
   automationsHref,
   automationsPlaceholderReason,
   canOpenAutomations,
+  canOpenPublishedRuns,
   memberPublished,
+  publishedRunsHref,
+  publishedRunsPlaceholderReason,
   publishDisabled,
   publishNotice,
   publishPending,
@@ -779,6 +815,7 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
   currentDraftRunPlaceholderReason,
   onPublishMember,
   onOpenAutomations,
+  onOpenPublishedRuns,
   onRefreshPublishStatus,
   onAddNode,
   onDeleteConnection,
@@ -846,6 +883,7 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
           automationsPlaceholderReason={automationsPlaceholderReason}
           canOpenAutomations={canOpenAutomations}
           canOpenDraftRunPanel={canOpenDraftRunPanel}
+          canOpenPublishedRuns={canOpenPublishedRuns}
           canSave={canSave}
           canViewYaml={canViewYaml}
           onAddNode={onAddNode}
@@ -853,6 +891,7 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
           onDeleteNode={onDeleteNode}
           onOpenAutomations={onOpenAutomations}
           onOpenDraftRunPanel={onOpenDraftRunPanel}
+          onOpenPublishedRuns={onOpenPublishedRuns}
           onPasteYamlClick={onOpenPasteYaml}
           onPublishMember={onPublishMember}
           onRefreshPublishStatus={onRefreshPublishStatus}
@@ -862,6 +901,8 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
           publishDisabled={publishDisabled}
           publishPending={publishPending}
           publishPlaceholderReason={publishPlaceholderReason}
+          publishedRunsHref={publishedRunsHref}
+          publishedRunsPlaceholderReason={publishedRunsPlaceholderReason}
           refreshPublishStatusPending={refreshPublishStatusPending}
           savePending={savePending}
           savePlaceholderReason={savePlaceholderReason}

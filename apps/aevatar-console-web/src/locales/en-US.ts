@@ -22,6 +22,7 @@ const enUSMessages = {
   'menu.Settings': 'Settings',
   'menu.Team Details': 'Team Details',
   'menu.Team Member Invoke': 'Team Member Invoke',
+  'menu.Team Member Published Runs': 'Team Member Published Runs',
   'menu.Team Member Workflow Studio': 'Team Member Workflow Studio',
   'menu.Topology': 'Topology',
   'nav.groups.platform': 'Platform',
@@ -784,6 +785,11 @@ const enUSMessages = {
   'pages.teammemberinvoke.member': 'Member',
   'pages.teammemberinvoke.next.step': 'Next step',
   'pages.teammemberinvoke.open.studio': 'Workflow Studio',
+  'pages.teammemberinvoke.publishedRuns': 'Published runs',
+  'pages.teammemberinvoke.publishedRuns.open':
+    'View runs from the published member service.',
+  'pages.teammemberinvoke.publishedRuns.publishFirst':
+    'Publish this member to start recording published runs.',
   'pages.teammemberinvoke.resolve.in.studio': 'Open Workflow Studio',
   'pages.teammemberinvoke.route.missing': 'Missing member route',
   'pages.teammemberinvoke.route.missing.description':
@@ -802,6 +808,23 @@ const enUSMessages = {
     'Invoke is available for workflow members only.',
   'pages.teammemberinvoke.workflow.only.description':
     "This page only runs workflow members. Use the member's own surface for other implementation kinds.",
+  'pages.runs.memberPublishedRuns.auditUnavailable':
+    'Published run audit is unavailable.',
+  'pages.runs.memberPublishedRuns.details': 'Details',
+  'pages.runs.memberPublishedRuns.input': 'Input',
+  'pages.runs.memberPublishedRuns.listUnavailable':
+    'Published runs are unavailable.',
+  'pages.runs.memberPublishedRuns.logs': 'Logs',
+  'pages.runs.memberPublishedRuns.noAuditSteps':
+    'No audit steps were recorded for this published run.',
+  'pages.runs.memberPublishedRuns.noRuns': 'No published runs yet.',
+  'pages.runs.memberPublishedRuns.openEditor': 'Open editor',
+  'pages.runs.memberPublishedRuns.output': 'Output',
+  'pages.runs.memberPublishedRuns.publishedRuns': 'Published runs',
+  'pages.runs.memberPublishedRuns.refresh': 'Refresh',
+  'pages.runs.memberPublishedRuns.selectPublishedRun':
+    'Select a published run',
+  'pages.runs.memberPublishedRuns.timeline': 'Timeline',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.description':
     'You can build or paste the workflow here. Saving creates a reusable workflow draft until the member link is materialized.',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.title':
@@ -910,6 +933,13 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.header.primaryActionsAria':
     'Workflow primary actions',
   'teamMemberWorkflowStudio.header.prepareDraftRun': 'Prepare draft run',
+  'teamMemberWorkflowStudio.header.publishedRuns': 'Published runs',
+  'teamMemberWorkflowStudio.header.publishedRuns.open':
+    'View runs from the published member service.',
+  'teamMemberWorkflowStudio.header.publishedRuns.publishFirst':
+    'Publish this member to start recording published runs.',
+  'teamMemberWorkflowStudio.header.publishedRuns.saveFirst':
+    'Save this member before viewing published runs.',
   'teamMemberWorkflowStudio.header.publish': 'Publish',
   'teamMemberWorkflowStudio.header.runMessage': 'Run message',
   'teamMemberWorkflowStudio.header.refreshPublishStatus': 'Refresh status',

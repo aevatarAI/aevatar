@@ -214,7 +214,18 @@ describe("TeamMemberInvokePage", () => {
       "variant:undefined",
     );
     expect(screen.queryByRole("button", { name: "Team members" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Workflow Studio" })).toBeNull();
+    const publishedRunsButton = screen.getByRole("button", {
+      name: "Published runs",
+    });
+    expect(publishedRunsButton).toHaveAttribute(
+      "title",
+      "View runs from the published member service.",
+    );
+    fireEvent.click(publishedRunsButton);
+    expect(window.location.pathname).toBe(
+      "/scopes/scope-1/teams/team-1/members/member-alpha/runs",
+    );
+    expect(window.location.search).toBe("");
     expect(scopeRuntimeApi.listServices).toHaveBeenCalledWith("scope-1", {
       appId: "default",
     });
@@ -329,12 +340,20 @@ describe("TeamMemberInvokePage", () => {
       await screen.findByText("This workflow member is not bound yet."),
     ).toBeTruthy();
     expect(screen.queryByTestId("member-invoke-panel")).toBeNull();
+    const publishedRunsButton = screen.getByRole("button", {
+      name: "Published runs",
+    });
+    expect(publishedRunsButton).toBeDisabled();
+    expect(publishedRunsButton).toHaveAttribute(
+      "title",
+      "Publish this member to start recording published runs.",
+    );
     const workflowStudioButtons = screen.getAllByRole("button", {
       name: "Workflow Studio",
     });
-    expect(workflowStudioButtons).toHaveLength(1);
+    expect(workflowStudioButtons).toHaveLength(2);
 
-    fireEvent.click(workflowStudioButtons[0]);
+    fireEvent.click(workflowStudioButtons[1]);
 
     expect(window.location.pathname).toBe(
       "/scopes/scope-1/teams/team-1/members/member-alpha/workflow",
