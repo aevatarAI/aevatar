@@ -394,14 +394,20 @@ public sealed class ScopeServiceCatalogEndpointTests : ScopeServiceEndpointTestK
     }
 
     [Fact]
-    public async Task GetMemberPublishedServiceEndpoint_ShouldRejectDifferentAuthenticatedMember()
+    public async Task GetMemberPublishedServiceEndpoint_ShouldAllowDifferentAuthenticatedMemberInSameScope()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
         using var request = new HttpRequestMessage(HttpMethod.Get, "/api/scopes/scope-a/members/member-a/published-service");
+        request.Headers.Add("X-Test-Scope-Id", "scope-a");
         request.Headers.Add("X-Test-Member-Id", "member-b");
 
         var response = await host.Client.SendAsync(request);
+        var body = await response.Content.ReadFromJsonAsync<ScopeServiceEndpoints.MemberPublishedServiceHttpResponse>();
 
-        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        body.Should().NotBeNull();
+        body!.ScopeId.Should().Be("scope-a");
+        body.MemberId.Should().Be("member-a");
+        body.PublishedServiceId.Should().Be("member-a");
     }
 }

@@ -13,7 +13,7 @@ The current authoritative resolver maps each normalized `memberId` to a stable p
 | `publishedServiceId` | Stable service id used by backend service runtime for that member. |
 | `publishedServiceKey` | Internal service identity key for diagnostics and contract inspection. |
 
-The resolver is exposed through `IMemberPublishedServiceResolver`, so a later actor-owned member catalog can replace the deterministic mapping without changing HTTP routes. Until that catalog is authoritative, member binding writes are restricted to scope administrators; member reads and invokes require either the matching authenticated member claim or a scope administrator role.
+The resolver is exposed through `IMemberPublishedServiceResolver`, so a later actor-owned member catalog can replace the deterministic mapping without changing HTTP routes. Member-first routes are authorized at the scope boundary; `memberId` identifies the target member-owned resource, not the authenticated principal. Binding write authority remains owned by the Studio member async protocol.
 
 ## Routes
 

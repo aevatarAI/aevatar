@@ -431,9 +431,6 @@ public static class ScopeServiceEndpoints
             if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
                 return denied;
 
-            if (AevatarMemberAccessGuard.TryCreateMemberAccessDeniedResult(http, memberId, out var memberDenied))
-                return memberDenied;
-
             var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
                 new MemberPublishedServiceResolveRequest(scopeId, memberId),
                 ct);
@@ -1176,9 +1173,6 @@ public static class ScopeServiceEndpoints
             if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
                 return denied;
 
-            if (AevatarMemberAccessGuard.TryCreateMemberAccessDeniedResult(http, memberId, out var memberDenied))
-                return memberDenied;
-
             var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
                 new MemberPublishedServiceResolveRequest(scopeId, memberId),
                 ct);
@@ -1251,9 +1245,6 @@ public static class ScopeServiceEndpoints
             if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
                 return denied;
 
-            if (AevatarMemberAccessGuard.TryCreateMemberAccessDeniedResult(http, memberId, out var memberDenied))
-                return memberDenied;
-
             var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
                 new MemberPublishedServiceResolveRequest(scopeId, memberId),
                 ct);
@@ -1308,9 +1299,6 @@ public static class ScopeServiceEndpoints
         {
             if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
                 return denied;
-
-            if (AevatarMemberAccessGuard.TryCreateMemberAccessDeniedResult(http, memberId, out var memberDenied))
-                return memberDenied;
 
             var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
                 new MemberPublishedServiceResolveRequest(scopeId, memberId),
@@ -1379,9 +1367,6 @@ public static class ScopeServiceEndpoints
             if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
                 return denied;
 
-            if (AevatarMemberAccessGuard.TryCreateMemberAccessDeniedResult(http, memberId, out var memberDenied))
-                return memberDenied;
-
             var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
                 new MemberPublishedServiceResolveRequest(scopeId, memberId),
                 ct);
@@ -1395,7 +1380,8 @@ public static class ScopeServiceEndpoints
                 workflowRunBindingReader,
                 resumeService,
                 options,
-                ct);
+                ct,
+                BuildScopeServiceRunBasePath(memberResolution.ScopeId, memberResolution.PublishedServiceId, memberResolution.MemberId));
         }
         catch (InvalidOperationException ex)
         {
@@ -1425,9 +1411,6 @@ public static class ScopeServiceEndpoints
             if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
                 return denied;
 
-            if (AevatarMemberAccessGuard.TryCreateMemberAccessDeniedResult(http, memberId, out var memberDenied))
-                return memberDenied;
-
             var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
                 new MemberPublishedServiceResolveRequest(scopeId, memberId),
                 ct);
@@ -1441,7 +1424,8 @@ public static class ScopeServiceEndpoints
                 workflowRunBindingReader,
                 signalService,
                 options,
-                ct);
+                ct,
+                BuildScopeServiceRunBasePath(memberResolution.ScopeId, memberResolution.PublishedServiceId, memberResolution.MemberId));
         }
         catch (InvalidOperationException ex)
         {
@@ -1471,9 +1455,6 @@ public static class ScopeServiceEndpoints
             if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
                 return denied;
 
-            if (AevatarMemberAccessGuard.TryCreateMemberAccessDeniedResult(http, memberId, out var memberDenied))
-                return memberDenied;
-
             var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
                 new MemberPublishedServiceResolveRequest(scopeId, memberId),
                 ct);
@@ -1487,7 +1468,8 @@ public static class ScopeServiceEndpoints
                 workflowRunBindingReader,
                 stopService,
                 options,
-                ct);
+                ct,
+                BuildScopeServiceRunBasePath(memberResolution.ScopeId, memberResolution.PublishedServiceId, memberResolution.MemberId));
         }
         catch (InvalidOperationException ex)
         {
@@ -2314,7 +2296,8 @@ public static class ScopeServiceEndpoints
         [FromServices] IWorkflowRunBindingReader workflowRunBindingReader,
         [FromServices] ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError> resumeService,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? acceptedResourcePath = null)
     {
         var resolution = await ResolveScopeServiceRunAsync(
             http,
@@ -2329,27 +2312,28 @@ public static class ScopeServiceEndpoints
         if (resolution.Failure != null)
             return resolution.Failure;
 
-        return await WorkflowCapabilityEndpoints.HandleResume(
-            new WorkflowResumeInput
-            {
-                ActorId = resolution.Binding!.ActorId,
-                RunId = resolution.Binding.RunId,
-                StepId = request.StepId ?? string.Empty,
-                CommandId = request.CommandId,
-                Approved = request.Approved,
-                UserInput = request.UserInput,
-                Metadata = request.Metadata,
-                ToolApproval = request.ToolApproval == null
+        var binding = resolution.Binding!;
+        var dispatch = await resumeService.DispatchAsync(
+            new WorkflowResumeCommand(
+                binding.ActorId,
+                binding.RunId,
+                request.StepId ?? string.Empty,
+                request.CommandId,
+                request.Approved,
+                request.UserInput,
+                request.Metadata,
+                ToolApproval: request.ToolApproval == null
                     ? null
-                    : new WorkflowToolApprovalResumeInput
-                    {
-                        ExecutionId = request.ToolApproval.ExecutionId ?? string.Empty,
-                        ToolCallId = request.ToolApproval.ToolCallId ?? string.Empty,
-                        ApprovalRequestId = request.ToolApproval.ApprovalRequestId ?? string.Empty,
-                    },
-            },
-            resumeService,
+                    : new WorkflowToolApprovalResumeCommand(
+                        request.ToolApproval.ExecutionId ?? string.Empty,
+                        request.ToolApproval.ToolCallId ?? string.Empty,
+                        request.ToolApproval.ApprovalRequestId ?? string.Empty)),
             ct);
+
+        if (!dispatch.Succeeded || dispatch.Receipt == null)
+            return CreateRunControlDispatchFailure(dispatch.Error);
+
+        return CreateRunControlAcceptedResult(dispatch.Receipt, scopeId, serviceId, acceptedResourcePath);
     }
 
     private static async Task<IResult> HandleSignalRunAsync(
@@ -2362,7 +2346,8 @@ public static class ScopeServiceEndpoints
         [FromServices] IWorkflowRunBindingReader workflowRunBindingReader,
         [FromServices] ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError> signalService,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? acceptedResourcePath = null)
     {
         var resolution = await ResolveScopeServiceRunAsync(
             http,
@@ -2377,18 +2362,21 @@ public static class ScopeServiceEndpoints
         if (resolution.Failure != null)
             return resolution.Failure;
 
-        return await WorkflowCapabilityEndpoints.HandleSignal(
-            new WorkflowSignalInput
-            {
-                ActorId = resolution.Binding!.ActorId,
-                RunId = resolution.Binding.RunId,
-                SignalName = request.SignalName ?? string.Empty,
-                StepId = request.StepId,
-                CommandId = request.CommandId,
-                Payload = request.Payload,
-            },
-            signalService,
+        var binding = resolution.Binding!;
+        var dispatch = await signalService.DispatchAsync(
+            new WorkflowSignalCommand(
+                binding.ActorId,
+                binding.RunId,
+                request.SignalName ?? string.Empty,
+                request.CommandId,
+                request.Payload,
+                request.StepId),
             ct);
+
+        if (!dispatch.Succeeded || dispatch.Receipt == null)
+            return CreateRunControlDispatchFailure(dispatch.Error);
+
+        return CreateRunControlAcceptedResult(dispatch.Receipt, scopeId, serviceId, acceptedResourcePath);
     }
 
     private static async Task<IResult> HandleStopRunAsync(
@@ -2401,7 +2389,8 @@ public static class ScopeServiceEndpoints
         [FromServices] IWorkflowRunBindingReader workflowRunBindingReader,
         [FromServices] ICommandDispatchService<WorkflowStopCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError> stopService,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? acceptedResourcePath = null)
     {
         var resolution = await ResolveScopeServiceRunAsync(
             http,
@@ -2416,16 +2405,84 @@ public static class ScopeServiceEndpoints
         if (resolution.Failure != null)
             return resolution.Failure;
 
-        return await WorkflowCapabilityEndpoints.HandleStop(
-            new WorkflowStopInput
-            {
-                ActorId = resolution.Binding!.ActorId,
-                RunId = resolution.Binding.RunId,
-                CommandId = request.CommandId,
-                Reason = request.Reason,
-            },
-            stopService,
+        var binding = resolution.Binding!;
+        var dispatch = await stopService.DispatchAsync(
+            new WorkflowStopCommand(
+                binding.ActorId,
+                binding.RunId,
+                request.CommandId,
+                request.Reason),
             ct);
+
+        if (!dispatch.Succeeded || dispatch.Receipt == null)
+            return CreateRunControlDispatchFailure(dispatch.Error);
+
+        return CreateRunControlAcceptedResult(dispatch.Receipt, scopeId, serviceId, acceptedResourcePath);
+    }
+
+    private static IResult CreateRunControlAcceptedResult(
+        WorkflowRunControlAcceptedReceipt receipt,
+        string scopeId,
+        string serviceId,
+        string? acceptedResourcePath)
+    {
+        var statusUrl = BuildScopeServiceRunControlStatusUrl(scopeId, serviceId, receipt.RunId, acceptedResourcePath);
+        return Results.Accepted(statusUrl, new
+        {
+            accepted = true,
+            actorId = receipt.ActorId,
+            runId = receipt.RunId,
+            acceptedCommandId = receipt.CommandId,
+            correlationId = receipt.CorrelationId,
+            statusUrl,
+        });
+    }
+
+    private static string BuildScopeServiceRunControlStatusUrl(
+        string scopeId,
+        string serviceId,
+        string runId,
+        string? acceptedResourcePath)
+    {
+        var basePath = string.IsNullOrWhiteSpace(acceptedResourcePath)
+            ? BuildScopeServiceRunBasePath(scopeId, serviceId)
+            : acceptedResourcePath.TrimEnd('/');
+        return $"{basePath}/runs/{Uri.EscapeDataString(runId)}";
+    }
+
+    private static IResult CreateRunControlDispatchFailure(WorkflowRunControlStartError error)
+    {
+        var (statusCode, message) = error.Code switch
+        {
+            WorkflowRunControlStartErrorCode.InvalidActorId => (
+                StatusCodes.Status400BadRequest,
+                "actorId is required."),
+            WorkflowRunControlStartErrorCode.InvalidRunId => (
+                StatusCodes.Status400BadRequest,
+                "runId is required."),
+            WorkflowRunControlStartErrorCode.InvalidStepId => (
+                StatusCodes.Status400BadRequest,
+                "stepId is required."),
+            WorkflowRunControlStartErrorCode.InvalidSignalName => (
+                StatusCodes.Status400BadRequest,
+                "signalName is required."),
+            WorkflowRunControlStartErrorCode.ActorNotFound => (
+                StatusCodes.Status404NotFound,
+                $"Actor '{error.ActorId}' not found."),
+            WorkflowRunControlStartErrorCode.ActorNotWorkflowRun => (
+                StatusCodes.Status400BadRequest,
+                $"Actor '{error.ActorId}' is not a workflow run actor."),
+            WorkflowRunControlStartErrorCode.RunBindingMissing => (
+                StatusCodes.Status409Conflict,
+                $"Actor '{error.ActorId}' does not have a bound run id."),
+            WorkflowRunControlStartErrorCode.RunBindingMismatch => (
+                StatusCodes.Status409Conflict,
+                $"Actor '{error.ActorId}' is bound to run '{error.BoundRunId}', not '{error.RequestedRunId}'"),
+            _ => (
+                StatusCodes.Status500InternalServerError,
+                "Workflow control dispatch failed."),
+        };
+        return Results.Json(new { error = message }, statusCode: statusCode);
     }
 
     private static async Task<IResult> HandleRetryCompensationRunAsync(
