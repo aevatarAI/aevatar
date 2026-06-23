@@ -1,6 +1,5 @@
 using Aevatar.Configuration;
 using Aevatar.Capabilities;
-using Aevatar.Authentication.ScopeServiceTokens;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
@@ -177,8 +176,6 @@ public static class WebApplicationBuilderExtensions
 
         if (options.EnableOpenApiDocument)
             app.MapOpenApi(options.OpenApiDocumentRoute).AllowAnonymous();
-
-        app.MapScopeServiceTokenJwks();
 
         if (options.AutoMapCapabilities)
             app.MapAevatarCapabilities();

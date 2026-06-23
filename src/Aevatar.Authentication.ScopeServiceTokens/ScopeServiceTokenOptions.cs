@@ -14,8 +14,6 @@ public sealed class ScopeServiceTokenOptions
 
     public int ClockSkewSeconds { get; set; } = 60;
 
-    public string JwksPath { get; set; } = "/.well-known/aevatar-scope-service-jwks.json";
-
     public ScopeServiceTokenSigningKeyOptions[] SigningKeys { get; set; } = [];
 
     public ScopeServiceTokenSigningKeyOptions? SigningKey { get; set; }
