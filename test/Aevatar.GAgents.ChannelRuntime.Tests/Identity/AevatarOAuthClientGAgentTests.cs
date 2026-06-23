@@ -78,14 +78,20 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         {
             NyxidAuthority = "https://nyxid.test",
             RedirectUri = "https://aevatar.test/api/oauth/nyxid-callback",
+            StudioLoginRedirectUri = "https://dashboard.example/auth/callback",
             ClientName = "aevatar",
         });
 
         _registrar.Calls.Should().HaveCount(1);
         _registrar.Calls[0].Authority.Should().Be("https://nyxid.test");
         _registrar.Calls[0].RedirectUri.Should().Be("https://aevatar.test/api/oauth/nyxid-callback");
+        _registrar.Calls[0].RedirectUris.Should().BeEquivalentTo([
+            "https://aevatar.test/api/oauth/nyxid-callback",
+            "https://dashboard.example/auth/callback",
+        ]);
         _agent.State.ClientId.Should().Be(_registrar.NextClientId);
         _agent.State.NyxidAuthority.Should().Be("https://nyxid.test");
+        _agent.State.StudioLoginRedirectUri.Should().Be("https://dashboard.example/auth/callback");
         _agent.State.OauthScope.Should().Be(AevatarOAuthClientScopes.AuthorizationScope);
         _agent.State.HmacKey.Length.Should().Be(32);
         _agent.State.ProvisioningRetryAttempt.Should().Be(0);
@@ -98,6 +104,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         {
             NyxidAuthority = "https://nyxid.test",
             RedirectUri = "https://aevatar.test/api/oauth/nyxid-callback",
+            StudioLoginRedirectUri = "https://dashboard.example/auth/callback",
             ClientName = "aevatar",
         };
 
@@ -130,6 +137,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         {
             NyxidAuthority = "https://nyxid.test",
             RedirectUri = "http://+:8080/api/oauth/nyxid-callback",
+            StudioLoginRedirectUri = "https://dashboard.example/auth/callback",
         });
         var firstClientId = _agent.State.ClientId;
         _agent.State.RedirectUri.Should().Be("http://+:8080/api/oauth/nyxid-callback",
@@ -140,6 +148,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         {
             NyxidAuthority = "https://nyxid.test",
             RedirectUri = "https://aevatar-console-backend-api.aevatar.ai/api/oauth/nyxid-callback",
+            StudioLoginRedirectUri = "https://dashboard.example/auth/callback",
         });
 
         _registrar.Calls.Should().HaveCount(2,
@@ -168,6 +177,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         {
             NyxidAuthority = "https://nyxid.test",
             RedirectUri = "https://aevatar-console-backend-api.aevatar.ai/api/oauth/nyxid-callback",
+            StudioLoginRedirectUri = "https://dashboard.example/auth/callback",
         });
 
         _registrar.Calls.Should().ContainSingle(
@@ -184,12 +194,14 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         {
             NyxidAuthority = "https://nyxid.test",
             RedirectUri = redirectUri,
+            StudioLoginRedirectUri = "https://dashboard.example/auth/callback",
         });
 
         await _agent.HandleEnsureProvisioned(new EnsureAevatarOAuthClientProvisionedCommand
         {
             NyxidAuthority = "https://nyxid.test",
             RedirectUri = redirectUri,
+            StudioLoginRedirectUri = "https://dashboard.example/auth/callback",
         });
 
         _registrar.Calls.Should().HaveCount(1, "matching redirect URI must not re-DCR");
@@ -203,6 +215,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         {
             NyxidAuthority = "https://nyxid.test",
             RedirectUri = redirectUri,
+            StudioLoginRedirectUri = "https://dashboard.example/auth/callback",
         };
 
         await _agent.HandleEnsureProvisioned(cmd);
@@ -229,6 +242,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         {
             NyxidAuthority = "https://nyxid.test",
             RedirectUri = "https://aevatar.test/api/oauth/nyxid-callback",
+            StudioLoginRedirectUri = "https://dashboard.example/auth/callback",
             ClientName = "aevatar",
         });
 
@@ -255,6 +269,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         {
             NyxidAuthority = "https://nyxid.test",
             RedirectUri = "https://aevatar.test/api/oauth/nyxid-callback",
+            StudioLoginRedirectUri = "https://dashboard.example/auth/callback",
             ClientName = "aevatar",
         };
 
@@ -281,6 +296,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
             DueUnixMs = _agent.State.ProvisioningRetryDueUnixMs,
             NyxidAuthority = _agent.State.ProvisioningRetryAuthority,
             RedirectUri = _agent.State.ProvisioningRetryRedirectUri,
+            StudioLoginRedirectUri = _agent.State.ProvisioningRetryStudioLoginRedirectUri,
             ClientName = _agent.State.ProvisioningRetryClientName,
             CallbackId = _agent.State.ProvisioningRetryCallbackId,
             CallbackGeneration = _agent.State.ProvisioningRetryCallbackGeneration,
@@ -301,6 +317,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         {
             NyxidAuthority = "https://nyxid.test",
             RedirectUri = "https://aevatar.test/api/oauth/nyxid-callback",
+            StudioLoginRedirectUri = "https://dashboard.example/auth/callback",
             ClientName = "aevatar",
         });
 
@@ -312,6 +329,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
             DueUnixMs = _agent.State.ProvisioningRetryDueUnixMs,
             NyxidAuthority = _agent.State.ProvisioningRetryAuthority,
             RedirectUri = _agent.State.ProvisioningRetryRedirectUri,
+            StudioLoginRedirectUri = _agent.State.ProvisioningRetryStudioLoginRedirectUri,
             ClientName = _agent.State.ProvisioningRetryClientName,
             CallbackId = _agent.State.ProvisioningRetryCallbackId,
             CallbackGeneration = _agent.State.ProvisioningRetryCallbackGeneration,
@@ -335,6 +353,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         {
             NyxidAuthority = "https://nyxid.test",
             RedirectUri = "https://aevatar.test/api/oauth/nyxid-callback",
+            StudioLoginRedirectUri = "https://dashboard.example/auth/callback",
         });
 
         _registrar.ThrowOnRegister = null;
@@ -344,6 +363,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
             DueUnixMs = _agent.State.ProvisioningRetryDueUnixMs,
             NyxidAuthority = _agent.State.ProvisioningRetryAuthority,
             RedirectUri = _agent.State.ProvisioningRetryRedirectUri,
+            StudioLoginRedirectUri = _agent.State.ProvisioningRetryStudioLoginRedirectUri,
             ClientName = _agent.State.ProvisioningRetryClientName,
             CallbackId = _agent.State.ProvisioningRetryCallbackId,
             CallbackGeneration = _agent.State.ProvisioningRetryCallbackGeneration,
@@ -362,6 +382,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         {
             NyxidAuthority = "https://nyxid.test",
             RedirectUri = "https://aevatar.test/api/oauth/nyxid-callback",
+            StudioLoginRedirectUri = "https://dashboard.example/auth/callback",
         });
 
         _registrar.ThrowOnRegister = new InvalidOperationException("second failure");
@@ -371,6 +392,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
             DueUnixMs = _agent.State.ProvisioningRetryDueUnixMs,
             NyxidAuthority = _agent.State.ProvisioningRetryAuthority,
             RedirectUri = _agent.State.ProvisioningRetryRedirectUri,
+            StudioLoginRedirectUri = _agent.State.ProvisioningRetryStudioLoginRedirectUri,
             ClientName = _agent.State.ProvisioningRetryClientName,
             CallbackId = _agent.State.ProvisioningRetryCallbackId,
             CallbackGeneration = _agent.State.ProvisioningRetryCallbackGeneration,
@@ -391,6 +413,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         {
             NyxidAuthority = "https://prod.nyxid.test",
             RedirectUri = "https://aevatar.test/api/oauth/nyxid-callback",
+            StudioLoginRedirectUri = "https://dashboard.example/auth/callback",
         });
         var firstClientId = _agent.State.ClientId;
 
@@ -399,6 +422,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         {
             NyxidAuthority = "https://staging.nyxid.test",
             RedirectUri = "https://aevatar.test/api/oauth/nyxid-callback",
+            StudioLoginRedirectUri = "https://dashboard.example/auth/callback",
         });
 
         _registrar.Calls.Should().HaveCount(2);
@@ -418,6 +442,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         {
             NyxidAuthority = string.Empty,
             RedirectUri = "https://aevatar.test/api/oauth/nyxid-callback",
+            StudioLoginRedirectUri = "https://dashboard.example/auth/callback",
         });
         _agent.State.ClientId.Should().BeEmpty();
 
@@ -617,6 +642,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         {
             NyxidAuthority = "https://nyxid.test",
             RedirectUri = "http://+:8080/api/oauth/nyxid-callback",
+            StudioLoginRedirectUri = "https://dashboard.example/auth/callback",
         });
 
         var resolvedRedirect = "https://aevatar-console-backend-api.aevatar.ai/api/oauth/nyxid-callback";
@@ -638,6 +664,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
                 ClientIdIssuedAtUnix = 1700000001,
                 NyxidAuthority = "https://nyxid.test",
                 RedirectUri = resolvedRedirect,
+                StudioLoginRedirectUri = "https://dashboard.example/auth/callback",
                 OauthScope = AevatarOAuthClientScopes.AuthorizationScope,
                 PersistedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             };
@@ -661,6 +688,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         {
             NyxidAuthority = "https://nyxid.test",
             RedirectUri = resolvedRedirect,
+            StudioLoginRedirectUri = "https://dashboard.example/auth/callback",
         });
 
         // Loser absorbed the OCC: state reflects the peer's commit, NOT
@@ -683,6 +711,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         {
             NyxidAuthority = "https://nyxid.test",
             RedirectUri = "http://+:8080/api/oauth/nyxid-callback",
+            StudioLoginRedirectUri = "https://dashboard.example/auth/callback",
         });
 
         _registrar.NextClientId = "loser-orphan-client";
@@ -720,6 +749,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         {
             NyxidAuthority = "https://nyxid.test",
             RedirectUri = "https://aevatar-console-backend-api.aevatar.ai/api/oauth/nyxid-callback",
+            StudioLoginRedirectUri = "https://dashboard.example/auth/callback",
         });
 
         _agent.State.RedirectUri.Should().Be("http://+:8080/api/oauth/nyxid-callback");
@@ -749,7 +779,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
     private sealed class RecordingDcrClient
     {
         public string NextClientId { get; set; } = "client-first";
-        public List<(string Authority, string ClientName, string RedirectUri)> Calls { get; } = new();
+        public List<DcrCall> Calls { get; } = new();
         public Exception? ThrowOnRegister { get; set; }
 
         /// <summary>
@@ -775,7 +805,13 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
             public override async Task<RegistrationResult> RegisterPublicClientAsync(
                 string authority, string clientName, string redirectUri, CancellationToken ct = default)
             {
-                _owner.Calls.Add((authority, clientName, redirectUri));
+                return await RegisterPublicClientAsync(authority, clientName, [redirectUri], ct).ConfigureAwait(false);
+            }
+
+            public override async Task<RegistrationResult> RegisterPublicClientAsync(
+                string authority, string clientName, IReadOnlyCollection<string> redirectUris, CancellationToken ct = default)
+            {
+                _owner.Calls.Add(new DcrCall(authority, clientName, redirectUris.ToArray()));
                 if (_owner.OnRegistered is not null)
                     await _owner.OnRegistered().ConfigureAwait(false);
                 if (_owner.ThrowOnRegister is not null)
@@ -788,6 +824,11 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         {
             protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
                 throw new InvalidOperationException("HTTP client must not be invoked in unit tests");
+        }
+
+        public sealed record DcrCall(string Authority, string ClientName, IReadOnlyList<string> RedirectUris)
+        {
+            public string RedirectUri => RedirectUris[0];
         }
     }
 

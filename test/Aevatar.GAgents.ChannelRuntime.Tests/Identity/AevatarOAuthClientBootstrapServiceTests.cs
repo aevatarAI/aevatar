@@ -25,6 +25,7 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
         var command = dispatch.Commands[0];
         command.NyxidAuthority.Should().Be(environment.Authority);
         command.RedirectUri.Should().Be(environment.RedirectUri);
+        command.StudioLoginRedirectUri.Should().Be(environment.StudioLoginRedirectUri);
         command.ClientName.Should().Be("aevatar");
     }
 
@@ -42,6 +43,7 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
         var command = dispatch.Commands[0];
         command.NyxidAuthority.Should().Be(environment.Authority);
         command.RedirectUri.Should().Be(environment.RedirectUri);
+        command.StudioLoginRedirectUri.Should().Be(environment.StudioLoginRedirectUri);
         command.ClientName.Should().Be("aevatar");
     }
 
@@ -141,23 +143,29 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
     {
         private readonly string? _oldAuthority;
         private readonly string? _oldRedirectBaseUrl;
+        private readonly string? _oldStudioLoginRedirectBaseUrl;
 
         public string Authority { get; } = "https://nyxid.test";
         public string RedirectBaseUrl { get; } = "https://aevatar.test";
         public string RedirectUri => $"{RedirectBaseUrl}{NyxIdRedirectUriResolver.CallbackPath}";
+        public string StudioLoginRedirectBaseUrl { get; } = "https://dashboard.example";
+        public string StudioLoginRedirectUri => $"{StudioLoginRedirectBaseUrl}{NyxIdStudioLoginRedirectUriResolver.CallbackPath}";
 
         public OAuthBootstrapEnvironment()
         {
             _oldAuthority = Environment.GetEnvironmentVariable(NyxIdAuthorityResolver.OverrideEnvVar);
             _oldRedirectBaseUrl = Environment.GetEnvironmentVariable(NyxIdRedirectUriResolver.OverrideEnvVar);
+            _oldStudioLoginRedirectBaseUrl = Environment.GetEnvironmentVariable(NyxIdStudioLoginRedirectUriResolver.OverrideEnvVar);
             Environment.SetEnvironmentVariable(NyxIdAuthorityResolver.OverrideEnvVar, Authority);
             Environment.SetEnvironmentVariable(NyxIdRedirectUriResolver.OverrideEnvVar, RedirectBaseUrl);
+            Environment.SetEnvironmentVariable(NyxIdStudioLoginRedirectUriResolver.OverrideEnvVar, StudioLoginRedirectBaseUrl);
         }
 
         public void Dispose()
         {
             Environment.SetEnvironmentVariable(NyxIdAuthorityResolver.OverrideEnvVar, _oldAuthority);
             Environment.SetEnvironmentVariable(NyxIdRedirectUriResolver.OverrideEnvVar, _oldRedirectBaseUrl);
+            Environment.SetEnvironmentVariable(NyxIdStudioLoginRedirectUriResolver.OverrideEnvVar, _oldStudioLoginRedirectBaseUrl);
         }
     }
 

@@ -245,9 +245,13 @@ public static class IdentityOAuthEndpoints
             var resolvedRedirectUri = NyxIdRedirectUriResolver.Resolve();
             var redirectUriDrifted = string.IsNullOrEmpty(snapshot.RedirectUri)
                 || !string.Equals(snapshot.RedirectUri, resolvedRedirectUri, StringComparison.Ordinal);
+            var resolvedStudioLoginRedirectUri = NyxIdStudioLoginRedirectUriResolver.Resolve();
+            var studioLoginRedirectUriDrifted = string.IsNullOrEmpty(snapshot.StudioLoginRedirectUri)
+                || !string.Equals(snapshot.StudioLoginRedirectUri, resolvedStudioLoginRedirectUri, StringComparison.Ordinal);
             var oauthScopeDrifted = !AevatarOAuthClientScopes.ContainsRequiredScopes(snapshot.OauthScope);
             var status = redirectUriDrifted
                 ? "redirect_uri_drifted"
+                : studioLoginRedirectUriDrifted ? "studio_login_redirect_uri_drifted"
                 : oauthScopeDrifted ? "oauth_scope_drifted"
                 : snapshot.BrokerCapabilityObserved ? "ready" : "broker_capability_pending";
             return Results.Ok(new
@@ -259,12 +263,17 @@ public static class IdentityOAuthEndpoints
                 redirect_uri_registered = snapshot.RedirectUri,
                 redirect_uri_resolved = resolvedRedirectUri,
                 redirect_uri_drifted = redirectUriDrifted,
+                studio_login_redirect_uri_registered = snapshot.StudioLoginRedirectUri,
+                studio_login_redirect_uri_resolved = resolvedStudioLoginRedirectUri,
+                studio_login_redirect_uri_drifted = studioLoginRedirectUriDrifted,
                 oauth_scope_registered = snapshot.OauthScope,
                 oauth_scope_required = AevatarOAuthClientScopes.AuthorizationScope,
                 oauth_scope_drifted = oauthScopeDrifted,
                 broker_capability_observed = snapshot.BrokerCapabilityObserved,
                 broker_capability_observed_at = snapshot.BrokerCapabilityObservedAt,
-                ops_handoff = oauthScopeDrifted
+                ops_handoff = studioLoginRedirectUriDrifted
+                    ? "Bootstrap must re-run DCR so the OAuth client includes the Studio Console login callback registered for browser PKCE login."
+                    : oauthScopeDrifted
                     ? "Bootstrap must re-run DCR so the OAuth client includes the proxy scope required by LLM route selection."
                     : snapshot.BrokerCapabilityObserved
                         ? null
@@ -363,6 +372,7 @@ public static class IdentityOAuthEndpoints
 
         var authority = NyxIdAuthorityResolver.Resolve(logger);
         var redirectUri = NyxIdRedirectUriResolver.Resolve(logger);
+        var studioLoginRedirectUri = NyxIdStudioLoginRedirectUriResolver.Resolve(logger);
         var oauthScope = AevatarOAuthClientScopes.AuthorizationScope;
 
         // Validate Unix-seconds before dispatching: AevatarOAuthClient
@@ -404,6 +414,7 @@ public static class IdentityOAuthEndpoints
                     NyxidAuthority = authority,
                     OauthScope = oauthScope,
                     RedirectUri = redirectUri,
+                    StudioLoginRedirectUri = studioLoginRedirectUri,
                 }, ct)
                 .ConfigureAwait(false);
         }
