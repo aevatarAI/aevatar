@@ -62,6 +62,14 @@ describe("TeamMemberPublishedRunsPage", () => {
     getMember: jest.Mock;
   };
 
+  function createDeferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((nextResolve) => {
+      resolve = nextResolve;
+    });
+    return { promise, resolve };
+  }
+
   beforeEach(() => {
     window.history.replaceState(
       {},
@@ -216,6 +224,35 @@ describe("TeamMemberPublishedRunsPage", () => {
         updatedAt: "2026-06-22T01:00:02Z",
         workflowName: "Alpha Workflow",
       },
+    });
+  });
+
+  it("renders skeleton panels while published runs are loading", async () => {
+    const memberRuns = createDeferred<{
+      displayName: string;
+      memberId: string;
+      publishedServiceId: string;
+      publishedServiceKey: string;
+      runs: [];
+      scopeId: string;
+    }>();
+    mockedScopeRuntimeApi.listMemberRuns.mockReturnValueOnce(memberRuns.promise);
+
+    renderWithQueryClient(React.createElement(TeamMemberPublishedRunsPage));
+
+    expect(await screen.findByTestId("member-published-runs-replay")).toBeTruthy();
+    expect(screen.getByTestId("member-published-runs-list-skeleton")).toBeTruthy();
+    expect(screen.getByTestId("member-published-runs-graph-skeleton")).toBeTruthy();
+    expect(screen.getByTestId("member-published-runs-details-skeleton")).toBeTruthy();
+    expect(screen.queryByText("No published runs yet.")).toBeNull();
+
+    memberRuns.resolve({
+      displayName: "Alpha Workflow",
+      memberId: "m-alpha",
+      publishedServiceId: "svc-alpha",
+      publishedServiceKey: "scope-1:default:default:svc-alpha",
+      runs: [],
+      scopeId: "scope-1",
     });
   });
 
