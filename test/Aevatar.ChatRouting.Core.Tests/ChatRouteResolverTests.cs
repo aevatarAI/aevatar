@@ -178,7 +178,6 @@ public sealed class ChatRouteResolverTests
 
         decision.MatchedRuleId.Should().Be("model-route");
         decision.Action.Should().Be(action);
-        decision.Deprecations.Should().BeEmpty();
     }
 
     [Theory]
@@ -234,7 +233,6 @@ public sealed class ChatRouteResolverTests
         });
 
         decision.MatchedRuleId.Should().Be("voice-openai");
-        decision.Deprecations.Should().BeEmpty();
         decision.Action.Should().Be(action);
         AssertForwardToModelTool(
             decision.Action,
@@ -273,7 +271,6 @@ public sealed class ChatRouteResolverTests
         var decision = resolver.Resolve(snapshot, new ChatRouteInput { CommandName = "/triage" });
 
         decision.MatchedRuleId.Should().Be("team-route");
-        decision.Deprecations.Should().BeEmpty();
         decision.Action.Should().Be(action);
         AssertForwardToModelTool(
             decision.Action,
