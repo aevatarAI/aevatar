@@ -105,6 +105,15 @@ public sealed class ObservatoryViewEvent
     public string StepType { get; init; } = string.Empty;
 
     public ObservatoryToolCallDetail? ToolCall { get; init; }
+
+    // 06-23 detail enrichment: the actual LLM/role reply text (for role.reply Message events), merged from
+    // the committed role-reply artifact so the timeline shows real responses, not just the role id.
+    public string Content { get; init; } = string.Empty;
+
+    // AGUI event detail bag (the committed timeline event's data map) — model/tokens/usage and other
+    // event-type-specific fields the viewer can surface beautified.
+    public IReadOnlyDictionary<string, string> Data { get; init; } =
+        new Dictionary<string, string>(StringComparer.Ordinal);
 }
 
 public sealed class ObservatoryToolCallDetail
