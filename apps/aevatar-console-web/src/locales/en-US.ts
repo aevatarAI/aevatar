@@ -566,6 +566,9 @@ const enUSMessages = {
   'teams.members.actions.invokeRequiresBinding':
     'Bind this workflow member before invoking it.',
   'teams.members.actions.invokeWorkflow': 'Invoke',
+  'teams.members.actions.publishedRuns': 'Published runs',
+  'teams.members.actions.publishedRuns.publishFirst':
+    'Publish this member before viewing published runs.',
   'teams.members.actions.setEntry': 'Set as entry member',
   'teams.members.actions.workflowOnly': 'Workflow only',
   'teams.members.actions.workflowOnlyTitle':

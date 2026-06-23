@@ -533,6 +533,8 @@ const zhCNMessages = {
   'teams.members.actions.automate': '自动化',
   'teams.members.actions.invokeRequiresBinding': '请先绑定这个 Workflow 成员再调用。',
   'teams.members.actions.invokeWorkflow': '调用',
+  'teams.members.actions.publishedRuns': '发布运行记录',
+  'teams.members.actions.publishedRuns.publishFirst': '请先发布这个成员再查看发布运行记录。',
   'teams.members.actions.setEntry': '设为入口成员',
   'teams.members.actions.workflowOnly': '仅支持 Workflow',
   'teams.members.actions.workflowOnlyTitle': '当前控制台暂只支持 Workflow 类型成员。',
