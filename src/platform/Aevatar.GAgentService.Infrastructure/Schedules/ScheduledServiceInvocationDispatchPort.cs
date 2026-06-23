@@ -31,7 +31,9 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         ArgumentNullException.ThrowIfNull(dispatch);
         ArgumentNullException.ThrowIfNull(dispatch.Request);
 
-        var request = await BuildInvocationRequestAsync(dispatch, ct);
+        var request = WithScheduleId(
+            await BuildInvocationRequestAsync(dispatch, ct),
+            dispatch.ScheduleId);
         var receipt = await _serviceInvocationPort.InvokeAsync(request, ct);
         return new ScheduledServiceInvocationDispatchReceipt(
             true,
@@ -84,6 +86,19 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
                 exchange.Role,
                 NormalizeNyxIdAccessToken(exchange.Result.AccessToken, ToErrorSubject(exchange.Role))),
             dispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredential);
+    }
+
+    private static ServiceInvocationRequest WithScheduleId(ServiceInvocationRequest request, string? scheduleId)
+    {
+        if (string.IsNullOrWhiteSpace(scheduleId))
+            return request;
+
+        if (string.Equals(request.ScheduleId, scheduleId.Trim(), StringComparison.Ordinal))
+            return request;
+
+        var cloned = request.Clone();
+        cloned.ScheduleId = scheduleId.Trim();
+        return cloned;
     }
 
     private async Task<CredentialExchange?> ExchangeCredentialAsync(

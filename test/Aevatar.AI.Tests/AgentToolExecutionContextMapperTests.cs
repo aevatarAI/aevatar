@@ -294,7 +294,7 @@ public sealed class AgentToolExecutionContextMapperTests
             new AgentToolCredentials(" access-1 ", " org-1 ", " sender-access-1 "),
             new AgentToolCallerContext(" scope-1 ", " owner-1 ", " response-1 "),
             new AgentToolChannelContext(" telegram ", " sender-1 ", " registration-1 ", " message-1 ", " platform-message-1 ", " delivery-target-1 ", " secrets://nyx/reply-1 "),
-            new AgentToolSenderBindingContext(" binding-1 "),
+            new AgentToolSenderBindingContext(" binding-1 ", " nyx-user-1 "),
             new LLMRequestRoutingContext(" model-1 ", " route-1 ", 7, " memory-1 "),
             new AgentToolConnectedServicesContext("""{"service":"telegram"}"""),
             new AgentWorkflowRuntimeContext(" parent-actor ", " parent-run ", " parent-step ", " root-run ", 3),
@@ -334,6 +334,7 @@ public sealed class AgentToolExecutionContextMapperTests
         copy.Channel.DeliveryTargetId.Should().Be("delivery-target-1");
         copy.Channel.DurableReplyCredentialRef.Should().Be("secrets://nyx/reply-1");
         copy.SenderBinding.BindingId.Should().Be("binding-1");
+        copy.SenderBinding.NyxUserId.Should().Be("nyx-user-1");
         copy.Routing.ModelOverride.Should().Be("model-1");
         copy.Routing.NyxIdRoutePreference.Should().Be("route-1");
         copy.Routing.MaxToolRoundsOverride.Should().Be(7);

@@ -242,10 +242,15 @@ internal static class WorkflowRunObservatoryPage
     padding: 8px 16px; border-bottom: 1px solid var(--border); background: var(--panel);
   }
   .adminbar .ab-badge {
-    font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
-    padding: 2px 8px; border-radius: var(--r-pill);
-    color: var(--accent-ink); background: var(--accent-soft); border: 1px solid var(--accent-line);
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase;
+    padding: 3px 10px; border-radius: var(--r-pill);
+    /* high-contrast solid accent chip with white ink — must read clearly at a glance */
+    color: #fff; background: var(--accent);
+    border: 1px solid color-mix(in oklab, var(--accent) 60%, #000);
+    box-shadow: 0 1px 0 rgba(0,0,0,.25), inset 0 1px 0 rgba(255,255,255,.18);
   }
+  .adminbar .ab-badge svg { width: 12px; height: 12px; }
   .adminbar .ab-view { font-size: 12.5px; color: var(--muted); }
   .adminbar .ab-view b { color: var(--fg-strong); font-family: var(--mono); font-weight: 600; }
   .adminbar input.ab-input {
@@ -260,24 +265,56 @@ internal static class WorkflowRunObservatoryPage
   /* =========================================================================
      Run-list filter bar (06-23-observatory-run-coverage-filter)
      状态 / 来源 / 更新时间窗，下推到 list 查询；与 scope 维度可组合。
+     Collapsible: a compact toggle header is always visible; the controls expand
+     below it. Collapsed by default so the run list isn't pushed down.
      ========================================================================= */
-  .filterbar {
-    display: flex; align-items: flex-end; gap: 10px 12px; flex-wrap: wrap;
-    padding: 9px 16px; border-bottom: 1px solid var(--border-soft); background: var(--panel);
+  .filterwrap { border-bottom: 1px solid var(--border-soft); background: var(--panel); }
+
+  /* toggle header — keyboard-accessible button, aria-expanded */
+  .fb-toggle {
+    display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+    padding: 9px 16px; background: transparent; border: 0; color: var(--muted);
+    font-size: 12px; font-weight: 650; letter-spacing: .03em;
+    transition: color .12s, background .12s;
   }
+  .fb-toggle:hover { color: var(--fg); background: var(--panel-2); }
+  .fb-toggle .fb-tchevron { color: var(--muted-2); transition: transform .18s ease; flex: 0 0 auto; display: inline-grid; place-items: center; }
+  .fb-toggle[aria-expanded="true"] .fb-tchevron { transform: rotate(90deg); }
+  .fb-toggle .fb-ticon { color: var(--muted-2); display: inline-grid; place-items: center; flex: 0 0 auto; }
+  .fb-toggle .fb-tlabel { color: var(--fg); }
+  .fb-toggle .fb-tspacer { flex: 1 1 auto; }
+  /* active-filter count badge shown on the header while collapsed */
+  .fb-tcount {
+    display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px;
+    padding: 0 5px; border-radius: var(--r-pill); font-size: 11px; font-weight: 700;
+    color: #fff; background: var(--accent); border: 1px solid color-mix(in oklab, var(--accent) 60%, #000);
+  }
+  .fb-tclear {
+    display: inline-flex; align-items: center; background: transparent; border: 0;
+    color: var(--accent); font-size: 12px; font-weight: 600; padding: 2px 4px; border-radius: var(--r-sm);
+  }
+  .fb-tclear:hover { text-decoration: underline; }
+
+  /* the controls panel — compact horizontal flex-wrap; hidden when collapsed */
+  .filterbar {
+    display: flex; align-items: flex-end; gap: 8px 10px; flex-wrap: wrap;
+    padding: 4px 16px 12px;
+  }
+  .filterbar[hidden] { display: none; }
   .filterbar .fb-field { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
   .filterbar .fb-label {
-    font-size: 10.5px; font-weight: 650; letter-spacing: .05em; text-transform: uppercase; color: var(--muted-2);
+    font-size: 10px; font-weight: 650; letter-spacing: .05em; text-transform: uppercase; color: var(--muted-2);
   }
   .filterbar .fb-select, .filterbar .fb-date {
-    font: inherit; font-size: 12.5px; padding: 5px 9px; color: var(--fg);
+    font: inherit; font-size: 12px; padding: 5px 8px; color: var(--fg);
     background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r-sm);
   }
-  .filterbar .fb-select { min-width: 110px; }
-  .filterbar .fb-date { min-width: 150px; font-variant-numeric: tabular-nums; }
+  .filterbar .fb-select { min-width: 104px; }
+  /* compact date inputs so they don't dominate the narrow pane */
+  .filterbar .fb-date { width: 138px; min-width: 0; font-variant-numeric: tabular-nums; }
   .filterbar .fb-select:focus, .filterbar .fb-date:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
   .filterbar .fb-reset {
-    background: transparent; border: 0; color: var(--accent); font-size: 12.5px; font-weight: 600;
+    background: transparent; border: 0; color: var(--accent); font-size: 12px; font-weight: 600;
     padding: 6px 6px; border-radius: var(--r-sm); align-self: flex-end;
   }
   .filterbar .fb-reset:hover { text-decoration: underline; }
@@ -321,10 +358,16 @@ internal static class WorkflowRunObservatoryPage
     display: flex; flex-direction: column; min-height: 0;
     background: color-mix(in oklab, var(--panel) 40%, transparent);
   }
-  .list-head { padding: 14px 16px 10px; border-bottom: 1px solid var(--border-soft); }
-  .list-title-row { display: flex; align-items: baseline; justify-content: space-between; }
-  .list-title { font-size: 13px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
-  .list-count { font-family: var(--mono); font-size: 12px; color: var(--muted-2); }
+  .list-head { padding: 14px 16px 11px; border-bottom: 1px solid var(--border-soft); }
+  .list-title-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .list-title { font-size: 13px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); display: inline-flex; align-items: center; gap: 8px; }
+  .list-title .lt-ic { color: var(--muted-2); display: inline-grid; place-items: center; }
+  /* count rendered as a small pill so the header reads as an intentional unit */
+  .list-count {
+    font-family: var(--mono); font-size: 11.5px; font-weight: 600; color: var(--muted);
+    padding: 2px 9px; border-radius: var(--r-pill); background: var(--panel-2); border: 1px solid var(--border);
+    font-variant-numeric: tabular-nums;
+  }
   .filters { display: flex; gap: 6px; margin-top: 11px; flex-wrap: wrap; }
   .chip {
     padding: 4px 10px; border-radius: var(--r-pill); font-size: 12px; font-weight: 550;
@@ -467,7 +510,7 @@ internal static class WorkflowRunObservatoryPage
   .ev.k-RunStopped .marker { border-color: var(--warn); background: var(--warn-soft); }
   .ev.k-ToolCall .marker { border-color: var(--accent); background: var(--accent-soft); }
   .ev.k-HumanInputRequest .marker { border-color: var(--warn); background: var(--warn-soft); }
-  .ev.k-TextMessage .marker { border-color: var(--run); background: var(--run-soft); }
+  .ev.k-TextMessage .marker, .ev.k-Message .marker { border-color: var(--run); background: var(--run-soft); }
   .ev.k-StepStarted .marker, .ev.k-StepFinished .marker { border-color: var(--muted-2); }
 
   .ev-head { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; min-height: 18px; }
@@ -481,7 +524,7 @@ internal static class WorkflowRunObservatoryPage
   .k-RunError .kind { color: var(--err); background: var(--err-soft); border-color: color-mix(in oklab, var(--err) 38%, transparent); }
   .k-RunStopped .kind { color: var(--warn); background: var(--warn-soft); border-color: color-mix(in oklab, var(--warn) 32%, transparent); }
   .k-StepStarted .kind, .k-StepFinished .kind { color: var(--muted); background: var(--neutral-soft); border-color: var(--border); }
-  .k-TextMessage .kind { color: var(--run); background: var(--run-soft); border-color: color-mix(in oklab, var(--run) 28%, transparent); }
+  .k-TextMessage .kind, .k-Message .kind { color: var(--run); background: var(--run-soft); border-color: color-mix(in oklab, var(--run) 28%, transparent); }
   .k-ToolCall .kind { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-line); }
   .k-HumanInputRequest .kind { color: var(--warn); background: var(--warn-soft); border-color: color-mix(in oklab, var(--warn) 38%, transparent); }
 
@@ -506,6 +549,81 @@ internal static class WorkflowRunObservatoryPage
     border-left: 2px solid var(--run);
     color: var(--fg); font-size: 13.5px; line-height: 1.6; max-width: 62ch;
   }
+
+  /* ---- Assistant / role reply — the real LLM response, beautified ---- */
+  .reply {
+    margin-top: 8px; max-width: 74ch;
+    border: 1px solid var(--border); border-radius: 4px 12px 12px 12px;
+    background:
+      linear-gradient(180deg, color-mix(in oklab, var(--run) 5%, var(--panel)) 0%, var(--panel) 40%);
+    border-left: 2px solid var(--run);
+    overflow: hidden;
+  }
+  .reply-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px; border-bottom: 1px solid var(--border-soft);
+  }
+  .reply-avatar {
+    width: 22px; height: 22px; border-radius: 50%; flex: 0 0 auto;
+    display: grid; place-items: center; font-size: 11px; font-weight: 700; color: #fff;
+    background: linear-gradient(140deg, var(--run), color-mix(in oklab, var(--run) 55%, #a78bfa));
+  }
+  .reply-role { font-size: 12.5px; font-weight: 650; color: var(--fg-strong); letter-spacing: -.005em; }
+  .reply-tag { font-size: 11px; color: var(--muted-2); font-weight: 600; letter-spacing: .03em; }
+  .reply-head .reply-spacer { flex: 1 1 auto; }
+  .reply-body {
+    padding: 11px 14px; color: var(--fg); font-size: 13.5px; line-height: 1.62;
+    white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere;
+  }
+  /* clamp long responses; the toggle removes the clamp */
+  .reply-body.clamp {
+    display: -webkit-box; -webkit-line-clamp: 10; line-clamp: 10; -webkit-box-orient: vertical;
+    overflow: hidden; position: relative;
+  }
+  .reply-body.clamp::after {
+    content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 38px;
+    background: linear-gradient(180deg, transparent, var(--panel));
+  }
+  .reply-more {
+    display: inline-flex; align-items: center; gap: 5px; margin: 0 14px 11px;
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r-pill);
+    color: var(--muted); font-size: 11.5px; font-weight: 600; padding: 3px 11px;
+  }
+  .reply-more:hover { color: var(--fg); border-color: var(--muted-2); }
+  .reply-empty { padding: 9px 14px; color: var(--muted-2); font-size: 12.5px; font-style: italic; }
+
+  /* ---- Data detail chips (model / token usage) + collapsible raw bag ---- */
+  .datachips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; align-items: center; }
+  .dchip {
+    display: inline-flex; align-items: center; gap: 5px; line-height: 1;
+    font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: var(--r-pill);
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--muted);
+    white-space: nowrap;
+  }
+  .dchip .dk { color: var(--muted-2); font-weight: 600; }
+  .dchip .dv { color: var(--fg); font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .dchip.model { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); }
+  .dchip.model .dv { color: var(--accent); }
+  .dchip.tok-total .dv { color: var(--fg-strong); }
+  /* collapsible "详情" for the non-whitelisted keys */
+  .datamore { margin-top: 7px; }
+  .datamore > summary {
+    list-style: none; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+    font-size: 11.5px; font-weight: 600; color: var(--muted);
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r-pill); padding: 3px 11px;
+  }
+  .datamore > summary::-webkit-details-marker { display: none; }
+  .datamore > summary:hover { color: var(--fg); border-color: var(--muted-2); }
+  .datamore[open] > summary { border-color: var(--muted-2); color: var(--fg); }
+  .datamore .dm-chevron { transition: transform .18s ease; display: inline-grid; place-items: center; }
+  .datamore[open] .dm-chevron { transform: rotate(90deg); }
+  .datatable {
+    margin-top: 8px; display: grid; grid-template-columns: auto 1fr; gap: 4px 14px;
+    padding: 10px 12px; background: var(--bg); border: 1px solid var(--border-soft); border-radius: var(--r-sm);
+    font-size: 12px; max-height: 240px; overflow: auto;
+  }
+  .datatable .dt-k { color: var(--muted-2); font-family: var(--mono); word-break: break-word; }
+  .datatable .dt-v { color: var(--fg); font-family: var(--mono); word-break: break-word; white-space: pre-wrap; }
 
   /* HumanInputRequest highlight */
   .needs-attn {
@@ -882,7 +1000,9 @@ const filterState = (function(){
   const q = new URLSearchParams(location.search);
   const pick = (k, allowed) => { const v = (q.get(k) || "").trim(); return allowed.has(v) ? v : ""; };
   const date = (k) => { const v = (q.get(k) || "").trim(); const ms = v ? Date.parse(v) : NaN; return isNaN(ms) ? "" : new Date(ms).toISOString().slice(0,10); };
-  return { status: pick("status", STATUS_VALUES), origin: pick("origin", ORIGIN_VALUES), from: date("from"), to: date("to") };
+  // panel open/closed survives re-renders (and bookmarks via ?filters=1); collapsed by default.
+  const open = (q.get("filters") || "").trim() === "1";
+  return { status: pick("status", STATUS_VALUES), origin: pick("origin", ORIGIN_VALUES), from: date("from"), to: date("to"), open };
 })();
 function originLabel(o){ return o ? (ORIGIN_LABEL[o] || o) : ""; }
 /* compose the runs LIST query: existing scope axis + the four filter dimensions. Empty filters are
@@ -898,6 +1018,29 @@ function listQueryParams(){
   return s ? "?" + s : "";
 }
 function hasActiveFilters(){ return !!(filterState.status || filterState.origin || filterState.from || filterState.to); }
+/* count of active filter dimensions — drives the collapsed-header badge. */
+function activeFilterCount(){ return (filterState.status?1:0) + (filterState.origin?1:0) + (filterState.from?1:0) + (filterState.to?1:0); }
+/* persist the filter-panel open state into the URL (best-effort) so it survives reload/bookmarks
+   without disturbing the existing scope hash or other query params. */
+function persistFilterOpen(){
+  try {
+    const u = new URL(location.href);
+    if(filterState.open) u.searchParams.set("filters", "1"); else u.searchParams.delete("filters");
+    history.replaceState(null, "", u.pathname + (u.search || "") + (location.hash || ""));
+  } catch(e){ /* URL persistence is best-effort */ }
+}
+/* toggle the panel in place: flip aria-expanded + show/hide the controls without a full re-render,
+   so focus stays on the toggle and the run list doesn't reflow. */
+function toggleFilterPanel(){
+  filterState.open = !filterState.open;
+  persistFilterOpen();
+  const tgl = document.getElementById("fbToggle");
+  const panel = document.getElementById("filterPanel");
+  const badge = document.getElementById("fbToggleCount");
+  if(tgl) tgl.setAttribute("aria-expanded", String(filterState.open));
+  if(panel) panel.hidden = !filterState.open;
+  if(badge) badge.hidden = filterState.open || !hasActiveFilters();
+}
 /* apply a single filter change: reset list scroll (existing convention), drop the stale run cache so
    the server-filtered set replaces it cleanly, and re-fetch + re-render. */
 function applyFilterChange(){
@@ -976,11 +1119,40 @@ const KIND = {
   RunStopped:        { label:"运行停止" },
   StepStarted:       { label:"步骤开始" },
   StepFinished:      { label:"步骤完成" },
+  // role.reply arrives from the API as kind "Message"; keep TextMessage too for older payloads.
+  Message:           { label:"模型回复" },
   TextMessage:       { label:"模型回复" },
   ToolCall:          { label:"工具调用" },
   HumanInputRequest: { label:"待人工确认" }
 };
+// kinds that carry an assistant/role reply (real LLM response text in ev.content).
+const REPLY_KINDS = new Set(["Message", "TextMessage"]);
 const STEPTYPE_LABEL = { llm:"模型", tool:"工具", human:"人工" };
+
+/* 06-23 detail enrichment: the AGUI event data bag (ev.data) is an open string->string map. We surface
+   a tasteful whitelist of the high-value keys as chips (model + token usage) and tuck everything else
+   under a collapsible 详情, instead of dumping the raw bag. Keys are matched case-insensitively across a
+   few common spellings so we don't miss model/token fields named slightly differently upstream. */
+const DATA_MODEL_KEYS = ["model", "model_id", "modelId", "model_name", "modelName", "deployment", "provider"];
+const DATA_TOKEN_KEYS = [
+  ["prompt", ["prompt_tokens","promptTokens","input_tokens","inputTokens","prompt"]],
+  ["completion", ["completion_tokens","completionTokens","output_tokens","outputTokens","completion"]],
+  ["total", ["total_tokens","totalTokens","total"]]
+];
+const TOKEN_CHIP_LABEL = { prompt:"输入", completion:"输出", total:"合计" };
+/* keys already represented by chips (or pure tool-call plumbing) — excluded from the "详情" table so it
+   only shows the genuinely-extra fields. */
+const DATA_CHIP_KEYS = new Set(
+  [...DATA_MODEL_KEYS, ...DATA_TOKEN_KEYS.flatMap(([,ks]) => ks),
+   "call_id","arguments_json","result_json","success","error"].map(k => k.toLowerCase()));
+function dataLookup(data, keys){
+  if(!data) return "";
+  for(const k of keys){ const v = data[k]; if(v != null && String(v).trim() !== "") return String(v); }
+  // case-insensitive fallback so upstream spelling variants still match
+  const lower = {}; for(const dk in data) lower[dk.toLowerCase()] = data[dk];
+  for(const k of keys){ const v = lower[k.toLowerCase()]; if(v != null && String(v).trim() !== "") return String(v); }
+  return "";
+}
 
 function parseT(iso){ return Date.parse(iso); }
 function clockUTC(iso){ // 取 ISO 中的 HH:MM:SS（UTC），保持确定性
@@ -1043,7 +1215,10 @@ const ICON = {
   cursor:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M5 3l5.5 16 2.2-6.3L19 10.5 5 3Z"/></svg>',
   ghost:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 20V11a7 7 0 0 1 14 0v9l-2.3-1.6L14.4 20l-2.4-1.6L9.6 20 7.3 18.4 5 20Z"/><path d="M9.5 10h.01M14.5 10h.01"/></svg>',
   lock:'<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
-  back:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m14 6-6 6 6 6"/></svg>'
+  back:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m14 6-6 6 6 6"/></svg>',
+  filter:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h18l-7 8v5l-4 2v-7L3 5Z"/></svg>',
+  shield:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 5 6v5c0 4.2 2.9 7.8 7 9 4.1-1.2 7-4.8 7-9V6l-7-3Z"/></svg>',
+  list:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h12M8 12h12M8 18h12M3.5 6h.01M3.5 12h.01M3.5 18h.01"/></svg>'
 };
 function kindIcon(kind){
   switch(kind){
@@ -1052,7 +1227,7 @@ function kindIcon(kind){
     case "RunError": return ICON.x;
     case "RunStopped": return ICON.stop;
     case "StepStarted": case "StepFinished": return ICON.step;
-    case "TextMessage": return ICON.chat;
+    case "Message": case "TextMessage": return ICON.chat;
     case "ToolCall": return ICON.tool;
     case "HumanInputRequest": return ICON.human;
     default: return ICON.step;
@@ -1189,7 +1364,36 @@ function renderDate(id, label, value, onPick){
   return field;
 }
 function renderFilterBar(){
-  const bar = el("div", { class:"filterbar", role:"group", "aria-label":"按状态、来源、更新时间筛选运行" });
+  const wrap = el("div", { class:"filterwrap" });
+  const count = activeFilterCount();
+
+  // --- collapsible toggle header (always visible) ---
+  const toggle = el("button", {
+    class:"fb-toggle", id:"fbToggle", type:"button",
+    "aria-expanded": String(filterState.open), "aria-controls":"filterPanel"
+  });
+  toggle.innerHTML = `
+    <span class="fb-tchevron" aria-hidden="true">${ICON.chevron}</span>
+    <span class="fb-ticon" aria-hidden="true">${ICON.filter}</span>
+    <span class="fb-tlabel">筛选</span>
+    <span class="fb-tcount" id="fbToggleCount" title="${count} 个生效筛选" ${(filterState.open || !hasActiveFilters()) ? "hidden" : ""}>${count}</span>
+    <span class="fb-tspacer"></span>`;
+  toggle.addEventListener("click", toggleFilterPanel);
+  // a quick "清除" affordance on the header itself when collapsed + filters active
+  if(hasActiveFilters()){
+    const clr = el("button", { class:"fb-tclear", type:"button", "aria-label":"清除全部筛选" }, "清除");
+    clr.addEventListener("click", (e) => {
+      e.stopPropagation();
+      filterState.status=""; filterState.origin=""; filterState.from=""; filterState.to="";
+      applyFilterChange();
+    });
+    toggle.appendChild(clr);
+  }
+  wrap.appendChild(toggle);
+
+  // --- the controls panel (hidden when collapsed) ---
+  const bar = el("div", { class:"filterbar", id:"filterPanel", role:"group", "aria-label":"按状态、来源、更新时间筛选运行" });
+  if(!filterState.open) bar.hidden = true;
   bar.appendChild(renderSelect("flt-status", "状态", STATUS_OPTIONS, filterState.status,
     v => { filterState.status = v; applyFilterChange(); }));
   bar.appendChild(renderSelect("flt-origin", "来源", ORIGIN_OPTIONS, filterState.origin,
@@ -1204,7 +1408,8 @@ function renderFilterBar(){
     reset.addEventListener("click", () => { filterState.status=""; filterState.origin=""; filterState.from=""; filterState.to=""; applyFilterChange(); });
     bar.appendChild(reset);
   }
-  return bar;
+  wrap.appendChild(bar);
+  return wrap;
 }
 
 /* ===========================================================================
@@ -1214,7 +1419,7 @@ function renderList(){
   const pane = el("aside", { class:"list-pane", "aria-label":"运行列表" });
   const head = el("div", { class:"list-head" });
   const shown = state.scenario==="empty" ? 0 : DataSource.listRuns().length;
-  head.innerHTML = `<div class="list-title-row"><span class="list-title">运行</span><span class="list-count" title="当前筛选下返回的运行数（最近 N）">${shown}</span></div>`;
+  head.innerHTML = `<div class="list-title-row"><span class="list-title"><span class="lt-ic" aria-hidden="true">${ICON.list}</span>运行</span><span class="list-count" title="当前筛选下返回的运行数（最近 N）">${shown}</span></div>`;
   pane.appendChild(head);
   pane.appendChild(renderFilterBar());
 
@@ -1419,6 +1624,75 @@ function renderTabs(){
   return tablist;
 }
 
+/* role.reply / Message events now carry the real LLM response in ev.content (was: only the role id).
+   Render it as a beautified assistant bubble — role avatar + label, line breaks preserved, long replies
+   clamped behind a 展开/收起 toggle. Empty content degrades to a small note (no empty bubble). */
+function renderReplyBubble(ev){
+  const role = ev.agentId || ev.stepId || "assistant";
+  const reply = el("div", { class:"reply", role:"group", "aria-label":`模型回复 ${role}` });
+  const head = el("div", { class:"reply-head" });
+  head.innerHTML = `
+    <span class="reply-avatar" aria-hidden="true">${esc(initials(role))}</span>
+    <span class="reply-role" title="${esc(role)}">${esc(role)}</span>
+    <span class="reply-tag">回复</span>
+    <span class="reply-spacer"></span>`;
+  reply.appendChild(head);
+
+  const content = String(ev.content == null ? "" : ev.content);
+  if(content.trim() === ""){
+    reply.appendChild(el("div", { class:"reply-empty" }, "（无文本内容 —— 该回合可能仅触发工具调用）"));
+    return reply;
+  }
+  // clamp long responses; offer expand/collapse. Threshold by length OR line count.
+  const isLong = content.length > 360 || (content.match(/\n/g) || []).length > 8;
+  const bodyEl = el("div", { class:"reply-body"+(isLong?" clamp":"") }, esc(content));
+  reply.appendChild(bodyEl);
+  if(isLong){
+    const more = el("button", { class:"reply-more", type:"button", "aria-expanded":"false" }, `${ICON.chevron}<span>展开</span>`);
+    more.addEventListener("click", () => {
+      const clamped = bodyEl.classList.toggle("clamp");
+      more.setAttribute("aria-expanded", String(!clamped));
+      more.querySelector("span").textContent = clamped ? "展开" : "收起";
+    });
+    reply.appendChild(more);
+  }
+  return reply;
+}
+
+/* Surface the high-value AGUI data (model + token usage) as compact chips; tuck the rest under a
+   collapsible 详情. Returns null when there's nothing worth showing so callers can skip it cleanly. */
+function renderDataDetails(data){
+  if(!data || typeof data !== "object") return null;
+  const model = dataLookup(data, DATA_MODEL_KEYS);
+  const tokens = DATA_TOKEN_KEYS.map(([id, keys]) => [id, dataLookup(data, keys)]).filter(([,v]) => v !== "");
+  const extraKeys = Object.keys(data).filter(k => !DATA_CHIP_KEYS.has(k.toLowerCase()) && String(data[k]).trim() !== "");
+  if(!model && tokens.length === 0 && extraKeys.length === 0) return null;
+
+  const wrap = el("div", {});
+  if(model || tokens.length){
+    const chips = el("div", { class:"datachips" });
+    if(model) chips.appendChild(el("span", { class:"dchip model", title:"模型" }, `<span class="dk">模型</span><span class="dv">${esc(model)}</span>`));
+    tokens.forEach(([id, v]) => {
+      const n = Number(v); const disp = isNaN(n) ? esc(v) : fmtNum(n);
+      chips.appendChild(el("span", { class:"dchip tok-"+id, title:(TOKEN_CHIP_LABEL[id]||id)+" tokens" },
+        `<span class="dk">${TOKEN_CHIP_LABEL[id]||id}</span><span class="dv">${disp}</span>`));
+    });
+    wrap.appendChild(chips);
+  }
+  if(extraKeys.length){
+    const det = el("details", { class:"datamore" });
+    det.appendChild(el("summary", {}, `<span class="dm-chevron" aria-hidden="true">${ICON.chevron}</span><span>详情 · ${extraKeys.length}</span>`));
+    const table = el("div", { class:"datatable scroll" });
+    extraKeys.sort().forEach(k => {
+      table.appendChild(el("span", { class:"dt-k" }, esc(k)));
+      table.appendChild(el("span", { class:"dt-v" }, esc(String(data[k]))));
+    });
+    det.appendChild(table);
+    wrap.appendChild(det);
+  }
+  return wrap;
+}
+
 /* ---- Timeline ---- */
 function renderTimeline(detail){
   const wrap = el("div", {});
@@ -1449,8 +1723,9 @@ function renderTimeline(detail){
     body.appendChild(headRow);
 
     // content by kind
-    if(ev.kind === "TextMessage"){
-      body.appendChild(el("div", { class:"bubble" }, esc(ev.message)));
+    if(REPLY_KINDS.has(ev.kind)){
+      // the real assistant/role response text (ev.content), beautified — NOT just the role id
+      body.appendChild(renderReplyBubble(ev));
     } else if(ev.kind === "ToolCall"){
       body.appendChild(renderToolCall(ev.toolCall));
     } else if(ev.kind === "HumanInputRequest"){
@@ -1465,6 +1740,14 @@ function renderTimeline(detail){
       const node = el("div", { class:cls }, esc(ev.message));
       if(ev.kind==="RunError") node.style.color = "var(--err)", node.style.fontWeight = "600";
       body.appendChild(node);
+    }
+
+    // model + token-usage chips (and a collapsible 详情 for the rest) wherever the committed data bag
+    // carries them — typically llm_call StepFinished / Message events. Skipped for tool-call rows whose
+    // detail already lives in the tool-call panel.
+    if(ev.kind !== "ToolCall"){
+      const details = renderDataDetails(ev.data);
+      if(details) body.appendChild(details);
     }
 
     rail.appendChild(body);
@@ -1686,8 +1969,16 @@ function renderNodeDetailPanel(detail, g, nodeId){
       row.appendChild(evHead);
       if(ev.kind === "ToolCall" && ev.toolCall){
         row.appendChild(renderToolCall(ev.toolCall));
+      } else if(REPLY_KINDS.has(ev.kind)){
+        // surface the real LLM response so a selected node is explorable, not just a status dot
+        row.appendChild(renderReplyBubble(ev));
       } else if(ev.message){
         row.appendChild(el("div", { class:"nd-ev-msg"+(ev.kind==="RunError"?" err":"") }, esc(ev.message)));
+      }
+      // model + token usage from this step's committed data bag
+      if(ev.kind !== "ToolCall"){
+        const details = renderDataDetails(ev.data);
+        if(details) row.appendChild(details);
       }
       sec.appendChild(row);
     });
@@ -1951,7 +2242,7 @@ async function resolveEmail(email){
 
 function renderAdminBar(){
   const bar = el("div", { class:"adminbar", role:"region", "aria-label":"管理员跨 scope 查看" });
-  bar.appendChild(el("span", { class:"ab-badge", title:"NyxID 平台角色：" + esc(adminState.role) }, "ADMIN"));
+  bar.appendChild(el("span", { class:"ab-badge", title:"NyxID 平台角色：" + esc(adminState.role) }, `${ICON.shield}<span>ADMIN</span>`));
 
   const view = el("span", { class:"ab-view" });
   view.innerHTML = adminState.currentScope === ALL_SCOPES

@@ -121,9 +121,22 @@ public sealed class WorkflowRunObservatoryQueryService
             };
         }
 
+        // Merge the committed role-reply content (the actual LLM/agent responses) into the role.reply
+        // timeline events, matched per role id in commit order, so the detail shows the real response text
+        // (the timeline event itself only carries the role id). One queue per role, drained in time order.
+        var roleReplyByRole = report.RoleReplies
+            .GroupBy(reply => reply.RoleId ?? string.Empty, StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => new Queue<string>(
+                    group.OrderBy(reply => reply.Timestamp).Select(reply => reply.Content ?? string.Empty)),
+                StringComparer.Ordinal);
+
         var viewEvents = report.Timeline
             .OrderBy(item => item.Timestamp)
-            .Select(WorkflowRunObservatoryTimelineMapper.ToViewEvent)
+            .Select(item => WorkflowRunObservatoryTimelineMapper.ToViewEvent(
+                item,
+                ResolveRoleReplyContent(item, roleReplyByRole)))
             .ToList();
 
         return new ObservatoryRunDetail
@@ -132,6 +145,20 @@ public sealed class WorkflowRunObservatoryQueryService
             Timeline = viewEvents,
             UsageTotals = WorkflowRunObservatoryTimelineMapper.ToUsageTotals(report.Usage),
         };
+    }
+
+    // role.reply timeline events carry the role id (e.g. "writer") in Message; the response text lives in the
+    // committed role-reply artifact. Dequeue the next reply for that role in commit order.
+    private static string ResolveRoleReplyContent(
+        WorkflowRunTimelineEvent item,
+        IReadOnlyDictionary<string, Queue<string>> roleReplyByRole)
+    {
+        if (!string.Equals(item.Stage, "role.reply", StringComparison.Ordinal))
+            return string.Empty;
+        var roleId = item.Message ?? string.Empty;
+        return roleReplyByRole.TryGetValue(roleId, out var queue) && queue.Count > 0
+            ? queue.Dequeue()
+            : string.Empty;
     }
 
     public async Task<ObservatoryRunGraph?> GetRunGraphForScopeAsync(

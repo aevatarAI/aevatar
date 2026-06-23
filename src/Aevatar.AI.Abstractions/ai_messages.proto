@@ -148,6 +148,7 @@ message AgentToolChannelContextPayload {
 
 message AgentToolSenderBindingContextPayload {
   string binding_id = 1;
+  string nyx_user_id = 2;
 }
 
 message LLMRequestRoutingContextPayload {

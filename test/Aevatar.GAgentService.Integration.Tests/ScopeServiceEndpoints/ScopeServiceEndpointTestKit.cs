@@ -791,6 +791,7 @@ public abstract class ScopeServiceEndpointTestKit
                 record.CommandId,
                 record.CorrelationId,
                 record.EndpointId,
+                record.ScheduleId ?? string.Empty,
                 record.ImplementationKind,
                 record.TargetActorId,
                 record.RevisionId,
@@ -864,6 +865,14 @@ public abstract class ScopeServiceEndpointTestKit
                 results = results.Where(s => string.Equals(s.ScopeId, query.ScopeId, StringComparison.Ordinal));
             if (!string.IsNullOrWhiteSpace(query.ServiceId))
                 results = results.Where(s => string.Equals(s.ServiceId, query.ServiceId, StringComparison.Ordinal));
+            if (!string.IsNullOrWhiteSpace(query.ScheduleId))
+                results = results.Where(s => string.Equals(s.ScheduleId, query.ScheduleId, StringComparison.Ordinal));
+            if (query.Status.HasValue)
+                results = results.Where(s => s.Status == query.Status.Value);
+            if (query.UpdatedFrom.HasValue)
+                results = results.Where(s => s.UpdatedAt >= query.UpdatedFrom.Value);
+            if (query.UpdatedTo.HasValue)
+                results = results.Where(s => s.UpdatedAt <= query.UpdatedTo.Value);
             return Task.FromResult<IReadOnlyList<ServiceRunSnapshot>>(
                 results.OrderByDescending(s => s.UpdatedAt).Take(query.Take).ToList());
         }
@@ -915,6 +924,7 @@ public abstract class ScopeServiceEndpointTestKit
                 CommandId: binding.RunId,
                 CorrelationId: binding.RunId,
                 EndpointId: string.Empty,
+                ScheduleId: string.Empty,
                 ImplementationKind: ServiceImplementationKind.Workflow,
                 TargetActorId: binding.ActorId,
                 RevisionId: revisionId,

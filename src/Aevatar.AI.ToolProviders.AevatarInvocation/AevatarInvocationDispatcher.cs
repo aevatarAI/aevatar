@@ -37,6 +37,7 @@ public sealed class AevatarInvocationDispatcher
         LLMRequestMetadataKeys.NyxIdOrgToken,
         LLMRequestMetadataKeys.SenderNyxIdAccessToken,
         LLMRequestMetadataKeys.SenderBindingId,
+        LLMRequestMetadataKeys.SenderNyxUserId,
         LLMRequestMetadataKeys.ModelOverride,
         LLMRequestMetadataKeys.NyxIdRoutePreference,
         LLMRequestMetadataKeys.MaxToolRoundsOverride,
@@ -194,7 +195,7 @@ public sealed class AevatarInvocationDispatcher
         if (error != null)
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(error), error);
 
-        var scope = ResolveCallerScope();
+        var scope = ResolveTeamInvocationScope();
         if (scope.Error != null)
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(scope.Error), scope.Error);
 
@@ -1169,6 +1170,24 @@ public sealed class AevatarInvocationDispatcher
             scopeId,
             ownerSubject ?? string.Empty,
             responseId));
+    }
+
+    private CallerScopeResolution ResolveTeamInvocationScope()
+    {
+        var baseScope = ResolveCallerScope();
+        if (baseScope.Error != null)
+            return baseScope;
+
+        var context = AgentToolRequestContext.Current;
+        var senderNyxUserId = Normalize(context?.SenderBinding.NyxUserId);
+        if (senderNyxUserId == null)
+            return baseScope;
+
+        return CallerScopeResolution.Success(baseScope.Value! with
+        {
+            ScopeId = senderNyxUserId,
+            OwnerSubject = senderNyxUserId,
+        });
     }
 
     private static IReadOnlyList<ChatContentPart> ToChatInputParts(InvocationPayload payload) =>

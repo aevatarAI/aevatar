@@ -1110,6 +1110,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         !string.IsNullOrWhiteSpace(context.Routing.NyxIdRoutePreference) ||
         context.Routing.MaxToolRoundsOverride.HasValue ||
         !string.IsNullOrWhiteSpace(context.Routing.UserMemoryPrompt) ||
+        !string.IsNullOrWhiteSpace(context.SenderBinding.NyxUserId) ||
         !string.IsNullOrWhiteSpace(context.ConnectedServices.ContextJson) ||
         context.SkillRecovery != AgentSkillRecoveryContext.Empty ||
         context.ExternalMetadata.Count > 0;

@@ -34,9 +34,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<INyxIdApiClientFactory, HttpClientFactoryNyxIdApiClientFactory>();
         services.AddHttpClient(ConnectedServiceSpecCache.HttpClientName, _ => { });
         services.TryAddSingleton<IConnectedServiceSpecSource, ConnectedServiceSpecCache>();
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IWorkflowConnectedServiceFileSubmitAdapter,
-            NyxIdWorkflowConnectedServiceFileSubmitAdapter>());
+        services.Replace(ServiceDescriptor.Singleton<
+            IWorkflowFileMultipartUploadPort,
+            NyxIdWorkflowFileMultipartUploadPort>());
         if (services.Any(static descriptor => descriptor.ServiceType == typeof(IWorkflowFileIngressPort)))
         {
             services.TryAddSingleton<INyxIdProxyFileArtifactIngress>(sp =>

@@ -252,6 +252,7 @@ message ServiceRunCurrentStateReadModel {
   google.protobuf.Timestamp updated_at_utc_value = 21;
   string last_output = 22;
   string last_error = 23;
+  string schedule_id = 24;
 }
 // --- GAgentRunTerminalReadModel ---
 

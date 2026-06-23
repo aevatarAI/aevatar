@@ -29,7 +29,7 @@ public sealed class ServiceRunQueryReader : IServiceRunQueryPort
             return [];
 
         var boundedTake = Math.Clamp(query.Take, 1, 200);
-        var filters = new List<ProjectionDocumentFilter>(2);
+        var filters = new List<ProjectionDocumentFilter>(6);
         if (!string.IsNullOrWhiteSpace(query.ScopeId))
         {
             filters.Add(new ProjectionDocumentFilter
@@ -46,6 +46,42 @@ public sealed class ServiceRunQueryReader : IServiceRunQueryPort
                 FieldPath = nameof(ServiceRunCurrentStateReadModel.ServiceId),
                 Operator = ProjectionDocumentFilterOperator.Eq,
                 Value = ProjectionDocumentValue.FromString(query.ServiceId),
+            });
+        }
+        if (!string.IsNullOrWhiteSpace(query.ScheduleId))
+        {
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(ServiceRunCurrentStateReadModel.ScheduleId),
+                Operator = ProjectionDocumentFilterOperator.Eq,
+                Value = ProjectionDocumentValue.FromString(query.ScheduleId.Trim()),
+            });
+        }
+        if (query.Status.HasValue)
+        {
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(ServiceRunCurrentStateReadModel.Status),
+                Operator = ProjectionDocumentFilterOperator.Eq,
+                Value = ProjectionDocumentValue.FromInt64((int)query.Status.Value),
+            });
+        }
+        if (query.UpdatedFrom.HasValue)
+        {
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(ServiceRunCurrentStateReadModel.UpdatedAt),
+                Operator = ProjectionDocumentFilterOperator.Gte,
+                Value = ProjectionDocumentValue.FromDateTime(query.UpdatedFrom.Value.UtcDateTime),
+            });
+        }
+        if (query.UpdatedTo.HasValue)
+        {
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(ServiceRunCurrentStateReadModel.UpdatedAt),
+                Operator = ProjectionDocumentFilterOperator.Lte,
+                Value = ProjectionDocumentValue.FromDateTime(query.UpdatedTo.Value.UtcDateTime),
             });
         }
 
@@ -167,6 +203,7 @@ public sealed class ServiceRunQueryReader : IServiceRunQueryPort
             readModel.CommandId,
             readModel.CorrelationId,
             readModel.EndpointId,
+            readModel.ScheduleId,
             (ServiceImplementationKind)readModel.ImplementationKind,
             readModel.TargetActorId,
             readModel.RevisionId,

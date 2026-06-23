@@ -133,6 +133,10 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
                 TimelineEvent("step.completed", "draft (success)", stepId: "draft"),
                 TimelineEvent("workflow.completed", "completed"),
             ],
+            RoleReplies =
+            [
+                new WorkflowRunRoleReply { RoleId = "planner", Content = "here is the plan", ContentLength = 16 },
+            ],
         };
         var artifact = new FakeArtifactQueryPort { Report = report };
         var service = new WorkflowRunObservatoryQueryService(currentState, artifact);
@@ -143,6 +147,12 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         detail!.Summary.RunId.Should().Be("run-1");
         detail.Timeline.Select(x => x.Kind).Should().ContainInOrder(
             "RunStarted", "StepStarted", "Message", "ToolCall", "StepFinished", "RunFinished");
+
+        // role.reply Message event carries the merged LLM/agent response content (not just the role id).
+        var replyEvent = detail.Timeline.Single(x => x.Kind == "Message");
+        replyEvent.Message.Should().Be("planner");
+        replyEvent.Content.Should().Be("here is the plan");
+
         detail.UsageTotals.TotalTokens.Should().Be(15);
         detail.UsageTotals.Cost.Should().Be(0.004);
 
