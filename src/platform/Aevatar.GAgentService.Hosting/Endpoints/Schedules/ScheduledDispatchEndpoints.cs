@@ -489,19 +489,30 @@ public sealed record ScheduledDispatchServiceInvocationTargetHttpRequest
 public sealed record ScheduledServiceInvocationAuthHttpRequest
 {
     public ScheduledServiceInvocationNyxIdCredentialSourceHttpRequest? SenderNyxId { get; init; }
+    public string? DurableSenderBearerToken { get; init; }
     public ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceHttpRequest? ScopeOwnerNyxId { get; init; }
 
     public ScheduledServiceInvocationAuth ToAuth(
         ScheduledServiceInvocationNyxIdSubjectRef? authenticatedOwnerSubject = null)
     {
         var hasSenderNyxId = SenderNyxId != null;
+        var durableToken = DurableSenderBearerToken?.Trim() ?? string.Empty;
+        var hasDurableSenderBearerToken = durableToken.Length > 0;
         var hasScopeOwnerNyxId = ScopeOwnerNyxId != null;
-        if (hasSenderNyxId == hasScopeOwnerNyxId)
-            throw new ArgumentException("Exactly one NyxID credential source is required.", nameof(SenderNyxId));
+        if (Convert.ToInt32(hasSenderNyxId) +
+            Convert.ToInt32(hasDurableSenderBearerToken) +
+            Convert.ToInt32(hasScopeOwnerNyxId) != 1)
+        {
+            throw new ArgumentException("Exactly one service invocation credential source is required.", nameof(SenderNyxId));
+        }
 
-        return hasScopeOwnerNyxId
-            ? new ScheduledServiceInvocationAuth(ScopeOwnerNyxId: ScopeOwnerNyxId!.ToSource(authenticatedOwnerSubject))
-            : new ScheduledServiceInvocationAuth(SenderNyxId: SenderNyxId!.ToSource());
+        if (hasScopeOwnerNyxId)
+            return new ScheduledServiceInvocationAuth(ScopeOwnerNyxId: ScopeOwnerNyxId!.ToSource(authenticatedOwnerSubject));
+
+        if (hasDurableSenderBearerToken)
+            return new ScheduledServiceInvocationAuth(DurableSenderBearerToken: durableToken);
+
+        return new ScheduledServiceInvocationAuth(SenderNyxId: SenderNyxId!.ToSource());
     }
 }
 

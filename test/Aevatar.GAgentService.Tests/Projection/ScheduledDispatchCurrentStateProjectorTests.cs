@@ -46,6 +46,42 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
         document.LastEventId.Should().Be("evt-9");
     }
 
+    [Fact]
+    public async Task ProjectAsync_ShouldNotProjectDurableSenderBearerToken()
+    {
+        var store = new RecordingDocumentStore<ScheduledDispatchDocument>(x => x.Id);
+        var projector = new ScheduledDispatchCurrentStateProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-06-18T00:00:00+00:00")));
+        var identity = new ServiceIdentity
+        {
+            TenantId = "tenant",
+            AppId = "app",
+            Namespace = "default",
+            ServiceId = "svc",
+        };
+        var state = CreateServiceInvocationState("schedule-secret", identity);
+        state.Target.ServiceInvocation.Auth = new ScheduledServiceInvocationAuthState
+        {
+            DurableSenderBearerToken = "durable-run-key",
+        };
+
+        await projector.ProjectAsync(
+            CreateContext("scheduled-dispatch:schedule-secret"),
+            WrapCommitted(
+                state,
+                version: 10,
+                eventId: "evt-secret",
+                observedAt: DateTimeOffset.Parse("2026-06-18T01:15:00+00:00")));
+
+        var document = await store.GetAsync("schedule-secret");
+        document.Should().NotBeNull();
+        document!.ToByteArray().AsSpan().IndexOf(ByteString.CopyFromUtf8("durable-run-key").ToByteArray()).Should().Be(-1);
+        document.ToString().Should().NotContain("durable-run-key");
+        document.ServiceKey.Should().Be(ServiceKeys.Build(identity));
+        document.StateVersion.Should().Be(10);
+    }
+
     [Theory]
     [InlineData("", "app", "default", "svc")]
     [InlineData("tenant", "", "default", "svc")]

@@ -35,6 +35,7 @@ using Aevatar.GAgents.StatusDashboard.Executors;
 using Aevatar.Mainnet.Host.Api.Hosting;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.Scripting.Projection.ReadModels;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.Runs;
 using Aevatar.Workflow.Integration.AI;
 using Aevatar.Workflow.Projection.ReadModels;
@@ -247,7 +248,7 @@ public sealed class MainnetHostCompositionTests
     }
 
     [Fact]
-    public void AddAevatarMainnetHost_ShouldAllowWorkflowFileSubmitOptInWithoutChangingAgentToolSets()
+    public void AddAevatarMainnetHost_ShouldIgnoreLegacyLarkWorkflowFileSubmitOptIn()
     {
         using var home = new TemporaryAevatarHomeScope();
         var builder = CreateBuilder(new Dictionary<string, string?>
@@ -264,10 +265,16 @@ public sealed class MainnetHostCompositionTests
         using var app = builder.Build();
         app.Services.GetRequiredService<LarkToolOptions>()
             .EnableWorkflowFileSubmit.Should().BeTrue();
+        app.Services.GetServices<IWorkflowFileMultipartUploadPort>()
+            .Should()
+            .ContainSingle()
+            .Which
+            .Should()
+            .BeOfType<NyxIdWorkflowFileMultipartUploadPort>();
     }
 
     [Fact]
-    public void AddAevatarMainnetHost_ShouldBindWorkflowConnectedServiceFileSubmitSection()
+    public void AddAevatarMainnetHost_ShouldIgnoreLegacyWorkflowConnectedServiceFileSubmitSection()
     {
         using var home = new TemporaryAevatarHomeScope();
         var builder = CreateBuilder(BuildWorkflowFileSubmitTargetConfiguration());
@@ -279,20 +286,143 @@ public sealed class MainnetHostCompositionTests
         });
 
         using var app = builder.Build();
-        var target = app.Services.GetRequiredService<IOptions<WorkflowConnectedServiceFileSubmitOptions>>()
-            .Value
-            .Targets
+        app.Services.GetServices<IWorkflowFileMultipartUploadPort>()
             .Should()
             .ContainSingle()
-            .Subject;
+            .Which
+            .Should()
+            .BeOfType<NyxIdWorkflowFileMultipartUploadPort>();
+        app.Services.GetServices<IWorkflowFileMultipartUploadPolicyResolver>()
+            .Should()
+            .ContainSingle();
+    }
 
-        target.Target.Should().Be("submit_invoice");
-        target.Provider.Should().Be("nyxid_connected_service");
-        target.Endpoint.Should().NotBeNull();
-        target.Endpoint!.ServiceSlug.Should().Be("storage");
-        target.Endpoint.Path.Should().Be("files/upload");
-        target.Endpoint.Method.Should().Be("POST");
-        target.Endpoint.FileFieldName.Should().Be("upload");
+    [Theory]
+    [InlineData("POST")]
+    [InlineData("PUT")]
+    [InlineData("PATCH")]
+    public async Task AddAevatarMainnetHost_ShouldResolveWorkflowFileMultipartUploadSafetyPolicyFromCandidate(
+        string method)
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder();
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        var resolver = app.Services.GetRequiredService<IWorkflowFileMultipartUploadPolicyResolver>();
+        resolver.Should().BeOfType<MainnetWorkflowFileMultipartUploadSafetyPolicyResolver>();
+
+        var resolution = await resolver.ResolveAsync(
+            new WorkflowFileMultipartUploadCandidate(
+                BuildWorkflowFileRef(),
+                ServiceSlug: "api-custom-service",
+                Path: "custom/files/upload",
+                Method: method,
+                FileFieldName: "asset",
+                FormFields: new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["folder"] = "reports",
+                    ["purpose"] = "extract",
+                },
+                OutputKind: "external_resource_id",
+                OutputSelector: "data.document_id",
+                MaxFileBytes: 512),
+            BuildWorkflowFileRef(),
+            BuildMultipartUploadContext());
+
+        resolution.IsAllowed.Should().BeTrue(resolution.Detail);
+        resolution.Policy.Should().NotBeNull();
+        resolution.Policy!.ServiceSlug.Should().Be("api-custom-service");
+        resolution.Policy.Path.Should().Be("custom/files/upload");
+        resolution.Policy.Method.Should().Be(method);
+        resolution.Policy.FileFieldName.Should().Be("asset");
+        resolution.Policy.FormFields.Should().ContainKey("folder").WhoseValue.Should().Be("reports");
+        resolution.Policy.FormFields.Should().ContainKey("purpose").WhoseValue.Should().Be("extract");
+        resolution.Policy.OutputKind.Should().Be("external_resource_id");
+        resolution.Policy.OutputSelector.Should().Be("data.document_id");
+        resolution.Policy.MaxFileBytes.Should().Be(512);
+    }
+
+    [Fact]
+    public async Task AddAevatarMainnetHost_ShouldUseMainnetWorkflowFileMultipartUploadSafetyLimitWhenCandidateDoesNotNarrow()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder();
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        var resolver = app.Services.GetRequiredService<IWorkflowFileMultipartUploadPolicyResolver>();
+        resolver.Should().BeOfType<MainnetWorkflowFileMultipartUploadSafetyPolicyResolver>();
+
+        var resolution = await resolver.ResolveAsync(
+            new WorkflowFileMultipartUploadCandidate(
+                BuildWorkflowFileRef(),
+                ServiceSlug: "storage",
+                Path: "files/upload",
+                Method: "POST",
+                FileFieldName: "upload",
+                FormFields: new Dictionary<string, string>(StringComparer.Ordinal),
+                OutputKind: "external_resource_id",
+                OutputSelector: "data.document_id",
+                MaxFileBytes: null),
+            BuildWorkflowFileRef(),
+            BuildMultipartUploadContext());
+
+        resolution.IsAllowed.Should().BeTrue(resolution.Detail);
+        resolution.Policy.Should().NotBeNull();
+        resolution.Policy!.MaxFileBytes.Should().Be(
+            MainnetWorkflowFileMultipartUploadSafetyPolicyResolver.MaxFileBytes);
+    }
+
+    [Theory]
+    [InlineData("GET")]
+    [InlineData("DELETE")]
+    [InlineData("HEAD")]
+    [InlineData("OPTIONS")]
+    public async Task AddAevatarMainnetHost_ShouldRejectNonUploadWorkflowFileMultipartUploadMethod(
+        string method)
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder();
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        var resolver = app.Services.GetRequiredService<IWorkflowFileMultipartUploadPolicyResolver>();
+
+        var resolution = await resolver.ResolveAsync(
+            new WorkflowFileMultipartUploadCandidate(
+                BuildWorkflowFileRef(),
+                ServiceSlug: "storage",
+                Path: "files/upload",
+                Method: method,
+                FileFieldName: "upload",
+                FormFields: new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["folder"] = "reports",
+                },
+                OutputKind: "external_resource_id",
+                OutputSelector: "data.document_id",
+                MaxFileBytes: null),
+            BuildWorkflowFileRef(),
+            BuildMultipartUploadContext());
+
+        resolution.IsAllowed.Should().BeFalse();
+        resolution.Error.Should().Be("unsupported_method");
     }
 
     [Fact]
@@ -319,7 +449,7 @@ public sealed class MainnetHostCompositionTests
     }
 
     [Fact]
-    public async Task AddAevatarMainnetHost_ShouldFailFastOnMalformedWorkflowFileSubmitEndpointPolicy()
+    public void AddAevatarMainnetHost_ShouldNotBindMalformedLegacyWorkflowFileSubmitEndpointPolicy()
     {
         using var home = new TemporaryAevatarHomeScope();
         var configurationValues = BuildWorkflowFileSubmitTargetConfiguration();
@@ -332,12 +462,17 @@ public sealed class MainnetHostCompositionTests
             options.EnableCors = false;
         });
 
-        await using var app = builder.Build();
-        var act = async () => await app.StartAsync();
+        builder.Services.Should().NotContain(descriptor =>
+            descriptor.ServiceType.FullName != null &&
+            descriptor.ServiceType.FullName.Contains("WorkflowConnectedServiceFileSubmit", StringComparison.Ordinal));
 
-        await act.Should()
-            .ThrowAsync<OptionsValidationException>()
-            .WithMessage("*WorkflowConnectedServiceFileSubmit:Targets[0].Endpoint.Path*");
+        using var app = builder.Build();
+        app.Services.GetServices<IWorkflowFileMultipartUploadPort>()
+            .Should()
+            .ContainSingle()
+            .Which
+            .Should()
+            .BeOfType<NyxIdWorkflowFileMultipartUploadPort>();
     }
 
     [Fact]
@@ -585,6 +720,31 @@ public sealed class MainnetHostCompositionTests
             ["WorkflowConnectedServiceFileSubmit:Targets:0:Endpoint:Method"] = "POST",
             ["WorkflowConnectedServiceFileSubmit:Targets:0:Endpoint:FileFieldName"] = "upload",
         };
+
+    private static WorkflowFileRef BuildWorkflowFileRef() =>
+        new()
+        {
+            FileId = "file-1",
+            ArtifactId = "artifact-1",
+            SourceKind = WorkflowFileSourceKind.FormUpload,
+            FileName = "report.txt",
+            MediaType = "text/plain",
+            SizeBytes = 12,
+            Sha256 = "sha256-value",
+            OwnerRunId = "run-1",
+            OwnerScopeId = "scope-1",
+        };
+
+    private static WorkflowFileMultipartUploadExecutionContext BuildMultipartUploadContext() =>
+        new(
+            RunId: "run-1",
+            ParentRunId: null,
+            RootRunId: null,
+            ScopeId: "scope-1",
+            StepId: "step-1",
+            ExecutionId: "exec-1",
+            CallId: "call-1",
+            IdempotencyKey: "idem-1");
 
     private static void InvokeConfigureMainnetAIFeatures(AevatarAIFeatureOptions options)
     {

@@ -127,6 +127,39 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
+    public async Task CreateAsync_ShouldNormalizeDurableSenderBearerTokenAuth()
+    {
+        var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            new RecordingScheduledDispatchQueryPort(),
+            new ScheduledDispatchTargetPreparationService());
+
+        await service.CreateAsync(new ScheduledDispatchConfiguration(
+            "schedule-durable-auth",
+            "Invoke",
+            new ScheduledDispatchTargetDescriptor(
+                ScheduledDispatchTargetKind.ServiceInvocation,
+                ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
+                    new ServiceIdentity { TenantId = "tenant", AppId = "app", Namespace = "default", ServiceId = "svc" },
+                    "run",
+                    Any.Pack(new StringValue { Value = "invoke" }),
+                    Auth: new ScheduledServiceInvocationAuth(DurableSenderBearerToken: " durable-run-key "))),
+            "0 9 * * *",
+            "UTC",
+            true,
+            new Dictionary<string, string>()));
+
+        var created = actorPort.Created.Should().ContainSingle().Which;
+        var configurationAuth = created.Configuration.Target.ServiceInvocation!.Auth;
+        configurationAuth.Should().NotBeNull();
+        configurationAuth!.SenderNyxId.Should().BeNull();
+        configurationAuth.ScopeOwnerNyxId.Should().BeNull();
+        configurationAuth.DurableSenderBearerToken.Should().Be("durable-run-key");
+        created.Dispatch.Descriptor.ServiceInvocation!.Auth!.DurableSenderBearerToken.Should().Be("durable-run-key");
+    }
+
+    [Fact]
     public async Task UpdateAsync_ShouldNormalizeServiceInvocationAndDispatchUpdate()
     {
         var actorPort = new RecordingScheduledDispatchActorPort();
@@ -380,7 +413,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
-    public async Task CreateAsync_ShouldRejectServiceInvocationAuthWithBothNyxIdSources()
+    public async Task CreateAsync_ShouldRejectServiceInvocationAuthWithMultipleCredentialSources()
     {
         var service = CreateService();
 
@@ -397,6 +430,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
                         SenderNyxId: new ScheduledServiceInvocationNyxIdCredentialSource(
                             new ScheduledServiceInvocationNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
                             "proxy"),
+                        DurableSenderBearerToken: "durable-run-key",
                         ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
                             "owner-proxy",
                             new ScheduledServiceInvocationNyxIdSubjectRef(OwnerScope.NyxIdPlatform, string.Empty, "owner-nyx-user"))))),
@@ -406,7 +440,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
             new Dictionary<string, string>()));
 
         await act.Should().ThrowAsync<ArgumentException>()
-            .WithMessage("*Exactly one service invocation NyxID credential source*");
+            .WithMessage("*Exactly one service invocation credential source*");
     }
 
     [Fact]
@@ -569,6 +603,37 @@ public sealed class ScheduledDispatchApplicationServiceTests
                 Tenant = string.Empty,
                 ExternalUserId = "owner-nyx-user",
             });
+    }
+
+    [Fact]
+    public async Task ScheduledDispatchActorPort_ShouldPersistDurableSenderBearerTokenAuth()
+    {
+        var dispatchPort = new RecordingActorDispatchPort();
+        var port = new ScheduledDispatchActorPort(new RecordingActorRuntime(), dispatchPort);
+        var configuration = new ScheduledDispatchConfiguration(
+            "schedule-durable",
+            "Invoke",
+            new ScheduledDispatchTargetDescriptor(
+                ScheduledDispatchTargetKind.ServiceInvocation,
+                ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
+                    new ServiceIdentity { TenantId = "tenant", AppId = "app", Namespace = "default", ServiceId = "svc" },
+                    "run",
+                    Any.Pack(new StringValue { Value = "invoke" }),
+                    Auth: new ScheduledServiceInvocationAuth(DurableSenderBearerToken: "durable-run-key"))),
+            "0 9 * * *",
+            "UTC",
+            true,
+            new Dictionary<string, string>(),
+            ScheduledDispatchScheduleKind.Workflow);
+        var prepared = await new ScheduledDispatchTargetPreparationService()
+            .PrepareAsync(configuration, "cmd-1", "corr-1");
+
+        await port.DispatchCreateAsync("scheduled-dispatch:schedule-durable", configuration, prepared);
+
+        var command = dispatchPort.Envelopes.Should().ContainSingle().Which.Payload.Unpack<ScheduledDispatchCreateCommand>();
+        command.Target.ServiceInvocation.Auth.SenderNyxId.Should().BeNull();
+        command.Target.ServiceInvocation.Auth.ScopeOwnerNyxId.Should().BeNull();
+        command.Target.ServiceInvocation.Auth.DurableSenderBearerToken.Should().Be("durable-run-key");
     }
 
     [Fact]

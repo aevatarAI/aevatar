@@ -45,7 +45,10 @@ message ServiceInvocationRequest {
   string correlation_id = 5;
   ServiceInvocationCaller caller = 6;
   string revision_id = 7;
-  string schedule_id = 8;
+  // Canonical run origin/type for observatory attribution. Empty = registered-service invoke
+  // (the dispatcher defaults it to "service-invoke"); scheduled dispatch sets "provisioned".
+  string run_origin = 8;
+  string schedule_id = 9;
 }
 
 message ServiceInvocationAcceptedReceipt {

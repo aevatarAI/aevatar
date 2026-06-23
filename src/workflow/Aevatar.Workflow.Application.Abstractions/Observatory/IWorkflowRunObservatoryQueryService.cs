@@ -27,6 +27,15 @@ public sealed class ObservatoryRunListFilter
 {
     public string? Status { get; init; }
 
+    // 06-23-observatory-run-coverage-filter: additional filter dimensions. Null/empty = not filtered.
+    public IReadOnlyList<string> Origins { get; init; } = [];
+
+    public IReadOnlyList<string> DefinitionActorIds { get; init; } = [];
+
+    public DateTimeOffset? FromUtc { get; init; }
+
+    public DateTimeOffset? ToUtc { get; init; }
+
     public int Take { get; init; } = 100;
 }
 
@@ -52,6 +61,10 @@ public sealed class ObservatoryRunSummary
     // 06-20-observatory-admin-cross-scope: the run's owning scope. Populated for every read; the page only
     // surfaces it in admin cross-scope mode (own-scope callers already know their scope).
     public string ScopeId { get; init; } = string.Empty;
+
+    // 06-23-observatory-run-coverage-filter: canonical run origin/type (draft | member-invoke | ...),
+    // empty for legacy/unstamped runs. Drives the run-type filter + badge.
+    public string RunOrigin { get; init; } = string.Empty;
 }
 
 public sealed class ObservatoryRunDetail
@@ -92,6 +105,15 @@ public sealed class ObservatoryViewEvent
     public string StepType { get; init; } = string.Empty;
 
     public ObservatoryToolCallDetail? ToolCall { get; init; }
+
+    // 06-23 detail enrichment: the actual LLM/role reply text (for role.reply Message events), merged from
+    // the committed role-reply artifact so the timeline shows real responses, not just the role id.
+    public string Content { get; init; } = string.Empty;
+
+    // AGUI event detail bag (the committed timeline event's data map) — model/tokens/usage and other
+    // event-type-specific fields the viewer can surface beautified.
+    public IReadOnlyDictionary<string, string> Data { get; init; } =
+        new Dictionary<string, string>(StringComparer.Ordinal);
 }
 
 public sealed class ObservatoryToolCallDetail
