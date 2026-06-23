@@ -135,10 +135,12 @@ const workflowStudioHeaderCss = `
 
 .workflow-studio-header__breadcrumb-link {
   color: #6b7280;
+  display: inline-block;
   max-width: 140px;
   overflow: hidden;
   text-decoration: none;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .workflow-studio-header__breadcrumb-link:hover {

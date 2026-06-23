@@ -157,7 +157,9 @@ const TeamCreatePage: React.FC = () => {
       setIsCreatingTeam(false);
     }
   };
-  const teamsHref = buildTeamsHref();
+  const teamsHref = scopeId
+    ? buildTeamDetailHref({ scopeId })
+    : buildTeamsHref();
   const breadcrumbItems: AevatarBreadcrumbItem[] = [
     {
       href: teamsHref,

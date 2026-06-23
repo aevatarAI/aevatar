@@ -10387,12 +10387,15 @@ const StudioPage: React.FC = () => {
   const studioTeamLabel =
     trimOptional(studioTeamSummaryQuery.data?.displayName) ||
     (routeState.teamId ? t("pages.studio.index.teamBreadcrumb", "Team") : "");
+  const studioTeamsHref = resolvedStudioScopeId
+    ? buildTeamDetailHref({ scopeId: resolvedStudioScopeId })
+    : buildTeamsHref();
   const studioBreadcrumbItems: AevatarBreadcrumbItem[] = [
     {
-      href: buildTeamsHref(),
+      href: studioTeamsHref,
       onClick: (event) => {
         event.preventDefault();
-        history.push(buildTeamsHref());
+        history.push(studioTeamsHref);
       },
       title: t("pages.studio.index.teamsBreadcrumb", "Teams"),
     },

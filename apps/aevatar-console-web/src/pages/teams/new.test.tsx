@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { setLocale } from '@umijs/max';
 import { message } from 'antd';
 import React from 'react';
@@ -59,8 +59,12 @@ describe('TeamCreatePage', () => {
   it('renders the simplified Team create page', async () => {
     renderWithQueryClient(React.createElement(TeamCreatePage));
 
-    expect(await screen.findByRole('navigation', { name: 'Breadcrumb' })).toHaveTextContent('团队');
-    expect(screen.getByRole('navigation', { name: 'Breadcrumb' })).toHaveTextContent('创建团队');
+    const breadcrumb = await screen.findByRole('navigation', { name: 'Breadcrumb' });
+    expect(screen.getAllByRole('navigation')).toHaveLength(1);
+    expect(breadcrumb).toHaveTextContent('Teams');
+    expect(breadcrumb).toHaveTextContent('创建团队');
+    const teamsBreadcrumbLink = within(breadcrumb).getByRole('link', { name: 'Teams' });
+    expect(teamsBreadcrumbLink).toHaveAttribute('href', '/scopes/scope-a/teams');
     expect(screen.getByRole('heading', { level: 2, name: '创建团队' })).toBeTruthy();
     expect(screen.getByText('团队信息')).toBeTruthy();
     expect(screen.getByLabelText('队名')).toBeTruthy();
@@ -72,6 +76,10 @@ describe('TeamCreatePage', () => {
     expect(screen.queryByRole('button', { name: '继续在 Studio 中编辑' })).toBeNull();
     expect(screen.queryByRole('button', { name: '查看 Behaviors' })).toBeNull();
     expect(screen.queryByText('已保存草稿')).toBeNull();
+
+    fireEvent.click(teamsBreadcrumbLink);
+    expect(window.location.pathname).toBe('/scopes/scope-a/teams');
+    expect(window.location.search).toBe('');
   });
 
   it('creates a backend StudioTeam and routes to team focus', async () => {

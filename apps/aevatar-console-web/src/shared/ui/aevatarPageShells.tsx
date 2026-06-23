@@ -1,7 +1,6 @@
 import { ArrowLeftOutlined, InfoCircleOutlined } from '@ant-design/icons';
 import { PageContainer, ProCard } from '@ant-design/pro-components';
 import {
-  Breadcrumb,
   Button,
   Drawer,
   Empty,
@@ -285,24 +284,24 @@ const breadcrumbCss = `
   min-width: 0;
 }
 
-.aevatar-breadcrumb .ant-breadcrumb {
-  color: inherit;
-  min-width: 0;
-}
-
-.aevatar-breadcrumb .ant-breadcrumb ol {
+.aevatar-breadcrumb__list {
   align-items: center;
+  display: flex;
   flex-wrap: nowrap;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  min-width: 0;
+  padding: 0;
+}
+
+.aevatar-breadcrumb__item {
   min-width: 0;
 }
 
-.aevatar-breadcrumb .ant-breadcrumb li {
-  min-width: 0;
-}
-
-.aevatar-breadcrumb .ant-breadcrumb-link,
-.aevatar-breadcrumb .ant-breadcrumb-separator {
-  color: inherit;
+.aevatar-breadcrumb__item--separator {
+  color: var(--aevatar-breadcrumb-color);
+  flex: 0 0 auto;
 }
 
 .aevatar-breadcrumb__link {
@@ -352,8 +351,8 @@ export const AevatarBreadcrumb: React.FC<AevatarBreadcrumbProps> = ({
           } as React.CSSProperties
         }
       >
-        <Breadcrumb
-          items={visibleItems.map((item, index) => {
+        <ol className="aevatar-breadcrumb__list">
+          {visibleItems.map((item, index) => {
             const current = item.current ?? index === visibleItems.length - 1;
             const label = (
               <span
@@ -364,38 +363,44 @@ export const AevatarBreadcrumb: React.FC<AevatarBreadcrumbProps> = ({
                 {item.title}
               </span>
             );
-
-            if (!current && (item.href || item.onClick)) {
-              return {
-                title: (
-                  <a
-                    className="aevatar-breadcrumb__link"
-                    href={item.href ?? "#"}
-                    onClick={(event) => {
-                      if (item.onClick || !item.href) {
-                        event.preventDefault();
-                      }
-                      item.onClick?.(event);
-                    }}
-                  >
-                    {label}
-                  </a>
-                ),
-              };
-            }
-
-            return {
-              title: (
+            const content =
+              !current && (item.href || item.onClick) ? (
+                <a
+                  className="aevatar-breadcrumb__link"
+                  href={item.href ?? "#"}
+                  onClick={(event) => {
+                    if (item.onClick || !item.href) {
+                      event.preventDefault();
+                    }
+                    item.onClick?.(event);
+                  }}
+                >
+                  {label}
+                </a>
+              ) : (
                 <span
                   aria-current={current ? "page" : undefined}
                   className={current ? "aevatar-breadcrumb__current" : undefined}
                 >
                   {label}
                 </span>
-              ),
-            };
+              );
+
+            return (
+              <React.Fragment key={item.key ?? index}>
+                {index > 0 ? (
+                  <li
+                    aria-hidden="true"
+                    className="aevatar-breadcrumb__item aevatar-breadcrumb__item--separator"
+                  >
+                    /
+                  </li>
+                ) : null}
+                <li className="aevatar-breadcrumb__item">{content}</li>
+              </React.Fragment>
+            );
           })}
-        />
+        </ol>
       </nav>
     </>
   );
