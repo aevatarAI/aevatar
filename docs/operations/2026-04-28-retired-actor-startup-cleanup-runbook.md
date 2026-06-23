@@ -21,6 +21,13 @@ When Orleans activates the persisted actors during startup or rebuild paths,
 activation fails and can abort pod startup. The same pattern appears whenever a
 runtime CLR type is renamed or moved across assemblies.
 
+`ChannelBotRegistrationGAgent` is now **fully deleted**, not merely relocated:
+ADR-0037 removed aevatar's self-registration of channel bots along with the
+`ChannelBotRegistration` GAgent / readmodel / projector. Its persisted
+`channel-bot-registration-store` and `projection.durable.scope:channel-bot-registration`
+durable scope therefore have no current owner type at all and must be cleaned by this
+spec (they are already declared as `channel-runtime` targets below).
+
 `LegacyClrTypeName` remains a protobuf payload compatibility tool for renamed
 state messages; it does not make a retired actor implementation type safe to
 activate. The startup cleanup therefore targets persisted runtime actor type

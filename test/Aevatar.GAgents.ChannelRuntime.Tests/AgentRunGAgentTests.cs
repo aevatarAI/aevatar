@@ -1193,9 +1193,6 @@ public sealed class AgentRunGAgentTests
             LlmControlObserver = control => observedControl = control,
         };
 
-        var scopeResolver = Substitute.For<INyxIdRelayScopeResolver>();
-        scopeResolver.ResolveScopeIdByApiKeyAsync("api-key-bot", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<string?>("scope-bot-owner"));
         var userConfigQueryPort = Substitute.For<IUserConfigQueryPort>();
         userConfigQueryPort.GetAsync("scope-bot-owner", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new Aevatar.Studio.Application.Studio.Abstractions.UserConfig(
@@ -1212,11 +1209,10 @@ public sealed class AgentRunGAgentTests
             replyGenerator,
             new AsyncLocalInteractiveReplyCollector(),
             new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true },
-            scopeResolver,
             userConfigQueryPort);
 
         var activity = BuildRelayActivity();
-        activity.Bot = BotInstanceId.From("api-key-bot");
+        activity.TransportExtras = new TransportExtras { NyxRegistrationScopeId = "scope-bot-owner" };
 
         await runtime.HandleStartAsync(new NeedsLlmReplyEvent
         {
@@ -1437,9 +1433,6 @@ public sealed class AgentRunGAgentTests
             preferencesStore: preferencesStore);
         var actorRuntime = new DispatchingActorRuntime(("conversation:c", targetActor));
 
-        var scopeResolver = Substitute.For<INyxIdRelayScopeResolver>();
-        scopeResolver.ResolveScopeIdByApiKeyAsync("api-key-bot", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<string?>("scope-bot-owner"));
         var userConfigQueryPort = Substitute.For<IUserConfigQueryPort>();
         userConfigQueryPort.GetAsync("scope-bot-owner", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new Aevatar.Studio.Application.Studio.Abstractions.UserConfig(
@@ -1456,13 +1449,12 @@ public sealed class AgentRunGAgentTests
             replyGenerator,
             new AsyncLocalInteractiveReplyCollector(),
             new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true },
-            scopeResolver,
             userConfigQueryPort);
 
         var activity = BuildRelayActivity();
-        activity.Bot = BotInstanceId.From("api-key-bot");
         activity.TransportExtras = new TransportExtras
         {
+            NyxRegistrationScopeId = "scope-bot-owner",
             NyxUserAccessToken = "bot-owner-session-jwt",
         };
 
@@ -2991,10 +2983,6 @@ public sealed class AgentRunGAgentTests
         actor.Id.Returns("actor-1");
         var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
 
-        var scopeResolver = Substitute.For<INyxIdRelayScopeResolver>();
-        scopeResolver.ResolveScopeIdByApiKeyAsync("api-key-bot", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<string?>("scope-bot-owner"));
-
         var userConfigQueryPort = Substitute.For<IUserConfigQueryPort>();
         userConfigQueryPort.GetAsync("scope-bot-owner", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new Aevatar.Studio.Application.Studio.Abstractions.UserConfig(
@@ -3011,13 +2999,12 @@ public sealed class AgentRunGAgentTests
             replyGenerator,
             new AsyncLocalInteractiveReplyCollector(),
             new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true },
-            scopeResolver,
             userConfigQueryPort);
 
         var activity = BuildRelayActivity();
-        activity.Bot = BotInstanceId.From("api-key-bot");
         activity.TransportExtras = new TransportExtras
         {
+            NyxRegistrationScopeId = "scope-bot-owner",
             NyxUserAccessToken = "bot-owner-session-jwt",
         };
 
@@ -3089,7 +3076,6 @@ public sealed class AgentRunGAgentTests
         IConversationReplyGenerator replyGenerator,
         IInteractiveReplyCollector? collector,
         Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions relayOptions,
-        INyxIdRelayScopeResolver? scopeResolver = null,
         IUserConfigQueryPort? userConfigQueryPort = null,
         IEventPublisher? eventPublisher = null,
         IActorRuntimeCallbackScheduler? callbackScheduler = null)
@@ -3100,7 +3086,6 @@ public sealed class AgentRunGAgentTests
             replyGenerator,
             collector,
             relayOptions,
-            scopeResolver,
             userConfigQueryPort);
         var agent = new AgentRunGAgent(
             actorRuntime,
@@ -3447,7 +3432,6 @@ public sealed class AgentRunGAgentTests
         private readonly IActorDispatchPort _dispatchPort;
         private readonly IConversationReplyGenerator _replyGenerator;
         private readonly Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions _relayOptions;
-        private readonly INyxIdRelayScopeResolver? _scopeResolver;
         private readonly IUserConfigQueryPort? _userConfigQueryPort;
         private readonly IInteractiveReplyCollector? _interactiveReplyCollector;
         private AgentRunGAgent? _agent;
@@ -3460,13 +3444,11 @@ public sealed class AgentRunGAgentTests
             IConversationReplyGenerator replyGenerator,
             IInteractiveReplyCollector? collector,
             Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions relayOptions,
-            INyxIdRelayScopeResolver? scopeResolver,
             IUserConfigQueryPort? userConfigQueryPort)
         {
             _dispatchPort = dispatchPort;
             _replyGenerator = replyGenerator;
             _relayOptions = relayOptions;
-            _scopeResolver = scopeResolver;
             _userConfigQueryPort = userConfigQueryPort;
             _interactiveReplyCollector = collector;
             _inner = new AgentRunReplyGenerationExecutor(
@@ -3475,7 +3457,6 @@ public sealed class AgentRunGAgentTests
                 collector,
                 relayOptions,
                 NullLogger<AgentRunReplyGenerationExecutor>.Instance,
-                scopeResolver,
                 userConfigQueryPort);
         }
 
@@ -3792,28 +3773,24 @@ public sealed class AgentRunGAgentTests
             CancellationToken ct)
         {
             var control = LLMControlContextMapper.FromPayload(request.LlmControl);
-            if (_scopeResolver is not null && _userConfigQueryPort is not null)
+            if (_userConfigQueryPort is not null)
             {
-                var apiKeyId = request.Activity?.Bot?.Value?.Trim();
-                if (!string.IsNullOrWhiteSpace(apiKeyId))
+                var scopeId = request.Activity?.TransportExtras?.NyxRegistrationScopeId?.Trim();
+                if (!string.IsNullOrWhiteSpace(scopeId))
                 {
-                    var scopeId = await _scopeResolver.ResolveScopeIdByApiKeyAsync(apiKeyId, ct);
-                    if (!string.IsNullOrWhiteSpace(scopeId))
+                    var config = await _userConfigQueryPort.GetAsync(scopeId, ct);
+                    control = control with
                     {
-                        var config = await _userConfigQueryPort.GetAsync(scopeId, ct);
-                        control = control with
-                        {
-                            ModelOverride = string.IsNullOrWhiteSpace(config.DefaultModel)
-                                ? control.ModelOverride
-                                : config.DefaultModel.Trim(),
-                            NyxIdRoutePreference = string.IsNullOrWhiteSpace(config.PreferredLlmRoute)
-                                ? control.NyxIdRoutePreference
-                                : config.PreferredLlmRoute.Trim(),
-                            MaxToolRoundsOverride = config.MaxToolRounds > 0
-                                ? config.MaxToolRounds
-                                : control.MaxToolRoundsOverride,
-                        };
-                    }
+                        ModelOverride = string.IsNullOrWhiteSpace(config.DefaultModel)
+                            ? control.ModelOverride
+                            : config.DefaultModel.Trim(),
+                        NyxIdRoutePreference = string.IsNullOrWhiteSpace(config.PreferredLlmRoute)
+                            ? control.NyxIdRoutePreference
+                            : config.PreferredLlmRoute.Trim(),
+                        MaxToolRoundsOverride = config.MaxToolRounds > 0
+                            ? config.MaxToolRounds
+                            : control.MaxToolRoundsOverride,
+                    };
                 }
             }
 

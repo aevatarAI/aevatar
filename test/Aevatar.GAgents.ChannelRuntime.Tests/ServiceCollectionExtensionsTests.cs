@@ -39,8 +39,6 @@ public sealed class ServiceCollectionExtensionsTests
 
         result.Should().BeSameAs(services);
         services.Should().Contain(descriptor =>
-            descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<ChannelBotRegistrationDocument>));
-        services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<ConversationDeliveryCurrentStateDocument>) &&
             descriptor.ImplementationType == typeof(ConversationDeliveryDocumentMetadataProvider));
         services.Should().Contain(descriptor =>
@@ -50,24 +48,17 @@ public sealed class ServiceCollectionExtensionsTests
             descriptor.ImplementationType == typeof(ProjectionScopeStatusQueryPort));
         services.Should().NotContain(descriptor =>
             descriptor.ServiceType.Name.Contains("AevatarSecretsStore", StringComparison.Ordinal));
-        services.Should().Contain(descriptor =>
-            descriptor.ServiceType == typeof(IChannelBotRegistrationRuntimeQueryPort));
-        services.Should().Contain(descriptor =>
-            descriptor.ServiceType == typeof(IChannelBotRegistrationQueryByNyxIdentityPort));
+        // The channel-bot registration projection/query-port surface was removed: a Lark/Feishu bot
+        // is registered directly on NyxID and the inbound scope comes from the validated relay JWT.
+        services.Should().NotContain(descriptor =>
+            descriptor.ServiceType.Name.Contains("ChannelBotRegistration", StringComparison.Ordinal));
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IConversationDeliveryQueryPort) &&
             descriptor.ImplementationType == typeof(ConversationDeliveryQueryPort));
-        services.Should().Contain(descriptor =>
-            descriptor.ServiceType == typeof(INyxIdRelayScopeResolver));
         services.Any(descriptor =>
                 descriptor.ServiceType.FullName is { } name &&
                 name.Contains("NyxIdRelayReplayGuard", StringComparison.Ordinal))
             .Should().BeFalse();
-        services.Should().Contain(descriptor =>
-            descriptor.ServiceType == typeof(IHostedService) &&
-            descriptor.ImplementationType == typeof(ChannelBotRegistrationStartupService));
-        AssertProjectionActivationProviderRegistered<ChannelBotRegistrationCommittedStateProjectionActivationPlanProvider>(
-            services);
         AssertProjectionActivationProviderRegistered<ConversationDeliveryCommittedStateProjectionActivationPlanProvider>(
             services);
         services.Any(descriptor =>
@@ -85,16 +76,6 @@ public sealed class ServiceCollectionExtensionsTests
         //   New principle: channel diagnostics are logs/metrics only unless backed by actor/projection readmodels; DI must not restore the retired singleton.
         AssertNoRetiredChannelRuntimeDiagnosticsRegistration(services);
         registry.Get(ChannelId.From("lark")).Should().BeOfType<LarkMessageComposer>();
-        services.Count(descriptor => descriptor.ServiceType == typeof(IPlatformAdapter))
-            .Should().Be(0);
-        services.Count(descriptor => descriptor.ServiceType == typeof(INyxChannelBotProvisioningService))
-            .Should().Be(2);
-        services.Should().Contain(descriptor =>
-            descriptor.ServiceType == typeof(ChannelRelayRegistrationFacade));
-        services.Should().Contain(descriptor =>
-            descriptor.ServiceType == typeof(ChannelRegistrationCommandFacade));
-        services.Should().Contain(descriptor =>
-            descriptor.ServiceType == typeof(ICommandDispatchService<ChannelBotRegisterCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>));
         registry.Get(ChannelId.From("telegram")).Should().BeOfType<Aevatar.GAgents.Platform.Telegram.TelegramMessageComposer>();
     }
 

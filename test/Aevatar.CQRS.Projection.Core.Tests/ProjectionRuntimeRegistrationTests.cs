@@ -453,8 +453,11 @@ public sealed class ProjectionRuntimeRegistrationTests
         var userAgentCatalogKind = ProjectionScopeAgentRegistration
             .Create<ProjectionMaterializationScopeGAgent<UserAgentCatalogMaterializationContext>>()
             .Kind;
-        var channelBotRegistrationKind = ProjectionScopeAgentRegistration
-            .Create<ProjectionMaterializationScopeGAgent<ChannelBotRegistrationMaterializationContext>>()
+        // The channel-bot-registration materialization scope was removed (a Lark/Feishu bot is
+        // registered directly on NyxID; aevatar no longer mirrors registrations). The surviving
+        // live channel materialization scope is conversation-delivery — it must never be retired.
+        var conversationDeliveryKind = ProjectionScopeAgentRegistration
+            .Create<ProjectionMaterializationScopeGAgent<ConversationDeliveryMaterializationContext>>()
             .Kind;
         var deviceRegistrationKind = ProjectionScopeAgentRegistration
             .Create<ProjectionMaterializationScopeGAgent<DeviceRegistrationMaterializationContext>>()
@@ -474,10 +477,10 @@ public sealed class ProjectionRuntimeRegistrationTests
             .ToArray();
 
         userAgentCatalogKind.Should().Be("projection.materialization-scope.user-agent-catalog-materialization-context");
-        channelBotRegistrationKind.Should().Be("projection.materialization-scope.channel-bot-registration-materialization-context");
+        conversationDeliveryKind.Should().Be("projection.materialization-scope.conversation-delivery-materialization-context");
         deviceRegistrationKind.Should().Be("projection.materialization-scope.device-registration-materialization-context");
         scheduledTokens.Should().NotContain(userAgentCatalogKind);
-        channelTokens.Should().NotContain(channelBotRegistrationKind);
+        channelTokens.Should().NotContain(conversationDeliveryKind);
         deviceTokens.Should().NotContain(deviceRegistrationKind);
     }
 

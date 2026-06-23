@@ -83,7 +83,7 @@ check_directory_build_version_guard
 #   New: proto field 9/name are reserved and mappers/docs stay credential-free.
 #   Principle: channel inbound durable facts must not contain runtime tokens.
 check_channel_inbound_no_runtime_credential() {
-  local proto_file="agents/Aevatar.GAgents.Channel.Runtime/protos/channel_bot_registration.proto"
+  local proto_file="agents/Aevatar.GAgents.Channel.Runtime/protos/channel_inbound.proto"
   local runner_file="agents/Aevatar.GAgents.NyxidChat/ChannelConversationTurnRunner.cs"
   local canon_dir="docs/canon"
 
@@ -504,7 +504,6 @@ fi
 set +e
 channel_registration_public_rebuild_report="$(
   rg -n "rebuild_projection|/registrations/rebuild|RebuildProjectionAsync|ChannelBotRebuildProjectionCommand" \
-    src/Aevatar.AI.ToolProviders.ChannelAdmin \
     agents/channels/Aevatar.GAgents.Channel.NyxIdRelay \
     agents/Aevatar.GAgents.NyxidChat \
     docs/operations \

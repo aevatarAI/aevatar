@@ -23,7 +23,6 @@ cd "${REPO_ROOT}"
 #
 # Messages checked:
 #   UserAgentCatalogEntry
-#   ChannelBotRegistrationEntry
 #   DeviceRegistrationEntry
 
 python3 <<'PY'
@@ -31,7 +30,7 @@ from pathlib import Path
 import re
 import sys
 
-MESSAGES = ("UserAgentCatalogEntry", "ChannelBotRegistrationEntry", "DeviceRegistrationEntry")
+MESSAGES = ("UserAgentCatalogEntry", "DeviceRegistrationEntry")
 MESSAGE_PATTERN = re.compile(r"^\s*message\s+(\w+)\s*\{", re.MULTILINE)
 TOMBSTONE_FIELD_PATTERN = re.compile(r"\bbool\s+(is_deleted|tombstoned)\s*=\s*\d+\s*;")
 

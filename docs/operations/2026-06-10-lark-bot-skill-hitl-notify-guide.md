@@ -14,9 +14,9 @@ Lark 侧必须已配置事件：
 - `im.message.receive_v1`
 - `card.action.trigger`
 
-Aevatar 侧有两类配置要分清：
+配置要分清 inbound 与 outbound：
 
-- `channel_registrations`：配置 inbound bot 回调，让用户消息和卡片点击进 Aevatar。
+- inbound bot 回调（让用户消息和卡片点击进 Aevatar）直接在 NyxID 侧注册 channel-bot + relay api-key（callback 指向 `/api/webhooks/nyxid-relay`）+ 会话路由；Aevatar 不再自注册，scope 由 callback JWT 注入。
 - `agent_delivery_targets`：配置 outbound 投递目标，让 workflow 的 HITL / Notify 卡片能主动发到某个 Lark 会话。
 
 workflow HITL 和 Notify 使用 `delivery_target_id=<agent_id>`，该 `agent_id` 必须能通过 `agent_delivery_targets` 解析到真实 Lark 会话。

@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+package aevatar.gagents.channel.runtime;
+
+option csharp_namespace = "Aevatar.GAgents.Channel.Runtime";
+
+// ─── Relay / conversation normalization ───
+
+// Normalized inbound callback payload used by relay-aware channel flows
+// (for example deterministic builder/tool routing in ChannelConversationTurnRunner).
+//
+// LIVE relay durable fact. A Lark/Feishu bot is registered directly on NyxID; the inbound
+// scope is the validated relay callback JWT scope. aevatar no longer maintains a local bot
+// registration mirror, so this message is the only surviving channel-runtime inbound proto.
+message ChannelInboundEvent {
+  // Refactor (v1/issue1466-first):
+  //   Old: registration_token made a runtime credential look like a durable inbound fact.
+  //   New: field 9 stays reserved; credentials remain transient runtime context only.
+  //   Principle: channel inbound durable facts are credential-free.
+  reserved 9;
+  reserved "registration_token";
+
+  string text = 1;
+  string sender_id = 2;
+  string sender_name = 3;
+  string conversation_id = 4;
+  string message_id = 5;
+  string chat_type = 6;
+  string platform = 7;
+  string registration_id = 8;
+  string registration_scope_id = 10;
+  string nyx_provider_slug = 11;
+  map<string, string> extra = 12;
+}

@@ -39,7 +39,6 @@
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.StatusDashboard\Aevatar.GAgents.StatusDashboard.csproj" />
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.AgentCatalog\Aevatar.AI.ToolProviders.AgentCatalog.csproj" />
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.Channel\Aevatar.AI.ToolProviders.Channel.csproj" />
-    <ProjectReference Include="..\Aevatar.AI.ToolProviders.ChannelAdmin\Aevatar.AI.ToolProviders.ChannelAdmin.csproj" />
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.Lark\Aevatar.AI.ToolProviders.Lark.csproj" />
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.Telegram\Aevatar.AI.ToolProviders.Telegram.csproj" />
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.NyxId\Aevatar.AI.ToolProviders.NyxId.csproj" />

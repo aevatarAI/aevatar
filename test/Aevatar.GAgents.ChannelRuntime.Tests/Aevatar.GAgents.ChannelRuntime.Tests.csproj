@@ -22,7 +22,6 @@
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.NyxidChat\Aevatar.GAgents.NyxidChat.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.AgentCatalog\Aevatar.AI.ToolProviders.AgentCatalog.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.Channel\Aevatar.AI.ToolProviders.Channel.csproj" />
-    <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.ChannelAdmin\Aevatar.AI.ToolProviders.ChannelAdmin.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.NyxId\Aevatar.AI.ToolProviders.NyxId.csproj" />
     <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Integration.AI\Aevatar.Workflow.Integration.AI.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.CQRS.Core.Abstractions\Aevatar.CQRS.Core.Abstractions.csproj" />

@@ -29,7 +29,6 @@ public sealed class ChannelRuntimeSourceRegressionTests
     {
         foreach (var relativeFile in new[]
                  {
-                     "agents/Aevatar.GAgents.Channel.Runtime/ChannelBotRegistrationStartupService.cs",
                      "agents/Aevatar.GAgents.Device/DeviceRegistrationStartupService.cs",
                      "agents/Aevatar.GAgents.Scheduled/UserAgentCatalogStartupService.cs",
                  })

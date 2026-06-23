@@ -20,12 +20,6 @@ public sealed class ChannelRuntimeTombstoneCompactorTests
         var watermarkQueryPort = Substitute.For<IProjectionScopeWatermarkQueryPort>();
         watermarkQueryPort.GetLastSuccessfulVersionAsync(
                 Arg.Is<ProjectionRuntimeScopeKey>(key =>
-                    key.RootActorId == ChannelBotRegistrationGAgent.WellKnownId &&
-                    key.ProjectionKind == ChannelBotRegistrationProjectionBootstrapActivator.ProjectionKind),
-                Arg.Any<CancellationToken>())
-            .Returns(12L);
-        watermarkQueryPort.GetLastSuccessfulVersionAsync(
-                Arg.Is<ProjectionRuntimeScopeKey>(key =>
                     key.RootActorId == DeviceRegistrationGAgent.WellKnownId &&
                     key.ProjectionKind == DeviceRegistrationProjectionBootstrapActivator.ProjectionKind),
                 Arg.Any<CancellationToken>())
@@ -37,15 +31,12 @@ public sealed class ChannelRuntimeTombstoneCompactorTests
                 Arg.Any<CancellationToken>())
             .Returns(32L);
 
-        var channelActor = Substitute.For<IActor>();
-        channelActor.Id.Returns(ChannelBotRegistrationGAgent.WellKnownId);
         var deviceActor = Substitute.For<IActor>();
         deviceActor.Id.Returns(DeviceRegistrationGAgent.WellKnownId);
         var registryActor = Substitute.For<IActor>();
         registryActor.Id.Returns(UserAgentCatalogGAgent.WellKnownId);
 
         var actorRuntime = Substitute.For<IActorRuntime>();
-        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId).Returns(Task.FromResult<IActor?>(channelActor));
         actorRuntime.GetAsync(DeviceRegistrationGAgent.WellKnownId).Returns(Task.FromResult<IActor?>(deviceActor));
         actorRuntime.GetAsync(UserAgentCatalogGAgent.WellKnownId).Returns(Task.FromResult<IActor?>(registryActor));
 
@@ -56,7 +47,6 @@ public sealed class ChannelRuntimeTombstoneCompactorTests
             dispatchPort,
             new ITombstoneCompactionTarget[]
             {
-                new ChannelBotRegistrationTombstoneCompactionTarget(),
                 new DeviceTombstoneCompactionTarget(),
                 new UserAgentCatalogTombstoneCompactionTarget(),
             },
@@ -64,10 +54,6 @@ public sealed class ChannelRuntimeTombstoneCompactorTests
 
         await sut.RunOnceAsync();
 
-        await dispatchPort.Received(1).DispatchAsync(
-            ChannelBotRegistrationGAgent.WellKnownId,
-            Arg.Is<EventEnvelope>(env => IsChannelBotCompaction(env, 12)),
-            Arg.Any<CancellationToken>());
         await dispatchPort.Received(1).DispatchAsync(
             DeviceRegistrationGAgent.WellKnownId,
             Arg.Is<EventEnvelope>(env => IsDeviceCompaction(env, 22)),
@@ -93,7 +79,6 @@ public sealed class ChannelRuntimeTombstoneCompactorTests
             dispatchPort,
             new ITombstoneCompactionTarget[]
             {
-                new ChannelBotRegistrationTombstoneCompactionTarget(),
                 new DeviceTombstoneCompactionTarget(),
                 new UserAgentCatalogTombstoneCompactionTarget(),
             },
@@ -103,14 +88,6 @@ public sealed class ChannelRuntimeTombstoneCompactorTests
 
         actorRuntime.ReceivedCalls().Should().BeEmpty();
         dispatchPort.ReceivedCalls().Should().BeEmpty();
-    }
-
-    private static bool IsChannelBotCompaction(EventEnvelope envelope, long safeStateVersion)
-    {
-        if (envelope.Payload?.Is(ChannelBotCompactTombstonesCommand.Descriptor) != true)
-            return false;
-
-        return envelope.Payload.Unpack<ChannelBotCompactTombstonesCommand>().SafeStateVersion == safeStateVersion;
     }
 
     private static bool IsDeviceCompaction(EventEnvelope envelope, long safeStateVersion)

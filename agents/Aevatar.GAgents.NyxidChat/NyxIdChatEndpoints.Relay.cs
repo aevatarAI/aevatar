@@ -67,12 +67,12 @@ public static partial class NyxIdChatEndpoints
             }
 
             http.User = validation.Principal;
-            var scopeId = await ResolveRelayScopeIdAsync(
-                validation.ScopeId,
-                payload,
-                http.RequestServices,
-                logger,
-                ct);
+            // Inbound scope is authoritative from the validated NyxID relay callback JWT
+            // (scope_id ?? sub ?? NameIdentifier — NyxIdRelayAuthValidator). aevatar no longer
+            // self-registers channel bots, so there is no local mirror to fall back to; a
+            // well-formed callback JWT always carries an identity claim, and an empty scope is a
+            // trust-boundary failure handled below.
+            var scopeId = NormalizeOptional(validation.ScopeId);
             if (string.IsNullOrWhiteSpace(scopeId))
             {
                 logger.LogWarning(
@@ -187,59 +187,6 @@ public static partial class NyxIdChatEndpoints
         catch (ArgumentException)
         {
             return fallback.ToUnixTimeMilliseconds();
-        }
-    }
-
-    private static async Task<string?> ResolveRelayScopeIdAsync(
-        string? validatedScopeId,
-        NyxIdRelayCallbackPayload payload,
-        IServiceProvider services,
-        ILogger logger,
-        CancellationToken ct)
-    {
-        var scopeId = NormalizeOptional(validatedScopeId);
-        if (scopeId is not null)
-            return scopeId;
-
-        var nyxAgentApiKeyId = NormalizeOptional(payload.Agent?.ApiKeyId);
-        if (nyxAgentApiKeyId is null)
-            return null;
-
-        var scopeResolver = services.GetService<INyxIdRelayScopeResolver>();
-        if (scopeResolver is null)
-        {
-            logger.LogWarning(
-                "Relay callback JWT had no scope id and relay scope resolver is unavailable: message={MessageId}, apiKeyId={ApiKeyId}",
-                payload.MessageId,
-                nyxAgentApiKeyId);
-            return null;
-        }
-
-        try
-        {
-            var resolvedScopeId = NormalizeOptional(await scopeResolver.ResolveScopeIdByApiKeyAsync(nyxAgentApiKeyId, ct));
-            if (resolvedScopeId is not null)
-            {
-                logger.LogInformation(
-                    "Resolved relay callback scope id from relay scope resolver: message={MessageId}, apiKeyId={ApiKeyId}",
-                    payload.MessageId,
-                    nyxAgentApiKeyId);
-            }
-
-            return resolvedScopeId;
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(
-                ex,
-                "Failed to resolve relay callback scope id from channel bot registration: message={MessageId}, apiKeyId={ApiKeyId}",
-                payload.MessageId,
-                nyxAgentApiKeyId);
-            return null;
         }
     }
 
