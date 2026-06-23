@@ -814,6 +814,7 @@ const enUSMessages = {
     "This page only runs workflow members. Use the member's own surface for other implementation kinds.",
   'pages.runs.memberPublishedRuns.auditUnavailable':
     'Published run audit is unavailable.',
+  'pages.runs.memberPublishedRuns.backToTeamMembers': 'Back to team members',
   'pages.runs.memberPublishedRuns.details': 'Details',
   'pages.runs.memberPublishedRuns.input': 'Input',
   'pages.runs.memberPublishedRuns.listUnavailable':
@@ -821,6 +822,7 @@ const enUSMessages = {
   'pages.runs.memberPublishedRuns.logs': 'Logs',
   'pages.runs.memberPublishedRuns.noAuditSteps':
     'No audit steps were recorded for this published run.',
+  'pages.runs.memberPublishedRuns.navigation': 'Published runs navigation',
   'pages.runs.memberPublishedRuns.noRuns': 'No published runs yet.',
   'pages.runs.memberPublishedRuns.openEditor': 'Open editor',
   'pages.runs.memberPublishedRuns.output': 'Output',

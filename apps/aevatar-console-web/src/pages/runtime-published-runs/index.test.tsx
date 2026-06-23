@@ -269,6 +269,17 @@ describe("TeamMemberPublishedRunsPage", () => {
     expect(await screen.findByText("node:config")).toBeTruthy();
     expect(container.textContent).toContain("Alpha Workflow");
     expect(container.textContent).toContain("Config ok");
+    expect(screen.getByRole("navigation", {
+      name: "Published runs navigation",
+    })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Teams" })).toHaveAttribute(
+      "href",
+      "/scopes/scope-1/teams/team-1?tab=overview",
+    );
+    expect(screen.getByRole("link", { name: "Alpha Workflow" })).toHaveAttribute(
+      "href",
+      "/scopes/scope-1/teams/team-1?memberId=m-alpha&tab=members",
+    );
     expect(screen.queryByLabelText("Search published runs")).toBeNull();
     expect(screen.queryByText("Auto refresh")).toBeNull();
     expect(screen.queryByText("Raw")).toBeNull();
@@ -300,6 +311,16 @@ describe("TeamMemberPublishedRunsPage", () => {
       backendRunId,
       { actorId: "actor://scope-1/run-1" },
     );
+  });
+
+  it("returns from published runs to the Team members tab", async () => {
+    renderWithQueryClient(React.createElement(TeamMemberPublishedRunsPage));
+
+    expect(await screen.findByTestId("member-published-runs-replay")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Back to team members" }));
+
+    expect(window.location.pathname).toBe("/scopes/scope-1/teams/team-1");
+    expect(window.location.search).toBe("?memberId=m-alpha&tab=members");
   });
 
   it("loads the selected member published run audit before the run catalog is materialized", async () => {

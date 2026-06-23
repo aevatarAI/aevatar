@@ -751,6 +751,7 @@ const zhCNMessages = {
     '这个页面只运行 Workflow 成员。其他实现类型请使用对应成员自己的入口。',
   'pages.runs.memberPublishedRuns.auditUnavailable':
     '发布运行审计暂不可见。',
+  'pages.runs.memberPublishedRuns.backToTeamMembers': '返回团队成员',
   'pages.runs.memberPublishedRuns.details': '详情',
   'pages.runs.memberPublishedRuns.input': '输入',
   'pages.runs.memberPublishedRuns.listUnavailable':
@@ -758,6 +759,7 @@ const zhCNMessages = {
   'pages.runs.memberPublishedRuns.logs': '日志',
   'pages.runs.memberPublishedRuns.noAuditSteps':
     '这次发布运行没有记录审计步骤。',
+  'pages.runs.memberPublishedRuns.navigation': '发布运行记录导航',
   'pages.runs.memberPublishedRuns.noRuns': '暂无发布运行记录。',
   'pages.runs.memberPublishedRuns.openEditor': '打开编辑器',
   'pages.runs.memberPublishedRuns.output': '输出',

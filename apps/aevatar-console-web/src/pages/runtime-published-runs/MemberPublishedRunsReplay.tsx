@@ -1,4 +1,5 @@
 import {
+  ArrowLeftOutlined,
   CheckCircleFilled,
   ClockCircleOutlined,
   CloseCircleFilled,
@@ -33,6 +34,7 @@ import type {
 } from "@/shared/models/runtime/scopeServices";
 import { history } from "@/shared/navigation/history";
 import {
+  buildTeamDetailHref,
   buildTeamMemberPublishedRunsHref,
   buildTeamMemberWorkflowStudioHref,
 } from "@/shared/navigation/teamRoutes";
@@ -77,8 +79,58 @@ const memberPublishedRunsReplayCss = `
   border-bottom: 1px solid #e5e7eb;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 18px 18px 14px;
+  gap: 10px;
+  padding: 12px 18px 14px;
+}
+
+.member-published-runs-replay__navigation {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.member-published-runs-replay__back-button {
+  border-color: #d1d5db;
+  color: #374151;
+  flex: 0 0 auto;
+}
+
+.member-published-runs-replay__breadcrumbs {
+  align-items: center;
+  color: #667085;
+  display: inline-flex;
+  flex: 1 1 auto;
+  font-size: 12px;
+  font-weight: 700;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.member-published-runs-replay__breadcrumb-link {
+  color: #667085;
+  min-width: 0;
+  overflow: hidden;
+  text-decoration: none;
+  text-overflow: ellipsis;
+}
+
+.member-published-runs-replay__breadcrumb-link:hover {
+  color: #1677ff;
+}
+
+.member-published-runs-replay__breadcrumb-current {
+  color: #111827;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.member-published-runs-replay__breadcrumb-separator {
+  color: #98a2b3;
+  flex: 0 0 auto;
 }
 
 .member-published-runs-replay__rail-title {
@@ -322,6 +374,11 @@ const memberPublishedRunsReplayCss = `
 }
 
 @media (max-width: 900px) {
+  .member-published-runs-replay__breadcrumbs {
+    flex-wrap: wrap;
+    white-space: normal;
+  }
+
   .member-published-runs-replay {
     grid-template-columns: 1fr;
     grid-template-rows: minmax(180px, 34vh) minmax(0, 1fr);
@@ -929,12 +986,80 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
   const selectedRunTime = selectedRun ? formatRunTime(selectedRun) : "n/a";
   const auditDuration = getAuditDurationMs(audit);
   const selectedRunDuration = formatDurationMs(auditDuration);
+  const teamOverviewHref = buildTeamDetailHref({
+    scopeId,
+    tab: "overview",
+    teamId: normalizedTeamId,
+  });
+  const teamMembersHref = buildTeamDetailHref({
+    memberId,
+    scopeId,
+    tab: "members",
+    teamId: normalizedTeamId,
+  });
+  const backToTeamMembersLabel = t(
+    "pages.runs.memberPublishedRuns.backToTeamMembers",
+    "Back to team members",
+  );
+  const navigateToTeamOverview = React.useCallback(
+    (event: React.MouseEvent<HTMLElement>) => {
+      event.preventDefault();
+      history.push(teamOverviewHref);
+    },
+    [teamOverviewHref],
+  );
+  const navigateToTeamMembers = React.useCallback(
+    (event?: React.MouseEvent<HTMLElement>) => {
+      event?.preventDefault();
+      history.push(teamMembersHref);
+    },
+    [teamMembersHref],
+  );
 
   return (
     <div className="member-published-runs-replay" data-testid="member-published-runs-replay">
       <style>{memberPublishedRunsReplayCss}</style>
       <aside className="member-published-runs-replay__rail">
         <div className="member-published-runs-replay__rail-header">
+          <nav
+            aria-label={t(
+              "pages.runs.memberPublishedRuns.navigation",
+              "Published runs navigation",
+            )}
+            className="member-published-runs-replay__navigation"
+          >
+            <Tooltip title={backToTeamMembersLabel}>
+              <Button
+                aria-label={backToTeamMembersLabel}
+                className="member-published-runs-replay__back-button"
+                icon={<ArrowLeftOutlined />}
+                onClick={() => navigateToTeamMembers()}
+                shape="circle"
+                size="small"
+              />
+            </Tooltip>
+            <div className="member-published-runs-replay__breadcrumbs">
+              <a
+                className="member-published-runs-replay__breadcrumb-link"
+                href={teamOverviewHref}
+                onClick={navigateToTeamOverview}
+              >
+                {t("teams.detail.breadcrumb.teams", "Teams")}
+              </a>
+              <span className="member-published-runs-replay__breadcrumb-separator">/</span>
+              <a
+                className="member-published-runs-replay__breadcrumb-link"
+                href={teamMembersHref}
+                onClick={navigateToTeamMembers}
+              >
+                {runsQuery.data?.displayName || memberId}
+              </a>
+              <span className="member-published-runs-replay__breadcrumb-separator">/</span>
+              <span className="member-published-runs-replay__breadcrumb-current">
+                {t("pages.runs.memberPublishedRuns.publishedRuns", "Published runs")}
+              </span>
+            </div>
+          </nav>
           <div className="member-published-runs-replay__rail-title">
             <div className="member-published-runs-replay__rail-title-main">
               <div style={{ minWidth: 0 }}>
