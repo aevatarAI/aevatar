@@ -80,6 +80,21 @@ public sealed class WorkflowExecutionCurrentStateQueryPortFilterTests
             ["def-a", "def-b"]);
     }
 
+    [Fact]
+    public async Task ListWorkflowActorCurrentStatesAsync_ShouldEmitRecencyDescendingSort()
+    {
+        var reader = new RecordingCurrentStateReader();
+        var port = CreatePort(reader);
+
+        await port.ListWorkflowActorCurrentStatesAsync(
+            new WorkflowActorCurrentStateListQuery { Take = 100, ScopeId = "scope-a" });
+
+        reader.LastQuery.Should().NotBeNull();
+        var sort = reader.LastQuery!.Sorts.Should().ContainSingle().Subject;
+        sort.FieldPath.Should().Be(nameof(WorkflowExecutionCurrentStateDocument.UpdatedAtUtcValue));
+        sort.Direction.Should().Be(ProjectionDocumentSortDirection.Desc);
+    }
+
     private static WorkflowExecutionCurrentStateQueryPort CreatePort(RecordingCurrentStateReader reader) =>
         new(
             reader,

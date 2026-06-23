@@ -69,6 +69,7 @@ public sealed class WorkflowExecutionCurrentStateQueryPort : IWorkflowExecutionC
             {
                 Take = boundedTake,
                 Filters = BuildFilters(query),
+                Sorts = RecencyDescendingSort,
             },
             ct);
         var snapshots = new List<WorkflowActorSnapshot>(currentStates.Items.Count);
@@ -90,6 +91,19 @@ public sealed class WorkflowExecutionCurrentStateQueryPort : IWorkflowExecutionC
         var currentState = await _currentStateReader.GetAsync(actorId, ct);
         return currentState == null ? null : _mapper.ToActorProjectionState(currentState);
     }
+
+    // Current-state lists (observatory own-scope + cross-scope overview, query service, tools) order by
+    // most-recent activity. Without an explicit sort the Elasticsearch store falls back to a non-existent
+    // default sort field ("CreatedAt") and degrades to the actor-id tiebreak order, so a bounded Take
+    // returns an arbitrary subset and recent runs are dropped from cross-scope pages (06-23 observatory bug).
+    private static readonly IReadOnlyList<ProjectionDocumentSort> RecencyDescendingSort =
+    [
+        new ProjectionDocumentSort
+        {
+            FieldPath = nameof(WorkflowExecutionCurrentStateDocument.UpdatedAtUtcValue),
+            Direction = ProjectionDocumentSortDirection.Desc,
+        },
+    ];
 
     private static IReadOnlyList<ProjectionDocumentFilter> BuildFilters(WorkflowActorCurrentStateListQuery query)
     {
