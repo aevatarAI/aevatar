@@ -174,17 +174,20 @@ public static class ScopeWorkflowEndpoints
             if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
                 return denied;
 
-            var workflow = await workflowQueryPort.GetByWorkflowIdAsync(scopeId, workflowId, ct);
-            if (workflow == null)
+            var lookup = await workflowQueryPort.LookupByWorkflowIdAsync(scopeId, workflowId, ct);
+            if (!lookup.IsRunnable)
             {
-                return Results.NotFound(new
-                {
-                    code = "USER_WORKFLOW_NOT_FOUND",
-                    message = BuildWorkflowNotFoundMessage(scopeId, workflowId),
-                });
+                var (statusCode, code, message) = MapWorkflowLookupError(scopeId, workflowId, lookup);
+                return Results.Json(
+                    new
+                    {
+                        code,
+                        message,
+                    },
+                    statusCode: statusCode);
             }
 
-            return Results.Json(await BuildWorkflowDetailAsync(workflow, workflowActorBindingReader, revisionCatalogReader, options.Value, ct));
+            return Results.Json(await BuildWorkflowDetailAsync(lookup.Workflow!, workflowActorBindingReader, revisionCatalogReader, options.Value, ct));
         }
         catch (InvalidOperationException ex)
         {
@@ -210,14 +213,15 @@ public static class ScopeWorkflowEndpoints
             if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
                 return;
 
-            var workflow = await workflowQueryPort.GetByWorkflowIdAsync(scopeId, workflowId, ct);
-            if (workflow == null)
+            var lookup = await workflowQueryPort.LookupByWorkflowIdAsync(scopeId, workflowId, ct);
+            if (!lookup.IsRunnable)
             {
+                var (statusCode, code, message) = MapWorkflowLookupError(scopeId, workflowId, lookup);
                 await WriteJsonErrorResponseAsync(
                     http,
-                    StatusCodes.Status404NotFound,
-                    "USER_WORKFLOW_NOT_FOUND",
-                    BuildWorkflowNotFoundMessage(scopeId, workflowId),
+                    statusCode,
+                    code,
+                    message,
                     ct);
                 return;
             }
@@ -225,7 +229,7 @@ public static class ScopeWorkflowEndpoints
             await HandleRunWorkflowStreamCoreAsync(
                 http,
                 scopeId,
-                workflow,
+                lookup.Workflow!,
                 request.Prompt,
                 request.SessionId,
                 request.Headers,
@@ -531,6 +535,26 @@ public static class ScopeWorkflowEndpoints
     private static string BuildWorkflowActorNotFoundMessage(string scopeId) =>
         $"Workflow actor was not found for scope '{scopeId}'.";
 
+    private static (int StatusCode, string Code, string Message) MapWorkflowLookupError(
+        string scopeId,
+        string workflowId,
+        ScopeWorkflowLookupResult lookup) =>
+        lookup.Status switch
+        {
+            ScopeWorkflowLookupStatus.NotFound => (
+                StatusCodes.Status404NotFound,
+                "USER_WORKFLOW_NOT_FOUND",
+                BuildWorkflowNotFoundMessage(scopeId, workflowId)),
+            ScopeWorkflowLookupStatus.Stale => (
+                StatusCodes.Status409Conflict,
+                "USER_WORKFLOW_STALE",
+                $"Workflow '{workflowId}' runtime readmodel is stale for scope '{scopeId}'."),
+            _ => (
+                StatusCodes.Status409Conflict,
+                "USER_WORKFLOW_NOT_READY",
+                $"Workflow '{workflowId}' is not ready to run for scope '{scopeId}'."),
+        };
+
     internal static bool TryParseEventFormat(
         string? rawValue,
         out ScopeWorkflowStreamEventFormat eventFormat)
@@ -646,7 +670,7 @@ public static class ScopeWorkflowEndpoints
                     NyxIdRoutePreference = route,
                 };
             }
-            catch
+            catch (InvalidOperationException)
             {
                 // Best-effort; fall back to provider defaults if config unavailable.
             }
