@@ -253,9 +253,11 @@ message ChatRouteDecision {
   // policy actor didn't exist or readmodel snapshot was unavailable.
   bool used_fallback = 4;
   repeated ChatRouteDeprecation deprecations = 5;
-  // Original matched policy action before runtime canonicalization. This is
-  // transient ingress context for non-LLM actor-bound entries that still need
-  // actor-specific fields (for example voice_module_name); it must not be
-  // persisted.
-  ChatRouteAction original_action = 6;
+  // tag 6 + name `original_action` was removed when route policies became
+  // tool-first. Runtime canonicalization is now identity (the single forward
+  // shape is ForwardToModel), so `action` already is the matched policy action
+  // and no "pre-canonicalization" twin is needed. Voice attach reads its typed
+  // target from `action.forward_to_model.tool_choice_hint.voice_attach_target`.
+  reserved 6;
+  reserved "original_action";
 }
