@@ -49,7 +49,7 @@ NyxID 有两层下游模型：**连接层 `POST /api/v1/keys`**（自定义服�
 8. **读侧诚实**：注册 `status` + 失败详情只经 projection readmodel 暴露、携权威源版本；不同步查 actor、不 query-time replay。
 9. **不静默吞失败**：永久失败落 `FAILED + last_error` 且 readmodel 可见；不 log-and-drop。
 10. **重试耗尽语义**：host 只注入 `max_attempts / base_delay / max_delay` 事实；`ServiceDefinitionGAgent` 自己判定耗尽，落 `FAILED + last_error=retry_exhausted:* + attempt=max + next_attempt_at=null`，并停止 durable self retry。后续显式 reconcile 可从 attempt 1 重新开始。
-11. **bind opt-in 语义**：bind request 的 typed `ExposureDesired` 是 tri-state intent： omitted/null 保持当前 intent，`true` 只写 canonical opt-in intent，实际注册仍由 activation committed hook 统一 reconcile；显式 `false` 复用 retire command，由 `ServiceDefinitionGAgent` 提交关闭外部暴露的 actor-owned receipt。
+11. **bind opt-in 语义**：bind request 的 typed `ExposureDesired` 是 tri-state intent： omitted/null 保持当前 intent，`true` 写 canonical opt-in intent，并通过与 activation committed hook 共用的 external exposure intent service 统一计算 OpenAPI URL / spec hash / credential 后派发 reconcile command；显式 `false` 复用 retire command，由 `ServiceDefinitionGAgent` 提交关闭外部暴露的 actor-owned receipt。
 12. **读侧版本语义**：`externalExposure.sourceStateVersion` 必须来自 service catalog current-state readmodel 根 `StateVersion`，不得使用投影本地计数或 query-time replay。
 
 ## Required Contract（`ExternalExposure` 演进，additive、wire-safe）

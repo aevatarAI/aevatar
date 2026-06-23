@@ -27,6 +27,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
     private readonly IScopeScriptQueryPort _scopeScriptQueryPort;
     private readonly IScriptDefinitionSnapshotPort _scriptDefinitionSnapshotPort;
     private readonly IWorkflowDefinitionParser _workflowDefinitionParser;
+    private readonly IServiceExternalExposureIntentPort _externalExposureIntentPort;
     private readonly IAgentKindRegistry? _agentKindRegistry;
     private readonly ScopeWorkflowCapabilityOptions _options;
 
@@ -39,7 +40,8 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         IScriptDefinitionSnapshotPort scriptDefinitionSnapshotPort,
         IWorkflowDefinitionParser workflowDefinitionParser,
         IOptions<ScopeWorkflowCapabilityOptions> options,
-        IAgentKindRegistry? agentKindRegistry = null)
+        IAgentKindRegistry? agentKindRegistry = null,
+        IServiceExternalExposureIntentPort? externalExposureIntentPort = null)
     {
         _serviceCommandPort = serviceCommandPort ?? throw new ArgumentNullException(nameof(serviceCommandPort));
         _serviceLifecycleQueryPort = serviceLifecycleQueryPort ?? throw new ArgumentNullException(nameof(serviceLifecycleQueryPort));
@@ -48,6 +50,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         _scopeScriptQueryPort = scopeScriptQueryPort ?? throw new ArgumentNullException(nameof(scopeScriptQueryPort));
         _scriptDefinitionSnapshotPort = scriptDefinitionSnapshotPort ?? throw new ArgumentNullException(nameof(scriptDefinitionSnapshotPort));
         _workflowDefinitionParser = workflowDefinitionParser ?? throw new ArgumentNullException(nameof(workflowDefinitionParser));
+        _externalExposureIntentPort = externalExposureIntentPort ?? new ServiceCommandExternalExposureIntentPort(serviceCommandPort);
         _agentKindRegistry = agentKindRegistry;
         ArgumentNullException.ThrowIfNull(options);
         _options = options.Value ?? throw new InvalidOperationException("Scope workflow capability options are required.");
@@ -68,7 +71,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
             : ScopeWorkflowCapabilityConventions.BuildServiceIdentity(_options, normalizedScopeId, request.ServiceId.Trim(), request.AppId);
         var desiredBinding = await ResolveDesiredBindingAsync(request, normalizedScopeId, identity, ct);
         var existingService = await _serviceLifecycleQueryPort.GetServiceAsync(identity, ct);
-        await ApplyExternalExposureIntentAsync(request, identity, desiredBinding.ServiceDefinition, existingService, ct);
+        ApplyExternalExposureIntent(request, desiredBinding.ServiceDefinition);
 
         if (existingService == null)
         {
@@ -123,6 +126,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
             Identity = identity.Clone(),
             RevisionId = revisionId,
         }, ct);
+        await DispatchExternalExposureIntentAsync(request, identity, desiredBinding.ServiceDefinition, existingService, ct);
 
         var expectedDeploymentId = $"{ServiceActorIds.Deployment(identity)}:{revisionId}";
         // TODO(iter2/cluster-006): If callers need "invoke safe now", add an explicit read/projection
@@ -130,7 +134,20 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         return desiredBinding.BuildResult(normalizedScopeId, identity.ServiceId, revisionId, expectedDeploymentId);
     }
 
-    private async Task ApplyExternalExposureIntentAsync(
+    private static void ApplyExternalExposureIntent(
+        ScopeBindingUpsertRequest request,
+        ServiceDefinitionSpec serviceDefinition)
+    {
+        if (request.ExposureDesired == true)
+        {
+            serviceDefinition.ExternalExposure = new ExternalExposure
+            {
+                ExposureDesired = true,
+            };
+        }
+    }
+
+    private async Task DispatchExternalExposureIntentAsync(
         ScopeBindingUpsertRequest request,
         ServiceIdentity identity,
         ServiceDefinitionSpec serviceDefinition,
@@ -140,23 +157,13 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         if (request.ExposureDesired == null)
             return;
 
-        if (request.ExposureDesired == true)
-        {
-            serviceDefinition.ExternalExposure = new ExternalExposure
-            {
-                ExposureDesired = true,
-            };
-            return;
-        }
-
-        if (existingService == null)
-            return;
-
-        await _serviceCommandPort.RetireExternalExposureAsync(new RetireExternalExposureCommand
-        {
-            Identity = identity.Clone(),
-            DesiredSpecHash = existingService.ExternalExposure?.DesiredSpecHash ?? string.Empty,
-        }, ct);
+        await _externalExposureIntentPort.ApplyAsync(
+            new ServiceExternalExposureIntentRequest(
+                identity.Clone(),
+                request.ExposureDesired.Value,
+                CloneServiceDefinition(serviceDefinition),
+                existingService),
+            ct);
     }
 
     private async Task<bool> ShouldCreateRevisionAsync(
@@ -761,4 +768,21 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         ServiceDefinitionSpec ServiceDefinition,
         Func<ServiceIdentity, string, ServiceRevisionSpec> BuildRevision,
         Func<string, string, string, string, ScopeBindingUpsertResult> BuildResult);
+
+    private sealed class ServiceCommandExternalExposureIntentPort(IServiceCommandPort commandPort) : IServiceExternalExposureIntentPort
+    {
+        public Task ApplyAsync(
+            ServiceExternalExposureIntentRequest request,
+            CancellationToken ct = default)
+        {
+            if (request.ExposureDesired || request.ExistingService == null)
+                return Task.CompletedTask;
+
+            return commandPort.RetireExternalExposureAsync(new RetireExternalExposureCommand
+            {
+                Identity = request.Identity.Clone(),
+                DesiredSpecHash = request.ExistingService.ExternalExposure?.DesiredSpecHash ?? string.Empty,
+            }, ct);
+        }
+    }
 }

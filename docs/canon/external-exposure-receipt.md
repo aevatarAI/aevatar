@@ -29,7 +29,7 @@ Scope binding exposes a typed tri-state `ExposureDesired` request field.
 - `true` records canonical opt-in intent on the service definition.
 - explicit `false` dispatches the existing retire command for an existing service. `ServiceDefinitionGAgent` commits the resulting `Retired` receipt even when no NyxID service id has been returned yet.
 
-Binding does not build OpenAPI URLs, hashes, or registration payloads. Activation committed hooks remain the single reconcile entry point for external registration.
+Binding does not build OpenAPI URLs, hashes, or registration payloads. Activation committed hooks and explicit bind opt-in share the same external exposure intent service, which computes those Infrastructure facts before dispatching the existing reconcile command.
 
 ## Retry Exhaustion
 

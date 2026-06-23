@@ -83,18 +83,22 @@ public sealed class ServiceExposureReconcileHookTests
 
     private static ServiceExposureReconcileHook CreateHook(
         ServiceCatalogSnapshot catalog,
-        RecordingServiceCommandPort commandPort) =>
-        new(
-            new FakeServiceCatalogQueryReader(catalog),
-            commandPort,
-            Options.Create(new ServiceExternalExposureOptions
-            {
-                Enabled = true,
-                PublicBaseUrl = "https://public.example.test/root/",
-                RegisterAllPublishedServices = false,
-                OptInPolicyIds = ["external-policy"],
-            }),
-            new StaticScopeServiceTokenKeyProvider("kid-1"));
+        RecordingServiceCommandPort commandPort)
+    {
+        var catalogReader = new FakeServiceCatalogQueryReader(catalog);
+        var options = Options.Create(new ServiceExternalExposureOptions
+        {
+            Enabled = true,
+            PublicBaseUrl = "https://public.example.test/root/",
+            RegisterAllPublishedServices = false,
+            OptInPolicyIds = ["external-policy"],
+        });
+        var keyProvider = new StaticScopeServiceTokenKeyProvider("kid-1");
+        return new ServiceExposureReconcileHook(
+            catalogReader,
+            new ServiceExternalExposureIntentService(catalogReader, commandPort, options, keyProvider),
+            options);
+    }
 
     private static CommittedStatePublicationContext CreateContext<TEvent>(TEvent evt)
         where TEvent : class, IMessage<TEvent> =>
