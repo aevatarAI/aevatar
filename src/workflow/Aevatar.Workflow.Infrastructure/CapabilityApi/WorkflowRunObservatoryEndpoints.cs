@@ -110,13 +110,25 @@ public static class WorkflowRunObservatoryEndpoints
         [FromServices] ILoggerFactory loggerFactory,
         string? scope = null,
         string? status = null,
+        string? origin = null,
+        string? definition = null,
+        string? from = null,
+        string? to = null,
         int take = 100,
         CancellationToken ct = default)
     {
         if (!AevatarScopeAccessGuard.TryGetCallerScopeId(http, out var ownScopeId))
             return Results.Unauthorized();
 
-        var filter = new ObservatoryRunListFilter { Status = status, Take = take };
+        var filter = new ObservatoryRunListFilter
+        {
+            Status = status,
+            Origins = SplitCsv(origin),
+            DefinitionActorIds = SplitCsv(definition),
+            FromUtc = ParseTimestamp(from),
+            ToUtc = ParseTimestamp(to),
+            Take = take,
+        };
 
         // No cross-scope intent (or explicitly the caller's own scope) -> unchanged own-scope path, no NyxID call.
         if (!IsCrossScope(scope, ownScopeId))
@@ -214,6 +226,16 @@ public static class WorkflowRunObservatoryEndpoints
     // Cross-scope intent = a non-empty scope that is not the caller's own.
     private static bool IsCrossScope(string? scope, string ownScopeId) =>
         !string.IsNullOrWhiteSpace(scope) && !string.Equals(scope, ownScopeId, StringComparison.Ordinal);
+
+    // Comma-separated multi-value filter param (origin / definition) -> canonical list.
+    private static IReadOnlyList<string> SplitCsv(string? value) =>
+        string.IsNullOrWhiteSpace(value)
+            ? []
+            : value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    // ISO-8601 timestamp filter param (from / to) -> DateTimeOffset, or null when absent/unparseable.
+    private static DateTimeOffset? ParseTimestamp(string? value) =>
+        DateTimeOffset.TryParse(value, out var parsed) ? parsed : null;
 
     // The single cross-scope authorization gate (G2). Fails closed: missing bearer -> 401; non-elevated -> 403.
     // The cross-scope query is reached only after this returns no denial. Audits every outcome (G5).

@@ -96,7 +96,10 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
                 plan.WorkflowName,
                 plan.WorkflowYaml,
                 plan.InlineWorkflowYamls,
-                ResolveAuthoritativeScopeId(request, chatRequest)),
+                ResolveAuthoritativeScopeId(request, chatRequest),
+                string.IsNullOrWhiteSpace(request.RunOrigin)
+                    ? WorkflowRunOrigins.ServiceInvoke
+                    : request.RunOrigin.Trim()),
             ct);
         var commandId = ResolveCommandId(request);
         var correlationId = ResolveCorrelationId(request, commandId);

@@ -258,6 +258,39 @@ internal static class WorkflowRunObservatoryPage
   .adminbar .ab-hint { flex-basis: 100%; font-size: 11.5px; color: var(--muted); margin-top: 1px; }
 
   /* =========================================================================
+     Run-list filter bar (06-23-observatory-run-coverage-filter)
+     状态 / 来源 / 更新时间窗，下推到 list 查询；与 scope 维度可组合。
+     ========================================================================= */
+  .filterbar {
+    display: flex; align-items: flex-end; gap: 10px 12px; flex-wrap: wrap;
+    padding: 9px 16px; border-bottom: 1px solid var(--border-soft); background: var(--panel);
+  }
+  .filterbar .fb-field { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .filterbar .fb-label {
+    font-size: 10.5px; font-weight: 650; letter-spacing: .05em; text-transform: uppercase; color: var(--muted-2);
+  }
+  .filterbar .fb-select, .filterbar .fb-date {
+    font: inherit; font-size: 12.5px; padding: 5px 9px; color: var(--fg);
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r-sm);
+  }
+  .filterbar .fb-select { min-width: 110px; }
+  .filterbar .fb-date { min-width: 150px; font-variant-numeric: tabular-nums; }
+  .filterbar .fb-select:focus, .filterbar .fb-date:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+  .filterbar .fb-reset {
+    background: transparent; border: 0; color: var(--accent); font-size: 12.5px; font-weight: 600;
+    padding: 6px 6px; border-radius: var(--r-sm); align-self: flex-end;
+  }
+  .filterbar .fb-reset:hover { text-decoration: underline; }
+  .filterbar .fb-spacer { flex: 1 1 auto; }
+
+  /* run-origin pill on each list row (legacy/empty origin renders no pill) */
+  .run-row .rm .rm-origin {
+    font-size: 10.5px; font-weight: 600; letter-spacing: .02em; line-height: 1;
+    padding: 2px 7px; border-radius: var(--r-pill);
+    color: var(--accent); background: var(--accent-soft); border: 1px solid var(--accent-line);
+  }
+
+  /* =========================================================================
      Error banner (role=alert)
      ========================================================================= */
   .banner {
@@ -810,7 +843,9 @@ const cache = { account:null, runs:[], details:{}, graphs:{} };
 const DataSource = {
   now: () => new Date().toISOString(),
   getAccount: () => cache.account || { label:"已登录" },
-  listRuns: (status) => (!status || status === "all") ? cache.runs.slice() : cache.runs.filter(r => r.status === status),
+  // Filtering (status/origin/time) is pushed to the server query via listQueryParams; the cache already
+  // holds the filtered set, so the list reads it as-is (no second client-side status pass).
+  listRuns: () => cache.runs.slice(),
   getRun: (runId) => cache.details[runId] || null,
   getGraph: (runId) => cache.graphs[runId] || null
 };
@@ -818,12 +853,61 @@ const DataSource = {
 /* 06-20-observatory-admin-cross-scope: cross-scope admin view state (drives the admin bar + API scope params). */
 const ALL_SCOPES = "__all__";
 const adminState = { isAdmin:false, role:"", email:"", ownScope:"", currentScope:null, inputDraft:"", candidates:null, message:"" };
-function listScopeParam(){ return (adminState.isAdmin && adminState.currentScope) ? "?scope=" + encodeURIComponent(adminState.currentScope) : ""; }
 function runScopeParam(runId){
   if(!adminState.isAdmin) return "";
   const run = cache.runs.find(r => r.runId === runId);
   const scope = run ? run.scopeId : ((adminState.currentScope && adminState.currentScope !== ALL_SCOPES) ? adminState.currentScope : "");
   return (scope && scope !== adminState.ownScope) ? "?scope=" + encodeURIComponent(scope) : "";
+}
+
+/* 06-23-observatory-run-coverage-filter: list-only filter dimensions pushed to the runs query
+   (status / run-origin / updated-at window). scope stays the admin cross-scope axis above.
+   Canonical strong sets so the UI never invents a status/origin the backend doesn't honor. */
+const STATUS_OPTIONS = [
+  ["", "全部状态"], ["running","运行中"], ["completed","已完成"],
+  ["failed","失败"], ["timed_out","已超时"], ["stopped","已停止"]
+];
+const ORIGIN_OPTIONS = [
+  ["", "全部来源"],
+  ["draft","草稿运行"], ["member-invoke","成员调用"], ["default-invoke","默认调用"],
+  ["team-invoke","团队调用"], ["service-invoke","服务调用"], ["ad-hoc-chat","即席对话"], ["provisioned","计划调度"]
+];
+const ORIGIN_LABEL = Object.fromEntries(ORIGIN_OPTIONS.map(([v,l]) => [v,l]));
+const STATUS_VALUES = new Set(STATUS_OPTIONS.map(o => o[0]));
+const ORIGIN_VALUES = new Set(ORIGIN_OPTIONS.map(o => o[0]));
+/* list filters seeded from the URL query so a shared/bookmarked link reopens the same view; only
+   canonical status/origin values are accepted (anything else falls back to "all") so the select and
+   the outgoing query never disagree. */
+const filterState = (function(){
+  const q = new URLSearchParams(location.search);
+  const pick = (k, allowed) => { const v = (q.get(k) || "").trim(); return allowed.has(v) ? v : ""; };
+  const date = (k) => { const v = (q.get(k) || "").trim(); const ms = v ? Date.parse(v) : NaN; return isNaN(ms) ? "" : new Date(ms).toISOString().slice(0,10); };
+  return { status: pick("status", STATUS_VALUES), origin: pick("origin", ORIGIN_VALUES), from: date("from"), to: date("to") };
+})();
+function originLabel(o){ return o ? (ORIGIN_LABEL[o] || o) : ""; }
+/* compose the runs LIST query: existing scope axis + the four filter dimensions. Empty filters are
+   skipped; date inputs (yyyy-mm-dd) are widened to a full ISO instant for the updated-at window. */
+function listQueryParams(){
+  const p = new URLSearchParams();
+  if(adminState.isAdmin && adminState.currentScope) p.set("scope", adminState.currentScope);
+  if(filterState.status) p.set("status", filterState.status);
+  if(filterState.origin) p.set("origin", filterState.origin);
+  if(filterState.from){ const d = new Date(filterState.from + "T00:00:00"); if(!isNaN(d)) p.set("from", d.toISOString()); }
+  if(filterState.to){ const d = new Date(filterState.to + "T23:59:59.999"); if(!isNaN(d)) p.set("to", d.toISOString()); }
+  const s = p.toString();
+  return s ? "?" + s : "";
+}
+function hasActiveFilters(){ return !!(filterState.status || filterState.origin || filterState.from || filterState.to); }
+/* apply a single filter change: reset list scroll (existing convention), drop the stale run cache so
+   the server-filtered set replaces it cleanly, and re-fetch + re-render. */
+function applyFilterChange(){
+  pendingListScrollReset = true;
+  state.selectedRunId = null;
+  cache.runs = []; cache.details = {}; cache.graphs = {};
+  lastRunsSig = "";
+  state.scenario = "listLoading";
+  render();
+  (async () => { await refreshRuns(); lastRunsSig = runsSig(cache.runs); render(); })();
 }
 function readScopeHash(){ const m = /(?:^#|&)scope=([^&]+)/.exec(location.hash || ""); return m ? decodeURIComponent(m[1]) : null; }
 function writeScopeHash(){
@@ -982,7 +1066,6 @@ function stepTypeIcon(t){ return t==="llm"?ICON.chat : t==="tool"?ICON.tool : t=
 const state = {
   signedIn: false,
   scenario: "login",   // login | listLoading | empty | globalError | detailLoading | notFound | normal
-  filter: "all",       // all | running | completed | failed | stopped
   selectedRunId: null,
   activeTab: "timeline",
   expanded: new Set(),  // tool-call ids expanded by default for the running run
@@ -1081,23 +1164,59 @@ function renderLogin(){
 }
 
 /* ===========================================================================
+   Render — run-list filter bar (status / origin / updated-at window)
+   =========================================================================== */
+function renderSelect(id, label, options, value, onPick){
+  const field = el("div", { class:"fb-field" });
+  field.appendChild(el("label", { class:"fb-label", for: id }, label));
+  const sel = el("select", { class:"fb-select", id, "aria-label": label });
+  options.forEach(([v,l]) => {
+    const opt = el("option", { value: v }, l);
+    if(v === value) opt.setAttribute("selected", "selected");
+    sel.appendChild(opt);
+  });
+  sel.value = value;
+  sel.addEventListener("change", e => onPick(e.target.value));
+  field.appendChild(sel);
+  return field;
+}
+function renderDate(id, label, value, onPick){
+  const field = el("div", { class:"fb-field" });
+  field.appendChild(el("label", { class:"fb-label", for: id }, label));
+  const inp = el("input", { class:"fb-date", id, type:"date", "aria-label": label, value: value || "" });
+  inp.addEventListener("change", e => onPick(e.target.value));
+  field.appendChild(inp);
+  return field;
+}
+function renderFilterBar(){
+  const bar = el("div", { class:"filterbar", role:"group", "aria-label":"按状态、来源、更新时间筛选运行" });
+  bar.appendChild(renderSelect("flt-status", "状态", STATUS_OPTIONS, filterState.status,
+    v => { filterState.status = v; applyFilterChange(); }));
+  bar.appendChild(renderSelect("flt-origin", "来源", ORIGIN_OPTIONS, filterState.origin,
+    v => { filterState.origin = v; applyFilterChange(); }));
+  bar.appendChild(renderDate("flt-from", "起始（更新于）", filterState.from,
+    v => { filterState.from = v; applyFilterChange(); }));
+  bar.appendChild(renderDate("flt-to", "截止（更新于）", filterState.to,
+    v => { filterState.to = v; applyFilterChange(); }));
+  bar.appendChild(el("div", { class:"fb-spacer" }));
+  if(hasActiveFilters()){
+    const reset = el("button", { class:"fb-reset", type:"button" }, "清除筛选");
+    reset.addEventListener("click", () => { filterState.status=""; filterState.origin=""; filterState.from=""; filterState.to=""; applyFilterChange(); });
+    bar.appendChild(reset);
+  }
+  return bar;
+}
+
+/* ===========================================================================
    Render — runs list
    =========================================================================== */
-const FILTERS = [["all","全部"],["running","运行中"],["completed","已完成"],["failed","失败"],["stopped","已停止"]];
-
 function renderList(){
   const pane = el("aside", { class:"list-pane", "aria-label":"运行列表" });
   const head = el("div", { class:"list-head" });
-  const total = state.scenario==="empty" ? 0 : DataSource.listRuns("all").length;
-  head.innerHTML = `<div class="list-title-row"><span class="list-title">运行</span><span class="list-count">${state.scenario==="empty"?0:DataSource.listRuns(state.filter).length} / ${total}</span></div>`;
-  const filters = el("div", { class:"filters", role:"group", "aria-label":"按状态筛选" });
-  FILTERS.forEach(([val,lab]) => {
-    const c = el("button", { class:"chip", "aria-pressed": String(state.filter===val) }, lab);
-    c.addEventListener("click", () => { state.filter = val; pendingListScrollReset = true; render(); });
-    filters.appendChild(c);
-  });
-  head.appendChild(filters);
+  const shown = state.scenario==="empty" ? 0 : DataSource.listRuns().length;
+  head.innerHTML = `<div class="list-title-row"><span class="list-title">运行</span><span class="list-count" title="当前筛选下返回的运行数（最近 N）">${shown}</span></div>`;
   pane.appendChild(head);
+  pane.appendChild(renderFilterBar());
 
   const listbox = el("div", { class:"runlist scroll", role:"list", "aria-label":"运行", tabindex:"-1" });
 
@@ -1111,16 +1230,14 @@ function renderList(){
     return pane;
   }
 
-  const runs = state.scenario === "empty" ? [] : DataSource.listRuns(state.filter);
+  const runs = state.scenario === "empty" ? [] : DataSource.listRuns();
 
   if(runs.length === 0){
-    const isFiltered = state.scenario !== "empty" && state.filter !== "all";
-    const fm = FILTERS.find(f => f[0] === state.filter);
-    const flabel = fm ? fm[1] : "当前条件";
+    const isFiltered = state.scenario !== "empty" && hasActiveFilters();
     listbox.appendChild(el("div", { class:"empty" }, `
       <div class="ic" aria-hidden="true">${ICON.inbox}</div>
       <div class="et">${isFiltered ? "没有匹配的运行" : "暂无运行"}</div>
-      <div class="es">${isFiltered ? `「${flabel}」筛选下没有运行，换个状态再看看。` : "你的账户下还没有任何工作流运行。一旦有运行启动，就会出现在这里。"}</div>`));
+      <div class="es">${isFiltered ? "当前筛选条件下没有运行，放宽状态、来源或时间范围再看看。" : "你的账户下还没有任何工作流运行。一旦有运行启动，就会出现在这里。"}</div>`));
     pane.appendChild(listbox);
     return pane;
   }
@@ -1131,11 +1248,16 @@ function renderList(){
     const scopeCol = (adminState.isAdmin && adminState.currentScope)
       ? `<span class="sep">·</span><span class="id" title="scope id: ${esc(r.scopeId||"")}">${esc(tailId(r.scopeId, 14))}</span>`
       : "";
+    // run-origin badge: legacy/empty origin renders nothing (keeps the row readable at density).
+    const olabel = originLabel(r.runOrigin);
+    const originCol = olabel
+      ? `<span class="sep">·</span><span class="rm-origin" title="运行来源：${esc(olabel)}">${esc(olabel)}</span>`
+      : "";
     row.innerHTML = `
       <span class="dot s-${r.status}" aria-hidden="true"></span>
       <span class="rn" title="${esc(r.workflowName)}">${esc(r.workflowName)}</span>
       <span class="rm">
-        <span class="rm-status s-${r.status}">${STATUS_LABEL[r.status]||r.status}</span>
+        <span class="rm-status s-${r.status}">${STATUS_LABEL[r.status]||r.status}</span>${originCol}
         <span class="sep">·</span>
         <span data-since="${r.updatedAtUtc}">${relTime(r.updatedAtUtc, nowMs())}</span>
         <span class="sep">·</span>
@@ -1865,7 +1987,7 @@ function renderAdminBar(){
 
 async function refreshRuns(){
   try {
-    const runs = await api("/api/workflow/observatory/runs" + listScopeParam());
+    const runs = await api("/api/workflow/observatory/runs" + listQueryParams());
     cache.runs = runs || [];
     if(state.scenario === "listLoading" || state.scenario === "empty" || state.scenario === "globalError"){
       state.scenario = (cache.runs.length === 0) ? "empty" : "normal";

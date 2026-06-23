@@ -40,7 +40,7 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
         InitializeId();
     }
 
-    [EventHandler]
+    [EventHandler(AllowSelfHandling = true)]
     public async Task HandleActivateAsync(ActivateServiceRevisionCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);

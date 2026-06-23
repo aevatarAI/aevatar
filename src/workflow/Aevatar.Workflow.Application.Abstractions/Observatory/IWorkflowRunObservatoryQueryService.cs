@@ -27,6 +27,15 @@ public sealed class ObservatoryRunListFilter
 {
     public string? Status { get; init; }
 
+    // 06-23-observatory-run-coverage-filter: additional filter dimensions. Null/empty = not filtered.
+    public IReadOnlyList<string> Origins { get; init; } = [];
+
+    public IReadOnlyList<string> DefinitionActorIds { get; init; } = [];
+
+    public DateTimeOffset? FromUtc { get; init; }
+
+    public DateTimeOffset? ToUtc { get; init; }
+
     public int Take { get; init; } = 100;
 }
 
@@ -52,6 +61,10 @@ public sealed class ObservatoryRunSummary
     // 06-20-observatory-admin-cross-scope: the run's owning scope. Populated for every read; the page only
     // surfaces it in admin cross-scope mode (own-scope callers already know their scope).
     public string ScopeId { get; init; } = string.Empty;
+
+    // 06-23-observatory-run-coverage-filter: canonical run origin/type (draft | member-invoke | ...),
+    // empty for legacy/unstamped runs. Drives the run-type filter + badge.
+    public string RunOrigin { get; init; } = string.Empty;
 }
 
 public sealed class ObservatoryRunDetail
