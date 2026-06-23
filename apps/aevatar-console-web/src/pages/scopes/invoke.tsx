@@ -1189,7 +1189,10 @@ const ScopeInvokePage: React.FC = () => {
             breadcrumbItems={breadcrumbItems}
             onBack={() => history.push(teamHomeHref)}
             title={t("pages.scopes.invoke.legacy.invoke.lab.2", "Legacy Invoke Lab")}
-            titleHelp="Legacy deep-link playground for direct endpoint probing. Team home stays the primary surface, while this lab handles raw payloads and older operator flows."
+            titleHelp={t(
+              "pages.scopes.invoke.legacyInvokeTitleHelp",
+              "Legacy deep-link playground for direct endpoint probing. Team home stays the primary surface, while this lab handles raw payloads and older operator flows.",
+            )}
           />
           <Space size={[8, 8]} wrap>
             <AevatarStatusTag domain="run" status={invokeResult.status} />

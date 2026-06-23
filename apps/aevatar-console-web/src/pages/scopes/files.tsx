@@ -147,13 +147,16 @@ const ProjectFilesPage: React.FC = () => {
   });
 
   return (
-    <AevatarPageShell pageHeaderRender={false} title="Files">
+    <AevatarPageShell pageHeaderRender={false} title={t("pages.scopes.files.title", "Files")}>
       <div style={filesShellStyle}>
         <header style={filesHeaderStyle}>
           <AevatarPageTitleBlock
             breadcrumbItems={filesBreadcrumbItems}
-            title="Files"
-            titleHelp="Browse workspace workflows, scope-backed scripts, and reusable Studio catalogs from one structured entry point."
+            title={t("pages.scopes.files.title", "Files")}
+            titleHelp={t(
+              "pages.scopes.files.titleHelp",
+              "Browse workspace workflows, scope-backed scripts, and reusable Studio catalogs from one structured entry point.",
+            )}
           />
         </header>
 

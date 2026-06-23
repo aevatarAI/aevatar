@@ -59,16 +59,6 @@ import {
 } from "./workflowPresentation";
 import { t } from "@/shared/i18n/messages";
 
-const breadcrumbItems: AevatarBreadcrumbItem[] = [
-  {
-    title: "Platform",
-  },
-  {
-    current: true,
-    title: "Workflow Library",
-  },
-];
-
 const tableHeaderCellStyle: React.CSSProperties = {
   background: "var(--ant-color-fill-alter)",
   borderBottom: "1px solid var(--ant-color-border-secondary)",
@@ -531,6 +521,15 @@ const WorkflowsPage: React.FC = () => {
     ],
     [intl],
   );
+  const breadcrumbItems: AevatarBreadcrumbItem[] = [
+    {
+      title: t("pages.workflows.index.platformBreadcrumb", "Platform"),
+    },
+    {
+      current: true,
+      title: t("pages.workflows.index.workflowLibraryBreadcrumb", "Workflow Library"),
+    },
+  ];
 
   return (
     <AevatarPageShell

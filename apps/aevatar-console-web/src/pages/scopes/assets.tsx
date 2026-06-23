@@ -727,7 +727,10 @@ const TeamAssetsPage: React.FC = () => {
       backAriaLabel={t("pages.scopes.assets.teamHome", "Team Home")}
       backTitle={t("pages.scopes.assets.teamHome", "Team Home")}
       breadcrumbItems={breadcrumbItems}
-      content="Team home now lives under /scopes/:scopeId/teams. Keep this page for older asset deep links, source inspection, and catalog detail while the scoped team flow finishes taking over."
+      content={t(
+        "pages.scopes.assets.legacyAssetsContent",
+        "Team home now lives under /scopes/:scopeId/teams. Keep this page for older asset deep links, source inspection, and catalog detail while the scoped team flow finishes taking over.",
+      )}
       extra={[
         <Button
           key="open-studio"
@@ -767,7 +770,10 @@ const TeamAssetsPage: React.FC = () => {
       layoutMode="document"
       onBack={() => history.push(buildTeamWorkspaceRoute(activeDraft.scopeId))}
       title={t("pages.scopes.assets.legacy.team.assets", "Legacy Team Assets")}
-      titleHelp="This is the legacy deep-link asset workspace. Use it for source inspection and catalog detail, but go back to team home for the main team narrative."
+      titleHelp={t(
+        "pages.scopes.assets.legacyAssetsTitleHelp",
+        "This is the legacy deep-link asset workspace. Use it for source inspection and catalog detail, but go back to team home for the main team narrative.",
+      )}
     >
       <div
         style={{

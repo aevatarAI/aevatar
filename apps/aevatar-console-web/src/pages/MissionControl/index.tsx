@@ -73,16 +73,6 @@ const monoStyle: React.CSSProperties = {
 type MissionStageView = 'topology' | 'execution_flow';
 type MissionDockTab = 'timeline' | 'logs';
 
-const missionControlBreadcrumbItems: AevatarBreadcrumbItem[] = [
-  {
-    title: 'Platform',
-  },
-  {
-    current: true,
-    title: 'Mission Control',
-  },
-];
-
 type MissionControlUiContextValue = {
   activeNodeId?: string;
   closeInspector: () => void;
@@ -1010,6 +1000,15 @@ const MissionControlPage: React.FC = () => {
   const { token } = theme.useToken();
   const runtime = useMissionControlRuntime();
   const shellStyle = useMemo(() => buildMissionShellStyle(token), [token]);
+  const missionControlBreadcrumbItems: AevatarBreadcrumbItem[] = [
+    {
+      title: t('pages.missioncontrol.index.platformBreadcrumb', 'Platform'),
+    },
+    {
+      current: true,
+      title: t('pages.missioncontrol.index.missionControlBreadcrumb', 'Mission Control'),
+    },
+  ];
 
   return (
     <MissionControlUiProvider intervention={runtime.snapshot.intervention}>

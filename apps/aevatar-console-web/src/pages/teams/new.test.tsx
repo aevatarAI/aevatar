@@ -59,11 +59,11 @@ describe('TeamCreatePage', () => {
   it('renders the simplified Team create page', async () => {
     renderWithQueryClient(React.createElement(TeamCreatePage));
 
-    const breadcrumb = await screen.findByRole('navigation', { name: 'Breadcrumb' });
+    const breadcrumb = await screen.findByRole('navigation', { name: '面包屑' });
     expect(screen.getAllByRole('navigation')).toHaveLength(1);
-    expect(breadcrumb).toHaveTextContent('Teams');
+    expect(breadcrumb).toHaveTextContent('团队');
     expect(breadcrumb).toHaveTextContent('创建团队');
-    const teamsBreadcrumbLink = within(breadcrumb).getByRole('link', { name: 'Teams' });
+    const teamsBreadcrumbLink = within(breadcrumb).getByRole('link', { name: '团队' });
     expect(teamsBreadcrumbLink).toHaveAttribute('href', '/scopes/scope-a/teams');
     expect(screen.getByRole('heading', { level: 2, name: '创建团队' })).toBeTruthy();
     expect(screen.getByText('团队信息')).toBeTruthy();

@@ -1179,11 +1179,17 @@ const SettingsPage: React.FC = () => {
     <SettingsPageShell
       content={
         activeSection === llmTabKey
-          ? "Personal defaults for Chat and Studio."
-          : "Identity, session, and access details for this browser."
+          ? t(
+              "pages.settings.index.llmContent",
+              "Personal defaults for Chat and Studio.",
+            )
+          : t(
+              "pages.settings.index.accountContent",
+              "Identity, session, and access details for this browser.",
+            )
       }
       extra={headerExtra}
-      title="Settings"
+      title={t("pages.settings.index.title", "Settings")}
     >
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         <div role="tablist" style={buildSettingsSwitchRailStyle(token)}>
