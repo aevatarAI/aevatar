@@ -90,9 +90,12 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         var chatRequest = request.Payload?.Unpack<ChatRequestEvent>()
             ?? throw new InvalidOperationException("Workflow services require ChatRequestEvent payload.");
         var plan = target.Artifact.DeploymentPlan.WorkflowPlan;
+        var definitionActorId = string.IsNullOrWhiteSpace(plan.DefinitionActorId)
+            ? target.Service.PrimaryActorId
+            : plan.DefinitionActorId.Trim();
         var run = await _workflowRunProvisioningPort.CreateRunAsync(
             new WorkflowDefinitionBinding(
-                target.Service.PrimaryActorId,
+                definitionActorId,
                 plan.WorkflowName,
                 plan.WorkflowYaml,
                 plan.InlineWorkflowYamls,

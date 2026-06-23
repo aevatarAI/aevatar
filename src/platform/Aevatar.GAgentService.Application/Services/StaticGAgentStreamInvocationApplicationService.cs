@@ -14,13 +14,13 @@ public sealed class StaticGAgentStreamInvocationApplicationService : IStaticGAge
 {
     private static readonly TimeSpan DefaultInteractionTimeout = TimeSpan.FromMinutes(2);
 
-    private readonly ServiceInvocationResolutionService _resolutionService;
+    private readonly IServiceInvocationResolutionPort _resolutionService;
     private readonly IInvokeAdmissionAuthorizer _admissionAuthorizer;
     private readonly IServiceRunRegistrationPort _serviceRunRegistrationPort;
     private readonly IGAgentDraftRunInteractionPort _interactionPort;
 
     public StaticGAgentStreamInvocationApplicationService(
-        ServiceInvocationResolutionService resolutionService,
+        IServiceInvocationResolutionPort resolutionService,
         IInvokeAdmissionAuthorizer admissionAuthorizer,
         IServiceRunRegistrationPort serviceRunRegistrationPort,
         IGAgentDraftRunInteractionPort interactionPort)
