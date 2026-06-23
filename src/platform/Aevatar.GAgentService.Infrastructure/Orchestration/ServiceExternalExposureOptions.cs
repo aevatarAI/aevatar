@@ -11,4 +11,10 @@ public sealed class ServiceExternalExposureOptions
     public bool RegisterAllPublishedServices { get; set; }
 
     public string[] OptInPolicyIds { get; set; } = [];
+
+    public int RetryMaxAttempts { get; set; } = 5;
+
+    public int RetryBaseDelaySeconds { get; set; } = 30;
+
+    public int RetryMaxDelaySeconds { get; set; } = 900;
 }

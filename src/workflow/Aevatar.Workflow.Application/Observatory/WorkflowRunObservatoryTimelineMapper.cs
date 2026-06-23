@@ -10,7 +10,7 @@ namespace Aevatar.Workflow.Application.Observatory;
 // authoritative per-step usage, not from the timeline data.
 public static class WorkflowRunObservatoryTimelineMapper
 {
-    public static ObservatoryViewEvent ToViewEvent(WorkflowRunTimelineEvent item)
+    public static ObservatoryViewEvent ToViewEvent(WorkflowRunTimelineEvent item, string roleReplyContent = "")
     {
         ArgumentNullException.ThrowIfNull(item);
 
@@ -25,6 +25,8 @@ public static class WorkflowRunObservatoryTimelineMapper
             StepId = item.StepId ?? string.Empty,
             StepType = item.StepType ?? string.Empty,
             ToolCall = stage == "tool.call" ? BuildToolCall(item) : null,
+            Content = roleReplyContent ?? string.Empty,
+            Data = item.Data ?? new Dictionary<string, string>(StringComparer.Ordinal),
         };
     }
 

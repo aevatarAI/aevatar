@@ -24,6 +24,8 @@ public static class AgentToolExecutionContextMapper
         LLMRequestMetadataKeys.ConnectedServicesContext,
         LLMRequestMetadataKeys.SenderBindingId,
         LLMRequestMetadataKeys.SenderNyxIdAccessToken,
+        LLMRequestMetadataKeys.SenderNyxUserId,
+        "sender_nyx_user_id",
         "workflow.parent_actor_id",
         "workflow.parent_run_id",
         "workflow.parent_step_id",
@@ -148,7 +150,9 @@ public static class AgentToolExecutionContextMapper
                 AgentToolExecutionContext.Normalize(payload.Channel?.PlatformMessageId),
                 AgentToolExecutionContext.Normalize(payload.Channel?.DeliveryTargetId),
                 AgentToolExecutionContext.Normalize(payload.Channel?.DurableReplyCredentialRef)),
-            new AgentToolSenderBindingContext(AgentToolExecutionContext.Normalize(payload.SenderBinding?.BindingId)),
+            new AgentToolSenderBindingContext(
+                AgentToolExecutionContext.Normalize(payload.SenderBinding?.BindingId),
+                AgentToolExecutionContext.Normalize(payload.SenderBinding?.NyxUserId)),
             new LLMRequestRoutingContext(
                 AgentToolExecutionContext.Normalize(payload.Routing?.ModelOverride),
                 AgentToolExecutionContext.Normalize(payload.Routing?.NyxIdRoutePreference),
@@ -198,6 +202,7 @@ public static class AgentToolExecutionContextMapper
             SenderBinding = new AgentToolSenderBindingContextPayload
             {
                 BindingId = context.SenderBinding.BindingId ?? string.Empty,
+                NyxUserId = context.SenderBinding.NyxUserId ?? string.Empty,
             },
             Routing = new LLMRequestRoutingContextPayload
             {

@@ -19,6 +19,8 @@ owner: eanzhao
 
 审批额度账本边界见 [approval-quota-ledger.md](approval-quota-ledger.md)：额度事实源属于外部 connected service 或渠道原生账本，不属于 Aevatar runtime、readmodel 或 projection 主链。
 
+External exposure 回执边界见 [external-exposure-receipt.md](external-exposure-receipt.md)：NyxID 注册回执由 service definition actor 拥有，读侧仅物化 actor committed state，并暴露权威源版本。
+
 ## 2. 解决方案结构
 
 ```mermaid

@@ -2264,6 +2264,10 @@ public sealed class ChannelConversationTurnRunnerTests
         var services = new ServiceCollection()
             .AddSingleton<IExternalIdentityBindingQueryPort>(broker)
             .AddSingleton<INyxIdCapabilityBroker>(broker)
+            .AddSingleton<INyxIdCurrentUserResolver>(new StubNyxIdCurrentUserResolver
+            {
+                ResolvedUserId = "nyx-user-1",
+            })
             .BuildServiceProvider();
         var registrationQueryPort = BuildRegistrationQueryPort();
         var adapter = new RecordingPlatformAdapter();
@@ -2340,9 +2344,14 @@ public sealed class ChannelConversationTurnRunnerTests
             },
             new BindingId { Value = "bnd-user-1" });
 
+        var userResolver = new StubNyxIdCurrentUserResolver
+        {
+            ResolvedUserId = "nyx-user-1",
+        };
         var services = new ServiceCollection()
             .AddSingleton<IExternalIdentityBindingQueryPort>(broker)
             .AddSingleton<INyxIdCapabilityBroker>(broker)
+            .AddSingleton<INyxIdCurrentUserResolver>(userResolver)
             .BuildServiceProvider();
         var registrationQueryPort = BuildRegistrationQueryPort();
         var adapter = new RecordingPlatformAdapter();
@@ -2373,7 +2382,9 @@ public sealed class ChannelConversationTurnRunnerTests
         toolContext.Caller.OwnerSubject.Should().Be("scope-1");
         toolContext.Credentials.SenderNyxIdAccessToken.Should().BeNull();
         toolContext.SenderBinding.BindingId.Should().Be("bnd-user-1");
+        toolContext.SenderBinding.NyxUserId.Should().Be("nyx-user-1");
         llmControl.SenderNyxIdAccessToken.Should().Be("test-access-token-for-bnd-user-1");
+        userResolver.Tokens.Should().ContainSingle().Which.Should().Be("test-access-token-for-bnd-user-1");
         adapter.Replies.Should().BeEmpty();
     }
 
@@ -3972,7 +3983,8 @@ public sealed class ChannelConversationTurnRunnerTests
             workflowResumeService: services.GetService<ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>(),
             workflowDraftRunAdmission: services.GetService<ChannelWorkflowDraftRunAdmission>(),
             remoteToolApprovalPort: remoteToolApprovalPort,
-            botIdentityResolver: botIdentityResolver);
+            botIdentityResolver: botIdentityResolver,
+            nyxIdCurrentUserResolver: services.GetService<INyxIdCurrentUserResolver>());
     }
 
     private static IServiceProvider BuildAgentBuilderToolServices(IScopeWorkflowQueryPort? workflowQueryPort = null)
@@ -4495,6 +4507,18 @@ public sealed class ChannelConversationTurnRunnerTests
             if (_throwOnGet)
                 throw new InvalidOperationException("simulated owner-config lookup failure");
             return Task.FromResult(_config);
+        }
+    }
+
+    private sealed class StubNyxIdCurrentUserResolver : INyxIdCurrentUserResolver
+    {
+        public string? ResolvedUserId { get; init; }
+        public List<string> Tokens { get; } = [];
+
+        public Task<string?> ResolveCurrentUserIdAsync(string nyxIdAccessToken, CancellationToken ct = default)
+        {
+            Tokens.Add(nyxIdAccessToken);
+            return Task.FromResult(ResolvedUserId);
         }
     }
 }

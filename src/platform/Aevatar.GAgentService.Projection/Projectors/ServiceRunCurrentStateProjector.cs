@@ -58,6 +58,7 @@ public sealed class ServiceRunCurrentStateProjector
             CommandId = record.CommandId ?? string.Empty,
             CorrelationId = record.CorrelationId ?? string.Empty,
             EndpointId = record.EndpointId ?? string.Empty,
+            ScheduleId = record.ScheduleId ?? string.Empty,
             ImplementationKind = (int)record.ImplementationKind,
             TargetActorId = record.TargetActorId ?? string.Empty,
             RevisionId = record.RevisionId ?? string.Empty,

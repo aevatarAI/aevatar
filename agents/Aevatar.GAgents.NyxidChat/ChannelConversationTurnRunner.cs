@@ -91,6 +91,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private readonly IRemoteToolApprovalPort? _remoteToolApprovalPort;
     private readonly ILogger<ChannelConversationTurnRunner> _logger;
     private readonly ILarkBotIdentityResolver? _botIdentityResolver;
+    private readonly INyxIdCurrentUserResolver? _nyxIdCurrentUserResolver;
 
     public ChannelConversationTurnRunner(
         IServiceProvider services,
@@ -113,7 +114,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>? workflowResumeService = null,
         ChannelWorkflowDraftRunAdmission? workflowDraftRunAdmission = null,
         IRemoteToolApprovalPort? remoteToolApprovalPort = null,
-        ILarkBotIdentityResolver? botIdentityResolver = null)
+        ILarkBotIdentityResolver? botIdentityResolver = null,
+        INyxIdCurrentUserResolver? nyxIdCurrentUserResolver = null)
     {
         _toolServiceProvider = services ?? throw new ArgumentNullException(nameof(services));
         _registrationQueryPort = registrationQueryPort ?? throw new ArgumentNullException(nameof(registrationQueryPort));
@@ -136,6 +138,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         _remoteToolApprovalPort = remoteToolApprovalPort;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _botIdentityResolver = botIdentityResolver;
+        _nyxIdCurrentUserResolver = nyxIdCurrentUserResolver;
     }
 
     public async Task<ConversationTurnResult> RunInboundAsync(
@@ -2249,6 +2252,17 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     currentControl.NyxIdRoutePreference,
                     currentControl.MaxToolRoundsOverride,
                     currentControl.UserMemoryPrompt).ToPayload();
+                var senderNyxUserId = await TryResolveSenderNyxUserIdAsync(senderAccessToken, senderBinding.Subject, ct)
+                    .ConfigureAwait(false);
+                if (!string.IsNullOrWhiteSpace(senderNyxUserId))
+                {
+                    request.ToolContext = (AgentToolExecutionContextMapper.FromPayload(request.ToolContext) with
+                    {
+                        SenderBinding = new AgentToolSenderBindingContext(
+                            senderBinding.BindingId,
+                            senderNyxUserId.Trim()),
+                    }).ToPayload();
+                }
             }
         }
 
@@ -2401,6 +2415,36 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             _logger.LogWarning(
                 ex,
                 "Failed to issue sender NyxID LLM token; falling back to bot owner LLM config. subject={Platform}:{Tenant}:{User}",
+                subject.Platform,
+                subject.Tenant,
+                subject.ExternalUserId);
+            return null;
+        }
+    }
+
+    private async Task<string?> TryResolveSenderNyxUserIdAsync(
+        string senderAccessToken,
+        ExternalSubjectRef subject,
+        CancellationToken ct)
+    {
+        var resolver = _nyxIdCurrentUserResolver;
+        if (resolver is null || string.IsNullOrWhiteSpace(senderAccessToken))
+            return null;
+
+        try
+        {
+            var nyxUserId = await resolver.ResolveCurrentUserIdAsync(senderAccessToken, ct).ConfigureAwait(false);
+            return NormalizeOptional(nyxUserId);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to resolve sender NyxID user id from short-lived token; team invocation will fall back to registration scope. subject={Platform}:{Tenant}:{User}",
                 subject.Platform,
                 subject.Tenant,
                 subject.ExternalUserId);

@@ -222,6 +222,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
         response.Runs[0].RunId.Should().Be("run-member-list-1");
         response.Runs[0].MemberId.Should().Be("member-a");
         response.Runs[0].PublishedServiceId.Should().Be("member-a");
+        response.Runs[0].DefinitionActorId.Should().Be("def-member-old");
         response.Runs[0].RevisionId.Should().Be("rev-1");
         response.Runs[0].DeploymentId.Should().Be("dep-member-old");
         response.Runs[0].StateVersion.Should().Be(13);
@@ -582,6 +583,109 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
     }
 
     [Fact]
+    public async Task ListRunsEndpoint_ShouldFilterByScheduleStatusAndUpdatedAt()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.LifecycleQueryPort.Service = BuildService("scope-a", "orders", "static-actor-1");
+        host.LifecycleQueryPort.Deployments = BuildDeployments("scope-a:default:default:orders", "dep-1", "rev-1", "static-actor-1");
+        var baseTime = DateTimeOffset.Parse("2026-04-27T00:00:00+00:00");
+        host.ServiceRunQueryPort.Upsert(BuildRunSnapshot(
+            "scope-a",
+            "orders",
+            "run-match",
+            "schedule-a",
+            ServiceRunStatus.Completed,
+            baseTime.AddHours(1)));
+        host.ServiceRunQueryPort.Upsert(BuildRunSnapshot(
+            "scope-a",
+            "orders",
+            "run-wrong-status",
+            "schedule-a",
+            ServiceRunStatus.Accepted,
+            baseTime.AddHours(2)));
+        host.ServiceRunQueryPort.Upsert(BuildRunSnapshot(
+            "scope-a",
+            "orders",
+            "run-wrong-schedule",
+            "schedule-b",
+            ServiceRunStatus.Completed,
+            baseTime.AddHours(3)));
+
+        var response = await host.Client.GetFromJsonAsync<ScopeServiceEndpoints.ScopeServiceRunCatalogHttpResponse>(
+            "/api/scopes/scope-a/services/orders/runs?take=1&scheduleId=schedule-a&status=completed&updatedFrom=2026-04-27T00:30:00Z&updatedTo=2026-04-27T01:30:00Z");
+
+        response.Should().NotBeNull();
+        response!.Runs.Select(x => x.RunId).Should().Equal("run-match");
+    }
+
+    [Fact]
+    public async Task ListMemberRunsEndpoint_ShouldApplyRegistryFilters()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.LifecycleQueryPort.Service = BuildService("scope-a", "member-a", "def-member-registry");
+        host.LifecycleQueryPort.Deployments = BuildDeployments("scope-a:default:default:member-a", "dep-1", "rev-1", "def-member-registry");
+        var baseTime = DateTimeOffset.Parse("2026-04-27T00:00:00+00:00");
+        host.ServiceRunQueryPort.Upsert(BuildRunSnapshot(
+            "scope-a",
+            "member-a",
+            "run-member-match",
+            "schedule-member",
+            ServiceRunStatus.Completed,
+            baseTime.AddHours(1),
+            ServiceImplementationKind.Workflow,
+            "run-actor-member-registry"));
+        host.RunBindingReader.BindingsByRunId["run-member-match"] =
+        [
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                "run-actor-member-registry",
+                "def-member-registry",
+                "run-member-match",
+                "member-flow",
+                "yaml",
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                "scope-a",
+                CreatedAt: baseTime.AddMinutes(10),
+                UpdatedAt: baseTime.AddHours(1)),
+        ];
+        host.ServiceRunQueryPort.Upsert(BuildRunSnapshot(
+            "scope-a",
+            "member-a",
+            "run-member-skipped",
+            "schedule-member",
+            ServiceRunStatus.Accepted,
+            baseTime.AddHours(2)));
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            "/api/scopes/scope-a/members/member-a/runs?take=1&scheduleId=schedule-member&status=Completed&updatedFrom=2026-04-27T00:30:00Z&updatedTo=2026-04-27T01:30:00Z");
+        request.Headers.Add("X-Test-Scope-Id", "scope-a");
+        request.Headers.Add("X-Test-Member-Id", "other-member");
+
+        var httpResponse = await host.Client.SendAsync(request);
+        var response = await httpResponse.Content.ReadFromJsonAsync<ScopeServiceEndpoints.MemberScopeServiceRunCatalogHttpResponse>();
+
+        httpResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.Should().NotBeNull();
+        response!.Runs.Select(x => x.RunId).Should().Equal("run-member-match");
+        response.Runs[0].ActorId.Should().Be("run-actor-member-registry");
+        response.Runs[0].DefinitionActorId.Should().Be("def-member-registry");
+    }
+
+    [Fact]
+    public async Task ListRunsEndpoint_ShouldRejectInvalidFilterValues()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.LifecycleQueryPort.Service = BuildService("scope-a", "orders", "static-actor-1");
+
+        var statusResponse = await host.Client.GetAsync("/api/scopes/scope-a/services/orders/runs?status=unknown");
+        var dateResponse = await host.Client.GetAsync("/api/scopes/scope-a/services/orders/runs?updatedFrom=not-a-date");
+
+        statusResponse.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        dateResponse.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
     public async Task GetRunEndpoint_ShouldReturnScopeScopedRunSummaryForNamedService()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
@@ -894,4 +998,38 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
         response.Audit.WorkflowName.Should().Be("orders");
         host.WorkflowQueryService.ReportCalls.Should().ContainSingle("run-actor-orders-audit-1");
     }
+
+    private static ServiceRunSnapshot BuildRunSnapshot(
+        string scopeId,
+        string serviceId,
+        string runId,
+        string scheduleId,
+        ServiceRunStatus status,
+        DateTimeOffset updatedAt,
+        ServiceImplementationKind implementationKind = ServiceImplementationKind.Static,
+        string targetActorId = "static-actor-1") =>
+        new(
+            ScopeId: scopeId,
+            ServiceId: serviceId,
+            ServiceKey: $"{scopeId}:default:default:{serviceId}",
+            RunId: runId,
+            CommandId: $"cmd-{runId}",
+            CorrelationId: $"corr-{runId}",
+            EndpointId: "run",
+            ScheduleId: scheduleId,
+            ImplementationKind: implementationKind,
+            TargetActorId: targetActorId,
+            RevisionId: "rev-1",
+            DeploymentId: "dep-1",
+            Status: status,
+            ActorId: $"service-run:{scopeId}:{serviceId}:{runId}",
+            TenantId: scopeId,
+            AppId: "default",
+            Namespace: "default",
+            StateVersion: 1,
+            LastEventId: $"{runId}:registered",
+            CreatedAt: updatedAt.AddMinutes(-5),
+            UpdatedAt: updatedAt,
+            LastOutput: string.Empty,
+            LastError: string.Empty);
 }

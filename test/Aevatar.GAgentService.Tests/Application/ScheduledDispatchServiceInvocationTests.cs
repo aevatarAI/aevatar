@@ -55,6 +55,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
         request.RevisionId.Should().Be("rev-1");
         request.CommandId.Should().Be("cmd-1");
         request.CorrelationId.Should().Be("corr-1");
+        request.ScheduleId.Should().Be("schedule-1");
         request.Payload.Unpack<StringValue>().Value.Should().Be("run");
     }
 
@@ -190,10 +191,12 @@ public sealed class ScheduledDispatchServiceInvocationTests
                     CommandId = "cmd-invoke",
                     CorrelationId = "corr-invoke",
                     Payload = Any.Pack(new StringValue { Value = "invoke" }),
-                }));
+                },
+                ScheduleId: "schedule-invoke"));
 
-        invocationPort.Requests.Should().ContainSingle()
-            .Which.Payload.Unpack<StringValue>().Value.Should().Be("invoke");
+        var invokedRequest = invocationPort.Requests.Should().ContainSingle().Which;
+        invokedRequest.Payload.Unpack<StringValue>().Value.Should().Be("invoke");
+        invokedRequest.ScheduleId.Should().Be("schedule-invoke");
         credentialExchange.Sources.Should().BeEmpty();
         receipt.Accepted.Should().BeTrue();
         receipt.CommandId.Should().Be("cmd-invoke");

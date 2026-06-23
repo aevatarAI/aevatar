@@ -141,7 +141,8 @@ public sealed class LarkCoverageTests
             descriptor.ServiceType == typeof(IAgentToolSource) &&
             descriptor.ImplementationType == typeof(LarkAgentToolSource));
         services.Should().NotContain(descriptor =>
-            descriptor.ServiceType == typeof(IWorkflowConnectedServiceFileSubmitAdapter));
+            descriptor.ServiceType.FullName != null &&
+            descriptor.ServiceType.FullName.Contains("WorkflowConnectedServiceFileSubmit", StringComparison.Ordinal));
 
         services.Single(descriptor => descriptor.ServiceType == typeof(LarkToolOptions))
             .ImplementationInstance.Should().BeOfType<LarkToolOptions>()

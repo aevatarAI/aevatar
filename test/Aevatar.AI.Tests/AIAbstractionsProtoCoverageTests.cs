@@ -547,7 +547,7 @@ public sealed class AIAbstractionsProtoCoverageTests
                 Credentials = new AgentToolCredentials("token-should-only-appear-in-this-explicit-roundtrip", null, null),
                 Caller = new AgentToolCallerContext("scope-typed", "owner-typed", "response-typed"),
                 Channel = new AgentToolChannelContext("lark", "sender-1", "registration-1", "message-1", "platform-message-1", "delivery-target-1", "secrets://nyx/reply-1"),
-                SenderBinding = new AgentToolSenderBindingContext("binding-1"),
+                SenderBinding = new AgentToolSenderBindingContext("binding-1", "nyx-user-1"),
                 Routing = new LLMRequestRoutingContext("model-typed", "route-typed", 4, "memory-typed"),
                 ConnectedServices = new AgentToolConnectedServicesContext("{\"service\":\"ok\"}"),
                 ExternalMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -562,7 +562,7 @@ public sealed class AIAbstractionsProtoCoverageTests
         pending.ToolContext.Caller.ScopeId.Should().Be("scope-typed");
         pending.ToolContext.Channel.Platform.Should().Be("lark");
         pending.ToolContext.Channel.DeliveryTargetId.Should().Be("delivery-target-1");
-        pending.ToolContext.SenderBinding.BindingId.Should().Be("binding-1");
+        (pending.ToolContext.SenderBinding.BindingId, pending.ToolContext.SenderBinding.NyxUserId).Should().Be(("binding-1", "nyx-user-1"));
         pending.ToolContext.Routing.MaxToolRoundsOverride.Should().Be(4);
         pending.ToolContext.ConnectedServices.ContextJson.Should().Be("{\"service\":\"ok\"}");
         pending.ToolContext.ExternalMetadata["trace-id"].Should().Be("trace-typed");

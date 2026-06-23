@@ -19,6 +19,7 @@ using Aevatar.GAgentService.Application.Scripts;
 using Aevatar.GAgentService.Application.Schedules;
 using Aevatar.GAgentService.Application.Workflows;
 using Aevatar.GAgentService.Core.Assemblers;
+using Aevatar.GAgentService.Core.Models;
 using Aevatar.GAgentService.Core.Schedules;
 using Aevatar.GAgentService.Core.Ports;
 using Aevatar.GAgentService.Core.Services;
@@ -74,6 +75,14 @@ public static class ServiceCollectionExtensions
             .Bind(configuration.GetSection("GAgentService:Demo"));
         services.AddOptions<ServiceExternalExposureOptions>()
             .Bind(configuration.GetSection(ServiceExternalExposureOptions.SectionName));
+        services.TryAddSingleton(sp =>
+        {
+            var options = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<ServiceExternalExposureOptions>>().Value;
+            return ServiceExternalExposureRetrySettings.Create(
+                options.RetryMaxAttempts,
+                TimeSpan.FromSeconds(options.RetryBaseDelaySeconds),
+                TimeSpan.FromSeconds(options.RetryMaxDelaySeconds));
+        });
         services.AddOptions<NyxIdRegistrationTokenOptions>()
             .Bind(configuration.GetSection(NyxIdRegistrationTokenOptions.SectionName));
         if (configuration.GetSection(ScopeServiceTokenOptions.SectionName).Get<ScopeServiceTokenOptions>()?.Enabled == true)
@@ -88,6 +97,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IServiceRuntimeActivator, DefaultServiceRuntimeActivator>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<ICommittedStatePublicationHook, ScriptingServiceRevisionRepublishHook>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<ICommittedStatePublicationHook, ServiceExposureReconcileHook>());
+        services.TryAddSingleton<ServiceExternalExposureIntentService>();
+        services.TryAddSingleton<IServiceExternalExposureIntentPort>(sp => sp.GetRequiredService<ServiceExternalExposureIntentService>());
         services.TryAddSingleton<NyxIdToolOptions>();
         services.AddHttpClient<NyxIdApiClient>();
         services.TryAddSingleton<INyxIdServiceRegistrationPort, NyxIdServiceRegistrationAdapter>();

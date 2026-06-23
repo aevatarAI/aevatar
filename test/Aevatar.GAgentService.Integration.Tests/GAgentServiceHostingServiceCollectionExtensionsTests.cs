@@ -31,6 +31,7 @@ using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Application.Responses;
+using Aevatar.GAgentService.Core.Models;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Routing;
@@ -147,6 +148,47 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         services.Count(x => x.ServiceType == typeof(IWorkflowCatalogPort))
             .Should()
             .Be(workflowRegistrationsBefore);
+    }
+
+    [Fact]
+    public void AddGAgentServiceCapability_ShouldRegisterConfiguredExternalExposureRetrySettings()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["GAgentService:ExternalExposure:RetryMaxAttempts"] = "7",
+                ["GAgentService:ExternalExposure:RetryBaseDelaySeconds"] = "3",
+                ["GAgentService:ExternalExposure:RetryMaxDelaySeconds"] = "30",
+            })
+            .Build();
+
+        services.AddGAgentServiceCapability(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        var settings = provider.GetRequiredService<ServiceExternalExposureRetrySettings>();
+        settings.MaxAttempts.Should().Be(7);
+        settings.BaseDelay.Should().Be(TimeSpan.FromSeconds(3));
+        settings.MaxDelay.Should().Be(TimeSpan.FromSeconds(30));
+    }
+
+    [Fact]
+    public void AddGAgentServiceCapability_ShouldRejectInvalidExternalExposureRetrySettings()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["GAgentService:ExternalExposure:RetryMaxAttempts"] = "0",
+            })
+            .Build();
+
+        services.AddGAgentServiceCapability(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        var act = () => provider.GetRequiredService<ServiceExternalExposureRetrySettings>();
+        act.Should().Throw<ArgumentOutOfRangeException>()
+            .WithParameterName("maxAttempts");
     }
 
     [Fact]

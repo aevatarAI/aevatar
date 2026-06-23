@@ -27,6 +27,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
     private readonly IScopeScriptQueryPort _scopeScriptQueryPort;
     private readonly IScriptDefinitionSnapshotPort _scriptDefinitionSnapshotPort;
     private readonly IWorkflowDefinitionParser _workflowDefinitionParser;
+    private readonly IServiceExternalExposureIntentPort _externalExposureIntentPort;
     private readonly IAgentKindRegistry? _agentKindRegistry;
     private readonly ScopeWorkflowCapabilityOptions _options;
 
@@ -39,7 +40,8 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         IScriptDefinitionSnapshotPort scriptDefinitionSnapshotPort,
         IWorkflowDefinitionParser workflowDefinitionParser,
         IOptions<ScopeWorkflowCapabilityOptions> options,
-        IAgentKindRegistry? agentKindRegistry = null)
+        IAgentKindRegistry? agentKindRegistry = null,
+        IServiceExternalExposureIntentPort? externalExposureIntentPort = null)
     {
         _serviceCommandPort = serviceCommandPort ?? throw new ArgumentNullException(nameof(serviceCommandPort));
         _serviceLifecycleQueryPort = serviceLifecycleQueryPort ?? throw new ArgumentNullException(nameof(serviceLifecycleQueryPort));
@@ -48,6 +50,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         _scopeScriptQueryPort = scopeScriptQueryPort ?? throw new ArgumentNullException(nameof(scopeScriptQueryPort));
         _scriptDefinitionSnapshotPort = scriptDefinitionSnapshotPort ?? throw new ArgumentNullException(nameof(scriptDefinitionSnapshotPort));
         _workflowDefinitionParser = workflowDefinitionParser ?? throw new ArgumentNullException(nameof(workflowDefinitionParser));
+        _externalExposureIntentPort = externalExposureIntentPort ?? new ServiceCommandExternalExposureIntentPort(serviceCommandPort);
         _agentKindRegistry = agentKindRegistry;
         ArgumentNullException.ThrowIfNull(options);
         _options = options.Value ?? throw new InvalidOperationException("Scope workflow capability options are required.");
@@ -68,6 +71,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
             : ScopeWorkflowCapabilityConventions.BuildServiceIdentity(_options, normalizedScopeId, request.ServiceId.Trim(), request.AppId);
         var desiredBinding = await ResolveDesiredBindingAsync(request, normalizedScopeId, identity, ct);
         var existingService = await _serviceLifecycleQueryPort.GetServiceAsync(identity, ct);
+        ApplyExternalExposureIntent(request, desiredBinding.ServiceDefinition);
 
         if (existingService == null)
         {
@@ -122,11 +126,44 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
             Identity = identity.Clone(),
             RevisionId = revisionId,
         }, ct);
+        await DispatchExternalExposureIntentAsync(request, identity, desiredBinding.ServiceDefinition, existingService, ct);
 
         var expectedDeploymentId = $"{ServiceActorIds.Deployment(identity)}:{revisionId}";
         // TODO(iter2/cluster-006): If callers need "invoke safe now", add an explicit read/projection
         // observation path in a separate PR rather than blocking this command path on readmodels.
         return desiredBinding.BuildResult(normalizedScopeId, identity.ServiceId, revisionId, expectedDeploymentId);
+    }
+
+    private static void ApplyExternalExposureIntent(
+        ScopeBindingUpsertRequest request,
+        ServiceDefinitionSpec serviceDefinition)
+    {
+        if (request.ExposureDesired == true)
+        {
+            serviceDefinition.ExternalExposure = new ExternalExposure
+            {
+                ExposureDesired = true,
+            };
+        }
+    }
+
+    private async Task DispatchExternalExposureIntentAsync(
+        ScopeBindingUpsertRequest request,
+        ServiceIdentity identity,
+        ServiceDefinitionSpec serviceDefinition,
+        ServiceCatalogSnapshot? existingService,
+        CancellationToken ct)
+    {
+        if (request.ExposureDesired == null)
+            return;
+
+        await _externalExposureIntentPort.ApplyAsync(
+            new ServiceExternalExposureIntentRequest(
+                identity.Clone(),
+                request.ExposureDesired.Value,
+                CloneServiceDefinition(serviceDefinition),
+                existingService),
+            ct);
     }
 
     private async Task<bool> ShouldCreateRevisionAsync(
@@ -579,6 +616,12 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         if (!string.Equals(existingService.DisplayName, desiredDefinition.DisplayName, StringComparison.Ordinal))
             return true;
 
+        if (desiredDefinition.ExternalExposure?.ExposureDesired == true &&
+            existingService.ExternalExposure?.ExposureDesired != true)
+        {
+            return true;
+        }
+
         var existingEndpoints = existingService.Endpoints
             .OrderBy(x => x.EndpointId, StringComparer.Ordinal)
             .ToArray();
@@ -725,4 +768,21 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         ServiceDefinitionSpec ServiceDefinition,
         Func<ServiceIdentity, string, ServiceRevisionSpec> BuildRevision,
         Func<string, string, string, string, ScopeBindingUpsertResult> BuildResult);
+
+    private sealed class ServiceCommandExternalExposureIntentPort(IServiceCommandPort commandPort) : IServiceExternalExposureIntentPort
+    {
+        public Task ApplyAsync(
+            ServiceExternalExposureIntentRequest request,
+            CancellationToken ct = default)
+        {
+            if (request.ExposureDesired || request.ExistingService == null)
+                return Task.CompletedTask;
+
+            return commandPort.RetireExternalExposureAsync(new RetireExternalExposureCommand
+            {
+                Identity = request.Identity.Clone(),
+                DesiredSpecHash = request.ExistingService.ExternalExposure?.DesiredSpecHash ?? string.Empty,
+            }, ct);
+        }
+    }
 }
