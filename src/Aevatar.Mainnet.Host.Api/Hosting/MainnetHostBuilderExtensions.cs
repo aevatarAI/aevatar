@@ -16,6 +16,7 @@ using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.AI.ToolProviders.Web;
 using Aevatar.Authentication.Hosting;
 using Aevatar.Authentication.Providers.NyxId;
+using Aevatar.Authentication.ScopeServiceTokens;
 using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.ChatRouting.Core;
@@ -147,6 +148,13 @@ public static class MainnetHostBuilderExtensions
             ServiceDescriptor.Singleton<IReadmodelFreshnessSource, ChannelBotRegistrationFreshnessSource>());
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IHealthProbeExecutor, AevatarCoreLoopStatusProbeExecutor>());
+        // Self-issued scope service token source for credentialed orchestration/observatory probes.
+        // IScopeServiceTokenIssuer is only registered when scope service tokens are enabled, so it is
+        // resolved optionally — absent it the provider returns null and those probes read "unknown".
+        builder.Services.AddSingleton<IProbeServiceTokenProvider>(
+            sp => new ScopeServiceProbeTokenProvider(
+                sp.GetRequiredService<TimeProvider>(),
+                sp.GetService<IScopeServiceTokenIssuer>()));
         builder.Services.AddChatRoutingAgents(builder.Configuration);
         builder.Services.AddMainnetAgentProjectionDocumentStores(builder.Configuration);
         builder.Services.AddChatRoutingCore();

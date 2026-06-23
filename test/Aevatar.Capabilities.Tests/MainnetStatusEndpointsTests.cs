@@ -24,6 +24,7 @@ public sealed class MainnetStatusEndpointsTests
             Slug = "responses-api-auth-gate",
             DisplayName = "Responses API auth gate",
             Category = "feature",
+            Severity = "critical",
             ProbeKind = "http_status",
             IntervalSeconds = 60,
             Enabled = true,
@@ -78,6 +79,62 @@ public sealed class MainnetStatusEndpointsTests
         html.Should().Contain("target-details");
         html.Should().Contain("aria-expanded");
     }
+
+    [Fact]
+    public async Task GetStatusJson_NonCriticalDown_DegradesWithoutBlackingOut()
+    {
+        await using var app = await CreateAppAsync(
+        [
+            Doc("self-readiness", "critical", HealthOutcomeStatus.Ok),
+            Doc("nyxid-http-health", "standard", HealthOutcomeStatus.Down),
+            Doc("llm-completion-canary", "canary", HealthOutcomeStatus.Unknown),
+        ]);
+
+        using var json = JsonDocument.Parse(await app.GetTestClient().GetStringAsync("/api/status"));
+        // A non-critical down degrades; an unconfigured canary (unknown) is excluded — so the
+        // board is honest "degraded", never a false blanket "down".
+        json.RootElement.GetProperty("overall").GetString().Should().Be("degraded");
+    }
+
+    [Fact]
+    public async Task GetStatusJson_CriticalDown_IsDown()
+    {
+        await using var app = await CreateAppAsync(
+        [
+            Doc("self-readiness", "critical", HealthOutcomeStatus.Down),
+            Doc("studio-health", "standard", HealthOutcomeStatus.Ok),
+        ]);
+
+        using var json = JsonDocument.Parse(await app.GetTestClient().GetStringAsync("/api/status"));
+        json.RootElement.GetProperty("overall").GetString().Should().Be("down");
+    }
+
+    [Fact]
+    public async Task GetStatusJson_UnconfiguredCanary_DoesNotForceRed()
+    {
+        await using var app = await CreateAppAsync(
+        [
+            Doc("self-readiness", "critical", HealthOutcomeStatus.Ok),
+            Doc("llm-completion-canary", "canary", HealthOutcomeStatus.Unknown),
+        ]);
+
+        using var json = JsonDocument.Parse(await app.GetTestClient().GetStringAsync("/api/status"));
+        json.RootElement.GetProperty("overall").GetString().Should().Be("ok");
+    }
+
+    private static HealthProbeTargetDocument Doc(string slug, string severity, HealthOutcomeStatus status) =>
+        new()
+        {
+            Id = slug,
+            Slug = slug,
+            DisplayName = slug,
+            Category = "feature",
+            Severity = severity,
+            ProbeKind = "http_status",
+            IntervalSeconds = 60,
+            Enabled = true,
+            Status = status,
+        };
 
     private static async Task<WebApplication> CreateAppAsync(IReadOnlyList<HealthProbeTargetDocument> documents)
     {

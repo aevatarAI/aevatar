@@ -33,12 +33,13 @@ message HealthProbeOutcome {
 message HealthProbeTargetDescriptor {
   string slug = 1;               // stable identifier; also the actor id suffix
   string display_name = 2;
-  string category = 3;           // "upstream" | "self" | "feature"
+  string category = 3;           // layer: "self" | "llm" | "orchestration" | "studio" | "upstream" | "feature"
   string probe_kind = 4;         // executor strategy key
   int32 interval_seconds = 5;
   int32 timeout_ms = 6;
   bool enabled = 7;
   map<string, string> parameters = 8;
+  string severity = 9;           // aggregation weight: "critical" | "standard" | "canary"
 }
 
 // ─── Persisted actor state ───
@@ -133,4 +134,5 @@ message HealthProbeTargetDocument {
   string actor_id = 17;
   google.protobuf.Timestamp updated_at_utc = 18;
   repeated HealthProbeOutcome recent_outcomes = 19;
+  string severity = 20;                          // "critical" | "standard" | "canary"
 }
