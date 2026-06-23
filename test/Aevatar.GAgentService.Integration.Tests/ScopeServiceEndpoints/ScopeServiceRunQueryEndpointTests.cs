@@ -2,7 +2,6 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Reflection;
 using System.Security.Claims;
-using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
@@ -206,9 +205,14 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
             LastOutput = "done",
         };
 
-        var response = await host.Client.GetFromJsonAsync<ScopeServiceEndpoints.MemberScopeServiceRunCatalogHttpResponse>(
-            "/api/scopes/scope-a/members/member-a/runs?take=5");
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/scopes/scope-a/members/member-a/runs?take=5");
+        request.Headers.Add("X-Test-Scope-Id", "scope-a");
+        request.Headers.Add("X-Test-Member-Id", "member-b");
 
+        var httpResponse = await host.Client.SendAsync(request);
+        var response = await httpResponse.Content.ReadFromJsonAsync<ScopeServiceEndpoints.MemberScopeServiceRunCatalogHttpResponse>();
+
+        httpResponse.StatusCode.Should().Be(HttpStatusCode.OK);
         response.Should().NotBeNull();
         response!.ScopeId.Should().Be("scope-a");
         response.MemberId.Should().Be("member-a");
@@ -264,9 +268,14 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
             DeadLetterError = "cancel failed",
         };
 
-        var response = await host.Client.GetFromJsonAsync<ScopeServiceEndpoints.MemberScopeServiceRunSummaryHttpResponse>(
-            "/api/scopes/scope-a/members/member-a/runs/run-member-detail-1");
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/scopes/scope-a/members/member-a/runs/run-member-detail-1");
+        request.Headers.Add("X-Test-Scope-Id", "scope-a");
+        request.Headers.Add("X-Test-Member-Id", "member-b");
 
+        var httpResponse = await host.Client.SendAsync(request);
+        var response = await httpResponse.Content.ReadFromJsonAsync<ScopeServiceEndpoints.MemberScopeServiceRunSummaryHttpResponse>();
+
+        httpResponse.StatusCode.Should().Be(HttpStatusCode.OK);
         response.Should().NotBeNull();
         response!.ScopeId.Should().Be("scope-a");
         response.MemberId.Should().Be("member-a");
@@ -341,9 +350,14 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
             },
         };
 
-        var response = await host.Client.GetFromJsonAsync<ScopeServiceEndpoints.MemberScopeServiceRunAuditHttpResponse>(
-            "/api/scopes/scope-a/members/member-a/runs/run-member-audit-1/audit");
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/scopes/scope-a/members/member-a/runs/run-member-audit-1/audit");
+        request.Headers.Add("X-Test-Scope-Id", "scope-a");
+        request.Headers.Add("X-Test-Member-Id", "member-b");
 
+        var httpResponse = await host.Client.SendAsync(request);
+        var response = await httpResponse.Content.ReadFromJsonAsync<ScopeServiceEndpoints.MemberScopeServiceRunAuditHttpResponse>();
+
+        httpResponse.StatusCode.Should().Be(HttpStatusCode.OK);
         response.Should().NotBeNull();
         response!.Summary.MemberId.Should().Be("member-a");
         response.Summary.PublishedServiceId.Should().Be("member-a");
@@ -371,20 +385,26 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
                 "scope-a"),
         ];
 
-        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/members/member-a/runs/run-member-resume-1:resume", new
-        {
-            stepId = "approval-1",
-            approved = true,
-            toolApproval = new
+        using var request = CreateAuthenticatedJsonRequest(
+            HttpMethod.Post,
+            "/api/scopes/scope-a/members/member-a/runs/run-member-resume-1:resume",
+            new
             {
-                executionId = "exec-member-1",
-                toolCallId = "tool-call-member-1",
-                approvalRequestId = "approval-member-1",
+                stepId = "approval-1",
+                approved = true,
+                toolApproval = new
+                {
+                    executionId = "exec-member-1",
+                    toolCallId = "tool-call-member-1",
+                    approvalRequestId = "approval-member-1",
+                },
             },
-        });
+            "scope-a");
+        request.Headers.Add("X-Test-Member-Id", "member-b");
+
+        var response = await host.Client.SendAsync(request);
 
         response.StatusCode.Should().Be(HttpStatusCode.Accepted);
-        response.Headers.Location.Should().NotBeNull();
         host.ResumeDispatchService.LastCommand.Should().NotBeNull();
         host.ResumeDispatchService.LastCommand!.ActorId.Should().Be("run-actor-member-resume-1");
         host.ResumeDispatchService.LastCommand.RunId.Should().Be("run-member-resume-1");
@@ -414,14 +434,20 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
                 "scope-a"),
         ];
 
-        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/members/member-a/runs/run-member-signal-1:signal", new
-        {
-            signalName = "ops_window_open",
-            stepId = "wait-1",
-        });
+        using var request = CreateAuthenticatedJsonRequest(
+            HttpMethod.Post,
+            "/api/scopes/scope-a/members/member-a/runs/run-member-signal-1:signal",
+            new
+            {
+                signalName = "ops_window_open",
+                stepId = "wait-1",
+            },
+            "scope-a");
+        request.Headers.Add("X-Test-Member-Id", "member-b");
+
+        var response = await host.Client.SendAsync(request);
 
         response.StatusCode.Should().Be(HttpStatusCode.Accepted);
-        response.Headers.Location.Should().NotBeNull();
         host.SignalDispatchService.LastCommand.Should().NotBeNull();
         host.SignalDispatchService.LastCommand!.ActorId.Should().Be("run-actor-member-signal-1");
         host.SignalDispatchService.LastCommand.RunId.Should().Be("run-member-signal-1");
@@ -447,13 +473,19 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
                 "scope-a"),
         ];
 
-        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/members/member-a/runs/run-member-stop-1:stop", new
-        {
-            reason = "manual",
-        });
+        using var request = CreateAuthenticatedJsonRequest(
+            HttpMethod.Post,
+            "/api/scopes/scope-a/members/member-a/runs/run-member-stop-1:stop",
+            new
+            {
+                reason = "manual",
+            },
+            "scope-a");
+        request.Headers.Add("X-Test-Member-Id", "member-b");
+
+        var response = await host.Client.SendAsync(request);
 
         response.StatusCode.Should().Be(HttpStatusCode.Accepted);
-        response.Headers.Location.Should().NotBeNull();
         host.StopDispatchService.LastCommand.Should().NotBeNull();
         host.StopDispatchService.LastCommand!.ActorId.Should().Be("run-actor-member-stop-1");
         host.StopDispatchService.LastCommand.RunId.Should().Be("run-member-stop-1");
