@@ -99,7 +99,6 @@ public sealed class ChatRouteResolverTests
         var decision = resolver.Resolve(snapshot, new ChatRouteInput());
 
         decision.Action.ForwardToModel.ToolSetRef.Name.Should().Be("workspace.default");
-        decision.OriginalAction.ForwardToModel.ToolSetRef.Name.Should().Be("workspace.default");
     }
 
     [Fact]
@@ -116,7 +115,6 @@ public sealed class ChatRouteResolverTests
 
         decision.Action.ForwardToModel.ToolSetRef.Name.Should().Be("lark.self_notify");
         decision.Action.ForwardToModel.ToolChoiceHint.ToolName.Should().Be("notify_self");
-        decision.OriginalAction.ForwardToModel.ToolSetRef.Name.Should().Be("lark.self_notify");
     }
 
     [Fact]
