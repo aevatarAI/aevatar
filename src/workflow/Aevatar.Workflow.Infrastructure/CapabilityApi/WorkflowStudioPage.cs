@@ -1118,6 +1118,31 @@ function makeSend(ta){
   return sb;
 }
 
+/* ---- conversation continuity ------------------------------------------- */
+// The /api/chat run is stateless: one prompt per call, and SessionId is a
+// correlation tag only (the backend never rehydrates prior turns from it). This
+// page already owns the full transcript in localStorage, so to give the agent
+// memory we fold a bounded slice of prior turns into the prompt. The first turn
+// (no prior context) sends the bare prompt — identical to the previous behavior.
+const HISTORY_TURN_CAP = 10;     // most recent prior messages to include
+const HISTORY_CHAR_CAP = 6000;   // hard ceiling on the injected transcript length
+function composePromptWithHistory(sess, currentPrompt){
+  const msgs = (sess && Array.isArray(sess.messages)) ? sess.messages : [];
+  // The current user turn is the last user message; history is everything before it.
+  let lastUserIdx = -1;
+  for(let i=msgs.length-1;i>=0;i--){ if(msgs[i].role==="user"){ lastUserIdx=i; break; } }
+  const prior = (lastUserIdx>=0 ? msgs.slice(0,lastUserIdx) : msgs)
+    .filter(m => m && (m.role==="user"||m.role==="agent") && m.text && m.text.trim());
+  if(!prior.length) return currentPrompt;
+  const recent = prior.slice(-HISTORY_TURN_CAP);
+  const lines = recent.map(m => (m.role==="user" ? "用户" : "助手") + "：" + m.text.trim());
+  let transcript = lines.join("\n");
+  if(transcript.length > HISTORY_CHAR_CAP) transcript = "…（更早内容已省略）\n" + transcript.slice(-HISTORY_CHAR_CAP);
+  return "以下是本次对话的前序记录，仅供你保持上下文连续，请勿复述：\n"
+    + "<对话历史>\n" + transcript + "\n</对话历史>\n\n"
+    + "用户最新消息：\n" + currentPrompt;
+}
+
 /* ---- send / stop / retry (live chat) ----------------------------------- */
 function sendComposer(){
   const ta=$("#composerInput");
@@ -1141,6 +1166,9 @@ function retryLastRun(){
   runChat(sess, lastUser.text);
 }
 function runChat(sess, prompt){
+  // Build the history-augmented prompt BEFORE pushing the in-flight agent
+  // placeholder, so the placeholder (empty text) is never part of the transcript.
+  const promptWithHistory = composePromptWithHistory(sess, prompt);
   const agent = { role:"agent", text:"", status:"working", steps:[], toolCalls:[] };
   sess.messages.push(agent);
   state.streaming = true;
@@ -1149,7 +1177,7 @@ function runChat(sess, prompt){
   scrollChatToBottom();
   let rafPending = false;
   const scheduleRender = ()=>{ if(rafPending) return; rafPending = true; requestAnimationFrame(()=>{ rafPending=false; if(state.streaming){ patchActiveAgent(agent); scrollChatToBottom(); } }); };
-  streamChat(prompt, sess.id, (frame)=>{
+  streamChat(promptWithHistory, sess.id, (frame)=>{
     const terminal = applyFrameToMessage(frame, agent);
     sess.updatedAt = Date.now();
     if(terminal){ finishRun(sess, agent); } else { scheduleRender(); }
