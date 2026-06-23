@@ -141,6 +141,8 @@ public static class ServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IServiceImplementationAdapter, ScriptingServiceImplementationAdapter>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IServiceImplementationAdapter, WorkflowServiceImplementationAdapter>());
         services.TryAddSingleton<ServiceInvocationResolutionService>();
+        services.TryAddSingleton<IServiceInvocationResolutionPort>(sp =>
+            sp.GetRequiredService<ServiceInvocationResolutionService>());
         services.TryAddSingleton<ServiceInvokeReadinessErrorMapper>();
         services.TryAddSingleton<IServiceCommandPort, ServiceCommandApplicationService>();
         services.TryAddSingleton<IServiceLifecycleQueryPort, ServiceLifecycleQueryApplicationService>();
@@ -188,6 +190,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IServiceServingTargetResolver, DefaultServiceServingTargetResolver>();
         services.TryAddSingleton<IServiceRunRegistrationPort, ServiceRunRegistrationAdapter>();
         services.TryAddSingleton<ServiceInvocationResolutionService>();
+        services.TryAddSingleton<IServiceInvocationResolutionPort>(sp =>
+            sp.GetRequiredService<ServiceInvocationResolutionService>());
         services.TryAddSingleton<ServiceInvokeReadinessErrorMapper>();
         services.TryAddSingleton<IInvokeAdmissionAuthorizer, ScheduledDispatchInvokeAdmissionAuthorizer>();
         services.TryAddSingleton<IServiceInvocationDispatcher, DefaultServiceInvocationDispatcher>();
