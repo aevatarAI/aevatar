@@ -2206,6 +2206,7 @@ public sealed class AevatarInvocationToolSourceTests
             commandId,
             commandId,
             "entry",
+            string.Empty,
             ServiceImplementationKind.Static,
             "target-actor",
             "revision-1",

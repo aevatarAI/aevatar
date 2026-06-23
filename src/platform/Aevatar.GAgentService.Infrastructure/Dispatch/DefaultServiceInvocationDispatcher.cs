@@ -198,6 +198,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             RevisionId = target.Service.RevisionId ?? string.Empty,
             DeploymentId = target.Service.DeploymentId ?? string.Empty,
             Status = ServiceRunStatus.Accepted,
+            ScheduleId = request.ScheduleId ?? string.Empty,
             Identity = request.Identity?.Clone(),
         };
         await _serviceRunRegistrationPort.RegisterAsync(record, ct);

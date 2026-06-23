@@ -962,6 +962,10 @@ public static class ScopeServiceEndpoints
         HttpContext http,
         string scopeId,
         int take,
+        string? scheduleId,
+        string? status,
+        string? updatedFrom,
+        string? updatedTo,
         [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
         [FromServices] IServiceRunQueryPort serviceRunQueryPort,
         [FromServices] IWorkflowExecutionQueryApplicationService workflowExecutionQueryService,
@@ -972,6 +976,10 @@ public static class ScopeServiceEndpoints
             scopeId,
             ResolveDefaultScopeServiceId(options.Value),
             take,
+            scheduleId,
+            status,
+            updatedFrom,
+            updatedTo,
             lifecycleQueryPort,
             serviceRunQueryPort,
             workflowExecutionQueryService,
@@ -1161,8 +1169,13 @@ public static class ScopeServiceEndpoints
         string scopeId,
         string memberId,
         int take,
+        string? scheduleId,
+        string? status,
+        string? updatedFrom,
+        string? updatedTo,
         [FromServices] IMemberPublishedServiceResolver memberPublishedServiceResolver,
         [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
+        [FromServices] IServiceRunQueryPort serviceRunQueryPort,
         [FromServices] IWorkflowRunBindingReader workflowRunBindingReader,
         [FromServices] IWorkflowExecutionQueryApplicationService workflowExecutionQueryService,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
@@ -1187,23 +1200,30 @@ public static class ScopeServiceEndpoints
             if (resolution.Failure != null)
                 return resolution.Failure;
 
-            var bindings = await ListScopeServiceRunsAsync(
-                memberResolution.ScopeId,
-                resolution.Service!,
-                resolution.Deployments,
-                workflowRunBindingReader,
-                take,
-                ct);
-
-            var summaries = new List<MemberScopeServiceRunSummaryHttpResponse>(bindings.Count);
-            foreach (var binding in bindings)
-            {
-                var serviceSummary = await BuildScopeRunSummaryAsync(
+            if (!TryBuildServiceRunQuery(
                     memberResolution.ScopeId,
                     memberResolution.PublishedServiceId,
-                    binding,
-                    resolution.Service!,
-                    resolution.Deployments,
+                    take,
+                    scheduleId,
+                    status,
+                    updatedFrom,
+                    updatedTo,
+                    out var query,
+                    out var failure))
+            {
+                return failure!;
+            }
+
+            var snapshots = await serviceRunQueryPort.ListAsync(query!, ct);
+
+            var summaries = new List<MemberScopeServiceRunSummaryHttpResponse>(snapshots.Count);
+            foreach (var snapshot in snapshots)
+            {
+                var serviceSummary = await BuildScopeRunSummaryFromRegistryAsync(
+                    memberResolution.ScopeId,
+                    memberResolution.PublishedServiceId,
+                    snapshot,
+                    workflowRunBindingReader,
                     workflowExecutionQueryService,
                     ct);
                 summaries.Add(BuildMemberRunSummaryResponse(memberResolution, serviceSummary));
@@ -1529,6 +1549,10 @@ public static class ScopeServiceEndpoints
         string scopeId,
         string serviceId,
         int take,
+        string? scheduleId,
+        string? status,
+        string? updatedFrom,
+        string? updatedTo,
         [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
         [FromServices] IServiceRunQueryPort serviceRunQueryPort,
         [FromServices] IWorkflowExecutionQueryApplicationService workflowExecutionQueryService,
@@ -1539,9 +1563,21 @@ public static class ScopeServiceEndpoints
         if (resolution.Failure != null)
             return resolution.Failure;
 
-        var snapshots = await serviceRunQueryPort.ListAsync(
-            new ServiceRunQuery(scopeId, serviceId, Math.Clamp(take <= 0 ? 50 : take, 1, 200)),
-            ct);
+        if (!TryBuildServiceRunQuery(
+                scopeId,
+                serviceId,
+                take,
+                scheduleId,
+                status,
+                updatedFrom,
+                updatedTo,
+                out var query,
+                out var failure))
+        {
+            return failure!;
+        }
+
+        var snapshots = await serviceRunQueryPort.ListAsync(query!, ct);
 
         var summaries = new List<ScopeServiceRunSummaryHttpResponse>(snapshots.Count);
         foreach (var snapshot in snapshots)
@@ -1550,6 +1586,7 @@ public static class ScopeServiceEndpoints
                 scopeId,
                 serviceId,
                 snapshot,
+                workflowRunBindingReader: null,
                 workflowExecutionQueryService,
                 ct));
         }
@@ -1591,6 +1628,7 @@ public static class ScopeServiceEndpoints
             scopeId,
             serviceId,
             snapshot,
+            workflowRunBindingReader: null,
             workflowExecutionQueryService,
             ct));
     }
@@ -1624,6 +1662,7 @@ public static class ScopeServiceEndpoints
             scopeId,
             serviceId,
             snapshot,
+            workflowRunBindingReader: null,
             workflowExecutionQueryService,
             ct);
 
@@ -1682,6 +1721,7 @@ public static class ScopeServiceEndpoints
             RevisionId = target.Service.RevisionId ?? string.Empty,
             DeploymentId = target.Service.DeploymentId ?? string.Empty,
             Status = ServiceRunStatus.Accepted,
+            ScheduleId = invocationRequest.ScheduleId ?? string.Empty,
             Identity = invocationRequest.Identity?.Clone(),
         };
         return new ValueTask(serviceRunRegistrationPort.RegisterAsync(record, ct));
@@ -3035,6 +3075,96 @@ const response = await fetch("{{invokePath}}", {
             .ToArray();
     }
 
+    private static bool TryBuildServiceRunQuery(
+        string scopeId,
+        string serviceId,
+        int take,
+        string? scheduleId,
+        string? status,
+        string? updatedFrom,
+        string? updatedTo,
+        out ServiceRunQuery? query,
+        out IResult? failure)
+    {
+        query = null;
+        failure = null;
+        if (!TryParseServiceRunStatus(status, out var parsedStatus, out var statusFailure))
+        {
+            failure = statusFailure;
+            return false;
+        }
+        if (!TryParseDateTimeOffsetQuery(updatedFrom, nameof(updatedFrom), out var parsedUpdatedFrom, out var updatedFromFailure))
+        {
+            failure = updatedFromFailure;
+            return false;
+        }
+        if (!TryParseDateTimeOffsetQuery(updatedTo, nameof(updatedTo), out var parsedUpdatedTo, out var updatedToFailure))
+        {
+            failure = updatedToFailure;
+            return false;
+        }
+
+        query = new ServiceRunQuery(
+            scopeId,
+            serviceId,
+            Math.Clamp(take <= 0 ? 50 : take, 1, 200),
+            NormalizeOptionalQueryValue(scheduleId),
+            parsedStatus,
+            parsedUpdatedFrom,
+            parsedUpdatedTo);
+        return true;
+    }
+
+    private static bool TryParseServiceRunStatus(string? status, out ServiceRunStatus? parsed, out IResult? failure)
+    {
+        parsed = null;
+        failure = null;
+        if (string.IsNullOrWhiteSpace(status))
+            return true;
+
+        if (System.Enum.TryParse<ServiceRunStatus>(status.Trim(), ignoreCase: true, out var enumValue) &&
+            enumValue != ServiceRunStatus.Unspecified)
+        {
+            parsed = enumValue;
+            return true;
+        }
+
+        failure = Results.BadRequest(new
+        {
+            code = "INVALID_SERVICE_RUN_QUERY",
+            message = "status must be one of Accepted, Completed, Failed, or Stopped.",
+        });
+        return false;
+    }
+
+    private static bool TryParseDateTimeOffsetQuery(
+        string? value,
+        string parameterName,
+        out DateTimeOffset? parsed,
+        out IResult? failure)
+    {
+        parsed = null;
+        failure = null;
+        if (string.IsNullOrWhiteSpace(value))
+            return true;
+
+        if (DateTimeOffset.TryParse(value.Trim(), out var dateTimeOffset))
+        {
+            parsed = dateTimeOffset.ToUniversalTime();
+            return true;
+        }
+
+        failure = Results.BadRequest(new
+        {
+            code = "INVALID_SERVICE_RUN_QUERY",
+            message = $"{parameterName} must be a valid ISO-8601 date-time.",
+        });
+        return false;
+    }
+
+    private static string? NormalizeOptionalQueryValue(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
     private static async Task<IReadOnlyList<WorkflowActorBinding>> ListScopeServiceRunsAsync(
         string scopeId,
         ServiceCatalogSnapshot service,
@@ -3101,9 +3231,11 @@ const response = await fetch("{{invokePath}}", {
         string scopeId,
         string serviceId,
         ServiceRunSnapshot snapshot,
+        IWorkflowRunBindingReader? workflowRunBindingReader,
         IWorkflowExecutionQueryApplicationService workflowExecutionQueryService,
         CancellationToken ct)
     {
+        var workflowBinding = await ResolveWorkflowRunBindingAsync(snapshot, workflowRunBindingReader, ct);
         var workflowSnapshot = snapshot.ImplementationKind == ServiceImplementationKind.Workflow &&
                                !string.IsNullOrWhiteSpace(snapshot.TargetActorId)
             ? await workflowExecutionQueryService.GetWorkflowActorCurrentStateAsync(snapshot.TargetActorId, ct)
@@ -3117,7 +3249,7 @@ const response = await fetch("{{invokePath}}", {
             // ActorId stays the controllable target so existing resume/signal/stop
             // round-trips keep working; the registry actor is internal infra.
             snapshot.TargetActorId,
-            string.Empty,
+            workflowBinding?.EffectiveDefinitionActorId ?? string.Empty,
             snapshot.RevisionId,
             snapshot.DeploymentId,
             workflowSnapshot?.WorkflowName ?? string.Empty,
@@ -3143,6 +3275,24 @@ const response = await fetch("{{invokePath}}", {
             snapshot.EndpointId,
             snapshot.TargetActorId,
             snapshot.CreatedAt);
+    }
+
+    private static async Task<WorkflowActorBinding?> ResolveWorkflowRunBindingAsync(
+        ServiceRunSnapshot snapshot,
+        IWorkflowRunBindingReader? workflowRunBindingReader,
+        CancellationToken ct)
+    {
+        if (workflowRunBindingReader == null ||
+            snapshot.ImplementationKind != ServiceImplementationKind.Workflow ||
+            string.IsNullOrWhiteSpace(snapshot.RunId))
+        {
+            return null;
+        }
+
+        var bindings = await workflowRunBindingReader.ListByRunIdAsync(snapshot.RunId, take: 20, ct);
+        return bindings.FirstOrDefault(binding =>
+            binding.ActorKind == WorkflowActorKind.Run &&
+            string.Equals(binding.ActorId, snapshot.TargetActorId, StringComparison.Ordinal));
     }
 
     private static WorkflowRunCompletionStatus MapServiceRunCompletionStatus(ServiceRunStatus status) =>
