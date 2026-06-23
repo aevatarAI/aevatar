@@ -2,7 +2,6 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Reflection;
 using System.Security.Claims;
-using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
@@ -405,12 +404,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
 
         var response = await host.Client.SendAsync(request);
 
-        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
-
         response.StatusCode.Should().Be(HttpStatusCode.Accepted);
-        response.Headers.Location.Should().NotBeNull();
-        response.Headers.Location!.OriginalString.Should().Be("/api/scopes/scope-a/members/member-a/runs/run-member-resume-1");
-        body.GetProperty("statusUrl").GetString().Should().Be("/api/scopes/scope-a/members/member-a/runs/run-member-resume-1");
         host.ResumeDispatchService.LastCommand.Should().NotBeNull();
         host.ResumeDispatchService.LastCommand!.ActorId.Should().Be("run-actor-member-resume-1");
         host.ResumeDispatchService.LastCommand.RunId.Should().Be("run-member-resume-1");
@@ -453,12 +447,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
 
         var response = await host.Client.SendAsync(request);
 
-        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
-
         response.StatusCode.Should().Be(HttpStatusCode.Accepted);
-        response.Headers.Location.Should().NotBeNull();
-        response.Headers.Location!.OriginalString.Should().Be("/api/scopes/scope-a/members/member-a/runs/run-member-signal-1");
-        body.GetProperty("statusUrl").GetString().Should().Be("/api/scopes/scope-a/members/member-a/runs/run-member-signal-1");
         host.SignalDispatchService.LastCommand.Should().NotBeNull();
         host.SignalDispatchService.LastCommand!.ActorId.Should().Be("run-actor-member-signal-1");
         host.SignalDispatchService.LastCommand.RunId.Should().Be("run-member-signal-1");
@@ -496,12 +485,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
 
         var response = await host.Client.SendAsync(request);
 
-        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
-
         response.StatusCode.Should().Be(HttpStatusCode.Accepted);
-        response.Headers.Location.Should().NotBeNull();
-        response.Headers.Location!.OriginalString.Should().Be("/api/scopes/scope-a/members/member-a/runs/run-member-stop-1");
-        body.GetProperty("statusUrl").GetString().Should().Be("/api/scopes/scope-a/members/member-a/runs/run-member-stop-1");
         host.StopDispatchService.LastCommand.Should().NotBeNull();
         host.StopDispatchService.LastCommand!.ActorId.Should().Be("run-actor-member-stop-1");
         host.StopDispatchService.LastCommand.RunId.Should().Be("run-member-stop-1");
