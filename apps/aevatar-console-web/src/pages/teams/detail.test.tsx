@@ -1082,11 +1082,11 @@ describe("TeamDetailPage", () => {
     expect(
       await screen.findByRole("heading", { name: "Alpha Support Team" }),
     ).toBeTruthy();
-    expect(await screen.findByRole("navigation", { name: "Breadcrumb" }))
+    expect(await screen.findByRole("navigation", { name: "面包屑" }))
       .toHaveTextContent("团队");
-    expect(screen.getByRole("navigation", { name: "Breadcrumb" }))
+    expect(screen.getByRole("navigation", { name: "面包屑" }))
       .toHaveTextContent("Alpha Support Team");
-    expect(screen.getByRole("navigation", { name: "Breadcrumb" }))
+    expect(screen.getByRole("navigation", { name: "面包屑" }))
       .toHaveTextContent("概览");
     expect(screen.getByRole("link", { name: "团队" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "返回团队列表" })).toBeTruthy();
