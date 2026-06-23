@@ -9,8 +9,10 @@ import {
 } from "@/shared/runs/draftRunSession";
 import { saveRecentRun } from "@/shared/runs/recentRuns";
 import { runtimeCatalogApi } from "@/shared/api/runtimeCatalogApi";
+import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
+import { studioApi } from "@/shared/studio/api";
 import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
 import RunsPage from "./index";
 
@@ -96,6 +98,44 @@ jest.mock("@/shared/api/runtimeRunsApi", () => ({
     resume: jest.fn(),
     signal: jest.fn(),
     stop: jest.fn(),
+  },
+}));
+
+jest.mock("@/shared/api/scopeRuntimeApi", () => ({
+  scopeRuntimeApi: {
+    getMemberRunAudit: jest.fn(),
+    listMemberRuns: jest.fn(),
+  },
+}));
+
+jest.mock("@/shared/studio/api", () => ({
+  studioApi: {
+    getMember: jest.fn(),
+  },
+}));
+
+jest.mock("@/shared/graphs/GraphCanvas", () => ({
+  __esModule: true,
+  default: (props: {
+    nodes?: Array<{ id?: string; data?: { stepId?: string } }>;
+    onNodeSelect?: (nodeId: string) => void;
+  }) => {
+    const React = require("react");
+    return React.createElement(
+      "div",
+      { "data-testid": "published-run-graph" },
+      props.nodes?.map((node) =>
+        React.createElement(
+          "button",
+          {
+            key: node.id,
+            onClick: () => props.onNodeSelect?.(String(node.id ?? "")),
+            type: "button",
+          },
+          `node:${node.data?.stepId ?? node.id}`,
+        ),
+      ),
+    );
   },
 }));
 
@@ -318,6 +358,13 @@ describe("RunsPage", () => {
     signal: jest.Mock;
     stop: jest.Mock;
   };
+  const mockedScopeRuntimeApi = scopeRuntimeApi as unknown as {
+    getMemberRunAudit: jest.Mock;
+    listMemberRuns: jest.Mock;
+  };
+  const mockedStudioApi = studioApi as unknown as {
+    getMember: jest.Mock;
+  };
   const mockedParseBackendSSEStream = parseBackendSSEStream as jest.Mock;
 
   beforeEach(() => {
@@ -347,9 +394,270 @@ describe("RunsPage", () => {
     });
     mockedRuntimeRunsApi.streamDraftRun.mockResolvedValue({});
     mockedRuntimeCatalogApi.listWorkflowCatalog.mockResolvedValue([]);
+    mockedStudioApi.getMember.mockResolvedValue({
+      summary: {
+        createdAt: "2026-06-22T00:00:00Z",
+        description: "",
+        displayName: "Alpha Workflow",
+        implementationKind: "workflow",
+        implementationRef: {
+          implementationKind: "workflow",
+          workflowId: "wf-alpha",
+          workflowRevision: null,
+        },
+        lastBoundRevisionId: "rev-alpha",
+        lifecycleStage: "bind_ready",
+        memberId: "m-alpha",
+        publishedServiceId: "svc-alpha",
+        scopeId: "scope-1",
+        teamId: "team-1",
+        updatedAt: "2026-06-22T00:00:00Z",
+      },
+      implementationRef: {
+        implementationKind: "workflow",
+        workflowId: "wf-alpha",
+        workflowRevision: null,
+      },
+      currentBindingRun: null,
+      lastBinding: null,
+    });
+    mockedScopeRuntimeApi.listMemberRuns.mockResolvedValue({
+      displayName: "Alpha Workflow",
+      memberId: "m-alpha",
+      publishedServiceId: "svc-alpha",
+      publishedServiceKey: "scope-1:default:default:svc-alpha",
+      runs: [],
+      scopeId: "scope-1",
+    });
+    mockedScopeRuntimeApi.getMemberRunAudit.mockResolvedValue({
+      summary: {
+        actorId: "actor://scope-1/run-1",
+        bindingUpdatedAt: "2026-06-22T01:00:00Z",
+        boundAt: "2026-06-22T01:00:00Z",
+        completedSteps: 2,
+        completionStatus: "completed",
+        definitionActorId: "definition://alpha",
+        deploymentId: "dep-alpha",
+        lastError: "",
+        lastEventId: "evt-2",
+        lastOutput: "Done",
+        lastSuccess: true,
+        lastUpdatedAt: "2026-06-22T01:00:02Z",
+        memberId: "m-alpha",
+        publishedServiceId: "svc-alpha",
+        revisionId: "rev-alpha",
+        roleReplyCount: 0,
+        runId: "run-1",
+        scopeId: "scope-1",
+        stateVersion: 2,
+        totalSteps: 2,
+        workflowName: "Alpha Workflow",
+      },
+      audit: {
+        commandId: "cmd-1",
+        completionStatus: "completed",
+        createdAt: "2026-06-22T01:00:00Z",
+        durationMs: 0,
+        endedAt: "2026-06-22T01:00:02Z",
+        finalError: "",
+        finalOutput: "Done",
+        input: "hello",
+        lastEventId: "evt-2",
+        projectionScope: "run_isolated",
+        reportVersion: "1.0",
+        roleReplies: [],
+        rootActorId: "actor://scope-1/run-1",
+        startedAt: "2026-06-22T01:00:00Z",
+        stateVersion: 2,
+        steps: [
+          {
+            assignedValue: "",
+            assignedVariable: "",
+            branchKey: "",
+            completedAt: "2026-06-22T01:00:01Z",
+            completionAnnotations: { status: "Ok" },
+            durationMs: 1000,
+            error: "",
+            nextStepId: "answer",
+            outputPreview: "Config ok",
+            requestParameters: { prompt: "hello" },
+            requestedAt: "2026-06-22T01:00:00Z",
+            requestedVariableName: "",
+            stepId: "config",
+            stepType: "transform",
+            success: true,
+            suspensionPrompt: "",
+            suspensionTimeoutSeconds: null,
+            suspensionType: "",
+            targetRole: "",
+            workerId: "worker-1",
+          },
+          {
+            assignedValue: "",
+            assignedVariable: "",
+            branchKey: "",
+            completedAt: "2026-06-22T01:00:02Z",
+            completionAnnotations: {},
+            durationMs: 1000,
+            error: "",
+            nextStepId: "",
+            outputPreview: "Done",
+            requestParameters: {},
+            requestedAt: "2026-06-22T01:00:01Z",
+            requestedVariableName: "",
+            stepId: "answer",
+            stepType: "llm_call",
+            success: true,
+            suspensionPrompt: "",
+            suspensionTimeoutSeconds: null,
+            suspensionType: "",
+            targetRole: "assistant",
+            workerId: "worker-2",
+          },
+        ],
+        success: true,
+        summary: {
+          completedSteps: 2,
+          requestedSteps: 2,
+          roleReplyCount: 0,
+          stepTypeCounts: { llm_call: 1, transform: 1 },
+          totalSteps: 2,
+        },
+        timeline: [
+          {
+            agentId: "worker-1",
+            data: {},
+            eventType: "completed",
+            message: "Config ok",
+            stage: "completed",
+            stepId: "config",
+            stepType: "transform",
+            timestamp: "2026-06-22T01:00:01Z",
+          },
+        ],
+        topology: [{ child: "answer", parent: "config" }],
+        topologySource: "committed_projection",
+        updatedAt: "2026-06-22T01:00:02Z",
+        workflowName: "Alpha Workflow",
+      },
+    });
     mockedParseBackendSSEStream.mockImplementation(
       () => (async function* () {})()
     );
+  });
+
+  it("renders member published run history when scope and member query are present", async () => {
+    const backendRunId = "scope-workflow:scope-1:wf-alpha:dep-alpha";
+    window.history.replaceState(
+      {},
+      "",
+      `/runtime/runs?scopeId=scope-1&teamId=team-1&memberId=m-alpha&runId=${encodeURIComponent(
+        backendRunId,
+      )}`,
+    );
+    mockedScopeRuntimeApi.listMemberRuns.mockResolvedValueOnce({
+      displayName: "Alpha Workflow",
+      memberId: "m-alpha",
+      publishedServiceId: "svc-alpha",
+      publishedServiceKey: "scope-1:default:default:svc-alpha",
+      runs: [
+        {
+          actorId: "actor://scope-1/run-1",
+          bindingUpdatedAt: "2026-06-22T01:00:00Z",
+          boundAt: "2026-06-22T01:00:00Z",
+          completedSteps: 2,
+          completionStatus: "completed",
+          definitionActorId: "definition://alpha",
+          deploymentId: "dep-alpha",
+          lastError: "",
+          lastEventId: "evt-2",
+          lastOutput: "Done",
+          lastSuccess: true,
+          lastUpdatedAt: "2026-06-22T01:00:02Z",
+          memberId: "m-alpha",
+          publishedServiceId: "svc-alpha",
+          revisionId: "rev-alpha",
+          roleReplyCount: 0,
+          runId: backendRunId,
+          scopeId: "scope-1",
+          stateVersion: 2,
+          totalSteps: 2,
+          workflowName: "Alpha Workflow",
+        },
+      ],
+      scopeId: "scope-1",
+    });
+
+    const { container } = renderWithQueryClient(React.createElement(RunsPage));
+
+    expect(await screen.findByTestId("member-published-runs-replay")).toBeTruthy();
+    await screen.findByText("node:config");
+    expect(container.textContent).toContain("Alpha Workflow");
+    expect(await screen.findByText("node:config")).toBeTruthy();
+    expect(container.textContent).toContain("Config ok");
+    expect(screen.queryByLabelText("Search published runs")).toBeNull();
+    expect(screen.queryByText("Auto refresh")).toBeNull();
+    expect(container.textContent).not.toContain("steps -");
+    expect(container.textContent).not.toContain(backendRunId);
+    expect(container.textContent).not.toContain("scope-workflow:");
+    expect(container.textContent).toContain("2.00s");
+    expect(screen.queryByText("0ms")).toBeNull();
+    expect(mockedRuntimeCatalogApi.listWorkflowCatalog).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Open editor" }));
+    expect(window.location.pathname).toBe(
+      "/scopes/scope-1/teams/team-1/members/m-alpha/workflow",
+    );
+    expect(new URLSearchParams(window.location.search).get("workflowId")).toBe(
+      "wf-alpha",
+    );
+    expect(mockedStudioApi.getMember).toHaveBeenCalledWith("scope-1", "m-alpha");
+    expect(mockedScopeRuntimeApi.listMemberRuns).toHaveBeenCalledWith(
+      "scope-1",
+      "m-alpha",
+      { take: 200 },
+    );
+    expect(mockedScopeRuntimeApi.getMemberRunAudit).toHaveBeenCalledWith(
+      "scope-1",
+      "m-alpha",
+      backendRunId,
+      { actorId: "actor://scope-1/run-1" },
+    );
+  });
+
+  it("loads the selected member published run audit even before the run catalog is materialized", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/runtime/runs?scopeId=scope-1&teamId=team-1&memberId=m-alpha&runId=run-1&actorId=actor%3A%2F%2Fscope-1%2Frun-1",
+    );
+    mockedScopeRuntimeApi.listMemberRuns.mockResolvedValueOnce({
+      displayName: "Alpha Workflow",
+      memberId: "m-alpha",
+      publishedServiceId: "svc-alpha",
+      publishedServiceKey: "scope-1:default:default:svc-alpha",
+      runs: [],
+      scopeId: "scope-1",
+    });
+
+    const { container } = renderWithQueryClient(React.createElement(RunsPage));
+
+    expect(await screen.findByTestId("member-published-runs-replay")).toBeTruthy();
+    expect(await screen.findByText("node:config")).toBeTruthy();
+    expect(container.textContent).toContain("Alpha Workflow");
+    expect(container.textContent).toContain("Config ok");
+    expect(container.textContent).not.toContain("No published runs yet.");
+    expect(mockedScopeRuntimeApi.listMemberRuns).toHaveBeenCalledWith(
+      "scope-1",
+      "m-alpha",
+      { take: 200 },
+    );
+    expect(mockedScopeRuntimeApi.getMemberRunAudit).toHaveBeenCalledWith(
+      "scope-1",
+      "m-alpha",
+      "run-1",
+      { actorId: "actor://scope-1/run-1" },
+    );
+    expect(mockedRuntimeCatalogApi.listWorkflowCatalog).not.toHaveBeenCalled();
   });
 
   it("renders the run console header and setup-first state before any run starts", async () => {

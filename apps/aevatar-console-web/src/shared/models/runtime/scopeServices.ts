@@ -99,6 +99,39 @@ export interface ScopeServiceRunCatalogSnapshot {
   readonly runs: readonly ScopeServiceRunSummary[];
 }
 
+export interface ScopeMemberRunSummary {
+  readonly scopeId: string;
+  readonly memberId: string;
+  readonly publishedServiceId: string;
+  readonly runId: string;
+  readonly actorId: string;
+  readonly definitionActorId: string;
+  readonly revisionId: string;
+  readonly deploymentId: string;
+  readonly workflowName: string;
+  readonly completionStatus: string;
+  readonly stateVersion: number;
+  readonly lastEventId: string;
+  readonly lastUpdatedAt: string | null;
+  readonly boundAt: string | null;
+  readonly bindingUpdatedAt: string | null;
+  readonly lastSuccess: boolean | null;
+  readonly totalSteps: number;
+  readonly completedSteps: number;
+  readonly roleReplyCount: number;
+  readonly lastOutput: string;
+  readonly lastError: string;
+}
+
+export interface ScopeMemberRunCatalogSnapshot {
+  readonly scopeId: string;
+  readonly memberId: string;
+  readonly publishedServiceId: string;
+  readonly publishedServiceKey: string;
+  readonly displayName: string;
+  readonly runs: readonly ScopeMemberRunSummary[];
+}
+
 export interface ScopeServiceRunAuditSummary {
   readonly totalSteps: number;
   readonly requestedSteps: number;
@@ -183,11 +216,52 @@ export interface ScopeServiceRunAuditSnapshot {
   readonly audit: ScopeServiceRunAuditReport;
 }
 
+export interface ScopeMemberRunAuditSnapshot {
+  readonly summary: ScopeMemberRunSummary;
+  readonly audit: ScopeServiceRunAuditReport;
+}
+
 export type ScopeServiceBindingCatalogSnapshot = {
   readonly serviceKey: string;
   readonly bindings: readonly ServiceBindingSnapshot[];
   readonly updatedAt: string | null;
 };
+
+export function toScopeServiceRunSummary(
+  run: ScopeMemberRunSummary,
+): ScopeServiceRunSummary {
+  return {
+    actorId: run.actorId,
+    bindingUpdatedAt: run.bindingUpdatedAt,
+    boundAt: run.boundAt,
+    completedSteps: run.completedSteps,
+    completionStatus: run.completionStatus,
+    definitionActorId: run.definitionActorId,
+    deploymentId: run.deploymentId,
+    lastError: run.lastError,
+    lastEventId: run.lastEventId,
+    lastOutput: run.lastOutput,
+    lastSuccess: run.lastSuccess,
+    lastUpdatedAt: run.lastUpdatedAt,
+    revisionId: run.revisionId,
+    roleReplyCount: run.roleReplyCount,
+    runId: run.runId,
+    scopeId: run.scopeId,
+    serviceId: run.publishedServiceId,
+    stateVersion: run.stateVersion,
+    totalSteps: run.totalSteps,
+    workflowName: run.workflowName,
+  };
+}
+
+export function toScopeServiceRunAuditSnapshot(
+  snapshot: ScopeMemberRunAuditSnapshot,
+): ScopeServiceRunAuditSnapshot {
+  return {
+    audit: snapshot.audit,
+    summary: toScopeServiceRunSummary(snapshot.summary),
+  };
+}
 
 export function getScopeServiceCurrentRevision(
   catalog: ScopeServiceRevisionCatalogSnapshot | null | undefined,

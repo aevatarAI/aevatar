@@ -12,6 +12,9 @@ import {
   readStringRecord,
 } from "./http/decoders";
 import type {
+  ScopeMemberRunAuditSnapshot,
+  ScopeMemberRunCatalogSnapshot,
+  ScopeMemberRunSummary,
   ScopeServiceBindingCatalogSnapshot,
   ScopeServiceBindingInput,
   ScopeServiceEndpointContract,
@@ -790,6 +793,139 @@ function decodeScopeServiceRunCatalogSnapshot(
   };
 }
 
+function decodeScopeMemberRunSummary(
+  value: unknown,
+  label = "ScopeMemberRunSummary",
+): ScopeMemberRunSummary {
+  const record = expectRecord(value, label);
+  return {
+    scopeId: readString(record, ["scopeId", "ScopeId"], `${label}.scopeId`),
+    memberId: readString(
+      record,
+      ["memberId", "MemberId"],
+      `${label}.memberId`,
+    ),
+    publishedServiceId: readString(
+      record,
+      ["publishedServiceId", "PublishedServiceId"],
+      `${label}.publishedServiceId`,
+    ),
+    runId: readString(record, ["runId", "RunId"], `${label}.runId`),
+    actorId: readString(record, ["actorId", "ActorId"], `${label}.actorId`),
+    definitionActorId: readString(
+      record,
+      ["definitionActorId", "DefinitionActorId"],
+      `${label}.definitionActorId`,
+    ),
+    revisionId: readString(
+      record,
+      ["revisionId", "RevisionId"],
+      `${label}.revisionId`,
+    ),
+    deploymentId: readString(
+      record,
+      ["deploymentId", "DeploymentId"],
+      `${label}.deploymentId`,
+    ),
+    workflowName: readString(
+      record,
+      ["workflowName", "WorkflowName"],
+      `${label}.workflowName`,
+    ),
+    completionStatus: normalizeEnumValue(
+      record.completionStatus ?? record.CompletionStatus,
+      `${label}.completionStatus`,
+      completionStatusMap,
+    ),
+    stateVersion: readNumber(
+      record,
+      ["stateVersion", "StateVersion"],
+      `${label}.stateVersion`,
+    ),
+    lastEventId: readString(
+      record,
+      ["lastEventId", "LastEventId"],
+      `${label}.lastEventId`,
+    ),
+    lastUpdatedAt: readNullableString(
+      record,
+      ["lastUpdatedAt", "LastUpdatedAt"],
+      `${label}.lastUpdatedAt`,
+    ),
+    boundAt: readNullableString(
+      record,
+      ["boundAt", "BoundAt"],
+      `${label}.boundAt`,
+    ),
+    bindingUpdatedAt: readNullableString(
+      record,
+      ["bindingUpdatedAt", "BindingUpdatedAt"],
+      `${label}.bindingUpdatedAt`,
+    ),
+    lastSuccess: readNullableBoolean(record, ["lastSuccess", "LastSuccess"]),
+    totalSteps: readNumber(
+      record,
+      ["totalSteps", "TotalSteps"],
+      `${label}.totalSteps`,
+    ),
+    completedSteps: readNumber(
+      record,
+      ["completedSteps", "CompletedSteps"],
+      `${label}.completedSteps`,
+    ),
+    roleReplyCount: readNumber(
+      record,
+      ["roleReplyCount", "RoleReplyCount"],
+      `${label}.roleReplyCount`,
+    ),
+    lastOutput: readString(
+      record,
+      ["lastOutput", "LastOutput"],
+      `${label}.lastOutput`,
+    ),
+    lastError: readString(
+      record,
+      ["lastError", "LastError"],
+      `${label}.lastError`,
+    ),
+  };
+}
+
+function decodeScopeMemberRunCatalogSnapshot(
+  value: unknown,
+  label = "ScopeMemberRunCatalogSnapshot",
+): ScopeMemberRunCatalogSnapshot {
+  const record = expectRecord(value, label);
+  return {
+    scopeId: readString(record, ["scopeId", "ScopeId"], `${label}.scopeId`),
+    memberId: readString(
+      record,
+      ["memberId", "MemberId"],
+      `${label}.memberId`,
+    ),
+    publishedServiceId: readString(
+      record,
+      ["publishedServiceId", "PublishedServiceId"],
+      `${label}.publishedServiceId`,
+    ),
+    publishedServiceKey: readString(
+      record,
+      ["publishedServiceKey", "PublishedServiceKey"],
+      `${label}.publishedServiceKey`,
+    ),
+    displayName: readString(
+      record,
+      ["displayName", "DisplayName"],
+      `${label}.displayName`,
+    ),
+    runs: expectArray(
+      record.runs ?? record.Runs,
+      `${label}.runs`,
+      decodeScopeMemberRunSummary,
+    ),
+  };
+}
+
 function decodeStepTypeCounts(
   value: unknown,
   label: string,
@@ -1128,6 +1264,23 @@ function decodeScopeServiceRunAuditSnapshot(
   };
 }
 
+function decodeScopeMemberRunAuditSnapshot(
+  value: unknown,
+  label = "ScopeMemberRunAuditSnapshot",
+): ScopeMemberRunAuditSnapshot {
+  const record = expectRecord(value, label);
+  return {
+    summary: decodeScopeMemberRunSummary(
+      record.summary ?? record.Summary,
+      `${label}.summary`,
+    ),
+    audit: decodeScopeServiceRunAuditReport(
+      record.audit ?? record.Audit,
+      `${label}.audit`,
+    ),
+  };
+}
+
 function encodeScopeServiceBindingPayload(input: ScopeServiceBindingInput) {
   return {
     bindingId: input.bindingId.trim(),
@@ -1306,7 +1459,7 @@ export const scopeRuntimeApi = {
     options?: {
       take?: number;
     },
-  ): Promise<ScopeServiceRunCatalogSnapshot> {
+  ): Promise<ScopeMemberRunCatalogSnapshot> {
     return requestJson(
       withQuery(
         `/api/scopes/${encodeURIComponent(scopeId)}/members/${encodeURIComponent(memberId)}/runs`,
@@ -1314,7 +1467,7 @@ export const scopeRuntimeApi = {
           take: options?.take,
         },
       ),
-      decodeScopeServiceRunCatalogSnapshot,
+      decodeScopeMemberRunCatalogSnapshot,
     );
   },
 
@@ -1344,7 +1497,7 @@ export const scopeRuntimeApi = {
     options?: {
       actorId?: string;
     },
-  ): Promise<ScopeServiceRunAuditSnapshot> {
+  ): Promise<ScopeMemberRunAuditSnapshot> {
     return requestJson(
       withQuery(
         `/api/scopes/${encodeURIComponent(scopeId)}/members/${encodeURIComponent(memberId)}/runs/${encodeURIComponent(runId)}/audit`,
@@ -1352,7 +1505,7 @@ export const scopeRuntimeApi = {
           actorId: options?.actorId?.trim(),
         },
       ),
-      decodeScopeServiceRunAuditSnapshot,
+      decodeScopeMemberRunAuditSnapshot,
     );
   },
 };

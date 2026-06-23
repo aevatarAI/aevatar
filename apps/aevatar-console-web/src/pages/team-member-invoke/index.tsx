@@ -1,6 +1,6 @@
-import { EditOutlined } from "@ant-design/icons";
+import { EditOutlined, HistoryOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
-import { Button, Spin } from "antd";
+import { Button, Space, Spin } from "antd";
 import React from "react";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { getScopeServiceCurrentRevision } from "@/shared/models/runtime/scopeServices";
@@ -9,6 +9,7 @@ import {
   history,
   subscribeToLocationChanges,
 } from "@/shared/navigation/history";
+import { buildRuntimeRunsHref } from "@/shared/navigation/runtimeRoutes";
 import {
   buildTeamDetailHref,
   buildTeamMemberWorkflowStudioHref,
@@ -107,6 +108,11 @@ const TeamMemberInvokePage: React.FC = () => {
     scopeId: route.scopeId,
     teamId: route.teamId,
   });
+  const publishedRunsHref = buildRuntimeRunsHref({
+    memberId: route.memberId || undefined,
+    scopeId: route.scopeId || undefined,
+    teamId: route.teamId || undefined,
+  });
 
   const memberQuery = useQuery({
     queryKey: ["team-member-invoke", "member", route.scopeId, route.memberId],
@@ -145,6 +151,22 @@ const TeamMemberInvokePage: React.FC = () => {
     ? trimOptional(lastBinding?.publishedServiceId) ||
       trimOptional(memberSummary?.publishedServiceId)
     : "";
+  const canOpenPublishedRuns = Boolean(
+    route.scopeId &&
+      route.teamId &&
+      route.memberId &&
+      memberBindingCompleted &&
+      boundPublishedServiceId,
+  );
+  const publishedRunsPlaceholderReason = canOpenPublishedRuns
+    ? t(
+        "pages.teammemberinvoke.publishedRuns.open",
+        "View runs from the published member service.",
+      )
+    : t(
+        "pages.teammemberinvoke.publishedRuns.publishFirst",
+        "Publish this member to start recording published runs.",
+      );
   const selectedService = React.useMemo(
     () =>
       boundPublishedServiceId
@@ -291,6 +313,28 @@ const TeamMemberInvokePage: React.FC = () => {
   return (
     <AevatarPageShell
       breadcrumbRender={false}
+      extra={
+        <Space data-testid="team-member-invoke-header-actions" size={8} wrap>
+          <Button
+            disabled={!canOpenPublishedRuns}
+            icon={<HistoryOutlined />}
+            onClick={() => {
+              if (canOpenPublishedRuns) {
+                history.push(publishedRunsHref);
+              }
+            }}
+            title={publishedRunsPlaceholderReason}
+          >
+            {t("pages.teammemberinvoke.publishedRuns", "Published runs")}
+          </Button>
+          <Button
+            icon={<EditOutlined />}
+            onClick={() => history.push(workflowStudioHref)}
+          >
+            {t("pages.teammemberinvoke.open.studio", "Workflow Studio")}
+          </Button>
+        </Space>
+      }
       layoutMode="document"
       onBack={() => history.push(backHref)}
       title={t("pages.teammemberinvoke.title", "Run workflow member")}

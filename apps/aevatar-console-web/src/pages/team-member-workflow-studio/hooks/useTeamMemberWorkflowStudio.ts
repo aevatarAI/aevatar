@@ -14,6 +14,7 @@ import {
   subscribeToLocationChanges,
 } from "@/shared/navigation/history";
 import { t } from "@/shared/i18n/messages";
+import { buildRuntimeRunsHref } from "@/shared/navigation/runtimeRoutes";
 import {
   buildTeamDetailHref,
   buildTeamMemberAutomationsHref,
@@ -150,6 +151,9 @@ type TeamMemberWorkflowStudioState = {
   readonly automationsHref: string;
   readonly canOpenAutomations: boolean;
   readonly automationsPlaceholderReason: string;
+  readonly canOpenPublishedRuns: boolean;
+  readonly publishedRunsHref: string;
+  readonly publishedRunsPlaceholderReason: string;
   readonly publishMember: () => void;
   readonly memberPublished: boolean;
   readonly publishDisabled: boolean;
@@ -162,6 +166,7 @@ type TeamMemberWorkflowStudioState = {
   readonly showRefreshPublishStatus: boolean;
   readonly backHref: string;
   readonly navigateToTeam: () => void;
+  readonly navigateToPublishedRuns: () => void;
   readonly navigateToAutomations: () => void;
   readonly navigateToTeams: () => void;
   readonly closeYamlImportPanel: () => void;
@@ -1860,6 +1865,33 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const memberPublishedServiceId = trimOptional(
     memberQuery.data?.summary.publishedServiceId,
   );
+  const publishedRunsHref = buildRuntimeRunsHref({
+    memberId: route.memberId || undefined,
+    scopeId: route.scopeId,
+    teamId: route.teamId || undefined,
+  });
+  const canOpenPublishedRuns = Boolean(
+    route.mode === "existing" &&
+      route.scopeId &&
+      route.teamId &&
+      route.memberId &&
+      memberIsPublished &&
+      memberPublishedServiceId,
+  );
+  const publishedRunsPlaceholderReason = !route.memberId
+    ? t(
+        "teamMemberWorkflowStudio.header.publishedRuns.saveFirst",
+        "Save this member before viewing published runs.",
+      )
+    : !memberIsPublished || !memberPublishedServiceId
+      ? t(
+          "teamMemberWorkflowStudio.header.publishedRuns.publishFirst",
+          "Publish this member to start recording published runs.",
+        )
+      : t(
+          "teamMemberWorkflowStudio.header.publishedRuns.open",
+          "View runs from the published member service.",
+        );
   const canOpenAutomations = Boolean(
     route.mode === "existing" &&
       route.scopeId &&
@@ -2390,6 +2422,9 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     automationsHref,
     canOpenAutomations,
     automationsPlaceholderReason,
+    canOpenPublishedRuns,
+    publishedRunsHref,
+    publishedRunsPlaceholderReason,
     publishMember: () => {
       if (
         workflowQuery.data &&
@@ -2424,6 +2459,11 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     navigateToTeams: () => {
       if (!dirty || confirmDiscardUnsavedChanges()) {
         history.push(teamsHref);
+      }
+    },
+    navigateToPublishedRuns: () => {
+      if (canOpenPublishedRuns && (!dirty || confirmDiscardUnsavedChanges())) {
+        history.push(publishedRunsHref);
       }
     },
     navigateToAutomations: () => {

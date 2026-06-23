@@ -53,6 +53,22 @@ describe('runtimeRoutes', () => {
     );
   });
 
+  it('builds shallow member published run history links', () => {
+    const href = buildRuntimeRunsHref({
+      memberId: 'm-alpha',
+      runId: 'run-1',
+      scopeId: 'scope-a',
+      teamId: 'team-a',
+    });
+    const url = new URL(href, 'https://console.aevatar.test');
+
+    expect(url.pathname).toBe('/runtime/runs');
+    expect(url.searchParams.get('scopeId')).toBe('scope-a');
+    expect(url.searchParams.get('teamId')).toBe('team-a');
+    expect(url.searchParams.get('memberId')).toBe('m-alpha');
+    expect(url.searchParams.get('runId')).toBe('run-1');
+  });
+
   it('builds Mission Control deep links with live run context', () => {
     expect(
       buildRuntimeMissionControlHref({

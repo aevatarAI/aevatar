@@ -52,6 +52,8 @@ export function buildRuntimeRunsHref(options?: {
   prompt?: string;
   runId?: string;
   scopeId?: string;
+  teamId?: string;
+  memberId?: string;
   serviceOverrideId?: string;
   serviceId?: string;
   endpointId?: string;
@@ -67,6 +69,8 @@ export function buildRuntimeRunsHref(options?: {
     prompt: options?.prompt,
     runId: options?.runId,
     scopeId: options?.scopeId,
+    teamId: options?.teamId,
+    memberId: options?.memberId,
     serviceOverrideId: options?.serviceOverrideId ?? options?.serviceId,
     endpointId: options?.endpointId,
     endpointKind: options?.endpointKind,
