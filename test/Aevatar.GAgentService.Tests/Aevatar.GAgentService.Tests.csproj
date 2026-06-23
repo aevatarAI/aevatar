@@ -17,6 +17,7 @@
     <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Governance.Application\Aevatar.GAgentService.Governance.Application.csproj" />
     <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Infrastructure\Aevatar.GAgentService.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Governance.Infrastructure\Aevatar.GAgentService.Governance.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Hosting\Aevatar.GAgentService.Hosting.csproj" />
     <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Projection\Aevatar.GAgentService.Projection.csproj" />
     <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Governance.Projection\Aevatar.GAgentService.Governance.Projection.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Authentication.ScopeServiceTokens\Aevatar.Authentication.ScopeServiceTokens.csproj" />

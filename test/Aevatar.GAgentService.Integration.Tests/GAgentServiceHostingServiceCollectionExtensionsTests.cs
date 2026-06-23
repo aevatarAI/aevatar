@@ -100,10 +100,29 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
             x.ImplementationType == typeof(LlmRunExecutionWorker));
 
         using var provider = services.BuildServiceProvider();
-        provider.GetRequiredService<ILlmRunCore>().Should().NotBeNull();
+        provider.GetRequiredService<ILlmRunCore>().Should().BeOfType<MissingLlmProviderRunCore>();
+        provider.GetRequiredService<ILlmRunExecutionScheduler>()
+            .Should()
+            .BeSameAs(provider.GetRequiredService<LlmRunExecutionScheduler>());
+        provider.GetRequiredService<ILlmRunExecutionQueue>().Should().BeOfType<LlmRunExecutionQueue>();
         provider.GetRequiredService<IScopeBindingReadinessQueryPort>().Should().NotBeNull();
         provider.GetRequiredService<IServiceRolloutCommandObservationQueryReader>().Should().NotBeNull();
         provider.GetRequiredService<IGAgentRunTerminalQueryPort>().Should().NotBeNull();
+    }
+
+    [Fact]
+    public void AddGAgentServiceCapability_WhenLlmProviderFactoryExists_ShouldRegisterProviderBackedRunCore()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>())
+            .Build();
+        services.AddSingleton<ILLMProviderFactory>(new ThrowingLlmProviderFactory());
+
+        services.AddGAgentServiceCapability(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<ILlmRunCore>().Should().BeOfType<LlmRunCore>();
     }
 
     [Fact]
@@ -614,6 +633,17 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         //   New principle: tests protect against service registration by symbol name without keeping the deleted type alive.
         services.Should().NotContain(service =>
             ServiceTypeContains(service.ServiceType, "WorkflowCapabilitiesStartupArtifact"));
+    }
+
+    private sealed class ThrowingLlmProviderFactory : ILLMProviderFactory
+    {
+        public ILLMProvider GetProvider(string name) =>
+            throw new NotSupportedException("The DI test only asserts provider-backed ILlmRunCore composition.");
+
+        public ILLMProvider GetDefault() =>
+            throw new NotSupportedException("The DI test only asserts provider-backed ILlmRunCore composition.");
+
+        public IReadOnlyList<string> GetAvailableProviders() => [];
     }
 
     private sealed class UnusedLlmProviderFactory : ILLMProviderFactory

@@ -355,33 +355,3 @@ internal sealed class ScheduledDispatchInvokeAdmissionAuthorizer : IInvokeAdmiss
         return Task.CompletedTask;
     }
 }
-
-internal sealed class MissingLlmProviderRunCore : ILlmRunCore
-{
-    public static MissingLlmProviderRunCore Instance { get; } = new();
-
-    private MissingLlmProviderRunCore()
-    {
-    }
-
-    public async Task RunAsync(
-        LlmRunCoreRequest request,
-        ILlmRunSink sink,
-        CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        ArgumentNullException.ThrowIfNull(sink);
-        ArgumentNullException.ThrowIfNull(request.Command);
-
-        _ = await sink.RecordRunFailedAsync(
-            new LlmRunFailed
-            {
-                ResponseId = request.Command.ResponseId,
-                RunId = request.RunId,
-                FailureCode = "llm_provider_factory_missing",
-                FailureMessage = "ILLMProviderFactory is not registered. Configure an AI provider before executing LLM runs.",
-                FailedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow),
-            },
-            ct).ConfigureAwait(false);
-    }
-}
