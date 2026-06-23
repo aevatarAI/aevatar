@@ -12,6 +12,7 @@ public sealed class WorkflowExecutionReadModelMapper
             ActorId = source.RootActorId,
             WorkflowName = source.WorkflowName,
             ScopeId = source.ScopeId,
+            RunOrigin = source.RunOrigin,
             LastCommandId = source.CommandId,
             CompletionStatus = MapCompletionStatus(source.Status),
             StateVersion = source.StateVersion,

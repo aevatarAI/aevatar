@@ -40,13 +40,11 @@ public sealed class WorkflowRunObservatoryQueryService
 
         var take = Math.Clamp(filter.Take <= 0 ? DefaultRunListTake : filter.Take, 1, MaxRunListTake);
         var snapshots = await _currentStateQueryPort.ListWorkflowActorCurrentStatesAsync(
-            new WorkflowActorCurrentStateListQuery
-            {
-                Take = take,
-                ScopeId = normalizedScopeId,
-            },
+            BuildListQuery(filter, take, normalizedScopeId),
             ct);
 
+        // Status is pushed to the source query (so it narrows BEFORE the bounded Take); this in-memory pass
+        // is a case-insensitive safety net over the same predicate.
         var statusFilter = filter.Status?.Trim();
         var summaries = snapshots
             .Where(snapshot => string.Equals(snapshot.ScopeId, normalizedScopeId, StringComparison.Ordinal))
@@ -71,12 +69,10 @@ public sealed class WorkflowRunObservatoryQueryService
 
         var take = Math.Clamp(filter.Take <= 0 ? DefaultRunListTake : filter.Take, 1, MaxRunListTake);
         var snapshots = await _currentStateQueryPort.ListWorkflowActorCurrentStatesAsync(
-            new WorkflowActorCurrentStateListQuery
-            {
-                Take = take,
-            },
+            BuildListQuery(filter, take, scopeId: null),
             ct);
 
+        // Status pushed to the source query; in-memory pass is a case-insensitive safety net (see above).
         var statusFilter = filter.Status?.Trim();
         return snapshots
             .Select(ToRunSummary)
@@ -85,6 +81,23 @@ public sealed class WorkflowRunObservatoryQueryService
             .OrderByDescending(summary => summary.StartedAtUtc ?? summary.UpdatedAtUtc)
             .ToList();
     }
+
+    // Translates the observatory filter into the source query so status / origin / definition / time-range
+    // are filtered (and the list recency-sorted) at the projection store, not after a bounded Take.
+    private static WorkflowActorCurrentStateListQuery BuildListQuery(
+        ObservatoryRunListFilter filter,
+        int take,
+        string? scopeId) =>
+        new()
+        {
+            Take = take,
+            ScopeId = scopeId ?? string.Empty,
+            Status = filter.Status?.Trim() ?? string.Empty,
+            RunOrigins = filter.Origins,
+            DefinitionActorIds = filter.DefinitionActorIds,
+            UpdatedFromUtc = filter.FromUtc,
+            UpdatedToUtc = filter.ToUtc,
+        };
 
     public async Task<ObservatoryRunDetail?> GetRunForScopeAsync(
         string scopeId,
@@ -197,6 +210,7 @@ public sealed class WorkflowRunObservatoryQueryService
             UpdatedAtUtc = snapshot.LastUpdatedAt,
             StateVersion = snapshot.StateVersion,
             ScopeId = snapshot.ScopeId,
+            RunOrigin = snapshot.RunOrigin,
         };
     }
 

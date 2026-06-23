@@ -68,5 +68,5 @@ src/platform/Aevatar.GAgentService.Projection/Orchestration/GAgentDraftRunObserv
 src/platform/Aevatar.GAgentService.Projection/Orchestration/LlmSessionObservationScopeLeasePreparationPort.cs	47	broad catch returns null without visible failure signal
 src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunFinalizeEmitter.cs	65	broad catch returns null without visible failure signal
 src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunFinalizeEmitter.cs	81	broad catch returns null without visible failure signal
-src/workflow/Aevatar.Workflow.Infrastructure/Runs/WorkflowRunActorPort.cs	323	empty broad catch block
+src/workflow/Aevatar.Workflow.Infrastructure/Runs/WorkflowRunActorPort.cs	324	empty broad catch block
 src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowChatRunObservationScopeActivationPort.cs	46	broad catch returns null without visible failure signal

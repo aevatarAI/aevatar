@@ -65,6 +65,9 @@ message WorkflowExecutionCurrentStateDocument {
   int32 dead_letter_remaining_uncompensated = 28;
   string dead_letter_error = 29;
   google.protobuf.Timestamp started_at_utc_value = 30;
+  // Canonical run origin/type carried from the committed WorkflowRunState. Observatory filter
+  // dimension; empty for legacy/unstamped runs.
+  string run_origin = 31;
 }
 
 message WorkflowExternalApprovalContinuationDocument {
