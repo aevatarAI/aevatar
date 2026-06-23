@@ -7,7 +7,7 @@ namespace Aevatar.AI.ToolProviders.Ornn.Tests;
 public sealed class OrnnPublishRoundTripContractTests
 {
     [Fact]
-    public async Task PublishedWorkflowAsset_ShouldRoundTripThroughOrnnJsonAsWorkflowDescriptor()
+    public async Task PublishedWorkflowYaml_ShouldRoundTripThroughWorkflowsRootAsWorkflowDescriptor()
     {
         var workflowYaml = "name: approval-flow\nsteps: []";
         var request = new OrnnSkillPublishRequest
@@ -27,7 +27,8 @@ public sealed class OrnnPublishRoundTripContractTests
             ],
         };
         var built = new OrnnSkillPackageBuilder().Build(request).Package!;
-        built.Files.Should().ContainKey("approval-skill/assets/approval-flow.yaml");
+        built.Files.Should().ContainKey("approval-skill/workflows/approval-flow.yaml");
+        built.Files.Should().NotContainKey("approval-skill/assets/approval-flow.yaml");
 
         var handler = OrnnTestHttpMessageHandler.ReturningJson("""
             {
@@ -36,7 +37,7 @@ public sealed class OrnnPublishRoundTripContractTests
                 "description": "Approval skill",
                 "files": {
                   "SKILL.md": "---\nname: approval-skill\n---\nRun approval.",
-                  "assets/approval-flow.yaml": "name: approval-flow\nsteps: []",
+                  "workflows/approval-flow.yaml": "name: approval-flow\nsteps: []",
                   "assets/readme.txt": "ordinary asset"
                 }
               }
@@ -50,6 +51,34 @@ public sealed class OrnnPublishRoundTripContractTests
         var workflow = skill!.Workflows.Should().ContainSingle().Subject;
         workflow.WorkflowId.Should().Be("approval-flow");
         workflow.WorkflowYamls.Should().Equal(workflowYaml);
+        skill.AssociatedFiles.Should().ContainKey("assets/readme.txt");
+        skill.AssociatedFiles.Should().NotContainKey("workflows/approval-flow.yaml");
+    }
+
+    [Fact]
+    public async Task LegacyAssetWorkflowYaml_ShouldRemainReadCompatibleWithoutBeingPublishPath()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson("""
+            {
+              "data": {
+                "name": "legacy-approval-skill",
+                "description": "Approval skill",
+                "files": {
+                  "SKILL.md": "---\nname: legacy-approval-skill\n---\nRun approval.",
+                  "assets/approval-flow.yaml": "name: approval-flow\nsteps: []",
+                  "assets/readme.txt": "ordinary asset"
+                }
+              }
+            }
+            """);
+        var fetcher = new OrnnRemoteSkillFetcher(CreateClient(handler));
+
+        var skill = await fetcher.FetchSkillAsync("token", "legacy-approval-skill");
+
+        skill.Should().NotBeNull();
+        var workflow = skill!.Workflows.Should().ContainSingle().Subject;
+        workflow.WorkflowId.Should().Be("approval-flow");
+        workflow.WorkflowYamls.Should().Equal("name: approval-flow\nsteps: []");
         skill.AssociatedFiles.Should().ContainKey("assets/readme.txt");
         skill.AssociatedFiles.Should().NotContainKey("assets/approval-flow.yaml");
     }

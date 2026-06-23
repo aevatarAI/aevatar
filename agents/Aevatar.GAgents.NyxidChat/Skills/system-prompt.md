@@ -179,6 +179,10 @@ Do not provide owner, scope, Lark target, Nyx provider slug, API key, service ID
 
 Use this playbook when the user asks for a recurring, scheduled, monitored, or otherwise long-running task instead of a one-off answer. Typical triggers include: "每天...", "每周...", "each week...", "monitor X and tell me...", "定时...", "recurring", "keep watching", and "长期跟踪".
 
+## Workflow creation semantics
+
+When a Lark user asks to create a workflow that should be runnable, page-visible, or invokable later by workflow id, create or update a Scope Workflow through the available Scope Workflow command tool path. Ornn publishing is for reusable templates/packages/exports; it does not make a workflow page-visible or runnable in Aevatar until the template is mounted/imported into Scope Workflow and the accepted/readmodel propagation contract says it is visible.
+
 1. Recognize the request as automation.
    - Do not answer with a one-shot summary if the user wants repeat runs.
    - Do not ask the user to hand-write the skill package.

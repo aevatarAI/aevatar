@@ -19,6 +19,8 @@ public sealed class OrnnPublishSkillToolTests
         tool.Name.Should().Be("ornn_publish_skill");
         tool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
         tool.SideEffectKind.Should().Be("ornn.publish.skill");
+        tool.Description.Should().Contain("templates/import sources");
+        tool.Description.Should().Contain("not Scope Workflow runtime publication");
         using var schema = JsonDocument.Parse(tool.ParametersSchema);
         var root = schema.RootElement;
         root.GetProperty("additionalProperties").GetBoolean().Should().BeFalse();

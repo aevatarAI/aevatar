@@ -77,12 +77,15 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
-    public async Task StartWorkflowToolDescription_ShouldMentionInlineWorkflowYamls()
+    public async Task StartWorkflowToolDescription_ShouldTreatInlineWorkflowYamlsAsFallback()
     {
         var tool = await DiscoverSingleAsync(new StartWorkflowToolSource(new Harness().CreateDispatcher()));
 
+        tool.Description.Should().Contain("mounted/imported Aevatar Scope Workflow");
         tool.Description.Should().Contain("workflow_yamls");
-        tool.Description.Should().Contain("use_skill");
+        tool.Description.Should().Contain("explicit fallback");
+        tool.Description.Should().Contain("templates/import sources");
+        tool.Description.Should().NotContain("pass that bundle in workflow_yamls");
     }
 
     [Fact]
