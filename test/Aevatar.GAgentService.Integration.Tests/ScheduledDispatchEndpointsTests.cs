@@ -279,6 +279,28 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
+    public async Task Create_ShouldAcceptDurableSenderBearerTokenWithoutOwnerBinding()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+        var request = CreateServiceInvocationRequestWithAuth(new ScheduledServiceInvocationAuthHttpRequest
+        {
+            DurableSenderBearerToken = " durable-sender-token ",
+        });
+
+        var result = await CreateAsync(request, service);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        var auth = service.Created.Should().ContainSingle().Which.Target.ServiceInvocation!.Auth;
+        auth.Should().NotBeNull();
+        auth!.SenderNyxId.Should().BeNull();
+        auth.ScopeOwnerNyxId.Should().BeNull();
+        auth.DurableSenderBearerToken.Should().Be("durable-sender-token");
+    }
+
+    [Fact]
     public async Task Update_ShouldRejectScopeOwnerNyxId_WhenDurableOwnerBindingIsMissing()
     {
         var service = new RecordingScheduledDispatchApplicationService();
@@ -304,7 +326,7 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
-    public async Task Create_ShouldRejectServiceInvocationAuthWithBothNyxIdSources()
+    public async Task Create_ShouldRejectServiceInvocationAuthWithMultipleCredentialSources()
     {
         var request = CreateServiceInvocationRequestWithAuth(new ScheduledServiceInvocationAuthHttpRequest
         {
@@ -312,6 +334,7 @@ public sealed class ScheduledDispatchEndpointsTests
             {
                 Scope = "proxy",
             },
+            DurableSenderBearerToken = "durable-sender-token",
             SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceHttpRequest
             {
                 Subject = new ScheduledServiceInvocationNyxIdSubjectRefHttpRequest
