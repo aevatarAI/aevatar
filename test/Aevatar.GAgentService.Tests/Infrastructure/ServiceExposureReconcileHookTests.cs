@@ -82,6 +82,76 @@ public sealed class ServiceExposureReconcileHookTests
     }
 
     [Fact]
+    public async Task BeforePublishAsync_ShouldReconcile_WhenGlobalRegistrationIsEnabled()
+    {
+        var identity = Identity();
+        var catalog = ServiceSnapshot(
+            identity,
+            new ServiceExternalExposureSnapshot(
+                string.Empty,
+                null,
+                ServiceRegistrationStatus.Unspecified,
+                ExposureDesired: false));
+        var commandPort = new RecordingServiceCommandPort();
+        var hook = CreateHook(
+            catalog,
+            commandPort,
+            options => options.RegisterAllPublishedServices = true);
+
+        await hook.BeforePublishAsync(CreateContext(new ServiceDeploymentActivatedEvent
+        {
+            Identity = identity.Clone(),
+            DeploymentId = "dep-1",
+            RevisionId = "rev-1",
+            PrimaryActorId = "actor-1",
+            Status = ServiceDeploymentStatus.Active,
+            ActivatedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+        }), CancellationToken.None);
+
+        commandPort.ReconcileCommands.Should().ContainSingle();
+        var command = commandPort.ReconcileCommands.Single();
+        command.Identity.Should().BeEquivalentTo(identity);
+        command.OpenapiUrl.Should().Be(ExpectedOpenApiUrl(identity));
+        command.DesiredSpecHash.Should().Be(ExpectedSpecHash(catalog, command.OpenapiUrl));
+        command.CredentialKid.Should().Be("kid-1");
+        commandPort.RetireCommands.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task BeforePublishAsync_ShouldReconcile_WhenPolicyMatchesOptInPolicy()
+    {
+        var identity = Identity();
+        var catalog = ServiceSnapshot(
+            identity,
+            new ServiceExternalExposureSnapshot(
+                string.Empty,
+                null,
+                ServiceRegistrationStatus.Unspecified,
+                ExposureDesired: false),
+            ["external-policy"]);
+        var commandPort = new RecordingServiceCommandPort();
+        var hook = CreateHook(catalog, commandPort);
+
+        await hook.BeforePublishAsync(CreateContext(new ServiceDeploymentActivatedEvent
+        {
+            Identity = identity.Clone(),
+            DeploymentId = "dep-1",
+            RevisionId = "rev-1",
+            PrimaryActorId = "actor-1",
+            Status = ServiceDeploymentStatus.Active,
+            ActivatedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+        }), CancellationToken.None);
+
+        commandPort.ReconcileCommands.Should().ContainSingle();
+        var command = commandPort.ReconcileCommands.Single();
+        command.Identity.Should().BeEquivalentTo(identity);
+        command.OpenapiUrl.Should().Be(ExpectedOpenApiUrl(identity));
+        command.DesiredSpecHash.Should().Be(ExpectedSpecHash(catalog, command.OpenapiUrl));
+        command.CredentialKid.Should().Be("kid-1");
+        commandPort.RetireCommands.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ApplyAsync_ShouldRetireExistingExposure_WhenIntentIsOptOut()
     {
         var identity = Identity();
@@ -187,34 +257,39 @@ public sealed class ServiceExposureReconcileHookTests
 
     private static ServiceExposureReconcileHook CreateHook(
         ServiceCatalogSnapshot catalog,
-        RecordingServiceCommandPort commandPort)
+        RecordingServiceCommandPort commandPort,
+        Action<ServiceExternalExposureOptions>? configureOptions = null)
     {
         var catalogReader = new FakeServiceCatalogQueryReader(catalog);
-        var options = Options.Create(new ServiceExternalExposureOptions
+        var exposureOptions = new ServiceExternalExposureOptions
         {
             Enabled = true,
             PublicBaseUrl = "https://public.example.test/root/",
             RegisterAllPublishedServices = false,
             OptInPolicyIds = ["external-policy"],
-        });
+        };
+        configureOptions?.Invoke(exposureOptions);
+        var options = Options.Create(exposureOptions);
         return new ServiceExposureReconcileHook(
             catalogReader,
-            CreateIntentService(catalog, commandPort),
+            CreateIntentService(catalog, commandPort, exposureOptions),
             options);
     }
 
     private static ServiceExternalExposureIntentService CreateIntentService(
         ServiceCatalogSnapshot catalog,
-        RecordingServiceCommandPort commandPort)
+        RecordingServiceCommandPort commandPort,
+        ServiceExternalExposureOptions? exposureOptions = null)
     {
         var catalogReader = new FakeServiceCatalogQueryReader(catalog);
-        var options = Options.Create(new ServiceExternalExposureOptions
+        exposureOptions ??= new ServiceExternalExposureOptions
         {
             Enabled = true,
             PublicBaseUrl = "https://public.example.test/root/",
             RegisterAllPublishedServices = false,
             OptInPolicyIds = ["external-policy"],
-        });
+        };
+        var options = Options.Create(exposureOptions);
         var keyProvider = new StaticScopeServiceTokenKeyProvider("kid-1");
         return new ServiceExternalExposureIntentService(catalogReader, commandPort, options, keyProvider);
     }
@@ -239,7 +314,8 @@ public sealed class ServiceExposureReconcileHookTests
 
     private static ServiceCatalogSnapshot ServiceSnapshot(
         ServiceIdentity identity,
-        ServiceExternalExposureSnapshot? externalExposure) =>
+        ServiceExternalExposureSnapshot? externalExposure,
+        IReadOnlyList<string>? policyIds = null) =>
         new(
             "tenant-a:app-a:orders:svc alpha",
             identity.TenantId,
@@ -268,7 +344,7 @@ public sealed class ServiceExposureReconcileHookTests
                     "type.googleapis.com/aevatar.CommandResponse",
                     "Command endpoint."),
             ],
-            ["internal-policy"],
+            policyIds ?? ["internal-policy"],
             DateTimeOffset.Parse("2026-06-23T00:00:00+00:00"),
             externalExposure);
 
