@@ -22,6 +22,7 @@ const zhCNMessages = {
   'menu.Settings': '设置',
   'menu.Team Details': '团队详情',
   'menu.Team Member Invoke': '团队成员调用',
+  'menu.Team Member Published Runs': '团队成员发布运行记录',
   'menu.Team Member Workflow Studio': '团队成员 Workflow Studio',
   'menu.Topology': '拓扑',
   'nav.groups.platform': '平台',
@@ -724,6 +725,11 @@ const zhCNMessages = {
   'pages.teammemberinvoke.member': '成员',
   'pages.teammemberinvoke.next.step': '下一步',
   'pages.teammemberinvoke.open.studio': 'Workflow Studio',
+  'pages.teammemberinvoke.publishedRuns': '发布运行记录',
+  'pages.teammemberinvoke.publishedRuns.open':
+    '查看这个已发布成员服务的运行记录。',
+  'pages.teammemberinvoke.publishedRuns.publishFirst':
+    '先发布这个成员，才会开始记录发布运行。',
   'pages.teammemberinvoke.resolve.in.studio': '打开 Workflow Studio',
   'pages.teammemberinvoke.route.missing': '缺少成员路由',
   'pages.teammemberinvoke.route.missing.description':
@@ -740,6 +746,23 @@ const zhCNMessages = {
   'pages.teammemberinvoke.workflow.only': '只有 Workflow 成员可以在这里调用。',
   'pages.teammemberinvoke.workflow.only.description':
     '这个页面只运行 Workflow 成员。其他实现类型请使用对应成员自己的入口。',
+  'pages.runs.memberPublishedRuns.auditUnavailable':
+    '发布运行审计暂不可见。',
+  'pages.runs.memberPublishedRuns.details': '详情',
+  'pages.runs.memberPublishedRuns.input': '输入',
+  'pages.runs.memberPublishedRuns.listUnavailable':
+    '发布运行记录暂不可见。',
+  'pages.runs.memberPublishedRuns.logs': '日志',
+  'pages.runs.memberPublishedRuns.noAuditSteps':
+    '这次发布运行没有记录审计步骤。',
+  'pages.runs.memberPublishedRuns.noRuns': '暂无发布运行记录。',
+  'pages.runs.memberPublishedRuns.openEditor': '打开编辑器',
+  'pages.runs.memberPublishedRuns.output': '输出',
+  'pages.runs.memberPublishedRuns.publishedRuns': '发布运行记录',
+  'pages.runs.memberPublishedRuns.refresh': '刷新',
+  'pages.runs.memberPublishedRuns.selectPublishedRun':
+    '选择一次发布运行',
+  'pages.runs.memberPublishedRuns.timeline': '时间线',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.description':
     '你可以在这里搭建或粘贴 workflow。保存时会创建可恢复的 workflow 草稿，直到成员关联完成物化。',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.title':
@@ -848,6 +871,13 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.header.primaryActionsAria':
     'Workflow 主操作',
   'teamMemberWorkflowStudio.header.prepareDraftRun': '准备草稿运行',
+  'teamMemberWorkflowStudio.header.publishedRuns': '发布运行记录',
+  'teamMemberWorkflowStudio.header.publishedRuns.open':
+    '查看这个已发布成员服务的运行记录。',
+  'teamMemberWorkflowStudio.header.publishedRuns.publishFirst':
+    '先发布这个成员，才会开始记录发布运行。',
+  'teamMemberWorkflowStudio.header.publishedRuns.saveFirst':
+    '先保存这个成员，再查看发布运行记录。',
   'teamMemberWorkflowStudio.header.publish': '发布',
   'teamMemberWorkflowStudio.header.runMessage': '运行消息',
   'teamMemberWorkflowStudio.header.refreshPublishStatus': '刷新状态',
