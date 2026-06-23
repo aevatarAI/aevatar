@@ -292,7 +292,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
     }
 
     [Fact]
-    public async Task DispatchAsync_ShouldIgnoreWorkflowScopeAnnotations_WhenTypedScopeIsBlank()
+    public async Task DispatchAsync_ShouldRejectBlankTypedScope_WithoutFallingBackToWorkflowScopeAnnotations()
     {
         var workflowPort = new RecordingWorkflowRunActorPort();
         var dispatcher = new DefaultServiceInvocationDispatcher(
@@ -310,7 +310,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
             WorkflowYaml = "name: wf",
         };
 
-        await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
+        var dispatch = async () => await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
         {
             Identity = new ServiceIdentity { TenantId = "", AppId = "app", Namespace = "default", ServiceId = "svc" },
             EndpointId = "chat",
@@ -330,12 +330,14 @@ public sealed class DefaultServiceInvocationDispatcherTests
             }),
         });
 
-        workflowPort.CreateRunCalls.Should().ContainSingle();
-        workflowPort.CreateRunCalls[0].ScopeId.Should().BeEmpty();
+        // 06-23 W3b: a blank typed scope no longer falls back to untrusted header/metadata scope nor creates
+        // an empty-scope run; it fails fast so no unattributed run is materialized.
+        await dispatch.Should().ThrowAsync<InvalidOperationException>().WithMessage("*requires a scope*");
+        workflowPort.CreateRunCalls.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task DispatchAsync_ShouldIgnoreLegacyScopeMetadata_WhenTypedScopeIsBlank()
+    public async Task DispatchAsync_ShouldRejectBlankTypedScope_WithoutFallingBackToLegacyMetadata()
     {
         var workflowPort = new RecordingWorkflowRunActorPort();
         var dispatcher = new DefaultServiceInvocationDispatcher(
@@ -353,7 +355,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
             WorkflowYaml = "name: wf",
         };
 
-        await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
+        var dispatch = async () => await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
         {
             Identity = new ServiceIdentity { TenantId = "", AppId = "app", Namespace = "default", ServiceId = "svc" },
             EndpointId = "chat",
@@ -367,8 +369,10 @@ public sealed class DefaultServiceInvocationDispatcherTests
             }),
         });
 
-        workflowPort.CreateRunCalls.Should().ContainSingle();
-        workflowPort.CreateRunCalls[0].ScopeId.Should().BeEmpty();
+        // 06-23 W3b: a blank typed scope no longer falls back to untrusted metadata scope nor creates an
+        // empty-scope run; it fails fast so no unattributed run is materialized.
+        await dispatch.Should().ThrowAsync<InvalidOperationException>().WithMessage("*requires a scope*");
+        workflowPort.CreateRunCalls.Should().BeEmpty();
     }
 
     [Fact]
