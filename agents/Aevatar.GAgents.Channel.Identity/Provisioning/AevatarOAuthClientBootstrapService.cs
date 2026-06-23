@@ -51,15 +51,18 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
         // and the actor's single-threaded handler turns the broadcast into
         // exactly one DCR HTTP call. Without this seam the bootstrap path
         // races on the projection readmodel and creates orphan OAuth clients
-        // at NyxID. The redirect URI must match what the broker sends at
-        // authorize / token time — both call sites use NyxIdRedirectUriResolver.
+        // at NyxID. The binding redirect URI must match what the broker sends
+        // at authorize / token time, and the Studio login redirect URI must
+        // match what Console sends and /api/auth/nyxid/finalize validates.
         var redirectUri = NyxIdRedirectUriResolver.Resolve(_logger);
+        var studioLoginRedirectUri = NyxIdStudioLoginRedirectUriResolver.Resolve(_logger);
 
         var accepted = await _provisioningDispatch
             .DispatchAsync(new EnsureAevatarOAuthClientProvisionedCommand
             {
                 NyxidAuthority = authority,
                 RedirectUri = redirectUri,
+                StudioLoginRedirectUri = studioLoginRedirectUri,
                 ClientName = ClientName,
             }, ct)
             .ConfigureAwait(false);

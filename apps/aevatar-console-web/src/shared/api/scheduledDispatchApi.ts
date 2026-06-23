@@ -1,4 +1,6 @@
 import { jsonBody, requestJson, withQuery } from "./http/client";
+import { authFetch } from "@/shared/auth/fetch";
+import { readResponseErrorDetails } from "./http/error";
 import {
   expectArray,
   expectRecord,
@@ -120,6 +122,14 @@ export type ScheduledDispatchListQuery = {
   readonly includeTotalCount?: boolean;
   readonly take?: number;
 };
+
+const missingOwnerBindingMessage =
+  "NyxID binding was not found for the scheduled subject.";
+const bindingReadModelRetryDelaysMs = [400, 900] as const;
+let waitForBindingReadModelRetry = (delayMs: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, delayMs);
+  });
 
 function trimOptional(value: string | null | undefined): string | undefined {
   const normalized = value?.trim();
@@ -417,6 +427,70 @@ function encodePreview(input: ScheduledDispatchPreviewInput) {
   };
 }
 
+export class ScheduledDispatchApiError extends Error {
+  readonly code?: string;
+  readonly status: number;
+
+  constructor(message: string, status: number, code?: string) {
+    super(message);
+    this.name = "ScheduledDispatchApiError";
+    this.code = code;
+    this.status = status;
+  }
+}
+
+export function configureScheduledDispatchRetryDelay(
+  waitForRetry: (delayMs: number) => Promise<void>,
+): () => void {
+  const previous = waitForBindingReadModelRetry;
+  waitForBindingReadModelRetry = waitForRetry;
+  return () => {
+    waitForBindingReadModelRetry = previous;
+  };
+}
+
+function isMissingOwnerBindingError(error: unknown): boolean {
+  return (
+    error instanceof ScheduledDispatchApiError &&
+    error.message.includes(missingOwnerBindingMessage)
+  );
+}
+
+async function requestScheduledDispatchMutation<T>(
+  input: string,
+  decoder: (value: unknown, label?: string) => T,
+  init: RequestInit,
+): Promise<T> {
+  const response = await authFetch(input, init);
+  if (!response.ok) {
+    const details = await readResponseErrorDetails(response);
+    throw new ScheduledDispatchApiError(
+      details.message,
+      details.status,
+      details.code,
+    );
+  }
+
+  return decoder(await response.json());
+}
+
+async function requestScheduleMutationWithBindingRetry<T>(
+  operation: () => Promise<T>,
+): Promise<T> {
+  for (let attemptIndex = 0; ; attemptIndex += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      const delayMs = bindingReadModelRetryDelaysMs[attemptIndex];
+      if (!isMissingOwnerBindingError(error) || delayMs === undefined) {
+        throw error;
+      }
+
+      await waitForBindingReadModelRetry(delayMs);
+    }
+  }
+}
+
 function listScheduledDispatches(
   query?: ScheduledDispatchListQuery,
 ): Promise<ScheduledDispatchListResult> {
@@ -483,23 +557,33 @@ export const scheduledDispatchApi = {
   create(
     input: ScheduledDispatchConfigurationInput,
   ): Promise<ScheduledDispatchMutationReceipt> {
-    return requestJson("/api/schedules", decodeScheduledDispatchMutationReceipt, {
-      method: "POST",
-      ...jsonBody(encodeConfiguration(input)),
-    });
+    const configuration = encodeConfiguration(input);
+    return requestScheduleMutationWithBindingRetry(() =>
+      requestScheduledDispatchMutation(
+        "/api/schedules",
+        decodeScheduledDispatchMutationReceipt,
+        {
+          method: "POST",
+          ...jsonBody(configuration),
+        },
+      ),
+    );
   },
 
   update(
     scheduleId: string,
     input: ScheduledDispatchConfigurationInput,
   ): Promise<ScheduledDispatchMutationReceipt> {
-    return requestJson(
-      `/api/schedules/${encodeURIComponent(scheduleId.trim())}`,
-      decodeScheduledDispatchMutationReceipt,
-      {
-        method: "PUT",
-        ...jsonBody(encodeConfiguration(input)),
-      },
+    const configuration = encodeConfiguration(input);
+    return requestScheduleMutationWithBindingRetry(() =>
+      requestScheduledDispatchMutation(
+        `/api/schedules/${encodeURIComponent(scheduleId.trim())}`,
+        decodeScheduledDispatchMutationReceipt,
+        {
+          method: "PUT",
+          ...jsonBody(configuration),
+        },
+      ),
     );
   },
 
