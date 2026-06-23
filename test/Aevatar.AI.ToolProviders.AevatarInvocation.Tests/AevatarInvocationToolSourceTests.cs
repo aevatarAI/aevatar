@@ -383,6 +383,7 @@ public sealed class AevatarInvocationToolSourceTests
                   "{{LLMRequestMetadataKeys.OwnerSubject}}": "evil-owner",
                   "{{LLMRequestMetadataKeys.NyxIdAccessToken}}": "evil-access-token",
                   "{{LLMRequestMetadataKeys.SenderNyxIdAccessToken}}": "evil-sender-token",
+                  "{{LLMRequestMetadataKeys.SenderNyxUserId}}": "evil-sender-user",
                   "{{LLMRequestMetadataKeys.ScopeId}}": "evil-scope",
                   "scope_id": "evil-legacy-scope"
                 }
@@ -460,6 +461,42 @@ public sealed class AevatarInvocationToolSourceTests
         result.GetProperty("run_id").GetString().Should().Be("team-command");
         result.GetProperty("service_id").GetString().Should().Be("service-1");
         result.GetProperty("stream_topic").GetString().Should().Be("aevatar://scopes/scope-1/services/service-1/runs/team-command");
+    }
+
+    [Fact]
+    public async Task InvokeTeam_ShouldResolveTeamInSenderNyxUserScope_WhenChannelSenderIsBound()
+    {
+        var harness = new Harness();
+        harness.TeamResolver.Resolution = new TeamEntryMemberResolution(
+            "nyx-user-scope",
+            "team-1",
+            "member-1",
+            "service-1");
+        var tool = await harness.DiscoverToolAsync("aevatar_invoke_team");
+
+        using var _ = PushContext(
+            callId: "call-team-bound-sender",
+            scopeId: "registration-scope-1",
+            senderNyxUserId: "nyx-user-scope");
+        var output = await tool.ExecuteAsync("""
+            {
+              "team_id": "team-1",
+              "endpoint_id": "entry",
+              "payload": { "prompt": "go" },
+              "wait": "stream"
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.TeamResolver.LastScopeId.Should().Be("nyx-user-scope");
+        harness.TeamInvocation.Request.Should().NotBeNull();
+        harness.TeamInvocation.Request!.Identity.TenantId.Should().Be("nyx-user-scope");
+        harness.TeamInvocation.Request.Input.Caller!.TenantId.Should().Be("nyx-user-scope");
+        harness.TeamInvocation.Request.Input.ToolContext!.Caller.ScopeId.Should().Be("registration-scope-1");
+        harness.TeamInvocation.Request.Input.ToolContext.SenderBinding.NyxUserId.Should().Be("nyx-user-scope");
+
+        var result = Read(output);
+        result.GetProperty("stream_topic").GetString().Should().Be("aevatar://scopes/nyx-user-scope/services/service-1/runs/team-command");
     }
 
     [Fact]
@@ -606,6 +643,7 @@ public sealed class AevatarInvocationToolSourceTests
                   "{{LLMRequestMetadataKeys.NyxIdOrgToken}}": "evil-org-token",
                   "{{LLMRequestMetadataKeys.SenderNyxIdAccessToken}}": "evil-sender-token",
                   "{{LLMRequestMetadataKeys.SenderBindingId}}": "evil-binding",
+                  "{{LLMRequestMetadataKeys.SenderNyxUserId}}": "evil-sender-user",
                   "{{LLMRequestMetadataKeys.ScopeId}}": "evil-scope",
                   "{{LLMRequestMetadataKeys.ModelOverride}}": "evil-model",
                   "{{LLMRequestMetadataKeys.NyxIdRoutePreference}}": "evil-route",
@@ -2052,6 +2090,7 @@ public sealed class AevatarInvocationToolSourceTests
         values.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdOrgToken);
         values.Should().NotContainKey(LLMRequestMetadataKeys.SenderNyxIdAccessToken);
         values.Should().NotContainKey(LLMRequestMetadataKeys.SenderBindingId);
+        values.Should().NotContainKey(LLMRequestMetadataKeys.SenderNyxUserId);
         values.Should().NotContainKey(LLMRequestMetadataKeys.ScopeId);
         values.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
         values.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
@@ -2093,6 +2132,7 @@ public sealed class AevatarInvocationToolSourceTests
         string callId,
         string? scopeId = "scope-1",
         string? accessToken = "access-token",
+        string? senderNyxUserId = null,
         AgentWorkflowRuntimeContext? workflowRuntime = null,
         string? durableReplyCredentialRef = "secrets://nyx/default-reply",
         IReadOnlyDictionary<string, string>? externalMetadata = null) =>
@@ -2108,7 +2148,7 @@ public sealed class AevatarInvocationToolSourceTests
                 "platform-message-1",
                 null,
                 durableReplyCredentialRef),
-            new AgentToolSenderBindingContext("binding-1"),
+            new AgentToolSenderBindingContext("binding-1", senderNyxUserId),
             new LLMRequestRoutingContext("model-1", "route-1", 4, "memory"),
             new AgentToolConnectedServicesContext("""{"service":"ctx"}"""),
             workflowRuntime ?? AgentWorkflowRuntimeContext.Empty,
