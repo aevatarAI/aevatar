@@ -81,6 +81,58 @@ public sealed class ServiceExposureReconcileHookTests
         commandPort.RetireCommands.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task ApplyAsync_ShouldRetireExistingExposure_WhenIntentIsOptOut()
+    {
+        var identity = Identity();
+        var catalog = ServiceSnapshot(
+            identity,
+            new ServiceExternalExposureSnapshot(
+                "orders-live",
+                DateTimeOffset.Parse("2026-06-23T00:00:00+00:00"),
+                ServiceRegistrationStatus.Registered,
+                NyxidServiceId: "nyxid-service-1",
+                DesiredSpecHash: "desired-hash-1",
+                ExposureDesired: true));
+        var commandPort = new RecordingServiceCommandPort();
+        var service = CreateIntentService(catalog, commandPort);
+
+        await service.ApplyAsync(new ServiceExternalExposureIntentRequest(
+            identity,
+            ExposureDesired: false,
+            ExistingService: catalog));
+
+        commandPort.RetireCommands.Should().ContainSingle();
+        var command = commandPort.RetireCommands.Single();
+        command.Identity.Should().BeEquivalentTo(identity);
+        command.Identity.Should().NotBeSameAs(identity);
+        command.DesiredSpecHash.Should().Be("desired-hash-1");
+        commandPort.ReconcileCommands.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task BeforePublishAsync_ShouldRetireExposure_WhenDeploymentIsDeactivated()
+    {
+        var identity = Identity();
+        var commandPort = new RecordingServiceCommandPort();
+        var hook = CreateHook(ServiceSnapshot(identity, null), commandPort);
+
+        await hook.BeforePublishAsync(CreateContext(new ServiceDeploymentDeactivatedEvent
+        {
+            Identity = identity.Clone(),
+            DeploymentId = "dep-1",
+            RevisionId = "rev-1",
+            DeactivatedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+        }), CancellationToken.None);
+
+        commandPort.RetireCommands.Should().ContainSingle();
+        var command = commandPort.RetireCommands.Single();
+        command.Identity.Should().BeEquivalentTo(identity);
+        command.Identity.Should().NotBeSameAs(identity);
+        command.DesiredSpecHash.Should().BeEmpty();
+        commandPort.ReconcileCommands.Should().BeEmpty();
+    }
+
     private static ServiceExposureReconcileHook CreateHook(
         ServiceCatalogSnapshot catalog,
         RecordingServiceCommandPort commandPort)
@@ -93,11 +145,26 @@ public sealed class ServiceExposureReconcileHookTests
             RegisterAllPublishedServices = false,
             OptInPolicyIds = ["external-policy"],
         });
-        var keyProvider = new StaticScopeServiceTokenKeyProvider("kid-1");
         return new ServiceExposureReconcileHook(
             catalogReader,
-            new ServiceExternalExposureIntentService(catalogReader, commandPort, options, keyProvider),
+            CreateIntentService(catalog, commandPort),
             options);
+    }
+
+    private static ServiceExternalExposureIntentService CreateIntentService(
+        ServiceCatalogSnapshot catalog,
+        RecordingServiceCommandPort commandPort)
+    {
+        var catalogReader = new FakeServiceCatalogQueryReader(catalog);
+        var options = Options.Create(new ServiceExternalExposureOptions
+        {
+            Enabled = true,
+            PublicBaseUrl = "https://public.example.test/root/",
+            RegisterAllPublishedServices = false,
+            OptInPolicyIds = ["external-policy"],
+        });
+        var keyProvider = new StaticScopeServiceTokenKeyProvider("kid-1");
+        return new ServiceExternalExposureIntentService(catalogReader, commandPort, options, keyProvider);
     }
 
     private static CommittedStatePublicationContext CreateContext<TEvent>(TEvent evt)
