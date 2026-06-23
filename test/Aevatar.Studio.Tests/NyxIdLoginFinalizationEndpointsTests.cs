@@ -44,6 +44,28 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
     }
 
     [Fact]
+    public async Task Config_ShouldReturnUnavailable_WhenStudioLoginRedirectUriIsMissing()
+    {
+        var result = await NyxIdLoginFinalizationEndpoints.HandleConfigAsync(
+            new StubAevatarOAuthClientProvider(new AevatarOAuthClientSnapshot(
+                ClientId: "broker-client-1",
+                ClientIdIssuedAt: DateTimeOffset.UnixEpoch,
+                HmacKid: "kid",
+                HmacKey: [1, 2, 3],
+                HmacKeyRotatedAt: DateTimeOffset.UnixEpoch,
+                NyxIdAuthority: "https://nyx.example/",
+                BrokerCapabilityObserved: true,
+                BrokerCapabilityObservedAt: DateTimeOffset.UnixEpoch,
+                OauthScope: "openid broker proxy")));
+
+        var (statusCode, payload) = await ExecuteJsonAsync<JsonElement>(result);
+
+        statusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        payload.GetProperty("error").GetString().Should().Be("oauth_client_not_provisioned");
+        payload.GetProperty("detail").GetString().Should().Contain("not been provisioned");
+    }
+
+    [Fact]
     public async Task Finalize_ShouldCommitOwnerBindingFromAuthorizationCodeExchange()
     {
         var broker = new RecordingBrokerCallback(new BrokerAuthorizationCodeResult(

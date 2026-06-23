@@ -94,6 +94,19 @@ function readString(value: unknown, label: string): string {
   return value.trim();
 }
 
+function readRequiredBackendConfigString(
+  value: unknown,
+  label: string,
+): string {
+  if (typeof value === "string" && value.trim().length > 0) {
+    return value.trim();
+  }
+
+  throw new Error(
+    `NyxID backend login config is missing ${label}. Deploy the Studio auth backend that returns ${label} from /api/auth/nyxid/config.`,
+  );
+}
+
 function readOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0
     ? value.trim()
@@ -144,7 +157,7 @@ function decodeBackendLoginConfig(
     ),
     clientId: readString(record.clientId ?? record.ClientId, "clientId"),
     scope: readString(record.scope ?? record.Scope, "scope"),
-    redirectUri: readString(
+    redirectUri: readRequiredBackendConfigString(
       record.redirectUri ?? record.RedirectUri,
       "redirectUri",
     ),

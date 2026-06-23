@@ -42,6 +42,23 @@ describe("NyxID backend auth API", () => {
     });
   });
 
+  it("reports an actionable backend contract error when redirectUri is missing", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        baseUrl: "https://nyx.example/",
+        clientId: "broker-client-1",
+        scope: "openid urn:nyxid:scope:broker_binding proxy",
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(loadBackendNyxIDLoginConfig()).rejects.toThrow(
+      "NyxID backend login config is missing redirectUri. Deploy the Studio auth backend that returns redirectUri from /api/auth/nyxid/config.",
+    );
+  });
+
   it("finalizes an authorization code through the backend and preserves accepted-dispatch semantics", async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
