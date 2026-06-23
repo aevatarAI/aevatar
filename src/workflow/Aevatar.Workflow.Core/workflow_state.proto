@@ -165,6 +165,9 @@ message WorkflowRunState
   string compensation_origin_failed_step_id = 32;
   bool terminal_workflow_completion_recorded = 33;
   google.protobuf.Timestamp started_at_utc = 34;
+  // Canonical run origin/type stamped at bind by the creating ingress. Observatory filter
+  // dimension; empty for legacy/unstamped runs. See WorkflowRunOrigins for the canonical set.
+  string run_origin = 35;
 }
 
 message WorkflowRunExecutionContextState

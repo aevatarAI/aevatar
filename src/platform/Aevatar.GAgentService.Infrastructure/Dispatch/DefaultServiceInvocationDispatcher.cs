@@ -96,7 +96,10 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
                 plan.WorkflowName,
                 plan.WorkflowYaml,
                 plan.InlineWorkflowYamls,
-                ResolveAuthoritativeScopeId(request, chatRequest)),
+                ResolveAuthoritativeScopeId(request, chatRequest),
+                string.IsNullOrWhiteSpace(request.RunOrigin)
+                    ? WorkflowRunOrigins.ServiceInvoke
+                    : request.RunOrigin.Trim()),
             ct);
         var commandId = ResolveCommandId(request);
         var correlationId = ResolveCorrelationId(request, commandId);
@@ -275,6 +278,11 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         if (!string.IsNullOrWhiteSpace(chatRequest.ScopeId))
             return chatRequest.ScopeId.Trim();
 
-        return string.Empty;
+        // 06-23-observatory-run-coverage-filter (W3b): fail fast instead of returning an empty scope, which
+        // would materialize an unattributed run invisible to every scope-bound observatory viewer. Scope is a
+        // cross-run authoritative fact; a workflow service invoke must carry it via typed identity or payload.
+        throw new InvalidOperationException(
+            "Workflow service invocation requires a scope: neither service identity tenantId nor chat payload " +
+            "scopeId was provided. Refusing to create an unattributed (empty-scope) run.");
     }
 }

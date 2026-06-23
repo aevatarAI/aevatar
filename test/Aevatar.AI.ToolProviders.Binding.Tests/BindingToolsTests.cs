@@ -708,6 +708,19 @@ public class BindingToolsTests
             return Task.FromResult(_listResult);
         }
 
+        public Task<ScopeWorkflowLookupResult> LookupByWorkflowIdAsync(
+            string scopeId,
+            string workflowId,
+            CancellationToken ct = default)
+        {
+            if (_exception is not null)
+                throw _exception;
+
+            return Task.FromResult(_getResult is null
+                ? new ScopeWorkflowLookupResult(ScopeWorkflowLookupStatus.NotFound, null, "test_not_found")
+                : new ScopeWorkflowLookupResult(ScopeWorkflowLookupStatus.Runnable, _getResult, "test_runnable"));
+        }
+
         public Task<ScopeWorkflowSummary?> GetByWorkflowIdAsync(
             string scopeId,
             string workflowId,

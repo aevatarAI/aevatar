@@ -427,6 +427,18 @@ public sealed class ScopeWorkflowEndpointsTests
     }
 
     [Fact]
+    public async Task BuildScopedLlmControlInputAsync_ShouldFallBackToProviderDefaults_WhenUserConfigFails()
+    {
+        var http = CreateHttpContext(userConfigQueryPort: new ThrowingUserConfigStore());
+
+        var scopedControlInput = await ScopeWorkflowEndpoints.BuildScopedLlmControlInputAsync(
+            http,
+            CancellationToken.None);
+
+        scopedControlInput.Should().BeNull();
+    }
+
+    [Fact]
     public async Task HandleRunWorkflowByIdStreamAsync_ShouldPropagateScopedPreferredLlmRouteToAguiRequest()
     {
         var snapshot = new ServiceCatalogSnapshot(
@@ -935,6 +947,13 @@ public sealed class ScopeWorkflowEndpointsTests
         public Task<UserConfig> GetAsync(string scopeId, CancellationToken ct = default) => GetAsync(ct);
     }
 
+    private sealed class ThrowingUserConfigStore : IUserConfigQueryPort
+    {
+        public Task<UserConfig> GetAsync(CancellationToken ct = default) => throw new HttpRequestException("config backend unavailable");
+
+        public Task<UserConfig> GetAsync(string scopeId, CancellationToken ct = default) => GetAsync(ct);
+    }
+
     private sealed class FakeServiceCommandPort : IServiceCommandPort
     {
         public Task<ServiceCommandAcceptedReceipt> CreateServiceAsync(CreateServiceDefinitionCommand command, CancellationToken ct = default) => Task.FromResult(Accepted());
@@ -962,13 +981,18 @@ public sealed class ScopeWorkflowEndpointsTests
 
         public readonly Queue<ServiceCatalogSnapshot?> GetServiceResults = new();
         public IReadOnlyList<ServiceCatalogSnapshot> ListServicesResult { get; set; } = [];
+        public ServiceDeploymentCatalogSnapshot? DeploymentResult { get; set; }
         public ServiceIdentity? LastGetIdentity { get; private set; }
         public ListRequest? LastListRequest { get; private set; }
+        private ServiceCatalogSnapshot? _lastServiceSnapshot;
 
         public Task<ServiceCatalogSnapshot?> GetServiceAsync(ServiceIdentity identity, CancellationToken ct = default)
         {
             LastGetIdentity = identity;
-            return Task.FromResult(GetServiceResults.Count > 0 ? GetServiceResults.Dequeue() : null);
+            _lastServiceSnapshot = GetServiceResults.Count > 0
+                ? GetServiceResults.Dequeue()
+                : ListServicesResult.FirstOrDefault(x => string.Equals(x.ServiceId, identity.ServiceId, StringComparison.Ordinal));
+            return Task.FromResult(_lastServiceSnapshot);
         }
 
         public Task<IReadOnlyList<ServiceCatalogSnapshot>> ListServicesAsync(string tenantId, string appId, string @namespace, int take = 200, CancellationToken ct = default)
@@ -978,7 +1002,29 @@ public sealed class ScopeWorkflowEndpointsTests
         }
 
         public Task<ServiceRevisionCatalogSnapshot?> GetServiceRevisionsAsync(ServiceIdentity identity, CancellationToken ct = default) => Task.FromResult<ServiceRevisionCatalogSnapshot?>(null);
-        public Task<ServiceDeploymentCatalogSnapshot?> GetServiceDeploymentsAsync(ServiceIdentity identity, CancellationToken ct = default) => Task.FromResult<ServiceDeploymentCatalogSnapshot?>(null);
+
+        public Task<ServiceDeploymentCatalogSnapshot?> GetServiceDeploymentsAsync(ServiceIdentity identity, CancellationToken ct = default)
+        {
+            if (DeploymentResult != null)
+                return Task.FromResult<ServiceDeploymentCatalogSnapshot?>(DeploymentResult);
+
+            var serviceKey = ServiceKeys.Build(identity);
+            var service = ListServicesResult.FirstOrDefault(x => string.Equals(x.ServiceKey, serviceKey, StringComparison.Ordinal))
+                ?? _lastServiceSnapshot;
+            if (service == null || string.IsNullOrWhiteSpace(service.DeploymentId))
+                return Task.FromResult<ServiceDeploymentCatalogSnapshot?>(null);
+
+            return Task.FromResult<ServiceDeploymentCatalogSnapshot?>(new ServiceDeploymentCatalogSnapshot(
+                service.ServiceKey,
+                [new ServiceDeploymentSnapshot(
+                    service.DeploymentId,
+                    service.ActiveServingRevisionId,
+                    service.PrimaryActorId,
+                    service.DeploymentStatus,
+                    service.UpdatedAt,
+                    service.UpdatedAt)],
+                service.UpdatedAt));
+        }
     }
 
     private sealed class FakeWorkflowActorBindingReader : IWorkflowActorBindingReader
@@ -986,7 +1032,16 @@ public sealed class ScopeWorkflowEndpointsTests
         public Dictionary<string, WorkflowActorBinding> Bindings { get; } = new(StringComparer.Ordinal);
 
         public Task<WorkflowActorBinding?> GetAsync(string actorId, CancellationToken ct = default) =>
-            Task.FromResult(Bindings.TryGetValue(actorId, out var binding) ? binding : null);
+            Task.FromResult(Bindings.TryGetValue(actorId, out var binding)
+                ? binding
+                : new WorkflowActorBinding(
+                    WorkflowActorKind.Definition,
+                    actorId,
+                    actorId,
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    new Dictionary<string, string>()));
     }
 
     private sealed class FakeServiceRevisionCatalogQueryReader : IServiceRevisionCatalogQueryReader

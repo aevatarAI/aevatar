@@ -95,6 +95,43 @@ public sealed class WorkflowExecutionCurrentStateQueryPortFilterTests
         sort.Direction.Should().Be(ProjectionDocumentSortDirection.Desc);
     }
 
+    [Fact]
+    public async Task ListWorkflowActorCurrentStatesAsync_ShouldEmitOriginStatusAndTimeRangeFilters()
+    {
+        var reader = new RecordingCurrentStateReader();
+        var port = CreatePort(reader);
+        var from = new DateTimeOffset(2026, 6, 1, 0, 0, 0, TimeSpan.Zero);
+        var to = new DateTimeOffset(2026, 6, 23, 0, 0, 0, TimeSpan.Zero);
+
+        await port.ListWorkflowActorCurrentStatesAsync(
+            new WorkflowActorCurrentStateListQuery
+            {
+                Take = 50,
+                Status = " completed ",
+                RunOrigins = [" draft ", "member-invoke", "draft"],
+                UpdatedFromUtc = from,
+                UpdatedToUtc = to,
+            });
+
+        reader.LastQuery.Should().NotBeNull();
+        ShouldContainStringFilter(
+            reader.LastQuery!.Filters,
+            nameof(WorkflowExecutionCurrentStateDocument.Status),
+            ProjectionDocumentFilterOperator.Eq,
+            "completed");
+        ShouldContainStringListFilter(
+            reader.LastQuery.Filters,
+            nameof(WorkflowExecutionCurrentStateDocument.RunOrigin),
+            ProjectionDocumentFilterOperator.In,
+            ["draft", "member-invoke"]);
+        var rangeFilters = reader.LastQuery.Filters
+            .Where(filter => filter.FieldPath == nameof(WorkflowExecutionCurrentStateDocument.UpdatedAtUtcValue))
+            .ToList();
+        rangeFilters.Should().HaveCount(2);
+        rangeFilters.Should().Contain(filter => filter.Operator == ProjectionDocumentFilterOperator.Gte);
+        rangeFilters.Should().Contain(filter => filter.Operator == ProjectionDocumentFilterOperator.Lte);
+    }
+
     private static WorkflowExecutionCurrentStateQueryPort CreatePort(RecordingCurrentStateReader reader) =>
         new(
             reader,

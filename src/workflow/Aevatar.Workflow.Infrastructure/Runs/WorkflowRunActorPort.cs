@@ -101,7 +101,8 @@ internal sealed class WorkflowRunActorPort :
                     definition.WorkflowYaml,
                     definition.WorkflowName,
                     definition.InlineWorkflowYamls,
-                    definition.ScopeId),
+                    definition.ScopeId,
+                    definition.RunOrigin),
                 ct);
 
             return new WorkflowRunCreationReceipt(
@@ -429,12 +430,13 @@ internal sealed class WorkflowRunActorPort :
         string workflowYaml,
         string workflowName,
         IReadOnlyDictionary<string, string> inlineWorkflowYamls,
-        string? scopeId) =>
+        string? scopeId,
+        string? runOrigin) =>
         new()
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(BuildBindWorkflowRunDefinitionEvent(definitionActorId, runId, workflowYaml, workflowName, inlineWorkflowYamls, scopeId)),
+            Payload = Any.Pack(BuildBindWorkflowRunDefinitionEvent(definitionActorId, runId, workflowYaml, workflowName, inlineWorkflowYamls, scopeId, runOrigin)),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication(WorkflowRunActorPortPublisherId, TopologyAudience.Self),
             Propagation = new EnvelopePropagation
             {
@@ -491,7 +493,8 @@ internal sealed class WorkflowRunActorPort :
         string workflowYaml,
         string workflowName,
         IReadOnlyDictionary<string, string> inlineWorkflowYamls,
-        string? scopeId)
+        string? scopeId,
+        string? runOrigin)
     {
         var bind = new BindWorkflowRunDefinitionEvent
         {
@@ -500,6 +503,7 @@ internal sealed class WorkflowRunActorPort :
             WorkflowYaml = workflowYaml ?? string.Empty,
             WorkflowName = workflowName ?? string.Empty,
             ScopeId = scopeId?.Trim() ?? string.Empty,
+            RunOrigin = runOrigin?.Trim() ?? string.Empty,
         };
 
         foreach (var (key, value) in inlineWorkflowYamls)

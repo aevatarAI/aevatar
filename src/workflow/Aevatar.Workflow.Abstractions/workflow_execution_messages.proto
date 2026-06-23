@@ -155,6 +155,10 @@ message BindWorkflowRunDefinitionEvent
   map<string, string> inline_workflow_yamls = 4;
   string run_id = 5;
   string scope_id = 6;
+  // Canonical run origin/type stamped by the creating ingress (draft | member-invoke |
+  // default-invoke | team-invoke | service-invoke | ad-hoc-chat | provisioned). Observatory
+  // filter dimension; empty for legacy/unstamped runs.
+  string run_origin = 7;
 }
 message BindWorkflowDefinitionEvent
 {

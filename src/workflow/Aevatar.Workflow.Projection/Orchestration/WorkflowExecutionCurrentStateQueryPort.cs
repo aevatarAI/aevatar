@@ -152,6 +152,60 @@ public sealed class WorkflowExecutionCurrentStateQueryPort : IWorkflowExecutionC
             });
         }
 
+        if (!string.IsNullOrWhiteSpace(query.Status))
+        {
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(WorkflowExecutionCurrentStateDocument.Status),
+                Operator = ProjectionDocumentFilterOperator.Eq,
+                Value = ProjectionDocumentValue.FromString(query.Status.Trim()),
+            });
+        }
+
+        var runOrigins = query.RunOrigins
+            .Select(static value => value?.Trim() ?? string.Empty)
+            .Where(static value => value.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (runOrigins.Length == 1)
+        {
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(WorkflowExecutionCurrentStateDocument.RunOrigin),
+                Operator = ProjectionDocumentFilterOperator.Eq,
+                Value = ProjectionDocumentValue.FromString(runOrigins[0]),
+            });
+        }
+        else if (runOrigins.Length > 1)
+        {
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(WorkflowExecutionCurrentStateDocument.RunOrigin),
+                Operator = ProjectionDocumentFilterOperator.In,
+                Value = ProjectionDocumentValue.FromStrings(runOrigins),
+            });
+        }
+
+        if (query.UpdatedFromUtc is { } updatedFrom)
+        {
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(WorkflowExecutionCurrentStateDocument.UpdatedAtUtcValue),
+                Operator = ProjectionDocumentFilterOperator.Gte,
+                Value = ProjectionDocumentValue.FromString(updatedFrom.UtcDateTime.ToString("O")),
+            });
+        }
+
+        if (query.UpdatedToUtc is { } updatedTo)
+        {
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(WorkflowExecutionCurrentStateDocument.UpdatedAtUtcValue),
+                Operator = ProjectionDocumentFilterOperator.Lte,
+                Value = ProjectionDocumentValue.FromString(updatedTo.UtcDateTime.ToString("O")),
+            });
+        }
+
         return filters;
     }
 }
