@@ -78,6 +78,44 @@ public sealed class ServiceDefinitionGAgentTests
     }
 
     [Fact]
+    public async Task HandleCreateAsync_ShouldKeepInlineExposureDesiredIntentOnly()
+    {
+        var eventStore = new InMemoryEventStore();
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var actorId = ServiceActorIds.Definition(identity);
+        var agent = GAgentServiceTestKit.CreateStatefulAgent<ServiceDefinitionGAgent, ServiceDefinitionState>(
+            eventStore,
+            actorId,
+            static () => new ServiceDefinitionGAgent(GAgentServiceTestKit.NoOpDispatchPort));
+        var spec = GAgentServiceTestKit.CreateDefinitionSpec(identity);
+        spec.ExternalExposure = new ExternalExposure
+        {
+            ExposureDesired = true,
+            NyxidSlug = "caller-supplied-slug",
+            NyxidServiceId = "caller-supplied-id",
+            LastError = "caller-supplied-error",
+        };
+
+        await agent.HandleCreateAsync(new CreateServiceDefinitionCommand
+        {
+            Spec = spec,
+        });
+        await agent.DeactivateAsync();
+
+        var replayed = GAgentServiceTestKit.CreateStatefulAgent<ServiceDefinitionGAgent, ServiceDefinitionState>(
+            eventStore,
+            actorId,
+            static () => new ServiceDefinitionGAgent(GAgentServiceTestKit.NoOpDispatchPort));
+        await replayed.ActivateAsync();
+
+        replayed.State.Spec.ExternalExposure.Should().NotBeNull();
+        replayed.State.Spec.ExternalExposure.ExposureDesired.Should().BeTrue();
+        replayed.State.Spec.ExternalExposure.NyxidSlug.Should().BeEmpty();
+        replayed.State.Spec.ExternalExposure.NyxidServiceId.Should().BeEmpty();
+        replayed.State.Spec.ExternalExposure.LastError.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task HandleCreateAsync_ShouldRejectDuplicateCreate_AndKeepOriginalState()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
@@ -449,6 +487,46 @@ public sealed class ServiceDefinitionGAgentTests
         agent.State.Spec.ExternalExposure.Status.Should().Be(ServiceRegistrationStatus.Failed);
         agent.State.Spec.ExternalExposure.LastError.Should().StartWith("MissingToken:");
         agent.State.Spec.ExternalExposure.NextAttemptAt.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task RunRegistrationAttemptAsync_ShouldStopRetry_WhenMaxAttemptsExhausted()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var registrationPort = new RecordingNyxIdServiceRegistrationPort();
+        var dispatchPort = new RecordingActorDispatchPort();
+        var agent = GAgentServiceTestKit.CreateStatefulAgent<ServiceDefinitionGAgent, ServiceDefinitionState>(
+            new InMemoryEventStore(),
+            ServiceActorIds.Definition(identity),
+            () => new ServiceDefinitionGAgent(
+                dispatchPort,
+                registrationPort,
+                new StubNyxIdRegistrationTokenAccessor(null),
+                ServiceExternalExposureRetrySettings.Create(1, TimeSpan.FromMilliseconds(10), TimeSpan.FromMilliseconds(10))));
+        await agent.HandleCreateAsync(new CreateServiceDefinitionCommand
+        {
+            Spec = GAgentServiceTestKit.CreateDefinitionSpec(identity),
+        });
+        await agent.HandleReconcileExternalExposureAsync(new ReconcileExternalExposureCommand
+        {
+            Identity = identity.Clone(),
+            OpenapiUrl = "https://api.test/openapi.json",
+            DesiredSpecHash = "hash-1",
+        });
+
+        await agent.HandleRunRegistrationAttemptAsync(new RunRegistrationAttemptCommand
+        {
+            Identity = identity.Clone(),
+            ExpectedAttempt = 1,
+            DesiredSpecHash = "hash-1",
+            OpenapiUrl = "https://api.test/openapi.json",
+        });
+
+        agent.State.Spec.ExternalExposure.Status.Should().Be(ServiceRegistrationStatus.Failed);
+        agent.State.Spec.ExternalExposure.Attempt.Should().Be(1);
+        agent.State.Spec.ExternalExposure.LastError.Should().StartWith("retry_exhausted:MissingToken:");
+        agent.State.Spec.ExternalExposure.NextAttemptAt.Should().BeNull();
+        dispatchPort.Calls.Count(call => call.Envelope.Payload.Is(RegistrationRetryDueCommand.Descriptor)).Should().Be(0);
     }
 
     [Fact]

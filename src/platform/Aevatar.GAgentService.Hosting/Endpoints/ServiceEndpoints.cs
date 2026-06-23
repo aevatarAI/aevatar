@@ -650,7 +650,8 @@ public static partial class ServiceEndpoints
             externalExposure.Attempt,
             externalExposure.NextAttemptAt,
             externalExposure.CredentialKid ?? string.Empty,
-            externalExposure.ExposureDesired);
+            externalExposure.ExposureDesired,
+            externalExposure.SourceStateVersion);
     }
 
     private static ServiceImplementationKind ParseImplementationKind(string? rawValue)
@@ -724,7 +725,8 @@ public static partial class ServiceEndpoints
         int Attempt = 0,
         DateTimeOffset? NextAttemptAt = null,
         string CredentialKid = "",
-        bool ExposureDesired = false);
+        bool ExposureDesired = false,
+        long SourceStateVersion = 0);
 
     public sealed record CreateServiceHttpRequest(
         string TenantId,

@@ -57,6 +57,7 @@ public sealed record ScopeBindingUpsertRequest(
     string? RevisionId = null,
     string? AppId = null,
     string? ServiceId = null,
+    bool ExposureDesired = false,
     bool AllowExistingRevisionReplay = false,
     string? ReplayRevisionId = null);
 

@@ -95,6 +95,9 @@ public sealed class ServiceExposureReconcileHook : ICommittedStatePublicationHoo
 
     private bool ShouldExpose(Aevatar.GAgentService.Abstractions.Queries.ServiceCatalogSnapshot service)
     {
+        if (service.ExternalExposure?.ExposureDesired == true)
+            return true;
+
         if (_options.RegisterAllPublishedServices)
             return true;
 

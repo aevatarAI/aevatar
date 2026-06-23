@@ -68,6 +68,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
             : ScopeWorkflowCapabilityConventions.BuildServiceIdentity(_options, normalizedScopeId, request.ServiceId.Trim(), request.AppId);
         var desiredBinding = await ResolveDesiredBindingAsync(request, normalizedScopeId, identity, ct);
         var existingService = await _serviceLifecycleQueryPort.GetServiceAsync(identity, ct);
+        await ApplyExternalExposureIntentAsync(request, identity, desiredBinding.ServiceDefinition, existingService, ct);
 
         if (existingService == null)
         {
@@ -127,6 +128,32 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         // TODO(iter2/cluster-006): If callers need "invoke safe now", add an explicit read/projection
         // observation path in a separate PR rather than blocking this command path on readmodels.
         return desiredBinding.BuildResult(normalizedScopeId, identity.ServiceId, revisionId, expectedDeploymentId);
+    }
+
+    private async Task ApplyExternalExposureIntentAsync(
+        ScopeBindingUpsertRequest request,
+        ServiceIdentity identity,
+        ServiceDefinitionSpec serviceDefinition,
+        ServiceCatalogSnapshot? existingService,
+        CancellationToken ct)
+    {
+        if (request.ExposureDesired)
+        {
+            serviceDefinition.ExternalExposure = new ExternalExposure
+            {
+                ExposureDesired = true,
+            };
+            return;
+        }
+
+        if (existingService?.ExternalExposure?.ExposureDesired != true)
+            return;
+
+        await _serviceCommandPort.RetireExternalExposureAsync(new RetireExternalExposureCommand
+        {
+            Identity = identity.Clone(),
+            DesiredSpecHash = existingService.ExternalExposure.DesiredSpecHash ?? string.Empty,
+        }, ct);
     }
 
     private async Task<bool> ShouldCreateRevisionAsync(
@@ -578,6 +605,12 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
     {
         if (!string.Equals(existingService.DisplayName, desiredDefinition.DisplayName, StringComparison.Ordinal))
             return true;
+
+        if (desiredDefinition.ExternalExposure?.ExposureDesired == true &&
+            existingService.ExternalExposure?.ExposureDesired != true)
+        {
+            return true;
+        }
 
         var existingEndpoints = existingService.Endpoints
             .OrderBy(x => x.EndpointId, StringComparer.Ordinal)

@@ -58,6 +58,7 @@ public sealed class ScopeServiceBindingEndpointTests : ScopeServiceEndpointTestK
         {
             implementationKind = "workflow",
             displayName = "Orders App",
+            exposureDesired = true,
             workflow = new
             {
                 workflowYamls = new[]
@@ -77,6 +78,7 @@ public sealed class ScopeServiceBindingEndpointTests : ScopeServiceEndpointTestK
         host.ScopeBindingPort.LastRequest.Should().NotBeNull();
         host.ScopeBindingPort.LastRequest!.ScopeId.Should().Be("scope-a");
         host.ScopeBindingPort.LastRequest.ImplementationKind.Should().Be(ScopeBindingImplementationKind.Workflow);
+        host.ScopeBindingPort.LastRequest.ExposureDesired.Should().BeTrue();
         host.ScopeBindingPort.LastRequest.Workflow.Should().NotBeNull();
         host.ScopeBindingPort.LastRequest.Workflow!.WorkflowYamls.Should().HaveCount(2);
     }

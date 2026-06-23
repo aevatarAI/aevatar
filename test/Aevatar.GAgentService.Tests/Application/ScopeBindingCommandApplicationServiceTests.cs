@@ -85,6 +85,86 @@ public sealed class ScopeBindingCommandApplicationServiceTests
     }
 
     [Fact]
+    public async Task UpsertAsync_ShouldRecordExternalExposureIntent_WhenExposureIsDesired()
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(getResult: null);
+        var service = CreateService(
+            commandPort,
+            lifecyclePort,
+            new FakeScopeScriptQueryPort(),
+            new FakeScriptDefinitionSnapshotPort(),
+            new FakeWorkflowRunActorPort());
+
+        await service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeId,
+            ScopeBindingImplementationKind.Workflow,
+            Workflow: new ScopeBindingWorkflowSpec([
+                "name: main\nsteps:\n  - run: echo hello",
+            ]),
+            ExposureDesired: true));
+
+        var createCommand = commandPort.Calls[0].Command.Should().BeOfType<CreateServiceDefinitionCommand>().Subject;
+        createCommand.Spec.ExternalExposure.Should().NotBeNull();
+        createCommand.Spec.ExternalExposure!.ExposureDesired.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task UpsertAsync_ShouldRetireExternalExposure_WhenExistingIntentIsDisabled()
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(new ServiceCatalogSnapshot(
+            "scope-a:default:default:default",
+            ScopeId,
+            DefaultOptions.ServiceAppId,
+            DefaultOptions.ServiceNamespace,
+            DefaultOptions.DefaultServiceId,
+            "main",
+            "rev-old",
+            "rev-old",
+            "dep-old",
+            "actor-old",
+            "Active",
+            [
+                new ServiceEndpointSnapshot(
+                    "chat",
+                    "chat",
+                    ServiceEndpointKind.Chat.ToString(),
+                    GetTypeUrl(ChatRequestEvent.Descriptor),
+                    GetTypeUrl(ChatResponseEvent.Descriptor),
+                    "Default chat endpoint."),
+            ],
+            [],
+            DateTimeOffset.UtcNow,
+            new ServiceExternalExposureSnapshot(
+                string.Empty,
+                null,
+                ServiceRegistrationStatus.Pending,
+                DesiredSpecHash: "hash-1",
+                ExposureDesired: true)));
+        var service = CreateService(
+            commandPort,
+            lifecyclePort,
+            new FakeScopeScriptQueryPort(),
+            new FakeScriptDefinitionSnapshotPort(),
+            new FakeWorkflowRunActorPort());
+
+        await service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeId,
+            ScopeBindingImplementationKind.Workflow,
+            Workflow: new ScopeBindingWorkflowSpec([
+                "name: main\nsteps:\n  - run: echo hello",
+            ])));
+
+        commandPort.Calls.Should().ContainSingle(call => call.Method == "RetireExternalExposureAsync");
+        var retireCommand = commandPort.Calls
+            .Single(call => call.Method == "RetireExternalExposureAsync")
+            .Command.Should().BeOfType<RetireExternalExposureCommand>().Subject;
+        retireCommand.Identity.ServiceId.Should().Be(DefaultOptions.DefaultServiceId);
+        retireCommand.DesiredSpecHash.Should().Be("hash-1");
+    }
+
+    [Fact]
     public async Task UpsertAsync_ShouldReturnAcceptedWithoutServingReadModelPolling()
     {
         var commandPort = new RecordingServiceCommandPort();
@@ -1751,6 +1831,18 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         public Task<ServiceCommandAcceptedReceipt> ActivateServiceRevisionAsync(ActivateServiceRevisionCommand command, CancellationToken ct = default)
         {
             Calls.Add(new CommandCall("ActivateServiceRevisionAsync", command));
+            return Task.FromResult(DefaultReceipt);
+        }
+
+        public Task<ServiceCommandAcceptedReceipt> ReconcileExternalExposureAsync(ReconcileExternalExposureCommand command, CancellationToken ct = default)
+        {
+            Calls.Add(new CommandCall("ReconcileExternalExposureAsync", command));
+            return Task.FromResult(DefaultReceipt);
+        }
+
+        public Task<ServiceCommandAcceptedReceipt> RetireExternalExposureAsync(RetireExternalExposureCommand command, CancellationToken ct = default)
+        {
+            Calls.Add(new CommandCall("RetireExternalExposureAsync", command));
             return Task.FromResult(DefaultReceipt);
         }
 

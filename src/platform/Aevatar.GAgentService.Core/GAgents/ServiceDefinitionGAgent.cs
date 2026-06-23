@@ -16,21 +16,22 @@ namespace Aevatar.GAgentService.Core.GAgents;
 public sealed class ServiceDefinitionGAgent : GAgentBase<ServiceDefinitionState>
 {
     private const string RegistrationRetryCallbackId = "service-definition-registration-retry";
-    private static readonly TimeSpan RegistrationRetryBaseDelay = TimeSpan.FromSeconds(30);
-    private static readonly TimeSpan RegistrationRetryMaxDelay = TimeSpan.FromMinutes(15);
 
     private readonly IActorDispatchPort _dispatchPort;
     private readonly INyxIdServiceRegistrationPort _registrationPort;
     private readonly INyxIdRegistrationTokenAccessor _tokenAccessor;
+    private readonly ServiceExternalExposureRetrySettings _retrySettings;
 
     public ServiceDefinitionGAgent(
         IActorDispatchPort dispatchPort,
         INyxIdServiceRegistrationPort? registrationPort = null,
-        INyxIdRegistrationTokenAccessor? tokenAccessor = null)
+        INyxIdRegistrationTokenAccessor? tokenAccessor = null,
+        ServiceExternalExposureRetrySettings? retrySettings = null)
     {
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _registrationPort = registrationPort ?? NullNyxIdServiceRegistrationPort.Instance;
         _tokenAccessor = tokenAccessor ?? NullNyxIdRegistrationTokenAccessor.Instance;
+        _retrySettings = retrySettings ?? ServiceExternalExposureRetrySettings.Default;
         InitializeId();
     }
 
@@ -86,6 +87,9 @@ public sealed class ServiceDefinitionGAgent : GAgentBase<ServiceDefinitionState>
         }
 
         var nextAttempt = (exposure?.Attempt ?? 0) + 1;
+        if (nextAttempt > _retrySettings.MaxAttempts)
+            nextAttempt = 1;
+
         await PersistDomainEventAsync(new ServiceRegistrationRequestedEvent
         {
             Identity = command.Identity.Clone(),
@@ -326,22 +330,27 @@ public sealed class ServiceDefinitionGAgent : GAgentBase<ServiceDefinitionState>
         string credentialKid,
         bool scheduleRetry)
     {
-        var nextAttemptAt = scheduleRetry
+        var retryable = scheduleRetry && command.ExpectedAttempt < _retrySettings.MaxAttempts;
+        var exhausted = scheduleRetry && !retryable;
+        var now = DateTimeOffset.UtcNow;
+        var nextAttemptAt = retryable
             ? DateTimeOffset.UtcNow + ComputeRetryDelay(command.ExpectedAttempt)
             : DateTimeOffset.UtcNow;
         await PersistDomainEventAsync(new ServiceRegistrationFailedEvent
         {
             Identity = command.Identity.Clone(),
             DesiredSpecHash = command.DesiredSpecHash.Trim(),
-            LastError = NormalizeFailure(failure),
+            LastError = exhausted
+                ? NormalizeRetryExhaustedFailure(failure)
+                : NormalizeFailure(failure),
             Attempt = command.ExpectedAttempt,
-            FailedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            NextAttemptAt = scheduleRetry ? Timestamp.FromDateTimeOffset(nextAttemptAt) : null,
+            FailedAt = Timestamp.FromDateTimeOffset(now),
+            NextAttemptAt = retryable ? Timestamp.FromDateTimeOffset(nextAttemptAt) : null,
             CredentialKid = credentialKid ?? string.Empty,
         });
         await DispatchInvocationCatalogObservationAsync(CancellationToken.None);
 
-        if (scheduleRetry)
+        if (retryable)
             await ScheduleRegistrationRetryAsync(command, nextAttemptAt, CancellationToken.None);
     }
 
@@ -398,7 +407,7 @@ public sealed class ServiceDefinitionGAgent : GAgentBase<ServiceDefinitionState>
     {
         var next = state.Clone();
         next.Spec = evt.Spec?.Clone() ?? new ServiceDefinitionSpec();
-        next.Spec.ExternalExposure = null;
+        next.Spec.ExternalExposure = ExtractExternalExposureIntent(evt.Spec?.ExternalExposure);
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         next.LastEventId = BuildEventId(evt.Spec?.Identity, "created");
         return next;
@@ -409,6 +418,12 @@ public sealed class ServiceDefinitionGAgent : GAgentBase<ServiceDefinitionState>
         var next = state.Clone();
         var spec = evt.Spec?.Clone() ?? new ServiceDefinitionSpec();
         spec.ExternalExposure = state.Spec?.ExternalExposure?.Clone();
+        if (evt.Spec?.ExternalExposure?.ExposureDesired == true)
+        {
+            spec.ExternalExposure ??= new ExternalExposure();
+            spec.ExternalExposure.ExposureDesired = true;
+        }
+
         next.Spec = spec;
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         next.LastEventId = BuildEventId(evt.Spec?.Identity, "updated");
@@ -587,18 +602,21 @@ public sealed class ServiceDefinitionGAgent : GAgentBase<ServiceDefinitionState>
         return $"{failure.Kind}:{reason}";
     }
 
-    private static TimeSpan ComputeRetryDelay(int attempt)
-    {
-        var safeAttempt = Math.Clamp(attempt, 1, 10);
-        var multiplier = 1 << Math.Min(safeAttempt - 1, 5);
-        var delay = TimeSpan.FromTicks(RegistrationRetryBaseDelay.Ticks * multiplier);
-        return delay <= RegistrationRetryMaxDelay ? delay : RegistrationRetryMaxDelay;
-    }
+    private static string NormalizeRetryExhaustedFailure(NyxIdRegistrationFailure failure) =>
+        $"retry_exhausted:{NormalizeFailure(failure)}";
+
+    private TimeSpan ComputeRetryDelay(int attempt) =>
+        _retrySettings.ComputeDelay(attempt);
 
     private static void EnsureSpec(ServiceDefinitionState state)
     {
         state.Spec ??= new ServiceDefinitionSpec();
     }
+
+    private static ExternalExposure? ExtractExternalExposureIntent(ExternalExposure? externalExposure) =>
+        externalExposure?.ExposureDesired == true
+            ? new ExternalExposure { ExposureDesired = true }
+            : null;
 
     private static string BuildEventId(ServiceIdentity? identity, string suffix)
     {
