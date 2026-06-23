@@ -188,6 +188,14 @@ public sealed class ScopeWorkflowApplicationServicesTests
             "approval",
             string.Empty,
             new Dictionary<string, string>());
+        bindingReader.Bindings[definitionActorId] = new WorkflowActorBinding(
+            WorkflowActorKind.Definition,
+            definitionActorId,
+            definitionActorId,
+            string.Empty,
+            "approval",
+            "name: approval",
+            new Dictionary<string, string>());
 
         var service = new ScopeWorkflowQueryApplicationService(
             queryPort,
@@ -273,11 +281,14 @@ public sealed class ScopeWorkflowApplicationServicesTests
         public IReadOnlyList<ServiceCatalogSnapshot> ListServicesResult { get; set; } = [];
         public ServiceDeploymentCatalogSnapshot? DeploymentCatalogResult { get; set; }
         public ListRequest? LastListRequest { get; private set; }
+        private ServiceCatalogSnapshot? _lastServiceSnapshot;
 
         public Task<ServiceCatalogSnapshot?> GetServiceAsync(ServiceIdentity identity, CancellationToken ct = default)
         {
-            _ = identity;
-            return Task.FromResult(GetServiceResults.Count > 0 ? GetServiceResults.Dequeue() : null);
+            _lastServiceSnapshot = GetServiceResults.Count > 0
+                ? GetServiceResults.Dequeue()
+                : ListServicesResult.FirstOrDefault(x => string.Equals(x.ServiceId, identity.ServiceId, StringComparison.Ordinal));
+            return Task.FromResult(_lastServiceSnapshot);
         }
 
         public Task<IReadOnlyList<ServiceCatalogSnapshot>> ListServicesAsync(string tenantId, string appId, string @namespace, int take = 200, CancellationToken ct = default)
@@ -291,8 +302,25 @@ public sealed class ScopeWorkflowApplicationServicesTests
 
         public Task<ServiceDeploymentCatalogSnapshot?> GetServiceDeploymentsAsync(ServiceIdentity identity, CancellationToken ct = default)
         {
-            _ = identity;
-            return Task.FromResult(DeploymentCatalogResult);
+            if (DeploymentCatalogResult != null)
+                return Task.FromResult<ServiceDeploymentCatalogSnapshot?>(DeploymentCatalogResult);
+
+            var serviceKey = ServiceKeys.Build(identity);
+            var service = ListServicesResult.FirstOrDefault(x => string.Equals(x.ServiceKey, serviceKey, StringComparison.Ordinal))
+                ?? _lastServiceSnapshot;
+            if (service == null || string.IsNullOrWhiteSpace(service.DeploymentId))
+                return Task.FromResult<ServiceDeploymentCatalogSnapshot?>(null);
+
+            return Task.FromResult<ServiceDeploymentCatalogSnapshot?>(new ServiceDeploymentCatalogSnapshot(
+                service.ServiceKey,
+                [new ServiceDeploymentSnapshot(
+                    service.DeploymentId,
+                    service.ActiveServingRevisionId,
+                    service.PrimaryActorId,
+                    service.DeploymentStatus,
+                    service.UpdatedAt,
+                    service.UpdatedAt)],
+                service.UpdatedAt));
         }
 
         public sealed record ListRequest(string TenantId, string AppId, string Namespace, int Take);

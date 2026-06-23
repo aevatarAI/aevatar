@@ -329,7 +329,8 @@ public static class ScopeServiceEndpoints
                     request.DisplayName,
                     request.RevisionId,
                     request.AppId,
-                    request.ServiceId),
+                    request.ServiceId,
+                    request.ExposureDesired),
                 ct);
             return Results.Ok(result);
         }
@@ -3480,7 +3481,8 @@ const response = await fetch("{{invokePath}}", {
             externalExposure.Attempt,
             externalExposure.NextAttemptAt,
             externalExposure.CredentialKid ?? string.Empty,
-            externalExposure.ExposureDesired);
+            externalExposure.ExposureDesired,
+            externalExposure.SourceStateVersion);
     }
 
     private static ServiceBindingKind ParseBindingKind(string? rawValue)
@@ -4191,7 +4193,8 @@ const response = await fetch("{{invokePath}}", {
         string? DisplayName = null,
         string? RevisionId = null,
         string? AppId = null,
-        string? ServiceId = null);
+        string? ServiceId = null,
+        bool? ExposureDesired = null);
 
     public sealed record ScopeBindingWorkflowHttpRequest(
         string? WorkflowId,
@@ -4467,7 +4470,8 @@ const response = await fetch("{{invokePath}}", {
         int Attempt = 0,
         DateTimeOffset? NextAttemptAt = null,
         string CredentialKid = "",
-        bool ExposureDesired = false);
+        bool ExposureDesired = false,
+        long SourceStateVersion = 0);
 
     public sealed record ScopeServiceRevisionActionHttpResponse(
         string ScopeId,

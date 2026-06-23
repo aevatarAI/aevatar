@@ -121,11 +121,12 @@ public sealed class ServiceCatalogQueryReader : IServiceCatalogQueryReader
                 .ToList(),
             [.. readModel.PolicyIds],
             readModel.UpdatedAt,
-            MapExternalExposure(readModel.ExternalExposure));
+            MapExternalExposure(readModel.ExternalExposure, readModel.StateVersion));
     }
 
     private static ServiceExternalExposureSnapshot? MapExternalExposure(
-        ServiceCatalogExternalExposureReadModel? externalExposure)
+        ServiceCatalogExternalExposureReadModel? externalExposure,
+        long sourceStateVersion)
     {
         if (externalExposure == null)
             return null;
@@ -156,6 +157,7 @@ public sealed class ServiceCatalogQueryReader : IServiceCatalogQueryReader
             externalExposure.Attempt,
             externalExposure.NextAttemptAt,
             externalExposure.CredentialKid ?? string.Empty,
-            externalExposure.ExposureDesired);
+            externalExposure.ExposureDesired,
+            sourceStateVersion);
     }
 }
