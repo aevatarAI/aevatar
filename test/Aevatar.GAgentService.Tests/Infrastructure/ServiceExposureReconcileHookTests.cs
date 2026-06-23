@@ -111,6 +111,58 @@ public sealed class ServiceExposureReconcileHookTests
     }
 
     [Fact]
+    public async Task ApplyAsync_ShouldReconcileDesiredDefinition_WhenIntentIsOptIn()
+    {
+        var identity = Identity();
+        var existingCatalog = ServiceSnapshot(
+            identity,
+            new ServiceExternalExposureSnapshot(
+                string.Empty,
+                null,
+                ServiceRegistrationStatus.Unspecified,
+                DesiredSpecHash: "old-hash",
+                ExposureDesired: false));
+        var desiredDefinition = new ServiceDefinitionSpec
+        {
+            Identity = identity.Clone(),
+            DisplayName = "Orders Public",
+            ExternalExposure = new ExternalExposure
+            {
+                ExposureDesired = true,
+            },
+        };
+        desiredDefinition.Endpoints.Add(new ServiceEndpointSpec
+        {
+            EndpointId = "submit",
+            DisplayName = "Submit",
+            Kind = ServiceEndpointKind.Command,
+            RequestTypeUrl = "type.googleapis.com/aevatar.SubmitOrderRequest",
+            ResponseTypeUrl = "type.googleapis.com/aevatar.SubmitOrderResponse",
+            Description = "Submit an order.",
+        });
+        var commandPort = new RecordingServiceCommandPort();
+        var service = CreateIntentService(existingCatalog, commandPort);
+
+        await service.ApplyAsync(new ServiceExternalExposureIntentRequest(
+            identity,
+            ExposureDesired: true,
+            DesiredDefinition: desiredDefinition,
+            ExistingService: existingCatalog));
+
+        commandPort.ReconcileCommands.Should().ContainSingle();
+        var command = commandPort.ReconcileCommands.Single();
+        command.Identity.Should().BeEquivalentTo(identity);
+        command.Identity.Should().NotBeSameAs(identity);
+        command.OpenapiUrl.Should().Be(ExpectedOpenApiUrl(identity));
+        command.DesiredSpecHash.Should().Be(ExpectedSpecHash(
+            DesiredServiceSnapshot(identity, desiredDefinition, existingCatalog),
+            command.OpenapiUrl));
+        command.DesiredSpecHash.Should().NotBe(ExpectedSpecHash(existingCatalog, command.OpenapiUrl));
+        command.CredentialKid.Should().Be("kid-1");
+        commandPort.RetireCommands.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task BeforePublishAsync_ShouldRetireExposure_WhenDeploymentIsDeactivated()
     {
         var identity = Identity();
@@ -219,6 +271,44 @@ public sealed class ServiceExposureReconcileHookTests
             ["internal-policy"],
             DateTimeOffset.Parse("2026-06-23T00:00:00+00:00"),
             externalExposure);
+
+    private static ServiceCatalogSnapshot DesiredServiceSnapshot(
+        ServiceIdentity identity,
+        ServiceDefinitionSpec desiredDefinition,
+        ServiceCatalogSnapshot existing) =>
+        new(
+            existing.ServiceKey,
+            identity.TenantId,
+            identity.AppId,
+            identity.Namespace,
+            identity.ServiceId,
+            desiredDefinition.DisplayName,
+            existing.DefaultServingRevisionId,
+            existing.ActiveServingRevisionId,
+            existing.DeploymentId,
+            existing.PrimaryActorId,
+            existing.DeploymentStatus,
+            desiredDefinition.Endpoints.Select(x => new ServiceEndpointSnapshot(
+                x.EndpointId,
+                x.DisplayName,
+                x.Kind.ToString(),
+                x.RequestTypeUrl,
+                x.ResponseTypeUrl,
+                x.Description)).ToArray(),
+            desiredDefinition.PolicyIds.ToArray(),
+            existing.UpdatedAt,
+            new ServiceExternalExposureSnapshot(
+                desiredDefinition.ExternalExposure.NyxidSlug,
+                desiredDefinition.ExternalExposure.RegisteredAt?.ToDateTimeOffset(),
+                desiredDefinition.ExternalExposure.Status,
+                desiredDefinition.ExternalExposure.NyxidServiceId,
+                desiredDefinition.ExternalExposure.DesiredSpecHash,
+                desiredDefinition.ExternalExposure.RegisteredSpecHash,
+                desiredDefinition.ExternalExposure.LastError,
+                desiredDefinition.ExternalExposure.Attempt,
+                desiredDefinition.ExternalExposure.NextAttemptAt?.ToDateTimeOffset(),
+                desiredDefinition.ExternalExposure.CredentialKid,
+                desiredDefinition.ExternalExposure.ExposureDesired));
 
     private static ServiceIdentity Identity() =>
         new()
