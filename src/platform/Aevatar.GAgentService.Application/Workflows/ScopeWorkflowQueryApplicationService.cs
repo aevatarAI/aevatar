@@ -39,16 +39,20 @@ public sealed class ScopeWorkflowQueryApplicationService : IScopeWorkflowQueryPo
         var summaries = new List<ScopeWorkflowSummary>(services.Count);
         foreach (var service in services.OrderByDescending(static x => x.UpdatedAt))
         {
+            var identity = BuildIdentity(normalizedScopeId, service.ServiceId);
+            var deploymentCatalog = await _serviceLifecycleQueryPort.GetServiceDeploymentsAsync(identity, ct);
+            var activeDeployment = ResolveActiveDeployment(service, deploymentCatalog);
             summaries.Add(await BuildWorkflowSummaryAsync(
                 normalizedScopeId,
                 service,
-                BuildIdentity(normalizedScopeId, service.ServiceId),
+                identity,
                 service.ServiceId,
                 service.DisplayName,
                 fallbackWorkflowName: null,
-                fallbackActiveRevisionId: service.ActiveServingRevisionId,
-                fallbackDeploymentId: service.DeploymentId,
-                fallbackActorId: service.PrimaryActorId,
+                fallbackActiveRevisionId: activeDeployment?.RevisionId ?? service.ActiveServingRevisionId,
+                fallbackDeploymentId: activeDeployment?.DeploymentId ?? service.DeploymentId,
+                fallbackActorId: activeDeployment?.PrimaryActorId ?? service.PrimaryActorId,
+                fallbackDeploymentStatus: activeDeployment?.Status ?? service.DeploymentStatus,
                 ct));
         }
 
@@ -72,46 +76,35 @@ public sealed class ScopeWorkflowQueryApplicationService : IScopeWorkflowQueryPo
                 Reason: "service_catalog_missing");
         }
 
-        if (string.IsNullOrWhiteSpace(serviceSnapshot.ActiveServingRevisionId) ||
-            string.IsNullOrWhiteSpace(serviceSnapshot.DeploymentId) ||
-            string.IsNullOrWhiteSpace(serviceSnapshot.PrimaryActorId))
-        {
-            return new ScopeWorkflowLookupResult(
-                ScopeWorkflowLookupStatus.NotReady,
-                Workflow: null,
-                Reason: "service_catalog_runtime_facts_missing");
-        }
-
         var deploymentCatalog = await _serviceLifecycleQueryPort.GetServiceDeploymentsAsync(identity, ct);
-        var deployment = deploymentCatalog?.Deployments.FirstOrDefault(x =>
-            string.Equals(x.DeploymentId, serviceSnapshot.DeploymentId, StringComparison.Ordinal));
+        var deployment = ResolveActiveDeployment(serviceSnapshot, deploymentCatalog);
         if (deployment == null)
         {
+            if (HasCompleteCatalogRuntimeFacts(serviceSnapshot) && deploymentCatalog?.Deployments.Count > 0)
+            {
+                return new ScopeWorkflowLookupResult(
+                    ScopeWorkflowLookupStatus.Stale,
+                    Workflow: null,
+                    Reason: "deployment_readmodel_mismatched");
+            }
+
             return new ScopeWorkflowLookupResult(
                 ScopeWorkflowLookupStatus.NotReady,
                 Workflow: null,
                 Reason: "deployment_readmodel_missing");
         }
 
-        if (!string.Equals(deployment.RevisionId, serviceSnapshot.ActiveServingRevisionId, StringComparison.Ordinal) ||
-            !string.Equals(deployment.PrimaryActorId, serviceSnapshot.PrimaryActorId, StringComparison.Ordinal))
-        {
-            return new ScopeWorkflowLookupResult(
-                ScopeWorkflowLookupStatus.Stale,
-                Workflow: null,
-                Reason: "deployment_readmodel_mismatched");
-        }
-
-        if (!string.Equals(deployment.Status, ServiceDeploymentStatus.Active.ToString(), StringComparison.OrdinalIgnoreCase) ||
-            !string.Equals(serviceSnapshot.DeploymentStatus, ServiceDeploymentStatus.Active.ToString(), StringComparison.OrdinalIgnoreCase))
+        if (string.IsNullOrWhiteSpace(deployment.RevisionId) ||
+            string.IsNullOrWhiteSpace(deployment.DeploymentId) ||
+            string.IsNullOrWhiteSpace(deployment.PrimaryActorId))
         {
             return new ScopeWorkflowLookupResult(
                 ScopeWorkflowLookupStatus.NotReady,
                 Workflow: null,
-                Reason: "deployment_not_active");
+                Reason: "deployment_runtime_facts_missing");
         }
 
-        var binding = await _workflowActorBindingReader.GetAsync(serviceSnapshot.PrimaryActorId, ct);
+        var binding = await _workflowActorBindingReader.GetAsync(deployment.PrimaryActorId, ct);
         if (binding == null || string.IsNullOrWhiteSpace(binding.EffectiveDefinitionActorId))
         {
             return new ScopeWorkflowLookupResult(
@@ -120,7 +113,7 @@ public sealed class ScopeWorkflowQueryApplicationService : IScopeWorkflowQueryPo
                 Reason: "workflow_actor_binding_missing");
         }
 
-        if (!string.Equals(binding.EffectiveDefinitionActorId, serviceSnapshot.PrimaryActorId, StringComparison.Ordinal))
+        if (!string.Equals(binding.EffectiveDefinitionActorId, deployment.PrimaryActorId, StringComparison.Ordinal))
         {
             return new ScopeWorkflowLookupResult(
                 ScopeWorkflowLookupStatus.Stale,
@@ -135,9 +128,10 @@ public sealed class ScopeWorkflowQueryApplicationService : IScopeWorkflowQueryPo
             normalizedWorkflowId,
             serviceSnapshot.DisplayName,
             binding.WorkflowName,
-            serviceSnapshot.ActiveServingRevisionId,
-            serviceSnapshot.DeploymentId,
-            serviceSnapshot.PrimaryActorId);
+            deployment.RevisionId,
+            deployment.DeploymentId,
+            deployment.PrimaryActorId,
+            deployment.Status);
 
         return new ScopeWorkflowLookupResult(
             ScopeWorkflowLookupStatus.Runnable,
@@ -192,6 +186,7 @@ public sealed class ScopeWorkflowQueryApplicationService : IScopeWorkflowQueryPo
         string fallbackActiveRevisionId,
         string fallbackDeploymentId,
         string fallbackActorId,
+        string fallbackDeploymentStatus,
         CancellationToken ct)
     {
         var workflowName = ScopeWorkflowCapabilityConventions.NormalizeOptional(fallbackWorkflowName);
@@ -211,7 +206,8 @@ public sealed class ScopeWorkflowQueryApplicationService : IScopeWorkflowQueryPo
             workflowName,
             fallbackActiveRevisionId,
             fallbackDeploymentId,
-            fallbackActorId);
+            fallbackActorId,
+            fallbackDeploymentStatus);
     }
 
     private static ScopeWorkflowSummary BuildWorkflowSummary(
@@ -223,7 +219,8 @@ public sealed class ScopeWorkflowQueryApplicationService : IScopeWorkflowQueryPo
         string? workflowName,
         string activeRevisionId,
         string deploymentId,
-        string actorId)
+        string actorId,
+        string deploymentStatus)
     {
         var displayName = serviceSnapshot.DisplayName?.Trim();
         if (string.IsNullOrWhiteSpace(displayName))
@@ -238,7 +235,33 @@ public sealed class ScopeWorkflowQueryApplicationService : IScopeWorkflowQueryPo
             actorId,
             activeRevisionId,
             deploymentId,
-            serviceSnapshot.DeploymentStatus.Trim() is { Length: > 0 } deploymentStatus ? deploymentStatus : ServiceDeploymentStatus.Unspecified.ToString(),
+            deploymentStatus.Trim() is { Length: > 0 } resolvedDeploymentStatus ? resolvedDeploymentStatus : ServiceDeploymentStatus.Unspecified.ToString(),
             serviceSnapshot.UpdatedAt);
     }
+
+    private static ServiceDeploymentSnapshot? ResolveActiveDeployment(
+        ServiceCatalogSnapshot serviceSnapshot,
+        ServiceDeploymentCatalogSnapshot? deploymentCatalog)
+    {
+        if (deploymentCatalog == null)
+            return null;
+
+        if (HasCompleteCatalogRuntimeFacts(serviceSnapshot))
+        {
+            return deploymentCatalog.Deployments.FirstOrDefault(x =>
+                string.Equals(x.DeploymentId, serviceSnapshot.DeploymentId, StringComparison.Ordinal) &&
+                string.Equals(x.RevisionId, serviceSnapshot.ActiveServingRevisionId, StringComparison.Ordinal) &&
+                string.Equals(x.PrimaryActorId, serviceSnapshot.PrimaryActorId, StringComparison.Ordinal));
+        }
+
+        return deploymentCatalog.Deployments
+            .Where(static x => string.Equals(x.Status, ServiceDeploymentStatus.Active.ToString(), StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(static x => x.UpdatedAt)
+            .FirstOrDefault();
+    }
+
+    private static bool HasCompleteCatalogRuntimeFacts(ServiceCatalogSnapshot serviceSnapshot) =>
+        !string.IsNullOrWhiteSpace(serviceSnapshot.ActiveServingRevisionId) &&
+        !string.IsNullOrWhiteSpace(serviceSnapshot.DeploymentId) &&
+        !string.IsNullOrWhiteSpace(serviceSnapshot.PrimaryActorId);
 }
