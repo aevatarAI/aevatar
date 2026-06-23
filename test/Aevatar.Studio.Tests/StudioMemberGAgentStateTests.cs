@@ -245,7 +245,7 @@ public sealed class StudioMemberGAgentStateTests
     }
 
     [Fact]
-    public void Created_ShouldPersistInitialImplementationRefAsActorOwnedState()
+    public void Created_WithHistoricalImplementationRef_ShouldReplayActorOwnedState()
     {
         var createdAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
 

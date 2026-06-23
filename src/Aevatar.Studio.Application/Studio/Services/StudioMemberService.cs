@@ -53,7 +53,7 @@ public sealed class StudioMemberService : IStudioMemberService
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var normalizedRequest = StudioMemberCreateRequestValidator.Validate(request);
+        var normalizedRequest = StudioMemberCreateRequestValidator.Validate(scopeId, request);
 
         if (!string.IsNullOrEmpty(normalizedRequest.TeamId))
         {

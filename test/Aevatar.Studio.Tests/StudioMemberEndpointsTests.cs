@@ -29,16 +29,35 @@ public sealed class StudioMemberEndpointsTests
     [Fact]
     public async Task HandleCreateAsync_ShouldReturnCreated_OnSuccess()
     {
-        var implementationRef = new StudioMemberImplementationRefResponse(
-            ImplementationKind: MemberImplementationKindNames.Workflow,
-            WorkflowId: "wf-alpha");
         var service = new RecordingMemberService
         {
-            CreateResponse = NewSummary() with
-            {
-                ImplementationRef = implementationRef,
-                LifecycleStage = MemberLifecycleStageNames.BuildReady,
-            },
+            CreateResponse = NewSummary(),
+        };
+
+        var result = await InvokeHandle<IResult>(
+            "HandleCreateAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            new CreateStudioMemberRequest(
+                DisplayName: "Alpha",
+                ImplementationKind: MemberImplementationKindNames.Workflow),
+            service,
+            CancellationToken.None);
+
+        var created = result.Should().BeOfType<Created<StudioMemberSummaryResponse>>().Subject;
+        created.Location.Should().Be($"/api/scopes/{ScopeId}/members/{NewSummary().MemberId}");
+        created.Value!.LifecycleStage.Should().Be(MemberLifecycleStageNames.Created);
+        created.Value.ImplementationRef.Should().BeNull();
+        service.CreateInvoked.Should().BeTrue();
+        service.CreateRequest!.ImplementationRef.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleCreateAsync_ShouldReturnTypedBadRequest_WhenImplementationRefIsPresent()
+    {
+        var service = new RecordingMemberService
+        {
+            CreateException = new StudioMemberCreateImplementationRefNotAllowedException(ScopeId),
         };
 
         var result = await InvokeHandle<IResult>(
@@ -48,14 +67,18 @@ public sealed class StudioMemberEndpointsTests
             new CreateStudioMemberRequest(
                 DisplayName: "Alpha",
                 ImplementationKind: MemberImplementationKindNames.Workflow,
-                ImplementationRef: implementationRef),
+                ImplementationRef: new StudioMemberImplementationRefResponse(
+                    ImplementationKind: MemberImplementationKindNames.Workflow,
+                    WorkflowId: "wf-alpha")),
             service,
             CancellationToken.None);
 
-        result.Should().BeOfType<Created<StudioMemberSummaryResponse>>()
-            .Which.Location.Should().Be($"/api/scopes/{ScopeId}/members/{NewSummary().MemberId}");
+        AssertBadRequestResult(
+            result,
+            StudioMemberCreateImplementationRefNotAllowedException.ErrorCode,
+            expectedField: "implementationRef",
+            expectedScopeId: ScopeId);
         service.CreateInvoked.Should().BeTrue();
-        service.CreateRequest!.ImplementationRef.Should().Be(implementationRef);
     }
 
     [Fact]
@@ -832,7 +855,11 @@ public sealed class StudioMemberEndpointsTests
             because: $"expected JSON result with status {expectedStatus} but got {result.GetType().Name}");
     }
 
-    private static void AssertBadRequestResult(IResult result, string expectedCode)
+    private static void AssertBadRequestResult(
+        IResult result,
+        string expectedCode,
+        string? expectedField = null,
+        string? expectedScopeId = null)
     {
         result.GetType().Name.Should().StartWith("BadRequest");
 
@@ -847,6 +874,20 @@ public sealed class StudioMemberEndpointsTests
         var codeProp = value!.GetType().GetProperty("code");
         var code = codeProp?.GetValue(value) as string;
         code.Should().Be(expectedCode);
+
+        if (expectedField != null)
+        {
+            var fieldProp = value.GetType().GetProperty("field");
+            var field = fieldProp?.GetValue(value) as string;
+            field.Should().Be(expectedField);
+        }
+
+        if (expectedScopeId != null)
+        {
+            var scopeIdProp = value.GetType().GetProperty("scopeId");
+            var scopeId = scopeIdProp?.GetValue(value) as string;
+            scopeId.Should().Be(expectedScopeId);
+        }
     }
 
     private static void AssertNotFoundResult(IResult result, string expectedCode)

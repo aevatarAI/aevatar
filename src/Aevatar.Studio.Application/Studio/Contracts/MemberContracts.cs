@@ -202,6 +202,26 @@ public sealed record CreateStudioMemberRequest(
     string? TeamId = null,
     StudioMemberImplementationRefResponse? ImplementationRef = null);
 
+public sealed class StudioMemberCreateImplementationRefNotAllowedException : InvalidOperationException
+{
+    public const string ErrorCode = "STUDIO_MEMBER_CREATE_IMPLEMENTATION_REF_NOT_ALLOWED";
+    public const string FieldName = "implementationRef";
+    public const string BindingRouteTemplate = "PUT /api/scopes/{scopeId}/members/{memberId}/binding";
+
+    public StudioMemberCreateImplementationRefNotAllowedException(string scopeId)
+        : base(
+            "implementationRef is not accepted when creating a studio member. " +
+            "Omit implementationRef, create the member shell, then bind the implementation through " +
+            BindingRouteTemplate + ".")
+    {
+        ScopeId = scopeId;
+    }
+
+    public string ScopeId { get; }
+
+    public string Field => FieldName;
+}
+
 /// <summary>
 /// Wire body for <c>PATCH /api/scopes/{scopeId}/members/{memberId}</c> when
 /// the caller wants to change the member's team assignment (ADR-0017 §Q6).

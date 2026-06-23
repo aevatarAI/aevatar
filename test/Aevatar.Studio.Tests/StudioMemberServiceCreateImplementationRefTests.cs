@@ -13,113 +13,82 @@ public sealed class StudioMemberServiceCreateImplementationRefTests
 {
     private const string ScopeId = "scope-1";
 
-    [Fact]
-    public async Task CreateAsync_WorkflowImplementationRef_ShouldForwardNormalizedRefToCommandPort()
+    public static IEnumerable<object[]> CreateTimeImplementationRefs()
+    {
+        yield return
+        [
+            MemberImplementationKindNames.Workflow,
+            new StudioMemberImplementationRefResponse(
+                ImplementationKind: MemberImplementationKindNames.Workflow,
+                WorkflowId: "wf-alpha",
+                WorkflowRevision: "rev-1"),
+        ];
+        yield return
+        [
+            MemberImplementationKindNames.Script,
+            new StudioMemberImplementationRefResponse(
+                ImplementationKind: MemberImplementationKindNames.Script,
+                ScriptId: "script-alpha"),
+        ];
+        yield return
+        [
+            MemberImplementationKindNames.GAgent,
+            new StudioMemberImplementationRefResponse(
+                ImplementationKind: MemberImplementationKindNames.GAgent,
+                DiagnosticActorTypeName: "Aevatar.SomeAgent"),
+        ];
+    }
+
+    [Theory]
+    [MemberData(nameof(CreateTimeImplementationRefs))]
+    public async Task CreateAsync_ImplementationRef_ShouldRejectTypedExceptionBeforeCommandDispatch(
+        string implementationKind,
+        StudioMemberImplementationRefResponse implementationRef)
     {
         var commandPort = new RecordingMemberCommandPort();
         var service = NewService(commandPort);
 
-        await service.CreateAsync(
+        var act = () => service.CreateAsync(
+            ScopeId,
+            new CreateStudioMemberRequest(
+                DisplayName: "Alpha",
+                ImplementationKind: implementationKind,
+                MemberId: "m-alpha",
+                ImplementationRef: implementationRef));
+
+        var thrown = await act.Should().ThrowAsync<StudioMemberCreateImplementationRefNotAllowedException>();
+        thrown.Which.ScopeId.Should().Be(ScopeId);
+        thrown.Which.Field.Should().Be("implementationRef");
+        thrown.Which.Message.Should().Contain("create the member shell");
+        thrown.Which.Message.Should().Contain("PUT /api/scopes/{scopeId}/members/{memberId}/binding");
+        commandPort.CreateRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShellCreate_ShouldForwardNormalizedRequestToCommandPort()
+    {
+        var commandPort = new RecordingMemberCommandPort();
+        var service = NewService(commandPort);
+
+        var summary = await service.CreateAsync(
             ScopeId,
             new CreateStudioMemberRequest(
                 DisplayName: " Alpha ",
                 ImplementationKind: " WORKFLOW ",
-                MemberId: " m-alpha ",
-                ImplementationRef: new StudioMemberImplementationRefResponse(
-                    ImplementationKind: " WORKFLOW ",
-                    WorkflowId: " wf-alpha ",
-                    WorkflowRevision: " rev-1 ")));
+                Description: " first member ",
+                MemberId: " m-alpha "));
 
         commandPort.CreateRequests.Should().ContainSingle();
-        commandPort.CreateRequests[0].Request.Should().BeEquivalentTo(
+        commandPort.CreateRequests[0].ScopeId.Should().Be(ScopeId);
+        commandPort.CreateRequests[0].Request.Should().Be(
             new CreateStudioMemberRequest(
                 DisplayName: "Alpha",
                 ImplementationKind: MemberImplementationKindNames.Workflow,
+                Description: "first member",
                 MemberId: "m-alpha",
-                ImplementationRef: new StudioMemberImplementationRefResponse(
-                    ImplementationKind: MemberImplementationKindNames.Workflow,
-                    WorkflowId: "wf-alpha",
-                    WorkflowRevision: "rev-1")));
-    }
-
-    [Fact]
-    public async Task CreateAsync_ScriptImplementationRef_ShouldAllowOptionalRevision()
-    {
-        var commandPort = new RecordingMemberCommandPort();
-        var service = NewService(commandPort);
-
-        await service.CreateAsync(
-            ScopeId,
-            new CreateStudioMemberRequest(
-                DisplayName: "Script Member",
-                ImplementationKind: MemberImplementationKindNames.Script,
-                ImplementationRef: new StudioMemberImplementationRefResponse(
-                    ImplementationKind: MemberImplementationKindNames.Script,
-                    ScriptId: " script-alpha ")));
-
-        commandPort.CreateRequests.Should().ContainSingle();
-        commandPort.CreateRequests[0].Request.ImplementationRef.Should().Be(
-            new StudioMemberImplementationRefResponse(
-                ImplementationKind: MemberImplementationKindNames.Script,
-                ScriptId: "script-alpha"));
-    }
-
-    [Fact]
-    public async Task CreateAsync_GAgentImplementationRef_ShouldAcceptDiagnosticActorTypeName()
-    {
-        var commandPort = new RecordingMemberCommandPort();
-        var service = NewService(commandPort);
-
-        await service.CreateAsync(
-            ScopeId,
-            new CreateStudioMemberRequest(
-                DisplayName: "Agent Member",
-                ImplementationKind: MemberImplementationKindNames.GAgent,
-                ImplementationRef: new StudioMemberImplementationRefResponse(
-                    ImplementationKind: MemberImplementationKindNames.GAgent,
-                    DiagnosticActorTypeName: " Aevatar.SomeAgent ")));
-
-        commandPort.CreateRequests[0].Request.ImplementationRef.Should().Be(
-            new StudioMemberImplementationRefResponse(
-                ImplementationKind: MemberImplementationKindNames.GAgent,
-                DiagnosticActorTypeName: "Aevatar.SomeAgent"));
-    }
-
-    [Fact]
-    public async Task CreateAsync_ImplementationRef_ShouldRejectKindMismatch()
-    {
-        var service = NewService(new RecordingMemberCommandPort());
-
-        var act = () => service.CreateAsync(
-            ScopeId,
-            new CreateStudioMemberRequest(
-                DisplayName: "Alpha",
-                ImplementationKind: MemberImplementationKindNames.Workflow,
-                ImplementationRef: new StudioMemberImplementationRefResponse(
-                    ImplementationKind: MemberImplementationKindNames.Script,
-                    ScriptId: "script-alpha")));
-
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*implementationRef.implementationKind must match implementationKind 'workflow'*");
-    }
-
-    [Fact]
-    public async Task CreateAsync_WorkflowImplementationRef_ShouldRejectNonWorkflowFields()
-    {
-        var service = NewService(new RecordingMemberCommandPort());
-
-        var act = () => service.CreateAsync(
-            ScopeId,
-            new CreateStudioMemberRequest(
-                DisplayName: "Alpha",
-                ImplementationKind: MemberImplementationKindNames.Workflow,
-                ImplementationRef: new StudioMemberImplementationRefResponse(
-                    ImplementationKind: MemberImplementationKindNames.Workflow,
-                    WorkflowId: "wf-alpha",
-                    ScriptId: "script-alpha")));
-
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*implementationRef.scriptId is not allowed*");
+                ImplementationRef: null));
+        summary.LifecycleStage.Should().Be(MemberLifecycleStageNames.Created);
+        summary.ImplementationRef.Should().BeNull();
     }
 
     private static StudioMemberService NewService(RecordingMemberCommandPort commandPort) =>
@@ -148,15 +117,13 @@ public sealed class StudioMemberServiceCreateImplementationRefTests
                 DisplayName: request.DisplayName,
                 Description: request.Description ?? string.Empty,
                 ImplementationKind: request.ImplementationKind,
-                LifecycleStage: request.ImplementationRef == null
-                    ? MemberLifecycleStageNames.Created
-                    : MemberLifecycleStageNames.BuildReady,
+                LifecycleStage: MemberLifecycleStageNames.Created,
                 PublishedServiceId: "member-test",
                 LastBoundRevisionId: null,
                 CreatedAt: DateTimeOffset.UtcNow,
                 UpdatedAt: DateTimeOffset.UtcNow)
             {
-                ImplementationRef = request.ImplementationRef,
+                ImplementationRef = null,
             });
         }
 
