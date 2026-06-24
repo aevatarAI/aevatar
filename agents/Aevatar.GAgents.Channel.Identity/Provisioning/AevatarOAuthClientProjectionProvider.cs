@@ -47,6 +47,10 @@ public sealed class AevatarOAuthClientProjectionProvider : IAevatarOAuthClientPr
                 : null;
         }
 
+        var redirectUris = document.RedirectUris.Count > 0
+            ? document.RedirectUris.ToArray()
+            : string.IsNullOrEmpty(document.RedirectUri) ? [] : [document.RedirectUri];
+
         return new AevatarOAuthClientSnapshot(
             ClientId: document.ClientId,
             ClientIdIssuedAt: DateTimeOffset.FromUnixTimeSeconds(document.ClientIdIssuedAtUnix),
@@ -61,6 +65,6 @@ public sealed class AevatarOAuthClientProjectionProvider : IAevatarOAuthClientPr
             PreviousHmacDemotedAt: previousDemotedAt,
             RedirectUri: string.IsNullOrEmpty(document.RedirectUri) ? null : document.RedirectUri,
             OauthScope: string.IsNullOrEmpty(document.OauthScope) ? null : document.OauthScope,
-            RedirectUris: document.RedirectUris.ToArray());
+            RedirectUris: redirectUris);
     }
 }
