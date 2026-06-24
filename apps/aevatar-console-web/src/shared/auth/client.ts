@@ -89,7 +89,7 @@ export class NyxIDAuthClient {
     const codeChallenge = await sha256Base64Url(codeVerifier);
     const state = randomUrlSafeString(24);
     const loginConfig = await loadBackendNyxIDLoginConfig();
-    const redirectUri = loginConfig.redirectUri;
+    const redirectUri = this.config.redirectUri;
     const scope = loginConfig.scope;
     const returnTo = sanitizeReturnTo(options.returnTo);
 

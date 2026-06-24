@@ -4,7 +4,7 @@ import type { NyxIDAuthSession, NyxIDTokenSet, NyxIDUserInfo } from "./session";
 
 export type NyxIDBackendLoginConfig = Pick<
   NyxIDRuntimeConfig,
-  "baseUrl" | "clientId" | "scope" | "redirectUri"
+  "baseUrl" | "clientId" | "scope"
 >;
 
 export type NyxIDLoginFinalizationRequest = {
@@ -25,8 +25,6 @@ type BackendLoginConfigResponse = {
   readonly ClientId?: unknown;
   readonly scope?: unknown;
   readonly Scope?: unknown;
-  readonly redirectUri?: unknown;
-  readonly RedirectUri?: unknown;
 };
 
 type BackendFinalizationResponse = {
@@ -144,10 +142,6 @@ function decodeBackendLoginConfig(
     ),
     clientId: readString(record.clientId ?? record.ClientId, "clientId"),
     scope: readString(record.scope ?? record.Scope, "scope"),
-    redirectUri: readString(
-      record.redirectUri ?? record.RedirectUri,
-      "redirectUri",
-    ),
   };
 }
 
