@@ -92,6 +92,10 @@ message EnsureAevatarOAuthClientProvisionedCommand {
   // Full redirect URI allowlist to register at NyxID. Empty means legacy caller;
   // the actor falls back to [redirect_uri].
   repeated string redirect_uris = 4;
+  // Break-glass: force DCR even when stored state appears provisioned. Operators
+  // must disable the startup env switch after one successful run to avoid
+  // creating a new NyxID client on every restart.
+  bool force_reprovision = 5;
 }
 
 // Durable self-callback payload fired when an actor-owned OAuth provisioning

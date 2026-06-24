@@ -27,6 +27,21 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
         command.RedirectUri.Should().Be(environment.RedirectUri);
         command.RedirectUris.Should().Equal(environment.RedirectUri, environment.ConsoleRedirectUri);
         command.ClientName.Should().Be("aevatar");
+        command.ForceReprovision.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task StartAsync_SetsForceReprovision_WhenBreakGlassEnvIsEnabled()
+    {
+        using var environment = new OAuthBootstrapEnvironment(forceDcrOnStartup: true);
+        var dispatch = new RecordingCommandDispatch<EnsureAevatarOAuthClientProvisionedCommand>(
+            static _ => OAuthClientReceipt());
+        var service = NewService(dispatch);
+
+        await service.StartAsync(CancellationToken.None);
+
+        dispatch.Commands.Should().ContainSingle();
+        dispatch.Commands[0].ForceReprovision.Should().BeTrue();
     }
 
     [Fact]
@@ -45,6 +60,7 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
         command.RedirectUri.Should().Be(environment.RedirectUri);
         command.RedirectUris.Should().Equal(environment.RedirectUri, environment.ConsoleRedirectUri);
         command.ClientName.Should().Be("aevatar");
+        command.ForceReprovision.Should().BeFalse();
     }
 
     [Fact]
@@ -144,20 +160,25 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
         private readonly string? _oldAuthority;
         private readonly string? _oldRedirectBaseUrl;
         private readonly string? _oldAdditionalRedirectUris;
+        private readonly string? _oldForceDcrOnStartup;
 
         public string Authority { get; } = "https://nyxid.test";
         public string RedirectBaseUrl { get; } = "https://aevatar.test";
         public string RedirectUri => $"{RedirectBaseUrl}{NyxIdRedirectUriResolver.CallbackPath}";
         public string ConsoleRedirectUri { get; } = "https://console.test/auth/callback";
 
-        public OAuthBootstrapEnvironment()
+        public OAuthBootstrapEnvironment(bool forceDcrOnStartup = false)
         {
             _oldAuthority = Environment.GetEnvironmentVariable(NyxIdAuthorityResolver.OverrideEnvVar);
             _oldRedirectBaseUrl = Environment.GetEnvironmentVariable(NyxIdRedirectUriResolver.OverrideEnvVar);
             _oldAdditionalRedirectUris = Environment.GetEnvironmentVariable(NyxIdRedirectUriResolver.AdditionalRedirectUrisEnvVar);
+            _oldForceDcrOnStartup = Environment.GetEnvironmentVariable(AevatarOAuthClientBootstrapService.ForceDcrOnStartupEnvVar);
             Environment.SetEnvironmentVariable(NyxIdAuthorityResolver.OverrideEnvVar, Authority);
             Environment.SetEnvironmentVariable(NyxIdRedirectUriResolver.OverrideEnvVar, RedirectBaseUrl);
             Environment.SetEnvironmentVariable(NyxIdRedirectUriResolver.AdditionalRedirectUrisEnvVar, ConsoleRedirectUri);
+            Environment.SetEnvironmentVariable(
+                AevatarOAuthClientBootstrapService.ForceDcrOnStartupEnvVar,
+                forceDcrOnStartup ? "true" : null);
         }
 
         public void Dispose()
@@ -165,6 +186,7 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
             Environment.SetEnvironmentVariable(NyxIdAuthorityResolver.OverrideEnvVar, _oldAuthority);
             Environment.SetEnvironmentVariable(NyxIdRedirectUriResolver.OverrideEnvVar, _oldRedirectBaseUrl);
             Environment.SetEnvironmentVariable(NyxIdRedirectUriResolver.AdditionalRedirectUrisEnvVar, _oldAdditionalRedirectUris);
+            Environment.SetEnvironmentVariable(AevatarOAuthClientBootstrapService.ForceDcrOnStartupEnvVar, _oldForceDcrOnStartup);
         }
     }
 

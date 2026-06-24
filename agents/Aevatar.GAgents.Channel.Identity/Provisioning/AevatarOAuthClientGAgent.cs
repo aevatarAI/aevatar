@@ -86,7 +86,7 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         bool allowPendingRetryBypass)
     {
         ArgumentNullException.ThrowIfNull(cmd);
-        if (!allowPendingRetryBypass && HasPendingProvisioningRetryNotDue(DateTimeOffset.UtcNow))
+        if (!cmd.ForceReprovision && !allowPendingRetryBypass && HasPendingProvisioningRetryNotDue(DateTimeOffset.UtcNow))
         {
             Logger.LogInformation(
                 "Ignoring duplicate external aevatar OAuth client provisioning ensure while actor-owned retry is pending: attempt={Attempt}, due_unix_ms={DueUnixMs}",
@@ -144,7 +144,7 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
                 || !RedirectUriListsEqual(State.RedirectUris, expectedRedirectUris));
         var oauthScopeDrifted = sameClient && !AevatarOAuthClientScopes.ContainsRequiredScopes(State.OauthScope);
 
-        if (sameClient && !redirectUriDrifted && !redirectUriListDrifted && !oauthScopeDrifted)
+        if (sameClient && !cmd.ForceReprovision && !redirectUriDrifted && !redirectUriListDrifted && !oauthScopeDrifted)
         {
             // Seed HMAC key on first activation against an existing client_id
             // (defence-in-depth against partial state loaded from snapshots).
@@ -190,6 +190,14 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
                 "Re-running DCR to register a new client_id at NyxID with proxy-capable scopes.",
                 State.OauthScope,
                 AevatarOAuthClientScopes.AuthorizationScope);
+        }
+        if (cmd.ForceReprovision)
+        {
+            Logger.LogWarning(
+                "Aevatar OAuth client force DCR requested: stored_client_id={ClientId}, authority={Authority}, redirect_uris={RedirectUris}.",
+                State.ClientId,
+                cmd.NyxidAuthority,
+                string.Join(",", expectedRedirectUris));
         }
 
         var registrar = Services.GetService<NyxIdDynamicClientRegistrationClient>();
