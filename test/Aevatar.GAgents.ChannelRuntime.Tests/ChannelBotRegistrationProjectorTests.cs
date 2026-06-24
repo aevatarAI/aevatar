@@ -39,6 +39,7 @@ public sealed class ChannelBotRegistrationProjectorTests
                     NyxAgentApiKeyId = "api-key-1",
                     NyxConversationRouteId = "route-1",
                     NyxReplyCredentialRef = "secrets://channel/nyxid/lark/bot-reg-1/reply-api-key",
+                    LastInboundAtUtc = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 4, 10, 11, 0, 0, TimeSpan.Zero)),
                 },
             },
         };
@@ -59,6 +60,7 @@ public sealed class ChannelBotRegistrationProjectorTests
         doc.StateVersion.Should().Be(2);
         doc.LastEventId.Should().Be("evt-bot-1");
         doc.ActorId.Should().Be("bot-reg-actor-1");
+        doc.LastInboundAtUtc.Should().Be(Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 4, 10, 11, 0, 0, TimeSpan.Zero)));
     }
 
     [Fact]

@@ -283,7 +283,7 @@ public sealed class ChannelCallbackEndpointsTests
     }
 
     [Fact]
-    public async Task HandleGetStatusAsync_ReturnsForeign_WhenScopeMismatch()
+    public async Task HandleGetStatusAsync_CrossAccount_PendingWhenNoInboundObserved()
     {
         var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
         queryPort.GetAsync("reg-foreign", Arg.Any<CancellationToken>())
@@ -293,16 +293,41 @@ public sealed class ChannelCallbackEndpointsTests
                 Platform = "lark",
                 ScopeId = "scope-2",
                 NyxChannelBotId = "bot-foreign",
+                // no LastInboundAtUtc → aevatar has not observed an inbound for it
             }));
         var http = CreateHttpContext("scope-1");
         http.Request.Headers.Authorization = "Bearer test-token";
 
-        // nyxClient (arg 4) null: the foreign path returns before any NyxID call.
+        // nyxClient (arg 4) null: the cross-account path reports from the read model, no NyxID call.
         var result = await InvokeAsync("HandleGetStatusAsync", "reg-foreign", http, queryPort, null, NullLoggerFactory.Instance, CancellationToken.None);
         var response = await ExecuteResultAsync(result);
 
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
-        response.Body.Should().Contain("\"status\":\"foreign\"");
+        response.Body.Should().Contain("\"status\":\"pending_webhook\"");
+        response.Body.Should().Contain("\"owned\":false");
+    }
+
+    [Fact]
+    public async Task HandleGetStatusAsync_CrossAccount_ActiveWhenInboundObserved()
+    {
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        queryPort.GetAsync("reg-foreign", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
+            {
+                Id = "reg-foreign",
+                Platform = "lark",
+                ScopeId = "scope-2",
+                NyxChannelBotId = "bot-foreign",
+                LastInboundAtUtc = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            }));
+        var http = CreateHttpContext("scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        var result = await InvokeAsync("HandleGetStatusAsync", "reg-foreign", http, queryPort, null, NullLoggerFactory.Instance, CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        response.Body.Should().Contain("\"status\":\"active\"");
     }
 
     [Fact]
