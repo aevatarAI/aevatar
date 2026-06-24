@@ -28,6 +28,7 @@ public static class ChannelCallbackEndpoints
         // Registration CRUD — requires authentication
         group.MapPost("/registrations", HandleRegisterAsync).RequireAuthorization();
         group.MapGet("/registrations", HandleListRegistrationsAsync).RequireAuthorization();
+        group.MapGet("/registrations/{registrationId}/status", HandleGetStatusAsync).RequireAuthorization();
         group.MapDelete("/registrations/{registrationId}", HandleDeleteRegistrationAsync).RequireAuthorization();
 
         // Diagnostic: test reply path without going through full LLM chat
@@ -149,6 +150,84 @@ public static class ChannelCallbackEndpoints
         });
 
         return Results.Ok(result);
+    }
+
+    /// <summary>
+    /// Live bot status for the catalog badges and the verify-step lights. The facade
+    /// list returns the registration record only; the live <c>active</c> /
+    /// <c>pending_webhook</c> state lives on NyxID, so this reads it server-side via
+    /// the existing channel-bot client (no browser→NyxID CORS, no NyxID change).
+    /// Status read failures degrade to <c>unknown</c> — polling must never 500.
+    /// </summary>
+    private static async Task<IResult> HandleGetStatusAsync(
+        string registrationId,
+        HttpContext http,
+        [FromServices] IChannelBotRegistrationQueryPort queryPort,
+        [FromServices] NyxIdApiClient nyxClient,
+        [FromServices] ILoggerFactory loggerFactory,
+        CancellationToken ct)
+    {
+        var registration = await queryPort.GetAsync(registrationId, ct);
+        if (registration is null)
+            return Results.NotFound(new { error = "Registration not found" });
+
+        var accessToken = ResolveBearerAccessToken(http);
+        if (string.IsNullOrWhiteSpace(accessToken))
+            return Results.Unauthorized();
+
+        if (string.IsNullOrWhiteSpace(registration.NyxChannelBotId))
+            return Results.Json(new { registration_id = registrationId, status = "unknown", note = "no channel bot id" });
+
+        string raw;
+        try
+        {
+            raw = await nyxClient.GetChannelBotAsync(accessToken, registration.NyxChannelBotId, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            loggerFactory.CreateLogger("Aevatar.ChannelRuntime.Status").LogWarning(
+                ex,
+                "Nyx channel-bot status read failed: registration={RegistrationId}, botId={BotId}",
+                registrationId,
+                registration.NyxChannelBotId);
+            return Results.Json(new { registration_id = registrationId, nyx_channel_bot_id = registration.NyxChannelBotId, status = "unknown", error = "status_query_failed" });
+        }
+
+        var (status, lastEventAt) = ParseChannelBotStatus(raw);
+        return Results.Json(new
+        {
+            registration_id = registrationId,
+            nyx_channel_bot_id = registration.NyxChannelBotId,
+            status,
+            last_event_at = lastEventAt,
+        });
+    }
+
+    private static (string Status, string? LastEventAt) ParseChannelBotStatus(string response)
+    {
+        if (NyxApiResponseHelper.LooksLikeErrorEnvelope(response))
+            return ("unknown", null);
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+            // NyxID may wrap the resource in { "data": { ... } }.
+            var element = root.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Object
+                ? data
+                : root;
+            var status = element.TryGetProperty("status", out var statusElement) && statusElement.ValueKind == JsonValueKind.String
+                ? statusElement.GetString()
+                : null;
+            var lastEventAt = element.TryGetProperty("last_event_at", out var lastEventElement) && lastEventElement.ValueKind == JsonValueKind.String
+                ? lastEventElement.GetString()
+                : null;
+            return (string.IsNullOrWhiteSpace(status) ? "unknown" : status!, lastEventAt);
+        }
+        catch (JsonException)
+        {
+            return ("unknown", null);
+        }
     }
 
     private static string? ResolveBearerAccessToken(HttpContext http)

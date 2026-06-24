@@ -1,0 +1,73 @@
+using System.Reflection;
+using FluentAssertions;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Routing;
+using Xunit;
+using Aevatar.GAgents.Channel.NyxIdRelay;
+
+namespace Aevatar.GAgents.ChannelRuntime.Tests;
+
+public sealed class ChannelsEndpointsTests
+{
+    [Fact]
+    public void MapChannels_RegistersPage_AsAnonymousGet_WithoutOwnCallback()
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = "Development",
+        });
+
+        var app = builder.Build();
+        var routeBuilder = (IEndpointRouteBuilder)app;
+        app.MapChannels();
+
+        var endpoints = routeBuilder.DataSources
+            .SelectMany(source => source.Endpoints)
+            .OfType<RouteEndpoint>()
+            .ToArray();
+
+        var page = endpoints.Single(route => string.Equals(route.RoutePattern.RawText, "/channels", StringComparison.Ordinal));
+        page.Metadata.OfType<HttpMethodMetadata>().Single().HttpMethods.Should().Contain("GET");
+        page.Metadata.OfType<IAllowAnonymous>().Should().NotBeEmpty("the page is gated by in-page OIDC, not server auth");
+
+        // No /channels/callback: NyxID rejects unregistered redirect_uris, so the page reuses
+        // studio's /workflow/studio/callback instead.
+        endpoints.Any(route => route.RoutePattern.RawText == "/channels/callback").Should().BeFalse();
+    }
+
+    // Regression guard: the page is generated from channels.html at tools-time and embedded as a
+    // const. These markers anchor the contract pieces that must not silently drop on regeneration —
+    // the skill-mandated Tier-1 scope and the default-LLM reminder (the explicit product ask).
+    [Fact]
+    public void EmbeddedPage_PreservesContractMarkers()
+    {
+        var html = ReadEmbeddedHtml();
+
+        html.Should().StartWith("<!doctype html>");
+        html.Should().Contain("id=\"app\"");
+        html.Should().NotContain("class=\"dock\"", "the design-review dock must be stripped from the shipped page");
+        // OIDC reuses studio's registered callback + shared storage (NyxID rejects new redirect_uris)
+        html.Should().Contain("/workflow/studio/callback");
+        html.Should().Contain("aevatar-studio:nyxid:pkce");
+        // skill Tier-1 scope (the #1 silent-bot fix), event sub, and the default LLM reminder
+        html.Should().Contain("im:message.p2p_msg:readonly");
+        html.Should().Contain("im.message.receive_v1");
+        html.Should().Contain("chrono-llm-public");
+        html.Should().Contain("gpt-5.5");
+        // wired to the live facade (relative), not a mock host
+        html.Should().Contain("/api/channels/registrations");
+        html.Should().Contain("/api/user-config/llm");
+    }
+
+    private static string ReadEmbeddedHtml()
+    {
+        var pageType = typeof(ChannelsEndpoints).Assembly
+            .GetType("Aevatar.GAgents.Channel.NyxIdRelay.ChannelsPage")
+            ?? throw new InvalidOperationException("ChannelsPage type not found.");
+        var field = pageType.GetField("Html", BindingFlags.Public | BindingFlags.Static)
+            ?? throw new InvalidOperationException("ChannelsPage.Html not found.");
+        return (string)(field.GetValue(null) ?? throw new InvalidOperationException("ChannelsPage.Html is null."));
+    }
+}

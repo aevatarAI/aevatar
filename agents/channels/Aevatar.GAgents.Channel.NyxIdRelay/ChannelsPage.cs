@@ -1,0 +1,1179 @@
+// Channels onboarding page — one inline self-contained HTML page (no wwwroot, no
+// build step), mirroring the /workflow/studio + /workflow/observatory precedent.
+// Browser OIDC Authorization Code + PKCE against nyxid (same console-web client).
+// NyxID rejects unregistered redirect_uris and is external, so the page reuses
+// studio's registered /workflow/studio/callback and shares its PKCE + token
+// storage key (a live studio session also signs you in here). The page is the
+// anonymous static shell; the app is gated behind login, then wired to the live
+// channel-registration facade (POST/GET/DELETE /api/channels/registrations +
+// /status) and the owner LLM config (/api/user-config/llm). Source of the page is
+// authored at tools-time; this constant is the committed artifact. Authoritative
+// onboarding flow = the published aevatar-lark-bot-registration skill.
+namespace Aevatar.GAgents.Channel.NyxIdRelay;
+
+internal static class ChannelsPage
+{
+    public const string Html = """
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>渠道接入 · Channels · aevatar</title>
+<style>
+  /* =========================================================================
+     aevatar 渠道接入 / Channels —— 高保真视觉交互稿
+     由 host 直出于 /channels（和 /workflow/studio、observatory 同源）。
+     framework-agnostic：语义化 HTML + CSS 变量 + 少量 vanilla JS（仅状态切换）。
+     设计令牌与 studio/observatory 一字不差。
+     ========================================================================= */
+
+  /* ---- Design tokens : 暗色（默认）------------------------------------- */
+  :root {
+    --bg:#0f1115; --bg-grad:radial-gradient(1200px 600px at 78% -10%,#161b26 0%,#0f1115 60%);
+    --panel:#171a21; --panel-2:#1f232c; --panel-3:#252b36;
+    --border:#2a2f3a; --border-soft:#22272f;
+    --fg:#e6e9ef; --fg-strong:#f4f6fb; --muted:#9aa3b2; --muted-2:#6c7585;
+    --accent:#5b8cff; --accent-ink:#0b1020; --accent-soft:rgba(91,140,255,.14); --accent-line:rgba(91,140,255,.40);
+    --ok:#3fb950; --ok-soft:rgba(63,185,80,.14); --warn:#d29922; --warn-soft:rgba(210,153,34,.15);
+    --err:#f85149; --err-soft:rgba(248,81,73,.14); --run:#58a6ff; --run-soft:rgba(88,166,255,.16);
+    --shadow:0 8px 30px rgba(0,0,0,.40); --shadow-sm:0 1px 2px rgba(0,0,0,.30);
+    --ring:0 0 0 2px var(--bg),0 0 0 4px var(--accent);
+    --r-sm:6px; --r:9px; --r-lg:13px; --r-pill:999px;
+    --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif;
+    --topbar-h:56px; color-scheme:dark;
+  }
+  /* ---- 浅色：@media + .theme-light（令牌同 studio 浅色组）-------------- */
+  @media (prefers-color-scheme: light) {
+    html:not(.theme-dark) {
+      --bg:#f5f7fa; --bg-grad:radial-gradient(1100px 560px at 80% -12%,#eef2f8 0%,#f5f7fa 58%);
+      --panel:#ffffff; --panel-2:#f3f5f9; --panel-3:#eaeef4; --border:#dde2ea; --border-soft:#e7ebf1;
+      --fg:#1c2128; --fg-strong:#0b0f14; --muted:#57606b; --muted-2:#828b97;
+      --accent:#2f63e0; --accent-ink:#ffffff; --accent-soft:rgba(47,99,224,.10); --accent-line:rgba(47,99,224,.34);
+      --ok:#1a7f37; --ok-soft:rgba(26,127,55,.12); --warn:#9a6700; --warn-soft:rgba(154,103,0,.12);
+      --err:#cf222e; --err-soft:rgba(207,34,46,.10); --run:#2f6fed; --run-soft:rgba(47,111,237,.12);
+      --shadow:0 10px 30px rgba(16,24,40,.10); --shadow-sm:0 1px 2px rgba(16,24,40,.06);
+      color-scheme:light;
+    }
+  }
+  html.theme-light {
+    --bg:#f5f7fa; --bg-grad:radial-gradient(1100px 560px at 80% -12%,#eef2f8 0%,#f5f7fa 58%);
+    --panel:#ffffff; --panel-2:#f3f5f9; --panel-3:#eaeef4; --border:#dde2ea; --border-soft:#e7ebf1;
+    --fg:#1c2128; --fg-strong:#0b0f14; --muted:#57606b; --muted-2:#828b97;
+    --accent:#2f63e0; --accent-ink:#ffffff; --accent-soft:rgba(47,99,224,.10); --accent-line:rgba(47,99,224,.34);
+    --ok:#1a7f37; --ok-soft:rgba(26,127,55,.12); --warn:#9a6700; --warn-soft:rgba(154,103,0,.12);
+    --err:#cf222e; --err-soft:rgba(207,34,46,.10); --run:#2f6fed; --run-soft:rgba(47,111,237,.12);
+    --shadow:0 10px 30px rgba(16,24,40,.10); --shadow-sm:0 1px 2px rgba(16,24,40,.06);
+    color-scheme:light;
+  }
+  html.theme-dark { color-scheme:dark; }
+
+  /* ---- base ------------------------------------------------------------- */
+  * { box-sizing:border-box; }
+  html,body { height:100%; }
+  body { margin:0; background:var(--bg); background-image:var(--bg-grad); background-attachment:fixed;
+    color:var(--fg); font:14px/1.55 var(--sans); -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility; }
+  ::selection { background:var(--accent-soft); }
+  button { font:inherit; color:inherit; cursor:pointer; }
+  a { color:var(--accent); text-decoration:none; }
+  a:hover { text-decoration:underline; }
+  :focus-visible { outline:none; box-shadow:var(--ring); border-radius:var(--r-sm); }
+  .mono { font-family:var(--mono); font-variant-numeric:tabular-nums; }
+  .scroll::-webkit-scrollbar { width:10px; height:10px; }
+  .scroll::-webkit-scrollbar-thumb { background:var(--panel-3); border-radius:999px; border:2px solid transparent; background-clip:content-box; }
+
+  /* ---- status primitives (observatory/studio) --------------------------- */
+  .dot { width:9px; height:9px; border-radius:50%; flex:0 0 auto; }
+  .dot.s-active, .dot.s-registered, .dot.s-bound, .dot.s-done, .dot.s-ok { background:var(--ok); }
+  .dot.s-pending, .dot.s-running { background:var(--run); animation:pulse 2.4s ease-out infinite; }
+  .dot.s-warn { background:var(--warn); }
+  .dot.s-error, .dot.s-failed { background:var(--err); }
+  .dot.s-soon, .dot.s-unknown { background:var(--neutral,#9aa3b2); }
+  @keyframes pulse { 0%{box-shadow:0 0 0 0 var(--run-soft);} 70%{box-shadow:0 0 0 7px transparent;} 100%{box-shadow:0 0 0 0 transparent;} }
+
+  .badge { display:inline-flex; align-items:center; gap:6px; padding:3px 9px; border-radius:var(--r-pill); font-size:12px; font-weight:600; border:1px solid transparent; white-space:nowrap; }
+  .badge .dot { width:7px; height:7px; }
+  .b-active, .b-registered, .b-bound, .b-done { color:var(--ok); background:var(--ok-soft); border-color:color-mix(in oklab,var(--ok) 30%,transparent); }
+  .b-pending, .b-running { color:var(--run); background:var(--run-soft); border-color:color-mix(in oklab,var(--run) 30%,transparent); }
+  .b-warn { color:var(--warn); background:var(--warn-soft); border-color:color-mix(in oklab,var(--warn) 30%,transparent); }
+  .b-error, .b-failed { color:var(--err); background:var(--err-soft); border-color:color-mix(in oklab,var(--err) 30%,transparent); }
+  .b-soon { color:var(--muted); background:color-mix(in oklab,var(--muted) 12%,transparent); border-color:var(--border); }
+
+  /* one-click copy button (studio) */
+  .copybtn { display:inline-flex; align-items:center; gap:5px; font-size:11.5px; color:var(--muted); background:var(--panel-2); border:1px solid var(--border); border-radius:var(--r-sm); padding:4px 9px; white-space:nowrap; }
+  .copybtn:hover { color:var(--fg); border-color:var(--muted-2); }
+  .copybtn.done { color:var(--ok); border-color:color-mix(in oklab,var(--ok) 40%,transparent); }
+
+  /* =========================================================================
+     Top bar (thin header) — 同 studio/observatory topbar 模式
+     ========================================================================= */
+  .topbar { position:sticky; top:0; z-index:40; height:var(--topbar-h); display:flex; align-items:center; gap:12px; padding:0 16px;
+    background:color-mix(in oklab,var(--panel) 88%,transparent); backdrop-filter:saturate(140%) blur(12px); -webkit-backdrop-filter:saturate(140%) blur(12px);
+    border-bottom:1px solid var(--border); }
+  .brand { display:flex; align-items:center; gap:10px; min-width:0; }
+  .brand-mark { width:26px; height:26px; border-radius:7px; flex:0 0 auto; display:grid; place-items:center; color:#fff; box-shadow:var(--shadow-sm);
+    background:linear-gradient(150deg,var(--accent),color-mix(in oklab,var(--accent) 55%,#7c4dff)); }
+  .brand-name { font-weight:650; letter-spacing:-.01em; color:var(--fg-strong); white-space:nowrap; }
+  .brand-sub { color:var(--muted-2); font-size:12px; white-space:nowrap; }
+  .scope-chip { display:inline-flex; align-items:center; gap:7px; padding:4px 10px; border-radius:var(--r-pill); background:var(--panel-2); border:1px solid var(--border); font-size:12px; color:var(--muted); }
+  .scope-chip .sid { font-family:var(--mono); font-size:11.5px; color:var(--fg); }
+  .scope-chip svg { color:var(--ok); }
+  .spacer { flex:1 1 auto; }
+  .obs-link { display:inline-flex; align-items:center; gap:7px; padding:6px 12px; border-radius:var(--r-pill); background:var(--accent-soft); border:1px solid var(--accent-line); color:var(--accent); font-size:12.5px; font-weight:600; }
+  .obs-link:hover { background:color-mix(in oklab,var(--accent) 18%,transparent); text-decoration:none; }
+  .iconbtn { width:34px; height:34px; display:grid; place-items:center; background:var(--panel-2); border:1px solid var(--border); border-radius:var(--r); color:var(--muted); transition:color .15s,border-color .15s; }
+  .iconbtn:hover { color:var(--fg); border-color:var(--muted-2); }
+  .account { display:inline-flex; align-items:center; gap:8px; padding:4px 6px 4px 4px; border-radius:var(--r-pill); background:var(--panel-2); border:1px solid var(--border); }
+  .avatar { width:24px; height:24px; border-radius:50%; flex:0 0 auto; display:grid; place-items:center; font-size:12px; font-weight:700; color:#fff; background:linear-gradient(140deg,#6f9bff,#9b6bff); }
+  .account .who { font-size:12.5px; color:var(--fg); max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+  /* =========================================================================
+     Page shell
+     ========================================================================= */
+  .page { max-width:1080px; margin:0 auto; padding:30px 24px 80px; }
+  .crumb { display:flex; align-items:center; gap:8px; font-size:12.5px; color:var(--muted); margin-bottom:18px; }
+  .crumb button { display:inline-flex; align-items:center; gap:6px; background:transparent; border:0; color:var(--accent); font-weight:600; padding:2px 4px; border-radius:var(--r-sm); }
+  .crumb button:hover { text-decoration:underline; }
+  .crumb .sep { color:var(--border); }
+
+  .page-h { font-size:24px; font-weight:760; letter-spacing:-.02em; color:var(--fg-strong); margin:0; }
+  .page-sub { color:var(--muted); font-size:14px; margin:9px 0 0; line-height:1.6; max-width:64ch; }
+  .sec-title { font-size:13px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:var(--muted); margin:34px 0 14px; display:flex; align-items:center; gap:10px; }
+  .sec-title .count { font-family:var(--mono); font-size:12px; color:var(--muted-2); }
+
+  /* ---- channel grid ----------------------------------------------------- */
+  .ch-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(232px,1fr)); gap:14px; }
+  .ch-card { text-align:left; border:1px solid var(--border); border-radius:var(--r-lg); background:var(--panel); padding:18px; display:flex; flex-direction:column; gap:13px; transition:border-color .15s,transform .15s,box-shadow .15s; }
+  .ch-card.available { cursor:pointer; }
+  .ch-card.available:hover { border-color:var(--accent-line); transform:translateY(-2px); box-shadow:var(--shadow); }
+  .ch-card.soon { opacity:.62; cursor:not-allowed; }
+  .ch-logo { width:44px; height:44px; border-radius:12px; display:grid; place-items:center; flex:0 0 auto; color:#fff; }
+  .ch-top { display:flex; align-items:flex-start; justify-content:space-between; }
+  .ch-name { font-weight:680; color:var(--fg-strong); font-size:15.5px; letter-spacing:-.01em; }
+  .ch-en { font-family:var(--mono); font-size:11px; color:var(--muted-2); margin-top:2px; }
+  .ch-desc { font-size:12.5px; color:var(--muted); flex:1; line-height:1.55; }
+  .ch-foot { display:flex; align-items:center; justify-content:space-between; }
+  .ch-cta { font-size:12px; font-weight:600; color:var(--accent); display:inline-flex; align-items:center; gap:5px; }
+
+  /* ---- connected list --------------------------------------------------- */
+  .reg-row { display:grid; grid-template-columns:auto 1fr auto; gap:13px; align-items:center; padding:13px 15px; border:1px solid var(--border); border-radius:var(--r); background:var(--panel); margin-bottom:8px; }
+  .reg-row .rl { width:34px; height:34px; border-radius:9px; display:grid; place-items:center; color:#fff; flex:0 0 auto; }
+  .reg-row .rn { font-weight:640; color:var(--fg-strong); }
+  .reg-row .rm { font-size:12px; color:var(--muted); display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:2px; }
+  .reg-row .rm .id { font-family:var(--mono); font-size:11.5px; color:var(--muted-2); }
+  .reg-row .rm .sep { color:var(--border); }
+  .reg-row .ra { display:flex; align-items:center; gap:10px; }
+  .manage-btn { font-size:12.5px; font-weight:600; color:var(--fg); background:var(--panel-2); border:1px solid var(--border); border-radius:var(--r-sm); padding:6px 12px; }
+  .manage-btn:hover { border-color:var(--muted-2); }
+
+  .empty { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; text-align:center; color:var(--muted); padding:40px 22px; border:1px dashed var(--border); border-radius:var(--r-lg); }
+  .empty .ic { width:40px; height:40px; color:var(--muted-2); opacity:.8; }
+  .empty .et { font-weight:600; color:var(--fg); }
+  .empty .es { font-size:12.5px; max-width:240px; }
+
+  /* =========================================================================
+     Wizard : stepper + main
+     ========================================================================= */
+  .wiz { display:grid; grid-template-columns:262px minmax(0,1fr); gap:0; border:1px solid var(--border); border-radius:var(--r-lg); background:var(--panel); overflow:hidden; }
+  .stepper { padding:20px 14px; border-right:1px solid var(--border); background:color-mix(in oklab,var(--panel-2) 40%,transparent); }
+  .stepper-h { font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--muted-2); padding:0 8px; margin-bottom:12px; }
+  .step-item { position:relative; display:grid; grid-template-columns:auto 1fr; gap:12px; padding:9px 8px; border-radius:var(--r); border:1px solid transparent; }
+  .step-item.clickable { cursor:pointer; }
+  .step-item.clickable:hover { background:var(--panel-2); }
+  .step-item[aria-current="step"] { background:var(--accent-soft); border-color:var(--accent-line); }
+  .step-num { width:28px; height:28px; border-radius:50%; border:1.5px solid var(--border); display:grid; place-items:center; font-size:13px; font-weight:700; color:var(--muted); background:var(--panel); z-index:1; }
+  .step-item::before { content:""; position:absolute; left:21px; top:39px; height:calc(100% - 30px); width:2px; background:var(--border); }
+  .step-item:last-child::before { display:none; }
+  .step-item.done .step-num { border-color:var(--ok); color:var(--ok); background:var(--ok-soft); }
+  .step-item.done::before { background:var(--ok); }
+  .step-item.current .step-num { border-color:var(--accent); color:var(--accent); background:var(--accent-soft); }
+  .step-item.failed .step-num { border-color:var(--err); color:var(--err); background:var(--err-soft); }
+  .step-item .st-title { font-weight:640; color:var(--fg-strong); font-size:13.5px; }
+  .step-item.pending .st-title { color:var(--muted); }
+  .step-item .st-sub { font-size:11px; color:var(--muted-2); margin-top:1px; font-family:var(--mono); }
+
+  .step-main { padding:26px 30px 36px; min-width:0; }
+  .step-head { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  .step-kicker { font-family:var(--mono); font-size:12px; color:var(--accent); }
+  .step-h { font-size:20px; font-weight:720; letter-spacing:-.01em; color:var(--fg-strong); margin:4px 0 0; }
+  .step-desc { color:var(--muted); font-size:13.5px; margin:10px 0 18px; line-height:1.65; max-width:64ch; }
+  .step-foot { display:flex; gap:10px; align-items:center; margin-top:26px; padding-top:18px; border-top:1px solid var(--border-soft); flex-wrap:wrap; }
+  .step-foot .spacer { flex:1 1 auto; }
+
+  /* forms */
+  .field { margin-bottom:16px; }
+  .field > label { display:block; font-size:13px; font-weight:600; color:var(--fg); margin-bottom:6px; }
+  .field .req { color:var(--accent); margin-left:2px; }
+  .input { width:100%; background:var(--panel-2); border:1px solid var(--border); border-radius:var(--r); padding:10px 12px; color:var(--fg-strong); font-family:var(--mono); font-size:13px; outline:none; transition:border-color .15s,box-shadow .15s; }
+  .input::placeholder { color:var(--muted-2); }
+  .input:focus { border-color:var(--accent-line); box-shadow:0 0 0 3px var(--accent-soft); }
+  .input.bad { border-color:color-mix(in oklab,var(--err) 55%,var(--border)); }
+  .field .help { font-size:11.5px; color:var(--muted-2); margin-top:6px; line-height:1.5; }
+  .field .err-msg { font-size:12px; color:var(--err); margin-top:6px; display:inline-flex; gap:5px; align-items:center; }
+
+  /* copy rows */
+  .crow { display:grid; grid-template-columns:1fr auto; gap:12px; align-items:center; padding:11px 13px; border:1px solid var(--border); border-radius:var(--r); background:var(--panel-2); margin-bottom:8px; }
+  .crow .ck { font-size:11.5px; color:var(--muted-2); margin-bottom:3px; }
+  .crow .cv { font-family:var(--mono); font-size:12.5px; color:var(--fg-strong); word-break:break-all; }
+  .crow.req-perm { grid-template-columns:1fr auto; }
+  .perm-pill { font-family:var(--mono); font-size:11px; padding:2px 8px; border-radius:var(--r-pill); background:var(--accent-soft); color:var(--accent); border:1px solid var(--accent-line); margin-right:6px; }
+
+  /* callouts */
+  .callout { display:flex; gap:11px; padding:12px 14px; border-radius:var(--r); font-size:13px; line-height:1.6; margin:16px 0; }
+  .callout svg { flex:0 0 auto; margin-top:2px; }
+  .callout .ct-title { font-weight:650; color:var(--fg-strong); display:block; margin-bottom:2px; }
+  .callout.info { background:var(--accent-soft); border:1px solid var(--accent-line); }
+  .callout.info svg { color:var(--accent); }
+  .callout.warn { background:var(--warn-soft); border:1px solid color-mix(in oklab,var(--warn) 38%,transparent); }
+  .callout.warn svg { color:var(--warn); }
+  .callout.err { background:var(--err-soft); border:1px solid color-mix(in oklab,var(--err) 38%,transparent); }
+  .callout.err svg { color:var(--err); }
+  .callout .body { color:var(--muted); }
+  .callout .body b { color:var(--fg); font-weight:600; }
+
+  /* buttons */
+  .btn { display:inline-flex; align-items:center; justify-content:center; gap:8px; padding:10px 16px; border-radius:var(--r); font-size:13.5px; font-weight:650; border:1px solid transparent; transition:filter .15s,border-color .15s,background .15s; }
+  .btn-primary { background:var(--accent); color:var(--accent-ink); }
+  .btn-primary:hover { filter:brightness(1.08); }
+  .btn-ghost { background:var(--panel-2); border-color:var(--border); color:var(--fg); }
+  .btn-ghost:hover { border-color:var(--muted-2); }
+  .btn-danger { background:transparent; border-color:color-mix(in oklab,var(--err) 45%,transparent); color:var(--err); }
+  .btn-danger:hover { background:var(--err-soft); }
+  .btn:disabled { opacity:.5; cursor:default; }
+
+  /* register progress */
+  .reg-steps { display:flex; flex-direction:column; gap:1px; margin:6px 0 4px; }
+  .reg-line { display:flex; align-items:center; gap:11px; padding:9px 12px; border-radius:var(--r-sm); font-size:13px; color:var(--muted-2); }
+  .reg-line .ic { width:18px; height:18px; display:grid; place-items:center; flex:0 0 auto; color:var(--muted-2); }
+  .reg-line.done { color:var(--fg); } .reg-line.done .ic { color:var(--ok); }
+  .reg-line.run { color:var(--fg-strong); } .reg-line.run .ic { color:var(--run); }
+  .spin { width:13px; height:13px; border-radius:50%; border:1.7px solid color-mix(in oklab,var(--run) 35%,transparent); border-top-color:var(--run); animation:spin .7s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+
+  .result-card { border:1px solid color-mix(in oklab,var(--ok) 30%,var(--border)); border-radius:var(--r-lg); background:var(--panel); padding:14px; margin:6px 0 2px; }
+  .result-card .rc-h { display:flex; align-items:center; gap:8px; font-weight:650; color:var(--ok); font-size:13.5px; margin-bottom:10px; }
+
+  /* LLM select */
+  .select-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .sel { position:relative; }
+  .sel select { width:100%; appearance:none; background:var(--panel-2); border:1px solid var(--border); border-radius:var(--r); padding:10px 34px 10px 12px; color:var(--fg-strong); font-family:var(--mono); font-size:13px; outline:none; }
+  .sel select:focus { border-color:var(--accent-line); box-shadow:0 0 0 3px var(--accent-soft); }
+  .sel .chev { position:absolute; right:12px; top:50%; transform:translateY(-50%); color:var(--muted-2); pointer-events:none; }
+  .scope-match { display:flex; align-items:center; gap:10px; padding:11px 13px; border-radius:var(--r); margin-top:14px; font-size:12.5px; }
+  .scope-match.ok { background:var(--ok-soft); border:1px solid color-mix(in oklab,var(--ok) 30%,transparent); }
+  .scope-match.bad { background:var(--err-soft); border:1px solid color-mix(in oklab,var(--err) 36%,transparent); }
+  .scope-match .mono2 { font-family:var(--mono); font-size:11.5px; }
+
+  /* verify lights */
+  .lights { display:flex; flex-direction:column; gap:10px; margin:18px 0; }
+  .light { display:flex; align-items:center; gap:13px; padding:13px 15px; border:1px solid var(--border); border-radius:var(--r); background:var(--panel); }
+  .light .lic { width:28px; height:28px; border-radius:50%; display:grid; place-items:center; flex:0 0 auto; border:1.5px solid var(--border); color:var(--muted-2); }
+  .light.pending .lic { color:var(--run); border-color:color-mix(in oklab,var(--run) 35%,transparent); }
+  .light.pending .lic .spin { width:13px; height:13px; }
+  .light.ok .lic { border-color:var(--ok); color:var(--ok); background:var(--ok-soft); }
+  .light.fail .lic { border-color:var(--err); color:var(--err); background:var(--err-soft); }
+  .light .lt { font-weight:600; color:var(--fg-strong); font-size:13.5px; }
+  .light .ls { font-size:12px; color:var(--muted); margin-top:1px; }
+  .light .lstat { margin-left:auto; font-size:12px; font-weight:600; }
+  .light.pending .lstat { color:var(--muted-2); } .light.ok .lstat { color:var(--ok); } .light.fail .lstat { color:var(--err); }
+  .live-chip { display:inline-flex; align-items:center; gap:7px; padding:5px 11px; border-radius:var(--r-pill); background:var(--panel-2); border:1px solid var(--border); font-size:12px; color:var(--muted); }
+  .live-chip .dot { width:7px; height:7px; }
+
+  /* chat round-trip (reuse studio bubble观感) */
+  .roundtrip { border:1px solid var(--border); border-radius:var(--r-lg); background:var(--panel-2); padding:14px 16px; margin:14px 0; }
+  .rt-h { font-size:11.5px; color:var(--muted-2); margin-bottom:12px; display:flex; align-items:center; gap:7px; }
+  .msg { display:flex; gap:11px; margin-bottom:14px; }
+  .msg:last-child { margin-bottom:0; }
+  .msg .av { width:26px; height:26px; border-radius:8px; flex:0 0 auto; display:grid; place-items:center; font-size:11px; font-weight:700; }
+  .msg.user .av { background:var(--panel-3); color:var(--muted); }
+  .msg.bot .av { color:#fff; background:linear-gradient(150deg,var(--accent),color-mix(in oklab,var(--accent) 55%,#7c4dff)); }
+  .msg .mb { font-size:13.5px; line-height:1.6; }
+  .msg.user .bubble { background:var(--accent-soft); border:1px solid var(--accent-line); padding:9px 13px; border-radius:12px 4px 12px 12px; display:inline-block; }
+  .msg.bot .bubble { background:var(--panel); border:1px solid var(--border); padding:9px 13px; border-radius:4px 12px 12px 12px; display:inline-block; }
+  .msg .nm { font-size:11px; color:var(--muted-2); margin-bottom:4px; }
+
+  /* manage status card */
+  .status-card { border:1px solid var(--border); border-radius:var(--r-lg); background:var(--panel); overflow:hidden; }
+  .status-card .sc-top { display:flex; align-items:center; gap:13px; padding:18px; border-bottom:1px solid var(--border-soft); }
+  .status-card .sc-logo { width:42px; height:42px; border-radius:11px; display:grid; place-items:center; color:#fff; flex:0 0 auto; }
+  .status-card .sc-name { font-weight:680; color:var(--fg-strong); font-size:16px; }
+  .status-card .sc-sub { font-size:12.5px; color:var(--muted); margin-top:2px; }
+  .kv { display:flex; justify-content:space-between; gap:14px; padding:11px 18px; font-size:13px; border-bottom:1px solid var(--border-soft); }
+  .kv:last-child { border-bottom:0; }
+  .kv .k { color:var(--muted); }
+  .kv .v { color:var(--fg); font-family:var(--mono); font-size:12.5px; text-align:right; word-break:break-all; }
+  .kv .v.plain { font-family:var(--sans); }
+
+  /* =========================================================================
+     Responsive
+     ========================================================================= */
+  @media (max-width:820px) {
+    .wiz { grid-template-columns:1fr; }
+    .stepper { border-right:0; border-bottom:1px solid var(--border); display:flex; gap:4px; overflow-x:auto; padding:12px; }
+    .stepper-h { display:none; }
+    .step-item { grid-template-columns:auto; justify-items:center; min-width:84px; text-align:center; padding:6px; }
+    .step-item::before { display:none; }
+    .step-item .st-sub { display:none; }
+    .step-item .st-title { font-size:11.5px; }
+    .step-main { padding:20px 18px 30px; }
+    .select-grid { grid-template-columns:1fr; }
+  }
+  @media (max-width:560px) {
+    .brand-sub, .scope-chip { display:none; }
+    .page { padding:22px 16px 70px; }
+    .reg-row { grid-template-columns:auto 1fr; }
+    .reg-row .ra { grid-column:2; justify-content:flex-end; }
+  }
+
+
+  @media (prefers-reduced-motion: reduce) {
+    *,*::before,*::after { animation-duration:.001ms !important; animation-iteration-count:1 !important; transition-duration:.001ms !important; }
+    .dot.s-pending,.dot.s-running { animation:none; box-shadow:0 0 0 3px var(--run-soft); }
+  }
+
+  /* =========================================================================
+     Login gate (mirrors studio/observatory OIDC bearer-token gate)
+     ========================================================================= */
+  .login { min-height:calc(100dvh - var(--topbar-h)); display:grid; place-items:center; padding:24px; }
+  .login-card { width:min(420px,100%); background:var(--panel); border:1px solid var(--border); border-radius:var(--r-lg); padding:32px 30px; box-shadow:var(--shadow); text-align:center; }
+  .login-mark { width:52px; height:52px; border-radius:14px; margin:0 auto 18px; background:linear-gradient(150deg,var(--accent),color-mix(in oklab,var(--accent) 55%,#7c4dff)); display:grid; place-items:center; color:#fff; box-shadow:var(--shadow); }
+  .login h1 { font-size:19px; font-weight:700; letter-spacing:-.01em; color:var(--fg-strong); margin:0 0 8px; }
+  .login p { color:var(--muted); font-size:13.5px; margin:0 auto 22px; max-width:32ch; line-height:1.6; }
+  .login-card .login-btn { width:100%; }
+  .login-foot { margin-top:16px; font-size:11.5px; color:var(--muted-2); display:inline-flex; align-items:center; gap:6px; justify-content:center; }
+  .account { cursor:pointer; }
+
+  /* inline code chip + error note + tier-2 scopes */
+  .kbd { font-family:var(--mono); font-size:12px; background:var(--panel-2); padding:1px 5px; border-radius:5px; }
+  .errnote { margin-top:8px; font-size:11.5px; color:var(--muted-2); word-break:break-all; }
+  .perm-pill.alt { background:var(--panel-2); color:var(--muted); border-color:var(--border); }
+  .more { margin:10px 0 4px; }
+  .more summary { cursor:pointer; font-size:12.5px; color:var(--accent); font-weight:600; list-style:none; }
+  .more summary::-webkit-details-marker { display:none; }
+  .more summary:hover { text-decoration:underline; }
+  .more .perm-pill { margin:0 6px 6px 0; display:inline-block; }
+</style>
+</head>
+<body>
+  <div id="app"></div>
+
+<script>
+/* ===========================================================================
+   /channels — backend-served Lark bot onboarding. Mirrors /workflow/studio:
+   one inline self-contained page, gated behind NyxID OIDC (PKCE), then wired to
+   the live facade. Authoritative flow = published aevatar-lark-bot-registration
+   skill (facade path that writes the api_key_id→scope_id mirror).
+
+   Live wiring (all relative URLs, Bearer from OIDC):
+     POST   /api/channels/registrations                register via facade
+     GET    /api/channels/registrations                connected list
+     DELETE /api/channels/registrations/{id}            delete / recreate
+     GET    /api/channels/registrations/{id}/status     live NyxID bot status
+     GET/PUT /api/user-config/llm                        owner reply-model config
+   =========================================================================== */
+
+const STUDIO = "/workflow/studio";
+const OBS = "/workflow/observatory";
+const DEFAULT_LLM = { route: "chrono-llm-public", model: "gpt-5.5" };
+
+/* Lark Tier-1 minimum scopes (skill §7 — the #1 silent-bot fix). */
+const LARK_SCOPES_T1 = [
+  "im:message:send_as_bot",
+  "im:message.p2p_msg:readonly",
+  "im:message.group_at_msg:readonly",
+  "im:message.group_at_msg.include_bot:readonly",
+  "im:resource"
+];
+/* Tier-2 recommended (reactions, sender lookup, cards). */
+const LARK_SCOPES_T2 = [
+  "im:message:readonly", "im:message:update", "im:message:recall",
+  "im:message.reactions:read", "im:message.reactions:write_only",
+  "im:chat:read", "contact:contact.base:readonly",
+  "cardkit:card:read", "cardkit:card:write"
+];
+
+/* 渠道目录（Lark 已上线；其余即将上线） */
+const CHANNELS = [
+  { id:"lark",     name:"Lark",        en:"lark",     status:"available", desc:"飞书国际版 · 把 bot 接到群聊和单聊", color:"#3370ff" },
+  { id:"feishu",   name:"飞书 Feishu", en:"feishu",   status:"soon",      desc:"国内版飞书，复用同一接入流程", color:"#3370ff" },
+  { id:"telegram", name:"Telegram",    en:"telegram", status:"soon",      desc:"Bot API 接入，规划中", color:"#2aabee" },
+  { id:"discord",  name:"Discord",     en:"discord",  status:"soon",      desc:"服务器 / 频道 bot，规划中", color:"#5865f2" },
+  { id:"slack",    name:"Slack",       en:"slack",    status:"soon",      desc:"Workspace app，规划中", color:"#611f69" }
+];
+
+/* ===========================================================================
+   工具函数
+   =========================================================================== */
+const $ = (s,r=document)=>r.querySelector(s);
+const el=(t,a={},h)=>{const n=document.createElement(t);for(const k in a){if(k==="class")n.className=a[k];else if(k.startsWith("on")&&typeof a[k]==="function")n.addEventListener(k.slice(2),a[k]);else if(a[k]!=null)n.setAttribute(k,a[k]);}if(h!=null)n.innerHTML=h;return n;};
+const esc=(s)=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const initials=(s)=>(s||"?").trim().charAt(0).toUpperCase();
+
+const STATUS_LABEL = { active:"已激活", pending:"待激活", pending_webhook:"待激活", error:"异常", registered:"已注册", bound:"已绑定", soon:"即将上线", available:"可接入", unknown:"查询中" };
+
+const ICON={
+  sun:'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2.4M12 19.6V22M2 12h2.4M19.6 12H22M4.6 4.6l1.7 1.7M17.7 17.7l1.7 1.7M19.4 4.6l-1.7 1.7M6.3 17.7l-1.7 1.7"/></svg>',
+  moon:'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a6.6 6.6 0 0 0 9.8 9.8Z"/></svg>',
+  check:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.2 4.2L19 7"/></svg>',
+  x:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg>',
+  copy:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h9"/></svg>',
+  ext:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>',
+  back:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m14 6-6 6 6 6"/></svg>',
+  arrow:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m10 6 6 6-6 6"/></svg>',
+  chev:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>',
+  info:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 7.6v.2"/></svg>',
+  warn:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 8.5v4.5M12 16.2v.2"/><path d="M10.3 3.9 2.5 17.5A2 2 0 0 0 4.2 20.5h15.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>',
+  key:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2 20 3M17 6l2 2M15 8l1.5 1.5"/></svg>',
+  bolt:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 13h7l-1 9 9-11h-7l1-9Z"/></svg>',
+  gear:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v2.6M12 18.9v2.6M21.5 12h-2.6M5.1 12H2.5M18.7 5.3l-1.8 1.8M7.1 16.9l-1.8 1.8M18.7 18.7l-1.8-1.8M7.1 7.1 5.3 5.3"/></svg>',
+  shield:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 5 5.5V11c0 4.5 3 8 7 9.5 4-1.5 7-5 7-9.5V5.5L12 3Z"/><path d="m9 12 2 2 4-4"/></svg>',
+  chat:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M4 5h16v11H9l-4 3.5V16H4Z"/></svg>',
+  send:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12 20 4l-7 16-2.5-6.5L4 12Z"/></svg>',
+  link:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14a4 4 0 0 0 5.6 0l3-3a4 4 0 1 0-5.6-5.6L11 7M14 10a4 4 0 0 0-5.6 0l-3 3A4 4 0 1 0 11 18.6L12.8 17"/></svg>',
+  trash:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>',
+  refresh:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/></svg>',
+  plug:'<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v5M15 3v5M7 8h10v3a5 5 0 0 1-10 0V8ZM12 16v5"/></svg>',
+  studio:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="12" r="2.4"/><path d="M8.2 7.2 15.8 11M8.2 16.8 15.8 13"/></svg>',
+  cpu:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2"/></svg>',
+  lock:'<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
+  spark:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8"/></svg>'
+};
+/* 渠道 glyph（通用图形，非品牌 logo） */
+function chLogo(id){
+  const g={
+    lark:'<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M4 6h16v9H10l-5 4v-4H4V6Z"/><path d="M8.5 10.5h7" stroke-linecap="round"/></svg>',
+    feishu:'<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M4 6h16v9H10l-5 4v-4H4V6Z"/><path d="M8.5 10.5h7" stroke-linecap="round"/></svg>',
+    telegram:'<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 4 3 11l5 2 2 6 3-4 5 4 3-15Z"/></svg>',
+    discord:'<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7a14 14 0 0 1 10 0M6 17a16 16 0 0 0 12 0M7.5 7 6 6M16.5 7 18 6M6 17l-1.5 1.5M18 17l1.5 1.5"/><path d="M9.5 13v.01M14.5 13v.01"/></svg>',
+    slack:'<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 3v8M16 13v8M3 16h8M13 8h8M3 8h5M16 3v5M21 16h-5M8 21v-5"/></svg>'
+  };
+  return g[id]||g.lark;
+}
+
+/* ===========================================================================
+   App state
+   =========================================================================== */
+const state = {
+  signedIn:false,
+  account:null,                       // { label }
+  scopeId:null, scopeSource:"nyxid",
+  view:"catalog",                     // catalog | wizard | manage
+  step:1,                             // 1..5
+  s:"idle",                           // idle | running | done | failed
+  err:null,                           // step2: 'auth' | '409' | 'cred' | 'infra' | 'other' | 'network'
+  errMsg:null,
+  cred:{ app_id:"", app_secret:"", verification_token:"", label:"" },
+  reg:null,                           // last registration result
+  registrations:[],                   // GET /api/channels/registrations
+  statuses:{},                        // registrationId -> { status, last_event_at }
+  llm:null,                           // GET /api/user-config/llm
+  llmSel:{ route:null, model:null },  // step4 selections
+  llmSaving:false, llmSaved:false,
+  manageReg:null,                     // registration row being managed
+  lights:["pending","pending"],
+  _statusTimer:null
+};
+
+function curTheme(){ const h=document.documentElement; return h.classList.contains("theme-light")?"light":h.classList.contains("theme-dark")?"dark":null; }
+function effDark(){ const t=curTheme(); if(t)return t==="dark"; return !window.matchMedia||!window.matchMedia("(prefers-color-scheme: light)").matches; }
+function applyTheme(){ const t=localStorage.getItem("channels-theme"); document.documentElement.classList.remove("theme-light","theme-dark"); if(t==="light")document.documentElement.classList.add("theme-light"); else if(t==="dark")document.documentElement.classList.add("theme-dark"); }
+
+/* ===========================================================================
+   Auth layer — OIDC Authorization Code + PKCE against nyxid (same console-web
+   client as studio/observatory). No server-side cookie/session, no NyxID change.
+   NyxID rejects any redirect_uri it hasn't pre-registered (verified: a fresh
+   /channels/callback returns invalid_redirect_uri) and we can't register one
+   (NyxID is external). So we reuse studio's already-registered callback AND share
+   studio's PKCE + token storage key — which also means a live studio session
+   signs you in here automatically. returnTo carries our path so the shared shell
+   can route back to /channels once it supports cross-page return.
+   =========================================================================== */
+const CFG = {
+  authority: "https://nyx.chrono-ai.fun",
+  clientId: "37a93189-2734-406e-bca1-7dbdf25c5a53",
+  scope: "openid profile email proxy",
+  redirectUri: location.origin + "/workflow/studio/callback",
+  storageKey: "aevatar-studio:nyxid:pkce"
+};
+const TOKEN_KEY = CFG.storageKey + ":token";
+const PKCE_KEY  = CFG.storageKey + ":pkce";
+
+function b64url(buf){ return btoa(String.fromCharCode.apply(null, new Uint8Array(buf))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,""); }
+async function sha256(text){ return b64url(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text))); }
+function randomString(len){ const a=new Uint8Array(len); crypto.getRandomValues(a); return b64url(a.buffer).slice(0, len); }
+
+function getToken(){ const raw=localStorage.getItem(TOKEN_KEY); if(!raw) return null; try { return JSON.parse(raw); } catch(e){ console.warn("channels: token parse failed", e); } return null; }
+function setToken(t){ localStorage.setItem(TOKEN_KEY, JSON.stringify(t)); }
+function clearToken(){ localStorage.removeItem(TOKEN_KEY); }
+
+async function beginLogin(){
+  const verifier = randomString(64);
+  const st = randomString(32);
+  const challenge = await sha256(verifier);
+  // returnTo matches studio's shared-shell PKCE blob shape so the studio callback
+  // can route back here once cross-page return lands; harmless meanwhile.
+  sessionStorage.setItem(PKCE_KEY, JSON.stringify({ verifier, state: st, returnTo: location.pathname }));
+  const u = new URL(CFG.authority + "/oauth/authorize");
+  u.searchParams.set("response_type", "code");
+  u.searchParams.set("client_id", CFG.clientId);
+  u.searchParams.set("redirect_uri", CFG.redirectUri);
+  u.searchParams.set("scope", CFG.scope);
+  u.searchParams.set("state", st);
+  u.searchParams.set("code_challenge", challenge);
+  u.searchParams.set("code_challenge_method", "S256");
+  location.assign(u.toString());
+}
+
+async function completeLoginIfCallback(){
+  const params = new URLSearchParams(location.search);
+  const code = params.get("code");
+  if(!code) return false;
+  const returnedState = params.get("state");
+  const pending = JSON.parse(sessionStorage.getItem(PKCE_KEY) || "null");
+  history.replaceState({}, "", "/channels");
+  if(!pending || pending.state !== returnedState){ console.warn("channels: login state mismatch"); return false; }
+  const form = new URLSearchParams();
+  form.set("grant_type", "authorization_code");
+  form.set("code", code);
+  form.set("redirect_uri", CFG.redirectUri);
+  form.set("client_id", CFG.clientId);
+  form.set("code_verifier", pending.verifier);
+  const res = await fetch(CFG.authority + "/oauth/token", { method:"POST", headers:{ "Content-Type":"application/x-www-form-urlencoded" }, body: form.toString() });
+  sessionStorage.removeItem(PKCE_KEY);
+  if(!res.ok){ console.warn("channels: token exchange failed", res.status); return false; }
+  const token = await res.json();
+  token.obtained_at = Date.now();
+  setToken(token);
+  return true;
+}
+
+async function fetchUserInfo(){
+  const token = getToken(); if(!token) return null;
+  try { const res = await fetch(CFG.authority + "/oauth/userinfo", { headers:{ Authorization:"Bearer " + token.access_token } }); return res.ok ? await res.json() : null; }
+  catch(e){ console.warn("channels: userinfo fetch failed", e); }
+  return null;
+}
+function toAccount(info){ return info ? { label: info.email || info.preferred_username || info.sub || "已登录" } : null; }
+
+/* Decode the scope_id claim from the access token (the facade resolves the
+   registration scope from this same claim). Display-only. */
+function decodeJwt(token){
+  try { const p=token.access_token.split("."); if(p.length<2) return null;
+    const b=p[1].replace(/-/g,"+").replace(/_/g,"/"); const pad=b+"=".repeat((4-b.length%4)%4);
+    return JSON.parse(decodeURIComponent(escape(atob(pad)))); } catch(e){ return null; }
+}
+function resolveScopeId(){ const t=getToken(); if(!t) return null; const c=decodeJwt(t); return c ? (c.scope_id||c.scopeId||c.sub||null) : null; }
+
+function signOut(){ clearToken(); beginLogin(); }
+function signOutSilent(){ clearToken(); state.signedIn=false; stopStatusPolling(); render(); }
+
+/* ===========================================================================
+   API helpers (relative, scope-gated bearer)
+   =========================================================================== */
+async function apiGet(path){
+  const token = getToken(); if(!token) throw new Error("not-authenticated");
+  const res = await fetch(path, { headers:{ Authorization:"Bearer " + token.access_token } });
+  if(res.status === 401){ signOutSilent(); throw new Error("unauthorized"); }
+  if(res.status === 404) return null;
+  if(!res.ok) throw new Error("api-error-" + res.status);
+  const txt = await res.text(); if(!txt) return null;
+  try { return JSON.parse(txt); } catch(e){ return null; }
+}
+async function apiSend(path, method, body){
+  const token = getToken(); if(!token) throw new Error("not-authenticated");
+  const opts = { method, headers:{ Authorization:"Bearer " + token.access_token } };
+  if(body != null){ opts.headers["Content-Type"]="application/json"; opts.body = JSON.stringify(body); }
+  const res = await fetch(path, opts);
+  if(res.status === 401){ signOutSilent(); throw new Error("unauthorized"); }
+  let data=null; const txt = await res.text();
+  if(txt){ try { data = JSON.parse(txt); } catch(e){ data = { raw:txt }; } }
+  return { ok: res.ok, status: res.status, data };
+}
+
+/* ---- data loaders ---- */
+async function loadRegistrations(){
+  try { state.registrations = (await apiGet("/api/channels/registrations")) || []; }
+  catch(e){ if(e.message!=="unauthorized") console.warn("channels: list failed", e); state.registrations = []; }
+  render();
+  pollAllStatuses();
+}
+async function loadLlm(force){
+  if(state.llm && !force) return state.llm;
+  try { state.llm = await apiGet("/api/user-config/llm"); }
+  catch(e){ if(e.message!=="unauthorized") console.warn("channels: llm read failed", e); state.llm = null; }
+  return state.llm;
+}
+async function fetchStatus(regId){
+  try { return await apiGet("/api/channels/registrations/" + encodeURIComponent(regId) + "/status"); }
+  catch(e){ return null; }
+}
+function pollAllStatuses(){
+  (state.registrations||[]).forEach(r=>{
+    fetchStatus(r.id).then(s=>{ if(s){ state.statuses[r.id]=s; render(); } });
+  });
+}
+function normStatus(s){
+  if(!s) return "unknown";
+  const v=(s.status||"").toLowerCase();
+  if(v==="active") return "active";
+  if(v==="pending_webhook"||v==="pending"||v==="") return "pending";
+  if(v.includes("error")||v.includes("fail")) return "error";
+  return "unknown";
+}
+
+/* ---- register / delete / llm save ---- */
+async function doRegister(){
+  state.step=2; state.s="running"; state.err=null; state.errMsg=null; render();
+  const c=state.cred;
+  const body = {
+    platform:"lark",
+    webhook_base_url: location.origin,
+    app_id: c.app_id.trim(),
+    app_secret: c.app_secret,
+    verification_token: c.verification_token.trim(),
+    label: c.label.trim()
+  };
+  let r;
+  try { r = await apiSend("/api/channels/registrations", "POST", body); }
+  catch(e){ if(e.message==="unauthorized") return; state.s="failed"; state.err="network"; state.errMsg=String(e.message||e); render(); return; }
+  if(r.ok){
+    const d = r.data || {};
+    state.reg = {
+      registrationId: d.registration_id || "",
+      botId: d.nyx_channel_bot_id || "",
+      apiKeyId: d.nyx_agent_api_key_id || "",
+      routeId: d.nyx_conversation_route_id || "",
+      webhookUrl: d.webhook_url || "",
+      relayCallbackUrl: d.relay_callback_url || "",
+      scope: state.scopeId || (r.data && r.data.scope_id) || "",
+      verificationToken: c.verification_token.trim(),
+      label: c.label.trim()
+    };
+    state.s="done"; render();
+    loadRegistrations();
+    return;
+  }
+  const errText = ((r.data && r.data.error) || "") + " " + ((r.data && r.data.note) || "");
+  state.err = classifyRegError(r.status, errText);
+  state.errMsg = (r.data && (r.data.error || r.data.note)) || ("HTTP " + r.status);
+  state.s="failed"; render();
+}
+function classifyRegError(status, errText){
+  const t=(errText||"").toLowerCase();
+  if(status===401) return "auth";
+  if(t.includes("nyx_status=409") || t.includes("already")) return "409";
+  if(t.includes("nyx_status=401") || t.includes("nyx_status=400") || t.includes("secret") || t.includes("invalid")) return "cred";
+  if(t.includes("nyx_base_url")) return "infra";
+  return "other";
+}
+async function doDelete(regId, after){
+  try { await apiSend("/api/channels/registrations/" + encodeURIComponent(regId), "DELETE", null); }
+  catch(e){ if(e.message==="unauthorized") return; }
+  delete state.statuses[regId];
+  await loadRegistrations();
+  if(typeof after==="function") after();
+}
+async function saveLlm(){
+  if(!state.llmSel.route && state.llmSel.route!=="") return;
+  state.llmSaving=true; state.llmSaved=false; render();
+  try {
+    await apiSend("/api/user-config/llm", "PUT", { routeValue: state.llmSel.route, model: state.llmSel.model || null });
+    state.llmSaved=true;
+    await loadLlm(true);
+  } catch(e){ if(e.message!=="unauthorized") console.warn("channels: llm save failed", e); }
+  state.llmSaving=false; render();
+}
+
+/* ---- live status polling (verify step) ---- */
+function startStatusPolling(regId){
+  stopStatusPolling();
+  const tick=()=>{ fetchStatus(regId).then(s=>{ if(s){ state.statuses[regId]=s; if(state.view==="wizard"&&state.step===5) render(); if(normStatus(s)==="active") stopStatusPolling(); } }); };
+  tick();
+  state._statusTimer = setInterval(tick, 3500);
+}
+function stopStatusPolling(){ if(state._statusTimer){ clearInterval(state._statusTimer); state._statusTimer=null; } }
+
+/* ===========================================================================
+   Topbar
+   =========================================================================== */
+function scopeChipHtml(){
+  if(state.scopeId) return `<div class="scope-chip" title="scope 已解析（来源：${esc(state.scopeSource)}）">${ICON.check}<span>scope</span><span class="sid">${esc(state.scopeId)}</span></div>`;
+  return `<div class="scope-chip" title="正在解析 scope">${ICON.spark}<span>scope</span><span class="sid">解析中…</span></div>`;
+}
+function renderTopbar(){
+  const bar=el("header",{class:"topbar",role:"banner"});
+  bar.innerHTML=`
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">${ICON.plug.replace('width="22" height="22"','width="15" height="15"')}</div>
+      <div><div class="brand-name">渠道接入 <span class="brand-sub">Channels</span></div></div>
+    </div>
+    ${state.signedIn?scopeChipHtml():""}
+    <div class="spacer"></div>
+    ${state.signedIn?`<a class="obs-link" href="${STUDIO}" title="回到对话式编排页">${ICON.studio}<span>工作室 Studio</span></a>`:""}`;
+  const tbtn=el("button",{class:"iconbtn",id:"themeBtn","aria-label":"切换主题",title:"切换主题"});
+  tbtn.innerHTML=effDark()?ICON.sun:ICON.moon;
+  tbtn.addEventListener("click",()=>{ localStorage.setItem("channels-theme", effDark()?"light":"dark"); applyTheme(); render(); });
+  bar.appendChild(tbtn);
+  if(state.signedIn){
+    const acct=el("button",{class:"account",title:"点击退出登录","aria-label":"退出登录"});
+    const label = state.account ? state.account.label : "已登录";
+    acct.innerHTML=`<span class="avatar" aria-hidden="true">${initials(label)}</span><span class="who" title="${esc(label)}">${esc(label)}</span>`;
+    acct.addEventListener("click",()=>{ if(confirm("退出登录？")) signOut(); });
+    bar.appendChild(acct);
+  }
+  return bar;
+}
+
+/* ===========================================================================
+   Login gate
+   =========================================================================== */
+function renderLogin(){
+  const wrap = el("main", { class:"login" });
+  const card = el("section", { class:"login-card", role:"region", "aria-label":"登录" });
+  card.innerHTML = `
+    <div class="login-mark" aria-hidden="true">${ICON.lock}</div>
+    <h1>登录以接入渠道</h1>
+    <p>把 Lark / 飞书机器人接到你的 aevatar agent —— 登录后开始。</p>`;
+  const btn = el("button", { class:"btn btn-primary login-btn", id:"signinBtn" }, "使用 nyxid 登录");
+  btn.addEventListener("click", () => { beginLogin(); });
+  card.appendChild(btn);
+  card.appendChild(el("div", { class:"login-foot" }, `${ICON.lock.replace('width="24" height="24"','width="12" height="12"')}<span>采用 OIDC bearer-token 鉴权 · 通过 nyxid 账户登录</span>`));
+  wrap.appendChild(card);
+  return wrap;
+}
+
+/* ===========================================================================
+   Catalog
+   =========================================================================== */
+function renderCatalog(){
+  const p=el("main",{class:"page"});
+  p.innerHTML=`
+    <h1 class="page-h">把消息渠道接到你的 agent</h1>
+    <p class="page-sub">选择一个渠道，按向导一步步接入：填凭据 → 注册 → 在渠道后台配置 → 配回复模型 → 验证。完成后就能在该渠道里直接跟你的 aevatar bot 对话。</p>
+    <div class="sec-title">可接入的渠道</div>`;
+  const grid=el("div",{class:"ch-grid"});
+  CHANNELS.forEach(c=>{
+    const avail=c.status==="available";
+    const card=el(avail?"button":"div",{class:`ch-card ${avail?"available":"soon"}`, "aria-disabled":avail?null:"true"});
+    card.innerHTML=`
+      <div class="ch-top">
+        <div class="ch-logo" style="background:linear-gradient(150deg,var(--accent),color-mix(in oklab,var(--accent) 55%,#7c4dff))">${chLogo(c.id)}</div>
+        <span class="badge ${avail?"b-active":"b-soon"}">${avail?"可接入":"即将上线"}</span>
+      </div>
+      <div><div class="ch-name">${esc(c.name)}</div><div class="ch-en">${esc(c.en)}</div></div>
+      <div class="ch-desc">${esc(c.desc)}</div>
+      <div class="ch-foot">${avail?`<span class="ch-cta">开始接入 ${ICON.arrow}</span>`:`<span style="font-size:12px;color:var(--muted-2)">敬请期待</span>`}</div>`;
+    if(avail) card.addEventListener("click",()=>{ enterWizard(); });
+    grid.appendChild(card);
+  });
+  p.appendChild(grid);
+
+  const regs = state.registrations || [];
+  p.appendChild(el("div",{class:"sec-title"},`已接入 <span class="count">${regs.length}</span>`));
+  if(regs.length===0){
+    p.appendChild(el("div",{class:"empty"},`<div class="ic" aria-hidden="true">${ICON.plug}</div><div class="et">还没有接入任何渠道</div><div class="es">从上方选一个渠道开始接入你的第一个 bot。</div>`));
+  } else {
+    const list=el("div",{role:"list"});
+    regs.forEach(r=>{
+      const st = normStatus(state.statuses[r.id]);
+      const badgeCls = st==="active"?"b-active":st==="error"?"b-error":st==="pending"?"b-pending":"b-soon";
+      const dotCls = st==="active"?"s-active":st==="error"?"s-error":st==="pending"?"s-pending":"s-unknown";
+      const row=el("div",{class:"reg-row",role:"listitem"});
+      row.innerHTML=`
+        <div class="rl" style="background:linear-gradient(150deg,var(--accent),color-mix(in oklab,var(--accent) 55%,#7c4dff))">${chLogo(r.platform||"lark")}</div>
+        <div style="min-width:0">
+          <div class="rn">${esc(r.platform||"lark")} bot</div>
+          <div class="rm"><span class="id">${esc(r.nyx_channel_bot_id||r.id)}</span><span class="sep">·</span><span class="id">${esc(r.scope_id||"")}</span></div>
+        </div>
+        <div class="ra">
+          <span class="badge ${badgeCls}"><span class="dot ${dotCls}"></span>${STATUS_LABEL[st]||st}</span>
+          <button class="manage-btn">管理</button>
+        </div>`;
+      row.querySelector(".manage-btn").addEventListener("click",()=>{ state.view="manage"; state.manageReg=r; render(); fetchStatus(r.id).then(s=>{ if(s){ state.statuses[r.id]=s; render(); } }); });
+      list.appendChild(row);
+    });
+    p.appendChild(list);
+  }
+  return p;
+}
+
+/* ===========================================================================
+   Wizard
+   =========================================================================== */
+const STEPS=[
+  { n:1, title:"填凭据", sub:"credentials" },
+  { n:2, title:"一键注册", sub:"register · facade" },
+  { n:3, title:"Lark 后台配置", sub:"lark console" },
+  { n:4, title:"配回复模型", sub:"reply model · llm" },
+  { n:5, title:"验证", sub:"verify" }
+];
+function renderWizard(){
+  const p=el("main",{class:"page"});
+  const crumb=el("nav",{class:"crumb","aria-label":"路径"});
+  const back=el("button",{},`${ICON.back}<span>渠道目录</span>`);
+  back.addEventListener("click",()=>{ state.view="catalog"; stopStatusPolling(); render(); });
+  crumb.appendChild(back);
+  crumb.insertAdjacentHTML("beforeend",`<span class="sep">/</span><span>Lark 接入</span>`);
+  p.appendChild(crumb);
+  p.appendChild(el("h1",{class:"page-h"},"接入 Lark"));
+  p.appendChild(el("p",{class:"page-sub"},"按下面 5 步完成，直到你能在 Lark 里给 bot 发消息、bot 能回话。"));
+
+  const wiz=el("div",{class:"wiz"});
+  wiz.appendChild(renderStepper());
+  const main=el("div",{class:"step-main"});
+  main.appendChild([renderStep1,renderStep2,renderStep3,renderStep4,renderStep5][state.step-1]());
+  wiz.appendChild(main);
+  p.appendChild(wiz);
+  return p;
+}
+function stepStatusClass(n){
+  if(n<state.step) return "done";
+  if(n===state.step) return state.s==="failed" ? "failed" : "current";
+  return "pending";
+}
+function renderStepper(){
+  const aside=el("aside",{class:"stepper",role:"navigation","aria-label":"接入步骤"});
+  aside.appendChild(el("div",{class:"stepper-h"},"接入步骤"));
+  STEPS.forEach(st=>{
+    const cls=stepStatusClass(st.n);
+    const clickable = st.n<=state.step;
+    const item=el("div",{class:`step-item ${cls} ${clickable?"clickable":""}`, role:"button", tabindex:clickable?"0":"-1",
+      "aria-current": st.n===state.step?"step":null, "aria-label":`第 ${st.n} 步 ${st.title}` });
+    const numHtml = cls==="done" ? ICON.check : cls==="failed" ? ICON.x : String(st.n);
+    item.innerHTML=`<span class="step-num">${numHtml}</span><div><div class="st-title">${esc(st.title)}</div><div class="st-sub">${esc(st.sub)}</div></div>`;
+    if(clickable){ const go=()=>{ goStep(st.n); };
+      item.addEventListener("click",go);
+      item.addEventListener("keydown",(e)=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); go(); }}); }
+    aside.appendChild(item);
+  });
+  return aside;
+}
+function goStep(n){
+  if(n!==5) stopStatusPolling();
+  state.step=n; state.err=null;
+  state.s = n<state.step ? "done" : "idle";
+  if(n===state.step) state.s="idle";
+  render();
+  if(n===4) loadLlm().then(()=>render());
+  if(n===5 && state.reg && state.reg.registrationId) startStatusPolling(state.reg.registrationId);
+}
+
+/* helpers */
+function stepHead(kicker,title,statusBadge){ return `<div class="step-head"><div style="flex:1"><div class="step-kicker">${kicker}</div><div class="step-h">${title}</div></div>${statusBadge||""}</div>`; }
+function badge(s,label){ return `<span class="badge b-${s}"><span class="dot s-${s}"></span>${label}</span>`; }
+function copyRow(label,value,extra){
+  const row=el("div",{class:"crow"});
+  row.innerHTML=`<div style="min-width:0"><div class="ck">${esc(label)}</div><div class="cv">${esc(value)}</div></div>`;
+  if(extra){ row.appendChild(extra); }
+  else { const b=el("button",{class:"copybtn","aria-label":"复制 "+label},`${ICON.copy}<span>复制</span>`); bindCopy(b,value); row.appendChild(b); }
+  return row;
+}
+function bindCopy(btn,value){
+  btn.addEventListener("click",async()=>{ try{await navigator.clipboard.writeText(value);}catch(e){const ta=document.createElement("textarea");ta.value=value;document.body.appendChild(ta);ta.select();try{document.execCommand("copy");}catch(_){}ta.remove();} btn.classList.add("done"); const sp=btn.querySelector("span"); const old=sp?sp.textContent:""; if(sp)sp.textContent="已复制"; setTimeout(()=>{btn.classList.remove("done"); if(sp)sp.textContent=old;},1400); });
+}
+function footer(nodes){ const f=el("div",{class:"step-foot"}); nodes.forEach(n=>{ if(n==="spacer")f.appendChild(el("div",{class:"spacer"})); else f.appendChild(n); }); return f; }
+function btn(label,kind,icon,onClick,opts={}){ const b=el("button",{class:`btn btn-${kind}`},`${icon?icon+" ":""}<span>${label}</span>`); if(opts.disabled)b.disabled=true; if(onClick)b.addEventListener("click",onClick); return b; }
+function sub(t){ return el("div",{class:"sec-title",style:"margin:22px 0 10px;font-size:12px"},esc(t)); }
+
+/* ---- Step 1 : 填凭据 ---- */
+function renderStep1(){
+  const wrap=el("section",{});
+  wrap.innerHTML=stepHead("STEP 1 / 5 · credentials","填入 Lark 应用凭据", badge("pending","待填写"));
+  wrap.insertAdjacentHTML("beforeend",`<p class="step-desc">这些值来自 Lark 开发者后台 → 你的应用 → <b style="color:var(--fg)">凭证与基础信息</b> / <b style="color:var(--fg)">事件订阅</b>。我们只用它们去 facade 注册，不会明文留存。</p>`);
+
+  const f=el("div",{});
+  f.appendChild(field("app_id","cli_xxxxxxxxxxxx","开发者后台 → 凭证与基础信息 → App ID", state.cred.app_id));
+  f.appendChild(field("app_secret","••••••••••••••••","开发者后台 → 凭证与基础信息 → App Secret", state.cred.app_secret));
+  f.appendChild(field("verification_token","事件订阅页的 Verification Token","开发者后台 → 事件订阅 → Verification Token（第③步在 Lark 后台还会用到）", state.cred.verification_token));
+  f.appendChild(field("label","给这个 bot 起个名字（可选）","便于在「已接入」列表里区分；可留空", state.cred.label, true));
+  wrap.appendChild(f);
+
+  wrap.appendChild(el("div",{class:"callout info"},`${ICON.info}<div class="body"><span class="ct-title">找不到这些值？</span>登录 <b>open.larksuite.com</b> → 开发者后台 → 选择或新建企业自建应用 → 左侧「凭证与基础信息」拿 App ID / Secret；「事件订阅」拿 Verification Token。</div>`));
+
+  const next=btn("下一步：注册","primary",ICON.arrow,()=>{ captureCred(wrap); if(!state.cred.app_id.trim()||!state.cred.app_secret.trim()){ alert("请先填写 app_id 和 app_secret"); return; } goStep(2); });
+  wrap.appendChild(footer([next]));
+  return wrap;
+}
+function captureCred(scope){
+  const g=(n)=>{ const e=scope.querySelector("#f_"+n); return e?e.value:""; };
+  state.cred.app_id = g("app_id");
+  state.cred.app_secret = g("app_secret");
+  state.cred.verification_token = g("verification_token");
+  state.cred.label = g("label");
+}
+function field(name,ph,help,val,optional){
+  const f=el("div",{class:"field"});
+  const type = name==="app_secret" ? "password" : "text";
+  f.innerHTML=`<label for="f_${name}">${name} ${optional?'<span style="color:var(--muted-2);font-weight:500">· 可选</span>':'<span class="req">*</span>'}</label>
+    <input class="input" id="f_${name}" type="${type}" placeholder="${esc(ph)}" autocomplete="off" spellcheck="false" value="${esc(val||"")}" />
+    <div class="help">${esc(help)}</div>`;
+  return f;
+}
+
+/* ---- Step 2 : 一键注册（facade）---- */
+function renderStep2(){
+  const wrap=el("section",{});
+  const map={ idle:["pending","待注册"], running:["running","注册中"], done:["registered","已注册"], failed:["failed", state.err==="409"?"已被接入":state.err==="cred"?"凭据无效":"注册失败"] };
+  const [bs,bl]=map[state.s]||map.idle;
+  wrap.innerHTML=stepHead("STEP 2 / 5 · register",`通过 facade 一键注册`, badge(bs,bl));
+  wrap.insertAdjacentHTML("beforeend",`<p class="step-desc">注册走 aevatar <b style="color:var(--fg)">facade</b>：它会建好 NyxID channel-bot、relay api-key、入站路由，并写入 <code class="kbd">api_key_id → scope_id</code> mirror —— 这是入站消息路由的<b style="color:var(--fg)">唯一依据</b>，只有 facade 会写它，所以注册不能用 CLI/工具代替。</p>`);
+
+  if(state.s==="idle"){
+    wrap.appendChild(el("div",{class:"callout info"},`${ICON.info}<div class="body">点击注册后，facade 会自动完成 4 件事：建 channel-bot、建 relay key、写 mirror、建路由。约几秒。</div>`));
+    wrap.appendChild(footer([ btn("一键注册","primary",ICON.bolt,doRegister), "spacer",
+      btn("上一步","ghost",ICON.back,()=>{ goStep(1); }) ]));
+  } else if(state.s==="running"){
+    wrap.appendChild(regProgress(["run","run","run","run"]));
+    wrap.appendChild(el("div",{class:"live-chip",style:"margin-top:8px"},`<span class="dot s-running"></span><span>正在调用 facade · POST /api/channels/registrations</span>`));
+  } else if(state.s==="failed"){
+    if(state.err==="409"){
+      wrap.appendChild(el("div",{class:"callout err"},`${ICON.warn}<div class="body"><span class="ct-title">该 Lark app 已被接入（NyxID 409）</span>同一个 app_id 在 NyxID 全局只能有一个 active channel-bot。可以删旧重建 —— 但<b>重建会换一个新的 bot_id 和 webhook_url</b>，你需要回 Lark 后台把回调地址改成新的。</div>`));
+      wrap.appendChild(footer([ btn("删旧重建","danger",ICON.refresh,()=>{ deleteExistingLarkThenRegister(); }),
+        btn("取消","ghost",null,()=>{ goStep(1); }) ]));
+    } else if(state.err==="cred"){
+      wrap.appendChild(el("div",{class:"callout err"},`${ICON.warn}<div class="body"><span class="ct-title">凭据无效</span>facade 用 app_id / app_secret 向 Lark 换 token 失败（多半是 app_secret 错误）。<div class="errnote mono">${esc(state.errMsg||"")}</div>回上一步修改后重试。</div>`));
+      wrap.appendChild(footer([ btn("返回修改凭据","primary",ICON.back,()=>{ goStep(1); }) ]));
+    } else if(state.err==="auth"){
+      wrap.appendChild(el("div",{class:"callout err"},`${ICON.warn}<div class="body"><span class="ct-title">登录已失效</span>请重新登录后再注册。</div>`));
+      wrap.appendChild(footer([ btn("重新登录","primary",null,()=>signOut()) ]));
+    } else {
+      wrap.appendChild(el("div",{class:"callout err"},`${ICON.warn}<div class="body"><span class="ct-title">注册失败</span><div class="errnote mono">${esc(state.errMsg||"未知错误")}</div></div>`));
+      wrap.appendChild(footer([ btn("重试","primary",ICON.refresh,doRegister), "spacer", btn("上一步","ghost",ICON.back,()=>{ goStep(1); }) ]));
+    }
+  } else { // done
+    wrap.appendChild(regProgress(["done","done","done","done"]));
+    const rc=el("div",{class:"result-card"});
+    rc.innerHTML=`<div class="rc-h">${ICON.check} 注册成功 · mirror 已写入</div>`;
+    rc.appendChild(copyRow("bot_id", state.reg.botId));
+    rc.appendChild(copyRow("webhook_url（回调地址）", state.reg.webhookUrl));
+    if(state.reg.scope) rc.appendChild(copyRow("scope", state.reg.scope));
+    wrap.appendChild(rc);
+    wrap.appendChild(el("div",{class:"callout info"},`${ICON.info}<div class="body">下一步要把上面的 <b>webhook_url</b> 和 Verification Token 填到 Lark 后台 —— 这一步只能你手动做。</div>`));
+    wrap.appendChild(footer([ btn("下一步：去 Lark 后台配置","primary",ICON.arrow,()=>{ goStep(3); }) ]));
+  }
+  return wrap;
+}
+function regProgress(states){
+  const labels=["创建 NyxID channel-bot","创建 relay api-key","写入 api_key_id → scope_id mirror","建立入站路由"];
+  const box=el("div",{class:"reg-steps"});
+  labels.forEach((l,i)=>{
+    const stt=states[i]||"pending";
+    const ic = stt==="done"?ICON.check : stt==="run"?'<span class="spin"></span>' : '<span class="dot s-pending" style="width:8px;height:8px"></span>';
+    box.appendChild(el("div",{class:`reg-line ${stt}`},`<span class="ic">${ic}</span><span>${l}</span>`));
+  });
+  return box;
+}
+/* delete-then-recreate for the 409 path: find the existing Lark registration for
+   the same scope, delete it, then re-register with the captured credentials. */
+async function deleteExistingLarkThenRegister(){
+  state.s="running"; state.err=null; render();
+  try {
+    const list = (await apiGet("/api/channels/registrations")) || [];
+    const existing = list.filter(r => (r.platform||"").toLowerCase()==="lark");
+    for(const r of existing){ await apiSend("/api/channels/registrations/" + encodeURIComponent(r.id), "DELETE", null); }
+  } catch(e){ if(e.message==="unauthorized") return; }
+  doRegister();
+}
+
+/* ---- Step 3 : Lark 后台手动配置（按 skill 校正）---- */
+function renderStep3(){
+  const wrap=el("section",{});
+  wrap.innerHTML=stepHead("STEP 3 / 5 · lark console","去 Lark 后台手动配置", badge("pending","待你完成"));
+  wrap.insertAdjacentHTML("beforeend",`<p class="step-desc">这一步<b style="color:var(--fg)">无法自动化</b> —— 需要你登录 Lark 开发者后台，把下面的值逐项填进去。每个值都能一键复制。填完<b style="color:var(--fg)">发布版本</b>后，回来继续验证。</p>`);
+
+  const reg = state.reg || {};
+  wrap.appendChild(sub("① 事件订阅 —— 回调地址 & Token"));
+  wrap.appendChild(copyRow("事件订阅 Request URL（回调地址）", reg.webhookUrl||""));
+  wrap.appendChild(copyRow("Verification Token", reg.verificationToken||""));
+  wrap.appendChild(copyRow("Encrypt Key", "（留空）"));
+
+  wrap.appendChild(el("div",{class:"callout warn"},`${ICON.warn}<div class="body"><span class="ct-title">别填错回调地址</span>Lark 后台填的是上面这个 <b>webhook_url</b>（指向 NyxID）。⚠️ <b>不要</b>填 relay 内部用的 <code class="kbd">callback_url</code>${reg.relayCallbackUrl?`（<span class="mono">${esc(reg.relayCallbackUrl)}</span>，仅供参考，勿填）`:""}。卡片回调（如有单独字段）也填同一个 webhook_url。</div>`));
+
+  wrap.appendChild(sub("② 权限 —— 至少申请这 5 个 scope（Tier-1）"));
+  const perm=el("div",{class:"crow req-perm"});
+  perm.innerHTML=`<div style="min-width:0"><div class="ck">最小可收发权限（少一个 bot 就收不到消息）</div><div class="cv">${LARK_SCOPES_T1.map(s=>`<span class="perm-pill">${esc(s)}</span>`).join("")}</div></div>`;
+  const jump=el("a",{class:"copybtn",href:"https://open.larksuite.com",target:"_blank",rel:"noopener"},`${ICON.ext}<span>去权限管理</span>`);
+  perm.appendChild(jump); wrap.appendChild(perm);
+  wrap.appendChild(el("div",{class:"callout warn"},`${ICON.warn}<div class="body"><span class="ct-title">权限不足是机器人「装了却不回」的头号原因</span>只给 <span class="mono">im:message:send_as_bot</span> 是<b>收不到任何消息</b>的 —— 必须连同上面的读权限一起授予并发布。</div>`));
+
+  const t2=el("details",{class:"more"});
+  t2.innerHTML=`<summary>推荐再加这些（Tier-2：表情回应 / 发送者信息 / 卡片）</summary><div class="cv" style="margin-top:8px">${LARK_SCOPES_T2.map(s=>`<span class="perm-pill alt">${esc(s)}</span>`).join("")}</div>`;
+  wrap.appendChild(t2);
+
+  wrap.appendChild(sub("③ 订阅事件"));
+  wrap.appendChild(copyRow("订阅事件", "im.message.receive_v1"));
+
+  wrap.appendChild(sub("④ 创建并发布版本"));
+  wrap.appendChild(el("div",{class:"callout info"},`${ICON.info}<div class="body">在「版本管理与发布」里创建版本并发布，企业管理员审核通过后配置才生效。<b>未发布前回调不会送达、权限也不生效。</b></div>`));
+
+  wrap.appendChild(footer([
+    btn("我已在 Lark 后台配置完成","primary",ICON.check,()=>{ goStep(4); }),
+    "spacer",
+    btn("上一步","ghost",ICON.back,()=>{ goStep(2); })
+  ]));
+  return wrap;
+}
+
+/* ---- Step 4 : 配回复模型（owner LLM）---- */
+function renderStep4(){
+  const wrap=el("section",{});
+  const llm = state.llm;
+  const unset = !llm || !llm.savedRoute || llm.routeFallbackActive;
+  wrap.innerHTML=stepHead("STEP 4 / 5 · reply model", "配回复模型（owner LLM）", badge(state.llmSaved?"registered":"pending", state.llmSaved?"已保存":(unset?"未设置":"已设置")));
+  wrap.insertAdjacentHTML("beforeend",`<p class="step-desc">bot 收到消息后，要用<b style="color:var(--fg)">一个 LLM</b> 生成回复 —— 用的是<b style="color:var(--fg)">你账户（bot owner）的回复模型配置</b>。没有模型，bot 收得到消息但回不了话。</p>`);
+
+  if(!llm){
+    wrap.appendChild(el("div",{class:"live-chip"},`<span class="dot s-running"></span><span>正在读取你的回复模型配置…</span>`));
+    wrap.appendChild(footer([ btn("上一步","ghost",ICON.back,()=>{ goStep(3); }) ]));
+    return wrap;
+  }
+
+  if(unset){
+    wrap.appendChild(el("div",{class:"callout warn"},`${ICON.warn}<div class="body"><span class="ct-title">你还没有设置回复模型</span>bot 现在会用平台<b>默认模型</b> <code class="kbd">${esc(DEFAULT_LLM.route)} / ${esc(DEFAULT_LLM.model)}</code> 回复。可以保持默认，也可以在下面选你偏好的模型。${llm.fallbackReason?`<div class="errnote mono">${esc(llm.fallbackReason)}</div>`:""}</div>`));
+  } else {
+    wrap.appendChild(el("div",{class:"callout info"},`${ICON.info}<div class="body"><span class="ct-title">当前回复模型</span><span class="mono">${esc(llm.effectiveRoute||llm.savedRoute||"")}</span>${llm.effectiveRouteLabel?` · ${esc(llm.effectiveRouteLabel)}`:""}。下面可以修改。</div>`));
+  }
+
+  // route + model selectors
+  const routeOpts = (llm.routeOptions||[]).slice();
+  if(state.llmSel.route==null) state.llmSel.route = llm.savedRoute || llm.effectiveRoute || (routeOpts[0]&&routeOpts[0].routeValue) || "";
+  const curRoute = state.llmSel.route;
+  const modelsForRoute = (llm.modelGroupsByRoute||[]).filter(g=>g.routeValue===curRoute).flatMap(g=>g.models||[]);
+  if(state.llmSel.model==null) state.llmSel.model = llm.defaultModel || modelsForRoute[0] || DEFAULT_LLM.model;
+
+  const grid=el("div",{class:"select-grid"});
+  const routeSel=selField("LLM 路由（route）", routeOpts.map(o=>({value:o.routeValue,label:o.label||o.routeValue})), curRoute);
+  routeSel.querySelector("select").addEventListener("change",(e)=>{ state.llmSel.route=e.target.value; state.llmSel.model=null; state.llmSaved=false; render(); });
+  grid.appendChild(routeSel);
+  const modelChoices = modelsForRoute.length ? modelsForRoute.map(m=>({value:m,label:m})) : [{value:state.llmSel.model,label:state.llmSel.model+"（默认）"}];
+  const modelSel=selField("模型 model", modelChoices, state.llmSel.model);
+  modelSel.querySelector("select").addEventListener("change",(e)=>{ state.llmSel.model=e.target.value; state.llmSaved=false; });
+  grid.appendChild(modelSel);
+  wrap.appendChild(grid);
+
+  const saveBtn = btn(state.llmSaving?"保存中…":(state.llmSaved?"已保存 ✓":"保存回复模型"),"ghost",ICON.gear, ()=>saveLlm(), {disabled:state.llmSaving});
+  const nextBtn = btn("下一步：验证","primary",ICON.arrow,()=>{ goStep(5); });
+  wrap.appendChild(footer([ saveBtn, nextBtn, "spacer", btn("上一步","ghost",ICON.back,()=>{ goStep(3); }) ]));
+  return wrap;
+}
+function selField(label,opts,sel){
+  const f=el("div",{class:"field",style:"margin-bottom:0"});
+  f.innerHTML=`<label>${esc(label)}</label><div class="sel"><select aria-label="${esc(label)}">${opts.map(o=>`<option value="${esc(o.value)}" ${o.value===sel?"selected":""}>${esc(o.label)}</option>`).join("")}</select><span class="chev">${ICON.chev}</span></div>`;
+  return f;
+}
+
+/* ---- Step 5 : 验证（实时状态轮询）---- */
+function renderStep5(){
+  const wrap=el("section",{});
+  const reg = state.reg || {};
+  const st = normStatus(state.statuses[reg.registrationId]);
+  const active = st==="active";
+  const received = active || (state.statuses[reg.registrationId] && state.statuses[reg.registrationId].last_event_at);
+  const bs = active?["registered","已激活"] : ["running","等待消息"];
+  wrap.innerHTML=stepHead("STEP 5 / 5 · verify","验证：发一条消息试试", badge(bs[0],bs[1]));
+  wrap.insertAdjacentHTML("beforeend",`<p class="step-desc">去 Lark 里给 bot 发一条消息（DM 直接发，或群里 <b>@它</b>）。<b style="color:var(--fg)">第一条验证过的入站消息会把 bot 翻为「已激活」</b> —— 激活和验证是同一件事。下面会实时轮询 bot 状态。</p>`);
+
+  const lightDefs=[
+    ["收到首条入站消息","NyxID 记录到来自 Lark 的事件", received],
+    ["bot 已激活","状态从 pending_webhook 翻为 active", active]
+  ];
+  const lights=el("div",{class:"lights",role:"status","aria-live":"polite"});
+  lightDefs.forEach(d=>{
+    const ok=!!d[2];
+    const ic = ok?ICON.check : '<span class="spin"></span>';
+    const stat = ok?"通过":"等待中";
+    lights.appendChild(el("div",{class:`light ${ok?"ok":"pending"}`},`<span class="lic">${ic}</span><div><div class="lt">${d[0]}</div><div class="ls">${d[1]}</div></div><span class="lstat">${stat}</span>`));
+  });
+  wrap.appendChild(lights);
+
+  if(active){
+    wrap.appendChild(el("div",{class:"callout info"},`${ICON.check.replace('width="13" height="13"','width="16" height="16"')}<div class="body"><span class="ct-title">bot 已激活 🎉</span>已经能在 Lark 里收消息了。如果<b>收到消息却不回复</b>，多半是回复模型没配好 —— 回第 4 步检查（默认用 ${esc(DEFAULT_LLM.route)} / ${esc(DEFAULT_LLM.model)}）。</div>`));
+    wrap.appendChild(footer([ btn("完成 · 去管理","primary",ICON.arrow,()=>{ stopStatusPolling(); state.view="manage"; state.manageReg=findReg(reg.registrationId); render(); }) ]));
+  } else {
+    wrap.appendChild(el("div",{class:"live-chip"},`<span class="dot s-running"></span><span>等待你的消息 · 每 3.5s 轮询 bot 状态…</span>`));
+    wrap.appendChild(footer([
+      btn("立即刷新状态","ghost",ICON.refresh,()=>{ if(reg.registrationId) fetchStatus(reg.registrationId).then(s=>{ if(s){ state.statuses[reg.registrationId]=s; render(); } }); }),
+      "spacer",
+      btn("上一步","ghost",ICON.back,()=>{ goStep(4); })
+    ]));
+  }
+  return wrap;
+}
+function findReg(regId){ return (state.registrations||[]).find(r=>r.id===regId) || null; }
+
+/* ===========================================================================
+   Manage
+   =========================================================================== */
+function renderManage(){
+  const p=el("main",{class:"page"});
+  const r = state.manageReg || {};
+  const st = normStatus(state.statuses[r.id]);
+  const crumb=el("nav",{class:"crumb"});
+  const back=el("button",{},`${ICON.back}<span>渠道目录</span>`); back.addEventListener("click",()=>{ state.view="catalog"; render(); });
+  crumb.appendChild(back); crumb.insertAdjacentHTML("beforeend",`<span class="sep">/</span><span>Lark · 管理</span>`);
+  p.appendChild(crumb);
+
+  const badgeCls = st==="active"?"active":st==="error"?"error":st==="pending"?"pending":"soon";
+  const card=el("div",{class:"status-card"});
+  card.innerHTML=`
+    <div class="sc-top">
+      <div class="sc-logo" style="background:linear-gradient(150deg,var(--accent),color-mix(in oklab,var(--accent) 55%,#7c4dff))">${chLogo(r.platform||"lark")}</div>
+      <div style="flex:1;min-width:0"><div class="sc-name">${esc(r.platform||"lark")} · ${esc(r.nyx_channel_bot_id||r.id||"")}</div><div class="sc-sub">registration ${esc(r.id||"")}</div></div>
+      ${badge(badgeCls, STATUS_LABEL[st]||st)}
+    </div>`;
+  const rows=[
+    ["渠道", r.platform||"lark","plain"],
+    ["bot_id", r.nyx_channel_bot_id||""],
+    ["scope", r.scope_id||""],
+    ["provider", r.nyx_provider_slug||""],
+    ["api_key_id", r.nyx_agent_api_key_id||""]
+  ];
+  rows.forEach(([k,v,pl])=> card.appendChild(el("div",{class:"kv"},`<span class="k">${esc(k)}</span><span class="v ${pl||""}">${esc(v||"—")}</span>`)) );
+  p.appendChild(card);
+
+  if(st!=="active"){
+    p.appendChild(el("div",{class:"callout warn",style:"margin-top:16px"},`${ICON.warn}<div class="body"><span class="ct-title">bot 还没激活</span>还没收到验证过的入站消息。去 Lark 给 bot 发条消息；如果一直 pending，多半是 Lark 后台的<b>权限/事件没发布</b>（回第 3 步核对 Tier-1 scope 并发布版本）。</div>`));
+  }
+
+  const foot=el("div",{class:"step-foot",style:"border-top:0;margin-top:18px;padding-top:0"});
+  foot.appendChild(btn("刷新状态","ghost",ICON.refresh,()=>{ if(r.id) fetchStatus(r.id).then(s=>{ if(s){ state.statuses[r.id]=s; render(); } }); }));
+  foot.appendChild(btn("重新接入","ghost",ICON.gear,()=>{ state.view="wizard"; state.step=1; state.s="idle"; render(); }));
+  foot.appendChild(btn("删除接入","danger",ICON.trash,()=>{ if(confirm("删除该接入？\n\n这会删除 registration 和 mirror，bot 将不再路由。如需恢复要重新注册并回 Lark 后台改回调。")){ doDelete(r.id, ()=>{ state.view="catalog"; render(); }); } }));
+  p.appendChild(foot);
+  return p;
+}
+
+/* ===========================================================================
+   Compose / render
+   =========================================================================== */
+function enterWizard(){ state.view="wizard"; state.step=1; state.s="idle"; state.err=null; state.reg=null; render(); }
+function render(){
+  const app=$("#app"); app.innerHTML="";
+  app.appendChild(renderTopbar());
+  if(!state.signedIn){ app.appendChild(renderLogin()); return; }
+  if(state.view==="catalog") app.appendChild(renderCatalog());
+  else if(state.view==="wizard") app.appendChild(renderWizard());
+  else app.appendChild(renderManage());
+}
+
+/* init */
+(async function init(){
+  applyTheme();
+  try { await completeLoginIfCallback(); }
+  catch(e){ console.warn("channels: login callback failed", e); }
+  if(!getToken()){ state.signedIn=false; render(); return; }
+  state.signedIn=true;
+  state.scopeId = resolveScopeId();
+  render();
+  loadRegistrations();
+  loadLlm();
+  (async()=>{ const acct=toAccount(await fetchUserInfo()); if(acct){ state.account=acct; render(); } })();
+})();
+if(window.matchMedia){ window.matchMedia("(prefers-color-scheme: light)").addEventListener?.("change",()=>{ if(!curTheme())render(); }); }
+
+</script>
+</body>
+</html>
+""";
+}

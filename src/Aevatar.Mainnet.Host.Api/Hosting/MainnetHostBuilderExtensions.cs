@@ -350,6 +350,7 @@ public static class MainnetHostBuilderExtensions
         app.MapMessagesApiEndpoints();
         app.MapChatCompletionsApiEndpoints();
         app.MapChannelCallbackEndpoints();
+        app.MapChannels();
         app.MapDeviceEventEndpoints();
         app.MapIdentityOAuthEndpoints();
         app.MapSkillRunnerExternalTriggerEndpoints();

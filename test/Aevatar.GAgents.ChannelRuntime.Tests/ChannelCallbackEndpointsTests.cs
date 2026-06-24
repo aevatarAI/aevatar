@@ -342,6 +342,104 @@ public sealed class ChannelCallbackEndpointsTests
         response.Body.Should().NotContain("entries");
     }
 
+    [Fact]
+    public void MapChannelCallbackEndpoints_ShouldRegisterStatusRoute_RequiringAuthorization()
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = "Development",
+        });
+
+        var app = builder.Build();
+        var routeBuilder = (IEndpointRouteBuilder)app;
+        app.MapChannelCallbackEndpoints();
+
+        var endpoint = routeBuilder.DataSources
+            .SelectMany(source => source.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Single(route => string.Equals(route.RoutePattern.RawText, "/api/channels/registrations/{registrationId}/status", StringComparison.Ordinal));
+
+        endpoint.Metadata.OfType<IAuthorizeData>().Should().NotBeEmpty();
+        endpoint.Metadata.OfType<Microsoft.AspNetCore.Routing.HttpMethodMetadata>()
+            .Single().HttpMethods.Should().Contain("GET");
+    }
+
+    [Fact]
+    public async Task HandleGetStatusAsync_ReturnsNotFound_WhenMissing()
+    {
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        queryPort.GetAsync("missing", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(null));
+        var http = CreateHttpContext("scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        // nyxClient (arg 4) is null on purpose: the not-found path returns before it is used.
+        var result = await InvokeAsync("HandleGetStatusAsync", "missing", http, queryPort, null, NullLoggerFactory.Instance, CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+    }
+
+    [Fact]
+    public async Task HandleGetStatusAsync_ReturnsUnknown_WhenNoChannelBotId()
+    {
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        queryPort.GetAsync("reg-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
+            {
+                Id = "reg-1",
+                Platform = "lark",
+                NyxChannelBotId = string.Empty,
+            }));
+        var http = CreateHttpContext("scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        // No channel bot id → returns "unknown" before touching the Nyx client (arg 4 null).
+        var result = await InvokeAsync("HandleGetStatusAsync", "reg-1", http, queryPort, null, NullLoggerFactory.Instance, CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        response.Body.Should().Contain("\"status\":\"unknown\"");
+    }
+
+    [Fact]
+    public void ParseChannelBotStatus_MapsActiveWithLastEvent()
+    {
+        var (status, lastEventAt) = InvokeParseStatus(
+            """{"id":"bot-1","status":"active","last_event_at":"2026-06-24T00:00:00Z"}""");
+
+        status.Should().Be("active");
+        lastEventAt.Should().Be("2026-06-24T00:00:00Z");
+    }
+
+    [Fact]
+    public void ParseChannelBotStatus_HandlesDataWrapperAndPending()
+    {
+        var (status, lastEventAt) = InvokeParseStatus(
+            """{"data":{"status":"pending_webhook","last_event_at":null}}""");
+
+        status.Should().Be("pending_webhook");
+        lastEventAt.Should().BeNull();
+    }
+
+    [Fact]
+    public void ParseChannelBotStatus_DegradesToUnknown_OnErrorEnvelopeOrMalformed()
+    {
+        InvokeParseStatus("""{"error":true,"status":404}""").Status.Should().Be("unknown");
+        InvokeParseStatus("not-json").Status.Should().Be("unknown");
+        InvokeParseStatus("""{"id":"bot-1"}""").Status.Should().Be("unknown");
+    }
+
+    private static (string Status, string? LastEventAt) InvokeParseStatus(string response)
+    {
+        var method = typeof(ChannelCallbackEndpoints)
+            .GetMethod("ParseChannelBotStatus", BindingFlags.Static | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("ParseChannelBotStatus not found.");
+        var boxed = method.Invoke(null, [response]) ?? throw new InvalidOperationException("null result");
+        var tuple = (ValueTuple<string, string?>)boxed;
+        return (tuple.Item1, tuple.Item2);
+    }
+
     private static HttpContext CreateHttpContext(string? scopeId = null)
     {
         var builder = WebApplication.CreateBuilder();
