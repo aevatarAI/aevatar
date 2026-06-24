@@ -3887,7 +3887,7 @@ public sealed class AgentRunGAgentTests
                     }
                 }
 
-                await sink.DispatchAsync(text, ct);
+                await sink.DispatchAsync(text, isFinal, ct);
                 if (sink.ChunksEmitted > _chunksEmitted)
                 {
                     _lastEmittedText = text;

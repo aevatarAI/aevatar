@@ -11,6 +11,7 @@ using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Ornn;
 using Aevatar.AI.ToolProviders.Skills;
+using Aevatar.AI.ToolProviders.StudioProvisioning;
 using Aevatar.AI.ToolProviders.Telegram;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.AI.ToolProviders.Web;
@@ -236,6 +237,12 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddChannelAdminTools();
         builder.Services.AddAgentCatalogTools();
         builder.Services.AddAevatarInvocationTools();
+        // Studio workflow scheduling tool (aevatar_provision_workflow_schedule): the channel-free,
+        // Observatory-delivered analogue of the Lark scheduled_agent_creator. Registered as an
+        // IAgentToolSource here; the studio workflow's allowed_tools allowlist (W2) scopes it to
+        // studio runs. The narrow IWorkflowScheduleProvisioningPort it depends on is registered by
+        // AddStudioApplication (via AddStudioCapability), composed in the same host container.
+        builder.Services.AddStudioProvisioningTools();
         builder.Services.Configure<DeviceEventOptions>(
             builder.Configuration.GetSection("Aevatar:DeviceEvents"));
         // 06-20-observatory-admin-cross-scope: NyxID-backed platform-admin authorizer for the run observatory.
@@ -345,6 +352,7 @@ public static class MainnetHostBuilderExtensions
         app.MapNyxIdChatEndpoints();
         app.MapChatRoutePolicyAdminEndpoints();
         app.MapVoicePresenceCapabilityAdminEndpoints();
+        app.MapVoiceConsoleEndpoints();
         app.MapStreamingProxyEndpoints();
         app.MapResponsesApiEndpoints();
         app.MapMessagesApiEndpoints();

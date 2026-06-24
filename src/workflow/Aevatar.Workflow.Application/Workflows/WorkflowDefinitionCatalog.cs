@@ -50,6 +50,83 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
         """;
 
     /// <summary>
+    /// Built-in <c>studio</c> workflow for the channel-less <c>/workflow/studio</c> authoring surface.
+    ///
+    /// <para>
+    /// Unlike <see cref="BuiltInDirectYaml"/> (a zero-bias "helpful assistant" used by every channel-less
+    /// <c>Direct</c> caller — Lark/Telegram/bare), this workflow steers the agent to be <b>workflow-first</b>
+    /// and <b>Observatory-delivered</b>: author a runnable workflow, run + observe it, and schedule recurring
+    /// runs through the channel-free <c>aevatar_provision_workflow_schedule</c> tool so results surface in
+    /// <c>/workflow/observatory</c> — never a chat/bot, never a prose ornn skill as the deliverable.
+    /// </para>
+    ///
+    /// <para>
+    /// The studio page selects this workflow by sending <c>workflow: "studio"</c> on <c>/api/chat</c>
+    /// (legacy-name lookup → <c>WorkflowChatSource.CatalogWorkflow("studio")</c>). It is the ONLY studio
+    /// scoping signal: no proto/surface field is added and the shared role agent is untouched, so other
+    /// <c>Direct</c> callers keep the benign <c>direct</c> prompt + unrestricted tool surface.
+    /// </para>
+    ///
+    /// <para>
+    /// The role carries an <c>allowed_tools</c> allowlist (parsed by <c>WorkflowParser</c> →
+    /// <c>RoleDefinition.AgentToolScope</c>, intersected with any step scope by the execution kernel →
+    /// <c>ToolVisibility</c>). It INCLUDES the workflow-first tool set and EXCLUDES the Lark
+    /// <c>scheduled_agent_creator</c>; the allowlist is the lever that keeps the failing Lark scheduler out of
+    /// the studio surface entirely (prompt steering alone is unreliable while the tool is visible).
+    /// </para>
+    /// </summary>
+    public static string BuiltInStudioYaml { get; } = """
+        name: studio
+        description: >
+          Studio authoring surface: workflow-first, Observatory-delivered. Author a runnable workflow,
+          run and observe it, and schedule recurring runs so results appear in /workflow/observatory.
+        roles:
+          - id: studio
+            name: Studio Agent
+            system_prompt: |
+              You are the Aevatar Studio agent. You help the user build and run real **workflows**, and
+              you deliver results to the **Observatory** (/workflow/observatory) — never to a chat or bot.
+
+              How to work:
+              1. To build automation, author a real workflow. Draft the workflow as YAML and create it with
+                 `workflow_create_def` (use `workflow_read_def` / `workflow_list_defs` to inspect, and
+                 `workflow_update_def` to revise). Inline workflow YAML is acceptable when creating a
+                 definition is unavailable.
+              2. To run it, call `aevatar_start_workflow`, then `aevatar_observe_run` (and
+                 `aevatar_read_workflow_run_artifact` for outputs) to watch and report the run.
+              3. To run it on a recurring schedule, call `aevatar_provision_workflow_schedule` with the
+                 workflow YAML, a display name, and a cron + IANA timezone. Its runs appear in
+                 /workflow/observatory. Tell the user to open /workflow/observatory to see the runs.
+              4. You may use `ornn_search_skills` and `use_skill` to discover and load skills for genuinely
+                 non-deterministic, language-driven subtasks — but the deliverable for an automation request
+                 is a runnable workflow, not a published skill.
+
+              Hard rules:
+              - The deliverable is a runnable workflow whose runs are visible in /workflow/observatory. Do NOT
+                publish a prose skill as the answer to "build/automate/schedule X".
+              - Never deliver results to Lark/Telegram or any chat/bot, and never schedule a bot delivery.
+                Scheduling goes exclusively through `aevatar_provision_workflow_schedule` (Observatory-delivered).
+              - The owning scope and your credentials come from the session; do not ask the user for scope,
+                channel, owner, or tokens.
+            allowed_tools:
+              - workflow_create_def
+              - workflow_update_def
+              - workflow_read_def
+              - workflow_list_defs
+              - aevatar_start_workflow
+              - aevatar_observe_run
+              - aevatar_read_workflow_run_artifact
+              - aevatar_provision_workflow_schedule
+              - ornn_search_skills
+              - use_skill
+        steps:
+          - id: reply
+            type: llm_call
+            role: studio
+            parameters: {}
+        """;
+
+    /// <summary>
     /// Built-in auto-route workflow. Classifies user intent: simple questions get a
     /// direct LLM answer; complex requests trigger workflow YAML generation, multi-round
     /// human approval, and then dynamic execution of the confirmed workflow.

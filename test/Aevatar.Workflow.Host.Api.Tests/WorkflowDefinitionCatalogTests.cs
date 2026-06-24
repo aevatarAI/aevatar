@@ -186,6 +186,52 @@ public class WorkflowDefinitionCatalogTests
     }
 
     [Fact]
+    public void BuiltInStudioYaml_ShouldParseAsWorkflowFirstStudioRoleWithToolAllowlist()
+    {
+        var workflow = new WorkflowParser().Parse(WorkflowDefinitionCatalog.BuiltInStudioYaml);
+
+        workflow.Name.Should().Be("studio");
+        var role = workflow.Roles.Should().ContainSingle().Subject;
+
+        // The role carries a workflow-first, Observatory-delivered system prompt — NOT a bare
+        // "helpful assistant" and NOT a Lark/skill-publishing playbook.
+        role.SystemPrompt.Should().Contain("Studio agent");
+        role.SystemPrompt.Should().Contain("workflow_create_def");
+        role.SystemPrompt.Should().Contain("aevatar_provision_workflow_schedule");
+        role.SystemPrompt.Should().Contain("/workflow/observatory");
+        role.SystemPrompt.Should().Contain("Do NOT");
+
+        // The allowlist is the lever that keeps the Lark scheduler out of the studio surface
+        // and brings the channel-free scheduling tool in.
+        role.AgentToolScope.Should().NotBeNull();
+        var allowed = role.AgentToolScope!.AllowedToolNames;
+        allowed.Should().Contain("aevatar_provision_workflow_schedule");
+        allowed.Should().Contain("workflow_create_def");
+        allowed.Should().Contain("aevatar_start_workflow");
+        allowed.Should().Contain("aevatar_observe_run");
+        allowed.Should().NotContain("scheduled_agent_creator");
+        // Studio is workflow-first: publishing a prose skill is not the deliverable.
+        allowed.Should().NotContain("ornn_publish_skill");
+
+        // The single llm_call step runs under the studio role.
+        var step = workflow.Steps.Should().ContainSingle().Subject;
+        step.Type.Should().Be("llm_call");
+        step.TargetRole.Should().Be("studio");
+    }
+
+    [Fact]
+    public void Catalog_ShouldRegisterStudioWorkflowAlongsideDirect()
+    {
+        var registry = new WorkflowDefinitionCatalog();
+        registry.Register("direct", WorkflowDefinitionCatalog.BuiltInDirectYaml);
+        registry.Register("studio", WorkflowDefinitionCatalog.BuiltInStudioYaml);
+
+        registry.GetYaml("studio").Should().Contain("name: studio");
+        registry.GetDefinition("studio")!.DefinitionActorId
+            .Should().Be(WorkflowDefinitionActorId.Format("studio"));
+    }
+
+    [Fact]
     public void FileLoader_ShouldLoadLarkApprovalWaitTemplates()
     {
         var registry = new WorkflowDefinitionCatalog();

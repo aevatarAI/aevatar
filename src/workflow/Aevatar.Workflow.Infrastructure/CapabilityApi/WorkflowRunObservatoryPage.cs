@@ -199,6 +199,15 @@ internal static class WorkflowRunObservatoryPage
   }
   .spacer { flex: 1 1 auto; }
 
+  /* ---- shared suite navigation (identical across the five console pages) -- */
+  .suite-nav { display:flex; align-items:center; gap:2px; overflow-x:auto; scrollbar-width:none; }
+  .suite-nav::-webkit-scrollbar { display:none; }
+  .suite-nav a { display:inline-flex; align-items:center; gap:6px; padding:6px 11px; border-radius:var(--r-pill); font-size:12.5px; font-weight:600; color:var(--muted); text-decoration:none; border:1px solid transparent; white-space:nowrap; transition:color .15s,background .15s,border-color .15s; }
+  .suite-nav a:hover { color:var(--fg); background:var(--panel-2); }
+  .suite-nav a[aria-current="page"] { color:var(--accent); background:var(--accent-soft); border-color:var(--accent-line); }
+  .suite-nav svg { width:14px; height:14px; flex:0 0 auto; }
+  @media (max-width:760px) { .suite-nav .nav-label { display:none; } .suite-nav a { padding:6px 8px; } }
+
   .live {
     display: inline-flex; align-items: center; gap: 8px;
     padding: 5px 11px 5px 9px; border-radius: var(--r-pill);
@@ -849,6 +858,14 @@ internal static class WorkflowRunObservatoryPage
     .list-pane { border-right: 0; }
     .brand-sub { display: none; }
     .account .who { max-width: 92px; }
+    /* topbar: stop secondary pills from being squeezed into ugly vertical char-wrap
+       (e.g. "已暂停"/"切换账户" stacking one glyph per line); let the brand truncate instead. */
+    .topbar { gap: 8px; }
+    .brand-name { overflow: hidden; text-overflow: ellipsis; }
+    .brand, .brand > div { min-width: 0; }
+    .pill-ro, .live, .iconbtn, .account, .linkbtn { flex-shrink: 0; }
+    .live, .linkbtn, .pill-ro { white-space: nowrap; }
+    .live .freshness { display: none; }
     /* mobile master-detail: one region visible at a time */
     body[data-mobile-view="list"] .detail-pane { display: none; }
     body[data-mobile-view="detail"] .list-pane { display: none; }
@@ -871,6 +888,14 @@ internal static class WorkflowRunObservatoryPage
     .gnode-detail { top: auto; left: 8px; right: 8px; bottom: 8px; width: auto; max-width: none; max-height: 64%; }
   }
   @media (min-width: 761px) { .backbar { display: none !important; } }
+
+  /* phone: drop the most secondary topbar chrome (read-only pill, live indicator, account email)
+     so brand + theme + account/sign-out fit on one clean row without squeezing. */
+  @media (max-width: 520px) {
+    .topbar { gap: 6px; padding: 0 12px; }
+    .pill-ro, .live { display: none; }
+    .account .who { display: none; }
+  }
 
   /* reduced motion */
   @media (prefers-reduced-motion: reduce) {
@@ -1281,6 +1306,16 @@ function effectiveDark(){
 /* ===========================================================================
    Render — top bar
    =========================================================================== */
+/* shared suite navigation — identical markup/behaviour across the five console pages */
+const SUITE_NAV=[
+  {k:"observatory",href:"/workflow/observatory",label:"观测台",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>'},
+  {k:"studio",href:"/workflow/studio",label:"Studio",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="12" r="2.4"/><path d="M8.2 7.2 15.8 11M8.2 16.8 15.8 13"/></svg>'},
+  {k:"schedules",href:"/schedules",label:"定时任务",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>'},
+  {k:"channels",href:"/channels",label:"渠道",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2.6"/><path d="M12 4.5v4.9M12 14.6v4.9M4.5 12h4.9M14.6 12h4.9"/></svg>'},
+  {k:"voice",href:"/voice",label:"语音",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg>'}
+];
+function suiteNavHtml(active){return '<nav class="suite-nav" aria-label="控制台导航">'+SUITE_NAV.map(function(n){return '<a href="'+n.href+'"'+(n.k===active?' aria-current="page"':'')+' title="'+n.label+'">'+n.svg+'<span class="nav-label">'+n.label+'</span></a>';}).join('')+'</nav>';}
+
 function renderTopbar(){
   const acct = DataSource.getAccount();
   const bar = el("header", { class:"topbar", role:"banner" });
@@ -1294,6 +1329,7 @@ function renderTopbar(){
       </div>
       <span class="pill-ro" title="只读视图，不可修改任何运行">只读</span>
     </div>
+    ${suiteNavHtml("observatory")}
     <div class="spacer"></div>`;
 
   // live indicator (hidden on login)
@@ -1479,7 +1515,10 @@ function renderList(){
   runs.forEach(r => {
     const sel = state.selectedRunId === r.runId && state.scenario==="normal";
     const row = el("button", { class:"run-row", role:"listitem", "aria-current": String(sel) });
-    const scopeCol = (adminState.isAdmin && adminState.currentScope)
+    // scope id per row is only meaningful in the cross-scope (全部 scope) view, where rows differ in
+    // scope. When a single concrete scope is selected it's the same id on every row (already shown in
+    // the admin bar) — pure noise — so it's hidden there.
+    const scopeCol = (adminState.isAdmin && adminState.currentScope === ALL_SCOPES)
       ? `<span class="sep">·</span><span class="id" title="scope id: ${esc(r.scopeId||"")}">${esc(tailId(r.scopeId, 14))}</span>`
       : "";
     // run-origin badge: legacy/empty origin renders nothing (keeps the row readable at density).
@@ -1495,7 +1534,7 @@ function renderList(){
         <span class="sep">·</span>
         <span data-since="${r.updatedAtUtc}">${relTime(r.updatedAtUtc, nowMs())}</span>
         <span class="sep">·</span>
-        <span class="id" title="run id: ${esc(r.runId)}">${esc(tailId(r.runId, 18))}</span>${scopeCol}
+        <span class="id" title="run id: ${esc(r.runId)}">${esc(midTrunc(parseRunId(r.runId).run, 16) || tailId(r.runId, 12))}</span>${scopeCol}
       </span>`;
     row.addEventListener("click", () => selectRun(r.runId));
     listbox.appendChild(row);

@@ -43,6 +43,8 @@ public static class ServiceCollectionExtensions
             var catalog = new WorkflowDefinitionCatalog();
             if (options.RegisterBuiltInDirectWorkflow)
                 catalog.Register("direct", WorkflowDefinitionCatalog.BuiltInDirectYaml);
+            if (options.RegisterBuiltInStudioWorkflow)
+                catalog.Register("studio", WorkflowDefinitionCatalog.BuiltInStudioYaml);
             if (options.RegisterBuiltInAutoWorkflow)
                 catalog.Register("auto", WorkflowDefinitionCatalog.CreateBuiltInAutoYaml());
             if (options.RegisterBuiltInAutoReviewWorkflow)

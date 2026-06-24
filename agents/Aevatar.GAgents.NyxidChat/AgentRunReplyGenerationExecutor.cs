@@ -833,7 +833,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 }
             }
 
-            await _sink.DispatchAsync(text, ct).ConfigureAwait(false);
+            await _sink.DispatchAsync(text, isFinal, ct).ConfigureAwait(false);
             if (_sink.ChunksEmitted > _chunksEmitted)
             {
                 _lastEmittedText = text;
