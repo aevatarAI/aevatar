@@ -382,7 +382,7 @@ internal static class ChannelsPage
 
 <script>
 /* ===========================================================================
-   /channels — backend-served Lark bot onboarding. Mirrors /workflow/studio:
+   /channels — backend-served Lark + Telegram bot onboarding. Mirrors /workflow/studio:
    one inline self-contained page, gated behind NyxID OIDC (PKCE), then wired to
    the live facade. Authoritative flow = published aevatar-lark-bot-registration
    skill (facade path that writes the api_key_id→scope_id mirror).
@@ -425,7 +425,7 @@ const LARK_SCOPE_IMPORT_JSON = JSON.stringify(
 const CHANNELS = [
   { id:"lark",     name:"Lark",        en:"lark",     status:"available", desc:"飞书国际版 · 把 bot 接到群聊和单聊", color:"#3370ff" },
   { id:"feishu",   name:"飞书 Feishu", en:"feishu",   status:"soon",      desc:"国内版飞书，复用同一接入流程", color:"#3370ff" },
-  { id:"telegram", name:"Telegram",    en:"telegram", status:"soon",      desc:"Bot API 接入，规划中", color:"#2aabee" },
+  { id:"telegram", name:"Telegram",    en:"telegram", status:"available", desc:"Bot API 接入 · 用 BotFather 的 bot token 一步接入（无需手动配 webhook）", color:"#2aabee" },
   { id:"discord",  name:"Discord",     en:"discord",  status:"soon",      desc:"服务器 / 频道 bot，规划中", color:"#5865f2" },
   { id:"slack",    name:"Slack",       en:"slack",    status:"soon",      desc:"Workspace app，规划中", color:"#611f69" }
 ];
@@ -480,6 +480,52 @@ function chLogo(id){
 }
 
 /* ===========================================================================
+   平台描述符：把每个渠道的差异（凭证字段、注册 body、是否需要后台手动配置、各步
+   文案）收敛到数据里，渲染逻辑保持单一（多态-by-config，避免到处 if(platform)）。
+   只有 lark / telegram 已上线；feishu / discord / slack 仍是 catalog 里的 soon 卡片。
+   置于 ICON / chLogo 之后：credHelp 在定义期就内插 ICON，提前引用会触发 TDZ 白屏。
+   =========================================================================== */
+const PLATFORMS = {
+  lark: {
+    id:"lark", connect:"Lark", consoleStep:true,
+    intro:"按下面 5 步完成，直到你能在 Lark 里给 bot 发消息、bot 能回话。",
+    credTitle:"填入 Lark 应用凭据",
+    credDesc:`这些值来自 Lark 开发者后台 → 你的应用 → <b style="color:var(--fg)">凭证与基础信息</b> / <b style="color:var(--fg)">事件订阅</b>。我们只用它们去 facade 注册，不会明文留存。`,
+    credHelp:`${ICON.info}<div class="body"><span class="ct-title">找不到这些值？</span>登录 <b>open.larksuite.com</b> → 开发者后台 → 选择或新建企业自建应用 → 左侧「凭证与基础信息」拿 App ID / Secret；「事件订阅」拿 Verification Token。</div>`,
+    credFields:[
+      { name:"app_id", ph:"cli_xxxxxxxxxxxx", help:"开发者后台 → 凭证与基础信息 → App ID" },
+      { name:"app_secret", ph:"••••••••••••••••", help:"开发者后台 → 凭证与基础信息 → App Secret", secret:true },
+      { name:"verification_token", ph:"事件订阅页的 Verification Token", help:"开发者后台 → 事件订阅 → Verification Token（第③步在 Lark 后台还会用到）" },
+      { name:"label", ph:"给这个 bot 起个名字（可选）", help:"便于在「已接入」列表里区分；可留空", optional:true }
+    ],
+    requiredOk:(c)=> !!(c.app_id.trim() && c.app_secret.trim()),
+    requiredMsg:"请先填写 app_id 和 app_secret",
+    buildBody:(c)=>({ platform:"lark", webhook_base_url:location.origin, app_id:c.app_id.trim(), app_secret:c.app_secret, verification_token:c.verification_token.trim(), label:(c.label||"").trim() }),
+    step3Title:"Lark 后台配置", stepSub3:"lark console",
+    step2Next:"下一步：去 Lark 后台配置"
+  },
+  telegram: {
+    id:"telegram", connect:"Telegram", consoleStep:false,
+    intro:"按下面几步完成。Telegram 不需要你手动配置 webhook —— 注册后 NyxID 会自动用 bot token 接管 Bot API。",
+    credTitle:"填入 Telegram Bot Token",
+    credDesc:`在 Telegram 里找 <b style="color:var(--fg)">@BotFather</b>，用 <code class="kbd">/newbot</code> 新建一个 bot（或对已有 bot 用 <code class="kbd">/token</code>），把它给你的 <b style="color:var(--fg)">HTTP API token</b> 贴到下面。我们只用它去 facade 注册，不会明文留存。`,
+    credHelp:`${ICON.info}<div class="body"><span class="ct-title">怎么拿 bot token？</span>在 Telegram 搜索 <b>@BotFather</b> → 发送 <code class="kbd">/newbot</code> → 按提示起名 → 它会回一串形如 <span class="mono">123456789:AAE…</span> 的 token，整串复制过来。</div>`,
+    credFields:[
+      { name:"bot_token", ph:"123456789:AAE-xxxxxxxxxxxxxxxxxxxxxxxxxxx", help:"@BotFather 用 /newbot 或 /token 给你的 HTTP API token", secret:true },
+      { name:"label", ph:"给这个 bot 起个名字（可选）", help:"便于在「已接入」列表里区分；可留空", optional:true }
+    ],
+    requiredOk:(c)=> !!c.bot_token.trim(),
+    requiredMsg:"请先填写 bot_token（来自 @BotFather）",
+    buildBody:(c)=>({ platform:"telegram", webhook_base_url:location.origin, bot_token:c.bot_token.trim(), label:(c.label||"").trim() }),
+    step3Title:"自动配置 webhook", stepSub3:"telegram · 自动",
+    step2Next:"下一步"
+  }
+};
+function curP(){ return PLATFORMS[state.platform] || PLATFORMS.lark; }
+function connectName(p){ return (PLATFORMS[(p||"").toLowerCase()]||{}).connect || p || "Lark"; }
+function hasConsole(p){ const P=PLATFORMS[(p||"").toLowerCase()]; return P ? P.consoleStep : true; }
+
+/* ===========================================================================
    App state
    =========================================================================== */
 const state = {
@@ -489,11 +535,12 @@ const state = {
   isAdmin:false,                      // platform admin (from GET /api/channels/me)
   scopeView:"mine",                   // "mine" | "all" (admin cross-account view)
   view:"catalog",                     // catalog | wizard | manage
+  platform:"lark",                    // active wizard platform (lark | telegram)
   step:1,                             // 1..5
   s:"idle",                           // idle | running | done | failed
   err:null,                           // step2: 'auth' | '409' | 'cred' | 'infra' | 'other' | 'network'
   errMsg:null,
-  cred:{ app_id:"", app_secret:"", verification_token:"", label:"" },
+  cred:{ app_id:"", app_secret:"", verification_token:"", bot_token:"", label:"" },
   reg:null,                           // last registration result
   registrations:[],                   // GET /api/channels/registrations
   statuses:{},                        // registrationId -> { status, last_event_at }
@@ -670,14 +717,7 @@ const BADGE_BY_STATUS = { active:["b-active","s-active"], pending:["b-pending","
 async function doRegister(){
   state.step=2; state.s="running"; state.err=null; state.errMsg=null; render();
   const c=state.cred;
-  const body = {
-    platform:"lark",
-    webhook_base_url: location.origin,
-    app_id: c.app_id.trim(),
-    app_secret: c.app_secret,
-    verification_token: c.verification_token.trim(),
-    label: c.label.trim()
-  };
+  const body = curP().buildBody(c);
   let r;
   try { r = await apiSend("/api/channels/registrations", "POST", body); }
   catch(e){ if(e.message==="unauthorized") return; state.s="failed"; state.err="network"; state.errMsg=String(e.message||e); render(); return; }
@@ -691,8 +731,8 @@ async function doRegister(){
       webhookUrl: d.webhook_url || "",
       relayCallbackUrl: d.relay_callback_url || "",
       scope: state.scopeId || (r.data && r.data.scope_id) || "",
-      verificationToken: c.verification_token.trim(),
-      label: c.label.trim()
+      verificationToken: (c.verification_token||"").trim(),
+      label: (c.label||"").trim()
     };
     state.s="done"; render();
     loadRegistrations();
@@ -790,7 +830,7 @@ function renderLogin(){
   card.innerHTML = `
     <div class="login-mark" aria-hidden="true">${ICON.lock}</div>
     <h1>登录以接入渠道</h1>
-    <p>把 Lark / 飞书机器人接到你的 aevatar agent —— 登录后开始。</p>`;
+    <p>把 Lark / Telegram 机器人接到你的 aevatar agent —— 登录后开始。</p>`;
   const btn = el("button", { class:"btn btn-primary login-btn", id:"signinBtn" }, "使用 nyxid 登录");
   btn.addEventListener("click", () => { beginLogin(); });
   card.appendChild(btn);
@@ -829,7 +869,7 @@ function renderCatalog(){
       <div><div class="ch-name">${esc(c.name)}</div><div class="ch-en">${esc(c.en)}</div></div>
       <div class="ch-desc">${esc(c.desc)}</div>
       <div class="ch-foot">${avail?`<span class="ch-cta">开始接入 ${ICON.arrow}</span>`:`<span style="font-size:12px;color:var(--muted-2)">敬请期待</span>`}</div>`;
-    if(avail) card.addEventListener("click",()=>{ enterWizard(); });
+    if(avail) card.addEventListener("click",()=>{ enterWizard(c.id); });
     grid.appendChild(card);
   });
   p.appendChild(grid);
@@ -867,23 +907,26 @@ function renderCatalog(){
 /* ===========================================================================
    Wizard
    =========================================================================== */
-const STEPS=[
-  { n:1, title:"填凭据", sub:"credentials" },
-  { n:2, title:"一键注册", sub:"register · facade" },
-  { n:3, title:"Lark 后台配置", sub:"lark console" },
-  { n:4, title:"配回复模型", sub:"reply model · llm" },
-  { n:5, title:"验证", sub:"verify" }
-];
+function steps(){
+  const P=curP();
+  return [
+    { n:1, title:"填凭据", sub:"credentials" },
+    { n:2, title:"一键注册", sub:"register · facade" },
+    { n:3, title:P.step3Title, sub:P.stepSub3 },
+    { n:4, title:"配回复模型", sub:"reply model · llm" },
+    { n:5, title:"验证", sub:"verify" }
+  ];
+}
 function renderWizard(){
   const p=el("main",{class:"page"});
   const crumb=el("nav",{class:"crumb","aria-label":"路径"});
   const back=el("button",{},`${ICON.back}<span>渠道目录</span>`);
   back.addEventListener("click",()=>{ state.view="catalog"; stopStatusPolling(); render(); });
   crumb.appendChild(back);
-  crumb.insertAdjacentHTML("beforeend",`<span class="sep">/</span><span>Lark 接入</span>`);
+  crumb.insertAdjacentHTML("beforeend",`<span class="sep">/</span><span>${esc(curP().connect)} 接入</span>`);
   p.appendChild(crumb);
-  p.appendChild(el("h1",{class:"page-h"},"接入 Lark"));
-  p.appendChild(el("p",{class:"page-sub"},"按下面 5 步完成，直到你能在 Lark 里给 bot 发消息、bot 能回话。"));
+  p.appendChild(el("h1",{class:"page-h"},"接入 "+curP().connect));
+  p.appendChild(el("p",{class:"page-sub"},curP().intro));
 
   const wiz=el("div",{class:"wiz"});
   wiz.appendChild(renderStepper());
@@ -901,7 +944,7 @@ function stepStatusClass(n){
 function renderStepper(){
   const aside=el("aside",{class:"stepper",role:"navigation","aria-label":"接入步骤"});
   aside.appendChild(el("div",{class:"stepper-h"},"接入步骤"));
-  STEPS.forEach(st=>{
+  steps().forEach(st=>{
     const cls=stepStatusClass(st.n);
     const clickable = st.n<=state.step;
     const item=el("div",{class:`step-item ${cls} ${clickable?"clickable":""}`, role:"button", tabindex:clickable?"0":"-1",
@@ -944,36 +987,31 @@ function sub(t){ return el("div",{class:"sec-title",style:"margin:22px 0 10px;fo
 
 /* ---- Step 1 : 填凭据 ---- */
 function renderStep1(){
+  const P=curP();
   const wrap=el("section",{});
-  wrap.innerHTML=stepHead("STEP 1 / 5 · credentials","填入 Lark 应用凭据", badge("pending","待填写"));
-  wrap.insertAdjacentHTML("beforeend",`<p class="step-desc">这些值来自 Lark 开发者后台 → 你的应用 → <b style="color:var(--fg)">凭证与基础信息</b> / <b style="color:var(--fg)">事件订阅</b>。我们只用它们去 facade 注册，不会明文留存。</p>`);
+  wrap.innerHTML=stepHead("STEP 1 / 5 · credentials", esc(P.credTitle), badge("pending","待填写"));
+  wrap.insertAdjacentHTML("beforeend",`<p class="step-desc">${P.credDesc}</p>`);
 
   const f=el("div",{});
-  f.appendChild(field("app_id","cli_xxxxxxxxxxxx","开发者后台 → 凭证与基础信息 → App ID", state.cred.app_id));
-  f.appendChild(field("app_secret","••••••••••••••••","开发者后台 → 凭证与基础信息 → App Secret", state.cred.app_secret));
-  f.appendChild(field("verification_token","事件订阅页的 Verification Token","开发者后台 → 事件订阅 → Verification Token（第③步在 Lark 后台还会用到）", state.cred.verification_token));
-  f.appendChild(field("label","给这个 bot 起个名字（可选）","便于在「已接入」列表里区分；可留空", state.cred.label, true));
+  P.credFields.forEach(fd=> f.appendChild(field(fd, state.cred[fd.name])));
   wrap.appendChild(f);
 
-  wrap.appendChild(el("div",{class:"callout info"},`${ICON.info}<div class="body"><span class="ct-title">找不到这些值？</span>登录 <b>open.larksuite.com</b> → 开发者后台 → 选择或新建企业自建应用 → 左侧「凭证与基础信息」拿 App ID / Secret；「事件订阅」拿 Verification Token。</div>`));
+  wrap.appendChild(el("div",{class:"callout info"},P.credHelp));
 
-  const next=btn("下一步：注册","primary",ICON.arrow,()=>{ captureCred(wrap); if(!state.cred.app_id.trim()||!state.cred.app_secret.trim()){ alert("请先填写 app_id 和 app_secret"); return; } goStep(2); });
+  const next=btn("下一步：注册","primary",ICON.arrow,()=>{ captureCred(wrap); if(!P.requiredOk(state.cred)){ alert(P.requiredMsg); return; } goStep(2); });
   wrap.appendChild(footer([next]));
   return wrap;
 }
 function captureCred(scope){
   const g=(n)=>{ const e=scope.querySelector("#f_"+n); return e?e.value:""; };
-  state.cred.app_id = g("app_id");
-  state.cred.app_secret = g("app_secret");
-  state.cred.verification_token = g("verification_token");
-  state.cred.label = g("label");
+  curP().credFields.forEach(fd=>{ state.cred[fd.name]=g(fd.name); });
 }
-function field(name,ph,help,val,optional){
+function field(fd,val){
   const f=el("div",{class:"field"});
-  const type = name==="app_secret" ? "password" : "text";
-  f.innerHTML=`<label for="f_${name}">${name} ${optional?'<span style="color:var(--muted-2);font-weight:500">· 可选</span>':'<span class="req">*</span>'}</label>
-    <input class="input" id="f_${name}" type="${type}" placeholder="${esc(ph)}" autocomplete="off" spellcheck="false" value="${esc(val||"")}" />
-    <div class="help">${esc(help)}</div>`;
+  const type = fd.secret ? "password" : "text";
+  f.innerHTML=`<label for="f_${fd.name}">${esc(fd.name)} ${fd.optional?'<span style="color:var(--muted-2);font-weight:500">· 可选</span>':'<span class="req">*</span>'}</label>
+    <input class="input" id="f_${fd.name}" type="${type}" placeholder="${esc(fd.ph)}" autocomplete="off" spellcheck="false" value="${esc(val||"")}" />
+    <div class="help">${esc(fd.help)}</div>`;
   return f;
 }
 
@@ -994,11 +1032,19 @@ function renderStep2(){
     wrap.appendChild(el("div",{class:"live-chip",style:"margin-top:8px"},`<span class="dot s-running"></span><span>正在调用 facade · POST /api/channels/registrations</span>`));
   } else if(state.s==="failed"){
     if(state.err==="409"){
-      wrap.appendChild(el("div",{class:"callout err"},`${ICON.warn}<div class="body"><span class="ct-title">该 Lark app 已被接入（NyxID 409）</span>同一个 app_id 在 NyxID 全局只能有一个 active channel-bot。可以删旧重建 —— 但<b>重建会换一个新的 bot_id 和 webhook_url</b>，你需要回 Lark 后台把回调地址改成新的。</div>`));
-      wrap.appendChild(footer([ btn("删旧重建","danger",ICON.refresh,()=>{ deleteExistingLarkThenRegister(); }),
+      const P=curP();
+      const msg = P.consoleStep
+        ? `同一个 app_id 在 NyxID 全局只能有一个 active channel-bot。可以删旧重建 —— 但<b>重建会换一个新的 bot_id 和 webhook_url</b>，你需要回 ${esc(P.connect)} 后台把回调地址改成新的。`
+        : `同一个 bot token 在 NyxID 全局只能有一个 active channel-bot。删旧重建即可 —— Telegram 无需任何后台改动，NyxID 会自动重新注册 webhook。`;
+      wrap.appendChild(el("div",{class:"callout err"},`${ICON.warn}<div class="body"><span class="ct-title">该 ${esc(P.connect)} bot 已被接入（NyxID 409）</span>${msg}</div>`));
+      wrap.appendChild(footer([ btn("删旧重建","danger",ICON.refresh,()=>{ deleteExistingThenRegister(); }),
         btn("取消","ghost",null,()=>{ goStep(1); }) ]));
     } else if(state.err==="cred"){
-      wrap.appendChild(el("div",{class:"callout err"},`${ICON.warn}<div class="body"><span class="ct-title">凭据无效</span>facade 用 app_id / app_secret 向 Lark 换 token 失败（多半是 app_secret 错误）。<div class="errnote mono">${esc(state.errMsg||"")}</div>回上一步修改后重试。</div>`));
+      const P=curP();
+      const detail = P.consoleStep
+        ? "facade 用 app_id / app_secret 向 Lark 换 token 失败（多半是 app_secret 错误）。"
+        : "facade 用 bot token 向 Telegram 校验失败（多半是 bot token 错误或已失效）。";
+      wrap.appendChild(el("div",{class:"callout err"},`${ICON.warn}<div class="body"><span class="ct-title">凭据无效</span>${detail}<div class="errnote mono">${esc(state.errMsg||"")}</div>回上一步修改后重试。</div>`));
       wrap.appendChild(footer([ btn("返回修改凭据","primary",ICON.back,()=>{ goStep(1); }) ]));
     } else if(state.err==="auth"){
       wrap.appendChild(el("div",{class:"callout err"},`${ICON.warn}<div class="body"><span class="ct-title">登录已失效</span>请重新登录后再注册。</div>`));
@@ -1008,15 +1054,20 @@ function renderStep2(){
       wrap.appendChild(footer([ btn("重试","primary",ICON.refresh,doRegister), "spacer", btn("上一步","ghost",ICON.back,()=>{ goStep(1); }) ]));
     }
   } else { // done
+    const P=curP();
     wrap.appendChild(regProgress(["done","done","done","done"]));
     const rc=el("div",{class:"result-card"});
     rc.innerHTML=`<div class="rc-h">${ICON.check} 注册成功 · mirror 已写入</div>`;
     rc.appendChild(copyRow("bot_id", state.reg.botId));
-    rc.appendChild(copyRow("webhook_url（回调地址）", state.reg.webhookUrl));
+    if(P.consoleStep) rc.appendChild(copyRow("webhook_url（回调地址）", state.reg.webhookUrl));
     if(state.reg.scope) rc.appendChild(copyRow("scope", state.reg.scope));
     wrap.appendChild(rc);
-    wrap.appendChild(el("div",{class:"callout info"},`${ICON.info}<div class="body">下一步要把上面的 <b>webhook_url</b> 和 Verification Token 填到 Lark 后台 —— 这一步只能你手动做。</div>`));
-    wrap.appendChild(footer([ btn("下一步：去 Lark 后台配置","primary",ICON.arrow,()=>{ goStep(3); }) ]));
+    if(P.consoleStep){
+      wrap.appendChild(el("div",{class:"callout info"},`${ICON.info}<div class="body">下一步要把上面的 <b>webhook_url</b> 和 Verification Token 填到 Lark 后台 —— 这一步只能你手动做。</div>`));
+    } else {
+      wrap.appendChild(el("div",{class:"callout info"},`${ICON.info}<div class="body"><span class="ct-title">已自动接入 · 无需手动配置</span>NyxID 已用你的 bot token 向 Telegram 注册好 webhook 和 secret_token。<b>不要</b>自己再调 setWebhook，否则会覆盖 NyxID 的 secret_token、弄坏入站校验。直接进入下一步配回复模型即可。</div>`));
+    }
+    wrap.appendChild(footer([ btn(P.step2Next,"primary",ICON.arrow,()=>{ goStep(3); }) ]));
   }
   return wrap;
 }
@@ -1030,20 +1081,43 @@ function regProgress(states){
   });
   return box;
 }
-/* delete-then-recreate for the 409 path: find the existing Lark registration for
-   the same scope, delete it, then re-register with the captured credentials. */
-async function deleteExistingLarkThenRegister(){
+/* delete-then-recreate for the 409 path: find the existing registration for the
+   active platform, delete it, then re-register with the captured credentials. */
+async function deleteExistingThenRegister(){
   state.s="running"; state.err=null; render();
   try {
     const list = (await apiGet("/api/channels/registrations")) || [];
-    const existing = list.filter(r => (r.platform||"").toLowerCase()==="lark");
+    const existing = list.filter(r => (r.platform||"").toLowerCase()===state.platform);
     for(const r of existing){ await apiSend("/api/channels/registrations/" + encodeURIComponent(r.id), "DELETE", null); }
   } catch(e){ if(e.message==="unauthorized") return; }
   doRegister();
 }
 
-/* ---- Step 3 : Lark 后台手动配置（按 skill 校正）---- */
+/* ---- Step 3（Telegram）: webhook 已由 NyxID 自动注册，无需手动操作 ---- */
+function renderStep3Auto(){
+  const wrap=el("section",{});
+  wrap.innerHTML=stepHead("STEP 3 / 5 · auto","webhook 已自动配置", badge("registered","已自动完成"));
+  wrap.insertAdjacentHTML("beforeend",`<p class="step-desc">和 Lark 不同，Telegram <b style="color:var(--fg)">不需要你去任何后台手动配置</b>。注册时 NyxID 已经用你的 bot token 调用了 Telegram Bot API 的 <code class="kbd">setWebhook</code>，把入站消息指到 relay 回调并设置了 secret_token 校验。</p>`);
+  wrap.appendChild(el("div",{class:"callout warn"},`${ICON.warn}<div class="body"><span class="ct-title">不要自己调 setWebhook</span>如果你手动对这个 bot 调用 <code class="kbd">setWebhook</code>，会覆盖掉 NyxID 设置的 secret_token，导致入站消息无法通过校验、bot 收不到消息。保持现状即可。</div>`));
+  const reg=state.reg||{};
+  if(reg.botId){
+    const rc=el("div",{class:"result-card"});
+    rc.innerHTML=`<div class="rc-h">${ICON.check} 已就绪</div>`;
+    rc.appendChild(copyRow("bot_id", reg.botId));
+    if(reg.scope) rc.appendChild(copyRow("scope", reg.scope));
+    wrap.appendChild(rc);
+  }
+  wrap.appendChild(footer([
+    btn("下一步：配回复模型","primary",ICON.arrow,()=>{ goStep(4); }),
+    "spacer",
+    btn("上一步","ghost",ICON.back,()=>{ goStep(2); })
+  ]));
+  return wrap;
+}
+
+/* ---- Step 3（Lark）: Lark 后台手动配置（按 skill 校正）---- */
 function renderStep3(){
+  if(!curP().consoleStep) return renderStep3Auto();
   const wrap=el("section",{});
   wrap.innerHTML=stepHead("STEP 3 / 5 · lark console","去 Lark 后台手动配置", badge("pending","待你完成"));
   wrap.insertAdjacentHTML("beforeend",`<p class="step-desc">这一步<b style="color:var(--fg)">无法自动化</b> —— 需要你登录 Lark 开发者后台，把下面的值逐项填进去。每个值都能一键复制。填完<b style="color:var(--fg)">发布版本</b>后，回来继续验证。</p>`);
@@ -1155,11 +1229,12 @@ function renderStep5(){
   const active = st==="active";
   const received = active || (state.statuses[reg.registrationId] && state.statuses[reg.registrationId].last_event_at);
   const bs = active?["registered","已激活"] : ["running","等待消息"];
+  const P=curP();
   wrap.innerHTML=stepHead("STEP 5 / 5 · verify","验证：发一条消息试试", badge(bs[0],bs[1]));
-  wrap.insertAdjacentHTML("beforeend",`<p class="step-desc">去 Lark 里给 bot 发一条消息（DM 直接发，或群里 <b>@它</b>）。<b style="color:var(--fg)">第一条验证过的入站消息会把 bot 翻为「已激活」</b> —— 激活和验证是同一件事。下面会实时轮询 bot 状态。</p>`);
+  wrap.insertAdjacentHTML("beforeend",`<p class="step-desc">去 ${esc(P.connect)} 里给 bot 发一条消息（私聊直接发，或群里 <b>@它</b>）。<b style="color:var(--fg)">第一条验证过的入站消息会把 bot 翻为「已激活」</b> —— 激活和验证是同一件事。下面会实时轮询 bot 状态。</p>`);
 
   const lightDefs=[
-    ["收到首条入站消息","NyxID 记录到来自 Lark 的事件", received],
+    ["收到首条入站消息",`NyxID 记录到来自 ${P.connect} 的事件`, received],
     ["bot 已激活","状态从 pending_webhook 翻为 active", active]
   ];
   const lights=el("div",{class:"lights",role:"status","aria-live":"polite"});
@@ -1172,7 +1247,7 @@ function renderStep5(){
   wrap.appendChild(lights);
 
   if(active){
-    wrap.appendChild(el("div",{class:"callout info"},`${ICON.check.replace('width="13" height="13"','width="16" height="16"')}<div class="body"><span class="ct-title">bot 已激活 🎉</span>已经能在 Lark 里收消息了。如果<b>收到消息却不回复</b>，多半是回复模型没配好 —— 回第 4 步检查（默认用 ${esc(DEFAULT_LLM.route)} / ${esc(DEFAULT_LLM.model)}）。</div>`));
+    wrap.appendChild(el("div",{class:"callout info"},`${ICON.check.replace('width="13" height="13"','width="16" height="16"')}<div class="body"><span class="ct-title">bot 已激活 🎉</span>已经能在 ${esc(P.connect)} 里收消息了。如果<b>收到消息却不回复</b>，多半是回复模型没配好 —— 回第 4 步检查（默认用 ${esc(DEFAULT_LLM.route)} / ${esc(DEFAULT_LLM.model)}）。</div>`));
     wrap.appendChild(footer([ btn("完成 · 去管理","primary",ICON.arrow,()=>{ stopStatusPolling(); state.view="manage"; state.manageReg=findReg(reg.registrationId); render(); }) ]));
   } else {
     wrap.appendChild(el("div",{class:"live-chip"},`<span class="dot s-running"></span><span>等待你的消息 · 每 3.5s 轮询 bot 状态…</span>`));
@@ -1195,7 +1270,7 @@ function renderManage(){
   const st = normStatus(state.statuses[r.id]);
   const crumb=el("nav",{class:"crumb"});
   const back=el("button",{},`${ICON.back}<span>渠道目录</span>`); back.addEventListener("click",()=>{ state.view="catalog"; render(); });
-  crumb.appendChild(back); crumb.insertAdjacentHTML("beforeend",`<span class="sep">/</span><span>Lark · 管理</span>`);
+  crumb.appendChild(back); crumb.insertAdjacentHTML("beforeend",`<span class="sep">/</span><span>${esc(connectName(r.platform))} · 管理</span>`);
   p.appendChild(crumb);
 
   const badgeCls = st==="active"?"active":st==="error"?"error":st==="pending"?"pending":"soon";
@@ -1217,13 +1292,18 @@ function renderManage(){
   p.appendChild(card);
 
   if(st!=="active"){
-    p.appendChild(el("div",{class:"callout warn",style:"margin-top:16px"},`${ICON.warn}<div class="body"><span class="ct-title">bot 还没激活</span>还没收到验证过的入站消息。去 Lark 给 bot 发条消息；如果一直 pending，多半是 Lark 后台的<b>权限/事件没发布</b>（回第 3 步核对 Tier-1 scope 并发布版本）。</div>`));
+    const pf=(r.platform||"lark").toLowerCase();
+    const cn=esc(connectName(pf));
+    const warnBody = hasConsole(pf)
+      ? `还没收到验证过的入站消息。去 ${cn} 给 bot 发条消息；如果一直 pending，多半是 ${cn} 后台的<b>权限/事件没发布</b>（回向导第 3 步核对 Tier-1 scope 并发布版本）。`
+      : `还没收到入站消息。去 ${cn} 私聊 bot 发条消息试试 —— NyxID 已自动配置好 webhook，通常一发就会激活。`;
+    p.appendChild(el("div",{class:"callout warn",style:"margin-top:16px"},`${ICON.warn}<div class="body"><span class="ct-title">bot 还没激活</span>${warnBody}</div>`));
   }
 
   const foot=el("div",{class:"step-foot",style:"border-top:0;margin-top:18px;padding-top:0"});
   foot.appendChild(btn("刷新状态","ghost",ICON.refresh,()=>{ if(r.id) fetchStatus(r.id).then(s=>{ if(s){ state.statuses[r.id]=s; render(); } }); }));
-  foot.appendChild(btn("重新接入","ghost",ICON.gear,()=>{ state.view="wizard"; state.step=1; state.s="idle"; render(); }));
-  foot.appendChild(btn("删除接入","danger",ICON.trash,()=>{ if(confirm("删除该接入？\n\n这会删除 registration 和 mirror，bot 将不再路由。如需恢复要重新注册并回 Lark 后台改回调。")){ doDelete(r.id, ()=>{ state.view="catalog"; render(); }); } }));
+  foot.appendChild(btn("重新接入","ghost",ICON.gear,()=>{ enterWizard((r.platform||"lark").toLowerCase()); }));
+  foot.appendChild(btn("删除接入","danger",ICON.trash,()=>{ const recover = hasConsole((r.platform||"lark").toLowerCase()) ? "如需恢复要重新注册并回后台改回调。" : "如需恢复重新注册即可（Telegram 无需后台改动）。"; if(confirm("删除该接入？\n\n这会删除 registration 和 mirror，bot 将不再路由。"+recover)){ doDelete(r.id, ()=>{ state.view="catalog"; render(); }); } }));
   p.appendChild(foot);
   return p;
 }
@@ -1231,7 +1311,7 @@ function renderManage(){
 /* ===========================================================================
    Compose / render
    =========================================================================== */
-function enterWizard(){ state.view="wizard"; state.step=1; state.s="idle"; state.err=null; state.reg=null; render(); }
+function enterWizard(platformId){ state.platform=(platformId&&PLATFORMS[platformId])?platformId:"lark"; state.view="wizard"; state.step=1; state.s="idle"; state.err=null; state.reg=null; state.cred={ app_id:"", app_secret:"", verification_token:"", bot_token:"", label:"" }; render(); }
 function render(){
   const app=$("#app"); app.innerHTML="";
   app.appendChild(renderTopbar());
