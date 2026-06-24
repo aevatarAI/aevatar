@@ -367,11 +367,14 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         CancellationToken ct)
     {
         var workflowBundle = await ParseWorkflowBundleAsync(request.Workflow?.WorkflowYamls, ct);
-        var workflowId = ResolveWorkflowBindingWorkflowId(request, identity);
-        var definitionActorIdPrefix = ScopeWorkflowCapabilityConventions.BuildDefinitionActorIdPrefix(
-            _options,
-            normalizedScopeId,
-            workflowId);
+        var suppliedWorkflowId = ScopeWorkflowCapabilityConventions.NormalizeOptional(request.Workflow?.WorkflowId);
+        var workflowId = ResolveWorkflowBindingWorkflowId(suppliedWorkflowId, identity);
+        var definitionActorIdPrefix = string.IsNullOrWhiteSpace(suppliedWorkflowId)
+            ? ScopeWorkflowCapabilityConventions.BuildDefaultDefinitionActorIdPrefix(_options, normalizedScopeId)
+            : ScopeWorkflowCapabilityConventions.BuildDefinitionActorIdPrefix(
+                _options,
+                normalizedScopeId,
+                workflowId);
         var displayName = ScopeWorkflowCapabilityConventions.ResolveDisplayName(
             request.DisplayName,
             workflowBundle.EntryWorkflowName);
@@ -546,13 +549,12 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
     }
 
     private static string ResolveWorkflowBindingWorkflowId(
-        ScopeBindingUpsertRequest request,
+        string? suppliedWorkflowId,
         ServiceIdentity identity)
     {
-        var workflowId = ScopeWorkflowCapabilityConventions.NormalizeOptional(request.Workflow?.WorkflowId);
-        return string.IsNullOrWhiteSpace(workflowId)
+        return string.IsNullOrWhiteSpace(suppliedWorkflowId)
             ? ScopeWorkflowCapabilityOptions.NormalizeRequired(identity.ServiceId, nameof(identity.ServiceId))
-            : ScopeWorkflowCapabilityConventions.NormalizeWorkflowId(workflowId);
+            : ScopeWorkflowCapabilityConventions.NormalizeWorkflowId(suppliedWorkflowId);
     }
 
     private string NormalizeGAgentKind(ScopeBindingGAgentSpec gagent)

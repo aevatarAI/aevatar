@@ -92,6 +92,38 @@ public sealed class ScopeBindingCommandApplicationServiceTests
     }
 
     [Fact]
+    public async Task UpsertAsync_ShouldKeepDefaultDefinitionPrefix_WhenWorkflowIdIsOmitted()
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(getResult: null);
+        var service = CreateService(
+            commandPort,
+            lifecyclePort,
+            new FakeScopeScriptQueryPort(),
+            new FakeScriptDefinitionSnapshotPort(),
+            new FakeWorkflowRunActorPort());
+
+        var result = await service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeId,
+            ScopeBindingImplementationKind.Workflow,
+            Workflow: new ScopeBindingWorkflowSpec(
+            [
+                "name: main_runtime\nsteps:\n  - run: echo hello",
+            ]),
+            ServiceId: "custom-service"));
+
+        var expectedDefinitionActorIdPrefix = ScopeWorkflowCapabilityConventions.BuildDefaultDefinitionActorIdPrefix(DefaultOptions, ScopeId);
+        result.Workflow.Should().NotBeNull();
+        result.Workflow!.WorkflowId.Should().Be("custom-service");
+        result.Workflow.DefinitionActorIdPrefix.Should().Be(expectedDefinitionActorIdPrefix);
+        result.ExpectedActorId.Should().StartWith($"{expectedDefinitionActorIdPrefix}:");
+
+        var revisionCommand = commandPort.Calls[1].Command.Should().BeOfType<CreateServiceRevisionCommand>().Subject;
+        revisionCommand.Spec.WorkflowSpec.Should().NotBeNull();
+        revisionCommand.Spec.WorkflowSpec!.DefinitionActorId.Should().Be(expectedDefinitionActorIdPrefix);
+    }
+
+    [Fact]
     public async Task UpsertAsync_ShouldRecordExternalExposureIntent_WhenExposureIsDesired()
     {
         var commandPort = new RecordingServiceCommandPort();
