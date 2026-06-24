@@ -76,6 +76,7 @@ type SavedWorkflowDraft = {
 
 type RunCurrentDraftVariables = {
   readonly document: StudioWorkflowDocument;
+  readonly files?: readonly File[];
   readonly runMessage: string;
   readonly title: string;
 };
@@ -195,10 +196,13 @@ type TeamMemberWorkflowStudioState = {
   readonly currentDraftRunPlaceholderReason: string;
   readonly executionDetail: StudioExecutionDetail | null;
   readonly executionError: string;
+  readonly draftRunFiles: readonly File[];
   readonly executionRunMessage: string;
   readonly executionStatus: WorkflowExecutionStatus;
   readonly activeExecutionLogIndex: number | null;
   readonly clearExecutionLogs: () => void;
+  readonly addDraftRunFiles: (files: readonly File[]) => void;
+  readonly removeDraftRunFile: (index: number) => void;
   readonly graph: ReturnType<typeof buildStudioGraphElements>;
   readonly insertNode: (stepType: string) => void;
   readonly linkedWorkflowMissing: boolean;
@@ -850,6 +854,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const [activeExecutionLogIndex, setActiveExecutionLogIndex] =
     React.useState<number | null>(null);
   const [executionRunMessage, setExecutionRunMessage] = React.useState("");
+  const [draftRunFiles, setDraftRunFiles] = React.useState<File[]>([]);
   const [pendingCreatedWorkflowMemberLink, setPendingCreatedWorkflowMemberLink] =
     React.useState<PendingCreatedWorkflowMemberLink | null>(null);
   const [publishBindingRun, setPublishBindingRun] =
@@ -1570,6 +1575,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const currentDraftRunMutation = useMutation({
     mutationFn: async ({
       document,
+      files,
       runMessage,
       title,
     }: RunCurrentDraftVariables): Promise<StudioExecutionDetail> => {
@@ -1619,6 +1625,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
           {
             prompt: userRunMessage,
             workflowYamls: [serialized.yaml],
+            files: files && files.length > 0 ? files : undefined,
           },
           controller.signal,
         );
@@ -2515,8 +2522,25 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         return;
       }
 
+      const emptyFile = draftRunFiles.find((file) => file.size <= 0);
+      if (emptyFile) {
+        const errorMessage = t(
+          "teamMemberWorkflowStudio.draftRunPanel.removeEmptyFile",
+          "Remove empty file {name} before starting the draft run.",
+          {
+            name:
+              emptyFile.name ||
+              t("teamMemberWorkflowStudio.draftRunPanel.thisFile", "this file"),
+          },
+        );
+        setExecutionError(errorMessage);
+        void message.error(errorMessage);
+        return;
+      }
+
       currentDraftRunMutation.mutate({
         document: editableDocument,
+        files: draftRunFiles,
         runMessage: trimOptional(executionRunMessage),
         title: activeMemberTitle,
       });
@@ -2525,6 +2549,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     currentDraftRunPlaceholderReason,
     executionDetail,
     executionError,
+    draftRunFiles,
     executionRunMessage,
     executionStatus,
     activeExecutionLogIndex,
@@ -2532,6 +2557,16 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       setExecutionDetail(null);
       setExecutionError("");
       setActiveExecutionLogIndex(null);
+    },
+    addDraftRunFiles: (files: readonly File[]) => {
+      if (files.length > 0) {
+        setDraftRunFiles((current) => [...current, ...files]);
+      }
+    },
+    removeDraftRunFile: (index: number) => {
+      setDraftRunFiles((current) =>
+        current.filter((_, itemIndex) => itemIndex !== index),
+      );
     },
     graph: graphWithExecution,
     insertNode,

@@ -657,7 +657,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(runtimeRunsApi.streamChat).not.toHaveBeenCalled();
   });
 
-  it("keeps draft run file input unavailable until backend multipart support lands", async () => {
+  it("sends draft run files through the scope draft endpoint", async () => {
     window.history.replaceState(
       {},
       "",
@@ -672,13 +672,13 @@ describe("TeamMemberWorkflowStudioPage", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Run" }));
     const draftRunPanel = await screen.findByLabelText("Draft run panel");
-    expect(
-      within(draftRunPanel).getByText(
-        "File input for draft runs is pending backend support.",
-      ),
-    ).toBeTruthy();
-    expect(within(draftRunPanel).queryByTestId("draft-run-file-input")).toBeNull();
-    expect(within(draftRunPanel).queryByTestId("draft-run-file-drop-zone")).toBeNull();
+    expect(within(draftRunPanel).getByTestId("draft-run-file-drop-zone")).toBeTruthy();
+    expect(within(draftRunPanel).getByText("No files attached")).toBeTruthy();
+    const image = new File(["image-bytes"], "draft.png", { type: "image/png" });
+    fireEvent.change(within(draftRunPanel).getByTestId("draft-run-file-input"), {
+      target: { files: [image] },
+    });
+    expect(await within(draftRunPanel).findByText("draft.png")).toBeTruthy();
 
     fireEvent.click(await screen.findByRole("button", { name: "Add first step" }));
     fireEvent.click(
@@ -695,6 +695,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
       expect(runtimeRunsApi.streamDraftRun).toHaveBeenCalledWith(
         "scope-1",
         expect.objectContaining({
+          files: [image],
           prompt: "",
           workflowYamls: [expect.any(String)],
         }),

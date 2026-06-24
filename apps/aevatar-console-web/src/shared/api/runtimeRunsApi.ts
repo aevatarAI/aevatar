@@ -222,6 +222,13 @@ export type StreamEndpointInvokeRequest = {
   files?: readonly File[];
 };
 
+export type DraftRunRequest = {
+  prompt?: string;
+  workflowYamls?: readonly string[];
+  metadata?: Record<string, string>;
+  files?: readonly File[];
+};
+
 export type WorkflowRunSummary = {
   actorId?: string;
   completionStatus?: string;
@@ -251,6 +258,53 @@ function buildStreamEndpointRequestInit(
   signal: AbortSignal
 ): RequestInit {
   const payload = buildStreamEndpointPayload(request);
+  const files = request.files?.filter(Boolean) ?? [];
+
+  if (files.length === 0) {
+    return {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "text/event-stream",
+      },
+      body: JSON.stringify(payload),
+      signal,
+    };
+  }
+
+  const formData = new FormData();
+  formData.append("payload", JSON.stringify(payload));
+  files.forEach((file) => {
+    formData.append("file", file, file.name);
+  });
+
+  return {
+    method: "POST",
+    headers: {
+      Accept: "text/event-stream",
+    },
+    body: formData,
+    signal,
+  };
+}
+
+function buildDraftRunPayload(request: DraftRunRequest) {
+  return compactObject({
+    eventFormat: "agui",
+    prompt: request.prompt?.trim() ?? "",
+    workflowYamls:
+      request.workflowYamls && request.workflowYamls.length > 0
+        ? request.workflowYamls
+        : undefined,
+    headers: request.metadata,
+  });
+}
+
+function buildDraftRunRequestInit(
+  request: DraftRunRequest,
+  signal: AbortSignal
+): RequestInit {
+  const payload = buildDraftRunPayload(request);
   const files = request.files?.filter(Boolean) ?? [];
 
   if (files.length === 0) {
@@ -359,28 +413,13 @@ export const runtimeRunsApi = {
 
   async streamDraftRun(
     scopeId: string,
-    request: ChatRunRequest,
+    request: DraftRunRequest,
     signal: AbortSignal
   ): Promise<Response> {
-    const response = await authFetch(`${buildScopePath(scopeId)}/workflow/draft-run`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "text/event-stream",
-      },
-      body: JSON.stringify(
-        compactObject({
-          eventFormat: "agui",
-          prompt: request.prompt.trim(),
-          workflowYamls:
-            request.workflowYamls && request.workflowYamls.length > 0
-              ? request.workflowYamls
-              : undefined,
-          headers: request.metadata,
-        })
-      ),
-      signal,
-    });
+    const response = await authFetch(
+      `${buildScopePath(scopeId)}/workflow/draft-run`,
+      buildDraftRunRequestInit(request, signal)
+    );
 
     if (!response.ok) {
       throw new Error(await readResponseError(response));
