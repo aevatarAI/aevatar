@@ -125,6 +125,8 @@ export type ScheduledDispatchListQuery = {
 
 const missingOwnerBindingMessage =
   "NyxID binding was not found for the scheduled subject.";
+const missingOwnerBindingCodePattern =
+  /nyxid.*binding.*not.*found|missing.*owner.*binding|owner.*binding.*not.*found/i;
 const bindingReadModelRetryDelaysMs = [400, 900] as const;
 let waitForBindingReadModelRetry = (delayMs: number): Promise<void> =>
   new Promise((resolve) => {
@@ -450,9 +452,14 @@ export function configureScheduledDispatchRetryDelay(
 }
 
 function isMissingOwnerBindingError(error: unknown): boolean {
+  if (!(error instanceof ScheduledDispatchApiError)) {
+    return false;
+  }
+
   return (
-    error instanceof ScheduledDispatchApiError &&
-    error.message.includes(missingOwnerBindingMessage)
+    error.message.includes(missingOwnerBindingMessage) ||
+    missingOwnerBindingCodePattern.test(error.message) ||
+    (Boolean(error.code) && missingOwnerBindingCodePattern.test(error.code ?? ""))
   );
 }
 
