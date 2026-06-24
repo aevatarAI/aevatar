@@ -1035,6 +1035,106 @@ public sealed class ConversationReplyGeneratorTests
         request.Tools!.Select(static tool => tool.Name).Should().NotContain("aevatar_invoke_workflow");
     }
 
+    // Tools whose outcome lands off-chat (e.g. aevatar_provision_workflow_schedule, which
+    // delivers its scheduled runs to /workflow/observatory, never a chat/bot) self-declare the
+    // generic AgentToolCapabilities.ExcludeFromDirectChannelChat marker. The channel/Lark
+    // conversation agent must hide ANY tool carrying that capability — keyed off the capability,
+    // not the tool name — otherwise it could route a Lark user's request away from their chat.
+    // Ordinary channel workflow tools (no such capability) are unaffected.
+    [Fact]
+    public async Task GenerateReplyAsync_ForLarkRelayTurn_ExcludesChannelHiddenCapabilityToolFromLlmRequest()
+    {
+        var providerFactory = new RecordingProviderFactory();
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            toolSources:
+            [
+                new SingleToolSource(new CapabilityFixedResultTool(
+                    "aevatar_provision_workflow_schedule",
+                    """{"ok":true}""",
+                    AgentToolCapabilities.ExcludeFromDirectChannelChat)),
+                new SingleToolSource(new FixedResultTool("aevatar_start_workflow", """{"run_id":"run-1"}""")),
+            ]);
+
+        var reply = await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "lark-relay-msg-excluded-tool",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-excluded-tool" },
+                Content = new MessageContent { Text = "schedule it" },
+                TransportExtras = new TransportExtras
+                {
+                    NyxPlatform = "lark",
+                    NyxPlatformMessageId = "om_excluded_tool",
+                },
+            },
+            new Dictionary<string, string>
+            {
+                [ChannelMetadataKeys.Platform] = "lark",
+                [ChannelMetadataKeys.PlatformMessageId] = "om_excluded_tool",
+            },
+            streamingSink: null,
+            CancellationToken.None);
+
+        reply.Text.Should().Be("ok");
+        var request = providerFactory.Requests.Should().ContainSingle().Subject;
+        request.Tools.Should().NotBeNull();
+        // The capability-marked (Observatory-only) scheduling tool is hidden from the channel surface...
+        request.Tools!.Select(static tool => tool.Name).Should().NotContain("aevatar_provision_workflow_schedule");
+        // ...but ordinary channel workflow tools still flow through unchanged.
+        request.Tools!.Select(static tool => tool.Name).Should().Contain("aevatar_start_workflow");
+    }
+
+    // The exclusion is keyed off the GENERIC capability marker, not the tool name. A tool with the
+    // very same name but WITHOUT the capability stays on the channel surface; a differently-named
+    // tool that DOES declare the capability is hidden. This pins the no-hardcoded-tool-name contract
+    // (CLAUDE.md "不得对特定 skill/命令/模板名硬编码").
+    [Fact]
+    public async Task GenerateReplyAsync_ForLarkRelayTurn_KeysChannelExclusionOnCapabilityNotToolName()
+    {
+        var providerFactory = new RecordingProviderFactory();
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            toolSources:
+            [
+                // Same name as the Observatory tool, but no exclusion capability → stays visible.
+                new SingleToolSource(new FixedResultTool("aevatar_provision_workflow_schedule", """{"ok":true}""")),
+                // Arbitrary name, but declares the exclusion capability → hidden.
+                new SingleToolSource(new CapabilityFixedResultTool(
+                    "some_other_off_chat_tool",
+                    """{"ok":true}""",
+                    AgentToolCapabilities.ExcludeFromDirectChannelChat)),
+            ]);
+
+        var reply = await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "lark-relay-msg-capability-keyed",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-capability-keyed" },
+                Content = new MessageContent { Text = "do it" },
+                TransportExtras = new TransportExtras
+                {
+                    NyxPlatform = "lark",
+                    NyxPlatformMessageId = "om_capability_keyed",
+                },
+            },
+            new Dictionary<string, string>
+            {
+                [ChannelMetadataKeys.Platform] = "lark",
+                [ChannelMetadataKeys.PlatformMessageId] = "om_capability_keyed",
+            },
+            streamingSink: null,
+            CancellationToken.None);
+
+        reply.Text.Should().Be("ok");
+        var request = providerFactory.Requests.Should().ContainSingle().Subject;
+        request.Tools.Should().NotBeNull();
+        var toolNames = request.Tools!.Select(static tool => tool.Name).ToArray();
+        // Name alone never triggers exclusion — only the capability does.
+        toolNames.Should().Contain("aevatar_provision_workflow_schedule");
+        toolNames.Should().NotContain("some_other_off_chat_tool");
+    }
+
     [Fact]
     public async Task GenerateReplyAsync_WhenUseSkillMountsWorkflows_ShouldUseRegisteredScopedToolWithoutApprovalDenial()
     {
@@ -2406,6 +2506,25 @@ public sealed class ConversationReplyGeneratorTests
         public string Description => "Returns a fixed test result.";
 
         public string ParametersSchema => "{}";
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult(result);
+    }
+
+    // A tool that self-declares an arbitrary set of generic capability tokens via
+    // IAgentToolCapabilityDescriptor. Used to prove the channel-discovery exclusion keys off
+    // the GENERIC capability marker (not the tool name): an excluded tool can have any name,
+    // and a same-named tool WITHOUT the capability is not excluded.
+    private sealed class CapabilityFixedResultTool(string name, string result, params string[] capabilities)
+        : IAgentTool, IAgentToolCapabilityDescriptor
+    {
+        public string Name => name;
+
+        public string Description => "Returns a fixed test result.";
+
+        public string ParametersSchema => "{}";
+
+        public IReadOnlyCollection<string> Capabilities { get; } = capabilities;
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
             Task.FromResult(result);

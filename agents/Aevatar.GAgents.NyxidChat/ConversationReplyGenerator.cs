@@ -29,6 +29,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     // Working-set ceiling for the ChatHistory during a turn (prior ≤10 + the live turn's growth).
     private const int MaxWorkingSetMessages = 200;
     private const int MaxInlineImageBytes = 10 * 1024 * 1024;
+
     private readonly ILLMProviderFactory _llmProviderFactory;
     private readonly IReadOnlyList<IAgentToolSource> _toolSources;
     private readonly IReadOnlyList<IAgentRunMiddleware> _agentMiddlewares;
@@ -1001,11 +1002,34 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         {
             var tools = await source.DiscoverToolsAsync(ct);
             foreach (var tool in tools)
+            {
+                // Channel-side exclusion by GENERIC capability, not by tool name: a tool that
+                // declares AgentToolCapabilities.ExcludeFromDirectChannelChat completes its work
+                // off-chat (e.g. delivered to /workflow/observatory), so surfacing it on this
+                // direct-channel/Lark agent would let the model silently route a chat user's
+                // request away from their chat. Such tools stay in the global catalog for the
+                // workflow allowlist path; the exclusion is channel-side only. No channel agent
+                // depended on these tools, so this changes no existing channel flow.
+                if (IsExcludedFromDirectChannelChat(tool))
+                    continue;
                 discovered[tool.Name] = tool;
+            }
         }
 
         return discovered.Values.ToArray();
     }
+
+    // A tool is hidden from the direct channel/chat surface when it self-declares the
+    // generic ExcludeFromDirectChannelChat capability via IAgentToolCapabilityDescriptor.
+    // The channel path never inspects a specific tool name; eligibility is a property of
+    // the tool, keeping channel routing agnostic to individual tool/skill identities.
+    private static bool IsExcludedFromDirectChannelChat(IAgentTool tool) =>
+        tool is IAgentToolCapabilityDescriptor descriptor &&
+        descriptor.Capabilities.Any(static capability =>
+            string.Equals(
+                capability,
+                AgentToolCapabilities.ExcludeFromDirectChannelChat,
+                StringComparison.OrdinalIgnoreCase));
 
     private ILLMProvider ResolveProvider()
     {

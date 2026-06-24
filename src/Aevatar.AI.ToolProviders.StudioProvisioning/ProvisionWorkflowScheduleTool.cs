@@ -18,8 +18,12 @@ namespace Aevatar.AI.ToolProviders.StudioProvisioning;
 /// forwarded NyxID access token is the run's durable credential). There are NO
 /// channel / Lark / owner / scope / credential inputs, and the result carries no
 /// channel/Lark fields — only the schedule id, member id, and the Observatory link.
+///
+/// Because its outcome lands in the Observatory and never in a chat, it declares the
+/// <see cref="AgentToolCapabilities.ExcludeFromDirectChannelChat"/> capability so any
+/// direct channel/chat agent filters it out generically (by capability, not by name).
 /// </summary>
-internal sealed class ProvisionWorkflowScheduleTool : IAgentTool
+internal sealed class ProvisionWorkflowScheduleTool : IAgentTool, IAgentToolCapabilityDescriptor
 {
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
@@ -83,6 +87,12 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool
     public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
     public bool IsReadOnly => false;
     public bool IsDestructive => false;
+
+    // Observatory-delivered, never chat-delivered: declare the generic surface signal so a
+    // direct channel/chat agent (e.g. the Lark/NyxID reply path) filters this out by capability
+    // rather than by hardcoding the tool name. The workflow allowlist path still selects it.
+    public IReadOnlyCollection<string> Capabilities { get; } =
+        [AgentToolCapabilities.ExcludeFromDirectChannelChat];
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
