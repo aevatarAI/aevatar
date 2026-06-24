@@ -73,7 +73,7 @@ describe('auth session storage', () => {
     expect(window.localStorage.length).toBe(0);
   });
 
-  it('clears expired sessions instead of restoring them with a browser refresh token', () => {
+  it('keeps an expired session when a refresh token can restore it', () => {
     persistAuthSession({
       tokens: {
         accessToken: 'token-3',
@@ -88,8 +88,19 @@ describe('auth session storage', () => {
     });
 
     expect(loadStoredAuthSession()).toBeNull();
-    expect(loadRestorableAuthSession()).toBeNull();
-    expect(readStoredAuthSession()).toBeNull();
+    expect(loadRestorableAuthSession()).toEqual({
+      tokens: {
+        accessToken: 'token-3',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() - 1,
+        refreshToken: 'refresh-token-3',
+      },
+      user: {
+        sub: 'user-3',
+      },
+    });
+    expect(readStoredAuthSession()).not.toBeNull();
   });
 
   it('accepts only safe in-app redirect targets', () => {

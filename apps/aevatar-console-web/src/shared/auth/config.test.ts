@@ -6,6 +6,8 @@ describe('NyxID runtime config', () => {
   beforeEach(() => {
     process.env = {
       ...originalEnv,
+      NYXID_CLIENT_ID: 'client-1',
+      NYXID_SCOPE: 'openid profile email',
     };
     window.history.replaceState({}, '', '/login');
   });
@@ -14,59 +16,61 @@ describe('NyxID runtime config', () => {
     process.env = originalEnv;
   });
 
-  it('normalizes the fallback callback redirect URI', () => {
+  it('normalizes local hostnames without an explicit scheme', () => {
+    process.env.NYXID_BASE_URL = 'localhost:3001';
     process.env.NYXID_REDIRECT_URI = '/auth/callback';
 
     expect(getNyxIDRuntimeConfig()).toEqual({
       enabled: true,
-      baseUrl: '',
-      clientId: '',
+      baseUrl: 'http://localhost:3001',
+      clientId: 'client-1',
       redirectUri: `${window.location.origin}/auth/callback`,
-      scope: '',
+      scope: 'openid profile email',
       configurationError: undefined,
     });
   });
 
-  it('accepts an injected callback redirect URI wrapped in quotes', () => {
+  it('accepts injected env values wrapped in quotes', () => {
+    process.env.NYXID_BASE_URL = '"https://nyx.chrono-ai.fun"';
     process.env.NYXID_REDIRECT_URI = '"http://localhost:5173/auth/callback"';
 
     expect(getNyxIDRuntimeConfig()).toEqual({
       enabled: true,
-      baseUrl: '',
-      clientId: '',
+      baseUrl: 'https://nyx.chrono-ai.fun',
+      clientId: 'client-1',
       redirectUri: 'http://localhost:5173/auth/callback',
-      scope: '',
+      scope: 'openid profile email',
       configurationError: undefined,
     });
   });
 
-  it('does not bake a NyxID OAuth client into frontend runtime config', () => {
+  it('falls back to the runtime defaults when optional env values are missing', () => {
     process.env.NYXID_BASE_URL = 'undefined';
     process.env.NYXID_CLIENT_ID = 'undefined';
     process.env.NYXID_REDIRECT_URI = 'undefined';
-    process.env.NYXID_SCOPE = 'undefined';
 
     expect(getNyxIDRuntimeConfig()).toEqual({
       enabled: true,
-      baseUrl: '',
-      clientId: '',
+      baseUrl: 'https://nyx.chrono-ai.fun',
+      clientId: '37a93189-2734-406e-bca1-7dbdf25c5a53',
       redirectUri: `${window.location.origin}/auth/callback`,
-      scope: '',
+      scope: 'openid profile email',
       configurationError: undefined,
     });
   });
 
-  it('disables NyxID auth when the fallback callback redirect URI is invalid', () => {
-    process.env.NYXID_REDIRECT_URI = '://bad-url';
+  it('disables NyxID auth when the base URL is invalid', () => {
+    process.env.NYXID_BASE_URL = '://bad-url';
+    process.env.NYXID_REDIRECT_URI = `${window.location.origin}/auth/callback`;
 
     expect(getNyxIDRuntimeConfig()).toEqual({
       enabled: false,
       baseUrl: '',
-      clientId: '',
-      redirectUri: '',
-      scope: '',
+      clientId: 'client-1',
+      redirectUri: `${window.location.origin}/auth/callback`,
+      scope: 'openid profile email',
       configurationError:
-        'NYXID_REDIRECT_URI must be a valid http(s) URL or a root-relative path such as /auth/callback.',
+        'NYXID_BASE_URL must be a valid http(s) URL or a root-relative path such as /nyxid.',
     });
   });
 });

@@ -7,6 +7,9 @@ export interface NyxIDRuntimeConfig {
   readonly configurationError?: string;
 }
 
+const DEFAULT_NYXID_BASE_URL = 'https://nyx.chrono-ai.fun';
+const DEFAULT_NYXID_CLIENT_ID = '37a93189-2734-406e-bca1-7dbdf25c5a53';
+const DEFAULT_SCOPE = 'openid profile email proxy';
 const DEFAULT_REDIRECT_PATH = '/auth/callback';
 
 function trimOptional(value?: string): string | undefined {
@@ -35,6 +38,10 @@ function trimOptional(value?: string): string | undefined {
   }
 
   return normalized ? normalized : undefined;
+}
+
+function normalizeBaseUrl(baseUrl: string): string {
+  return baseUrl.replace(/\/+$/, '');
 }
 
 function resolveWindowOrigin(): string {
@@ -71,7 +78,7 @@ function inferDefaultProtocol(value: string): 'http://' | 'https://' {
 
 function tryResolveHttpUrl(
   value: string,
-  options: { readonly allowRelative: boolean },
+  options: { readonly allowRelative: boolean; readonly trimTrailingSlash: boolean },
 ): string | undefined {
   const normalized = trimOptional(value);
   if (!normalized || normalized.startsWith('//')) {
@@ -80,13 +87,15 @@ function tryResolveHttpUrl(
 
   if (options.allowRelative && normalized.startsWith('/')) {
     const relativeUrl = new URL(normalized, resolveWindowOrigin());
-    return relativeUrl.toString();
+    const resolved = relativeUrl.toString();
+    return options.trimTrailingSlash ? normalizeBaseUrl(resolved) : resolved;
   }
 
   try {
     const absoluteUrl = new URL(normalized);
     if (isHttpUrl(absoluteUrl)) {
-      return absoluteUrl.toString();
+      const resolved = absoluteUrl.toString();
+      return options.trimTrailingSlash ? normalizeBaseUrl(resolved) : resolved;
     }
   } catch {
     // Fall through to scheme inference for user-provided hostnames like localhost:3001.
@@ -102,36 +111,51 @@ function tryResolveHttpUrl(
       return undefined;
     }
 
-    return inferredUrl.toString();
+    const resolved = inferredUrl.toString();
+    return options.trimTrailingSlash ? normalizeBaseUrl(resolved) : resolved;
   } catch {
     return undefined;
   }
 }
 
 function buildConfigurationError(
-  variableName: 'NYXID_REDIRECT_URI',
+  variableName: 'NYXID_BASE_URL' | 'NYXID_REDIRECT_URI',
   exampleValue: string,
 ): string {
   return `${variableName} must be a valid http(s) URL or a root-relative path such as ${exampleValue}.`;
 }
 
 export function getNyxIDRuntimeConfig(): NyxIDRuntimeConfig {
+  const baseUrl = trimOptional(process.env.NYXID_BASE_URL) ?? DEFAULT_NYXID_BASE_URL;
+  const clientId =
+    trimOptional(process.env.NYXID_CLIENT_ID) ?? DEFAULT_NYXID_CLIENT_ID;
   const redirectUri =
     trimOptional(process.env.NYXID_REDIRECT_URI) ?? resolveDefaultRedirectUri();
+  const scope = trimOptional(process.env.NYXID_SCOPE) ?? DEFAULT_SCOPE;
+  const normalizedBaseUrl = tryResolveHttpUrl(baseUrl, {
+    allowRelative: true,
+    trimTrailingSlash: true,
+  });
   const normalizedRedirectUri = tryResolveHttpUrl(redirectUri, {
     allowRelative: true,
+    trimTrailingSlash: false,
   });
   const configurationError =
-    !normalizedRedirectUri
+    !normalizedBaseUrl
+      ? buildConfigurationError('NYXID_BASE_URL', '/nyxid')
+      : !normalizedRedirectUri
         ? buildConfigurationError('NYXID_REDIRECT_URI', '/auth/callback')
         : undefined;
 
   return {
-    enabled: Boolean(normalizedRedirectUri),
-    baseUrl: '',
-    clientId: '',
+    enabled:
+      clientId.length > 0 &&
+      Boolean(normalizedBaseUrl) &&
+      Boolean(normalizedRedirectUri),
+    baseUrl: normalizedBaseUrl ?? '',
+    clientId,
     redirectUri: normalizedRedirectUri ?? '',
-    scope: '',
+    scope,
     configurationError,
   };
 }

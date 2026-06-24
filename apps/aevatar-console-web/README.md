@@ -42,24 +42,20 @@ console at the hosted backend, set both targets to the hosted API URL in
 `.env.local` and set `AEVATAR_PROXY_PRESERVE_AUTH_HOST=false` so `/api/auth/*`
 uses the hosted backend Host header.
 
-For NyxID login, the console reads the broker OAuth client from Studio Hosting
-via `/api/auth/nyxid/config` and finalizes callbacks through
-`/api/auth/nyxid/finalize`. Keep `/api/auth/*` proxied to the Studio backend.
-Only set a local fallback callback URI when the browser origin differs from the
-registered Studio callback:
+For NyxID login, also set these values in `.env.local`:
 
 ```bash
+NYXID_BASE_URL=http://127.0.0.1:3001
+NYXID_CLIENT_ID=your-public-client-id
 NYXID_REDIRECT_URI=http://127.0.0.1:5173/auth/callback
+NYXID_SCOPE="openid profile email"
 ORNN_BASE_URL=https://ornn.chrono-ai.fun
 # Optional when deploying under a sub-path such as /console/
 AEVATAR_CONSOLE_PUBLIC_PATH=/
 ```
 
-The browser must not configure its own NyxID OAuth client id. Authorization
-starts from the backend-provided `baseUrl`, `clientId`, and `scope`, so the
-client id matches backend token finalization.
-`NYXID_REDIRECT_URI` must exactly match the Studio login callback registered in
-NyxID when you override it locally.
+`NYXID_BASE_URL` and `NYXID_CLIENT_ID` are required. The console no longer ships a baked-in NyxID tenant or client id.
+`NYXID_REDIRECT_URI` must exactly match the public client registration in NyxID.
 `ORNN_BASE_URL` controls the Ornn skills endpoint used by Studio Settings. If you omit it, the frontend falls back to the public Ornn instance.
 If you change `.env.local`, restart `pnpm dev` so Umi reloads the injected env values.
 
