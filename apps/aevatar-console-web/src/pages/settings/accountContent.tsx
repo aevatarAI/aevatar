@@ -200,8 +200,8 @@ const AccountSettingsContent: React.FC<AccountSettingsContentProps> = ({
             value={authMeQuery.data?.scopeId || authSession?.tokens.scope || "Unavailable"}
           />
           <SummaryField
-            label={t("pages.settings.accountcontent.local.refresh.token", "Local refresh token")}
-            value={authSession?.tokens.refreshToken ? "Available" : "Unavailable"}
+            label={t("pages.settings.accountcontent.browser.token.refresh", "Browser token refresh")}
+            value={t("pages.settings.accountcontent.browser.token.refresh.disabled", "Disabled")}
           />
         </div>
       </AevatarPanel>
