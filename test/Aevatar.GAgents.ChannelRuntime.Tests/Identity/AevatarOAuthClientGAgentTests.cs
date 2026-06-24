@@ -119,6 +119,110 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleEnsureProvisioned_ForceReprovision_ReDcrs_WhenAlreadyProvisioned()
+    {
+        var cmd = new EnsureAevatarOAuthClientProvisionedCommand
+        {
+            NyxidAuthority = "https://nyxid.test",
+            RedirectUri = "https://aevatar.test/api/oauth/nyxid-callback",
+            ClientName = "aevatar",
+        };
+        cmd.RedirectUris.Add("https://aevatar.test/api/oauth/nyxid-callback");
+        cmd.RedirectUris.Add("https://console.test/auth/callback");
+
+        await _agent.HandleEnsureProvisioned(cmd);
+        var firstClientId = _agent.State.ClientId;
+
+        _registrar.NextClientId = "client-after-force-dcr";
+        cmd.ForceReprovision = true;
+        await _agent.HandleEnsureProvisioned(cmd);
+
+        _registrar.Calls.Should().HaveCount(2, "break-glass force DCR must bypass the already-provisioned no-op");
+        _agent.State.ClientId.Should().Be("client-after-force-dcr");
+        _agent.State.ClientId.Should().NotBe(firstClientId);
+        _agent.State.RedirectUris.Should().Equal(
+            "https://aevatar.test/api/oauth/nyxid-callback",
+            "https://console.test/auth/callback");
+        _agent.State.ForceReprovisionConsumed.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task HandleEnsureProvisioned_ForceReprovision_IsConsumedOnce()
+    {
+        var cmd = new EnsureAevatarOAuthClientProvisionedCommand
+        {
+            NyxidAuthority = "https://nyxid.test",
+            RedirectUri = "https://aevatar.test/api/oauth/nyxid-callback",
+            ClientName = "aevatar",
+        };
+        cmd.RedirectUris.Add("https://aevatar.test/api/oauth/nyxid-callback");
+        cmd.RedirectUris.Add("https://console.test/auth/callback");
+
+        await _agent.HandleEnsureProvisioned(cmd);
+
+        _registrar.NextClientId = "client-after-force-dcr";
+        cmd.ForceReprovision = true;
+        await _agent.HandleEnsureProvisioned(cmd);
+        await _agent.HandleEnsureProvisioned(cmd);
+
+        _registrar.Calls.Should().HaveCount(2, "only one startup force DCR should be consumed cluster-wide");
+        _agent.State.ClientId.Should().Be("client-after-force-dcr");
+        _agent.State.ForceReprovisionConsumed.Should().BeTrue();
+
+        cmd.ForceReprovision = false;
+        await _agent.HandleEnsureProvisioned(cmd);
+        _agent.State.ForceReprovisionConsumed.Should().BeFalse("normal startup after env removal resets the break-glass guard");
+    }
+
+    [Fact]
+    public async Task HandleProvisioningRetryFired_PreservesForceReprovision_WhenForcedDcrFails()
+    {
+        await _agent.HandleEnsureProvisioned(new EnsureAevatarOAuthClientProvisionedCommand
+        {
+            NyxidAuthority = "https://nyxid.test",
+            RedirectUri = "https://aevatar.test/api/oauth/nyxid-callback",
+            ClientName = "aevatar",
+        });
+
+        _registrar.ThrowOnRegister = new InvalidOperationException("nyxid unavailable");
+        var force = new EnsureAevatarOAuthClientProvisionedCommand
+        {
+            NyxidAuthority = "https://nyxid.test",
+            RedirectUri = "https://aevatar.test/api/oauth/nyxid-callback",
+            ClientName = "aevatar",
+            ForceReprovision = true,
+        };
+        force.RedirectUris.Add("https://aevatar.test/api/oauth/nyxid-callback");
+        force.RedirectUris.Add("https://console.test/auth/callback");
+        await _agent.HandleEnsureProvisioned(force);
+
+        _agent.State.ProvisioningRetryForceReprovision.Should().BeTrue();
+        _callbackScheduler.TimeoutRequests.Should().ContainSingle();
+        _callbackScheduler.TimeoutRequests[0].TriggerEnvelope.Payload
+            .Unpack<AevatarOAuthClientProvisioningRetryFiredEvent>()
+            .ForceReprovision.Should().BeTrue();
+
+        _registrar.ThrowOnRegister = null;
+        _registrar.NextClientId = "client-after-force-retry";
+        await _agent.HandleProvisioningRetryFired(AddRedirectUris(new AevatarOAuthClientProvisioningRetryFiredEvent
+        {
+            Attempt = _agent.State.ProvisioningRetryAttempt,
+            DueUnixMs = _agent.State.ProvisioningRetryDueUnixMs,
+            NyxidAuthority = _agent.State.ProvisioningRetryAuthority,
+            RedirectUri = _agent.State.ProvisioningRetryRedirectUri,
+            ClientName = _agent.State.ProvisioningRetryClientName,
+            CallbackId = _agent.State.ProvisioningRetryCallbackId,
+            CallbackGeneration = _agent.State.ProvisioningRetryCallbackGeneration,
+            FiredAtUnixMs = _agent.State.ProvisioningRetryDueUnixMs,
+            ForceReprovision = true,
+        }, _agent.State.ProvisioningRetryRedirectUris));
+
+        _registrar.Calls.Should().HaveCount(3, "the retry must preserve and execute the force-DCR intent");
+        _agent.State.ClientId.Should().Be("client-after-force-retry");
+        _agent.State.ProvisioningRetryAttempt.Should().Be(0);
+    }
+
+    [Fact]
     public async Task HandleEnsureProvisioned_ReDcrs_WhenRedirectUriDrifts()
     {
         // Pin the aismart-app-mainnet 2026-04-30 incident: cluster was
