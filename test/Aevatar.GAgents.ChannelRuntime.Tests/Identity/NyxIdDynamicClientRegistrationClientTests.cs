@@ -39,6 +39,32 @@ public sealed class NyxIdDynamicClientRegistrationClientTests
     }
 
     [Fact]
+    public async Task RegisterPublicClient_SendsAllNormalizedRedirectUris()
+    {
+        var handler = StubHandler.Json(HttpStatusCode.OK, new { client_id = "client-issued" });
+        var registrar = new NyxIdDynamicClientRegistrationClient(
+            new HttpClient(handler), NullLogger<NyxIdDynamicClientRegistrationClient>.Instance);
+
+        await registrar.RegisterPublicClientAsync(
+            "https://nyxid.test",
+            "aevatar",
+            [
+                " https://aevatar.test/api/oauth/nyxid-callback ",
+                "https://console.test/auth/callback",
+                "https://console.test/auth/callback",
+            ]);
+
+        var request = await handler.Last!.Content!.ReadFromJsonAsync<JsonElement>();
+        request.GetProperty("redirect_uris")
+            .EnumerateArray()
+            .Select(static item => item.GetString())
+            .Should()
+            .Equal(
+                "https://aevatar.test/api/oauth/nyxid-callback",
+                "https://console.test/auth/callback");
+    }
+
+    [Fact]
     public async Task RegisterPublicClient_FallsBackIssuedAt_WhenServerOmitsTimestamp()
     {
         var handler = StubHandler.Json(HttpStatusCode.OK, new { client_id = "client-no-ts" });
