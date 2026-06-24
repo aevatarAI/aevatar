@@ -5,6 +5,7 @@ using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.ToolProviders.AgentCatalog;
 using Aevatar.AI.ToolProviders.AevatarInvocation;
 using Aevatar.AI.ToolProviders.Channel;
+using Aevatar.AI.ToolProviders.ChannelAdmin;
 using Aevatar.AI.ToolProviders.ChronoStorage;
 using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.AI.ToolProviders.NyxId;
@@ -145,6 +146,8 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddScheduledAgents(builder.Configuration);
         builder.Services.AddStatusDashboard(builder.Configuration);
         builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IReadmodelFreshnessSource, ChannelBotRegistrationFreshnessSource>());
+        builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IHealthProbeExecutor, AevatarCoreLoopStatusProbeExecutor>());
         // Self-issued scope service token source for credentialed orchestration/observatory probes.
         // IScopeServiceTokenIssuer is only registered when scope service tokens are enabled, so it is
@@ -230,6 +233,7 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddLarkPlatform();
         builder.Services.AddTelegramPlatform();
         builder.Services.AddChannelInteractiveReplyTools();
+        builder.Services.AddChannelAdminTools();
         builder.Services.AddAgentCatalogTools();
         builder.Services.AddAevatarInvocationTools();
         builder.Services.Configure<DeviceEventOptions>(
@@ -299,6 +303,7 @@ public static class MainnetHostBuilderExtensions
                     CreateToolSource<ReadWorkflowRunArtifactToolSource>,
                     CreateToolSource<ResponsesAevatarToolProvider>,
                     CreateToolSource<ChannelInteractiveReplyToolSource>,
+                    CreateToolSource<ChannelRegistrationToolSource>,
                     CreateToolSource<AgentDeliveryTargetToolSource>,
                     CreateToolSource<NyxIdAgentToolSource>,
                     CreateToolSource<LarkAgentToolSource>,
@@ -344,6 +349,7 @@ public static class MainnetHostBuilderExtensions
         app.MapResponsesApiEndpoints();
         app.MapMessagesApiEndpoints();
         app.MapChatCompletionsApiEndpoints();
+        app.MapChannelCallbackEndpoints();
         app.MapDeviceEventEndpoints();
         app.MapIdentityOAuthEndpoints();
         app.MapSkillRunnerExternalTriggerEndpoints();

@@ -14,9 +14,9 @@ Lark 侧必须已配置事件：
 - `im.message.receive_v1`
 - `card.action.trigger`
 
-配置要分清 inbound 与 outbound：
+Aevatar 侧有两类配置要分清：
 
-- inbound bot 回调（让用户消息和卡片点击进 Aevatar）直接在 NyxID 侧注册 channel-bot + relay api-key（callback 指向 `/api/webhooks/nyxid-relay`）+ 会话路由；Aevatar 不再自注册，scope 由 callback JWT 注入。
+- `channel_registrations`：配置 inbound bot 回调，让用户消息和卡片点击进 Aevatar。
 - `agent_delivery_targets`：配置 outbound 投递目标，让 workflow 的 HITL / Notify 卡片能主动发到某个 Lark 会话。
 
 workflow HITL 和 Notify 使用 `delivery_target_id=<agent_id>`，该 `agent_id` 必须能通过 `agent_delivery_targets` 解析到真实 Lark 会话。
@@ -57,7 +57,7 @@ Follow the workflow route when a scope/workflow runtime is available. Use the li
 
 - `description` 写清触发场景，Lark bot 靠它判断是否加载 skill。
 - `tool-list` 写出会用到的工具。轻量卡片需要 `reply_with_interaction`；正式流程需要 `aevatar_start_workflow`；检查脚本可用 `code_execute`。
-- 如果有 workflow YAML，把它放在 skill 的 `assets/` 或 `workflow_yamls` 里，并在 `SKILL.md` 明确“启动 workflow 时传给 `aevatar_start_workflow.workflow_yamls`”。
+- 如果有 workflow YAML，通过 `ornn_publish_skill.workflow_yamls` 发布；包内路径会归一到 `workflows/{workflowId}.yaml`。这些 YAML 是模板/导入源，不是 scope 内已发布的可运行 workflow；需要先通过 Scope Workflow 命令链路挂载/导入，再启动运行。`assets/*.yaml` 只作为历史包读取兼容，不作为新发布路径。
 
 ## 轻量卡片交互
 
@@ -114,9 +114,9 @@ reason: hotfix validated
 
 ## 正式 HITL Workflow
 
-正式 HITL 适合审批、人工输入、敏感输入、长流程暂停恢复。skill 应该携带 workflow YAML，并要求 agent 用 `aevatar_start_workflow` 启动。
+正式 HITL 适合审批、人工输入、敏感输入、长流程暂停恢复。skill 可以携带 workflow YAML 模板，但模板必须先通过 Scope Workflow 命令链路挂载/导入，之后再按 `workflow_id` 启动已挂载的 scope workflow。
 
-启动工具参数形状：
+启动已挂载 workflow 的工具参数形状：
 
 ```json
 {
@@ -124,10 +124,11 @@ reason: hotfix validated
   "inputs": {
     "json": "{\"environment\":\"staging\",\"delivery_target_id\":\"agent-release-ops\"}"
   },
-  "wait": "stream",
-  "workflow_yamls": ["<inline workflow yaml here>"]
+  "wait": "stream"
 }
 ```
+
+只有在 Scope Workflow 挂载/导入不可用的显式降级场景，才把 inline `workflow_yamls` 作为临时导入/草稿运行输入；不要把 Ornn 包内 YAML 当成已发布、页面可见、可长期复用的 scope workflow 身份。
 
 `human_approval` 示例：
 
@@ -286,8 +287,8 @@ Notify 不适合：
 ```markdown
 ## Execution
 
-1. If a workflow-capable Aevatar scope is available, call `aevatar_start_workflow`.
-   - Pass the bundled workflow YAML in `workflow_yamls`.
+1. If a workflow-capable Aevatar scope is available, mount/import the bundled workflow template through the Scope Workflow command path, then start the mounted scope workflow after the accepted receipt/readmodel propagation contract allows it.
+   - Use inline `workflow_yamls` only as an explicit fallback when mounting is unavailable.
    - Require `delivery_target_id`; if missing, ask for it with `reply_with_interaction`.
 2. If no workflow scope is available, use lightweight `reply_with_interaction`.
 3. For lightweight card callbacks:
@@ -338,4 +339,3 @@ Notify 不适合：
 - `human_input` / `human_approval` 不使用 `interaction_template_spec`；模板卡通知只给 `notify` 用。
 - 轻量按钮点击后只是下一轮 LLM 输入，必须在 skill 中写清 `[card_action] action_id` 的处理规则。
 - 若卡片要收集输入或下拉选择，必须使用 `form_submit`，否则表单字段不会作为完整提交进入下一轮。
-

@@ -70,58 +70,10 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
     private sealed record LarkSubjectContactIds(string? UserId, string? EmployeeId);
 
-    // The NyxID proxy slug used to reply to / react on a Lark/Feishu bot. A Lark/Feishu bot is
-    // registered directly on NyxID; the inbound relay turn no longer reads an aevatar-side
-    // registration mirror, so the slug is the platform constant rather than a stored field.
-    private const string LarkProxySlug = "api-lark-bot";
-
-    // Turn-derived relay context. Replaces the deleted ChannelBotRegistrationEntry mirror: every
-    // value is re-sourced from the validated relay callback (JWT scope on TransportExtras +
-    // platform), never from a stored registration. ReplyCredentialRef is intentionally absent —
-    // interactive replies use the relay reply token, not a stored credential.
-    private readonly record struct RelayTurnContext(
-        string Label,
-        string? ScopeId,
-        string? Platform,
-        string NyxProviderSlug)
-    {
-        public string Id => Label;
-
-        public static RelayTurnContext ForActivity(ChatActivity? activity)
-        {
-            var scopeId = NormalizeOptional(activity?.TransportExtras?.NyxRegistrationScopeId);
-            var platform = NormalizeOptional(activity?.TransportExtras?.NyxPlatform)
-                ?? NormalizeOptional(activity?.ChannelId?.Value);
-            var apiKeyId = NormalizeOptional(activity?.TransportExtras?.NyxAgentApiKeyId);
-            return Create(scopeId, platform, scopeId ?? apiKeyId);
-        }
-
-        public static RelayTurnContext ForInbound(InboundMessage inbound)
-        {
-            var scopeId = NormalizeOptional(inbound.TransportExtras?.NyxRegistrationScopeId);
-            var platform = NormalizeOptional(inbound.TransportExtras?.NyxPlatform)
-                ?? NormalizeOptional(inbound.Platform);
-            var apiKeyId = NormalizeOptional(inbound.TransportExtras?.NyxAgentApiKeyId);
-            return Create(scopeId, platform, scopeId ?? apiKeyId);
-        }
-
-        public static RelayTurnContext ForPlatform(string? platform) =>
-            Create(scopeId: null, platform, label: null);
-
-        private static RelayTurnContext Create(string? scopeId, string? platform, string? label) =>
-            new(label ?? string.Empty, scopeId, platform, ResolveProviderSlug(platform));
-
-        // lark/feishu bots reply through the shared api-lark-bot NyxID proxy. Other platforms have
-        // no stored slug in the relay model, so they carry an empty slug (typing reactions and
-        // Lark-only proxy calls short-circuit on the empty value).
-        private static string ResolveProviderSlug(string? platform) =>
-            string.Equals(platform, "lark", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(platform, "feishu", StringComparison.OrdinalIgnoreCase)
-                ? LarkProxySlug
-                : string.Empty;
-    }
-
     private readonly IServiceProvider _toolServiceProvider;
+    private readonly IChannelBotRegistrationQueryPort _registrationQueryPort;
+    private readonly IChannelBotRegistrationQueryByNyxIdentityPort? _registrationQueryByNyxIdentityPort;
+    private readonly IEnumerable<IPlatformAdapter> _platformAdapters;
     private readonly NyxIdApiClient _nyxClient;
     private readonly NyxIdRelayOutboundPort _relayOutboundPort;
     private readonly IInteractiveReplyDispatcher? _interactiveReplyDispatcher;
@@ -133,6 +85,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private readonly IUserLlmOptionsService? _userLlmOptionsService;
     private readonly IUserLlmOptionsRenderer<MessageContent>? _userLlmOptionsRenderer;
     private readonly IUserConfigQueryPort? _userConfigQueryPort;
+    private readonly ChannelPlatformReplyService? _replyService;
     private readonly ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>? _workflowResumeService;
     private readonly ChannelWorkflowDraftRunAdmission? _workflowDraftRunAdmission;
     private readonly IRemoteToolApprovalPort? _remoteToolApprovalPort;
@@ -142,6 +95,9 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
     public ChannelConversationTurnRunner(
         IServiceProvider services,
+        IChannelBotRegistrationQueryPort registrationQueryPort,
+        IChannelBotRegistrationQueryByNyxIdentityPort? registrationQueryByNyxIdentityPort,
+        IEnumerable<IPlatformAdapter> platformAdapters,
         NyxIdApiClient nyxClient,
         NyxIdRelayOutboundPort relayOutboundPort,
         IInteractiveReplyDispatcher? interactiveReplyDispatcher,
@@ -154,6 +110,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         IUserLlmOptionsService? userLlmOptionsService = null,
         IUserLlmOptionsRenderer<MessageContent>? userLlmOptionsRenderer = null,
         IUserConfigQueryPort? userConfigQueryPort = null,
+        ChannelPlatformReplyService? replyService = null,
         ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>? workflowResumeService = null,
         ChannelWorkflowDraftRunAdmission? workflowDraftRunAdmission = null,
         IRemoteToolApprovalPort? remoteToolApprovalPort = null,
@@ -161,6 +118,9 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         INyxIdCurrentUserResolver? nyxIdCurrentUserResolver = null)
     {
         _toolServiceProvider = services ?? throw new ArgumentNullException(nameof(services));
+        _registrationQueryPort = registrationQueryPort ?? throw new ArgumentNullException(nameof(registrationQueryPort));
+        _registrationQueryByNyxIdentityPort = registrationQueryByNyxIdentityPort;
+        _platformAdapters = platformAdapters ?? throw new ArgumentNullException(nameof(platformAdapters));
         _nyxClient = nyxClient ?? throw new ArgumentNullException(nameof(nyxClient));
         _relayOutboundPort = relayOutboundPort ?? throw new ArgumentNullException(nameof(relayOutboundPort));
         _interactiveReplyDispatcher = interactiveReplyDispatcher;
@@ -172,6 +132,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         _userLlmOptionsService = userLlmOptionsService;
         _userLlmOptionsRenderer = userLlmOptionsRenderer;
         _userConfigQueryPort = userConfigQueryPort;
+        _replyService = replyService;
         _workflowResumeService = workflowResumeService;
         _workflowDraftRunAdmission = workflowDraftRunAdmission;
         _remoteToolApprovalPort = remoteToolApprovalPort;
@@ -187,10 +148,9 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     {
         ArgumentNullException.ThrowIfNull(activity);
 
-        // The bot is registered directly on NyxID; the inbound scope is the validated relay
-        // callback JWT scope stamped onto TransportExtras at ingress. No aevatar-side registration
-        // mirror is read — a directly-registered bot with no mirror runs the turn unchanged.
-        var registration = RelayTurnContext.ForActivity(activity);
+        var registration = await ResolveRegistrationAsync(activity, ct);
+        if (registration is null)
+            return ConversationTurnResult.PermanentFailure("registration_not_found", "Channel registration not found.");
 
         // Group/channel chats deliver every message once the bot holds the broad read scope, so a
         // turn only "addresses" the bot when it @-mentions the bot, replies to one of the bot's own
@@ -336,7 +296,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private async Task<ConversationTurnResult?> TryHandleSlashCommandAsync(
         ChatActivity activity,
         InboundMessage inbound,
-        RelayTurnContext registration,
+        ChannelBotRegistrationEntry registration,
         ConversationTurnRuntimeContext runtimeContext,
         CancellationToken ct)
     {
@@ -422,7 +382,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private async Task<ConversationTurnResult> HandleClearHistoryCommandAsync(
         ChatActivity activity,
         InboundMessage inbound,
-        RelayTurnContext registration,
+        ChannelBotRegistrationEntry registration,
         ConversationTurnRuntimeContext runtimeContext,
         CancellationToken ct)
     {
@@ -502,7 +462,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private async Task<ConversationTurnResult> SendBindingPromptAsync(
         ChatActivity activity,
         InboundMessage inbound,
-        RelayTurnContext registration,
+        ChannelBotRegistrationEntry registration,
         ConversationTurnRuntimeContext runtimeContext,
         CancellationToken ct)
     {
@@ -571,7 +531,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
     private static bool TryResolveExternalSubject(
         InboundMessage inbound,
-        RelayTurnContext registration,
+        ChannelBotRegistrationEntry registration,
         out ExternalSubjectRef subject)
     {
         subject = new ExternalSubjectRef();
@@ -596,7 +556,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     // that configure or inspect per-user state (/models, /model use, ...).
     private async Task<ResolvedSenderBinding?> TryResolveSenderBindingAsync(
         InboundMessage inbound,
-        RelayTurnContext registration,
+        ChannelBotRegistrationEntry registration,
         CancellationToken ct)
     {
         var queryPort = _identityBindingQueryPort;
@@ -666,7 +626,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         return chatType is "p2p" or "private" or "direct" or "dm";
     }
 
-    private static string? ResolveTenant(InboundMessage inbound, RelayTurnContext registration)
+    private static string? ResolveTenant(InboundMessage inbound, ChannelBotRegistrationEntry registration)
     {
         // Platform adapters set `open_tenant_id` (Lark) or `tenant` (generic)
         // in InboundMessage.Extra when the inbound carries a typed tenant.
@@ -690,7 +650,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private async Task<ConversationTurnResult?> TryHandleLlmSelectionCardActionAsync(
         ChatActivity activity,
         InboundMessage inbound,
-        RelayTurnContext registration,
+        ChannelBotRegistrationEntry registration,
         ConversationTurnRuntimeContext runtimeContext,
         string? senderBindingId,
         CancellationToken ct)
@@ -826,7 +786,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private async Task<ConversationTurnResult?> TryHandleNyxIdApprovalCardActionAsync(
         ChatActivity activity,
         InboundMessage inbound,
-        RelayTurnContext registration,
+        ChannelBotRegistrationEntry registration,
         ConversationTurnRuntimeContext runtimeContext,
         CancellationToken ct)
     {
@@ -958,7 +918,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private async Task<SlashBindingLookup> ResolveSlashBindingAsync(
         string commandName,
         InboundMessage inbound,
-        RelayTurnContext registration,
+        ChannelBotRegistrationEntry registration,
         IExternalIdentityBindingQueryPort queryPort,
         CancellationToken ct)
     {
@@ -1133,11 +1093,41 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         }
 
         var inbound = ToInboundMessage(reply.Activity);
-        // Relay sends use the reply token, not a stored registration; the turn context is derived
-        // from the reply activity purely so the post-reply typing clear can resolve the Lark proxy
-        // slug. The direct (non-relay) platform-adapter path falls back to adapter_not_found when
-        // the activity carries no resolvable platform.
-        RelayTurnContext registration = RelayTurnContext.ForActivity(reply.Activity);
+        // Direct path requires registration to actually send the reply; relay path only wants it
+        // for the post-reply reaction clear (relay sends use the reply token, not registration).
+        // So lookup is mandatory on the direct path and best-effort on the relay path — a
+        // transient registration-store error on the relay path must not drop an otherwise valid
+        // reply, only degrade the clear to a no-op for that turn.
+        ChannelBotRegistrationEntry? registration;
+        if (HasRelayDelivery(inbound))
+        {
+            try
+            {
+                registration = await ResolveRegistrationForReplyAsync(reply, ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Registration lookup failed on relay reply path; reply will proceed but post-reply reaction clear will be skipped. correlation={CorrelationId}",
+                    reply.CorrelationId);
+                registration = null;
+            }
+        }
+        else
+        {
+            registration = await ResolveRegistrationForReplyAsync(reply, ct);
+            if (registration is null)
+            {
+                return ConversationTurnResult.PermanentFailure(
+                    "registration_not_found",
+                    "Channel registration not found.");
+            }
+        }
 
         var sentSeed = string.IsNullOrWhiteSpace(reply.CorrelationId)
             ? reply.Activity.Id
@@ -1171,11 +1161,9 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 "Legacy Lark outbound bridge does not support delegated proactive sends.");
         }
 
-        // Legacy direct-send continuation: there is no relay reply token for a proactive send, so
-        // the platform-adapter branch in SendReplyAsync owns delivery. The turn context is derived
-        // from the conversation channel rather than a stored registration mirror.
-        var platform = NormalizeOptional(command.Conversation?.Channel?.Value);
-        var registration = RelayTurnContext.ForPlatform(platform);
+        var registration = await ResolveRegistrationAsync(command.Conversation?.Bot?.Value, ct);
+        if (registration is null)
+            return ConversationTurnResult.PermanentFailure("registration_not_found", "Channel registration not found.");
 
         var conversationId = ResolveRoutingConversationId(command.Conversation);
         if (string.IsNullOrWhiteSpace(conversationId))
@@ -1183,7 +1171,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
         var inbound = new InboundMessage
         {
-            Platform = registration.Platform ?? string.Empty,
+            Platform = registration.Platform,
             ConversationId = conversationId,
             SenderId = command.OnBehalfOfUserId ?? string.Empty,
             SenderName = string.Empty,
@@ -1211,10 +1199,9 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (activity is null)
             return;
 
-        // The typing clear only needs the Lark proxy slug + platform, both derived from the relay
-        // turn; no stored registration is read. ShouldClearTypingReaction short-circuits when the
-        // slug/platform are not Lark-shaped.
-        var registration = RelayTurnContext.ForActivity(activity);
+        var registration = await ResolveRegistrationAsync(activity, ct);
+        if (registration is null)
+            return;
 
         var inbound = ToInboundMessage(activity);
         await TryClearTypingReactionAsync(inbound, registration, ct);
@@ -1305,7 +1292,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private async Task<ConversationTurnResult?> TryHandleAgentBuilderAsync(
         ChatActivity activity,
         ChannelInboundEvent inboundEvent,
-        RelayTurnContext registration,
+        ChannelBotRegistrationEntry registration,
         ConversationTurnRuntimeContext runtimeContext,
         Task typingReactionTask,
         CancellationToken ct)
@@ -1332,6 +1319,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             using (AgentToolContextScope.Push(BuildAgentBuilderToolContext(
                        inboundEvent,
                        activity,
+                       registration,
                        ResolveUserAccessToken(activity, runtimeContext),
                        metadata)))
             {
@@ -1365,7 +1353,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         string replyText,
         ChatActivity activity,
         InboundMessage inbound,
-        RelayTurnContext registration,
+        ChannelBotRegistrationEntry registration,
         ConversationTurnRuntimeContext runtimeContext,
         CancellationToken ct) =>
         await SendReplyAsync(
@@ -1382,7 +1370,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         string sentActivitySeed,
         ConversationReference? conversation,
         InboundMessage inbound,
-        RelayTurnContext? registration,
+        ChannelBotRegistrationEntry? registration,
         ConversationTurnRuntimeContext runtimeContext,
         CancellationToken ct)
     {
@@ -1427,13 +1415,56 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 : ToRelayFailure(emit);
         }
 
-        // No relay outbound delivery context: the bot is registered directly on NyxID and replies
-        // exclusively through the relay reply token. The legacy direct platform-adapter send path
-        // (which read an aevatar-side registration mirror) has been removed, so a turn without a
-        // relay delivery context can no longer be answered.
-        return ConversationTurnResult.PermanentFailure(
-            "reply_delivery_unavailable",
-            "No relay outbound delivery context is available for this conversation turn.");
+        if (registration is null)
+        {
+            return ConversationTurnResult.PermanentFailure(
+                "registration_not_found",
+                "Channel registration not found.");
+        }
+
+        var adapter = _platformAdapters.FirstOrDefault(platformAdapter =>
+            string.Equals(platformAdapter.Platform, registration.Platform, StringComparison.OrdinalIgnoreCase));
+        if (adapter is null)
+        {
+            return ConversationTurnResult.PermanentFailure(
+                "adapter_not_found",
+                $"No platform adapter registered for '{registration.Platform}'.");
+        }
+
+        var replyText = NormalizeReplyText(
+            string.IsNullOrWhiteSpace(outboundIntent.Text) && HasInteractiveContent(outboundIntent)
+                ? NyxIdRelayInteractiveReplyDispatcher.BuildTextFallback(outboundIntent)
+                : outboundIntent.Text);
+        if (string.IsNullOrWhiteSpace(replyText))
+        {
+            return ConversationTurnResult.TransientFailure(
+                "empty_reply",
+                "Deferred LLM reply is empty.");
+        }
+
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(TimeSpan.FromSeconds(30));
+        var replyService = _replyService;
+        var delivery = replyService is not null
+            ? await replyService.DeliverAsync(adapter, replyText, inbound, registration, cts.Token)
+            : await adapter.SendReplyAsync(replyText, inbound, registration, _nyxClient, cts.Token);
+        if (!delivery.Succeeded)
+        {
+            _logger.LogWarning(
+                "Channel conversation reply rejected: registration={RegistrationId}, detail={Detail}, kind={Kind}",
+                registration.Id,
+                delivery.Detail,
+                delivery.FailureKind);
+            return delivery.FailureKind == PlatformReplyFailureKind.Permanent
+                ? ConversationTurnResult.PermanentFailure("reply_rejected", delivery.Detail ?? "reply rejected")
+                : ConversationTurnResult.TransientFailure("reply_rejected", delivery.Detail ?? "reply rejected");
+        }
+
+        return ConversationTurnResult.Sent(
+            sentActivityId: $"direct-reply:{sentActivitySeed}",
+            outbound: new MessageContent { Text = replyText },
+            authPrincipal: "bot",
+            outboundDelivery: inbound.OutboundDelivery?.Clone());
     }
 
     private async Task<ConversationTurnResult?> TrySendInteractiveRelayReplyAsync(
@@ -1540,6 +1571,99 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             : ToRelayFailure(emit);
     }
 
+    private async Task<ChannelBotRegistrationEntry?> ResolveRegistrationAsync(string? registrationId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(registrationId))
+            return null;
+
+        return await _registrationQueryPort.GetAsync(registrationId, ct);
+    }
+
+    private async Task<ChannelBotRegistrationEntry?> ResolveRegistrationAsync(ChatActivity activity, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(activity);
+
+        var nyxAgentApiKeyId = NormalizeOptional(activity.TransportExtras?.NyxAgentApiKeyId);
+        var canonicalScopeId = NormalizeOptional(activity.TransportExtras?.NyxRegistrationScopeId);
+        if (!string.IsNullOrWhiteSpace(nyxAgentApiKeyId))
+        {
+            if (_registrationQueryByNyxIdentityPort is null)
+                return null;
+
+            var registrations = await _registrationQueryByNyxIdentityPort.ListByNyxAgentApiKeyIdAsync(
+                nyxAgentApiKeyId,
+                ct);
+            var byNyxIdentity = ResolveRegistrationByNyxIdentityCandidates(registrations, canonicalScopeId);
+
+            if (byNyxIdentity is not null)
+                return byNyxIdentity;
+
+            if (registrations.Count > 0)
+                return null;
+        }
+
+        var byBotId = await ResolveRegistrationAsync(activity.Bot?.Value, ct);
+        return byBotId is not null && IsBotIdFallbackRegistrationAllowed(byBotId, canonicalScopeId, nyxAgentApiKeyId)
+            ? byBotId
+            : null;
+    }
+
+    private static ChannelBotRegistrationEntry? ResolveRegistrationByNyxIdentityCandidates(
+        IReadOnlyList<ChannelBotRegistrationEntry> registrations,
+        string? canonicalScopeId)
+    {
+        if (registrations.Count == 0)
+            return null;
+
+        if (!string.IsNullOrWhiteSpace(canonicalScopeId))
+        {
+            return registrations.FirstOrDefault(entry =>
+                string.Equals(NormalizeOptional(entry.ScopeId), canonicalScopeId, StringComparison.Ordinal));
+        }
+
+        var distinctScopeIds = registrations
+            .Select(entry => NormalizeOptional(entry.ScopeId))
+            .Where(static scopeId => scopeId is not null)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+        if (distinctScopeIds.Length != 1)
+            return null;
+
+        var resolvedScopeId = distinctScopeIds[0];
+        return registrations.FirstOrDefault(entry =>
+            string.Equals(NormalizeOptional(entry.ScopeId), resolvedScopeId, StringComparison.Ordinal));
+    }
+
+    private static bool IsBotIdFallbackRegistrationAllowed(
+        ChannelBotRegistrationEntry registration,
+        string? canonicalScopeId,
+        string? nyxAgentApiKeyId)
+    {
+        if (string.IsNullOrWhiteSpace(canonicalScopeId))
+            return true;
+
+        if (!string.Equals(NormalizeOptional(registration.ScopeId), canonicalScopeId, StringComparison.Ordinal))
+            return false;
+
+        var registrationApiKeyId = NormalizeOptional(registration.NyxAgentApiKeyId);
+        return registrationApiKeyId is null ||
+               string.Equals(registrationApiKeyId, nyxAgentApiKeyId, StringComparison.Ordinal);
+    }
+
+    private async Task<ChannelBotRegistrationEntry?> ResolveRegistrationForReplyAsync(
+        LlmReplyReadyEvent reply,
+        CancellationToken ct)
+    {
+        if (!string.IsNullOrWhiteSpace(reply.RegistrationId))
+            return await ResolveRegistrationAsync(reply.RegistrationId, ct);
+
+        if (reply.Activity is not null)
+            return await ResolveRegistrationAsync(reply.Activity, ct);
+
+        return null;
+    }
+
     private async Task<ConversationTurnResult?> TryHandleWorkflowResumeAsync(InboundMessage inbound, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(inbound);
@@ -1613,7 +1737,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private async Task<ConversationTurnResult?> TryHandleWorkflowDraftRunAsync(
         ChatActivity activity,
         InboundMessage inbound,
-        RelayTurnContext registration,
+        ChannelBotRegistrationEntry registration,
         ChannelInboundEvent inboundEvent,
         ConversationTurnRuntimeContext runtimeContext,
         CancellationToken ct)
@@ -1624,8 +1748,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
         var result = await admission.TryAdmitAsync(
                 activity,
-                registration.ScopeId,
-                registration.Id,
+                registration,
                 inboundEvent,
                 runtimeContext,
                 ct)
@@ -1854,6 +1977,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private static AgentToolExecutionContext BuildAgentBuilderToolContext(
         ChannelInboundEvent inboundEvent,
         ChatActivity activity,
+        ChannelBotRegistrationEntry registration,
         string? userAccessToken,
         IReadOnlyDictionary<string, string> metadata)
     {
@@ -1873,9 +1997,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 inboundEvent.MessageId,
                 NormalizeOptional(activity.TransportExtras?.NyxPlatformMessageId),
                 null,
-                // Interactive replies use the relay reply token; the bot is registered directly on
-                // NyxID, so there is no stored durable reply credential ref to thread through.
-                null),
+                NormalizeOptional(registration.NyxReplyCredentialRef)),
             ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata),
         };
     }
@@ -2005,7 +2127,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
     private static ChannelInboundEvent ToInboundEvent(
         ChatActivity activity,
-        RelayTurnContext registration,
+        ChannelBotRegistrationEntry registration,
         InboundMessage inbound)
     {
         // Refactor (v1/issue1466-first):
@@ -2022,7 +2144,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             ChatType = inbound.ChatType ?? string.Empty,
             Platform = inbound.Platform,
             RegistrationId = registration.Id,
-            RegistrationScopeId = registration.ScopeId ?? string.Empty,
+            RegistrationScopeId = registration.ScopeId,
             NyxProviderSlug = registration.NyxProviderSlug,
         };
 
@@ -2034,7 +2156,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
     private async Task<NeedsLlmReplyEvent> BuildLlmReplyRequestAsync(
         ChatActivity activity,
-        RelayTurnContext registration,
+        ChannelBotRegistrationEntry registration,
         ChannelInboundEvent inboundEvent,
         ConversationTurnRuntimeContext runtimeContext,
         ResolvedSenderBinding? senderBinding,
@@ -2090,8 +2212,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 inboundEvent.MessageId,
                 NormalizeOptional(activity.TransportExtras?.NyxPlatformMessageId),
                 null,
-                // Interactive/relay replies use the reply token; no stored durable reply credential.
-                null),
+                NormalizeOptional(registration.NyxReplyCredentialRef)),
             ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(replyMetadata),
         }).ToPayload();
 
@@ -2444,7 +2565,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     // forces an on-demand bot/v3/info resolve to learn whether that mention is the bot.
     private async Task<bool> ShouldIgnoreUnaddressedGroupMessageAsync(
         ChatActivity activity,
-        RelayTurnContext registration,
+        ChannelBotRegistrationEntry registration,
         ConversationTurnRuntimeContext runtimeContext,
         CancellationToken ct)
     {
@@ -2493,7 +2614,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private static bool LooksLikeSlashCommand(string? text) =>
         !string.IsNullOrWhiteSpace(text) && text.TrimStart().StartsWith('/');
 
-    private static bool IsLarkActivity(ChatActivity activity, RelayTurnContext registration)
+    private static bool IsLarkActivity(ChatActivity activity, ChannelBotRegistrationEntry registration)
     {
         var platform = NormalizeOptional(activity.TransportExtras?.NyxPlatform)
             ?? NormalizeOptional(registration.Platform)
@@ -2510,7 +2631,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
     private async Task TrySendImmediateLarkReactionAsync(
         ChatActivity activity,
-        RelayTurnContext registration,
+        ChannelBotRegistrationEntry registration,
         CancellationToken ct)
     {
         if (!ShouldSendImmediateLarkReaction(activity, registration, out var accessToken, out var providerSlug, out var platformMessageId))
@@ -2580,7 +2701,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private async Task AwaitTypingReactionThenClearAsync(
         Task typingReactionTask,
         InboundMessage inbound,
-        RelayTurnContext registration,
+        ChannelBotRegistrationEntry registration,
         CancellationToken ct)
     {
         try
@@ -2613,13 +2734,13 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     // who happened to add the same Typing reaction.
     private async Task TryClearTypingReactionAsync(
         InboundMessage inbound,
-        RelayTurnContext? registration,
+        ChannelBotRegistrationEntry? registration,
         CancellationToken ct)
     {
-        if (registration is not { } relayTurn)
+        if (registration is null)
             return;
 
-        if (!ShouldClearTypingReaction(inbound, relayTurn, out var accessToken, out var providerSlug, out var platformMessageId))
+        if (!ShouldClearTypingReaction(inbound, registration, out var accessToken, out var providerSlug, out var platformMessageId))
             return;
 
         try
@@ -2803,7 +2924,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
     private static bool ShouldClearTypingReaction(
         InboundMessage inbound,
-        RelayTurnContext registration,
+        ChannelBotRegistrationEntry registration,
         out string? accessToken,
         out string? providerSlug,
         out string? platformMessageId)
@@ -2833,7 +2954,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
     private static bool ShouldSendImmediateLarkReaction(
         ChatActivity activity,
-        RelayTurnContext registration,
+        ChannelBotRegistrationEntry registration,
         out string? accessToken,
         out string? providerSlug,
         out string? platformMessageId)

@@ -29,6 +29,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
     private readonly IConversationReplyGenerator _replyGenerator;
     private readonly IInteractiveReplyCollector? _interactiveReplyCollector;
     private readonly Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? _relayOptions;
+    private readonly INyxIdRelayScopeResolver? _scopeResolver;
     private readonly IUserConfigQueryPort? _userConfigQueryPort;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<AgentRunReplyGenerationExecutor> _logger;
@@ -39,6 +40,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         IInteractiveReplyCollector? interactiveReplyCollector,
         Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? relayOptions,
         ILogger<AgentRunReplyGenerationExecutor> logger,
+        INyxIdRelayScopeResolver? scopeResolver = null,
         IUserConfigQueryPort? userConfigQueryPort = null,
         TimeProvider? timeProvider = null)
     {
@@ -46,6 +48,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         _replyGenerator = replyGenerator ?? throw new ArgumentNullException(nameof(replyGenerator));
         _interactiveReplyCollector = interactiveReplyCollector;
         _relayOptions = relayOptions;
+        _scopeResolver = scopeResolver;
         _userConfigQueryPort = userConfigQueryPort;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -600,18 +603,39 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         LLMControlContext control,
         CancellationToken ct)
     {
-        if (_userConfigQueryPort is null)
+        if (_scopeResolver is null || _userConfigQueryPort is null)
             return control;
 
-        // Bot-owner scope comes from the relay turn's JWT scope (set at relay ingress from the
-        // validated NyxID callback token), not a local registration mirror — aevatar no longer
-        // self-registers channel bots.
-        var scopeId = NormalizeOptional(request.Activity?.TransportExtras?.NyxRegistrationScopeId);
-        if (scopeId is null)
+        var apiKeyId = request.Activity?.Bot?.Value?.Trim();
+        if (string.IsNullOrWhiteSpace(apiKeyId))
+            return control;
+
+        string? scopeId;
+        try
+        {
+            scopeId = await _scopeResolver.ResolveScopeIdByApiKeyAsync(apiKeyId, ct)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to resolve bot owner scope id for LLM config: correlation={CorrelationId} apiKeyId={ApiKeyId}",
+                request.CorrelationId,
+                apiKeyId);
+            return control;
+        }
+
+        if (string.IsNullOrWhiteSpace(scopeId))
         {
             _logger.LogDebug(
-                "No bot owner scope id on the relay turn for LLM config: correlation={CorrelationId}",
-                request.CorrelationId);
+                "No bot owner scope id resolved for LLM config: correlation={CorrelationId} apiKeyId={ApiKeyId}",
+                request.CorrelationId,
+                apiKeyId);
             return control;
         }
 

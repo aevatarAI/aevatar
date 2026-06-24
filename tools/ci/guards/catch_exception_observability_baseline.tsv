@@ -1,5 +1,5 @@
 path	line	message
-agents/Aevatar.GAgents.NyxidChat/AgentRunReplyGenerationExecutor.cs	152	empty broad catch block
+agents/Aevatar.GAgents.NyxidChat/AgentRunReplyGenerationExecutor.cs	155	empty broad catch block
 agents/Aevatar.GAgents.NyxidChat/NyxIdChatEndpoints.ConnectedServices.cs	109	empty broad catch block
 agents/Aevatar.GAgents.NyxidChat/NyxIdChatEndpoints.Streaming.cs	376	empty broad catch block
 agents/Aevatar.GAgents.NyxidChat/NyxIdChatEndpoints.cs	333	broad catch returns null without visible failure signal
@@ -22,7 +22,6 @@ src/Aevatar.AI.ToolProviders.ServiceInvoke/Schema/EndpointSchemaProvider.cs	92	b
 src/Aevatar.AI.ToolProviders.ServiceInvoke/Schema/EndpointSchemaProvider.cs	153	empty broad catch block
 src/Aevatar.AI.ToolProviders.ServiceInvoke/Tools/ListServicesTool.cs	157	empty broad catch block
 src/Aevatar.AI.ToolProviders.Skills/SkillScriptExtractor.cs	119	empty broad catch block
-src/Aevatar.AI.ToolProviders.Skills/UseSkillTool.cs	348	empty broad catch block
 src/Aevatar.CQRS.Core.Abstractions/Streaming/EventSinkProjectionLeaseOrchestrator.cs	47	empty broad catch block
 src/Aevatar.CQRS.Core.Abstractions/Streaming/EventSinkProjectionLeaseOrchestrator.cs	59	empty broad catch block
 src/Aevatar.CQRS.Projection.Providers.Elasticsearch/Stores/ElasticsearchOptimisticWriter.cs	170	broad catch returns null without visible failure signal

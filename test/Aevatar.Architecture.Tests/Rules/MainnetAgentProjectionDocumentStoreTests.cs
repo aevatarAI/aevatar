@@ -33,6 +33,7 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
         services.AddMainnetAgentProjectionDocumentStores(BuildInMemoryConfiguration());
 
         using var provider = services.BuildServiceProvider();
+        AssertProviderStore<ChannelBotRegistrationDocument, InMemoryProjectionDocumentStore<ChannelBotRegistrationDocument, string>>(provider);
         AssertProviderStore<ConversationDeliveryCurrentStateDocument, InMemoryProjectionDocumentStore<ConversationDeliveryCurrentStateDocument, string>>(provider);
         AssertProviderStore<ProjectionScopeStatusDocument, InMemoryProjectionDocumentStore<ProjectionScopeStatusDocument, string>>(provider);
         AssertProviderStore<ExternalIdentityBindingDocument, InMemoryProjectionDocumentStore<ExternalIdentityBindingDocument, string>>(provider);
@@ -58,6 +59,7 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
         services.AddMainnetAgentProjectionDocumentStores(BuildElasticsearchConfiguration());
 
         using var provider = services.BuildServiceProvider();
+        AssertProviderStore<ChannelBotRegistrationDocument, ElasticsearchProjectionDocumentStore<ChannelBotRegistrationDocument, string>>(provider);
         AssertProviderStore<ConversationDeliveryCurrentStateDocument, ElasticsearchProjectionDocumentStore<ConversationDeliveryCurrentStateDocument, string>>(provider);
         AssertProviderStore<ProjectionScopeStatusDocument, ElasticsearchProjectionDocumentStore<ProjectionScopeStatusDocument, string>>(provider);
         AssertProviderStore<ExternalIdentityBindingDocument, ElasticsearchProjectionDocumentStore<ExternalIdentityBindingDocument, string>>(provider);
@@ -81,33 +83,34 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
     public void AddMainnetAgentProjectionDocumentStores_WithSameProviderPartialRegistration_FillsMissingReaders()
     {
         var services = BuildAgentServices();
-        services.AddInMemoryDocumentProjectionStore<ConversationDeliveryCurrentStateDocument, string>(
+        services.AddInMemoryDocumentProjectionStore<ChannelBotRegistrationDocument, string>(
             keySelector: static document => document.Id,
             keyFormatter: static key => key);
 
         services.AddMainnetAgentProjectionDocumentStores(BuildInMemoryConfiguration());
 
         using var provider = services.BuildServiceProvider();
+        AssertProviderStore<ChannelBotRegistrationDocument, InMemoryProjectionDocumentStore<ChannelBotRegistrationDocument, string>>(provider);
         AssertProviderStore<ConversationDeliveryCurrentStateDocument, InMemoryProjectionDocumentStore<ConversationDeliveryCurrentStateDocument, string>>(provider);
         AssertProviderStore<ProjectionScopeStatusDocument, InMemoryProjectionDocumentStore<ProjectionScopeStatusDocument, string>>(provider);
         AssertProviderStore<StreamingProxyRoomParticipantsSnapshot, InMemoryProjectionDocumentStore<StreamingProxyRoomParticipantsSnapshot, string>>(provider);
         Assert.Single(
             services,
-            descriptor => descriptor.ServiceType == typeof(IProjectionDocumentReader<ConversationDeliveryCurrentStateDocument, string>));
+            descriptor => descriptor.ServiceType == typeof(IProjectionDocumentReader<ChannelBotRegistrationDocument, string>));
     }
 
     [Fact]
     public void AddMainnetAgentProjectionDocumentStores_WithDifferentProviderPartialRegistration_ShouldReject()
     {
         var services = BuildAgentServices();
-        services.AddInMemoryDocumentProjectionStore<ConversationDeliveryCurrentStateDocument, string>(
+        services.AddInMemoryDocumentProjectionStore<ChannelBotRegistrationDocument, string>(
             keySelector: static document => document.Id,
             keyFormatter: static key => key);
 
         var exception = Assert.Throws<InvalidOperationException>(() =>
             services.AddMainnetAgentProjectionDocumentStores(BuildElasticsearchConfiguration()));
 
-        Assert.Contains(nameof(ConversationDeliveryCurrentStateDocument), exception.Message, StringComparison.Ordinal);
+        Assert.Contains(nameof(ChannelBotRegistrationDocument), exception.Message, StringComparison.Ordinal);
         Assert.Contains("different provider", exception.Message, StringComparison.Ordinal);
     }
 

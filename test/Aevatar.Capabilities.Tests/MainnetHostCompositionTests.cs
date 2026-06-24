@@ -4,6 +4,7 @@ using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.ToolProviders.AgentCatalog;
 using Aevatar.AI.ToolProviders.AevatarInvocation;
 using Aevatar.AI.ToolProviders.Channel;
+using Aevatar.AI.ToolProviders.ChannelAdmin;
 using Aevatar.AI.ToolProviders.ChronoStorage;
 using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.AI.ToolProviders.NyxId;
@@ -121,6 +122,7 @@ public sealed class MainnetHostCompositionTests
             .ToList();
 
         routePatterns.Should().Contain("/api/webhooks/nyxid-relay/health");
+        routePatterns.Should().Contain("/api/channels/registrations");
         routePatterns.Should().Contain("/api/oauth/nyxid-callback");
         routePatterns.Should().Contain("/api/services/");
         routePatterns.Should().Contain("/api/skill-runners/{agentId}/external-trigger-sources/{sourceId}/deliveries");
@@ -203,6 +205,7 @@ public sealed class MainnetHostCompositionTests
         workspace.Sources.Should().Contain(source => source is ReadWorkflowRunArtifactToolSource);
         workspace.Sources.Should().Contain(source => source.GetType().Name == "ResponsesAevatarToolProvider");
         workspace.Sources.Should().Contain(source => source is ChannelInteractiveReplyToolSource);
+        workspace.Sources.Should().Contain(source => source is ChannelRegistrationToolSource);
         workspace.Sources.Should().Contain(source => source is AgentDeliveryTargetToolSource);
         workspace.Sources.Should().Contain(source => source is NyxIdAgentToolSource);
         workspace.Sources.Should().Contain(source => source is LarkAgentToolSource);

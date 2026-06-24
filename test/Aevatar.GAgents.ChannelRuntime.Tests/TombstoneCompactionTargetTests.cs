@@ -72,6 +72,29 @@ public sealed class TombstoneCompactionTargetTests
     }
 
     [Fact]
+    public async Task ChannelBotRegistration_EnsureActorAsync_CreatesActor_WhenMissing()
+    {
+        ITombstoneCompactionTarget target = ResolveChannelBotTarget();
+        var runtime = Substitute.For<IActorRuntime>();
+        runtime.GetAsync(target.ActorId).Returns(Task.FromResult<IActor?>(null));
+        runtime.CreateAsync<ChannelBotRegistrationGAgent>(target.ActorId, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Substitute.For<IActor>()));
+
+        await target.EnsureActorAsync(runtime, CancellationToken.None);
+
+        await runtime.Received(1).CreateAsync<ChannelBotRegistrationGAgent>(target.ActorId, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public void ChannelBotRegistration_CreateCommand_CarriesSafeStateVersion()
+    {
+        ITombstoneCompactionTarget target = ResolveChannelBotTarget();
+        var command = target.CreateCommand(99);
+        command.Should().BeOfType<ChannelBotCompactTombstonesCommand>()
+            .Which.SafeStateVersion.Should().Be(99);
+    }
+
+    [Fact]
     public async Task Device_EnsureActorAsync_CreatesActor_WhenMissing()
     {
         ITombstoneCompactionTarget target = ResolveDeviceTarget();
@@ -92,6 +115,14 @@ public sealed class TombstoneCompactionTargetTests
         var command = target.CreateCommand(77);
         command.Should().BeOfType<DeviceCompactTombstonesCommand>()
             .Which.SafeStateVersion.Should().Be(77);
+    }
+
+    private static ITombstoneCompactionTarget ResolveChannelBotTarget()
+    {
+        // Internal type — instantiate via reflection, kept stable for the patch's smoke coverage.
+        var t = typeof(ChannelBotRegistrationGAgent).Assembly
+            .GetType("Aevatar.GAgents.Channel.Runtime.ChannelBotRegistrationTombstoneCompactionTarget", throwOnError: true)!;
+        return (ITombstoneCompactionTarget)Activator.CreateInstance(t)!;
     }
 
     private static ITombstoneCompactionTarget ResolveDeviceTarget()
