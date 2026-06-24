@@ -993,14 +993,28 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.draftRunPanel.closeAria': '关闭草稿运行面板',
   'teamMemberWorkflowStudio.draftRunPanel.emptyInputHint':
     '留空则不携带用户输入运行。',
-  'teamMemberWorkflowStudio.draftRunPanel.filesBackendPendingNotice':
-    '草稿运行文件输入等待后端支持。',
+  'teamMemberWorkflowStudio.draftRunPanel.addFiles': '添加文件',
+  'teamMemberWorkflowStudio.draftRunPanel.attachFiles': '添加文件',
+  'teamMemberWorkflowStudio.draftRunPanel.attachFilesButton': '添加文件',
+  'teamMemberWorkflowStudio.draftRunPanel.attachFilesInput': '添加文件',
+  'teamMemberWorkflowStudio.draftRunPanel.dropFiles': '拖放文件到这里',
+  'teamMemberWorkflowStudio.draftRunPanel.filesHint':
+    '为这次草稿运行添加文件。',
+  'teamMemberWorkflowStudio.draftRunPanel.filesLabel': '文件',
+  'teamMemberWorkflowStudio.draftRunPanel.filesLimitHint':
+    '支持图片、文档、音频、视频、CSV 和文本文件，单个文件最大 10 MB。',
   'teamMemberWorkflowStudio.draftRunPanel.messageLabel':
     '草稿运行输入',
   'teamMemberWorkflowStudio.draftRunPanel.messagePlaceholder':
     '本次 Workflow 草稿运行的可选输入',
+  'teamMemberWorkflowStudio.draftRunPanel.noFilesAttached':
+    '未添加文件',
+  'teamMemberWorkflowStudio.draftRunPanel.removeEmptyFile':
+    '开始草稿运行前请移除空文件 {name}。',
+  'teamMemberWorkflowStudio.draftRunPanel.removeFile': '移除 {name}',
   'teamMemberWorkflowStudio.draftRunPanel.sectionAria': '草稿运行面板',
   'teamMemberWorkflowStudio.draftRunPanel.startDraftRun': '开始草稿运行',
+  'teamMemberWorkflowStudio.draftRunPanel.thisFile': '此文件',
   'teamMemberWorkflowStudio.draftRunPanel.title': '草稿运行',
   'teamMemberWorkflowStudio.runsPanel.description':
     '这个 tab 只展示明确关联到当前 Workflow 成员的运行记录。',

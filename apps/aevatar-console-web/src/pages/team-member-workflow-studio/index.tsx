@@ -373,6 +373,9 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
         <WorkflowStudioDraftRunPanel
           canRun={studio.canRunCurrentDraft}
           disabledReason={studio.currentDraftRunPlaceholderReason}
+          files={studio.draftRunFiles}
+          onFilesAdd={studio.addDraftRunFiles}
+          onFileRemove={studio.removeDraftRunFile}
           onClose={studio.selectCanvas}
           onRun={studio.runCurrentDraft}
           onRunMessageChange={studio.setExecutionRunMessage}

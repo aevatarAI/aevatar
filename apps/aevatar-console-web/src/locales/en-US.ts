@@ -1058,15 +1058,29 @@ const enUSMessages = {
     'Close draft run panel',
   'teamMemberWorkflowStudio.draftRunPanel.emptyInputHint':
     'Leave blank to run this draft without user input.',
-  'teamMemberWorkflowStudio.draftRunPanel.filesBackendPendingNotice':
-    'File input for draft runs is pending backend support.',
+  'teamMemberWorkflowStudio.draftRunPanel.addFiles': 'Add files',
+  'teamMemberWorkflowStudio.draftRunPanel.attachFiles': 'Attach files',
+  'teamMemberWorkflowStudio.draftRunPanel.attachFilesButton': 'Add files',
+  'teamMemberWorkflowStudio.draftRunPanel.attachFilesInput': 'Attach files',
+  'teamMemberWorkflowStudio.draftRunPanel.dropFiles': 'Drop files here',
+  'teamMemberWorkflowStudio.draftRunPanel.filesHint':
+    'Attach files for this draft run.',
+  'teamMemberWorkflowStudio.draftRunPanel.filesLabel': 'Files',
+  'teamMemberWorkflowStudio.draftRunPanel.filesLimitHint':
+    'Images, documents, audio, video, CSV, and text files up to 10 MB.',
   'teamMemberWorkflowStudio.draftRunPanel.messageLabel':
     'Draft run input',
   'teamMemberWorkflowStudio.draftRunPanel.messagePlaceholder':
     'Optional input sent to this workflow draft run',
+  'teamMemberWorkflowStudio.draftRunPanel.noFilesAttached':
+    'No files attached',
+  'teamMemberWorkflowStudio.draftRunPanel.removeEmptyFile':
+    'Remove empty file {name} before starting the draft run.',
+  'teamMemberWorkflowStudio.draftRunPanel.removeFile': 'Remove {name}',
   'teamMemberWorkflowStudio.draftRunPanel.sectionAria': 'Draft run panel',
   'teamMemberWorkflowStudio.draftRunPanel.startDraftRun':
     'Start draft run',
+  'teamMemberWorkflowStudio.draftRunPanel.thisFile': 'this file',
   'teamMemberWorkflowStudio.draftRunPanel.title': 'Draft run',
   'teamMemberWorkflowStudio.runsPanel.description':
     'This tab only shows runs with an explicit link to the current workflow member.',
