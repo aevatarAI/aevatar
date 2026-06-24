@@ -334,9 +334,12 @@ public sealed class UseSkillTool : IAgentTool
         try
         {
             using var doc = JsonDocument.Parse(argumentsJson);
-            if (doc.RootElement.TryGetProperty("skill", out var s))
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                return new UseSkillArguments("", "", null);
+
+            if (doc.RootElement.TryGetProperty("skill", out var s) && s.ValueKind == JsonValueKind.String)
                 skillName = s.GetString() ?? "";
-            if (doc.RootElement.TryGetProperty("args", out var a))
+            if (doc.RootElement.TryGetProperty("args", out var a) && a.ValueKind == JsonValueKind.String)
                 args = a.GetString() ?? "";
             if (doc.RootElement.TryGetProperty("mount_workflows", out var m) &&
                 (m.ValueKind == JsonValueKind.True || m.ValueKind == JsonValueKind.False))
@@ -344,7 +347,10 @@ public sealed class UseSkillTool : IAgentTool
                 mountWorkflows = m.GetBoolean();
             }
         }
-        catch { /* use defaults */ }
+        catch (JsonException)
+        {
+            return new UseSkillArguments("", "", null);
+        }
 
         return new UseSkillArguments(skillName, args, mountWorkflows);
     }
