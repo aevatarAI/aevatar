@@ -1,6 +1,5 @@
 import { persistAuthSession } from "@/shared/auth/session";
 import {
-  configureScheduledDispatchRetryDelay,
   decodeScheduledDispatchSummary,
   scheduledDispatchApi,
   scheduledWorkflowPromptMaxLength,
@@ -236,101 +235,6 @@ describe("scheduledDispatchApi", () => {
     expect(String(init.body)).not.toContain("workflowChatTarget");
   });
 
-  it("retries schedule creation when the owner binding read model briefly lags after NyxID finalization", async () => {
-    const restoreRetryDelay = configureScheduledDispatchRetryDelay(async () => {});
-    const fetchMock = jest
-      .fn()
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 400,
-        statusText: "Bad Request",
-        text: async () =>
-          JSON.stringify({
-            error: "NyxID binding was not found for the scheduled subject.",
-          }),
-      } as Response)
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 202,
-        json: async () => createReceipt(),
-      } as Response);
-    global.fetch = fetchMock as typeof global.fetch;
-
-    try {
-      await expect(
-        scheduledDispatchApi.create({
-          displayName: "Daily escalation digest",
-          cronExpression: "0 9 * * 1-5",
-          timezone: "Asia/Shanghai",
-          enabled: true,
-          workflowChatTarget: {
-            identity: {
-              tenantId: "scope-1",
-              appId: "default",
-              namespace: "default",
-              serviceId: "svc-alpha",
-            },
-            prompt: "Summarize escalations.",
-          },
-        }),
-      ).resolves.toEqual(
-        expect.objectContaining({
-          accepted: true,
-          scheduleId: "sch-alpha",
-        }),
-      );
-    } finally {
-      restoreRetryDelay();
-    }
-
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock.mock.calls.map(([input]) => input)).toEqual([
-      "/api/schedules",
-      "/api/schedules",
-    ]);
-  });
-
-  it("stops retrying schedule creation after bounded owner binding read model attempts", async () => {
-    const retryDelays: number[] = [];
-    const restoreRetryDelay = configureScheduledDispatchRetryDelay(async (delayMs) => {
-      retryDelays.push(delayMs);
-    });
-    const fetchMock = jest.fn().mockResolvedValue({
-      ok: false,
-      status: 400,
-      statusText: "Bad Request",
-      text: async () =>
-        JSON.stringify({
-          error: "NyxID binding was not found for the scheduled subject.",
-        }),
-    } as Response);
-    global.fetch = fetchMock as typeof global.fetch;
-
-    try {
-      await expect(
-        scheduledDispatchApi.create({
-          displayName: "Daily escalation digest",
-          cronExpression: "0 9 * * 1-5",
-          timezone: "Asia/Shanghai",
-          enabled: true,
-          workflowChatTarget: {
-            identity: {
-              tenantId: "scope-1",
-              appId: "default",
-              namespace: "default",
-              serviceId: "svc-alpha",
-            },
-          },
-        }),
-      ).rejects.toThrow("NyxID binding was not found for the scheduled subject.");
-    } finally {
-      restoreRetryDelay();
-    }
-
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(retryDelays).toEqual([400, 900]);
-  });
-
   it("posts workflow chat as base64 service invocation when creating without a revision", async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
@@ -488,59 +392,6 @@ describe("scheduledDispatchApi", () => {
     expect(String(init.body)).not.toContain("memberId");
     expect(String(init.body)).not.toContain("workflowId");
     expect(String(init.body)).not.toContain("workflowChatTarget");
-  });
-
-  it("retries schedule updates when the owner binding read model briefly lags", async () => {
-    const restoreRetryDelay = configureScheduledDispatchRetryDelay(async () => {});
-    const fetchMock = jest
-      .fn()
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 400,
-        statusText: "Bad Request",
-        text: async () =>
-          JSON.stringify({
-            error: "NyxID binding was not found for the scheduled subject.",
-          }),
-      } as Response)
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 202,
-        json: async () => createReceipt({ commandId: "cmd-update" }),
-      } as Response);
-    global.fetch = fetchMock as typeof global.fetch;
-
-    try {
-      await expect(
-        scheduledDispatchApi.update(" sch-alpha ", {
-          displayName: "Daily escalation digest",
-          cronExpression: "0 9 * * 1-5",
-          timezone: "Asia/Shanghai",
-          enabled: true,
-          workflowChatTarget: {
-            identity: {
-              tenantId: "scope-1",
-              appId: "default",
-              namespace: "default",
-              serviceId: "svc-alpha",
-            },
-          },
-        }),
-      ).resolves.toEqual(
-        expect.objectContaining({
-          commandId: "cmd-update",
-          scheduleId: "sch-alpha",
-        }),
-      );
-    } finally {
-      restoreRetryDelay();
-    }
-
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock.mock.calls.map(([input]) => input)).toEqual([
-      "/api/schedules/sch-alpha",
-      "/api/schedules/sch-alpha",
-    ]);
   });
 
   it("rejects oversized workflow prompts before storing the schedule payload", async () => {

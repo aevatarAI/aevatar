@@ -60,7 +60,6 @@ public sealed class AevatarOAuthClientProjectionProvider : IAevatarOAuthClientPr
             PreviousHmacKey: previousKey,
             PreviousHmacDemotedAt: previousDemotedAt,
             RedirectUri: string.IsNullOrEmpty(document.RedirectUri) ? null : document.RedirectUri,
-            OauthScope: string.IsNullOrEmpty(document.OauthScope) ? null : document.OauthScope,
-            StudioLoginRedirectUri: string.IsNullOrEmpty(document.StudioLoginRedirectUri) ? null : document.StudioLoginRedirectUri);
+            OauthScope: string.IsNullOrEmpty(document.OauthScope) ? null : document.OauthScope);
     }
 }
