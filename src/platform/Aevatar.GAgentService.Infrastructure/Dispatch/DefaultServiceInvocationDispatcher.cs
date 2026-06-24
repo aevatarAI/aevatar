@@ -90,9 +90,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         var chatRequest = request.Payload?.Unpack<ChatRequestEvent>()
             ?? throw new InvalidOperationException("Workflow services require ChatRequestEvent payload.");
         var plan = target.Artifact.DeploymentPlan.WorkflowPlan;
-        var definitionActorId = string.IsNullOrWhiteSpace(plan.DefinitionActorId)
-            ? target.Service.PrimaryActorId
-            : plan.DefinitionActorId.Trim();
+        var definitionActorId = ResolveWorkflowServiceDefinitionActorId(target, plan);
         var run = await _workflowRunProvisioningPort.CreateRunAsync(
             new WorkflowDefinitionBinding(
                 definitionActorId,
@@ -108,6 +106,17 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         var envelope = CreateEnvelope(run.ActorId, Any.Pack(ToWorkflowChatRequest(chatRequest)), commandId, correlationId);
         await _dispatchPort.DispatchAsync(run.ActorId, envelope, ct);
         return CreateReceipt(target, run.ActorId, commandId, correlationId, runId);
+    }
+
+    private static string ResolveWorkflowServiceDefinitionActorId(
+        ServiceInvocationResolvedTarget target,
+        WorkflowServiceDeploymentPlan plan)
+    {
+        var serviceDefinitionActorId = target.Service.PrimaryActorId?.Trim() ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(serviceDefinitionActorId))
+            return serviceDefinitionActorId;
+
+        return plan.DefinitionActorId?.Trim() ?? string.Empty;
     }
 
     private static WorkflowChatRequestEvent ToWorkflowChatRequest(ChatRequestEvent source)
