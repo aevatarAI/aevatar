@@ -311,15 +311,16 @@ internal static class WorkflowRunObservatoryPage
   /* active schedule deep-link filter chip (06-24): arrives via the /schedules deep-link, no select */
   .sched-filter {
     display: inline-flex; align-items: center; gap: 7px; margin: 0 16px 10px;
+    max-width: calc(100% - 32px);
     padding: 5px 7px 5px 10px; border-radius: var(--r-pill); font-size: 12px;
     color: var(--run); background: var(--run-soft);
     border: 1px solid color-mix(in oklab, var(--run) 32%, transparent);
   }
-  .sched-filter .sf-ic { display: inline-flex; opacity: .85; }
-  .sched-filter .sf-lab { font-weight: 650; }
-  .sched-filter .sf-id { font-family: var(--mono); color: var(--fg); max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sched-filter .sf-ic { display: inline-flex; flex: 0 0 auto; opacity: .85; }
+  .sched-filter .sf-lab { flex: 0 0 auto; font-weight: 650; white-space: nowrap; }
+  .sched-filter .sf-id { flex: 0 1 auto; min-width: 0; font-family: var(--mono); color: var(--fg); max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sched-filter .sf-x {
-    display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px;
+    display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 18px; height: 18px;
     padding: 0; border: 0; border-radius: 50%; background: transparent; color: inherit; cursor: pointer; opacity: .7;
   }
   .sched-filter .sf-x:hover { opacity: 1; background: color-mix(in oklab, var(--run) 18%, transparent); }
