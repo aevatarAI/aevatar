@@ -100,7 +100,7 @@ const LoginPage: React.FC = () => {
             subTitle={
               config.configurationError
                 ? config.configurationError
-                : 'Ensure the Studio backend exposes NyxID login configuration at /api/auth/nyxid/config before starting the console.'
+                : 'Set NYXID_CLIENT_ID and NYXID_BASE_URL in apps/aevatar-console-web/.env.local before starting the console.'
             }
           />
         </Card>
