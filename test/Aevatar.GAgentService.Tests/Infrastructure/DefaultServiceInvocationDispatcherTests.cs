@@ -610,11 +610,45 @@ public sealed class DefaultServiceInvocationDispatcherTests
         registry.Calls[0].TargetActorId.Should().Be(workflowPort.RunActor.Id);
         registry.Calls[0].CommandId.Should().Be("cmd-wf");
         workflowPort.CreateRunCalls.Should().ContainSingle();
-        workflowPort.CreateRunCalls[0].DefinitionActorId.Should().Be("artifact-definition-actor");
+        workflowPort.CreateRunCalls[0].DefinitionActorId.Should().Be("primary-actor");
         workflowPort.CreateRunCalls[0].WorkflowName.Should().Be("artifact-wf");
         workflowPort.CreateRunCalls[0].WorkflowYaml.Should().Be("name: artifact-wf");
         workflowPort.CreateRunCalls[0].InlineWorkflowYamls.Should().Contain("helper", "name: helper");
         workflowPort.CreateRunCalls[0].RunOrigin.Should().Be(WorkflowRunOrigins.ServiceInvoke);
+    }
+
+    [Fact]
+    public async Task DispatchAsync_ShouldFallbackToArtifactDefinitionActor_WhenWorkflowServiceHasNoPrimaryActor()
+    {
+        var workflowPort = new RecordingWorkflowRunActorPort();
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            new RecordingDispatchPort(),
+            new RecordingScriptRuntimeCommandPort(),
+            workflowPort,
+            new RecordingServiceRunRegistrationPort());
+        var target = CreateTarget(
+            ServiceImplementationKind.Workflow,
+            endpointId: "chat",
+            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl,
+            primaryActorId: "");
+        target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
+        {
+            WorkflowName = "artifact-wf",
+            WorkflowYaml = "name: artifact-wf",
+            DefinitionActorId = "artifact-definition-actor",
+        };
+        var request = new ServiceInvocationRequest
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            EndpointId = "chat",
+            CommandId = "cmd-wf",
+            Payload = Any.Pack(new ChatRequestEvent { Prompt = "hi" }),
+        };
+
+        await dispatcher.DispatchAsync(target, request);
+
+        workflowPort.CreateRunCalls.Should().ContainSingle();
+        workflowPort.CreateRunCalls[0].DefinitionActorId.Should().Be("artifact-definition-actor");
     }
 
     [Fact]
@@ -642,7 +676,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
     private static ServiceInvocationResolvedTarget CreateTarget(
         ServiceImplementationKind implementationKind,
         string endpointId,
-        string requestTypeUrl = "")
+        string requestTypeUrl = "",
+        string primaryActorId = "primary-actor")
     {
         var artifact = GAgentServiceTestKit.CreatePreparedStaticArtifact(
             GAgentServiceTestKit.CreateIdentity(),
@@ -660,7 +695,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
                 "tenant:app:default:svc",
                 "r1",
                 "dep-1",
-                "primary-actor",
+                primaryActorId,
                 ServiceDeploymentStatus.Active.ToString(),
                 []),
             artifact,
