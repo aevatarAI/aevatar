@@ -6,26 +6,19 @@ namespace Aevatar.Mainnet.Host.Api.Voice;
 // PKCE storage + callback route). The page is the anonymous static shell; the app is gated behind login
 // exactly like its siblings, and carries the shared suite navigation so the five console pages move as one.
 //
-// This page is a faithful port of the canonical ~/Code/voice.html high-fidelity design: the console shell
-// (global header + secondary nav + main), and its views — Agents, Tools & Connectors, Channels,
-// Display Outputs, Live Sessions, Test, Settings. The Agents view is the CORRECT model: it is centred on the
-// caller's DEFAULT voice agent, the zero-config primary flow that `/ws/voice` auto-provisions with NO actor
-// id (observed at runtime: actor=nyxid-chat-<caller>, module=voice_presence_openai, brain=OpenAI Realtime,
-// per-session NyxID ephemeral minted via slug openai-realtime). Configuring/enabling voice on a specific
-// actor is a SECONDARY/advanced action — the one real voice HTTP write that exists today
-// (POST /api/scopes/{scopeId}/gagent-actors/{actorId}/voice-presence/enable) — never a prerequisite.
-//
-// Honest wiring (aevatar exposes no voice read GETs — no default-agent GET, no provider/model listing, no
-// list-sessions, no agent-config write, no connectors GET, no display/sink or WHIP-ingress surface). So the
-// design's features that aevatar cannot back render as honest disabled/empty states rather than mock data:
-//   - Default-agent config (provider/model, persona, VAD, tools): shown reflecting the REAL runtime defaults
-//     (module voice_presence_openai; default tool allowlist nyxid_proxy / nyxid_status / nyxid_services /
-//     nyxid_catalog / ornn_search_skills / use_skill — VOICE_TOOL_ALLOWLIST), read-only — no config write API.
-//   - Live Sessions / Test live panel: no list-sessions read surface → empty/disabled state.
-//   - WHIP / WebRTC ingress: voice-service decomposition sub-project ② — disabled stub.
-//   - Display Outputs / vp-control side-channel: sub-project ③ — disabled stub.
-//   - Routing policy: no read/write surface from this page → described, not fabricated.
-// Real surfaces actually called: GET /api/studio/context (scope chip) and the enable POST above.
+// Minimal, usable page centred on what works. Four views:
+//   - Talk: a REAL in-browser voice client over /ws/voice — mic (PCM16 mono 24kHz) ↔ response audio,
+//     half-duplex, status driven by the server's VoiceControlFrame stream (sessionAccepted / realtimeFrame).
+//     Wire format mirrors voice-presence's AevatarVoiceClient.cs; auth reuses this page's NyxID OIDC token
+//     passed as the ?access_token= query param. No actor id → /ws/voice auto-provisions the caller's
+//     default voice agent (module voice_presence_openai; per-session NyxID ephemeral via slug openai-realtime).
+//   - Default agent: the zero-config agent's real runtime defaults (provider/model/persona), read-only —
+//     aevatar has no default-agent config write. Plus the one real voice HTTP write as an advanced action:
+//     POST /api/scopes/{scopeId}/gagent-actors/{actorId}/voice-presence/enable (attach to a specific actor).
+//   - Tools: the default session tool allowlist (VOICE_TOOL_ALLOWLIST), read-only.
+//   - Settings: provider credential chain (NyxID-managed); publishing is host-gated (a disabled chip).
+// Real HTTP surfaces called: GET /api/studio/context (scope chip), the enable POST above, and the /ws/voice
+// WebSocket. Non-functional stub views (Live Sessions / Display Outputs / WHIP) were removed.
 internal static class VoiceConsolePage
 {
     public const string Html = """
@@ -305,7 +298,7 @@ internal static class VoiceConsolePage
   .mic-btn:hover { filter:brightness(1.07); }
 
   /* host-gated / disabled stub lock */
-  .gated .lock { display:inline-flex; align-items:center; gap:6px; font-size:11px; font-weight:700; letter-spacing:.04em; color:var(--warn); background:var(--warn-soft); border:1px solid color-mix(in oklab,var(--warn) 35%,transparent); border-radius:var(--r-pill); padding:3px 9px; }
+  .lock { display:inline-flex; align-items:center; gap:6px; font-size:11px; font-weight:700; letter-spacing:.04em; color:var(--warn); background:var(--warn-soft); border:1px solid color-mix(in oklab,var(--warn) 35%,transparent); border-radius:var(--r-pill); padding:3px 9px; }
   .card.stub { opacity:.96; }
   .card.stub .panel-head { border-bottom-style:dashed; }
 
@@ -353,16 +346,13 @@ internal static class VoiceConsolePage
 
 <script>
 /* ===========================================================================
-   数据契约（与现有 console 套件一致，无新增后端）：
-     - GET  /api/studio/context → {scopeId, scopeResolved, scopeSource}（scope chip + 预填 scope）
+   Backend surfaces used by this page:
+     - GET  /api/studio/context → {scopeId, scopeResolved, scopeSource}  (scope chip)
      - POST /api/scopes/{scopeId}/gagent-actors/{actorId}/voice-presence/enable?agentKind=...
-            body: {moduleName}  →  202 受理回执 / 4xx-5xx {error,detail}   ← 次级/进阶动作（在指定 actor 上启用）
-   主路径（零配置默认语音 agent）由 /ws/voice 自动开通（无需 actor id；运行时观测：
-     actor=nyxid-chat-<caller>，module=voice_presence_openai，大脑=OpenAI Realtime，
-     每会话经 NyxID slug openai-realtime mint ephemeral）。该路径无 HTTP 写入端点，本页只描述、不编造。
-   语音目前没有只读 GET（默认 agent / 会话 / provider / 连接器 列举），也无 agent 配置写入端点，因此：
-     默认 agent 的 provider/persona/VAD/工具按真实运行时默认值「只读」呈现；
-     实时会话 / WHIP 入站(②) / 显示侧信道 vp-control(③) 给出诚实占位（disabled/empty），不展示虚构数据。
+            body {moduleName} → 202 / 4xx-5xx {error,detail}   (advanced: attach to a specific actor)
+     - WS   /ws/voice?codec=pcm16&mode=half_duplex&access_token=<NyxID JWT>  (the Talk client)
+   The default voice agent is auto-provisioned by /ws/voice with no actor id; it has no config write API,
+   so the Default-agent view shows real runtime defaults read-only.
    =========================================================================== */
 
 /* ===========================================================================
@@ -445,8 +435,8 @@ async function apiGet(path){
   return await res.json();
 }
 
-function signOut(){ clearToken(); beginLogin(); }
-function signOutSilent(){ clearToken(); state.signedIn = false; render(); }
+function signOut(){ try{stopVoice(true);}catch(e){} clearToken(); beginLogin(); }
+function signOutSilent(){ try{stopVoice(true);}catch(e){} clearToken(); state.signedIn = false; render(); }
 
 /* ===========================================================================
    App state + DOM helpers
@@ -475,7 +465,7 @@ const DEFAULT_TOOL_ALLOWLIST = ["nyxid_proxy","nyxid_status","nyxid_services","n
 const state = {
   signedIn:false,
   theme: localStorage.getItem("voice-theme") || null,
-  view:"agents",
+  view:"test",
   scopeId:null, scopeResolved:false, scopeSource:null,
   // advanced "enable on a specific actor" action (the one real voice write):
   enableOpen:false,
@@ -518,7 +508,7 @@ const ICON={
   cast:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8V6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-6"/><path d="M3 16a4 4 0 0 1 4 4M3 12a8 8 0 0 1 8 8"/><circle cx="3.5" cy="19.5" r="1"/></svg>',
   wave:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 12h0M8 8v8M12 5v14M16 8v8M20 12h0"/></svg>'
 };
-function navIcon(id){ return ({agents:ICON.agent,tools:ICON.tools,channels:ICON.channels,outputs:ICON.display,sessions:ICON.sessions,test:ICON.test,settings:ICON.settings})[id]; }
+function navIcon(id){ return ({agents:ICON.agent,tools:ICON.tools,test:ICON.mic,settings:ICON.settings})[id]; }
 
 /* ===========================================================================
    Shared suite navigation — the five console pages move as one.
@@ -574,8 +564,8 @@ function renderLogin(){
   const card = el("section", { class:"login-card", role:"region", "aria-label":"登录" });
   card.innerHTML =
     '<div class="login-mark" aria-hidden="true">'+ICON.mic+'</div>'+
-    '<h1>登录以进入语音在场</h1>'+
-    '<p>配置默认语音 agent、查看接入与显示能力 —— 登录后即可使用。</p>';
+    '<h1>语音在场</h1>'+
+    '<p>登录后即可和你的默认语音 agent 对话。</p>';
   const btn = el("button", { class:"btn-primary", id:"signinBtn" }, "使用 nyxid 登录");
   btn.addEventListener("click", () => { beginLogin(); });
   card.appendChild(btn);
@@ -588,8 +578,7 @@ function renderLogin(){
    Shared view bits
    =========================================================================== */
 const NAV=[
-  ["agents","Agents"],["tools","Tools & Connectors"],["channels","Channels"],
-  ["outputs","Display Outputs"],["sessions","Live Sessions"],["test","Test"],["settings","Settings"]
+  ["test","Talk"],["agents","Default agent"],["tools","Tools"],["settings","Settings"]
 ];
 function renderSideNav(){
   const nav=el("nav",{class:"nav scroll","aria-label":"语音控制台导航"});
@@ -635,53 +624,30 @@ function banner(kind,icon,title,body,actions){ const b=el("div",{class:"banner "
 function renderAgents(){
   const v=el("div",{class:"view"});
   v.appendChild(pageHead(
-    '默认语音 Agent <span class="badge b-ready" style="font-size:11px"><span class="dot s-ready"></span>零配置可用</span>',
-    '终端打开 <code class="inline">/ws/voice</code> 即由本服务<b>自动开通一个默认语音 agent</b>（无需 actor id）：'+
-      '可插拔的实时 provider 作大脑、persona、VAD、以及来自 NyxID 连接器的工具。这是首要、零配置的接入方式。'));
-
-  v.appendChild(banner("info",ICON.info,
-    "这是零配置的主路径",
-    '默认 agent 在首次 <code class="inline">/ws/voice</code> 连接时自动开通（运行时观测：'+
-    '<span class="mono">actor=nyxid-chat-&lt;caller&gt;</span> · <span class="mono">module='+esc(DEFAULT_MODULE)+'</span>）。'+
-    '无需先「在某个 actor 上启用」——那只是下方的进阶动作。'));
+    '默认语音 Agent <span class="badge b-ready" style="font-size:11px"><span class="dot s-ready"></span>零配置</span>',
+    '首次连接 <code class="inline">/ws/voice</code> 时自动开通，无需配置。以下为运行时默认值（只读）。'));
 
   const grid=el("div",{class:"grid-2"});
 
   /* provider + model (real default: openai-realtime via module voice_presence_openai) */
   const pm=el("div",{});
   pm.innerHTML=
-    '<div class="field"><label>实时 provider / module（可插拔大脑）</label>'+
+    '<div class="field"><label>provider / module</label>'+
       '<input class="input" value="'+esc(DEFAULT_MODULE)+'（OpenAI Realtime）" disabled aria-label="provider module" />'+
-      '<div class="help">默认 agent 的大脑是可插拔 realtime provider；当前部署默认 <span class="mono">'+esc(DEFAULT_MODULE)+'</span>。'+
-        '凭据为<b>每会话经 NyxID slug <span class="mono">openai-realtime</span> mint 的 ephemeral</b>，aevatar 不持有长期密钥。'+
-        '本页只读：aevatar 暂无「默认 agent 配置」写入端点。</div></div>'+
+      '<div class="help">凭据为每会话经 NyxID slug <span class="mono">openai-realtime</span> mint 的 ephemeral。</div></div>'+
     '<div class="field"><label>model</label>'+
       '<input class="input" value="由 provider 决定（如 gpt-realtime）" disabled aria-label="model" /></div>';
-  grid.appendChild(panel(ICON.agent,"Provider & Model","绑定实时语音后端",badge("ok","可达"),pm));
+  grid.appendChild(panel(ICON.agent,"Provider & Model",null,badge("ok","可达"),pm));
 
   /* persona (read-only; no config write endpoint) */
   const persona=el("div",{});
-  const voiceRow=el("div",{class:"field"});
-  voiceRow.innerHTML='<label>voice 音色</label>';
-  const vline=el("div",{style:"display:flex;gap:10px"});
-  const vin=el("input",{class:"input",value:"由 provider/部署默认决定",disabled:"","aria-label":"voice",style:"flex:1"});
-  vline.appendChild(vin); vline.appendChild(btn("试听","ghost",ICON.speaker,null,{disabled:true}));
-  voiceRow.appendChild(vline);
-  persona.appendChild(voiceRow);
-  const instr=el("div",{class:"field"});
-  instr.innerHTML='<label>系统指令 instructions</label>'+
-    '<textarea class="textarea" aria-label="instructions" disabled>由部署的 persona 决定（VoiceSessionConfig 的一部分）。aevatar 暂无配置写入端点，故此处只读。</textarea>'+
-    '<div class="help">决定 agent 的角色与口吻。要修改默认 persona，需在 host 侧 provider 配置中调整。</div>';
-  persona.appendChild(instr);
-  grid.appendChild(panel(ICON.speaker,"Persona","音色 + 系统指令",badge("muted","只读"),persona));
+  persona.innerHTML=
+    '<div class="field"><label>voice 音色</label>'+
+      '<input class="input" value="由部署默认决定" disabled aria-label="voice" /></div>'+
+    '<div class="field"><label>系统指令 instructions</label>'+
+      '<input class="input" value="由部署的 persona 决定" disabled aria-label="instructions" /></div>';
+  grid.appendChild(panel(ICON.speaker,"Persona",null,badge("muted","只读"),persona));
   v.appendChild(grid);
-
-  /* VAD (read-only; provider-managed) */
-  const vad=el("div",{});
-  vad.appendChild(banner("info",ICON.info,"VAD / 打断由 provider 管理",
-    '语音活动检测与 barge-in（打断）在实时 provider 侧处理。aevatar 当前不暴露默认 agent 的 VAD 配置读/写端点，'+
-    '故此处不提供可编辑控件，也不展示虚构数值。'));
-  v.appendChild(panel(ICON.test,"VAD / 打断","语音活动检测与 barge-in 参数",badge("muted","provider 托管"),vad));
 
   /* advanced: enable on a specific actor (the one real voice write) */
   v.appendChild(renderEnableAdvanced());
@@ -691,19 +657,18 @@ function renderAgents(){
 /* ---- Advanced: enable voice presence on a SPECIFIC actor (real POST) ----- */
 function renderEnableAdvanced(){
   const body=el("div",{});
-  body.appendChild(el("p",{class:"card-desc",style:"font-size:12.5px;color:var(--muted);line-height:1.6;margin:0 0 12px"},
-    '进阶 · 可选。把语音在场模块附加到<b>某个已存在的 GAgent actor</b> 上（而非零配置默认 agent）。'+
-    '命令异步受理（202 accepted）；语音会话状态在 capability read model 物化后可见。'));
 
   if(!state.enableOpen){
+    body.appendChild(el("p",{style:"font-size:12.5px;color:var(--muted);margin:0 0 12px"},
+      '可选 · 把语音模块附加到某个已存在的 GAgent actor 上（默认 agent 无需此步）。'));
     body.appendChild(btn("在指定 actor 上启用…","ghost",ICON.add,()=>{ state.enableOpen=true; render(); }));
-    return panel(ICON.agent,"在指定 Actor 上启用语音（进阶）","非零配置默认流程；很少需要",badge("muted","可选"),body);
+    return panel(ICON.agent,"在指定 Actor 上启用（进阶）",null,badge("muted","可选"),body);
   }
 
   body.appendChild(el("div",{class:"field"},'<label>Scope ID<span style="color:var(--err);margin-left:3px">*</span></label><input id="vfScope" class="input" autocomplete="off" spellcheck="false" placeholder="scope_…" value="'+esc(state.form.scopeId)+'" />'));
   body.appendChild(el("div",{class:"field"},'<label>Actor ID<span style="color:var(--err);margin-left:3px">*</span></label><input id="vfActor" class="input" autocomplete="off" spellcheck="false" placeholder="GAgent actor id" value="'+esc(state.form.actorId)+'" />'));
-  body.appendChild(el("div",{class:"field"},'<label>Agent kind<span style="color:var(--err);margin-left:3px">*</span></label><input id="vfKind" class="input" autocomplete="off" spellcheck="false" placeholder="例如 role / workflow" value="'+esc(state.form.agentKind)+'" /><div class="help">未知 agentKind 会被后端拒绝（400 invalid_input）。</div>'));
-  body.appendChild(el("div",{class:"field"},'<label>Module name<span style="color:var(--err);margin-left:3px">*</span></label><input id="vfModule" class="input" autocomplete="off" spellcheck="false" placeholder="语音在场模块名" value="'+esc(state.form.moduleName)+'" /><div class="help">由部署的语音 provider 决定（默认 <span class="mono">'+esc(DEFAULT_MODULE)+'</span>）；未配置 provider 时返回 503 voice_not_configured，未注册模块返回 404 unknown_module。</div>'));
+  body.appendChild(el("div",{class:"field"},'<label>Agent kind<span style="color:var(--err);margin-left:3px">*</span></label><input id="vfKind" class="input" autocomplete="off" spellcheck="false" placeholder="例如 role / workflow" value="'+esc(state.form.agentKind)+'" /></div>'));
+  body.appendChild(el("div",{class:"field"},'<label>Module name<span style="color:var(--err);margin-left:3px">*</span></label><input id="vfModule" class="input" autocomplete="off" spellcheck="false" placeholder="语音在场模块名" value="'+esc(state.form.moduleName)+'" /></div>'));
 
   const actions=el("div",{class:"ph-actions",style:"margin-top:4px"});
   const submit = el("button", { class:"btn btn-primary", id:"vEnableBtn", type:"button" });
@@ -723,7 +688,7 @@ function renderEnableAdvanced(){
   if(state.result) res.appendChild(renderResult(state.result));
   body.appendChild(res);
 
-  return panel(ICON.agent,"在指定 Actor 上启用语音（进阶）","非零配置默认流程；很少需要",badge("ok","实时可用"),body);
+  return panel(ICON.agent,"在指定 Actor 上启用（进阶）",null,badge("ok","可用"),body);
 }
 function renderResult(r){
   const box = el("div", { class:"result "+(r.ok?"ok":"err"), role:"status", "aria-live":"polite" });
@@ -778,13 +743,8 @@ function mapEnableError(status, body){
    =========================================================================== */
 function renderTools(){
   const v=el("div",{class:"view"});
-  v.appendChild(pageHead("Tools & Connectors",
-    '默认语音 agent 的能力来自 <b>NyxID 下游连接器/服务</b>（与「接入通道 Channels」是两回事）。'+
-    '下面是当前部署的<b>默认会话工具 allowlist</b>（来自 <code class="inline">VOICE_TOOL_ALLOWLIST</code>，否则取内置默认）。'));
-
-  v.appendChild(banner("info",ICON.info,"工具来源 = NyxID 下游服务",
-    'aevatar 暂不向本页暴露「连接器列举 / allowlist 写入」端点：allowlist 由 host 环境变量 '+
-    '<code class="inline">VOICE_TOOL_ALLOWLIST</code> 决定，因此这里<b>只读</b>展示真实默认，不提供添加/勾选操作，也不编造连接器清单。'));
+  v.appendChild(pageHead("Tools",
+    'agent 能调用的工具，来自你的 NyxID 连接器。默认 allowlist（<code class="inline">VOICE_TOOL_ALLOWLIST</code>，只读）：'));
 
   const grp=el("div",{class:"tool-grp"});
   const h=el("div",{class:"tool-grp-h"});
@@ -804,92 +764,189 @@ function renderTools(){
 }
 
 /* ===========================================================================
-   View: Channels / Transports — WS real (described); WHIP = sub-project ②
+   Voice client engine — a real in-browser /ws/voice client.
+
+   Wire format mirrors voice-presence AevatarVoiceClient.cs exactly:
+     connect:  wss://<same-origin>/ws/voice?codec=pcm16&mode=half_duplex&access_token=<NyxID JWT>
+     up   (client→server):  BINARY = PCM16 mono 24kHz mic frames
+                            TEXT   = {"drainAcknowledged":{"responseId":N,"playoutSequence":M}}
+     down (server→client):  TEXT   = {"sessionAccepted":{...}} (first), {"realtimeFrame":{...}} (events)
+                            BINARY = PCM16 mono 24kHz response audio
+   Half-duplex: mic is gated (muted) while the AI is responding.
+   Audio path is fixed at 24kHz (server pcmSampleRateHz); a mismatch is surfaced, not resampled.
    =========================================================================== */
-function renderChannels(){
-  const v=el("div",{class:"view"});
-  v.appendChild(pageHead("Channels / Transports",
-    '终端如何接入默认语音 agent。WebSocket（<code class="inline">/ws/voice</code>）始终可用；'+
-    'WHIP/WebRTC 浏览器直推属于语音服务分解的子项目 ②，后端就绪后接入。'));
+const PCM_RATE = 24000;
+const voice = {
+  ws:null, status:"idle",            // idle|connecting|listening|speaking|error|ended
+  detail:"", transcript:"",
+  micCtx:null, micStream:null, micNode:null, micSource:null, micGate:true,
+  playCtx:null, playHead:0, responseId:0, playoutSeq:0,
+  sessionId:"", actorId:"", moduleName:""
+};
 
-  /* WS — real endpoint + contract; no live-client list GET, so we describe, not fabricate. */
-  const wsBody=el("div",{});
-  wsBody.appendChild(copyRow("WS 接入地址", location.origin.replace(/^http/,"ws") + "/ws/voice?codec=pcm16&mode=half_duplex"));
-  wsBody.appendChild(copyRow("鉴权", "Authorization: Bearer <NyxID token>（ChatRoutePolicy 解析路由）"));
-  wsBody.appendChild(copyRow("可选 · 指定模块", "?voice_module_name=" + DEFAULT_MODULE));
-  const contract=el("div",{class:"contract",style:"margin-top:14px"});
-  contract.innerHTML=
-    '<div class="row"><span class="lbl">下行 (server→client)</span><span class="val">VoiceControlFrame：sessionAccepted / realtimeFrame（PCM16）</span></div>'+
-    '<div class="row"><span class="lbl">上行 (client→server)</span><span class="val">VoiceControlFrame：drainAcknowledged / inputImage</span></div>'+
-    '<div class="row"><span class="lbl">音频编码</span><span class="val">PCM16</span></div>'+
-    '<div class="row"><span class="lbl">会话自动开通</span><span class="val">无需 actor id · 自动开通默认 agent（'+esc(DEFAULT_MODULE)+'）</span></div>';
-  wsBody.appendChild(contract);
-  const wsWarn=banner("warn",ICON.alert,"未配置 provider 时 fail-closed",
-    '未配置语音 provider 时，<code class="inline">/ws/voice</code> 以 <code class="inline">503 voice_not_configured</code> 拒绝连接。');
-  wsWarn.style.marginTop="16px"; wsWarn.style.marginBottom="0";
-  wsBody.appendChild(wsWarn);
-  v.appendChild(panel(ICON.channels,"WebSocket","双向消息 + 音频帧",badge("active","可用"),wsBody));
+function vStatus(s, detail){ voice.status=s; if(detail!=null) voice.detail=detail; if(state.view==="test") render(); }
 
-  /* WHIP — honest disabled stub (sub-project ②) */
-  const whipBody=el("div",{});
-  whipBody.appendChild(emptyState(ICON.cast,"WHIP / WebRTC 入站 — 待后端 ②",
-    "浏览器直推音视频（WHIP/WebRTC 入站）属于「通用语音服务」分解中的子项目 ②。后端就绪并暴露入站端点后本卡片接入；当前不提供可点操作，也不展示虚构地址。"));
-  v.appendChild(panel(ICON.channels,"WHIP / WebRTC","低延迟实时音频",badge("warn","待后端 ②"),whipBody,{stub:true,muted:true}));
-  return v;
+function floatTo16(float32){
+  const out=new Int16Array(float32.length);
+  for(let i=0;i<float32.length;i++){ let s=Math.max(-1,Math.min(1,float32[i])); out[i]=s<0?s*0x8000:s*0x7fff; }
+  return out;
+}
+
+async function startVoice(){
+  if(voice.ws) return;
+  const token=getToken(); if(!token){ signOutSilent(); return; }
+  voice.transcript=""; voice.responseId=0; voice.playoutSeq=0;
+  vStatus("connecting","正在请求麦克风…");
+
+  // 1) mic capture → PCM16 24k. Force a 24k AudioContext so no resampling is needed.
+  try {
+    voice.micStream = await navigator.mediaDevices.getUserMedia({ audio:{ channelCount:1, echoCancellation:true, noiseSuppression:true, autoGainControl:true } });
+  } catch(e){ vStatus("error","麦克风权限被拒绝或不可用"); return; }
+  try { voice.micCtx = new (window.AudioContext||window.webkitAudioContext)({ sampleRate:PCM_RATE }); }
+  catch(e){ voice.micCtx = new (window.AudioContext||window.webkitAudioContext)(); }
+  voice.playCtx = new (window.AudioContext||window.webkitAudioContext)({ sampleRate:PCM_RATE });
+  voice.playHead = voice.playCtx.currentTime;
+
+  // 2) open WS — token on the access_token query param (validated equivalent to the bearer header).
+  vStatus("connecting","正在连接 /ws/voice…");
+  const url = location.origin.replace(/^http/,"ws") + "/ws/voice?codec=pcm16&mode=half_duplex&access_token=" + encodeURIComponent(token.access_token);
+  let ws; try { ws = new WebSocket(url); } catch(e){ vStatus("error","无法建立 WebSocket：" + (e&&e.message||e)); stopVoice(true); return; }
+  ws.binaryType = "arraybuffer";
+  voice.ws = ws;
+
+  ws.onopen = () => { /* wait for sessionAccepted before streaming mic */ };
+  ws.onmessage = (ev) => {
+    if(ev.data instanceof ArrayBuffer){ playPcm(ev.data); return; }
+    let f; try { f = JSON.parse(ev.data); } catch { return; }
+    if(f.sessionAccepted){ onSessionAccepted(f.sessionAccepted); return; }
+    if(f.realtimeFrame){ onRealtimeFrame(f.realtimeFrame); return; }
+  };
+  ws.onerror = () => { if(voice.status!=="ended") vStatus("error","连接出错（服务器拒绝或网络问题）"); };
+  ws.onclose = (ev) => {
+    const why = ev.reason || (ev.code===1006?"连接异常中断":("code "+ev.code));
+    if(voice.status!=="ended" && voice.status!=="error") vStatus("ended","会话已结束 · " + why);
+    teardownAudio();
+    voice.ws=null;
+  };
+}
+
+function onSessionAccepted(s){
+  voice.sessionId=s.sessionId||""; voice.actorId=s.actorId||""; voice.moduleName=s.moduleName||"";
+  const rate = s.pcmSampleRateHz||PCM_RATE;
+  if(rate && rate!==PCM_RATE){ vStatus("listening","已连接 · 注意：会话采样率 "+rate+"Hz≠"+PCM_RATE+"Hz，音频可能失真"); }
+  else { vStatus("listening","已连接 · 请开始说话"); }
+  beginMicStreaming();
+}
+
+function beginMicStreaming(){
+  if(!voice.ws || !voice.micCtx || !voice.micStream) return;
+  voice.micSource = voice.micCtx.createMediaStreamSource(voice.micStream);
+  // ScriptProcessor is deprecated but universally available and adequate for a test client; 4096 frames ~170ms @24k.
+  voice.micNode = voice.micCtx.createScriptProcessor(4096, 1, 1);
+  voice.micNode.onaudioprocess = (e) => {
+    if(!voice.ws || voice.ws.readyState!==1) return;
+    if(voice.micGate===false) return; // half-duplex: gated while AI speaks
+    const pcm = floatTo16(e.inputBuffer.getChannelData(0));
+    try { voice.ws.send(pcm.buffer); } catch {}
+  };
+  voice.micSource.connect(voice.micNode);
+  voice.micNode.connect(voice.micCtx.destination); // keep node alive (output is silence)
+  if(voice.micCtx.state==="suspended") voice.micCtx.resume();
+  voice.micGate = true;
+}
+
+function onRealtimeFrame(rf){
+  if(rf.responseStarted){ voice.responseId = rf.responseStarted.responseId||0; voice.playoutSeq=0; voice.micGate=false; vStatus("speaking","AI 正在回应…"); }
+  else if(rf.responseDone || rf.responseCancelled){ voice.micGate=true; voice.responseId=0; vStatus("listening","请继续说话"); }
+  else if(rf.speechStarted){ if(voice.status!=="speaking") vStatus("listening","检测到你在说话…"); }
+  else if(rf.speechStopped){ /* server VAD end-of-turn; await response */ }
+  else if(rf.transcriptCompleted && rf.transcriptCompleted.text){ voice.transcript = rf.transcriptCompleted.text; if(state.view==="test") render(); }
+  else if(rf.error){ vStatus("error", "provider 错误：" + (rf.error.errorMessage||rf.error.errorCode||"unknown")); }
+  else if(rf.disconnected){ vStatus("error", "provider 断开：" + (rf.disconnected.reason||"")); }
+  else if(rf.sessionClosed){ vStatus("ended", "会话已关闭：" + (rf.sessionClosed.reason||"")); }
+}
+
+function playPcm(arrayBuf){
+  if(!voice.playCtx) return;
+  const pcm = new Int16Array(arrayBuf);
+  if(pcm.length===0) return;
+  const f32 = new Float32Array(pcm.length);
+  for(let i=0;i<pcm.length;i++) f32[i]=pcm[i]/0x8000;
+  const buf = voice.playCtx.createBuffer(1, f32.length, PCM_RATE);
+  buf.copyToChannel(f32, 0);
+  const src = voice.playCtx.createBufferSource();
+  src.buffer = buf; src.connect(voice.playCtx.destination);
+  const now = voice.playCtx.currentTime;
+  if(voice.playHead < now) voice.playHead = now;
+  src.start(voice.playHead);
+  voice.playHead += buf.duration;
+  // drain ack — tells the actor how much audio we've queued for playout (mirrors AevatarVoiceClient).
+  voice.playoutSeq += pcm.length;
+  if(voice.responseId>0 && voice.ws && voice.ws.readyState===1){
+    try { voice.ws.send(JSON.stringify({ drainAcknowledged:{ responseId:voice.responseId, playoutSequence:voice.playoutSeq } })); } catch {}
+  }
+}
+
+function teardownAudio(){
+  try { voice.micNode && (voice.micNode.onaudioprocess=null, voice.micNode.disconnect()); } catch {}
+  try { voice.micSource && voice.micSource.disconnect(); } catch {}
+  try { voice.micStream && voice.micStream.getTracks().forEach(t=>t.stop()); } catch {}
+  try { voice.micCtx && voice.micCtx.state!=="closed" && voice.micCtx.close(); } catch {}
+  try { voice.playCtx && voice.playCtx.state!=="closed" && voice.playCtx.close(); } catch {}
+  voice.micNode=voice.micSource=voice.micStream=voice.micCtx=voice.playCtx=null;
+}
+
+function stopVoice(silent){
+  if(voice.ws){ try { voice.ws.close(1000,"client ended"); } catch {} }
+  voice.ws=null;
+  teardownAudio();
+  if(!silent) vStatus("ended","会话已结束");
 }
 
 /* ===========================================================================
-   View: Display Outputs — vp-control side-channel = sub-project ③ (stub)
-   =========================================================================== */
-function renderOutputs(){
-  const v=el("div",{class:"view"});
-  v.appendChild(pageHead("Display Outputs / Sinks",
-    'agent 通过显示侧信道（<code class="inline">vp-control</code>）把 <span class="mono">show_text</span> / '+
-    '<span class="mono">show_image</span> 等视觉内容推到 sink。该能力属于语音服务分解的子项目 ③。'));
-  const body=el("div",{});
-  body.appendChild(emptyState(ICON.cast,"显示侧信道 (vp-control) — 待后端 ③",
-    "显示侧信道与 sink 路由（show_text / show_image → 浏览器 / 设备 / 连接器通知）属于子项目 ③。后端暴露读取/控制端点后本视图接入；当前不展示任何 sink 或路由规则的虚构数据。"));
-  v.appendChild(panel(ICON.display,"Sinks & 路由","显示输出目标与 show_* 去向",badge("warn","待后端 ③"),body,{stub:true,muted:true}));
-  return v;
-}
-
-/* ===========================================================================
-   View: Live Sessions — no list-sessions read surface → honest empty state
-   =========================================================================== */
-function renderSessions(){
-  const v=el("div",{class:"view"});
-  v.appendChild(pageHead("Live Sessions",
-    '实时观测每个接入会话：双轨转写、说话/打断/思考状态、工具调用、延迟与租约。'));
-  v.appendChild(emptyState(ICON.sessions,"暂无会话观测端点",
-    "语音运行态属于会话本身，aevatar 当前没有「列举/读取实时会话」的端点，因此这里不展示会话列表（不编造数据）。"+
-    "该读取面在语音服务分解的后端就绪后接入；要发起一次真实会话，可经 /ws/voice 接入终端。"));
-  return v;
-}
-
-/* ===========================================================================
-   View: Test — keep the connect affordance pointing at the real /ws/voice,
-   but no fabricated live observation panel (no session read surface).
+   View: Talk — the real in-browser voice client over /ws/voice.
    =========================================================================== */
 function renderTest(){
   const v=el("div",{class:"view"});
-  v.appendChild(pageHead("内置测试台 Test",
-    '本服务无服务端会话读取面，因此页面内不内嵌「实时观测」面板（不编造）。'+
-    '要联调默认语音 agent，用 WHIP/WS 测试客户端连到 <code class="inline">/ws/voice</code>。'));
+  v.appendChild(pageHead('和默认 Agent 对话 <span class="badge b-ready" style="font-size:11px"><span class="dot s-ready"></span>实时</span>',
+    '点麦克风即开始：浏览器麦克风经 <code class="inline">/ws/voice</code> 实时送达你的默认语音 agent，回应直接在此播放。'));
+
   const stage=el("section",{class:"panel"});
   const body=el("div",{class:"panel-body"});
-  body.appendChild(banner("info",ICON.info,"如何联调",
-    '默认 agent 零配置可用：浏览器/设备携带 NyxID bearer 打开 '+
-    '<code class="inline">/ws/voice?codec=pcm16&amp;mode=half_duplex</code> 即开始一次实时语音会话。'+
-    '（参考 voice-presence 的 <span class="mono">/test.html</span> / <span class="mono">/unified-test.html</span> WHIP 测试页。）'));
   const tstage=el("div",{class:"test-stage"});
-  const mb=el("div",{class:"mic-btn","aria-hidden":"true"},ICON.mic.replace('width="16" height="16"','width="34" height="34"'));
+
+  const live = (voice.status==="connecting"||voice.status==="listening"||voice.status==="speaking");
+  const mb=el("button",{class:"mic-btn","aria-label":live?"结束会话":"开始对话"});
+  mb.innerHTML = live
+    ? '<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>'
+    : ICON.mic.replace('width="16" height="16"','width="34" height="34"').replace(/currentColor/g,'#fff');
+  if(voice.status==="speaking") mb.style.background="linear-gradient(150deg,var(--accent),color-mix(in oklab,var(--accent) 40%,#7c4dff))";
+  mb.addEventListener("click",()=>{ live ? stopVoice() : startVoice(); });
   tstage.appendChild(mb);
-  tstage.appendChild(el("div",{style:"margin-top:16px;color:var(--muted);font-size:13px;text-align:center;max-width:420px"},
-    "页面内连麦测试需要会话观测端点（暂无）。当前请用外部 WHIP/WS 测试客户端联调；连上后会话即由默认 agent 处理。"));
+
+  const statusMap={
+    idle:["idle","未连接"], connecting:["pending","连接中"], listening:["listening","聆听中"],
+    speaking:["speaking","AI 回应中"], error:["err","出错"], ended:["idle","已结束"]
+  };
+  const st=statusMap[voice.status]||statusMap.idle;
+  tstage.appendChild(el("div",{style:"margin-top:18px"}, badge(st[0],st[1])));
+  if(voice.detail) tstage.appendChild(el("div",{style:"margin-top:8px;color:var(--muted);font-size:12.5px;text-align:center;max-width:460px"}, esc(voice.detail)));
+  if(voice.sessionId && live) tstage.appendChild(el("div",{class:"mono",style:"margin-top:6px;color:var(--muted-2);font-size:11px"}, "session "+esc(voice.sessionId.slice(0,18))+" · "+esc(voice.moduleName||DEFAULT_MODULE)));
+
+  if(voice.transcript){
+    const t=el("div",{style:"margin-top:18px;max-width:520px;width:100%;background:var(--panel-2);border:1px solid var(--border);border-radius:var(--r);padding:12px 14px"});
+    t.innerHTML='<div style="font-size:11px;color:var(--muted-2);margin-bottom:4px">最近转写</div><div style="font-size:13.5px;color:var(--fg);line-height:1.55">'+esc(voice.transcript)+'</div>';
+    tstage.appendChild(t);
+  }
   body.appendChild(tstage);
-  body.appendChild(el("div",{style:"text-align:center;margin-top:6px"},btn("查看 WS 接入地址","ghost",ICON.link,()=>{ state.view="channels"; render(); }).outerHTML));
   stage.appendChild(body);
   v.appendChild(stage);
+
+  if(voice.status==="error"){
+    v.appendChild(banner("warn",ICON.alert,"连不上？",
+      '<code class="inline">/ws/voice</code> 在未配置 provider 时返回 503，会话内部异常返回 5xx。'+
+      '确认本部署已配置语音 provider、且你的 NyxID 拥有 <span class="mono">openai-realtime</span> 服务后重试。'));
+  }
   return v;
 }
 
@@ -898,8 +955,7 @@ function renderTest(){
    =========================================================================== */
 function renderSettings(){
   const v=el("div",{class:"view"});
-  v.appendChild(pageHead("Settings",
-    'provider 凭据来源、以及把本语音服务发布给他人调用（受平台门控）。'));
+  v.appendChild(pageHead("Settings", 'provider 凭据来源。'));
 
   /* credentials — describe the real per-session ephemeral chain; no secret UI. */
   const cred=el("div",{});
@@ -908,20 +964,12 @@ function renderSettings(){
     '<div class="row"><span class="lbl">默认 provider</span><span class="val">'+esc(DEFAULT_MODULE)+'（OpenAI Realtime）</span></div>'+
     '<div class="row"><span class="lbl">凭据模型</span><span class="val">每会话 NyxID ephemeral（slug <span class="mono">openai-realtime</span>）</span></div>'+
     '<div class="row"><span class="lbl">长期密钥</span><span class="val">仅存于 NyxID；aevatar 不持有</span></div>'+
-    '</div>'+
-    '<div class="banner info" style="margin-top:14px;margin-bottom:0">'+ICON.info+'<div><div class="bt">凭据在 NyxID 侧管理</div>'+
-      '<div class="bb">语音会话的 provider 凭据由调用者的 NyxID 身份所拥有的服务（slug <span class="mono">openai-realtime</span>，端点为 OpenAI 裸主机）提供。'+
-      'aevatar 不存储 provider 密钥，故此处无凭据输入项。</div></div></div>';
-  v.appendChild(panel(ICON.settings,"Provider 凭据","每会话 NyxID ephemeral 据此 mint",badge("ok","NyxID 托管"),cred));
+    '</div>';
+  v.appendChild(panel(ICON.settings,"Provider 凭据",null,badge("ok","NyxID 托管"),cred));
 
-  /* host-gated publish (honest disabled) */
-  const pub=el("div",{});
-  pub.appendChild(banner("warn",ICON.lock,"发布 / 暴露受平台门控（host-gated）",
-    '把本语音服务注册为 NyxID 连接器供他人调用，需要平台开启权限 —— operator 不能自助开启。'));
-  const card=el("div",{style:"opacity:.7;border:1px dashed var(--border);border-radius:var(--r);padding:16px"});
-  card.innerHTML='<div class="togline"><div><div class="tl-t">注册为 NyxID 连接器（对外可调用）</div><div class="tl-s">暴露后其他 scope 可经 NyxID 调用本语音服务</div></div><div class="spacer"></div><span class="gated"><span class="lock">'+ICON.lock+' host-gated</span></span></div>';
-  pub.appendChild(card);
-  v.appendChild(panel(ICON.lock,"发布 / 暴露","让本服务可被他人调用",badge("muted","受限"),pub,{stub:true,muted:true}));
+  /* publishing this voice service is host-gated — a single tiny disabled chip, no banner. */
+  v.appendChild(el("div",{style:"margin-top:14px;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)"},
+    '发布为 NyxID 连接器（对外可调用）<span class="lock">'+ICON.lock+' host-gated</span>'));
   return v;
 }
 
@@ -935,7 +983,7 @@ function render(){
   const shell=el("div",{class:"shell"});
   shell.appendChild(renderSideNav());
   const main=el("div",{class:"main scroll"});
-  const r={ agents:renderAgents, tools:renderTools, channels:renderChannels, outputs:renderOutputs, sessions:renderSessions, test:renderTest, settings:renderSettings }[state.view] || renderAgents;
+  const r={ test:renderTest, agents:renderAgents, tools:renderTools, settings:renderSettings }[state.view] || renderTest;
   main.appendChild(r());
   shell.appendChild(main);
   app.appendChild(shell);
