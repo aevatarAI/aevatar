@@ -367,9 +367,11 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         CancellationToken ct)
     {
         var workflowBundle = await ParseWorkflowBundleAsync(request.Workflow?.WorkflowYamls, ct);
-        var workflowId = ScopeWorkflowCapabilityConventions.NormalizeOptional(request.Workflow?.WorkflowId) ??
-                         ScopeWorkflowCapabilityOptions.NormalizeRequired(identity.ServiceId, nameof(identity.ServiceId));
-        var definitionActorIdPrefix = ScopeWorkflowCapabilityConventions.BuildDefaultDefinitionActorIdPrefix(_options, normalizedScopeId);
+        var workflowId = ResolveWorkflowBindingWorkflowId(request, identity);
+        var definitionActorIdPrefix = ScopeWorkflowCapabilityConventions.BuildDefinitionActorIdPrefix(
+            _options,
+            normalizedScopeId,
+            workflowId);
         var displayName = ScopeWorkflowCapabilityConventions.ResolveDisplayName(
             request.DisplayName,
             workflowBundle.EntryWorkflowName);
@@ -541,6 +543,16 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                     GAgent: new ScopeBindingGAgentResult(
                         diagnosticClrTypeName),
                     ExpectedDeploymentId: expectedDeploymentId));
+    }
+
+    private static string ResolveWorkflowBindingWorkflowId(
+        ScopeBindingUpsertRequest request,
+        ServiceIdentity identity)
+    {
+        var workflowId = ScopeWorkflowCapabilityConventions.NormalizeOptional(request.Workflow?.WorkflowId);
+        return string.IsNullOrWhiteSpace(workflowId)
+            ? ScopeWorkflowCapabilityOptions.NormalizeRequired(identity.ServiceId, nameof(identity.ServiceId))
+            : ScopeWorkflowCapabilityConventions.NormalizeWorkflowId(workflowId);
     }
 
     private string NormalizeGAgentKind(ScopeBindingGAgentSpec gagent)

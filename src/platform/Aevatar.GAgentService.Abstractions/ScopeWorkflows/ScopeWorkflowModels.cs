@@ -11,6 +11,17 @@ public sealed record ScopeWorkflowUpsertRequest(
     IReadOnlyDictionary<string, string>? InlineWorkflowYamls = null,
     string? RevisionId = null);
 
+public sealed record ScopeWorkflowSaveAndBindRequest(
+    string ScopeId,
+    string? WorkflowId,
+    string WorkflowYaml,
+    string? WorkflowName = null,
+    string? DisplayName = null,
+    IReadOnlyDictionary<string, string>? InlineWorkflowYamls = null,
+    string? AppId = null,
+    string? ServiceId = null,
+    bool? ExposureDesired = null);
+
 public enum ScopeWorkflowLookupStatus
 {
     NotFound = 0,
@@ -77,3 +88,12 @@ public sealed record ScopeWorkflowUpsertResult(
     string PropagationStage = "readmodel_propagating",
     string DisplayName = "",
     string WorkflowName = "");
+
+public sealed record ScopeWorkflowSaveAndBindResult(
+    string ScopeId,
+    string WorkflowId,
+    string RevisionId,
+    ScopeWorkflowUpsertResult Workflow,
+    ScopeBindingUpsertResult Binding,
+    string AcceptanceStage = "accepted",
+    string PropagationStage = "readmodel_propagating");

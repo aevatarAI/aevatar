@@ -66,9 +66,16 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         result.AcceptanceStage.Should().Be("accepted");
         result.PropagationStage.Should().Be("readmodel_propagating");
         result.Workflow.Should().NotBeNull();
+        var expectedDefinitionActorIdPrefix = DefaultOptions.BuildDefinitionActorIdPrefix(ScopeId, "workflow-stable-id");
         result.Workflow!.WorkflowId.Should().Be("workflow-stable-id");
         result.Workflow!.WorkflowName.Should().Be("main_runtime");
+        result.Workflow.DefinitionActorIdPrefix.Should().Be(expectedDefinitionActorIdPrefix);
+        result.ExpectedActorId.Should().StartWith($"{expectedDefinitionActorIdPrefix}:");
         result.DisplayName.Should().Be("main_runtime");
+
+        var revisionCommand = commandPort.Calls[1].Command.Should().BeOfType<CreateServiceRevisionCommand>().Subject;
+        revisionCommand.Spec.WorkflowSpec.Should().NotBeNull();
+        revisionCommand.Spec.WorkflowSpec!.DefinitionActorId.Should().Be(expectedDefinitionActorIdPrefix);
 
         var createCommand = commandPort.Calls[0].Command.Should().BeOfType<CreateServiceDefinitionCommand>().Subject;
         createCommand.Spec.Identity.Should().BeEquivalentTo(new ServiceIdentity

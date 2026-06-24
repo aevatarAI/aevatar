@@ -47,6 +47,46 @@ public sealed class ScopeWorkflowEndpointsTests
     }
 
     [Fact]
+    public async Task HandleSaveAndBindWorkflowAsync_ShouldReturnAccepted_WithoutRequestRevisionId()
+    {
+        var http = CreateHttpContext();
+        var port = new RecordingScopeWorkflowSaveAndBindPort();
+
+        var result = await ScopeWorkflowEndpoints.HandleSaveAndBindWorkflowAsync(
+            http,
+            "user-1",
+            new ScopeWorkflowEndpoints.SaveAndBindScopeWorkflowHttpRequest(
+                "wf-alpha",
+                "name: approval\nsteps: []\n",
+                WorkflowName: "approval",
+                DisplayName: "Approval",
+                InlineWorkflowYamls: new Dictionary<string, string>
+                {
+                    ["child"] = "name: child\nsteps: []\n",
+                },
+                AppId: "studio",
+                ServiceId: "svc-alpha",
+                ExposureDesired: true),
+            port,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        http.Response.Headers.Location.ToString().Should().Be("/api/scopes/user-1/workflows/wf-alpha");
+        port.Request.Should().NotBeNull();
+        port.Request!.ScopeId.Should().Be("user-1");
+        port.Request.WorkflowId.Should().Be("wf-alpha");
+        port.Request.AppId.Should().Be("studio");
+        port.Request.ServiceId.Should().Be("svc-alpha");
+        port.Request.ExposureDesired.Should().BeTrue();
+        body.Should().Contain("\"revisionId\":\"rev-generated\"");
+        body.Should().Contain("\"acceptanceStage\":\"accepted\"");
+        body.Should().Contain("\"propagationStage\":\"readmodel_propagating\"");
+    }
+
+    [Fact]
     public async Task HandleRunWorkflowStreamAsync_ShouldReturnNotFound_WhenActorDoesNotBelongToUser()
     {
         var http = CreateHttpContext();
@@ -1134,6 +1174,43 @@ public sealed class ScopeWorkflowEndpointsTests
                 DateTimeOffset.UtcNow,
                 revisions.Count,
                 string.Empty));
+        }
+    }
+
+    private sealed class RecordingScopeWorkflowSaveAndBindPort : IScopeWorkflowSaveAndBindPort
+    {
+        public ScopeWorkflowSaveAndBindRequest? Request { get; private set; }
+
+        public Task<ScopeWorkflowSaveAndBindResult> SaveAndBindAsync(
+            ScopeWorkflowSaveAndBindRequest request,
+            CancellationToken ct = default)
+        {
+            Request = request;
+            var workflowId = request.WorkflowId ?? "wf-generated";
+            var workflowResult = new ScopeWorkflowUpsertResult(
+                request.ScopeId,
+                workflowId,
+                "scope-service-key",
+                "rev-generated",
+                "definition-prefix",
+                "workflow-actor",
+                "deployment-id",
+                DateTimeOffset.UtcNow,
+                [],
+                $"/api/scopes/{request.ScopeId}/workflows/{workflowId}");
+            var bindingResult = new ScopeBindingUpsertResult(
+                request.ScopeId,
+                request.ServiceId ?? "default",
+                request.DisplayName ?? "main",
+                "rev-generated",
+                ScopeBindingImplementationKind.Workflow,
+                "binding-actor");
+            return Task.FromResult(new ScopeWorkflowSaveAndBindResult(
+                request.ScopeId,
+                workflowId,
+                "rev-generated",
+                workflowResult,
+                bindingResult));
         }
     }
 
