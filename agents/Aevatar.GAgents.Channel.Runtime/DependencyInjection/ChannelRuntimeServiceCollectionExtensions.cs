@@ -40,7 +40,7 @@ public static class ChannelRuntimeServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
 
         // ─── Retired-actor cleanup contribution ───
-        services.AddAevatarAgentKindRegistry(builder => builder.ScanAssemblies(typeof(ChannelRuntimeRetiredActorSpec).Assembly));
+        services.AddAevatarAgentKindRegistry(builder => builder.ScanAssemblies(typeof(ChannelBotRegistrationGAgent).Assembly));
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IRetiredActorSpec, ChannelRuntimeRetiredActorSpec>());
 
@@ -76,7 +76,32 @@ public static class ChannelRuntimeServiceCollectionExtensions
             CommittedStateProjectionActivationHook>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionActivationPlanProvider,
+            ChannelBotRegistrationCommittedStateProjectionActivationPlanProvider>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionActivationPlanProvider,
             ConversationDeliveryCommittedStateProjectionActivationPlanProvider>());
+
+        // ─── Channel Bot Registration projection pipeline ───
+        services.AddProjectionMaterializationRuntimeCore<
+            ChannelBotRegistrationMaterializationContext,
+            ChannelBotRegistrationMaterializationRuntimeLease,
+            ProjectionMaterializationScopeGAgent<ChannelBotRegistrationMaterializationContext>>(
+            static scopeKey => new ChannelBotRegistrationMaterializationContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            static context => new ChannelBotRegistrationMaterializationRuntimeLease(context));
+        services.AddCurrentStateProjectionMaterializer<
+            ChannelBotRegistrationMaterializationContext,
+            ChannelBotRegistrationProjector>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<ChannelBotRegistrationDocument>,
+            ChannelBotRegistrationDocumentMetadataProvider>();
+        services.TryAddSingleton<IChannelBotRegistrationQueryPort, ChannelBotRegistrationQueryPort>();
+        services.TryAddSingleton<IChannelBotRegistrationQueryByNyxIdentityPort, ChannelBotRegistrationQueryPort>();
+        services.TryAddSingleton<IChannelBotRegistrationRuntimeQueryPort, ChannelBotRegistrationRuntimeQueryPort>();
+        services.TryAddSingleton<ChannelBotRegistrationProjectionBootstrapActivator>();
+        services.AddHostedService<ChannelBotRegistrationStartupService>();
 
         // ─── Conversation Delivery projection pipeline ───
         services.AddProjectionMaterializationRuntimeCore<
@@ -106,6 +131,8 @@ public static class ChannelRuntimeServiceCollectionExtensions
         services.TryAddSingleton<ChannelPipeline>(sp => sp.GetRequiredService<MiddlewarePipelineBuilder>().Build(sp));
 
         // ─── Tombstone compaction service ───
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<ITombstoneCompactionTarget, ChannelBotRegistrationTombstoneCompactionTarget>());
         services.TryAddSingleton<ChannelRuntimeTombstoneCompactor>();
         services.AddHostedService<ChannelRuntimeTombstoneCompactionService>();
 

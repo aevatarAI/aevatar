@@ -28,8 +28,6 @@ target_repo: aevatarAI/aevatar
 
 **当前受支持生产契约**：post-ADR-0012 / issue `#308` 的 ChannelRuntime 已收敛到 Nyx-backed Lark relay。Lark inbound 的唯一活跃入口是 `Aevatar.GAgents.NyxidChat` 映射的 `/api/webhooks/nyxid-relay`，并由 `ConversationGAgent` 承接权威会话事实；`Aevatar.GAgents.Platform.Lark` 只保留 HTTP client、message composer、native message producer、payload redactor 等 outbound/rendering 能力，不拥有 inbound runtime state。`TelegramPlatformAdapter` 与 `ChannelUserGAgent` 已从当前代码路径移除；本 RFC 下面若提到它们，均应理解为**历史基线/legacy 实现**，不是当前生产契约。
 
-> **Channel-bot 注册边界（权威，ADR-0037）**：aevatar **不再自注册** channel/Lark bot。channel-bot + relay api-key（callback 指向 `/api/webhooks/nyxid-relay`）+ conversation route 全部**直接在 NyxID 侧注册**，aevatar 不持有任何本地 registration mirror（`ChannelBotRegistration` GAgent / readmodel / projector / `channel-bot-registration-store` 均已删除，`POST/GET/DELETE /api/channels/registrations` 与 `NyxLark/TelegramProvisioningService` 一并移除）。inbound relay 的 scope 是 callback JWT 的唯一权威来源（`scope_id ?? sub ?? NameIdentifier`，落到 `activity.TransportExtras.NyxRegistrationScopeId`），不再做 registration lookup；outbound reply 走 `api-lark-bot` proxy + reply token。本 RFC 下文若仍以 `ChannelBotRegistration` 描述 runtime fact owner / projector / outbound 凭据持有者，均为**已废弃的历史基线**，以本节为准。
-
 直接在这个大包里继续加 channel 会让边界进一步模糊。需要引入 **channel-agnostic 抽象层**，把业务逻辑和 channel 细节隔离，并把 ChannelRuntime 的多职责按概念拆成独立包。
 
 ## 2. 目标
@@ -189,8 +187,7 @@ sequenceDiagram
 | `agents/Aevatar.GAgents.Channel.Abstractions/protos/chat_activity.proto` | `ChatActivity` / `ConversationReference` / `ParticipantRef` / `MessageContent` / `OutboundDeliveryContext` / `TransportExtras` / `AttachmentRef` / `AttachmentKind` (enum) / `ActionElement` / `CardBlock` / `MessageDisposition` / `ActivityType` / `ConversationScope` / `ChannelId` / `BotInstanceId` / `TransportMode` |
 | `agents/Aevatar.GAgents.Channel.Abstractions/protos/channel_contracts.proto` | `EmitResult` / `ComposeCapability` / `ComposeContext` / `ChannelBotDescriptor` / `ChannelTransportBinding` / `ChannelCapabilities` / `StreamingSupport` / `AuthContext` / `PrincipalKind` / `StreamChunk` |
 | `agents/Aevatar.GAgents.Channel.Abstractions/protos/schedule.proto` | `ScheduleState` / `ProjectionVerdict` |
-| `agents/Aevatar.GAgents.Channel.Runtime/protos/conversation_events.proto` | `ConversationTurnCompletedEvent` / `ConversationContinueRequestedEvent` / `ConversationContinueRejectedEvent` / `ConversationContinueFailedEvent` / `UserAgentCatalogEntry` / `DeviceRegistrationEntry`（含 `IsDeleted` flag 支持 tombstone retention）。详细 field schema 见 §4.3.1。**注**：`ChannelBotRegistrationEntry` 已随本地 registration mirror 删除（见 §1 ADR-0037） |
-| `agents/Aevatar.GAgents.Channel.Runtime/protos/channel_inbound.proto` | `ChannelInboundEvent`——relay inbound 的唯一 durable fact，scope 由 callback JWT 注入（`activity.TransportExtras.NyxRegistrationScopeId`），不依赖任何 registration lookup |
+| `agents/Aevatar.GAgents.Channel.Runtime/protos/conversation_events.proto` | `ConversationTurnCompletedEvent` / `ConversationContinueRequestedEvent` / `ConversationContinueRejectedEvent` / `ConversationContinueFailedEvent` / `ChannelBotRegistrationEntry` / `UserAgentCatalogEntry` / `DeviceRegistrationEntry`（含 `IsDeleted` flag 支持 tombstone retention）。详细 field schema 见 §4.3.1 |
 | `agents/Aevatar.GAgents.Channel.Runtime/protos/session_store.proto` | `SessionState` / `LeaseToken`（见 §10.4。**注意 proto 映射**：`LeaseToken.Owner` 用 `bytes owner = 1;` 存 Guid 的 16 bytes；`LeaseToken.ExpiresAt` 用 `int64 expires_at_unix_ms = 2;` 不是 `google.protobuf.Timestamp`——avoid 时区歧义；`ScheduleState.ErrorCount` 用 `int32`） |
 | `agents/Aevatar.GAgents.Channel.Runtime/protos/interaction_journal.proto` | `PreAckJournalEntry`（见 §9.5.2.1） |
 | `agents/Aevatar.GAgents.Channel.Runtime/protos/payload_quarantine.proto` | `PlatformQuarantineEnvelope`（见 §9.6.1 breaker-open forensic path。注意：**quarantine envelope 只含 metadata + encrypted_blob_ref，不含明文 raw payload**；和 inbox 完全分离，不进 Projection Pipeline，属于 `AGENTS.md` 的 `artifact/export` 形态） |
@@ -1781,17 +1778,17 @@ Phase 0 落实步骤：部署 EventHubs → validation harness 过 → 配置 pa
 
 ## 9.6 Credentials / security boundary
 
-ADR-0012 / issue `#308` 收紧了 channel 凭据边界；ADR-0037 进一步删除了 aevatar 侧的本地 registration mirror（见 §1）。**当前 Lark relay 不在 aevatar 侧持久化任何 channel 凭据**：channel-bot 与 relay api-key 都直接注册在 NyxID 上，inbound callback 的验证 secret 由 relay 验证链在 NyxID 边界完成；outbound reply 走 `api-lark-bot` proxy + reply token，aevatar 不持有 bot token。下面这节关于 `transport_binding` / `ChannelTransportBinding` 的内容是**未来 channel-agnostic 抽象设计**——一旦引入需要 aevatar 侧运行时持有凭据引用的新 channel（如自托管 adapter），凭据引用走 `ChannelTransportBinding.credential_ref` + `IAevatarSecretsStore`，**不是**当前已上线的 runtime shape，也不复用任何已删除的 `ChannelBotRegistration` 路径。新 channel 要加的 Slack `signing_secret` / `bot_token` / `user_token` / `app_token`、Discord `bot_token`、各类 webhook secret 体量更大敏感度更高，**绝对不能照抄旧 registration raw-secret 路径**。
+ADR-0012 / issue `#308` 之后，`ChannelBotRegistrationEntry` / registration query surface 已不再持久化 `nyx_user_token`、`encrypt_key` 或 direct-callback credential 字段。当前 Nyx relay Lark runtime 已进一步把 callback HMAC material 收紧到 `credential_ref + IAevatarSecretsStore`：registration state/readmodel 只保留非敏感 Nyx routing handles 和 `credential_ref`，真正 secret 不入 proto / projection / query payload。下面这节关于 `transport_binding` 的内容仍属于**未来 channel-agnostic 抽象设计**，不是当前 `ChannelBotRegistration` 已上线的完整 runtime shape。新 channel 要加的 Slack `signing_secret` / `bot_token` / `user_token` / `app_token`、Discord `bot_token`、各类 webhook secret 体量更大敏感度更高，**绝对不能照抄旧 registration raw-secret 路径**。
 
 新架构下的 credentials 处理：
 
 | 数据 | 存储 | 可见性 |
 |---|---|---|
 | 凭据本身（tokens, signing_secrets, app_tokens） | Secret manager（Azure Key Vault / AWS Secrets Manager / Kubernetes Secret） | 仅 adapter 运行时 inject，不入 proto / projection / query store |
-| 凭据引用（secret ref / vault key） | `ChannelTransportBinding.credential_ref`（未来 self-hosted adapter 的 binding 持有；relay 路径无此项） | 解引用需要 adapter runtime 的 vault client |
+| 凭据引用（secret ref / vault key） | `ChannelTransportBinding.credential_ref`（由 `ChannelBotRegistrationEntry.transport_binding` 持有） | 进 projection 可查，但解引用需要 adapter runtime 的 vault client |
 | 非密敏感元数据（team_id / workspace_id / guild_id） | proto 正常字段 | ops 查询需要 |
 
-具体实现（未来 self-hosted adapter 形态）：channel binding 持有 `transport_binding`，其中 `ChannelTransportBinding.credential_ref` 作为唯一凭据引用；运行时 `ICredentialProvider` 按 ref 拉凭据。`IChannelTransport.InitializeAsync` 只接收 `ChannelTransportBinding`，把解析后的 credential 放进 adapter instance 内存。当前 Lark relay 路径不经过此抽象——凭据全在 NyxID 侧。
+具体实现：`ChannelBotRegistrationEntry` 持有 `transport_binding`，其中 `ChannelTransportBinding.credential_ref` 作为唯一凭据引用；运行时 `ICredentialProvider` 按 ref 拉凭据。`IChannelTransport.InitializeAsync` 只接收 `ChannelTransportBinding`，把解析后的 credential 放进 adapter instance 内存，**不回写 registration**。
 
 **轮换策略**：凭据过期 / rotate 时，secret manager 更新 → adapter 下次 Initialize 或监听轮换事件 reload，不需要改 registration。
 

@@ -402,10 +402,10 @@ public sealed class RetiredActorCleanupHostedServiceTests
         var serviceCollection = new ServiceCollection();
         serviceCollection.AddSingleton<Aevatar.Foundation.Abstractions.Persistence.IEventStore>(eventStore);
         serviceCollection.AddSingleton<IActorKindProbe>(kindProbe);
-        serviceCollection.AddSingleton<IProjectionDocumentReader<ConversationDeliveryCurrentStateDocument, string>>(
-            new ThrowingProjectionReader<ConversationDeliveryCurrentStateDocument>());
-        serviceCollection.AddSingleton<IProjectionWriteDispatcher<ConversationDeliveryCurrentStateDocument>>(
-            new NoopProjectionWriter<ConversationDeliveryCurrentStateDocument>());
+        serviceCollection.AddSingleton<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>(
+            new ThrowingProjectionReader<ChannelBotRegistrationDocument>());
+        serviceCollection.AddSingleton<IProjectionWriteDispatcher<ChannelBotRegistrationDocument>>(
+            new NoopProjectionWriter<ChannelBotRegistrationDocument>());
         var runtime = new RecordingActorRuntime();
         var service = CreateService(
             kindProbe,

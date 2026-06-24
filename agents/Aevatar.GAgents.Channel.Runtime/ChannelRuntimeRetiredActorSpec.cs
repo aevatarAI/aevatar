@@ -12,18 +12,17 @@ public sealed class ChannelRuntimeRetiredActorSpec : RetiredActorSpec
 {
     public override string SpecId => "channel-runtime";
 
-    // The channel-bot-registration actor + its read model have been removed: a Lark/Feishu bot is
-    // registered directly on NyxID and the inbound relay scope comes from the validated callback
-    // JWT, so aevatar no longer maintains a local registration mirror. The actor body is retired so
-    // startup cleanup removes any leftover persisted state by its historical well-known id. The
-    // registration document type no longer exists, so only the conversation-delivery read model is
-    // swept here.
-    private const string RetiredRegistrationActorId = "channel-bot-registration-store";
-
+    // Retire only the legacy actor body left by the deleted Aevatar.GAgents.ChannelRuntime
+    // assembly. The durable materialization scope MUST NOT be a retired target: its runtime
+    // kind is derived from the context's simple type name, so the legacy and current
+    // ChannelBotRegistrationMaterializationContext collapse to the same
+    // "projection.materialization-scope.channel-bot-registration-materialization-context"
+    // kind. Retiring it would destroy the live projection scope on every startup cleanup
+    // pass and leave the channel-bot-registration read model un-materialized (#1763 regression).
     public override IReadOnlyList<RetiredActorTarget> Targets { get; } =
     [
         new(
-            RetiredRegistrationActorId,
+            ChannelBotRegistrationGAgent.WellKnownId,
             ["channel-runtime.channel-bot-registration"],
             CleanupReadModels: true),
     ];
@@ -32,8 +31,18 @@ public sealed class ChannelRuntimeRetiredActorSpec : RetiredActorSpec
         IServiceProvider services,
         string actorId,
         CancellationToken ct) =>
+        await DeleteReadModelsAsync(services, actorId, ct);
+
+    private static async Task DeleteReadModelsAsync(
+        IServiceProvider services,
+        string actorId,
+        CancellationToken ct)
+    {
+        await RetiredActorReadModelHelpers.DeleteByActorAsync<ChannelBotRegistrationDocument>(
+            services, actorId, ct).ConfigureAwait(false);
         await RetiredActorReadModelHelpers.DeleteByActorAsync<ConversationDeliveryCurrentStateDocument>(
             services, actorId, ct).ConfigureAwait(false);
+    }
 }
 
 /// <summary>

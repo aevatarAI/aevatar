@@ -178,8 +178,8 @@ public sealed class ChannelRuntimeProtoTests
             .ShouldContain(nameof(NeedsLlmReplyEvent));
         ConversationEventsReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(LlmReplyReadyEvent));
-        ChannelInboundReflection.Descriptor.MessageTypes.Select(x => x.Name)
-            .ShouldContain(nameof(ChannelInboundEvent));
+        ChannelBotRegistrationReflection.Descriptor.MessageTypes.Select(x => x.Name)
+            .ShouldContain(nameof(ChannelBotRegistrationEntry));
         UserAgentCatalogReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(UserAgentCatalogEntry));
         SessionStoreReflection.Descriptor.MessageTypes.Select(x => x.Name)

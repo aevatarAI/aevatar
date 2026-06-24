@@ -79,8 +79,7 @@ public sealed class ChannelWorkflowDraftRunTests
 
         var result = await admission.TryAdmitAsync(
             activity,
-            scopeId,
-            "reg-1",
+            new ChannelBotRegistrationEntry { Id = "reg-1", ScopeId = scopeId ?? string.Empty },
             new ChannelInboundEvent
             {
                 Text = "/workflow run daily-greeting",
@@ -110,8 +109,7 @@ public sealed class ChannelWorkflowDraftRunTests
 
         var result = await admission.TryAdmitAsync(
             BuildWorkflowActivity("scope-1", "user-token-1"),
-            "scope-1",
-            "reg-1",
+            new ChannelBotRegistrationEntry { Id = "reg-1", ScopeId = "scope-1" },
             new ChannelInboundEvent
             {
                 Text = "/workflow run daily-greeting",

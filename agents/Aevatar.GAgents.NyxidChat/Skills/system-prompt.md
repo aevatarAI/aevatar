@@ -124,13 +124,33 @@ The relay handles LLM route selection deterministically, without an LLM round-tr
 - `/model use <model-name>` — keep the current route and only override the model.
 - `/model reset` — clear the sender's route/model preference and fall back to the bot default.
 
-### Lark inbound relay & typed Lark tools
+### channel_registrations (Aevatar's local Lark mirror)
 
-Lark/Feishu bots are registered **directly on NyxID** — the channel-bot, the relay api-key (whose callback points at Aevatar's `/api/webhooks/nyxid-relay`), and the conversation route all live on the NyxID side. Aevatar does **not** self-register channel bots and holds no local registration mirror; inbound relay turns derive their scope solely from the validated NyxID callback JWT. To inspect or set up the Nyx-side bot/route, use `nyxid_channel_bots action=list` / `show` / `routes`, and `use_skill(skill="nyxid")` for the NyxID-side connection flow.
+Aevatar owns the local runtime and registration mirror.
+For Lark, webhook ingress goes through NyxID first, then NyxID relays callbacks into Aevatar.
+Nyx owns the platform bot, route, and relay API key; Aevatar owns the local registration mirror used by the runtime.
+Do not assume `channel_registrations action=list` being empty means the Nyx bot is missing.
 
-For advanced Lark API operations outside the current relay reply, prefer typed tools: `lark_messages_send`, `lark_messages_batch_get`, `lark_messages_reactions_list`, `lark_messages_reactions_delete`, `lark_chats_lookup`, `lark_sheets_append_rows`, `lark_approvals_list`, `lark_approvals_act`. These go through the Nyx Lark outbound provider slug (typically `api-lark-bot`); if it is missing, `use_skill(skill="nyxid")` to drive the catalog connection flow.
+**Stage 1: New provisioning** — when the user wants the bot connected for inbound Lark messages and basic relay replies. Do not block on typed Lark tools or proactive outbound setup.
+
+`channel_registrations action=register_lark_via_nyx app_id=<app_id> app_secret=<app_secret> verification_token=<verification_token when available> webhook_base_url=https://<your-aevatar-host>`
+
+→ Returns the registration ID, the Nyx relay callback URL, and the Nyx webhook URL that must be configured in 开发者后台 → 事件与回调 → 事件配置 → 请求地址.
+
+Add events: `im.message.receive_v1`, `card.action.trigger`.
+
+**Stage 2: Existing-bot inspection** — when Nyx already has the Lark bot/route but Aevatar no longer replies or `channel_registrations action=list` is empty.
+
+1. Inspect Nyx-side first: `nyxid_channel_bots action=list` / `show` / `routes`. (For NyxID-side details, `use_skill(skill="nyxid")`.)
+2. If Nyx is healthy but local list still empty, provision through `channel_registrations action=register_lark_via_nyx`.
+
+**Stage 3: Advanced Lark capabilities** — only when the user needs proactive sends, typed Lark tools, delivery target bindings, spreadsheet appends, approval actions, or active chat lookup. Ensure NyxID has a usable Lark outbound provider slug (typically `api-lark-bot`); if not, `use_skill(skill="nyxid")` to drive the catalog connection flow.
+
+For advanced Lark API operations outside the current relay reply, prefer typed tools: `lark_messages_send`, `lark_messages_batch_get`, `lark_messages_reactions_list`, `lark_messages_reactions_delete`, `lark_chats_lookup`, `lark_sheets_append_rows`, `lark_approvals_list`, `lark_approvals_act`.
 
 For inbound Lark relay turns that represent a fresh user message, do **not** call `lark_messages_reply` or `lark_messages_react` to deliver the answer. Produce the final text reply directly; the channel runtime will send it through the Nyx relay reply token.
+
+Managing registrations: `list`, `delete id=<reg_id> confirm=true`.
 
 ### agent_delivery_targets
 
@@ -141,7 +161,7 @@ Bind `agent_id` to the real outbound route:
 - `agent_delivery_targets action=upsert agent_id=<agent_id> conversation_id=<chat_id> nyx_provider_slug=<lark_slug, e.g. api-lark-bot>`
 - `agent_delivery_targets action=delete agent_id=<agent_id> confirm=true`
 
-`agent_delivery_targets` configures outbound agent delivery (inbound bot callbacks are configured directly on NyxID, not in Aevatar). Today the human-interaction delivery path supports `lark`.
+`channel_registrations` configures inbound bot callbacks; `agent_delivery_targets` configures outbound agent delivery. Today the human-interaction delivery path supports `lark`.
 
 ### scheduled_agent_creator (scheduled Ornn skill agents)
 

@@ -27,6 +27,7 @@ owner: eanzhao
 | Host composition | `src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs` | 注册 `AddStatusDashboard` 与 host 侧 freshness source |
 | StatusDashboard agent module | `agents/Aevatar.GAgents.StatusDashboard/` | 探针 actor、执行器、投影、查询端口 |
 | Proto contract | `agents/Aevatar.GAgents.StatusDashboard/protos/status_dashboard.proto` | target descriptor、state、event、readmodel 契约 |
+| Channel freshness source | `src/Aevatar.Mainnet.Host.Api/Status/ChannelBotRegistrationFreshnessSource.cs` | 将 channel-bot registration readmodel 暴露为 freshness source |
 
 ## 3. 总体链路
 
@@ -212,7 +213,8 @@ Mainnet Host 额外注册 `aevatar_core_loop` executor。它不调用 LLM、不�
 1. `self-liveness`（standard）/ `self-readiness`（critical）。
 2. `studio-health`（`/api/health` → 200）、`app-context`（`/api/app/context` → 200）：匿名 200 即真实成功信号。
 3. `aevatar-core-loop-tools`（critical），展示当前分支核心的 LLM-driven Aevatar invocation/tool-choice 链路是否在 host 组合层可用。
-4. NyxID `/health` 与 OIDC discovery 上游探测（standard）。
+4. `channel-bot-runtime` readmodel freshness（standard）。
+5. NyxID `/health` 与 OIDC discovery 上游探测（standard）。
 
 凭证门控的 LLM canary（仅当配置了 `Aevatar:Status:Probe:CanaryBearer` 时生成，`severity=canary`）：
 

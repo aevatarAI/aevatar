@@ -15,7 +15,6 @@ Authoritative architecture and developer guides. Each covers one topic.
 - [Connector 配置与执行逻辑](canon/connector.md)
 - [Aevatar CQRS 架构（Maker 插件化后）](canon/cqrs-projection.md)
 - [Event Sourcing 基线文档（2026-02-23）](canon/event-sourcing.md)
-- [External Exposure Receipt](canon/external-exposure-receipt.md)
 - [Aevatar 前端设计基线](canon/frontend-design.md)
 - [GAgent Registry Ownership](canon/gagent-registry-ownership.md)
 - [Lark Reply Chain Completion Semantics](canon/lark-reply-completion-semantics.md)
@@ -73,7 +72,6 @@ Immutable records of architectural choices and their rationale.
 - [Workflow Saga / Compensation Protocol](adr/0034-workflow-saga-compensation-protocol.md)
 - [已发布 workflow 服务自动注册到 NyxID](adr/0035-auto-register-published-service-to-nyxid.md)
 - [Scope Workflow as the Authoritative Runnable Workflow Model](adr/0036-scope-workflow-authoritative-runnable-model.md)
-- [Channel bots register directly on NyxID; inbound relay scope from callback JWT](adr/0037-channel-bot-registered-directly-on-nyxid.md)
 - [Agent Kind Primary-Only Identity](adr/2026-06-04-agent-kind-primary-only-identity.md)
 
 ## History
@@ -115,4 +113,3 @@ Point-in-time design snapshots. Not authoritative — for context only.
 ## Templates
 
 - [architecture.md](templates/architecture.md)
-

@@ -34,26 +34,22 @@ public sealed class ChannelWorkflowDraftRunAdmission
 
     public async Task<ChannelWorkflowDraftRunAdmissionResult> TryAdmitAsync(
         ChatActivity activity,
-        string? relayScopeId,
-        string? relayLabel,
+        ChannelBotRegistrationEntry registration,
         ChannelInboundEvent inboundEvent,
         ConversationTurnRuntimeContext runtimeContext,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(activity);
+        ArgumentNullException.ThrowIfNull(registration);
         ArgumentNullException.ThrowIfNull(inboundEvent);
 
         if (!_parser.TryParse(inboundEvent.Text, out var intent))
             return ChannelWorkflowDraftRunAdmissionResult.NotMatched;
 
-        // The inbound scope comes from the validated relay callback JWT (stamped onto
-        // TransportExtras at ingress); no aevatar-side registration mirror is read.
         var scopeId = NormalizeOptional(activity.TransportExtras?.NyxRegistrationScopeId) ??
-                      NormalizeOptional(relayScopeId);
+                      NormalizeOptional(registration.ScopeId);
         if (scopeId is null)
             return ChannelWorkflowDraftRunAdmissionResult.Rejected("无法确定当前 NyxID scope,暂不能运行 workflow。");
-
-        var label = NormalizeOptional(relayLabel) ?? scopeId;
 
         var userAccessToken = NormalizeOptional(runtimeContext.NyxUserAccessToken) ??
                               NormalizeOptional(activity.TransportExtras?.NyxUserAccessToken);
@@ -76,7 +72,7 @@ public sealed class ChannelWorkflowDraftRunAdmission
         var request = new NeedsWorkflowDraftRunEvent
         {
             CorrelationId = activity.Id ?? string.Empty,
-            RegistrationId = label,
+            RegistrationId = registration.Id ?? string.Empty,
             Activity = activity.Clone(),
             WorkflowSource = new ChannelWorkflowDraftRunSource
             {
@@ -93,7 +89,7 @@ public sealed class ChannelWorkflowDraftRunAdmission
         };
 
         request.Headers["channel"] = inboundEvent.Platform ?? string.Empty;
-        request.Headers["registration_id"] = label;
+        request.Headers["registration_id"] = registration.Id ?? string.Empty;
         request.Headers["activity_id"] = activity.Id ?? string.Empty;
         request.Headers["message_id"] = inboundEvent.MessageId ?? string.Empty;
         request.Headers["conversation_id"] = inboundEvent.ConversationId ?? string.Empty;
