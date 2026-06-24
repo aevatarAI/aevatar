@@ -1,7 +1,6 @@
 using System.Net;
 using System.Text;
 using Aevatar.AI.ToolProviders.NyxId;
-using Aevatar.Configuration;
 using Aevatar.Foundation.Abstractions;
 using FluentAssertions;
 using NSubstitute;
@@ -14,7 +13,7 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public class NyxLarkProvisioningServiceTests
 {
     [Fact]
-    public async Task ProvisionAsync_Captures_Nyx_FullKey_And_Dispatches_Local_Mirror_With_Opaque_Ref()
+    public async Task ProvisionAsync_Dispatches_Local_Mirror_Without_Persisting_Any_Secret()
     {
         var handler = new RecordingHandler();
         handler.Enqueue("/api/v1/api-keys", """{"id":"key-123","full_key":"full-key"}""");
@@ -37,13 +36,11 @@ public class NyxLarkProvisioningServiceTests
                 Arg.Any<CancellationToken>())
             .Returns(ActorDispatchPortTestSupport.AcceptAsync);
         var commandFacade = ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime);
-        var secretsStore = new RecordingSecretsStore();
 
         var service = new NyxLarkProvisioningService(
             nyxClient,
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             commandFacade,
-            secretsStore,
             Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxLarkProvisioningService>>());
 
         var result = await service.ProvisionAsync(
@@ -64,16 +61,17 @@ public class NyxLarkProvisioningServiceTests
         result.NyxAgentApiKeyId.Should().Be("key-123");
         result.NyxChannelBotId.Should().Be("bot-456");
         result.NyxConversationRouteId.Should().Be("route-789");
-        result.NyxReplyCredentialRef.Should().Be($"secrets://channel/nyxid/lark/{result.RegistrationId}/reply-api-key");
+        // aevatar no longer persists the relay api-key secret, so there is no credential ref.
+        result.NyxReplyCredentialRef.Should().BeNullOrEmpty();
         result.RelayCallbackUrl.Should().Be("https://aevatar.example.com/api/webhooks/nyxid-relay");
         result.WebhookUrl.Should().Be("https://nyx.example.com/api/v1/webhooks/channel/lark/bot-456");
-        secretsStore.Get(result.NyxReplyCredentialRef!).Should().Be("full-key");
 
         capturedEnvelope.Should().NotBeNull();
         capturedEnvelope!.Payload.Is(ChannelBotRegisterCommand.Descriptor).Should().BeTrue();
         MatchesLocalMirror(capturedEnvelope.Payload.Unpack<ChannelBotRegisterCommand>(), result.RegistrationId!)
             .Should().BeTrue();
-        capturedEnvelope.Payload.Unpack<ChannelBotRegisterCommand>().NyxReplyCredentialRef.Should().Be(result.NyxReplyCredentialRef);
+        capturedEnvelope.Payload.Unpack<ChannelBotRegisterCommand>().NyxReplyCredentialRef.Should().BeNullOrEmpty();
+        // The relay api-key full_key returned by NyxID is never read into aevatar state.
         capturedEnvelope.Payload.Unpack<ChannelBotRegisterCommand>().ToString().Should().NotContain("full-key");
 
         handler.Requests.Should().HaveCount(4);
@@ -132,7 +130,6 @@ public class NyxLarkProvisioningServiceTests
             nyxClient,
             new NyxIdToolOptions { BaseUrl = null },
             ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
-            new RecordingSecretsStore(),
             Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxLarkProvisioningService>>());
 
         var result = await service.ProvisionAsync(BuildRequest(), CancellationToken.None);
@@ -171,7 +168,6 @@ public class NyxLarkProvisioningServiceTests
                 new HttpClient(handler)),
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             commandFacade,
-            new RecordingSecretsStore(),
             Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxLarkProvisioningService>>());
 
         var result = await service.ProvisionAsync(BuildRequest(), CancellationToken.None);
@@ -186,35 +182,6 @@ public class NyxLarkProvisioningServiceTests
         handler.Requests[6].Path.Should().Be("/api/v1/api-keys/key-123");
     }
 
-    [Fact]
-    public async Task ProvisionAsync_ShouldRollbackApiKey_WhenFullKeyIsMissing()
-    {
-        var handler = new RecordingHandler();
-        handler.Enqueue("/api/v1/api-keys", """{"id":"key-123"}""");
-        handler.Enqueue(HttpMethod.Delete, "/api/v1/api-keys/key-123", """{"ok":true}""");
-
-        var secretsStore = new RecordingSecretsStore();
-        var service = new NyxLarkProvisioningService(
-            new NyxIdApiClient(
-                new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-                new HttpClient(handler)),
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(
-                Substitute.For<IActorRuntime, IActorDispatchPort>(),
-                Substitute.For<IActorDispatchPort>()),
-            secretsStore,
-            Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxLarkProvisioningService>>());
-
-        var result = await service.ProvisionAsync(BuildRequest(), CancellationToken.None);
-
-        result.Succeeded.Should().BeFalse();
-        result.Error.Should().Be("missing_full_key_in_api_key_id_response");
-        secretsStore.GetAll().Should().BeEmpty();
-        handler.Requests.Should().HaveCount(2);
-        handler.Requests[1].Method.Should().Be(HttpMethod.Delete);
-        handler.Requests[1].Path.Should().Be("/api/v1/api-keys/key-123");
-    }
-
     private static bool MatchesLocalMirror(ChannelBotRegisterCommand command, string registrationId) =>
         command.RequestedId == registrationId &&
         command.Platform == "lark" &&
@@ -223,7 +190,7 @@ public class NyxLarkProvisioningServiceTests
         command.NyxAgentApiKeyId == "key-123" &&
         command.NyxChannelBotId == "bot-456" &&
         command.NyxConversationRouteId == "route-789" &&
-        command.NyxReplyCredentialRef == $"secrets://channel/nyxid/lark/{registrationId}/reply-api-key" &&
+        string.IsNullOrEmpty(command.NyxReplyCredentialRef) &&
         command.WebhookUrl == "https://nyx.example.com/api/v1/webhooks/channel/lark/bot-456";
 
     private static NyxLarkProvisioningRequest BuildRequest() =>
@@ -250,25 +217,7 @@ public class NyxLarkProvisioningServiceTests
             nyxClient,
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
-            new RecordingSecretsStore(),
             Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxLarkProvisioningService>>());
-    }
-
-    private sealed class RecordingSecretsStore : IAevatarSecretsStore
-    {
-        private readonly Dictionary<string, string> _secrets = new(StringComparer.Ordinal);
-
-        public string? Get(string key) => _secrets.GetValueOrDefault(key);
-
-        public string? GetApiKey(string providerName) => null;
-
-        public string? GetDefaultProvider() => null;
-
-        public IReadOnlyDictionary<string, string> GetAll() => _secrets;
-
-        public void Set(string key, string value) => _secrets[key] = value;
-
-        public void Remove(string key) => _secrets.Remove(key);
     }
 
     private sealed class RecordingHandler : HttpMessageHandler

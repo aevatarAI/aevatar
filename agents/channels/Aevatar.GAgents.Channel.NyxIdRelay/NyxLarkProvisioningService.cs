@@ -1,6 +1,5 @@
 using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
-using Aevatar.Configuration;
 using Aevatar.GAgents.Channel.Runtime;
 using Microsoft.Extensions.Logging;
 
@@ -85,20 +84,17 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
     private readonly NyxIdApiClient _nyxClient;
     private readonly NyxIdToolOptions _nyxOptions;
     private readonly ChannelRegistrationCommandFacade _commandFacade;
-    private readonly IAevatarSecretsStore _secretsStore;
     private readonly ILogger<NyxLarkProvisioningService> _logger;
 
     public NyxLarkProvisioningService(
         NyxIdApiClient nyxClient,
         NyxIdToolOptions nyxOptions,
         ChannelRegistrationCommandFacade commandFacade,
-        IAevatarSecretsStore secretsStore,
         ILogger<NyxLarkProvisioningService> logger)
     {
         _nyxClient = nyxClient ?? throw new ArgumentNullException(nameof(nyxClient));
         _nyxOptions = nyxOptions ?? throw new ArgumentNullException(nameof(nyxOptions));
         _commandFacade = commandFacade ?? throw new ArgumentNullException(nameof(commandFacade));
-        _secretsStore = secretsStore ?? throw new ArgumentNullException(nameof(secretsStore));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -137,15 +133,20 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
         string? apiKeyId = null;
         string? channelBotId = null;
         string? routeId = null;
-        string? replyCredentialRef = null;
+        // No relay api-key secret is persisted (see below); the local mirror's reply-credential ref
+        // is always empty. Kept as a field on the command/result for proto compatibility only.
+        var replyCredentialRef = string.Empty;
         var localMirrorAccepted = false;
 
         try
         {
             var relayApiKeyResponse = await CreateRelayApiKeyAsync(request.AccessToken, relayCallbackUrl, registrationId, ct);
             apiKeyId = NyxApiResponseHelper.ExtractRequiredApiKeyId(relayApiKeyResponse);
-            var relayApiKey = NyxApiResponseHelper.ExtractRequiredApiKeyCredentials(relayApiKeyResponse);
-            replyCredentialRef = PersistRelayApiKeySecret(registrationId, relayApiKey);
+            // aevatar does NOT persist the relay api-key secret. The relay reply path authenticates via
+            // the NyxID-issued reply token / api-lark-bot proxy, never a locally-stored full_key, and the
+            // mainnet host's secrets store is read-only — persisting it here was the original registration
+            // 502. NyxTelegramProvisioningService never persisted it either; the local mirror's
+            // NyxReplyCredentialRef is left empty (it is not used by the live relay reply path).
 
             channelBotId = await RegisterChannelBotAsync(
                 request.AccessToken,
@@ -254,13 +255,6 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
                 callback_url = relayCallbackUrl,
             }),
             ct);
-    }
-
-    private string PersistRelayApiKeySecret(string registrationId, NyxRelayApiKeyCredentials credentials)
-    {
-        var secretRef = $"secrets://channel/nyxid/lark/{registrationId}/reply-api-key";
-        _secretsStore.Set(secretRef, credentials.FullKey);
-        return secretRef;
     }
 
     private async Task<string> RegisterChannelBotAsync(

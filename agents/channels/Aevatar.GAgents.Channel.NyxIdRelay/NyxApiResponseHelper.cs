@@ -3,8 +3,6 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.Channel.NyxIdRelay;
 
-internal sealed record NyxRelayApiKeyCredentials(string Id, string FullKey);
-
 /// <summary>
 /// Shared parsing / rollback helpers for the Nyx-side responses consumed by per-platform
 /// provisioning services (<see cref="NyxLarkProvisioningService"/>, <see cref="NyxTelegramProvisioningService"/>,
@@ -72,28 +70,6 @@ internal static class NyxApiResponseHelper
         }
     }
 
-    public static NyxRelayApiKeyCredentials ExtractRequiredApiKeyCredentials(string response)
-    {
-        var id = ExtractRequiredApiKeyId(response);
-
-        try
-        {
-            using var document = JsonDocument.Parse(response);
-            var root = document.RootElement;
-            if (!root.TryGetProperty("full_key", out var fullKeyElement) || fullKeyElement.ValueKind != JsonValueKind.String)
-                throw new InvalidOperationException("missing_full_key_in_api_key_id_response");
-
-            var fullKey = fullKeyElement.GetString()?.Trim();
-            if (string.IsNullOrWhiteSpace(fullKey))
-                throw new InvalidOperationException("empty_full_key_in_api_key_id_response");
-
-            return new NyxRelayApiKeyCredentials(id, fullKey);
-        }
-        catch (JsonException ex)
-        {
-            throw new InvalidOperationException($"invalid_json_in_api_key_id_response {ex.Message}", ex);
-        }
-    }
 
     /// <summary>
     /// Returns true when the response either is unparseable or carries a top-level <c>"error":true</c>
