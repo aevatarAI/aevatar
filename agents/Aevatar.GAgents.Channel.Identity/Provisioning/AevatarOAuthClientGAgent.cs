@@ -121,6 +121,7 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
             return;
         }
 
+        var expectedRedirectUris = NormalizeProvisioningRedirectUris(cmd.RedirectUris, cmd.RedirectUri);
         var sameClient = !string.IsNullOrEmpty(State.ClientId)
             && string.Equals(State.NyxidAuthority, cmd.NyxidAuthority, StringComparison.Ordinal);
 
@@ -138,9 +139,12 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         var redirectUriDrifted = sameClient
             && (string.IsNullOrEmpty(State.RedirectUri)
                 || !string.Equals(State.RedirectUri, cmd.RedirectUri, StringComparison.Ordinal));
+        var redirectUriListDrifted = sameClient
+            && (State.RedirectUris.Count == 0
+                || !RedirectUriListsEqual(State.RedirectUris, expectedRedirectUris));
         var oauthScopeDrifted = sameClient && !AevatarOAuthClientScopes.ContainsRequiredScopes(State.OauthScope);
 
-        if (sameClient && !redirectUriDrifted && !oauthScopeDrifted)
+        if (sameClient && !redirectUriDrifted && !redirectUriListDrifted && !oauthScopeDrifted)
         {
             // Seed HMAC key on first activation against an existing client_id
             // (defence-in-depth against partial state loaded from snapshots).
@@ -171,6 +175,14 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
                 State.RedirectUri,
                 cmd.RedirectUri);
         }
+        if (redirectUriListDrifted)
+        {
+            Logger.LogWarning(
+                "Aevatar OAuth client redirect URI allowlist drifted: stored='{Stored}', resolved='{Resolved}'. " +
+                "Re-running DCR to register a new client_id at NyxID with the configured callback targets.",
+                string.Join(",", State.RedirectUris),
+                string.Join(",", expectedRedirectUris));
+        }
         if (oauthScopeDrifted)
         {
             Logger.LogWarning(
@@ -196,7 +208,7 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         // DCR call itself is bounded.
         var clientName = string.IsNullOrWhiteSpace(cmd.ClientName) ? "aevatar" : cmd.ClientName;
         var registration = await registrar
-            .RegisterPublicClientAsync(cmd.NyxidAuthority, clientName, cmd.RedirectUri, CancellationToken.None)
+            .RegisterPublicClientAsync(cmd.NyxidAuthority, clientName, expectedRedirectUris, CancellationToken.None)
             .ConfigureAwait(false);
 
         // Cluster-shared Garnet event store + brief two-pod overlap during
@@ -211,17 +223,20 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         // "replay state" helper a future handler could misuse outside an
         // active commit path (PR #552 review codex/glm-5.1).
         var previousRedirectUri = State.RedirectUri;
+        var previousRedirectUris = State.RedirectUris.ToArray();
         var previousOauthScope = State.OauthScope;
+        var provisioned = new AevatarOAuthClientProvisionedEvent
+        {
+            ClientId = registration.ClientId,
+            ClientIdIssuedAtUnix = registration.IssuedAt.ToUnixTimeSeconds(),
+            NyxidAuthority = cmd.NyxidAuthority,
+            PersistedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            RedirectUri = cmd.RedirectUri,
+            OauthScope = AevatarOAuthClientScopes.AuthorizationScope,
+        };
+        provisioned.RedirectUris.AddRange(expectedRedirectUris);
         await PersistDomainEventAsync(
-            new AevatarOAuthClientProvisionedEvent
-            {
-                ClientId = registration.ClientId,
-                ClientIdIssuedAtUnix = registration.IssuedAt.ToUnixTimeSeconds(),
-                NyxidAuthority = cmd.NyxidAuthority,
-                PersistedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                RedirectUri = cmd.RedirectUri,
-                OauthScope = AevatarOAuthClientScopes.AuthorizationScope,
-            },
+            provisioned,
             onOptimisticConcurrencyConflict: occ => AbsorbPeerDcrProvisioningAsync(cmd, registration.ClientId, occ));
 
         // The loser absorber path returned (peer committed the same
@@ -237,15 +252,17 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
 
         await PersistDriftReconciledEventsAsync(
             redirectUriDrifted,
+            redirectUriListDrifted,
             oauthScopeDrifted,
             previousRedirectUri,
+            previousRedirectUris,
             previousOauthScope);
 
         Logger.LogInformation(
-            "Provisioned aevatar OAuth client via DCR: client_id={ClientId}, authority={Authority}, redirect_uri={RedirectUri}",
+            "Provisioned aevatar OAuth client via DCR: client_id={ClientId}, authority={Authority}, redirect_uris={RedirectUris}",
             registration.ClientId,
             cmd.NyxidAuthority,
-            cmd.RedirectUri);
+            string.Join(",", expectedRedirectUris));
 
         if (State.HmacKey.Length == 0)
         {
@@ -279,12 +296,14 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
             return;
         }
 
-        await HandleEnsureProvisionedAsync(new EnsureAevatarOAuthClientProvisionedCommand
+        var command = new EnsureAevatarOAuthClientProvisionedCommand
         {
             NyxidAuthority = State.ProvisioningRetryAuthority,
             RedirectUri = State.ProvisioningRetryRedirectUri,
             ClientName = State.ProvisioningRetryClientName,
-        }, allowPendingRetryBypass: true).ConfigureAwait(false);
+        };
+        command.RedirectUris.AddRange(State.ProvisioningRetryRedirectUris);
+        await HandleEnsureProvisionedAsync(command, allowPendingRetryBypass: true).ConfigureAwait(false);
     }
 
     private bool HasPendingProvisioningRetryNotDue(DateTimeOffset now) =>
@@ -301,7 +320,10 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
             || evt.DueUnixMs != State.ProvisioningRetryDueUnixMs
             || !string.Equals(evt.NyxidAuthority, State.ProvisioningRetryAuthority, StringComparison.Ordinal)
             || !string.Equals(evt.RedirectUri, State.ProvisioningRetryRedirectUri, StringComparison.Ordinal)
-            || !string.Equals(evt.ClientName, State.ProvisioningRetryClientName, StringComparison.Ordinal))
+            || !string.Equals(evt.ClientName, State.ProvisioningRetryClientName, StringComparison.Ordinal)
+            || !RedirectUriListsEqual(
+                NormalizeProvisioningRedirectUris(evt.RedirectUris, evt.RedirectUri),
+                State.ProvisioningRetryRedirectUris))
         {
             return false;
         }
@@ -320,6 +342,7 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         !string.IsNullOrEmpty(State.ClientId)
         && string.Equals(State.NyxidAuthority, cmd.NyxidAuthority, StringComparison.Ordinal)
         && string.Equals(State.RedirectUri, cmd.RedirectUri, StringComparison.Ordinal)
+        && RedirectUriListsEqual(State.RedirectUris, NormalizeProvisioningRedirectUris(cmd.RedirectUris, cmd.RedirectUri))
         && AevatarOAuthClientScopes.ContainsRequiredScopes(State.OauthScope)
         && State.HmacKey.Length > 0;
 
@@ -350,6 +373,7 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
             CallbackId = callbackId,
             FiredAtUnixMs = due.ToUnixTimeMilliseconds(),
         };
+        callbackPayload.RedirectUris.AddRange(normalized.RedirectUris);
         var lease = await ScheduleSelfDurableTimeoutAsync(
                 callbackId,
                 delay,
@@ -357,7 +381,7 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
                 ct: CancellationToken.None)
             .ConfigureAwait(false);
 
-        await PersistDomainEventAsync(new AevatarOAuthClientProvisioningRetryScheduledEvent
+        var scheduled = new AevatarOAuthClientProvisioningRetryScheduledEvent
         {
             Attempt = nextAttempt,
             DueUnixMs = due.ToUnixTimeMilliseconds(),
@@ -368,7 +392,9 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
             CallbackGeneration = lease.Generation,
             LastError = error.Message,
             ScheduledAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-        }).ConfigureAwait(false);
+        };
+        scheduled.RedirectUris.AddRange(normalized.RedirectUris);
+        await PersistDomainEventAsync(scheduled).ConfigureAwait(false);
 
         Logger.LogWarning(
             error,
@@ -392,11 +418,13 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
 
     private async Task PersistDriftReconciledEventsAsync(
         bool redirectUriDrifted,
+        bool redirectUriListDrifted,
         bool oauthScopeDrifted,
         string previousRedirectUri,
+        IReadOnlyCollection<string> previousRedirectUris,
         string previousOauthScope)
     {
-        var events = new List<IMessage>(capacity: 2);
+        var events = new List<IMessage>(capacity: 3);
         var now = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
         if (redirectUriDrifted)
         {
@@ -405,6 +433,17 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
                 DriftKind = "redirect_uri",
                 PreviousValue = previousRedirectUri ?? string.Empty,
                 ExpectedValue = State.RedirectUri,
+                ActiveClientId = State.ClientId,
+                ReconciledAt = now,
+            });
+        }
+        if (redirectUriListDrifted)
+        {
+            events.Add(new AevatarOAuthClientDriftReconciledEvent
+            {
+                DriftKind = "redirect_uris",
+                PreviousValue = string.Join(",", previousRedirectUris),
+                ExpectedValue = string.Join(",", State.RedirectUris),
                 ActiveClientId = State.ClientId,
                 ReconciledAt = now,
             });
@@ -431,12 +470,35 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         if (string.IsNullOrWhiteSpace(cmd.NyxidAuthority) || string.IsNullOrWhiteSpace(cmd.RedirectUri))
             return null;
 
-        return new EnsureAevatarOAuthClientProvisionedCommand
+        var normalized = new EnsureAevatarOAuthClientProvisionedCommand
         {
             NyxidAuthority = cmd.NyxidAuthority.Trim(),
             RedirectUri = cmd.RedirectUri.Trim(),
             ClientName = string.IsNullOrWhiteSpace(cmd.ClientName) ? "aevatar" : cmd.ClientName.Trim(),
         };
+        normalized.RedirectUris.AddRange(NormalizeProvisioningRedirectUris(cmd.RedirectUris, normalized.RedirectUri));
+        return normalized;
+    }
+
+    private static string[] NormalizeProvisioningRedirectUris(
+        IEnumerable<string> redirectUris,
+        string fallbackRedirectUri)
+    {
+        var values = NyxIdRedirectUriResolver.NormalizeRedirectUris(redirectUris);
+        if (values.Count > 0)
+            return values.ToArray();
+
+        var fallback = fallbackRedirectUri?.Trim();
+        return string.IsNullOrWhiteSpace(fallback) ? Array.Empty<string>() : [fallback];
+    }
+
+    private static bool RedirectUriListsEqual(
+        IEnumerable<string> stored,
+        IReadOnlyCollection<string> expected)
+    {
+        var storedValues = NyxIdRedirectUriResolver.NormalizeRedirectUris(stored);
+        return storedValues.Count == expected.Count
+            && storedValues.SequenceEqual(expected, StringComparer.Ordinal);
     }
 
     private static TimeSpan ComputeRetryDelay(int attempt)
@@ -459,9 +521,11 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         // Framework already refreshed State from the store before invoking
         // this callback. A peer healed the drift iff the cluster's stored
         // record now matches the command's intended shape.
+        var expectedRedirectUris = NormalizeProvisioningRedirectUris(cmd.RedirectUris, cmd.RedirectUri);
         var peerHealed = !string.IsNullOrEmpty(State.ClientId)
             && string.Equals(State.NyxidAuthority, cmd.NyxidAuthority, StringComparison.Ordinal)
             && string.Equals(State.RedirectUri, cmd.RedirectUri, StringComparison.Ordinal)
+            && RedirectUriListsEqual(State.RedirectUris, expectedRedirectUris)
             && AevatarOAuthClientScopes.ContainsRequiredScopes(State.OauthScope)
             && State.HmacKey.Length > 0;
 
@@ -481,11 +545,11 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
 
         Logger.LogError(
             "Aevatar OAuth client OCC race did not converge on the desired shape after replay; actor-owned retry will re-evaluate. "
-            + "stored_client_id={StoredClientId}, stored_redirect_uri={StoredRedirect}, expected_redirect_uri={ExpectedRedirect}, "
+            + "stored_client_id={StoredClientId}, stored_redirect_uris={StoredRedirectUris}, expected_redirect_uris={ExpectedRedirectUris}, "
             + "orphan_client_id={OrphanClientId}, expected_version={Expected}, actual_version={Actual}.",
             State.ClientId,
-            State.RedirectUri,
-            cmd.RedirectUri,
+            string.Join(",", State.RedirectUris),
+            string.Join(",", expectedRedirectUris),
             orphanClientId,
             occ.ExpectedVersion,
             occ.ActualVersion);
@@ -558,13 +622,17 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         // rotate it away. Codex P1 on PR #570.
         var redirectUri = string.IsNullOrEmpty(cmd.RedirectUri) ? State.RedirectUri : cmd.RedirectUri;
         var oauthScope = string.IsNullOrEmpty(cmd.OauthScope) ? State.OauthScope : cmd.OauthScope;
+        var redirectUris = cmd.RedirectUris.Count == 0
+            ? State.RedirectUris.Count == 0 ? NormalizeProvisioningRedirectUris(Array.Empty<string>(), redirectUri) : State.RedirectUris.ToArray()
+            : NormalizeProvisioningRedirectUris(cmd.RedirectUris, redirectUri);
         var sameSnapshot = string.Equals(State.ClientId, cmd.ClientId, StringComparison.Ordinal)
             && string.Equals(State.NyxidAuthority, cmd.NyxidAuthority, StringComparison.Ordinal)
             && string.Equals(State.RedirectUri, redirectUri, StringComparison.Ordinal)
+            && RedirectUriListsEqual(State.RedirectUris, redirectUris)
             && string.Equals(State.OauthScope, oauthScope, StringComparison.Ordinal);
         if (!sameSnapshot)
         {
-            await PersistDomainEventAsync(new AevatarOAuthClientProvisionedEvent
+            var provisioned = new AevatarOAuthClientProvisionedEvent
             {
                 ClientId = cmd.ClientId,
                 ClientIdIssuedAtUnix = cmd.ClientIdIssuedAtUnix,
@@ -572,12 +640,14 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
                 PersistedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
                 OauthScope = oauthScope,
                 RedirectUri = redirectUri,
-            });
+            };
+            provisioned.RedirectUris.AddRange(redirectUris);
+            await PersistDomainEventAsync(provisioned);
             Logger.LogInformation(
-                "Provisioned aevatar OAuth client: client_id={ClientId}, authority={Authority}, redirect_uri={RedirectUri}",
+                "Provisioned aevatar OAuth client: client_id={ClientId}, authority={Authority}, redirect_uris={RedirectUris}",
                 cmd.ClientId,
                 cmd.NyxidAuthority,
-                string.IsNullOrEmpty(redirectUri) ? "<unspecified>" : redirectUri);
+                redirectUris.Length == 0 ? "<unspecified>" : string.Join(",", redirectUris));
         }
 
         if (State.HmacKey.Length == 0)
@@ -681,6 +751,8 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         next.ClientIdIssuedAtUnix = evt.ClientIdIssuedAtUnix;
         next.NyxidAuthority = evt.NyxidAuthority ?? string.Empty;
         next.RedirectUri = evt.RedirectUri ?? string.Empty;
+        next.RedirectUris.Clear();
+        next.RedirectUris.AddRange(NormalizeProvisioningRedirectUris(evt.RedirectUris, next.RedirectUri));
         next.OauthScope = evt.OauthScope ?? string.Empty;
         // Re-provisioning resets the broker observation: a new client_id
         // starts with broker_capability_enabled=false until ops flips it.
@@ -722,6 +794,8 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         next.ProvisioningRetryDueUnixMs = evt.DueUnixMs;
         next.ProvisioningRetryAuthority = evt.NyxidAuthority ?? string.Empty;
         next.ProvisioningRetryRedirectUri = evt.RedirectUri ?? string.Empty;
+        next.ProvisioningRetryRedirectUris.Clear();
+        next.ProvisioningRetryRedirectUris.AddRange(NormalizeProvisioningRedirectUris(evt.RedirectUris, next.ProvisioningRetryRedirectUri));
         next.ProvisioningRetryClientName = evt.ClientName ?? string.Empty;
         next.ProvisioningRetryCallbackId = evt.CallbackId ?? string.Empty;
         next.ProvisioningRetryCallbackGeneration = evt.CallbackGeneration;
@@ -739,6 +813,7 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         next.ProvisioningRetryDueUnixMs = 0;
         next.ProvisioningRetryAuthority = string.Empty;
         next.ProvisioningRetryRedirectUri = string.Empty;
+        next.ProvisioningRetryRedirectUris.Clear();
         next.ProvisioningRetryClientName = string.Empty;
         next.ProvisioningRetryCallbackId = string.Empty;
         next.ProvisioningRetryCallbackGeneration = 0;

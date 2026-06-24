@@ -54,14 +54,18 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
         // at NyxID. The redirect URI must match what the broker sends at
         // authorize / token time — both call sites use NyxIdRedirectUriResolver.
         var redirectUri = NyxIdRedirectUriResolver.Resolve(_logger);
+        var redirectUris = NyxIdRedirectUriResolver.ResolveRegisteredRedirectUris(_logger);
+
+        var command = new EnsureAevatarOAuthClientProvisionedCommand
+        {
+            NyxidAuthority = authority,
+            RedirectUri = redirectUri,
+            ClientName = ClientName,
+        };
+        command.RedirectUris.AddRange(redirectUris);
 
         var accepted = await _provisioningDispatch
-            .DispatchAsync(new EnsureAevatarOAuthClientProvisionedCommand
-            {
-                NyxidAuthority = authority,
-                RedirectUri = redirectUri,
-                ClientName = ClientName,
-            }, ct)
+            .DispatchAsync(command, ct)
             .ConfigureAwait(false);
         if (!accepted.Succeeded || accepted.Receipt is null)
             throw new InvalidOperationException($"Aevatar OAuth client bootstrap dispatch rejected: {accepted.Error}.");
