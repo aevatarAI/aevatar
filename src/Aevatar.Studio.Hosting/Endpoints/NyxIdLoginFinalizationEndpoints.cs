@@ -40,9 +40,19 @@ public static class NyxIdLoginFinalizationEndpoints
         try
         {
             var snapshot = await oauthClientProvider.GetAsync(ct).ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(snapshot.RedirectUri))
+            {
+                return Results.Json(new
+                {
+                    error = "oauth_redirect_uri_missing",
+                    detail = "The provisioned NyxID OAuth redirect URI is missing.",
+                }, statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+
             return Results.Ok(new NyxIdLoginConfigurationResponse(
                 BaseUrl: snapshot.NyxIdAuthority.TrimEnd('/'),
                 ClientId: snapshot.ClientId,
+                RedirectUri: snapshot.RedirectUri.Trim(),
                 Scope: string.IsNullOrWhiteSpace(snapshot.OauthScope)
                     ? AevatarOAuthClientScopes.AuthorizationScope
                     : snapshot.OauthScope.Trim()));
@@ -289,6 +299,7 @@ public static class NyxIdLoginFinalizationEndpoints
 public sealed record NyxIdLoginConfigurationResponse(
     string BaseUrl,
     string ClientId,
+    string RedirectUri,
     string Scope);
 
 public sealed record NyxIdLoginFinalizationRequest

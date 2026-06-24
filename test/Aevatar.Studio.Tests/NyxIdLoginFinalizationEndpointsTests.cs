@@ -30,6 +30,7 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
                 NyxIdAuthority: "https://nyx.example/",
                 BrokerCapabilityObserved: true,
                 BrokerCapabilityObservedAt: DateTimeOffset.UnixEpoch,
+                RedirectUri: " https://studio.example/auth/callback ",
                 OauthScope: "openid broker proxy")));
 
         var (statusCode, payload) = await ExecuteJsonAsync<NyxIdLoginConfigurationResponse>(result);
@@ -38,6 +39,7 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
         payload.Should().BeEquivalentTo(new NyxIdLoginConfigurationResponse(
             "https://nyx.example",
             "broker-client-1",
+            "https://studio.example/auth/callback",
             "openid broker proxy"));
     }
 
@@ -53,12 +55,37 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
                 HmacKeyRotatedAt: DateTimeOffset.UnixEpoch,
                 NyxIdAuthority: "https://nyx.example/",
                 BrokerCapabilityObserved: true,
-                BrokerCapabilityObservedAt: DateTimeOffset.UnixEpoch)));
+                BrokerCapabilityObservedAt: DateTimeOffset.UnixEpoch,
+                RedirectUri: "https://studio.example/auth/callback")));
 
         var (statusCode, payload) = await ExecuteJsonAsync<NyxIdLoginConfigurationResponse>(result);
 
         statusCode.Should().Be(StatusCodes.Status200OK);
-        payload!.Scope.Should().Be(AevatarOAuthClientScopes.AuthorizationScope);
+        payload!.RedirectUri.Should().Be("https://studio.example/auth/callback");
+        payload.Scope.Should().Be(AevatarOAuthClientScopes.AuthorizationScope);
+    }
+
+    [Fact]
+    public async Task Config_ShouldReturnUnavailable_WhenRedirectUriIsMissing()
+    {
+        var result = await NyxIdLoginFinalizationEndpoints.HandleConfigAsync(
+            new StubAevatarOAuthClientProvider(new AevatarOAuthClientSnapshot(
+                ClientId: "broker-client-1",
+                ClientIdIssuedAt: DateTimeOffset.UnixEpoch,
+                HmacKid: "kid",
+                HmacKey: [1, 2, 3],
+                HmacKeyRotatedAt: DateTimeOffset.UnixEpoch,
+                NyxIdAuthority: "https://nyx.example/",
+                BrokerCapabilityObserved: true,
+                BrokerCapabilityObservedAt: DateTimeOffset.UnixEpoch,
+                RedirectUri: "   ")));
+
+        var (statusCode, payload) = await ExecuteJsonAsync<ConfigurationErrorResponse>(result);
+
+        statusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        payload.Should().BeEquivalentTo(new ConfigurationErrorResponse(
+            "oauth_redirect_uri_missing",
+            "The provisioned NyxID OAuth redirect URI is missing."));
     }
 
     [Fact]
@@ -300,6 +327,8 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
         var text = await new StreamReader(context.Response.Body, Encoding.UTF8).ReadToEndAsync();
         return (context.Response.StatusCode, JsonSerializer.Deserialize<T>(text, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
     }
+
+    private sealed record ConfigurationErrorResponse(string Error, string Detail);
 
     private static ExternalSubjectRef OwnerSubject(string externalUserId) =>
         new()
