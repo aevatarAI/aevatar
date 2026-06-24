@@ -47,6 +47,21 @@ public sealed class WorkflowActorBindingProjector
         if (!payload.Is(BindWorkflowRunDefinitionEvent.Descriptor))
             return;
 
+        // A run actor's BindWorkflowRunDefinitionEvent is materialized into the run's OWN binding
+        // projection scope (RootActorId == the run actor id). The committed-observation relay also
+        // forwards that same committed event UP to the parent definition actor's stream, where it
+        // would arrive in the definition's binding scope (RootActorId == the definition actor id).
+        // Writing a Run-kind document keyed on the definition actor id there clobbers the Definition
+        // document at that _id. Only the run's own scope owns the run binding document, so a relayed
+        // delivery (origin actor id != projecting scope root) must be skipped; a workflow-definition
+        // _id can never receive a Run-kind document this way.
+        var originActorId = CommittedStateEventEnvelope.GetOriginActorId(envelope);
+        if (!string.IsNullOrWhiteSpace(originActorId) &&
+            !string.Equals(originActorId, context.RootActorId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
         var bindRun = payload.Unpack<BindWorkflowRunDefinitionEvent>();
         var runDocument = CreateRunDocument(context.RootActorId, bindRun);
         ApplyProjectionMetadata(runDocument, eventId, stateVersion, updatedAt);
