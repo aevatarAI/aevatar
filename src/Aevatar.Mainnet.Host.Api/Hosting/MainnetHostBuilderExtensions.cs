@@ -352,6 +352,7 @@ public static class MainnetHostBuilderExtensions
         app.MapNyxIdChatEndpoints();
         app.MapChatRoutePolicyAdminEndpoints();
         app.MapVoicePresenceCapabilityAdminEndpoints();
+        app.MapVoiceConsoleEndpoints();
         app.MapStreamingProxyEndpoints();
         app.MapResponsesApiEndpoints();
         app.MapMessagesApiEndpoints();

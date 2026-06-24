@@ -131,6 +131,14 @@ internal static class WorkflowStudioPage
   .obs-link { display:inline-flex; align-items:center; gap:7px; padding:6px 12px; border-radius:var(--r-pill);
     background:var(--accent-soft); border:1px solid var(--accent-line); color:var(--accent); font-size:12.5px; font-weight:600; text-decoration:none; }
   .obs-link:hover { background:color-mix(in oklab,var(--accent) 18%,transparent); }
+  /* ---- shared suite navigation (identical across the five console pages) -- */
+  .suite-nav { display:flex; align-items:center; gap:2px; overflow-x:auto; scrollbar-width:none; }
+  .suite-nav::-webkit-scrollbar { display:none; }
+  .suite-nav a { display:inline-flex; align-items:center; gap:6px; padding:6px 11px; border-radius:var(--r-pill); font-size:12.5px; font-weight:600; color:var(--muted); text-decoration:none; border:1px solid transparent; white-space:nowrap; transition:color .15s,background .15s,border-color .15s; }
+  .suite-nav a:hover { color:var(--fg); background:var(--panel-2); }
+  .suite-nav a[aria-current="page"] { color:var(--accent); background:var(--accent-soft); border-color:var(--accent-line); }
+  .suite-nav svg { width:14px; height:14px; flex:0 0 auto; }
+  @media (max-width:760px) { .suite-nav .nav-label { display:none; } .suite-nav a { padding:6px 8px; } }
   .iconbtn { width:34px; height:34px; display:grid; place-items:center; background:var(--panel-2); border:1px solid var(--border); border-radius:var(--r); color:var(--muted); transition:color .15s,border-color .15s; }
   .iconbtn:hover { color:var(--fg); border-color:var(--muted-2); }
   .account { display:inline-flex; align-items:center; gap:8px; padding:4px 6px 4px 4px; border-radius:var(--r-pill); background:var(--panel-2); border:1px solid var(--border); }
@@ -806,6 +814,16 @@ const ICON={
 };
 function catIcon(t){ return t==="llm"?ICON.chat : t==="tool"?ICON.tool : t==="foreach"?ICON.foreach : t==="conditional"?ICON.cond : t==="human"?ICON.human : ICON.tool; }
 
+/* shared suite navigation — identical markup/behaviour across the five console pages */
+const SUITE_NAV=[
+  {k:"observatory",href:"/workflow/observatory",label:"观测台",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>'},
+  {k:"studio",href:"/workflow/studio",label:"Studio",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="12" r="2.4"/><path d="M8.2 7.2 15.8 11M8.2 16.8 15.8 13"/></svg>'},
+  {k:"schedules",href:"/schedules",label:"定时任务",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>'},
+  {k:"channels",href:"/channels",label:"渠道",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2.6"/><path d="M12 4.5v4.9M12 14.6v4.9M4.5 12h4.9M14.6 12h4.9"/></svg>'},
+  {k:"voice",href:"/voice",label:"语音",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg>'}
+];
+function suiteNavHtml(active){return '<nav class="suite-nav" aria-label="控制台导航">'+SUITE_NAV.map(function(n){return '<a href="'+n.href+'"'+(n.k===active?' aria-current="page"':'')+' title="'+n.label+'">'+n.svg+'<span class="nav-label">'+n.label+'</span></a>';}).join('')+'</nav>';}
+
 /* ===========================================================================
    App state
    =========================================================================== */
@@ -848,6 +866,7 @@ function renderTopbar(){
       <div class="brand-mark" aria-hidden="true">${ICON.studio}</div>
       <div><div class="brand-name">${isSchedulesPage()?'定时任务 <span class="brand-sub">Schedules</span>':'Studio <span class="brand-sub">Workflow Studio</span>'}</div></div>
     </div>
+    ${suiteNavHtml(isSchedulesPage()?"schedules":"studio")}
     ${state.signedIn?scopeChipHtml():""}
     <div class="spacer"></div>
     ${state.signedIn?`<a class="obs-link" href="${OBS}" title="跳转到运行观测台（只读查看运行结果）">${ICON.ext}<span>运行观测台</span></a>`:""}`;
