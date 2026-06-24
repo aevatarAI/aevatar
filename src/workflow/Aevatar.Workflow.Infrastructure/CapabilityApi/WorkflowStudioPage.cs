@@ -119,10 +119,12 @@ internal static class WorkflowStudioPage
     backdrop-filter:saturate(140%) blur(12px); -webkit-backdrop-filter:saturate(140%) blur(12px);
     border-bottom:1px solid var(--border);
   }
-  .brand { display:flex; align-items:center; gap:10px; min-width:0; }
+  /* Fixed-width brand region keeps the shared suite-nav's start position independent of the
+     active page title length, so the five entries don't shift when switching console pages. */
+  .brand { display:flex; align-items:center; gap:10px; flex:0 0 268px; width:268px; min-width:0; overflow:hidden; }
   .brand-mark { width:26px; height:26px; border-radius:7px; flex:0 0 auto; display:grid; place-items:center; color:#fff; box-shadow:var(--shadow-sm);
     background:linear-gradient(150deg,var(--accent),color-mix(in oklab,var(--accent) 55%,#7c4dff)); }
-  .brand-name { font-weight:650; letter-spacing:-.01em; color:var(--fg-strong); white-space:nowrap; }
+  .brand-name { font-weight:650; letter-spacing:-.01em; color:var(--fg-strong); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .brand-sub { color:var(--muted-2); font-size:12px; white-space:nowrap; }
   .scope-chip { display:inline-flex; align-items:center; gap:7px; padding:4px 10px; border-radius:var(--r-pill); background:var(--panel-2); border:1px solid var(--border); font-size:12px; color:var(--muted); }
   .scope-chip .sid { font-family:var(--mono); font-size:11.5px; color:var(--fg); }
@@ -402,6 +404,7 @@ internal static class WorkflowStudioPage
     body.ctx-collapsed .ctx-pane { display:flex; }
     .ctx-toggle { display:grid; }
     .brand-sub, .scope-chip { display:none; }
+    .brand { flex:0 0 auto; width:auto; } .brand-name { display:none; }
     .scrim { position:fixed; inset:var(--topbar-h) 0 0; background:rgba(0,0,0,.45); z-index:45; }
     .ctx-resizer { display:none; }
   }

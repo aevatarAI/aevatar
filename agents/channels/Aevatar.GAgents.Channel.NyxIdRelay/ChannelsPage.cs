@@ -111,10 +111,12 @@ internal static class ChannelsPage
   .topbar { position:sticky; top:0; z-index:40; height:var(--topbar-h); display:flex; align-items:center; gap:12px; padding:0 16px;
     background:color-mix(in oklab,var(--panel) 88%,transparent); backdrop-filter:saturate(140%) blur(12px); -webkit-backdrop-filter:saturate(140%) blur(12px);
     border-bottom:1px solid var(--border); }
-  .brand { display:flex; align-items:center; gap:10px; min-width:0; }
+  /* Fixed-width brand region keeps the shared suite-nav's start position independent of the
+     active page title length, so the five entries don't shift when switching console pages. */
+  .brand { display:flex; align-items:center; gap:10px; flex:0 0 268px; width:268px; min-width:0; overflow:hidden; }
   .brand-mark { width:26px; height:26px; border-radius:7px; flex:0 0 auto; display:grid; place-items:center; color:#fff; box-shadow:var(--shadow-sm);
     background:linear-gradient(150deg,var(--accent),color-mix(in oklab,var(--accent) 55%,#7c4dff)); }
-  .brand-name { font-weight:650; letter-spacing:-.01em; color:var(--fg-strong); white-space:nowrap; }
+  .brand-name { font-weight:650; letter-spacing:-.01em; color:var(--fg-strong); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .brand-sub { color:var(--muted-2); font-size:12px; white-space:nowrap; }
   /* ---- shared suite navigation (identical across the five console pages) -- */
   .suite-nav { display:flex; align-items:center; gap:2px; overflow-x:auto; scrollbar-width:none; }
@@ -328,6 +330,7 @@ internal static class ChannelsPage
   }
   @media (max-width:560px) {
     .brand-sub, .scope-chip { display:none; }
+    .brand { flex:0 0 auto; width:auto; } .brand-name { display:none; }
     .page { padding:22px 16px 70px; }
     .reg-row { grid-template-columns:auto 1fr; }
     .reg-row .ra { grid-column:2; justify-content:flex-end; }

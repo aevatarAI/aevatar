@@ -183,16 +183,20 @@ internal static class WorkflowRunObservatoryPage
     -webkit-backdrop-filter: saturate(140%) blur(12px);
     border-bottom: 1px solid var(--border);
   }
-  .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  /* Fixed-width brand region keeps the shared suite-nav's start position independent of the
+     active page title length, so the five entries don't shift when switching console pages.
+     The title text ellipsizes; the brand-mark and read-only pill stay pinned (flex:0 0 auto). */
+  .brand { display: flex; align-items: center; gap: 10px; flex: 0 0 268px; width: 268px; min-width: 0; overflow: hidden; }
+  .brand > div { min-width: 0; overflow: hidden; }
   .brand-mark {
     width: 26px; height: 26px; border-radius: 7px; flex: 0 0 auto;
     background: linear-gradient(150deg, var(--accent), color-mix(in oklab, var(--accent) 55%, #7c4dff));
     display: grid; place-items: center; color: #fff; box-shadow: var(--shadow-sm);
   }
-  .brand-name { font-weight: 650; letter-spacing: -.01em; color: var(--fg-strong); white-space: nowrap; }
+  .brand-name { font-weight: 650; letter-spacing: -.01em; color: var(--fg-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .brand-sub { color: var(--muted-2); font-size: 12px; white-space: nowrap; }
   .pill-ro {
-    font-size: 11px; font-weight: 650; letter-spacing: .04em;
+    font-size: 11px; font-weight: 650; letter-spacing: .04em; flex: 0 0 auto;
     padding: 2px 8px; border-radius: var(--r-pill);
     color: var(--muted); background: var(--neutral-soft); border: 1px solid var(--border);
     text-transform: uppercase;
@@ -862,7 +866,8 @@ internal static class WorkflowRunObservatoryPage
        (e.g. "已暂停"/"切换账户" stacking one glyph per line); let the brand truncate instead. */
     .topbar { gap: 8px; }
     .brand-name { overflow: hidden; text-overflow: ellipsis; }
-    .brand, .brand > div { min-width: 0; }
+    /* release the fixed brand width on narrow screens so the nav reclaims the space */
+    .brand { flex: 1 1 auto; width: auto; } .brand, .brand > div { min-width: 0; }
     .pill-ro, .live, .iconbtn, .account, .linkbtn { flex-shrink: 0; }
     .live, .linkbtn, .pill-ro { white-space: nowrap; }
     .live .freshness { display: none; }
