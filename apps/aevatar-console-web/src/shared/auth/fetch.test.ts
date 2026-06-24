@@ -8,11 +8,7 @@ describe('authFetch', () => {
   beforeEach(() => {
     window.localStorage.clear();
     jest.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
-    process.env = {
-      ...originalEnv,
-      NYXID_BASE_URL: 'http://127.0.0.1:3001',
-      NYXID_CLIENT_ID: 'console-web',
-    };
+    process.env = { ...originalEnv };
   });
 
   afterEach(() => {
@@ -74,7 +70,7 @@ describe('authFetch', () => {
     );
   });
 
-  it('refreshes an expired NyxID session before sending the request', async () => {
+  it('does not exchange refresh tokens in the browser for expired sessions', async () => {
     persistAuthSession({
       tokens: {
         accessToken: 'expired-token',
@@ -89,48 +85,20 @@ describe('authFetch', () => {
       },
     });
 
-    const fetchMock = jest.fn().mockImplementation(
-      async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = String(input);
-        if (url.endsWith('/oauth/token')) {
-          expect(init?.method).toBe('POST');
-          return {
-            ok: true,
-            json: async () => ({
-              access_token: 'new-access-token',
-              refresh_token: 'new-refresh-token',
-              token_type: 'Bearer',
-              expires_in: 900,
-              scope: 'openid profile email',
-            }),
-          } as Response;
-        }
-
-        if (url.endsWith('/oauth/userinfo')) {
-          return {
-            ok: true,
-            json: async () => ({
-              sub: 'user-1',
-              email: 'after@example.com',
-            }),
-          } as Response;
-        }
-
-        return {
-          ok: true,
-        } as Response;
-      },
-    );
+    const fetchMock = jest.fn().mockResolvedValue({ ok: true } as Response);
     global.fetch = fetchMock as typeof global.fetch;
 
     await authFetch('/api/agents');
 
-    const [, init] = fetchMock.mock.calls.at(-1) as [
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [input, init] = fetchMock.mock.calls[0] as [
       string,
       RequestInit | undefined,
     ];
-    expect(new Headers(init?.headers).get('Authorization')).toBe(
-      'Bearer new-access-token',
-    );
+    expect(input).toBe('/api/agents');
+    expect(new Headers(init?.headers).has('Authorization')).toBe(false);
+    expect(
+      fetchMock.mock.calls.some(([url]) => String(url).includes('/oauth/token')),
+    ).toBe(false);
   });
 });
