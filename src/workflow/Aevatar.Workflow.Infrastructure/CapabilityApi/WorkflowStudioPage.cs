@@ -595,7 +595,7 @@ function sessionTitleFrom(text){ const t=(text||"").trim().replace(/\s+/g," "); 
 // separator (\n\n), and invokes onFrame(parsedJson) per `data:` line.
 async function streamChat(prompt, sessionId, onFrame, signal){
   const token = getToken(); if(!token) throw new Error("not-authenticated");
-  const body = { prompt, sessionId };
+  const body = { prompt, sessionId, workflow: "studio" };
   if(state.scopeId) body.scopeId = state.scopeId;
   const res = await fetch("/api/chat", {
     method:"POST",
