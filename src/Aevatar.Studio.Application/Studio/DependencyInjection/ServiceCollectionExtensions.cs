@@ -1,4 +1,5 @@
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Authoring;
 using Aevatar.Studio.Application.Studio.Services;
@@ -29,6 +30,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IStudioAuthoringPreviewApplicationService, StudioAuthoringPreviewApplicationService>();
         services.TryAddSingleton<IStudioMemberService, StudioMemberService>();
         services.TryAddSingleton<IStudioWorkflowProvisioningService, StudioWorkflowProvisioningService>();
+        // Narrow, tool-facing port (Abstractions) adapting IStudioWorkflowProvisioningService so the
+        // aevatar_provision_workflow_schedule agent tool can depend only on Aevatar.Studio.Application.Abstractions.
+        services.TryAddSingleton<IWorkflowScheduleProvisioningPort, WorkflowScheduleProvisioningPort>();
         services.TryAddSingleton<IStudioTeamService, StudioTeamService>();
         services.TryAddSingleton<IStudioTeamGAgentStreamInvocationService, StudioTeamGAgentStreamInvocationService>();
         services.AddOptions<UserLlmSettingsOptions>();
