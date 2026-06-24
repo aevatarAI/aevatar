@@ -152,6 +152,30 @@ public static partial class NyxIdChatEndpoints
                     validation.CallbackReplayExpiresAtUnixMs),
                 ct);
 
+            // Best-effort activation marker for cross-account /channels status. Fire-and-forget:
+            // it runs AFTER the inbound is accepted and is NOT awaited, so it can never add
+            // latency to, stall, or fail the relay response (the sensitive path that previously
+            // went silent) — including turning a request cancellation into a 499 post-acceptance.
+            // The recorder is a singleton (safe to use after the request scope disposes) and
+            // swallows its own errors; CancellationToken.None so request completion doesn't
+            // cancel the in-flight signal.
+            var activityRecorder = http.RequestServices.GetService<IChannelRelayActivityRecorder>();
+            if (activityRecorder is not null)
+            {
+                var relayApiKeyId = validation.RelayApiKeyId;
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await activityRecorder.RecordInboundAsync(relayApiKeyId, CancellationToken.None);
+                    }
+                    catch (Exception recordEx)
+                    {
+                        logger.LogWarning(recordEx, "Relay activity recording failed (non-fatal): apiKeyId={ApiKeyId}", relayApiKeyId);
+                    }
+                });
+            }
+
             return Results.Accepted(value: new
             {
                 status = "accepted",

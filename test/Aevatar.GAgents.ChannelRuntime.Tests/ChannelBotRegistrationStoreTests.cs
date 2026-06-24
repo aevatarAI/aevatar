@@ -99,6 +99,42 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleRecordInbound_SetsActivationOnce_AndIsIdempotent()
+    {
+        await _agent.HandleRegister(new ChannelBotRegisterCommand
+        {
+            Platform = "lark",
+            NyxProviderSlug = "api-lark-bot",
+            ScopeId = "scope-1",
+            RequestedId = "reg-1",
+            NyxChannelBotId = "bot-1",
+            NyxAgentApiKeyId = "key-1",
+        });
+
+        var first = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 6, 24, 10, 0, 0, TimeSpan.Zero));
+        await _agent.HandleRecordInbound(new ChannelBotRecordInboundCommand { RegistrationId = "reg-1", ObservedAtUtc = first });
+        _agent.State.Registrations.Single(r => r.Id == "reg-1").LastInboundAtUtc.Should().Be(first);
+
+        // Activation is set once — a later inbound must NOT overwrite it (bounds the
+        // single store actor's event log; we don't persist an event per message).
+        var second = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 6, 24, 11, 0, 0, TimeSpan.Zero));
+        await _agent.HandleRecordInbound(new ChannelBotRecordInboundCommand { RegistrationId = "reg-1", ObservedAtUtc = second });
+        _agent.State.Registrations.Single(r => r.Id == "reg-1").LastInboundAtUtc.Should().Be(first);
+    }
+
+    [Fact]
+    public async Task HandleRecordInbound_NoopForUnknownRegistration()
+    {
+        await _agent.HandleRecordInbound(new ChannelBotRecordInboundCommand
+        {
+            RegistrationId = "does-not-exist",
+            ObservedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+
+        _agent.State.Registrations.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task HandleRegister_PersistsTelegramRelayRegistration()
     {
         await _agent.HandleRegister(new ChannelBotRegisterCommand

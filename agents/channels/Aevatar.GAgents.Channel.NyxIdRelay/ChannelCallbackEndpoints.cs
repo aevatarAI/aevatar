@@ -230,18 +230,21 @@ public static class ChannelCallbackEndpoints
             return Results.NotFound(new { error = "Registration not found" });
 
         // Cross-account bot: NyxID's channel-bot API is strictly owner-scoped (even a
-        // platform admin gets 404 for another user's bot), so its live status is not
-        // readable here. Report it honestly as "foreign" rather than a misleading
-        // "unknown" that the UI would render as a perpetual "querying" spinner.
+        // platform admin gets 404 for another user's bot), so we can't query its live status.
+        // Instead report aevatar's OWN observation: the relay-activity read model marks a bot
+        // active once it has received a verified inbound. No historical backfill exists, so a
+        // bot that was active before this feature shipped shows pending until its next inbound.
         var callerScope = ResolveScopeId(http, null, required: false).ScopeId;
         if (!string.IsNullOrWhiteSpace(callerScope)
             && !string.Equals(registration.ScopeId, callerScope, StringComparison.Ordinal))
         {
+            var observedAt = registration.LastInboundAtUtc;
             return Results.Json(new
             {
                 registration_id = registrationId,
                 nyx_channel_bot_id = registration.NyxChannelBotId,
-                status = "foreign",
+                status = observedAt is not null ? "active" : "pending_webhook",
+                last_event_at = observedAt?.ToDateTimeOffset(),
                 owned = false,
             });
         }
