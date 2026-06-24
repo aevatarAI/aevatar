@@ -55,9 +55,18 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
     /// <para>
     /// Unlike <see cref="BuiltInDirectYaml"/> (a zero-bias "helpful assistant" used by every channel-less
     /// <c>Direct</c> caller — Lark/Telegram/bare), this workflow steers the agent to be <b>workflow-first</b>
-    /// and <b>Observatory-delivered</b>: author a runnable workflow, run + observe it, and schedule recurring
-    /// runs through the channel-free <c>aevatar_provision_workflow_schedule</c> tool so results surface in
+    /// and <b>Observatory-delivered</b>: author the workflow as inline YAML, then persist + schedule it as a
+    /// real <c>member</c> via the channel-free <c>aevatar_provision_workflow_schedule</c> tool (member create →
+    /// bind inline YAML → <c>ScheduleKind=Workflow</c> dispatch) so its runs surface in
     /// <c>/workflow/observatory</c> — never a chat/bot, never a prose ornn skill as the deliverable.
+    /// </para>
+    ///
+    /// <para>
+    /// It deliberately does NOT steer to the loose <c>workflow_create_def</c> + <c>aevatar_start_workflow &lt;name&gt;</c>
+    /// path: that authors a file-only definition and then runs it by name, which inside the managed workflow
+    /// context resolves the target by name against an unprovisioned definition actor and hangs for 30s
+    /// (<c>SubWorkflowDefinitionResolution</c> timeout). The member/provision path binds the inline YAML directly
+    /// and never goes through by-name loose-definition resolution.
     /// </para>
     ///
     /// <para>
@@ -70,16 +79,18 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
     /// <para>
     /// The role carries an <c>allowed_tools</c> allowlist (parsed by <c>WorkflowParser</c> →
     /// <c>RoleDefinition.AgentToolScope</c>, intersected with any step scope by the execution kernel →
-    /// <c>ToolVisibility</c>). It INCLUDES the workflow-first tool set and EXCLUDES the Lark
-    /// <c>scheduled_agent_creator</c>; the allowlist is the lever that keeps the failing Lark scheduler out of
-    /// the studio surface entirely (prompt steering alone is unreliable while the tool is visible).
+    /// <c>ToolVisibility</c>). It INCLUDES <c>aevatar_provision_workflow_schedule</c> + the observe tools and
+    /// EXCLUDES both the Lark <c>scheduled_agent_creator</c> and the hanging loose-definition tools
+    /// (<c>workflow_create_def</c>/<c>update</c>/<c>read</c>/<c>list_defs</c>, <c>aevatar_start_workflow</c>);
+    /// the allowlist is the lever that keeps those out of the studio surface entirely (prompt steering alone is
+    /// unreliable while a tool is visible).
     /// </para>
     /// </summary>
     public static string BuiltInStudioYaml { get; } = """
         name: studio
         description: >
           Studio authoring surface: workflow-first, Observatory-delivered. Author a runnable workflow,
-          run and observe it, and schedule recurring runs so results appear in /workflow/observatory.
+          provision it as a persisted member, and schedule its runs so results appear in /workflow/observatory.
         roles:
           - id: studio
             name: Studio Agent
@@ -88,35 +99,32 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
               you deliver results to the **Observatory** (/workflow/observatory) — never to a chat or bot.
 
               How to work:
-              1. To build automation, author a real workflow. Draft the workflow as YAML and create it with
-                 `workflow_create_def` (use `workflow_read_def` / `workflow_list_defs` to inspect, and
-                 `workflow_update_def` to revise). Inline workflow YAML is acceptable when creating a
-                 definition is unavailable.
-              2. To run it, call `aevatar_start_workflow`, then `aevatar_observe_run` (and
-                 `aevatar_read_workflow_run_artifact` for outputs) to watch and report the run.
-              3. To run it on a recurring schedule, call `aevatar_provision_workflow_schedule` with the
-                 workflow YAML, a display name, and a cron + IANA timezone. Its runs appear in
-                 /workflow/observatory. Tell the user to open /workflow/observatory to see the runs.
+              1. Author the workflow as inline YAML in the conversation. Keep it complete and runnable.
+              2. Persist and schedule it by calling `aevatar_provision_workflow_schedule` with `workflow_yaml`
+                 and a `display_name`. For a recurring monitor (e.g. "every day"), add a 5-field `schedule_cron`
+                 plus an IANA `schedule_timezone` (e.g. Asia/Shanghai); `run_immediately` defaults true so a demo
+                 run fires shortly after the bind. This creates the workflow as a persisted member whose runs land
+                 in /workflow/observatory — that persisted, observatory-delivered workflow is the deliverable.
+              3. `aevatar_provision_workflow_schedule` returns `Accepted` (the bind + run are asynchronous) — do
+                 NOT claim the workflow "ran successfully" from that receipt. Use `aevatar_observe_run` (and
+                 `aevatar_read_workflow_run_artifact` for outputs) to watch the demo/scheduled run, and tell the
+                 user to open /workflow/observatory to see the runs. Report honestly: state that the workflow was
+                 accepted and provisioned, then report the observed run status — never optimistically assume success.
               4. You may use `ornn_search_skills` and `use_skill` to discover and load skills for genuinely
-                 non-deterministic, language-driven subtasks — but the deliverable for an automation request
-                 is a runnable workflow, not a published skill.
+                 non-deterministic, language-driven subtasks inside the workflow — but the deliverable for an
+                 automation request is a runnable workflow, not a published skill.
 
               Hard rules:
-              - The deliverable is a runnable workflow whose runs are visible in /workflow/observatory. Do NOT
-                publish a prose skill as the answer to "build/automate/schedule X".
-              - Never deliver results to Lark/Telegram or any chat/bot, and never schedule a bot delivery.
-                Scheduling goes exclusively through `aevatar_provision_workflow_schedule` (Observatory-delivered).
+              - The deliverable is a runnable workflow persisted as a member whose runs are visible in
+                /workflow/observatory. Do NOT publish a prose skill as the answer to "build/automate/schedule X".
+              - Scheduling goes exclusively through `aevatar_provision_workflow_schedule` (Observatory-delivered).
+                Never deliver results to Lark/Telegram or any chat/bot, and never schedule a bot delivery.
               - The owning scope and your credentials come from the session; do not ask the user for scope,
                 channel, owner, or tokens.
             allowed_tools:
-              - workflow_create_def
-              - workflow_update_def
-              - workflow_read_def
-              - workflow_list_defs
-              - aevatar_start_workflow
+              - aevatar_provision_workflow_schedule
               - aevatar_observe_run
               - aevatar_read_workflow_run_artifact
-              - aevatar_provision_workflow_schedule
               - ornn_search_skills
               - use_skill
         steps:

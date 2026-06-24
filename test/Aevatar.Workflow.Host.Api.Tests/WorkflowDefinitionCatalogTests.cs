@@ -186,29 +186,40 @@ public class WorkflowDefinitionCatalogTests
     }
 
     [Fact]
-    public void BuiltInStudioYaml_ShouldParseAsWorkflowFirstStudioRoleWithToolAllowlist()
+    public void BuiltInStudioYaml_ShouldParseAsMemberProvisionStudioRoleWithToolAllowlist()
     {
         var workflow = new WorkflowParser().Parse(WorkflowDefinitionCatalog.BuiltInStudioYaml);
 
         workflow.Name.Should().Be("studio");
         var role = workflow.Roles.Should().ContainSingle().Subject;
 
-        // The role carries a workflow-first, Observatory-delivered system prompt — NOT a bare
-        // "helpful assistant" and NOT a Lark/skill-publishing playbook.
+        // The role carries a workflow-first, Observatory-delivered system prompt that steers to the
+        // member/provision path — NOT a bare "helpful assistant", NOT a Lark/skill-publishing playbook,
+        // and NOT the loose-definition author-then-run-by-name path that hangs.
         role.SystemPrompt.Should().Contain("Studio agent");
-        role.SystemPrompt.Should().Contain("workflow_create_def");
         role.SystemPrompt.Should().Contain("aevatar_provision_workflow_schedule");
         role.SystemPrompt.Should().Contain("/workflow/observatory");
         role.SystemPrompt.Should().Contain("Do NOT");
+        // Honesty: the receipt is Accepted (async), not a success claim.
+        role.SystemPrompt.Should().Contain("Accepted");
+        // The loose-definition tools that hang on by-name resolution are no longer steered to.
+        role.SystemPrompt.Should().NotContain("workflow_create_def");
+        role.SystemPrompt.Should().NotContain("aevatar_start_workflow");
 
-        // The allowlist is the lever that keeps the Lark scheduler out of the studio surface
-        // and brings the channel-free scheduling tool in.
+        // The allowlist is the lever that keeps both the Lark scheduler and the hanging loose-definition
+        // tools out of the studio surface, and brings the channel-free provision tool in.
         role.AgentToolScope.Should().NotBeNull();
         var allowed = role.AgentToolScope!.AllowedToolNames;
         allowed.Should().Contain("aevatar_provision_workflow_schedule");
-        allowed.Should().Contain("workflow_create_def");
-        allowed.Should().Contain("aevatar_start_workflow");
         allowed.Should().Contain("aevatar_observe_run");
+        allowed.Should().Contain("aevatar_read_workflow_run_artifact");
+        // The loose-definition path (file-only create + run-by-name) hangs 30s on an unprovisioned
+        // definition actor — it must be absent from the studio surface.
+        allowed.Should().NotContain("workflow_create_def");
+        allowed.Should().NotContain("workflow_update_def");
+        allowed.Should().NotContain("workflow_read_def");
+        allowed.Should().NotContain("workflow_list_defs");
+        allowed.Should().NotContain("aevatar_start_workflow");
         allowed.Should().NotContain("scheduled_agent_creator");
         // Studio is workflow-first: publishing a prose skill is not the deliverable.
         allowed.Should().NotContain("ornn_publish_skill");
