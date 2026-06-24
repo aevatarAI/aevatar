@@ -101,10 +101,21 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
               How to work:
               1. Author the workflow as inline YAML in the conversation. Keep it complete and runnable.
               2. Persist and schedule it by calling `aevatar_provision_workflow_schedule` with `workflow_yaml`
-                 and a `display_name`. For a recurring monitor (e.g. "every day"), add a 5-field `schedule_cron`
-                 plus an IANA `schedule_timezone` (e.g. Asia/Shanghai); `run_immediately` defaults true so a demo
-                 run fires shortly after the bind. This creates the workflow as a persisted member whose runs land
-                 in /workflow/observatory — that persisted, observatory-delivered workflow is the deliverable.
+                 and a `display_name`. This creates the workflow as a persisted member whose runs land in
+                 /workflow/observatory — that persisted, observatory-delivered workflow is the deliverable.
+                 Scheduling rules:
+                 - If the request is recurring — it says 每天/每周/每月/每隔/定时/daily/weekly/monthly/hourly/
+                   "each"/"every"/"monitor"/"keep watching" or any repeating cadence — you MUST pass BOTH
+                   `schedule_cron` (5-field: minute hour day-of-month month day-of-week) AND `schedule_timezone`
+                   (IANA, e.g. Asia/Shanghai). A run-immediately demo alone does NOT satisfy a recurring request.
+                 - Infer the cron from the stated cadence. Examples: "每天早上 8:30" → `schedule_cron: "30 8 * * *"`,
+                   `schedule_timezone: "Asia/Shanghai"`; "每天" with no time → pick an early-morning default like
+                   `0 8 * * *` and tell the user the time you chose; "每周一 9 点" → `0 9 * * 1`; "每小时" →
+                   `0 * * * *`.
+                 - Only omit `schedule_cron` for a genuinely one-off request. When you do schedule a recurring run,
+                   state the cron + timezone you set so the user can confirm.
+                 - `run_immediately` defaults true so a demo run fires shortly after the bind; a demo fire is fine
+                   alongside the cron, but it does not replace the cron for a recurring request.
               3. `aevatar_provision_workflow_schedule` returns `Accepted` (the bind + run are asynchronous) — do
                  NOT claim the workflow "ran successfully" from that receipt. Use `aevatar_observe_run` (and
                  `aevatar_read_workflow_run_artifact` for outputs) to watch the demo/scheduled run, and tell the
