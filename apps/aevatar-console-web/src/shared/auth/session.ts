@@ -116,7 +116,7 @@ export function loadRestorableAuthSession(): NyxIDAuthSession | null {
     return null;
   }
 
-  if (hasActiveAccessToken(session.tokens) || session.tokens.refreshToken) {
+  if (hasActiveAccessToken(session.tokens)) {
     return session;
   }
 
