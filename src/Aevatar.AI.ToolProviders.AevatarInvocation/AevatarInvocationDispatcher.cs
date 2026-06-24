@@ -373,6 +373,7 @@ public sealed class AevatarInvocationDispatcher
         {
             var registration = await RegisterWorkflowRunBackgroundDeliveryAsync(
                     receipt,
+                    receipt.CommandId,
                     streamTopic,
                     backgroundDelivery.DurableReplyCredentialRef!,
                     AgentToolRequestContext.Current,
@@ -647,6 +648,7 @@ public sealed class AevatarInvocationDispatcher
         {
             var registration = await RegisterWorkflowRunBackgroundDeliveryAsync(
                     receipt,
+                    serviceRunId,
                     streamTopic,
                     backgroundDelivery.DurableReplyCredentialRef!,
                     AgentToolRequestContext.Current,
@@ -870,6 +872,7 @@ public sealed class AevatarInvocationDispatcher
 
     private async Task<WorkflowBackgroundDeliveryRegistrationResult> RegisterWorkflowRunBackgroundDeliveryAsync(
         WorkflowChatRunAcceptedReceipt receipt,
+        string serviceRunId,
         string streamTopic,
         string durableReplyCredentialRef,
         AgentToolExecutionContext? context,
@@ -877,6 +880,7 @@ public sealed class AevatarInvocationDispatcher
     {
         var registration = BuildWorkflowRunDeliveryRegistration(
             receipt,
+            serviceRunId,
             streamTopic,
             durableReplyCredentialRef,
             context);
@@ -933,6 +937,7 @@ public sealed class AevatarInvocationDispatcher
 
     private static WorkflowRunBackgroundDeliveryRegistration? BuildWorkflowRunDeliveryRegistration(
         WorkflowChatRunAcceptedReceipt receipt,
+        string serviceRunId,
         string streamTopic,
         string durableReplyCredentialRef,
         AgentToolExecutionContext? context)
@@ -950,10 +955,13 @@ public sealed class AevatarInvocationDispatcher
                                   Normalize(context.Caller.ScopeId) ??
                                   string.Empty;
         var deliveryId = $"workflow-run-delivery:{SanitizeActorIdSegment(receipt.ActorId)}:{SanitizeActorIdSegment(receipt.CommandId)}";
+        var normalizedWorkflowRunId = string.IsNullOrWhiteSpace(serviceRunId)
+            ? receipt.ActorId
+            : serviceRunId.Trim();
         return new WorkflowRunBackgroundDeliveryRegistration(
             DeliveryId: deliveryId,
             WorkflowActorId: receipt.ActorId,
-            WorkflowRunId: receipt.CommandId,
+            WorkflowRunId: normalizedWorkflowRunId,
             WorkflowCommandId: receipt.CommandId,
             WorkflowCorrelationId: receipt.CorrelationId,
             StreamTopic: streamTopic,
@@ -1058,7 +1066,6 @@ public sealed class AevatarInvocationDispatcher
         ServiceInvocationRequest invocationRequest,
         WorkflowRunCallerCredential? callerCredential)
     {
-        invocationRequest.RunOrigin = WorkflowRunOrigins.ServiceInvoke;
         if (invocationRequest.Payload?.TryUnpack<ChatRequestEvent>(out var chatRequest) != true)
             return;
 
