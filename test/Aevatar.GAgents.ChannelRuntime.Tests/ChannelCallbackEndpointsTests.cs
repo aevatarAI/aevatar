@@ -13,6 +13,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Xunit;
+using Aevatar.Authentication.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
 
@@ -195,29 +196,127 @@ public sealed class ChannelCallbackEndpointsTests
         response.Body.Should().Contain("missing_bot_token");
     }
 
-    [Fact]
-    public async Task HandleListRegistrationsAsync_ReturnsRelayModeOnly()
+    private static IChannelBotRegistrationQueryPort QueryPortWith(params ChannelBotRegistrationEntry[] entries)
     {
         var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
         queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>(
-            [
-                new ChannelBotRegistrationEntry
-                {
-                    Id = "reg-1",
-                    Platform = "lark",
-                    NyxProviderSlug = "api-lark-bot",
-                    ScopeId = "scope-1",
-                    NyxChannelBotId = "bot-1",
-                },
-            ]));
+            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>(entries));
+        return queryPort;
+    }
 
-        var result = await InvokeAsync("HandleListRegistrationsAsync", queryPort, CancellationToken.None);
+    private static IPlatformAdminAuthorizer AdminAuthorizer(bool elevated)
+    {
+        var authorizer = Substitute.For<IPlatformAdminAuthorizer>();
+        authorizer.ResolveCallerAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new PlatformCaller(elevated, elevated ? "admin" : string.Empty, "e@x", "u")));
+        return authorizer;
+    }
+
+    [Fact]
+    public async Task HandleListRegistrationsAsync_ReturnsRelayModeOnly_AndScopesToCaller()
+    {
+        var queryPort = QueryPortWith(new ChannelBotRegistrationEntry
+        {
+            Id = "reg-1",
+            Platform = "lark",
+            NyxProviderSlug = "api-lark-bot",
+            ScopeId = "scope-1",
+            NyxChannelBotId = "bot-1",
+        });
+        var http = CreateHttpContext("scope-1");
+
+        var result = await InvokeAsync("HandleListRegistrationsAsync", http, queryPort, AdminAuthorizer(false), (string?)null, CancellationToken.None);
         var response = await ExecuteResultAsync(result);
 
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
         response.Body.Should().Contain("\"registration_mode\":\"nyx_relay_webhook\"");
         response.Body.Should().Contain("\"callback_url\":\"\"");
+        response.Body.Should().Contain("\"owned\":true");
+    }
+
+    [Fact]
+    public async Task HandleListRegistrationsAsync_ExcludesOtherAccountsByDefault()
+    {
+        var queryPort = QueryPortWith(
+            new ChannelBotRegistrationEntry { Id = "mine", Platform = "lark", ScopeId = "scope-1", NyxChannelBotId = "bot-mine" },
+            new ChannelBotRegistrationEntry { Id = "theirs", Platform = "lark", ScopeId = "scope-2", NyxChannelBotId = "bot-theirs" });
+        var http = CreateHttpContext("scope-1");
+
+        var result = await InvokeAsync("HandleListRegistrationsAsync", http, queryPort, AdminAuthorizer(false), (string?)null, CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        response.Body.Should().Contain("bot-mine");
+        response.Body.Should().NotContain("bot-theirs");
+    }
+
+    [Fact]
+    public async Task HandleListRegistrationsAsync_ScopeAll_Forbidden_WhenNotAdmin()
+    {
+        var queryPort = QueryPortWith(new ChannelBotRegistrationEntry { Id = "x", Platform = "lark", ScopeId = "scope-2" });
+        var http = CreateHttpContext("scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        var result = await InvokeAsync("HandleListRegistrationsAsync", http, queryPort, AdminAuthorizer(false), "all", CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        response.Body.Should().Contain("scope_admin_required");
+    }
+
+    [Fact]
+    public async Task HandleListRegistrationsAsync_ScopeAll_ReturnsAllAccounts_WhenAdmin()
+    {
+        var queryPort = QueryPortWith(
+            new ChannelBotRegistrationEntry { Id = "mine", Platform = "lark", ScopeId = "scope-1", NyxChannelBotId = "bot-mine" },
+            new ChannelBotRegistrationEntry { Id = "theirs", Platform = "lark", ScopeId = "scope-2", NyxChannelBotId = "bot-theirs" });
+        var http = CreateHttpContext("scope-1");
+        http.Request.Headers.Authorization = "Bearer admin-token";
+
+        var result = await InvokeAsync("HandleListRegistrationsAsync", http, queryPort, AdminAuthorizer(true), "all", CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        response.Body.Should().Contain("bot-mine");
+        response.Body.Should().Contain("bot-theirs");
+        response.Body.Should().Contain("\"owned\":false");
+    }
+
+    [Fact]
+    public async Task HandleGetStatusAsync_ReturnsForeign_WhenScopeMismatch()
+    {
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        queryPort.GetAsync("reg-foreign", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
+            {
+                Id = "reg-foreign",
+                Platform = "lark",
+                ScopeId = "scope-2",
+                NyxChannelBotId = "bot-foreign",
+            }));
+        var http = CreateHttpContext("scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        // nyxClient (arg 4) null: the foreign path returns before any NyxID call.
+        var result = await InvokeAsync("HandleGetStatusAsync", "reg-foreign", http, queryPort, null, NullLoggerFactory.Instance, CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        response.Body.Should().Contain("\"status\":\"foreign\"");
+    }
+
+    [Fact]
+    public async Task HandleGetCallerInfoAsync_ReturnsAdminFlag()
+    {
+        var http = CreateHttpContext("scope-1");
+        http.Request.Headers.Authorization = "Bearer admin-token";
+
+        var result = await InvokeAsync("HandleGetCallerInfoAsync", http, AdminAuthorizer(true), CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        response.Body.Should().Contain("\"is_admin\":true");
+        response.Body.Should().Contain("\"scope_id\":\"scope-1\"");
     }
 
     [Fact]
@@ -389,6 +488,7 @@ public sealed class ChannelCallbackEndpointsTests
             {
                 Id = "reg-1",
                 Platform = "lark",
+                ScopeId = "scope-1",   // owned by the caller, so it passes the foreign-scope check
                 NyxChannelBotId = string.Empty,
             }));
         var http = CreateHttpContext("scope-1");

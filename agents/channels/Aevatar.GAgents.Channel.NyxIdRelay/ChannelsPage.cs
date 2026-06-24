@@ -353,6 +353,12 @@ internal static class ChannelsPage
   .more summary::-webkit-details-marker { display:none; }
   .more summary:hover { text-decoration:underline; }
   .more .perm-pill { margin:0 6px 6px 0; display:inline-block; }
+
+  /* admin account-scope segmented toggle (shown only to platform admins) */
+  .scope-toggle { display:inline-flex; margin-left:auto; border:1px solid var(--border); border-radius:var(--r-pill); overflow:hidden; background:var(--panel-2); text-transform:none; letter-spacing:normal; }
+  .scope-toggle button { font:inherit; font-size:12px; font-weight:600; color:var(--muted); background:transparent; border:0; padding:5px 12px; cursor:pointer; text-transform:none; letter-spacing:normal; }
+  .scope-toggle button.on { color:var(--accent); background:var(--accent-soft); }
+  .scope-toggle button:hover:not(.on) { color:var(--fg); }
 </style>
 </head>
 <body>
@@ -410,7 +416,7 @@ const el=(t,a={},h)=>{const n=document.createElement(t);for(const k in a){if(k==
 const esc=(s)=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const initials=(s)=>(s||"?").trim().charAt(0).toUpperCase();
 
-const STATUS_LABEL = { active:"已激活", pending:"待激活", pending_webhook:"待激活", error:"异常", registered:"已注册", bound:"已绑定", soon:"即将上线", available:"可接入", unknown:"查询中" };
+const STATUS_LABEL = { active:"已激活", pending:"待激活", pending_webhook:"待激活", error:"异常", registered:"已注册", bound:"已绑定", soon:"即将上线", available:"可接入", loading:"查询中", foreign:"非本账户", unknown:"状态未知" };
 
 const ICON={
   sun:'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2.4M12 19.6V22M2 12h2.4M19.6 12H22M4.6 4.6l1.7 1.7M17.7 17.7l1.7 1.7M19.4 4.6l-1.7 1.7M6.3 17.7l-1.7 1.7"/></svg>',
@@ -458,6 +464,8 @@ const state = {
   signedIn:false,
   account:null,                       // { label }
   scopeId:null, scopeSource:"nyxid",
+  isAdmin:false,                      // platform admin (from GET /api/channels/me)
+  scopeView:"mine",                   // "mine" | "all" (admin cross-account view)
   view:"catalog",                     // catalog | wizard | manage
   step:1,                             // 1..5
   s:"idle",                           // idle | running | done | failed
@@ -592,9 +600,21 @@ async function apiSend(path, method, body){
 }
 
 /* ---- data loaders ---- */
+async function loadMe(){
+  try {
+    const me = await apiGet("/api/channels/me");
+    if(me){ state.isAdmin = !!me.is_admin; if(me.scope_id) state.scopeId = me.scope_id; }
+  } catch(e){ if(e.message!=="unauthorized") console.warn("channels: me read failed", e); }
+}
 async function loadRegistrations(){
-  try { state.registrations = (await apiGet("/api/channels/registrations")) || []; }
-  catch(e){ if(e.message!=="unauthorized") console.warn("channels: list failed", e); state.registrations = []; }
+  const q = state.scopeView==="all" ? "?scope=all" : "";
+  try { state.registrations = (await apiGet("/api/channels/registrations"+q)) || []; }
+  catch(e){
+    if(e.message!=="unauthorized") console.warn("channels: list failed", e);
+    if(state.scopeView==="all"){ state.scopeView="mine"; return loadRegistrations(); } // not admin → fall back
+    state.registrations = [];
+  }
+  state.statuses = {};   // reset stale statuses on scope switch
   render();
   pollAllStatuses();
 }
@@ -614,13 +634,15 @@ function pollAllStatuses(){
   });
 }
 function normStatus(s){
-  if(!s) return "unknown";
+  if(!s) return "loading";          // status not fetched yet (honest: querying)
   const v=(s.status||"").toLowerCase();
   if(v==="active") return "active";
+  if(v==="foreign") return "foreign";   // bot owned by another account — not queryable here
   if(v==="pending_webhook"||v==="pending"||v==="") return "pending";
   if(v.includes("error")||v.includes("fail")) return "error";
-  return "unknown";
+  return "unknown";                 // fetched but status couldn't be determined
 }
+const BADGE_BY_STATUS = { active:["b-active","s-active"], pending:["b-pending","s-pending"], error:["b-error","s-error"], loading:["b-soon","s-running"], foreign:["b-soon","s-unknown"], unknown:["b-warn","s-warn"] };
 
 /* ---- register / delete / llm save ---- */
 async function doRegister(){
@@ -746,6 +768,15 @@ function renderLogin(){
 /* ===========================================================================
    Catalog
    =========================================================================== */
+function scopeToggle(){
+  const wrap=el("div",{class:"scope-toggle",role:"group","aria-label":"账户范围"});
+  [["mine","我的账户"],["all","所有账户"]].forEach(([v,label])=>{
+    const b=el("button",{class:state.scopeView===v?"on":"","data-v":v,title:v==="all"?"管理员：查看所有账户的 bot":"只看我的 bot"},label);
+    b.addEventListener("click",()=>{ if(v!==state.scopeView){ state.scopeView=v; loadRegistrations(); } });
+    wrap.appendChild(b);
+  });
+  return wrap;
+}
 function renderCatalog(){
   const p=el("main",{class:"page"});
   p.innerHTML=`
@@ -770,15 +801,16 @@ function renderCatalog(){
   p.appendChild(grid);
 
   const regs = state.registrations || [];
-  p.appendChild(el("div",{class:"sec-title"},`已接入 <span class="count">${regs.length}</span>`));
+  const connHead = el("div",{class:"sec-title"},`已接入 <span class="count">${regs.length}</span>`);
+  if(state.isAdmin) connHead.appendChild(scopeToggle());
+  p.appendChild(connHead);
   if(regs.length===0){
     p.appendChild(el("div",{class:"empty"},`<div class="ic" aria-hidden="true">${ICON.plug}</div><div class="et">还没有接入任何渠道</div><div class="es">从上方选一个渠道开始接入你的第一个 bot。</div>`));
   } else {
     const list=el("div",{role:"list"});
     regs.forEach(r=>{
       const st = normStatus(state.statuses[r.id]);
-      const badgeCls = st==="active"?"b-active":st==="error"?"b-error":st==="pending"?"b-pending":"b-soon";
-      const dotCls = st==="active"?"s-active":st==="error"?"s-error":st==="pending"?"s-pending":"s-unknown";
+      const [badgeCls,dotCls] = BADGE_BY_STATUS[st] || ["b-soon","s-unknown"];
       const row=el("div",{class:"reg-row",role:"listitem"});
       row.innerHTML=`
         <div class="rl" style="background:linear-gradient(150deg,var(--accent),color-mix(in oklab,var(--accent) 55%,#7c4dff))">${chLogo(r.platform||"lark")}</div>
@@ -1166,6 +1198,7 @@ function render(){
   state.signedIn=true;
   state.scopeId = resolveScopeId();
   render();
+  await loadMe();          // platform-admin flag + authoritative scope (drives the all-accounts toggle)
   loadRegistrations();
   loadLlm();
   (async()=>{ const acct=toAccount(await fetchUserInfo()); if(acct){ state.account=acct; render(); } })();
