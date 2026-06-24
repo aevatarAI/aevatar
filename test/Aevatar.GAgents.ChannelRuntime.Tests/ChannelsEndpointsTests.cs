@@ -32,8 +32,8 @@ public sealed class ChannelsEndpointsTests
         page.Metadata.OfType<HttpMethodMetadata>().Single().HttpMethods.Should().Contain("GET");
         page.Metadata.OfType<IAllowAnonymous>().Should().NotBeEmpty("the page is gated by in-page OIDC, not server auth");
 
-        // No /channels/callback: NyxID rejects unregistered redirect_uris, so the page reuses
-        // studio's /workflow/studio/callback instead.
+        // No /channels/callback: the unified console suite shares one OIDC redirect target,
+        // /auto/callback, so per-page callback routes are intentionally absent.
         endpoints.Any(route => route.RoutePattern.RawText == "/channels/callback").Should().BeFalse();
     }
 
@@ -48,9 +48,11 @@ public sealed class ChannelsEndpointsTests
         html.Should().StartWith("<!doctype html>");
         html.Should().Contain("id=\"app\"");
         html.Should().NotContain("class=\"dock\"", "the design-review dock must be stripped from the shipped page");
-        // OIDC reuses studio's registered callback + shared storage (NyxID rejects new redirect_uris)
-        html.Should().Contain("/workflow/studio/callback");
-        html.Should().Contain("aevatar-studio:nyxid:pkce");
+        // OIDC uses the unified suite's shared redirect target + shared storage (one login spans all pages)
+        html.Should().Contain("/auto/callback");
+        html.Should().Contain("aevatar-console:nyxid:pkce");
+        // the consolidated suite brand is fixed top-left across every page
+        html.Should().Contain("Aevatar Backend Console");
         // skill Tier-1 scope (the #1 silent-bot fix), event sub, and the default LLM reminder
         html.Should().Contain("im:message.p2p_msg:readonly");
         html.Should().Contain("im.message.receive_v1");

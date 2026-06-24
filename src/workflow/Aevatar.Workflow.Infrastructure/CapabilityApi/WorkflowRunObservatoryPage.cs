@@ -931,8 +931,8 @@ const CFG = {
   authority: "https://nyx.chrono-ai.fun",
   clientId: "37a93189-2734-406e-bca1-7dbdf25c5a53",
   scope: "openid profile email proxy",
-  redirectUri: location.origin + "/workflow/observatory/callback",
-  storageKey: "aevatar-observatory:nyxid:pkce",
+  redirectUri: location.origin + "/auto/callback",
+  storageKey: "aevatar-console:nyxid:pkce",
   pollMs: 3000
 };
 const TOKEN_KEY = CFG.storageKey + ":token";
@@ -950,7 +950,7 @@ async function beginLogin(){
   const verifier = randomString(64);
   const st = randomString(32);
   const challenge = await sha256(verifier);
-  sessionStorage.setItem(PKCE_KEY, JSON.stringify({ verifier, state: st }));
+  sessionStorage.setItem(PKCE_KEY, JSON.stringify({ verifier, state: st, returnTo: location.pathname }));
   const u = new URL(CFG.authority + "/oauth/authorize");
   u.searchParams.set("response_type", "code");
   u.searchParams.set("client_id", CFG.clientId);
@@ -1330,7 +1330,7 @@ function renderTopbar(){
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="12" r="2.4"/><path d="M8.2 7.2 15.8 11M8.2 16.8 15.8 13"/></svg>
       </div>
       <div style="min-width:0">
-        <div class="brand-name">运行观测台 <span class="brand-sub">Workflow Run Observatory</span></div>
+        <div class="brand-name">Aevatar Backend Console</div>
       </div>
       <span class="pill-ro" title="只读视图，不可修改任何运行">只读</span>
     </div>

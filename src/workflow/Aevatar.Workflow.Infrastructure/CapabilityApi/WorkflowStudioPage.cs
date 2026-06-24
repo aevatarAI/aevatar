@@ -130,9 +130,6 @@ internal static class WorkflowStudioPage
   .scope-chip .sid { font-family:var(--mono); font-size:11.5px; color:var(--fg); }
   .scope-chip svg { color:var(--ok); }
   .spacer { flex:1 1 auto; }
-  .obs-link { display:inline-flex; align-items:center; gap:7px; padding:6px 12px; border-radius:var(--r-pill);
-    background:var(--accent-soft); border:1px solid var(--accent-line); color:var(--accent); font-size:12.5px; font-weight:600; text-decoration:none; }
-  .obs-link:hover { background:color-mix(in oklab,var(--accent) 18%,transparent); }
   /* ---- shared suite navigation (identical across the five console pages) -- */
   .suite-nav { display:flex; align-items:center; gap:2px; overflow-x:auto; scrollbar-width:none; }
   .suite-nav::-webkit-scrollbar { display:none; }
@@ -482,8 +479,8 @@ const CFG = {
   authority: "https://nyx.chrono-ai.fun",
   clientId: "37a93189-2734-406e-bca1-7dbdf25c5a53",
   scope: "openid profile email proxy",
-  redirectUri: location.origin + "/workflow/studio/callback",
-  storageKey: "aevatar-studio:nyxid:pkce"
+  redirectUri: location.origin + "/auto/callback",
+  storageKey: "aevatar-console:nyxid:pkce"
 };
 const TOKEN_KEY = CFG.storageKey + ":token";
 const PKCE_KEY  = CFG.storageKey + ":pkce";
@@ -867,12 +864,11 @@ function renderTopbar(){
     <button class="mobnav" id="navBtn" aria-label="会话列表">${ICON.menu}</button>
     <div class="brand">
       <div class="brand-mark" aria-hidden="true">${ICON.studio}</div>
-      <div><div class="brand-name">${isSchedulesPage()?'定时任务 <span class="brand-sub">Schedules</span>':'Studio <span class="brand-sub">Workflow Studio</span>'}</div></div>
+      <div><div class="brand-name">Aevatar Backend Console</div></div>
     </div>
     ${suiteNavHtml(isSchedulesPage()?"schedules":"studio")}
     ${state.signedIn?scopeChipHtml():""}
-    <div class="spacer"></div>
-    ${state.signedIn?`<a class="obs-link" href="${OBS}" title="跳转到运行观测台（只读查看运行结果）">${ICON.ext}<span>运行观测台</span></a>`:""}`;
+    <div class="spacer"></div>`;
   const tbtn=el("button",{class:"iconbtn",id:"themeBtn","aria-label":"切换主题",title:"切换主题"});
   tbtn.innerHTML=effDark()?ICON.sun:ICON.moon;
   tbtn.addEventListener("click",()=>{ state.theme=effDark()?"light":"dark"; localStorage.setItem("studio-theme",state.theme); applyTheme(); render(); });

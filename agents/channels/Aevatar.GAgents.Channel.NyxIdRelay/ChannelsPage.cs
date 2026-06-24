@@ -130,8 +130,6 @@ internal static class ChannelsPage
   .scope-chip .sid { font-family:var(--mono); font-size:11.5px; color:var(--fg); }
   .scope-chip svg { color:var(--ok); }
   .spacer { flex:1 1 auto; }
-  .obs-link { display:inline-flex; align-items:center; gap:7px; padding:6px 12px; border-radius:var(--r-pill); background:var(--accent-soft); border:1px solid var(--accent-line); color:var(--accent); font-size:12.5px; font-weight:600; }
-  .obs-link:hover { background:color-mix(in oklab,var(--accent) 18%,transparent); text-decoration:none; }
   .iconbtn { width:34px; height:34px; display:grid; place-items:center; background:var(--panel-2); border:1px solid var(--border); border-radius:var(--r); color:var(--muted); transition:color .15s,border-color .15s; }
   .iconbtn:hover { color:var(--fg); border-color:var(--muted-2); }
   .account { display:inline-flex; align-items:center; gap:8px; padding:4px 6px 4px 4px; border-radius:var(--r-pill); background:var(--panel-2); border:1px solid var(--border); }
@@ -395,8 +393,6 @@ internal static class ChannelsPage
      GET/PUT /api/user-config/llm                        owner reply-model config
    =========================================================================== */
 
-const STUDIO = "/workflow/studio";
-const OBS = "/workflow/observatory";
 const DEFAULT_LLM = { route: "chrono-llm-public", model: "gpt-5.5" };
 
 /* Lark Tier-1 minimum scopes (skill §7 — the #1 silent-bot fix). */
@@ -570,8 +566,8 @@ const CFG = {
   authority: "https://nyx.chrono-ai.fun",
   clientId: "37a93189-2734-406e-bca1-7dbdf25c5a53",
   scope: "openid profile email proxy",
-  redirectUri: location.origin + "/workflow/studio/callback",
-  storageKey: "aevatar-studio:nyxid:pkce"
+  redirectUri: location.origin + "/auto/callback",
+  storageKey: "aevatar-console:nyxid:pkce"
 };
 const TOKEN_KEY = CFG.storageKey + ":token";
 const PKCE_KEY  = CFG.storageKey + ":pkce";
@@ -801,12 +797,11 @@ function renderTopbar(){
   bar.innerHTML=`
     <div class="brand">
       <div class="brand-mark" aria-hidden="true">${ICON.plug.replace('width="22" height="22"','width="15" height="15"')}</div>
-      <div><div class="brand-name">渠道接入 <span class="brand-sub">Channels</span></div></div>
+      <div><div class="brand-name">Aevatar Backend Console</div></div>
     </div>
     ${suiteNavHtml("channels")}
     ${state.signedIn?scopeChipHtml():""}
-    <div class="spacer"></div>
-    ${state.signedIn?`<a class="obs-link" href="${STUDIO}" title="回到对话式编排页">${ICON.studio}<span>工作室 Studio</span></a>`:""}`;
+    <div class="spacer"></div>`;
   const tbtn=el("button",{class:"iconbtn",id:"themeBtn","aria-label":"切换主题",title:"切换主题"});
   tbtn.innerHTML=effDark()?ICON.sun:ICON.moon;
   tbtn.addEventListener("click",()=>{ localStorage.setItem("channels-theme", effDark()?"light":"dark"); applyTheme(); render(); });

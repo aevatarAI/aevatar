@@ -364,8 +364,8 @@ const CFG = {
   authority: "https://nyx.chrono-ai.fun",
   clientId: "37a93189-2734-406e-bca1-7dbdf25c5a53",
   scope: "openid profile email proxy",
-  redirectUri: location.origin + "/voice/callback",
-  storageKey: "aevatar-voice:nyxid:pkce"
+  redirectUri: location.origin + "/auto/callback",
+  storageKey: "aevatar-console:nyxid:pkce"
 };
 const TOKEN_KEY = CFG.storageKey + ":token";
 const PKCE_KEY  = CFG.storageKey + ":pkce";
@@ -539,7 +539,7 @@ function renderTopbar(){
   bar.innerHTML=
     '<div class="brand">'+
       '<div class="brand-mark" aria-hidden="true">'+ICON.mic+'</div>'+
-      '<div style="min-width:0"><div class="brand-name">语音在场 <span class="brand-sub">Voice Presence</span></div></div>'+
+      '<div style="min-width:0"><div class="brand-name">Aevatar Backend Console</div></div>'+
     '</div>'+
     suiteNavHtml("voice")+
     '<div class="spacer"></div>'+
