@@ -100,7 +100,8 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
                 ResolveAuthoritativeScopeId(request, chatRequest),
                 string.IsNullOrWhiteSpace(request.RunOrigin)
                     ? WorkflowRunOrigins.ServiceInvoke
-                    : request.RunOrigin.Trim()),
+                    : request.RunOrigin.Trim(),
+                request.ScheduleId?.Trim() ?? string.Empty),
             ct);
         var commandId = ResolveCommandId(request);
         var correlationId = ResolveCorrelationId(request, commandId);

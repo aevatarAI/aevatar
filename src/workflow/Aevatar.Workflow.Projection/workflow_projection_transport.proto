@@ -68,6 +68,9 @@ message WorkflowExecutionCurrentStateDocument {
   // Canonical run origin/type carried from the committed WorkflowRunState. Observatory filter
   // dimension; empty for legacy/unstamped runs.
   string run_origin = 31;
+  // Per-schedule correlation id carried from the committed WorkflowRunState. Observatory filter
+  // dimension for "this schedule's runs"; empty for non-scheduled/legacy runs.
+  string schedule_id = 32;
 }
 
 message WorkflowExternalApprovalContinuationDocument {

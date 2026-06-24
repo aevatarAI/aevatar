@@ -590,6 +590,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
             Identity = GAgentServiceTestKit.CreateIdentity(),
             EndpointId = "chat",
             CommandId = "cmd-wf",
+            ScheduleId = "schedule-wf",
             Payload = Any.Pack(new ChatRequestEvent { Prompt = "hi" }),
         };
         target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
@@ -615,6 +616,9 @@ public sealed class DefaultServiceInvocationDispatcherTests
         workflowPort.CreateRunCalls[0].WorkflowYaml.Should().Be("name: artifact-wf");
         workflowPort.CreateRunCalls[0].InlineWorkflowYamls.Should().Contain("helper", "name: helper");
         workflowPort.CreateRunCalls[0].RunOrigin.Should().Be(WorkflowRunOrigins.ServiceInvoke);
+        // 06-24: scheduleId must ride from the service-invocation request into the run binding so the
+        // observatory can filter this schedule's runs (previously dropped on the workflow branch).
+        workflowPort.CreateRunCalls[0].ScheduleId.Should().Be("schedule-wf");
     }
 
     [Fact]

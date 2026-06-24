@@ -95,6 +95,7 @@ public sealed class WorkflowRunObservatoryQueryService
             Status = filter.Status?.Trim() ?? string.Empty,
             RunOrigins = filter.Origins,
             DefinitionActorIds = filter.DefinitionActorIds,
+            ScheduleIds = filter.ScheduleIds,
             UpdatedFromUtc = filter.FromUtc,
             UpdatedToUtc = filter.ToUtc,
         };

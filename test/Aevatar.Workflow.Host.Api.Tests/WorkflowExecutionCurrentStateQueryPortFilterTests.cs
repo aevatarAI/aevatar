@@ -132,6 +132,48 @@ public sealed class WorkflowExecutionCurrentStateQueryPortFilterTests
         rangeFilters.Should().Contain(filter => filter.Operator == ProjectionDocumentFilterOperator.Lte);
     }
 
+    [Fact]
+    public async Task ListWorkflowActorCurrentStatesAsync_ShouldEmitScheduleIdEqFilter_ForSingleScheduleId()
+    {
+        var reader = new RecordingCurrentStateReader();
+        var port = CreatePort(reader);
+
+        await port.ListWorkflowActorCurrentStatesAsync(
+            new WorkflowActorCurrentStateListQuery
+            {
+                Take = 50,
+                ScheduleIds = [" schedule-a "],
+            });
+
+        reader.LastQuery.Should().NotBeNull();
+        ShouldContainStringFilter(
+            reader.LastQuery!.Filters,
+            nameof(WorkflowExecutionCurrentStateDocument.ScheduleId),
+            ProjectionDocumentFilterOperator.Eq,
+            "schedule-a");
+    }
+
+    [Fact]
+    public async Task ListWorkflowActorCurrentStatesAsync_ShouldEmitScheduleIdInFilter_ForMultipleScheduleIds()
+    {
+        var reader = new RecordingCurrentStateReader();
+        var port = CreatePort(reader);
+
+        await port.ListWorkflowActorCurrentStatesAsync(
+            new WorkflowActorCurrentStateListQuery
+            {
+                Take = 50,
+                ScheduleIds = [" schedule-a ", "", "schedule-b", "schedule-a", "   "],
+            });
+
+        reader.LastQuery.Should().NotBeNull();
+        ShouldContainStringListFilter(
+            reader.LastQuery!.Filters,
+            nameof(WorkflowExecutionCurrentStateDocument.ScheduleId),
+            ProjectionDocumentFilterOperator.In,
+            ["schedule-a", "schedule-b"]);
+    }
+
     private static WorkflowExecutionCurrentStateQueryPort CreatePort(RecordingCurrentStateReader reader) =>
         new(
             reader,

@@ -893,6 +893,8 @@ public sealed class WorkflowExecutionProjectionProjectorTests
                     DefinitionActorId = "definition-1",
                     WorkflowName = "wf-current",
                     ScopeId = "scope-current",
+                    RunOrigin = "provisioned",
+                    ScheduleId = "schedule-current",
                     Status = status,
                     Compiled = true,
                     CompilationError = "none",
@@ -920,6 +922,8 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         document.DefinitionActorId.Should().Be("definition-1");
         document.WorkflowName.Should().Be("wf-current");
         document.ScopeId.Should().Be("scope-current");
+        document.RunOrigin.Should().Be("provisioned");
+        document.ScheduleId.Should().Be("schedule-current");
         document.Status.Should().Be(status);
         document.SagaStatus.Should().Be(WorkflowSagaStatus.CompensationDeadLetter);
         document.DeadLetterFailedCompensationStepId.Should().Be("refund_payment");

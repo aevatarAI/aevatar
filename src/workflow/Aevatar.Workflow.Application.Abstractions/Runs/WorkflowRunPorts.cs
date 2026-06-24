@@ -26,7 +26,8 @@ public sealed record WorkflowDefinitionBinding(
     string WorkflowYaml,
     IReadOnlyDictionary<string, string> InlineWorkflowYamls,
     string ScopeId = "",
-    string RunOrigin = "");
+    string RunOrigin = "",
+    string ScheduleId = "");
 
 public sealed record WorkflowRunCreationReceipt(
     string ActorId,

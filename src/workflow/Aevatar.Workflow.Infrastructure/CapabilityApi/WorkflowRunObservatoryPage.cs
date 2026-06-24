@@ -295,6 +295,22 @@ internal static class WorkflowRunObservatoryPage
   }
   .fb-tclear:hover { text-decoration: underline; }
 
+  /* active schedule deep-link filter chip (06-24): arrives via the /schedules deep-link, no select */
+  .sched-filter {
+    display: inline-flex; align-items: center; gap: 7px; margin: 0 16px 10px;
+    padding: 5px 7px 5px 10px; border-radius: var(--r-pill); font-size: 12px;
+    color: var(--run); background: var(--run-soft);
+    border: 1px solid color-mix(in oklab, var(--run) 32%, transparent);
+  }
+  .sched-filter .sf-ic { display: inline-flex; opacity: .85; }
+  .sched-filter .sf-lab { font-weight: 650; }
+  .sched-filter .sf-id { font-family: var(--mono); color: var(--fg); max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sched-filter .sf-x {
+    display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px;
+    padding: 0; border: 0; border-radius: 50%; background: transparent; color: inherit; cursor: pointer; opacity: .7;
+  }
+  .sched-filter .sf-x:hover { opacity: 1; background: color-mix(in oklab, var(--run) 18%, transparent); }
+
   /* the controls panel — compact horizontal flex-wrap; hidden when collapsed */
   .filterbar {
     display: flex; align-items: flex-end; gap: 8px 10px; flex-wrap: wrap;
@@ -1002,7 +1018,8 @@ const filterState = (function(){
   const date = (k) => { const v = (q.get(k) || "").trim(); const ms = v ? Date.parse(v) : NaN; return isNaN(ms) ? "" : new Date(ms).toISOString().slice(0,10); };
   // panel open/closed survives re-renders (and bookmarks via ?filters=1); collapsed by default.
   const open = (q.get("filters") || "").trim() === "1";
-  return { status: pick("status", STATUS_VALUES), origin: pick("origin", ORIGIN_VALUES), from: date("from"), to: date("to"), open };
+  // schedule is a deep-link-only filter (opaque scheduleId, no <select>); empty = not filtered.
+  return { status: pick("status", STATUS_VALUES), origin: pick("origin", ORIGIN_VALUES), schedule: (q.get("schedule")||"").trim(), from: date("from"), to: date("to"), open };
 })();
 function originLabel(o){ return o ? (ORIGIN_LABEL[o] || o) : ""; }
 /* compose the runs LIST query: existing scope axis + the four filter dimensions. Empty filters are
@@ -1012,14 +1029,15 @@ function listQueryParams(){
   if(adminState.isAdmin && adminState.currentScope) p.set("scope", adminState.currentScope);
   if(filterState.status) p.set("status", filterState.status);
   if(filterState.origin) p.set("origin", filterState.origin);
+  if(filterState.schedule) p.set("schedule", filterState.schedule);
   if(filterState.from){ const d = new Date(filterState.from + "T00:00:00"); if(!isNaN(d)) p.set("from", d.toISOString()); }
   if(filterState.to){ const d = new Date(filterState.to + "T23:59:59.999"); if(!isNaN(d)) p.set("to", d.toISOString()); }
   const s = p.toString();
   return s ? "?" + s : "";
 }
-function hasActiveFilters(){ return !!(filterState.status || filterState.origin || filterState.from || filterState.to); }
+function hasActiveFilters(){ return !!(filterState.status || filterState.origin || filterState.schedule || filterState.from || filterState.to); }
 /* count of active filter dimensions — drives the collapsed-header badge. */
-function activeFilterCount(){ return (filterState.status?1:0) + (filterState.origin?1:0) + (filterState.from?1:0) + (filterState.to?1:0); }
+function activeFilterCount(){ return (filterState.status?1:0) + (filterState.origin?1:0) + (filterState.schedule?1:0) + (filterState.from?1:0) + (filterState.to?1:0); }
 /* persist the filter-panel open state into the URL (best-effort) so it survives reload/bookmarks
    without disturbing the existing scope hash or other query params. */
 function persistFilterOpen(){
@@ -1384,12 +1402,23 @@ function renderFilterBar(){
     const clr = el("button", { class:"fb-tclear", type:"button", "aria-label":"清除全部筛选" }, "清除");
     clr.addEventListener("click", (e) => {
       e.stopPropagation();
-      filterState.status=""; filterState.origin=""; filterState.from=""; filterState.to="";
+      filterState.status=""; filterState.origin=""; filterState.schedule=""; filterState.from=""; filterState.to="";
       applyFilterChange();
     });
     toggle.appendChild(clr);
   }
   wrap.appendChild(toggle);
+
+  // active schedule deep-link filter — dismissible chip (the scheduleId has no <select>; it arrives
+  // via the /schedules deep-link), so it gets its own always-visible affordance below the toggle.
+  if(filterState.schedule){
+    const chip = el("div", { class:"sched-filter", title:"仅显示该定时任务触发的运行" });
+    chip.innerHTML = `<span class="sf-ic" aria-hidden="true">${ICON.filter}</span><span class="sf-lab">定时任务</span><span class="sf-id">${esc(filterState.schedule)}</span>`;
+    const x = el("button", { class:"sf-x", type:"button", "aria-label":"清除定时任务筛选" }, ICON.x);
+    x.addEventListener("click", () => { filterState.schedule=""; applyFilterChange(); });
+    chip.appendChild(x);
+    wrap.appendChild(chip);
+  }
 
   // --- the controls panel (hidden when collapsed) ---
   const bar = el("div", { class:"filterbar", id:"filterPanel", role:"group", "aria-label":"按状态、来源、更新时间筛选运行" });

@@ -159,6 +159,9 @@ message BindWorkflowRunDefinitionEvent
   // default-invoke | team-invoke | service-invoke | ad-hoc-chat | provisioned). Observatory
   // filter dimension; empty for legacy/unstamped runs.
   string run_origin = 7;
+  // Per-schedule correlation id stamped at bind for provisioned (cron-fired) runs; empty for
+  // non-scheduled runs. Carried from ServiceInvocationRequest.schedule_id via WorkflowDefinitionBinding.
+  string schedule_id = 8;
 }
 message BindWorkflowDefinitionEvent
 {

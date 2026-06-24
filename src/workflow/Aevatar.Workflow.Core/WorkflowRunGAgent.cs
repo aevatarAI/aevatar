@@ -357,6 +357,7 @@ public sealed class WorkflowRunGAgent
         string? runId = null,
         string? scopeId = null,
         string? runOrigin = null,
+        string? scheduleId = null,
         CancellationToken ct = default)
     {
         EnsureWorkflowNameCanBind(workflowName);
@@ -370,6 +371,7 @@ public sealed class WorkflowRunGAgent
             RunId = string.IsNullOrWhiteSpace(runId) ? Id : WorkflowRunIdNormalizer.Normalize(runId),
             ScopeId = scopeId?.Trim() ?? string.Empty,
             RunOrigin = runOrigin?.Trim() ?? string.Empty,
+            ScheduleId = scheduleId?.Trim() ?? string.Empty,
         };
         if (inlineWorkflowYamls != null)
         {
@@ -393,7 +395,8 @@ public sealed class WorkflowRunGAgent
             request.InlineWorkflowYamls,
             request.RunId,
             request.ScopeId,
-            request.RunOrigin);
+            request.RunOrigin,
+            request.ScheduleId);
 
     public override Task<string> GetDescriptionAsync()
     {
@@ -1267,6 +1270,9 @@ public sealed class WorkflowRunGAgent
         next.RunOrigin = string.IsNullOrWhiteSpace(evt.RunOrigin)
             ? current.RunOrigin
             : evt.RunOrigin.Trim();
+        next.ScheduleId = string.IsNullOrWhiteSpace(evt.ScheduleId)
+            ? current.ScheduleId
+            : evt.ScheduleId.Trim();
         next.Status = "bound";
         next.Input = string.Empty;
         next.FinalOutput = string.Empty;
@@ -2082,6 +2088,7 @@ public sealed class WorkflowRunGAgent
             RunId = string.IsNullOrWhiteSpace(State.RunId) ? Id : State.RunId,
             ScopeId = State.ScopeId ?? string.Empty,
             RunOrigin = State.RunOrigin ?? string.Empty,
+            ScheduleId = State.ScheduleId ?? string.Empty,
             InlineWorkflowYamls = { State.InlineWorkflowYamls },
         }, ct);
         await _subWorkflowOrchestrator.CancelPendingDefinitionResolutionTimeoutsAsync(stateBeforeBind, CancellationToken.None);

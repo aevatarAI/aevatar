@@ -362,6 +362,12 @@ internal static class WorkflowStudioPage
   .sched-err { margin-top:8px; font-family:var(--mono); font-size:11px; color:var(--err); background:var(--err-soft); border:1px solid color-mix(in oklab,var(--err) 30%,transparent); border-radius:var(--r-sm); padding:6px 8px; word-break:break-word; }
   .poll-tag { font-size:10.5px; color:var(--muted-2); display:inline-flex; align-items:center; gap:5px; }
   .poll-tag .dot { width:6px; height:6px; background:var(--run); animation:pulse 2.4s ease-out infinite; }
+  /* standalone /schedules full-screen page (reuses the .sched cards above) */
+  .sched-page { max-width:760px; margin:0 auto; padding:28px 20px 48px; overflow-y:auto; height:calc(100dvh - var(--topbar-h)); }
+  .sched-page-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:20px; }
+  .sched-page-title { font-size:20px; font-weight:680; color:var(--fg-strong); margin:0; letter-spacing:-.01em; }
+  .sched-page-sub { font-size:12.5px; color:var(--muted); margin:6px 0 0; line-height:1.55; max-width:52ch; }
+  .sched-page-empty { display:grid; place-items:center; padding:64px 0; }
 
   .ctx-empty { flex:1 1 auto; display:grid; place-items:center; }
 
@@ -483,7 +489,7 @@ async function beginLogin(){
   const verifier = randomString(64);
   const st = randomString(32);
   const challenge = await sha256(verifier);
-  sessionStorage.setItem(PKCE_KEY, JSON.stringify({ verifier, state: st }));
+  sessionStorage.setItem(PKCE_KEY, JSON.stringify({ verifier, state: st, returnTo: location.pathname }));
   const u = new URL(CFG.authority + "/oauth/authorize");
   u.searchParams.set("response_type", "code");
   u.searchParams.set("client_id", CFG.clientId);
@@ -501,7 +507,7 @@ async function completeLoginIfCallback(){
   if(!code) return false;
   const returnedState = params.get("state");
   const pending = JSON.parse(sessionStorage.getItem(PKCE_KEY) || "null");
-  history.replaceState({}, "", "/workflow/studio");
+  history.replaceState({}, "", (pending && pending.returnTo) || "/workflow/studio");
   if(!pending || pending.state !== returnedState){ console.warn("studio: login state mismatch"); return false; }
   const form = new URLSearchParams();
   form.set("grant_type", "authorization_code");
@@ -719,13 +725,15 @@ async function loadSchedules(){
     const data = await api("/api/schedules?take=50");
     const items = (data && Array.isArray(data.items)) ? data.items.filter(s=>!s.deleted) : [];
     const sig = JSON.stringify(items);
+    const wantsRender = ()=> state.signedIn && (isSchedulesPage() || state.ctxTab==="schedules");
     if(sig !== state.schedulesSig){
       state.schedules = items;
       state.schedulesSig = sig;
       state.schedulesLoaded = true;
-      if(state.signedIn && state.ctxTab==="schedules") render();
+      if(wantsRender()) render();
     } else if(!state.schedulesLoaded){
       state.schedulesLoaded = true;
+      if(wantsRender()) render();
     }
   } catch(e){ /* leave last-known schedules; chip stays as-is */ }
 }
@@ -838,7 +846,7 @@ function renderTopbar(){
     <button class="mobnav" id="navBtn" aria-label="会话列表">${ICON.menu}</button>
     <div class="brand">
       <div class="brand-mark" aria-hidden="true">${ICON.studio}</div>
-      <div><div class="brand-name">Studio <span class="brand-sub">Workflow Studio</span></div></div>
+      <div><div class="brand-name">${isSchedulesPage()?'定时任务 <span class="brand-sub">Schedules</span>':'Studio <span class="brand-sub">Workflow Studio</span>'}</div></div>
     </div>
     ${state.signedIn?scopeChipHtml():""}
     <div class="spacer"></div>
@@ -1290,37 +1298,73 @@ function ctxPanel(icon,color,title,metaHtml,bodyNode){
 }
 
 // Live schedules (GET /api/schedules) — reuses the existing .sched component.
+// Deep-link to the observatory filtered to THIS schedule's runs (read-only view).
+// schedule rides the query string (?schedule=<id>); scope rides the hash (#scope=<id>),
+// matching how WorkflowRunObservatoryPage parses each. The observatory ignores an
+// unknown ?schedule= until the per-schedule filter is wired, so this href is forward-safe.
+function observatoryRunsHref(s){
+  const q = `?schedule=${encodeURIComponent(s.scheduleId||"")}`;
+  const hash = state.scopeId ? `#scope=${encodeURIComponent(state.scopeId)}` : "";
+  return `${OBS}${q}${hash}`;
+}
+function schedulesSkeleton(){
+  return el("div",{class:"sched"},`<div class="sched-top"><span class="sk" style="width:9px;height:9px;border-radius:50%"></span><span class="sk" style="height:13px;width:160px"></span></div><div class="sched-grid" style="margin-top:8px"><span class="sk" style="height:12px"></span><span class="sk" style="height:12px"></span><span class="sk" style="height:12px"></span><span class="sk" style="height:12px"></span></div>`);
+}
+// Single schedule card — shared by the studio right-pane panel and the standalone /schedules page.
+function renderScheduleCard(s){
+  const sc=el("div",{class:"sched"});
+  const hasFail = (s.failureCount||0)>0;
+  sc.innerHTML=`
+    <div class="sched-top"><span class="dot s-${s.enabled?(hasFail?"failed":"completed"):"stopped"}"></span><span class="sname">${esc(s.displayName||s.scheduleId)}</span><span class="sched-cron">${esc(s.cronExpression||"")}</span></div>
+    <div class="sched-grid">
+      <div class="sg"><span class="gk">timezone</span><span class="gv">${esc(s.timezone||"—")}</span></div>
+      <div class="sg"><span class="gk">enabled</span><span class="gv">${s.enabled?"true":"false"}</span></div>
+      <div class="sg"><span class="gk">下次触发</span><span class="gv">${s.nextFireAt?relFuture(s.nextFireAt):"—"}</span></div>
+      <div class="sg"><span class="gk">上次触发</span><span class="gv">${s.lastFireAt?relPast(s.lastFireAt):"—"}</span></div>
+      <div class="sg"><span class="gk">fireCount</span><span class="gv">${s.fireCount||0}</span></div>
+      <div class="sg"><span class="gk">failureCount</span><span class="gv ${hasFail?"bad":""}">${s.failureCount||0}</span></div>
+      <div class="sg"><span class="gk">kind</span><span class="gv">${esc(scheduleKindLabel(s.scheduleKind))}</span></div>
+      <div class="sg"><span class="gk">target</span><span class="gv">${esc(targetKindLabel(s.targetKind))}</span></div>
+    </div>
+    ${s.lastError?`<div class="sched-err">lastError: ${esc(s.lastError)}</div>`:""}
+    <a class="deeplink" style="margin-top:9px" href="${observatoryRunsHref(s)}">${ICON.ext}<span>到观测台查看运行</span></a>`;
+  return sc;
+}
 function renderSchedulesPanel(){
   if(!state.schedulesLoaded){
     const p=el("div",{class:"ctx-panel scroll"});
-    p.appendChild(el("div",{class:"sched"},`<div class="sched-top"><span class="sk" style="width:9px;height:9px;border-radius:50%"></span><span class="sk" style="height:13px;width:160px"></span></div><div class="sched-grid" style="margin-top:8px"><span class="sk" style="height:12px"></span><span class="sk" style="height:12px"></span><span class="sk" style="height:12px"></span><span class="sk" style="height:12px"></span></div>`));
+    p.appendChild(schedulesSkeleton());
     return p;
   }
   if(!state.schedules.length){
     return panelEmpty(ICON.clock,"还没有定时任务","为 service 配置 cron 后会出现在这里。");
   }
   const b=el("div",{});
-  state.schedules.forEach(s=>{
-    const sc=el("div",{class:"sched"});
-    const hasFail = (s.failureCount||0)>0;
-    const deepHref = state.scopeId ? `${OBS}#scope=${encodeURIComponent(state.scopeId)}` : OBS;
-    sc.innerHTML=`
-      <div class="sched-top"><span class="dot s-${s.enabled?(hasFail?"failed":"completed"):"stopped"}"></span><span class="sname">${esc(s.displayName||s.scheduleId)}</span><span class="sched-cron">${esc(s.cronExpression||"")}</span></div>
-      <div class="sched-grid">
-        <div class="sg"><span class="gk">timezone</span><span class="gv">${esc(s.timezone||"—")}</span></div>
-        <div class="sg"><span class="gk">enabled</span><span class="gv">${s.enabled?"true":"false"}</span></div>
-        <div class="sg"><span class="gk">下次触发</span><span class="gv">${s.nextFireAt?relFuture(s.nextFireAt):"—"}</span></div>
-        <div class="sg"><span class="gk">上次触发</span><span class="gv">${s.lastFireAt?relPast(s.lastFireAt):"—"}</span></div>
-        <div class="sg"><span class="gk">fireCount</span><span class="gv">${s.fireCount||0}</span></div>
-        <div class="sg"><span class="gk">failureCount</span><span class="gv ${hasFail?"bad":""}">${s.failureCount||0}</span></div>
-        <div class="sg"><span class="gk">kind</span><span class="gv">${esc(scheduleKindLabel(s.scheduleKind))}</span></div>
-        <div class="sg"><span class="gk">target</span><span class="gv">${esc(targetKindLabel(s.targetKind))}</span></div>
-      </div>
-      ${s.lastError?`<div class="sched-err">lastError: ${esc(s.lastError)}</div>`:""}
-      <a class="deeplink" style="margin-top:9px" href="${deepHref}">${ICON.ext}<span>到观测台看触发运行</span></a>`;
-    b.appendChild(sc);
-  });
+  state.schedules.forEach(s=>{ b.appendChild(renderScheduleCard(s)); });
   return ctxPanel(ICON.clock,"var(--warn)","Schedules",`<span class="poll-tag"><span class="dot"></span>实时</span>`,b);
+}
+// Standalone full-screen schedules view (served at /schedules; same shell + login gate
+// as the studio app, renders the live schedule cards full-width instead of the 3-pane app).
+function isSchedulesPage(){ return location.pathname.replace(/\/+$/,"")==="/schedules"; }
+function renderSchedulesPage(){
+  const main=el("main",{class:"sched-page"});
+  const head=el("div",{class:"sched-page-head"});
+  head.innerHTML=`<div><h1 class="sched-page-title">定时任务</h1><p class="sched-page-sub">当前 scope 的全部定时任务（cron 调度）。点任一卡片的「到观测台查看运行」可精准查看它触发的运行。</p></div><span class="poll-tag"><span class="dot"></span>实时</span>`;
+  main.appendChild(head);
+  if(!state.schedulesLoaded){
+    const list=el("div",{class:"sched-page-list"});
+    list.appendChild(schedulesSkeleton()); list.appendChild(schedulesSkeleton());
+    main.appendChild(list);
+    return main;
+  }
+  if(!state.schedules.length){
+    main.appendChild(el("div",{class:"sched-page-empty"},`<div class="empty"><div class="ic" aria-hidden="true">${ICON.clock}</div><div class="et">还没有定时任务</div><div class="es">为 service 配置 cron 后会出现在这里。</div></div>`));
+    return main;
+  }
+  const list=el("div",{class:"sched-page-list"});
+  state.schedules.forEach(s=>{ list.appendChild(renderScheduleCard(s)); });
+  main.appendChild(list);
+  return main;
 }
 
 /* ===========================================================================
@@ -1347,6 +1391,7 @@ function renderLogin(){
 function render(){
   const app=$("#app"); app.innerHTML="";
   if(!state.signedIn){ app.appendChild(renderTopbar()); app.appendChild(renderLogin()); return; }
+  if(isSchedulesPage()){ app.appendChild(renderTopbar()); app.appendChild(renderSchedulesPage()); return; }
   if(state.ctxW) document.documentElement.style.setProperty("--ctx-w", state.ctxW+"px");
   app.appendChild(renderTopbar());
   const shell=el("div",{class:"shell"});

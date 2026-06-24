@@ -168,6 +168,9 @@ message WorkflowRunState
   // Canonical run origin/type stamped at bind by the creating ingress. Observatory filter
   // dimension; empty for legacy/unstamped runs. See WorkflowRunOrigins for the canonical set.
   string run_origin = 35;
+  // Per-schedule correlation id stamped at bind for provisioned (cron-fired) runs; empty for
+  // non-scheduled runs. Observatory filter dimension for "this schedule's runs".
+  string schedule_id = 36;
 }
 
 message WorkflowRunExecutionContextState

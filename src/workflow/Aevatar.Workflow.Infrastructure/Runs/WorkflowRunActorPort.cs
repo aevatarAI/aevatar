@@ -102,7 +102,8 @@ internal sealed class WorkflowRunActorPort :
                     definition.WorkflowName,
                     definition.InlineWorkflowYamls,
                     definition.ScopeId,
-                    definition.RunOrigin),
+                    definition.RunOrigin,
+                    definition.ScheduleId),
                 ct);
 
             return new WorkflowRunCreationReceipt(
@@ -431,12 +432,13 @@ internal sealed class WorkflowRunActorPort :
         string workflowName,
         IReadOnlyDictionary<string, string> inlineWorkflowYamls,
         string? scopeId,
-        string? runOrigin) =>
+        string? runOrigin,
+        string? scheduleId) =>
         new()
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(BuildBindWorkflowRunDefinitionEvent(definitionActorId, runId, workflowYaml, workflowName, inlineWorkflowYamls, scopeId, runOrigin)),
+            Payload = Any.Pack(BuildBindWorkflowRunDefinitionEvent(definitionActorId, runId, workflowYaml, workflowName, inlineWorkflowYamls, scopeId, runOrigin, scheduleId)),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication(WorkflowRunActorPortPublisherId, TopologyAudience.Self),
             Propagation = new EnvelopePropagation
             {
@@ -494,7 +496,8 @@ internal sealed class WorkflowRunActorPort :
         string workflowName,
         IReadOnlyDictionary<string, string> inlineWorkflowYamls,
         string? scopeId,
-        string? runOrigin)
+        string? runOrigin,
+        string? scheduleId)
     {
         var bind = new BindWorkflowRunDefinitionEvent
         {
@@ -504,6 +507,7 @@ internal sealed class WorkflowRunActorPort :
             WorkflowName = workflowName ?? string.Empty,
             ScopeId = scopeId?.Trim() ?? string.Empty,
             RunOrigin = runOrigin?.Trim() ?? string.Empty,
+            ScheduleId = scheduleId?.Trim() ?? string.Empty,
         };
 
         foreach (var (key, value) in inlineWorkflowYamls)

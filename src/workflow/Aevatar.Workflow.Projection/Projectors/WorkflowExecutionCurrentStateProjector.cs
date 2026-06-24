@@ -54,6 +54,7 @@ public sealed class WorkflowExecutionCurrentStateProjector
             Status = state.Status ?? string.Empty,
             ScopeId = state.ScopeId ?? string.Empty,
             RunOrigin = state.RunOrigin ?? string.Empty,
+            ScheduleId = state.ScheduleId ?? string.Empty,
             Compiled = state.Compiled,
             CompilationError = state.CompilationError ?? string.Empty,
             Input = state.Input ?? string.Empty,

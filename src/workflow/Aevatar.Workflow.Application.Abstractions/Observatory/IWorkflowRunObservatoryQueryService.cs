@@ -32,6 +32,9 @@ public sealed class ObservatoryRunListFilter
 
     public IReadOnlyList<string> DefinitionActorIds { get; init; } = [];
 
+    // 06-24-schedules-page-and-schedule-run-filter: runs produced by a specific cron schedule.
+    public IReadOnlyList<string> ScheduleIds { get; init; } = [];
+
     public DateTimeOffset? FromUtc { get; init; }
 
     public DateTimeOffset? ToUtc { get; init; }

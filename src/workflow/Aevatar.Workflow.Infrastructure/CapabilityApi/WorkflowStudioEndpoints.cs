@@ -13,6 +13,7 @@ namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 public static class WorkflowStudioEndpoints
 {
     private const string PageRoute = "/workflow/studio";
+    private const string SchedulesRoute = "/schedules";
     private const string CallbackRoute = "/workflow/studio/callback";
 
     public static IEndpointRouteBuilder MapWorkflowStudio(this IEndpointRouteBuilder app)
@@ -23,6 +24,16 @@ public static class WorkflowStudioEndpoints
             .WithTags("WorkflowStudio")
             .WithName("GetWorkflowStudioPage")
             .WithSummary("Conversational workflow studio (inline self-contained page).")
+            .AllowAnonymous();
+
+        // Standalone schedules view: same self-contained shell + login gate as the studio
+        // page; the in-page JS renders a full-screen schedules list when path is /schedules.
+        // Reuses the studio OIDC callback (/workflow/studio/callback) + storageKey, so no new
+        // NyxID redirect_uri registration is required.
+        app.MapGet(SchedulesRoute, GetStudioPage)
+            .WithTags("WorkflowStudio")
+            .WithName("GetWorkflowSchedulesPage")
+            .WithSummary("Standalone schedules view (studio shell, full-screen schedules).")
             .AllowAnonymous();
 
         app.MapGet(CallbackRoute, GetStudioPage)

@@ -75,6 +75,20 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
     }
 
     [Fact]
+    public async Task ListRunsForScopeAsync_ShouldPassScheduleIdsToQuery_WhenRequested()
+    {
+        var currentState = new FakeCurrentStateQueryPort();
+        var service = new WorkflowRunObservatoryQueryService(currentState, new FakeArtifactQueryPort());
+
+        await service.ListRunsForScopeAsync(
+            CallerScope,
+            new ObservatoryRunListFilter { ScheduleIds = ["schedule-a", "schedule-b"] });
+
+        currentState.LastListQuery.Should().NotBeNull();
+        currentState.LastListQuery!.ScheduleIds.Should().BeEquivalentTo(["schedule-a", "schedule-b"]);
+    }
+
+    [Fact]
     public async Task ListRunsForScopeAsync_ShouldReturnEmpty_WhenScopeBlank()
     {
         var currentState = new FakeCurrentStateQueryPort();

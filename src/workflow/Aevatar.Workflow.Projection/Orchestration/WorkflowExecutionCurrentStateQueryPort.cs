@@ -186,6 +186,30 @@ public sealed class WorkflowExecutionCurrentStateQueryPort : IWorkflowExecutionC
             });
         }
 
+        var scheduleIds = query.ScheduleIds
+            .Select(static value => value?.Trim() ?? string.Empty)
+            .Where(static value => value.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (scheduleIds.Length == 1)
+        {
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(WorkflowExecutionCurrentStateDocument.ScheduleId),
+                Operator = ProjectionDocumentFilterOperator.Eq,
+                Value = ProjectionDocumentValue.FromString(scheduleIds[0]),
+            });
+        }
+        else if (scheduleIds.Length > 1)
+        {
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(WorkflowExecutionCurrentStateDocument.ScheduleId),
+                Operator = ProjectionDocumentFilterOperator.In,
+                Value = ProjectionDocumentValue.FromStrings(scheduleIds),
+            });
+        }
+
         if (query.UpdatedFromUtc is { } updatedFrom)
         {
             filters.Add(new ProjectionDocumentFilter
