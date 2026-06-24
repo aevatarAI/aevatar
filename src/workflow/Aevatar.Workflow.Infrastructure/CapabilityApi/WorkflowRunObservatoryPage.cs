@@ -849,6 +849,14 @@ internal static class WorkflowRunObservatoryPage
     .list-pane { border-right: 0; }
     .brand-sub { display: none; }
     .account .who { max-width: 92px; }
+    /* topbar: stop secondary pills from being squeezed into ugly vertical char-wrap
+       (e.g. "已暂停"/"切换账户" stacking one glyph per line); let the brand truncate instead. */
+    .topbar { gap: 8px; }
+    .brand-name { overflow: hidden; text-overflow: ellipsis; }
+    .brand, .brand > div { min-width: 0; }
+    .pill-ro, .live, .iconbtn, .account, .linkbtn { flex-shrink: 0; }
+    .live, .linkbtn, .pill-ro { white-space: nowrap; }
+    .live .freshness { display: none; }
     /* mobile master-detail: one region visible at a time */
     body[data-mobile-view="list"] .detail-pane { display: none; }
     body[data-mobile-view="detail"] .list-pane { display: none; }
@@ -871,6 +879,14 @@ internal static class WorkflowRunObservatoryPage
     .gnode-detail { top: auto; left: 8px; right: 8px; bottom: 8px; width: auto; max-width: none; max-height: 64%; }
   }
   @media (min-width: 761px) { .backbar { display: none !important; } }
+
+  /* phone: drop the most secondary topbar chrome (read-only pill, live indicator, account email)
+     so brand + theme + account/sign-out fit on one clean row without squeezing. */
+  @media (max-width: 520px) {
+    .topbar { gap: 6px; padding: 0 12px; }
+    .pill-ro, .live { display: none; }
+    .account .who { display: none; }
+  }
 
   /* reduced motion */
   @media (prefers-reduced-motion: reduce) {
@@ -1479,7 +1495,10 @@ function renderList(){
   runs.forEach(r => {
     const sel = state.selectedRunId === r.runId && state.scenario==="normal";
     const row = el("button", { class:"run-row", role:"listitem", "aria-current": String(sel) });
-    const scopeCol = (adminState.isAdmin && adminState.currentScope)
+    // scope id per row is only meaningful in the cross-scope (全部 scope) view, where rows differ in
+    // scope. When a single concrete scope is selected it's the same id on every row (already shown in
+    // the admin bar) — pure noise — so it's hidden there.
+    const scopeCol = (adminState.isAdmin && adminState.currentScope === ALL_SCOPES)
       ? `<span class="sep">·</span><span class="id" title="scope id: ${esc(r.scopeId||"")}">${esc(tailId(r.scopeId, 14))}</span>`
       : "";
     // run-origin badge: legacy/empty origin renders nothing (keeps the row readable at density).
@@ -1495,7 +1514,7 @@ function renderList(){
         <span class="sep">·</span>
         <span data-since="${r.updatedAtUtc}">${relTime(r.updatedAtUtc, nowMs())}</span>
         <span class="sep">·</span>
-        <span class="id" title="run id: ${esc(r.runId)}">${esc(tailId(r.runId, 18))}</span>${scopeCol}
+        <span class="id" title="run id: ${esc(r.runId)}">${esc(midTrunc(parseRunId(r.runId).run, 16) || tailId(r.runId, 12))}</span>${scopeCol}
       </span>`;
     row.addEventListener("click", () => selectRun(r.runId));
     listbox.appendChild(row);
