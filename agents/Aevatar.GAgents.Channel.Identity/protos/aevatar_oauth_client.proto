@@ -70,6 +70,13 @@ message AevatarOAuthClientState {
   string provisioning_retry_callback_id = 19;
   int64 provisioning_retry_callback_generation = 20;
   string provisioning_retry_last_error = 21;
+  // Full redirect URI allowlist that must be registered at NyxID for the
+  // active client_id. redirect_uri remains the canonical backend callback used
+  // by the broker callback flow; this list also includes explicitly configured
+  // external callbacks such as the Console SPA /auth/callback route.
+  repeated string redirect_uris = 22;
+  // Full redirect URI allowlist captured for an actor-owned provisioning retry.
+  repeated string provisioning_retry_redirect_uris = 23;
 }
 
 // Issued by the bootstrap startup service from every silo on cluster cold-
@@ -82,6 +89,9 @@ message EnsureAevatarOAuthClientProvisionedCommand {
   string redirect_uri = 2;
   // Optional override for the DCR <c>client_name</c>; bootstrap leaves blank.
   string client_name = 3;
+  // Full redirect URI allowlist to register at NyxID. Empty means legacy caller;
+  // the actor falls back to [redirect_uri].
+  repeated string redirect_uris = 4;
 }
 
 // Durable self-callback payload fired when an actor-owned OAuth provisioning
@@ -96,6 +106,7 @@ message AevatarOAuthClientProvisioningRetryFiredEvent {
   string callback_id = 6;
   int64 callback_generation = 7;
   int64 fired_at_unix_ms = 8;
+  repeated string redirect_uris = 9;
 }
 
 // Issued by tests / manual operator scripts that already hold a client_id
@@ -118,6 +129,9 @@ message ProvisionAevatarOAuthClientCommand {
   // client. Tests / fixture seeds may leave it empty when they don't care
   // about drift detection on a subsequent bootstrap pass.
   string redirect_uri = 5;
+  // Full redirect URI allowlist pinned for the supplied client_id. Empty means
+  // preserve existing list or fall back to [redirect_uri] for legacy callers.
+  repeated string redirect_uris = 6;
 }
 
 // Issued by ops to force a fresh HMAC key rotation. Old tokens signed with
@@ -150,6 +164,7 @@ message AevatarOAuthClientProvisioningRetryScheduledEvent {
   int64 callback_generation = 7;
   string last_error = 8;
   google.protobuf.Timestamp scheduled_at = 9;
+  repeated string redirect_uris = 10;
 }
 
 // Persisted when provisioning reaches a terminal successful branch and the
@@ -186,6 +201,8 @@ message AevatarOAuthClientProvisionedEvent {
   // an older event predates scope tracking; the actor treats empty as
   // legacy/unknown and re-DCRs once so proxy-capable bindings can be minted.
   string oauth_scope = 6;
+  // Full redirect URI allowlist registered with NyxID at this DCR call.
+  repeated string redirect_uris = 7;
 }
 
 // Persisted when the actor seeds or rotates its HMAC key. On rotation, the
@@ -250,4 +267,7 @@ message AevatarOAuthClientDocument {
   // Mirror of AevatarOAuthClientState.oauth_scope for diagnostics and
   // bootstrap drift detection.
   string oauth_scope = 17;
+  // Mirror of AevatarOAuthClientState.redirect_uris for diagnostics and drift
+  // detection of explicitly configured external callbacks.
+  repeated string redirect_uris = 18;
 }

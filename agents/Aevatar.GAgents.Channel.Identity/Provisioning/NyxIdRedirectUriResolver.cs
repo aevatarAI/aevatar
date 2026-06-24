@@ -46,6 +46,14 @@ public static class NyxIdRedirectUriResolver
     public const string OverrideEnvVar = "AEVATAR_OAUTH_REDIRECT_BASE_URL";
 
     /// <summary>
+    /// Optional comma/semicolon/newline separated list of additional redirect
+    /// URIs to register on the same NyxID OAuth client. Used for external
+    /// callbacks such as the Console SPA <c>/auth/callback</c> route. The
+    /// backend does not infer these deployment-specific frontend URLs.
+    /// </summary>
+    public const string AdditionalRedirectUrisEnvVar = "AEVATAR_OAUTH_ADDITIONAL_REDIRECT_URIS";
+
+    /// <summary>
     /// Returns the absolute callback URL DCR + authorize must use. Reads
     /// <see cref="OverrideEnvVar"/> if set; otherwise returns the
     /// hardcoded production default. A wildcard / unspecified-host
@@ -57,6 +65,47 @@ public static class NyxIdRedirectUriResolver
     {
         var baseUrl = ResolveBaseUrl(logger);
         return $"{baseUrl.TrimEnd('/')}{CallbackPath}";
+    }
+
+    public static IReadOnlyList<string> ResolveRegisteredRedirectUris(ILogger? logger = null)
+    {
+        var values = new List<string> { Resolve(logger) };
+        var additional = Environment.GetEnvironmentVariable(AdditionalRedirectUrisEnvVar);
+        if (!string.IsNullOrWhiteSpace(additional))
+        {
+            foreach (var candidate in additional.Split([',', ';', '\n', '\r'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                if (IsWildcardListenAddress(candidate))
+                {
+                    logger?.LogWarning(
+                        "Ignoring additional OAuth redirect URI from {EnvVar}: '{Value}' is a wildcard / unspecified-host listen address.",
+                        AdditionalRedirectUrisEnvVar,
+                        candidate);
+                    continue;
+                }
+
+                values.Add(candidate);
+            }
+        }
+
+        return NormalizeRedirectUris(values);
+    }
+
+    public static IReadOnlyList<string> NormalizeRedirectUris(IEnumerable<string> redirectUris)
+    {
+        var unique = new HashSet<string>(StringComparer.Ordinal);
+        var values = new List<string>();
+        foreach (var raw in redirectUris)
+        {
+            var normalized = raw?.Trim();
+            if (string.IsNullOrWhiteSpace(normalized))
+                continue;
+
+            if (unique.Add(normalized))
+                values.Add(normalized);
+        }
+
+        return values;
     }
 
     private static string ResolveBaseUrl(ILogger? logger)
