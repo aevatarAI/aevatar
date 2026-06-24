@@ -52,6 +52,7 @@ import { saveRecentRun } from '@/shared/runs/recentRuns';
 import { studioApi } from '@/shared/studio/api';
 import {
   AevatarContextDrawer,
+  type AevatarBreadcrumbItem,
   AevatarInspectorEmpty,
   AevatarPageShell,
   AevatarStatusTag,
@@ -64,7 +65,6 @@ import { t } from "@/shared/i18n/messages";
 type ActorReuseMode = 'new' | 'existing';
 const GAGENT_DRAFT_RUN_TIMEOUT_MS = 30_000;
 const GAGENT_DRAFT_RUN_CLIENT_TIMEOUT_MS = GAGENT_DRAFT_RUN_TIMEOUT_MS + 5_000;
-
 type NoticeState = {
   message: string;
   type: 'success' | 'error';
@@ -2735,9 +2735,19 @@ const GAgentsPage: React.FC = () => {
       />
     </div>
   );
+  const breadcrumbItems: AevatarBreadcrumbItem[] = [
+    {
+      title: t('pages.gagents.index.platformBreadcrumb', 'Platform'),
+    },
+    {
+      current: true,
+      title: t('pages.gagents.index.teamMembersBreadcrumb', 'Team members'),
+    },
+  ];
 
   return (
     <AevatarPageShell
+      breadcrumbItems={breadcrumbItems}
       layoutMode="document"
       extra={
         <Space size={[8, 8]} wrap>

@@ -73,6 +73,32 @@ jest.mock('@/shared/ui/aevatarPageShells', () => {
       ),
     AevatarPageShell: ({ children }: any) =>
       mockReact.createElement('section', null, children),
+    AevatarPageTitleBlock: ({
+      breadcrumbItems,
+      onBack,
+      title,
+      titleHelp,
+    }: any) =>
+      mockReact.createElement(
+        'header',
+        null,
+        onBack
+          ? mockReact.createElement(
+              'button',
+              { 'aria-label': 'Team Home', onClick: onBack, type: 'button' },
+              'Team Home',
+            )
+          : null,
+        breadcrumbItems?.length
+          ? mockReact.createElement(
+              'nav',
+              { 'aria-label': 'Breadcrumb' },
+              breadcrumbItems.map((item: any) => item.title).join(' / '),
+            )
+          : null,
+        mockReact.createElement('strong', null, title),
+        titleHelp ? mockReact.createElement('span', null, titleHelp) : null,
+      ),
     AevatarStatusTag: ({ status }: any) =>
       mockReact.createElement('span', null, status),
   };

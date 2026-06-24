@@ -157,7 +157,7 @@ describe("ActorsPage", () => {
 
     await screen.findByText("SupportRoot");
 
-    expect(container.textContent).toContain("Aevatar / Platform");
+    expect(container.textContent).toContain("Platform");
     expect(container.textContent).toContain("Topology");
     expect(container.textContent).toContain("真实数据");
     expect(container.textContent).toContain("选择追查对象");

@@ -5,6 +5,7 @@ import React from "react";
 import type { TeamDetailTab } from "@/shared/navigation/teamRoutes";
 import {
   AevatarInspectorEmpty,
+  type AevatarBreadcrumbItem,
   AevatarPageShell,
   AevatarPanel,
 } from "@/shared/ui/aevatarPageShells";
@@ -40,6 +41,7 @@ type TeamDetailShellProps = {
   readonly activeTab: TeamDetailTab;
   readonly activeTabLabel: string;
   readonly actionRail: React.ReactNode;
+  readonly breadcrumbTeamTitle?: React.ReactNode;
   readonly children: React.ReactNode;
   readonly initialLoading: boolean;
   readonly onOpenTeamsList: () => void;
@@ -210,6 +212,7 @@ export const TeamDetailShell: React.FC<TeamDetailShellProps> = ({
   activeTab,
   activeTabLabel,
   actionRail,
+  breadcrumbTeamTitle,
   children,
   initialLoading,
   onOpenTeamsList,
@@ -222,51 +225,37 @@ export const TeamDetailShell: React.FC<TeamDetailShellProps> = ({
 }) => {
   const intl = useIntl();
   const { token } = theme.useToken();
+  const breadcrumbItems: AevatarBreadcrumbItem[] = [
+    {
+      href: teamsListHref,
+      onClick: (event) => {
+        event.preventDefault();
+        onOpenTeamsList();
+      },
+      title: intl.formatMessage({ id: "teams.detail.breadcrumb.teams" }),
+    },
+    {
+      title:
+        typeof breadcrumbTeamTitle === "string"
+          ? breadcrumbTeamTitle
+          : typeof teamTitle === "string"
+            ? teamTitle
+          : intl.formatMessage({ id: "teams.detail.breadcrumb.detail" }),
+    },
+    {
+      current: true,
+      title: activeTabLabel,
+    },
+  ];
 
   return (
     <AevatarPageShell
-      breadcrumbRender={false}
+      backAriaLabel={intl.formatMessage({ id: "teams.detail.backToTeams" })}
+      backTitle={intl.formatMessage({ id: "teams.detail.backToTeams" })}
+      breadcrumbItems={breadcrumbItems}
+      onBack={onOpenTeamsList}
       title={
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <Typography.Text
-            style={{
-              color: token.colorTextTertiary,
-              fontSize: 13,
-              fontWeight: 500,
-              lineHeight: 1.4,
-            }}
-          >
-            <Typography.Link
-              href={teamsListHref}
-              onClick={(event) => {
-                event.preventDefault();
-                onOpenTeamsList();
-              }}
-              style={{
-                color: token.colorTextTertiary,
-                fontSize: "inherit",
-                fontWeight: "inherit",
-              }}
-            >
-              {intl.formatMessage({ id: "common.appName" })}
-            </Typography.Link>
-            {" / "}
-            <Typography.Link
-              href={teamsListHref}
-              onClick={(event) => {
-                event.preventDefault();
-                onOpenTeamsList();
-              }}
-              style={{
-                color: token.colorTextTertiary,
-                fontSize: "inherit",
-                fontWeight: "inherit",
-              }}
-            >
-              {intl.formatMessage({ id: "teams.detail.breadcrumb.teams" })}
-            </Typography.Link>
-            {` / ${intl.formatMessage({ id: "teams.detail.breadcrumb.detail" })} / ${activeTabLabel}`}
-          </Typography.Text>
           <div
             style={{
               alignItems: "center",

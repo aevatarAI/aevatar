@@ -62,6 +62,14 @@ describe("TeamMemberPublishedRunsPage", () => {
     getMember: jest.Mock;
   };
 
+  function createDeferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((nextResolve) => {
+      resolve = nextResolve;
+    });
+    return { promise, resolve };
+  }
+
   beforeEach(() => {
     window.history.replaceState(
       {},
@@ -219,6 +227,35 @@ describe("TeamMemberPublishedRunsPage", () => {
     });
   });
 
+  it("renders skeleton panels while published runs are loading", async () => {
+    const memberRuns = createDeferred<{
+      displayName: string;
+      memberId: string;
+      publishedServiceId: string;
+      publishedServiceKey: string;
+      runs: [];
+      scopeId: string;
+    }>();
+    mockedScopeRuntimeApi.listMemberRuns.mockReturnValueOnce(memberRuns.promise);
+
+    renderWithQueryClient(React.createElement(TeamMemberPublishedRunsPage));
+
+    expect(await screen.findByTestId("member-published-runs-replay")).toBeTruthy();
+    expect(screen.getByTestId("member-published-runs-list-skeleton")).toBeTruthy();
+    expect(screen.getByTestId("member-published-runs-graph-skeleton")).toBeTruthy();
+    expect(screen.getByTestId("member-published-runs-details-skeleton")).toBeTruthy();
+    expect(screen.queryByText("No published runs yet.")).toBeNull();
+
+    memberRuns.resolve({
+      displayName: "Alpha Workflow",
+      memberId: "m-alpha",
+      publishedServiceId: "svc-alpha",
+      publishedServiceKey: "scope-1:default:default:svc-alpha",
+      runs: [],
+      scopeId: "scope-1",
+    });
+  });
+
   it("renders member published run history from the canonical Team member route", async () => {
     const backendRunId = "scope-workflow:scope-1:wf-alpha:dep-alpha";
     window.history.replaceState(
@@ -269,6 +306,17 @@ describe("TeamMemberPublishedRunsPage", () => {
     expect(await screen.findByText("node:config")).toBeTruthy();
     expect(container.textContent).toContain("Alpha Workflow");
     expect(container.textContent).toContain("Config ok");
+    expect(screen.getByRole("navigation", {
+      name: "Published runs navigation",
+    })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Teams" })).toHaveAttribute(
+      "href",
+      "/scopes/scope-1/teams/team-1?tab=overview",
+    );
+    expect(screen.getByRole("link", { name: "Alpha Workflow" })).toHaveAttribute(
+      "href",
+      "/scopes/scope-1/teams/team-1?memberId=m-alpha&tab=members",
+    );
     expect(screen.queryByLabelText("Search published runs")).toBeNull();
     expect(screen.queryByText("Auto refresh")).toBeNull();
     expect(screen.queryByText("Raw")).toBeNull();
@@ -300,6 +348,16 @@ describe("TeamMemberPublishedRunsPage", () => {
       backendRunId,
       { actorId: "actor://scope-1/run-1" },
     );
+  });
+
+  it("returns from published runs to the Team members tab", async () => {
+    renderWithQueryClient(React.createElement(TeamMemberPublishedRunsPage));
+
+    expect(await screen.findByTestId("member-published-runs-replay")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Back to team members" }));
+
+    expect(window.location.pathname).toBe("/scopes/scope-1/teams/team-1");
+    expect(window.location.search).toBe("?memberId=m-alpha&tab=members");
   });
 
   it("loads the selected member published run audit before the run catalog is materialized", async () => {

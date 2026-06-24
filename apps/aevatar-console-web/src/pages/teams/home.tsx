@@ -34,6 +34,7 @@ import {
   type StudioTeamSummary,
 } from "@/shared/studio/models";
 import { AevatarPageShell } from "@/shared/ui/aevatarPageShells";
+import type { AevatarBreadcrumbItem } from "@/shared/ui/aevatarPageShells";
 import { describeError } from "@/shared/ui/errorText";
 import { resolveStudioScopeContext } from "../scopes/components/resolvedScope";
 import {
@@ -1431,13 +1432,6 @@ const TeamsHomePage: React.FC = () => {
 
   const titleNode = (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <Typography.Text
-        style={{
-          color: token.colorTextSecondary,
-          fontSize: 14,
-        }}
-      >
-        {t("pages.teams.home.aevatar.teams", "Aevatar / Teams")}</Typography.Text>
       <Typography.Title
         level={1}
         style={{
@@ -1447,9 +1441,16 @@ const TeamsHomePage: React.FC = () => {
         {t("pages.teams.home.ai", "My AI teams")}</Typography.Title>
     </div>
   );
+  const breadcrumbItems: AevatarBreadcrumbItem[] = [
+    {
+      current: true,
+      title: t("teams.detail.breadcrumb.teams", "Teams"),
+    },
+  ];
 
   return (
     <AevatarPageShell
+      breadcrumbItems={breadcrumbItems}
       extra={
         <Space wrap>
           <Button

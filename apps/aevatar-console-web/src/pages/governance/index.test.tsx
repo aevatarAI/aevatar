@@ -117,7 +117,7 @@ describe('GovernanceIndexPage', () => {
   it('renders the platform governance product framing', async () => {
     renderWithQueryClient(React.createElement(GovernanceIndexPage));
 
-    expect(await screen.findByText('Aevatar / Platform')).toBeTruthy();
+    expect(await screen.findByText('Platform')).toBeTruthy();
     expect(screen.getAllByText('Governance').length).toBeGreaterThan(0);
   });
 

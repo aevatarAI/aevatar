@@ -5,7 +5,6 @@ import {
 } from "@ant-design/icons";
 import type { ProListMetas } from "@ant-design/pro-components";
 import {
-  PageContainer,
   ProCard,
   ProList,
 } from "@ant-design/pro-components";
@@ -67,7 +66,10 @@ import {
   summaryFieldStyle,
   summaryMetricValueStyle,
 } from "@/shared/ui/proComponents";
-import { AevatarTitleWithHelp } from "@/shared/ui/aevatarPageShells";
+import {
+  AevatarPageShell,
+  type AevatarBreadcrumbItem,
+} from "@/shared/ui/aevatarPageShells";
 import ScopeQueryCard from "./components/ScopeQueryCard";
 import { renderMultilineText } from "./components/renderMultilineText";
 import { resolveStudioScopeContext } from "./components/resolvedScope";
@@ -704,11 +706,31 @@ const TeamAssetsPage: React.FC = () => {
     }),
     [activeDraft.scopeId, surfaceToken],
   );
+  const teamHomeHref = buildTeamWorkspaceRoute(activeDraft.scopeId);
+  const breadcrumbItems: AevatarBreadcrumbItem[] = [
+    {
+      href: teamHomeHref,
+      onClick: (event) => {
+        event.preventDefault();
+        history.push(teamHomeHref);
+      },
+      title: t("pages.scopes.assets.teamsBreadcrumb", "Teams"),
+    },
+    {
+      current: true,
+      title: t("pages.scopes.assets.legacyAssetsBreadcrumb", "Legacy Assets"),
+    },
+  ];
 
   return (
-    <PageContainer
-      className="aevatar-page-shell-document"
-      content="Team home now lives under /scopes/:scopeId/teams. Keep this page for older asset deep links, source inspection, and catalog detail while the scoped team flow finishes taking over."
+    <AevatarPageShell
+      backAriaLabel={t("pages.scopes.assets.teamHome", "Team Home")}
+      backTitle={t("pages.scopes.assets.teamHome", "Team Home")}
+      breadcrumbItems={breadcrumbItems}
+      content={t(
+        "pages.scopes.assets.legacyAssetsContent",
+        "Team home now lives under /scopes/:scopeId/teams. Keep this page for older asset deep links, source inspection, and catalog detail while the scoped team flow finishes taking over.",
+      )}
       extra={[
         <Button
           key="open-studio"
@@ -745,13 +767,13 @@ const TeamAssetsPage: React.FC = () => {
         >
           {t("pages.scopes.assets.open.member.runtime", "Open Member Runtime")}</Button>,
       ]}
+      layoutMode="document"
       onBack={() => history.push(buildTeamWorkspaceRoute(activeDraft.scopeId))}
-      title={
-        <AevatarTitleWithHelp
-          help="This is the legacy deep-link asset workspace. Use it for source inspection and catalog detail, but go back to team home for the main team narrative."
-          title={t("pages.scopes.assets.legacy.team.assets", "Legacy Team Assets")}
-        />
-      }
+      title={t("pages.scopes.assets.legacy.team.assets", "Legacy Team Assets")}
+      titleHelp={t(
+        "pages.scopes.assets.legacyAssetsTitleHelp",
+        "This is the legacy deep-link asset workspace. Use it for source inspection and catalog detail, but go back to team home for the main team narrative.",
+      )}
     >
       <div
         style={{
@@ -1177,7 +1199,7 @@ const TeamAssetsPage: React.FC = () => {
           )}
         </div>
       </Drawer>
-    </PageContainer>
+    </AevatarPageShell>
   );
 };
 

@@ -2175,7 +2175,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     ).not.toHaveLength(0);
     expect(screen.getByText("Published")).toBeTruthy();
     expect(screen.queryByText("Draft")).toBeNull();
-    expect(screen.getByRole("button", { name: "Refresh status" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Refresh status" })).toBeNull();
     const publishedRunsButton = screen.getByRole("link", {
       name: "Published runs",
     });
@@ -4070,7 +4070,6 @@ describe("TeamMemberWorkflowStudioPage", () => {
       "Run",
       "Add node",
       "Save",
-      "Refresh status",
       "YAML",
     ]);
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
@@ -5282,7 +5281,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(screen.getByRole("button", { name: "Refresh status" })).toBeEnabled();
   });
 
-  it("blocks duplicate publish for an already published workflow member and refreshes status through reads", async () => {
+  it("blocks duplicate publish for an already published workflow member without surfacing refresh status", async () => {
     window.history.replaceState(
       {},
       "",
@@ -5336,15 +5335,9 @@ describe("TeamMemberWorkflowStudioPage", () => {
       expect(
         screen.queryByRole("button", { name: "Publish" }),
       ).toBeNull();
-      expect(screen.getByRole("button", { name: "Refresh status" })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Refresh status" })).toBeNull();
     });
     expect(screen.getByDisplayValue("Workflow Alpha")).toBeTruthy();
-    const getMemberCallCount = (studioApi.getMember as jest.Mock).mock.calls.length;
-    fireEvent.click(screen.getByRole("button", { name: /Refresh status/ }));
-    await waitFor(() => {
-      expect(studioApi.getMember).toHaveBeenCalledTimes(getMemberCallCount + 1);
-    });
-    expect(studioApi.getMember).toHaveBeenLastCalledWith("scope-1", "m-alpha");
     expect(studioApi.getWorkflow).toHaveBeenCalledWith("wf-alpha", "scope-1");
     expect(studioApi.saveWorkflow).not.toHaveBeenCalled();
     expect(studioApi.bindMemberWorkflow).not.toHaveBeenCalled();
@@ -5437,7 +5430,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
       expect(
         screen.queryByRole("button", { name: "Publish" }),
       ).toBeNull();
-      expect(screen.getByRole("button", { name: "Refresh status" })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Refresh status" })).toBeNull();
     });
     expect(screen.getByDisplayValue("Workflow Alpha")).toBeTruthy();
     fireEvent.change(screen.getByLabelText("Workflow title"), {
@@ -5828,7 +5821,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(studioApi.getMember).toHaveBeenLastCalledWith("scope-1", "m-alpha");
     expect(screen.queryByText("Error")).toBeNull();
     expect(screen.queryByRole("button", { name: "Publish" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Refresh status" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Refresh status" })).toBeNull();
     expect(studioApi.saveWorkflow).not.toHaveBeenCalled();
     expect(studioApi.bindMemberWorkflow).not.toHaveBeenCalled();
     expect(studioApi.getMemberBindingRun).not.toHaveBeenCalled();
