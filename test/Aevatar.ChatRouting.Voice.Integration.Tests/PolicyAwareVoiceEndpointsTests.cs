@@ -582,6 +582,38 @@ public sealed class PolicyAwareVoiceEndpointsTests
                 VoiceRealtimeSessionPurpose.Attach));
     }
 
+    [Fact]
+    public async Task PolicyAwareVoice_WhenCapabilityProjectionNotReady_ShouldReturnTyped503BeforeUpgrade()
+    {
+        // The capability grain accepted the lease, but its read-model projection never caught up (and the
+        // self-heal did not converge), so the realtime session reports CapabilityNotReady. The ingress
+        // must return a typed, retryable 503 voice_capability_not_ready with an {error,detail} body —
+        // NOT the opaque empty-body 500 the bare TimeoutException used to surface.
+        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(
+            VoiceAttachTarget("voice-agent-lark", "voice_presence_openai"),
+            []));
+        var session = new RecordingVoiceRealtimeSession(VoiceRealtimeSessionStartError.CapabilityNotReady);
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        using var app = CreatePolicyAwareApp(
+            policyPort,
+            new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent-lark"]),
+            session);
+        var context = CreateVoiceContext(app, "/ws/voice?channel=lark");
+        var wsFeature = new FakeHttpWebSocketFeature(socket);
+        context.Features.Set<IHttpWebSocketFeature>(wsFeature);
+
+        await GetEndpoint(app, "/ws/voice").RequestDelegate!(context);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        context.Response.Headers.RetryAfter.ToString().Should().Be("1");
+        var body = await ReadBodyAsync(context);
+        body.Should().Contain("\"error\":\"voice_capability_not_ready\"");
+        body.Should().Contain("\"detail\":");
+        wsFeature.AcceptCalls.Should().Be(0);
+        session.Requests.Should().ContainSingle()
+            .Which.ActorId.Should().Be("voice-agent-lark");
+    }
+
     [Theory]
     [InlineData("remote-audio-unavailable", "remote_audio_transport_unavailable")]
     [InlineData("credential-unavailable", "voice_credential_unavailable")]

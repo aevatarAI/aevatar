@@ -203,6 +203,17 @@ public static class VoicePresenceEndpoints
                 ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
                 await ctx.Response.WriteAsync(VoiceVolatileMediaStreamUnavailableException.Reason);
                 return null;
+            case VoiceRealtimeSessionStartError.CapabilityNotReady:
+                // Capability grain accepted the lease but its read-model projection has not caught up.
+                // Typed, retryable 503 with an {error,detail} body instead of an opaque empty-body 500.
+                // Mirror VoiceWebSocketAttachExecutor's CapabilityNotReady handling so both voice ingresses
+                // return the same contract.
+                ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                ctx.Response.Headers.RetryAfter = "1";
+                ctx.Response.ContentType = "application/json; charset=utf-8";
+                await ctx.Response.WriteAsync(
+                    $$"""{"error":"{{VoiceWebSocketAttachExecutor.CapabilityNotReadyReason}}","detail":"Voice capability is not ready yet (read-model projection is catching up). Retry shortly."}""");
+                return null;
             case VoiceRealtimeSessionStartError.NotFound:
             case VoiceRealtimeSessionStartError.NotInitialized:
             case VoiceRealtimeSessionStartError.TransportAlreadyAttached:
