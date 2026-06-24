@@ -119,6 +119,33 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleEnsureProvisioned_ForceReprovision_ReDcrs_WhenAlreadyProvisioned()
+    {
+        var cmd = new EnsureAevatarOAuthClientProvisionedCommand
+        {
+            NyxidAuthority = "https://nyxid.test",
+            RedirectUri = "https://aevatar.test/api/oauth/nyxid-callback",
+            ClientName = "aevatar",
+        };
+        cmd.RedirectUris.Add("https://aevatar.test/api/oauth/nyxid-callback");
+        cmd.RedirectUris.Add("https://console.test/auth/callback");
+
+        await _agent.HandleEnsureProvisioned(cmd);
+        var firstClientId = _agent.State.ClientId;
+
+        _registrar.NextClientId = "client-after-force-dcr";
+        cmd.ForceReprovision = true;
+        await _agent.HandleEnsureProvisioned(cmd);
+
+        _registrar.Calls.Should().HaveCount(2, "break-glass force DCR must bypass the already-provisioned no-op");
+        _agent.State.ClientId.Should().Be("client-after-force-dcr");
+        _agent.State.ClientId.Should().NotBe(firstClientId);
+        _agent.State.RedirectUris.Should().Equal(
+            "https://aevatar.test/api/oauth/nyxid-callback",
+            "https://console.test/auth/callback");
+    }
+
+    [Fact]
     public async Task HandleEnsureProvisioned_ReDcrs_WhenRedirectUriDrifts()
     {
         // Pin the aismart-app-mainnet 2026-04-30 incident: cluster was
