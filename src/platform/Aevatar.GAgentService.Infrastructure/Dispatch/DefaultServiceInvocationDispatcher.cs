@@ -101,11 +101,11 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             ct);
         var commandId = ResolveCommandId(request);
         var correlationId = ResolveCorrelationId(request, commandId);
-        var runId = ResolveRunId(request, commandId);
-        await RegisterRunAsync(target, request, runId, commandId, correlationId, run.ActorId, ServiceImplementationKind.Workflow, ct);
+        var serviceRunId = run.ActorId;
+        await RegisterRunAsync(target, request, serviceRunId, commandId, correlationId, run.ActorId, ServiceImplementationKind.Workflow, ct);
         var envelope = CreateEnvelope(run.ActorId, Any.Pack(ToWorkflowChatRequest(chatRequest)), commandId, correlationId);
         await _dispatchPort.DispatchAsync(run.ActorId, envelope, ct);
-        return CreateReceipt(target, run.ActorId, commandId, correlationId, runId);
+        return CreateReceipt(target, run.ActorId, commandId, correlationId, serviceRunId);
     }
 
     private static string ResolveWorkflowServiceDefinitionActorId(

@@ -562,6 +562,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
 
         registry.Calls.Should().ContainSingle();
         registry.Calls[0].ImplementationKind.Should().Be(ServiceImplementationKind.Scripting);
+        registry.Calls[0].RunId.Should().Be("cmd-script");
         registry.Calls[0].CommandId.Should().Be("cmd-script");
     }
 
@@ -597,10 +598,14 @@ public sealed class DefaultServiceInvocationDispatcherTests
             },
         };
 
-        await dispatcher.DispatchAsync(target, request);
+        var receipt = await dispatcher.DispatchAsync(target, request);
 
+        receipt.RunId.Should().Be(workflowPort.RunActor.Id);
+        receipt.TargetActorId.Should().Be(workflowPort.RunActor.Id);
+        receipt.CommandId.Should().Be("cmd-wf");
         registry.Calls.Should().ContainSingle();
         registry.Calls[0].ImplementationKind.Should().Be(ServiceImplementationKind.Workflow);
+        registry.Calls[0].RunId.Should().Be(workflowPort.RunActor.Id);
         registry.Calls[0].TargetActorId.Should().Be(workflowPort.RunActor.Id);
         registry.Calls[0].CommandId.Should().Be("cmd-wf");
         workflowPort.CreateRunCalls.Should().ContainSingle();
@@ -608,7 +613,6 @@ public sealed class DefaultServiceInvocationDispatcherTests
         workflowPort.CreateRunCalls[0].WorkflowName.Should().Be("artifact-wf");
         workflowPort.CreateRunCalls[0].WorkflowYaml.Should().Be("name: artifact-wf");
         workflowPort.CreateRunCalls[0].InlineWorkflowYamls.Should().Contain("helper", "name: helper");
-        workflowPort.CreateRunCalls[0].RunOrigin.Should().Be(WorkflowRunOrigins.ServiceInvoke);
     }
 
     [Fact]

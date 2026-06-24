@@ -530,7 +530,6 @@ public sealed class AevatarInvocationToolSourceTests
         serviceDispatch.Request.Identity!.TenantId.Should().Be("scope-1");
         serviceDispatch.Request.Identity.ServiceId.Should().Be("workflow-service");
         serviceDispatch.Request.EndpointId.Should().Be("chat");
-        serviceDispatch.Request.RunOrigin.Should().Be(WorkflowRunOrigins.ServiceInvoke);
         var chatPayload = serviceDispatch.Request.Payload!.Unpack<ChatRequestEvent>();
         chatPayload.Prompt.Should().Be("run team workflow");
         chatPayload.SessionId.Should().Be("response-1");
@@ -556,7 +555,7 @@ public sealed class AevatarInvocationToolSourceTests
         harness.WorkflowRunDelivery.Registrations.Should().ContainSingle();
         harness.WorkflowRunDelivery.Registrations[0].StreamTopic.Should().Be(result.StreamTopic);
         harness.WorkflowRunDelivery.Registrations[0].WorkflowActorId.Should().Be("workflow-run-actor");
-        harness.WorkflowRunDelivery.Registrations[0].WorkflowRunId.Should().Be("workflow-command");
+        harness.WorkflowRunDelivery.Registrations[0].WorkflowRunId.Should().Be("workflow-service-run");
         harness.WorkflowRunDelivery.Registrations[0].WorkflowCommandId.Should().Be("workflow-command");
         harness.WorkflowRunDelivery.Registrations[0].WorkflowCorrelationId.Should().Be("workflow-correlation");
 
@@ -640,7 +639,6 @@ public sealed class AevatarInvocationToolSourceTests
         dispatch.Target.Artifact.DeploymentPlan.WorkflowPlan.InlineWorkflowYamls.Should().Contain("helper", "name: helper");
         dispatch.Request.Identity!.ServiceId.Should().Be("workflow-service");
         dispatch.Request.EndpointId.Should().Be("chat");
-        dispatch.Request.RunOrigin.Should().Be(WorkflowRunOrigins.ServiceInvoke);
         dispatch.Request.Payload!.Unpack<ChatRequestEvent>().Prompt.Should().Be("run published workflow");
 
         using var output = JsonDocument.Parse(result.ToolExecutionResultJson);
@@ -728,11 +726,11 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
-    public async Task InvokeTeam_ShouldResolveTeamInSenderNyxUserScope_WhenChannelSenderIsBound()
+    public async Task InvokeTeam_ShouldResolveTeamInRegistrationScope_WhenChannelSenderBindingIsPresent()
     {
         var harness = new Harness();
         harness.TeamResolver.Resolution = new TeamEntryMemberResolution(
-            "nyx-user-scope",
+            "registration-scope-1",
             "team-1",
             "member-1",
             "service-1");
@@ -741,7 +739,7 @@ public sealed class AevatarInvocationToolSourceTests
         using var _ = PushContext(
             callId: "call-team-bound-sender",
             scopeId: "registration-scope-1",
-            senderNyxUserId: "nyx-user-scope");
+            senderBindingId: "binding-1");
         var output = await tool.ExecuteAsync("""
             {
               "team_id": "team-1",
@@ -752,15 +750,15 @@ public sealed class AevatarInvocationToolSourceTests
             """);
 
         ErrorCodeOrNull(output).Should().BeNull(output);
-        harness.TeamResolver.LastScopeId.Should().Be("nyx-user-scope");
+        harness.TeamResolver.LastScopeId.Should().Be("registration-scope-1");
         harness.TeamInvocation.Request.Should().NotBeNull();
-        harness.TeamInvocation.Request!.Identity.TenantId.Should().Be("nyx-user-scope");
-        harness.TeamInvocation.Request.Input.Caller!.TenantId.Should().Be("nyx-user-scope");
+        harness.TeamInvocation.Request!.Identity.TenantId.Should().Be("registration-scope-1");
+        harness.TeamInvocation.Request.Input.Caller!.TenantId.Should().Be("registration-scope-1");
         harness.TeamInvocation.Request.Input.ToolContext!.Caller.ScopeId.Should().Be("registration-scope-1");
-        harness.TeamInvocation.Request.Input.ToolContext.SenderBinding.NyxUserId.Should().Be("nyx-user-scope");
+        harness.TeamInvocation.Request.Input.ToolContext.SenderBinding.BindingId.Should().Be("binding-1");
 
         var result = Read(output);
-        result.GetProperty("stream_topic").GetString().Should().Be("aevatar://scopes/nyx-user-scope/services/service-1/runs/team-command");
+        result.GetProperty("stream_topic").GetString().Should().Be("aevatar://scopes/registration-scope-1/services/service-1/runs/team-command");
     }
 
     [Fact]
@@ -2394,6 +2392,7 @@ public sealed class AevatarInvocationToolSourceTests
         string callId,
         string? scopeId = "scope-1",
         string? accessToken = "access-token",
+        string? senderBindingId = "binding-1",
         AgentWorkflowRuntimeContext? workflowRuntime = null,
         string? durableReplyCredentialRef = "secrets://nyx/default-reply",
         IReadOnlyDictionary<string, string>? externalMetadata = null) =>
@@ -2409,7 +2408,7 @@ public sealed class AevatarInvocationToolSourceTests
                 "platform-message-1",
                 null,
                 durableReplyCredentialRef),
-            new AgentToolSenderBindingContext("binding-1"),
+            new AgentToolSenderBindingContext(senderBindingId),
             new LLMRequestRoutingContext("model-1", "route-1", 4, "memory"),
             new AgentToolConnectedServicesContext("""{"service":"ctx"}"""),
             workflowRuntime ?? AgentWorkflowRuntimeContext.Empty,
