@@ -224,7 +224,6 @@ internal static class ChannelsPage
   .crow { display:grid; grid-template-columns:1fr auto; gap:12px; align-items:center; padding:11px 13px; border:1px solid var(--border); border-radius:var(--r); background:var(--panel-2); margin-bottom:8px; }
   .crow .ck { font-size:11.5px; color:var(--muted-2); margin-bottom:3px; }
   .crow .cv { font-family:var(--mono); font-size:12.5px; color:var(--fg-strong); word-break:break-all; }
-  .crow.req-perm { grid-template-columns:1fr auto; }
   .perm-pill { font-family:var(--mono); font-size:11px; padding:2px 8px; border-radius:var(--r-pill); background:var(--accent-soft); color:var(--accent); border:1px solid var(--accent-line); margin-right:6px; }
 
   /* callouts */
@@ -362,6 +361,12 @@ internal static class ChannelsPage
   .more summary:hover { text-decoration:underline; }
   .more .perm-pill { margin:0 6px 6px 0; display:inline-block; }
 
+  /* batch-import JSON block (Lark 权限「批量导入/导出」→ 导入) */
+  .jsonbox { border:1px solid var(--border); border-radius:var(--r); background:var(--panel-2); margin:9px 0; overflow:hidden; }
+  .jsonbox .jb-head { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 11px; border-bottom:1px solid var(--border-soft); }
+  .jsonbox .jb-label { font-size:11.5px; color:var(--muted-2); min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .jsonbox pre { margin:0; padding:11px 13px; max-height:230px; overflow:auto; font-family:var(--mono); font-size:12px; line-height:1.5; color:var(--fg-strong); white-space:pre; tab-size:2; }
+
   /* admin account-scope segmented toggle (shown only to platform admins) */
   .scope-toggle { display:inline-flex; margin-left:auto; border:1px solid var(--border); border-radius:var(--r-pill); overflow:hidden; background:var(--panel-2); text-transform:none; letter-spacing:normal; }
   .scope-toggle button { font:inherit; font-size:12px; font-weight:600; color:var(--muted); background:transparent; border:0; padding:5px 12px; cursor:pointer; text-transform:none; letter-spacing:normal; }
@@ -406,6 +411,12 @@ const LARK_SCOPES_T2 = [
   "im:chat:read", "contact:contact.base:readonly",
   "cardkit:card:read", "cardkit:card:write"
 ];
+/* Lark 权限「批量导入」JSON（权限管理 → 批量导入/导出 → 导入 标签可直接粘贴）。
+   单一事实源：直接由上面的 Tier-1 + Tier-2 拼出，避免另维护一份 scope 清单。 */
+const LARK_SCOPE_IMPORT_JSON = JSON.stringify(
+  { scopes: { tenant: [...LARK_SCOPES_T1, ...LARK_SCOPES_T2], user: [] } },
+  null, 2
+);
 
 /* 渠道目录（Lark 已上线；其余即将上线） */
 const CHANNELS = [
@@ -1042,15 +1053,33 @@ function renderStep3(){
 
   wrap.appendChild(el("div",{class:"callout warn"},`${ICON.warn}<div class="body"><span class="ct-title">别填错回调地址</span>Lark 后台填的是上面这个 <b>webhook_url</b>（指向 NyxID）。⚠️ <b>不要</b>填 relay 内部用的 <code class="kbd">callback_url</code>${reg.relayCallbackUrl?`（<span class="mono">${esc(reg.relayCallbackUrl)}</span>，仅供参考，勿填）`:""}。卡片回调（如有单独字段）也填同一个 webhook_url。</div>`));
 
-  wrap.appendChild(sub("② 权限 —— 至少申请这 5 个 scope（Tier-1）"));
-  const perm=el("div",{class:"crow req-perm"});
-  perm.innerHTML=`<div style="min-width:0"><div class="ck">最小可收发权限（少一个 bot 就收不到消息）</div><div class="cv">${LARK_SCOPES_T1.map(s=>`<span class="perm-pill">${esc(s)}</span>`).join("")}</div></div>`;
-  const jump=el("a",{class:"copybtn",href:"https://open.larksuite.com",target:"_blank",rel:"noopener"},`${ICON.ext}<span>去权限管理</span>`);
-  perm.appendChild(jump); wrap.appendChild(perm);
-  wrap.appendChild(el("div",{class:"callout warn"},`${ICON.warn}<div class="body"><span class="ct-title">权限不足是机器人「装了却不回」的头号原因</span>只给 <span class="mono">im:message:send_as_bot</span> 是<b>收不到任何消息</b>的 —— 必须连同上面的读权限一起授予并发布。</div>`));
+  wrap.appendChild(sub("② 权限 —— 批量导入（一键，不用一个一个填）"));
+  wrap.appendChild(el("div",{class:"callout info"},`${ICON.info}<div class="body"><span class="ct-title">用「批量导入」一次配齐，别一个一个找</span>复制下面的权限 JSON，到 <b>权限管理</b> 页右上角「<b>批量导入/导出</b>」→「<b>导入</b>」标签，粘贴后一次性申请全部 scope。</div>`));
+
+  const permTotal = LARK_SCOPES_T1.length + LARK_SCOPES_T2.length;
+  const jb=el("div",{class:"jsonbox"});
+  const jbHead=el("div",{class:"jb-head"});
+  jbHead.appendChild(el("span",{class:"jb-label"},`权限 JSON · 收发(Tier-1) + 表情/发送者/卡片(Tier-2) · 共 ${permTotal} 项`));
+  const jbCopy=el("button",{class:"copybtn","aria-label":"复制权限 JSON"},`${ICON.copy}<span>复制 JSON</span>`);
+  bindCopy(jbCopy, LARK_SCOPE_IMPORT_JSON);
+  jbHead.appendChild(jbCopy);
+  jb.appendChild(jbHead);
+  jb.appendChild(el("pre",{class:"scroll"},esc(LARK_SCOPE_IMPORT_JSON)));
+  wrap.appendChild(jb);
+
+  const jumpRow=el("div",{style:"display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:2px 0"});
+  jumpRow.appendChild(el("a",{class:"copybtn",href:"https://open.larksuite.com",target:"_blank",rel:"noopener"},`${ICON.ext}<span>去权限管理</span>`));
+  jumpRow.appendChild(el("span",{style:"font-size:11.5px;color:var(--muted-2)"},"导入后点「确认申请」，再到「版本管理与发布」发布版本才生效。"));
+  wrap.appendChild(jumpRow);
+
+  wrap.appendChild(el("div",{class:"callout warn"},`${ICON.warn}<div class="body"><span class="ct-title">权限不足是机器人「装了却不回」的头号原因</span>只给 <span class="mono">im:message:send_as_bot</span> 是<b>收不到任何消息</b>的 —— 上面的 JSON 已含必需的读权限，导入后务必<b>发布版本</b>。</div>`));
 
   const t2=el("details",{class:"more"});
-  t2.innerHTML=`<summary>推荐再加这些（Tier-2：表情回应 / 发送者信息 / 卡片）</summary><div class="cv" style="margin-top:8px">${LARK_SCOPES_T2.map(s=>`<span class="perm-pill alt">${esc(s)}</span>`).join("")}</div>`;
+  t2.innerHTML=`<summary>看 JSON 里包含哪些 scope（共 ${permTotal} 项，可手动增删）</summary>
+    <div style="margin-top:10px;font-size:11.5px;color:var(--muted-2)">Tier-1 · 最小可收发（${LARK_SCOPES_T1.length}）</div>
+    <div style="margin-top:5px">${LARK_SCOPES_T1.map(s=>`<span class="perm-pill">${esc(s)}</span>`).join("")}</div>
+    <div style="margin-top:12px;font-size:11.5px;color:var(--muted-2)">Tier-2 · 表情 / 发送者 / 卡片（${LARK_SCOPES_T2.length}）</div>
+    <div style="margin-top:5px">${LARK_SCOPES_T2.map(s=>`<span class="perm-pill alt">${esc(s)}</span>`).join("")}</div>`;
   wrap.appendChild(t2);
 
   wrap.appendChild(sub("③ 订阅事件"));
