@@ -77,6 +77,14 @@ message AevatarOAuthClientState {
   repeated string redirect_uris = 22;
   // Full redirect URI allowlist captured for an actor-owned provisioning retry.
   repeated string provisioning_retry_redirect_uris = 23;
+  // Whether the pending actor-owned provisioning retry must preserve a
+  // break-glass force-DCR intent.
+  bool provisioning_retry_force_reprovision = 24;
+  // Actor-side one-shot guard for the startup force-DCR switch. Set after one
+  // forced DCR succeeds so multi-silo startup broadcasts cannot create one
+  // NyxID client per silo. Cleared by the next normal (non-force) ensure after
+  // operators remove AEVATAR_OAUTH_FORCE_DCR_ON_STARTUP.
+  bool force_reprovision_consumed = 25;
 }
 
 // Issued by the bootstrap startup service from every silo on cluster cold-
@@ -111,6 +119,7 @@ message AevatarOAuthClientProvisioningRetryFiredEvent {
   int64 callback_generation = 7;
   int64 fired_at_unix_ms = 8;
   repeated string redirect_uris = 9;
+  bool force_reprovision = 10;
 }
 
 // Issued by tests / manual operator scripts that already hold a client_id
@@ -169,6 +178,7 @@ message AevatarOAuthClientProvisioningRetryScheduledEvent {
   string last_error = 8;
   google.protobuf.Timestamp scheduled_at = 9;
   repeated string redirect_uris = 10;
+  bool force_reprovision = 11;
 }
 
 // Persisted when provisioning reaches a terminal successful branch and the
@@ -176,6 +186,15 @@ message AevatarOAuthClientProvisioningRetryScheduledEvent {
 message AevatarOAuthClientProvisioningRetryClearedEvent {
   string reason = 1;
   google.protobuf.Timestamp cleared_at = 2;
+}
+
+// Persisted when the actor consumes or resets the one-shot startup force-DCR
+// guard. This keeps AEVATAR_OAUTH_FORCE_DCR_ON_STARTUP cluster-idempotent
+// across multi-silo bootstrap broadcasts while allowing a later normal startup
+// to reset the guard after operators remove the env var.
+message AevatarOAuthClientForceReprovisionConsumedEvent {
+  bool consumed = 1;
+  google.protobuf.Timestamp persisted_at = 2;
 }
 
 // Persisted when actor-owned drift reconciliation succeeds through DCR.
