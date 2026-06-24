@@ -59,6 +59,10 @@ public sealed class ChannelsEndpointsTests
         // wired to the live facade (relative), not a mock host
         html.Should().Contain("/api/channels/registrations");
         html.Should().Contain("/api/user-config/llm");
+        // honest status (no perpetual "查询中" for un-queryable bots) + admin all-accounts view
+        html.Should().Contain("非本账户");
+        html.Should().Contain("/api/channels/me");
+        html.Should().Contain("所有账户");
     }
 
     private static string ReadEmbeddedHtml()

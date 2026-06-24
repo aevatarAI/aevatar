@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.Authentication.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.AspNetCore.Builder;
@@ -26,6 +27,7 @@ public static class ChannelCallbackEndpoints
         var group = app.MapGroup("/api/channels").WithTags("ChannelRuntime");
 
         // Registration CRUD — requires authentication
+        group.MapGet("/me", HandleGetCallerInfoAsync).RequireAuthorization();
         group.MapPost("/registrations", HandleRegisterAsync).RequireAuthorization();
         group.MapGet("/registrations", HandleListRegistrationsAsync).RequireAuthorization();
         group.MapGet("/registrations/{registrationId}/status", HandleGetStatusAsync).RequireAuthorization();
@@ -131,12 +133,42 @@ public static class ChannelCallbackEndpoints
         return Results.Json(payload, statusCode: statusCode);
     }
 
+    /// <summary>
+    /// Lists channel-bot registrations. Scoped to the caller's own account by default
+    /// (a tenant must not see other tenants' bots, and their status is only queryable
+    /// for the caller's own bots anyway). <c>?scope=all</c> returns every account's bots
+    /// but is gated on a platform-admin role, verified server-side against the IdP.
+    /// </summary>
     private static async Task<IResult> HandleListRegistrationsAsync(
+        HttpContext http,
         [FromServices] IChannelBotRegistrationQueryPort queryPort,
+        [FromServices] IPlatformAdminAuthorizer adminAuthorizer,
+        string? scope,
         CancellationToken ct)
     {
+        var callerScope = ResolveScopeId(http, null, required: false).ScopeId;
+        var wantsAll = string.Equals(scope, "all", StringComparison.OrdinalIgnoreCase);
+
+        if (wantsAll)
+        {
+            var token = ResolveBearerAccessToken(http);
+            var caller = string.IsNullOrWhiteSpace(token)
+                ? PlatformCaller.NotElevated
+                : await adminAuthorizer.ResolveCallerAsync(token, ct);
+            if (!caller.IsElevated)
+            {
+                return Results.Json(
+                    new { error = "scope_admin_required", message = "Listing channel bots across accounts requires a platform admin role." },
+                    statusCode: StatusCodes.Status403Forbidden);
+            }
+        }
+
         var registrations = await queryPort.QueryAllAsync(ct);
-        var result = registrations.Select(e => new
+        var visible = wantsAll
+            ? registrations
+            : registrations.Where(e => string.Equals(e.ScopeId, callerScope, StringComparison.Ordinal));
+
+        var result = visible.Select(e => new
         {
             id = e.Id,
             platform = e.Platform,
@@ -147,9 +179,35 @@ public static class ChannelCallbackEndpoints
             nyx_channel_bot_id = e.NyxChannelBotId,
             nyx_agent_api_key_id = e.NyxAgentApiKeyId,
             nyx_conversation_route_id = e.NyxConversationRouteId,
+            // Whether this bot belongs to the caller's account. Cross-account bots
+            // (admin all-view) cannot have their live status read from NyxID.
+            owned = string.Equals(e.ScopeId, callerScope, StringComparison.Ordinal),
         });
 
         return Results.Ok(result);
+    }
+
+    /// <summary>
+    /// Caller info for the page: own scope id + whether the caller is a platform admin
+    /// (so the UI can offer the cross-account view). Admin is verified against the IdP.
+    /// </summary>
+    private static async Task<IResult> HandleGetCallerInfoAsync(
+        HttpContext http,
+        [FromServices] IPlatformAdminAuthorizer adminAuthorizer,
+        CancellationToken ct)
+    {
+        var callerScope = ResolveScopeId(http, null, required: false).ScopeId ?? string.Empty;
+        var token = ResolveBearerAccessToken(http);
+        var caller = string.IsNullOrWhiteSpace(token)
+            ? PlatformCaller.NotElevated
+            : await adminAuthorizer.ResolveCallerAsync(token, ct);
+
+        return Results.Json(new
+        {
+            scope_id = callerScope,
+            is_admin = caller.IsElevated,
+            role = caller.Role,
+        });
     }
 
     /// <summary>
@@ -170,6 +228,23 @@ public static class ChannelCallbackEndpoints
         var registration = await queryPort.GetAsync(registrationId, ct);
         if (registration is null)
             return Results.NotFound(new { error = "Registration not found" });
+
+        // Cross-account bot: NyxID's channel-bot API is strictly owner-scoped (even a
+        // platform admin gets 404 for another user's bot), so its live status is not
+        // readable here. Report it honestly as "foreign" rather than a misleading
+        // "unknown" that the UI would render as a perpetual "querying" spinner.
+        var callerScope = ResolveScopeId(http, null, required: false).ScopeId;
+        if (!string.IsNullOrWhiteSpace(callerScope)
+            && !string.Equals(registration.ScopeId, callerScope, StringComparison.Ordinal))
+        {
+            return Results.Json(new
+            {
+                registration_id = registrationId,
+                nyx_channel_bot_id = registration.NyxChannelBotId,
+                status = "foreign",
+                owned = false,
+            });
+        }
 
         var accessToken = ResolveBearerAccessToken(http);
         if (string.IsNullOrWhiteSpace(accessToken))
