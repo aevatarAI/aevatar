@@ -386,6 +386,11 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             TimeoutMs = timeoutMs,
             RunId = WorkflowRunIdNormalizer.Normalize(request.RunId),
             StepId = stepId,
+            // Carry the owning run's authoritative scope to the role actor so its tool caller
+            // context can be scope-scoped on the channel-less Direct/studio path (no inbound
+            // channel stamps the caller scope there). Empty stays empty; the role actor only
+            // fills a caller scope that is otherwise unset.
+            ScopeId = Normalize(ctx.ScopeId) ?? string.Empty,
         };
         intent.InputFileRefs.Add(request.InputFileRefs.Select(static fileRef => fileRef.Clone()));
         var runtimeContext = WorkflowRunExecutionContextStateAccess.GetWorkflowRuntimeContext(
