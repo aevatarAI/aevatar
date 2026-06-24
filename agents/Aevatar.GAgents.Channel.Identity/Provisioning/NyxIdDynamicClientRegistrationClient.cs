@@ -44,32 +44,15 @@ public class NyxIdDynamicClientRegistrationClient
         string redirectUri,
         CancellationToken ct = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(redirectUri);
-        return await RegisterPublicClientAsync(authority, clientName, [redirectUri], ct).ConfigureAwait(false);
-    }
-
-    public virtual async Task<RegistrationResult> RegisterPublicClientAsync(
-        string authority,
-        string clientName,
-        IReadOnlyCollection<string> redirectUris,
-        CancellationToken ct = default)
-    {
         ArgumentException.ThrowIfNullOrWhiteSpace(authority);
         ArgumentException.ThrowIfNullOrWhiteSpace(clientName);
-        ArgumentNullException.ThrowIfNull(redirectUris);
-        var normalizedRedirectUris = redirectUris
-            .Select(static uri => uri.Trim())
-            .Where(static uri => !string.IsNullOrWhiteSpace(uri))
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-        if (normalizedRedirectUris.Length == 0)
-            throw new ArgumentException("At least one redirect URI is required.", nameof(redirectUris));
+        ArgumentException.ThrowIfNullOrWhiteSpace(redirectUri);
 
         var url = $"{authority.TrimEnd('/')}{RegisterEndpoint}";
         var request = new RegistrationRequest
         {
             ClientName = clientName,
-            RedirectUris = normalizedRedirectUris,
+            RedirectUris = [redirectUri],
             GrantTypes = ["authorization_code"],
             ResponseTypes = ["code"],
             TokenEndpointAuthMethod = "none",

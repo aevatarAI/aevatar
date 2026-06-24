@@ -33,17 +33,6 @@ public interface INyxIdBrokerCallbackClient
         CancellationToken ct = default);
 
     /// <summary>
-    /// Exchanges an OAuth authorization code that was issued for a caller-provided
-    /// redirect URI. Used by Studio login finalization where the SPA owns the
-    /// callback URL and the backend only performs the single-use code exchange.
-    /// </summary>
-    Task<BrokerAuthorizationCodeResult> ExchangeAuthorizationCodeAsync(
-        string authorizationCode,
-        string codeVerifier,
-        string redirectUri,
-        CancellationToken ct = default);
-
-    /// <summary>
     /// Revoke a specific NyxID-issued <paramref name="bindingId"/> by id.
     /// Used by the callback handler to clean up an orphan binding when the
     /// sender is already bound (race / replay) — without the subject lookup
@@ -58,11 +47,4 @@ public interface INyxIdBrokerCallbackClient
 /// may be null when NyxID has not yet enabled <c>broker_capability_enabled</c>
 /// on this client (see ADR-0018 §Decision).
 /// </summary>
-public sealed record BrokerAuthorizationCodeResult(string? BindingId, string? IdToken, string? AccessToken)
-{
-    public string? TokenType { get; init; }
-
-    public int? ExpiresIn { get; init; }
-
-    public string? Scope { get; init; }
-}
+public sealed record BrokerAuthorizationCodeResult(string? BindingId, string? IdToken, string? AccessToken);
