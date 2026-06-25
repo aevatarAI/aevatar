@@ -66,9 +66,16 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         result.AcceptanceStage.Should().Be("accepted");
         result.PropagationStage.Should().Be("readmodel_propagating");
         result.Workflow.Should().NotBeNull();
+        var expectedDefinitionActorIdPrefix = DefaultOptions.BuildDefinitionActorIdPrefix(ScopeId, "workflow-stable-id");
         result.Workflow!.WorkflowId.Should().Be("workflow-stable-id");
         result.Workflow!.WorkflowName.Should().Be("main_runtime");
+        result.Workflow.DefinitionActorIdPrefix.Should().Be(expectedDefinitionActorIdPrefix);
+        result.ExpectedActorId.Should().StartWith($"{expectedDefinitionActorIdPrefix}:");
         result.DisplayName.Should().Be("main_runtime");
+
+        var revisionCommand = commandPort.Calls[1].Command.Should().BeOfType<CreateServiceRevisionCommand>().Subject;
+        revisionCommand.Spec.WorkflowSpec.Should().NotBeNull();
+        revisionCommand.Spec.WorkflowSpec!.DefinitionActorId.Should().Be(expectedDefinitionActorIdPrefix);
 
         var createCommand = commandPort.Calls[0].Command.Should().BeOfType<CreateServiceDefinitionCommand>().Subject;
         createCommand.Spec.Identity.Should().BeEquivalentTo(new ServiceIdentity
@@ -82,6 +89,38 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         governanceCommandPort.CreateEndpointCatalogCommand!.Spec.Endpoints.Should().ContainSingle();
         governanceCommandPort.CreateEndpointCatalogCommand.Spec.Endpoints[0].EndpointId.Should().Be("chat");
         governanceCommandPort.CreateEndpointCatalogCommand.Spec.Endpoints[0].ExposureKind.Should().Be(ServiceEndpointExposureKind.Internal);
+    }
+
+    [Fact]
+    public async Task UpsertAsync_ShouldKeepDefaultDefinitionPrefix_WhenWorkflowIdIsOmitted()
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(getResult: null);
+        var service = CreateService(
+            commandPort,
+            lifecyclePort,
+            new FakeScopeScriptQueryPort(),
+            new FakeScriptDefinitionSnapshotPort(),
+            new FakeWorkflowRunActorPort());
+
+        var result = await service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeId,
+            ScopeBindingImplementationKind.Workflow,
+            Workflow: new ScopeBindingWorkflowSpec(
+            [
+                "name: main_runtime\nsteps:\n  - run: echo hello",
+            ]),
+            ServiceId: "custom-service"));
+
+        var expectedDefinitionActorIdPrefix = ScopeWorkflowCapabilityConventions.BuildDefaultDefinitionActorIdPrefix(DefaultOptions, ScopeId);
+        result.Workflow.Should().NotBeNull();
+        result.Workflow!.WorkflowId.Should().Be("custom-service");
+        result.Workflow.DefinitionActorIdPrefix.Should().Be(expectedDefinitionActorIdPrefix);
+        result.ExpectedActorId.Should().StartWith($"{expectedDefinitionActorIdPrefix}:");
+
+        var revisionCommand = commandPort.Calls[1].Command.Should().BeOfType<CreateServiceRevisionCommand>().Subject;
+        revisionCommand.Spec.WorkflowSpec.Should().NotBeNull();
+        revisionCommand.Spec.WorkflowSpec!.DefinitionActorId.Should().Be(expectedDefinitionActorIdPrefix);
     }
 
     [Fact]

@@ -32,6 +32,9 @@ public static class ScopeWorkflowEndpoints
         group.MapPut("/{scopeId}/workflows/{workflowId}", HandleUpsertWorkflowAsync)
             .Produces<ScopeWorkflowUpsertResult>(StatusCodes.Status202Accepted)
             .Produces(StatusCodes.Status400BadRequest);
+        group.MapPost("/{scopeId}/workflows:save-and-bind", HandleSaveAndBindWorkflowAsync)
+            .Produces<ScopeWorkflowSaveAndBindResult>(StatusCodes.Status202Accepted)
+            .Produces(StatusCodes.Status400BadRequest);
         group.MapGet("/{scopeId}/workflows", HandleListWorkflowsAsync)
             .Produces(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status400BadRequest);
@@ -50,6 +53,14 @@ public static class ScopeWorkflowEndpoints
         [FromServices] IScopeWorkflowCommandPort workflowCommandPort,
         CancellationToken ct)
         => await HandleUpsertWorkflowAsyncCore(http, scopeId, workflowId, request, workflowCommandPort, ct);
+
+    internal static async Task<IResult> HandleSaveAndBindWorkflowAsync(
+        HttpContext http,
+        string scopeId,
+        SaveAndBindScopeWorkflowHttpRequest request,
+        [FromServices] IScopeWorkflowSaveAndBindPort saveAndBindPort,
+        CancellationToken ct)
+        => await HandleSaveAndBindWorkflowAsyncCore(http, scopeId, request, saveAndBindPort, ct);
 
     internal static async Task<IResult> HandleListWorkflowsAsync(
         HttpContext http,
@@ -114,6 +125,42 @@ public static class ScopeWorkflowEndpoints
                 request.InlineWorkflowYamls,
                 request.RevisionId), ct);
             return Results.Accepted(result.ReadModelUrl, result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new
+            {
+                code = "INVALID_USER_WORKFLOW_REQUEST",
+                message = ex.Message,
+            });
+        }
+    }
+
+    private static async Task<IResult> HandleSaveAndBindWorkflowAsyncCore(
+        HttpContext http,
+        string scopeId,
+        SaveAndBindScopeWorkflowHttpRequest request,
+        IScopeWorkflowSaveAndBindPort saveAndBindPort,
+        CancellationToken ct)
+    {
+        try
+        {
+            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+                return denied;
+
+            var result = await saveAndBindPort.SaveAndBindAsync(
+                new ScopeWorkflowSaveAndBindRequest(
+                    scopeId,
+                    request.WorkflowId,
+                    request.WorkflowYaml,
+                    request.WorkflowName,
+                    request.DisplayName,
+                    request.InlineWorkflowYamls,
+                    request.AppId,
+                    request.ServiceId,
+                    request.ExposureDesired),
+                ct);
+            return Results.Accepted(result.Workflow.ReadModelUrl, result);
         }
         catch (InvalidOperationException ex)
         {
@@ -731,6 +778,16 @@ public static class ScopeWorkflowEndpoints
         string? DisplayName = null,
         Dictionary<string, string>? InlineWorkflowYamls = null,
         string? RevisionId = null);
+
+    public sealed record SaveAndBindScopeWorkflowHttpRequest(
+        string? WorkflowId,
+        string WorkflowYaml,
+        string? WorkflowName = null,
+        string? DisplayName = null,
+        Dictionary<string, string>? InlineWorkflowYamls = null,
+        string? AppId = null,
+        string? ServiceId = null,
+        bool? ExposureDesired = null);
 
     public sealed record RunScopeWorkflowByIdStreamHttpRequest(
         string Prompt,

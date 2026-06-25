@@ -162,6 +162,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ScopeWorkflowQueryApplicationService>();
         services.TryAddSingleton<IScopeWorkflowQueryPort>(sp => sp.GetRequiredService<ScopeWorkflowQueryApplicationService>());
         services.TryAddSingleton<IScopeWorkflowCommandPort, ScopeWorkflowCommandApplicationService>();
+        services.TryAddSingleton<IScopeWorkflowSaveAndBindPort, ScopeWorkflowSaveAndBindApplicationService>();
         services.TryAddSingleton<ISkillWorkflowMountPort, SkillWorkflowMountAdapter>();
         services.TryAddSingleton<IScopeBindingCommandPort, ScopeBindingCommandApplicationService>();
         services.TryAddSingleton<IScopeBindingReadinessQueryPort, ScopeBindingReadinessQueryService>();
