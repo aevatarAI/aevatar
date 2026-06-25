@@ -104,8 +104,8 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
                  and a `display_name`. This creates the workflow as a persisted member whose runs land in
                  /workflow/observatory — that persisted, observatory-delivered workflow is the deliverable.
                  Scheduling rules:
-                 - If the request is recurring — it says 每天/每周/每月/每隔/定时/daily/weekly/monthly/hourly/
-                   "each"/"every"/"monitor"/"keep watching" or any repeating cadence — you MUST pass BOTH
+                 - If the request is recurring — it says 每天, 每周, 每月, 每隔, 定时, daily, weekly, monthly, hourly,
+                   "each", "every", "monitor", "keep watching" or any repeating cadence — you MUST pass BOTH
                    `schedule_cron` (5-field: minute hour day-of-month month day-of-week) AND `schedule_timezone`
                    (IANA, e.g. Asia/Shanghai). A run-immediately demo alone does NOT satisfy a recurring request.
                  - Infer the cron from the stated cadence. Examples: "每天早上 8:30" → `schedule_cron: "30 8 * * *"`,
@@ -123,7 +123,7 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
                  accepted and provisioned, then report the observed run status — never optimistically assume success.
               4. You may use `ornn_search_skills` and `use_skill` to discover and load skills for genuinely
                  non-deterministic, language-driven subtasks inside the workflow — but the deliverable for an
-                 automation request is a runnable workflow, not a published skill.
+                 automation request is a runnable workflow, not a separately published skill.
 
               Hard rules:
               - The deliverable is a runnable workflow persisted as a member whose runs are visible in
