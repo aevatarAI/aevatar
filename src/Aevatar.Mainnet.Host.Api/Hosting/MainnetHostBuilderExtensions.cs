@@ -45,6 +45,7 @@ using Aevatar.Foundation.VoicePresence;
 using Aevatar.Mainnet.Host.Api.BackendConsole;
 using Aevatar.Mainnet.Host.Api.ChatCompletions;
 using Aevatar.Mainnet.Host.Api.ChatRouting;
+using Aevatar.Mainnet.Host.Api.Cqrs;
 using Aevatar.Mainnet.Host.Api.Messages;
 using Aevatar.Mainnet.Host.Api.Responses;
 using Aevatar.Mainnet.Host.Api.Scheduled;
@@ -355,6 +356,8 @@ public static class MainnetHostBuilderExtensions
         app.MapVoicePresenceCapabilityAdminEndpoints();
         app.MapVoiceConsoleEndpoints();
         app.MapAutoConsoleCallbackEndpoints();
+        app.MapCqrsObservatoryPageEndpoints();
+        app.MapCqrsObservatoryApiEndpoints();
         app.MapStreamingProxyEndpoints();
         app.MapResponsesApiEndpoints();
         app.MapMessagesApiEndpoints();
