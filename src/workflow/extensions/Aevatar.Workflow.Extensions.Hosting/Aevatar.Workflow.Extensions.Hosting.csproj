@@ -15,7 +15,6 @@
     <ProjectReference Include="..\..\..\Aevatar.CQRS.Projection.Providers.Neo4j\Aevatar.CQRS.Projection.Providers.Neo4j.csproj" />
     <ProjectReference Include="..\..\..\Aevatar.Bootstrap.Extensions.AI\Aevatar.Bootstrap.Extensions.AI.csproj" />
     <ProjectReference Include="..\..\..\platform\Aevatar.GAgentService.Hosting\Aevatar.GAgentService.Hosting.csproj" />
-    <ProjectReference Include="..\..\..\..\agents\Aevatar.GAgents.Channel.Identity\Aevatar.GAgents.Channel.Identity.csproj" />
     <ProjectReference Include="..\..\..\Aevatar.Scripting.Hosting\Aevatar.Scripting.Hosting.csproj" />
     <ProjectReference Include="..\..\Aevatar.Workflow.Infrastructure\Aevatar.Workflow.Infrastructure.csproj" />
     <ProjectReference Include="..\..\Aevatar.Workflow.Projection\Aevatar.Workflow.Projection.csproj" />

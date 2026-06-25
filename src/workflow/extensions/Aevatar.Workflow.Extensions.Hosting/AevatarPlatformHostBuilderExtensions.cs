@@ -4,7 +4,6 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Capabilities;
 using Aevatar.GAgentService.Hosting.DependencyInjection;
 using Aevatar.GAgentService.Hosting.Endpoints;
-using Aevatar.GAgents.Channel.Identity.DependencyInjection;
 using Aevatar.Scripting.Hosting.CapabilityApi;
 using Aevatar.Workflow.Extensions.Maker;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
@@ -64,7 +63,6 @@ public static class AevatarPlatformHostBuilderExtensions
         if (options.EnableWorkflowCapability)
         {
             builder.Services.AddWorkflowProjectionReadModelProviders(builder.Configuration);
-            builder.Services.AddChannelIdentity(builder.Configuration);
             builder.Services.AddAevatarHealthContributor(new AevatarHealthContributorRegistration
             {
                 Name = "workflow-document-readmodel",

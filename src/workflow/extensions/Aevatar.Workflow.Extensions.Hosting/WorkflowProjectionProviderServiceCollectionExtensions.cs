@@ -5,7 +5,6 @@ using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Providers.Neo4j.Configuration;
 using Aevatar.CQRS.Projection.Providers.Neo4j.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
-using Aevatar.GAgents.Channel.Identity;
 using Aevatar.Workflow.Projection.ReadModels;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -87,14 +86,6 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
             services,
             configuration,
             static document => document.Id);
-        TryAddElasticsearchDocumentStore<ExternalIdentityBindingDocument>(
-            services,
-            configuration,
-            static document => document.Id);
-        TryAddElasticsearchDocumentStore<AevatarOAuthClientDocument>(
-            services,
-            configuration,
-            static document => document.Id);
     }
 
     private static void AddInMemoryDocumentStores(IServiceCollection services)
@@ -119,14 +110,6 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
             services,
             static document => document.Id,
             static document => document.UpdatedAt);
-        TryAddInMemoryDocumentStore<ExternalIdentityBindingDocument>(
-            services,
-            static document => document.Id,
-            static document => document.UpdatedAt);
-        TryAddInMemoryDocumentStore<AevatarOAuthClientDocument>(
-            services,
-            static document => document.Id,
-            static document => document.UpdatedAt);
     }
 
     private static bool HasAllWorkflowDocumentReaders(
@@ -137,9 +120,7 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
                && HasDocumentReaderForProvider<WorkflowRunInsightReportDocument>(services, providerKind)
                && HasDocumentReaderForProvider<WorkflowActorBindingDocument>(services, providerKind)
                && HasDocumentReaderForProvider<WorkflowCatalogCurrentStateDocument>(services, providerKind)
-               && HasDocumentReaderForProvider<WorkflowExternalApprovalContinuationDocument>(services, providerKind)
-               && HasDocumentReaderForProvider<ExternalIdentityBindingDocument>(services, providerKind)
-               && HasDocumentReaderForProvider<AevatarOAuthClientDocument>(services, providerKind);
+               && HasDocumentReaderForProvider<WorkflowExternalApprovalContinuationDocument>(services, providerKind);
     }
 
     private static bool HasAnyDocumentReader<TDocument>(IServiceCollection services)
