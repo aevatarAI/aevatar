@@ -88,6 +88,35 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
     }
 
     [Fact]
+    public async Task ExchangeAuthorizationCodeAsync_MapsRefreshTokenFromNyxIdTokenResponse()
+    {
+        var broker = NewBroker(
+            NewSnapshot(NyxIdRedirectUriResolver.Resolve()),
+            httpHandler: StubHandler.Text(HttpStatusCode.OK,
+                """
+                {
+                  "binding_id": "bnd-user",
+                  "access_token": "access-token",
+                  "refresh_token": "refresh-token",
+                  "id_token": "id-token",
+                  "token_type": "Bearer",
+                  "expires_in": 1800,
+                  "scope": "openid profile proxy"
+                }
+                """));
+
+        var result = await broker.ExchangeAuthorizationCodeAsync("auth-code", "verifier");
+
+        result.BindingId.Should().Be("bnd-user");
+        result.AccessToken.Should().Be("access-token");
+        result.RefreshToken.Should().Be("refresh-token");
+        result.IdToken.Should().Be("id-token");
+        result.TokenType.Should().Be("Bearer");
+        result.ExpiresIn.Should().Be(1800);
+        result.Scope.Should().Be("openid profile proxy");
+    }
+
+    [Fact]
     public async Task StartExternalBindingAsync_EmitsAuthorizeUrlOnlyWhenRedirectUriMatches()
     {
         var expectedRedirectUri = NyxIdRedirectUriResolver.Resolve();

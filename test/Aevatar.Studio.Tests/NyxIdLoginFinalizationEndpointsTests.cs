@@ -81,6 +81,7 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
             IdToken: CreateIdToken(new { uid = "owner-user-1", email = "owner@example.com", name = "Owner" }),
             AccessToken: "access-token")
         {
+            RefreshToken = "refresh-token",
             TokenType = "Bearer",
             ExpiresIn = 1800,
             Scope = "openid profile proxy",
@@ -107,6 +108,7 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
         payload.Should().NotBeNull();
         payload!.BindingDispatchAccepted.Should().BeTrue();
         payload.Tokens.AccessToken.Should().Be("access-token");
+        payload.Tokens.RefreshToken.Should().Be("refresh-token");
         payload.Tokens.ExpiresIn.Should().Be(1800);
         payload.User.Sub.Should().Be("owner-user-1");
         payload.User.Email.Should().Be("owner@example.com");
