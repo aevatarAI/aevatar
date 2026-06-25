@@ -245,6 +245,41 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
+    public async Task Create_ShouldRejectScopeOwnerNyxId_WhenRequestedScopeCannotBeIssued()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+        var request = CreateServiceInvocationRequestWithAuth(new ScheduledServiceInvocationAuthHttpRequest
+        {
+            ScopeOwnerNyxId = new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceHttpRequest
+            {
+                Scope = "schedule:workflow",
+            },
+        });
+        var bindingQuery = new FakeExternalIdentityBindingQueryPort();
+        bindingQuery.Bindings[SubjectKey(OwnerSubject("owner-user-1"))] = "bnd-owner-1";
+        var credentialExchange = new FakeScheduledServiceInvocationCredentialExchangePort
+        {
+            ScopeOwnerExchangeResult = ScheduledServiceInvocationCredentialExchangeResult.Failure(
+                "NyxID binding does not grant the requested schedule scope."),
+        };
+
+        var result = await CreateAsync(
+            request,
+            service,
+            CreateHttpContext(uid: "owner-user-1"),
+            bindingQuery,
+            credentialExchange);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        service.Created.Should().BeEmpty();
+        credentialExchange.ScopeOwnerSources.Should().ContainSingle()
+            .Which.Scope.Should().Be("schedule:workflow");
+    }
+
+    [Fact]
     public async Task Update_ShouldPersistScopeOwnerNyxIdFromAuthenticatedUser_WhenDurableBindingExists()
     {
         var service = new RecordingScheduledDispatchApplicationService();
@@ -1021,21 +1056,24 @@ public sealed class ScheduledDispatchEndpointsTests
         ScheduledDispatchConfigurationHttpRequest request,
         RecordingScheduledDispatchApplicationService service,
         HttpContext? http = null,
-        IExternalIdentityBindingQueryPort? bindingQueryPort = null) =>
+        IExternalIdentityBindingQueryPort? bindingQueryPort = null,
+        IScheduledServiceInvocationCredentialExchangePort? credentialExchangePort = null) =>
         ScheduledDispatchEndpoints.Create(
             http ?? CreateHttpContext(),
             request,
             service,
             new FakeServiceCatalogQueryReader(),
             new FakeServiceRevisionCatalogQueryReader(),
-            bindingQueryPort ?? new FakeExternalIdentityBindingQueryPort());
+            bindingQueryPort ?? new FakeExternalIdentityBindingQueryPort(),
+            credentialExchangePort ?? new FakeScheduledServiceInvocationCredentialExchangePort());
 
     private static Task<IResult> UpdateAsync(
         string scheduleId,
         ScheduledDispatchConfigurationHttpRequest request,
         RecordingScheduledDispatchApplicationService service,
         HttpContext? http = null,
-        IExternalIdentityBindingQueryPort? bindingQueryPort = null) =>
+        IExternalIdentityBindingQueryPort? bindingQueryPort = null,
+        IScheduledServiceInvocationCredentialExchangePort? credentialExchangePort = null) =>
         ScheduledDispatchEndpoints.Update(
             http ?? CreateHttpContext(),
             scheduleId,
@@ -1043,7 +1081,8 @@ public sealed class ScheduledDispatchEndpointsTests
             service,
             new FakeServiceCatalogQueryReader(),
             new FakeServiceRevisionCatalogQueryReader(),
-            bindingQueryPort ?? new FakeExternalIdentityBindingQueryPort());
+            bindingQueryPort ?? new FakeExternalIdentityBindingQueryPort(),
+            credentialExchangePort ?? new FakeScheduledServiceInvocationCredentialExchangePort());
 
     private static ServiceCatalogSnapshot CreateServiceCatalog(string activeRevisionId) =>
         new(
@@ -1193,6 +1232,7 @@ public sealed class ScheduledDispatchEndpointsTests
             builder.Services.AddSingleton<IServiceCatalogQueryReader>(catalogReader);
             builder.Services.AddSingleton<IServiceRevisionCatalogQueryReader>(revisionCatalog);
             builder.Services.AddSingleton<IExternalIdentityBindingQueryPort, FakeExternalIdentityBindingQueryPort>();
+            builder.Services.AddSingleton<IScheduledServiceInvocationCredentialExchangePort, FakeScheduledServiceInvocationCredentialExchangePort>();
 
             var app = builder.Build();
             ScheduledDispatchEndpoints.Map(app.MapGroup("/api"));
@@ -1504,6 +1544,28 @@ public sealed class ScheduledDispatchEndpointsTests
             return Task.FromResult(Bindings.TryGetValue(SubjectKey(externalSubject), out var bindingId)
                 ? new BindingId { Value = bindingId }
                 : null);
+        }
+    }
+
+    private sealed class FakeScheduledServiceInvocationCredentialExchangePort : IScheduledServiceInvocationCredentialExchangePort
+    {
+        public ScheduledServiceInvocationCredentialExchangeResult ScopeOwnerExchangeResult { get; init; } =
+            ScheduledServiceInvocationCredentialExchangeResult.Success("owner-token");
+
+        public List<ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource> ScopeOwnerSources { get; } = [];
+
+        public Task<ScheduledServiceInvocationCredentialExchangeResult> IssueSenderNyxIdAsync(
+            ScheduledServiceInvocationNyxIdCredentialSource source,
+            CancellationToken ct = default) =>
+            Task.FromResult(ScheduledServiceInvocationCredentialExchangeResult.Success("sender-token"));
+
+        public Task<ScheduledServiceInvocationCredentialExchangeResult> IssueScopeOwnerNyxIdAsync(
+            ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource source,
+            ServiceIdentity serviceIdentity,
+            CancellationToken ct = default)
+        {
+            ScopeOwnerSources.Add(source);
+            return Task.FromResult(ScopeOwnerExchangeResult);
         }
     }
 
