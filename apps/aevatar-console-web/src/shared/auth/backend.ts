@@ -18,6 +18,12 @@ export type NyxIDLoginFinalizationResult = {
   readonly session: NyxIDAuthSession;
 };
 
+export type NyxIDTokenRefreshRequest = {
+  readonly baseUrl: string;
+  readonly clientId: string;
+  readonly refreshToken: string;
+};
+
 type BackendLoginConfigResponse = {
   readonly baseUrl?: unknown;
   readonly BaseUrl?: unknown;
@@ -55,6 +61,8 @@ type BackendTokenSetResponse = {
   readonly scope?: unknown;
   readonly Scope?: unknown;
 };
+
+type NyxIDTokenRefreshResponse = BackendTokenSetResponse;
 
 type BackendUserInfoResponse = {
   readonly sub?: unknown;
@@ -174,6 +182,39 @@ function decodeTokenSet(value: unknown): NyxIDTokenSet {
   };
 }
 
+function decodeRefreshTokenSet(
+  value: unknown,
+  fallbackRefreshToken: string,
+): NyxIDTokenSet {
+  const record = expectRecord(value, "NyxID refreshed tokens") as
+    NyxIDTokenRefreshResponse;
+  const expiresIn = readNumber(
+    record.expiresIn ?? record.ExpiresIn ?? record.expires_in,
+    "tokens.expiresIn",
+  );
+
+  return {
+    accessToken: readString(
+      record.accessToken ?? record.AccessToken ?? record.access_token,
+      "tokens.accessToken",
+    ),
+    tokenType:
+      readOptionalString(
+        record.tokenType ?? record.TokenType ?? record.token_type,
+      ) ?? "Bearer",
+    expiresIn,
+    expiresAt: Date.now() + expiresIn * 1000,
+    refreshToken:
+      readOptionalString(
+        record.refreshToken ?? record.RefreshToken ?? record.refresh_token,
+      ) ?? fallbackRefreshToken,
+    idToken: readOptionalString(
+      record.idToken ?? record.IdToken ?? record.id_token,
+    ),
+    scope: readOptionalString(record.scope ?? record.Scope),
+  };
+}
+
 function decodeUserInfo(value: unknown): NyxIDUserInfo {
   const record = expectRecord(value, "NyxID finalized user") as
     BackendUserInfoResponse;
@@ -248,6 +289,32 @@ export function finalizeBackendNyxIDLogin(
       headers: {
         Accept: "application/json",
         "Content-Type": "application/json",
+      },
+      method: "POST",
+    },
+  );
+}
+
+export function refreshNyxIDTokenSet(
+  request: NyxIDTokenRefreshRequest,
+): Promise<NyxIDTokenSet> {
+  const baseUrl = readString(request.baseUrl, "baseUrl").replace(/\/+$/, "");
+  const clientId = readString(request.clientId, "clientId");
+  const refreshToken = readString(request.refreshToken, "refreshToken");
+  const body = new URLSearchParams({
+    grant_type: "refresh_token",
+    refresh_token: refreshToken,
+    client_id: clientId,
+  });
+
+  return requestBackendJson(
+    `${baseUrl}/oauth/token`,
+    (value) => decodeRefreshTokenSet(value, refreshToken),
+    {
+      body,
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/x-www-form-urlencoded",
       },
       method: "POST",
     },

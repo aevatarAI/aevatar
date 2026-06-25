@@ -1,6 +1,7 @@
 import {
   finalizeBackendNyxIDLogin,
   loadBackendNyxIDLoginConfig,
+  refreshNyxIDTokenSet,
 } from "./backend";
 
 describe("NyxID backend auth API", () => {
@@ -22,7 +23,7 @@ describe("NyxID backend auth API", () => {
       json: async () => ({
         baseUrl: "https://nyx.example/",
         clientId: "broker-client-1",
-        scope: "openid urn:nyxid:scope:broker_binding proxy",
+        scope: "openid profile email offline_access urn:nyxid:scope:broker_binding proxy",
       }),
     } as Response);
     global.fetch = fetchMock as typeof global.fetch;
@@ -30,7 +31,7 @@ describe("NyxID backend auth API", () => {
     await expect(loadBackendNyxIDLoginConfig()).resolves.toEqual({
       baseUrl: "https://nyx.example",
       clientId: "broker-client-1",
-      scope: "openid urn:nyxid:scope:broker_binding proxy",
+      scope: "openid profile email offline_access urn:nyxid:scope:broker_binding proxy",
     });
 
     expect(fetchMock).toHaveBeenCalledWith("/api/auth/nyxid/config", {
@@ -68,10 +69,11 @@ describe("NyxID backend auth API", () => {
       json: async () => ({
         tokens: {
           accessToken: "access-token",
+          refreshToken: "refresh-token",
           tokenType: "Bearer",
           expiresIn: 1800,
           idToken: "id-token",
-          scope: "openid profile proxy",
+          scope: "openid profile email offline_access proxy",
         },
         user: {
           sub: "owner-user-1",
@@ -98,9 +100,9 @@ describe("NyxID backend auth API", () => {
           tokenType: "Bearer",
           expiresIn: 1800,
           expiresAt: 1_700_000_000_000 + 1_800_000,
+          refreshToken: "refresh-token",
           idToken: "id-token",
-          scope: "openid profile proxy",
-          refreshToken: undefined,
+          scope: "openid profile email offline_access proxy",
         },
         user: {
           sub: "owner-user-1",
@@ -123,5 +125,74 @@ describe("NyxID backend auth API", () => {
       codeVerifier: "pkce-verifier",
       redirectUri: "http://localhost:8000/auth/callback",
     });
+  });
+
+  it("refreshes a NyxID token set through the OAuth refresh grant", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        access_token: "access-token-2",
+        refresh_token: "refresh-token-2",
+        token_type: "Bearer",
+        expires_in: 300,
+        id_token: "id-token-2",
+        scope: "openid profile email offline_access proxy",
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      refreshNyxIDTokenSet({
+        baseUrl: "https://nyx.example/",
+        clientId: "broker-client-1",
+        refreshToken: "refresh-token-1",
+      }),
+    ).resolves.toEqual({
+      accessToken: "access-token-2",
+      refreshToken: "refresh-token-2",
+      tokenType: "Bearer",
+      expiresIn: 300,
+      expiresAt: 1_700_000_000_000 + 300_000,
+      idToken: "id-token-2",
+      scope: "openid profile email offline_access proxy",
+    });
+
+    const [input, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(input).toBe("https://nyx.example/oauth/token");
+    expect(init.method).toBe("POST");
+    expect(init.headers).toEqual({
+      Accept: "application/json",
+      "Content-Type": "application/x-www-form-urlencoded",
+    });
+    expect(String(init.body)).toBe(
+      "grant_type=refresh_token&refresh_token=refresh-token-1&client_id=broker-client-1",
+    );
+  });
+
+  it("keeps the existing refresh token when NyxID refresh does not rotate it", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        accessToken: "access-token-2",
+        tokenType: "Bearer",
+        expiresIn: 300,
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      refreshNyxIDTokenSet({
+        baseUrl: "https://nyx.example",
+        clientId: "broker-client-1",
+        refreshToken: "refresh-token-1",
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        accessToken: "access-token-2",
+        refreshToken: "refresh-token-1",
+      }),
+    );
   });
 });

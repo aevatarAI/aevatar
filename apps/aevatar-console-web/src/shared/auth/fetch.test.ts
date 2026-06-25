@@ -70,7 +70,7 @@ describe('authFetch', () => {
     );
   });
 
-  it('does not exchange refresh tokens in the browser for expired sessions', async () => {
+  it('refreshes expired sessions before injecting the bearer token', async () => {
     persistAuthSession({
       tokens: {
         accessToken: 'expired-token',
@@ -85,20 +85,42 @@ describe('authFetch', () => {
       },
     });
 
-    const fetchMock = jest.fn().mockResolvedValue({ ok: true } as Response);
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          baseUrl: "https://nyx.example",
+          clientId: "broker-client-1",
+          scope: "openid profile email offline_access urn:nyxid:scope:broker_binding proxy",
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          access_token: "access-token-2",
+          refresh_token: "refresh-token-2",
+          token_type: "Bearer",
+          expires_in: 300,
+        }),
+      } as Response)
+      .mockResolvedValueOnce({ ok: true } as Response);
     global.fetch = fetchMock as typeof global.fetch;
 
     await authFetch('/api/agents');
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [input, init] = fetchMock.mock.calls[0] as [
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/auth/nyxid/config");
+    expect(fetchMock.mock.calls[1][0]).toBe("https://nyx.example/oauth/token");
+    const [input, init] = fetchMock.mock.calls[2] as [
       string,
       RequestInit | undefined,
     ];
     expect(input).toBe('/api/agents');
-    expect(new Headers(init?.headers).has('Authorization')).toBe(false);
-    expect(
-      fetchMock.mock.calls.some(([url]) => String(url).includes('/oauth/token')),
-    ).toBe(false);
+    expect(new Headers(init?.headers).get('Authorization')).toBe(
+      'Bearer access-token-2',
+    );
   });
 });
