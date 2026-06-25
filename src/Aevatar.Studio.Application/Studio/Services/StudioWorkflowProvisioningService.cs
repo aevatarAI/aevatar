@@ -31,12 +31,13 @@ namespace Aevatar.Studio.Application.Studio.Services;
 ///   <c>IServiceInvocationPort.InvokeAsync</c> could not provide.</item>
 /// </list>
 ///
-/// The caller credential is a NyxID <b>subject reference</b> (not a raw token):
-/// the scheduled dispatch exchanges it for a short-lived token on every fire, so a
-/// recurring monitor schedule keeps working past the caller's session-token
-/// expiry. <paramref name="scopeId"/> and the caller credential are always input
-/// parameters — the service holds no HttpContext and no infrastructure
-/// dependency, only application ports.
+/// The schedule carries EXACTLY ONE credential source, chosen by
+/// <see cref="BuildScheduleAuthAsync"/> to stay valid for the schedule's whole
+/// lifetime: a re-mintable NyxID subject reference for a recurring monitor (the
+/// dispatch exchanges it for a fresh token on every fire, past session-token
+/// expiry), or a durable/forwarded bearer token for a one-shot demo. The scope id
+/// and the caller credential are always input parameters — the service holds no
+/// HttpContext and no infrastructure dependency, only application ports.
 /// </summary>
 public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvisioningService
 {
@@ -110,24 +111,23 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         //    one-shot demo (RunImmediately). RunImmediately=false with no Cron is an
         //    honest "bind only": no schedule, no run (and nothing to credential).
         //
-        //    The schedule carries a DURABLE bearer credential so the run's LLM call
-        //    authenticates without a re-mintable NyxID binding (the gap a raw nyxid
-        //    caller hits): a minted agent key when a credential issuer is wired
-        //    (mirroring the SkillRunner scheduled-agent pattern), else the caller's
-        //    forwarded token directly. The subject ref stays as a fallback for hosts
-        //    whose callers do have a re-mintable binding.
+        //    The schedule carries EXACTLY ONE credential source (the validator admits
+        //    no more), chosen to stay valid for the schedule's whole lifetime — see
+        //    BuildScheduleAuthAsync. The recurring-vs-one-shot decision is owned by
+        //    ResolveCron and threaded into the credential choice.
         string? scheduleId = null;
         if (ShouldSchedule(request))
         {
+            var cronExpression = ResolveCron(request, out var timezone, out var isRecurringMonitor);
             var auth = await BuildScheduleAuthAsync(
-                subjectRef, normalizedCallerToken, memberId, normalizedScopeId, ct);
+                subjectRef, normalizedCallerToken, isRecurringMonitor, memberId, normalizedScopeId, ct);
             var schedule = await _scheduleService.CreateAsync(
                 BuildScheduleConfiguration(
                     normalizedScopeId,
                     publishedServiceId,
                     request.Prompt ?? string.Empty,
                     auth,
-                    ResolveCron(request, out var timezone),
+                    cronExpression,
                     timezone),
                 ct);
             scheduleId = NormalizeOptional(schedule.ScheduleId);
@@ -150,9 +150,8 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
     /// <summary>
     /// Builds the scheduled-dispatch configuration: a Workflow-kind service
     /// invocation targeting the bound member's <c>chat</c> endpoint with the
-    /// caller's prompt, carrying the resolved auth (a durable credential when
-    /// available, with the caller subject ref as fallback) that the dispatch
-    /// projects onto the run.
+    /// caller's prompt, carrying the single resolved credential source that the
+    /// dispatch projects onto the run.
     /// </summary>
     private static ScheduledDispatchConfiguration BuildScheduleConfiguration(
         string scopeId,
@@ -203,11 +202,14 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
     /// accepts; the dispatch's recurrence harmlessly re-fires if the bind has not
     /// completed by the first tick.
     /// </summary>
-    private string ResolveCron(ProvisionWorkflowRequest request, out string timezone)
+    private string ResolveCron(ProvisionWorkflowRequest request, out string timezone, out bool isRecurringMonitor)
     {
         var callerCron = NormalizeOptional(request.Cron);
         if (callerCron != null)
         {
+            // A caller-supplied cron is a recurring monitor — its credential must
+            // survive every future fire, not just the next one.
+            isRecurringMonitor = true;
             timezone = ScheduledDispatchCalculator.NormalizeTimezone(request.Timezone);
             return callerCron;
         }
@@ -219,6 +221,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         // caller deletes it, and a recurring monitor supplies its own Cron). The
         // round-up is required because a cron never fires within the current
         // partial minute.
+        isRecurringMonitor = false;
         timezone = ScheduledDispatchCalculator.DefaultTimezone;
         var fireAt = _timeProvider
             .GetUtcNow()
@@ -231,54 +234,72 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
     }
 
     /// <summary>
-    /// Builds the scheduled-dispatch auth. Resolves a DURABLE bearer credential so
-    /// the run's LLM call authenticates without a re-mintable NyxID subject binding
-    /// (the gap a raw nyxid caller hits): a minted agent key when a
-    /// <see cref="IStudioRunCredentialIssuer"/> is wired, else the caller's
-    /// forwarded token. The subject ref is always retained as a fallback for hosts
-    /// whose callers do have a re-mintable binding (the dispatch prefers the durable
-    /// token when present and exchanges the subject otherwise).
+    /// Selects the schedule's single authoritative credential source, matched to its
+    /// lifetime. A scheduled dispatch admits EXACTLY ONE source (the create-time
+    /// validator rejects more, and the dispatch never combines them), so this never
+    /// attaches a "fallback" alongside another source. The choice:
+    /// <list type="bullet">
+    ///   <item>a minted durable agent key (issuer wired) authenticates every fire
+    ///   with no re-mint dependency, so it is the strongest source for any
+    ///   schedule;</item>
+    ///   <item>a forwarded session token is short-lived — valid for a single
+    ///   near-future demo fire but expired well before a recurring monitor's next
+    ///   tick — so it is used ONLY for a one-shot demo, never pinned to a recurring
+    ///   schedule (which would silently fail every later fire);</item>
+    ///   <item>otherwise the caller's NyxID subject reference is the authoritative
+    ///   identity: the dispatch re-mints a fresh sender token from it on every fire,
+    ///   the only honest credential for a recurring monitor on a re-mintable host.</item>
+    /// </list>
     /// </summary>
     private async Task<ScheduledServiceInvocationAuth> BuildScheduleAuthAsync(
         ScheduledServiceInvocationNyxIdCredentialSource subjectRef,
         string? callerBearerToken,
+        bool isRecurringMonitor,
         string memberId,
         string scopeId,
         CancellationToken ct)
     {
-        var durableToken = await ResolveDurableRunCredentialAsync(callerBearerToken, memberId, scopeId, ct);
-        return new ScheduledServiceInvocationAuth(subjectRef, durableToken);
+        var credential = await ResolveRunCredentialAsync(callerBearerToken, memberId, scopeId, ct);
+
+        if (credential.Kind == RunCredentialKind.MintedDurable)
+            return new ScheduledServiceInvocationAuth(DurableSenderBearerToken: credential.Token);
+
+        if (credential.Kind == RunCredentialKind.ForwardedEphemeral && !isRecurringMonitor)
+            return new ScheduledServiceInvocationAuth(DurableSenderBearerToken: credential.Token);
+
+        return new ScheduledServiceInvocationAuth(SenderNyxId: subjectRef);
     }
 
     /// <summary>
-    /// Mints a durable agent key under the caller's account (the proven SkillRunner
-    /// scheduled-agent pattern) when a credential issuer is registered and returns
-    /// one; otherwise falls back to the caller's forwarded bearer token. Returns
-    /// <c>null</c> when neither is available (the dispatch then falls back to the
-    /// subject token-exchange).
+    /// Resolves the run credential and classifies its durability — the classification,
+    /// not just the token string, is what lets <see cref="BuildScheduleAuthAsync"/>
+    /// match the credential to the schedule's lifetime. Mints a durable agent key
+    /// under the caller's account (the proven SkillRunner scheduled-agent pattern)
+    /// when a <see cref="IStudioRunCredentialIssuer"/> is wired and returns one;
+    /// otherwise the caller's forwarded session token (short-lived); otherwise none.
     /// </summary>
-    private async Task<string?> ResolveDurableRunCredentialAsync(
+    private async Task<ResolvedRunCredential> ResolveRunCredentialAsync(
         string? callerBearerToken,
         string memberId,
         string scopeId,
         CancellationToken ct)
     {
         if (callerBearerToken == null)
-            return null;
+            return ResolvedRunCredential.None;
 
         if (_runCredentialIssuer != null)
         {
             var mintedKey = NormalizeOptional(await _runCredentialIssuer.IssueDurableRunCredentialAsync(
                 callerBearerToken, memberId, scopeId, ct));
             if (mintedKey != null)
-                return mintedKey;
+                return new ResolvedRunCredential(RunCredentialKind.MintedDurable, mintedKey);
         }
 
-        // No durable agent key was minted (no issuer wired, or it could not mint a
-        // key for this caller/scope). Thread the forwarded caller token directly —
-        // valid for a soon-firing one-shot run; a recurring monitor benefits from a
-        // minted key but the forwarded token still unblocks the demo path.
-        return callerBearerToken;
+        // No durable agent key minted (no issuer wired, or it could not mint a key
+        // for this caller/scope). The forwarded caller token is short-lived: usable
+        // for a soon-firing one-shot demo, but BuildScheduleAuthAsync must not pin it
+        // to a recurring monitor.
+        return new ResolvedRunCredential(RunCredentialKind.ForwardedEphemeral, callerBearerToken);
     }
 
     private static ScheduledServiceInvocationNyxIdCredentialSource BuildSenderNyxIdCredentialSource(
@@ -312,5 +333,26 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
     {
         var normalized = value?.Trim() ?? string.Empty;
         return normalized.Length == 0 ? null : normalized;
+    }
+
+    /// <summary>Durability class of a resolved run credential — governs which
+    /// schedules it can authenticate (see <see cref="BuildScheduleAuthAsync"/>).</summary>
+    private enum RunCredentialKind
+    {
+        /// <summary>No run token resolved (no forwarded caller token).</summary>
+        None,
+
+        /// <summary>A durable agent key minted under the caller's account: long-lived,
+        /// authenticates every fire of any schedule with no re-mint dependency.</summary>
+        MintedDurable,
+
+        /// <summary>The caller's forwarded session token: short-lived, valid only for a
+        /// single near-future fire.</summary>
+        ForwardedEphemeral,
+    }
+
+    private readonly record struct ResolvedRunCredential(RunCredentialKind Kind, string? Token)
+    {
+        public static ResolvedRunCredential None { get; } = new(RunCredentialKind.None, null);
     }
 }
