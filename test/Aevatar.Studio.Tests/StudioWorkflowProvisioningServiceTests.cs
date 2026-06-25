@@ -109,6 +109,8 @@ public sealed class StudioWorkflowProvisioningServiceTests
         auth.SenderNyxId.Subject.ExternalUserId.Should().Be("ou-user-1");
         auth.SenderNyxId.Subject.Tenant.Should().Be("tenant-9");
         auth.SenderNyxId.Scope.Should().Be("proxy");
+        auth.DurableSenderBearerToken.Should().BeNull();
+        AssertExactlyOneCredentialSource(auth);
     }
 
     [Fact]
@@ -124,14 +126,16 @@ public sealed class StudioWorkflowProvisioningServiceTests
             new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "p"),
             callerBearerToken: CallerBearerToken);
 
-        // With no credential issuer wired, the forwarded caller token is threaded
-        // directly as the run's durable credential so the scheduled run's LLM call
-        // authenticates without a re-mintable subject binding. The subject ref is
-        // retained as a fallback.
+        // One-shot demo (no caller cron) with no credential issuer: the forwarded
+        // caller token is valid for the single near-future fire, so it is the run's
+        // sole credential. The schedule carries EXACTLY ONE source — the subject ref
+        // is NOT also attached (the validator admits only one, and the dispatch never
+        // falls back to a subject ref once a token is present).
         var auth = schedule.Configuration!.Target.ServiceInvocation!.Auth;
         auth.Should().NotBeNull();
         auth!.DurableSenderBearerToken.Should().Be(CallerBearerToken);
-        auth.SenderNyxId.Should().NotBeNull();
+        auth.SenderNyxId.Should().BeNull();
+        AssertExactlyOneCredentialSource(auth);
     }
 
     [Fact]
@@ -155,9 +159,12 @@ public sealed class StudioWorkflowProvisioningServiceTests
         issuer.AgentId.Should().Be(MemberId);
         issuer.ScopeId.Should().Be(ScopeId);
 
-        // The minted key (NOT the forwarded token) is threaded as the run credential.
+        // The minted key (NOT the forwarded token) is the run's sole credential; a
+        // long-lived key needs no subject-ref fallback, so none is attached.
         var auth = schedule.Configuration!.Target.ServiceInvocation!.Auth;
         auth!.DurableSenderBearerToken.Should().Be(MintedKey);
+        auth.SenderNyxId.Should().BeNull();
+        AssertExactlyOneCredentialSource(auth);
     }
 
     [Fact]
@@ -175,10 +182,13 @@ public sealed class StudioWorkflowProvisioningServiceTests
             callerBearerToken: CallerBearerToken);
 
         issuer.IssueInvoked.Should().BeTrue();
-        // The issuer minted nothing (e.g. no host slug configured); the forwarded
-        // caller token is used so provisioning still produces an authenticatable run.
+        // The issuer minted nothing (e.g. no host slug configured); for a one-shot
+        // demo the forwarded caller token is the sole credential so provisioning still
+        // produces an authenticatable run.
         var auth = schedule.Configuration!.Target.ServiceInvocation!.Auth;
         auth!.DurableSenderBearerToken.Should().Be(CallerBearerToken);
+        auth.SenderNyxId.Should().BeNull();
+        AssertExactlyOneCredentialSource(auth);
     }
 
     [Fact]
@@ -195,11 +205,70 @@ public sealed class StudioWorkflowProvisioningServiceTests
             new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "p"));
 
         // No forwarded token → nothing to mint from and nothing to thread; the
-        // subject ref is the only auth (the dispatch falls back to subject exchange).
+        // subject ref is the schedule's sole credential (the dispatch re-mints a
+        // fresh sender token from it on every fire).
         issuer.IssueInvoked.Should().BeFalse();
         var auth = schedule.Configuration!.Target.ServiceInvocation!.Auth;
         auth!.DurableSenderBearerToken.Should().BeNull();
         auth.SenderNyxId.Should().NotBeNull();
+        AssertExactlyOneCredentialSource(auth);
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_RecurringMonitor_WithForwardedTokenOnly_UsesSubjectRef_NotEphemeralToken()
+    {
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var issuer = new RecordingRunCredentialIssuer { MintedKey = null };
+        var sut = NewService(member, schedule, issuer);
+
+        await sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest(
+                DisplayName: "Monitor",
+                WorkflowYaml: "name: monitor",
+                Prompt: "go",
+                Cron: "0 8 * * *",
+                Timezone: "Asia/Shanghai"),
+            callerBearerToken: CallerBearerToken);
+
+        // A forwarded session token is short-lived: pinning it to a recurring monitor
+        // would authenticate only the first ~15 minutes, then every later fire would
+        // silently fail. The re-mintable subject reference is the only honest
+        // credential for a recurring schedule, so it — not the ephemeral token — is
+        // the sole source.
+        var auth = schedule.Configuration!.Target.ServiceInvocation!.Auth;
+        auth!.SenderNyxId.Should().NotBeNull();
+        auth.DurableSenderBearerToken.Should().BeNull();
+        AssertExactlyOneCredentialSource(auth);
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_RecurringMonitor_WithMintedKey_UsesDurableKey()
+    {
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var issuer = new RecordingRunCredentialIssuer { MintedKey = MintedKey };
+        var sut = NewService(member, schedule, issuer);
+
+        await sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest(
+                DisplayName: "Monitor",
+                WorkflowYaml: "name: monitor",
+                Prompt: "go",
+                Cron: "0 8 * * *",
+                Timezone: "Asia/Shanghai"),
+            callerBearerToken: CallerBearerToken);
+
+        // A minted durable key authenticates every fire with no re-mint dependency,
+        // so a recurring monitor uses it directly as the sole source.
+        var auth = schedule.Configuration!.Target.ServiceInvocation!.Auth;
+        auth!.DurableSenderBearerToken.Should().Be(MintedKey);
+        auth.SenderNyxId.Should().BeNull();
+        AssertExactlyOneCredentialSource(auth);
     }
 
     [Fact]
@@ -382,6 +451,24 @@ public sealed class StudioWorkflowProvisioningServiceTests
 
     private const string CallerBearerToken = "caller-bearer-token";
     private const string MintedKey = "minted-durable-agent-key";
+
+    /// <summary>
+    /// The platform validator (<see cref="IScheduledDispatchApplicationService"/>
+    /// CreateAsync → NormalizeServiceInvocationAuth) admits a schedule only when its
+    /// auth carries EXACTLY ONE credential source. These unit tests drive a recording
+    /// schedule service that does NOT run that validator, so this guard pins the
+    /// invariant at the producer — the gap that let a two-source regression ship and
+    /// fail live with "Exactly one service invocation credential source is required."
+    /// </summary>
+    private static void AssertExactlyOneCredentialSource(ScheduledServiceInvocationAuth? auth)
+    {
+        auth.Should().NotBeNull();
+        var sources =
+            (auth!.SenderNyxId != null ? 1 : 0) +
+            (string.IsNullOrEmpty(auth.DurableSenderBearerToken) ? 0 : 1) +
+            (auth.ScopeOwnerNyxId != null ? 1 : 0);
+        sources.Should().Be(1, "a scheduled dispatch must carry exactly one credential source");
+    }
 
     private static StudioWorkflowProvisioningService NewService(
         RecordingMemberService member,
