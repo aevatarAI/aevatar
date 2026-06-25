@@ -1512,6 +1512,98 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
+    public async Task OnActivateAsync_WhenArmedFireIsDueAndNoPendingIntent_ShouldRearmForArmedTimeAsCatchUpInsteadOfSkipping()
+    {
+        // Regression: a daily cron armed NextFireAt for a fire time that came due while the
+        // actor was inactive (pod churn at the fire boundary). PendingNextFireAt is null in
+        // steady state, so reactivation must NOT recompute the next occurrence from "now"
+        // (which would skip the due fire), but re-arm for the armed time as a catch-up.
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(eventStore, dispatch, scheduler);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(cronExpression: "* * * * *", enabled: true));
+
+        // Arm NextFireAt for a fire time in the past (the occurrence that came due while the
+        // actor was offline) via the early-callback re-arm path. This persists a
+        // NextFireScheduledEvent that sets NextFireAt and clears PendingNextFireAt, exactly
+        // like steady state after a normal arm.
+        var armedFireAt = DateTimeOffset.UtcNow.AddMinutes(-5);
+        var firstRequest = scheduler.TimeoutRequests.Single();
+        await agent.HandleEventAsync(CreateFiredCallbackEnvelope(
+            firstRequest,
+            generation: 1,
+            fireIndex: 1,
+            firedAt: armedFireAt.AddSeconds(-1),
+            scheduledFireAt: armedFireAt));
+
+        agent.State.NextFireAt.Should().Be(armedFireAt);
+        agent.State.PendingNextFireAt.Should().BeNull();
+        dispatch.Dispatches.Should().BeEmpty();
+        var armCount = scheduler.TimeoutRequests.Count;
+
+        var reactivated = CreateAgent(eventStore, dispatch, scheduler);
+        await reactivated.ActivateAsync();
+
+        // The reactivation re-arms for the armed (past) time as a catch-up: a new timeout is
+        // registered for armedFireAt with a near-immediate due time, and NextFireAt is NOT
+        // advanced to a future occurrence (which is the silent-skip bug).
+        scheduler.TimeoutRequests.Should().HaveCount(armCount + 1);
+        var reactivationRequest = scheduler.TimeoutRequests[^1];
+        reactivationRequest.CallbackId.Should().Be(NextFireCallbackId);
+        reactivationRequest.DueTime.Should().BeLessThanOrEqualTo(TimeSpan.FromSeconds(1));
+        var reactivationFire = reactivationRequest.TriggerEnvelope.Payload.Unpack<ScheduledDispatchFireCommand>();
+        reactivationFire.Manual.Should().BeFalse();
+        reactivationFire.ScheduledFireAt.ToDateTimeOffset().Should().Be(armedFireAt);
+        reactivated.State.NextFireAt.Should().Be(armedFireAt);
+        reactivated.State.NextFireLease.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task OnActivateAsync_WhenNothingArmedAndNoPendingIntent_ShouldComputeNextFireFromNow()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+
+        // Seed an enabled, configured schedule whose persisted state has neither an armed
+        // NextFireAt nor a PendingNextFireAt (genuine first activation): the scheduler throws
+        // on the configure arm so only the ConfiguredEvent is persisted.
+        var seed = CreateAgent(eventStore, dispatch, scheduler);
+        await seed.ActivateAsync();
+        scheduler.ScheduleException = new InvalidOperationException("schedule failed");
+        var failedConfigure = () => seed.HandleConfigureAsync(CreateConfigureCommand(
+            cronExpression: "*/15 * * * *",
+            enabled: true));
+        await failedConfigure.Should().ThrowAsync<InvalidOperationException>();
+        seed.State.NextFireAt.Should().BeNull();
+        seed.State.PendingNextFireAt.Should().NotBeNull();
+
+        // Drop the pending intent so the reactivated state has nothing armed and nothing
+        // pending, isolating the genuine-first-activation branch.
+        eventStore.RemoveEvents(
+            ScheduleActorId,
+            ScheduledDispatchNextFireIntentRecordedEvent.Descriptor.FullName);
+        scheduler.ScheduleException = null;
+        var armCountBeforeReactivation = scheduler.TimeoutRequests.Count;
+
+        var reactivated = CreateAgent(eventStore, dispatch, scheduler);
+        await reactivated.ActivateAsync();
+
+        // First activation with nothing armed computes the next occurrence from now, so the
+        // newly armed fire is in the future (not a catch-up of a past time).
+        reactivated.State.PendingNextFireAt.Should().BeNull();
+        reactivated.State.NextFireLease.Should().NotBeNull();
+        reactivated.State.NextFireAt.Should().NotBeNull();
+        reactivated.State.NextFireAt!.Value.Should().BeAfter(DateTimeOffset.UtcNow);
+        scheduler.TimeoutRequests.Should().HaveCount(armCountBeforeReactivation + 1);
+        var reactivationRequest = scheduler.TimeoutRequests[^1];
+        var reactivationFire = reactivationRequest.TriggerEnvelope.Payload.Unpack<ScheduledDispatchFireCommand>();
+        reactivationFire.ScheduledFireAt.ToDateTimeOffset().Should().BeAfter(DateTimeOffset.UtcNow);
+    }
+
+    [Fact]
     public void ScheduledDispatchStateReplay_ShouldUsePersistedNextFireScheduledAtForUpdatedAt()
     {
         var eventStore = new TestEventStore();
@@ -1567,11 +1659,19 @@ public sealed class ScheduledDispatchGAgentTests
         RuntimeCallbackTimeoutRequest request,
         long generation,
         long fireIndex,
-        DateTimeOffset? firedAt = null)
+        DateTimeOffset? firedAt = null,
+        DateTimeOffset? scheduledFireAt = null)
     {
         var envelope = request.TriggerEnvelope.Clone();
         envelope.Id = Guid.NewGuid().ToString("N");
         envelope.Timestamp = Timestamp.FromDateTime(DateTime.UtcNow);
+        if (scheduledFireAt.HasValue)
+        {
+            var fireCommand = envelope.Payload.Unpack<ScheduledDispatchFireCommand>();
+            fireCommand.ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt.Value);
+            envelope.Payload = Any.Pack(fireCommand);
+        }
+
         var callback = envelope.EnsureRuntime().EnsureCallback();
         callback.CallbackId = request.CallbackId;
         callback.Generation = generation;
@@ -1832,6 +1932,14 @@ public sealed class ScheduledDispatchGAgentTests
             (_streams.GetValueOrDefault(agentId) ?? [])
             .Select(x => x.Clone())
             .ToArray();
+
+        public void RemoveEvents(string agentId, string eventType)
+        {
+            if (!_streams.TryGetValue(agentId, out var stream))
+                return;
+
+            stream.RemoveAll(x => string.Equals(x.EventType, eventType, StringComparison.Ordinal));
+        }
 
         public Task<EventStoreCommitResult> AppendAsync(
             string agentId,

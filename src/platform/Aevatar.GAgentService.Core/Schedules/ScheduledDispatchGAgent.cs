@@ -41,6 +41,17 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 var previousLease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
                 await ActivateNextFireIntentAsync(pendingNextFireAt, previousLease, ct);
             }
+            else if (State.NextFireAt != null)
+            {
+                // A fire is already armed for State.NextFireAt. Re-arm for that exact time
+                // instead of computing from now: if reactivation happens at or after the armed
+                // time (pod churn at the boundary), recomputing from now would silently skip the
+                // due occurrence. Re-arming a past armed time fires it immediately (catch-up); the
+                // fire handler then advances to the next occurrence normally.
+                var armedNextFireAt = State.NextFireAt.Value;
+                var previousLease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
+                await ActivateNextFireIntentAsync(armedNextFireAt, previousLease, ct);
+            }
             else
             {
                 await EnsureNextFireScheduledAsync(DateTimeOffset.UtcNow, ct);
