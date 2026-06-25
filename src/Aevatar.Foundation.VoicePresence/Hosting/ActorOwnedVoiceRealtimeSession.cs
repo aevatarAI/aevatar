@@ -21,6 +21,7 @@ public sealed class ActorOwnedVoiceRealtimeSession
     private readonly IVoicePresenceSessionLeasePort _leasePort;
     private readonly IVoiceVolatileMediaStreamPort _mediaStreamPort;
     private readonly IVoicePresenceCapabilityProjectionRecoveryPort? _capabilityRecoveryPort;
+    private readonly IVoicePresenceCapabilityAutoEnablePort? _capabilityAutoEnablePort;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<ActorOwnedVoiceRealtimeSession>? _logger;
 
@@ -29,6 +30,7 @@ public sealed class ActorOwnedVoiceRealtimeSession
         IVoicePresenceSessionLeasePort leasePort,
         IVoiceVolatileMediaStreamPort mediaStreamPort,
         IVoicePresenceCapabilityProjectionRecoveryPort? capabilityRecoveryPort = null,
+        IVoicePresenceCapabilityAutoEnablePort? capabilityAutoEnablePort = null,
         TimeProvider? timeProvider = null,
         ILogger<ActorOwnedVoiceRealtimeSession>? logger = null)
     {
@@ -36,6 +38,7 @@ public sealed class ActorOwnedVoiceRealtimeSession
         _leasePort = leasePort ?? throw new ArgumentNullException(nameof(leasePort));
         _mediaStreamPort = mediaStreamPort ?? throw new ArgumentNullException(nameof(mediaStreamPort));
         _capabilityRecoveryPort = capabilityRecoveryPort;
+        _capabilityAutoEnablePort = capabilityAutoEnablePort;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _logger = logger;
     }
@@ -69,6 +72,41 @@ public sealed class ActorOwnedVoiceRealtimeSession
                 if (attempt > 0)
                     await Task.Delay(CapabilityRecoveryBackoff, _timeProvider, ct);
                 capability = await _capabilityQueryPort.GetAsync(inbound.ActorId, inbound.ModuleName, ct);
+            }
+        }
+
+        // True zero-config: if the capability is STILL null after the re-projection self-heal above, the
+        // default voice agent was never enabled at all (its grain holds no committed VoicePresenceEnabled
+        // event for the recovery port to re-materialize). Auto-PROVISION it — commit the same enable
+        // voice-presence/enable would, then re-read with the same bounded window — so connecting to
+        // /ws/voice with no explicit actor enables the caller's default voice capability on first connect
+        // and attaches, instead of 404/503-ing forever. Idempotent and scoped to the genuinely-unprovisioned
+        // default path: the auto-enable port no-ops unless the resolved actor actually exists with a known,
+        // registered runtime agent kind, so a happy path (non-null capability) and a bogus actor are
+        // untouched. The enable is read-model-asynchronous, so we re-read — if it has not materialized within
+        // the window the existing typed retryable 503 (CapabilityNotReady) below still surfaces on retry.
+        if (capability == null &&
+            _capabilityAutoEnablePort != null &&
+            await _capabilityAutoEnablePort.TryAutoEnableAsync(inbound.ActorId, inbound.ModuleName, ct))
+        {
+            for (var attempt = 0; attempt < CapabilityRecoveryMaxReads && capability == null; attempt++)
+            {
+                if (attempt > 0)
+                    await Task.Delay(CapabilityRecoveryBackoff, _timeProvider, ct);
+                capability = await _capabilityQueryPort.GetAsync(inbound.ActorId, inbound.ModuleName, ct);
+            }
+
+            // The enable committed but the read model has not caught up within the bounded window. This is a
+            // retryable materialization lag (the same shape as a lease-observe timeout), not a genuinely
+            // missing capability — surface the typed retryable 503 so the client re-attaches rather than
+            // getting a permanent 404.
+            if (capability == null)
+            {
+                _logger?.LogInformation(
+                    "voice auto-enable committed for actor {ActorId}/{ModuleName} but capability not yet materialized; returning CapabilityNotReady (retryable)",
+                    inbound.ActorId,
+                    inbound.ModuleName);
+                return Failure(VoiceRealtimeSessionStartError.CapabilityNotReady);
             }
         }
 
