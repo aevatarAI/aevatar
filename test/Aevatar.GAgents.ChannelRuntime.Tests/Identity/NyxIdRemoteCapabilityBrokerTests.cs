@@ -129,7 +129,9 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
         var query = QueryHelpers.ParseQuery(uri.Query);
         query["client_id"].Should().ContainSingle().Which.Should().Be("client-1");
         query["redirect_uri"].Should().ContainSingle().Which.Should().Be(expectedRedirectUri);
-        query["scope"].Should().ContainSingle().Which.Should().Be(AevatarOAuthClientScopes.AuthorizationScope);
+        var scope = query["scope"].Should().ContainSingle().Which;
+        scope.Should().Be(AevatarOAuthClientScopes.AuthorizationScope);
+        scope.Should().Contain(AevatarOAuthClientScopes.OfflineAccess);
         query["state"].Should().ContainSingle();
         query["code_challenge"].Should().ContainSingle();
         query["code_challenge_method"].Should().ContainSingle().Which.Should().Be("S256");
