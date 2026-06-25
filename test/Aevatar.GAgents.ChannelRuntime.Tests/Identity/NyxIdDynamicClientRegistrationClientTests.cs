@@ -35,7 +35,9 @@ public sealed class NyxIdDynamicClientRegistrationClientTests
         handler.Last.Should().NotBeNull();
         handler.Last!.RequestUri!.AbsoluteUri.Should().Be("https://nyxid.test/oauth/register");
         var request = await handler.Last.Content!.ReadFromJsonAsync<JsonElement>();
-        request.GetProperty("scope").GetString().Should().Be(AevatarOAuthClientScopes.AuthorizationScope);
+        var scope = request.GetProperty("scope").GetString();
+        scope.Should().Be(AevatarOAuthClientScopes.AuthorizationScope);
+        scope.Should().Contain(AevatarOAuthClientScopes.OfflineAccess);
     }
 
     [Fact]

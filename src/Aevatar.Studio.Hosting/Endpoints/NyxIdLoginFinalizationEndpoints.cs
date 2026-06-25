@@ -181,6 +181,7 @@ public static class NyxIdLoginFinalizationEndpoints
         new(
             Tokens: new NyxIdFinalizedTokenSet(
                 AccessToken: exchange.AccessToken ?? string.Empty,
+                RefreshToken: exchange.RefreshToken,
                 TokenType: string.IsNullOrWhiteSpace(exchange.TokenType) ? "Bearer" : exchange.TokenType,
                 ExpiresIn: exchange.ExpiresIn ?? 3600,
                 IdToken: exchange.IdToken,
@@ -305,6 +306,7 @@ public sealed record NyxIdLoginFinalizationResponse(
 
 public sealed record NyxIdFinalizedTokenSet(
     string AccessToken,
+    string? RefreshToken,
     string TokenType,
     int ExpiresIn,
     string? IdToken,

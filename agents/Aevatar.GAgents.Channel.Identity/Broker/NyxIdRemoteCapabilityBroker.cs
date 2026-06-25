@@ -323,6 +323,7 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         // toggle the flag at NyxID admin (one-time per cluster).
         return new BrokerAuthorizationCodeResult(payload.BindingId, payload.IdToken, payload.AccessToken)
         {
+            RefreshToken = payload.RefreshToken,
             TokenType = payload.TokenType,
             ExpiresIn = payload.ExpiresIn,
             Scope = payload.Scope,
@@ -399,6 +400,7 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
     private sealed record TokenResponse
     {
         public string? AccessToken { get; init; }
+        public string? RefreshToken { get; init; }
         public string? IdToken { get; init; }
         public string? BindingId { get; init; }
         public string? Scope { get; init; }

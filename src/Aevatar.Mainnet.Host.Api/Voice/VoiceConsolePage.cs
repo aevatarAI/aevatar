@@ -847,7 +847,7 @@ function beginMicStreaming(){
     if(!voice.ws || voice.ws.readyState!==1) return;
     if(voice.micGate===false) return; // half-duplex: gated while AI speaks
     const pcm = floatTo16(e.inputBuffer.getChannelData(0));
-    try { voice.ws.send(pcm.buffer); } catch {}
+    try { voice.ws.send(pcm.buffer); } catch(err) { console.warn("voice mic frame send failed", err); }
   };
   voice.micSource.connect(voice.micNode);
   voice.micNode.connect(voice.micCtx.destination); // keep node alive (output is silence)
@@ -883,21 +883,21 @@ function playPcm(arrayBuf){
   // drain ack — tells the actor how much audio we've queued for playout (mirrors AevatarVoiceClient).
   voice.playoutSeq += pcm.length;
   if(voice.responseId>0 && voice.ws && voice.ws.readyState===1){
-    try { voice.ws.send(JSON.stringify({ drainAcknowledged:{ responseId:voice.responseId, playoutSequence:voice.playoutSeq } })); } catch {}
+    try { voice.ws.send(JSON.stringify({ drainAcknowledged:{ responseId:voice.responseId, playoutSequence:voice.playoutSeq } })); } catch(err) { console.warn("voice drain ack send failed", err); }
   }
 }
 
 function teardownAudio(){
-  try { voice.micNode && (voice.micNode.onaudioprocess=null, voice.micNode.disconnect()); } catch {}
-  try { voice.micSource && voice.micSource.disconnect(); } catch {}
-  try { voice.micStream && voice.micStream.getTracks().forEach(t=>t.stop()); } catch {}
-  try { voice.micCtx && voice.micCtx.state!=="closed" && voice.micCtx.close(); } catch {}
-  try { voice.playCtx && voice.playCtx.state!=="closed" && voice.playCtx.close(); } catch {}
+  try { voice.micNode && (voice.micNode.onaudioprocess=null, voice.micNode.disconnect()); } catch(err) { console.warn("voice mic node teardown failed", err); }
+  try { voice.micSource && voice.micSource.disconnect(); } catch(err) { console.warn("voice mic source teardown failed", err); }
+  try { voice.micStream && voice.micStream.getTracks().forEach(t=>t.stop()); } catch(err) { console.warn("voice mic stream teardown failed", err); }
+  try { voice.micCtx && voice.micCtx.state!=="closed" && voice.micCtx.close(); } catch(err) { console.warn("voice mic context teardown failed", err); }
+  try { voice.playCtx && voice.playCtx.state!=="closed" && voice.playCtx.close(); } catch(err) { console.warn("voice playback context teardown failed", err); }
   voice.micNode=voice.micSource=voice.micStream=voice.micCtx=voice.playCtx=null;
 }
 
 function stopVoice(silent){
-  if(voice.ws){ try { voice.ws.close(1000,"client ended"); } catch {} }
+  if(voice.ws){ try { voice.ws.close(1000,"client ended"); } catch(err) { console.warn("voice websocket close failed", err); } }
   voice.ws=null;
   teardownAudio();
   if(!silent) vStatus("ended","会话已结束");
