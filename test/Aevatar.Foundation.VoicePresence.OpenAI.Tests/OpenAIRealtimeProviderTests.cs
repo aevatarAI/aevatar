@@ -271,6 +271,36 @@ public class OpenAIRealtimeProviderTests
     }
 
     [Fact]
+    public async Task Receive_loop_should_suppress_benign_realtime_race_errors()
+    {
+        var session = new FakeSession(
+        [
+            new OpenAIRealtimeErrorEvent("response_cancel_not_active", "Cancellation failed: no active response found"),
+            new OpenAIRealtimeErrorEvent("conversation_already_has_active_response", "Conversation already has an active response"),
+            new OpenAIRealtimeErrorEvent("rate_limit", "slow down"),
+            new OpenAIRealtimeDisconnectedEvent("done"),
+        ]);
+        var provider = CreateProvider(session);
+        var events = new List<VoiceProviderEvent>();
+        var disconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        await ConnectAsync(provider, events, evt =>
+        {
+            if (evt.EventCase == VoiceProviderEvent.EventOneofCase.Disconnected)
+                disconnected.TrySetResult();
+        });
+        await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // Benign idempotent realtime races — an explicit response.cancel that loses to OpenAI's
+        // server-side interrupt_response (response_cancel_not_active), or a redundant response.create
+        // (conversation_already_has_active_response) — must NOT reach the client as a fatal provider
+        // error. A genuine error (rate_limit) still surfaces.
+        var errors = events.Where(x => x.EventCase == VoiceProviderEvent.EventOneofCase.Error).ToList();
+        errors.Count.ShouldBe(1);
+        errors[0].Error.ErrorCode.ShouldBe("rate_limit");
+    }
+
+    [Fact]
     public async Task Receive_loop_should_emit_events_directly_through_physical_session_sink()
     {
         var session = new FakeSession(
