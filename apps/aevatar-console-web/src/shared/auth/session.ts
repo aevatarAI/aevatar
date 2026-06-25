@@ -120,6 +120,10 @@ export function loadRestorableAuthSession(): NyxIDAuthSession | null {
     return session;
   }
 
+  if (session.tokens.refreshToken) {
+    return session;
+  }
+
   storage.removeItem(AUTH_SESSION_STORAGE_KEY);
   return null;
 }

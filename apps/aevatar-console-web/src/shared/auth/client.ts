@@ -5,12 +5,15 @@ import {
 import {
   finalizeBackendNyxIDLogin,
   loadBackendNyxIDLoginConfig,
+  refreshNyxIDTokenSet,
   type NyxIDBackendLoginConfig,
 } from './backend';
 import {
   clearStoredAuthSession,
+  hasActiveAccessToken,
   loadStoredAuthSession,
   persistAuthSession,
+  readStoredAuthSession,
   sanitizeReturnTo,
   type NyxIDAuthSession,
 } from './session';
@@ -35,6 +38,7 @@ export interface AuthCallbackResult {
 }
 
 const PENDING_KEY_PREFIX = 'aevatar-console:nyxid:pending:';
+let pendingRefreshPromise: Promise<NyxIDAuthSession | null> | null = null;
 
 function base64UrlEncode(input: Uint8Array): string {
   let binary = '';
@@ -202,7 +206,11 @@ export class NyxIDAuthClient {
 }
 
 export function hasRestorableAuthSession(): boolean {
-  return Boolean(loadStoredAuthSession());
+  const session = readStoredAuthSession();
+  return Boolean(
+    session &&
+      (hasActiveAccessToken(session.tokens) || session.tokens.refreshToken),
+  );
 }
 
 export async function ensureActiveAuthSession(
@@ -218,6 +226,52 @@ export async function ensureActiveAuthSession(
     return activeSession;
   }
 
-  clearStoredAuthSession();
-  return null;
+  const expiredSession = readStoredAuthSession();
+  const refreshToken = expiredSession?.tokens.refreshToken;
+  if (!expiredSession || !refreshToken) {
+    clearStoredAuthSession();
+    return null;
+  }
+
+  if (pendingRefreshPromise) {
+    return pendingRefreshPromise;
+  }
+
+  pendingRefreshPromise = refreshStoredAuthSession(expiredSession, refreshToken)
+    .catch(() => {
+      clearStoredAuthSession();
+      return null;
+    })
+    .finally(() => {
+      pendingRefreshPromise = null;
+    });
+
+  return pendingRefreshPromise;
+}
+
+async function refreshStoredAuthSession(
+  expiredSession: NyxIDAuthSession,
+  refreshToken: string,
+): Promise<NyxIDAuthSession | null> {
+  const loginConfig = await loadBackendNyxIDLoginConfig();
+  const refreshedTokens = await refreshNyxIDTokenSet({
+    baseUrl: loginConfig.baseUrl,
+    clientId: loginConfig.clientId,
+    refreshToken,
+  });
+  const currentSession = readStoredAuthSession();
+  if (currentSession?.tokens.refreshToken !== refreshToken) {
+    return loadStoredAuthSession();
+  }
+
+  const refreshedSession: NyxIDAuthSession = {
+    ...expiredSession,
+    tokens: {
+      ...expiredSession.tokens,
+      ...refreshedTokens,
+    },
+  };
+
+  persistAuthSession(refreshedSession);
+  return refreshedSession;
 }
