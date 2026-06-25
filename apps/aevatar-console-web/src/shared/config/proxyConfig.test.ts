@@ -142,6 +142,27 @@ describe('proxy config', () => {
     });
   });
 
+  it('routes scope workflow save-and-bind to the Studio host', () => {
+    process.env.AEVATAR_API_TARGET = 'http://127.0.0.1:5080';
+    process.env.AEVATAR_STUDIO_API_TARGET = 'http://127.0.0.1:5180';
+
+    const proxyModule = require('../../../config/proxy');
+    const devProxy = proxyModule.default.dev as Record<string, ProxyEntry>;
+
+    expect(
+      resolveProxyEntry(devProxy, '/api/scopes/scope-1/workflows:save-and-bind'),
+    ).toEqual({
+      target: 'http://127.0.0.1:5180',
+      changeOrigin: true,
+      ws: true,
+    });
+    expect(devProxy['/api/']).toEqual({
+      target: 'http://127.0.0.1:5080',
+      changeOrigin: true,
+      ws: true,
+    });
+  });
+
   it('routes scope team endpoints to the Studio host without stealing runtime member routes', () => {
     process.env.AEVATAR_API_TARGET = 'http://127.0.0.1:5080';
     process.env.AEVATAR_STUDIO_API_TARGET = 'http://127.0.0.1:5180';

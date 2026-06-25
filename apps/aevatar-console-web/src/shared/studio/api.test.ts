@@ -580,6 +580,67 @@ describe('studioApi host-session requests', () => {
     });
   });
 
+  it('loads a published scope workflow detail without checking workspace drafts', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        available: true,
+        scopeId: 'scope-1',
+        workflow: {
+          scopeId: 'scope-1',
+          workflowId: 'workflow-1',
+          displayName: 'published-demo-v2',
+          serviceKey: 'svc-1',
+          workflowName: 'published-demo-v2',
+          actorId: 'actor-1',
+          activeRevisionId: 'rev-2',
+          deploymentId: 'dep-1',
+          deploymentStatus: 'Running',
+          updatedAt: '2026-04-17T00:00:00Z',
+        },
+        source: {
+          workflowYaml: 'name: published-demo-v2\nsteps: []\n',
+          definitionActorId: 'definition-1',
+          inlineWorkflowYamls: null,
+        },
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      studioApi.getPublishedWorkflow('workflow-1', 'scope-1'),
+    ).resolves.toEqual({
+      workflowId: 'workflow-1',
+      name: 'published-demo-v2',
+      fileName: 'workflow-1.yaml',
+      filePath: 'scope://scope-1/workflow-1.yaml',
+      directoryId: 'scope:scope-1',
+      directoryLabel: 'scope-1',
+      yaml: 'name: published-demo-v2\nsteps: []\n',
+      document: null,
+      draftExists: false,
+      findings: [],
+      updatedAtUtc: '2026-04-17T00:00:00Z',
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      '/api/scopes/scope-1/workflows/workflow-1',
+    );
+  });
+
   it('creates a scoped workflow draft on first save when the loaded workflow is committed-only', async () => {
     persistAuthSession({
       tokens: {
@@ -920,6 +981,88 @@ describe('studioApi host-session requests', () => {
         workflowYamls: ['name: joker\nsteps: []\n'],
       }),
     ).toThrow('Workflow member binding requires a stable workflow id.');
+  });
+
+  it('saves and binds a published workflow using the dedicated save-and-bind endpoint', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 202,
+      json: async () => ({
+        scopeId: 'scope-1',
+        workflowId: 'wf-alpha',
+        revisionId: 'rev-1',
+        workflow: {
+          scopeId: 'scope-1',
+          workflowId: 'wf-alpha',
+          revisionId: 'rev-1',
+          readModelUrl: '/api/scopes/scope-1/workflows/wf-alpha',
+          acceptanceStage: 'accepted',
+          propagationStage: 'readmodel_propagating',
+        },
+        binding: {
+          scopeId: 'scope-1',
+          serviceId: 'svc-alpha',
+          displayName: 'Workflow Alpha',
+          revisionId: 'rev-1',
+          implementationKind: 'workflow',
+          targetKind: 'workflow',
+          targetName: 'Workflow Alpha',
+        },
+        acceptanceStage: 'accepted',
+        propagationStage: 'readmodel_propagating',
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    const result = await studioApi.saveAndBindWorkflow({
+      scopeId: 'scope-1',
+      workflowId: 'wf-alpha',
+      workflowYaml: 'name: Workflow Alpha\nsteps: []\n',
+      workflowName: 'Workflow Alpha',
+      displayName: 'Workflow Alpha',
+      inlineWorkflowYamls: {},
+      appId: 'studio',
+      serviceId: 'svc-alpha',
+      exposureDesired: true,
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        scopeId: 'scope-1',
+        workflowId: 'wf-alpha',
+        revisionId: 'rev-1',
+        acceptanceStage: 'accepted',
+        propagationStage: 'readmodel_propagating',
+      }),
+    );
+
+    const [input, init] = fetchMock.mock.calls[0] as [
+      string,
+      RequestInit | undefined,
+    ];
+    expect(input).toBe('/api/scopes/scope-1/workflows:save-and-bind');
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse(String(init?.body))).toEqual({
+      workflowId: 'wf-alpha',
+      workflowYaml: 'name: Workflow Alpha\nsteps: []\n',
+      workflowName: 'Workflow Alpha',
+      displayName: 'Workflow Alpha',
+      appId: 'studio',
+      serviceId: 'svc-alpha',
+      exposureDesired: true,
+    });
   });
 
   it('binds a GAgent to the default service using the scope binding endpoint', async () => {

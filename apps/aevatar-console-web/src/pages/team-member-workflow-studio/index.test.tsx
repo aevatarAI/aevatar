@@ -138,6 +138,8 @@ jest.mock("@/shared/studio/api", () => {
       listWorkflows: jest.fn(),
       listExecutions: jest.fn(),
       parseYaml: jest.fn(),
+      getPublishedWorkflow: jest.fn(),
+      saveAndBindWorkflow: jest.fn(),
       saveWorkflow: jest.fn(),
       serializeYaml: jest.fn(),
       setTeamEntryMember: jest.fn(),
@@ -5473,6 +5475,135 @@ describe("TeamMemberWorkflowStudioPage", () => {
       );
     });
     expect(studioApi.setTeamEntryMember).not.toHaveBeenCalled();
+  });
+
+  it("saves and rebinds a changed published workflow member through save-and-bind", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/m-alpha/workflow?workflowId=wf-alpha",
+    );
+    (studioApi.getMember as jest.Mock).mockResolvedValue({
+      implementationRef: {
+        implementationKind: "workflow",
+        workflowId: "wf-alpha",
+      },
+      summary: {
+        createdAt: "2026-06-08T00:00:00Z",
+        description: "",
+        displayName: "Workflow Alpha",
+        implementationKind: "workflow",
+        lastBoundRevisionId: "rev-1",
+        lifecycleStage: "bind_ready",
+        memberId: "m-alpha",
+        publishedServiceId: "svc-alpha",
+        scopeId: "scope-1",
+        teamId: "t-alpha",
+        updatedAt: "2026-06-08T00:00:00Z",
+      },
+      lastBinding: {
+        boundAt: "2026-06-08T00:00:00Z",
+        implementationKind: "workflow",
+        publishedServiceId: "svc-alpha",
+        revisionId: "rev-1",
+      },
+    });
+    const staleWorkflow = {
+      directoryId: "scope:scope-1",
+      directoryLabel: "scope-1",
+      draftExists: true,
+      fileName: "wf-alpha.yaml",
+      filePath: "scope://scope-1/wf-alpha.yaml",
+      findings: [],
+      layout: null,
+      name: "Workflow Alpha",
+      workflowId: "wf-alpha",
+      yaml: "name: Workflow Alpha\nsteps: []\n",
+      document: mockWorkflowDocument,
+      updatedAtUtc: "2026-06-08T00:00:00Z",
+    };
+    const materializedWorkflow = {
+      ...staleWorkflow,
+      name: "Workflow Alpha v2",
+      yaml: "name: Workflow Alpha v2\nsteps:\n  - id: triage\n    type: llm_call",
+      document: {
+        ...mockWorkflowDocument,
+        name: "Workflow Alpha v2",
+      },
+      updatedAtUtc: "2026-06-08T00:00:03Z",
+    };
+    (studioApi.getWorkflow as jest.Mock).mockResolvedValue(staleWorkflow);
+    (studioApi.getPublishedWorkflow as jest.Mock)
+      .mockResolvedValueOnce(staleWorkflow)
+      .mockResolvedValueOnce(staleWorkflow)
+      .mockResolvedValue(materializedWorkflow);
+    (studioApi.saveAndBindWorkflow as jest.Mock).mockResolvedValue({
+      scopeId: "scope-1",
+      workflowId: "wf-alpha",
+      revisionId: "rev-2",
+      workflow: {
+        scopeId: "scope-1",
+        workflowId: "wf-alpha",
+        revisionId: "rev-2",
+        readModelUrl: "/api/scopes/scope-1/workflows/wf-alpha",
+        acceptanceStage: "accepted",
+        propagationStage: "readmodel_propagating",
+      },
+      binding: {
+        scopeId: "scope-1",
+        serviceId: "svc-alpha",
+        displayName: "Workflow Alpha v2",
+        revisionId: "rev-2",
+        implementationKind: "workflow",
+        targetKind: "workflow",
+        targetName: "Workflow Alpha v2",
+      },
+      acceptanceStage: "accepted",
+      propagationStage: "readmodel_propagating",
+    });
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
+      expect(screen.getByText("Published")).toBeTruthy();
+    });
+    fireEvent.change(screen.getByLabelText("Workflow title"), {
+      target: { value: "Workflow Alpha v2" },
+    });
+
+    const saveButton = screen.getByRole("button", { name: "Save" });
+    await waitFor(() => {
+      expect(saveButton).toBeEnabled();
+    });
+    fireEvent.click(saveButton);
+
+    await waitFor(() => {
+      expect(studioApi.saveAndBindWorkflow).toHaveBeenCalledWith({
+        appId: "studio",
+        displayName: "Workflow Alpha v2",
+        exposureDesired: true,
+        inlineWorkflowYamls: {},
+        scopeId: "scope-1",
+        serviceId: "svc-alpha",
+        workflowId: "wf-alpha",
+        workflowName: "Workflow Alpha v2",
+        workflowYaml: expect.stringContaining("name: Workflow Alpha v2"),
+      });
+    });
+    expect(studioApi.saveWorkflow).not.toHaveBeenCalled();
+    expect(studioApi.bindMemberWorkflow).not.toHaveBeenCalled();
+    expect(studioApi.getMemberBindingRun).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(studioApi.updateMemberDisplayName).toHaveBeenCalledWith({
+        displayName: "Workflow Alpha v2",
+        memberId: "m-alpha",
+        scopeId: "scope-1",
+      });
+      expect(studioApi.getWorkflow).toHaveBeenCalledTimes(1);
+      expect(studioApi.getPublishedWorkflow).toHaveBeenCalledTimes(3);
+      expect(screen.getByDisplayValue("Workflow Alpha v2")).toBeTruthy();
+    });
   });
 
   it("surfaces failed republish even when an older member binding remains serviceable", async () => {

@@ -50,6 +50,7 @@ import type {
   StudioExecutionFrame,
   StudioMemberBindingRunStatusResponse,
   StudioMemberDetail,
+  StudioSaveAndBindWorkflowAcceptedResult,
   StudioWorkflowDraftCreateAcceptedReceipt,
   StudioWorkflowDocument,
   StudioWorkflowFile,
@@ -91,6 +92,12 @@ type PublishWorkflowVariables = {
 type PublishedWorkflow = {
   readonly run: StudioMemberBindingRunStatusResponse | null;
   readonly savedDraft: SavedWorkflowDraft | null;
+};
+
+type SavedAndBoundWorkflow = {
+  readonly materializedWorkflow: StudioWorkflowFile | null;
+  readonly result: StudioSaveAndBindWorkflowAcceptedResult;
+  readonly savedDraft: SavedWorkflowDraft;
 };
 
 class PublishWorkflowStatusError extends Error {
@@ -246,6 +253,8 @@ const CREATED_MEMBER_MATERIALIZATION_ATTEMPTS = 8;
 const CREATED_MEMBER_MATERIALIZATION_DELAY_MS = 450;
 const WORKFLOW_DRAFT_MATERIALIZATION_ATTEMPTS = 10;
 const WORKFLOW_DRAFT_MATERIALIZATION_DELAY_MS = 900;
+const SAVE_AND_BIND_WORKFLOW_MATERIALIZATION_ATTEMPTS = 12;
+const SAVE_AND_BIND_WORKFLOW_MATERIALIZATION_DELAY_MS = 1_000;
 const SAVED_WORKFLOW_QUERY_STALE_MS = 30_000;
 
 function trimOptional(value: string | null | undefined): string {
@@ -551,6 +560,53 @@ function waitForWorkflowDraftMaterializationTick(): Promise<void> {
   });
 }
 
+function waitForSaveAndBindWorkflowMaterializationTick(): Promise<void> {
+  return new Promise((resolve) => {
+    const testEnvironment =
+      typeof process !== "undefined" && process.env.NODE_ENV === "test";
+    window.setTimeout(
+      resolve,
+      testEnvironment ? 0 : SAVE_AND_BIND_WORKFLOW_MATERIALIZATION_DELAY_MS,
+    );
+  });
+}
+
+function workflowYamlMatches(left: string | null | undefined, right: string): boolean {
+  return String(left || "").trim() === right.trim();
+}
+
+async function waitForSaveAndBindWorkflowMaterialized(input: {
+  readonly expectedYaml: string;
+  readonly scopeId: string;
+  readonly workflowId: string;
+}): Promise<StudioWorkflowFile | null> {
+  for (
+    let attempt = 0;
+    attempt < SAVE_AND_BIND_WORKFLOW_MATERIALIZATION_ATTEMPTS;
+    attempt += 1
+  ) {
+    try {
+      const workflow = await studioApi.getPublishedWorkflow(
+        input.workflowId,
+        input.scopeId,
+      );
+      if (workflowYamlMatches(workflow.yaml, input.expectedYaml)) {
+        return workflow;
+      }
+    } catch (error) {
+      if (!isStudioApiStatus(error, 404)) {
+        throw error;
+      }
+    }
+
+    if (attempt < SAVE_AND_BIND_WORKFLOW_MATERIALIZATION_ATTEMPTS - 1) {
+      await waitForSaveAndBindWorkflowMaterializationTick();
+    }
+  }
+
+  return null;
+}
+
 async function waitForCreatedMemberVisible(input: {
   readonly memberId: string;
   readonly scopeId: string;
@@ -827,6 +883,84 @@ async function saveWorkflowDraft(input: {
     layout: nextLayout,
     title: normalizedTitle,
     workflow: savedWorkflow,
+  };
+}
+
+async function saveAndBindPublishedWorkflowDraft(input: {
+  readonly document: StudioWorkflowDocument;
+  readonly layout: unknown;
+  readonly routeScopeId: string;
+  readonly serviceId?: string | null;
+  readonly title: string;
+  readonly workflow: StudioWorkflowFile;
+}): Promise<SavedAndBoundWorkflow> {
+  const { document, layout, routeScopeId, serviceId, title, workflow } = input;
+  const workflowId = trimOptional(workflow.workflowId);
+  if (!workflowId) {
+    throw new Error("Resolve a stable workflow id before saving the published workflow.");
+  }
+
+  const normalizedTitle =
+    trimOptional(title) || trimOptional(document.name) || workflow.name || "draft";
+  const documentWithTitle: StudioWorkflowDocument = {
+    ...document,
+    name: normalizedTitle,
+  };
+  const serialized = await studioApi.serializeYaml({
+    document: documentWithTitle,
+    availableStepTypes: AVAILABLE_STEP_TYPES,
+  });
+  const savedDocument =
+    cloneWorkflowDocument(serialized.document) ?? documentWithTitle;
+  const graphForLayout = buildStudioGraphElements(savedDocument, layout);
+  const nextLayout = buildStudioWorkflowLayout(
+    normalizedTitle,
+    graphForLayout.nodes,
+    layout ?? workflow.layout,
+  );
+  const result = await studioApi.saveAndBindWorkflow({
+    scopeId: routeScopeId,
+    workflowId,
+    workflowYaml: serialized.yaml,
+    workflowName: normalizedTitle,
+    displayName: normalizedTitle,
+    inlineWorkflowYamls: {},
+    appId: "studio",
+    serviceId,
+    exposureDesired: true,
+  });
+  const resultWorkflowId = trimOptional(result.workflowId) || workflowId;
+  const materializedWorkflow = await waitForSaveAndBindWorkflowMaterialized({
+    expectedYaml: serialized.yaml,
+    scopeId: routeScopeId,
+    workflowId: resultWorkflowId,
+  });
+  const savedWorkflow: StudioWorkflowFile = materializedWorkflow
+    ? {
+        ...materializedWorkflow,
+        document:
+          cloneWorkflowDocument(materializedWorkflow.document) ?? savedDocument,
+        layout: materializedWorkflow.layout ?? nextLayout,
+      }
+    : {
+        ...workflow,
+        workflowId: resultWorkflowId,
+        name: normalizedTitle,
+        yaml: serialized.yaml,
+        layout: nextLayout,
+        document: savedDocument,
+        findings: [],
+      };
+
+  return {
+    materializedWorkflow,
+    result,
+    savedDraft: {
+      document: savedDocument,
+      layout: nextLayout,
+      title: normalizedTitle,
+      workflow: savedWorkflow,
+    },
   };
 }
 
@@ -1308,6 +1442,39 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     onSuccess: (saved) => {
       markSavedDraft(saved);
       void message.success("Workflow draft saved.");
+    },
+  });
+  const saveAndBindMutation = useMutation({
+    mutationFn: async (variables: SaveWorkflowDraftVariables) => {
+      if (!route.scopeId) {
+        throw new Error("Resolve a Team workspace before saving this workflow.");
+      }
+
+      const savedAndBound = await saveAndBindPublishedWorkflowDraft({
+        ...variables,
+        routeScopeId: route.scopeId,
+        serviceId: memberQuery.data?.summary.publishedServiceId,
+      });
+      await renameExistingMemberFromTitle(savedAndBound.savedDraft.title);
+      return savedAndBound;
+    },
+    onError: (error) => {
+      void message.error(
+        error instanceof Error
+          ? error.message
+          : "Failed to save and publish workflow.",
+      );
+    },
+    onSuccess: ({ materializedWorkflow, savedDraft }) => {
+      markSavedDraft(savedDraft);
+      void memberQuery.refetch();
+      if (materializedWorkflow) {
+        void message.success("Published workflow saved.");
+      } else {
+        void message.info(
+          "Published workflow save was accepted. Studio is waiting for the workflow read model.",
+        );
+      }
     },
   });
   const createWorkflowMemberMutation = useMutation({
@@ -1829,13 +1996,15 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
             dirty &&
             workflowHasSteps &&
             !selectedStepConfigurationError &&
-            !createWorkflowMemberMutation.isPending,
+            !createWorkflowMemberMutation.isPending &&
+            !saveAndBindMutation.isPending,
         )
       : Boolean(
           editableDocument &&
             dirty &&
             !selectedStepConfigurationError &&
             !saveMutation.isPending &&
+            !saveAndBindMutation.isPending &&
             !createUnlinkedMemberDraftMutation.isPending &&
             ((workflowQuery.data && !linkedWorkflowMissing) ||
               canCreateUnlinkedMemberDraft),
@@ -2198,8 +2367,10 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
             : routeDraftWorkflowId
               ? "Load the workflow draft before saving."
               : "Save creates a reusable workflow draft for this editor."
-          : !workflowQuery.data
-            ? "Load a workflow member before saving."
+        : !workflowQuery.data
+          ? "Load a workflow member before saving."
+          : memberPublished
+            ? "Save updates the workflow draft and published binding."
             : "Save updates the workflow draft.";
   React.useEffect(() => {
     if (!dirty || typeof window === "undefined") {
@@ -2639,7 +2810,9 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       }
 
       if (workflowQuery.data && editableDocument) {
-        saveMutation.mutate({
+        const mutation = memberPublished ? saveAndBindMutation : saveMutation;
+
+        mutation.mutate({
           document: editableDocument,
           layout:
             editableLayout ??
@@ -2651,6 +2824,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     },
     savePending:
       saveMutation.isPending ||
+      saveAndBindMutation.isPending ||
       createWorkflowMemberMutation.isPending ||
       createUnlinkedMemberDraftMutation.isPending,
     savePlaceholderReason,

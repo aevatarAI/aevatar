@@ -44,6 +44,8 @@ import type {
   StudioScopeScriptBindingResult,
   StudioScopeScriptBindingStatus,
   StudioRuntimeTestResult,
+  StudioSaveAndBindWorkflowAcceptedResult,
+  StudioSaveAndBindWorkflowInput,
   StudioSaveSettingsInput,
   StudioSaveWorkflowInput,
   StudioSerializeYamlResult,
@@ -1034,6 +1036,94 @@ function decodeStudioScopeBindingResult(
             ]) || "",
         }
       : null,
+  };
+}
+
+function decodeStudioSaveAndBindWorkflowResult(
+  value: unknown
+): StudioSaveAndBindWorkflowAcceptedResult {
+  const record = expectRecord(value, "StudioSaveAndBindWorkflowAcceptedResult");
+  const workflowRecord =
+    record.workflow == null && record.Workflow == null
+      ? null
+      : expectRecord(
+          record.workflow ?? record.Workflow,
+          "StudioSaveAndBindWorkflowAcceptedResult.workflow"
+        );
+  const binding =
+    record.binding == null && record.Binding == null
+      ? undefined
+      : decodeStudioScopeBindingResult(record.binding ?? record.Binding);
+  const scopeId = readString(
+    record,
+    ["scopeId", "ScopeId"],
+    "StudioSaveAndBindWorkflowAcceptedResult.scopeId"
+  );
+  const workflowId = readString(
+    record,
+    ["workflowId", "WorkflowId"],
+    "StudioSaveAndBindWorkflowAcceptedResult.workflowId"
+  );
+  const revisionId = readString(
+    record,
+    ["revisionId", "RevisionId"],
+    "StudioSaveAndBindWorkflowAcceptedResult.revisionId"
+  );
+
+  return {
+    scopeId,
+    workflowId,
+    revisionId,
+    workflow: workflowRecord
+      ? {
+          scopeId: readString(
+            workflowRecord,
+            ["scopeId", "ScopeId"],
+            "StudioSaveAndBindWorkflowAcceptedResult.workflow.scopeId"
+          ),
+          workflowId: readString(
+            workflowRecord,
+            ["workflowId", "WorkflowId"],
+            "StudioSaveAndBindWorkflowAcceptedResult.workflow.workflowId"
+          ),
+          serviceKey: readOptionalString(workflowRecord, [
+            "serviceKey",
+            "ServiceKey",
+          ]),
+          revisionId: readString(
+            workflowRecord,
+            ["revisionId", "RevisionId"],
+            "StudioSaveAndBindWorkflowAcceptedResult.workflow.revisionId"
+          ),
+          readModelUrl: readOptionalString(workflowRecord, [
+            "readModelUrl",
+            "ReadModelUrl",
+          ]),
+          acceptanceStage: readOptionalString(workflowRecord, [
+            "acceptanceStage",
+            "AcceptanceStage",
+          ]),
+          propagationStage: readOptionalString(workflowRecord, [
+            "propagationStage",
+            "PropagationStage",
+          ]),
+          displayName: readOptionalString(workflowRecord, [
+            "displayName",
+            "DisplayName",
+          ]),
+          workflowName: readOptionalString(workflowRecord, [
+            "workflowName",
+            "WorkflowName",
+          ]),
+        }
+      : undefined,
+    binding,
+    acceptanceStage:
+      readOptionalString(record, ["acceptanceStage", "AcceptanceStage"]) ||
+      "accepted",
+    propagationStage:
+      readOptionalString(record, ["propagationStage", "PropagationStage"]) ||
+      "readmodel_propagating",
   };
 }
 
@@ -2218,6 +2308,16 @@ export const studioApi = {
     );
   },
 
+  async getPublishedWorkflow(
+    workflowId: string,
+    scopeId: string
+  ): Promise<StudioWorkflowFile> {
+    return toCommittedWorkflowFile(
+      scopeId.trim(),
+      await scopesApi.getWorkflowDetail(scopeId.trim(), workflowId)
+    );
+  },
+
   async saveWorkflow(input: StudioSaveWorkflowInput): Promise<StudioWorkflowSaveResult> {
     const normalizedWorkflowId = trimOptional(input.workflowId);
     const shouldUpdate =
@@ -2242,6 +2342,35 @@ export const studioApi = {
       yaml: input.yaml,
       layout: input.layout,
     });
+  },
+
+  saveAndBindWorkflow(
+    input: StudioSaveAndBindWorkflowInput
+  ): Promise<StudioSaveAndBindWorkflowAcceptedResult> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/workflows:save-and-bind`,
+      decodeStudioSaveAndBindWorkflowResult,
+      {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(
+          compactObject({
+            workflowId: trimOptional(input.workflowId),
+            workflowYaml: input.workflowYaml,
+            workflowName: trimOptional(input.workflowName),
+            displayName: trimOptional(input.displayName),
+            inlineWorkflowYamls:
+              input.inlineWorkflowYamls &&
+              Object.keys(input.inlineWorkflowYamls).length > 0
+                ? input.inlineWorkflowYamls
+                : undefined,
+            appId: trimOptional(input.appId),
+            serviceId: trimOptional(input.serviceId),
+            exposureDesired: input.exposureDesired ?? undefined,
+          })
+        ),
+      }
+    );
   },
 
   deleteWorkflow(
