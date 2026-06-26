@@ -9,6 +9,7 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
 using FluentAssertions;
 using Google.Protobuf;
@@ -734,6 +735,11 @@ public sealed class ScheduledDispatchEndpointsTests
     public async Task Create_WithServiceInvocationPayloadBase64Json_ShouldBindAndPackPayload()
     {
         await using var host = await ScheduleEndpointTestHost.StartAsync();
+        host.CatalogReader.Service = CreateServiceCatalog(activeRevisionId: "rev-chat");
+        host.RevisionCatalog.UpsertRevision(
+            "tenant:app:default:workflow",
+            "rev-chat",
+            BuildPreparedArtifact(ChatRequestEvent.Descriptor));
         var chat = new ChatRequestEvent { Prompt = "summarize status" };
 
         var response = await host.Client.PostAsJsonAsync("/api/schedules", new
@@ -767,12 +773,18 @@ public sealed class ScheduledDispatchEndpointsTests
         invocation.Payload.TypeUrl.Should().Be("type.googleapis.com/aevatar.ai.ChatRequestEvent");
         invocation.Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("summarize status");
         invocation.RevisionId.Should().Be("rev-chat");
+        configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
     }
 
     [Fact]
     public async Task Create_WithWorkflowScheduleKindAndDurableSenderBearerToken_ShouldForwardScheduleKind()
     {
         await using var host = await ScheduleEndpointTestHost.StartAsync();
+        host.CatalogReader.Service = CreateServiceCatalog(activeRevisionId: "rev-chat");
+        host.RevisionCatalog.UpsertRevision(
+            "tenant:app:default:workflow",
+            "rev-chat",
+            BuildPreparedArtifact(ChatRequestEvent.Descriptor));
         var chat = new ChatRequestEvent { Prompt = "run durable workflow" };
 
         var response = await host.Client.PostAsJsonAsync("/api/schedules", new
@@ -811,9 +823,107 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
+    public async Task Create_WithWorkflowScheduleKindAndEnvelopeTarget_ShouldReturnBadRequest()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+        var request = CreateEnvelopeRequest(scheduleId: "schedule-1") with
+        {
+            ScheduleKind = ScheduledDispatchScheduleKind.Workflow,
+        };
+
+        var result = await CreateAsync(request, service);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        service.Created.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Create_WithWorkflowScheduleKindAndStaticServiceInvocation_ShouldReturnBadRequest()
+    {
+        await using var host = await ScheduleEndpointTestHost.StartAsync();
+        host.CatalogReader.Service = CreateServiceCatalog(activeRevisionId: "rev-chat");
+        host.RevisionCatalog.UpsertRevision(
+            "tenant:app:default:workflow",
+            "rev-chat",
+            BuildPreparedArtifact(ChatRequestEvent.Descriptor, ServiceImplementationKind.Static));
+        var chat = new ChatRequestEvent { Prompt = "run static" };
+
+        var response = await host.Client.PostAsJsonAsync("/api/schedules", new
+        {
+            scheduleId = "schedule-chat",
+            displayName = "Static chat",
+            scheduleKind = "Workflow",
+            cronExpression = "0 9 * * *",
+            timezone = "UTC",
+            serviceInvocation = new
+            {
+                identity = new
+                {
+                    tenantId = "tenant",
+                    appId = "app",
+                    @namespace = "default",
+                    serviceId = "workflow",
+                },
+                endpointId = "chat",
+                payloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                payloadBase64 = Convert.ToBase64String(chat.ToByteArray()),
+                revisionId = "rev-chat",
+            },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        host.Schedules.Created.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Update_WithWorkflowScheduleKindAndScriptingServiceInvocation_ShouldReturnBadRequest()
+    {
+        await using var host = await ScheduleEndpointTestHost.StartAsync();
+        host.CatalogReader.Service = CreateServiceCatalog(activeRevisionId: "rev-chat");
+        host.RevisionCatalog.UpsertRevision(
+            "tenant:app:default:workflow",
+            "rev-chat",
+            BuildPreparedArtifact(ChatRequestEvent.Descriptor, ServiceImplementationKind.Scripting));
+        var chat = new ChatRequestEvent { Prompt = "run script" };
+
+        var response = await host.Client.PutAsJsonAsync("/api/schedules/schedule-chat", new
+        {
+            displayName = "Script chat",
+            scheduleKind = "Workflow",
+            cronExpression = "0 10 * * *",
+            timezone = "UTC",
+            serviceInvocation = new
+            {
+                identity = new
+                {
+                    tenantId = "tenant",
+                    appId = "app",
+                    @namespace = "default",
+                    serviceId = "workflow",
+                },
+                endpointId = "chat",
+                payloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                payloadBase64 = Convert.ToBase64String(chat.ToByteArray()),
+                revisionId = "rev-chat",
+            },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        host.Schedules.Updated.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task Update_WithServiceInvocationPayloadBase64Json_ShouldBindAndPackPayload()
     {
         await using var host = await ScheduleEndpointTestHost.StartAsync();
+        host.CatalogReader.Service = CreateServiceCatalog(activeRevisionId: "rev-chat");
+        host.RevisionCatalog.UpsertRevision(
+            "tenant:app:default:workflow",
+            "rev-chat",
+            BuildPreparedArtifact(ChatRequestEvent.Descriptor));
         var chat = new ChatRequestEvent { Prompt = "refresh standup" };
 
         var response = await host.Client.PutAsJsonAsync("/api/schedules/schedule-chat", new
@@ -847,6 +957,7 @@ public sealed class ScheduledDispatchEndpointsTests
         invocation.EndpointId.Should().Be("chat");
         invocation.Payload.TypeUrl.Should().Be("type.googleapis.com/aevatar.ai.ChatRequestEvent");
         invocation.Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("refresh standup");
+        configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
     }
 
     [Fact]
@@ -915,11 +1026,95 @@ public sealed class ScheduledDispatchEndpointsTests
         });
 
         response.StatusCode.Should().Be(HttpStatusCode.Accepted);
-        var serviceInvocation = host.Schedules.Created.Should().ContainSingle().Which.Target.ServiceInvocation;
+        var configuration = host.Schedules.Created.Should().ContainSingle().Which;
+        var serviceInvocation = configuration.Target.ServiceInvocation;
         serviceInvocation.Should().NotBeNull();
         var invocation = serviceInvocation!;
         invocation.RevisionId.Should().Be("rev-active");
         invocation.Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("json prompt");
+        configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
+    }
+
+    [Fact]
+    public async Task Create_WithServiceInvocationPayloadJson_ShouldInferKindFromResolvedActiveRevision()
+    {
+        await using var host = await ScheduleEndpointTestHost.StartAsync();
+        host.CatalogReader.Service = CreateServiceCatalog(
+            activeRevisionId: "rev-active-workflow",
+            defaultServingRevisionId: "rev-default-static");
+        host.RevisionCatalog.UpsertRevision(
+            "tenant:app:default:workflow",
+            "rev-default-static",
+            BuildPreparedArtifact(ChatRequestEvent.Descriptor, ServiceImplementationKind.Static));
+        host.RevisionCatalog.UpsertRevision(
+            "tenant:app:default:workflow",
+            "rev-active-workflow",
+            BuildPreparedArtifact(ChatRequestEvent.Descriptor));
+
+        var response = await host.Client.PostAsJsonAsync("/api/schedules", new
+        {
+            scheduleId = "schedule-chat",
+            displayName = "Workflow chat",
+            cronExpression = "0 9 * * *",
+            timezone = "UTC",
+            serviceInvocation = new
+            {
+                identity = new
+                {
+                    tenantId = "tenant",
+                    appId = "app",
+                    @namespace = "default",
+                    serviceId = "workflow",
+                },
+                endpointId = "chat",
+                payloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                payloadJson = """{"prompt":"json prompt"}""",
+            },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        var configuration = host.Schedules.Created.Should().ContainSingle().Which;
+        configuration.Target.ServiceInvocation!.RevisionId.Should().Be("rev-active-workflow");
+        configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
+    }
+
+    [Fact]
+    public async Task Create_WithExplicitGenericScheduleKindAndWorkflowServiceInvocation_ShouldInferWorkflow()
+    {
+        await using var host = await ScheduleEndpointTestHost.StartAsync();
+        host.CatalogReader.Service = CreateServiceCatalog(activeRevisionId: "rev-chat");
+        host.RevisionCatalog.UpsertRevision(
+            "tenant:app:default:workflow",
+            "rev-chat",
+            BuildPreparedArtifact(ChatRequestEvent.Descriptor));
+        var chat = new ChatRequestEvent { Prompt = "run generic" };
+
+        var response = await host.Client.PostAsJsonAsync("/api/schedules", new
+        {
+            scheduleId = "schedule-chat",
+            displayName = "Workflow chat",
+            scheduleKind = "Generic",
+            cronExpression = "0 9 * * *",
+            timezone = "UTC",
+            serviceInvocation = new
+            {
+                identity = new
+                {
+                    tenantId = "tenant",
+                    appId = "app",
+                    @namespace = "default",
+                    serviceId = "workflow",
+                },
+                endpointId = "chat",
+                payloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                payloadBase64 = Convert.ToBase64String(chat.ToByteArray()),
+                revisionId = "rev-chat",
+            },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        host.Schedules.Created.Should().ContainSingle()
+            .Which.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
     }
 
     [Fact]
@@ -1084,7 +1279,9 @@ public sealed class ScheduledDispatchEndpointsTests
             bindingQueryPort ?? new FakeExternalIdentityBindingQueryPort(),
             credentialExchangePort ?? new FakeScheduledServiceInvocationCredentialExchangePort());
 
-    private static ServiceCatalogSnapshot CreateServiceCatalog(string activeRevisionId) =>
+    private static ServiceCatalogSnapshot CreateServiceCatalog(
+        string activeRevisionId,
+        string defaultServingRevisionId = "") =>
         new(
             "tenant:app:default:workflow",
             "tenant",
@@ -1092,7 +1289,7 @@ public sealed class ScheduledDispatchEndpointsTests
             "default",
             "workflow",
             "Workflow",
-            string.Empty,
+            defaultServingRevisionId,
             activeRevisionId,
             string.Empty,
             string.Empty,
@@ -1101,10 +1298,24 @@ public sealed class ScheduledDispatchEndpointsTests
             [],
             DateTimeOffset.UtcNow);
 
-    private static PreparedServiceRevisionArtifact BuildPreparedArtifact(MessageDescriptor descriptor) =>
+    private static PreparedServiceRevisionArtifact BuildPreparedArtifact(
+        MessageDescriptor descriptor,
+        ServiceImplementationKind implementationKind = ServiceImplementationKind.Workflow,
+        string endpointId = "chat") =>
         new()
         {
+            ImplementationKind = implementationKind,
             ProtocolDescriptorSet = BuildProtocolDescriptorSetFor(descriptor),
+            Endpoints =
+            {
+                new ServiceEndpointDescriptor
+                {
+                    EndpointId = endpointId,
+                    DisplayName = endpointId,
+                    Kind = ServiceEndpointKind.Command,
+                    RequestTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                },
+            },
         };
 
     private static ByteString BuildProtocolDescriptorSetFor(MessageDescriptor descriptor)
