@@ -5,6 +5,8 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.Workflow.Abstractions;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.GAgentService.Infrastructure.Schedules;
 
@@ -14,14 +16,17 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
 
     private readonly IServiceInvocationPort _serviceInvocationPort;
     private readonly IScheduledServiceInvocationCredentialExchangePort _credentialExchangePort;
+    private readonly ILogger<ScheduledServiceInvocationDispatchPort> _logger;
 
     public ScheduledServiceInvocationDispatchPort(
         IServiceInvocationPort serviceInvocationPort,
-        IScheduledServiceInvocationCredentialExchangePort credentialExchangePort)
+        IScheduledServiceInvocationCredentialExchangePort credentialExchangePort,
+        ILogger<ScheduledServiceInvocationDispatchPort>? logger = null)
     {
         _serviceInvocationPort = serviceInvocationPort ?? throw new ArgumentNullException(nameof(serviceInvocationPort));
         _credentialExchangePort = credentialExchangePort
             ?? throw new ArgumentNullException(nameof(credentialExchangePort));
+        _logger = logger ?? NullLogger<ScheduledServiceInvocationDispatchPort>.Instance;
     }
 
     public async Task<ScheduledServiceInvocationDispatchReceipt> DispatchAsync(
@@ -34,6 +39,15 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         var request = WithScheduleId(
             await BuildInvocationRequestAsync(dispatch, ct),
             dispatch.ScheduleId);
+        _logger.LogInformation(
+            "Scheduled service invocation credential projection prepared. scheduleId={ScheduleId} serviceKey={ServiceKey} endpointId={EndpointId} projectWorkflowCallerCredential={ProjectWorkflowCallerCredential} hasConnectorAuthorization={HasConnectorAuthorization} hasOwnerLlmToken={HasOwnerLlmToken} hasSenderLlmToken={HasSenderLlmToken}",
+            dispatch.ScheduleId ?? string.Empty,
+            FormatServiceKey(request.Identity),
+            request.EndpointId ?? string.Empty,
+            dispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredential,
+            HasConnectorAuthorization(request),
+            HasOwnerLlmToken(request),
+            HasSenderLlmToken(request));
         var receipt = await _serviceInvocationPort.InvokeAsync(request, ct);
         return new ScheduledServiceInvocationDispatchReceipt(
             true,
@@ -78,6 +92,15 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
                 ? $"Scheduled service invocation {ToErrorSubject(exchange.Role)} NyxID credential exchange failed."
                 : exchange.Result.Error.Trim());
         }
+
+        _logger.LogInformation(
+            "Scheduled service invocation NyxID credential exchange succeeded. scheduleId={ScheduleId} serviceKey={ServiceKey} endpointId={EndpointId} credentialRole={CredentialRole} projectWorkflowCallerCredential={ProjectWorkflowCallerCredential} hasAccessToken={HasAccessToken}",
+            dispatch.ScheduleId ?? string.Empty,
+            FormatServiceKey(dispatch.Request.Identity),
+            dispatch.Request.EndpointId ?? string.Empty,
+            ToErrorSubject(exchange.Role),
+            dispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredential,
+            !string.IsNullOrWhiteSpace(exchange.Result.AccessToken));
 
         return EnrichChatPayload(
             dispatch.Request,
@@ -183,6 +206,36 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         cloned.Payload = Any.Pack(chatRequest);
         return cloned;
     }
+
+    private static bool HasConnectorAuthorization(ServiceInvocationRequest request)
+    {
+        if (request.Payload?.TryUnpack<ChatRequestEvent>(out var chatRequest) != true)
+            return false;
+
+        return !string.IsNullOrWhiteSpace(chatRequest.ConnectorHttpAuthorization);
+    }
+
+    private static bool HasOwnerLlmToken(ServiceInvocationRequest request)
+    {
+        if (request.Payload?.TryUnpack<ChatRequestEvent>(out var chatRequest) != true)
+            return false;
+
+        return !string.IsNullOrWhiteSpace(chatRequest.LlmControl?.NyxIdAccessToken) ||
+               !string.IsNullOrWhiteSpace(chatRequest.LlmControl?.NyxIdOrgToken);
+    }
+
+    private static bool HasSenderLlmToken(ServiceInvocationRequest request)
+    {
+        if (request.Payload?.TryUnpack<ChatRequestEvent>(out var chatRequest) != true)
+            return false;
+
+        return !string.IsNullOrWhiteSpace(chatRequest.LlmControl?.SenderNyxIdAccessToken);
+    }
+
+    private static string FormatServiceKey(ServiceIdentity? identity) =>
+        identity == null
+            ? string.Empty
+            : $"{identity.TenantId}:{identity.AppId}:{identity.Namespace}:{identity.ServiceId}";
 
     private static string NormalizeNyxIdAccessToken(string? accessToken, string credentialSubject)
     {
