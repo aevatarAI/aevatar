@@ -37,6 +37,7 @@ using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
@@ -139,6 +140,53 @@ public sealed class MainnetHostCompositionTests
             .NotContain(middleware => middleware is ToolApprovalMiddleware);
 
         await app.StopAsync();
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_WhenVoiceRealtimeConfigured_ShouldMapPolicyAwareWhipOfferEndpoint()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        using var runtimeProvider = new EnvironmentVariableScope(
+            "AEVATAR_ActorRuntime__Provider", "InMemory");
+        using var documentProvider = new EnvironmentVariableScope(
+            "AEVATAR_Projection__Document__Providers__InMemory__Enabled", "true");
+        using var documentElasticsearch = new EnvironmentVariableScope(
+            "AEVATAR_Projection__Document__Providers__Elasticsearch__Enabled", "false");
+        using var graphProvider = new EnvironmentVariableScope(
+            "AEVATAR_Projection__Graph__Providers__InMemory__Enabled", "true");
+        using var graphNeo4j = new EnvironmentVariableScope(
+            "AEVATAR_Projection__Graph__Providers__Neo4j__Enabled", "false");
+        using var projectionEnvironment = new EnvironmentVariableScope(
+            "Projection__Policies__Environment", "Development");
+        using var denyInMemoryDocument = new EnvironmentVariableScope(
+            "Projection__Policies__DenyInMemoryDocumentReadStore", "false");
+        using var denyInMemoryGraph = new EnvironmentVariableScope(
+            "Projection__Policies__DenyInMemoryGraphFactStore", "false");
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["Aevatar:VoicePresence:OpenAI:ApiKey"] = "voice-openai-key",
+        });
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        app.MapAevatarMainnetHost();
+
+        ((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(static source => source.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Should()
+            .ContainSingle(endpoint =>
+                endpoint.RoutePattern.RawText == "/whip/offer" &&
+                endpoint.Metadata
+                    .OfType<HttpMethodMetadata>()
+                    .Single()
+                    .HttpMethods
+                    .Contains(HttpMethods.Post, StringComparer.OrdinalIgnoreCase));
     }
 
     [Fact]
