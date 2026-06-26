@@ -1,6 +1,7 @@
 using Aevatar.Authentication.Abstractions;
 using Aevatar.Capabilities;
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -33,6 +34,11 @@ public static class CqrsObservatoryApiEndpoints
         data.MapGet("/scopes", ListScopes)
             .WithName("ListCqrsProjectionScopes")
             .WithSummary("List projection-scope statuses (version lag, active, failures). Platform admin only.")
+            .RequireAuthorization();
+
+        data.MapGet("/readmodels", ListReadModels)
+            .WithName("ListCqrsReadModels")
+            .WithSummary("List materialized read-models grouped by sink shape (version, freshness, count). Platform admin only.")
             .RequireAuthorization();
 
         return app;
@@ -83,6 +89,67 @@ public static class CqrsObservatoryApiEndpoints
             }),
         });
     }
+
+    // Read-model inventory: materialized read-model types grouped by sink shape (doc/graph/mem) with each
+    // one's freshness (max StateVersion), latest UpdatedAt, and total count. version/updated/count are
+    // emitted as null when the backing store cannot cheaply provide them (never fabricated). Same auth as
+    // /scopes: authenticated caller with an unambiguous scope, then platform-admin elevation, fail-closed.
+    // The inventory port reads the materialized read-model stores only; it never touches IEventStore.
+    internal static async Task<IResult> ListReadModels(
+        HttpContext http,
+        [FromServices] IProjectionReadModelInventoryQueryPort inventory,
+        [FromServices] IPlatformAdminAuthorizer authorizer,
+        [FromServices] ILoggerFactory loggerFactory,
+        CancellationToken ct = default)
+    {
+        if (!AevatarScopeAccessGuard.TryGetCallerScopeId(http, out var callerScopeId))
+            return Results.Unauthorized();
+
+        var logger = loggerFactory.CreateLogger(AuditLoggerCategory);
+
+        if (!TryGetBearer(http, out var token))
+        {
+            Audit(logger, http, "denied", callerScopeId, PlatformCaller.NotElevated, "missing_bearer");
+            return Results.Unauthorized();
+        }
+
+        var caller = await authorizer.ResolveCallerAsync(token, ct);
+        if (!caller.IsElevated)
+        {
+            Audit(logger, http, "denied", callerScopeId, caller, "not_admin_or_disabled");
+            return Results.Json(
+                new { code = "SCOPE_ACCESS_DENIED", message = "Platform admin role required to view read-models." },
+                statusCode: StatusCodes.Status403Forbidden);
+        }
+
+        Audit(logger, http, "allowed", callerScopeId, caller, reason: null);
+
+        var result = await inventory.GetInventoryAsync(ct);
+        return Results.Json(new
+        {
+            groups = result.Groups.Select(static group => new
+            {
+                shape = ToWireShape(group.Shape),
+                engine = group.Engine,
+                items = group.Items.Select(static item => new
+                {
+                    name = item.Name,
+                    actor = item.Actor,
+                    version = item.Version,
+                    updated = item.Updated,
+                    count = item.Count,
+                }),
+            }),
+        });
+    }
+
+    private static string ToWireShape(ProjectionReadModelSinkShape shape) => shape switch
+    {
+        ProjectionReadModelSinkShape.Document => "doc",
+        ProjectionReadModelSinkShape.Graph => "graph",
+        ProjectionReadModelSinkShape.Memory => "mem",
+        _ => "doc",
+    };
 
     private static bool TryGetBearer(HttpContext http, out string token)
     {
