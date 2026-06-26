@@ -2,6 +2,7 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.DependencyInjection;
 using Aevatar.Studio.Application.Studio.Services;
+using Aevatar.Studio.Application.Studio.WorkflowBoards;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -20,6 +21,9 @@ public sealed class StudioApplicationServiceCollectionExtensionsTests
             .Which.ImplementationType.Should().Be(typeof(StudioTeamEntryMemberResolver));
         services.Should().ContainSingle(x => x.ServiceType == typeof(IStudioTeamGAgentStreamInvocationService))
             .Which.ImplementationType.Should().Be(typeof(StudioTeamGAgentStreamInvocationService));
+        services.Should().ContainSingle(x => x.ServiceType == typeof(IWorkflowBoardSnapshotQueryPort));
+        services.Should().ContainSingle(x => x.ServiceType == typeof(IWorkflowBoardRosterQueryPort));
+        services.Should().ContainSingle(x => x.ServiceType == typeof(IWorkflowBoardClock));
         services.Should().ContainSingle(x => x.ServiceType == typeof(IUserConfigService))
             .Which.ImplementationType.Should().Be(typeof(UserConfigService));
     }

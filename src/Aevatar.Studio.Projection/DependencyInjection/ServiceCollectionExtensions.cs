@@ -65,6 +65,16 @@ public static class ServiceCollectionExtensions
                 ProjectionKind = scopeKey.ProjectionKind,
             },
             context => new StudioMaterializationRuntimeLease(context));
+        services.AddProjectionMaterializationRuntimeCore<
+            StudioWorkflowBoardMaterializationContext,
+            StudioWorkflowBoardMaterializationRuntimeLease,
+            ProjectionMaterializationScopeGAgent<StudioWorkflowBoardMaterializationContext>>(
+            scopeKey => new StudioWorkflowBoardMaterializationContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            context => new StudioWorkflowBoardMaterializationRuntimeLease(context));
 
         // ── Projectors ──
 
@@ -116,7 +126,15 @@ public static class ServiceCollectionExtensions
             StudioMaterializationContext,
             StudioWorkspaceCurrentStateProjector>();
 
+        services.AddProjectionArtifactMaterializer<
+            StudioWorkflowBoardMaterializationContext,
+            WorkflowExecutionBoardMaterializer>();
+
         // ── Document metadata providers (for index creation in Elasticsearch) ──
+
+        services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<WorkflowExecutionBoardDocument>,
+            WorkflowExecutionBoardDocumentMetadataProvider>();
 
         services.TryAddSingleton<
             IProjectionDocumentMetadataProvider<UserConfigCurrentStateDocument>,
@@ -169,6 +187,9 @@ public static class ServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionActivationPlanProvider,
             StudioCommittedStateProjectionActivationPlanProvider>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionActivationPlanProvider,
+            StudioWorkflowBoardProjectionActivationPlanProvider>());
 
         // Compile-time-safe actor provisioning used by every Studio actor-backed
         // store. Projection activation is driven by committed-state plans.

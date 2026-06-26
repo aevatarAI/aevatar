@@ -958,6 +958,7 @@ public sealed class StudioMemberGAgentStateTests
                     WorkflowRevision = "rev-8",
                 },
             },
+            ExpectedActorId = "scope-workflow:scope-1:m-1",
             CompletedAtUtc = completedAt,
         });
 
@@ -968,7 +969,19 @@ public sealed class StudioMemberGAgentStateTests
         completed.Binding.CurrentStatus.Should().Be(StudioMemberBindingRunStatus.Succeeded);
         completed.Binding.LastTerminalBindingRunId.Should().Be("bind-1");
         completed.Binding.LastFailure.Should().BeNull();
+        completed.LastBinding.Should().NotBeNull();
+        completed.LastBinding.ExpectedActorId.Should().Be("scope-workflow:scope-1:m-1");
         completed.Binding.UpdatedAtUtc.Should().Be(completedAt);
+    }
+
+    [Fact]
+    public void BindingCompletedEvent_ShouldCarryMemberContractFieldsWithoutPlatformResultBag()
+    {
+        StudioMemberBindingCompletedEvent.Descriptor.Fields.InFieldNumberOrder()
+            .Select(field => field.Name)
+            .Should()
+            .Contain("expected_actor_id")
+            .And.NotContain("result");
     }
 
     [Fact]

@@ -5,6 +5,54 @@ option csharp_namespace = "Aevatar.Studio.Projection.ReadModels";
 import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
 
+// ─── Workflow Board Execution Materialized View ───
+//
+// Studio owns the workflow board product surface. The authoritative facts
+// still come from WorkflowRunGAgent committed state events; this document is
+// a Studio-shaped event-incremental materialized view for board snapshots.
+// It is not a WorkflowRun actor current-state replica.
+
+message WorkflowExecutionBoardDocument {
+  string id = 1;
+  int64 state_version = 2;
+  string last_event_id = 3;
+  google.protobuf.Timestamp updated_at_utc_value = 4;
+  string root_actor_id = 5;
+  string command_id = 6;
+  string definition_actor_id = 7;
+  string run_id = 8;
+  string workflow_name = 9;
+  string scope_id = 10;
+  string run_origin = 11;
+  string schedule_id = 12;
+  int32 completion_status_value = 13;
+  string current_node_id = 14;
+  repeated WorkflowExecutionBoardNodeReadModel node_entries = 15;
+  WorkflowExecutionBoardSummaryReadModel summary_value = 16;
+  google.protobuf.Timestamp last_node_updated_at_utc_value = 19;
+}
+
+message WorkflowExecutionBoardNodeReadModel {
+  string node_id = 1;
+  string name = 2;
+  string step_type = 3;
+  int32 status_value = 4;
+  int32 order = 5;
+  google.protobuf.Timestamp requested_at_utc_value = 6;
+  google.protobuf.Timestamp completed_at_utc_value = 7;
+  google.protobuf.Timestamp updated_at_utc_value = 8;
+  int64 duration_ms = 9;
+  string next_node_id = 10;
+  string branch_key = 11;
+}
+
+message WorkflowExecutionBoardSummaryReadModel {
+  int32 completed_steps = 1;
+  int32 running_nodes = 2;
+  int32 waiting_or_pending_nodes = 3;
+  int32 failed_nodes = 4;
+}
+
 // ─── UserConfig Current State ReadModel ───
 
 message UserConfigCurrentStateDocument {
@@ -136,6 +184,7 @@ message StudioMemberCurrentStateDocument {
   string last_bound_revision_id = 41;
   string last_bound_implementation_kind = 42; // wire-stable string
   google.protobuf.Timestamp last_bound_at = 43;
+  string last_bound_expected_actor_id = 44;
 
   // ── Team membership (ADR-0017) ──
   // Optional. Absence = unassigned; empty string is not a valid serialized
