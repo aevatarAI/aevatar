@@ -72,6 +72,41 @@ internal static class NyxApiResponseHelper
 
 
     /// <summary>
+    /// Returns the trimmed per-connection proxy slug from a Nyx <c>POST /api/v1/keys</c>
+    /// (connect-service) response — <c>proxy_url_slug</c> preferred, <c>slug</c> as fallback — or
+    /// <c>null</c> when the response is an error envelope, unparseable, or carries neither field.
+    /// NyxID auto-numbers a base slug that is already taken (<c>api-lark-bot</c> →
+    /// <c>api-lark-bot-2</c>/<c>-3</c>), so a user with several Lark bots gets a distinct proxy
+    /// service per app. Capturing the slug NyxID actually assigned is what lets a later reply proxy
+    /// through the SAME Lark app this connection was created for, instead of always the first one.
+    /// </summary>
+    public static string? ExtractOptionalProxyUrlSlug(string response)
+    {
+        if (LooksLikeErrorEnvelope(response))
+            return null;
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+            return ReadNonEmptyString(root, "proxy_url_slug") ?? ReadNonEmptyString(root, "slug");
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static string? ReadNonEmptyString(JsonElement root, string propertyName)
+    {
+        if (!root.TryGetProperty(propertyName, out var element) || element.ValueKind != JsonValueKind.String)
+            return null;
+
+        var value = element.GetString()?.Trim();
+        return string.IsNullOrWhiteSpace(value) ? null : value;
+    }
+
+    /// <summary>
     /// Returns true when the response either is unparseable or carries a top-level <c>"error":true</c>
     /// envelope (the wrapping shape Nyx applies to non-2xx HTTP responses from the upstream platform).
     /// </summary>
