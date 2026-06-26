@@ -12,8 +12,9 @@ namespace Aevatar.Mainnet.Host.Api.Cqrs;
 //     fetches nothing. Animated tokens + reduced-motion handling are preserved.
 //   - Panel B (scope & lag rail + headline metrics): LIVE via GET /api/cqrs/scopes (platform-admin gated).
 //     401 -> re-login; 403 -> honest "needs platform admin" state; otherwise surfaces backend error detail.
-//   - Panel C (read-model inventory): NO backend exists -> rendered as a "待后端 / pending backend" panel
-//     with only the structural sink-shape legend (Document/Graph/Memory), no fake rows/counts/versions.
+//   - Panel C (read-model inventory): LIVE via GET /api/cqrs/readmodels (platform-admin gated). Groups read
+//     models by sink shape (Document/Graph/Memory) with engine + per-item name/actor/version/updated/count.
+//     401 -> re-login; 403 -> honest "needs platform admin" state; nullable fields render "—", never faked.
 //   - Panel D (envelope inspector): the recent-envelope LIST is unbacked (event-stream browse is a gap) ->
 //     pending state. The state_root snapshot SHAPE block (field names + types) is structural and kept, as
 //     are the two existing pending-backend stubs.
@@ -458,7 +459,9 @@ const state = {
   scopeId:null, scopeResolved:false, scopeSource:null,
   sort:"lag", selectedScope:null, selectedEvent:0,
   // scopes panel B: status one of loading | ok | empty | forbidden | error
-  scopes:{ status:"loading", rows:[], detail:null }
+  scopes:{ status:"loading", rows:[], detail:null },
+  // read-model inventory panel C: status one of loading | ok | empty | forbidden | error
+  readmodels:{ status:"loading", groups:[], detail:null }
 };
 let accountLabel = "已登录";
 
@@ -507,12 +510,14 @@ const RAILS = [
 ];
 const RAIL_MID = { p0:[358,181], p1:[873,80], p2:[874,181], p3:[873,284] };
 
-/* C) read-model sink-shape structural legend (no data — backend not exposed) */
-const SINK_SHAPES = [
-  { shape:"doc",   shapeName:"Document",      engine:"Elasticsearch" },
-  { shape:"graph", shapeName:"Graph",         engine:"Neo4j" },
-  { shape:"mem",   shapeName:"Memory",        engine:"dev" }
-];
+/* C) read-model sink-shape metadata — static structural labels (display name + count unit)
+   keyed by the backend's shape code. NOT data: the shape→engine/name/unit mapping is always-true. */
+const SHAPE_META = {
+  doc:   { name:"Document", unit:"docs" },
+  graph: { name:"Graph",    unit:"nodes" },
+  mem:   { name:"Memory",   unit:"entries" }
+};
+function shapeMeta(shape){ return SHAPE_META[shape] || { name:String(shape||"?"), unit:"" }; }
 
 /* ===========================================================================
    topbar
@@ -731,22 +736,90 @@ function renderScopeRail(){
 }
 
 /* ===========================================================================
-   C) read-model inventory — NO backend exposed → pending, structural legend only
+   C) read-model inventory — LIVE via GET /api/cqrs/readmodels (platform-admin gated)
+   401 -> re-login; 403 -> honest "needs platform admin" state; otherwise surfaces backend error detail.
+   Nullable version/updated/count render as "—" — never fabricated.
    =========================================================================== */
+function rmVersion(v){ return (v==null) ? "—" : "v"+v; }
+function rmCount(c, shape){ if(c==null) return "—"; const u=shapeMeta(shape).unit; return fmt(c)+(u?" "+u:""); }
+function rmUpdated(iso){
+  if(!iso) return "—";
+  const d=new Date(iso); if(isNaN(d.getTime())) return "—";
+  const p=(n)=>String(n).padStart(2,"0");
+  return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate())+" "+p(d.getHours())+":"+p(d.getMinutes());
+}
 function renderInventory(){
   const card=el("section",{class:"panel"});
-  card.appendChild(el("div",{class:"panel-head"},'<h2>Read-model Inventory</h2><div class="ph-r"><span class="pending">'+ICON.warn+' 待后端 / pending backend</span></div>'));
-  const body=el("div",{class:"panel-body"});
-  body.appendChild(el("div",{class:"banner info",style:"margin-bottom:14px"},
-    '<div>'+ICON.info+'</div><div><div class="bt">读模型清单端点尚未由后端暴露</div>'+
-    '<div class="bb">每个读模型的当前态（名称 / 复制 actor / 版本 / 文档数）需要一个清单读取端点，目前后端尚未提供。下面仅作为 <b style="color:var(--fg)">结构图例</b>：三种 sink 形状，每个读模型只落到一个启用的 sink；这里不展示任何虚构行/计数/版本。</div></div>'));
-  SINK_SHAPES.forEach(g=>{
-    const grp=el("div",{class:"inv-group"});
-    grp.appendChild(el("div",{class:"inv-group-h"},'<span class="shape-badge '+g.shape+'">'+ICON.cube+' '+g.shapeName+'</span><span class="gh-eng">'+g.engine+'</span><span style="margin-left:auto"><span class="pending">'+ICON.warn+' 待后端</span></span>'));
-    grp.appendChild(el("div",{class:"inv-empty"},'该 sink 形状下的读模型清单将在后端暴露清单端点后填充。'));
-    body.appendChild(grp);
-  });
-  card.appendChild(body);
+  const head=el("div",{class:"panel-head"});
+  const tag = state.readmodels.status==="ok"
+    ? '<span class="srctag live"><span class="dot"></span>数据来源 · LIVE</span>'
+    : (state.readmodels.status==="loading" ? '<span class="srctag live" style="color:var(--muted);background:var(--neutral-soft);border-color:var(--border)"><span class="dot" style="background:var(--muted)"></span>加载中…</span>' : '<span class="pending">'+ICON.warn+' 平台级</span>');
+  head.innerHTML='<h2>Read-model Inventory</h2><div class="ph-r">'+tag+'</div>';
+  card.appendChild(head);
+
+  const st = state.readmodels.status;
+  const groups = state.readmodels.groups;
+
+  if(st==="ok"){
+    const body=el("div",{class:"panel-body"});
+    groups.forEach(g=>{
+      const meta=shapeMeta(g.shape);
+      const items=Array.isArray(g.items)?g.items:[];
+      const grp=el("div",{class:"inv-group"});
+      grp.appendChild(el("div",{class:"inv-group-h"},
+        '<span class="shape-badge '+esc(g.shape)+'">'+ICON.cube+' '+esc(meta.name)+'</span>'+
+        '<span class="gh-eng">'+esc(g.engine||"")+'</span>'+
+        '<span style="margin-left:auto;font-size:11px;color:var(--muted-2)">'+items.length+' 个读模型</span>'));
+      if(items.length===0){
+        grp.appendChild(el("div",{class:"inv-empty"},'该 sink 形状下暂无已注册读模型。'));
+      } else {
+        items.forEach(it=>{
+          const row=el("div",{class:"rm-row"});
+          const actor=it.actor==null?"":String(it.actor);
+          const left='<div><div class="rm-n">'+esc(it.name)+'</div>'+
+            '<div class="rm-m">'+(actor?'<span class="mono" title="复制 actor '+esc(actor)+'">'+esc(actor)+'</span>':'<span class="mono">—</span>')+
+            '<span>更新 '+esc(rmUpdated(it.updated))+'</span></div></div>';
+          const right='<div class="rm-r"><div class="rm-v">'+esc(rmVersion(it.version))+'</div>'+
+            '<div class="rm-c">'+esc(rmCount(it.count, g.shape))+'</div></div>';
+          row.innerHTML=left+right;
+          grp.appendChild(row);
+        });
+      }
+      body.appendChild(grp);
+    });
+    card.appendChild(body);
+    return card;
+  }
+
+  /* non-ok states — same markup as Panel B */
+  if(st==="loading"){
+    const body=el("div",{});
+    for(let i=0;i<4;i++){
+      const sk=el("div",{class:"skel"});
+      sk.innerHTML='<span class="skel-bar" style="width:'+(40+i*7)+'%"></span><span class="skel-bar" style="width:48px;margin-left:auto"></span>';
+      body.appendChild(sk);
+    }
+    card.appendChild(body);
+    return card;
+  }
+  if(st==="empty"){
+    card.appendChild(el("div",{class:"pstate"},
+      '<div class="ps-ic lock">'+ICON.info+'</div><div class="ps-t">无已注册读模型</div>'+
+      '<div class="ps-b">平台当前没有任何已注册的投影读模型。一旦有 projector 把已提交事件物化到某个 sink，读模型会在此按形状分组出现。</div>'));
+    return card;
+  }
+  if(st==="forbidden"){
+    card.appendChild(el("div",{class:"pstate"},
+      '<div class="ps-ic lock">'+ICON.lock+'</div><div class="ps-t">需要平台管理员权限</div>'+
+      '<div class="ps-b">projection 读模型清单为<b style="color:var(--fg)">平台级数据</b>。需平台管理员/运维角色方可查看。</div>'+
+      (state.readmodels.detail?'<div class="ps-detail">'+esc(state.readmodels.detail)+'</div>':'')));
+    return card;
+  }
+  /* error */
+  card.appendChild(el("div",{class:"pstate"},
+    '<div class="ps-ic err">'+ICON.warn+'</div><div class="ps-t">读取读模型清单失败</div>'+
+    '<div class="ps-b">后端返回错误。请稍后重试；若持续失败，请检查 read-model 清单读取端点与平台鉴权。</div>'+
+    (state.readmodels.detail?'<div class="ps-detail">'+esc(state.readmodels.detail)+'</div>':'')));
   return card;
 }
 
@@ -862,6 +935,45 @@ async function loadScopes(){
   }
 }
 
+async function loadReadModels(){
+  state.readmodels = { status:"loading", groups:[], detail:null };
+  render();
+  try {
+    const res = await authFetch("/api/cqrs/readmodels");
+    if(res.status === 403){
+      let detail=null;
+      try { const b=await res.json(); detail = b && (b.message || b.detail || b.code); } catch(e){ /* tolerate */ }
+      state.readmodels = { status:"forbidden", groups:[], detail };
+      render(); return;
+    }
+    if(!res.ok){
+      let detail="HTTP "+res.status;
+      try { const b=await res.json(); if(b && (b.message||b.detail||b.error||b.code)) detail = b.message||b.detail||b.error||b.code; } catch(e){ /* tolerate */ }
+      state.readmodels = { status:"error", groups:[], detail };
+      render(); return;
+    }
+    const data = await res.json();
+    const groups = (data && Array.isArray(data.groups) ? data.groups : []).map(g=>({
+      shape: g.shape,
+      engine: g.engine || null,
+      items: (Array.isArray(g.items) ? g.items : []).map(it=>({
+        name: it.name,
+        actor: it.actor,
+        version: (it.version==null ? null : Number(it.version)),
+        updated: it.updated || null,
+        count: (it.count==null ? null : Number(it.count))
+      }))
+    }));
+    const hasItems = groups.some(g=>g.items.length>0);
+    state.readmodels = { status: hasItems ? "ok" : "empty", groups, detail:null };
+    render();
+  } catch(e){
+    if(e && e.message === "unauthorized") return; // signOutSilent already re-rendered
+    state.readmodels = { status:"error", groups:[], detail:String(e && e.message || e) };
+    render();
+  }
+}
+
 /* init */
 applyTheme();
 (async function init(){
@@ -872,6 +984,7 @@ applyTheme();
   render();
   loadContext();
   loadScopes();
+  loadReadModels();
   const acct = toAccount(await fetchUserInfo());
   if(acct){ accountLabel = acct.label; render(); }
 })();
