@@ -122,6 +122,12 @@ public sealed class WebRtcVoiceTransport : IVoiceTransport
         try
         {
             var frame = ControlJsonReader.Parse<VoiceControlFrame>(json);
+            if (frame.FrameCase == VoiceControlFrame.FrameOneofCase.InputImage)
+            {
+                _frames.Writer.TryWrite(VoiceTransportFrame.InputImageFrame(frame.InputImage.Clone()));
+                return;
+            }
+
             _frames.Writer.TryWrite(VoiceTransportFrame.ControlFrame(frame));
         }
         catch

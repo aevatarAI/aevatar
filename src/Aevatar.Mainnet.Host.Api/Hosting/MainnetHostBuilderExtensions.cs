@@ -377,6 +377,7 @@ public static class MainnetHostBuilderExtensions
         if (PolicyAwareVoiceEndpoints.IsVoiceRealtimeConfigured(app.Services))
         {
             app.MapPolicyAwareVoiceEndpoint();
+            app.MapPolicyAwareVoiceWhipEndpoint();
         }
         else
         {
