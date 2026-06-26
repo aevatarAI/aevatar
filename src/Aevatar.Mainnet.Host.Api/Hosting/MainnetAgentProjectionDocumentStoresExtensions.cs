@@ -134,7 +134,7 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
     }
 
     // Registers a single inventory descriptor that delegates to the read-model's already-registered
-    // document reader. TryAddEnumerable keyed on the closed descriptor type keeps it idempotent.
+    // document reader. Each read-model contributes one descriptor to IEnumerable<IProjectionReadModelDescriptor>.
     private static void TryAddReadModelDescriptor<TReadModel>(
         IServiceCollection services,
         string name,
@@ -143,13 +143,13 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         ProjectionReadModelSinkShape shape)
         where TReadModel : class, IProjectionReadModel<TReadModel>, new()
     {
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IProjectionReadModelDescriptor>(sp =>
+        services.AddSingleton<IProjectionReadModelDescriptor>(sp =>
             new ProjectionDocumentReadModelDescriptor<TReadModel>(
                 name,
                 shape,
                 engineLabel,
                 actorKind,
-                sp.GetRequiredService<IProjectionDocumentReader<TReadModel, string>>())));
+                sp.GetRequiredService<IProjectionDocumentReader<TReadModel, string>>()));
     }
 
     private static void TryAddElasticsearchStore<TReadModel>(
