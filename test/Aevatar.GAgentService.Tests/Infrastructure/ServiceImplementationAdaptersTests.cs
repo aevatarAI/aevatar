@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core.TypeSystem;
@@ -9,6 +10,7 @@ using Aevatar.Scripting.Core.Ports;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Google.Protobuf;
+using Google.Protobuf.Reflection;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Tests.Infrastructure;
@@ -522,6 +524,36 @@ public sealed class ServiceImplementationAdaptersTests
     }
 
     [Fact]
+    public async Task WorkflowAdapter_ShouldPrepareChatProtocolDescriptorSet()
+    {
+        var workflowPort = new RecordingWorkflowRunActorPort
+        {
+            ParseResult = WorkflowYamlParseResult.Success("workflow"),
+        };
+        var adapter = new WorkflowServiceImplementationAdapter(workflowPort);
+
+        var artifact = await adapter.PrepareRevisionAsync(new PrepareServiceRevisionRequest
+        {
+            Spec = new ServiceRevisionSpec
+            {
+                Identity = GAgentServiceTestKit.CreateIdentity(),
+                RevisionId = "r1",
+                ImplementationKind = ServiceImplementationKind.Workflow,
+                WorkflowSpec = new WorkflowServiceRevisionSpec
+                {
+                    WorkflowYaml = "name: workflow",
+                },
+            },
+        });
+
+        artifact.ProtocolDescriptorSet.IsEmpty.Should().BeFalse();
+        ResolveDescriptor(artifact.ProtocolDescriptorSet, ChatRequestEvent.Descriptor.FullName)
+            .Should().NotBeNull();
+        ResolveDescriptor(artifact.ProtocolDescriptorSet, ChatResponseEvent.Descriptor.FullName)
+            .Should().NotBeNull();
+    }
+
+    [Fact]
     public async Task WorkflowAdapter_ShouldRejectInvalidWorkflowYaml()
     {
         var adapter = new WorkflowServiceImplementationAdapter(new RecordingWorkflowRunActorPort
@@ -674,6 +706,37 @@ public sealed class ServiceImplementationAdaptersTests
         nullPort.Should().Throw<ArgumentNullException>();
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("workflow implementation_spec is required.");
+    }
+
+    private static MessageDescriptor? ResolveDescriptor(ByteString descriptorSet, string fullName)
+    {
+        var fds = FileDescriptorSet.Parser.ParseFrom(descriptorSet);
+        var byteStrings = fds.File.Select(file => file.ToByteString()).ToList();
+        var fileDescriptors = FileDescriptor.BuildFromByteStrings(byteStrings);
+
+        foreach (var fileDescriptor in fileDescriptors)
+        {
+            var descriptor = FindDescriptor(fileDescriptor.MessageTypes, fullName);
+            if (descriptor != null)
+                return descriptor;
+        }
+
+        return null;
+    }
+
+    private static MessageDescriptor? FindDescriptor(IList<MessageDescriptor> messageTypes, string fullName)
+    {
+        foreach (var messageType in messageTypes)
+        {
+            if (string.Equals(messageType.FullName, fullName, StringComparison.Ordinal))
+                return messageType;
+
+            var nested = FindDescriptor(messageType.NestedTypes, fullName);
+            if (nested != null)
+                return nested;
+        }
+
+        return null;
     }
 
     private sealed class RecordingScriptDefinitionSnapshotPort : IScriptDefinitionSnapshotPort
