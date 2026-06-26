@@ -5,6 +5,17 @@ namespace Aevatar.GAgentService.Abstractions.Services;
 
 public static class ServiceProtocolDescriptorSetBuilder
 {
+    private static readonly IReadOnlyDictionary<string, FileDescriptor> KnownDependencies = new[]
+    {
+        Google.Protobuf.WellKnownTypes.Any.Descriptor.File,
+        Google.Protobuf.WellKnownTypes.Duration.Descriptor.File,
+        Google.Protobuf.WellKnownTypes.Empty.Descriptor.File,
+        Google.Protobuf.WellKnownTypes.FieldMask.Descriptor.File,
+        Google.Protobuf.WellKnownTypes.Struct.Descriptor.File,
+        Google.Protobuf.WellKnownTypes.Timestamp.Descriptor.File,
+        Google.Protobuf.WellKnownTypes.StringValue.Descriptor.File,
+    }.ToDictionary(file => file.Name, StringComparer.Ordinal);
+
     public static ByteString Build(params MessageDescriptor[] descriptors)
     {
         var files = new Dictionary<string, FileDescriptorProto>(StringComparer.Ordinal);
@@ -38,19 +49,7 @@ public static class ServiceProtocolDescriptorSetBuilder
         string dependencyName,
         IDictionary<string, FileDescriptorProto> files)
     {
-        var file = dependencyName switch
-        {
-            "google/protobuf/any.proto" => Google.Protobuf.WellKnownTypes.Any.Descriptor.File,
-            "google/protobuf/duration.proto" => Google.Protobuf.WellKnownTypes.Duration.Descriptor.File,
-            "google/protobuf/empty.proto" => Google.Protobuf.WellKnownTypes.Empty.Descriptor.File,
-            "google/protobuf/field_mask.proto" => Google.Protobuf.WellKnownTypes.FieldMask.Descriptor.File,
-            "google/protobuf/struct.proto" => Google.Protobuf.WellKnownTypes.Struct.Descriptor.File,
-            "google/protobuf/timestamp.proto" => Google.Protobuf.WellKnownTypes.Timestamp.Descriptor.File,
-            "google/protobuf/wrappers.proto" => Google.Protobuf.WellKnownTypes.StringValue.Descriptor.File,
-            _ => null,
-        };
-
-        if (file != null)
+        if (KnownDependencies.TryGetValue(dependencyName, out var file))
             AddFile(file, files);
     }
 }
