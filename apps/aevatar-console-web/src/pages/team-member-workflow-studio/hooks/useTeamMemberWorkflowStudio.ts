@@ -2082,7 +2082,6 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         publishBindingRun.status !== "succeeded" &&
         !publishBindingRunTerminal),
   );
-  const publishHasDraftChanges = Boolean(dirty && workflowHasSteps);
   const publishPending = publishMutation.isPending;
   const memberPublished = memberIsPublished;
   const memberPublishedServiceId = trimOptional(
@@ -2153,7 +2152,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       Boolean(selectedStepConfigurationError) ||
       publishMutation.isPending ||
       publishStatusStillInProgress ||
-      (memberIsPublished && !publishHasDraftChanges),
+      memberIsPublished,
   );
   const publishPlaceholderReason =
     route.mode === "new"
@@ -2167,9 +2166,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         : publishStatusStillInProgress
           ? "Binding run is still in progress. Use Refresh status before publishing again."
         : memberIsPublished
-          ? publishHasDraftChanges
-            ? "Publish saves draft changes, dispatches a candidate binding run, and observes the read model."
-            : "This member workflow is already published. Use Refresh status to check readiness."
+          ? "This member workflow is already published. Save changes to update the bound workflow."
         : !workflowQuery.data || !editableDocument
             ? "Load the workflow draft before publishing."
             : !workflowHasSteps

@@ -4105,7 +4105,6 @@ describe("TeamMemberWorkflowStudioPage", () => {
       "Run",
       "Add node",
       "Save",
-      "Publish",
       "YAML",
     ]);
 
@@ -5431,7 +5430,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(studioApi.getWorkflow).not.toHaveBeenCalled();
   });
 
-  it("allows publishing a changed draft version for an already published workflow member", async () => {
+  it("keeps publish hidden when an already published workflow member has draft changes", async () => {
     window.history.replaceState(
       {},
       "",
@@ -5476,38 +5475,6 @@ describe("TeamMemberWorkflowStudioPage", () => {
       document: mockWorkflowDocument,
       updatedAtUtc: "2026-06-08T00:00:00Z",
     });
-    (studioApi.saveWorkflow as jest.Mock).mockResolvedValue({
-      directoryId: "scope:scope-1",
-      directoryLabel: "scope-1",
-      draftExists: true,
-      fileName: "wf-alpha.yaml",
-      filePath: "scope://scope-1/wf-alpha.yaml",
-      findings: [],
-      layout: null,
-      name: "Workflow Alpha v2",
-      workflowId: "wf-alpha",
-      yaml: "name: Workflow Alpha v2\nsteps: []\n",
-      document: {
-        ...mockWorkflowDocument,
-        name: "Workflow Alpha v2",
-      },
-      updatedAtUtc: "2026-06-08T00:00:01Z",
-    });
-    (studioApi.bindMemberWorkflow as jest.Mock).mockResolvedValue({
-      bindingRunId: "binding-run-v2",
-      memberId: "m-alpha",
-      scopeId: "scope-1",
-      status: "accepted",
-    });
-    (studioApi.getMemberBindingRun as jest.Mock).mockResolvedValue({
-      bindingRunId: "binding-run-v2",
-      memberId: "m-alpha",
-      scopeId: "scope-1",
-      status: "succeeded",
-      stateVersion: 3,
-      updatedAt: "2026-06-08T00:00:02Z",
-    });
-
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
     await waitFor(() => {
@@ -5523,42 +5490,15 @@ describe("TeamMemberWorkflowStudioPage", () => {
       target: { value: "Workflow Alpha v2" },
     });
 
-    const publishButton = screen.getByRole("button", {
-      name: "Publish",
-    });
     await waitFor(() => {
-      expect(publishButton).toBeEnabled();
+      expect(screen.getByText("Unsaved changes")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+      expect(screen.queryByRole("button", { name: "Publish" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Refresh status" })).toBeNull();
     });
-    fireEvent.click(publishButton);
-
-    await waitFor(() => {
-      expect(studioApi.saveWorkflow).toHaveBeenCalledWith(
-        expect.objectContaining({
-          scopeId: "scope-1",
-          workflowId: "wf-alpha",
-          workflowName: "Workflow Alpha v2",
-        }),
-      );
-      expect(studioApi.updateMemberDisplayName).toHaveBeenCalledWith({
-        displayName: "Workflow Alpha v2",
-        memberId: "m-alpha",
-        scopeId: "scope-1",
-      });
-      expect(studioApi.bindMemberWorkflow).toHaveBeenCalledWith({
-        displayName: "Workflow Alpha v2",
-        memberId: "m-alpha",
-        scopeId: "scope-1",
-        workflowId: "wf-alpha",
-        workflowYamls: [expect.stringContaining("name: Workflow Alpha v2")],
-      });
-      expect(studioApi.getMemberBindingRun).toHaveBeenCalledWith(
-        "scope-1",
-        "m-alpha",
-        "binding-run-v2",
-      );
-      expect(screen.queryByText("No workflow draft is linked to this member yet.")).toBeNull();
-      expect(screen.getByDisplayValue("Workflow Alpha v2")).toBeTruthy();
-    });
+    expect(studioApi.saveWorkflow).not.toHaveBeenCalled();
+    expect(studioApi.bindMemberWorkflow).not.toHaveBeenCalled();
+    expect(studioApi.getMemberBindingRun).not.toHaveBeenCalled();
     expect(studioApi.getPublishedWorkflow).not.toHaveBeenCalled();
     expect(studioApi.setTeamEntryMember).not.toHaveBeenCalled();
   });
@@ -5696,11 +5636,11 @@ describe("TeamMemberWorkflowStudioPage", () => {
     });
   });
 
-  it("surfaces failed republish even when an older member binding remains serviceable", async () => {
+  it("surfaces failed save-and-bind while an older member binding remains serviceable", async () => {
     window.history.replaceState(
       {},
       "",
-      "/scopes/scope-1/teams/t-alpha/members/m-alpha/workflow?workflowId=wf-alpha",
+      "/scopes/scope-1/teams/t-alpha/members/m-alpha/workflow?workflowId=wf-alpha&workflowSource=published",
     );
     (studioApi.getMember as jest.Mock).mockResolvedValue({
       implementationRef: {
@@ -5727,7 +5667,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
         revisionId: "rev-1",
       },
     });
-    (studioApi.getWorkflow as jest.Mock).mockResolvedValue({
+    (studioApi.getPublishedWorkflow as jest.Mock).mockResolvedValue({
       directoryId: "scope:scope-1",
       directoryLabel: "scope-1",
       draftExists: true,
@@ -5741,41 +5681,9 @@ describe("TeamMemberWorkflowStudioPage", () => {
       document: mockWorkflowDocument,
       updatedAtUtc: "2026-06-08T00:00:00Z",
     });
-    (studioApi.saveWorkflow as jest.Mock).mockResolvedValue({
-      directoryId: "scope:scope-1",
-      directoryLabel: "scope-1",
-      draftExists: true,
-      fileName: "wf-alpha.yaml",
-      filePath: "scope://scope-1/wf-alpha.yaml",
-      findings: [],
-      layout: null,
-      name: "Workflow Alpha v2",
-      workflowId: "wf-alpha",
-      yaml: "name: Workflow Alpha v2\nsteps: []\n",
-      document: {
-        ...mockWorkflowDocument,
-        name: "Workflow Alpha v2",
-      },
-      updatedAtUtc: "2026-06-08T00:00:01Z",
-    });
-    (studioApi.bindMemberWorkflow as jest.Mock).mockResolvedValue({
-      bindingRunId: "binding-run-v2",
-      memberId: "m-alpha",
-      scopeId: "scope-1",
-      status: "accepted",
-    });
-    (studioApi.getMemberBindingRun as jest.Mock).mockResolvedValue({
-      bindingRunId: "binding-run-v2",
-      failure: {
-        code: "BINDING_FAILED",
-        message: "Latest workflow draft failed to bind.",
-      },
-      memberId: "m-alpha",
-      scopeId: "scope-1",
-      status: "failed",
-      stateVersion: 3,
-      updatedAt: "2026-06-08T00:00:02Z",
-    });
+    (studioApi.saveAndBindWorkflow as jest.Mock).mockRejectedValue(
+      new StudioApiError("Latest workflow draft failed to bind.", 500),
+    );
 
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
@@ -5786,15 +5694,25 @@ describe("TeamMemberWorkflowStudioPage", () => {
     fireEvent.change(screen.getByLabelText("Workflow title"), {
       target: { value: "Workflow Alpha v2" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Publish" }));
+    expect(screen.queryByRole("button", { name: "Publish" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => {
-      expect(screen.getByText("Error")).toBeTruthy();
-      expect(
-        screen.getByTitle(/Latest workflow draft failed to bind/),
-      ).toBeTruthy();
+      expect(screen.getByText("Latest workflow draft failed to bind.")).toBeTruthy();
     });
-    expect(screen.queryByTitle(/Published member workflow is serviceable/)).toBeNull();
+    expect(studioApi.saveAndBindWorkflow).toHaveBeenCalledWith({
+      appId: "studio",
+      displayName: "Workflow Alpha v2",
+      exposureDesired: true,
+      inlineWorkflowYamls: {},
+      scopeId: "scope-1",
+      serviceId: "svc-alpha",
+      workflowId: "wf-alpha",
+      workflowName: "Workflow Alpha v2",
+      workflowYaml: expect.stringContaining("name: Workflow Alpha v2"),
+    });
+    expect(studioApi.saveWorkflow).not.toHaveBeenCalled();
+    expect(studioApi.bindMemberWorkflow).not.toHaveBeenCalled();
   });
 
   it("refreshes a stale member current binding run from the binding-run read model", async () => {
