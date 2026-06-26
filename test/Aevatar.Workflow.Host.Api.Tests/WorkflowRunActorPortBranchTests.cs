@@ -247,10 +247,15 @@ public sealed class WorkflowRunActorPortBranchTests
     }
 
     [Fact]
-    public async Task CreateRunAsync_WhenBindingReaderReturnsNullForExistingActor_ShouldFailFast()
+    public async Task CreateRunAsync_WhenBindingReaderReturnsNullForExistingActor_ShouldRebindFromCatalogPayload()
     {
+        // A null binding doc on an existing definition actor is the signature of a clobbered binding
+        // slot (the studio failure). With a definition payload in hand, the run self-heals by re-binding
+        // the definition instead of failing fast.
         var runtime = new RecordingActorRuntime();
-        runtime.StoredActors["definition-missing-binding"] = new RecordingActor("definition-missing-binding", new WorkflowGAgent());
+        var definitionActor = new RecordingActor("definition-missing-binding", new WorkflowGAgent());
+        runtime.StoredActors["definition-missing-binding"] = definitionActor;
+        runtime.ActorsToCreate.Enqueue(new RecordingActor("run-missing-binding", new StubAgent("run-missing-binding")));
         var port = CreatePort(
             runtime,
             new StaticWorkflowActorBindingReader(new Dictionary<string, WorkflowActorBinding?>(StringComparer.Ordinal)
@@ -258,7 +263,7 @@ public sealed class WorkflowRunActorPortBranchTests
                 ["definition-missing-binding"] = null,
             }));
 
-        var act = async () => await port.CreateRunAsync(
+        var result = await port.CreateRunAsync(
             new WorkflowDefinitionBinding(
                 "definition-missing-binding",
                 "direct",
@@ -266,8 +271,46 @@ public sealed class WorkflowRunActorPortBranchTests
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
             CancellationToken.None);
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*not a workflow definition actor*");
+        result.DefinitionActorId.Should().Be("definition-missing-binding");
+        definitionActor.LastHandledEnvelope.Should().NotBeNull();
+        definitionActor.LastHandledEnvelope!.Payload!.Is(BindWorkflowDefinitionEvent.Descriptor).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task CreateRunAsync_WhenExistingDefinitionSlotHoldsRunKind_ShouldRebindFromCatalogPayload()
+    {
+        // The exact studio clobber: the definition actor's binding read-model was overwritten with a
+        // Run-kind document. The run heals by re-binding the definition from the catalog payload.
+        var runtime = new RecordingActorRuntime();
+        var definitionActor = new RecordingActor("workflow-definition:studio", new WorkflowGAgent());
+        runtime.StoredActors["workflow-definition:studio"] = definitionActor;
+        runtime.ActorsToCreate.Enqueue(new RecordingActor("studio-run", new StubAgent("studio-run")));
+        var port = CreatePort(
+            runtime,
+            new StaticWorkflowActorBindingReader(new Dictionary<string, WorkflowActorBinding?>(StringComparer.Ordinal)
+            {
+                ["workflow-definition:studio"] = new(
+                    WorkflowActorKind.Run,
+                    "workflow-definition:studio",
+                    "workflow-definition:studio",
+                    "workflow-definition:studio:run:old",
+                    "studio",
+                    "name: studio\nroles: []\nsteps: []\n",
+                    new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                    SourceVersion: 701),
+            }));
+
+        var result = await port.CreateRunAsync(
+            new WorkflowDefinitionBinding(
+                "workflow-definition:studio",
+                "studio",
+                "name: studio\nroles: []\nsteps: []\n",
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+            CancellationToken.None);
+
+        result.DefinitionActorId.Should().Be("workflow-definition:studio");
+        definitionActor.LastHandledEnvelope.Should().NotBeNull();
+        definitionActor.LastHandledEnvelope!.Payload!.Is(BindWorkflowDefinitionEvent.Descriptor).Should().BeTrue();
     }
 
     [Fact]

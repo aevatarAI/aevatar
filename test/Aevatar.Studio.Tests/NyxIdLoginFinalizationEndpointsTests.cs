@@ -81,6 +81,7 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
             IdToken: CreateIdToken(new { uid = "owner-user-1", email = "owner@example.com", name = "Owner" }),
             AccessToken: "access-token")
         {
+            RefreshToken = "refresh-token",
             TokenType = "Bearer",
             ExpiresIn = 1800,
             Scope = "openid profile proxy",
@@ -96,8 +97,10 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
                 RedirectUri = "http://localhost/auth/callback",
             },
             broker,
+            new UsableCapabilityBroker(),
             queryPort,
             dispatch,
+            new RecordingBindingRefreshDispatch(),
             NullLoggerFactory.Instance);
 
         var (statusCode, payload) = await ExecuteJsonAsync<NyxIdLoginFinalizationResponse>(result);
@@ -107,6 +110,7 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
         payload.Should().NotBeNull();
         payload!.BindingDispatchAccepted.Should().BeTrue();
         payload.Tokens.AccessToken.Should().Be("access-token");
+        payload.Tokens.RefreshToken.Should().Be("refresh-token");
         payload.Tokens.ExpiresIn.Should().Be(1800);
         payload.User.Sub.Should().Be("owner-user-1");
         payload.User.Email.Should().Be("owner@example.com");
@@ -136,8 +140,10 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
         var result = await NyxIdLoginFinalizationEndpoints.HandleFinalizeAsync(
             new NyxIdLoginFinalizationRequest { Code = "auth-code", CodeVerifier = "pkce-verifier", RedirectUri = "http://localhost/auth/callback" },
             broker,
+            new UsableCapabilityBroker(),
             queryPort,
             dispatch,
+            new RecordingBindingRefreshDispatch(),
             NullLoggerFactory.Instance);
 
         var (statusCode, payload) = await ExecuteJsonAsync<NyxIdLoginFinalizationResponse>(result);
@@ -149,13 +155,80 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
     }
 
     [Fact]
+    public async Task Finalize_ShouldRefreshBinding_WhenExistingBindingIsRevoked()
+    {
+        var broker = new RecordingBrokerCallback(new BrokerAuthorizationCodeResult(
+            BindingId: "bnd-new",
+            IdToken: CreateIdToken(new { uid = "owner-user-1" }),
+            AccessToken: "access-token"));
+        var queryPort = new FakeExternalIdentityBindingQueryPort();
+        queryPort.Bindings[SubjectKey(OwnerSubject("owner-user-1"))] = "bnd-existing";
+        var dispatch = new RecordingBindingDispatch();
+        var refreshDispatch = new RecordingBindingRefreshDispatch();
+
+        var result = await NyxIdLoginFinalizationEndpoints.HandleFinalizeAsync(
+            new NyxIdLoginFinalizationRequest { Code = "auth-code", CodeVerifier = "pkce-verifier", RedirectUri = "http://localhost/auth/callback" },
+            broker,
+            new RevokedCapabilityBroker(),
+            queryPort,
+            dispatch,
+            refreshDispatch,
+            NullLoggerFactory.Instance);
+
+        var (statusCode, payload) = await ExecuteJsonAsync<NyxIdLoginFinalizationResponse>(result);
+
+        statusCode.Should().Be(StatusCodes.Status200OK);
+        payload!.BindingDispatchAccepted.Should().BeTrue();
+        broker.RevokedBindingIds.Should().BeEmpty();
+        refreshDispatch.Commands.Should().ContainSingle().Which.Should().BeEquivalentTo(new RefreshBindingCommand
+        {
+            ExternalSubject = OwnerSubject("owner-user-1"),
+            BindingId = "bnd-new",
+            Reason = "nyxid_login_refresh",
+        });
+        dispatch.Commands.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Finalize_ShouldReturnUnavailable_WhenExistingBindingProbeFails()
+    {
+        var broker = new RecordingBrokerCallback(new BrokerAuthorizationCodeResult(
+            BindingId: "bnd-new",
+            IdToken: CreateIdToken(new { uid = "owner-user-1" }),
+            AccessToken: "access-token"));
+        var queryPort = new FakeExternalIdentityBindingQueryPort();
+        queryPort.Bindings[SubjectKey(OwnerSubject("owner-user-1"))] = "bnd-existing";
+        var dispatch = new RecordingBindingDispatch();
+        var refreshDispatch = new RecordingBindingRefreshDispatch();
+
+        var result = await NyxIdLoginFinalizationEndpoints.HandleFinalizeAsync(
+            new NyxIdLoginFinalizationRequest { Code = "auth-code", CodeVerifier = "pkce-verifier", RedirectUri = "http://localhost/auth/callback" },
+            broker,
+            new FailingCapabilityBroker(),
+            queryPort,
+            dispatch,
+            refreshDispatch,
+            NullLoggerFactory.Instance);
+
+        var context = NewHttpContext();
+        await result.ExecuteAsync(context);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        broker.RevokedBindingIds.Should().ContainSingle().Which.Should().Be("bnd-new");
+        refreshDispatch.Commands.Should().BeEmpty();
+        dispatch.Commands.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task Finalize_ShouldRejectMissingCode()
     {
         var result = await NyxIdLoginFinalizationEndpoints.HandleFinalizeAsync(
             new NyxIdLoginFinalizationRequest { CodeVerifier = "pkce-verifier", RedirectUri = "http://localhost/auth/callback" },
             new RecordingBrokerCallback(new BrokerAuthorizationCodeResult("bnd", CreateIdToken(new { uid = "owner" }), "access")),
+            new UsableCapabilityBroker(),
             new FakeExternalIdentityBindingQueryPort(),
             new RecordingBindingDispatch(),
+            new RecordingBindingRefreshDispatch(),
             NullLoggerFactory.Instance);
 
         var context = NewHttpContext();
@@ -170,8 +243,10 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
         var result = await NyxIdLoginFinalizationEndpoints.HandleFinalizeAsync(
             new NyxIdLoginFinalizationRequest { Code = "auth-code" },
             new RecordingBrokerCallback(new BrokerAuthorizationCodeResult("bnd", CreateIdToken(new { uid = "owner" }), "access")),
+            new UsableCapabilityBroker(),
             new FakeExternalIdentityBindingQueryPort(),
             new RecordingBindingDispatch(),
+            new RecordingBindingRefreshDispatch(),
             NullLoggerFactory.Instance);
 
         var context = NewHttpContext();
@@ -186,8 +261,10 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
         var result = await NyxIdLoginFinalizationEndpoints.HandleFinalizeAsync(
             new NyxIdLoginFinalizationRequest { Code = "auth-code", CodeVerifier = "pkce-verifier" },
             new RecordingBrokerCallback(new BrokerAuthorizationCodeResult("bnd", CreateIdToken(new { uid = "owner" }), "access")),
+            new UsableCapabilityBroker(),
             new FakeExternalIdentityBindingQueryPort(),
             new RecordingBindingDispatch(),
+            new RecordingBindingRefreshDispatch(),
             NullLoggerFactory.Instance);
 
         var context = NewHttpContext();
@@ -202,8 +279,10 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
         var result = await NyxIdLoginFinalizationEndpoints.HandleFinalizeAsync(
             new NyxIdLoginFinalizationRequest { Code = "auth-code", CodeVerifier = "pkce-verifier", RedirectUri = "http://localhost/auth/callback" },
             new RecordingBrokerCallback(new BrokerAuthorizationCodeResult(null, CreateIdToken(new { uid = "owner" }), "access")),
+            new UsableCapabilityBroker(),
             new FakeExternalIdentityBindingQueryPort(),
             new RecordingBindingDispatch(),
+            new RecordingBindingRefreshDispatch(),
             NullLoggerFactory.Instance);
 
         var context = NewHttpContext();
@@ -218,8 +297,10 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
         var result = await NyxIdLoginFinalizationEndpoints.HandleFinalizeAsync(
             new NyxIdLoginFinalizationRequest { Code = "auth-code", CodeVerifier = "pkce-verifier", RedirectUri = "http://localhost/auth/callback" },
             new RecordingBrokerCallback(new BrokerAuthorizationCodeResult("bnd", CreateIdToken(new { uid = "owner" }), null)),
+            new UsableCapabilityBroker(),
             new FakeExternalIdentityBindingQueryPort(),
             new RecordingBindingDispatch(),
+            new RecordingBindingRefreshDispatch(),
             NullLoggerFactory.Instance);
 
         var context = NewHttpContext();
@@ -236,8 +317,10 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
         var result = await NyxIdLoginFinalizationEndpoints.HandleFinalizeAsync(
             new NyxIdLoginFinalizationRequest { Code = "auth-code", CodeVerifier = "pkce-verifier", RedirectUri = "http://localhost/auth/callback" },
             broker,
+            new UsableCapabilityBroker(),
             new FakeExternalIdentityBindingQueryPort(),
             new RecordingBindingDispatch(),
+            new RecordingBindingRefreshDispatch(),
             NullLoggerFactory.Instance);
 
         var context = NewHttpContext();
@@ -258,8 +341,10 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
         var result = await NyxIdLoginFinalizationEndpoints.HandleFinalizeAsync(
             new NyxIdLoginFinalizationRequest { Code = "auth-code", CodeVerifier = "pkce-verifier", RedirectUri = "http://localhost/auth/callback" },
             broker,
+            new UsableCapabilityBroker(),
             new FakeExternalIdentityBindingQueryPort(),
             new RejectingBindingDispatch(),
+            new RecordingBindingRefreshDispatch(),
             NullLoggerFactory.Instance);
 
         var context = NewHttpContext();
@@ -367,6 +452,52 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
         }
     }
 
+    private abstract class StubCapabilityBroker : INyxIdCapabilityBroker
+    {
+        public Task<BindingChallenge> StartExternalBindingAsync(ExternalSubjectRef externalSubject, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task RevokeBindingAsync(ExternalSubjectRef externalSubject, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public abstract Task<CapabilityHandle> IssueShortLivedAsync(
+            ExternalSubjectRef externalSubject,
+            CapabilityScope scope,
+            CancellationToken ct = default);
+    }
+
+    private sealed class UsableCapabilityBroker : StubCapabilityBroker
+    {
+        public override Task<CapabilityHandle> IssueShortLivedAsync(
+            ExternalSubjectRef externalSubject,
+            CapabilityScope scope,
+            CancellationToken ct = default) =>
+            Task.FromResult(new CapabilityHandle
+            {
+                AccessToken = "probe-token",
+                Scope = scope.Value,
+                ExpiresAtUnix = 3600,
+            });
+    }
+
+    private sealed class RevokedCapabilityBroker : StubCapabilityBroker
+    {
+        public override Task<CapabilityHandle> IssueShortLivedAsync(
+            ExternalSubjectRef externalSubject,
+            CapabilityScope scope,
+            CancellationToken ct = default) =>
+            throw new BindingRevokedException(externalSubject);
+    }
+
+    private sealed class FailingCapabilityBroker : StubCapabilityBroker
+    {
+        public override Task<CapabilityHandle> IssueShortLivedAsync(
+            ExternalSubjectRef externalSubject,
+            CapabilityScope scope,
+            CancellationToken ct = default) =>
+            throw new HttpRequestException("nyxid unavailable");
+    }
+
     private sealed class RecordingBindingDispatch
         : ICommandDispatchService<CommitBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>
     {
@@ -374,6 +505,21 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
 
         public Task<CommandDispatchResult<ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>> DispatchAsync(
             CommitBindingCommand command,
+            CancellationToken ct = default)
+        {
+            Commands.Add(command);
+            return Task.FromResult(CommandDispatchResult<ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>.Success(
+                new ChannelIdentityOAuthAcceptedReceipt("actor", "command", "command")));
+        }
+    }
+
+    private sealed class RecordingBindingRefreshDispatch
+        : ICommandDispatchService<RefreshBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>
+    {
+        public List<RefreshBindingCommand> Commands { get; } = [];
+
+        public Task<CommandDispatchResult<ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>> DispatchAsync(
+            RefreshBindingCommand command,
             CancellationToken ct = default)
         {
             Commands.Add(command);

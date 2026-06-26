@@ -320,19 +320,56 @@ public static class ChannelCallbackEndpoints
 
     private static async Task<IResult> HandleDeleteRegistrationAsync(
         string registrationId,
+        HttpContext http,
         [FromServices] ChannelRegistrationCommandFacade commandFacade,
         [FromServices] IChannelBotRegistrationQueryPort queryPort,
+        [FromServices] INyxChannelBotDeprovisioningService deprovision,
         CancellationToken ct)
     {
         // Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
         //   Old pattern: delete endpoint queried then dispatched unregister through raw helpers.
         //   New principle: query remains readmodel existence check; write enters typed command facade.
-        var exists = await queryPort.GetAsync(registrationId, ct);
-        if (exists is null)
+        // Deprovision (06-25-channel-delete-nyxid-deprovision):
+        //   Delete is the reverse of register — tear down the NyxID side (conversation route →
+        //   channel-bot → relay api-key) BEFORE tombstoning the local mirror, so deleting a bot
+        //   leaves no orphaned NyxID resources and the same app re-registers cleanly. A NyxID 404
+        //   is success (idempotent). A hard channel-bot delete failure returns a non-2xx and does
+        //   NOT tombstone the local mirror (row stays visible/retryable). Residual route/api-key
+        //   cleanup failures are surfaced as warnings but never block the tombstone. NyxID
+        //   channel-bot delete is owner-scoped, so a platform admin deleting another owner's
+        //   foreign registration cannot delete that owner's NyxID bot — that hard-fails here and
+        //   keeps the local mirror; a pure-local admin purge would be a separate explicit path.
+        var registration = await queryPort.GetAsync(registrationId, ct);
+        if (registration is null)
             return Results.NotFound(new { error = "Registration not found" });
 
+        var accessToken = ResolveBearerAccessToken(http);
+        if (string.IsNullOrWhiteSpace(accessToken))
+            return Results.Unauthorized();
+
+        var deprovisionResult = await deprovision.DeprovisionAsync(
+            accessToken,
+            registration.NyxConversationRouteId,
+            registration.NyxChannelBotId,
+            registration.NyxAgentApiKeyId,
+            ct);
+
+        if (!deprovisionResult.Succeeded)
+        {
+            // Hard channel-bot delete failure: leave the local mirror intact so the caller can
+            // retry and the registration row stays visible (no silent half-dead orphan).
+            return Results.Json(
+                new
+                {
+                    error = "nyx_channel_bot_delete_failed",
+                    registration_id = registrationId,
+                    note = "The NyxID channel-bot could not be deleted; the local registration was kept so you can retry.",
+                },
+                statusCode: StatusCodes.Status502BadGateway);
+        }
+
         await commandFacade.UnregisterAsync(registrationId, ct);
-        return Results.Ok(new { status = "deleted" });
+        return Results.Ok(new { status = "deleted", warnings = deprovisionResult.Warnings });
     }
 
     /// <summary>

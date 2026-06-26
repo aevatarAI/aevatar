@@ -119,18 +119,17 @@ internal static class WorkflowStudioPage
     backdrop-filter:saturate(140%) blur(12px); -webkit-backdrop-filter:saturate(140%) blur(12px);
     border-bottom:1px solid var(--border);
   }
-  .brand { display:flex; align-items:center; gap:10px; min-width:0; }
+  /* Fixed-width brand region keeps the shared suite-nav's start position independent of the
+     active page title length, so the five entries don't shift when switching console pages. */
+  .brand { display:flex; align-items:center; gap:10px; flex:0 0 268px; width:268px; min-width:0; overflow:hidden; }
   .brand-mark { width:26px; height:26px; border-radius:7px; flex:0 0 auto; display:grid; place-items:center; color:#fff; box-shadow:var(--shadow-sm);
     background:linear-gradient(150deg,var(--accent),color-mix(in oklab,var(--accent) 55%,#7c4dff)); }
-  .brand-name { font-weight:650; letter-spacing:-.01em; color:var(--fg-strong); white-space:nowrap; }
+  .brand-name { font-weight:650; letter-spacing:-.01em; color:var(--fg-strong); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .brand-sub { color:var(--muted-2); font-size:12px; white-space:nowrap; }
   .scope-chip { display:inline-flex; align-items:center; gap:7px; padding:4px 10px; border-radius:var(--r-pill); background:var(--panel-2); border:1px solid var(--border); font-size:12px; color:var(--muted); }
   .scope-chip .sid { font-family:var(--mono); font-size:11.5px; color:var(--fg); }
   .scope-chip svg { color:var(--ok); }
   .spacer { flex:1 1 auto; }
-  .obs-link { display:inline-flex; align-items:center; gap:7px; padding:6px 12px; border-radius:var(--r-pill);
-    background:var(--accent-soft); border:1px solid var(--accent-line); color:var(--accent); font-size:12.5px; font-weight:600; text-decoration:none; }
-  .obs-link:hover { background:color-mix(in oklab,var(--accent) 18%,transparent); }
   /* ---- shared suite navigation (identical across the five console pages) -- */
   .suite-nav { display:flex; align-items:center; gap:2px; overflow-x:auto; scrollbar-width:none; }
   .suite-nav::-webkit-scrollbar { display:none; }
@@ -402,6 +401,7 @@ internal static class WorkflowStudioPage
     body.ctx-collapsed .ctx-pane { display:flex; }
     .ctx-toggle { display:grid; }
     .brand-sub, .scope-chip { display:none; }
+    .brand { flex:0 0 auto; width:auto; } .brand-name { display:none; }
     .scrim { position:fixed; inset:var(--topbar-h) 0 0; background:rgba(0,0,0,.45); z-index:45; }
     .ctx-resizer { display:none; }
   }
@@ -479,8 +479,8 @@ const CFG = {
   authority: "https://nyx.chrono-ai.fun",
   clientId: "37a93189-2734-406e-bca1-7dbdf25c5a53",
   scope: "openid profile email proxy",
-  redirectUri: location.origin + "/workflow/studio/callback",
-  storageKey: "aevatar-studio:nyxid:pkce"
+  redirectUri: location.origin + "/auto/callback",
+  storageKey: "aevatar-console:nyxid:pkce"
 };
 const TOKEN_KEY = CFG.storageKey + ":token";
 const PKCE_KEY  = CFG.storageKey + ":pkce";
@@ -820,7 +820,8 @@ const SUITE_NAV=[
   {k:"studio",href:"/workflow/studio",label:"Studio",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="12" r="2.4"/><path d="M8.2 7.2 15.8 11M8.2 16.8 15.8 13"/></svg>'},
   {k:"schedules",href:"/schedules",label:"定时任务",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>'},
   {k:"channels",href:"/channels",label:"渠道",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2.6"/><path d="M12 4.5v4.9M12 14.6v4.9M4.5 12h4.9M14.6 12h4.9"/></svg>'},
-  {k:"voice",href:"/voice",label:"语音",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg>'}
+  {k:"voice",href:"/voice",label:"语音",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg>'},
+  {k:"cqrs",href:"/cqrs",label:"投影",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5.5" rx="7.5" ry="3"/><path d="M4.5 5.5v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-6M4.5 11.5v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-6"/></svg>'}
 ];
 function suiteNavHtml(active){return '<nav class="suite-nav" aria-label="控制台导航">'+SUITE_NAV.map(function(n){return '<a href="'+n.href+'"'+(n.k===active?' aria-current="page"':'')+' title="'+n.label+'">'+n.svg+'<span class="nav-label">'+n.label+'</span></a>';}).join('')+'</nav>';}
 
@@ -864,12 +865,11 @@ function renderTopbar(){
     <button class="mobnav" id="navBtn" aria-label="会话列表">${ICON.menu}</button>
     <div class="brand">
       <div class="brand-mark" aria-hidden="true">${ICON.studio}</div>
-      <div><div class="brand-name">${isSchedulesPage()?'定时任务 <span class="brand-sub">Schedules</span>':'Studio <span class="brand-sub">Workflow Studio</span>'}</div></div>
+      <div><div class="brand-name">Aevatar Backend Console</div></div>
     </div>
     ${suiteNavHtml(isSchedulesPage()?"schedules":"studio")}
     ${state.signedIn?scopeChipHtml():""}
-    <div class="spacer"></div>
-    ${state.signedIn?`<a class="obs-link" href="${OBS}" title="跳转到运行观测台（只读查看运行结果）">${ICON.ext}<span>运行观测台</span></a>`:""}`;
+    <div class="spacer"></div>`;
   const tbtn=el("button",{class:"iconbtn",id:"themeBtn","aria-label":"切换主题",title:"切换主题"});
   tbtn.innerHTML=effDark()?ICON.sun:ICON.moon;
   tbtn.addEventListener("click",()=>{ state.theme=effDark()?"light":"dark"; localStorage.setItem("studio-theme",state.theme); applyTheme(); render(); });

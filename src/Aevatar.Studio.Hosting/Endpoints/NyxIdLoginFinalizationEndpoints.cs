@@ -60,8 +60,10 @@ public static class NyxIdLoginFinalizationEndpoints
     internal static async Task<IResult> HandleFinalizeAsync(
         NyxIdLoginFinalizationRequest request,
         [FromServices] INyxIdBrokerCallbackClient brokerCallback,
+        [FromServices] INyxIdCapabilityBroker capabilityBroker,
         [FromServices] IExternalIdentityBindingQueryPort bindingQueryPort,
         [FromServices] ICommandDispatchService<CommitBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> bindingDispatch,
+        [FromServices] ICommandDispatchService<RefreshBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> bindingRefreshDispatch,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct = default)
     {
@@ -131,20 +133,135 @@ public static class NyxIdLoginFinalizationEndpoints
         var existingBinding = await bindingQueryPort.ResolveAsync(subject, ct).ConfigureAwait(false);
         if (existingBinding != null)
         {
-            if (!string.Equals(existingBinding.Value, exchange.BindingId, StringComparison.Ordinal))
-                await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
+            if (string.Equals(existingBinding.Value, exchange.BindingId, StringComparison.Ordinal))
+                return Results.Ok(BuildResponse(exchange, user, bindingDispatchAccepted: false));
 
-            return Results.Ok(BuildResponse(exchange, user, bindingDispatchAccepted: false));
+            var probeResult = await ProbeExistingBindingAsync(capabilityBroker, subject, logger, ct).ConfigureAwait(false);
+            if (probeResult == ExistingBindingProbeResult.Usable)
+            {
+                await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
+                return Results.Ok(BuildResponse(exchange, user, bindingDispatchAccepted: false));
+            }
+
+            if (probeResult == ExistingBindingProbeResult.Unavailable)
+            {
+                await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
+                return Results.Json(new
+                {
+                    error = "binding_probe_failed",
+                    detail = "NyxID owner binding could not be verified; retry login finalization later.",
+                }, statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+
+            var refreshResult = await DispatchRefreshBindingAsync(bindingRefreshDispatch, subject, exchange.BindingId, logger, ct).ConfigureAwait(false);
+            if (refreshResult != BindingDispatchOutcome.Accepted)
+            {
+                await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
+                return Results.Json(new
+                {
+                    error = refreshResult == BindingDispatchOutcome.Rejected ? "actor_dispatch_rejected" : "actor_dispatch_failed",
+                    detail = "Stale NyxID owner binding could not be queued for local refresh.",
+                }, statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+
+            return Results.Ok(BuildResponse(exchange, user, bindingDispatchAccepted: true));
         }
 
-        CommandDispatchResult<ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> accepted;
+        var commitResult = await DispatchCommitBindingAsync(bindingDispatch, subject, exchange.BindingId, logger, ct).ConfigureAwait(false);
+        if (commitResult != BindingDispatchOutcome.Accepted)
+        {
+            await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
+            return Results.Json(new
+            {
+                error = commitResult == BindingDispatchOutcome.Rejected ? "actor_dispatch_rejected" : "actor_dispatch_failed",
+                detail = "NyxID owner binding could not be queued for local persistence.",
+            }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+
+        return Results.Ok(BuildResponse(exchange, user, bindingDispatchAccepted: true));
+    }
+
+    private enum ExistingBindingProbeResult
+    {
+        Usable,
+        Stale,
+        Unavailable,
+    }
+
+    private enum BindingDispatchOutcome
+    {
+        Accepted,
+        Rejected,
+        Failed,
+    }
+
+    private static async Task<ExistingBindingProbeResult> ProbeExistingBindingAsync(
+        INyxIdCapabilityBroker capabilityBroker,
+        ExternalSubjectRef subject,
+        ILogger logger,
+        CancellationToken ct)
+    {
         try
         {
-            accepted = await bindingDispatch.DispatchAsync(new CommitBindingCommand
+            await capabilityBroker
+                .IssueShortLivedAsync(subject, new CapabilityScope { Value = AevatarOAuthClientScopes.Proxy }, ct)
+                .ConfigureAwait(false);
+            return ExistingBindingProbeResult.Usable;
+        }
+        catch (BindingRevokedException ex)
+        {
+            logger.LogInformation(ex, "NyxID owner binding is stale for {Platform}:{Tenant}:{User}; refreshing local binding.",
+                subject.Platform,
+                subject.Tenant,
+                subject.ExternalUserId);
+            return ExistingBindingProbeResult.Stale;
+        }
+        catch (BindingNotFoundException ex)
+        {
+            logger.LogInformation(ex, "NyxID owner binding disappeared for {Platform}:{Tenant}:{User}; refreshing local binding.",
+                subject.Platform,
+                subject.Tenant,
+                subject.ExternalUserId);
+            return ExistingBindingProbeResult.Stale;
+        }
+        catch (BindingScopeMismatchException ex)
+        {
+            logger.LogInformation(ex, "NyxID owner binding lacks required scope for {Platform}:{Tenant}:{User}; refreshing local binding.",
+                subject.Platform,
+                subject.Tenant,
+                subject.ExternalUserId);
+            return ExistingBindingProbeResult.Stale;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "NyxID owner binding probe failed for {Platform}:{Tenant}:{User}.",
+                subject.Platform,
+                subject.Tenant,
+                subject.ExternalUserId);
+            return ExistingBindingProbeResult.Unavailable;
+        }
+    }
+
+    private static async Task<BindingDispatchOutcome> DispatchCommitBindingAsync(
+        ICommandDispatchService<CommitBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> bindingDispatch,
+        ExternalSubjectRef subject,
+        string bindingId,
+        ILogger logger,
+        CancellationToken ct)
+    {
+        try
+        {
+            var accepted = await bindingDispatch.DispatchAsync(new CommitBindingCommand
             {
                 ExternalSubject = subject,
-                BindingId = exchange.BindingId.Trim(),
+                BindingId = bindingId.Trim(),
             }, ct).ConfigureAwait(false);
+
+            if (accepted.Succeeded && accepted.Receipt != null)
+                return BindingDispatchOutcome.Accepted;
+
+            logger.LogError("NyxID login finalization binding dispatch rejected: error={Error}.", accepted.Error);
+            return BindingDispatchOutcome.Rejected;
         }
         catch (Exception ex)
         {
@@ -152,26 +269,40 @@ public static class NyxIdLoginFinalizationEndpoints
                 subject.Platform,
                 subject.Tenant,
                 subject.ExternalUserId);
-            await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
-            return Results.Json(new
-            {
-                error = "actor_dispatch_failed",
-                detail = "NyxID owner binding could not be queued for local persistence.",
-            }, statusCode: StatusCodes.Status503ServiceUnavailable);
+            return BindingDispatchOutcome.Failed;
         }
+    }
 
-        if (!accepted.Succeeded || accepted.Receipt == null)
+    private static async Task<BindingDispatchOutcome> DispatchRefreshBindingAsync(
+        ICommandDispatchService<RefreshBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> bindingRefreshDispatch,
+        ExternalSubjectRef subject,
+        string bindingId,
+        ILogger logger,
+        CancellationToken ct)
+    {
+        try
         {
-            logger.LogError("NyxID login finalization binding dispatch rejected: error={Error}.", accepted.Error);
-            await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
-            return Results.Json(new
+            var accepted = await bindingRefreshDispatch.DispatchAsync(new RefreshBindingCommand
             {
-                error = "actor_dispatch_rejected",
-                detail = "NyxID owner binding was rejected by the local persistence queue.",
-            }, statusCode: StatusCodes.Status503ServiceUnavailable);
-        }
+                ExternalSubject = subject,
+                BindingId = bindingId.Trim(),
+                Reason = "nyxid_login_refresh",
+            }, ct).ConfigureAwait(false);
 
-        return Results.Ok(BuildResponse(exchange, user, bindingDispatchAccepted: true));
+            if (accepted.Succeeded && accepted.Receipt != null)
+                return BindingDispatchOutcome.Accepted;
+
+            logger.LogError("NyxID login finalization stale binding refresh dispatch rejected: error={Error}.", accepted.Error);
+            return BindingDispatchOutcome.Rejected;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "NyxID login finalization failed to dispatch RefreshBindingCommand for {Platform}:{Tenant}:{User}.",
+                subject.Platform,
+                subject.Tenant,
+                subject.ExternalUserId);
+            return BindingDispatchOutcome.Failed;
+        }
     }
 
     private static NyxIdLoginFinalizationResponse BuildResponse(
@@ -181,6 +312,7 @@ public static class NyxIdLoginFinalizationEndpoints
         new(
             Tokens: new NyxIdFinalizedTokenSet(
                 AccessToken: exchange.AccessToken ?? string.Empty,
+                RefreshToken: exchange.RefreshToken,
                 TokenType: string.IsNullOrWhiteSpace(exchange.TokenType) ? "Bearer" : exchange.TokenType,
                 ExpiresIn: exchange.ExpiresIn ?? 3600,
                 IdToken: exchange.IdToken,
@@ -305,6 +437,7 @@ public sealed record NyxIdLoginFinalizationResponse(
 
 public sealed record NyxIdFinalizedTokenSet(
     string AccessToken,
+    string? RefreshToken,
     string TokenType,
     int ExpiresIn,
     string? IdToken,

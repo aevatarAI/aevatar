@@ -152,6 +152,12 @@ public sealed class VoiceWebSocketAttachExecutor
                 http.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
                 await http.Response.WriteAsync(VoiceVolatileMediaStreamUnavailableException.Reason, http.RequestAborted);
                 return null;
+            case VoiceRealtimeSessionStartError.CapabilityNotReady:
+                // The capability grain accepted the lease but its read-model projection has not caught up
+                // (and self-heal did not converge in time). Typed, retryable 503 with an {error,detail}
+                // body — a clean signal for the client to retry — instead of an opaque empty-body 500.
+                await WriteCapabilityNotReadyAsync(http);
+                return null;
             case VoiceRealtimeSessionStartError.NotFound:
             case VoiceRealtimeSessionStartError.NotInitialized:
             case VoiceRealtimeSessionStartError.TransportAlreadyAttached:
@@ -162,6 +168,18 @@ public sealed class VoiceWebSocketAttachExecutor
                 await http.Response.WriteAsync("Voice realtime session failed.", http.RequestAborted);
                 return null;
         }
+    }
+
+    public const string CapabilityNotReadyReason = "voice_capability_not_ready";
+
+    private static Task WriteCapabilityNotReadyAsync(HttpContext http)
+    {
+        http.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        http.Response.Headers.RetryAfter = "1";
+        http.Response.ContentType = "application/json; charset=utf-8";
+        return http.Response.WriteAsync(
+            $$"""{"error":"{{CapabilityNotReadyReason}}","detail":"Voice capability is not ready yet (read-model projection is catching up). Retry shortly."}""",
+            http.RequestAborted);
     }
 
     private async Task<VoiceTransportLifetimeCompleted?> AttachWithTimeoutAsync(

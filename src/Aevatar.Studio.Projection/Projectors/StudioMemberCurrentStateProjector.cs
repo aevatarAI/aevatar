@@ -120,6 +120,7 @@ public sealed class StudioMemberCurrentStateProjector
         document.LastBoundRevisionId = lastBinding.RevisionId ?? string.Empty;
         document.LastBoundImplementationKind = MemberImplementationKindMapper.ToWireName(
             lastBinding.ImplementationKind);
+        document.LastBoundExpectedActorId = lastBinding.ExpectedActorId ?? string.Empty;
         if (lastBinding.BoundAtUtc != null)
             document.LastBoundAt = lastBinding.BoundAtUtc;
     }

@@ -209,32 +209,33 @@ public sealed class NyxIdRelayOutboundPort
                 "Relay outbound is missing the platform required to resolve a message composer.");
         }
 
-        if (!_composers.TryGetValue(normalizedPlatform, out var composer))
+        if (_composers.TryGetValue(normalizedPlatform, out var composer))
         {
-            return EmitResult.Failed(
-                "composer_not_found",
-                $"Relay outbound has no message composer registered for platform '{normalizedPlatform}'.");
+            var composeContext = new ComposeContext
+            {
+                Conversation = conversation.Clone(),
+            };
+            if (composer.Evaluate(content, composeContext) == ComposeCapability.Unsupported)
+            {
+                return EmitResult.Failed(
+                    "composer_unsupported",
+                    $"Relay outbound composer for platform '{normalizedPlatform}' cannot express the requested message content.");
+            }
+
+            if (composer.Compose(content, composeContext) is not IPlainTextComposedMessage plainTextPayload)
+            {
+                return EmitResult.Failed(
+                    "plain_text_payload_unavailable",
+                    $"Relay outbound composer for platform '{normalizedPlatform}' does not expose a plain-text payload.");
+            }
+
+            replyText = plainTextPayload.PlainText;
+        }
+        else
+        {
+            replyText = NyxIdRelayInteractiveReplyDispatcher.BuildTextFallback(content);
         }
 
-        var composeContext = new ComposeContext
-        {
-            Conversation = conversation.Clone(),
-        };
-        if (composer.Evaluate(content, composeContext) == ComposeCapability.Unsupported)
-        {
-            return EmitResult.Failed(
-                "composer_unsupported",
-                $"Relay outbound composer for platform '{normalizedPlatform}' cannot express the requested message content.");
-        }
-
-        if (composer.Compose(content, composeContext) is not IPlainTextComposedMessage plainTextPayload)
-        {
-            return EmitResult.Failed(
-                "plain_text_payload_unavailable",
-                $"Relay outbound composer for platform '{normalizedPlatform}' does not expose a plain-text payload.");
-        }
-
-        replyText = plainTextPayload.PlainText;
         if (string.IsNullOrWhiteSpace(replyText))
         {
             return EmitResult.Failed(

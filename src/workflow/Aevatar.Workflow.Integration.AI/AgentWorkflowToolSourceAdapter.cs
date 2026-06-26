@@ -5,6 +5,8 @@ using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Modules;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.Workflow.Integration.AI;
 
@@ -12,7 +14,8 @@ public sealed class AgentWorkflowToolSourceAdapter(
     IEnumerable<IAgentToolSource> agentToolSources,
     IEnumerable<IToolCallMiddleware>? toolMiddlewares = null,
     IToolApprovalHandler? approvalHandler = null,
-    IEnumerable<IAIGAgentExecutionHook>? hooks = null) : IWorkflowToolSource
+    IEnumerable<IAIGAgentExecutionHook>? hooks = null,
+    ILogger<AgentWorkflowToolSourceAdapter>? logger = null) : IWorkflowToolSource
 {
     private readonly IEnumerable<IAgentToolSource> _agentToolSources =
         agentToolSources ?? throw new ArgumentNullException(nameof(agentToolSources));
@@ -21,6 +24,8 @@ public sealed class AgentWorkflowToolSourceAdapter(
             toolMiddlewares ?? [],
             approvalHandler,
             hooks == null ? null : new AgentHookPipeline(hooks));
+    private readonly ILogger<AgentWorkflowToolSourceAdapter> _logger =
+        logger ?? NullLogger<AgentWorkflowToolSourceAdapter>.Instance;
 
     public async Task<IReadOnlyList<IWorkflowTool>> GetToolsAsync(CancellationToken ct = default)
     {
@@ -29,7 +34,7 @@ public sealed class AgentWorkflowToolSourceAdapter(
         {
             var tools = await source.DiscoverToolsAsync(ct).ConfigureAwait(false);
             foreach (var tool in tools)
-                workflowTools.Add(new AgentWorkflowToolAdapter(tool, _toolMiddlewares));
+                workflowTools.Add(new AgentWorkflowToolAdapter(tool, _toolMiddlewares, _logger));
         }
 
         return workflowTools;
@@ -37,11 +42,13 @@ public sealed class AgentWorkflowToolSourceAdapter(
 
     private sealed class AgentWorkflowToolAdapter(
         IAgentTool tool,
-        IReadOnlyList<IToolCallMiddleware> toolMiddlewares) : IWorkflowTool
+        IReadOnlyList<IToolCallMiddleware> toolMiddlewares,
+        ILogger logger) : IWorkflowTool
     {
         private readonly IAgentTool _tool = tool ?? throw new ArgumentNullException(nameof(tool));
         private readonly IReadOnlyList<IToolCallMiddleware> _toolMiddlewares =
             toolMiddlewares ?? throw new ArgumentNullException(nameof(toolMiddlewares));
+        private readonly ILogger _logger = logger ?? NullLogger.Instance;
 
         public string Name => _tool.Name;
 
@@ -70,6 +77,16 @@ public sealed class AgentWorkflowToolSourceAdapter(
                     ScopeId = Normalize(request.ScopeId),
                 },
             };
+            _logger.LogInformation(
+                "Workflow tool credential context prepared. toolName={ToolName} scopeId={ScopeId} rootRunId={RootRunId} parentRunId={ParentRunId} parentStepId={ParentStepId} hasCallerCredentialBearer={HasCallerCredentialBearer} hasNyxIdAccessToken={HasNyxIdAccessToken} hasNyxIdOrgToken={HasNyxIdOrgToken}",
+                _tool.Name,
+                request.ScopeId ?? string.Empty,
+                request.RuntimeContext.RootRunId ?? string.Empty,
+                request.RuntimeContext.ParentRunId ?? string.Empty,
+                request.RuntimeContext.ParentStepId ?? string.Empty,
+                !string.IsNullOrWhiteSpace(request.CallerCredential?.BearerToken),
+                !string.IsNullOrWhiteSpace(toolContext.Credentials.NyxIdAccessToken),
+                !string.IsNullOrWhiteSpace(toolContext.Credentials.NyxIdOrgToken));
             using var scope = AgentToolContextScope.Push(toolContext);
             var toolCallContext = new ToolCallContext
             {

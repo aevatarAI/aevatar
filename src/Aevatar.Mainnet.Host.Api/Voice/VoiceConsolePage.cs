@@ -6,11 +6,19 @@ namespace Aevatar.Mainnet.Host.Api.Voice;
 // PKCE storage + callback route). The page is the anonymous static shell; the app is gated behind login
 // exactly like its siblings, and carries the shared suite navigation so the five console pages move as one.
 //
-// Honest wiring: the page surfaces the ONE real voice HTTP write that exists today —
-// POST /api/scopes/{scopeId}/gagent-actors/{actorId}/voice-presence/enable — plus the scope chip from
-// GET /api/studio/context. Voice has no read GETs (no module/session/provider listing), so live-session,
-// WHIP/WebRTC ingress and the vp-control display side-channel render honest "待后端 ②③" disabled stubs
-// rather than mock data; they light up when sub-projects ②③ land their read surfaces.
+// Minimal, usable page centred on what works. Four views:
+//   - Talk: a REAL in-browser voice client over /ws/voice — mic (PCM16 mono 24kHz) ↔ response audio,
+//     half-duplex, status driven by the server's VoiceControlFrame stream (sessionAccepted / realtimeFrame).
+//     Wire format mirrors voice-presence's AevatarVoiceClient.cs; auth reuses this page's NyxID OIDC token
+//     passed as the ?access_token= query param. No actor id → /ws/voice auto-provisions the caller's
+//     default voice agent (module voice_presence_openai; per-session NyxID ephemeral via slug openai-realtime).
+//   - Default agent: the zero-config agent's real runtime defaults (provider/model/persona), read-only —
+//     aevatar has no default-agent config write. Plus the one real voice HTTP write as an advanced action:
+//     POST /api/scopes/{scopeId}/gagent-actors/{actorId}/voice-presence/enable (attach to a specific actor).
+//   - Tools: the default session tool allowlist (VOICE_TOOL_ALLOWLIST), read-only.
+//   - Settings: provider credential chain (NyxID-managed); publishing is host-gated (a disabled chip).
+// Real HTTP surfaces called: GET /api/studio/context (scope chip), the enable POST above, and the /ws/voice
+// WebSocket. Non-functional stub views (Live Sessions / Display Outputs / WHIP) were removed.
 internal static class VoiceConsolePage
 {
     public const string Html = """
@@ -22,14 +30,13 @@ internal static class VoiceConsolePage
 <title>语音在场 · Voice Presence · aevatar</title>
 <style>
   /* =========================================================================
-     aevatar 语音在场 / Voice Presence — 控制台套件成员（视觉令牌与 observatory/studio 一致）
-     framework-agnostic：语义化 HTML + CSS 变量 + 少量 vanilla JS。
+     aevatar 语音在场 / Voice Presence 控制台 — 控制台套件成员
+     高保真界面 + 交互 + 状态。framework-agnostic（语义化 HTML + CSS 变量 + vanilla JS）。
+     设计令牌与 observatory / studio / channels 一字不差（暗色默认 + 浅色变体）。
+     忠实移植 ~/Code/voice.html 的布局 / 视图 / 组件；aevatar 无法支撑处给出诚实占位，不编造数据。
      ========================================================================= */
-
-  /* ---- Design tokens : 暗色（默认，与 observatory/studio 一字不差）-------- */
   :root {
-    --bg:#0f1115;
-    --bg-grad:radial-gradient(1200px 600px at 78% -10%,#161b26 0%,#0f1115 60%);
+    --bg:#0f1115; --bg-grad:radial-gradient(1200px 600px at 78% -10%,#161b26 0%,#0f1115 60%);
     --panel:#171a21; --panel-2:#1f232c; --panel-3:#252b36;
     --border:#2a2f3a; --border-soft:#22272f;
     --fg:#e6e9ef; --fg-strong:#f4f6fb; --muted:#9aa3b2; --muted-2:#6c7585;
@@ -42,69 +49,82 @@ internal static class VoiceConsolePage
     --r-sm:6px; --r:9px; --r-lg:13px; --r-pill:999px;
     --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
     --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif;
-    --topbar-h:56px; color-scheme:dark;
+    --nav-w:228px; --topbar-h:56px; --brand-w:268px; color-scheme:dark;
   }
   @media (prefers-color-scheme: light) {
     :root:not([data-theme]) {
-      --bg:#f5f7fa;
-      --bg-grad:radial-gradient(1100px 560px at 80% -12%,#eef2f8 0%,#f5f7fa 58%);
+      --bg:#f5f7fa; --bg-grad:radial-gradient(1100px 560px at 80% -12%,#eef2f8 0%,#f5f7fa 58%);
       --panel:#ffffff; --panel-2:#f3f5f9; --panel-3:#eaeef4; --border:#dde2ea; --border-soft:#e7ebf1;
       --fg:#1c2128; --fg-strong:#0b0f14; --muted:#57606b; --muted-2:#828b97;
       --accent:#2f63e0; --accent-ink:#ffffff; --accent-soft:rgba(47,99,224,.10); --accent-line:rgba(47,99,224,.34);
       --ok:#1a7f37; --ok-soft:rgba(26,127,55,.12); --warn:#9a6700; --warn-soft:rgba(154,103,0,.12);
       --err:#cf222e; --err-soft:rgba(207,34,46,.10); --run:#2f6fed; --run-soft:rgba(47,111,237,.12);
       --neutral:#57606b; --neutral-soft:rgba(87,96,107,.10);
-      --shadow:0 10px 30px rgba(16,24,40,.10); --shadow-sm:0 1px 2px rgba(16,24,40,.06);
-      color-scheme:light;
+      --shadow:0 10px 30px rgba(16,24,40,.10); --shadow-sm:0 1px 2px rgba(16,24,40,.06); color-scheme:light;
     }
   }
   :root[data-theme="light"] {
-    --bg:#f5f7fa;
-    --bg-grad:radial-gradient(1100px 560px at 80% -12%,#eef2f8 0%,#f5f7fa 58%);
+    --bg:#f5f7fa; --bg-grad:radial-gradient(1100px 560px at 80% -12%,#eef2f8 0%,#f5f7fa 58%);
     --panel:#ffffff; --panel-2:#f3f5f9; --panel-3:#eaeef4; --border:#dde2ea; --border-soft:#e7ebf1;
     --fg:#1c2128; --fg-strong:#0b0f14; --muted:#57606b; --muted-2:#828b97;
     --accent:#2f63e0; --accent-ink:#ffffff; --accent-soft:rgba(47,99,224,.10); --accent-line:rgba(47,99,224,.34);
     --ok:#1a7f37; --ok-soft:rgba(26,127,55,.12); --warn:#9a6700; --warn-soft:rgba(154,103,0,.12);
     --err:#cf222e; --err-soft:rgba(207,34,46,.10); --run:#2f6fed; --run-soft:rgba(47,111,237,.12);
     --neutral:#57606b; --neutral-soft:rgba(87,96,107,.10);
-    --shadow:0 10px 30px rgba(16,24,40,.10); --shadow-sm:0 1px 2px rgba(16,24,40,.06);
-    color-scheme:light;
+    --shadow:0 10px 30px rgba(16,24,40,.10); --shadow-sm:0 1px 2px rgba(16,24,40,.06); color-scheme:light;
   }
+  :root[data-theme="dark"] { color-scheme:dark; }
 
-  /* ---- base ------------------------------------------------------------- */
+  /* ---- base ---- */
   * { box-sizing:border-box; }
   html,body { height:100%; }
-  body {
-    margin:0; background:var(--bg); background-image:var(--bg-grad); background-attachment:fixed;
-    color:var(--fg); font:14px/1.55 var(--sans); -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
-  }
+  body { margin:0; background:var(--bg); background-image:var(--bg-grad); background-attachment:fixed; color:var(--fg);
+    font:14px/1.55 var(--sans); -webkit-font-smoothing:antialiased; overflow:hidden; }
   ::selection { background:var(--accent-soft); }
   button { font:inherit; color:inherit; cursor:pointer; }
+  a { color:var(--accent); text-decoration:none; } a:hover { text-decoration:underline; }
   :focus-visible { outline:none; box-shadow:var(--ring); border-radius:var(--r-sm); }
   .mono { font-family:var(--mono); font-variant-numeric:tabular-nums; }
   .scroll::-webkit-scrollbar { width:10px; height:10px; }
   .scroll::-webkit-scrollbar-thumb { background:var(--panel-3); border-radius:999px; border:2px solid transparent; background-clip:content-box; }
 
-  /* ---- status primitives (observatory) ---------------------------------- */
+  /* ---- status primitives ---- */
+  .dot { width:9px; height:9px; border-radius:50%; flex:0 0 auto; }
+  .dot.s-ok,.dot.s-active,.dot.s-ready,.dot.s-connected,.dot.s-reachable { background:var(--ok); }
+  .dot.s-run,.dot.s-listening,.dot.s-pending { background:var(--run); animation:pulse 2.4s ease-out infinite; }
+  .dot.s-speaking { background:var(--accent); animation:pulse 1.6s ease-out infinite; }
+  .dot.s-thinking,.dot.s-degraded,.dot.s-warn { background:var(--warn); }
+  .dot.s-err,.dot.s-offline,.dot.s-unreachable,.dot.s-error,.dot.s-failed { background:var(--err); }
+  .dot.s-idle,.dot.s-unknown { background:var(--neutral); }
+  @keyframes pulse { 0%{box-shadow:0 0 0 0 var(--run-soft);} 70%{box-shadow:0 0 0 7px transparent;} 100%{box-shadow:0 0 0 0 transparent;} }
+
   .badge { display:inline-flex; align-items:center; gap:6px; padding:3px 9px; border-radius:var(--r-pill); font-size:12px; font-weight:600; border:1px solid transparent; white-space:nowrap; }
-  .b-ok      { color:var(--ok); background:var(--ok-soft); border-color:color-mix(in oklab,var(--ok) 30%,transparent); }
-  .b-warn    { color:var(--warn); background:var(--warn-soft); border-color:color-mix(in oklab,var(--warn) 30%,transparent); }
-  .b-pending { color:var(--muted); background:var(--neutral-soft); border-color:var(--border); }
+  .badge .dot { width:7px; height:7px; }
+  .b-ok,.b-active,.b-ready,.b-connected,.b-reachable { color:var(--ok); background:var(--ok-soft); border-color:color-mix(in oklab,var(--ok) 30%,transparent); }
+  .b-run,.b-pending,.b-listening { color:var(--run); background:var(--run-soft); border-color:color-mix(in oklab,var(--run) 30%,transparent); }
+  .b-warn,.b-thinking,.b-degraded { color:var(--warn); background:var(--warn-soft); border-color:color-mix(in oklab,var(--warn) 30%,transparent); }
+  .b-err,.b-offline,.b-error,.b-failed,.b-unreachable { color:var(--err); background:var(--err-soft); border-color:color-mix(in oklab,var(--err) 30%,transparent); }
+  .b-idle,.b-muted { color:var(--muted); background:var(--neutral-soft); border-color:var(--border); }
+  .owner { font-family:var(--mono); font-size:10px; font-weight:700; letter-spacing:.03em; padding:1px 6px; border-radius:5px; }
+  .owner.ACTOR { color:var(--accent); background:var(--accent-soft); border:1px solid var(--accent-line); }
+  .owner.CLIENT { color:var(--warn); background:var(--warn-soft); border:1px solid color-mix(in oklab,var(--warn) 35%,transparent); }
+
+  .copybtn { display:inline-flex; align-items:center; gap:5px; font-size:11.5px; color:var(--muted); background:var(--panel-2); border:1px solid var(--border); border-radius:var(--r-sm); padding:4px 9px; white-space:nowrap; }
+  .copybtn:hover { color:var(--fg); border-color:var(--muted-2); }
+  .copybtn.done { color:var(--ok); border-color:color-mix(in oklab,var(--ok) 40%,transparent); }
 
   /* =========================================================================
-     Top bar + shared suite navigation (5 console pages move as one)
+     Global header + shared suite navigation (5 console pages move as one)
      ========================================================================= */
-  .topbar {
-    position:sticky; top:0; z-index:40; height:var(--topbar-h);
-    display:flex; align-items:center; gap:12px; padding:0 14px;
-    background:color-mix(in oklab,var(--panel) 88%,transparent);
-    backdrop-filter:saturate(140%) blur(12px); -webkit-backdrop-filter:saturate(140%) blur(12px);
-    border-bottom:1px solid var(--border);
-  }
-  .brand { display:flex; align-items:center; gap:10px; min-width:0; }
-  .brand-mark { width:26px; height:26px; border-radius:7px; flex:0 0 auto; display:grid; place-items:center; color:#fff; box-shadow:var(--shadow-sm);
+  .topbar { position:sticky; top:0; z-index:40; height:var(--topbar-h); display:flex; align-items:center; gap:12px; padding:0 14px;
+    background:color-mix(in oklab,var(--panel) 90%,transparent); backdrop-filter:saturate(140%) blur(12px); -webkit-backdrop-filter:saturate(140%) blur(12px);
+    border-bottom:1px solid var(--border); }
+  /* Fixed-width brand region so the shared suite-nav's start position is INDEPENDENT of the active
+     page title length — the five entries no longer shift/jitter when switching pages. (Layout fix.) */
+  .brand { display:flex; align-items:center; gap:10px; flex:0 0 var(--brand-w); width:var(--brand-w); min-width:0; overflow:hidden; }
+  .brand-mark { width:26px; height:26px; border-radius:7px; display:grid; place-items:center; color:#fff; box-shadow:var(--shadow-sm); flex:0 0 auto;
     background:linear-gradient(150deg,var(--accent),color-mix(in oklab,var(--accent) 55%,#7c4dff)); }
-  .brand-name { font-weight:650; letter-spacing:-.01em; color:var(--fg-strong); white-space:nowrap; }
+  .brand-name { font-weight:650; letter-spacing:-.01em; color:var(--fg-strong); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .brand-sub { color:var(--muted-2); font-size:12px; white-space:nowrap; }
 
   /* shared cross-page nav — identical markup/behaviour on all five pages */
@@ -117,99 +137,207 @@ internal static class VoiceConsolePage
   .suite-nav a[aria-current="page"] { color:var(--accent); background:var(--accent-soft); border-color:var(--accent-line); }
   .suite-nav svg { width:14px; height:14px; flex:0 0 auto; }
 
-  .scope-chip { display:inline-flex; align-items:center; gap:7px; padding:4px 10px; border-radius:var(--r-pill); background:var(--panel-2); border:1px solid var(--border); font-size:12px; color:var(--muted); }
+  .scope-chip { display:inline-flex; align-items:center; gap:7px; padding:4px 10px; border-radius:var(--r-pill); background:var(--panel-2); border:1px solid var(--border); font-size:12px; color:var(--muted); white-space:nowrap; }
   .scope-chip .sid { font-family:var(--mono); font-size:11.5px; color:var(--fg); }
   .scope-chip svg { color:var(--ok); }
   .spacer { flex:1 1 auto; }
-  .iconbtn { width:34px; height:34px; display:grid; place-items:center; background:var(--panel-2); border:1px solid var(--border); border-radius:var(--r); color:var(--muted); transition:color .15s,border-color .15s; }
+  .iconbtn { width:34px; height:34px; display:grid; place-items:center; background:var(--panel-2); border:1px solid var(--border); border-radius:var(--r); color:var(--muted); transition:color .15s,border-color .15s; flex:0 0 auto; }
   .iconbtn:hover { color:var(--fg); border-color:var(--muted-2); }
-  .account { display:inline-flex; align-items:center; gap:8px; padding:4px 6px 4px 4px; border-radius:var(--r-pill); background:var(--panel-2); border:1px solid var(--border); }
+  .account { display:inline-flex; align-items:center; gap:8px; padding:4px 6px 4px 4px; border-radius:var(--r-pill); background:var(--panel-2); border:1px solid var(--border); flex:0 0 auto; }
   .avatar { width:24px; height:24px; border-radius:50%; flex:0 0 auto; display:grid; place-items:center; font-size:12px; font-weight:700; color:#fff; background:linear-gradient(140deg,#6f9bff,#9b6bff); }
   .account .who { font-size:12.5px; color:var(--fg); max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .linkbtn { background:transparent; border:0; color:var(--accent); font-size:12.5px; font-weight:600; padding:4px 6px; border-radius:var(--r-sm); }
   .linkbtn:hover { text-decoration:underline; }
 
   /* =========================================================================
-     Page body — single centered column (ops/admin layout)
+     Console shell : nav + main
      ========================================================================= */
-  .page { max-width:760px; margin:0 auto; padding:28px 20px 64px; }
-  .page-head { margin-bottom:22px; }
-  .page-title { font-size:20px; font-weight:680; color:var(--fg-strong); margin:0; letter-spacing:-.01em; }
-  .page-sub { font-size:12.5px; color:var(--muted); margin:7px 0 0; line-height:1.6; max-width:60ch; }
+  .shell { display:grid; grid-template-columns:var(--nav-w) minmax(0,1fr); height:calc(100dvh - var(--topbar-h)); min-height:0; }
+  .nav { border-right:1px solid var(--border); padding:12px 10px; display:flex; flex-direction:column; gap:2px; overflow-y:auto; background:color-mix(in oklab,var(--panel) 40%,transparent); }
+  .nav-h { font-size:10.5px; font-weight:700; letter-spacing:.07em; text-transform:uppercase; color:var(--muted-2); padding:10px 10px 6px; }
+  .nav-item { display:flex; align-items:center; gap:10px; padding:8px 10px; border-radius:var(--r); border:1px solid transparent; color:var(--muted); background:transparent; width:100%; text-align:left; font-size:13.5px; font-weight:550; }
+  .nav-item:hover { background:var(--panel-2); color:var(--fg); }
+  .nav-item[aria-current="page"] { background:var(--accent-soft); border-color:var(--accent-line); color:var(--fg-strong); }
+  .nav-item svg { width:17px; height:17px; flex:0 0 auto; opacity:.9; }
+  .nav-item .nv-count { margin-left:auto; font-family:var(--mono); font-size:11px; color:var(--muted-2); }
+  .nav-item[aria-current="page"] .nv-count { color:var(--accent); }
+  .nav-item .nv-live { margin-left:auto; display:inline-flex; align-items:center; gap:5px; font-size:11px; color:var(--run); }
 
-  .card { border:1px solid var(--border); border-radius:var(--r-lg); background:var(--panel); padding:18px 18px 20px; margin-bottom:18px; box-shadow:var(--shadow-sm); }
-  .card.stub { opacity:.92; border-style:dashed; background:color-mix(in oklab,var(--panel) 60%,transparent); }
-  .card-head { display:flex; align-items:center; gap:11px; margin-bottom:6px; }
-  .card-ic { width:32px; height:32px; border-radius:9px; display:grid; place-items:center; flex:0 0 auto; color:var(--accent); background:var(--accent-soft); border:1px solid var(--accent-line); }
-  .card-ic.muted { color:var(--muted); background:var(--neutral-soft); border-color:var(--border); }
-  .card-title { font-weight:680; color:var(--fg-strong); font-size:15px; letter-spacing:-.01em; }
-  .card-meta { margin-left:auto; }
-  .card-desc { font-size:12.5px; color:var(--muted); line-height:1.6; margin:2px 0 14px; }
+  .main { overflow-y:auto; min-height:0; }
+  .view { max-width:1100px; margin:0 auto; padding:22px 28px 64px; }
+  .view.wide { max-width:1340px; }
 
-  /* form */
-  .field { margin-bottom:13px; }
-  .field label { display:block; font-size:12px; font-weight:600; color:var(--muted); margin-bottom:5px; }
-  .field label .req { color:var(--err); margin-left:3px; }
-  .field input { width:100%; background:var(--panel-2); border:1px solid var(--border); border-radius:var(--r); color:var(--fg);
-    font:13.5px/1.5 var(--sans); padding:9px 11px; transition:border-color .15s,box-shadow .15s; }
-  .field input:focus { outline:none; border-color:var(--accent-line); box-shadow:0 0 0 3px var(--accent-soft); }
-  .field input::placeholder { color:var(--muted-2); }
-  .field input.mono { font-family:var(--mono); font-size:12.5px; }
-  .field .hint { font-size:11px; color:var(--muted-2); margin-top:4px; line-height:1.5; }
-  .form-actions { display:flex; align-items:center; gap:12px; margin-top:6px; }
-  .btn-primary { padding:10px 18px; border-radius:var(--r); border:1px solid transparent; background:var(--accent); color:var(--accent-ink);
-    font-weight:650; font-size:13.5px; display:inline-flex; align-items:center; justify-content:center; gap:8px; transition:filter .15s,opacity .15s; }
-  .btn-primary:hover { filter:brightness(1.08); }
-  .btn-primary:disabled { opacity:.5; cursor:default; }
+  .page-head { display:flex; align-items:flex-start; gap:14px; flex-wrap:wrap; margin-bottom:6px; }
+  .page-head .ph-l { flex:1 1 auto; min-width:0; }
+  .page-h { font-size:21px; font-weight:740; letter-spacing:-.02em; color:var(--fg-strong); margin:0; display:flex; align-items:center; gap:11px; }
+  .page-sub { color:var(--muted); font-size:13.5px; margin:8px 0 0; line-height:1.6; max-width:74ch; }
+  .ph-actions { display:flex; align-items:center; gap:9px; flex-wrap:wrap; }
+
+  /* panels */
+  .panel { border:1px solid var(--border); border-radius:var(--r-lg); background:var(--panel); margin-top:18px; overflow:hidden; }
+  .panel-head { display:flex; align-items:center; gap:10px; padding:13px 16px; border-bottom:1px solid var(--border-soft); }
+  .panel-head .ph-ic { width:28px; height:28px; border-radius:8px; display:grid; place-items:center; color:var(--accent); background:var(--accent-soft); flex:0 0 auto; }
+  .panel-head h2 { font-size:14px; font-weight:660; color:var(--fg-strong); margin:0; }
+  .panel-head .ph-desc { font-size:12px; color:var(--muted-2); margin-top:1px; }
+  .panel-head .ph-r { margin-left:auto; display:flex; align-items:center; gap:9px; }
+  .panel-body { padding:16px; }
+  .panel-body.flush { padding:0; }
+  .row2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  .grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:18px; align-items:start; }
+
+  /* forms */
+  .field { margin-bottom:15px; }
+  .field:last-child { margin-bottom:0; }
+  .field > label { display:block; font-size:12.5px; font-weight:600; color:var(--fg); margin-bottom:6px; }
+  .field .help { font-size:11.5px; color:var(--muted-2); margin-top:6px; line-height:1.5; }
+  .input,.textarea,.sel select { width:100%; background:var(--panel-2); border:1px solid var(--border); border-radius:var(--r); padding:9px 11px; color:var(--fg-strong); font-family:var(--mono); font-size:13px; outline:none; transition:border-color .15s,box-shadow .15s; }
+  .textarea { font-family:var(--sans); line-height:1.6; resize:vertical; min-height:84px; }
+  .input:focus,.textarea:focus,.sel select:focus { border-color:var(--accent-line); box-shadow:0 0 0 3px var(--accent-soft); }
+  .input.bad { border-color:color-mix(in oklab,var(--err) 55%,var(--border)); }
+  .input:disabled,.textarea:disabled,.sel select:disabled { opacity:.6; cursor:default; }
+  .sel { position:relative; }
+  .sel select { appearance:none; padding-right:34px; }
+  .sel .chev { position:absolute; right:11px; top:50%; transform:translateY(-50%); color:var(--muted-2); pointer-events:none; }
+
+  .toggle { position:relative; width:38px; height:22px; border-radius:999px; background:var(--panel-3); border:1px solid var(--border); flex:0 0 auto; transition:background .15s; }
+  .toggle::after { content:""; position:absolute; left:2px; top:1px; width:18px; height:18px; border-radius:50%; background:var(--muted); transition:transform .15s,background .15s; }
+  .toggle[aria-pressed="true"] { background:var(--accent-soft); border-color:var(--accent-line); }
+  .toggle[aria-pressed="true"]::after { transform:translateX(16px); background:var(--accent); }
+  .toggle:disabled { opacity:.55; cursor:default; }
+  .togline { display:flex; align-items:center; gap:12px; }
+  .togline .tl-t { font-size:13px; color:var(--fg); font-weight:550; }
+  .togline .tl-s { font-size:11.5px; color:var(--muted-2); margin-top:1px; }
+  .togline .spacer { flex:1; }
+
+  input[type=range] { -webkit-appearance:none; width:100%; height:4px; border-radius:999px; background:var(--panel-3); outline:none; }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:16px; height:16px; border-radius:50%; background:var(--accent); border:2px solid var(--panel); box-shadow:var(--shadow-sm); cursor:pointer; }
+  input[type=range]:disabled { opacity:.55; }
+  .slider-row { display:flex; align-items:center; gap:14px; }
+  .slider-row .sval { font-family:var(--mono); font-size:12.5px; color:var(--fg-strong); min-width:42px; text-align:right; }
+
+  /* buttons */
+  .btn { display:inline-flex; align-items:center; justify-content:center; gap:8px; padding:8px 14px; border-radius:var(--r); font-size:13px; font-weight:640; border:1px solid transparent; transition:filter .15s,border-color .15s,background .15s; white-space:nowrap; }
+  .btn-primary { background:var(--accent); color:var(--accent-ink); } .btn-primary:hover { filter:brightness(1.08); }
+  .btn-ghost { background:var(--panel-2); border-color:var(--border); color:var(--fg); } .btn-ghost:hover { border-color:var(--muted-2); }
+  .btn-danger { background:transparent; border-color:color-mix(in oklab,var(--err) 45%,transparent); color:var(--err); } .btn-danger:hover { background:var(--err-soft); }
+  .btn-sm { padding:5px 10px; font-size:12px; }
+  .btn:disabled { opacity:.45; cursor:default; }
+  .btn-block { width:100%; }
   .spin { width:13px; height:13px; border-radius:50%; border:1.8px solid color-mix(in oklab,var(--accent-ink) 45%,transparent); border-top-color:var(--accent-ink); animation:spin .7s linear infinite; }
   @keyframes spin { to { transform:rotate(360deg); } }
 
-  /* key/value receipt + banners */
-  .kv { display:flex; justify-content:space-between; gap:12px; padding:6px 0; font-size:12.5px; border-bottom:1px solid var(--border-soft); }
+  /* banners / callouts */
+  .banner { display:flex; gap:11px; padding:12px 14px; border-radius:var(--r); font-size:13px; line-height:1.6; margin-bottom:16px; }
+  .banner svg { flex:0 0 auto; margin-top:2px; }
+  .banner .bt { font-weight:650; color:var(--fg-strong); }
+  .banner .bb { color:var(--muted); }
+  .banner.info { background:var(--accent-soft); border:1px solid var(--accent-line); } .banner.info svg { color:var(--accent); }
+  .banner.warn { background:var(--warn-soft); border:1px solid color-mix(in oklab,var(--warn) 38%,transparent); } .banner.warn svg { color:var(--warn); }
+  .banner.err { background:var(--err-soft); border:1px solid color-mix(in oklab,var(--err) 38%,transparent); } .banner.err svg { color:var(--err); }
+  .banner.ok { background:var(--ok-soft); border:1px solid color-mix(in oklab,var(--ok) 36%,transparent); } .banner.ok svg { color:var(--ok); }
+  .banner .ba { margin-left:auto; display:flex; gap:8px; align-items:center; }
+
+  .kv { display:flex; justify-content:space-between; gap:14px; padding:9px 0; font-size:12.5px; border-bottom:1px solid var(--border-soft); }
   .kv:last-child { border-bottom:0; }
-  .kv .k { color:var(--muted); flex:0 0 auto; }
-  .kv .v { color:var(--fg); font-family:var(--mono); font-size:12px; text-align:right; word-break:break-all; }
+  .kv .k { color:var(--muted); } .kv .v { color:var(--fg); font-family:var(--mono); font-size:12px; text-align:right; word-break:break-all; }
+  .kv .v.plain { font-family:var(--sans); }
+
+  .crow { display:grid; grid-template-columns:1fr auto; gap:12px; align-items:center; padding:10px 12px; border:1px solid var(--border); border-radius:var(--r); background:var(--panel-2); margin-bottom:8px; }
+  .crow .ck { font-size:11px; color:var(--muted-2); margin-bottom:3px; } .crow .cv { font-family:var(--mono); font-size:12px; color:var(--fg-strong); word-break:break-all; }
+
+  .empty { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:11px; text-align:center; color:var(--muted); padding:50px 24px; border:1px dashed var(--border); border-radius:var(--r-lg); margin-top:18px; }
+  .empty .ic { width:42px; height:42px; color:var(--muted-2); opacity:.8; }
+  .empty .et { font-weight:650; color:var(--fg); font-size:15px; }
+  .empty .es { font-size:13px; max-width:380px; line-height:1.55; }
+
+  /* list rows (connectors / sinks / clients / sessions) */
+  .lrow { display:grid; grid-template-columns:auto 1fr auto; gap:13px; align-items:center; padding:12px 14px; border:1px solid var(--border); border-radius:var(--r); background:var(--panel); margin-bottom:8px; }
+  .lrow .li { width:32px; height:32px; border-radius:9px; display:grid; place-items:center; color:var(--accent); background:var(--accent-soft); flex:0 0 auto; }
+  .lrow .ln { font-weight:620; color:var(--fg-strong); font-size:13.5px; }
+  .lrow .lm { font-size:12px; color:var(--muted); margin-top:2px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .lrow .lm .mono { font-family:var(--mono); font-size:11.5px; color:var(--muted-2); }
+  .lrow .lr { display:flex; align-items:center; gap:10px; }
+
+  /* tool allowlist */
+  .tool-grp { border:1px solid var(--border); border-radius:var(--r); background:var(--panel); margin-bottom:10px; overflow:hidden; }
+  .tool-grp-h { display:flex; align-items:center; gap:11px; padding:11px 13px; background:var(--panel); border-bottom:1px solid var(--border-soft); }
+  .tool-grp-h .gi { width:28px; height:28px; border-radius:8px; display:grid; place-items:center; color:var(--accent); background:var(--accent-soft); }
+  .tool-grp.off { opacity:.66; }
+  .tool-line { display:flex; align-items:center; gap:11px; padding:10px 13px; border-bottom:1px solid var(--border-soft); }
+  .tool-line:last-child { border-bottom:0; }
+  .tool-line .tn { font-family:var(--mono); font-size:12.5px; color:var(--fg-strong); }
+  .tool-line .td { font-size:11.5px; color:var(--muted-2); }
+  .tool-line .tr { margin-left:auto; display:flex; align-items:center; gap:10px; }
+  .chk { width:18px; height:18px; border-radius:5px; border:1.5px solid var(--border); background:var(--panel-2); display:grid; place-items:center; color:transparent; flex:0 0 auto; }
+  .chk[aria-checked="true"] { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); }
+  .chk[aria-disabled="true"] { opacity:.7; cursor:default; }
+
+  /* contract rows + inline code (transport / honest stubs) */
+  .contract { display:grid; gap:8px; }
+  .contract .row { display:flex; gap:10px; align-items:baseline; font-size:12.5px; }
+  .contract .row .lbl { flex:0 0 150px; color:var(--muted); }
+  .contract .row .val { color:var(--fg); font-family:var(--mono); font-size:12px; word-break:break-word; }
+  code.inline { font-family:var(--mono); font-size:12px; background:var(--panel-2); border:1px solid var(--border-soft); border-radius:5px; padding:1px 6px; color:var(--fg); }
+
+  /* result receipt (enable action) */
   .result { margin-top:14px; border-radius:var(--r); border:1px solid var(--border-soft); padding:13px 14px; }
   .result.ok  { background:var(--ok-soft); border-color:color-mix(in oklab,var(--ok) 34%,transparent); }
   .result.err { background:var(--err-soft); border-color:color-mix(in oklab,var(--err) 38%,transparent); }
   .result-head { display:flex; gap:9px; align-items:flex-start; }
   .result-head svg { flex:0 0 auto; margin-top:1px; }
-  .result.ok .result-head svg { color:var(--ok); }
-  .result.err .result-head svg { color:var(--err); }
+  .result.ok .result-head svg { color:var(--ok); } .result.err .result-head svg { color:var(--err); }
   .result-l { font-weight:650; font-size:13px; }
   .result.ok .result-l { color:var(--ok); } .result.err .result-l { color:var(--err); }
   .result-m { color:var(--muted); font-size:12.5px; margin-top:3px; line-height:1.6; }
   .result-grid { margin-top:11px; }
 
-  .note { display:flex; gap:9px; align-items:flex-start; padding:11px 13px; border-radius:var(--r); background:var(--warn-soft);
-    border:1px solid color-mix(in oklab,var(--warn) 32%,transparent); margin-top:13px; }
-  .note svg { color:var(--warn); flex:0 0 auto; margin-top:1px; }
-  .note .nt { font-size:12.5px; color:var(--fg); line-height:1.6; }
-  .note .nt b { color:var(--warn); }
+  /* test panel */
+  .test-stage { display:grid; place-items:center; padding:40px 20px; }
+  .mic-btn { width:84px; height:84px; border-radius:50%; border:0; display:grid; place-items:center; color:#fff; box-shadow:var(--shadow);
+    background:linear-gradient(150deg,var(--accent),color-mix(in oklab,var(--accent) 55%,#7c4dff)); }
+  .mic-btn:hover { filter:brightness(1.07); }
 
-  .contract { display:grid; gap:8px; }
-  .contract .row { display:flex; gap:10px; align-items:baseline; font-size:12.5px; }
-  .contract .row .lbl { flex:0 0 132px; color:var(--muted); }
-  .contract .row .val { color:var(--fg); font-family:var(--mono); font-size:12px; word-break:break-word; }
-  code.inline { font-family:var(--mono); font-size:12px; background:var(--panel-2); border:1px solid var(--border-soft); border-radius:5px; padding:1px 6px; color:var(--fg); }
+  /* host-gated / disabled stub lock */
+  .lock { display:inline-flex; align-items:center; gap:6px; font-size:11px; font-weight:700; letter-spacing:.04em; color:var(--warn); background:var(--warn-soft); border:1px solid color-mix(in oklab,var(--warn) 35%,transparent); border-radius:var(--r-pill); padding:3px 9px; }
+  .card.stub { opacity:.96; }
+  .card.stub .panel-head { border-bottom-style:dashed; }
 
-  /* login */
+  /* routing table */
+  .rtable { width:100%; border-collapse:collapse; font-size:13px; }
+  .rtable th { text-align:left; font-size:11px; letter-spacing:.04em; text-transform:uppercase; color:var(--muted-2); font-weight:600; padding:10px 12px; border-bottom:1px solid var(--border); }
+  .rtable td { padding:11px 12px; border-bottom:1px solid var(--border-soft); color:var(--fg); }
+  .rtable td.mono { font-family:var(--mono); font-size:12px; }
+  .rtable tr:last-child td { border-bottom:0; }
+
+  /* =========================================================================
+     Login gate (mirrors observatory/studio OIDC bearer-token gate)
+     ========================================================================= */
   .login { min-height:calc(100dvh - var(--topbar-h)); display:grid; place-items:center; padding:24px; }
   .login-card { width:min(420px,100%); background:var(--panel); border:1px solid var(--border); border-radius:var(--r-lg); padding:32px 30px; box-shadow:var(--shadow); text-align:center; }
   .login-mark { width:52px; height:52px; border-radius:14px; margin:0 auto 18px; background:linear-gradient(150deg,var(--accent),color-mix(in oklab,var(--accent) 55%,#7c4dff)); display:grid; place-items:center; color:#fff; box-shadow:var(--shadow); }
   .login h1 { font-size:19px; font-weight:700; letter-spacing:-.01em; color:var(--fg-strong); margin:0 0 8px; }
-  .login p { color:var(--muted); font-size:13.5px; margin:0 auto 22px; max-width:32ch; line-height:1.6; }
+  .login p { color:var(--muted); font-size:13.5px; margin:0 auto 22px; max-width:34ch; line-height:1.6; }
   .login .btn-primary { width:100%; padding:11px 16px; font-size:14px; }
   .login-foot { margin-top:16px; font-size:11.5px; color:var(--muted-2); display:inline-flex; align-items:center; gap:6px; }
 
-  @media (max-width:760px) {
-    .brand-sub, .scope-chip { display:none; }
-    .suite-nav .nav-label { display:none; }
-    .suite-nav a { padding:6px 8px; }
-    .account .who { display:none; }
+  /* =========================================================================
+     Responsive
+     ========================================================================= */
+  @media (max-width:1080px) { .grid-2,.row2 { grid-template-columns:1fr; } }
+  @media (max-width:880px) {
+    :root { --nav-w:60px; --brand-w:54px; }
+    .nav-item span.nlabel, .nav-h, .nav-item .nv-count, .nav-item .nv-live span { display:none; }
+    .nav-item { justify-content:center; }
+    .brand-name { display:none; }
   }
+  @media (max-width:760px) {
+    .suite-nav .nav-label { display:none; } .suite-nav a { padding:6px 8px; }
+    .scope-chip { display:none; } .account .who { display:none; }
+  }
+  @media (max-width:620px) { .view { padding:18px 16px 56px; } }
   @media (prefers-reduced-motion: reduce) {
     *,*::before,*::after { animation-duration:.001ms !important; animation-iteration-count:1 !important; transition-duration:.001ms !important; }
+    .dot.s-run,.dot.s-speaking,.dot.s-listening,.dot.s-pending { animation:none; box-shadow:0 0 0 3px var(--run-soft); }
   }
 </style>
 </head>
@@ -218,12 +346,13 @@ internal static class VoiceConsolePage
 
 <script>
 /* ===========================================================================
-   数据契约（与现有 console 套件一致，无新增后端）：
-     - GET  /api/studio/context → {scopeId, scopeResolved, scopeSource}（scope chip）
+   Backend surfaces used by this page:
+     - GET  /api/studio/context → {scopeId, scopeResolved, scopeSource}  (scope chip)
      - POST /api/scopes/{scopeId}/gagent-actors/{actorId}/voice-presence/enable?agentKind=...
-            body: {moduleName}  →  202 受理回执 / 4xx-5xx {error,detail}
-   语音目前没有只读 GET（模块/会话/provider 列举），因此「实时会话 / WHIP 入站 /
-   显示侧信道」只做诚实占位（待后端 ②③），不编造数据。
+            body {moduleName} → 202 / 4xx-5xx {error,detail}   (advanced: attach to a specific actor)
+     - WS   /ws/voice?codec=pcm16&mode=half_duplex&access_token=<NyxID JWT>  (the Talk client)
+   The default voice agent is auto-provisioned by /ws/voice with no actor id; it has no config write API,
+   so the Default-agent view shows real runtime defaults read-only.
    =========================================================================== */
 
 /* ===========================================================================
@@ -235,8 +364,8 @@ const CFG = {
   authority: "https://nyx.chrono-ai.fun",
   clientId: "37a93189-2734-406e-bca1-7dbdf25c5a53",
   scope: "openid profile email proxy",
-  redirectUri: location.origin + "/voice/callback",
-  storageKey: "aevatar-voice:nyxid:pkce"
+  redirectUri: location.origin + "/auto/callback",
+  storageKey: "aevatar-console:nyxid:pkce"
 };
 const TOKEN_KEY = CFG.storageKey + ":token";
 const PKCE_KEY  = CFG.storageKey + ":pkce";
@@ -306,8 +435,8 @@ async function apiGet(path){
   return await res.json();
 }
 
-function signOut(){ clearToken(); beginLogin(); }
-function signOutSilent(){ clearToken(); state.signedIn = false; render(); }
+function signOut(){ try{stopVoice(true);}catch(e){} clearToken(); beginLogin(); }
+function signOutSilent(){ try{stopVoice(true);}catch(e){} clearToken(); state.signedIn = false; render(); }
 
 /* ===========================================================================
    App state + DOM helpers
@@ -326,13 +455,23 @@ function el(tag, attrs={}, html){
 function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c])); }
 function initials(label){ const s=String(label||"?").trim(); return (s[0]||"?").toUpperCase(); }
 
+/* Real runtime facts (NOT mock UI data — these mirror the deployed defaults):
+   - default voice module = voice_presence_openai (provider openai), the zero-config /ws/voice agent.
+   - default tool allowlist (PolicyAwareVoiceEndpoints.DefaultVoiceToolAllowlist / VOICE_TOOL_ALLOWLIST).
+   These are surfaced read-only; aevatar exposes no default-agent config GET or write today. */
+const DEFAULT_MODULE = "voice_presence_openai";
+const DEFAULT_TOOL_ALLOWLIST = ["nyxid_proxy","nyxid_status","nyxid_services","nyxid_catalog","ornn_search_skills","use_skill"];
+
 const state = {
   signedIn:false,
   theme: localStorage.getItem("voice-theme") || null,
+  view:"test",
   scopeId:null, scopeResolved:false, scopeSource:null,
+  // advanced "enable on a specific actor" action (the one real voice write):
+  enableOpen:false,
   submitting:false,
   result:null,                 // { ok, label, message, detail:{} }
-  form:{ scopeId:"", actorId:"", agentKind:"", moduleName:"" }
+  form:{ scopeId:"", actorId:"", agentKind:"", moduleName:DEFAULT_MODULE }
 };
 let accountLabel = "已登录";
 
@@ -340,33 +479,50 @@ function applyTheme(){ if(state.theme==="light"||state.theme==="dark")document.d
 function effDark(){ if(state.theme)return state.theme==="dark"; return !window.matchMedia||!window.matchMedia("(prefers-color-scheme: light)").matches; }
 
 const ICON={
-  lock:'<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
+  lock:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
+  lockLg:'<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
   sun:'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2.4M12 19.6V22M2 12h2.4M19.6 12H22M4.6 4.6l1.7 1.7M17.7 17.7l1.7 1.7M19.4 4.6l-1.7 1.7M6.3 17.7l-1.7 1.7"/></svg>',
   moon:'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a6.6 6.6 0 0 0 9.8 9.8Z"/></svg>',
   check:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.2 4.2L19 7"/></svg>',
   okc:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8.5 12.2 2.4 2.4 4.6-4.8"/></svg>',
   alert:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 8.5v4.5M12 16.2v.2"/><path d="M10.3 3.9 2.5 17.5A2 2 0 0 0 4.2 20.5h15.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>',
+  info:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 7.6v.2"/></svg>',
   spark:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M18 6l-2.5 2.5M8.5 15.5 6 18"/></svg>',
+  chev:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>',
+  ext:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>',
+  copy:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h9"/></svg>',
+  refresh:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/></svg>',
+  add:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
+  speaker:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4ZM17 9a4 4 0 0 1 0 6"/></svg>',
+  link:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14a4 4 0 0 0 5.6 0l3-3a4 4 0 1 0-5.6-5.6L11 7M14 10a4 4 0 0 0-5.6 0l-3 3A4 4 0 1 0 11 18.6L12.8 17"/></svg>',
+  // nav + brand glyphs
   mic:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg>',
-  wave:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 12h0M8 8v8M12 5v14M16 8v8M20 12h0"/></svg>',
-  cast:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8V6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-6"/><path d="M3 16a4 4 0 0 1 4 4M3 12a8 8 0 0 1 8 8"/><circle cx="3.5" cy="19.5" r="1"/></svg>',
-  graph:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="6" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="12" r="2.2"/><path d="M7 6.6 17 11M7 17.4 17 13"/></svg>',
-  studio:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="12" r="2.4"/><path d="M8.2 7.2 15.8 11M8.2 16.8 15.8 13"/></svg>',
-  clock:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>',
-  hub:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2.6"/><path d="M12 4.5v4.9M12 14.6v4.9M4.5 12h4.9M14.6 12h4.9"/><circle cx="12" cy="4" r="1.3"/><circle cx="12" cy="20" r="1.3"/><circle cx="4" cy="12" r="1.3"/><circle cx="20" cy="12" r="1.3"/></svg>'
+  agent:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="8" width="14" height="11" rx="3"/><path d="M12 3v5M8.5 13h.01M15.5 13h.01M9 17h6"/></svg>',
+  sessions:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h3l2-6 4 14 3-9 2 3h4"/></svg>',
+  tools:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 6a3.5 3.5 0 0 0-4.6 4.4L4 16.3 6.7 19l5.9-5.9A3.5 3.5 0 1 0 14.5 6Z"/></svg>',
+  channels:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M8.2 11 15.8 7M8.2 13l7.6 4"/></svg>',
+  display:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>',
+  routing:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v6a3 3 0 0 0 3 3h6a3 3 0 0 1 3 3v6"/><circle cx="6" cy="4" r="1.6"/><circle cx="18" cy="20" r="1.6"/></svg>',
+  test:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="10" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v3"/></svg>',
+  settings:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v2.6M12 18.9v2.6M21.5 12h-2.6M5.1 12H2.5M18.7 5.3l-1.8 1.8M7.1 16.9l-1.8 1.8M18.7 18.7l-1.8-1.8M7.1 7.1 5.3 5.3"/></svg>',
+  cast:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8V6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-6"/><path d="M3 16a4 4 0 0 1 4 4M3 12a8 8 0 0 1 8 8"/><circle cx="3.5" cy="19.5" r="1"/></svg>',
+  wave:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 12h0M8 8v8M12 5v14M16 8v8M20 12h0"/></svg>'
 };
+function navIcon(id){ return ({agents:ICON.agent,tools:ICON.tools,test:ICON.mic,settings:ICON.settings})[id]; }
 
 /* ===========================================================================
    Shared suite navigation — the five console pages move as one.
-   The same five links/labels/order are reused across observatory/studio/
-   schedules/channels/voice; the host page passes its own active key.
+   Same five links/labels/order reused across observatory/studio/schedules/
+   channels/voice; the host page passes its own active key. The fixed-width
+   .brand region (CSS) keeps these entry positions stable across pages.
    =========================================================================== */
 const SUITE_NAV=[
   {k:"observatory",href:"/workflow/observatory",label:"观测台",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>'},
   {k:"studio",href:"/workflow/studio",label:"Studio",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="12" r="2.4"/><path d="M8.2 7.2 15.8 11M8.2 16.8 15.8 13"/></svg>'},
   {k:"schedules",href:"/schedules",label:"定时任务",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>'},
   {k:"channels",href:"/channels",label:"渠道",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2.6"/><path d="M12 4.5v4.9M12 14.6v4.9M4.5 12h4.9M14.6 12h4.9"/></svg>'},
-  {k:"voice",href:"/voice",label:"语音",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg>'}
+  {k:"voice",href:"/voice",label:"语音",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg>'},
+  {k:"cqrs",href:"/cqrs",label:"投影",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5.5" rx="7.5" ry="3"/><path d="M4.5 5.5v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-6M4.5 11.5v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-6"/></svg>'}
 ];
 function suiteNavHtml(active){return '<nav class="suite-nav" aria-label="控制台导航">'+SUITE_NAV.map(function(n){return '<a href="'+n.href+'"'+(n.k===active?' aria-current="page"':'')+' title="'+n.label+'">'+n.svg+'<span class="nav-label">'+n.label+'</span></a>';}).join('')+'</nav>';}
 
@@ -384,11 +540,11 @@ function renderTopbar(){
   bar.innerHTML=
     '<div class="brand">'+
       '<div class="brand-mark" aria-hidden="true">'+ICON.mic+'</div>'+
-      '<div><div class="brand-name">语音在场 <span class="brand-sub">Voice Presence</span></div></div>'+
+      '<div style="min-width:0"><div class="brand-name">Aevatar Backend Console</div></div>'+
     '</div>'+
     suiteNavHtml("voice")+
-    (state.signedIn?scopeChipHtml():"")+
-    '<div class="spacer"></div>';
+    '<div class="spacer"></div>'+
+    (state.signedIn?scopeChipHtml():"");
   const tbtn=el("button",{class:"iconbtn",id:"themeBtn","aria-label":"切换主题",title:"切换主题"});
   tbtn.innerHTML=effDark()?ICON.sun:ICON.moon;
   tbtn.addEventListener("click",()=>{ state.theme=effDark()?"light":"dark"; localStorage.setItem("voice-theme",state.theme); applyTheme(); render(); });
@@ -409,188 +565,413 @@ function renderLogin(){
   const card = el("section", { class:"login-card", role:"region", "aria-label":"登录" });
   card.innerHTML =
     '<div class="login-mark" aria-hidden="true">'+ICON.mic+'</div>'+
-    '<h1>登录以进入语音在场</h1>'+
-    '<p>管理 GAgent actor 的语音在场能力 —— 登录后即可启用。</p>';
+    '<h1>语音在场</h1>'+
+    '<p>登录后即可和你的默认语音 agent 对话。</p>';
   const btn = el("button", { class:"btn-primary", id:"signinBtn" }, "使用 nyxid 登录");
   btn.addEventListener("click", () => { beginLogin(); });
   card.appendChild(btn);
-  card.appendChild(el("div", { class:"login-foot" }, ICON.lock.replace('width="24" height="24"','width="12" height="12"')+'<span>采用 OIDC bearer-token 鉴权 · 通过 nyxid 账户登录</span>'));
+  card.appendChild(el("div", { class:"login-foot" }, ICON.lock+'<span>采用 OIDC bearer-token 鉴权 · 通过 nyxid 账户登录</span>'));
   wrap.appendChild(card);
   return wrap;
 }
 
-/* ---- Enable card (the one real voice write) ----------------------------- */
-function renderEnableCard(){
-  const card = el("section", { class:"card", "aria-label":"启用语音在场" });
-  card.innerHTML =
-    '<div class="card-head">'+
-      '<div class="card-ic" aria-hidden="true">'+ICON.mic+'</div>'+
-      '<div class="card-title">启用语音在场</div>'+
-      '<span class="card-meta badge b-ok">实时可用</span>'+
-    '</div>'+
-    '<p class="card-desc">为某个 scope 下的 GAgent actor 启用语音在场模块。命令异步受理（202 accepted）；'+
-      '语音会话状态在 capability read model 物化后可见。</p>'+
-    '<div class="field"><label for="vfScope">Scope ID<span class="req">*</span></label>'+
-      '<input id="vfScope" class="mono" autocomplete="off" spellcheck="false" placeholder="scope_…" value="'+esc(state.form.scopeId)+'" /></div>'+
-    '<div class="field"><label for="vfActor">Actor ID<span class="req">*</span></label>'+
-      '<input id="vfActor" class="mono" autocomplete="off" spellcheck="false" placeholder="GAgent actor id" value="'+esc(state.form.actorId)+'" /></div>'+
-    '<div class="field"><label for="vfKind">Agent kind<span class="req">*</span></label>'+
-      '<input id="vfKind" class="mono" autocomplete="off" spellcheck="false" placeholder="例如 role / workflow" value="'+esc(state.form.agentKind)+'" />'+
-      '<div class="hint">未知 agentKind 会被后端拒绝（400 invalid_input）。</div></div>'+
-    '<div class="field"><label for="vfModule">Module name<span class="req">*</span></label>'+
-      '<input id="vfModule" class="mono" autocomplete="off" spellcheck="false" placeholder="语音在场模块名" value="'+esc(state.form.moduleName)+'" />'+
-      '<div class="hint">由部署的语音 provider 决定；未配置 provider 时返回 503 voice_not_configured，未注册模块返回 404 unknown_module。</div></div>'+
-    '<div class="form-actions"></div>'+
-    '<div id="vResult"></div>';
-
-  const actions = card.querySelector(".form-actions");
-  const btn = el("button", { class:"btn-primary", id:"vEnableBtn", type:"button" });
-  btn.innerHTML = state.submitting ? '<span class="spin" aria-hidden="true"></span><span>启用中…</span>' : '<span>启用</span>';
-  btn.disabled = state.submitting;
-  btn.addEventListener("click", submitEnable);
-  actions.appendChild(btn);
-
-  // keep field edits in state (so a re-render from polling/theme does not wipe input)
-  ["vfScope","vfActor","vfKind","vfModule"].forEach((id,i)=>{
-    const key = ["scopeId","actorId","agentKind","moduleName"][i];
-    const inp = card.querySelector("#"+id);
-    if(inp) inp.addEventListener("input", e => { state.form[key] = e.target.value; });
+/* ===========================================================================
+   Shared view bits
+   =========================================================================== */
+const NAV=[
+  ["test","Talk"],["agents","Default agent"],["tools","Tools"],["settings","Settings"]
+];
+function renderSideNav(){
+  const nav=el("nav",{class:"nav scroll","aria-label":"语音控制台导航"});
+  nav.appendChild(el("div",{class:"nav-h"},"语音服务"));
+  NAV.forEach(([id,label])=>{
+    const it=el("button",{class:"nav-item","aria-current":state.view===id?"page":null});
+    it.innerHTML=navIcon(id)+'<span class="nlabel">'+label+'</span>';
+    it.addEventListener("click",()=>{ state.view=id; render(); });
+    nav.appendChild(it);
   });
+  return nav;
+}
+function pageHead(title,sub,actions){
+  const h=el("div",{class:"page-head"});
+  h.innerHTML='<div class="ph-l"><h1 class="page-h">'+title+'</h1>'+(sub?'<p class="page-sub">'+sub+'</p>':"")+'</div>';
+  if(actions){ const a=el("div",{class:"ph-actions"}); actions.forEach(n=>a.appendChild(n)); h.appendChild(a); }
+  return h;
+}
+function panel(icon,title,desc,right,bodyNode,opts){
+  opts=opts||{};
+  const p=el("section",{class:"panel"+(opts.stub?" stub":"")});
+  const head=el("div",{class:"panel-head"});
+  head.innerHTML='<span class="ph-ic'+(opts.muted?' muted':'')+'">'+icon+'</span><div><h2>'+title+'</h2>'+(desc?'<div class="ph-desc">'+desc+'</div>':"")+'</div>';
+  if(right){ const r=el("div",{class:"ph-r"}); (Array.isArray(right)?right:[right]).forEach(n=>r.appendChild(typeof n==="string"?el("span",{},n):n)); head.appendChild(r); }
+  p.appendChild(head);
+  const b=el("div",{class:"panel-body"+(opts.flush?" flush":"")}); if(bodyNode)b.appendChild(bodyNode); p.appendChild(b);
+  return p;
+}
+function badge(s,l){ return '<span class="badge b-'+s+'"><span class="dot s-'+s+'"></span>'+l+'</span>'; }
+function btn(label,kind,icon,onClick,opts){ opts=opts||{}; const b=el("button",{class:"btn btn-"+kind+(opts.sm?" btn-sm":"")+(opts.block?" btn-block":"")},(icon?icon+" ":"")+'<span>'+label+'</span>'); if(opts.disabled)b.disabled=true; if(onClick)b.addEventListener("click",onClick); return b; }
+function bindCopy(b,v){ b.addEventListener("click",async()=>{ try{await navigator.clipboard.writeText(v);}catch(e){const t=document.createElement("textarea");t.value=v;document.body.appendChild(t);t.select();try{document.execCommand("copy");}catch(_){}t.remove();} b.classList.add("done");const s=b.querySelector("span");const o=s?s.textContent:"";if(s)s.textContent="已复制";setTimeout(()=>{b.classList.remove("done");if(s)s.textContent=o;},1300); }); }
+function copyRow(label,value){ const r=el("div",{class:"crow"}); r.innerHTML='<div style="min-width:0"><div class="ck">'+esc(label)+'</div><div class="cv">'+esc(value)+'</div></div>'; const b=el("button",{class:"copybtn","aria-label":"复制"},ICON.copy+'<span>复制</span>'); bindCopy(b,value); r.appendChild(b); return r; }
+function emptyState(icon,t,s,cta){ const e=el("div",{class:"empty"}); e.innerHTML='<div class="ic">'+icon+'</div><div class="et">'+t+'</div><div class="es">'+s+'</div>'; if(cta)e.appendChild(cta); return e; }
+function banner(kind,icon,title,body,actions){ const b=el("div",{class:"banner "+kind}); b.innerHTML=icon+'<div><div class="bt">'+title+'</div><div class="bb">'+body+'</div></div>'; if(actions){ const a=el("div",{class:"ba"}); actions.forEach(n=>a.appendChild(n)); b.appendChild(a); } return b; }
 
-  if(state.result) card.querySelector("#vResult").appendChild(renderResult(state.result));
-  return card;
+/* ===========================================================================
+   View: Agents — the DEFAULT voice agent (zero-config primary flow)
+   Centred on the caller's default voice agent that /ws/voice auto-provisions
+   with NO actor id. Config (provider/persona/VAD/tools) shown reflecting the
+   REAL runtime defaults, read-only (aevatar has no default-agent config write).
+   Enabling on a SPECIFIC actor is the secondary/advanced action (the real POST).
+   =========================================================================== */
+function renderAgents(){
+  const v=el("div",{class:"view"});
+  v.appendChild(pageHead(
+    '默认语音 Agent <span class="badge b-ready" style="font-size:11px"><span class="dot s-ready"></span>零配置</span>',
+    '首次连接 <code class="inline">/ws/voice</code> 时自动开通，无需配置。以下为运行时默认值（只读）。'));
+
+  const grid=el("div",{class:"grid-2"});
+
+  /* provider + model (real default: openai-realtime via module voice_presence_openai) */
+  const pm=el("div",{});
+  pm.innerHTML=
+    '<div class="field"><label>provider / module</label>'+
+      '<input class="input" value="'+esc(DEFAULT_MODULE)+'（OpenAI Realtime）" disabled aria-label="provider module" />'+
+      '<div class="help">凭据为每会话经 NyxID slug <span class="mono">openai-realtime</span> mint 的 ephemeral。</div></div>'+
+    '<div class="field"><label>model</label>'+
+      '<input class="input" value="由 provider 决定（如 gpt-realtime）" disabled aria-label="model" /></div>';
+  grid.appendChild(panel(ICON.agent,"Provider & Model",null,badge("ok","可达"),pm));
+
+  /* persona (read-only; no config write endpoint) */
+  const persona=el("div",{});
+  persona.innerHTML=
+    '<div class="field"><label>voice 音色</label>'+
+      '<input class="input" value="由部署默认决定" disabled aria-label="voice" /></div>'+
+    '<div class="field"><label>系统指令 instructions</label>'+
+      '<input class="input" value="由部署的 persona 决定" disabled aria-label="instructions" /></div>';
+  grid.appendChild(panel(ICON.speaker,"Persona",null,badge("muted","只读"),persona));
+  v.appendChild(grid);
+
+  /* advanced: enable on a specific actor (the one real voice write) */
+  v.appendChild(renderEnableAdvanced());
+  return v;
 }
 
+/* ---- Advanced: enable voice presence on a SPECIFIC actor (real POST) ----- */
+function renderEnableAdvanced(){
+  const body=el("div",{});
+
+  if(!state.enableOpen){
+    body.appendChild(el("p",{style:"font-size:12.5px;color:var(--muted);margin:0 0 12px"},
+      '可选 · 把语音模块附加到某个已存在的 GAgent actor 上（默认 agent 无需此步）。'));
+    body.appendChild(btn("在指定 actor 上启用…","ghost",ICON.add,()=>{ state.enableOpen=true; render(); }));
+    return panel(ICON.agent,"在指定 Actor 上启用（进阶）",null,badge("muted","可选"),body);
+  }
+
+  body.appendChild(el("div",{class:"field"},'<label>Scope ID<span style="color:var(--err);margin-left:3px">*</span></label><input id="vfScope" class="input" autocomplete="off" spellcheck="false" placeholder="scope_…" value="'+esc(state.form.scopeId)+'" />'));
+  body.appendChild(el("div",{class:"field"},'<label>Actor ID<span style="color:var(--err);margin-left:3px">*</span></label><input id="vfActor" class="input" autocomplete="off" spellcheck="false" placeholder="GAgent actor id" value="'+esc(state.form.actorId)+'" />'));
+  body.appendChild(el("div",{class:"field"},'<label>Agent kind<span style="color:var(--err);margin-left:3px">*</span></label><input id="vfKind" class="input" autocomplete="off" spellcheck="false" placeholder="例如 role / workflow" value="'+esc(state.form.agentKind)+'" /></div>'));
+  body.appendChild(el("div",{class:"field"},'<label>Module name<span style="color:var(--err);margin-left:3px">*</span></label><input id="vfModule" class="input" autocomplete="off" spellcheck="false" placeholder="语音在场模块名" value="'+esc(state.form.moduleName)+'" /></div>'));
+
+  const actions=el("div",{class:"ph-actions",style:"margin-top:4px"});
+  const submit = el("button", { class:"btn btn-primary", id:"vEnableBtn", type:"button" });
+  submit.innerHTML = state.submitting ? '<span class="spin" aria-hidden="true"></span><span>启用中…</span>' : ICON.check+'<span>启用</span>';
+  submit.disabled = state.submitting;
+  submit.addEventListener("click", submitEnable);
+  actions.appendChild(submit);
+  actions.appendChild(btn("取消","ghost",null,()=>{ state.enableOpen=false; state.result=null; render(); }));
+  body.appendChild(actions);
+
+  ["vfScope","vfActor","vfKind","vfModule"].forEach((id,i)=>{
+    const key=["scopeId","actorId","agentKind","moduleName"][i];
+    const inp=body.querySelector("#"+id);
+    if(inp) inp.addEventListener("input", e=>{ state.form[key]=e.target.value; });
+  });
+  const res=el("div",{id:"vResult"});
+  if(state.result) res.appendChild(renderResult(state.result));
+  body.appendChild(res);
+
+  return panel(ICON.agent,"在指定 Actor 上启用（进阶）",null,badge("ok","可用"),body);
+}
 function renderResult(r){
   const box = el("div", { class:"result "+(r.ok?"ok":"err"), role:"status", "aria-live":"polite" });
-  let head =
-    '<div class="result-head">'+(r.ok?ICON.okc:ICON.alert)+
-      '<div><div class="result-l">'+esc(r.label)+'</div>'+
-      (r.message?'<div class="result-m">'+esc(r.message)+'</div>':'')+'</div>'+
-    '</div>';
+  let head = '<div class="result-head">'+(r.ok?ICON.okc:ICON.alert)+'<div><div class="result-l">'+esc(r.label)+'</div>'+(r.message?'<div class="result-m">'+esc(r.message)+'</div>':'')+'</div></div>';
   let grid = "";
   if(r.detail && typeof r.detail === "object"){
     const rows = Object.keys(r.detail).filter(k=>r.detail[k]!=null && r.detail[k]!=="");
-    if(rows.length){
-      grid = '<div class="result-grid">'+rows.map(k =>
-        '<div class="kv"><span class="k">'+esc(k)+'</span><span class="v">'+esc(r.detail[k])+'</span></div>'
-      ).join("")+'</div>';
-    }
+    if(rows.length){ grid = '<div class="result-grid">'+rows.map(k => '<div class="kv"><span class="k">'+esc(k)+'</span><span class="v">'+esc(r.detail[k])+'</span></div>').join("")+'</div>'; }
   }
   box.innerHTML = head + grid;
   return box;
 }
-
 async function submitEnable(){
   if(state.submitting) return;
   const f = state.form;
-  const scopeId = (f.scopeId||"").trim();
-  const actorId = (f.actorId||"").trim();
-  const agentKind = (f.agentKind||"").trim();
-  const moduleName = (f.moduleName||"").trim();
-  const missing = [];
+  const scopeId=(f.scopeId||"").trim(), actorId=(f.actorId||"").trim(), agentKind=(f.agentKind||"").trim(), moduleName=(f.moduleName||"").trim();
+  const missing=[];
   if(!scopeId) missing.push("Scope ID");
   if(!actorId) missing.push("Actor ID");
   if(!agentKind) missing.push("Agent kind");
   if(!moduleName) missing.push("Module name");
-  if(missing.length){
-    state.result = { ok:false, label:"缺少必填项", message:"请填写：" + missing.join("、") };
-    render(); return;
-  }
-  const token = getToken();
-  if(!token){ signOutSilent(); return; }
+  if(missing.length){ state.result={ ok:false, label:"缺少必填项", message:"请填写：" + missing.join("、") }; render(); return; }
+  const token = getToken(); if(!token){ signOutSilent(); return; }
 
   state.submitting = true; state.result = null; render();
-  const url = "/api/scopes/" + encodeURIComponent(scopeId) + "/gagent-actors/" + encodeURIComponent(actorId)
-    + "/voice-presence/enable?agentKind=" + encodeURIComponent(agentKind);
+  const url = "/api/scopes/" + encodeURIComponent(scopeId) + "/gagent-actors/" + encodeURIComponent(actorId) + "/voice-presence/enable?agentKind=" + encodeURIComponent(agentKind);
   try {
-    const res = await fetch(url, {
-      method:"POST",
-      headers:{ Authorization:"Bearer " + token.access_token, "Content-Type":"application/json" },
-      body: JSON.stringify({ moduleName: moduleName })
-    });
+    const res = await fetch(url, { method:"POST", headers:{ Authorization:"Bearer " + token.access_token, "Content-Type":"application/json" }, body: JSON.stringify({ moduleName: moduleName }) });
     if(res.status === 401){ signOutSilent(); return; }
     let body = null;
     try { body = await res.json(); } catch(e){ /* tolerate empty/non-json */ }
-
     if(res.status === 202 && body){
-      state.result = {
-        ok:true,
-        label:"已受理启用命令",
-        message: body.note || "命令已受理待分发；read model 观测到提交后可重新连接。",
-        detail: {
-          module_name: body.module_name,
-          stage: body.stage,
-          agent_kind: body.agent_kind,
-          actor_id: body.actor_id,
-          command_id: body.command_id,
-          correlation_id: body.correlation_id
-        }
-      };
-    } else {
-      state.result = mapEnableError(res.status, body);
-    }
-  } catch(e){
-    state.result = { ok:false, label:"请求失败", message: String(e && e.message || e) };
-  } finally {
-    state.submitting = false; render();
-  }
+      state.result = { ok:true, label:"已受理启用命令", message: body.note || "命令已受理待分发；read model 观测到提交后可重新连接。",
+        detail: { module_name: body.module_name, stage: body.stage, agent_kind: body.agent_kind, actor_id: body.actor_id, command_id: body.command_id, correlation_id: body.correlation_id } };
+    } else { state.result = mapEnableError(res.status, body); }
+  } catch(e){ state.result = { ok:false, label:"请求失败", message: String(e && e.message || e) }; }
+  finally { state.submitting = false; render(); }
 }
-
 function mapEnableError(status, body){
   const code = body && body.error ? body.error : ("http_" + status);
   const detail = body && body.detail ? body.detail : "";
-  if(code === "voice_not_configured"){
-    return { ok:false, label:"未配置语音 provider", message:"当前部署尚未注册任何语音在场模块（503 voice_not_configured）。需先在 host 配置语音 provider 后才能启用。", detail:{ error:code, detail } };
-  }
-  if(code === "unknown_module"){
-    return { ok:false, label:"模块未注册", message:(detail || "指定的语音模块未注册。") + "（404 unknown_module）", detail:{ error:code } };
-  }
-  if(code === "admission_denied"){
-    return { ok:false, label:"scope 准入被拒", message:(detail || "scope 准入拒绝了启用访问。") + "（403）", detail:{ error:code } };
-  }
-  if(code === "actor_not_found"){
-    return { ok:false, label:"Actor 不存在", message:(detail || "该 actor 未在请求的 scope 中注册。") + "（404）", detail:{ error:code } };
-  }
-  if(code === "admission_unavailable" || code === "command_dispatch_failed"){
-    return { ok:false, label:"暂不可用", message:(detail || "服务暂时不可用，请稍后重试。") + "（503 " + code + "）", detail:{ error:code } };
-  }
+  if(code === "voice_not_configured") return { ok:false, label:"未配置语音 provider", message:"当前部署尚未注册任何语音在场模块（503 voice_not_configured）。需先在 host 配置语音 provider 后才能启用。", detail:{ error:code, detail } };
+  if(code === "unknown_module") return { ok:false, label:"模块未注册", message:(detail || "指定的语音模块未注册。") + "（404 unknown_module）", detail:{ error:code } };
+  if(code === "admission_denied") return { ok:false, label:"scope 准入被拒", message:(detail || "scope 准入拒绝了启用访问。") + "（403）", detail:{ error:code } };
+  if(code === "actor_not_found") return { ok:false, label:"Actor 不存在", message:(detail || "该 actor 未在请求的 scope 中注册。") + "（404）", detail:{ error:code } };
+  if(code === "admission_unavailable" || code === "command_dispatch_failed") return { ok:false, label:"暂不可用", message:(detail || "服务暂时不可用，请稍后重试。") + "（503 " + code + "）", detail:{ error:code } };
   return { ok:false, label:"启用失败（" + status + "）", message: detail || "后端返回错误。", detail:{ error:code } };
 }
 
-/* ---- Honest stubs / info (no read GETs exist yet) ----------------------- */
-function renderTransportCard(){
-  const card = el("section", { class:"card", "aria-label":"实时语音传输" });
-  card.innerHTML =
-    '<div class="card-head">'+
-      '<div class="card-ic" aria-hidden="true">'+ICON.wave+'</div>'+
-      '<div class="card-title">实时语音传输</div>'+
-      '<span class="card-meta badge b-pending">运行态由会话持有</span>'+
-    '</div>'+
-    '<p class="card-desc">实时会话经 <code class="inline">/ws/voice</code> WebSocket 建立。这里只描述传输契约——'+
-      '语音运行态属于会话本身，没有只读查询端点，因此不在此罗列“当前会话”。</p>'+
-    '<div class="contract">'+
-      '<div class="row"><span class="lbl">下行 (server→client)</span><span class="val">VoiceControlFrame：sessionAccepted / realtimeFrame（PCM16）</span></div>'+
-      '<div class="row"><span class="lbl">上行 (client→server)</span><span class="val">VoiceControlFrame：drainAcknowledged / inputImage</span></div>'+
-      '<div class="row"><span class="lbl">音频编码</span><span class="val">PCM16</span></div>'+
-      '<div class="row"><span class="lbl">鉴权</span><span class="val">Bearer + ChatRoutePolicy 路由解析</span></div>'+
-    '</div>'+
-    '<div class="note">'+ICON.alert+'<div class="nt">未配置语音 provider 时，<b>/ws/voice</b> 以 <code class="inline">503 voice_not_configured</code> fail-closed。</div></div>';
-  return card;
+/* ===========================================================================
+   View: Tools & Connectors — read-only default allowlist (no write / no GET)
+   =========================================================================== */
+function renderTools(){
+  const v=el("div",{class:"view"});
+  v.appendChild(pageHead("Tools",
+    'agent 能调用的工具，来自你的 NyxID 连接器。默认 allowlist（<code class="inline">VOICE_TOOL_ALLOWLIST</code>，只读）：'));
+
+  const grp=el("div",{class:"tool-grp"});
+  const h=el("div",{class:"tool-grp-h"});
+  h.innerHTML='<span class="gi">'+ICON.link+'</span><div style="flex:1"><div style="font-weight:640;color:var(--fg-strong);font-size:13.5px">默认会话工具 allowlist</div><div style="font-size:11.5px;color:var(--muted-2);font-family:var(--mono)">VOICE_TOOL_ALLOWLIST · '+DEFAULT_TOOL_ALLOWLIST.length+' 工具</div></div>'+badge("active","默认启用");
+  grp.appendChild(h);
+  const descs={ nyxid_proxy:"经 NyxID 代理调用已连接服务", nyxid_status:"查询 NyxID 连接状态", nyxid_services:"列举已连接的 NyxID 服务", nyxid_catalog:"浏览可连接的 NyxID 服务目录", ornn_search_skills:"检索已发布的 Ornn 技能", use_skill:"加载并运行某个技能" };
+  DEFAULT_TOOL_ALLOWLIST.forEach(name=>{
+    const line=el("div",{class:"tool-line"});
+    line.innerHTML='<span class="chk" role="checkbox" aria-checked="true" aria-disabled="true" aria-label="'+esc(name)+'">'+ICON.check+'</span>'+
+      '<div style="min-width:0"><div class="tn">'+esc(name)+'</div><div class="td">'+esc(descs[name]||"NyxID 下游工具")+'</div></div>'+
+      '<div class="tr"><span class="owner ACTOR" title="执行方">ACTOR</span></div>';
+    grp.appendChild(line);
+  });
+  const wrap=el("div",{style:"margin-top:18px"}); wrap.appendChild(grp); v.appendChild(wrap);
+  v.appendChild(el("div",{style:"margin-top:10px;font-size:12.5px;color:var(--muted)"},'当前默认 allowlist：<span class="mono" style="color:var(--accent)">'+DEFAULT_TOOL_ALLOWLIST.map(esc).join(", ")+'</span>'));
+  return v;
 }
 
-function renderStubCard(){
-  const card = el("section", { class:"card stub", "aria-label":"浏览器直推与显示侧信道" });
-  card.innerHTML =
-    '<div class="card-head">'+
-      '<div class="card-ic muted" aria-hidden="true">'+ICON.cast+'</div>'+
-      '<div class="card-title">浏览器直推 (WHIP) · 显示侧信道 (vp-control)</div>'+
-      '<span class="card-meta badge b-warn">待后端 ②③</span>'+
-    '</div>'+
-    '<p class="card-desc">WHIP/WebRTC 入站（浏览器直推音视频）与显示侧信道 <code class="inline">vp-control</code> 属于'+
-      '“通用语音服务”分解中的子项目 ②③。后端就绪并暴露读取/控制端点后，本卡片接入；当前不提供任何可点操作，'+
-      '也不展示虚构数据。</p>';
-  return card;
+/* ===========================================================================
+   Voice client engine — a real in-browser /ws/voice client.
+
+   Wire format mirrors voice-presence AevatarVoiceClient.cs exactly:
+     connect:  wss://<same-origin>/ws/voice?codec=pcm16&mode=half_duplex&access_token=<NyxID JWT>
+     up   (client→server):  BINARY = PCM16 mono 24kHz mic frames
+                            TEXT   = {"drainAcknowledged":{"responseId":N,"playoutSequence":M}}
+     down (server→client):  TEXT   = {"sessionAccepted":{...}} (first), {"realtimeFrame":{...}} (events)
+                            BINARY = PCM16 mono 24kHz response audio
+   Half-duplex: mic is gated (muted) while the AI is responding.
+   Audio path is fixed at 24kHz (server pcmSampleRateHz); a mismatch is surfaced, not resampled.
+   =========================================================================== */
+const PCM_RATE = 24000;
+const voice = {
+  ws:null, status:"idle",            // idle|connecting|listening|speaking|error|ended
+  detail:"", transcript:"",
+  micCtx:null, micStream:null, micNode:null, micSource:null, micGate:true,
+  playCtx:null, playHead:0, responseId:0, playoutSeq:0,
+  sessionId:"", actorId:"", moduleName:""
+};
+
+function vStatus(s, detail){ voice.status=s; if(detail!=null) voice.detail=detail; if(state.view==="test") render(); }
+
+function floatTo16(float32){
+  const out=new Int16Array(float32.length);
+  for(let i=0;i<float32.length;i++){ let s=Math.max(-1,Math.min(1,float32[i])); out[i]=s<0?s*0x8000:s*0x7fff; }
+  return out;
+}
+
+async function startVoice(){
+  if(voice.ws) return;
+  const token=getToken(); if(!token){ signOutSilent(); return; }
+  voice.transcript=""; voice.responseId=0; voice.playoutSeq=0;
+  vStatus("connecting","正在请求麦克风…");
+
+  // 1) mic capture → PCM16 24k. Force a 24k AudioContext so no resampling is needed.
+  try {
+    voice.micStream = await navigator.mediaDevices.getUserMedia({ audio:{ channelCount:1, echoCancellation:true, noiseSuppression:true, autoGainControl:true } });
+  } catch(e){ vStatus("error","麦克风权限被拒绝或不可用"); return; }
+  try { voice.micCtx = new (window.AudioContext||window.webkitAudioContext)({ sampleRate:PCM_RATE }); }
+  catch(e){ voice.micCtx = new (window.AudioContext||window.webkitAudioContext)(); }
+  voice.playCtx = new (window.AudioContext||window.webkitAudioContext)({ sampleRate:PCM_RATE });
+  voice.playHead = voice.playCtx.currentTime;
+
+  // 2) open WS — token on the access_token query param (validated equivalent to the bearer header).
+  vStatus("connecting","正在连接 /ws/voice…");
+  const url = location.origin.replace(/^http/,"ws") + "/ws/voice?codec=pcm16&mode=half_duplex&access_token=" + encodeURIComponent(token.access_token);
+  let ws; try { ws = new WebSocket(url); } catch(e){ vStatus("error","无法建立 WebSocket：" + (e&&e.message||e)); stopVoice(true); return; }
+  ws.binaryType = "arraybuffer";
+  voice.ws = ws;
+
+  ws.onopen = () => { /* wait for sessionAccepted before streaming mic */ };
+  ws.onmessage = (ev) => {
+    if(ev.data instanceof ArrayBuffer){ playPcm(ev.data); return; }
+    let f; try { f = JSON.parse(ev.data); } catch { return; }
+    if(f.sessionAccepted){ onSessionAccepted(f.sessionAccepted); return; }
+    if(f.realtimeFrame){ onRealtimeFrame(f.realtimeFrame); return; }
+  };
+  ws.onerror = () => { if(voice.status!=="ended") vStatus("error","连接出错（服务器拒绝或网络问题）"); };
+  ws.onclose = (ev) => {
+    const why = ev.reason || (ev.code===1006?"连接异常中断":("code "+ev.code));
+    if(voice.status!=="ended" && voice.status!=="error") vStatus("ended","会话已结束 · " + why);
+    teardownAudio();
+    voice.ws=null;
+  };
+}
+
+function onSessionAccepted(s){
+  voice.sessionId=s.sessionId||""; voice.actorId=s.actorId||""; voice.moduleName=s.moduleName||"";
+  const rate = s.pcmSampleRateHz||PCM_RATE;
+  if(rate && rate!==PCM_RATE){ vStatus("listening","已连接 · 注意：会话采样率 "+rate+"Hz≠"+PCM_RATE+"Hz，音频可能失真"); }
+  else { vStatus("listening","已连接 · 请开始说话"); }
+  beginMicStreaming();
+}
+
+function beginMicStreaming(){
+  if(!voice.ws || !voice.micCtx || !voice.micStream) return;
+  voice.micSource = voice.micCtx.createMediaStreamSource(voice.micStream);
+  // ScriptProcessor is deprecated but universally available and adequate for a test client; 4096 frames ~170ms @24k.
+  voice.micNode = voice.micCtx.createScriptProcessor(4096, 1, 1);
+  voice.micNode.onaudioprocess = (e) => {
+    if(!voice.ws || voice.ws.readyState!==1) return;
+    if(voice.micGate===false) return; // half-duplex: gated while AI speaks
+    const pcm = floatTo16(e.inputBuffer.getChannelData(0));
+    try { voice.ws.send(pcm.buffer); } catch(err) { console.warn("voice mic frame send failed", err); }
+  };
+  voice.micSource.connect(voice.micNode);
+  voice.micNode.connect(voice.micCtx.destination); // keep node alive (output is silence)
+  if(voice.micCtx.state==="suspended") voice.micCtx.resume();
+  voice.micGate = true;
+}
+
+function onRealtimeFrame(rf){
+  if(rf.responseStarted){ voice.responseId = rf.responseStarted.responseId||0; voice.playoutSeq=0; voice.micGate=false; vStatus("speaking","AI 正在回应…"); }
+  else if(rf.responseDone || rf.responseCancelled){ voice.micGate=true; voice.responseId=0; vStatus("listening","请继续说话"); }
+  else if(rf.speechStarted){ if(voice.status!=="speaking") vStatus("listening","检测到你在说话…"); }
+  else if(rf.speechStopped){ /* server VAD end-of-turn; await response */ }
+  else if(rf.transcriptCompleted && rf.transcriptCompleted.text){ voice.transcript = rf.transcriptCompleted.text; if(state.view==="test") render(); }
+  else if(rf.error){ vStatus("error", "provider 错误：" + (rf.error.errorMessage||rf.error.errorCode||"unknown")); }
+  else if(rf.disconnected){ vStatus("error", "provider 断开：" + (rf.disconnected.reason||"")); }
+  else if(rf.sessionClosed){ vStatus("ended", "会话已关闭：" + (rf.sessionClosed.reason||"")); }
+}
+
+function playPcm(arrayBuf){
+  if(!voice.playCtx) return;
+  const pcm = new Int16Array(arrayBuf);
+  if(pcm.length===0) return;
+  const f32 = new Float32Array(pcm.length);
+  for(let i=0;i<pcm.length;i++) f32[i]=pcm[i]/0x8000;
+  const buf = voice.playCtx.createBuffer(1, f32.length, PCM_RATE);
+  buf.copyToChannel(f32, 0);
+  const src = voice.playCtx.createBufferSource();
+  src.buffer = buf; src.connect(voice.playCtx.destination);
+  const now = voice.playCtx.currentTime;
+  if(voice.playHead < now) voice.playHead = now;
+  src.start(voice.playHead);
+  voice.playHead += buf.duration;
+  // drain ack — tells the actor how much audio we've queued for playout (mirrors AevatarVoiceClient).
+  voice.playoutSeq += pcm.length;
+  if(voice.responseId>0 && voice.ws && voice.ws.readyState===1){
+    try { voice.ws.send(JSON.stringify({ drainAcknowledged:{ responseId:voice.responseId, playoutSequence:voice.playoutSeq } })); } catch(err) { console.warn("voice drain ack send failed", err); }
+  }
+}
+
+function teardownAudio(){
+  try { voice.micNode && (voice.micNode.onaudioprocess=null, voice.micNode.disconnect()); } catch(err) { console.warn("voice mic node teardown failed", err); }
+  try { voice.micSource && voice.micSource.disconnect(); } catch(err) { console.warn("voice mic source teardown failed", err); }
+  try { voice.micStream && voice.micStream.getTracks().forEach(t=>t.stop()); } catch(err) { console.warn("voice mic stream teardown failed", err); }
+  try { voice.micCtx && voice.micCtx.state!=="closed" && voice.micCtx.close(); } catch(err) { console.warn("voice mic context teardown failed", err); }
+  try { voice.playCtx && voice.playCtx.state!=="closed" && voice.playCtx.close(); } catch(err) { console.warn("voice playback context teardown failed", err); }
+  voice.micNode=voice.micSource=voice.micStream=voice.micCtx=voice.playCtx=null;
+}
+
+function stopVoice(silent){
+  if(voice.ws){ try { voice.ws.close(1000,"client ended"); } catch(err) { console.warn("voice websocket close failed", err); } }
+  voice.ws=null;
+  teardownAudio();
+  if(!silent) vStatus("ended","会话已结束");
+}
+
+/* ===========================================================================
+   View: Talk — the real in-browser voice client over /ws/voice.
+   =========================================================================== */
+function renderTest(){
+  const v=el("div",{class:"view"});
+  v.appendChild(pageHead('和默认 Agent 对话 <span class="badge b-ready" style="font-size:11px"><span class="dot s-ready"></span>实时</span>',
+    '点麦克风即开始：浏览器麦克风经 <code class="inline">/ws/voice</code> 实时送达你的默认语音 agent，回应直接在此播放。'));
+
+  const stage=el("section",{class:"panel"});
+  const body=el("div",{class:"panel-body"});
+  const tstage=el("div",{class:"test-stage"});
+
+  const live = (voice.status==="connecting"||voice.status==="listening"||voice.status==="speaking");
+  const mb=el("button",{class:"mic-btn","aria-label":live?"结束会话":"开始对话"});
+  mb.innerHTML = live
+    ? '<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>'
+    : ICON.mic.replace('width="16" height="16"','width="34" height="34"').replace(/currentColor/g,'#fff');
+  if(voice.status==="speaking") mb.style.background="linear-gradient(150deg,var(--accent),color-mix(in oklab,var(--accent) 40%,#7c4dff))";
+  mb.addEventListener("click",()=>{ live ? stopVoice() : startVoice(); });
+  tstage.appendChild(mb);
+
+  const statusMap={
+    idle:["idle","未连接"], connecting:["pending","连接中"], listening:["listening","聆听中"],
+    speaking:["speaking","AI 回应中"], error:["err","出错"], ended:["idle","已结束"]
+  };
+  const st=statusMap[voice.status]||statusMap.idle;
+  tstage.appendChild(el("div",{style:"margin-top:18px"}, badge(st[0],st[1])));
+  if(voice.detail) tstage.appendChild(el("div",{style:"margin-top:8px;color:var(--muted);font-size:12.5px;text-align:center;max-width:460px"}, esc(voice.detail)));
+  if(voice.sessionId && live) tstage.appendChild(el("div",{class:"mono",style:"margin-top:6px;color:var(--muted-2);font-size:11px"}, "session "+esc(voice.sessionId.slice(0,18))+" · "+esc(voice.moduleName||DEFAULT_MODULE)));
+
+  if(voice.transcript){
+    const t=el("div",{style:"margin-top:18px;max-width:520px;width:100%;background:var(--panel-2);border:1px solid var(--border);border-radius:var(--r);padding:12px 14px"});
+    t.innerHTML='<div style="font-size:11px;color:var(--muted-2);margin-bottom:4px">最近转写</div><div style="font-size:13.5px;color:var(--fg);line-height:1.55">'+esc(voice.transcript)+'</div>';
+    tstage.appendChild(t);
+  }
+  body.appendChild(tstage);
+  stage.appendChild(body);
+  v.appendChild(stage);
+
+  if(voice.status==="error"){
+    v.appendChild(banner("warn",ICON.alert,"连不上？",
+      '<code class="inline">/ws/voice</code> 在未配置 provider 时返回 503，会话内部异常返回 5xx。'+
+      '确认本部署已配置语音 provider、且你的 NyxID 拥有 <span class="mono">openai-realtime</span> 服务后重试。'));
+  }
+  return v;
+}
+
+/* ===========================================================================
+   View: Settings — provider credentials info + host-gated publish (honest)
+   =========================================================================== */
+function renderSettings(){
+  const v=el("div",{class:"view"});
+  v.appendChild(pageHead("Settings", 'provider 凭据来源。'));
+
+  /* credentials — describe the real per-session ephemeral chain; no secret UI. */
+  const cred=el("div",{});
+  cred.innerHTML=
+    '<div class="contract">'+
+    '<div class="row"><span class="lbl">默认 provider</span><span class="val">'+esc(DEFAULT_MODULE)+'（OpenAI Realtime）</span></div>'+
+    '<div class="row"><span class="lbl">凭据模型</span><span class="val">每会话 NyxID ephemeral（slug <span class="mono">openai-realtime</span>）</span></div>'+
+    '<div class="row"><span class="lbl">长期密钥</span><span class="val">仅存于 NyxID；aevatar 不持有</span></div>'+
+    '</div>';
+  v.appendChild(panel(ICON.settings,"Provider 凭据",null,badge("ok","NyxID 托管"),cred));
+
+  /* publishing this voice service is host-gated — a single tiny disabled chip, no banner. */
+  v.appendChild(el("div",{style:"margin-top:14px;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)"},
+    '发布为 NyxID 连接器（对外可调用）<span class="lock">'+ICON.lock+' host-gated</span>'));
+  return v;
 }
 
 /* ===========================================================================
@@ -600,15 +981,13 @@ function render(){
   const app=$("#app"); app.innerHTML="";
   app.appendChild(renderTopbar());
   if(!state.signedIn){ app.appendChild(renderLogin()); return; }
-  const page = el("main", { class:"page scroll" });
-  page.appendChild(el("div", { class:"page-head" },
-    '<h1 class="page-title">语音在场</h1>'+
-    '<p class="page-sub">套件成员之一 · 与运行观测台 / Studio / 定时任务 / 渠道接入共享登录与导航。'+
-      '本页只接入真实后端端点，未就绪的能力以诚实占位呈现。</p>'));
-  page.appendChild(renderEnableCard());
-  page.appendChild(renderTransportCard());
-  page.appendChild(renderStubCard());
-  app.appendChild(page);
+  const shell=el("div",{class:"shell"});
+  shell.appendChild(renderSideNav());
+  const main=el("div",{class:"main scroll"});
+  const r={ test:renderTest, agents:renderAgents, tools:renderTools, settings:renderSettings }[state.view] || renderTest;
+  main.appendChild(r());
+  shell.appendChild(main);
+  app.appendChild(shell);
 }
 
 /* ---- Live: scope chip + prefill the enable form's scope ----------------- */

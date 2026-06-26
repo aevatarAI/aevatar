@@ -132,6 +132,57 @@ public sealed class CommittedStateEventEnvelopeTests
     }
 
     [Fact]
+    public void GetOriginActorId_ShouldReturnCommittedEventAgentId()
+    {
+        var envelope = new EventEnvelope
+        {
+            Id = "outer-envelope",
+            Route = EnvelopeRouteSemantics.CreateObserverPublication("relayed-to-parent"),
+            Payload = Any.Pack(new CommittedStateEventPublished
+            {
+                StateEvent = new StateEvent
+                {
+                    EventId = "evt-origin",
+                    Version = 5,
+                    EventData = Any.Pack(new StringValue { Value = "fact" }),
+                    AgentId = "workflow-definition:studio:run:abc",
+                },
+                StateRoot = Any.Pack(new StringValue { Value = "STATE-ROOT" }),
+            }),
+        };
+
+        CommittedStateEventEnvelope.GetOriginActorId(envelope)
+            .Should().Be("workflow-definition:studio:run:abc");
+    }
+
+    [Fact]
+    public void GetOriginActorId_ShouldReturnEmpty_WhenAgentIdMissingOrNotCommitted()
+    {
+        var committedWithoutAgentId = new EventEnvelope
+        {
+            Id = "outer-envelope",
+            Payload = Any.Pack(new CommittedStateEventPublished
+            {
+                StateEvent = new StateEvent
+                {
+                    EventId = "evt-no-origin",
+                    Version = 6,
+                    EventData = Any.Pack(new StringValue { Value = "fact" }),
+                },
+                StateRoot = Any.Pack(new StringValue { Value = "STATE-ROOT" }),
+            }),
+        };
+        var rawEnvelope = new EventEnvelope
+        {
+            Id = "raw-envelope",
+            Payload = Any.Pack(new Int32Value { Value = 42 }),
+        };
+
+        CommittedStateEventEnvelope.GetOriginActorId(committedWithoutAgentId).Should().BeEmpty();
+        CommittedStateEventEnvelope.GetOriginActorId(rawEnvelope).Should().BeEmpty();
+    }
+
+    [Fact]
     public void TryCreateObservedEnvelope_ShouldRejectRawEnvelopeFallback()
     {
         var envelope = new EventEnvelope

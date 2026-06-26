@@ -71,6 +71,12 @@ public class WorkflowExecutionProjectionRegistrationTests
         provider.GetRequiredService<WorkflowExternalApprovalContinuationProjector>().Should().NotBeNull();
         provider.GetRequiredService<WorkflowRunInsightReportArtifactProjector>().Should().NotBeNull();
 
+        // The binding write path is decorated with the heal/guard dispatcher (Definition supersedes a
+        // clobbered Run-kind slot) and the binding projector consumes it.
+        provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowActorBindingDocument>>()
+            .Should().BeOfType<Aevatar.Workflow.Projection.Orchestration.WorkflowActorBindingHealingWriteDispatcher>();
+        provider.GetRequiredService<WorkflowActorBindingProjector>().Should().NotBeNull();
+
         Func<Task> act = () => StartHostedServicesAsync(provider);
         await act.Should().NotThrowAsync();
     }
@@ -137,6 +143,11 @@ public class WorkflowExecutionProjectionRegistrationTests
             defaultSortSelector: report => report.CreatedAt,
             queryTakeMax: 200);
         services.AddInMemoryDocumentProjectionStore<WorkflowExternalApprovalContinuationDocument, string>(
+            keySelector: document => document.Id,
+            keyFormatter: key => key,
+            defaultSortSelector: document => document.UpdatedAt,
+            queryTakeMax: 200);
+        services.AddInMemoryDocumentProjectionStore<WorkflowActorBindingDocument, string>(
             keySelector: document => document.Id,
             keyFormatter: key => key,
             defaultSortSelector: document => document.UpdatedAt,

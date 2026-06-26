@@ -23,6 +23,12 @@ namespace Aevatar.Mainnet.Host.Api.Hosting;
 
 public static class MainnetAgentProjectionDocumentStoresExtensions
 {
+    // Engine labels surfaced by the read-model inventory (GET /api/cqrs/readmodels). The document
+    // store/engine choice is a per-type branch in this file (ES vs InMemory), so the inventory
+    // descriptors are declared right next to the store registrations that pick the engine.
+    private const string ElasticsearchEngineLabel = "Elasticsearch";
+    private const string InMemoryEngineLabel = "dev/InMemory";
+
     public static IServiceCollection AddMainnetAgentProjectionDocumentStores(
         this IServiceCollection services,
         IConfiguration configuration)
@@ -43,11 +49,17 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
             // so a deploy that bumps a read-model schema doesn't 500 reads (e.g. /ws/voice).
             services.TryAddEnumerable(
                 ServiceDescriptor.Singleton<IHostedService, ElasticsearchProjectionIndexReconcileHostedService>());
+            AddReadModelInventoryDescriptors(services, ElasticsearchEngineLabel);
         }
         else
         {
             AddInMemoryStores(services);
+            AddReadModelInventoryDescriptors(services, InMemoryEngineLabel);
         }
+
+        // Assembles the read-model inventory from the opt-in descriptors registered above; reads the
+        // materialized read-model stores only (the read-write-separation invariant).
+        services.TryAddSingleton<IProjectionReadModelInventoryQueryPort, ProjectionReadModelInventoryQueryPort>();
 
         return services;
     }
@@ -92,6 +104,60 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
             services,
             static (StreamingProxyRoomParticipantsSnapshot document) => document.Id,
             static document => document.UpdatedAt.ToDateTimeOffset());
+    }
+
+    // Opt-in read-model inventory descriptors, one per materialized document read-model registered above.
+    // shape = Document when backed by Elasticsearch, Memory when backed by the InMemory dev store; the
+    // engine label is supplied by the caller (the branch that picked the provider). actorKind is the
+    // best-available GAgent/actor kind whose current state each read-model replicates.
+    private static void AddReadModelInventoryDescriptors(IServiceCollection services, string engineLabel)
+    {
+        var shape = ReferenceEquals(engineLabel, ElasticsearchEngineLabel)
+            ? ProjectionReadModelSinkShape.Document
+            : ProjectionReadModelSinkShape.Memory;
+
+        TryAddReadModelDescriptor<ChannelBotRegistrationDocument>(services, "channel-bot-registration", "ChannelBotGAgent", engineLabel, shape);
+        TryAddReadModelDescriptor<ConversationDeliveryCurrentStateDocument>(services, "conversation-delivery-current-state", "ConversationGAgent", engineLabel, shape);
+        TryAddReadModelDescriptor<ProjectionScopeStatusDocument>(services, "projection-scope-status", "ProjectionMaterializationScopeGAgent", engineLabel, shape);
+        TryAddReadModelDescriptor<ExternalIdentityBindingDocument>(services, "external-identity-binding", "ExternalIdentityBindingGAgent", engineLabel, shape);
+        TryAddReadModelDescriptor<AevatarOAuthClientDocument>(services, "aevatar-oauth-client", "AevatarOAuthClientGAgent", engineLabel, shape);
+        TryAddReadModelDescriptor<ChatRoutePolicyCurrentStateDocument>(services, "chat-route-policy-current-state", "ChatRoutePolicyGAgent", engineLabel, shape);
+        TryAddReadModelDescriptor<DeviceRegistrationDocument>(services, "device-registration", "DeviceGAgent", engineLabel, shape);
+        TryAddReadModelDescriptor<UserAgentCatalogDocument>(services, "user-agent-catalog", "UserAgentCatalogGAgent", engineLabel, shape);
+        TryAddReadModelDescriptor<SkillRunnerExecutionDocument>(services, "skill-runner-execution", "SkillRunnerGAgent", engineLabel, shape);
+        TryAddReadModelDescriptor<UserAgentCatalogNyxCredentialDocument>(services, "user-agent-catalog-nyx-credential", "UserAgentCatalogGAgent", engineLabel, shape);
+        TryAddReadModelDescriptor<HealthProbeTargetDocument>(services, "health-probe-target", "HealthProbeGAgent", engineLabel, shape);
+        // WorkflowExternalApprovalContinuationDocument is inventoried at the workflow store-registration
+        // site (it owns that read-model); registering it here too would double-count it in the inventory.
+        TryAddReadModelDescriptor<StreamingProxyChatSessionTerminalSnapshot>(services, "streaming-proxy-chat-session", "StreamingProxyChatSessionGAgent", engineLabel, shape);
+        TryAddReadModelDescriptor<StreamingProxyRoomParticipantsSnapshot>(services, "streaming-proxy-room-participants", "StreamingProxyRoomGAgent", engineLabel, shape);
+    }
+
+    // Registers a single inventory descriptor that delegates to the read-model's already-registered
+    // document reader. The closed concrete descriptor type is the idempotence key; TryAddEnumerable
+    // cannot be used for the interface factory because factory descriptors have no distinct
+    // implementation type and are indistinguishable when more than one read-model is registered.
+    private static void TryAddReadModelDescriptor<TReadModel>(
+        IServiceCollection services,
+        string name,
+        string actorKind,
+        string engineLabel,
+        ProjectionReadModelSinkShape shape)
+        where TReadModel : class, IProjectionReadModel<TReadModel>, new()
+    {
+        if (services.Any(static descriptor =>
+                descriptor.ServiceType == typeof(ProjectionDocumentReadModelDescriptor<TReadModel>)))
+            return;
+
+        services.AddSingleton<ProjectionDocumentReadModelDescriptor<TReadModel>>(sp =>
+            new ProjectionDocumentReadModelDescriptor<TReadModel>(
+                name,
+                shape,
+                engineLabel,
+                actorKind,
+                sp.GetRequiredService<IProjectionDocumentReader<TReadModel, string>>()));
+        services.AddSingleton<IProjectionReadModelDescriptor>(sp =>
+            sp.GetRequiredService<ProjectionDocumentReadModelDescriptor<TReadModel>>());
     }
 
     private static void TryAddElasticsearchStore<TReadModel>(

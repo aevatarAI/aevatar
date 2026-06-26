@@ -183,16 +183,20 @@ internal static class WorkflowRunObservatoryPage
     -webkit-backdrop-filter: saturate(140%) blur(12px);
     border-bottom: 1px solid var(--border);
   }
-  .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  /* Fixed-width brand region keeps the shared suite-nav's start position independent of the
+     active page title length, so the five entries don't shift when switching console pages.
+     The title text ellipsizes; the brand-mark and read-only pill stay pinned (flex:0 0 auto). */
+  .brand { display: flex; align-items: center; gap: 10px; flex: 0 0 268px; width: 268px; min-width: 0; overflow: hidden; }
+  .brand > div { min-width: 0; overflow: hidden; }
   .brand-mark {
     width: 26px; height: 26px; border-radius: 7px; flex: 0 0 auto;
     background: linear-gradient(150deg, var(--accent), color-mix(in oklab, var(--accent) 55%, #7c4dff));
     display: grid; place-items: center; color: #fff; box-shadow: var(--shadow-sm);
   }
-  .brand-name { font-weight: 650; letter-spacing: -.01em; color: var(--fg-strong); white-space: nowrap; }
+  .brand-name { font-weight: 650; letter-spacing: -.01em; color: var(--fg-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .brand-sub { color: var(--muted-2); font-size: 12px; white-space: nowrap; }
   .pill-ro {
-    font-size: 11px; font-weight: 650; letter-spacing: .04em;
+    font-size: 11px; font-weight: 650; letter-spacing: .04em; flex: 0 0 auto;
     padding: 2px 8px; border-radius: var(--r-pill);
     color: var(--muted); background: var(--neutral-soft); border: 1px solid var(--border);
     text-transform: uppercase;
@@ -307,15 +311,16 @@ internal static class WorkflowRunObservatoryPage
   /* active schedule deep-link filter chip (06-24): arrives via the /schedules deep-link, no select */
   .sched-filter {
     display: inline-flex; align-items: center; gap: 7px; margin: 0 16px 10px;
+    max-width: calc(100% - 32px);
     padding: 5px 7px 5px 10px; border-radius: var(--r-pill); font-size: 12px;
     color: var(--run); background: var(--run-soft);
     border: 1px solid color-mix(in oklab, var(--run) 32%, transparent);
   }
-  .sched-filter .sf-ic { display: inline-flex; opacity: .85; }
-  .sched-filter .sf-lab { font-weight: 650; }
-  .sched-filter .sf-id { font-family: var(--mono); color: var(--fg); max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sched-filter .sf-ic { display: inline-flex; flex: 0 0 auto; opacity: .85; }
+  .sched-filter .sf-lab { flex: 0 0 auto; font-weight: 650; white-space: nowrap; }
+  .sched-filter .sf-id { flex: 0 1 auto; min-width: 0; font-family: var(--mono); color: var(--fg); max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sched-filter .sf-x {
-    display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px;
+    display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 18px; height: 18px;
     padding: 0; border: 0; border-radius: 50%; background: transparent; color: inherit; cursor: pointer; opacity: .7;
   }
   .sched-filter .sf-x:hover { opacity: 1; background: color-mix(in oklab, var(--run) 18%, transparent); }
@@ -862,7 +867,8 @@ internal static class WorkflowRunObservatoryPage
        (e.g. "已暂停"/"切换账户" stacking one glyph per line); let the brand truncate instead. */
     .topbar { gap: 8px; }
     .brand-name { overflow: hidden; text-overflow: ellipsis; }
-    .brand, .brand > div { min-width: 0; }
+    /* release the fixed brand width on narrow screens so the nav reclaims the space */
+    .brand { flex: 1 1 auto; width: auto; } .brand, .brand > div { min-width: 0; }
     .pill-ro, .live, .iconbtn, .account, .linkbtn { flex-shrink: 0; }
     .live, .linkbtn, .pill-ro { white-space: nowrap; }
     .live .freshness { display: none; }
@@ -926,8 +932,8 @@ const CFG = {
   authority: "https://nyx.chrono-ai.fun",
   clientId: "37a93189-2734-406e-bca1-7dbdf25c5a53",
   scope: "openid profile email proxy",
-  redirectUri: location.origin + "/workflow/observatory/callback",
-  storageKey: "aevatar-observatory:nyxid:pkce",
+  redirectUri: location.origin + "/auto/callback",
+  storageKey: "aevatar-console:nyxid:pkce",
   pollMs: 3000
 };
 const TOKEN_KEY = CFG.storageKey + ":token";
@@ -945,7 +951,7 @@ async function beginLogin(){
   const verifier = randomString(64);
   const st = randomString(32);
   const challenge = await sha256(verifier);
-  sessionStorage.setItem(PKCE_KEY, JSON.stringify({ verifier, state: st }));
+  sessionStorage.setItem(PKCE_KEY, JSON.stringify({ verifier, state: st, returnTo: location.pathname }));
   const u = new URL(CFG.authority + "/oauth/authorize");
   u.searchParams.set("response_type", "code");
   u.searchParams.set("client_id", CFG.clientId);
@@ -1312,7 +1318,8 @@ const SUITE_NAV=[
   {k:"studio",href:"/workflow/studio",label:"Studio",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="12" r="2.4"/><path d="M8.2 7.2 15.8 11M8.2 16.8 15.8 13"/></svg>'},
   {k:"schedules",href:"/schedules",label:"定时任务",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>'},
   {k:"channels",href:"/channels",label:"渠道",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2.6"/><path d="M12 4.5v4.9M12 14.6v4.9M4.5 12h4.9M14.6 12h4.9"/></svg>'},
-  {k:"voice",href:"/voice",label:"语音",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg>'}
+  {k:"voice",href:"/voice",label:"语音",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg>'},
+  {k:"cqrs",href:"/cqrs",label:"投影",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5.5" rx="7.5" ry="3"/><path d="M4.5 5.5v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-6M4.5 11.5v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-6"/></svg>'}
 ];
 function suiteNavHtml(active){return '<nav class="suite-nav" aria-label="控制台导航">'+SUITE_NAV.map(function(n){return '<a href="'+n.href+'"'+(n.k===active?' aria-current="page"':'')+' title="'+n.label+'">'+n.svg+'<span class="nav-label">'+n.label+'</span></a>';}).join('')+'</nav>';}
 
@@ -1325,7 +1332,7 @@ function renderTopbar(){
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="12" r="2.4"/><path d="M8.2 7.2 15.8 11M8.2 16.8 15.8 13"/></svg>
       </div>
       <div style="min-width:0">
-        <div class="brand-name">运行观测台 <span class="brand-sub">Workflow Run Observatory</span></div>
+        <div class="brand-name">Aevatar Backend Console</div>
       </div>
       <span class="pill-ro" title="只读视图，不可修改任何运行">只读</span>
     </div>
