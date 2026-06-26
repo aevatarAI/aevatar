@@ -6,6 +6,7 @@ using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.Abstractions.Sessions;
 using Aevatar.Foundation.VoicePresence.Hosting;
+using Aevatar.Foundation.VoicePresence.Transport;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -19,11 +20,15 @@ namespace Aevatar.Mainnet.Host.Api.Voice;
 public static class PolicyAwareVoiceEndpoints
 {
     private const string DefaultPattern = "/ws/voice";
+    private const string WhipOfferPattern = "/whip/offer";
     internal const string VoiceNotConfiguredReason = "voice_not_configured";
     private const string VoiceCredentialUnavailableReason = "voice_credential_unavailable";
 
     public static IEndpointConventionBuilder MapPolicyAwareVoiceEndpoint(this IEndpointRouteBuilder app) =>
         app.Map(DefaultPattern, HandlePolicyAwareVoiceAsync);
+
+    public static IEndpointConventionBuilder MapPolicyAwareVoiceWhipEndpoint(this IEndpointRouteBuilder app) =>
+        app.MapPost(WhipOfferPattern, HandlePolicyAwareVoiceWhipAsync);
 
     /// <summary>
     /// True when the voice feature registered its realtime session services.
@@ -42,6 +47,8 @@ public static class PolicyAwareVoiceEndpoints
     public static IEndpointRouteBuilder MapVoiceNotConfiguredEndpoints(this IEndpointRouteBuilder app)
     {
         app.Map(DefaultPattern, HandleVoiceNotConfiguredAsync);
+        app.Map(DefaultPattern + "/{actorId}", HandleVoiceNotConfiguredAsync);
+        app.MapPost(WhipOfferPattern, HandleVoiceNotConfiguredAsync);
         return app;
     }
 
@@ -72,65 +79,101 @@ public static class PolicyAwareVoiceEndpoints
             return;
         }
 
-        if (!TryBuildCallerScope(http, out var routingScope, out var channel, out var failure))
+        var voiceTarget = await ResolveVoiceTargetWithLegacyRecoveryAsync(http, queryPort, recoveryPort, resolver);
+        if (!voiceTarget.Succeeded)
+            return;
+
+        await AttachVoiceTargetAsync(
+            http,
+            voiceRealtimeSession,
+            mediaStreamPort,
+            attachExecutor,
+            attachOptions.Value,
+            voiceTarget.Target);
+    }
+
+    private static async Task HandlePolicyAwareVoiceWhipAsync(
+        HttpContext http,
+        [FromServices] IChatRoutePolicyQueryPort queryPort,
+        [FromServices] ChatRouteResolver resolver,
+        [FromServices] IRealtimeSession<VoiceRealtimeSessionRequest, VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeFrame, VoiceRealtimeSessionCompletion> voiceRealtimeSession,
+        [FromServices] VoiceWhipAttachExecutor whipAttachExecutor,
+        [FromServices] IOptions<VoiceWebSocketAttachOptions> attachOptions)
+    {
+        var sessionId = NormalizeOptional(http.Request.Query["sessionId"].ToString());
+        if (sessionId is null)
         {
-            http.Response.StatusCode = StatusCodes.Status403Forbidden;
-            await http.Response.WriteAsync(failure, http.RequestAborted);
+            http.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await http.Response.WriteAsync("sessionId is required.", http.RequestAborted);
             return;
         }
 
-        var routeInput = BuildRouteInput(http, routingScope, channel);
-        var snapshot = await queryPort.LookupForCallerAsync(routingScope, http.RequestAborted);
-
-        // Self-heal a stale/missing read-model row before failing closed. /ws/voice returns 501 after the
-        // chat-route policy grain sits idle for days: the grain still holds the policy, but its ES projection
-        // row went missing, so LookupForCallerAsync returns null and the resolver falls to the text default
-        // (ForwardToModel without a voiceAttachTarget). Re-fire the committed-state activation plan to
-        // re-materialize the row from already-committed events (no new commit, no grain mutation), then
-        // re-read with a short bounded window (materialization may complete asynchronously). Gated on a null
-        // snapshot, so the happy path is untouched and text routing — which never runs this handler — is
-        // unaffected.
-        if (snapshot is null && await recoveryPort.TryRematerializeAsync(routingScope, http.RequestAborted))
+        var offerSdp = await ReadSdpBodyAsync(http.Request);
+        if (string.IsNullOrWhiteSpace(offerSdp))
         {
-            for (var attempt = 0; attempt < 5 && snapshot is null; attempt++)
-            {
-                if (attempt > 0)
-                    await Task.Delay(TimeSpan.FromMilliseconds(400), http.RequestAborted);
-                snapshot = await queryPort.LookupForCallerAsync(routingScope, http.RequestAborted);
-            }
+            http.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await http.Response.WriteAsync("SDP offer is required.", http.RequestAborted);
+            return;
         }
 
-        var decision = resolver.Resolve(snapshot, routeInput);
+        var voiceTarget = await ResolveVoiceTargetFromReadModelAsync(http, queryPort, resolver);
+        if (!voiceTarget.Succeeded)
+            return;
 
-        var action = decision.Action;
-        switch (action.ActionCase)
+        var toolContextAdmission = await TryBuildToolContextAsync(http);
+        if (!toolContextAdmission.Accepted)
+            return;
+
+        try
         {
-            case ChatRouteAction.ActionOneofCase.Reject:
-                http.Response.StatusCode = StatusCodes.Status403Forbidden;
-                await http.Response.WriteAsync(action.Reject?.Reason ?? "Voice route rejected.", http.RequestAborted);
-                return;
-            case ChatRouteAction.ActionOneofCase.ForwardToModel:
-                if (ChatRouteActionTargets.TryGetVoiceAttachTarget(action, out var voiceTarget))
-                {
-                    await AttachVoiceTargetAsync(
-                        http,
-                        voiceRealtimeSession,
-                        mediaStreamPort,
-                        attachExecutor,
-                        attachOptions.Value,
-                        voiceTarget);
-                    return;
-                }
+            var result = await voiceRealtimeSession.ExecuteAsync(
+                new VoiceRealtimeSessionRequest(
+                    voiceTarget.Target.ActorId.Trim(),
+                    NormalizeOptional(voiceTarget.Target.VoiceModuleName),
+                    VoiceRealtimeSessionPurpose.Attach,
+                    voiceTarget.Target.SessionOverrides?.Clone(),
+                    toolContextAdmission.ToolContext?.Clone()),
+                static (_, _) => ValueTask.CompletedTask,
+                ct: http.RequestAborted);
 
-                // ForwardToModel without a typed voice target is ordinary model forwarding,
-                // not voice attachment. Keep it fail-closed before WebSocket accept.
-                http.Response.StatusCode = StatusCodes.Status501NotImplemented;
-                await http.Response.WriteAsync("Voice ForwardToModel is not supported in v1.", http.RequestAborted);
+            var accepted = await VoiceWebSocketAttachExecutor.WriteNonAcceptedResolutionAsync(http, result, attachOptions.Value);
+            if (accepted is null)
+            {
+                await ReleasePendingToolCredentialAsync(http, toolContextAdmission.ToolContext);
                 return;
-            default:
-                http.Response.StatusCode = StatusCodes.Status403Forbidden;
-                await http.Response.WriteAsync("Voice route did not resolve to a GAgent target.", http.RequestAborted);
-                return;
+            }
+
+            var attached = await whipAttachExecutor.AttachAsync(
+                http,
+                accepted,
+                offerSdp,
+                BuildWhipResourceLocation(sessionId),
+                toolContextAdmission.TransportBinding,
+                http.RequestAborted);
+
+            http.Response.StatusCode = StatusCodes.Status201Created;
+            http.Response.ContentType = "application/sdp";
+            http.Response.Headers.Location = attached.ResourceLocation;
+            await http.Response.WriteAsync(attached.AnswerSdp, http.RequestAborted);
+        }
+        catch (VoiceVolatileMediaStreamUnavailableException)
+        {
+            await ReleasePendingToolCredentialAsync(http, toolContextAdmission.ToolContext);
+            http.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            await http.Response.WriteAsync(VoiceVolatileMediaStreamUnavailableException.Reason, http.RequestAborted);
+        }
+        catch (VoiceVolatileToolCredentialUnavailableException)
+        {
+            await ReleasePendingToolCredentialAsync(http, toolContextAdmission.ToolContext);
+            http.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            await http.Response.WriteAsync(VoiceWebSocketAttachExecutor.VoiceCredentialUnavailableReason, http.RequestAborted);
+        }
+        catch (VoiceWhipTransportAttachConflictException)
+        {
+            await ReleasePendingToolCredentialAsync(http, toolContextAdmission.ToolContext);
+            http.Response.StatusCode = StatusCodes.Status409Conflict;
+            http.Response.Headers.RetryAfter = Math.Max(1, attachOptions.Value.ConflictRetryAfterSeconds).ToString();
+            await http.Response.WriteAsync(VoiceWebSocketAttachExecutor.TransportAlreadyAttachedBody, http.RequestAborted);
         }
     }
 
@@ -322,6 +365,97 @@ public static class PolicyAwareVoiceEndpoints
     private static ILogger GetLogger(HttpContext http) =>
         http.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(PolicyAwareVoiceEndpoints));
 
+    private static async Task<VoiceTargetResolution> ResolveVoiceTargetWithLegacyRecoveryAsync(
+        HttpContext http,
+        IChatRoutePolicyQueryPort queryPort,
+        IChatRoutePolicyProjectionRecoveryPort recoveryPort,
+        ChatRouteResolver resolver)
+    {
+        if (!TryBuildCallerScope(http, out var routingScope, out var channel, out var failure))
+        {
+            http.Response.StatusCode = StatusCodes.Status403Forbidden;
+            await http.Response.WriteAsync(failure, http.RequestAborted);
+            return VoiceTargetResolution.Failed();
+        }
+
+        var routeInput = BuildRouteInput(http, routingScope, channel);
+        var snapshot = await queryPort.LookupForCallerAsync(routingScope, http.RequestAborted);
+
+        // Keep the legacy WebSocket self-heal path out of WHIP, whose request path only reads materialized state.
+        if (snapshot is null && await recoveryPort.TryRematerializeAsync(routingScope, http.RequestAborted))
+        {
+            for (var attempt = 0; attempt < 5 && snapshot is null; attempt++)
+            {
+                if (attempt > 0)
+                    await Task.Delay(TimeSpan.FromMilliseconds(400), http.RequestAborted);
+                snapshot = await queryPort.LookupForCallerAsync(routingScope, http.RequestAborted);
+            }
+        }
+
+        return await ResolveVoiceTargetDecisionAsync(http, snapshot, routeInput, resolver);
+    }
+
+    private static async Task<VoiceTargetResolution> ResolveVoiceTargetFromReadModelAsync(
+        HttpContext http,
+        IChatRoutePolicyQueryPort queryPort,
+        ChatRouteResolver resolver)
+    {
+        if (!TryBuildCallerScope(http, out var routingScope, out var channel, out var failure))
+        {
+            http.Response.StatusCode = StatusCodes.Status403Forbidden;
+            await http.Response.WriteAsync(failure, http.RequestAborted);
+            return VoiceTargetResolution.Failed();
+        }
+
+        var routeInput = BuildRouteInput(http, routingScope, channel);
+        var snapshot = await queryPort.LookupForCallerAsync(routingScope, http.RequestAborted);
+        return await ResolveVoiceTargetDecisionAsync(http, snapshot, routeInput, resolver);
+    }
+
+    private static async Task<VoiceTargetResolution> ResolveVoiceTargetDecisionAsync(
+        HttpContext http,
+        ChatRoutePolicySnapshot? snapshot,
+        ChatRouteInput routeInput,
+        ChatRouteResolver resolver)
+    {
+        var decision = resolver.Resolve(snapshot, routeInput);
+
+        var action = decision.Action;
+        switch (action.ActionCase)
+        {
+            case ChatRouteAction.ActionOneofCase.Reject:
+                http.Response.StatusCode = StatusCodes.Status403Forbidden;
+                await http.Response.WriteAsync(action.Reject?.Reason ?? "Voice route rejected.", http.RequestAborted);
+                return VoiceTargetResolution.Failed();
+            case ChatRouteAction.ActionOneofCase.ForwardToModel:
+                if (ChatRouteActionTargets.TryGetVoiceAttachTarget(action, out var voiceTarget))
+                    return VoiceTargetResolution.Success(voiceTarget);
+
+                http.Response.StatusCode = StatusCodes.Status501NotImplemented;
+                await http.Response.WriteAsync("Voice ForwardToModel is not supported in v1.", http.RequestAborted);
+                return VoiceTargetResolution.Failed();
+            default:
+                http.Response.StatusCode = StatusCodes.Status403Forbidden;
+                await http.Response.WriteAsync("Voice route did not resolve to a GAgent target.", http.RequestAborted);
+                return VoiceTargetResolution.Failed();
+        }
+    }
+
+    private static async Task<string> ReadSdpBodyAsync(HttpRequest request)
+    {
+        request.EnableBuffering();
+        request.Body.Seek(0, SeekOrigin.Begin);
+        using var reader = new StreamReader(request.Body, leaveOpen: true);
+        var sdp = await reader.ReadToEndAsync(request.HttpContext.RequestAborted);
+        request.Body.Seek(0, SeekOrigin.Begin);
+        return sdp.Trim();
+    }
+
+    private static string BuildWhipResourceLocation(string sessionId) =>
+        QueryString.Create("sessionId", sessionId).ToUriComponent() is var query && !string.IsNullOrEmpty(query)
+            ? WhipOfferPattern + query
+            : WhipOfferPattern;
+
     private static ChatRouteInput BuildRouteInput(
         HttpContext http,
         OwnerScope callerScope,
@@ -441,4 +575,10 @@ public static class PolicyAwareVoiceEndpoints
             .Select(static ch => char.ToLowerInvariant(ch))
             .ToArray());
 
+    private sealed record VoiceTargetResolution(bool Succeeded, ChatRouteVoiceAttachTarget Target)
+    {
+        public static VoiceTargetResolution Success(ChatRouteVoiceAttachTarget target) => new(true, target);
+
+        public static VoiceTargetResolution Failed() => new(false, new ChatRouteVoiceAttachTarget());
+    }
 }
