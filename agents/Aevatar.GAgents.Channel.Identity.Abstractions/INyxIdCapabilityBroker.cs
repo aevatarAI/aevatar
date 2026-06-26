@@ -59,4 +59,21 @@ public interface INyxIdCapabilityBroker
         ExternalSubjectRef externalSubject,
         CapabilityScope scope,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Issues a short-lived access token directly from a known
+    /// <paramref name="bindingId"/>, skipping the readmodel resolve that
+    /// <see cref="IssueShortLivedAsync"/> performs. Use when the caller already
+    /// holds the persisted binding id (e.g. a deferred reply run that carried it
+    /// as an identity fact across the run boundary), so token re-mint does not
+    /// depend on the readmodel having observed the bind. Same exception contract
+    /// as <see cref="IssueShortLivedAsync"/>: throws
+    /// <see cref="BindingRevokedException"/> on NyxID <c>invalid_grant</c> and
+    /// <see cref="BindingScopeMismatchException"/> on <c>invalid_scope</c>.
+    /// </summary>
+    Task<CapabilityHandle> IssueShortLivedByBindingIdAsync(
+        ExternalSubjectRef externalSubject,
+        string bindingId,
+        CapabilityScope scope,
+        CancellationToken ct = default);
 }

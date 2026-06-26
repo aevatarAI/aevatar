@@ -152,7 +152,8 @@ public static class AgentToolExecutionContextMapper
                 AgentToolExecutionContext.Normalize(payload.Channel?.DurableReplyCredentialRef)),
             new AgentToolSenderBindingContext(
                 AgentToolExecutionContext.Normalize(payload.SenderBinding?.BindingId),
-                AgentToolExecutionContext.Normalize(payload.SenderBinding?.NyxUserId)),
+                AgentToolExecutionContext.Normalize(payload.SenderBinding?.NyxUserId),
+                AgentToolExecutionContext.Normalize(payload.SenderBinding?.SenderTenant)),
             new LLMRequestRoutingContext(
                 AgentToolExecutionContext.Normalize(payload.Routing?.ModelOverride),
                 AgentToolExecutionContext.Normalize(payload.Routing?.NyxIdRoutePreference),
@@ -203,6 +204,7 @@ public static class AgentToolExecutionContextMapper
             {
                 BindingId = context.SenderBinding.BindingId ?? string.Empty,
                 NyxUserId = context.SenderBinding.NyxUserId ?? string.Empty,
+                SenderTenant = context.SenderBinding.SenderTenant ?? string.Empty,
             },
             Routing = new LLMRequestRoutingContextPayload
             {

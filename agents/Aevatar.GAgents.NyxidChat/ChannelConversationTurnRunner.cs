@@ -81,6 +81,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private readonly IExternalIdentityBindingQueryPort? _identityBindingQueryPort;
     private readonly ChannelSlashCommandRegistry? _slashCommandRegistry;
     private readonly INyxIdCapabilityBroker? _capabilityBroker;
+    private readonly IBindingRevocationReconciler? _bindingRevocationReconciler;
     private readonly IUserLlmSelectionService? _userLlmSelectionService;
     private readonly IUserLlmOptionsService? _userLlmOptionsService;
     private readonly IUserLlmOptionsRenderer<MessageContent>? _userLlmOptionsRenderer;
@@ -106,6 +107,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         IExternalIdentityBindingQueryPort? identityBindingQueryPort = null,
         ChannelSlashCommandRegistry? slashCommandRegistry = null,
         INyxIdCapabilityBroker? capabilityBroker = null,
+        IBindingRevocationReconciler? bindingRevocationReconciler = null,
         IUserLlmSelectionService? userLlmSelectionService = null,
         IUserLlmOptionsService? userLlmOptionsService = null,
         IUserLlmOptionsRenderer<MessageContent>? userLlmOptionsRenderer = null,
@@ -128,6 +130,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         _identityBindingQueryPort = identityBindingQueryPort;
         _slashCommandRegistry = slashCommandRegistry;
         _capabilityBroker = capabilityBroker;
+        _bindingRevocationReconciler = bindingRevocationReconciler;
         _userLlmSelectionService = userLlmSelectionService;
         _userLlmOptionsService = userLlmOptionsService;
         _userLlmOptionsRenderer = userLlmOptionsRenderer;
@@ -2236,9 +2239,19 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         // falls back to the bot owner's upstream-pinned LLM config.
         if (senderBinding is not null)
         {
+            // Carry the binding-id AND the external-subject tenant as identity
+            // facts (not credentials). Both survive the ConversationGAgent
+            // transient-credential strip, so the deferred reply run can rebuild
+            // the exact ExternalSubjectRef and re-mint a fresh sender token by
+            // binding id (the synchronously-minted token below is stripped
+            // before persistence, so the deferred run cannot reuse it).
+            var senderTenant = NormalizeOptional(senderBinding.Subject.Tenant);
             request.ToolContext = (AgentToolExecutionContextMapper.FromPayload(request.ToolContext) with
             {
-                SenderBinding = new AgentToolSenderBindingContext(senderBinding.BindingId),
+                SenderBinding = new AgentToolSenderBindingContext(
+                    senderBinding.BindingId,
+                    NyxUserId: null,
+                    SenderTenant: senderTenant),
             }).ToPayload();
             var senderAccessToken = await TryIssueSenderLlmAccessTokenAsync(senderBinding.Subject, ct).ConfigureAwait(false);
             if (!string.IsNullOrWhiteSpace(senderAccessToken))
@@ -2260,7 +2273,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     {
                         SenderBinding = new AgentToolSenderBindingContext(
                             senderBinding.BindingId,
-                            senderNyxUserId.Trim()),
+                            senderNyxUserId.Trim(),
+                            senderTenant),
                     }).ToPayload();
                 }
             }
@@ -2410,6 +2424,20 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         {
             throw;
         }
+        catch (BindingRevokedException ex)
+        {
+            // Grant is gone upstream (NyxID invalid_grant). Reconcile the local
+            // binding (best-effort, off the reply path) so /whoami shows unbound
+            // and /init lets the sender re-bind, then fall back to owner config.
+            _logger.LogWarning(
+                ex,
+                "Sender NyxID binding revoked at NyxID; reconciling local binding and falling back to bot owner LLM config. subject={Platform}:{Tenant}:{User}",
+                subject.Platform,
+                subject.Tenant,
+                subject.ExternalUserId);
+            TriggerBindingReconcile(subject);
+            return null;
+        }
         catch (Exception ex)
         {
             _logger.LogWarning(
@@ -2420,6 +2448,32 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 subject.ExternalUserId);
             return null;
         }
+    }
+
+    private void TriggerBindingReconcile(ExternalSubjectRef subject)
+    {
+        var reconciler = _bindingRevocationReconciler;
+        if (reconciler is null)
+            return;
+
+        var subjectSnapshot = subject.Clone();
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await reconciler
+                    .ReconcileRevokedAsync(subjectSnapshot, "nyx_invalid_grant", CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                // Best-effort self-heal; reconcile failures must never surface on
+                // the reply path. The reconciler logs its own dispatch failures;
+                // this only catches unexpected faults so the fire-and-forget task
+                // never escapes unobserved.
+                _logger.LogWarning(ex, "Binding reconcile after invalid_grant failed (best-effort, ignored).");
+            }
+        });
     }
 
     private async Task<string?> TryResolveSenderNyxUserIdAsync(

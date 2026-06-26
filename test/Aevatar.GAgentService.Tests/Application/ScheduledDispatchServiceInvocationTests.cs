@@ -780,5 +780,12 @@ public sealed class ScheduledDispatchServiceInvocationTests
                 _ => Task.FromResult(new CapabilityHandle { AccessToken = AccessToken }),
             };
         }
+
+        public Task<CapabilityHandle> IssueShortLivedByBindingIdAsync(
+            ExternalSubjectRef externalSubject,
+            string bindingId,
+            CapabilityScope scope,
+            CancellationToken ct = default) =>
+            IssueShortLivedAsync(externalSubject, scope, ct);
     }
 }

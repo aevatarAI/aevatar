@@ -945,8 +945,10 @@ public sealed class ConversationReplyGeneratorTests
             .Content;
         toolResult.Should().Contain("credential_denied");
         toolResult.Should().Contain("Owner credentials were not used");
+        toolResult.Should().Contain("/init");
         reply.Text.Should().Contain("credential_denied");
         reply.Text.Should().Contain("Owner credentials were not used");
+        reply.Text.Should().Contain("/init");
         approvalHandler.RequestCount.Should().Be(0);
         tool.ExecuteCount.Should().Be(0);
     }

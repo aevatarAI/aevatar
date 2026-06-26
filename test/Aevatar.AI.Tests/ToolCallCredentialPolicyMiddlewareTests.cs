@@ -67,6 +67,7 @@ public sealed class ToolCallCredentialPolicyMiddlewareTests
         context.TerminationKind.Should().Be(ToolCallTerminationKind.MiddlewareTerminated);
         context.Result.Should().Contain("credential_denied");
         context.Result.Should().Contain("Owner credentials were not used");
+        context.Result.Should().Contain("/init");
         using var result = JsonDocument.Parse(context.Result!);
         result.RootElement.GetProperty("error").GetString().Should().Be("credential_denied");
     }

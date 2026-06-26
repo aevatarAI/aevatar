@@ -5,6 +5,8 @@ using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Tools;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Identity;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.Studio.Application.Studio.Abstractions;
@@ -25,12 +27,15 @@ namespace Aevatar.GAgents.NyxidChat;
 public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationExecutorPort
 {
     private const string PublisherActorId = "agent-run-reply-generation-executor";
+    private const string InvalidGrantRevokeReason = "nyx_invalid_grant";
     private readonly IActorDispatchPort _actorDispatchPort;
     private readonly IConversationReplyGenerator _replyGenerator;
     private readonly IInteractiveReplyCollector? _interactiveReplyCollector;
     private readonly Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? _relayOptions;
     private readonly INyxIdRelayScopeResolver? _scopeResolver;
     private readonly IUserConfigQueryPort? _userConfigQueryPort;
+    private readonly INyxIdCapabilityBroker? _capabilityBroker;
+    private readonly IBindingRevocationReconciler? _bindingRevocationReconciler;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<AgentRunReplyGenerationExecutor> _logger;
 
@@ -42,7 +47,9 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         ILogger<AgentRunReplyGenerationExecutor> logger,
         INyxIdRelayScopeResolver? scopeResolver = null,
         IUserConfigQueryPort? userConfigQueryPort = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        INyxIdCapabilityBroker? capabilityBroker = null,
+        IBindingRevocationReconciler? bindingRevocationReconciler = null)
     {
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         _replyGenerator = replyGenerator ?? throw new ArgumentNullException(nameof(replyGenerator));
@@ -50,6 +57,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         _relayOptions = relayOptions;
         _scopeResolver = scopeResolver;
         _userConfigQueryPort = userConfigQueryPort;
+        _capabilityBroker = capabilityBroker;
+        _bindingRevocationReconciler = bindingRevocationReconciler;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -565,6 +574,19 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             control = control with { ModelOverride = routedModel };
 
         var toolContext = AgentToolExecutionContextMapper.FromPayload(request.ToolContext);
+
+        // Re-mint the sender's short-lived NyxID token here, in the deferred reply
+        // run. The synchronous inbound path mints a sender token but ConversationGAgent
+        // strips transient credentials before persisting NeedsLlmReplyEvent, so by the
+        // time this deferred run executes the token is gone. The binding-id + tenant
+        // survive as identity facts on the tool context, so we re-mint by binding id
+        // and overlay the fresh token onto LlmControl; ToToolContext then projects it
+        // into ToolContext.Credentials so sender-credentialed mutation tools (use_skill)
+        // run under the sender's own NyxID instead of being denied. Owner fallback is
+        // derived below with the sender token cleared, so a failed/empty re-mint still
+        // leaves the bot-owner LLM path intact.
+        control = await ApplySenderTokenAsync(request, toolContext, control, ct).ConfigureAwait(false);
+
         var ownerFallbackControl = control with { SenderNyxIdAccessToken = null };
         var ownerFallbackToolContext = ClearSenderBinding(toolContext);
 
@@ -584,6 +606,133 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             toolContext,
             ownerFallbackControl,
             ownerFallbackToolContext);
+    }
+
+    private async Task<LLMControlContext> ApplySenderTokenAsync(
+        NeedsLlmReplyEvent request,
+        AgentToolExecutionContext toolContext,
+        LLMControlContext control,
+        CancellationToken ct)
+    {
+        var broker = _capabilityBroker;
+        if (broker is null)
+            return control;
+
+        var bindingId = NormalizeOptional(toolContext.SenderBinding.BindingId);
+        if (bindingId is null)
+            return control;
+
+        if (!TryRebuildSenderSubject(toolContext, out var subject))
+        {
+            _logger.LogDebug(
+                "Sender token re-mint skipped: tool context lacks platform/sender-id to rebuild the external subject. correlation={CorrelationId}",
+                request.CorrelationId);
+            return control;
+        }
+
+        try
+        {
+            var handle = await broker
+                .IssueShortLivedByBindingIdAsync(
+                    subject,
+                    bindingId,
+                    new CapabilityScope { Value = AevatarOAuthClientScopes.Proxy },
+                    ct)
+                .ConfigureAwait(false);
+            var accessToken = NormalizeOptional(handle.AccessToken);
+            if (accessToken is null)
+            {
+                _logger.LogWarning(
+                    "Sender NyxID token re-mint returned an empty token; deferred reply run keeps owner fallback. correlation={CorrelationId} subject={Platform}:{Tenant}:{User}",
+                    request.CorrelationId,
+                    subject.Platform,
+                    subject.Tenant,
+                    subject.ExternalUserId);
+                return control;
+            }
+
+            return control with { SenderNyxIdAccessToken = accessToken };
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (BindingRevokedException ex)
+        {
+            // Grant is gone upstream (NyxID invalid_grant). Reconcile the local
+            // binding so /whoami shows unbound and /init lets the sender re-bind.
+            // Best-effort, off the reply path: never await or block the turn.
+            _logger.LogWarning(
+                ex,
+                "Sender NyxID binding revoked at NyxID during deferred re-mint; reconciling local binding and keeping owner fallback. correlation={CorrelationId} subject={Platform}:{Tenant}:{User}",
+                request.CorrelationId,
+                subject.Platform,
+                subject.Tenant,
+                subject.ExternalUserId);
+            TriggerBindingReconcile(subject);
+            return control;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to re-mint sender NyxID token in deferred reply run; falling back to bot owner LLM config. correlation={CorrelationId} subject={Platform}:{Tenant}:{User}",
+                request.CorrelationId,
+                subject.Platform,
+                subject.Tenant,
+                subject.ExternalUserId);
+            return control;
+        }
+    }
+
+    private static bool TryRebuildSenderSubject(
+        AgentToolExecutionContext toolContext,
+        out ExternalSubjectRef subject)
+    {
+        subject = new ExternalSubjectRef();
+        var platform = NormalizeOptional(toolContext.Channel.Platform);
+        var senderId = NormalizeOptional(toolContext.Channel.SenderId);
+        if (platform is null || senderId is null)
+            return false;
+
+        // Mirror TryResolveExternalSubject's normalization so the rebuilt subject
+        // matches the one the synchronous path resolved (and the actor id derived
+        // from it): platform lowercased, fields trimmed. Tenant is carried as an
+        // identity fact (SenderBinding.SenderTenant); a null tenant is valid for
+        // platforms without a tenant scope.
+        subject = new ExternalSubjectRef
+        {
+            Platform = platform.ToLowerInvariant(),
+            Tenant = NormalizeOptional(toolContext.SenderBinding.SenderTenant) ?? string.Empty,
+            ExternalUserId = senderId,
+        };
+        return true;
+    }
+
+    private void TriggerBindingReconcile(ExternalSubjectRef subject)
+    {
+        var reconciler = _bindingRevocationReconciler;
+        if (reconciler is null)
+            return;
+
+        var subjectSnapshot = subject.Clone();
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await reconciler
+                    .ReconcileRevokedAsync(subjectSnapshot, InvalidGrantRevokeReason, CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                // Best-effort self-heal; reconcile failures must never surface on
+                // the reply path. The reconciler logs its own dispatch failures;
+                // this only catches unexpected faults so the fire-and-forget task
+                // never escapes unobserved.
+                _logger.LogWarning(ex, "Binding reconcile after invalid_grant failed (best-effort, ignored).");
+            }
+        });
     }
 
     private static ChatAttachmentInputContext BuildAttachmentInputContext(
