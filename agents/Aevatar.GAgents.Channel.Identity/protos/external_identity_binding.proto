@@ -45,6 +45,16 @@ message RevokeBindingCommand {
   string reason = 2;
 }
 
+// Issued when the local binding points at a stale/revoked NyxID binding and a
+// fresh authorization-code exchange returned a replacement binding_id. Unlike
+// CommitBindingCommand, this command intentionally replaces an active binding in
+// one actor turn after the caller has verified the previous binding is unusable.
+message RefreshBindingCommand {
+  aevatar.gagents.channel.abstractions.ExternalSubjectRef external_subject = 1;
+  string binding_id = 2;
+  string reason = 3;
+}
+
 // Persisted when CommitBindingCommand is accepted by the actor.
 message ExternalIdentityBoundEvent {
   aevatar.gagents.channel.abstractions.ExternalSubjectRef external_subject = 1;

@@ -69,6 +69,7 @@ public static class ScheduledDispatchEndpoints
         [FromServices] IServiceCatalogQueryReader catalogReader,
         [FromServices] IServiceRevisionCatalogQueryReader revisionCatalogReader,
         [FromServices] IExternalIdentityBindingQueryPort bindingQueryPort,
+        [FromServices] IScheduledServiceInvocationCredentialExchangePort credentialExchangePort,
         CancellationToken ct = default)
     {
         ScheduledDispatchConfiguration configuration;
@@ -78,6 +79,8 @@ public static class ScheduledDispatchEndpoints
             await EnsureScopeOwnerNyxIdBindingExistsAsync(input, ownerSubject, bindingQueryPort, ct)
                 .ConfigureAwait(false);
             configuration = await input.ToConfigurationAsync(input.ScheduleId, catalogReader, revisionCatalogReader, ownerSubject, ct);
+            await EnsureScopeOwnerNyxIdScopeCanBeIssuedAsync(configuration, credentialExchangePort, ct)
+                .ConfigureAwait(false);
         }
         catch (Exception ex) when (TryMapScheduleConfigurationError(ex, out var result))
         {
@@ -103,6 +106,7 @@ public static class ScheduledDispatchEndpoints
         [FromServices] IServiceCatalogQueryReader catalogReader,
         [FromServices] IServiceRevisionCatalogQueryReader revisionCatalogReader,
         [FromServices] IExternalIdentityBindingQueryPort bindingQueryPort,
+        [FromServices] IScheduledServiceInvocationCredentialExchangePort credentialExchangePort,
         CancellationToken ct = default)
     {
         ScheduledDispatchConfiguration configuration;
@@ -112,6 +116,8 @@ public static class ScheduledDispatchEndpoints
             await EnsureScopeOwnerNyxIdBindingExistsAsync(input, ownerSubject, bindingQueryPort, ct)
                 .ConfigureAwait(false);
             configuration = await input.ToConfigurationAsync(scheduleId, catalogReader, revisionCatalogReader, ownerSubject, ct);
+            await EnsureScopeOwnerNyxIdScopeCanBeIssuedAsync(configuration, credentialExchangePort, ct)
+                .ConfigureAwait(false);
         }
         catch (Exception ex) when (TryMapScheduleConfigurationError(ex, out var result))
         {
@@ -270,6 +276,31 @@ public static class ScheduledDispatchEndpoints
         throw new ArgumentException(
             "Authenticated NyxID owner binding is required for scope owner schedule auth; complete or refresh NyxID login before creating a scope owner schedule.",
             nameof(input));
+    }
+
+    private static async Task EnsureScopeOwnerNyxIdScopeCanBeIssuedAsync(
+        ScheduledDispatchConfiguration configuration,
+        IScheduledServiceInvocationCredentialExchangePort credentialExchangePort,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(credentialExchangePort);
+
+        var serviceInvocation = configuration.Target.ServiceInvocation;
+        var scopeOwnerNyxId = serviceInvocation?.Auth?.ScopeOwnerNyxId;
+        if (scopeOwnerNyxId == null)
+            return;
+
+        var exchange = await credentialExchangePort.IssueScopeOwnerNyxIdAsync(
+            scopeOwnerNyxId,
+            serviceInvocation!.Identity,
+            ct).ConfigureAwait(false);
+        if (exchange.Succeeded)
+            return;
+
+        throw new ArgumentException(string.IsNullOrWhiteSpace(exchange.Error)
+            ? "NyxID binding does not grant the requested schedule scope."
+            : exchange.Error.Trim(), nameof(configuration));
     }
 
     private static ScheduledServiceInvocationNyxIdSubjectRef? ResolveAuthenticatedNyxIdOwnerSubject(HttpContext http)

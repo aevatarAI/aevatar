@@ -155,7 +155,9 @@ public sealed class DefaultServiceInvocationDispatcherTests
                 Prompt = "hello",
                 LlmControl = new LLMControlContextPayload
                 {
+                    NyxIdAccessToken = "owner-token",
                     ModelOverride = "sonnet",
+                    NyxIdRoutePreference = "chrono-llm-public",
                     UserMemoryPrompt = "memory",
                     SenderNyxIdAccessToken = "sender-token",
                 },
@@ -164,7 +166,9 @@ public sealed class DefaultServiceInvocationDispatcherTests
 
         var workflowRequest = dispatchPort.Calls.Should().ContainSingle().Which
             .envelope.Payload.Unpack<WorkflowChatRequestEvent>();
+        workflowRequest.CallerCredential.BearerToken.Should().Be("owner-token");
         workflowRequest.LlmControl.ModelOverride.Should().Be("sonnet");
+        workflowRequest.LlmControl.RoutePreference.Should().Be("chrono-llm-public");
         workflowRequest.LlmControl.UserMemoryPrompt.Should().Be("memory");
         workflowRequest.LlmControl.SenderNyxIdAccessToken.Should().Be("sender-token");
     }
