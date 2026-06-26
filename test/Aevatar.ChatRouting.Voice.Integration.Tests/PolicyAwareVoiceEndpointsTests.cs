@@ -256,6 +256,36 @@ public sealed class PolicyAwareVoiceEndpointsTests
     }
 
     [Fact]
+    public async Task PolicyAwareWhip_WhenPolicyProjectionIsMissing_ShouldNotRematerializeInRequestPath()
+    {
+        var policyPort = new HealablePolicyPort();
+        var recovery = new RecordingProjectionRecoveryPort(
+            result: true,
+            onHeal: () => policyPort.Heal(new ChatRoutePolicySnapshot(
+                VoiceAttachTarget("voice-agent-lark", "voice_presence_openai"),
+                [])));
+        var session = new RecordingVoiceRealtimeSession();
+        var factory = new FakeWebRtcVoiceTransportFactory(
+            new WebRtcVoiceTransportSession(new StubVoiceTransport(), "answer", Task.CompletedTask));
+        using var app = CreatePolicyAwareApp(
+            policyPort,
+            new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent-lark"]),
+            session,
+            recoveryPort: recovery,
+            transportFactory: factory);
+        var context = CreateWhipContext(app, "/whip/offer?sessionId=app-session-1&channel=lark", "v=0\r\noffer");
+
+        await GetEndpoint(app, "/whip/offer").RequestDelegate!(context);
+
+        recovery.Calls.Should().Be(0);
+        policyPort.Lookups.Should().Be(1);
+        context.Response.StatusCode.Should().Be(StatusCodes.Status501NotImplemented);
+        (await ReadBodyAsync(context)).Should().Be("Voice ForwardToModel is not supported in v1.");
+        session.Requests.Should().BeEmpty();
+        factory.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task PolicyAwareWhip_WhenAttachFails_ShouldReturnConflictAndDisposeTransport()
     {
         var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(

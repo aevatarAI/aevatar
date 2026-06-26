@@ -246,6 +246,7 @@ public sealed class ProjectionWorkflowBoardExecutionQueryPortTests
             "cmd-alpha",
             "corr-alpha",
             "chat",
+            string.Empty,
             ServiceImplementationKind.Workflow,
             targetActorId,
             "rev-alpha",

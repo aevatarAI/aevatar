@@ -79,7 +79,7 @@ public static class PolicyAwareVoiceEndpoints
             return;
         }
 
-        var voiceTarget = await ResolveVoiceTargetAsync(http, queryPort, recoveryPort, resolver);
+        var voiceTarget = await ResolveVoiceTargetWithLegacyRecoveryAsync(http, queryPort, recoveryPort, resolver);
         if (!voiceTarget.Succeeded)
             return;
 
@@ -95,7 +95,6 @@ public static class PolicyAwareVoiceEndpoints
     private static async Task HandlePolicyAwareVoiceWhipAsync(
         HttpContext http,
         [FromServices] IChatRoutePolicyQueryPort queryPort,
-        [FromServices] IChatRoutePolicyProjectionRecoveryPort recoveryPort,
         [FromServices] ChatRouteResolver resolver,
         [FromServices] IRealtimeSession<VoiceRealtimeSessionRequest, VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeFrame, VoiceRealtimeSessionCompletion> voiceRealtimeSession,
         [FromServices] VoiceWhipAttachExecutor whipAttachExecutor,
@@ -117,7 +116,7 @@ public static class PolicyAwareVoiceEndpoints
             return;
         }
 
-        var voiceTarget = await ResolveVoiceTargetAsync(http, queryPort, recoveryPort, resolver);
+        var voiceTarget = await ResolveVoiceTargetFromReadModelAsync(http, queryPort, resolver);
         if (!voiceTarget.Succeeded)
             return;
 
@@ -366,7 +365,7 @@ public static class PolicyAwareVoiceEndpoints
     private static ILogger GetLogger(HttpContext http) =>
         http.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(PolicyAwareVoiceEndpoints));
 
-    private static async Task<VoiceTargetResolution> ResolveVoiceTargetAsync(
+    private static async Task<VoiceTargetResolution> ResolveVoiceTargetWithLegacyRecoveryAsync(
         HttpContext http,
         IChatRoutePolicyQueryPort queryPort,
         IChatRoutePolicyProjectionRecoveryPort recoveryPort,
@@ -382,8 +381,7 @@ public static class PolicyAwareVoiceEndpoints
         var routeInput = BuildRouteInput(http, routingScope, channel);
         var snapshot = await queryPort.LookupForCallerAsync(routingScope, http.RequestAborted);
 
-        // Self-heal a stale/missing read-model row before failing closed. /ws/voice and /whip/offer both
-        // rely on the same policy-aware voice target, so they share the same recovery window.
+        // Keep the legacy WebSocket self-heal path out of WHIP, whose request path only reads materialized state.
         if (snapshot is null && await recoveryPort.TryRematerializeAsync(routingScope, http.RequestAborted))
         {
             for (var attempt = 0; attempt < 5 && snapshot is null; attempt++)
@@ -394,6 +392,32 @@ public static class PolicyAwareVoiceEndpoints
             }
         }
 
+        return await ResolveVoiceTargetDecisionAsync(http, snapshot, routeInput, resolver);
+    }
+
+    private static async Task<VoiceTargetResolution> ResolveVoiceTargetFromReadModelAsync(
+        HttpContext http,
+        IChatRoutePolicyQueryPort queryPort,
+        ChatRouteResolver resolver)
+    {
+        if (!TryBuildCallerScope(http, out var routingScope, out var channel, out var failure))
+        {
+            http.Response.StatusCode = StatusCodes.Status403Forbidden;
+            await http.Response.WriteAsync(failure, http.RequestAborted);
+            return VoiceTargetResolution.Failed();
+        }
+
+        var routeInput = BuildRouteInput(http, routingScope, channel);
+        var snapshot = await queryPort.LookupForCallerAsync(routingScope, http.RequestAborted);
+        return await ResolveVoiceTargetDecisionAsync(http, snapshot, routeInput, resolver);
+    }
+
+    private static async Task<VoiceTargetResolution> ResolveVoiceTargetDecisionAsync(
+        HttpContext http,
+        ChatRoutePolicySnapshot? snapshot,
+        ChatRouteInput routeInput,
+        ChatRouteResolver resolver)
+    {
         var decision = resolver.Resolve(snapshot, routeInput);
 
         var action = decision.Action;
