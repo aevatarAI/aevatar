@@ -98,7 +98,7 @@ public static class PolicyAwareVoiceEndpoints
         [FromServices] IChatRoutePolicyProjectionRecoveryPort recoveryPort,
         [FromServices] ChatRouteResolver resolver,
         [FromServices] IRealtimeSession<VoiceRealtimeSessionRequest, VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeFrame, VoiceRealtimeSessionCompletion> voiceRealtimeSession,
-        [FromServices] IVoiceVolatileMediaStreamPort mediaStreamPort,
+        [FromServices] VoiceWhipAttachExecutor whipAttachExecutor,
         [FromServices] IOptions<VoiceWebSocketAttachOptions> attachOptions)
     {
         var sessionId = NormalizeOptional(http.Request.Query["sessionId"].ToString());
@@ -144,10 +144,7 @@ public static class PolicyAwareVoiceEndpoints
                 return;
             }
 
-            var executor = new VoiceWhipAttachExecutor(
-                mediaStreamPort,
-                http.RequestServices.GetService<IWebRtcVoiceTransportFactory>());
-            var attached = await executor.AttachAsync(
+            var attached = await whipAttachExecutor.AttachAsync(
                 http,
                 accepted,
                 offerSdp,

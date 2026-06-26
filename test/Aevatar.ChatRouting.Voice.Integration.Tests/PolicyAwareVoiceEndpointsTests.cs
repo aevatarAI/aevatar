@@ -1078,12 +1078,13 @@ public sealed class PolicyAwareVoiceEndpointsTests
         builder.Services.AddSingleton<IUserAgentCatalogQueryPort>(catalog);
         builder.Services.AddSingleton<IRealtimeSession<VoiceRealtimeSessionRequest, VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeFrame, VoiceRealtimeSessionCompletion>>(session);
         builder.Services.AddSingleton<IVoiceVolatileMediaStreamPort>(mediaPort ?? new RecordingVolatileMediaStreamPort());
+        if (transportFactory != null)
+            builder.Services.AddSingleton(transportFactory);
+        builder.Services.AddVoiceWebRtcTransport();
         if (toolCredentialIssuer != null)
             builder.Services.AddSingleton(toolCredentialIssuer);
         if (realtimeHub != null)
             builder.Services.AddSingleton(realtimeHub);
-        if (transportFactory != null)
-            builder.Services.AddSingleton(transportFactory);
         var app = builder.Build();
         app.MapPolicyAwareVoiceEndpoint();
         app.MapPolicyAwareVoiceWhipEndpoint();

@@ -1,8 +1,8 @@
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.Abstractions.Sessions;
 using Aevatar.Foundation.VoicePresence.Transport;
-using Aevatar.Foundation.VoicePresence.Transport.Internal;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Foundation.VoicePresence.Hosting;
 
@@ -10,13 +10,16 @@ public sealed class VoiceWhipAttachExecutor
 {
     private readonly IVoiceVolatileMediaStreamPort _mediaStreamPort;
     private readonly IWebRtcVoiceTransportFactory _transportFactory;
+    private readonly ILogger<VoiceWhipAttachExecutor>? _logger;
 
     public VoiceWhipAttachExecutor(
         IVoiceVolatileMediaStreamPort mediaStreamPort,
-        IWebRtcVoiceTransportFactory? transportFactory = null)
+        IWebRtcVoiceTransportFactory transportFactory,
+        ILogger<VoiceWhipAttachExecutor>? logger = null)
     {
         _mediaStreamPort = mediaStreamPort ?? throw new ArgumentNullException(nameof(mediaStreamPort));
-        _transportFactory = transportFactory ?? new SipsorceryWebRtcVoiceTransportFactory();
+        _transportFactory = transportFactory ?? throw new ArgumentNullException(nameof(transportFactory));
+        _logger = logger;
     }
 
     public async Task<VoiceWhipAttachResult> AttachAsync(
@@ -49,6 +52,7 @@ public sealed class VoiceWhipAttachExecutor
                 http.RequestServices,
                 accepted,
                 transportSession.Transport,
+                _logger,
                 ct);
             var lifetimeCompleted = await _mediaStreamPort.AttachAsync(
                 accepted.LeaseHandle,
@@ -61,7 +65,8 @@ public sealed class VoiceWhipAttachExecutor
                 accepted.LeaseHandle,
                 lifetimeCompleted,
                 realtimeSubscription,
-                transportSession.Completion);
+                transportSession.Completion,
+                _logger);
 
             return new VoiceWhipAttachResult(transportSession.AnswerSdp, resourceLocation);
         }
@@ -90,15 +95,16 @@ public sealed class VoiceWhipAttachExecutor
         VoicePresenceSessionLeaseHandle handle,
         VoiceTransportLifetimeCompleted? lifetimeCompleted,
         IAsyncDisposable realtimeSubscription,
-        Task completion)
+        Task completion,
+        ILogger<VoiceWhipAttachExecutor>? logger)
     {
         try
         {
             await completion;
         }
-        catch
+        catch (Exception ex)
         {
-            // transport completion is best-effort cleanup only
+            logger?.LogWarning(ex, "Voice WHIP transport completion failed during best-effort cleanup.");
         }
         finally
         {

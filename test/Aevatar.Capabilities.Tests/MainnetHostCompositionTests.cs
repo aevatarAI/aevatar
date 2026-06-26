@@ -24,6 +24,8 @@ using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Runtime.Hosting.Maintenance;
 using Aevatar.Foundation.VoicePresence;
 using Aevatar.Foundation.VoicePresence.Modules;
+using Aevatar.Foundation.VoicePresence.Hosting;
+using Aevatar.Foundation.VoicePresence.Transport;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgents.Authoring.Lark;
 using Aevatar.GAgents.Channel.Identity;
@@ -202,6 +204,12 @@ public sealed class MainnetHostCompositionTests
         using var app = builder.Build();
         app.MapAevatarMainnetHost();
 
+        app.Services.GetRequiredService<IWebRtcVoiceTransportFactory>()
+            .Should()
+            .NotBeNull();
+        app.Services.GetRequiredService<VoiceWhipAttachExecutor>()
+            .Should()
+            .NotBeNull();
         ((IEndpointRouteBuilder)app).DataSources
             .SelectMany(static source => source.Endpoints)
             .OfType<RouteEndpoint>()
