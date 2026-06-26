@@ -464,6 +464,13 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
             ExternalSubjectRef externalSubject,
             CapabilityScope scope,
             CancellationToken ct = default);
+
+        public Task<CapabilityHandle> IssueShortLivedByBindingIdAsync(
+            ExternalSubjectRef externalSubject,
+            string bindingId,
+            CapabilityScope scope,
+            CancellationToken ct = default) =>
+            IssueShortLivedAsync(externalSubject, scope, ct);
     }
 
     private sealed class UsableCapabilityBroker : StubCapabilityBroker
