@@ -8,6 +8,7 @@ import {
 } from "@/shared/agui/runtimeEventSemantics";
 import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
+import { scopesApi } from "@/shared/api/scopesApi";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { formatCompactDateTime } from "@/shared/datetime/dateTime";
 import {
@@ -30,6 +31,7 @@ import {
   formatStudioMemberLifecycleStage,
 } from "@/shared/studio/models";
 import type { StudioMemberRoster, StudioTeamSummary } from "@/shared/studio/models";
+import type { ScopeWorkflowSummary } from "@/shared/models/scopes";
 import { describeError } from "@/shared/ui/errorText";
 import {
   TeamActionRail,
@@ -60,6 +62,7 @@ const teamProjectionRetryMaxMs = 3_000;
 const entryMemberClearingId = "__clear_entry_member__";
 const teamEntryVisibilityAttempts = 5;
 const teamEntryVisibilityRetryDelayMs = 100;
+const emptyWorkflowSummaries: readonly ScopeWorkflowSummary[] = [];
 
 function isProjectionSyncing404(error: unknown): boolean {
   return isStudioApiStatus(error, 404);
@@ -74,6 +77,81 @@ function projectionRetryDelay(attemptIndex: number): number {
 
 function trimText(value: string | null | undefined): string {
   return value?.trim() ?? "";
+}
+
+function workflowMatchesBoundService(
+  workflow: ScopeWorkflowSummary,
+  service: {
+    readonly activeServingRevisionId?: string | null;
+    readonly defaultServingRevisionId?: string | null;
+    readonly serviceKey?: string | null;
+  } | null | undefined,
+): boolean {
+  if (!service) {
+    return false;
+  }
+
+  const workflowServiceKey = trimText(workflow.serviceKey);
+  if (
+    workflowServiceKey &&
+    trimText(service.serviceKey) === workflowServiceKey
+  ) {
+    return true;
+  }
+
+  const workflowRevisionId = trimText(workflow.activeRevisionId);
+  if (!workflowRevisionId) {
+    return false;
+  }
+
+  return (
+    trimText(service.activeServingRevisionId) === workflowRevisionId ||
+    trimText(service.defaultServingRevisionId) === workflowRevisionId
+  );
+}
+
+function resolveRosterMemberWorkflowId(input: {
+  readonly boundService?: {
+    readonly activeServingRevisionId?: string | null;
+    readonly defaultServingRevisionId?: string | null;
+    readonly serviceKey?: string | null;
+  } | null;
+  readonly isBoundMember: boolean;
+  readonly member: {
+    readonly implementationRef?: {
+      readonly implementationKind?: string | null;
+      readonly workflowId?: string | null;
+    } | null;
+  };
+  readonly workflows: readonly ScopeWorkflowSummary[];
+}): string {
+  const implementationRef = input.member.implementationRef;
+  const implementationWorkflowId =
+    trimText(implementationRef?.implementationKind).toLowerCase() ===
+    "workflow"
+      ? trimText(implementationRef?.workflowId)
+      : "";
+  if (!input.isBoundMember) {
+    return implementationWorkflowId;
+  }
+
+  const matchedWorkflow =
+    input.workflows.find((workflow) =>
+      workflowMatchesBoundService(workflow, input.boundService),
+    ) ?? null;
+  return trimText(matchedWorkflow?.workflowId);
+}
+
+function isBoundWorkflowRosterMember(member: {
+  readonly implementationKind?: string | null;
+  readonly lifecycleStage?: string | null;
+  readonly publishedServiceId?: string | null;
+}): boolean {
+  return (
+    trimText(member.implementationKind).toLowerCase() === "workflow" &&
+    normalizeStatus(member.lifecycleStage) === "bind_ready" &&
+    trimText(member.publishedServiceId).length > 0
+  );
 }
 
 function resolveTeamHeading(input: {
@@ -545,10 +623,45 @@ const TeamDetailPage: React.FC = () => {
     queryKey: ["teams", "services", scopeId],
     retry: false,
   });
+  const hasBoundWorkflowMembersForStudioLinks = React.useMemo(
+    () =>
+      activeTab === "members" &&
+      (teamMembersQuery.data?.members ?? []).some(isBoundWorkflowRosterMember),
+    [activeTab, teamMembersQuery.data?.members],
+  );
+  const shouldLoadMemberStudioLinkCatalog =
+    hasTeamIdentity && hasBoundWorkflowMembersForStudioLinks;
+  const memberStudioLinkWorkflowsQuery = useQuery({
+    enabled: shouldLoadMemberStudioLinkCatalog,
+    queryFn: () => scopesApi.listWorkflows(scopeId),
+    queryKey: ["teams", "workflows", scopeId],
+    retry: false,
+  });
+  const memberStudioLinkServicesQuery = useQuery({
+    enabled: shouldLoadMemberStudioLinkCatalog,
+    queryFn: () =>
+      scopeRuntimeApi.listServices(scopeId, {
+        appId: "default",
+      }),
+    queryKey: ["teams", "services", scopeId],
+    retry: false,
+  });
+  const workflowSummariesForMemberLinks =
+    activeTab === "members"
+      ? memberStudioLinkWorkflowsQuery.data ??
+        workflowsQuery.data ??
+        emptyWorkflowSummaries
+      : workflowsQuery.data ?? emptyWorkflowSummaries;
+  const isResolvingMemberStudioLinks =
+    shouldLoadMemberStudioLinkCatalog &&
+    (memberStudioLinkWorkflowsQuery.isLoading ||
+      memberStudioLinkServicesQuery.isLoading);
   const automationServiceRuntimeByServiceId = React.useMemo(() => {
     const services =
       activeTab === "automations"
         ? automationsServicesQuery.data ?? servicesQuery.data ?? []
+        : activeTab === "members"
+          ? memberStudioLinkServicesQuery.data ?? servicesQuery.data ?? []
         : servicesQuery.data ?? [];
     return new Map(
       services
@@ -563,6 +676,7 @@ const TeamDetailPage: React.FC = () => {
               serviceId: service.serviceId,
               tenantId: service.tenantId,
             },
+            serviceKey: service.serviceKey,
           },
         ] as const)
         .filter(([serviceId]) => serviceId.length > 0),
@@ -570,6 +684,7 @@ const TeamDetailPage: React.FC = () => {
   }, [
     activeTab,
     automationsServicesQuery.data,
+    memberStudioLinkServicesQuery.data,
     servicesQuery.data,
   ]);
 
@@ -785,11 +900,12 @@ const TeamDetailPage: React.FC = () => {
           publishedServiceId.length > 0;
         const automationServiceRuntime =
           automationServiceRuntimeByServiceId.get(publishedServiceId);
-        const memberDraftWorkflowId =
-          trimText(member.implementationRef?.implementationKind).toLowerCase() ===
-          "workflow"
-            ? trimText(member.implementationRef?.workflowId)
-            : "";
+        const memberDraftWorkflowId = resolveRosterMemberWorkflowId({
+          boundService: automationServiceRuntime,
+          isBoundMember,
+          member,
+          workflows: workflowSummariesForMemberLinks,
+        });
         const workflowStudioHref = buildTeamMemberWorkflowStudioHref({
           memberId: member.memberId,
           mode: "edit-member",
@@ -869,6 +985,7 @@ const TeamDetailPage: React.FC = () => {
       automationServiceRuntimeByServiceId,
       teamMembersQuery.data?.members,
       token,
+      workflowSummariesForMemberLinks,
     ],
   );
   const createMemberHref = React.useMemo(
@@ -1542,7 +1659,7 @@ const TeamDetailPage: React.FC = () => {
       prompt={teamTestPrompt}
       resultText={teamTestResultText}
       rosterError={teamMembersQuery.isError && !isTeamMembersProjectionSyncing}
-      rosterLoading={teamMembersQuery.isLoading}
+      rosterLoading={teamMembersQuery.isLoading || isResolvingMemberStudioLinks}
       rosterRows={teamRosterRows}
       rosterSyncing={isTeamMembersProjectionSyncing}
       status={teamTestStatus}
@@ -1610,9 +1727,9 @@ const TeamDetailPage: React.FC = () => {
             : undefined
         }
         rosterError={teamMembersQuery.isError && !isTeamMembersProjectionSyncing}
-        rosterLoading={teamMembersQuery.isLoading}
+        rosterLoading={teamMembersQuery.isLoading || isResolvingMemberStudioLinks}
         rosterSyncing={isTeamMembersProjectionSyncing}
-      rosterRows={teamRosterRows}
+        rosterRows={teamRosterRows}
       />
     );
   };
