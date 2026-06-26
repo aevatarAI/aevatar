@@ -302,6 +302,7 @@ public sealed class MainnetHostCompositionTests
         var nyxIdConnectedServices = registry.Resolve(new ChatRouteToolSetRef { Name = ToolSetNames.NyxIdConnectedServices });
         nyxIdConnectedServices.IsSuccess.Should().BeTrue(nyxIdConnectedServices.Error?.Message);
         nyxIdConnectedServices.Sources.Should().ContainSingle(source => source is NyxIdConnectedServiceToolSource);
+        workspace.Sources.Should().NotContain(source => source is NyxIdConnectedServiceToolSource);
 
         var voice = registry.Resolve(new ChatRouteToolSetRef { Name = "voice.realtime" });
         voice.IsSuccess.Should().BeFalse();

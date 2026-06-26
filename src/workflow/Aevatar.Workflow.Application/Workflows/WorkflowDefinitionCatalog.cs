@@ -268,7 +268,7 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
             "        human_input, secure_input, human_approval,",
             "        cache, delay, emit, checkpoint, retrieve_facts, self_reschedule",
             "      - For self_reschedule, put schedule_id, cron_expression, timezone, workflow_name/service_id, scope_id, and prompt under parameters.",
-            "      - For external submit/poll jobs expected to run longer than 90 minutes, do not invent await_job or async_job and do not stretch wait_signal beyond 5400000ms. Use a checked-in split-run template: one submit workflow captures job_id/idempotency_key, a deterministic self_reschedule schedule owns polling, and each poll workflow run polls once.",
+            "      - wait_signal is for one durable callback/signal lease and may wait up to 86400000ms (24h). For external submit/poll jobs that need repeated polling or may exceed one callback lease, do not invent await_job or async_job and do not model same-run long polling. Use a checked-in split-run template: one submit workflow captures job_id/idempotency_key, a deterministic self_reschedule schedule owns polling, and each poll workflow run polls once.",
             "      - Keep submit/poll business facts such as job_id, idempotency_key, schedule_id, deadline, attempt, max_attempts, and terminal status in typed parameters or prompt payload fields. Do not put those facts in header.* or metadata.",
             "      - Do NOT add a top-level schedule key; scheduling is a normal step type.",
             "      - NEVER use dynamic_workflow in generated YAML. dynamic_workflow is engine-internal and expects a nested ```yaml block input.",

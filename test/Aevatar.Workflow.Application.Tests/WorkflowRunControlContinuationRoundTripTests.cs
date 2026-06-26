@@ -32,7 +32,7 @@ public sealed class WorkflowRunControlContinuationRoundTripTests
                 Parameters =
                 {
                     ["signal_name"] = "codex_worker_done",
-                    ["timeout_ms"] = "5400000",
+                    ["timeout_ms"] = "86400000",
                 },
             }),
             context,

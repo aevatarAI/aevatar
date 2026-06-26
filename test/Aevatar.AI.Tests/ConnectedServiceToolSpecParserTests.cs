@@ -173,6 +173,8 @@ public class ConnectedServiceToolSpecParserTests
         var second = ConnectedServiceToolNaming.Build("api-shop", "search_orders");
 
         first.Should().Be("nyxid_api-shop__search_orders");
+        first.Should().StartWith("nyxid_api-shop__");
+        first.Should().NotBe("nyxid_service_request");
         first.Should().Be(second, "naming must be deterministic for a given (slug, operation) pair");
     }
 
