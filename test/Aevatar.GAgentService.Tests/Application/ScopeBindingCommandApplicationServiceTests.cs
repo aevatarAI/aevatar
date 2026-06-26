@@ -3,6 +3,7 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Bindings;
 using Aevatar.GAgentService.Application.Workflows;
 using Aevatar.GAgentService.Core.Assemblers;
@@ -165,7 +166,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         const string revisionId = "rev-platform-bind-1";
         var commandPort = new RecordingServiceCommandPort();
         var externalExposureIntentPort = new RecordingExternalExposureIntentPort(commandPort);
-        var existingHash = "9FAFFAFE586BDBA6791AF7488B3D09AA3E9AA19B587D21AC772432E52DE86709";
+        var existingHash = CreateWorkflowArtifactHash(revisionId, "main", "name: main\nsteps:\n  - run: echo hello");
         var existingService = new ServiceCatalogSnapshot(
             "scope-a:default:default:default",
             ScopeId,
@@ -1080,7 +1081,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
     {
         const string revisionId = "rev-platform-bind-1";
         var commandPort = new RecordingServiceCommandPort();
-        var existingHash = "9FAFFAFE586BDBA6791AF7488B3D09AA3E9AA19B587D21AC772432E52DE86709";
+        var existingHash = CreateWorkflowArtifactHash(revisionId, "main", "name: main\nsteps:\n  - run: echo hello");
         var lifecyclePort = new FakeServiceLifecycleQueryPort(
             new ServiceCatalogSnapshot(
                 "scope-a:default:default:default",
@@ -1883,6 +1884,9 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             Identity = DefaultServiceIdentity(serviceId),
             RevisionId = revisionId,
             ImplementationKind = ServiceImplementationKind.Workflow,
+            ProtocolDescriptorSet = ServiceProtocolDescriptorSetBuilder.Build(
+                ChatRequestEvent.Descriptor,
+                ChatResponseEvent.Descriptor),
             Endpoints =
             {
                 new ServiceEndpointDescriptor
@@ -1901,7 +1905,9 @@ public sealed class ScopeBindingCommandApplicationServiceTests
                 {
                     WorkflowName = workflowName,
                     WorkflowYaml = workflowYaml,
-                    DefinitionActorId = $"scope-workflow:{ScopeId}:default",
+                    DefinitionActorId = ScopeWorkflowCapabilityConventions.BuildDefaultDefinitionActorIdPrefix(
+                        DefaultOptions,
+                        ScopeId),
                 },
             },
         };

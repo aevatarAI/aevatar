@@ -288,6 +288,9 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
             Identity = revisionSpec.Identity.Clone(),
             RevisionId = revisionSpec.RevisionId,
             ImplementationKind = ServiceImplementationKind.Workflow,
+            ProtocolDescriptorSet = ServiceProtocolDescriptorSetBuilder.Build(
+                ChatRequestEvent.Descriptor,
+                ChatResponseEvent.Descriptor),
             Endpoints =
             {
                 new ServiceEndpointDescriptor
