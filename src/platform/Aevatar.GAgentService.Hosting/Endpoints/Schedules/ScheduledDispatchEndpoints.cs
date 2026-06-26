@@ -7,6 +7,7 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Hosting.Serialization;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
@@ -407,18 +408,21 @@ public sealed record ScheduledDispatchConfigurationHttpRequest
         IServiceCatalogQueryReader catalogReader,
         IServiceRevisionCatalogQueryReader revisionCatalogReader,
         ScheduledServiceInvocationNyxIdSubjectRef? authenticatedOwnerSubject = null,
-        CancellationToken ct = default) =>
-        new(
+        CancellationToken ct = default)
+    {
+        var resolvedTarget = await ResolveTargetAsync(catalogReader, revisionCatalogReader, authenticatedOwnerSubject, ct);
+        return new ScheduledDispatchConfiguration(
             ScheduleId: string.IsNullOrWhiteSpace(ScheduleId) ? fallbackScheduleId ?? string.Empty : ScheduleId,
             DisplayName: DisplayName ?? string.Empty,
-            Target: await ResolveTargetAsync(catalogReader, revisionCatalogReader, authenticatedOwnerSubject, ct),
+            Target: resolvedTarget.Target,
             CronExpression: CronExpression,
             Timezone: Timezone ?? string.Empty,
             Enabled: Enabled,
             Headers: Headers ?? new Dictionary<string, string>(StringComparer.Ordinal),
-            ScheduleKind: ScheduleKind);
+            ScheduleKind: ResolveScheduleKind(resolvedTarget));
+    }
 
-    private async Task<ScheduledDispatchTargetDescriptor> ResolveTargetAsync(
+    private async Task<ResolvedScheduledDispatchTarget> ResolveTargetAsync(
         IServiceCatalogQueryReader catalogReader,
         IServiceRevisionCatalogQueryReader revisionCatalogReader,
         ScheduledServiceInvocationNyxIdSubjectRef? authenticatedOwnerSubject,
@@ -430,9 +434,35 @@ public sealed record ScheduledDispatchConfigurationHttpRequest
             throw new ArgumentException("Exactly one scheduled dispatch target is required.");
 
         if (Envelope != null)
-            return Envelope.ToTarget();
-        return await ServiceInvocation!.ToTargetAsync(catalogReader, revisionCatalogReader, authenticatedOwnerSubject, ct);
+            return new ResolvedScheduledDispatchTarget(Envelope.ToTarget(), IsWorkflowServiceTarget: false);
+        return await ServiceInvocation!.ToResolvedTargetAsync(catalogReader, revisionCatalogReader, authenticatedOwnerSubject, ct);
     }
+
+    private ScheduledDispatchScheduleKind ResolveScheduleKind(ResolvedScheduledDispatchTarget resolvedTarget)
+    {
+        if (ScheduleKind == ScheduledDispatchScheduleKind.Workflow)
+        {
+            if (!resolvedTarget.IsWorkflowServiceTarget)
+            {
+                throw new ArgumentException(
+                    "scheduleKind Workflow requires a workflow service invocation target.",
+                    nameof(ScheduleKind));
+            }
+
+            return ScheduledDispatchScheduleKind.Workflow;
+        }
+
+        if (resolvedTarget.IsWorkflowServiceTarget && ScheduleKind == ScheduledDispatchScheduleKind.Generic)
+        {
+            return ScheduledDispatchScheduleKind.Workflow;
+        }
+
+        return ScheduleKind;
+    }
+
+    internal sealed record ResolvedScheduledDispatchTarget(
+        ScheduledDispatchTargetDescriptor Target,
+        bool IsWorkflowServiceTarget);
 }
 
 public sealed record ScheduledDispatchEnvelopeTargetHttpRequest
@@ -462,10 +492,22 @@ public sealed record ScheduledDispatchServiceInvocationTargetHttpRequest
         IServiceCatalogQueryReader catalogReader,
         IServiceRevisionCatalogQueryReader revisionCatalogReader,
         ScheduledServiceInvocationNyxIdSubjectRef? authenticatedOwnerSubject = null,
+        CancellationToken ct = default) =>
+        (await ToResolvedTargetAsync(catalogReader, revisionCatalogReader, authenticatedOwnerSubject, ct))
+        .Target;
+
+    internal async Task<ScheduledDispatchConfigurationHttpRequest.ResolvedScheduledDispatchTarget> ToResolvedTargetAsync(
+        IServiceCatalogQueryReader catalogReader,
+        IServiceRevisionCatalogQueryReader revisionCatalogReader,
+        ScheduledServiceInvocationNyxIdSubjectRef? authenticatedOwnerSubject = null,
         CancellationToken ct = default)
     {
         var (payload, revisionId) = await ResolvePayloadAsync(catalogReader, revisionCatalogReader, ct);
-        return ToTarget(payload, revisionId, authenticatedOwnerSubject);
+        var target = ToTarget(payload, revisionId, authenticatedOwnerSubject);
+        var implementationRevision = await ResolveImplementationRevisionAsync(catalogReader, revisionCatalogReader, revisionId, ct);
+        return new ScheduledDispatchConfigurationHttpRequest.ResolvedScheduledDispatchTarget(
+            target,
+            IsWorkflowRevision(implementationRevision));
     }
 
     public ScheduledDispatchTargetDescriptor ToTarget(
@@ -519,6 +561,37 @@ public sealed record ScheduledDispatchServiceInvocationTargetHttpRequest
 
         return (ServiceJsonPayloads.PackBase64(typeUrl, PayloadBase64), requestedRevisionId);
     }
+
+    private async Task<ServiceRevisionSnapshot?> ResolveImplementationRevisionAsync(
+        IServiceCatalogQueryReader catalogReader,
+        IServiceRevisionCatalogQueryReader revisionCatalogReader,
+        string resolvedRevisionId,
+        CancellationToken ct)
+    {
+        var revisions = await revisionCatalogReader.GetAsync(Identity, ct).ConfigureAwait(false);
+        if (revisions == null || revisions.Revisions.Count == 0)
+            return null;
+
+        if (!string.IsNullOrWhiteSpace(resolvedRevisionId))
+        {
+            return revisions.Revisions.FirstOrDefault(revision =>
+                string.Equals(revision.RevisionId, resolvedRevisionId, StringComparison.Ordinal) &&
+                ServiceEndpointContractMath.RevisionContainsEndpoint(revision, EndpointId));
+        }
+
+        var service = await catalogReader.GetAsync(Identity, ct).ConfigureAwait(false);
+        return service == null
+            ? null
+            : ServiceEndpointContractMath.ResolveCurrentContractRevision(service, revisions, EndpointId);
+    }
+
+    private static bool IsWorkflowRevision(ServiceRevisionSnapshot? revision) =>
+        revision != null &&
+        (string.Equals(
+             revision.ImplementationKind,
+             ServiceEndpointContractMath.ImplementationKindWorkflow,
+             StringComparison.OrdinalIgnoreCase) ||
+         revision.Implementation?.Workflow != null);
 }
 
 public sealed record ScheduledServiceInvocationAuthHttpRequest
