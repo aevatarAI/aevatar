@@ -2,6 +2,40 @@
 
 set -euo pipefail
 
+scan_projection_document_reader_list_async() {
+  local projection_document_reader_scan_roots=("$@")
+  local projection_document_reader_file
+  local projection_document_reader_names
+  local projection_document_reader_name
+
+  while IFS= read -r projection_document_reader_file; do
+    [[ -z "${projection_document_reader_file}" ]] && continue
+
+    projection_document_reader_names="$(
+      {
+        rg --no-filename --no-line-number -o \
+          'IProjectionDocumentReader<[^>]+>[[:space:]]+_?[A-Za-z][A-Za-z0-9_]*' \
+          "${projection_document_reader_file}" \
+          | rg -o '_?[A-Za-z][A-Za-z0-9_]*$' \
+          | sort -u
+      } || true
+    )"
+
+    while IFS= read -r projection_document_reader_name; do
+      [[ -z "${projection_document_reader_name}" ]] && continue
+
+      rg -n --with-filename \
+        "(^|[^A-Za-z0-9_])${projection_document_reader_name}\\.ListAsync\\(" \
+        "${projection_document_reader_file}" || true
+    done <<< "${projection_document_reader_names}"
+  done < <(rg -l "IProjectionDocumentReader<" "${projection_document_reader_scan_roots[@]}" 2>/dev/null)
+}
+
+if [[ "${AEVATAR_ARCHITECTURE_GUARDS_RUN_PROJECTION_DOCUMENT_READER_SCAN_ONLY:-}" == "1" ]]; then
+  scan_projection_document_reader_list_async "$@"
+  exit 0
+fi
+
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
@@ -1047,17 +1081,14 @@ if rg -n "Projection:ReadModel:Bindings" src test; then
 fi
 
 set +e
-# Check for reader.ListAsync() calls (dot-prefixed) in files that use IProjectionDocumentReader.
-# Business-domain ListAsync methods (e.g., IStreamingProxyParticipantStore.ListAsync) are excluded
-# by requiring the call to be on a reader/document field (dot prefix pattern).
+# Check only ListAsync() calls on variables declared as IProjectionDocumentReader.
+# Business query ports may expose ListAsync and must not be inferred from file or path names.
 projection_document_reader_scan_roots=(src test)
 if [[ -d demos ]]; then
   projection_document_reader_scan_roots+=(demos)
 fi
 projection_document_reader_list_report="$(
-  rg -l "IProjectionDocumentReader<" "${projection_document_reader_scan_roots[@]}" \
-    | xargs -r rg -n "\.ListAsync\(" \
-    | rg -i "(reader|document|projection).*\.ListAsync"
+  scan_projection_document_reader_list_async "${projection_document_reader_scan_roots[@]}"
 )"
 projection_document_reader_list_status=$?
 set -e

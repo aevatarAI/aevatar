@@ -82,6 +82,7 @@ message StudioMemberBindingContract {
   string revision_id = 2;
   StudioMemberImplementationKind implementation_kind = 3;
   google.protobuf.Timestamp bound_at_utc = 4;
+  string expected_actor_id = 5;
 }
 
 message StudioMemberBindingFailure {
@@ -255,6 +256,7 @@ message StudioMemberBindingCompletedEvent {
   StudioMemberImplementationKind implementation_kind = 4;
   StudioMemberImplementationRef implementation_ref = 5;
   google.protobuf.Timestamp completed_at_utc = 6;
+  string expected_actor_id = 7;
 }
 
 message StudioMemberBindingFailedEvent {

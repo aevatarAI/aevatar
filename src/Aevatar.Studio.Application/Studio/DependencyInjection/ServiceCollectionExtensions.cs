@@ -2,6 +2,8 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Authoring;
 using Aevatar.Studio.Application.Studio.Services;
+using Aevatar.Studio.Application.Studio.WorkflowBoards;
+using Aevatar.Studio.Application.Studio.WorkflowBoards.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -30,6 +32,13 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IStudioMemberService, StudioMemberService>();
         services.TryAddSingleton<IStudioTeamService, StudioTeamService>();
         services.TryAddSingleton<IStudioTeamGAgentStreamInvocationService, StudioTeamGAgentStreamInvocationService>();
+        services.TryAddSingleton<IWorkflowBoardClock, SystemWorkflowBoardClock>();
+        services.TryAddSingleton<IWorkflowBoardRosterQueryPort, StudioWorkflowBoardRosterQueryPort>();
+        services.TryAddSingleton<IWorkflowBoardSnapshotQueryPort>(provider =>
+            new WorkflowBoardSnapshotQueryService(
+                provider.GetRequiredService<IWorkflowBoardRosterQueryPort>(),
+                provider.GetService<IWorkflowBoardExecutionQueryPort>(),
+                provider.GetRequiredService<IWorkflowBoardClock>()));
         services.AddOptions<UserLlmSettingsOptions>();
         services.Replace(ServiceDescriptor.Singleton<ITeamEntryMemberResolver, StudioTeamEntryMemberResolver>());
         services.TryAddSingleton<UserLlmPreferenceWriter>();

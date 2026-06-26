@@ -137,7 +137,8 @@ public sealed record StudioMemberBindingContractResponse(
     string PublishedServiceId,
     string RevisionId,
     string ImplementationKind,
-    DateTimeOffset BoundAt);
+    DateTimeOffset BoundAt,
+    string? ExpectedActorId = null);
 
 /// <summary>
 /// Wrapper returned from <c>GET /members/{memberId}/binding</c> so the
