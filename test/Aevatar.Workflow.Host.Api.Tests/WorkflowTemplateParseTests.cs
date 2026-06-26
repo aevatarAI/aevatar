@@ -32,6 +32,10 @@ public class WorkflowTemplateParseTests
         definition.Name.Should().NotBeNullOrWhiteSpace();
         definition.Steps.Should().NotBeEmpty();
         WorkflowValidator.Validate(definition).Should().BeEmpty();
+        definition.Steps
+            .Where(step => step.Type == "await_job" || step.Type == "async_job")
+            .Should()
+            .BeEmpty();
     }
 
     private static string FindRepositoryRoot()

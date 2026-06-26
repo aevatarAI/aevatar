@@ -331,6 +331,7 @@ steps:
 - 运行时事件：`WaitingForSignalEvent` 会显式携带 `run_id + step_id + signal_name`，用于无状态 UI 回传。
 - 回传约束：`SignalReceivedEvent` 必须携带 `run_id`；若同一 run 下同名 signal 有多个 waiter，还必须携带 `step_id` 以消歧。
 - 长等待口径：对长时间外部执行（例如 Codex worker、人工审批前置检查、离线作业）不要把一个普通执行步骤硬拉到超过 executor 的 `600s` 单步 timeout；改成“先发起外部工作，再 `wait_signal` 等回调”的 continuation 语义。当前 `wait_signal.timeout_ms` 官方支持到 `5400000`（90 分钟）。
+- 超过 90 分钟的 submit/poll 外部作业不属于 `wait_signal` 扩容场景，也不新增 `await_job` / `async_job` 原语。必须使用拆分 run 模板：submit run 只提交一次外部 job 并把 `job_id`、`idempotency_key`、确定性 `schedule_id`、deadline 与 attempt 预算写入 poll handoff；`ScheduledDispatchGAgent` 持有 poll schedule fact；每个 poll run 只查询一次状态，终态分支用同一个 `schedule_id` 禁用 schedule。
 
 ```yaml
 steps:
@@ -680,6 +681,28 @@ steps:
     parameters:
       event_type: "workflow.completed"
       payload: "$input"
+```
+
+### `self_reschedule` submit/poll 模板
+
+- 作用：为长时外部 submit/poll job 创建或更新一个 workflow schedule。schedule fact 由 `ScheduledDispatchGAgent` 拥有，workflow run 只收到 accepted receipt。
+- 常用参数：`schedule_id`、`cron_expression`、`timezone`、`workflow_name` 或 `service_id`、`scope_id`、`prompt`、`enabled`。
+- submit/poll 合同：submit 模板把 `job_id`、`idempotency_key`、确定性 `schedule_id`、poll cadence、deadline 与 attempt 预算放进 poll workflow 的 `prompt`；poll 模板每次只 poll 一次，非终态结束本 run，终态用同一 `schedule_id` 且 `enabled: "false"` 停止 schedule。
+- `header.*` 只用于 dispatch header 扩展；不得承载 `job_id`、`idempotency_key`、`schedule_id`、deadline、attempt 或 terminal status 等业务事实。内部 workflow YAML 不使用泛化 `metadata` 承载这些事实。
+
+参考模板：`workflows/firecrawl_agent_async_submit.yaml` 与 `workflows/firecrawl_agent_async_poll.yaml`。
+
+```yaml
+steps:
+  - id: ensure_poll_schedule
+    type: self_reschedule
+    parameters:
+      schedule_id: "firecrawl:${steps.submit_crawl.json.job_id}"
+      cron_expression: "*/5 * * * *"
+      timezone: "UTC"
+      workflow_name: firecrawl_agent_async_poll
+      scope_id: "${input.scope_id}"
+      prompt: '{"job_id":"${json(steps.submit_crawl.json.job_id)}","idempotency_key":"${json(input.idempotency_key)}","schedule_id":"firecrawl:${steps.submit_crawl.json.job_id}"}'
 ```
 
 ## 7. Human 原语
