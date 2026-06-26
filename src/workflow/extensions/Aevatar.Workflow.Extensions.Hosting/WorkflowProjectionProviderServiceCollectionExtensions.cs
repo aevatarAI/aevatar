@@ -142,7 +142,8 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
     }
 
     // Registers a single inventory descriptor that delegates to the read-model's already-registered
-    // document reader. Each read-model contributes one descriptor to IEnumerable<IProjectionReadModelDescriptor>.
+    // document reader. A private closed-generic marker keeps repeated host composition idempotent
+    // without using TryAddEnumerable on indistinguishable factory descriptors.
     private static void TryAddWorkflowReadModelDescriptor<TDocument>(
         IServiceCollection services,
         string name,
@@ -151,6 +152,10 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
         ProjectionReadModelSinkShape shape)
         where TDocument : class, IProjectionReadModel<TDocument>, new()
     {
+        if (HasWorkflowReadModelDescriptorRegistration<TDocument>(services))
+            return;
+
+        services.AddSingleton<WorkflowReadModelDescriptorRegistration<TDocument>>();
         services.AddSingleton<IProjectionReadModelDescriptor>(sp =>
             new ProjectionDocumentReadModelDescriptor<TDocument>(
                 name,
@@ -158,6 +163,18 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
                 engineLabel,
                 actorKind,
                 sp.GetRequiredService<IProjectionDocumentReader<TDocument, string>>()));
+    }
+
+    private static bool HasWorkflowReadModelDescriptorRegistration<TDocument>(IServiceCollection services)
+        where TDocument : class, IProjectionReadModel<TDocument>, new()
+    {
+        return services.Any(static descriptor =>
+            descriptor.ServiceType == typeof(WorkflowReadModelDescriptorRegistration<TDocument>));
+    }
+
+    private sealed class WorkflowReadModelDescriptorRegistration<TDocument>
+        where TDocument : class, IProjectionReadModel<TDocument>, new()
+    {
     }
 
     private static bool HasAllWorkflowDocumentReaders(

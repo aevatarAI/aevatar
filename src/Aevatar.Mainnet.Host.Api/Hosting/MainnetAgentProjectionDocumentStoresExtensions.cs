@@ -134,7 +134,8 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
     }
 
     // Registers a single inventory descriptor that delegates to the read-model's already-registered
-    // document reader. Each read-model contributes one descriptor to IEnumerable<IProjectionReadModelDescriptor>.
+    // document reader. A private closed-generic marker keeps repeated host composition idempotent
+    // without using TryAddEnumerable on indistinguishable factory descriptors.
     private static void TryAddReadModelDescriptor<TReadModel>(
         IServiceCollection services,
         string name,
@@ -143,6 +144,10 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         ProjectionReadModelSinkShape shape)
         where TReadModel : class, IProjectionReadModel<TReadModel>, new()
     {
+        if (HasReadModelDescriptorRegistration<TReadModel>(services))
+            return;
+
+        services.AddSingleton<ReadModelDescriptorRegistration<TReadModel>>();
         services.AddSingleton<IProjectionReadModelDescriptor>(sp =>
             new ProjectionDocumentReadModelDescriptor<TReadModel>(
                 name,
@@ -150,6 +155,18 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
                 engineLabel,
                 actorKind,
                 sp.GetRequiredService<IProjectionDocumentReader<TReadModel, string>>()));
+    }
+
+    private static bool HasReadModelDescriptorRegistration<TReadModel>(IServiceCollection services)
+        where TReadModel : class, IProjectionReadModel<TReadModel>, new()
+    {
+        return services.Any(static descriptor =>
+            descriptor.ServiceType == typeof(ReadModelDescriptorRegistration<TReadModel>));
+    }
+
+    private sealed class ReadModelDescriptorRegistration<TReadModel>
+        where TReadModel : class, IProjectionReadModel<TReadModel>, new()
+    {
     }
 
     private static void TryAddElasticsearchStore<TReadModel>(
