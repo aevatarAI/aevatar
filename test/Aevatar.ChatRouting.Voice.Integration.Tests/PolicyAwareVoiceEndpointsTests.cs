@@ -135,10 +135,19 @@ public sealed class PolicyAwareVoiceEndpointsTests
         var factory = new FakeWebRtcVoiceTransportFactory(
             new WebRtcVoiceTransportSession(transport, "v=0\r\nanswer", completion.Task));
         var attachedTransports = new List<IVoiceTransport>();
+        var lifetimeCompleted = new TaskCompletionSource<(
+            VoicePresenceSessionLeaseHandle Handle,
+            VoiceTransportLifetimeCompleted? Completed,
+            string Reason)>(TaskCreationOptions.RunContinuationsAsynchronously);
         var mediaPort = new RecordingVolatileMediaStreamPort(
             attachAsync: attached =>
             {
                 attachedTransports.Add(attached);
+                return Task.CompletedTask;
+            },
+            completeTransportLifetimeAsync: (handle, completed, reason) =>
+            {
+                lifetimeCompleted.TrySetResult((handle, completed, reason));
                 return Task.CompletedTask;
             });
         using var app = CreatePolicyAwareApp(
@@ -175,6 +184,17 @@ public sealed class PolicyAwareVoiceEndpointsTests
         request.SessionOverrides.TurnDetectionMode.Should().Be(VoiceTurnDetectionMode.Disabled);
 
         completion.SetResult();
+        var cleanup = await lifetimeCompleted.Task;
+        cleanup.Handle.ActorId.Should().Be("voice-agent-lark");
+        cleanup.Handle.ModuleName.Should().Be("voice_presence_openai");
+        cleanup.Handle.SessionId.Should().Be("session-1");
+        cleanup.Completed.Should().NotBeNull();
+        cleanup.Completed!.SessionId.Should().Be("session-1");
+        cleanup.Completed.TransportLeaseId.Should().Be("transport-1");
+        cleanup.Completed.OwnerId.Should().Be("voice-presence.host");
+        cleanup.Completed.Reason.Should().Be("completed");
+        cleanup.Reason.Should().Be("host_transport_completed");
+        transport.Disposed.Should().BeFalse();
 
         static RecordingVoiceRealtimeSession sessionRequest(WebApplication app) =>
             (RecordingVoiceRealtimeSession)app.Services.GetRequiredService<
@@ -264,6 +284,33 @@ public sealed class PolicyAwareVoiceEndpointsTests
 
         context.Response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
         (await ReadBodyAsync(context)).Should().Be("Voice transport already attached.");
+        transport.Disposed.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task PolicyAwareWhip_WhenRemoteAudioUnavailable_ShouldReturn503AndDisposeTransport()
+    {
+        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(
+            VoiceAttachTarget("voice-agent-lark", "voice_presence_openai"),
+            []));
+        var transport = new StubVoiceTransport();
+        var factory = new FakeWebRtcVoiceTransportFactory(
+            new WebRtcVoiceTransportSession(transport, "answer", Task.CompletedTask));
+        var mediaPort = new RecordingVolatileMediaStreamPort(
+            attachAsync: static _ => throw new VoiceVolatileMediaStreamUnavailableException());
+        using var app = CreatePolicyAwareApp(
+            policyPort,
+            new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent-lark"]),
+            new RecordingVoiceRealtimeSession(),
+            mediaPort,
+            transportFactory: factory);
+        var context = CreateWhipContext(app, "/whip/offer?sessionId=app-session-1", "v=0\r\noffer");
+
+        await GetEndpoint(app, "/whip/offer").RequestDelegate!(context);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        (await ReadBodyAsync(context)).Should().Be("remote_audio_transport_unavailable");
+        factory.Calls.Should().ContainSingle();
         transport.Disposed.Should().BeTrue();
     }
 
@@ -887,7 +934,8 @@ public sealed class PolicyAwareVoiceEndpointsTests
 
     private sealed class RecordingVolatileMediaStreamPort(
         Func<IVoiceTransport, Task>? attachAsync = null,
-        Func<IVoiceTransport?, Task>? detachAsync = null)
+        Func<IVoiceTransport?, Task>? detachAsync = null,
+        Func<VoicePresenceSessionLeaseHandle, VoiceTransportLifetimeCompleted?, string, Task>? completeTransportLifetimeAsync = null)
         : IVoiceVolatileMediaStreamPort
     {
         public bool SupportsRemoteAudio => true;
@@ -918,11 +966,8 @@ public sealed class PolicyAwareVoiceEndpointsTests
             string reason,
             CancellationToken ct = default)
         {
-            _ = handle;
-            _ = completed;
-            _ = reason;
             ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
+            return completeTransportLifetimeAsync?.Invoke(handle, completed, reason) ?? Task.CompletedTask;
         }
 
         private async Task<VoiceTransportLifetimeCompleted?> AttachCoreAsync(IVoiceTransport transport)
