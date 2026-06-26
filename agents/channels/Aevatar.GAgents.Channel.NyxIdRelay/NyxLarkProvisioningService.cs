@@ -126,7 +126,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
         var label = string.IsNullOrWhiteSpace(request.Label)
             ? $"Aevatar Lark Bot {registrationId[..8]}"
             : request.Label.Trim();
-        var nyxProviderSlug = string.IsNullOrWhiteSpace(request.NyxProviderSlug)
+        var requestedProviderSlug = string.IsNullOrWhiteSpace(request.NyxProviderSlug)
             ? DefaultNyxProviderSlug
             : request.NyxProviderSlug.Trim();
 
@@ -157,15 +157,21 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
                 ct);
             routeId = await CreateDefaultRouteAsync(request.AccessToken, channelBotId, apiKeyId, ct);
 
-            // Best-effort: connect the api-lark-bot NyxID proxy service so typing
-            // reactions can call the Lark API. Intentionally NOT in the rollback chain
-            // because the service is reusable across registrations; a 409 on re-provision
-            // is the expected idempotent case, not an orphan to clean up.
-            await TryConnectLarkBotProxyServiceAsync(
+            // Connect the api-lark-bot NyxID proxy service (so card/typing calls can reach the Lark
+            // API) and capture the per-connection slug NyxID assigned. When the user already has an
+            // `api-lark-bot` connection, NyxID auto-numbers this one (api-lark-bot-2/-3...); storing
+            // that returned slug — not the generic default — is what makes a later reply proxy
+            // through THIS bot's own Lark app instead of always the first one (multi-bot cross-talk).
+            // Intentionally NOT in the rollback chain: the connection is reusable across
+            // registrations and a failure (incl. 409) is non-fatal — it just falls back to the
+            // requested slug, degrading only this bot's outbound app binding, not the relay path.
+            var connectedProviderSlug = await ConnectLarkBotProxyServiceAsync(
                 request.AccessToken,
+                requestedProviderSlug,
                 request.AppId.Trim(),
                 request.AppSecret.Trim(),
                 ct);
+            var nyxProviderSlug = connectedProviderSlug ?? requestedProviderSlug;
 
             var webhookUrl = $"{nyxBaseUrl}/api/v1/webhooks/channel/lark/{Uri.EscapeDataString(channelBotId)}";
             await RegisterLocalMirrorAsync(
@@ -304,8 +310,17 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
         return NyxApiResponseHelper.ExtractRequiredId(response, "channel_route_id");
     }
 
-    private async Task TryConnectLarkBotProxyServiceAsync(
+    /// <summary>
+    /// Connects the requested per-app NyxID proxy service and returns the slug NyxID assigned to
+    /// THIS connection (e.g. <c>api-lark-bot-3</c> when the base slug is already taken).
+    /// That slug is stored as the registration's provider slug so every reply for this bot proxies
+    /// through its own Lark app. Best-effort: any failure (incl. a 409 already-exists) returns
+    /// <c>null</c> so the caller falls back to the requested slug - the relay path still works,
+    /// only this bot's outbound app binding degrades.
+    /// </summary>
+    private async Task<string?> ConnectLarkBotProxyServiceAsync(
         string accessToken,
+        string providerSlug,
         string appId,
         string appSecret,
         CancellationToken ct)
@@ -313,18 +328,18 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
         try
         {
             var credential = JsonSerializer.Serialize(new { app_id = appId, app_secret = appSecret });
-            var body = JsonSerializer.Serialize(new { service_slug = DefaultNyxProviderSlug, credential, label = $"Lark App {appId}" });
-            await _nyxClient.CreateServiceAsync(accessToken, body, ct);
+            var body = JsonSerializer.Serialize(new { service_slug = providerSlug, credential, label = $"Lark App {appId}" });
+            var response = await _nyxClient.CreateServiceAsync(accessToken, body, ct);
+            return NyxApiResponseHelper.ExtractOptionalProxyUrlSlug(response);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // Best-effort: 409 conflict (service already exists) or any other error is
-            // non-fatal. The core relay path works without this; only typing reactions
-            // are degraded when the proxy service is not connected.
             _logger.LogWarning(
                 ex,
-                "Best-effort api-lark-bot proxy service connection failed (non-fatal). appId={AppId}",
-                appId);
+                "Best-effort Lark bot proxy service connection failed (non-fatal). appId={AppId}, providerSlug={ProviderSlug}",
+                appId,
+                providerSlug);
+            return null;
         }
     }
 

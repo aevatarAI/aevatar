@@ -72,6 +72,86 @@ internal static class NyxApiResponseHelper
 
 
     /// <summary>
+    /// Returns the trimmed per-connection proxy slug from a Nyx <c>POST /api/v1/keys</c>
+    /// (connect-service) response — <c>slug</c> preferred, <c>proxy_url_slug</c> normalized as
+    /// fallback — or <c>null</c> when the response is an error envelope, unparseable, or carries
+    /// neither field.
+    /// NyxID auto-numbers a base slug that is already taken (<c>api-lark-bot</c> →
+    /// <c>api-lark-bot-2</c>/<c>-3</c>), so a user with several Lark bots gets a distinct proxy
+    /// service per app. Capturing the slug NyxID actually assigned is what lets a later reply proxy
+    /// through the SAME Lark app this connection was created for, instead of always the first one.
+    /// </summary>
+    public static string? ExtractOptionalProxyUrlSlug(string response)
+    {
+        if (LooksLikeErrorEnvelope(response))
+            return null;
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+            return NormalizeProxyUrlSlug(ReadNonEmptyString(root, "slug")) ??
+                   NormalizeProxyUrlSlug(ReadNonEmptyString(root, "proxy_url_slug"));
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static string? NormalizeProxyUrlSlug(string? value)
+    {
+        var trimmed = value?.Trim();
+        if (string.IsNullOrWhiteSpace(trimmed))
+            return null;
+
+        var extracted = ExtractProxySlugFromRouteTemplate(trimmed);
+        if (!string.IsNullOrWhiteSpace(extracted))
+            return extracted;
+
+        return LooksLikeProxyUrlTemplate(trimmed) ? null : trimmed;
+    }
+
+    private static string? ExtractProxySlugFromRouteTemplate(string value)
+    {
+        var path = Uri.TryCreate(value, UriKind.Absolute, out var uri) ? uri.AbsolutePath : value;
+        const string marker = "/proxy/s/";
+        var index = path.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (index < 0)
+            return null;
+
+        var start = index + marker.Length;
+        var end = path.IndexOfAny(new[] { '/', '?', '#' }, start);
+        var segment = end < 0 ? path[start..] : path[start..end];
+        string slug;
+        try
+        {
+            slug = Uri.UnescapeDataString(segment).Trim();
+        }
+        catch (UriFormatException)
+        {
+            return null;
+        }
+        return string.IsNullOrWhiteSpace(slug) || LooksLikeProxyUrlTemplate(slug) ? null : slug;
+    }
+
+    private static bool LooksLikeProxyUrlTemplate(string value) =>
+        value.Contains("://", StringComparison.Ordinal) ||
+        value.Contains('/', StringComparison.Ordinal) ||
+        value.Contains('\\', StringComparison.Ordinal) ||
+        value.Contains('?', StringComparison.Ordinal) ||
+        value.Contains('#', StringComparison.Ordinal);
+
+    private static string? ReadNonEmptyString(JsonElement root, string propertyName)
+    {
+        if (!root.TryGetProperty(propertyName, out var element) || element.ValueKind != JsonValueKind.String)
+            return null;
+
+        var value = element.GetString()?.Trim();
+        return string.IsNullOrWhiteSpace(value) ? null : value;
+    }
+
+    /// <summary>
     /// Returns true when the response either is unparseable or carries a top-level <c>"error":true</c>
     /// envelope (the wrapping shape Nyx applies to non-2xx HTTP responses from the upstream platform).
     /// </summary>
