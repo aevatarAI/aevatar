@@ -134,8 +134,9 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
     }
 
     // Registers a single inventory descriptor that delegates to the read-model's already-registered
-    // document reader. A private closed-generic marker keeps repeated host composition idempotent
-    // without using TryAddEnumerable on indistinguishable factory descriptors.
+    // document reader. The closed concrete descriptor type is the idempotence key; TryAddEnumerable
+    // cannot be used for the interface factory because factory descriptors have no distinct
+    // implementation type and are indistinguishable when more than one read-model is registered.
     private static void TryAddReadModelDescriptor<TReadModel>(
         IServiceCollection services,
         string name,
@@ -144,29 +145,19 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         ProjectionReadModelSinkShape shape)
         where TReadModel : class, IProjectionReadModel<TReadModel>, new()
     {
-        if (HasReadModelDescriptorRegistration<TReadModel>(services))
+        if (services.Any(static descriptor =>
+                descriptor.ServiceType == typeof(ProjectionDocumentReadModelDescriptor<TReadModel>)))
             return;
 
-        services.AddSingleton<ReadModelDescriptorRegistration<TReadModel>>();
-        services.AddSingleton<IProjectionReadModelDescriptor>(sp =>
+        services.AddSingleton<ProjectionDocumentReadModelDescriptor<TReadModel>>(sp =>
             new ProjectionDocumentReadModelDescriptor<TReadModel>(
                 name,
                 shape,
                 engineLabel,
                 actorKind,
                 sp.GetRequiredService<IProjectionDocumentReader<TReadModel, string>>()));
-    }
-
-    private static bool HasReadModelDescriptorRegistration<TReadModel>(IServiceCollection services)
-        where TReadModel : class, IProjectionReadModel<TReadModel>, new()
-    {
-        return services.Any(static descriptor =>
-            descriptor.ServiceType == typeof(ReadModelDescriptorRegistration<TReadModel>));
-    }
-
-    private sealed class ReadModelDescriptorRegistration<TReadModel>
-        where TReadModel : class, IProjectionReadModel<TReadModel>, new()
-    {
+        services.AddSingleton<IProjectionReadModelDescriptor>(sp =>
+            sp.GetRequiredService<ProjectionDocumentReadModelDescriptor<TReadModel>>());
     }
 
     private static void TryAddElasticsearchStore<TReadModel>(

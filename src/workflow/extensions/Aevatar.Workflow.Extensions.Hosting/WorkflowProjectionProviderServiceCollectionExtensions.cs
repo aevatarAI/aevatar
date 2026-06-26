@@ -142,8 +142,9 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
     }
 
     // Registers a single inventory descriptor that delegates to the read-model's already-registered
-    // document reader. A private closed-generic marker keeps repeated host composition idempotent
-    // without using TryAddEnumerable on indistinguishable factory descriptors.
+    // document reader. The closed concrete descriptor type is the idempotence key; TryAddEnumerable
+    // cannot be used for the interface factory because factory descriptors have no distinct
+    // implementation type and are indistinguishable when more than one read-model is registered.
     private static void TryAddWorkflowReadModelDescriptor<TDocument>(
         IServiceCollection services,
         string name,
@@ -152,29 +153,19 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
         ProjectionReadModelSinkShape shape)
         where TDocument : class, IProjectionReadModel<TDocument>, new()
     {
-        if (HasWorkflowReadModelDescriptorRegistration<TDocument>(services))
+        if (services.Any(static descriptor =>
+                descriptor.ServiceType == typeof(ProjectionDocumentReadModelDescriptor<TDocument>)))
             return;
 
-        services.AddSingleton<WorkflowReadModelDescriptorRegistration<TDocument>>();
-        services.AddSingleton<IProjectionReadModelDescriptor>(sp =>
+        services.AddSingleton<ProjectionDocumentReadModelDescriptor<TDocument>>(sp =>
             new ProjectionDocumentReadModelDescriptor<TDocument>(
                 name,
                 shape,
                 engineLabel,
                 actorKind,
                 sp.GetRequiredService<IProjectionDocumentReader<TDocument, string>>()));
-    }
-
-    private static bool HasWorkflowReadModelDescriptorRegistration<TDocument>(IServiceCollection services)
-        where TDocument : class, IProjectionReadModel<TDocument>, new()
-    {
-        return services.Any(static descriptor =>
-            descriptor.ServiceType == typeof(WorkflowReadModelDescriptorRegistration<TDocument>));
-    }
-
-    private sealed class WorkflowReadModelDescriptorRegistration<TDocument>
-        where TDocument : class, IProjectionReadModel<TDocument>, new()
-    {
+        services.AddSingleton<IProjectionReadModelDescriptor>(sp =>
+            sp.GetRequiredService<ProjectionDocumentReadModelDescriptor<TDocument>>());
     }
 
     private static bool HasAllWorkflowDocumentReaders(
