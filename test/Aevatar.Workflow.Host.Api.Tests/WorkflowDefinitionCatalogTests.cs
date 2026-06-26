@@ -162,6 +162,9 @@ public class WorkflowDefinitionCatalogTests
         WorkflowDefinitionCatalog.BuiltInAutoYaml.Should().Contain("name: normalize_text");
         WorkflowDefinitionCatalog.BuiltInAutoYaml.Should().Contain("name: review_summary");
         WorkflowDefinitionCatalog.BuiltInAutoYaml.Should().Contain("Do not invent extra fields.");
+        WorkflowDefinitionCatalog.BuiltInAutoYaml.Should().Contain("86400000ms");
+        WorkflowDefinitionCatalog.BuiltInAutoYaml.Should().Contain("do not invent await_job or async_job");
+        WorkflowDefinitionCatalog.BuiltInAutoYaml.Should().NotContain("5400000ms");
     }
 
     [Fact]
@@ -306,8 +309,9 @@ public class WorkflowDefinitionCatalogTests
     [Fact]
     public void BuiltInAutoYaml_ShouldSteerLongExternalJobsToSplitRunTemplates()
     {
-        WorkflowDefinitionCatalog.BuiltInAutoYaml.Should().Contain("longer than 90 minutes");
+        WorkflowDefinitionCatalog.BuiltInAutoYaml.Should().Contain("may wait up to 86400000ms (24h)");
         WorkflowDefinitionCatalog.BuiltInAutoYaml.Should().Contain("do not invent await_job or async_job");
+        WorkflowDefinitionCatalog.BuiltInAutoYaml.Should().Contain("do not model same-run long polling");
         WorkflowDefinitionCatalog.BuiltInAutoYaml.Should().Contain("deterministic self_reschedule schedule owns polling");
         WorkflowDefinitionCatalog.BuiltInAutoYaml.Should().Contain("Do not put those facts in header.* or metadata.");
     }

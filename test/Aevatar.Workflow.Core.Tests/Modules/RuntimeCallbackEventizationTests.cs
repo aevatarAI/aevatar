@@ -299,6 +299,32 @@ public class RuntimeCallbackEventizationTests
     }
 
     [Fact]
+    public async Task WaitSignalModule_ShouldScheduleTwentyFourHourTimeoutLease()
+    {
+        var module = new WaitSignalModule();
+        var ctx = new SchedulingContext();
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "wait-24h",
+                StepType = "wait_signal",
+                RunId = "run-wait-24h",
+                Parameters =
+                {
+                    ["signal_name"] = "callback",
+                    ["timeout_seconds"] = "86400",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var scheduled = ctx.Scheduled.Single(x => x.Event is WaitSignalTimeoutFiredEvent);
+        scheduled.DueTime.Should().Be(TimeSpan.FromHours(24));
+        ((WaitSignalTimeoutFiredEvent)scheduled.Event).TimeoutMs.Should().Be(86_400_000);
+    }
+
+    [Fact]
     public async Task WorkflowLoop_ShouldReplayTimeoutCompletion_WhenPublishFailsTransiently()
     {
         var ctx = new SchedulingContext
@@ -1366,12 +1392,11 @@ public class RuntimeCallbackEventizationTests
             EventEnvelopePublishOptions? options = null,
             CancellationToken ct = default)
         {
-            _ = dueTime;
             _ = options;
             _ = ct;
             var generation = _generations.GetValueOrDefault(callbackId, 0) + 1;
             _generations[callbackId] = generation;
-            Scheduled.Add(new ScheduledCallback(callbackId, generation, evt));
+            Scheduled.Add(new ScheduledCallback(callbackId, generation, dueTime, evt));
             return Task.FromResult(new RuntimeCallbackLease(AgentId, callbackId, generation, RuntimeCallbackBackend.InMemory));
         }
 
@@ -1539,6 +1564,7 @@ public class RuntimeCallbackEventizationTests
     private sealed record ScheduledCallback(
         string CallbackId,
         long Generation,
+        TimeSpan DueTime,
         IMessage Event);
 
     private sealed record CanceledCallback(

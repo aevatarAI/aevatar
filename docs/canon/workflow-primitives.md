@@ -330,8 +330,8 @@ steps:
 - 常用参数：`signal_name`、`prompt`、`timeout_ms`。
 - 运行时事件：`WaitingForSignalEvent` 会显式携带 `run_id + step_id + signal_name`，用于无状态 UI 回传。
 - 回传约束：`SignalReceivedEvent` 必须携带 `run_id`；若同一 run 下同名 signal 有多个 waiter，还必须携带 `step_id` 以消歧。
-- 长等待口径：对长时间外部执行（例如 Codex worker、人工审批前置检查、离线作业）不要把一个普通执行步骤硬拉到超过 executor 的 `600s` 单步 timeout；改成“先发起外部工作，再 `wait_signal` 等回调”的 continuation 语义。当前 `wait_signal.timeout_ms` 官方支持到 `5400000`（90 分钟）。
-- 超过 90 分钟的 submit/poll 外部作业不属于 `wait_signal` 扩容场景，也不新增 `await_job` / `async_job` 原语。必须使用拆分 run 模板：submit run 只提交一次外部 job 并把 `job_id`、`idempotency_key`、确定性 `schedule_id`、deadline 与 attempt 预算写入 poll handoff；`ScheduledDispatchGAgent` 持有 poll schedule fact；每个 poll run 只查询一次状态，终态分支用同一个 `schedule_id` 禁用 schedule。
+- 长等待口径：对长时间外部执行（例如 Codex worker、人工审批前置检查、离线作业）不要把一个普通执行步骤硬拉到超过 executor 的 `600s` 单步 timeout；改成“先发起外部工作，再 `wait_signal` 等回调”的 continuation 语义。当前 `wait_signal.timeout_ms` 官方支持到 `86400000`（24 小时）。
+- submit/poll 外部作业不属于 `wait_signal` 扩容场景，也不新增 `await_job` / `async_job` 原语。`wait_signal` 只表达一个 actor-owned durable callback/signal lease；需要重复轮询或可能超过单次 callback lease 的作业必须使用拆分 run 模板：submit run 只提交一次外部 job 并把 `job_id`、`idempotency_key`、确定性 `schedule_id`、deadline 与 attempt 预算写入 poll handoff；`ScheduledDispatchGAgent` 持有 poll schedule fact；每个 poll run 只查询一次状态，终态分支用同一个 `schedule_id` 禁用 schedule。
 
 ```yaml
 steps:
@@ -340,7 +340,7 @@ steps:
     parameters:
       signal_name: "release_approved"
       prompt: "Waiting for release approval"
-      timeout_ms: "5400000"
+      timeout_ms: "86400000"
 ```
 
 ### `checkpoint`
@@ -791,7 +791,7 @@ POST /api/workflows/signal
 - `stepId`：resume 时必须对应当前挂起步骤；不要用旧步骤 ID 复用请求。
 - `signalName`：建议统一小写蛇形命名，和 YAML `signal_name` 保持一致。
 - 交互端点为无状态契约：服务端不维护 `runId -> actorId` 进程内映射，调用方必须在每次请求里显式传入 `actorId` 与 `runId`。
-- 长运行建议：对预计会 stall `3600-5400s` 的外部工作，优先采用 `emit/connector_call -> wait_signal` 或 `human_approval` continuation，而不是把普通 `llm_call/connector_call` 步骤 timeout 调大到超过 executor 的 `600s` 上限。
+- 长运行建议：对预计会超过普通 executor `600s` 单步 timeout、且能由一个外部 callback/signal 恢复的工作，优先采用 `emit/connector_call -> wait_signal` 或 `human_approval` continuation；需要重复轮询的外部 job 使用 split-run + `self_reschedule`，而不是在同一个 run 中长轮询。
 - `human_approval.on_reject`：
   - `fail`：拒绝会终止流程；
   - `skip` / `continue`：拒绝后继续下一个步骤（输入保持原值）。
