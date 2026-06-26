@@ -796,6 +796,10 @@ const TeamDetailPage: React.FC = () => {
           scopeId,
           teamId: selectedTeamId,
           workflowId: memberDraftWorkflowId || undefined,
+          workflowSource:
+            isWorkflowMember && isBoundMember && memberDraftWorkflowId
+              ? "published"
+              : undefined,
         });
         const memberInvokeHref = buildTeamMemberInvokeHref({
           memberId: member.memberId,

@@ -173,6 +173,7 @@ export function buildTeamMemberWorkflowStudioHref(options: {
   scopeId: string;
   teamId: string;
   workflowId?: string;
+  workflowSource?: 'published';
 }): string {
   const scopeId = trimOptional(options.scopeId);
   const teamId = trimOptional(options.teamId);
@@ -197,6 +198,7 @@ export function buildTeamMemberWorkflowStudioHref(options: {
     `/scopes/${encodeURIComponent(scopeId)}/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(memberId)}/workflow`,
     {
       workflowId: options.workflowId,
+      workflowSource: options.workflowSource,
     },
   );
 }

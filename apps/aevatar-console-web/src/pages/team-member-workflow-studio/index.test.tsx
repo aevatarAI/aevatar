@@ -527,6 +527,9 @@ describe("TeamMemberWorkflowStudioPage", () => {
       scopeId: "scope-1",
       status: "accepted",
     });
+    (studioApi.getPublishedWorkflow as jest.Mock).mockImplementation(
+      (...args: unknown[]) => (studioApi.getWorkflow as jest.Mock)(...args),
+    );
   });
 
   afterEach(() => {
@@ -1640,7 +1643,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     window.history.replaceState(
       {},
       "",
-      "/scopes/scope-1/teams/t-alpha/members/m-alpha/workflow?workflowId=wf-alpha",
+      "/scopes/scope-1/teams/t-alpha/members/m-alpha/workflow?workflowId=wf-alpha&workflowSource=published",
     );
     (studioApi.getMember as jest.Mock).mockResolvedValue({
       implementationRef: {
@@ -5348,6 +5351,86 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(studioApi.setTeamEntryMember).not.toHaveBeenCalled();
   });
 
+  it("loads the published workflow for an already published member instead of a stale draft", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/m-alpha/workflow?workflowId=wf-alpha&workflowSource=published",
+    );
+    (studioApi.getMember as jest.Mock).mockResolvedValue({
+      implementationRef: {
+        implementationKind: "workflow",
+        workflowId: "wf-alpha",
+      },
+      summary: {
+        createdAt: "2026-06-08T00:00:00Z",
+        description: "",
+        displayName: "document_2",
+        implementationKind: "workflow",
+        lastBoundRevisionId: "rev-2",
+        lifecycleStage: "bind_ready",
+        memberId: "m-alpha",
+        publishedServiceId: "svc-alpha",
+        scopeId: "scope-1",
+        teamId: "t-alpha",
+        updatedAt: "2026-06-08T00:00:03Z",
+      },
+      lastBinding: {
+        boundAt: "2026-06-08T00:00:03Z",
+        implementationKind: "workflow",
+        publishedServiceId: "svc-alpha",
+        revisionId: "rev-2",
+      },
+    });
+    (studioApi.getWorkflow as jest.Mock).mockResolvedValue({
+      directoryId: "scope:scope-1",
+      directoryLabel: "scope-1",
+      draftExists: true,
+      fileName: "wf-alpha.yaml",
+      filePath: "scope://scope-1/wf-alpha.yaml",
+      findings: [],
+      layout: null,
+      name: "weekly_report_4",
+      workflowId: "wf-alpha",
+      yaml: "name: weekly_report_4\nsteps: []\n",
+      document: {
+        ...mockWorkflowDocument,
+        name: "weekly_report_4",
+      },
+      updatedAtUtc: "2026-06-08T00:00:00Z",
+    });
+    (studioApi.getPublishedWorkflow as jest.Mock).mockResolvedValue({
+      directoryId: "scope:scope-1",
+      directoryLabel: "scope-1",
+      draftExists: false,
+      fileName: "wf-alpha.yaml",
+      filePath: "scope://scope-1/wf-alpha.yaml",
+      findings: [],
+      layout: null,
+      name: "document_2",
+      workflowId: "wf-alpha",
+      yaml: "name: document_2\nsteps: []\n",
+      document: {
+        ...mockWorkflowDocument,
+        name: "document_2",
+      },
+      updatedAtUtc: "2026-06-08T00:00:03Z",
+    });
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    expect(await screen.findByDisplayValue("document_2")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
+    });
+    expect(screen.queryByDisplayValue("weekly_report_4")).toBeNull();
+    expect(studioApi.getPublishedWorkflow).toHaveBeenCalledWith(
+      "wf-alpha",
+      "scope-1",
+    );
+    expect(studioApi.getWorkflow).not.toHaveBeenCalled();
+  });
+
   it("allows publishing a changed draft version for an already published workflow member", async () => {
     window.history.replaceState(
       {},
@@ -5473,7 +5556,10 @@ describe("TeamMemberWorkflowStudioPage", () => {
         "m-alpha",
         "binding-run-v2",
       );
+      expect(screen.queryByText("No workflow draft is linked to this member yet.")).toBeNull();
+      expect(screen.getByDisplayValue("Workflow Alpha v2")).toBeTruthy();
     });
+    expect(studioApi.getPublishedWorkflow).not.toHaveBeenCalled();
     expect(studioApi.setTeamEntryMember).not.toHaveBeenCalled();
   });
 
@@ -5481,7 +5567,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     window.history.replaceState(
       {},
       "",
-      "/scopes/scope-1/teams/t-alpha/members/m-alpha/workflow?workflowId=wf-alpha",
+      "/scopes/scope-1/teams/t-alpha/members/m-alpha/workflow?workflowId=wf-alpha&workflowSource=published",
     );
     (studioApi.getMember as jest.Mock).mockResolvedValue({
       implementationRef: {
@@ -5534,6 +5620,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     };
     (studioApi.getWorkflow as jest.Mock).mockResolvedValue(staleWorkflow);
     (studioApi.getPublishedWorkflow as jest.Mock)
+      .mockResolvedValueOnce(staleWorkflow)
       .mockResolvedValueOnce(staleWorkflow)
       .mockResolvedValueOnce(staleWorkflow)
       .mockResolvedValue(materializedWorkflow);
@@ -5600,8 +5687,11 @@ describe("TeamMemberWorkflowStudioPage", () => {
         memberId: "m-alpha",
         scopeId: "scope-1",
       });
-      expect(studioApi.getWorkflow).toHaveBeenCalledTimes(1);
-      expect(studioApi.getPublishedWorkflow).toHaveBeenCalledTimes(3);
+      expect(studioApi.getWorkflow).not.toHaveBeenCalled();
+      expect(studioApi.getPublishedWorkflow).toHaveBeenCalledWith(
+        "wf-alpha",
+        "scope-1",
+      );
       expect(screen.getByDisplayValue("Workflow Alpha v2")).toBeTruthy();
     });
   });

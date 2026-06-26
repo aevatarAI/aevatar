@@ -1976,6 +1976,9 @@ describe("TeamDetailPage", () => {
     expect(new URLSearchParams(window.location.search).get("workflowId")).toBe(
       "wf-team-alpha",
     );
+    expect(new URLSearchParams(window.location.search).get("workflowSource")).toBe(
+      "published",
+    );
   });
 
   it("uses the roster implementation workflow id instead of the route workflow hint", async () => {
@@ -1994,6 +1997,9 @@ describe("TeamDetailPage", () => {
     );
     expect(new URLSearchParams(window.location.search).get("workflowId")).toBe(
       "wf-team-alpha",
+    );
+    expect(new URLSearchParams(window.location.search).get("workflowSource")).toBe(
+      "published",
     );
   });
 
@@ -2040,6 +2046,7 @@ describe("TeamDetailPage", () => {
       "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/workflow",
     );
     expect(new URLSearchParams(window.location.search).get("workflowId")).toBeNull();
+    expect(new URLSearchParams(window.location.search).get("workflowSource")).toBeNull();
   });
 
   it("does not reuse a route workflow hint for another Team member row", async () => {
@@ -2058,6 +2065,9 @@ describe("TeamDetailPage", () => {
     );
     expect(new URLSearchParams(window.location.search).get("workflowId")).toBe(
       "wf-team-alpha",
+    );
+    expect(new URLSearchParams(window.location.search).get("workflowSource")).toBe(
+      "published",
     );
   });
 

@@ -140,12 +140,14 @@ function getTeamMemberWorkflowStudioMemberQueryKey(
 function getTeamMemberWorkflowStudioWorkflowQueryKey(
   scopeId: string,
   workflowId: string,
+  source: "draft" | "published" = "draft",
 ) {
   return [
     "team-member-workflow-studio",
     "workflow",
     scopeId,
     workflowId,
+    source,
   ] as const;
 }
 
@@ -337,6 +339,7 @@ function readPathSegments(): {
   scopeId: string;
   teamId: string;
   workflowId: string;
+  workflowSource: "draft" | "published";
 } {
   const segments =
     typeof window === "undefined"
@@ -374,6 +377,10 @@ function readPathSegments(): {
   const isWorkflowEditorRoute = routeSurface === "workflow";
   const mode = routeMemberId === "new" ? "new" : "existing";
   const workflowId = trimOptional(params.get("workflowId"));
+  const workflowSource =
+    trimOptional(params.get("workflowSource")) === "published"
+      ? "published"
+      : "draft";
   const canonicalHref =
     isWorkflowEditorRoute && scopeId && teamId
       ? buildTeamMemberWorkflowStudioHref({
@@ -382,6 +389,10 @@ function readPathSegments(): {
           scopeId,
           teamId,
           workflowId,
+          workflowSource:
+            mode === "existing" && workflowSource === "published"
+              ? "published"
+              : undefined,
         })
       : currentHref;
 
@@ -392,6 +403,7 @@ function readPathSegments(): {
     scopeId,
     teamId,
     workflowId,
+    workflowSource,
   };
 }
 
@@ -605,6 +617,21 @@ async function waitForSaveAndBindWorkflowMaterialized(input: {
   }
 
   return null;
+}
+
+async function loadPublishedWorkflowWithDraftFallback(input: {
+  readonly scopeId: string;
+  readonly workflowId: string;
+}): Promise<StudioWorkflowFile> {
+  try {
+    return await studioApi.getPublishedWorkflow(input.workflowId, input.scopeId);
+  } catch (error) {
+    if (!isStudioApiStatus(error, 404)) {
+      throw error;
+    }
+
+    return studioApi.getWorkflow(input.workflowId, input.scopeId);
+  }
 }
 
 async function waitForCreatedMemberVisible(input: {
@@ -1122,9 +1149,12 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     isWorkflowDraftRouteId(trimOptional(route.workflowId))
       ? trimOptional(route.workflowId)
       : "";
+  const shouldLoadPublishedWorkflow =
+    route.mode === "existing" && route.workflowSource === "published";
   const workflowQueryKey = getTeamMemberWorkflowStudioWorkflowQueryKey(
     route.scopeId,
     routeDraftWorkflowId,
+    shouldLoadPublishedWorkflow ? "published" : "draft",
   );
   const workflowQuery = useQuery({
     enabled: Boolean(
@@ -1133,7 +1163,13 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         !memberQuery.isLoading,
     ),
     queryKey: workflowQueryKey,
-    queryFn: () => studioApi.getWorkflow(routeDraftWorkflowId, route.scopeId),
+    queryFn: () =>
+      shouldLoadPublishedWorkflow
+        ? loadPublishedWorkflowWithDraftFallback({
+            scopeId: route.scopeId,
+            workflowId: routeDraftWorkflowId,
+          })
+        : studioApi.getWorkflow(routeDraftWorkflowId, route.scopeId),
     staleTime: SAVED_WORKFLOW_QUERY_STALE_MS,
     retry: false,
   });
@@ -1325,7 +1361,10 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     setDirty(false);
   }, []);
   const cacheSavedWorkflowDraft = React.useCallback(
-    (saved: SavedWorkflowDraft) => {
+    (
+      saved: SavedWorkflowDraft,
+      sources: readonly ("draft" | "published")[] = ["draft"],
+    ) => {
       const savedWorkflow = buildSavedWorkflowCacheValue(saved);
       const savedSignature = readWorkflowSourceSignature(savedWorkflow);
       const savedWorkflowId = trimOptional(savedWorkflow.workflowId);
@@ -1334,13 +1373,16 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       }
 
       suppressedSourceSignatureRef.current = savedSignature;
-      queryClient.setQueryData(
-        getTeamMemberWorkflowStudioWorkflowQueryKey(
-          route.scopeId,
-          savedWorkflowId,
-        ),
-        savedWorkflow,
-      );
+      for (const source of sources) {
+        queryClient.setQueryData(
+          getTeamMemberWorkflowStudioWorkflowQueryKey(
+            route.scopeId,
+            savedWorkflowId,
+            source,
+          ),
+          savedWorkflow,
+        );
+      }
     },
     [queryClient, route.scopeId],
   );
@@ -1361,8 +1403,11 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     [queryClient, route.scopeId],
   );
   const markSavedDraft = React.useCallback(
-    (saved: SavedWorkflowDraft) => {
-      cacheSavedWorkflowDraft(saved);
+    (
+      saved: SavedWorkflowDraft,
+      sources?: readonly ("draft" | "published")[],
+    ) => {
+      cacheSavedWorkflowDraft(saved, sources);
 
       setEditableDocument((currentDocument) =>
         currentDocument
@@ -1466,7 +1511,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       );
     },
     onSuccess: ({ materializedWorkflow, savedDraft }) => {
-      markSavedDraft(savedDraft);
+      markSavedDraft(savedDraft, ["published"]);
       void memberQuery.refetch();
       if (materializedWorkflow) {
         void message.success("Published workflow saved.");
@@ -1958,7 +2003,9 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       }
       setPublishBindingRun(run);
       void memberQuery.refetch();
-      void workflowQuery.refetch();
+      if (!shouldLoadPublishedWorkflow) {
+        void workflowQuery.refetch();
+      }
       if (run?.status === "succeeded") {
         void message.success("Workflow member published.");
       } else {
