@@ -3,7 +3,6 @@ using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.Abstractions.Sessions;
 using Aevatar.Foundation.VoicePresence.Transport;
-using Aevatar.Foundation.VoicePresence.Transport.Internal;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -105,124 +104,6 @@ public static class VoicePresenceEndpoints
                     await mediaPort.DetachAsync(detachHandle, transport, ctx.RequestAborted);
             }
         });
-    }
-
-    /// <summary>
-    /// Maps a minimal WHIP-compatible endpoint for browser WebRTC voice sessions.
-    /// Audio uses RTP/Opus and control frames use a WebRTC data channel.
-    /// </summary>
-    public static IEndpointConventionBuilder MapVoicePresenceWhip(
-        this IEndpointRouteBuilder endpoints,
-        string pattern,
-        IWebRtcVoiceTransportFactory? transportFactory = null) =>
-        endpoints.MapVoicePresenceWhip(
-            pattern,
-            static (request, ctx) => ResolveSessionFromServicesAsync(ctx, request),
-            static ctx => ctx.RequestServices.GetRequiredService<IVoiceVolatileMediaStreamPort>(),
-            transportFactory);
-
-    public static IEndpointConventionBuilder MapVoicePresenceWhip(
-        this IEndpointRouteBuilder endpoints,
-        string pattern,
-        Func<VoiceRealtimeSessionRequest, HttpContext, Task<RealtimeSessionResult<VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeSessionCompletion>>> startSession,
-        Func<HttpContext, IVoiceVolatileMediaStreamPort> resolveMediaPort,
-        IWebRtcVoiceTransportFactory? transportFactory = null)
-    {
-        ArgumentNullException.ThrowIfNull(startSession);
-        ArgumentNullException.ThrowIfNull(resolveMediaPort);
-
-        transportFactory ??= new SipsorceryWebRtcVoiceTransportFactory();
-        var group = endpoints.MapGroup(pattern);
-
-        group.MapPost(string.Empty, async (HttpContext ctx) =>
-        {
-            var actorId = ctx.GetRouteValue("actorId")?.ToString();
-            if (string.IsNullOrWhiteSpace(actorId))
-            {
-                ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
-                await ctx.Response.WriteAsync("actorId is required.");
-                return;
-            }
-
-            var offerSdp = await ReadSdpBodyAsync(ctx.Request);
-            if (string.IsNullOrWhiteSpace(offerSdp))
-            {
-                ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
-                await ctx.Response.WriteAsync("SDP offer is required.");
-                return;
-            }
-
-            var result = await startSession(CreateSessionRequest(ctx, actorId, VoiceRealtimeSessionPurpose.Attach), ctx);
-            var accepted = await WriteNonAcceptedResolutionAsync(ctx, result);
-            if (accepted == null)
-                return;
-
-            var transportSession = await transportFactory.CreateAsync(
-                offerSdp,
-                new WebRtcVoiceTransportOptions
-                {
-                    PcmSampleRateHz = accepted.PcmSampleRateHz,
-                },
-                ctx.RequestAborted);
-
-            var attached = false;
-            var mediaPort = resolveMediaPort(ctx);
-            try
-            {
-                var lifetimeCompleted = await mediaPort.AttachAsync(accepted.LeaseHandle, transportSession.Transport, ctx.RequestAborted);
-                attached = true;
-                _ = ObserveTransportLifetimeAsync(mediaPort, accepted.LeaseHandle, lifetimeCompleted, transportSession.Completion);
-
-                ctx.Response.StatusCode = StatusCodes.Status201Created;
-                ctx.Response.ContentType = "application/sdp";
-                ctx.Response.Headers.Location = ctx.Request.Path.ToString();
-                await ctx.Response.WriteAsync(transportSession.AnswerSdp);
-            }
-            catch (VoiceVolatileMediaStreamUnavailableException)
-            {
-                if (!attached)
-                    await transportSession.Transport.DisposeAsync();
-
-                ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-                await ctx.Response.WriteAsync(VoiceVolatileMediaStreamUnavailableException.Reason);
-            }
-            catch
-            {
-                if (!attached)
-                    await transportSession.Transport.DisposeAsync();
-                throw;
-            }
-        });
-
-        group.MapDelete(string.Empty, async (HttpContext ctx) =>
-        {
-            var actorId = ctx.GetRouteValue("actorId")?.ToString();
-            if (string.IsNullOrWhiteSpace(actorId))
-            {
-                ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
-                await ctx.Response.WriteAsync("actorId is required.");
-                return;
-            }
-
-            var result = await startSession(CreateSessionRequest(ctx, actorId, VoiceRealtimeSessionPurpose.Detach), ctx);
-            if (!result.Succeeded && result.Error == VoiceRealtimeSessionStartError.NotFound)
-            {
-                ctx.Response.StatusCode = StatusCodes.Status404NotFound;
-                await ctx.Response.WriteAsync("Voice session not found for this agent.");
-                return;
-            }
-
-            if (!result.Succeeded || result.Receipt == null)
-            {
-                await WriteNonAcceptedResolutionAsync(ctx, result);
-                return;
-            }
-
-            await resolveMediaPort(ctx).DetachAsync(result.Receipt.LeaseHandle, null, ctx.RequestAborted);
-            ctx.Response.StatusCode = StatusCodes.Status204NoContent;
-        });
-
-        return group;
     }
 
     private static Task<RealtimeSessionResult<VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeSessionCompletion>> ResolveSessionFromServicesAsync(
@@ -371,31 +252,4 @@ public static class VoicePresenceEndpoints
         await transport.DisposeAsync();
     }
 
-    private static async Task<string> ReadSdpBodyAsync(HttpRequest request)
-    {
-        request.EnableBuffering();
-        request.Body.Seek(0, SeekOrigin.Begin);
-        using var reader = new StreamReader(request.Body, leaveOpen: true);
-        var sdp = await reader.ReadToEndAsync();
-        request.Body.Seek(0, SeekOrigin.Begin);
-        return sdp.Trim();
-    }
-
-    private static async Task ObserveTransportLifetimeAsync(
-        IVoiceVolatileMediaStreamPort mediaPort,
-        VoicePresenceSessionLeaseHandle handle,
-        VoiceTransportLifetimeCompleted? lifetimeCompleted,
-        Task completion)
-    {
-        try
-        {
-            await completion;
-        }
-        catch
-        {
-            // transport completion is best-effort cleanup only
-        }
-
-        await mediaPort.CompleteTransportLifetimeAsync(handle, lifetimeCompleted, "host_transport_completed");
-    }
 }

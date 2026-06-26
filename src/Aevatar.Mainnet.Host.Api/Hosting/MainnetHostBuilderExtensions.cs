@@ -336,6 +336,7 @@ public static class MainnetHostBuilderExtensions
         if (PolicyAwareVoiceEndpoints.IsVoiceRealtimeConfigured(app.Services))
         {
             app.MapPolicyAwareVoiceEndpoint();
+            app.MapPolicyAwareVoiceWhipEndpoint();
             app.MapVoicePresenceWebSocket("/ws/voice/{actorId}")
                 .RequireAuthorization("voice-dev");
         }

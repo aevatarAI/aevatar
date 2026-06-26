@@ -58,7 +58,8 @@ public static class AevatarAuthenticationHostExtensions
                 {
                     OnMessageReceived = context =>
                     {
-                        if (context.Request.Path.StartsWithSegments("/ws/voice") &&
+                        if ((context.Request.Path.StartsWithSegments("/ws/voice") ||
+                             context.Request.Path.StartsWithSegments("/whip/offer")) &&
                             context.Request.Query.TryGetValue("access_token", out var accessTokenValues))
                         {
                             var accessToken = accessTokenValues.FirstOrDefault();
