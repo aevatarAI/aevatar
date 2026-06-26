@@ -265,6 +265,24 @@ public class WorkflowDefinitionCatalogTests
     }
 
     [Fact]
+    public void FileLoader_ShouldLoadFirecrawlAsyncJobTemplates()
+    {
+        var registry = new WorkflowDefinitionCatalog();
+        var loader = new WorkflowDefinitionFileLoader();
+
+        var count = loader.LoadInto(
+            registry,
+            [Path.Combine(FindRepositoryRoot(), "workflows")],
+            NullLogger.Instance);
+
+        count.Should().BeGreaterThanOrEqualTo(4);
+        registry.GetYaml("firecrawl_agent_async_submit").Should().Contain("firecrawl_crawl_submit");
+        registry.GetYaml("firecrawl_agent_async_submit").Should().Contain("firecrawl_agent_async_poll");
+        registry.GetYaml("firecrawl_agent_async_poll").Should().Contain("firecrawl_crawl_status");
+        registry.GetYaml("firecrawl_agent_async_poll").Should().Contain("enabled: \"false\"");
+    }
+
+    [Fact]
     public void LarkApprovalWaitTemplates_ShouldUseExpectedWorkflowPrimitives()
     {
         var root = FindRepositoryRoot();
@@ -283,6 +301,15 @@ public class WorkflowDefinitionCatalogTests
         pollYaml.Should().Contain("value: \"${steps.get_instance.json.instance_code}\"");
         waitYaml.Should().NotContain("nyxid_proxy");
         pollYaml.Should().NotContain("nyxid_proxy");
+    }
+
+    [Fact]
+    public void BuiltInAutoYaml_ShouldSteerLongExternalJobsToSplitRunTemplates()
+    {
+        WorkflowDefinitionCatalog.BuiltInAutoYaml.Should().Contain("longer than 90 minutes");
+        WorkflowDefinitionCatalog.BuiltInAutoYaml.Should().Contain("do not invent await_job or async_job");
+        WorkflowDefinitionCatalog.BuiltInAutoYaml.Should().Contain("deterministic self_reschedule schedule owns polling");
+        WorkflowDefinitionCatalog.BuiltInAutoYaml.Should().Contain("Do not put those facts in header.* or metadata.");
     }
 
     [Fact]
