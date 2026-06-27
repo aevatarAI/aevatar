@@ -3549,15 +3549,13 @@ function viewVoice(){
 }
 
 /* ---------------- 模块分发 ---------------- */
-/* 套件子页内嵌：复用同源已部署的完整真实页面(共享 OIDC token),不再降级重实现。 */
-function viewStatus(){ return {html:'<iframe class="suite-embed" src="/status" title="系统状态"></iframe>'}; }
-function viewObservatory(){ return {html:'<iframe class="suite-embed" src="/workflow/observatory" title="运行观测台"></iframe>'}; }
-function viewCqrs(){ if(!(ACCOUNT&&ACCOUNT.admin)) return {html:moduleSubHeader('cqrs','')+'<div class="view-scroll">'+auth403('CQRS 投影管道仅平台管理员可见。')+'</div>'}; return {html:'<iframe class="suite-embed" src="/cqrs" title="投影管道 CQRS"></iframe>'}; }
-function viewStudio(){ return {html:'<iframe class="suite-embed" src="/workflow/studio" title="编排工作台"></iframe>'}; }
-function viewSkills(){ return {html:'<iframe class="suite-embed" src="/workflow/skills" title="技能调用"></iframe>'}; }
-function viewSchedules(){ return {html:'<iframe class="suite-embed" src="/schedules" title="排班调度"></iframe>'}; }
-function viewChannels(){ return {html:'<iframe class="suite-embed" src="/channels" title="通道管理"></iframe>'}; }
-function viewVoice(){ return {html:'<iframe class="suite-embed" src="/voice" title="语音台"></iframe>'}; }
+/* 内嵌真页(同源共享 token);onload 注入 CSS 隐藏真页自带 .topbar(brand+suite-nav),消除与 /admin 左栏的双层导航。 */
+function embedTrim(f){ try{ var d=f.contentDocument; if(d&&d.head){ var s=d.createElement('style'); s.textContent='.topbar{display:none!important}'; d.head.appendChild(s); } }catch(e){} }
+function suiteFrame(src,title){ return '<iframe class="suite-embed" src="'+src+'" title="'+title+'" onload="embedTrim(this)"></iframe>'; }
+/* 仅这三页真页确实更完整(观测台全 trace/token graph、CQRS 4 面板、Studio 对话编排)→用真页;其余模块(状态/技能/排班/通道/语音)保留更优的本地实现。 */
+function viewObservatory(){ return {html:suiteFrame('/workflow/observatory','运行观测台')}; }
+function viewCqrs(){ if(!(ACCOUNT&&ACCOUNT.admin)) return {html:moduleSubHeader('cqrs','')+'<div class="view-scroll">'+auth403('CQRS 投影管道仅平台管理员可见。')+'</div>'}; return {html:suiteFrame('/cqrs','投影管道 CQRS')}; }
+function viewStudio(){ return {html:suiteFrame('/workflow/studio','编排工作台')}; }
 
 function opsView(module){
   switch(module){
