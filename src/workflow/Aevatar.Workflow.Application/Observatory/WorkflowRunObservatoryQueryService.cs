@@ -143,7 +143,13 @@ public sealed class WorkflowRunObservatoryQueryService
         return new ObservatoryRunDetail
         {
             Summary = ToRunSummary(snapshot),
+            // Final result is fully materialized (not truncated), so the viewer can show it honestly.
+            Input = report.Input,
+            FinalOutput = report.FinalOutput,
+            FinalError = report.FinalError,
+            Steps = report.Steps.Select(ToStepDetail).ToList(),
             Timeline = viewEvents,
+            Statistics = ToStatistics(report.Summary),
             UsageTotals = WorkflowRunObservatoryTimelineMapper.ToUsageTotals(report.Usage),
         };
     }
@@ -241,6 +247,42 @@ public sealed class WorkflowRunObservatoryQueryService
             RunOrigin = snapshot.RunOrigin,
         };
     }
+
+    // 06-26 detail enrichment: per-step structured trace. OutputPreview is the materialized 240-char preview;
+    // the full per-step output is surfaced through the run timeline (role.reply / tool-call), not here.
+    private static ObservatoryStepDetail ToStepDetail(WorkflowRunStepTrace step) =>
+        new()
+        {
+            StepId = step.StepId,
+            StepType = step.StepType,
+            TargetRole = step.TargetRole,
+            RequestedAtUtc = step.RequestedAt,
+            CompletedAtUtc = step.CompletedAt,
+            Success = step.Success,
+            DurationMs = step.DurationMs,
+            OutputPreview = step.OutputPreview,
+            Error = step.Error,
+            RequestParameters = step.RequestParameters,
+            NextStepId = step.NextStepId,
+            BranchKey = step.BranchKey,
+            Usage = new ObservatoryUsageTotals
+            {
+                PromptTokens = step.Usage.PromptTokens,
+                CompletionTokens = step.Usage.CompletionTokens,
+                TotalTokens = step.Usage.TotalTokens,
+                Cost = step.Usage.Cost,
+            },
+        };
+
+    private static ObservatoryRunStatistics ToStatistics(WorkflowRunStatistics summary) =>
+        new()
+        {
+            TotalSteps = summary.TotalSteps,
+            RequestedSteps = summary.RequestedSteps,
+            CompletedSteps = summary.CompletedSteps,
+            RoleReplyCount = summary.RoleReplyCount,
+            StepTypeCounts = summary.StepTypeCounts,
+        };
 
     private static string MapStatus(WorkflowRunCompletionStatus status) =>
         status switch

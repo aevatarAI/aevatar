@@ -179,6 +179,74 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         toolEvent.ToolCall.Success.Should().BeTrue();
     }
 
+    // 06-26 detail enrichment: the final result + per-step trace + rollup statistics are surfaced from the
+    // committed run-report artifact. Final output/input are NOT truncated; step output is a 240-char preview.
+    [Fact]
+    public async Task GetRunForScopeAsync_ShouldSurfaceFinalResultStepsAndStatistics_WhenOwned()
+    {
+        var currentState = new FakeCurrentStateQueryPort
+        {
+            SingleResult = Snapshot("run-1", CallerScope, WorkflowRunCompletionStatus.Completed),
+        };
+        var report = new WorkflowRunReport
+        {
+            Input = "do the thing",
+            FinalOutput = "the thing is done",
+            FinalError = string.Empty,
+            Steps =
+            [
+                new WorkflowRunStepTrace
+                {
+                    StepId = "draft",
+                    StepType = "llm_call",
+                    TargetRole = "planner",
+                    RequestedAt = DateTimeOffset.UnixEpoch,
+                    CompletedAt = DateTimeOffset.UnixEpoch.AddSeconds(2),
+                    Success = true,
+                    OutputPreview = "preview of the step output",
+                    Usage = new WorkflowRunUsageMetrics
+                    {
+                        PromptTokens = 4,
+                        CompletionTokens = 6,
+                        TotalTokens = 10,
+                        Cost = 0.002,
+                    },
+                },
+            ],
+            Summary = new WorkflowRunStatistics
+            {
+                TotalSteps = 1,
+                RequestedSteps = 1,
+                CompletedSteps = 1,
+                RoleReplyCount = 1,
+                StepTypeCounts = new Dictionary<string, int> { ["llm_call"] = 1 },
+            },
+        };
+        var service = new WorkflowRunObservatoryQueryService(currentState, new FakeArtifactQueryPort { Report = report });
+
+        var detail = await service.GetRunForScopeAsync(CallerScope, "run-1");
+
+        detail.Should().NotBeNull();
+        detail!.Input.Should().Be("do the thing");
+        detail.FinalOutput.Should().Be("the thing is done");
+        detail.FinalError.Should().BeEmpty();
+
+        detail.Steps.Should().ContainSingle();
+        var step = detail.Steps[0];
+        step.StepId.Should().Be("draft");
+        step.StepType.Should().Be("llm_call");
+        step.TargetRole.Should().Be("planner");
+        step.Success.Should().BeTrue();
+        step.OutputPreview.Should().Be("preview of the step output");
+        step.DurationMs.Should().Be(2000);
+        step.Usage.TotalTokens.Should().Be(10);
+
+        detail.Statistics.TotalSteps.Should().Be(1);
+        detail.Statistics.CompletedSteps.Should().Be(1);
+        detail.Statistics.RoleReplyCount.Should().Be(1);
+        detail.Statistics.StepTypeCounts["llm_call"].Should().Be(1);
+    }
+
     [Fact]
     public async Task GetRunForScopeAsync_ShouldFallBackToSummary_WhenReportNotYetMaterialized()
     {
@@ -193,6 +261,10 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         detail.Should().NotBeNull();
         detail!.Timeline.Should().BeEmpty();
         detail.UsageTotals.TotalTokens.Should().Be(0);
+        // Enriched fields degrade to empty when the report artifact has not materialized yet.
+        detail.FinalOutput.Should().BeEmpty();
+        detail.Steps.Should().BeEmpty();
+        detail.Statistics.TotalSteps.Should().Be(0);
     }
 
     [Fact]

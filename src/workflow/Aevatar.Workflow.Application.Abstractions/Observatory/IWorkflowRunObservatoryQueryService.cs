@@ -74,9 +74,73 @@ public sealed class ObservatoryRunDetail
 {
     public ObservatoryRunSummary Summary { get; init; } = new();
 
+    // 06-26 detail enrichment: the run's authoritative input + final result, surfaced from the committed
+    // run-report artifact. These are NOT truncated by materialization (unlike per-step OutputPreview), so the
+    // viewer can show the real final output/error honestly. FinalOutput is empty while a run is still running.
+    public string Input { get; init; } = string.Empty;
+
+    public string FinalOutput { get; init; } = string.Empty;
+
+    public string FinalError { get; init; } = string.Empty;
+
+    // 06-26 detail enrichment: per-step structured trace (status / timing / params / per-step usage). The step
+    // OUTPUT is a 240-char preview by current materialization; the FULL per-step output lives in Timeline
+    // (role.reply Content / tool-call ResultJson), which this detail already carries.
+    public IReadOnlyList<ObservatoryStepDetail> Steps { get; init; } = [];
+
     public IReadOnlyList<ObservatoryViewEvent> Timeline { get; init; } = [];
 
+    public ObservatoryRunStatistics Statistics { get; init; } = new();
+
     public ObservatoryUsageTotals UsageTotals { get; init; } = new();
+}
+
+// 06-26 detail enrichment: read-only per-step view DTO mirroring the committed run-report step trace.
+public sealed class ObservatoryStepDetail
+{
+    public string StepId { get; init; } = string.Empty;
+
+    public string StepType { get; init; } = string.Empty;
+
+    public string TargetRole { get; init; } = string.Empty;
+
+    public DateTimeOffset? RequestedAtUtc { get; init; }
+
+    public DateTimeOffset? CompletedAtUtc { get; init; }
+
+    public bool? Success { get; init; }
+
+    public double? DurationMs { get; init; }
+
+    // A 240-char preview of the step output (current materialization truncates here). The full output is
+    // available via the run Timeline (role.reply Content / tool-call ResultJson); this field is a preview.
+    public string OutputPreview { get; init; } = string.Empty;
+
+    public string Error { get; init; } = string.Empty;
+
+    public IReadOnlyDictionary<string, string> RequestParameters { get; init; } =
+        new Dictionary<string, string>(StringComparer.Ordinal);
+
+    public string NextStepId { get; init; } = string.Empty;
+
+    public string BranchKey { get; init; } = string.Empty;
+
+    public ObservatoryUsageTotals Usage { get; init; } = new();
+}
+
+// 06-26 detail enrichment: run-level rollup statistics from the committed run-report artifact.
+public sealed class ObservatoryRunStatistics
+{
+    public int TotalSteps { get; init; }
+
+    public int RequestedSteps { get; init; }
+
+    public int CompletedSteps { get; init; }
+
+    public int RoleReplyCount { get; init; }
+
+    public IReadOnlyDictionary<string, int> StepTypeCounts { get; init; } =
+        new Dictionary<string, int>(StringComparer.Ordinal);
 }
 
 public sealed class ObservatoryUsageTotals
