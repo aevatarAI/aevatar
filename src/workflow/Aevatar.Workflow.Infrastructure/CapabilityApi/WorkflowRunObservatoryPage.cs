@@ -474,6 +474,8 @@ internal static class WorkflowRunObservatoryPage
   }
   .rid-chip .rid-lab { font-weight: 650; letter-spacing: .02em; }
   .rid-chip .rid-val { font-family: var(--mono); color: var(--fg); font-variant-numeric: tabular-nums; }
+  /* dimmed short scope id shown beside a resolved nyxid display name (admin scope-name resolution) */
+  .muted-id { color: var(--muted-2); font-family: var(--mono); font-size: .92em; font-variant-numeric: tabular-nums; }
   .rid-chip.def   { color: #a78bfa;    background: rgba(167,139,250,.13); border-color: color-mix(in oklab, #a78bfa 32%, transparent); }
   .rid-chip.run   { color: var(--run); background: var(--run-soft);       border-color: color-mix(in oklab, var(--run) 32%, transparent); }
   .rid-chip.scope { color: var(--muted); background: var(--neutral-soft); border-color: var(--border); }
@@ -930,6 +932,9 @@ internal static class WorkflowRunObservatoryPage
    =========================================================================== */
 const CFG = {
   authority: "https://nyx.chrono-ai.fun",
+  // nyxid REST API (different origin than this app; CORS-enabled, allows the Authorization header).
+  // Used admin-only to resolve a run's scopeId (≈ nyxid user id) to that user's display name.
+  nyxidApi: "https://nyx-api.chrono-ai.fun",
   clientId: "37a93189-2734-406e-bca1-7dbdf25c5a53",
   scope: "openid profile email proxy",
   redirectUri: location.origin + "/auto/callback",
@@ -1023,6 +1028,49 @@ function runScopeParam(runId){
   const run = cache.runs.find(r => r.runId === runId);
   const scope = run ? run.scopeId : ((adminState.currentScope && adminState.currentScope !== ALL_SCOPES) ? adminState.currentScope : "");
   return (scope && scope !== adminState.ownScope) ? "?scope=" + encodeURIComponent(scope) : "";
+}
+
+/* ---------------------------------------------------------------------------
+   nyxid user directory (admin-only): resolve a run's scopeId (≈ nyxid user id)
+   to that user's display name. The directory endpoint is admin-gated, so we only
+   ever fetch it when /me reported isAdmin; non-admins see no names (just their own
+   scope). Searching by a UUID does NOT match server-side, so we page through the
+   full user list once and build an id -> display_name map, cached for the session
+   (refreshable on re-init). Plain fetch — different origin than this app, so the
+   same-origin api() helper (and its bearer/redirect handling) doesn't apply. */
+const nyxidDirectory = { byId: new Map(), loaded: false, loading: false };
+async function loadNyxidDirectory(force){
+  if(!adminState.isAdmin) return;
+  if(nyxidDirectory.loading) return;
+  if(nyxidDirectory.loaded && !force) return;
+  const token = getToken(); if(!token) return;
+  nyxidDirectory.loading = true;
+  try {
+    const map = new Map();
+    const perPage = 50;
+    // cap the page walk so a directory-size change can't loop unbounded; ~123 users today.
+    for(let page = 1; page <= 50; page++){
+      const url = CFG.nyxidApi + "/api/v1/admin/users?search=&per_page=" + perPage + "&page=" + page;
+      const res = await fetch(url, { headers:{ Authorization:"Bearer " + token.access_token } });
+      if(!res.ok) break; // 401/403 (not admin / token expired) or transient — keep whatever we have
+      const body = await res.json();
+      const users = (body && body.users) || [];
+      for(const u of users){ if(u && u.id) map.set(String(u.id), u.display_name || ""); }
+      const total = body && typeof body.total === "number" ? body.total : null;
+      if(users.length < perPage) break;                 // last (short) page
+      if(total != null && page * perPage >= total) break; // reached the reported total
+    }
+    nyxidDirectory.byId = map;
+    nyxidDirectory.loaded = true;
+  } catch(e){ console.warn("observatory: nyxid directory fetch failed", e); }
+  finally { nyxidDirectory.loading = false; }
+}
+/* display name for a scopeId, or "" when admin gating is off / id unknown / name blank.
+   Never fabricates — falls back to "" so callers keep showing the short id. */
+function scopeDisplayName(scopeId){
+  if(!adminState.isAdmin || !scopeId) return "";
+  const name = nyxidDirectory.byId.get(String(scopeId));
+  return name || "";
 }
 
 /* 06-23-observatory-run-coverage-filter: list-only filter dimensions pushed to the runs query
@@ -1526,8 +1574,14 @@ function renderList(){
     // scope id per row is only meaningful in the cross-scope (全部 scope) view, where rows differ in
     // scope. When a single concrete scope is selected it's the same id on every row (already shown in
     // the admin bar) — pure noise — so it's hidden there.
+    // In cross-scope (全部 scope) view rows differ by scope owner. For admins we resolve the scopeId
+    // (≈ nyxid user id) to that user's display name and lead with it; the short id stays as the
+    // secondary cue and the full id in the tooltip. Falls back to the short id when unresolved.
+    const scopeName = scopeDisplayName(r.scopeId);
     const scopeCol = (adminState.isAdmin && adminState.currentScope === ALL_SCOPES)
-      ? `<span class="sep">·</span><span class="id" title="scope id: ${esc(r.scopeId||"")}">${esc(tailId(r.scopeId, 14))}</span>`
+      ? (scopeName
+          ? `<span class="sep">·</span><span class="id" title="${esc(scopeName)} · scope id: ${esc(r.scopeId||"")}">${esc(scopeName)} <span class="muted-id">${esc(tailId(r.scopeId, 6))}</span></span>`
+          : `<span class="sep">·</span><span class="id" title="scope id: ${esc(r.scopeId||"")}">${esc(tailId(r.scopeId, 14))}</span>`)
       : "";
     // run-origin badge: legacy/empty origin renders nothing (keeps the row readable at density).
     const olabel = originLabel(r.runOrigin);
@@ -1636,7 +1690,14 @@ function parseRunId(runId){
 }
 function renderRunIdChips(rid){
   const chips = [];
-  if(rid.scope) chips.push(`<span class="rid-chip scope" title="scope: ${esc(rid.scope)}"><span class="rid-lab">scope</span><span class="rid-val">${esc(midTrunc(rid.scope, 14))}</span></span>`);
+  if(rid.scope){
+    // scope segment of the run id is the scopeId (≈ nyxid user id). Admins see the owner's display
+    // name in the chip (short id kept as secondary, full id in the tooltip); otherwise the raw id.
+    const scopeName = scopeDisplayName(rid.scope);
+    chips.push(scopeName
+      ? `<span class="rid-chip scope" title="${esc(scopeName)} · scope: ${esc(rid.scope)}"><span class="rid-lab">scope</span><span class="rid-val">${esc(scopeName)} <span class="muted-id">${esc(tailId(rid.scope, 6))}</span></span></span>`
+      : `<span class="rid-chip scope" title="scope: ${esc(rid.scope)}"><span class="rid-lab">scope</span><span class="rid-val">${esc(midTrunc(rid.scope, 14))}</span></span>`);
+  }
   if(rid.def)   chips.push(`<span class="rid-chip def" title="workflow.definition: ${esc(rid.def)}"><span class="rid-lab">定义</span><span class="rid-val">${esc(midTrunc(rid.def, 16))}</span></span>`);
   if(rid.run)   chips.push(`<span class="rid-chip run" title="run: ${esc(rid.run)}"><span class="rid-lab">运行</span><span class="rid-val">${esc(midTrunc(rid.run, 16))}</span></span>`);
   if(chips.length === 0) chips.push(`<span class="rid-chip plain" title="${esc(rid.full)}"><span class="rid-val">${esc(midTrunc(rid.full, 30))}</span></span>`);
@@ -2462,6 +2523,9 @@ applyTheme();
   await refreshRuns();
   lastRunsSig = runsSig(cache.runs);
   render();
+  // Admin-only: resolve scopeIds to nyxid display names in the background, then re-render so the
+  // names appear in cross-scope rows and the run-detail scope chip without delaying the runs list.
+  if(adminState.isAdmin){ loadNyxidDirectory().then(() => { if(nyxidDirectory.loaded) render(); }); }
   startPolling();
 })();
 
