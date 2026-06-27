@@ -11,10 +11,14 @@ namespace Aevatar.Mainnet.Host.Api.Cqrs;
 //   - Panel A (pipeline canvas): STATIC. The pipeline structure is an always-true architectural diagram; it
 //     fetches nothing. Animated tokens + reduced-motion handling are preserved.
 //   - Panel B (scope & lag rail + headline metrics): LIVE via GET /api/cqrs/scopes (platform-admin gated).
-//     401 -> re-login; 403 -> honest "needs platform admin" state; otherwise surfaces backend error detail.
-//   - Panel C (read-model inventory): LIVE via GET /api/cqrs/readmodels (platform-admin gated). Groups read
-//     models by sink shape (Document/Graph/Memory) with engine + per-item name/actor/version/updated/count.
-//     401 -> re-login; 403 -> honest "needs platform admin" state; nullable fields render "—", never faked.
+//     Scope ids embed the owning nyxid account id (hyphenated UUID); we resolve it to a display_name via the
+//     nyxid admin single-user endpoint (GET {authority}/api/v1/admin/users/<id>, admin-only, CORS-open) and
+//     surface family + owner facets so 200 scopes across 24 families read as people, not opaque ids. A miss
+//     leaves the raw id — never a fabricated name. 401 -> re-login; 403 -> honest "needs platform admin".
+//   - Panel C (read-model inventory): LIVE via GET /api/cqrs/readmodels (platform-admin gated). The endpoint
+//     exposes the registry (read-model name + owning actor); version/updated are not surfaced by it, so those
+//     empty columns are NOT rendered (no "v—"/"更新 —" noise) — count shows only where the backend has one.
+//     401 -> re-login; 403 -> honest "needs platform admin" state; nullable fields are omitted, never faked.
 //   - Panel D (envelope inspector): the recent-envelope LIST is unbacked (event-stream browse is a gap) ->
 //     pending state. The state_root snapshot SHAPE block (field names + types) is structural and kept, as
 //     are the two existing pending-backend stubs.
@@ -217,6 +221,24 @@ internal static class CqrsObservatoryPage
   .scope-row[aria-current="true"] { background:var(--accent-soft); box-shadow:inset 3px 0 0 var(--accent); }
   .scope-row .sc-id { font-family:var(--mono); font-size:12px; color:var(--fg-strong); display:flex; align-items:center; gap:8px; min-width:0; }
   .scope-row .sc-id .txt { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  /* scope id, broken into family + owner + tail so the rail reads as people, not opaque ids */
+  .sc-main { min-width:0; display:flex; flex-direction:column; gap:3px; }
+  .sc-top { display:flex; align-items:center; gap:7px; min-width:0; }
+  .sc-fam { font-family:var(--sans); font-size:12px; font-weight:600; color:var(--fg-strong); white-space:nowrap; }
+  .sc-owner { display:inline-flex; align-items:center; gap:5px; font-family:var(--sans); font-size:11px; font-weight:600; padding:1px 8px 1px 4px; border-radius:var(--r-pill); color:var(--accent); background:var(--accent-soft); border:1px solid var(--accent-line); white-space:nowrap; }
+  .sc-owner .av { width:15px; height:15px; border-radius:50%; flex:0 0 auto; display:grid; place-items:center; font-size:9px; font-weight:700; color:#fff; background:linear-gradient(140deg,#6f9bff,#9b6bff); }
+  .sc-owner.unresolved { color:var(--muted-2); background:var(--neutral-soft); border-color:var(--border); }
+  .sc-owner.unresolved .av { background:var(--panel-3); color:var(--muted); }
+  .sc-tail { font-family:var(--mono); font-size:10.5px; color:var(--muted-2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  /* B filter bar — family + owner facets so 200 rows across 24 families are navigable */
+  .filterbar { display:flex; align-items:center; gap:7px; flex-wrap:wrap; padding:10px 14px; border-bottom:1px solid var(--border-soft); }
+  .filterbar .fb-l { font-size:10.5px; letter-spacing:.04em; text-transform:uppercase; color:var(--muted-2); margin-right:1px; }
+  .facet { display:inline-flex; align-items:center; gap:5px; font-size:11.5px; font-weight:600; color:var(--muted); background:var(--panel-2); border:1px solid var(--border); border-radius:var(--r-pill); padding:3px 10px; white-space:nowrap; transition:color .15s,border-color .15s,background .15s; }
+  .facet:hover { color:var(--fg); border-color:var(--muted-2); }
+  .facet[aria-pressed="true"] { color:var(--accent); background:var(--accent-soft); border-color:var(--accent-line); }
+  .facet .ct { font-family:var(--mono); font-size:10px; color:var(--muted-2); }
+  .facet[aria-pressed="true"] .ct { color:var(--accent); }
+  .facet .av { width:14px; height:14px; border-radius:50%; flex:0 0 auto; display:grid; place-items:center; font-size:8.5px; font-weight:700; color:#fff; background:linear-gradient(140deg,#6f9bff,#9b6bff); }
   .gauge { height:7px; border-radius:999px; background:var(--panel-3); overflow:hidden; position:relative; }
   .gauge > i { display:block; height:100%; background:var(--ok); border-radius:999px; }
   .gauge.lag > i { background:var(--warn); } .gauge.bad > i { background:var(--err); }
@@ -330,7 +352,8 @@ internal static class CqrsObservatoryPage
 /* ===========================================================================
    数据来源标注（DATA HONESTY）：
      LIVE（今天就有）：projection-scope 状态（active / observed vs successful version / failures）
-                       经 GET /api/cqrs/scopes（平台管理员可见的平台级健康视图）。
+                       经 GET /api/cqrs/scopes（平台管理员可见的平台级健康视图）；scope id 内嵌的
+                       nyxid 归属账户 id 经 nyxid admin 单用户端点解析为 display_name（解析失败保留原 id）。
      静态（结构永真，无 fetch）：Panel A 管道画布——一张始终成立的架构图。
      待后端（pending backend，仅做带标签的占位，绝不编造数据）：
                        读模型清单（Panel C）、原始事件流 browse/replay 与最近信封列表（Panel D）、
@@ -421,6 +444,53 @@ async function authFetch(path){
 }
 
 /* ===========================================================================
+   nyxid owner resolution — projection scope ids embed the owning nyxid account
+   id (the hyphenated 8-4-4-4-12 UUID, e.g. service-runs:…:1514a708-0b2d-…).
+   We resolve it to a human display_name so the scope rail reads as PEOPLE, not
+   opaque ids. Direct against the nyxid admin single-user endpoint
+   (GET {nyx-api}/api/v1/admin/users/<id>) — admin-only, browser-CORS-allowed
+   (access-control-allow-origin: *), reusing the same nyxid token the page holds.
+   Same nyxid API base + resolution purpose as the rest of the console suite
+   (cf. BackendConsole/admin.html NYX_API). Best-effort + cached: a miss leaves
+   the row showing its raw id, never a fabricated name. Only the FIRST hyphenated
+   uuid in a scope id is the owner (later 32-char hex ids are run/definition/chat
+   ids, not accounts). */
+const NYXID_API = "https://nyx-api.chrono-ai.fun";
+const NYXID_USER_API = NYXID_API + "/api/v1/admin/users/";
+const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+const ownerCache = {};                 // uuid -> display_name | null (null = resolved-but-unknown)
+const ownerInFlight = {};              // uuid -> Promise (dedupe concurrent lookups)
+function scopeOwnerId(scopeId){ const m = UUID_RE.exec(String(scopeId||"")); return m ? m[0].toLowerCase() : null; }
+async function resolveOwner(uuid){
+  if(uuid in ownerCache) return ownerCache[uuid];
+  if(ownerInFlight[uuid]) return ownerInFlight[uuid];
+  const token = getToken(); if(!token){ return null; }
+  const p = (async function(){
+    try {
+      const res = await fetch(NYXID_USER_API + encodeURIComponent(uuid), { headers:{ Authorization:"Bearer " + token.access_token } });
+      if(!res.ok){ ownerCache[uuid] = null; return null; }
+      const u = await res.json();
+      const name = (u && (u.display_name || u.name || u.username || u.email)) || null;
+      ownerCache[uuid] = name;
+      return name;
+    } catch(e){ console.warn("cqrs: owner resolve failed", uuid, e); ownerCache[uuid] = null; return null; }
+    finally { delete ownerInFlight[uuid]; }
+  })();
+  ownerInFlight[uuid] = p;
+  return p;
+}
+/* resolve every distinct owner across the loaded scopes, then re-render once. */
+async function resolveAllOwners(rows, rerender){
+  const ids = {};
+  rows.forEach(r=>{ const id=scopeOwnerId(r.id); if(id) ids[id]=1; });
+  const todo = Object.keys(ids).filter(id=>!(id in ownerCache));
+  if(!todo.length) return;
+  await Promise.all(todo.map(resolveOwner));
+  if(rerender) rerender();
+}
+function ownerName(scopeId){ const id=scopeOwnerId(scopeId); return id ? (ownerCache[id]||null) : null; }
+
+/* ===========================================================================
    App state + DOM helpers
    =========================================================================== */
 const $=(s,r=document)=>r.querySelector(s);
@@ -467,6 +537,7 @@ const state = {
   theme: localStorage.getItem("cqrs-theme") || null,
   scopeId:null, scopeResolved:false, scopeSource:null,
   sort:"lag", selectedScope:null, selectedEvent:0,
+  famFilter:null, ownerFilter:null,   // Panel B facet filters (scope family / nyxid owner id)
   scopePage:1, invPages:{},      // client-side display paging (Panel B list / Panel C per-shape group)
   // scopes panel B: status one of loading | ok | empty | forbidden | error
   scopes:{ status:"loading", rows:[], detail:null },
@@ -479,6 +550,18 @@ function curTheme(){ const h=document.documentElement; return h.classList.contai
 function effDark(){ const t=curTheme(); if(t)return t==="dark"; return !window.matchMedia||!window.matchMedia("(prefers-color-scheme: light)").matches; }
 function applyTheme(){ const t=state.theme; document.documentElement.classList.remove("theme-light","theme-dark"); if(t)document.documentElement.classList.add("theme-"+t); }
 function lagOf(s){ return (s.observed||0) - (s.successful||0); }
+
+/* scope id structure: "projection.durable.scope:<family>:<rest…>". Surface the family
+   (the human bit) and a compact tail so each row reads as <family> · <owner> · <tail>. */
+const SCOPE_PREFIX = "projection.durable.scope:";
+function scopeFamily(id){ const s=String(id||""); const b=s.startsWith(SCOPE_PREFIX)?s.slice(SCOPE_PREFIX.length):s; const i=b.indexOf(":"); return i<0?b:b.slice(0,i); }
+function scopeTail(id){
+  const s=String(id||""); const b=s.startsWith(SCOPE_PREFIX)?s.slice(SCOPE_PREFIX.length):s;
+  const i=b.indexOf(":"); let rest=i<0?"":b.slice(i+1);
+  const owner=scopeOwnerId(id);   // drop the resolved owner uuid from the tail (shown as a chip)
+  if(owner) rest=rest.replace(new RegExp(owner,"i"),"").replace(/::+/g,":").replace(/^:|:$/g,"");
+  return rest;
+}
 
 /* D) state_root snapshot shape — structural (field names + types), not data */
 const STATE_ROOT_SHAPE = [
@@ -678,12 +761,56 @@ function showStage(s){
 /* ===========================================================================
    B) scope & lag rail — LIVE via GET /api/cqrs/scopes (platform-admin gated)
    =========================================================================== */
+function filteredScopes(){
+  let arr=state.scopes.rows;
+  if(state.famFilter) arr=arr.filter(s=>scopeFamily(s.id)===state.famFilter);
+  if(state.ownerFilter) arr=arr.filter(s=>scopeOwnerId(s.id)===state.ownerFilter);
+  return arr;
+}
 function sortedScopes(){
-  const arr=state.scopes.rows.slice();
+  const arr=filteredScopes().slice();
   if(state.sort==="lag") arr.sort((a,b)=>lagOf(b)-lagOf(a) || b.failures-a.failures);
   else if(state.sort==="fail") arr.sort((a,b)=>b.failures-a.failures || lagOf(b)-lagOf(a));
   else arr.sort((a,b)=>String(a.id).localeCompare(String(b.id)));
   return arr;
+}
+/* facet tallies over the FULL (unfiltered) row set, so chips always show real totals. */
+function scopeFacets(){
+  const fam={}, own={};
+  state.scopes.rows.forEach(s=>{
+    const f=scopeFamily(s.id); fam[f]=(fam[f]||0)+1;
+    const o=scopeOwnerId(s.id); if(o) own[o]=(own[o]||0)+1;
+  });
+  return { fam, own };
+}
+function renderFilterBar(){
+  const f=scopeFacets();
+  const bar=el("div",{class:"filterbar",role:"group","aria-label":"按 family / 归属人筛选 scope"});
+  const fams=Object.keys(f.fam).sort((a,b)=>f.fam[b]-f.fam[a]);
+  const owners=Object.keys(f.own).sort((a,b)=>f.own[b]-f.own[a]);
+  // "全部" reset
+  const all=el("button",{class:"facet",type:"button","aria-pressed":String(!state.famFilter&&!state.ownerFilter)},"全部 <span class=\"ct\">"+state.scopes.rows.length+"</span>");
+  all.addEventListener("click",()=>{ state.famFilter=null; state.ownerFilter=null; state.scopePage=1; render(); });
+  bar.appendChild(all);
+  if(fams.length){
+    bar.appendChild(el("span",{class:"fb-l"},"FAMILY"));
+    fams.forEach(fam=>{
+      const b=el("button",{class:"facet",type:"button","aria-pressed":String(state.famFilter===fam),title:fam},esc(fam)+' <span class="ct">'+f.fam[fam]+'</span>');
+      b.addEventListener("click",()=>{ state.famFilter=(state.famFilter===fam?null:fam); state.scopePage=1; render(); });
+      bar.appendChild(b);
+    });
+  }
+  if(owners.length){
+    bar.appendChild(el("span",{class:"fb-l"},"归属人"));
+    owners.forEach(o=>{
+      const nm=ownerCache[o]; const label=nm||o.slice(0,8);
+      const b=el("button",{class:"facet",type:"button","aria-pressed":String(state.ownerFilter===o),title:nm?(nm+" · "+o):o},
+        '<span class="av">'+esc(initials(nm||"?"))+'</span>'+esc(label)+' <span class="ct">'+f.own[o]+'</span>');
+      b.addEventListener("click",()=>{ state.ownerFilter=(state.ownerFilter===o?null:o); state.scopePage=1; render(); });
+      bar.appendChild(b);
+    });
+  }
+  return bar;
 }
 function renderScopeRail(){
   const card=el("section",{class:"panel"});
@@ -712,10 +839,13 @@ function renderScopeRail(){
     hl.appendChild(el("div",{style:"font-size:11.5px;color:var(--muted-2);margin-top:8px"},'<b style="color:var(--muted)">lag + failures = 头条指标。</b> last_observed_version（已见）− last_successful_version（已物化）= 投影滞后。'));
     card.appendChild(hl);
 
+    /* family / owner facet bar — resolves opaque scope ids into navigable groups + people */
+    card.appendChild(renderFilterBar());
+
     /* sortable list */
     const sh=el("div",{class:"sort-h"});
     const sortBtn=(key,label)=>'<button data-sort="'+key+'" '+(state.sort===key?'aria-sort="descending"':"")+'>'+label+' '+(state.sort===key?ICON.sort:"")+'</button>';
-    sh.innerHTML='<span><button data-sort="id" '+(state.sort==="id"?'aria-sort="ascending"':"")+'>scope</button></span>'+
+    sh.innerHTML='<span><button data-sort="id" '+(state.sort==="id"?'aria-sort="ascending"':"")+'>scope · 归属人</button></span>'+
       '<span class="col-gauge">observed → materialized</span>'+
       '<span style="text-align:right">'+sortBtn("lag","lag")+'</span>'+
       '<span style="text-align:right">'+sortBtn("fail","fails")+'</span>';
@@ -729,9 +859,18 @@ function renderScopeRail(){
     allScopes.slice(scopeStart, scopeStart+SCOPE_PAGE_SIZE).forEach(s=>{
       const lag=lagOf(s); const pct=s.observed? Math.round(s.successful/s.observed*100):100;
       const gcls = lag===0?"":((s.failures>0||lag>15)?"bad":"lag");
+      const dotCls = s.active?(lag>0||s.failures>0?(s.failures>0?"bad":"lag"):"active"):"idle";
+      const fam=scopeFamily(s.id), tail=scopeTail(s.id), oid=scopeOwnerId(s.id), oname=oid?ownerCache[oid]:undefined;
+      let ownerHtml="";
+      if(oid){
+        if(oname) ownerHtml='<span class="sc-owner" title="nyxid '+esc(oid)+'"><span class="av">'+esc(initials(oname))+'</span>'+esc(oname)+'</span>';
+        else ownerHtml='<span class="sc-owner unresolved" title="nyxid '+esc(oid)+'（解析中或未知）"><span class="av">·</span>'+esc(oid.slice(0,8))+'</span>';
+      }
       const row=el("button",{class:"scope-row",role:"listitem","aria-current":String(state.selectedScope===s.id)});
       row.innerHTML=
-        '<span class="sc-id"><span class="dot s-'+(s.active?(lag>0||s.failures>0?(s.failures>0?"bad":"lag"):"active"):"idle")+'"></span><span class="txt" title="'+esc(s.id)+'">'+esc(s.id)+'</span></span>'+
+        '<span class="sc-id"><span class="dot s-'+dotCls+'"></span>'+
+          '<span class="sc-main"><span class="sc-top"><span class="sc-fam" title="'+esc(s.id)+'">'+esc(fam)+'</span>'+ownerHtml+'</span>'+
+          (tail?'<span class="sc-tail" title="'+esc(s.id)+'">'+esc(tail)+'</span>':'')+'</span></span>'+
         '<span class="cell-gauge"><div class="gauge '+gcls+'"><i style="width:'+pct+'%"></i></div><div class="gauge-cap">'+fmt(s.successful)+' / '+fmt(s.observed)+'</div></span>'+
         '<span class="lagcell '+(lag>0?(lag>15?"bad":"pos"):"")+'">'+(lag>0?"+"+lag:"0")+'</span>'+
         '<span class="failcell '+(s.failures>0?"pos":"")+'">'+(s.failures||0)+'</span>';
@@ -795,7 +934,7 @@ function renderInventory(){
   const tag = state.readmodels.status==="ok"
     ? '<span class="srctag live"><span class="dot"></span>数据来源 · LIVE</span>'
     : (state.readmodels.status==="loading" ? '<span class="srctag live" style="color:var(--muted);background:var(--neutral-soft);border-color:var(--border)"><span class="dot" style="background:var(--muted)"></span>加载中…</span>' : '<span class="pending">'+ICON.warn+' 平台级</span>');
-  head.innerHTML='<h2>Read-model Inventory</h2><div class="ph-r">'+tag+'</div>';
+  head.innerHTML='<h2>Read-model Inventory <span style="font-size:11px;font-weight:500;color:var(--muted-2)">· 已注册读模型 → 拥有 actor</span></h2><div class="ph-r">'+tag+'</div>';
   card.appendChild(head);
 
   const st = state.readmodels.status;
@@ -820,11 +959,14 @@ function renderInventory(){
         items.slice(invStart, invStart+RM_PAGE_SIZE).forEach(it=>{
           const row=el("div",{class:"rm-row"});
           const actor=it.actor==null?"":String(it.actor);
+          /* this endpoint exposes the registry (name + owning actor). version/updated are not
+             surfaced here, so we DON'T render empty "v—"/"更新 —" noise — we show the actor that
+             owns the read model, and the materialized count only when the backend actually has one. */
           const left='<div><div class="rm-n">'+esc(it.name)+'</div>'+
-            '<div class="rm-m">'+(actor?'<span class="mono" title="复制 actor '+esc(actor)+'">'+esc(actor)+'</span>':'<span class="mono">—</span>')+
-            '<span>更新 '+esc(rmUpdated(it.updated))+'</span></div></div>';
-          const right='<div class="rm-r"><div class="rm-v">'+esc(rmVersion(it.version))+'</div>'+
-            '<div class="rm-c">'+esc(rmCount(it.count, g.shape))+'</div></div>';
+            '<div class="rm-m">'+(actor?'<span class="mono" title="拥有此读模型的 actor：'+esc(actor)+'">'+esc(actor)+'</span>':'<span class="mono">—</span>')+
+            (it.version!=null?'<span>'+esc(rmVersion(it.version))+'</span>':'')+
+            (it.updated?'<span>更新 '+esc(rmUpdated(it.updated))+'</span>':'')+'</div></div>';
+          const right=it.count!=null?'<div class="rm-r"><div class="rm-v">'+esc(rmCount(it.count, g.shape))+'</div></div>':'';
           row.innerHTML=left+right;
           grp.appendChild(row);
         });
@@ -975,6 +1117,8 @@ async function loadScopes(){
     }));
     state.scopes = { status: rows.length? "ok":"empty", rows, detail:null };
     render();
+    /* resolve nyxid owners embedded in scope ids, then re-render (best-effort, cached). */
+    if(rows.length) resolveAllOwners(rows, render);
   } catch(e){
     if(e && e.message === "unauthorized") return; // signOutSilent already re-rendered
     state.scopes = { status:"error", rows:[], detail:String(e && e.message || e) };
