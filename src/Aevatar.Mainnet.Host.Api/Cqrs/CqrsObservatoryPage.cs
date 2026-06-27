@@ -240,6 +240,15 @@ internal static class CqrsObservatoryPage
   .skel-bar { height:10px; border-radius:999px; background:linear-gradient(90deg,var(--panel-2),var(--panel-3),var(--panel-2)); background-size:200% 100%; animation:shimmer 1.3s linear infinite; }
   @keyframes shimmer { 0%{background-position:200% 0;} 100%{background-position:-200% 0;} }
 
+  /* shared pager — client-side display paging (scope rail list + inventory groups) */
+  .pager { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:10px 14px; border-top:1px solid var(--border-soft); }
+  .pager.pg-inline { border-top:0; padding:8px 2px 1px; justify-content:flex-end; gap:12px; }
+  .pager .pg-info { font-family:var(--mono); font-size:11px; color:var(--muted-2); font-variant-numeric:tabular-nums; }
+  .pager .pg-btns { display:inline-flex; gap:6px; }
+  .pager button { display:inline-flex; align-items:center; gap:5px; font-size:12px; font-weight:600; color:var(--muted); background:var(--panel-2); border:1px solid var(--border); border-radius:var(--r-sm); padding:5px 10px; transition:color .15s,border-color .15s; }
+  .pager button:hover:not(:disabled) { color:var(--fg); border-color:var(--muted-2); }
+  .pager button:disabled { opacity:.42; cursor:not-allowed; }
+
   /* C inventory */
   .inv-group { margin-bottom:14px; } .inv-group:last-child { margin-bottom:0; }
   .inv-group-h { display:flex; align-items:center; gap:9px; margin-bottom:8px; }
@@ -458,6 +467,7 @@ const state = {
   theme: localStorage.getItem("cqrs-theme") || null,
   scopeId:null, scopeResolved:false, scopeSource:null,
   sort:"lag", selectedScope:null, selectedEvent:0,
+  scopePage:1, invPages:{},      // client-side display paging (Panel B list / Panel C per-shape group)
   // scopes panel B: status one of loading | ok | empty | forbidden | error
   scopes:{ status:"loading", rows:[], detail:null },
   // read-model inventory panel C: status one of loading | ok | empty | forbidden | error
@@ -518,6 +528,32 @@ const SHAPE_META = {
   mem:   { name:"Memory",   unit:"entries" }
 };
 function shapeMeta(shape){ return SHAPE_META[shape] || { name:String(shape||"?"), unit:"" }; }
+
+/* ===========================================================================
+   shared client-side pager — display paging for long lists (scope & lag rail rows +
+   read-model inventory groups). Pure view state; returns null when the list fits on a
+   single page, so short lists render exactly as before.
+   =========================================================================== */
+const SCOPE_PAGE_SIZE = 10;   // Panel B: scope & lag-rail rows per page
+const RM_PAGE_SIZE = 6;       // Panel C: read-model items per sink-shape group per page
+function pageCount(total, size){ return Math.max(1, Math.ceil((total||0)/size)); }
+function pageClamp(page, total, size){ return Math.min(Math.max(1, (page|0)||1), pageCount(total, size)); }
+function renderPager(page, total, size, onGo, inline){
+  const pages=pageCount(total, size);
+  if(pages<=1) return null;
+  const cur=pageClamp(page, total, size);
+  const start=(cur-1)*size+1, end=Math.min(cur*size, total);
+  const bar=el("div",{class:"pager"+(inline?" pg-inline":""),role:"navigation","aria-label":"分页"});
+  bar.appendChild(el("div",{class:"pg-info"}, start+"–"+end+" / "+total));
+  const btns=el("div",{class:"pg-btns"});
+  const prev=el("button",{type:"button","aria-label":"上一页"},"‹ 上一页");
+  if(cur<=1) prev.setAttribute("disabled","true"); else prev.addEventListener("click",function(){ onGo(cur-1); });
+  const next=el("button",{type:"button","aria-label":"下一页"},"下一页 ›");
+  if(cur>=pages) next.setAttribute("disabled","true"); else next.addEventListener("click",function(){ onGo(cur+1); });
+  btns.appendChild(prev); btns.appendChild(next);
+  bar.appendChild(btns);
+  return bar;
+}
 
 /* ===========================================================================
    topbar
@@ -683,11 +719,14 @@ function renderScopeRail(){
       '<span class="col-gauge">observed → materialized</span>'+
       '<span style="text-align:right">'+sortBtn("lag","lag")+'</span>'+
       '<span style="text-align:right">'+sortBtn("fail","fails")+'</span>';
-    sh.querySelectorAll("button").forEach(b=>b.addEventListener("click",()=>{ state.sort=b.getAttribute("data-sort"); render(); }));
+    sh.querySelectorAll("button").forEach(b=>b.addEventListener("click",()=>{ state.sort=b.getAttribute("data-sort"); state.scopePage=1; render(); }));
     card.appendChild(sh);
 
+    const allScopes=sortedScopes();
+    state.scopePage=pageClamp(state.scopePage, allScopes.length, SCOPE_PAGE_SIZE);
+    const scopeStart=(state.scopePage-1)*SCOPE_PAGE_SIZE;
     const list=el("div",{role:"list"});
-    sortedScopes().forEach(s=>{
+    allScopes.slice(scopeStart, scopeStart+SCOPE_PAGE_SIZE).forEach(s=>{
       const lag=lagOf(s); const pct=s.observed? Math.round(s.successful/s.observed*100):100;
       const gcls = lag===0?"":((s.failures>0||lag>15)?"bad":"lag");
       const row=el("button",{class:"scope-row",role:"listitem","aria-current":String(state.selectedScope===s.id)});
@@ -700,6 +739,8 @@ function renderScopeRail(){
       list.appendChild(row);
     });
     card.appendChild(list);
+    const scopePager=renderPager(state.scopePage, allScopes.length, SCOPE_PAGE_SIZE, function(p){ state.scopePage=p; render(); });
+    if(scopePager) card.appendChild(scopePager);
     return card;
   }
 
@@ -773,7 +814,10 @@ function renderInventory(){
       if(items.length===0){
         grp.appendChild(el("div",{class:"inv-empty"},'该 sink 形状下暂无已注册读模型。'));
       } else {
-        items.forEach(it=>{
+        const invKey=String(g.shape);
+        state.invPages[invKey]=pageClamp(state.invPages[invKey], items.length, RM_PAGE_SIZE);
+        const invStart=(state.invPages[invKey]-1)*RM_PAGE_SIZE;
+        items.slice(invStart, invStart+RM_PAGE_SIZE).forEach(it=>{
           const row=el("div",{class:"rm-row"});
           const actor=it.actor==null?"":String(it.actor);
           const left='<div><div class="rm-n">'+esc(it.name)+'</div>'+
@@ -784,6 +828,8 @@ function renderInventory(){
           row.innerHTML=left+right;
           grp.appendChild(row);
         });
+        const invPager=renderPager(state.invPages[invKey], items.length, RM_PAGE_SIZE, function(p){ state.invPages[invKey]=p; render(); }, true);
+        if(invPager) grp.appendChild(invPager);
       }
       body.appendChild(grp);
     });
@@ -903,6 +949,7 @@ async function loadContext(){
 
 async function loadScopes(){
   state.scopes = { status:"loading", rows:[], detail:null };
+  state.scopePage = 1;
   render();
   try {
     const res = await authFetch("/api/cqrs/scopes");
@@ -937,6 +984,7 @@ async function loadScopes(){
 
 async function loadReadModels(){
   state.readmodels = { status:"loading", groups:[], detail:null };
+  state.invPages = {};
   render();
   try {
     const res = await authFetch("/api/cqrs/readmodels");
