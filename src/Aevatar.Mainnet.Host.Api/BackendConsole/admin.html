@@ -1548,13 +1548,15 @@ function loadObsRuns(rerender){
   }).catch(function(e){ OBS_RUNS=[]; OBS_RUNS_ERR=(e&&(e.body||e.message))||'运行列表加载失败'; })
   .then(function(){ OBS_RUNS_LOADED=true; OBS_RUNS_LOADING=false; if(rerender) rerender(); });
 }
+/* 该 run 自己的 scopeId：detail/graph 必须按 run 所属 scope 拉取，admin __all__ 列表里的跨 scope run 才能打开（否则后端按调用者自身 scope 校验→404）。 */
+function obsRunScope(runId){ var r=(OBS_RUNS||[]).filter(function(x){return x.id===runId;})[0]; return (r&&r.scope)||''; }
 /* 选中 run 时懒加载详情 + DAG，缓存到 OBS_DETAIL[runId]。 */
 function loadObsDetail(runId,rerender){
   if(!runId) return Promise.resolve();
   if(OBS_DETAIL[runId] && (OBS_DETAIL[runId].loading || OBS_DETAIL[runId].detail)) { if(rerender) rerender(); return Promise.resolve(); }
   OBS_DETAIL[runId]={loading:true,err:null,detail:null}; if(rerender) rerender();
-  var scope=(OBS_STATE&&OBS_STATE.scope)||'__all__';
-  var sq=scope&&scope!=='__all__'&&scope!=='__self__'?('?scope='+encodeURIComponent(scope)):'';
+  var rs=obsRunScope(runId);
+  var sq=rs?('?scope='+encodeURIComponent(rs)):'';
   var base='/api/workflow/observatory/runs/'+encodeURIComponent(runId);
   return Promise.all([
     adminJson(base+sq).catch(function(e){ if(e&&e.status===404) return null; throw e; }),
@@ -1567,8 +1569,8 @@ function loadObsDetail(runId,rerender){
   .then(function(){ if(rerender) rerender(); });
 }
 function loadObsGraph(runId){
-  var scope=(OBS_STATE&&OBS_STATE.scope)||'__all__';
-  var sq=scope&&scope!=='__all__'&&scope!=='__self__'?('?scope='+encodeURIComponent(scope)):'';
+  var rs=obsRunScope(runId);
+  var sq=rs?('?scope='+encodeURIComponent(rs)):'';
   return adminJson('/api/workflow/observatory/runs/'+encodeURIComponent(runId)+'/graph'+sq).then(function(g){
     return (g&&g.forbidden)?null:g; });
 }
@@ -2600,7 +2602,7 @@ var NAV=[
 var MODULE_META={
   fleet:{name:'全景看板', auth:'admin', icon:NAV_ICON.fleet, live:true},
   status:{name:'系统状态', auth:'public', icon:NAV_ICON.status, live:true},
-  observatory:{name:'运行观测台', auth:'admin', icon:NAV_ICON.obs, live:true},
+  observatory:{name:'运行观测台', auth:'login', icon:NAV_ICON.obs, live:true},
   cqrs:{name:'投影管道 CQRS', auth:'platform-admin', icon:NAV_ICON.cqrs},
   studio:{name:'编排工作台', auth:'login', icon:NAV_ICON.studio},
   skills:{name:'技能调用', auth:'login', icon:NAV_ICON.skills},
@@ -2608,6 +2610,10 @@ var MODULE_META={
   channels:{name:'通道管理', auth:'login', icon:NAV_ICON.channels},
   voice:{name:'语音台', auth:'login', icon:NAV_ICON.voice, live:true}
 };
+/* 当前账号能否访问该模块：public 恒真；admin/platform-admin 需 ACCOUNT.admin；其余需已登录。无权→不在 rail 显示且路由拦截。 */
+function canAccessModule(m){ if(!m) return false; if(m.auth==='public') return true;
+  if(m.auth==='admin'||m.auth==='platform-admin') return !!(ACCOUNT&&ACCOUNT.admin); return !!ACCOUNT; }
+function defaultModule(){ return ACCOUNT?'observatory':'status'; }  /* 已登录默认落地真实观测台，非 mock 看板 */
 
 function authBadge(auth){
   if(auth==='admin'||auth==='platform-admin') return '<span class="auth-badge admin" data-tip="需要平台管理员权限">ADMIN</span>';
@@ -2631,8 +2637,10 @@ function auth403(msg){
 /* ---------------- 侧栏 + 账号 ---------------- */
 function renderRail(active){
   var groups=NAV.map(function(g){
+    var items=g.items.filter(function(id){return canAccessModule(MODULE_META[id]);});
+    if(!items.length) return '';
     return '<div class="rail-group"><div class="rail-group-label">'+esc(g.group)+'</div>'+
-      g.items.map(function(id){var m=MODULE_META[id];
+      items.map(function(id){var m=MODULE_META[id];
         return '<button class="rail-item'+(id===active?' on':'')+'" data-module="'+id+'" data-tip-r="'+esc(m.name)+'">'+
           '<span class="rail-ico">'+m.icon+'</span><span class="rail-name">'+esc(m.name)+'</span>'+
           ((m.auth==='admin'||m.auth==='platform-admin')?'<span class="rail-tag">A</span>':'')+'</button>';
@@ -3765,7 +3773,8 @@ function render(){
   STATE.l0Sort=q.sort||'health'; STATE.l0Filter=q.filter||null; STATE.l0Range=q.range||'today';
   STATE.l1Sub=q.view||'roster'; STATE.l1Status=q.status||null; STATE.l2Mode=q.mode||'emp';
 
-  var module=parts[0]||'fleet', rest=parts.slice(1);
+  var module=parts[0]||defaultModule(), rest=parts.slice(1);
+  if(!canAccessModule(MODULE_META[module])){ module=defaultModule(); rest=[]; }
   var v;
   if(module==='fleet'){
     if(rest.length===0) v=viewL0();
@@ -3944,8 +3953,8 @@ async function refreshAccount(){
   bindEvents(); startClock();
   if(!getToken()){ renderLoginGate(); return; }
   ACCOUNT=accountFromToken();
-  render();
-  refreshAccount().then(function(){ if(ACCOUNT) render(); });
+  render();                                          /* 即时首屏(token claims, admin=false) */
+  refreshAccount().then(function(){ if(ACCOUNT) render(); });  /* /me 回来确定 admin→重渲, rail 补显 admin 模块 */
 })();
 
 </script>
