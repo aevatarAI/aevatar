@@ -361,6 +361,7 @@ public static class MainnetHostBuilderExtensions
         app.MapVoicePresenceCapabilityAdminEndpoints();
         app.MapVoiceConsoleEndpoints();
         app.MapAutoConsoleCallbackEndpoints();
+        app.MapAdminConsoleEndpoints();
         app.MapCqrsObservatoryPageEndpoints();
         app.MapCqrsObservatoryApiEndpoints();
         app.MapStreamingProxyEndpoints();

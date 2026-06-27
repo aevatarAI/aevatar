@@ -49,4 +49,9 @@
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.ToolSetRegistry\Aevatar.AI.ToolProviders.ToolSetRegistry.csproj" />
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.Web\Aevatar.AI.ToolProviders.Web.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Fused backend admin console served at /admin (BackendConsole/AdminConsoleEndpoints.cs).
+         Kept as a real .html asset embedded in the assembly rather than a C# raw-string. -->
+    <EmbeddedResource Include="BackendConsole\admin.html" />
+  </ItemGroup>
 </Project>
