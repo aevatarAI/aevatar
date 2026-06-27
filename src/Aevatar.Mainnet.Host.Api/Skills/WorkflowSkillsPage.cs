@@ -1,11 +1,11 @@
 namespace Aevatar.Mainnet.Host.Api.Skills;
 
-// 06-26 ornn skills invocation page — backend-served self-contained HTML (sibling of the workflow run
+// 06-26 ornn skills invocation page - backend-served self-contained HTML (sibling of the workflow run
 // observatory page). Browser OIDC Authorization Code + PKCE against NyxID via the shared /auto/callback
 // target (same client + token key as every console page, so one login spans the suite). Data via the
 // scope-gated /api/workflow/skills* and /api/schedules endpoints; the page itself is the anonymous shell.
-// The design HTML was authored externally (skills.html) and surgically wired here: mock DataSource -> real
-// fetch + OIDC, design-preview dock removed, cron normalized to Cronos 5-field.
+// The design HTML was authored externally (skills.html) and surgically wired: mock DataSource -> real
+// fetch + OIDC, design-preview dock removed, cron normalized to Cronos 5-field, topbar account null-safe.
 internal static class WorkflowSkillsPage
 {
     public const string Html = """
@@ -474,7 +474,7 @@ function renderTopbar(){
   tb.addEventListener("click",()=>{ localStorage.setItem("skills-theme",effDark()?"light":"dark"); applyTheme(); render(); });
   bar.appendChild(tb);
   if(state.authed){
-    const ac=el("div",{class:"account"}); ac.innerHTML=`<span class="avatar">${initials(ACCOUNT.label)}</span><span class="who" title="${esc(ACCOUNT.label)}">${esc(ACCOUNT.label)}</span>`;
+    const ac=el("div",{class:"account"}); const aLbl=(ACCOUNT&&ACCOUNT.label)?ACCOUNT.label:"已登录"; ac.innerHTML=`<span class="avatar">${initials(aLbl)}</span><span class="who" title="${esc(aLbl)}">${esc(aLbl)}</span>`;
     bar.appendChild(ac);
   } else {
     const b=el("button",{class:"signin-pill"},"登录"); b.addEventListener("click",beginLogin); bar.appendChild(b);
