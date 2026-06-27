@@ -594,6 +594,17 @@ button{font-family:inherit;cursor:pointer;}
 .rail-tag{font-size:9px;font-weight:700;color:var(--failed);background:var(--failed-bg);border:1px solid var(--failed-bd);
   border-radius:3px;padding:0 4px;letter-spacing:.04em;}
 .rail-foot{flex:0 0 auto;border-top:1px solid var(--border);padding:10px;}
+.rail-foot{display:none!important;}
+.app-header .header-right{display:none!important;}
+#acctw{position:fixed;top:8px;right:14px;z-index:60;display:flex;align-items:center;gap:6px;}
+.acctw-chip{display:flex;align-items:center;gap:8px;height:38px;padding:4px 12px 4px 5px;border:1px solid var(--border);background:var(--surface);border-radius:999px;box-shadow:var(--shadow-card);cursor:pointer;}
+.acctw-chip:hover{background:var(--surface-3);}
+.acctw-av{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;color:#fff;font-size:12px;font-weight:600;background:linear-gradient(135deg,#2563eb,#1d4ed8);flex:0 0 auto;}
+.acctw-meta{display:flex;flex-direction:column;line-height:1.2;min-width:0;text-align:left;}
+.acctw-meta b{font-size:12px;color:var(--heading);font-weight:600;}
+.acctw-meta span{font-size:10.5px;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:160px;}
+.acctw-out{width:30px;height:30px;border:1px solid var(--border);background:var(--surface);border-radius:8px;color:var(--faint);cursor:pointer;}
+.acctw-out:hover{color:var(--heading);background:var(--surface-3);}
 .account-chip{width:100%;display:flex;align-items:center;gap:9px;padding:7px 8px;border:1px solid var(--border);
   background:var(--surface);border-radius:8px;text-align:left;}
 .account-chip:hover{background:var(--surface-3);}
@@ -1150,33 +1161,39 @@ var STATUS_CN={busy:'忙',idle:'闲',stuck:'卡',failed:'失败'};
 var RUN_CN={running:'运行中',success:'完成',failed:'失败',waiting:'等待',stuck:'卡住'};
 
 /* =====================================================================
-   ① 全景看板 Fleet —— 真实跨 scope 数据
-   公司 = GET /api/cqrs/scopes（权威组织清单，platform-admin）
-   活跃/成败/最近活动 = GET /api/workflow/observatory/runs?scope=__all__（admin 跨 scope）
-   按 scopeId 分组聚合；无后端来源的字段（成本/sparkline/员工花名册/交接图）诚实降级为
-   ~近似（由真实 run 派生）或 预览（无事实源，不伪造）。
+   ① 全景看板 Fleet —— 真实跨组织（nyxid 账号）数据
+   组织 = observatory GET /runs?scope=__all__ 里出现的 *去重 scopeId*（即 nyxid 用户 UUID）
+   组织名 = nyxid 用户显示名：浏览器直连 nyx-api 列出全部用户后按 id 映射（CORS 开放，Bearer=accessToken）
+   活跃/成败/最近活动 = 把 __all__ runs 按 scopeId 分组聚合
+   仅展示“有运行记录”的组织（避免空 0/0/0 卡片）；不使用 /api/cqrs/scopes（那是投影 actor id，非组织）
+   无后端来源字段（成本/sparkline/员工花名册/交接图）诚实降级为 ~近似 或 预览，不伪造
    ===================================================================== */
-var FLEET_COMPANIES=[];          /* 已映射的公司行（内部形态，companyCard/viewL0 直接消费） */
-var FLEET_RUNS_BY_SCOPE={};      /* scopeId -> 该 scope 的真实 run 列表（已映射） */
+var FLEET_COMPANIES=[];          /* 已映射的组织行（内部形态，companyCard/viewL0 直接消费） */
+var FLEET_RUNS_BY_SCOPE={};      /* scopeId -> 该组织的真实 run 列表（已映射） */
+var NYX_USERS={};                /* nyxid userId -> {display_name,email,avatar_url,isAdmin} */
+var NYX_USERS_LOADED=false;      /* 用户名册是否已尝试加载（即便 403 也置 true，避免重复打 nyx-api） */
 var FLEET_LOADED=false, FLEET_ERR=null, FLEET_FORBIDDEN=false, FLEET_LOADING=false;
-/* 与 COMPANIES/RUNS 别名保持一致，沿用既有 render 代码对全局名的引用 */
+/* 与 COMPANIES 别名保持一致，沿用既有 render 代码对全局名的引用 */
 var COMPANIES=FLEET_COMPANIES;
 
+/* nyxid 用户名册 host（与本站不同源；CORS 开放且接受 Authorization） */
+var NYX_API='https://nyx-api.chrono-ai.fun';
+function nyxShortId(id){ id=String(id||''); return id.length>12?id.slice(0,8):id; }
 function fleetAgoMins(iso){ if(!iso) return null; var t=new Date(iso); if(isNaN(t.getTime())) return null;
   return Math.max(0,Math.round((Date.now()-t.getTime())/60000)); }
 function fleetAgo(iso){ var m=fleetAgoMins(iso); if(m==null) return '—';
   if(m<1) return '刚刚'; if(m<60) return m+' 分钟前'; var h=Math.floor(m/60);
   if(h<24) return h+' 小时前'; return Math.floor(h/24)+' 天前'; }
-/* run.status（真实枚举）-> 是否在飞 / 是否失败 */
+/* run.status（真实枚举）-> 是否在飞 / 是否失败 / 是否完成 */
 function fleetRunActive(s){ return s==='running'; }
 function fleetRunFailed(s){ return s==='failed'||s==='timed_out'; }
 function fleetRunSuccess(s){ return s==='completed'; }
-/* 失败率 -> 健康度色（无 run = grey 未配置/无活动） */
+/* 失败率 -> 健康度色（无 run = grey；但有 run 的组织才会建卡，故 grey 仅作兜底） */
 function fleetHealth(total,fail,active){
   if(!total) return 'grey';
   var fr=fail/total;
   if(fr>=0.25) return 'red';
-  if(fr>0||active===0) return fr>0?'amber':'green';
+  if(fr>0) return 'amber';
   return 'green';
 }
 /* runs[]（真实 summary）-> {id,name,status,origin,scope,updatedAtUtc,...}（与 mapObsRuns 同形，
@@ -1188,56 +1205,87 @@ function mapFleetRuns(list){
       success:r.success, stateVersion:r.stateVersion,
       startedAtUtc:r.startedAtUtc, updatedAtUtc:r.updatedAtUtc }; });
 }
-/* scopes（权威组织清单）+ 跨 scope runs -> 公司内部形态。
-   scopes: [{id,active,observed,successful,failures}] —— active 是 scope 是否启用，不是在飞 run 数。
-   每个组织的活跃/成败/最近活动均由真实 run 分组算得；找不到 run 的 scope = grey（无活动）。 */
-function mapFleetCompanies(scopes, runs){
+/* nyxid 用户名册：分页列出全部用户，建 id -> 资料映射。容忍多种字段命名（display_name/displayName/name；
+   users/items/data）。admin-only：401/403 -> 返回 {forbidden:true}，调用方降级显示短 id，不伪造。
+   不能按 UUID 搜索（search 仅匹配 name/email），必须 list-all。 */
+function mapNyxUser(u){
+  return { display_name:(u.display_name||u.displayName||u.name||null),
+    email:(u.email||null), avatar_url:(u.avatar_url||u.avatarUrl||null),
+    isAdmin:!!(u.is_admin||u.isAdmin) }; }
+function loadNyxUsers(){
+  var tok=accessToken(); if(!tok) return Promise.resolve({forbidden:true});
+  var per=50, acc={};
+  function page(p){
+    return fetch(NYX_API+'/api/v1/admin/users?search=&per_page='+per+'&page='+p,
+      { headers:{ 'Authorization':'Bearer '+tok }, cache:'no-store' })
+      .then(function(res){
+        if(res.status===401||res.status===403) return {forbidden:true};
+        if(!res.ok) return {error:'HTTP '+res.status};
+        return res.json();
+      }).then(function(j){
+        if(!j || j.forbidden || j.error) return j||{error:'empty'};
+        var users=j.users||j.items||j.data||[];
+        users.forEach(function(u){ if(u && u.id!=null) acc[String(u.id)]=mapNyxUser(u); });
+        var total=(j.total!=null?j.total:users.length);
+        var seen=p*per;
+        if(users.length===per && seen<total && p<20) return page(p+1);  /* 翻页直到取完（上限 20 页兜底） */
+        return {ok:true};
+      });
+  }
+  return page(1).then(function(r){
+    if(r && r.forbidden) return {forbidden:true};
+    NYX_USERS=acc; return {ok:true,count:Object.keys(acc).length};
+  }).catch(function(){ return {error:'nyx-users-fetch-failed'}; });
+}
+/* 组织资料（名称/邮箱/头像）：优先 nyxid 名册，回退短 id */
+function fleetOrgProfile(scopeId){
+  var u=NYX_USERS[String(scopeId)];
+  return { name:(u&&u.display_name)||nyxShortId(scopeId), email:(u&&u.email)||null,
+    avatar:(u&&u.avatar_url)||null, isAdmin:!!(u&&u.isAdmin) }; }
+/* 把按 scopeId 分组的真实 runs -> 组织内部形态。组织来源 = runs 里出现的去重 scopeId（有 run 才建卡）。 */
+function mapFleetCompanies(runs){
   var byScope={};
   (runs||[]).forEach(function(r){ var sid=r.scope||'(unknown)'; (byScope[sid]=byScope[sid]||[]).push(r); });
   FLEET_RUNS_BY_SCOPE=byScope;
-  /* runs 里出现但 scopes 未列出的 scopeId 也补成公司，避免漏掉真实活动 */
-  var ids=(scopes||[]).map(function(s){ return s.id; });
-  Object.keys(byScope).forEach(function(sid){ if(ids.indexOf(sid)<0) ids.push(sid); });
-  return ids.map(function(sid){
-    var rs=byScope[sid]||[];
+  return Object.keys(byScope).map(function(sid){
+    var rs=byScope[sid];
     var active=rs.filter(function(r){return fleetRunActive(r.status);}).length;
     var fail=rs.filter(function(r){return fleetRunFailed(r.status);}).length;
     var success=rs.filter(function(r){return fleetRunSuccess(r.status);}).length;
-    var other=rs.length-active-fail-success;
     var wfSet={}; rs.forEach(function(r){ wfSet[r.name]=1; });
     var workflows=Object.keys(wfSet).length;
-    /* 最近活动 + 最久未推进的在飞 run（真实 updatedAtUtc） */
     var lastIso=null, oldest=null, oldestMins=-1;
     rs.forEach(function(r){
       if(r.updatedAtUtc && (!lastIso || new Date(r.updatedAtUtc).getTime()>new Date(lastIso).getTime())) lastIso=r.updatedAtUtc;
       if(fleetRunActive(r.status)){ var m=fleetAgoMins(r.startedAtUtc||r.updatedAtUtc);
         if(m!=null && m>oldestMins){ oldestMins=m; oldest={name:r.name,id:'#'+String(r.id).slice(0,4),mins:m}; } }
     });
-    return { id:sid, name:sid, health:fleetHealth(rs.length,fail,active),
-      active:active, runsTotal:rs.length, success:success, fail:fail, other:other,
+    var prof=fleetOrgProfile(sid);
+    return { id:sid, name:prof.name, email:prof.email, avatar:prof.avatar, isAdmin:prof.isAdmin,
+      health:fleetHealth(rs.length,fail,active),
+      active:active, runsTotal:rs.length, success:success, fail:fail,
       workflows:workflows, lastActivity:lastIso, lastActivityLabel:fleetAgo(lastIso),
       busy:active, idle:Math.max(0,rs.length-active-fail), emp:workflows,
       oldest:oldest, isEmpty:(rs.length===0),
       /* 无后端来源 -> 不伪造：成本/token/sparkline 置空，render 已改为不展示 */
       cost:0, tok:0, spark:null };
-  });
+  }).sort(function(a,b){ return b.runsTotal-a.runsTotal; });
 }
 function loadFleet(rerender){
   FLEET_ERR=null; FLEET_FORBIDDEN=false; FLEET_LOADING=true; if(rerender) rerender();
-  return Promise.all([
-    adminJson('/api/cqrs/scopes'),
-    adminJson('/api/workflow/observatory/runs?scope=__all__')
-  ]).then(function(res){
-    var scopesRes=res[0], runsRes=res[1];
-    if((scopesRes&&scopesRes.forbidden)||(runsRes&&runsRes.forbidden)){ FLEET_FORBIDDEN=true; return; }
-    var scopes=(scopesRes&&scopesRes.scopes)||[];
+  /* 先尝试 nyxid 名册（用于组织显示名；403/失败则用短 id，不阻断看板），再拉跨组织 runs。 */
+  var nyxStep=NYX_USERS_LOADED?Promise.resolve({skipped:true}):loadNyxUsers().then(function(r){ NYX_USERS_LOADED=true; return r; });
+  return nyxStep.then(function(){
+    return adminJson('/api/workflow/observatory/runs?scope=__all__');
+  }).then(function(runsRes){
+    if(runsRes && runsRes.forbidden){ FLEET_FORBIDDEN=true; return; }
     var runs=mapFleetRuns(Array.isArray(runsRes)?runsRes:((runsRes&&runsRes.items)||[]));
-    FLEET_COMPANIES=mapFleetCompanies(scopes, runs); COMPANIES=FLEET_COMPANIES;
+    FLEET_COMPANIES=mapFleetCompanies(runs); COMPANIES=FLEET_COMPANIES;
   }).catch(function(e){ FLEET_ERR=(e&&(e.body||e.message))||'看板加载失败'; })
   .then(function(){ FLEET_LOADED=true; FLEET_LOADING=false; if(rerender) rerender(); });
 }
 
-/* 集团 KPI —— 由真实公司行汇总（无成本来源 -> 不展示成本卡） */
+/* 集团 KPI —— 由真实组织行汇总（无成本来源 -> 不展示成本卡） */
 function kpiTotals(){
   var t={scopes:COMPANIES.length,active:0,runs:0,fail:0,onDuty:0,success:0,workflows:0};
   COMPANIES.forEach(function(c){ t.active+=c.active; t.runs+=c.runsTotal; t.fail+=c.fail;
@@ -1248,7 +1296,12 @@ function kpiTotals(){
 /* ---------------- accessors（保持既有签名，供 breadcrumb/viewL1/viewL2 复用） ---------------- */
 function companyById(id){ return COMPANIES.filter(function(c){return c.id===id;})[0]; }
 function companyDetail(id){
-  var co=companyById(id); if(!co) return null;
+  var co=companyById(id);
+  /* 分享链接直达某 org 但看板未加载时，至少用 profile 兜底一个壳，避免 breadcrumb/viewL1 崩 */
+  if(!co){ var prof=fleetOrgProfile(id);
+    co={ id:id, name:prof.name, email:prof.email, avatar:prof.avatar, health:'grey',
+      active:0, runsTotal:0, success:0, fail:0, workflows:0, busy:0, idle:0, emp:0,
+      oldest:null, isEmpty:true, lastActivity:null, lastActivityLabel:'—', cost:0, tok:0, spark:null }; }
   var runs=FLEET_RUNS_BY_SCOPE[id]||[];
   /* 由真实 run 派生“本组织内的 workflow”+每个 workflow 的真实跑批统计（员工花名册无后端 -> 用 workflow 代替，诚实标 ~近似） */
   var byWf={}, order=[];
@@ -2036,13 +2089,13 @@ function liveOrStamp(live){
 
 /* ============================== L0 集团总览 ============================== */
 function viewL0(){
-  if(!ACCOUNT||!ACCOUNT.admin) return {html:moduleSubHeader('fleet','')+'<div class="view-scroll">'+auth403('全景看板汇总全部 scope 的运行态，仅平台管理员可见。')+'</div>', mount:bindFleet};
+  if(!ACCOUNT||!ACCOUNT.admin) return {html:moduleSubHeader('fleet','')+'<div class="view-scroll">'+auth403('全景看板汇总全部组织的运行态，仅平台管理员可见。')+'</div>', mount:bindFleet};
   if(!FLEET_LOADED) return {html:moduleSubHeader('fleet','')+'<div class="view-scroll">'+fleetSkeleton()+'</div>', mount:bindFleet};
-  if(FLEET_FORBIDDEN) return {html:moduleSubHeader('fleet','')+'<div class="view-scroll">'+auth403('需要平台管理员权限读取跨 scope 运行态（/api/cqrs/scopes + observatory __all__）。')+'</div>', mount:bindFleet};
+  if(FLEET_FORBIDDEN) return {html:moduleSubHeader('fleet','')+'<div class="view-scroll">'+auth403('需要平台管理员权限读取跨组织运行态（observatory __all__）。')+'</div>', mount:bindFleet};
   if(FLEET_ERR) return {html:moduleSubHeader('fleet','')+'<div class="view-scroll"><div class="alert">'+ICON.warn+'<span class="grow">看板加载失败：'+esc(FLEET_ERR)+'</span><button class="btn" data-act="fleetReload">重试</button></div></div>', mount:bindFleet};
   var t=kpiTotals();
   var kpi=
-    metricCard({label:'组织数 (scopes)',icon:ICON.building,value:t.scopes,sub:'GET /api/cqrs/scopes'})+
+    metricCard({label:'活跃组织 (orgs)',icon:ICON.building,value:t.scopes,sub:'有运行记录的 nyxid 账号'})+
     metricCard({label:'此刻在飞 Run',icon:ICON.bolt,value:t.active,cls:'running',live:true})+
     metricCard({label:'近窗运行总数',icon:ICON.refresh,value:t.runs,sub:'observatory __all__'})+
     metricCard({label:'失败 / 超时 Run',icon:ICON.warn,value:t.fail,cls:t.fail>0?'danger':'',sub:'跨 '+COMPANIES.filter(function(c){return c.fail>0;}).length+' 个组织'})+
@@ -2060,7 +2113,7 @@ function viewL0(){
   var cards=list.map(companyCard).join('');
   if(!list.length) cards=emptyBlock('company-filter');
 
-  var sortLabel={health:'健康 ↓',runs:'运行数 ↓',active:'活跃 ↓'}[STATE.l0Sort]||'健康 ↓';
+  var sortLabel={health:'健康 ↓',runs:'运行数 ↓',active:'活跃 ↓'}[STATE.l0Sort]||'运行数 ↓';
   var rangeT=STATE.l0Range==='today'?'今日':'7 天';
 
   var body=
@@ -2072,12 +2125,12 @@ function viewL0(){
           chip('active','只看在飞','#2563eb',STATE.l0Filter==='active',COMPANIES.filter(function(c){return c.active>0;}).length)+
         '</div>'+
         '<div class="grow"></div>'+
-        '<span class="inline-refresh" style="margin-right:6px"><i class="live-dot" style="background:var(--success)"></i> observatory __all__ '+srcBadge('ready')+'</span>'+
+        '<span class="inline-refresh" style="margin-right:6px"><i class="live-dot" style="background:var(--success)"></i> observatory __all__ · 组织名 nyxid '+srcBadge('ready')+'</span>'+
         '<button class="ibtn" data-act="fleetReload">'+ICON.refresh+' 刷新</button>'+
         '<button class="sortbtn" data-act="l0sort"><span class="lbl">排序</span><span class="val">'+sortLabel+'</span></button>'+
       '</div>'+
       '<div class="card-wall">'+cards+'</div>'+
-      '<div class="src-legend-bar"><div class="panel-title" style="margin-bottom:12px">数据来源 · 组织清单 + 跨 scope 运行态为现成（/cqrs/scopes + observatory __all__）；去重 workflow 计数为 ~近似；成本 / 员工花名册 / 数据流交接图无统一事实源，已降级为 预览，不展示伪造值</div>'+srcLegendRows()+'</div>'+
+      '<div class="src-legend-bar"><div class="panel-title" style="margin-bottom:12px">数据来源 · 组织 = 有运行记录的 nyxid 账号（observatory __all__ 的去重 scopeId），名称取自 nyxid 用户名册；运行态为现成；去重 workflow 计数为 ~近似；成本 / 员工花名册 / 数据流交接图无统一事实源，已降级为 预览，不展示伪造值</div>'+srcLegendRows()+'</div>'+
     '</div>';
   return {html:body, mount:bindFleet};
 }
@@ -2112,11 +2165,13 @@ function companyCard(c){
     :c.health==='amber'?'<span class="co-health-tag" style="background:var(--waiting-bg);color:#9a5b07">观察</span>'
     :c.health==='grey'?'<span class="co-health-tag" style="background:var(--idle-bg);color:#6b7280">无活动</span>'
     :'<span class="co-health-tag" style="background:var(--success-bg);color:var(--success)">健康</span>';
-  /* scope id 较长 -> 截断显示，title 存全量；data-co 仍用全量 id */
+  /* 组织名 = nyxid 显示名（不可信长度时截断，title 存全量）；data-co 用 scopeId 全量；
+     副标题 = email（若名册命中）否则短 scopeId，便于辨认无名册命中的组织 */
   var label=esc(c.name), shortLabel=(c.name&&c.name.length>22)?esc(c.name.slice(0,20)+'…'):label;
+  var sub='<div class="emp-sub tnum" style="margin-top:2px">'+esc(c.email||nyxShortId(c.id))+'</div>';
   if(c.isEmpty){
     return '<button class="co-card" data-co="'+esc(c.id)+'" title="'+label+'" aria-label="进入 '+label+'">'+
-      '<div class="co-top"><span class="co-name"><i class="health-light health-grey"></i>'+shortLabel+'</span>'+tag+'</div>'+
+      '<div class="co-top"><span class="co-name"><i class="health-light health-grey"></i>'+shortLabel+'</span>'+tag+'</div>'+sub+
       '<div class="co-active"><span class="big zero">0</span><span class="unit">近窗运行</span></div>'+
       '<div class="co-alert calm">'+ICON.empty.replace('width="1.6"','width="2"')+'<span>该组织近窗内无运行记录</span></div>'+
       '<div class="co-foot"><span class="emp">0 workflow</span><span class="emp">无活动</span></div>'+
@@ -2137,7 +2192,7 @@ function companyCard(c){
         '<span class="live-dot" title="live 数据"></span></div>'
     : '<div class="co-alert calm">'+ICON.check.replace('stroke-width="2"','stroke-width="2.2"')+'<span>无长时间未推进的 Run</span></div>';
   return '<button class="co-card" data-co="'+esc(c.id)+'" title="'+label+'" aria-label="进入 '+label+'">'+
-    '<div class="co-top"><span class="co-name"><i class="health-light health-'+c.health+'"></i>'+shortLabel+'</span>'+tag+'</div>'+
+    '<div class="co-top"><span class="co-name"><i class="health-light health-'+c.health+'"></i>'+shortLabel+'</span>'+tag+'</div>'+sub+
     '<div class="co-active"><span class="big">'+c.active+'</span><span class="unit">此刻在飞 Run</span></div>'+
     '<div class="co-cost"><span class="cc-l">近窗 <b class="num" style="color:var(--heading)">'+c.runsTotal+'</b> 运行 · 完成 '+c.success+' · 最近 '+esc(c.lastActivityLabel)+'</span></div>'+
     stack+alert+
@@ -2157,9 +2212,10 @@ function viewL1(coId){
   if(!detail) return {html:emptyBlock('company-filter')};
   var c=detail.co;
   var sub=STATE.l1Sub||'roster';
+  var orgSub='<span class="emp-sub tnum" style="margin-left:10px">'+esc(c.email||nyxShortId(c.id))+'</span>';
   var subHeader=
     '<div class="sub-header">'+
-      '<span class="sub-title" title="'+esc(c.name)+'"><i class="health-light health-'+c.health+'" style="display:inline-block;margin-right:8px;vertical-align:middle"></i>'+esc((c.name&&c.name.length>26)?c.name.slice(0,24)+'…':c.name)+'</span>'+
+      '<span class="sub-title" title="'+esc(c.name)+'"><i class="health-light health-'+c.health+'" style="display:inline-block;margin-right:8px;vertical-align:middle"></i>'+esc((c.name&&c.name.length>26)?c.name.slice(0,24)+'…':c.name)+'</span>'+orgSub+
       '<div class="sub-kpis">'+
         '<div class="sub-kpi"><span class="k">workflow</span><span class="v num">'+c.workflows+'</span></div>'+
         '<div class="sub-kpi"><span class="k">在飞 Run</span><span class="v num" style="color:var(--running)">'+c.active+'</span></div>'+
@@ -3830,12 +3886,22 @@ async function refreshAccount(){
   }catch(e){ /* /me 不可用：保留 token claims */ }
 }
 /* ---------- boot ---------- */
+/* 右上角常驻登录态:渲染到 body(在 #app 之外)→切页 render() 不刷新它,固定右上角 */
+function renderAcctW(){
+  var el=document.getElementById('acctw');
+  if(!ACCOUNT){ if(el) el.remove(); return; }
+  if(!el){ el=document.createElement('div'); el.id='acctw'; document.body.appendChild(el); }
+  var nm=ACCOUNT.name||'NyxID 用户', sub=ACCOUNT.email||ACCOUNT.scope||'';
+  el.innerHTML='<button class="acctw-chip" data-act="account" title="点击查看登录信息"><span class="acctw-av">'+esc((nm||'?').slice(0,1))+'</span>'+
+    '<span class="acctw-meta"><b>'+esc(nm)+'</b>'+(sub?'<span>'+esc(sub)+'</span>':'')+'</span></button>'+
+    '<button class="acctw-out" data-act="logout" title="登出 NyxID" aria-label="登出">⎋</button>';
+}
 (function boot(){
   bindEvents(); startClock();
   if(!getToken()){ renderLoginGate(); return; }
   ACCOUNT=accountFromToken();
-  render();                                          /* 即时首屏(token claims, admin=false) */
-  refreshAccount().then(function(){ if(ACCOUNT) render(); });  /* /me 回来确定 admin→重渲, rail 补显 admin 模块 */
+  render(); renderAcctW();
+  refreshAccount().then(function(){ if(ACCOUNT) render(); renderAcctW(); });
 })();
 
 </script>
