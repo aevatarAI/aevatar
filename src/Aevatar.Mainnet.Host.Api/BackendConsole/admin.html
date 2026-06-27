@@ -122,6 +122,7 @@ button{font-family:inherit;cursor:pointer;}
 
 /* ============================ View region ============================ */
 .view{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;overflow:hidden;}
+.suite-embed{flex:1 1 auto;width:100%;min-height:0;border:0;display:block;background:var(--surface);}
 .view-scroll{flex:1 1 auto;min-height:0;overflow:auto;padding:var(--pad);}
 .sub-header{
   flex:0 0 auto;display:flex;align-items:center;gap:14px;flex-wrap:wrap;
@@ -1149,238 +1150,119 @@ var STATUS_CN={busy:'忙',idle:'闲',stuck:'卡',failed:'失败'};
 var RUN_CN={running:'运行中',success:'完成',failed:'失败',waiting:'等待',stuck:'卡住'};
 
 /* =====================================================================
-   部门花名册（按公司）— 大多空闲，少数在忙，2 个卡住(>40min)，2 个失败
+   ① 全景看板 Fleet —— 真实跨 scope 数据
+   公司 = GET /api/cqrs/scopes（权威组织清单，platform-admin）
+   活跃/成败/最近活动 = GET /api/workflow/observatory/runs?scope=__all__（admin 跨 scope）
+   按 scopeId 分组聚合；无后端来源的字段（成本/sparkline/员工花名册/交接图）诚实降级为
+   ~近似（由真实 run 派生）或 预览（无事实源，不伪造）。
    ===================================================================== */
-function E(id,dept,name,impl,status,cur,last,runs,tok,cost,extra){
-  var o={id:id,dept:dept,name:name,impl:impl,status:status,cur:cur,last:last,
-    today:{runs:runs,tok:tok,cost:cost},err:0,service:id+'-svc',role:name.replace(/Agent|机器人|助手/g,'')};
-  if(extra) for(var k in extra) o[k]=extra[k];
-  return o;
+var FLEET_COMPANIES=[];          /* 已映射的公司行（内部形态，companyCard/viewL0 直接消费） */
+var FLEET_RUNS_BY_SCOPE={};      /* scopeId -> 该 scope 的真实 run 列表（已映射） */
+var FLEET_LOADED=false, FLEET_ERR=null, FLEET_FORBIDDEN=false, FLEET_LOADING=false;
+/* 与 COMPANIES/RUNS 别名保持一致，沿用既有 render 代码对全局名的引用 */
+var COMPANIES=FLEET_COMPANIES;
+
+function fleetAgoMins(iso){ if(!iso) return null; var t=new Date(iso); if(isNaN(t.getTime())) return null;
+  return Math.max(0,Math.round((Date.now()-t.getTime())/60000)); }
+function fleetAgo(iso){ var m=fleetAgoMins(iso); if(m==null) return '—';
+  if(m<1) return '刚刚'; if(m<60) return m+' 分钟前'; var h=Math.floor(m/60);
+  if(h<24) return h+' 小时前'; return Math.floor(h/24)+' 天前'; }
+/* run.status（真实枚举）-> 是否在飞 / 是否失败 */
+function fleetRunActive(s){ return s==='running'; }
+function fleetRunFailed(s){ return s==='failed'||s==='timed_out'; }
+function fleetRunSuccess(s){ return s==='completed'; }
+/* 失败率 -> 健康度色（无 run = grey 未配置/无活动） */
+function fleetHealth(total,fail,active){
+  if(!total) return 'grey';
+  var fr=fail/total;
+  if(fr>=0.25) return 'red';
+  if(fr>0||active===0) return fr>0?'amber':'green';
+  return 'green';
+}
+/* runs[]（真实 summary）-> {id,name,status,origin,scope,updatedAtUtc,...}（与 mapObsRuns 同形，
+   供 L1 run 列表 / observatory 深链复用 run 行口径） */
+function mapFleetRuns(list){
+  return (list||[]).map(function(r){
+    return { id:r.runId, name:r.workflowName||r.runId, status:r.status,
+      origin:r.runOrigin||'—', scope:r.scopeId||'—',
+      success:r.success, stateVersion:r.stateVersion,
+      startedAtUtc:r.startedAtUtc, updatedAtUtc:r.updatedAtUtc }; });
+}
+/* scopes（权威组织清单）+ 跨 scope runs -> 公司内部形态。
+   scopes: [{id,active,observed,successful,failures}] —— active 是 scope 是否启用，不是在飞 run 数。
+   每个组织的活跃/成败/最近活动均由真实 run 分组算得；找不到 run 的 scope = grey（无活动）。 */
+function mapFleetCompanies(scopes, runs){
+  var byScope={};
+  (runs||[]).forEach(function(r){ var sid=r.scope||'(unknown)'; (byScope[sid]=byScope[sid]||[]).push(r); });
+  FLEET_RUNS_BY_SCOPE=byScope;
+  /* runs 里出现但 scopes 未列出的 scopeId 也补成公司，避免漏掉真实活动 */
+  var ids=(scopes||[]).map(function(s){ return s.id; });
+  Object.keys(byScope).forEach(function(sid){ if(ids.indexOf(sid)<0) ids.push(sid); });
+  return ids.map(function(sid){
+    var rs=byScope[sid]||[];
+    var active=rs.filter(function(r){return fleetRunActive(r.status);}).length;
+    var fail=rs.filter(function(r){return fleetRunFailed(r.status);}).length;
+    var success=rs.filter(function(r){return fleetRunSuccess(r.status);}).length;
+    var other=rs.length-active-fail-success;
+    var wfSet={}; rs.forEach(function(r){ wfSet[r.name]=1; });
+    var workflows=Object.keys(wfSet).length;
+    /* 最近活动 + 最久未推进的在飞 run（真实 updatedAtUtc） */
+    var lastIso=null, oldest=null, oldestMins=-1;
+    rs.forEach(function(r){
+      if(r.updatedAtUtc && (!lastIso || new Date(r.updatedAtUtc).getTime()>new Date(lastIso).getTime())) lastIso=r.updatedAtUtc;
+      if(fleetRunActive(r.status)){ var m=fleetAgoMins(r.startedAtUtc||r.updatedAtUtc);
+        if(m!=null && m>oldestMins){ oldestMins=m; oldest={name:r.name,id:'#'+String(r.id).slice(0,4),mins:m}; } }
+    });
+    return { id:sid, name:sid, health:fleetHealth(rs.length,fail,active),
+      active:active, runsTotal:rs.length, success:success, fail:fail, other:other,
+      workflows:workflows, lastActivity:lastIso, lastActivityLabel:fleetAgo(lastIso),
+      busy:active, idle:Math.max(0,rs.length-active-fail), emp:workflows,
+      oldest:oldest, isEmpty:(rs.length===0),
+      /* 无后端来源 -> 不伪造：成本/token/sparkline 置空，render 已改为不展示 */
+      cost:0, tok:0, spark:null };
+  });
+}
+function loadFleet(rerender){
+  FLEET_ERR=null; FLEET_FORBIDDEN=false; FLEET_LOADING=true; if(rerender) rerender();
+  return Promise.all([
+    adminJson('/api/cqrs/scopes'),
+    adminJson('/api/workflow/observatory/runs?scope=__all__')
+  ]).then(function(res){
+    var scopesRes=res[0], runsRes=res[1];
+    if((scopesRes&&scopesRes.forbidden)||(runsRes&&runsRes.forbidden)){ FLEET_FORBIDDEN=true; return; }
+    var scopes=(scopesRes&&scopesRes.scopes)||[];
+    var runs=mapFleetRuns(Array.isArray(runsRes)?runsRes:((runsRes&&runsRes.items)||[]));
+    FLEET_COMPANIES=mapFleetCompanies(scopes, runs); COMPANIES=FLEET_COMPANIES;
+  }).catch(function(e){ FLEET_ERR=(e&&(e.body||e.message))||'看板加载失败'; })
+  .then(function(){ FLEET_LOADED=true; FLEET_LOADING=false; if(rerender) rerender(); });
 }
 
-var ROSTERS={
-  /* ---------- 数据对账（focal · 红：1 卡 + 1 失败 + 排班） ---------- */
-  recon:[
-    E('recon-e01','对账核验部','差异核查Agent','workflow','busy',{wf:'对账批处理',step:5,total:7},'刚刚',14,312000,8.90,{role:'差异核查'}),
-    E('recon-e02','对账核验部','对账机器人','script','stuck',{wf:'对账批处理',step:3,total:6},'47 分钟前',6,120000,2.80,{role:'数据采集'}),
-    E('recon-e03','对账核验部','凭证校验机器人','script','idle',null,'1 小时前',4,56000,1.30,{role:'凭证校验'}),
-    E('recon-e04','报表汇总部','日终对账Agent','workflow','failed',null,'今日 02:00',1,33000,0.82,{err:2,role:'报表汇总',
-      sched:{next:'明日 02:00',cron:'0 2 * * *',lastRun:'今日 02:00',lastResult:'failed'},
-      lasterr:'ConnectionRefused: 对账数据源 settle-db 不可达（重试 3 次）'}),
-    E('recon-e05','报表汇总部','周报汇总Agent','gagent','idle',null,'上周一 09:00',1,24000,0.58,{role:'报表汇总',
-      sched:{next:'周一 09:00',cron:'0 9 * * 1',lastRun:'上周一 09:00',lastResult:'success'}}),
-    E('recon-e06','报表汇总部','指标聚合机器人','script','idle',null,'2 小时前',3,41000,0.92,{role:'指标聚合'}),
-    E('recon-e07','报表汇总部','异常监测Agent','workflow','idle',null,'30 分钟前',5,88000,2.10,{role:'异常监测'})
-  ],
-  /* ---------- 客服工单（红：1 卡 52min） ---------- */
-  support:[
-    E('support-e01','工单分流部','工单分流Agent','workflow','stuck',{wf:'工单自动分流',step:2,total:3},'52 分钟前',14,88000,2.10,{role:'工单分流'}),
-    E('support-e02','工单分流部','意图识别Agent','workflow','busy',{wf:'工单自动分流',step:2,total:3},'3 分钟前',16,120000,3.00,{role:'意图识别'}),
-    E('support-e03','工单分流部','优先级评估机器人','script','idle',null,'40 分钟前',5,40000,0.90,{role:'优先级评估'}),
-    E('support-e04','工单分流部','自动回复Agent','workflow','idle',null,'1 小时前',7,95000,2.20,{role:'自动回复'}),
-    E('support-e05','质检复核部','质检抽样Agent','workflow','idle',null,'2 小时前',4,60000,1.40,{role:'质检抽样'}),
-    E('support-e06','质检复核部','情绪检测Agent','workflow','idle',null,'25 分钟前',6,72000,1.70,{role:'情绪检测'}),
-    E('support-e07','质检复核部','复核汇总机器人','script','idle',null,'3 小时前',3,33000,0.80,{role:'复核汇总'}),
-    E('support-e08','知识库部','知识库更新Agent','gagent','idle',null,'今日 03:00',1,28000,0.70,{role:'知识库更新',
-      sched:{next:'明日 03:00',cron:'0 3 * * *',lastRun:'今日 03:00',lastResult:'success'}}),
-    E('support-e09','知识库部','答案匹配Agent','workflow','idle',null,'15 分钟前',8,110000,2.50,{role:'答案匹配'}),
-    E('support-e10','知识库部','FAQ归并机器人','script','idle',null,'昨天 22:10',2,26000,0.60,{role:'FAQ归并'})
-  ],
-  /* ---------- 增长运营（琥珀：1 失败） ---------- */
-  growth:[
-    E('growth-e01','选品策略部','选品分析Agent','workflow','busy',{wf:'每日选品分析',step:3,total:5},'刚刚',12,240000,6.40,{role:'选品分析'}),
-    E('growth-e02','选品策略部','类目洞察Agent','workflow','idle',null,'50 分钟前',5,96000,2.50,{role:'类目洞察'}),
-    E('growth-e03','选品策略部','选品评分机器人','script','idle',null,'1 小时前',3,41000,0.90,{role:'选品评分'}),
-    E('growth-e04','选品策略部','趋势捕捉Agent','workflow','idle',null,'2 小时前',4,70000,1.60,{role:'趋势捕捉'}),
-    E('growth-e05','投放优化部','竞品监控Agent','workflow','failed',null,'9 分钟前',7,128000,3.10,{err:1,role:'竞品监控',
-      lasterr:'RateLimited: 竞品站点返回 429，采集中断于第 3/8 页（已退避重试 2 次）'}),
-    E('growth-e06','投放优化部','出价优化Agent','workflow','busy',{wf:'竞品价格监控',step:2,total:4},'2 分钟前',9,150000,4.00,{role:'出价优化'}),
-    E('growth-e07','投放优化部','投放报表机器人','script','idle',null,'3 小时前',2,30000,0.70,{role:'投放报表'}),
-    E('growth-e08','投放优化部','创意测试Agent','workflow','idle',null,'1 小时前',6,110000,2.60,{role:'创意测试'}),
-    E('growth-e09','用户增长部','日报汇总Agent','gagent','idle',null,'今日 09:00',1,20000,0.50,{role:'日报汇总',
-      sched:{next:'明早 09:00',cron:'0 9 * * *',lastRun:'今日 09:00',lastResult:'success'}}),
-    E('growth-e10','用户增长部','留存分析Agent','workflow','idle',null,'2 小时前',3,52000,1.30,{role:'留存分析'}),
-    E('growth-e11','用户增长部','拉新归因Agent','workflow','busy',{wf:'渠道归因',step:4,total:6},'刚刚',8,176000,4.20,{role:'拉新归因'})
-  ],
-  /* ---------- 内容工作室（绿） ---------- */
-  content:[
-    E('content-e01','文案创作部','文案生成Agent','workflow','busy',{wf:'每日选题扩写',step:1,total:3},'6 分钟前',11,150000,3.50,{role:'文案生成'}),
-    E('content-e02','文案创作部','标题优化Agent','workflow','idle',null,'40 分钟前',5,60000,1.40,{role:'标题优化'}),
-    E('content-e03','文案创作部','合规审核Agent','workflow','idle',null,'20 分钟前',8,130000,3.00,{role:'合规审核'}),
-    E('content-e04','文案创作部','改写润色机器人','script','idle',null,'1 小时前',4,45000,1.00,{role:'改写润色'}),
-    E('content-e05','视觉生产部','配图生成Agent','gagent','idle',null,'2 小时前',3,88000,2.10,{role:'配图生成'}),
-    E('content-e06','视觉生产部','选题扩写Agent','workflow','idle',null,'1 小时前',6,100000,2.30,{role:'选题扩写'}),
-    E('content-e07','视觉生产部','素材整理机器人','script','idle',null,'昨天 19:30',2,24000,0.50,{role:'素材整理'})
-  ],
-  /* ---------- 研发助理（绿） ---------- */
-  devassist:[
-    E('dev-e01','代码审查部','代码审查Agent','workflow','busy',{wf:'增量代码审查',step:3,total:5},'4 分钟前',10,180000,4.40,{role:'代码审查'}),
-    E('dev-e02','代码审查部','安全扫描Agent','workflow','idle',null,'35 分钟前',4,90000,2.00,{role:'安全扫描'}),
-    E('dev-e03','代码审查部','风格检查机器人','script','idle',null,'1 小时前',6,50000,1.10,{role:'风格检查'}),
-    E('dev-e04','文档生成部','文档生成Agent','gagent','idle',null,'上周五 18:00',1,30000,0.70,{role:'文档生成',
-      sched:{next:'周五 18:00',cron:'0 18 * * 5',lastRun:'上周五 18:00',lastResult:'success'}}),
-    E('dev-e05','文档生成部','注释补全Agent','workflow','idle',null,'2 小时前',5,70000,1.60,{role:'注释补全'}),
-    E('dev-e06','文档生成部','变更摘要机器人','script','idle',null,'3 小时前',3,36000,0.80,{role:'变更摘要'}),
-    E('dev-e07','测试辅助部','用例生成Agent','workflow','busy',{wf:'回归用例生成',step:1,total:4},'1 分钟前',7,120000,2.80,{role:'用例生成'}),
-    E('dev-e08','测试辅助部','回归筛选Agent','workflow','idle',null,'1 小时前',4,64000,1.50,{role:'回归筛选'}),
-    E('dev-e09','测试辅助部','覆盖率统计机器人','script','idle',null,'2 小时前',2,28000,0.60,{role:'覆盖率统计'})
-  ]
-};
-
-/* =====================================================================
-   公司（scope）— 公司枚举=现成；活跃/成本/忙闲分布=~近似
-   ===================================================================== */
-var COMPANIES=[
-  {id:'recon',    name:'数据对账',  health:'red',   active:6, cost:34.80, tok:1120000, spark:[26,24,29,31,28,33,35], oldest:{name:'对账批处理',id:'#7f3a',mins:47}},
-  {id:'support',  name:'客服工单',  health:'red',   active:8, cost:41.20, tok:1640000, spark:[33,30,36,38,35,40,41], oldest:{name:'工单自动分流',id:'#9c21',mins:52}},
-  {id:'growth',   name:'增长运营',  health:'amber', active:5, cost:52.60, tok:1980000, spark:[44,40,48,50,47,51,53], oldest:{name:'竞品价格监控',id:'#3e88',mins:18}},
-  {id:'content',  name:'内容工作室',health:'green', active:4, cost:23.40, tok:880000,  spark:[18,17,20,22,19,23,23], oldest:{name:'每日选题扩写',id:'#5b14',mins:7}},
-  {id:'devassist',name:'研发助理',  health:'green', active:3, cost:16.90, tok:640000,  spark:[12,13,15,14,16,17,17], oldest:null},
-  {id:'newspace', name:'新建工作区',health:'grey',  active:0, cost:0,     tok:0,       spark:[0,0,0,0,0,0,0],        oldest:null, isEmpty:true}
-];
-/* 由花名册回算忙/闲/失败（卡住计入“在忙”，因为有 in-flight run） */
-COMPANIES.forEach(function(c){
-  if(c.isEmpty){ c.emp=0;c.busy=0;c.idle=0;c.fail=0;return; }
-  var r=ROSTERS[c.id]||[];
-  c.emp=r.length;
-  c.busy=r.filter(function(e){return e.status==='busy'||e.status==='stuck';}).length;
-  c.fail=r.filter(function(e){return e.status==='failed';}).length;
-  c.idle=r.filter(function(e){return e.status==='idle';}).length;
-});
-
+/* 集团 KPI —— 由真实公司行汇总（无成本来源 -> 不展示成本卡） */
 function kpiTotals(){
-  var t={scopes:COMPANIES.length,active:0,cost:0,fail:0,onDuty:0};
-  COMPANIES.forEach(function(c){ if(c.isEmpty)return; t.active+=c.active;t.cost+=c.cost;t.fail+=c.fail;t.onDuty+=c.busy; });
+  var t={scopes:COMPANIES.length,active:0,runs:0,fail:0,onDuty:0,success:0,workflows:0};
+  COMPANIES.forEach(function(c){ t.active+=c.active; t.runs+=c.runsTotal; t.fail+=c.fail;
+    t.onDuty+=c.busy; t.success+=c.success; t.workflows+=c.workflows; });
   return t;
 }
 
-/* =====================================================================
-   数据流图谱 — 数据对账(focal) 手写；其它公司由 buildFlow 生成
-   节点=岗位/角色(target_role)；边=排班→Run / 父→子 / step→step
-   边粗细=交接次数；边色=失败率
-   ===================================================================== */
-var FLOW_RECON={
-  nodes:[
-    {id:'n_sched',  label:'排班器',    role:'schedule',  impl:'schedule',x:40, y:250,state:'idle',  emp:null},
-    {id:'n_collect',label:'数据采集',  role:'target_role',impl:'script',  x:240,y:120,state:'alert', emp:'recon-e02'},
-    {id:'n_verify', label:'凭证校验',  role:'target_role',impl:'script',  x:240,y:380,state:'idle',  emp:'recon-e03'},
-    {id:'n_diff',   label:'差异核查',  role:'target_role',impl:'workflow',x:470,y:250,state:'active',emp:'recon-e01'},
-    {id:'n_agg',    label:'指标聚合',  role:'target_role',impl:'script',  x:700,y:120,state:'active',emp:'recon-e06'},
-    {id:'n_anomaly',label:'异常监测',  role:'target_role',impl:'workflow',x:700,y:380,state:'active',emp:'recon-e07'},
-    {id:'n_report', label:'报表汇总',  role:'target_role',impl:'workflow',x:940,y:250,state:'alert', emp:'recon-e04'}
-  ],
-  edges:[
-    {from:'n_sched',  to:'n_collect',count:22,fr:0.00,active:true, kind:'排班→Run'},
-    {from:'n_sched',  to:'n_verify', count:16,fr:0.02,active:true, kind:'排班→Run'},
-    {from:'n_collect',to:'n_diff',   count:18,fr:0.15,active:true, kind:'step→step'},
-    {from:'n_verify', to:'n_diff',   count:14,fr:0.04,active:true, kind:'step→step'},
-    {from:'n_diff',   to:'n_agg',    count:16,fr:0.05,active:true, kind:'父Run→子Run'},
-    {from:'n_diff',   to:'n_anomaly',count:9, fr:0.12,active:true, kind:'父Run→子Run'},
-    {from:'n_agg',    to:'n_report', count:12,fr:0.28,active:false,kind:'step→step'},
-    {from:'n_anomaly',to:'n_report', count:7, fr:0.20,active:false,kind:'step→step'}
-  ]
-};
-var FLOW_DETAIL={
-  n_report:{avgLatency:'3m44s',fr:'24%',handoffs:[
-    {from:'指标聚合',to:'报表汇总',mins:'14 分钟前',ok:false},
-    {from:'异常监测',to:'报表汇总',mins:'19 分钟前',ok:true},
-    {from:'指标聚合',to:'报表汇总',mins:'33 分钟前',ok:false}]},
-  n_collect:{avgLatency:'— (超时)',fr:'15%',handoffs:[
-    {from:'排班器',to:'数据采集',mins:'47 分钟前',ok:false},
-    {from:'排班器',to:'数据采集',mins:'1 小时前',ok:true}]},
-  n_diff:{avgLatency:'1m31s',fr:'5%',handoffs:[
-    {from:'数据采集',to:'差异核查',mins:'1 分钟前',ok:true},
-    {from:'凭证校验',to:'差异核查',mins:'6 分钟前',ok:true}]}
-};
-
-/* 为非 focal 公司生成结构合理的角色 DAG */
-function buildFlow(emps){
-  var seen={}, roles=[];
-  emps.forEach(function(e){ if(e.role && !seen[e.role]){ seen[e.role]=e; roles.push(e.role); } });
-  roles=roles.slice(0,7);
-  var NW=152,NH=58,WW=1180,WH=560;
-  var nodes=[{id:'n_sched',label:'排班器',role:'schedule',impl:'schedule',x:40,y:WH/2-NH/2,state:'idle',emp:null}];
-  var nCols=Math.min(3,Math.max(1,Math.ceil(roles.length/2)));
-  var cols=[]; for(var c=0;c<nCols;c++) cols.push([]);
-  roles.forEach(function(r,i){ cols[i%nCols].push(r); });
-  cols.forEach(function(colRoles,ci){
-    var x=240+ci*300, k=colRoles.length;
-    colRoles.forEach(function(r,ri){
-      var emp=seen[r];
-      var state=(emp.status==='failed'||emp.status==='stuck')?'alert':(emp.status==='busy')?'active':'idle';
-      var y=k===1?(WH/2-NH/2):(70+ri*((WH-200)/(k-1)));
-      nodes.push({id:'n_'+ci+'_'+ri,label:r,role:'target_role',impl:emp.impl,x:x,y:y,state:state,emp:emp.id,
-        detail:{avgLatency:state==='alert'?'— (超时)':'1m'+(18+ri*7)+'s',
-          fr:state==='alert'?'18%':state==='active'?'6%':'2%',
-          handoffs:[{from:ci===0?'排班器':'上游岗位',to:r,mins:(2+ri*4)+' 分钟前',ok:state!=='alert'}]}});
-    });
-  });
-  var edges=[], col0=nodes.filter(function(n){return n.id.indexOf('n_0_')===0;});
-  col0.forEach(function(n,i){ edges.push({from:'n_sched',to:n.id,count:14+i*4,fr:0.0,active:true,kind:'排班→Run'}); });
-  for(var cc=0;cc<nCols-1;cc++){
-    var cur=nodes.filter(function(n){return n.id.indexOf('n_'+cc+'_')===0;});
-    var nxt=nodes.filter(function(n){return n.id.indexOf('n_'+(cc+1)+'_')===0;});
-    cur.forEach(function(n,i){
-      var tgt=nxt[i%nxt.length];
-      if(tgt) edges.push({from:n.id,to:tgt.id,count:8+((i*5+cc*3)%16),
-        fr:tgt.state==='alert'?0.22:(tgt.state==='active'?0.08:0.03),active:tgt.state!=='idle',kind:'step→step'});
-      if(nxt.length>1){ var t2=nxt[(i+1)%nxt.length];
-        edges.push({from:n.id,to:t2.id,count:6+((i*3)%10),fr:t2.state==='alert'?0.2:0.05,active:false,kind:'父Run→子Run'}); }
-    });
-  }
-  return {nodes:nodes,edges:edges};
-}
-
-/* =====================================================================
-   L2 Run 列表（~近似：按 member 客户端聚合） & 任务聚合（预览口径）
-   ===================================================================== */
-var RUNS_DIFF=[
-  {id:'run-9f2a',wf:'对账批处理',status:'running',dur:'5m12s',tok:4200,cost:0.11,start:'14:29',end:'—'},
-  {id:'run-8e11',wf:'差异核查',  status:'success',dur:'1m48s',tok:3100,cost:0.08,start:'14:05',end:'14:07'},
-  {id:'run-7d09',wf:'对账批处理',status:'success',dur:'4m20s',tok:5000,cost:0.13,start:'13:40',end:'13:44'},
-  {id:'run-6c88',wf:'凭证校验',  status:'success',dur:'0m52s',tok:1200,cost:0.03,start:'13:10',end:'13:11'},
-  {id:'run-5b40',wf:'对账批处理',status:'failed', dur:'1m02s',tok:2000,cost:0.05,start:'12:30',end:'12:31'},
-  {id:'run-4a21',wf:'差异核查',  status:'success',dur:'1m40s',tok:3000,cost:0.08,start:'11:50',end:'11:52'},
-  {id:'run-3914',wf:'对账批处理',status:'success',dur:'4m11s',tok:4900,cost:0.12,start:'11:05',end:'11:09'},
-  {id:'run-280f',wf:'凭证校验',  status:'success',dur:'0m47s',tok:1100,cost:0.03,start:'10:20',end:'10:21'}
-];
-var RUNS_EOD=[
-  {id:'run-7710',wf:'日终对账',status:'failed', dur:'0m08s',tok:0,    cost:0.00,start:'02:00',end:'02:00'},
-  {id:'run-66f2',wf:'日终对账',status:'success',dur:'4m31s',tok:33000,cost:0.82,start:'昨 02:00',end:'昨 02:04'},
-  {id:'run-5ad0',wf:'日终对账',status:'success',dur:'4m18s',tok:32000,cost:0.79,start:'前 02:00',end:'前 02:04'}
-];
-var EMP_STATS={
-  'recon-e01':{rate:88,runs7:71,runsToday:14,avg:'2m12s',tok7:[28,31,26,34,30,38,40]},
-  'recon-e04':{rate:67,runs7:7, runsToday:1, avg:'4m02s',tok7:[33,0,32,0,33,0,33]}
-};
-
-var TASK_DEMO={
-  id:'B-0612 · root_run_id run-3a00',title:'对账批处理 批次 #B-0612',corr:'root_run_id = run-3a00',
-  total:8,done:6,cost:5.42,status:'running',
-  runs:[
-    {id:'run-3a01',wf:'数据采集',status:'success',dur:'0m44s',cost:0.04},
-    {id:'run-3a02',wf:'凭证校验',status:'success',dur:'0m51s',cost:0.05},
-    {id:'run-3a03',wf:'差异核查',status:'success',dur:'1m32s',cost:0.31},
-    {id:'run-3a04',wf:'对账批处理',status:'success',dur:'2m11s',cost:0.42},
-    {id:'run-3a05',wf:'指标聚合',status:'success',dur:'1m40s',cost:0.28},
-    {id:'run-3a06',wf:'报表汇总',status:'stuck',  dur:'已 22m',cost:0.55,stuck:true},
-    {id:'run-3a07',wf:'异常监测',status:'waiting',dur:'—',cost:0},
-    {id:'run-3a08',wf:'归档',    status:'waiting',dur:'—',cost:0}
-  ]
-};
-
-/* ---------------- accessors ---------------- */
+/* ---------------- accessors（保持既有签名，供 breadcrumb/viewL1/viewL2 复用） ---------------- */
 function companyById(id){ return COMPANIES.filter(function(c){return c.id===id;})[0]; }
 function companyDetail(id){
   var co=companyById(id); if(!co) return null;
-  if(co.isEmpty) return {co:co,employees:[],flow:{nodes:[],edges:[]},empty:true};
-  var emps=ROSTERS[id]||[];
-  var flow=id==='recon'?FLOW_RECON:buildFlow(emps);
-  return {co:co,employees:emps,flow:flow,generated:id!=='recon'};
+  var runs=FLEET_RUNS_BY_SCOPE[id]||[];
+  /* 由真实 run 派生“本组织内的 workflow”+每个 workflow 的真实跑批统计（员工花名册无后端 -> 用 workflow 代替，诚实标 ~近似） */
+  var byWf={}, order=[];
+  runs.forEach(function(r){ var k=r.name||'(unnamed)'; if(!byWf[k]){ byWf[k]={name:k,total:0,success:0,failed:0,running:0,lastActivity:null,runs:[]}; order.push(k); }
+    var w=byWf[k]; w.total++; w.runs.push(r);
+    if(fleetRunActive(r.status)) w.running++; else if(fleetRunFailed(r.status)) w.failed++; else if(fleetRunSuccess(r.status)) w.success++;
+    if(r.updatedAtUtc && (!w.lastActivity || new Date(r.updatedAtUtc).getTime()>new Date(w.lastActivity).getTime())) w.lastActivity=r.updatedAtUtc; });
+  var workflows=order.map(function(k){ return byWf[k]; });
+  return { co:co, employees:[], flow:{nodes:[],edges:[]}, runs:runs, workflows:workflows,
+    empty:(runs.length===0) };
 }
-function employeeById(detail,eid){ return detail.employees.filter(function(e){return e.id===eid;})[0]; }
-function runsForEmployee(eid){ if(eid==='recon-e04') return RUNS_EOD; return RUNS_DIFF; }
-function statsForEmployee(eid){ return EMP_STATS[eid]||EMP_STATS['recon-e01']; }
+function employeeById(detail,eid){ return null; }
+function runsForEmployee(eid){ return []; }
+function statsForEmployee(eid){ return null; }
 
 </script>
   <script>
@@ -2154,13 +2036,17 @@ function liveOrStamp(live){
 
 /* ============================== L0 集团总览 ============================== */
 function viewL0(){
+  if(!ACCOUNT||!ACCOUNT.admin) return {html:moduleSubHeader('fleet','')+'<div class="view-scroll">'+auth403('全景看板汇总全部 scope 的运行态，仅平台管理员可见。')+'</div>', mount:bindFleet};
+  if(!FLEET_LOADED) return {html:moduleSubHeader('fleet','')+'<div class="view-scroll">'+fleetSkeleton()+'</div>', mount:bindFleet};
+  if(FLEET_FORBIDDEN) return {html:moduleSubHeader('fleet','')+'<div class="view-scroll">'+auth403('需要平台管理员权限读取跨 scope 运行态（/api/cqrs/scopes + observatory __all__）。')+'</div>', mount:bindFleet};
+  if(FLEET_ERR) return {html:moduleSubHeader('fleet','')+'<div class="view-scroll"><div class="alert">'+ICON.warn+'<span class="grow">看板加载失败：'+esc(FLEET_ERR)+'</span><button class="btn" data-act="fleetReload">重试</button></div></div>', mount:bindFleet};
   var t=kpiTotals();
   var kpi=
-    metricCard({label:'公司数 (scopes)',icon:ICON.building,value:t.scopes,sub:'含 1 家未配置'})+
-    metricCard({label:'此刻活跃 Run',icon:ICON.bolt,value:t.active,cls:'running',live:true,approx:true})+
-    metricCard({label:'今日总成本',icon:ICON.cost,value:fmtMoney(t.cost),sub:'较昨 +6.2%',trend:'up',approx:true})+
-    metricCard({label:'今日红灯 (失败 Run)',icon:ICON.warn,value:t.fail,cls:t.fail>0?'danger':'',sub:'分布于 2 家公司',approx:true})+
-    metricCard({label:'在岗员工',icon:ICON.people,value:t.onDuty,sub:'共 '+COMPANIES.reduce(function(a,c){return a+c.emp;},0)+' 名',approx:true});
+    metricCard({label:'组织数 (scopes)',icon:ICON.building,value:t.scopes,sub:'GET /api/cqrs/scopes'})+
+    metricCard({label:'此刻在飞 Run',icon:ICON.bolt,value:t.active,cls:'running',live:true})+
+    metricCard({label:'近窗运行总数',icon:ICON.refresh,value:t.runs,sub:'observatory __all__'})+
+    metricCard({label:'失败 / 超时 Run',icon:ICON.warn,value:t.fail,cls:t.fail>0?'danger':'',sub:'跨 '+COMPANIES.filter(function(c){return c.fail>0;}).length+' 个组织'})+
+    metricCard({label:'活跃 workflow',icon:ICON.people,value:t.workflows,sub:'近窗出现的去重 workflow',approx:true});
 
   /* sort + filter */
   var list=COMPANIES.slice();
@@ -2168,13 +2054,13 @@ function viewL0(){
   if(STATE.l0Filter==='red') list=list.filter(function(c){return c.health==='red';});
   if(STATE.l0Filter==='active') list=list.filter(function(c){return c.active>0;});
   if(STATE.l0Sort==='health') list.sort(function(a,b){return order[a.health]-order[b.health];});
-  if(STATE.l0Sort==='cost')   list.sort(function(a,b){return b.cost-a.cost;});
+  if(STATE.l0Sort==='runs')   list.sort(function(a,b){return b.runsTotal-a.runsTotal;});
   if(STATE.l0Sort==='active') list.sort(function(a,b){return b.active-a.active;});
 
   var cards=list.map(companyCard).join('');
   if(!list.length) cards=emptyBlock('company-filter');
 
-  var sortLabel={health:'健康 ↓',cost:'成本 ↓',active:'活跃 ↓'}[STATE.l0Sort];
+  var sortLabel={health:'健康 ↓',runs:'运行数 ↓',active:'活跃 ↓'}[STATE.l0Sort]||'健康 ↓';
   var rangeT=STATE.l0Range==='today'?'今日':'7 天';
 
   var body=
@@ -2183,19 +2069,31 @@ function viewL0(){
       '<div class="toolbar">'+
         '<div class="chip-row">'+
           chip('red','只看红灯','#dc2626',STATE.l0Filter==='red',COMPANIES.filter(function(c){return c.health==='red';}).length)+
-          chip('active','只看活跃','#2563eb',STATE.l0Filter==='active',COMPANIES.filter(function(c){return c.active>0;}).length)+
+          chip('active','只看在飞','#2563eb',STATE.l0Filter==='active',COMPANIES.filter(function(c){return c.active>0;}).length)+
         '</div>'+
         '<div class="grow"></div>'+
-        '<div class="seg-toggle" data-act="l0range">'+
-          '<button class="'+(STATE.l0Range==='today'?'on':'')+'" data-range="today">今日</button>'+
-          '<button class="'+(STATE.l0Range==='7d'?'on':'')+'" data-range="7d">7 天</button>'+
-        '</div>'+
+        '<span class="inline-refresh" style="margin-right:6px"><i class="live-dot" style="background:var(--success)"></i> observatory __all__ '+srcBadge('ready')+'</span>'+
+        '<button class="ibtn" data-act="fleetReload">'+ICON.refresh+' 刷新</button>'+
         '<button class="sortbtn" data-act="l0sort"><span class="lbl">排序</span><span class="val">'+sortLabel+'</span></button>'+
       '</div>'+
       '<div class="card-wall">'+cards+'</div>'+
-      '<div class="src-legend-bar"><div class="panel-title" style="margin-bottom:12px">数据来源图例 · 公司枚举为现成，活跃 Run / 今日成本 / 忙闲分布为 ~近似</div>'+srcLegendRows()+'</div>'+
+      '<div class="src-legend-bar"><div class="panel-title" style="margin-bottom:12px">数据来源 · 组织清单 + 跨 scope 运行态为现成（/cqrs/scopes + observatory __all__）；去重 workflow 计数为 ~近似；成本 / 员工花名册 / 数据流交接图无统一事实源，已降级为 预览，不展示伪造值</div>'+srcLegendRows()+'</div>'+
     '</div>';
-  return {html:body};
+  return {html:body, mount:bindFleet};
+}
+/* 看板骨架 + 加载 + 重渲（整页重挂载，复用 shell 的挂载点） */
+function fleetSkeleton(){ return '<div class="sk-bar" style="height:90px;border-radius:8px"></div>'+
+  '<div class="card-wall" style="margin-top:16px">'+[0,0,0,0,0,0].map(function(){return '<div class="sk-card" style="height:200px"></div>';}).join('')+'</div>'; }
+function _fleetRemount(){ var slot=document.getElementById('app'); if(!slot) return; var sc=slot.querySelector('.view'); if(!sc) return;
+  var v=viewL0(); sc.innerHTML=v.html; if(v.mount) v.mount(sc); }
+function bindFleet(root){
+  if(ACCOUNT&&ACCOUNT.admin&&!FLEET_LOADED&&!FLEET_LOADING){ loadFleet(_fleetRemount); }
+  /* 看板内的下钻/排序/筛选导航统一由 foundation bindEvents（data-co / data-chip / l0sort）处理；
+     这里只接管板内 fleetReload 刷新（不重复绑定 document 级委托）。 */
+  root.addEventListener('click',function(ev){
+    var act=ev.target.closest('[data-act]'); if(!act) return;
+    if(act.getAttribute('data-act')==='fleetReload'){ FLEET_LOADED=false; FLEET_ERR=null; _fleetRemount(); loadFleet(_fleetRemount); }
+  });
 }
 
 function metricCard(o){
@@ -2212,14 +2110,16 @@ function metricCard(o){
 function companyCard(c){
   var tag=c.health==='red'?'<span class="co-health-tag" style="background:var(--failed-bg);color:var(--failed)">需关注</span>'
     :c.health==='amber'?'<span class="co-health-tag" style="background:var(--waiting-bg);color:#9a5b07">观察</span>'
-    :c.health==='grey'?'<span class="co-health-tag" style="background:var(--idle-bg);color:#6b7280">未配置</span>'
+    :c.health==='grey'?'<span class="co-health-tag" style="background:var(--idle-bg);color:#6b7280">无活动</span>'
     :'<span class="co-health-tag" style="background:var(--success-bg);color:var(--success)">健康</span>';
+  /* scope id 较长 -> 截断显示，title 存全量；data-co 仍用全量 id */
+  var label=esc(c.name), shortLabel=(c.name&&c.name.length>22)?esc(c.name.slice(0,20)+'…'):label;
   if(c.isEmpty){
-    return '<button class="co-card" data-co="'+c.id+'" aria-label="进入 '+esc(c.name)+'">'+
-      '<div class="co-top"><span class="co-name"><i class="health-light health-grey"></i>'+esc(c.name)+'</span>'+tag+'</div>'+
-      '<div class="co-active"><span class="big zero">0</span><span class="unit">活跃 Run</span></div>'+
-      '<div class="co-alert calm">'+ICON.empty.replace('width="1.6"','width="2"')+'<span>尚未配置员工，点击进入引导</span></div>'+
-      '<div class="co-foot"><span class="emp">0 名员工</span><span class="emp">— 成本</span></div>'+
+    return '<button class="co-card" data-co="'+esc(c.id)+'" title="'+label+'" aria-label="进入 '+label+'">'+
+      '<div class="co-top"><span class="co-name"><i class="health-light health-grey"></i>'+shortLabel+'</span>'+tag+'</div>'+
+      '<div class="co-active"><span class="big zero">0</span><span class="unit">近窗运行</span></div>'+
+      '<div class="co-alert calm">'+ICON.empty.replace('width="1.6"','width="2"')+'<span>该组织近窗内无运行记录</span></div>'+
+      '<div class="co-foot"><span class="emp">0 workflow</span><span class="emp">无活动</span></div>'+
     '</button>';
   }
   var total=c.busy+c.idle+c.fail||1;
@@ -2227,21 +2127,21 @@ function companyCard(c){
     '<i class="s-busy" style="width:'+(c.busy/total*100)+'%"></i>'+
     '<i class="s-idle" style="width:'+(c.idle/total*100)+'%"></i>'+
     '<i class="s-fail" style="width:'+(c.fail/total*100)+'%"></i></div>'+
-    '<div class="stack-legend"><span><i style="background:var(--running)"></i>忙 '+c.busy+'</span>'+
-    '<span><i style="background:#cbd0d8"></i>闲 '+c.idle+'</span>'+
+    '<div class="stack-legend"><span><i style="background:var(--running)"></i>在飞 '+c.busy+'</span>'+
+    '<span><i style="background:#cbd0d8"></i>完成 '+c.idle+'</span>'+
     '<span><i style="background:var(--failed)"></i>失败 '+c.fail+'</span></div>';
   var sev=c.oldest?(c.oldest.mins>40?'danger':'warn'):'';
   var alert=c.oldest
     ? '<div class="co-alert co-alert-'+sev+'"><span class="ca-ico">'+ICON.warn+'</span>'+
-        '<span class="ca-txt">最久未推进 · <b>'+esc(c.oldest.name)+'</b> Run '+c.oldest.id+' 已 running <b class="ca-min num">'+c.oldest.mins+'</b> min</span>'+
+        '<span class="ca-txt">最久未推进 · <b>'+esc(c.oldest.name)+'</b> Run '+esc(c.oldest.id)+' 已 running <b class="ca-min num">'+c.oldest.mins+'</b> min</span>'+
         '<span class="live-dot" title="live 数据"></span></div>'
     : '<div class="co-alert calm">'+ICON.check.replace('stroke-width="2"','stroke-width="2.2"')+'<span>无长时间未推进的 Run</span></div>';
-  return '<button class="co-card" data-co="'+c.id+'" aria-label="进入 '+esc(c.name)+'">'+
-    '<div class="co-top"><span class="co-name"><i class="health-light health-'+c.health+'"></i>'+esc(c.name)+'</span>'+tag+'</div>'+
-    '<div class="co-active">'+aprx('<span class="big">'+c.active+'</span>')+'<span class="unit">此刻活跃 Run</span></div>'+
-    '<div class="co-cost"><span class="cc-l">今日 '+aprx('<b class="num" style="color:var(--heading)">'+fmtMoney(c.cost)+'</b>')+' · '+fmtTok(c.tok)+' tok</span>'+sparkSVG(c.spark,c.health==='red'?'#dc2626':'#2563eb')+'</div>'+
+  return '<button class="co-card" data-co="'+esc(c.id)+'" title="'+label+'" aria-label="进入 '+label+'">'+
+    '<div class="co-top"><span class="co-name"><i class="health-light health-'+c.health+'"></i>'+shortLabel+'</span>'+tag+'</div>'+
+    '<div class="co-active"><span class="big">'+c.active+'</span><span class="unit">此刻在飞 Run</span></div>'+
+    '<div class="co-cost"><span class="cc-l">近窗 <b class="num" style="color:var(--heading)">'+c.runsTotal+'</b> 运行 · 完成 '+c.success+' · 最近 '+esc(c.lastActivityLabel)+'</span></div>'+
     stack+alert+
-    '<div class="co-foot"><span class="emp">'+c.emp+' 名 AI 员工</span><span class="emp">忙闲分布 <span class="approx-mark">~</span></span></div>'+
+    '<div class="co-foot"><span class="emp">'+c.workflows+' workflow <span class="approx-mark">~</span></span><span class="emp">查看运行 '+ICON.arrow.replace('width="2"','width="1.6" style="width:13px;height:13px;vertical-align:-2px"')+'</span></div>'+
   '</button>';
 }
 
@@ -2259,76 +2159,62 @@ function viewL1(coId){
   var sub=STATE.l1Sub||'roster';
   var subHeader=
     '<div class="sub-header">'+
-      '<span class="sub-title"><i class="health-light health-'+c.health+'" style="display:inline-block;margin-right:8px;vertical-align:middle"></i>'+esc(c.name)+'</span>'+
+      '<span class="sub-title" title="'+esc(c.name)+'"><i class="health-light health-'+c.health+'" style="display:inline-block;margin-right:8px;vertical-align:middle"></i>'+esc((c.name&&c.name.length>26)?c.name.slice(0,24)+'…':c.name)+'</span>'+
       '<div class="sub-kpis">'+
-        '<div class="sub-kpi"><span class="k">员工</span><span class="v num">'+c.emp+'</span></div>'+
-        '<div class="sub-kpi"><span class="k">活跃 Run</span><span class="v num" style="color:var(--running)">'+c.active+'</span></div>'+
-        '<div class="sub-kpi"><span class="k">今日成本</span><span class="v num">'+fmtMoney(c.cost)+'</span></div>'+
+        '<div class="sub-kpi"><span class="k">workflow</span><span class="v num">'+c.workflows+'</span></div>'+
+        '<div class="sub-kpi"><span class="k">在飞 Run</span><span class="v num" style="color:var(--running)">'+c.active+'</span></div>'+
+        '<div class="sub-kpi"><span class="k">近窗运行</span><span class="v num">'+c.runsTotal+'</span></div>'+
       '</div>'+
       '<div class="sub-spacer"></div>'+
       '<div class="segmented" data-act="l1seg">'+
-        '<button class="'+(sub==='roster'?'on':'')+'" data-seg="roster">组织花名册</button>'+
+        '<button class="'+(sub==='roster'?'on':'')+'" data-seg="roster">运行与 workflow</button>'+
         '<button class="'+(sub==='flow'?'on':'')+'" data-seg="flow">数据流</button>'+
       '</div>'+
     '</div>';
 
   if(sub==='flow') return {html:subHeader+l1Flow(detail), mount:function(root){
     var canvas=root.querySelector('#flow-canvas'); if(!canvas)return;
-    renderFlow(canvas, detail.flow, function(type,payload){
-      if(type==='node') openInspector(inspectorNode(payload,coId), {title:payload.label,sub:'岗位 / target_role',drawerKind:'node',node:payload,coId:coId});
-      else openInspector(inspectorEdge(payload), {title:'交接关系',sub:payload.kind,drawerKind:'edge'});
-    });
+    /* 真实 handoff/交接 feed 尚无后端 -> 渲染空画布的 emptyBlock（预览），不伪造节点/边 */
+    renderFlow(canvas, detail.flow, function(){});
   }};
 
-  return {html:subHeader+l1Roster(detail,coId)};
+  return {html:subHeader+l1Roster(detail,coId), mount:bindFleet};
 }
 
 function l1Roster(detail,coId){
-  if(detail.empty || !detail.employees.length) return '<div class="view-scroll">'+emptyBlock('roster')+'</div>';
-  /* group by dept */
-  var groups={}, order=[];
-  detail.employees.forEach(function(e){ if(!groups[e.dept]){groups[e.dept]=[];order.push(e.dept);} groups[e.dept].push(e); });
-  /* status filter */
-  var sf=STATE.l1Status;
-  var counts={all:0,busy:0,stuck:0,failed:0};
-  detail.employees.forEach(function(e){counts.all++;if(counts[e.status]!=null)counts[e.status]++;});
-
-  var filterRow=
-    '<div class="toolbar">'+
-      '<div class="chip-row" data-act="l1status">'+
-        l1chip(null,'全部',null,counts.all,sf)+
-        l1chip('busy','忙','#2563eb',counts.busy,sf)+
-        l1chip('stuck','卡','#d97706',counts.stuck,sf)+
-        l1chip('failed','失败','#dc2626',counts.failed,sf)+
-      '</div>'+
-      '<div class="grow"></div>'+
-      '<div class="search"><span>'+ICON.search+'</span><input placeholder="搜索员工名" data-act="l1search" value="'+esc(STATE.search||'')+'"></div>'+
-    '</div>';
-
-  var html='<div class="view-scroll">'+filterRow;
-  order.forEach(function(dept){
-    var emps=groups[dept].filter(function(e){
-      if(sf && e.status!==sf) return false;
-      if(STATE.search && e.name.indexOf(STATE.search)<0) return false;
-      return true;
-    });
-    if(!emps.length && (sf||STATE.search)) return;
-    var collapsed=STATE.collapsed[coId+'/'+dept];
-    html+='<div class="dept-group'+(collapsed?' collapsed':'')+'" data-dept="'+esc(dept)+'">'+
-      '<div class="dept-head" data-act="deptToggle" data-dept="'+esc(dept)+'">'+
-        '<span class="dept-caret">'+ICON.caret+'</span>'+
-        '<span class="dept-name">'+esc(dept)+'</span>'+
-        '<span class="dept-meta">'+emps.length+' 人</span>'+
-        '<span class="dept-line"></span></div>';
-    /* >6 人转紧凑表格 */
-    if(emps.length>6) html+=rosterTable(emps,coId);
-    else html+='<div class="emp-grid">'+emps.map(function(e){return empCard(e,coId);}).join('')+'</div>';
-    html+='</div>';
-  });
-  html+='<p style="margin-top:6px;font-size:11.5px;color:var(--faint)">名字 / 类型 / 生命周期 / 排班 '+srcBadge('ready')+
-    ' · 状态灯 / 当前在忙 / 最近活动 / 今日量 '+srcBadge('approx')+'</p>';
-  html+='</div>';
-  return html;
+  if(detail.empty || !detail.runs.length) return '<div class="view-scroll">'+emptyBlock('roster')+'</div>';
+  /* workflow 概览（由真实 run 派生；员工花名册无后端 -> 用 workflow + 真实跑批统计代替，标 ~近似） */
+  var wfRows=detail.workflows.map(function(w){
+    var st=w.running>0?statusLight('busy'):(w.failed>0?statusLight('failed'):statusLight('idle'));
+    return '<tr>'+
+      '<td><b style="color:var(--heading);font-weight:550">'+esc(w.name)+'</b></td>'+
+      '<td>'+st+'</td>'+
+      '<td class="tnum">'+w.total+'</td>'+
+      '<td class="tnum" style="color:var(--success)">'+w.success+'</td>'+
+      '<td class="tnum" style="color:'+(w.failed>0?'var(--failed)':'var(--faint)')+'">'+w.failed+'</td>'+
+      '<td class="tnum" style="color:'+(w.running>0?'var(--running)':'var(--faint)')+'">'+w.running+'</td>'+
+      '<td style="color:var(--faint)">'+esc(fleetAgo(w.lastActivity))+'</td></tr>';
+  }).join('');
+  var wfPanel='<div class="panel"><div class="panel-title">本组织内的 workflow（近窗去重）'+srcBadge('approx')+'</div>'+
+    '<div class="protable-wrap"><table class="protable"><thead><tr>'+
+    '<th>workflow</th><th>状态</th><th>运行</th><th>完成</th><th>失败</th><th>在飞</th><th>最近活动</th>'+
+    '</tr></thead><tbody>'+wfRows+'</tbody></table></div></div>';
+  /* 真实运行列表（点击行 -> foundation data-run 深链进 observatory，选中该 run） */
+  var runRows=detail.runs.slice(0,80).map(function(r){
+    var rstatus={running:'running',completed:'success',failed:'failed',timed_out:'failed',stopped:'stuck',disabled:'stuck'}[r.status]||'stuck';
+    return '<tr data-run="'+esc(r.id)+'">'+
+      '<td><b style="color:var(--heading);font-weight:550">'+esc(r.name)+'</b><div style="font-size:11px;color:var(--faint)" class="tnum">'+esc(r.id)+'</div></td>'+
+      '<td>'+statusTag(rstatus)+'</td>'+
+      '<td>'+originPill(r.origin)+'</td>'+
+      '<td class="tnum" style="color:var(--faint)">'+esc(fleetAgo(r.updatedAtUtc))+'</td>'+
+      '<td><span class="ibtn" style="height:24px;pointer-events:none">观测 ↗</span></td></tr>';
+  }).join('');
+  var runPanel='<div class="panel" style="margin-top:16px"><div class="panel-title">该组织的运行（observatory __all__ 过滤）'+srcBadge('ready')+'</div>'+
+    '<div class="protable-wrap"><table class="protable"><thead><tr>'+
+    '<th>workflow / runId</th><th>状态</th><th>来源</th><th>最近活动</th><th></th>'+
+    '</tr></thead><tbody>'+runRows+'</tbody></table></div>'+
+    '<p style="margin-top:8px;font-size:11.5px;color:var(--faint)">点击任一行进入运行观测台查看该 run 的逐步 trace / DAG / 产出。</p></div>';
+  return '<div class="view-scroll">'+wfPanel+runPanel+'</div>';
 }
 function l1chip(val,label,a,b,sf){
   var color=typeof a==='string'?a:null;
@@ -2379,43 +2265,37 @@ function rosterTable(emps,coId){
 }
 
 function l1Flow(detail){
-  if(detail.empty || !detail.flow.nodes.length) return '<div class="view-scroll">'+emptyBlock('graph')+'</div>';
-  var note=detail.generated?'<span class="src src-preview" style="margin-left:8px">示意图谱</span>':'';
+  /* 真实 handoff / 数据流交接 feed 尚无后端事实源 -> 整层标 预览，画布渲染空态，不伪造节点/边 */
   return '<div class="flow-region">'+
     '<div class="flow-toolbar">'+
       '<div class="chip-row">'+
-        '<button class="chip on" data-layer="handoff">任务交接'+note+'</button>'+
+        '<button class="chip on" data-layer="handoff">任务交接<span class="src src-preview" style="margin-left:8px">预览</span></button>'+
         previewChip('消息流')+
         previewChip('系统事件流')+
       '</div>'+
       '<div class="grow"></div>'+
-      '<span class="inline-refresh">'+ICON.clock+' 时间范围 <b style="color:var(--heading);margin-left:4px">今日</b></span>'+
-      '<span style="font-size:11.5px;color:var(--faint)">step→step / 父子树 / 排班→Run '+srcBadge('ready')+' · member↔member 身份交接 '+srcBadge('preview')+'</span>'+
+      '<span style="font-size:11.5px;color:var(--faint)">岗位交接 / 数据流图谱 '+srcBadge('preview')+' · 暂无统一 handoff 事实源，不展示伪造拓扑；运行级 DAG 见观测台每个 run 详情</span>'+
     '</div>'+
-    '<div class="flow-canvas" id="flow-canvas" aria-label="数据流画布，可拖拽平移、滚轮缩放"></div>'+
+    '<div class="flow-canvas" id="flow-canvas" aria-label="数据流画布（预览）"></div>'+
   '</div>';
 }
 
 /* ============================== L2 员工 / 任务 ============================== */
 function viewL2(coId,empId){
-  var detail=companyDetail(coId);
-  var e=employeeById(detail,empId)||detail.employees[0];
-  if(!e) return {html:emptyBlock('roster')};
-  var mode=STATE.l2Mode||'emp';
+  /* L2 员工/任务层无后端事实源（花名册已下线为 workflow 概览）。诚实跳回 L1（组织运行列表），
+     从那里点 run 行进观测台才是真实下钻路径。保留函数以兼容旧分享链接，不渲染伪造员工。 */
+  var detail=companyDetail(coId); var c=detail&&detail.co;
   var head=
     '<div class="sub-header">'+
-      '<span class="sub-title">'+esc(e.name)+'</span>'+statusLight(e.status)+implBadge(e.impl)+
-      '<span class="emp-sub">'+esc(e.dept)+' · 服务 <b style="color:var(--muted)">'+esc(e.service)+'</b></span>'+
+      '<span class="sub-title">'+esc((c&&c.name)||coId)+'</span>'+
+      '<span class="emp-sub">员工/任务视角已并入组织运行列表</span>'+
       '<div class="sub-spacer"></div>'+
-      '<div class="seg-toggle" data-act="l2mode">'+
-        '<button class="'+(mode==='emp'?'on':'')+'" data-mode="emp">员工视角</button>'+
-        '<button class="'+(mode==='task'?'on':'')+'" data-mode="task">任务视角</button>'+
-      '</div>'+
     '</div>';
-  if(mode==='task') return {html:head+l2Task(coId,empId), mount:function(root){
-    var mf=root.querySelector('#mini-flow'); if(mf) renderMiniFlow(mf,TASK_DEMO.runs);
-  }};
-  return {html:head+l2Employee(e,coId)};
+  var body='<div class="view-scroll"><div class="empty">'+ICON.empty+
+    '<div class="et">请从组织运行列表下钻</div>'+
+    '<div class="es">看板的下钻终点是真实 run：进入该组织后点任一运行行，跳转运行观测台查看逐步 trace / DAG / 产出。员工/任务花名册无统一后端事实源，不再单独成页。</div>'+
+    '<button class="btn btn-primary" data-co="'+esc(coId)+'" style="height:34px">查看该组织的运行 '+ICON.arrow+'</button></div></div>';
+  return {html:head+body, mount:bindFleet};
 }
 
 function l2Employee(e,coId){
@@ -2495,20 +2375,13 @@ function ringSVG(rate){
 /* ============================== L3 Run（已存在，stub） ============================== */
 function viewL3(coId,empId,runId){
   return {html:'<div class="view-scroll"><div class="panel" style="max-width:760px;margin:0 auto">'+
-    '<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">'+statusTag('running')+
+    '<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">'+
       '<span class="sub-title" style="font-size:16px">Run '+esc(runId)+'</span></div>'+
     '<div class="task-note" style="margin-bottom:18px">'+ICON.ext.replace('width="2"','width="1.8" style="width:15px;height:15px"')+
-      '<span>这是<b>已存在的 Run Observatory 详情页</b>。本原型只负责保证下钻入口与返回 breadcrumb 一致，视觉风格已对齐，不重画。</span></div>'+
-    '<div class="kv">'+
-      kv('timeline','step 1 数据采集 ✓ → step 2 质量校验 ✓ → step 3 风险分析 ●（运行中）')+
-      kv('DAG graph','5 节点 / 6 边（既有组件渲染）')+
-      kv('逐 step trace','含 input / output / token / 延迟（既有）')+
-      kv('usage','本 Run 累计 4.2k token · '+fmtMoney(0.11))+
-      kv('最终产出','—（运行中，尚未生成）')+
-    '</div>'+
-    '<div style="margin-top:18px;display:flex;gap:10px"><button class="btn btn-primary" data-act="openObs">'+ICON.ext+'打开 Run Observatory</button>'+
-      '<button class="btn" data-act="back-l2">返回员工详情</button></div>'+
-  '</div></div>'};
+      '<span>Run 详情由<b>运行观测台</b>承载（逐步 trace / DAG / usage / 最终产出，真实接口 /api/workflow/observatory/runs/'+esc(runId)+'）。点击下方进入观测台并选中该 run。</span></div>'+
+    '<div style="margin-top:6px;display:flex;gap:10px"><button class="btn btn-primary" data-run="'+esc(runId)+'">'+ICON.ext+'打开运行观测台</button>'+
+      '<button class="btn" data-co="'+esc(coId)+'">返回组织运行列表</button></div>'+
+  '</div></div>', mount:bindFleet};
 }
 function kv(k,v){ return '<div class="kv-row"><span class="kk">'+esc(k)+'</span><span class="vv sans">'+v+'</span></div>'; }
 
@@ -3676,6 +3549,16 @@ function viewVoice(){
 }
 
 /* ---------------- 模块分发 ---------------- */
+/* 套件子页内嵌：复用同源已部署的完整真实页面(共享 OIDC token),不再降级重实现。 */
+function viewStatus(){ return {html:'<iframe class="suite-embed" src="/status" title="系统状态"></iframe>'}; }
+function viewObservatory(){ return {html:'<iframe class="suite-embed" src="/workflow/observatory" title="运行观测台"></iframe>'}; }
+function viewCqrs(){ if(!(ACCOUNT&&ACCOUNT.admin)) return {html:moduleSubHeader('cqrs','')+'<div class="view-scroll">'+auth403('CQRS 投影管道仅平台管理员可见。')+'</div>'}; return {html:'<iframe class="suite-embed" src="/cqrs" title="投影管道 CQRS"></iframe>'}; }
+function viewStudio(){ return {html:'<iframe class="suite-embed" src="/workflow/studio" title="编排工作台"></iframe>'}; }
+function viewSkills(){ return {html:'<iframe class="suite-embed" src="/workflow/skills" title="技能调用"></iframe>'}; }
+function viewSchedules(){ return {html:'<iframe class="suite-embed" src="/schedules" title="排班调度"></iframe>'}; }
+function viewChannels(){ return {html:'<iframe class="suite-embed" src="/channels" title="通道管理"></iframe>'}; }
+function viewVoice(){ return {html:'<iframe class="suite-embed" src="/voice" title="语音台"></iframe>'}; }
+
 function opsView(module){
   switch(module){
     case 'status': return viewStatus();
