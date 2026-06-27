@@ -1612,17 +1612,35 @@ async function loadMySchedules(rerender){
   SKILL_SCHED_LOADED=true; if(rerender) rerender();
 }
 
-/* ⑦ 排班调度 Schedules —— GET /api/schedules（bearer，filter !deleted）, 动作走 202 receipt */
+/* ⑦ 排班调度 Schedules —— GET /api/schedules（bearer，filter !deleted）；动作走 202 receipt。
+   渲染 = 真实只读 /schedules 页的完整字段（状态点 / timezone / enabled / kind / target / 触发计数 /
+   lastError / 到观测台深链 / 3s 轮询）∪ 我的真实动作（enable/disable/run-now/delete + cron 预览）。 */
 var SCHEDULES_DATA=[];
 var SCHED_LOADED=false, SCHED_ERR=null, SCHED_BUSY=null, SCHED_PREVIEW=null;
+var SCHED_FILTER='all';        /* all | enabled | disabled | failing —— 真实页无过滤，此为增强项 */
+var SCHED_TIMER=null;          /* 3s 轮询句柄（对齐真实页 startSchedulePolling 的 3000ms） */
+var SCHED_OPEN={};             /* 展开了详情（serviceKey/serviceId/payloadTypeUrl）的行 id 集合 */
+/* scheduleKind 0=Generic 1=Workflow 2=SkillRunner（数值，后端无 string 枚举转换器） */
+var SCHED_KIND_LABEL={0:'Generic',1:'Workflow',2:'SkillRunner'};
+function _schKind(k){ return SCHED_KIND_LABEL[k]!=null?SCHED_KIND_LABEL[k]:('kind '+k); }
+/* targetKind 0=Envelope 1=ServiceInvocation */
+var SCHED_TARGET_LABEL={0:'Envelope',1:'ServiceInvocation'};
+function _schTarget(k){ return SCHED_TARGET_LABEL[k]!=null?SCHED_TARGET_LABEL[k]:('kind '+k); }
 /* 相对时间（未来向）：下次触发用 */
 function _schNext(iso){ if(!iso) return '—'; var t=new Date(iso); if(isNaN(t.getTime())) return '—';
   var s=(t.getTime()-Date.now())/1000;
   if(s<=0) return '即将'; if(s<60) return Math.round(s)+'s 后'; if(s<3600) return Math.round(s/60)+'m 后';
   if(s<86400) return Math.round(s/3600)+'h 后'; return Math.round(s/86400)+'d 后'; }
+/* 相对时间（过去向）：上次触发的相对表述（对齐真实页 relPast） */
+function _schRel(iso){ if(!iso) return '尚未运行'; var t=new Date(iso); if(isNaN(t.getTime())) return '—';
+  var d=Math.max(0,Math.round((Date.now()-t.getTime())/1000));
+  if(d<=1) return '刚刚'; if(d<60) return d+'s 前'; if(d<3600) return Math.round(d/60)+'m 前';
+  if(d<86400) return Math.round(d/3600)+'h 前'; return Math.round(d/86400)+'d 前'; }
 /* 绝对短格式：上次触发用 */
 function _schLast(iso){ if(!iso) return '尚未运行'; var t=new Date(iso); if(isNaN(t.getTime())) return '—';
   return (t.getMonth()+1)+'-'+('0'+t.getDate()).slice(-2)+' '+('0'+t.getHours()).slice(-2)+':'+('0'+t.getMinutes()).slice(-2); }
+/* 到观测台查看本排班触发的运行（in-app hash 路由，对齐 Skills 的 skSchedObs：?schedule=<id>） */
+function _schObs(id){ return id; }
 function mapSchedRow(it){
   var failed=!!(it.lastError);
   var lastTxt=_schLast(it.lastFireAt)+(it.lastFireAt?(' · '+(failed?'失败':'完成')):'');
@@ -1632,12 +1650,20 @@ function mapSchedRow(it){
     desc:it.displayName||'',
     cron:it.cronExpression||'',
     tz:it.timezone||'',
+    enabled:!!it.enabled,
+    nextIso:it.nextFireAt||null,
+    lastIso:it.lastFireAt||null,
     next:it.enabled?_schNext(it.nextFireAt):'—（已停用）',
     last:lastTxt,
-    enabled:!!it.enabled,
+    lastRel:_schRel(it.lastFireAt),
     fires:(it.fireCount!=null?it.fireCount:0),
     fails:(it.failureCount!=null?it.failureCount:0),
-    lastError:it.lastError||null
+    lastError:it.lastError||null,
+    kind:_schKind(it.scheduleKind),
+    target:_schTarget(it.targetKind),
+    serviceKey:it.serviceKey||'',
+    serviceId:it.serviceId||'',
+    payloadTypeUrl:it.payloadTypeUrl||''
   };
 }
 async function loadSchedules(rerender){
@@ -1650,6 +1676,20 @@ async function loadSchedules(rerender){
   SCHED_LOADED=true; if(rerender) rerender();
 }
 function SCHED_DATA_FORBIDDEN(){ SCHEDULES_DATA=[]; SCHED_LOADED=true; SCHED_ERR='__forbidden__'; }
+/* 3s 轮询：对齐真实只读页的 startSchedulePolling（3000ms）。每次挂载先清旧句柄再起新句柄
+   （沿用 Status 模块的 STATUS_TIMER 生命周期：重挂载即换表，避免离开后陈旧 timer 泄漏或重复）。 */
+function schedStartPoll(rerender){
+  if(SCHED_TIMER){ clearInterval(SCHED_TIMER); SCHED_TIMER=null; }
+  SCHED_TIMER=setInterval(function(){ loadSchedules(rerender); }, 3000);
+}
+function schedStopPoll(){ if(SCHED_TIMER){ clearInterval(SCHED_TIMER); SCHED_TIMER=null; } }
+function schedSetFilter(f, rerender){ SCHED_FILTER=f; if(rerender) rerender(); }
+function _schPass(x){
+  if(SCHED_FILTER==='enabled') return x.enabled;
+  if(SCHED_FILTER==='disabled') return !x.enabled;
+  if(SCHED_FILTER==='failing') return (x.fails||0)>0||!!x.lastError;
+  return true;
+}
 /* 动作：enable/disable/run-now 走 POST :verb，delete 走 DELETE，均返回 202 receipt（2xx=已受理）。 */
 async function schedAction(id, op, rerender){
   SCHED_BUSY=id+':'+op; if(rerender) rerender();
@@ -1671,6 +1711,17 @@ async function schedPreview(cronExpression, timezone, count){
     body:JSON.stringify({cronExpression:cronExpression, timezone:timezone, count:(count||5)}) });
   if(j&&j.forbidden) return [];
   return (j&&j.nextFireTimes)||[];
+}
+/* 行内详情（serviceKey/serviceId/payloadTypeUrl/target）——真实 envelope 携带，真实页未展示，此为补全 */
+function schedRowDetail(x){
+  var bits=[];
+  bits.push('<div class="kv-row"><span class="kk">target</span><span class="vv">'+esc(x.target)+'</span></div>');
+  if(x.serviceKey) bits.push('<div class="kv-row"><span class="kk">serviceKey</span><span class="vv">'+esc(x.serviceKey)+'</span></div>');
+  if(x.serviceId) bits.push('<div class="kv-row"><span class="kk">serviceId</span><span class="vv">'+esc(x.serviceId)+'</span></div>');
+  if(x.payloadTypeUrl) bits.push('<div class="kv-row"><span class="kk">payloadTypeUrl</span><span class="vv" style="word-break:break-all">'+esc(x.payloadTypeUrl)+'</span></div>');
+  bits.push('<div class="kv-row"><span class="kk">timezone</span><span class="vv">'+esc(x.tz||'—')+'</span></div>');
+  bits.push('<div class="kv-row"><span class="kk">上次触发</span><span class="vv">'+esc(x.lastRel)+'</span></div>');
+  return '<div class="kv" style="margin:6px 0 2px">'+bits.join('')+'</div>';
 }
 
 /* ⑧ 通道管理 Channels —— /channels（relay 注册与状态） */
@@ -3240,41 +3291,66 @@ function bindSkills(root){
 }
 
 /* ================= ⑦ 排班调度 Schedules ================= */
+function schedFilterBar(){
+  function tab(f,lbl){ return '<button class="chip'+(SCHED_FILTER===f?' on':'')+'" data-act="schFilter" data-f="'+f+'">'+lbl+'</button>'; }
+  return '<div class="toolbar"><div class="chips" style="display:flex;gap:6px">'+
+    tab('all','全部')+tab('enabled','启用')+tab('disabled','停用')+tab('failing','有失败')+'</div>'+
+    '<div class="grow"></div><button class="ibtn" data-act="schRefresh">'+ICON.refresh+' 刷新</button></div>';
+}
 function schedulesBody(){
   if(!SCHED_LOADED) return '<div class="sk-card" style="height:48px"></div>'+
     '<div class="sk-card" style="height:150px;margin-top:14px"></div>';
   if(SCHED_ERR==='__forbidden__') return auth403('当前账号无权查看排班列表，已按诚实态屏蔽。');
   if(SCHED_ERR) return '<div class="alert"><span class="grow">排班加载失败：'+esc(SCHED_ERR)+'</span>'+
     '<button class="btn" data-act="schRefresh">重试</button></div>';
-  var toolbar='<div class="toolbar"><div class="grow"></div>'+
-    '<button class="ibtn" data-act="schRefresh">'+ICON.refresh+' 刷新</button></div>';
-  if(!SCHEDULES_DATA.length) return toolbar+
+  if(!SCHEDULES_DATA.length) return schedFilterBar()+
     '<div class="empty" style="padding:34px"><div class="et">暂无排班</div>'+
-      '<div class="es">在「技能调用」为某个技能配置 cron 排班后，将出现在此处统一管理。</div></div>';
-  var rows=SCHEDULES_DATA.map(function(x){
-    var lastFail=!!x.lastError;
-    var stats=(x.fires||x.fails)?'<div style="font-size:10.5px;color:var(--faint);margin-top:2px">触发 '+x.fires+(x.fails?' · <b style="color:var(--failed)">失败 '+x.fails+'</b>':'')+'</div>':'';
-    var busyDis=function(op){ return SCHED_BUSY?' disabled':''; };
+      '<div class="es">在「技能调用」为某个技能配置 cron 排班后，将出现在此处统一管理（含启用/停用/立即运行/删除）。</div></div>';
+  var shown=SCHEDULES_DATA.filter(_schPass);
+  var rows=shown.map(function(x){
+    var lastFail=!!x.lastError||(x.fails||0)>0;
+    /* 状态点用真实色变量内联（设计的 .sdot 颜色来自父 .sl-* 类，此处不依赖缺失的修饰类）：
+       启用+正常 -> --running；启用+有失败 -> --failed；停用 -> --idle */
+    var dotColor=x.enabled?(lastFail?'var(--failed)':'var(--running)'):'var(--idle)';
+    var dotTitle=x.enabled?(lastFail?'启用 · 有失败':'启用'):'停用';
+    var open=!!SCHED_OPEN[x.id];
+    var stats='<span class="num">'+x.fires+'</span> 次'+(x.fails?' · <b style="color:var(--failed)">失败 '+x.fails+'</b>':'');
+    var busyDis=SCHED_BUSY?' disabled':'';
     var toggleOp=x.enabled?'disable':'enable', toggleLbl=x.enabled?'停用':'启用';
-    return '<tr><td><b style="color:var(--heading);font-weight:550">'+esc(x.skill)+'</b>'+
-        '<div style="font-size:11px;color:var(--faint)">'+esc(x.desc)+'</div>'+
-        (lastFail?'<div style="font-size:10.5px;color:var(--failed);margin-top:2px" title="'+esc(x.lastError)+'">⚠ '+esc(String(x.lastError).slice(0,72))+'</div>':'')+stats+'</td>'+
-      '<td class="tnum">'+esc(x.cron)+'</td><td class="tnum">'+esc(x.next)+'</td>'+
-      '<td style="color:'+(lastFail?'var(--failed)':'var(--faint)')+'">'+esc(x.last)+'</td>'+
-      '<td><button class="ibtn" data-act="schAction" data-op="run-now" data-id="'+esc(x.id)+'" style="height:24px"'+busyDis()+'>运行</button> '+
-        '<button class="ibtn" data-act="schAction" data-op="'+toggleOp+'" data-id="'+esc(x.id)+'" style="height:24px"'+busyDis()+'>'+toggleLbl+'</button> '+
-        '<button class="ibtn" data-act="schAction" data-op="delete" data-id="'+esc(x.id)+'" style="height:24px"'+busyDis()+'>删除</button></td></tr>';
+    var name='<span class="sdot" title="'+dotTitle+'" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:'+dotColor+';margin-right:6px;vertical-align:middle" aria-hidden="true"></span><b style="color:var(--heading);font-weight:550">'+esc(x.skill)+'</b>'+
+        '<span class="src src-ready" style="margin-left:6px">'+esc(x.kind)+'</span>'+
+        '<button class="ibtn" data-act="schToggleDetail" data-id="'+esc(x.id)+'" style="height:20px;margin-left:6px" title="字段详情">'+(open?'收起':'详情')+'</button>'+
+        '<div style="font-size:11px;color:var(--faint);margin-top:2px">'+esc(x.target)+(x.tz?' · '+esc(x.tz):'')+'</div>'+
+        (lastFail&&x.lastError?'<div style="font-size:10.5px;color:var(--failed);margin-top:2px" title="'+esc(x.lastError)+'">⚠ '+esc(String(x.lastError).slice(0,80))+'</div>':'')+
+        (open?schedRowDetail(x):'');
+    var actions='<button class="ibtn" data-act="schAction" data-op="run-now" data-id="'+esc(x.id)+'" style="height:24px"'+busyDis+'>运行</button> '+
+        '<button class="ibtn" data-act="schAction" data-op="'+toggleOp+'" data-id="'+esc(x.id)+'" style="height:24px"'+busyDis+'>'+toggleLbl+'</button> '+
+        '<button class="ibtn" data-act="schObs" data-id="'+esc(x.id)+'" style="height:24px">观测台 ↗</button> '+
+        '<button class="ibtn" data-act="schAction" data-op="delete" data-id="'+esc(x.id)+'" style="height:24px"'+busyDis+'>删除</button>';
+    return '<tr><td>'+name+'</td>'+
+      '<td class="tnum">'+esc(x.cron)+'</td>'+
+      '<td class="tnum">'+esc(x.next)+'</td>'+
+      '<td style="color:'+(x.last.indexOf('失败')>=0?'var(--failed)':'var(--faint)')+'">'+esc(x.last)+'<div style="font-size:10.5px;color:var(--faint);margin-top:1px">'+stats+'</div></td>'+
+      '<td>'+actions+'</td></tr>';
   }).join('');
-  var table='<div class="protable-wrap"><table class="protable"><thead><tr><th>排班</th><th>cron</th><th>下次</th><th>上次</th><th>操作</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
-  return toolbar+table;
+  var head='<thead><tr><th>排班</th><th>cron</th><th>下次</th><th>上次 / 触发</th><th>操作</th></tr></thead>';
+  var bodyRows=shown.length?rows:'<tr><td colspan="5"><div class="empty" style="padding:22px"><div class="es">当前筛选下没有排班。</div></div></td></tr>';
+  return schedFilterBar()+'<div class="protable-wrap"><table class="protable">'+head+'<tbody>'+bodyRows+'</tbody></table></div>';
 }
 function viewSchedules(){
-  return {html:moduleSubHeader('schedules','<span class="inline-refresh">GET /api/schedules · 动作 202 receipt '+srcBadge('ready')+'</span>')+
+  return {html:moduleSubHeader('schedules','<span class="inline-refresh">GET /api/schedules · 实时轮询 · 动作 202 receipt '+srcBadge('ready')+'</span>')+
     '<div class="view-scroll" id="schedules-root">'+schedulesBody()+'</div>', mount:function(root){
-      function re(){ var b=root.querySelector('#schedules-root'); if(b) b.innerHTML=schedulesBody(); }
+      /* re() 同时承担轮询自停职责：SPA 的 render() 切视图时只替换 #app.innerHTML，不做全局 timer
+         拆除，所以一旦本视图的 #schedules-root 不在文档里（已离开排班页），就停掉 3s 轮询，避免后台泄漏。 */
+      function re(){ var b=document.getElementById('schedules-root');
+        if(!b){ schedStopPoll(); return; } b.innerHTML=schedulesBody(); }
       loadSchedules(re);
+      schedStartPoll(re);                 /* 3s 轮询：对齐真实只读 /schedules 页 */
       root.addEventListener('click',function(ev){ var act=ev.target.closest('[data-act]'); if(!act||act.hasAttribute('disabled'))return; var a=act.getAttribute('data-act');
         if(a==='schRefresh'){ SCHED_LOADED=false; re(); loadSchedules(re); }
+        else if(a==='schFilter'){ schedSetFilter(act.getAttribute('data-f'), re); }
+        else if(a==='schToggleDetail'){ var did=act.getAttribute('data-id'); if(did){ SCHED_OPEN[did]=!SCHED_OPEN[did]; re(); } }
+        else if(a==='schObs'){ var oid=act.getAttribute('data-id'); if(oid) navigate(['observatory'],{schedule:_schObs(oid)}); }
         else if(a==='schAction'){ var id=act.getAttribute('data-id'), op=act.getAttribute('data-op'); if(id&&op) schedAction(id, op, re); }
       });
     }};
@@ -3608,10 +3684,11 @@ function viewVoice(){
 /* 内嵌真页(同源共享 token);onload 注入 CSS 隐藏真页自带 .topbar(brand+suite-nav),消除与 /admin 左栏的双层导航。 */
 function embedTrim(f){ try{ var d=f.contentDocument; if(d&&d.head){ var s=d.createElement('style'); s.textContent='.topbar{display:none!important}'; d.head.appendChild(s); } }catch(e){} }
 function suiteFrame(src,title){ return '<iframe class="suite-embed" src="'+src+'" title="'+title+'" onload="embedTrim(this)"></iframe>'; }
-/* 仅这三页真页确实更完整(观测台全 trace/token graph、CQRS 4 面板、Studio 对话编排)→用真页;其余模块(状态/技能/排班/通道/语音)保留更优的本地实现。 */
+/* 真页更完整的用真页(观测台全 trace/token graph、CQRS 4 面板、Studio 对话编排、Voice 真在场/WebRTC——我的预览版全 mock 不可用)→iframe;状态/技能/排班/通道保留更优本地实现。 */
 function viewObservatory(){ return {html:suiteFrame('/workflow/observatory','运行观测台')}; }
 function viewCqrs(){ if(!(ACCOUNT&&ACCOUNT.admin)) return {html:moduleSubHeader('cqrs','')+'<div class="view-scroll">'+auth403('CQRS 投影管道仅平台管理员可见。')+'</div>'}; return {html:suiteFrame('/cqrs','投影管道 CQRS')}; }
 function viewStudio(){ return {html:suiteFrame('/workflow/studio','编排工作台')}; }
+function viewVoice(){ return {html:suiteFrame('/voice','语音台')}; }
 
 function opsView(module){
   switch(module){
