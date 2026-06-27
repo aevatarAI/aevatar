@@ -49,6 +49,7 @@ using Aevatar.Mainnet.Host.Api.Cqrs;
 using Aevatar.Mainnet.Host.Api.Messages;
 using Aevatar.Mainnet.Host.Api.Responses;
 using Aevatar.Mainnet.Host.Api.Scheduled;
+using Aevatar.Mainnet.Host.Api.Skills;
 using Aevatar.Mainnet.Host.Api.Status;
 using Aevatar.Mainnet.Host.Api.Voice;
 using Aevatar.Studio.Application.Studio.Abstractions;
@@ -126,6 +127,10 @@ public static class MainnetHostBuilderExtensions
         });
         builder.AddGAgentServiceCapabilityBundle();
         builder.AddStudioCapability();
+
+        // 06-26 ornn skills invocation page: host-side catalog read surface (composes the Ornn skill client).
+        builder.Services.AddSingleton<IUserSkillCatalogQueryService, UserSkillCatalogQueryService>();
+        builder.Services.AddSingleton<IUserSkillRunService, UserSkillRunService>();
 
         // Authentication: config-driven, provider-agnostic
         builder.Services.AddNyxIdAuthentication();
@@ -367,6 +372,7 @@ public static class MainnetHostBuilderExtensions
         app.MapDeviceEventEndpoints();
         app.MapIdentityOAuthEndpoints();
         app.MapSkillRunnerExternalTriggerEndpoints();
+        app.MapWorkflowSkillsEndpoints();
         app.MapStatusEndpoints();
 
         // Voice service registration is conditional on a configured provider
