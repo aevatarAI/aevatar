@@ -711,7 +711,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     // still answer. Keep every system message (anchored instructions) plus the most-recent
     // keepRecent non-system messages, preserving order, dropping the older middle. Returns the number
     // of messages dropped (for logging).
-    private static int TrimMessagesToRecentFloor(
+    internal static int TrimMessagesToRecentFloor(
         Google.Protobuf.Collections.RepeatedField<AgentRunChatMessage> messages,
         int keepRecent)
     {

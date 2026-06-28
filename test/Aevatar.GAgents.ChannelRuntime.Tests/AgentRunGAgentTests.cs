@@ -451,6 +451,72 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
+    public async Task HandleNextLlmStepAsync_EmptyReplyRetryStep_FailsWithoutSecondRetry()
+    {
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        EventEnvelope? handled = null;
+        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => handled = call.Arg<EventEnvelope>());
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var executor = new PausedReplyGenerationExecutor();
+        var runtime = CreateRunAgentWithExecutor(
+            actorRuntime,
+            executor,
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions());
+        SetState(runtime, new AgentRunGAgentState
+        {
+            RunId = "run-empty-retry-used",
+            CorrelationId = "corr-empty-retry-used",
+            TargetActorId = "actor-1",
+            Status = AgentRunStatus.ReplyGenerationRequested,
+            GenerationAttempt = 1,
+            GenerationStep = new AgentRunReplyStepState
+            {
+                RunId = "run-empty-retry-used",
+                CorrelationId = "corr-empty-retry-used",
+                TargetActorId = "actor-1",
+                Attempt = 1,
+                NextStepIndex = 3,
+                MaxToolRounds = 4,
+                EmptyReplyRetry = true,
+            },
+        });
+
+        await runtime.HandleNextLlmStepAsync(new AgentRunNextLlmStepRequestedEvent
+        {
+            RunId = "run-empty-retry-used",
+            CorrelationId = "corr-empty-retry-used",
+            TargetActorId = "actor-1",
+            Attempt = 1,
+            StepIndex = 4,
+            Request = new NeedsLlmReplyEvent
+            {
+                CorrelationId = "corr-empty-retry-used",
+                RunId = "run-empty-retry-used",
+                TargetActorId = "actor-1",
+                RegistrationId = "reg-1",
+                Activity = BuildRelayActivity(),
+            },
+            LlmStepResult = new AgentRunLlmStepResult
+            {
+                AccumulatedText = string.Empty,
+                Content = string.Empty,
+                ReasoningContent = string.Empty,
+                FinishReason = "stop",
+                HasStreamedTextContent = false,
+            },
+        });
+
+        executor.LlmStepExecutions.Should().BeEmpty("EmptyReplyRetry is the one-shot recovery gate");
+        handled.Should().NotBeNull();
+        var ready = handled!.Payload.Unpack<LlmReplyReadyEvent>();
+        ready.TerminalState.Should().Be(LlmReplyTerminalState.Failed);
+        ready.ErrorCode.Should().Be("empty_reply");
+        ready.ErrorSummary.Should().Contain("Reply generator returned an empty response");
+    }
+
+    [Fact]
     public async Task DispatchAsync_ShouldCreateRunActorAndDispatchStartCommand()
     {
         var actorRuntime = new DispatchingActorRuntime();

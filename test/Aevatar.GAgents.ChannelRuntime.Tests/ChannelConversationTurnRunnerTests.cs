@@ -1556,6 +1556,36 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunInboundAsync_ShouldEngageGroupCardAction_EvenWithoutMention()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            botIdentityResolver: BuildBotIdentityResolver("ou_bot_self"));
+        var activity = BuildCardActionActivity("evt-card-group-button-1");
+        activity.Conversation = ConversationReference.Create(
+            ChannelId.From("lark"),
+            BotInstanceId.From("reg-1"),
+            ConversationScope.Group,
+            partition: "oc_group_chat_1",
+            "group",
+            "oc_group_chat_1");
+        activity.Content.CardAction.ActionKind = ActionElementKind.Button;
+        activity.Content.CardAction.ActionId = "confirm_deploy";
+        activity.Content.CardAction.SubmittedValue = "deploy-staging";
+
+        var result = await runner.RunInboundAsync(activity, CancellationToken.None);
+
+        result.SentActivityId.Should().NotStartWith(GateIgnorePrefix);
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.Activity.Content.Text.Should().Be("[card_action] confirm_deploy: deploy-staging");
+        adapter.Replies.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task RunInboundAsync_ShouldNotPromoteButtonToLlm_WhenTypedWorkflowResumePayloadAttached()
     {
         // A button carrying a typed payload belongs to its dedicated router; if that
