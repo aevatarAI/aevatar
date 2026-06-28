@@ -2066,6 +2066,9 @@ bash tools/ci/tool_approval_wiring_guard.sh
 echo "Running Nyx relay replay authority guard..."
 python3 tools/ci/guards/nyx_relay_replay_authority_guard.py
 
+echo "Running Lark agent path contract guard..."
+bash tools/ci/lark_agent_path_contract_guard.sh
+
 echo "Running docs lint guard..."
 bash tools/docs/lint.sh
 

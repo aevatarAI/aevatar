@@ -6,11 +6,14 @@ using Aevatar.AI.Core.Tools;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
+using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
+using StudioConfig = Aevatar.Studio.Application.Studio.Abstractions.UserConfig;
 using Xunit;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
@@ -141,29 +144,177 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
             .ReconcileRevokedAsync(default!, default!, default);
     }
 
+    [Fact]
+    public async Task BuildInitialStepState_WhenCapabilityBrokerMissing_KeepsSenderTokenEmpty()
+    {
+        var generator = new EchoStepPlanReplyGenerator();
+        var executor = CreateExecutor(generator, broker: null, Substitute.For<IBindingRevocationReconciler>());
+
+        var state = await executor.BuildInitialStepStateAsync(
+            BuildRequest(senderBindingId: SenderBindingId, senderTenant: "ou_tenant_x"),
+            CancellationToken.None);
+
+        generator.CapturedLlmControl.Should().NotBeNull();
+        generator.CapturedLlmControl!.SenderNyxIdAccessToken.Should().BeNull();
+        AgentToolExecutionContextMapper.FromPayload(state.ToolContext)
+            .Credentials.SenderNyxIdAccessToken.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task BuildInitialStepState_WhenSenderSubjectCannotBeRebuilt_DoesNotCallBroker()
+    {
+        var broker = Substitute.For<INyxIdCapabilityBroker>();
+        var generator = new EchoStepPlanReplyGenerator();
+        var executor = CreateExecutor(generator, broker, Substitute.For<IBindingRevocationReconciler>());
+
+        var state = await executor.BuildInitialStepStateAsync(
+            BuildRequest(
+                senderBindingId: SenderBindingId,
+                senderTenant: "ou_tenant_x",
+                platform: null,
+                senderId: "ou_user_y"),
+            CancellationToken.None);
+
+        generator.CapturedLlmControl.Should().NotBeNull();
+        generator.CapturedLlmControl!.SenderNyxIdAccessToken.Should().BeNull();
+        AgentToolExecutionContextMapper.FromPayload(state.ToolContext)
+            .Credentials.SenderNyxIdAccessToken.Should().BeNull();
+        await broker.DidNotReceiveWithAnyArgs()
+            .IssueShortLivedByBindingIdAsync(default!, default!, default!, default);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task BuildInitialStepState_WhenRemintedSenderTokenIsEmpty_KeepsOwnerFallback(string returnedToken)
+    {
+        var broker = Substitute.For<INyxIdCapabilityBroker>();
+        broker
+            .IssueShortLivedByBindingIdAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                SenderBindingId,
+                Arg.Any<CapabilityScope>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new CapabilityHandle { AccessToken = returnedToken }));
+        var generator = new EchoStepPlanReplyGenerator();
+        var executor = CreateExecutor(generator, broker, Substitute.For<IBindingRevocationReconciler>());
+
+        var state = await executor.BuildInitialStepStateAsync(
+            BuildRequest(senderBindingId: SenderBindingId, senderTenant: "ou_tenant_x"),
+            CancellationToken.None);
+
+        generator.CapturedLlmControl.Should().NotBeNull();
+        generator.CapturedLlmControl!.SenderNyxIdAccessToken.Should().BeNull();
+        AgentToolExecutionContextMapper.FromPayload(state.ToolContext)
+            .Credentials.SenderNyxIdAccessToken.Should().BeNull();
+        AgentRunReplyStepMappers.LlmControlFromProto(state).SenderNyxIdAccessToken.Should().BeNull();
+        LLMControlContextMapper.FromPayload(state.OwnerFallbackLlmControl)
+            .SenderNyxIdAccessToken.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task BuildInitialStepState_WhenBotOwnerScopeResolves_AppliesUserConfigToLlmControl()
+    {
+        var scopeResolver = Substitute.For<INyxIdRelayScopeResolver>();
+        scopeResolver.ResolveScopeIdByApiKeyAsync("api-key-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<string?>("owner-scope-1"));
+        var userConfigQueryPort = Substitute.For<IUserConfigQueryPort>();
+        userConfigQueryPort.GetAsync("owner-scope-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new StudioConfig(
+                DefaultModel: " owner-model ",
+                PreferredLlmRoute: " /api/v1/proxy/s/owner ",
+                MaxToolRounds: 7)));
+        var generator = new EchoStepPlanReplyGenerator();
+        var executor = CreateExecutor(
+            generator,
+            broker: null,
+            Substitute.For<IBindingRevocationReconciler>(),
+            scopeResolver,
+            userConfigQueryPort);
+
+        var state = await executor.BuildInitialStepStateAsync(
+            BuildRequest(senderBindingId: null, senderTenant: null, botId: "api-key-1"),
+            CancellationToken.None);
+
+        generator.CapturedLlmControl.Should().NotBeNull();
+        generator.CapturedLlmControl!.ModelOverride.Should().Be("owner-model");
+        generator.CapturedLlmControl.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/owner");
+        generator.CapturedLlmControl.MaxToolRoundsOverride.Should().Be(7);
+        var stateControl = AgentRunReplyStepMappers.LlmControlFromProto(state);
+        stateControl.ModelOverride.Should().Be("owner-model");
+        stateControl.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/owner");
+        stateControl.MaxToolRoundsOverride.Should().Be(7);
+    }
+
+    [Fact]
+    public async Task BuildInitialStepState_WhenBotOwnerScopeIsUnresolved_KeepsIncomingLlmControl()
+    {
+        var scopeResolver = Substitute.For<INyxIdRelayScopeResolver>();
+        scopeResolver.ResolveScopeIdByApiKeyAsync("api-key-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<string?>(null));
+        var userConfigQueryPort = Substitute.For<IUserConfigQueryPort>();
+        var generator = new EchoStepPlanReplyGenerator();
+        var executor = CreateExecutor(
+            generator,
+            broker: null,
+            Substitute.For<IBindingRevocationReconciler>(),
+            scopeResolver,
+            userConfigQueryPort);
+
+        var state = await executor.BuildInitialStepStateAsync(
+            BuildRequest(
+                senderBindingId: null,
+                senderTenant: null,
+                botId: "api-key-1",
+                llmControl: new LLMControlContext(
+                    NyxIdAccessToken: null,
+                    NyxIdOrgToken: null,
+                    SenderNyxIdAccessToken: null,
+                    ModelOverride: "incoming-model",
+                    NyxIdRoutePreference: "/api/v1/proxy/s/incoming",
+                    MaxToolRoundsOverride: 3,
+                    UserMemoryPrompt: null)),
+            CancellationToken.None);
+
+        generator.CapturedLlmControl.Should().NotBeNull();
+        generator.CapturedLlmControl!.ModelOverride.Should().Be("incoming-model");
+        generator.CapturedLlmControl.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/incoming");
+        generator.CapturedLlmControl.MaxToolRoundsOverride.Should().Be(3);
+        AgentRunReplyStepMappers.LlmControlFromProto(state).Should().Be(generator.CapturedLlmControl);
+        await userConfigQueryPort.DidNotReceiveWithAnyArgs().GetAsync(default!, default);
+    }
+
     private static AgentRunReplyGenerationExecutor CreateExecutor(
         EchoStepPlanReplyGenerator generator,
-        INyxIdCapabilityBroker broker,
-        IBindingRevocationReconciler reconciler) =>
+        INyxIdCapabilityBroker? broker,
+        IBindingRevocationReconciler? reconciler,
+        INyxIdRelayScopeResolver? scopeResolver = null,
+        IUserConfigQueryPort? userConfigQueryPort = null) =>
         new(
             Substitute.For<IActorDispatchPort>(),
             generator,
             interactiveReplyCollector: null,
             relayOptions: null,
             NullLogger<AgentRunReplyGenerationExecutor>.Instance,
-            scopeResolver: null,
-            userConfigQueryPort: null,
+            scopeResolver: scopeResolver,
+            userConfigQueryPort: userConfigQueryPort,
             timeProvider: null,
             capabilityBroker: broker,
             bindingRevocationReconciler: reconciler);
 
-    private static AgentRunReplyGenerationExecutionRequest BuildRequest(string? senderBindingId, string? senderTenant)
+    private static AgentRunReplyGenerationExecutionRequest BuildRequest(
+        string? senderBindingId,
+        string? senderTenant,
+        string? platform = "lark",
+        string? senderId = "ou_user_y",
+        string botId = "reg-1",
+        LLMControlContext? llmControl = null)
     {
         var toolContext = AgentToolExecutionContext.Empty with
         {
             Channel = new AgentToolChannelContext(
-                Platform: "lark",
-                SenderId: "ou_user_y",
+                Platform: platform,
+                SenderId: senderId,
                 RegistrationScopeId: "scope-1",
                 MessageId: "msg-1",
                 PlatformMessageId: null),
@@ -180,10 +331,11 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
             Activity = new ChatActivity
             {
                 Id = "activity-1",
+                Bot = BotInstanceId.From(botId),
                 Content = new MessageContent { Text = "/chrono-llm-token-usage" },
             },
             ToolContext = toolContext.ToPayload(),
-            LlmControl = LLMControlContext.Empty.ToPayload(),
+            LlmControl = (llmControl ?? LLMControlContext.Empty).ToPayload(),
         };
 
         return new AgentRunReplyGenerationExecutionRequest(
