@@ -2,6 +2,8 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.EventSourcing;
+using Aevatar.Foundation.Abstractions.Maintenance;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.GAgents.StatusDashboard.DependencyInjection;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -25,6 +27,15 @@ public sealed class StatusDashboardServiceCollectionExtensionsTests
         provider.GetServices<IProjectionActivationPlanProvider>()
             .Should().ContainSingle(planProvider =>
                 planProvider is HealthProbeCommittedStateProjectionActivationPlanProvider);
+        provider.GetServices<IRetiredActorSpec>()
+            .Should().ContainSingle(spec => spec is StatusDashboardRetiredActorSpec);
+
+        provider.GetRequiredService<IAgentKindRegistry>()
+            .TryGetKindForAgentType(
+                typeof(ProjectionMaterializationScopeGAgent<HealthProbeMaterializationContext>),
+                out var scopeKind)
+            .Should().BeTrue();
+        scopeKind.Should().Be("projection.materialization-scope.health-probe-materialization-context");
     }
 
     [Fact]

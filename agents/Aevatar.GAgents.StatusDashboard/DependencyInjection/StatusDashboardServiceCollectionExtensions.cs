@@ -2,6 +2,7 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Abstractions.Maintenance;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.GAgents.StatusDashboard.Configuration;
@@ -66,6 +67,9 @@ public static class StatusDashboardServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionActivationPlanProvider,
             HealthProbeCommittedStateProjectionActivationPlanProvider>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IRetiredActorSpec,
+            StatusDashboardRetiredActorSpec>());
         services.AddHostedService<HealthProbeStartupService>();
 
         return services;
