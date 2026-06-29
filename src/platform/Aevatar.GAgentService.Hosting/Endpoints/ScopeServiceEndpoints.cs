@@ -35,6 +35,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.Text.Json;
+using WorkflowRunOrigins = Aevatar.Workflow.Abstractions.WorkflowRunOrigins;
 using WorkflowSagaStatus = Aevatar.Workflow.Abstractions.WorkflowSagaStatus;
 
 namespace Aevatar.GAgentService.Hosting.Endpoints;
@@ -42,6 +43,10 @@ namespace Aevatar.GAgentService.Hosting.Endpoints;
 public static class ScopeServiceEndpoints
 {
     private const string DefaultScopeServiceSmokePrompt = "Hello from Studio Bind.";
+    private const string RunKindMember = WorkflowRunOrigins.MemberInvoke;
+    private const string RunKindTeam = WorkflowRunOrigins.TeamInvoke;
+    private const string RunKindDefault = WorkflowRunOrigins.DefaultInvoke;
+    private const string RunKindService = WorkflowRunOrigins.ServiceInvoke;
     private const string StreamFrameFormatWorkflow = "workflow-run-event";
     private const string StreamFrameFormatAgui = "agui";
     private const string LegacyConnectorHttpAuthorizationBlockedKey = "connector.http.authorization";
@@ -157,10 +162,10 @@ public static class ScopeServiceEndpoints
                 return;
             }
 
-            var normalizedPrompt = request.Prompt?.Trim() ?? string.Empty;
+            var normalizedStartInput = request.ResolveStartInput();
             var llmControl = await BuildScopedLlmControlAsync(http, ct);
             var chatRequest = new WorkflowChatRunRequest(
-                Prompt: normalizedPrompt,
+                Prompt: normalizedStartInput,
                 Source: WorkflowChatSource.InlineYamlBundle(request.WorkflowYamls),
                 SessionId: request.SessionId,
                 InputParts: MapWorkflowChatInputParts(requestInput.InputParts),
@@ -184,7 +189,7 @@ public static class ScopeServiceEndpoints
                 http,
                 new ChatInput
                 {
-                    Prompt = normalizedPrompt,
+                    Prompt = normalizedStartInput,
                     InputParts = requestInput.InputParts,
                     WorkflowYamls = chatRequest.Source.InlineBundle?.YamlDocuments
                         .Select(static document => document.Yaml)
@@ -710,7 +715,7 @@ public static class ScopeServiceEndpoints
         //   Old pattern: ScopeServiceEndpoints.HandleInvokeDefaultChatStreamAsync 在 unbound default service 情况下 launch Host-inline DefaultChatWorkflowYaml 作为 hidden fallback,把 Host 当成 business orchestrator。
         //   New principle: Host endpoint 仅做 routing + bound service stream;unbound case 返回 explicit error;stream registration / static orchestration 归 Application owner。
         var serviceId = ResolveDefaultScopeServiceId(options.Value);
-        await HandleInvokeStreamAsync(
+        await HandleInvokeStreamCoreAsync(
             http,
             scopeId,
             serviceId,
@@ -726,6 +731,7 @@ public static class ScopeServiceEndpoints
             scriptServiceRunService,
             staticGAgentStreamInvocationPort,
             options,
+            RunKindDefault,
             ct);
     }
 
@@ -740,13 +746,15 @@ public static class ScopeServiceEndpoints
         [FromServices] ServiceInvokeReadinessErrorMapper readinessErrorMapper,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct) =>
-        HandleInvokeAsync(
+        HandleInvokeAsyncCore(
             http,
             scopeId,
             ResolveDefaultScopeServiceId(options.Value),
             endpointId,
             request,
             appId: null,
+            acceptedResourcePath: null,
+            RunKindDefault,
             invocationPort,
             catalogReader,
             revisionCatalogReader,
@@ -780,7 +788,7 @@ public static class ScopeServiceEndpoints
             var memberResolution = await memberPublishedServiceResolver.ResolveAsync(
                 new MemberPublishedServiceResolveRequest(scopeId, memberId),
                 ct);
-            await HandleInvokeStreamAsync(
+            await HandleInvokeStreamCoreAsync(
                 http,
                 memberResolution.ScopeId,
                 memberResolution.PublishedServiceId,
@@ -796,6 +804,7 @@ public static class ScopeServiceEndpoints
                 scriptServiceRunService,
                 staticGAgentStreamInvocationPort,
                 options,
+                RunKindMember,
                 ct);
         }
         catch (InvalidOperationException ex)
@@ -839,6 +848,7 @@ public static class ScopeServiceEndpoints
                 request,
                 null,
                 null,
+                RunKindMember,
                 invocationPort,
                 catalogReader,
                 revisionCatalogReader,
@@ -876,7 +886,7 @@ public static class ScopeServiceEndpoints
                 return;
 
             var teamResolution = await teamEntryMemberResolver.ResolveAsync(scopeId, teamId, endpointId, ct);
-            await HandleInvokeStreamAsync(
+            await HandleInvokeStreamCoreAsync(
                 http,
                 teamResolution.ScopeId,
                 teamResolution.PublishedServiceId,
@@ -892,6 +902,7 @@ public static class ScopeServiceEndpoints
                 scriptServiceRunService,
                 staticGAgentStreamInvocationPort,
                 options,
+                RunKindTeam,
                 ct);
         }
         catch (TeamEntryMemberResolutionException ex)
@@ -942,6 +953,7 @@ public static class ScopeServiceEndpoints
                 request,
                 null,
                 BuildScopeServiceRunBasePath(teamResolution.ScopeId, teamResolution.PublishedServiceId, teamResolution.EntryMemberId),
+                RunKindTeam,
                 invocationPort,
                 catalogReader,
                 revisionCatalogReader,
@@ -1746,7 +1758,7 @@ public static class ScopeServiceEndpoints
         return await serviceRunQueryPort.GetByCommandIdAsync(scopeId, serviceId, normalized, ct);
     }
 
-    private static async Task HandleInvokeStreamAsync(
+    private static Task HandleInvokeStreamAsync(
         HttpContext http,
         string scopeId,
         string serviceId,
@@ -1762,6 +1774,43 @@ public static class ScopeServiceEndpoints
         [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus> scriptServiceRunService,
         [FromServices] IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
+        CancellationToken ct) =>
+        HandleInvokeStreamCoreAsync(
+            http,
+            scopeId,
+            serviceId,
+            endpointId,
+            multipartFileInputParser,
+            appId,
+            resolutionService,
+            readinessErrorMapper,
+            admissionAuthorizer,
+            serviceRunRegistrationPort,
+            chatRunService,
+            workflowFileIngressPort,
+            scriptServiceRunService,
+            staticGAgentStreamInvocationPort,
+            options,
+            RunKindService,
+            ct);
+
+    private static async Task HandleInvokeStreamCoreAsync(
+        HttpContext http,
+        string scopeId,
+        string serviceId,
+        string endpointId,
+        WorkflowMultipartFileInputParser multipartFileInputParser,
+        string? appId,
+        [FromServices] ServiceInvocationResolutionService resolutionService,
+        [FromServices] ServiceInvokeReadinessErrorMapper readinessErrorMapper,
+        [FromServices] IInvokeAdmissionAuthorizer admissionAuthorizer,
+        [FromServices] IServiceRunRegistrationPort serviceRunRegistrationPort,
+        [FromServices] IWorkflowChatRunInteractionPort chatRunService,
+        [FromServices] IWorkflowFileIngressPort workflowFileIngressPort,
+        [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus> scriptServiceRunService,
+        [FromServices] IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
+        [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
+        string runKind,
         CancellationToken ct)
     {
         try
@@ -1801,6 +1850,7 @@ public static class ScopeServiceEndpoints
                 scopedHeaders,
                 callerCredential.Credential,
                 request.RevisionId,
+                runKind,
                 appId);
             var target = await resolutionService.ResolveAsync(invocationRequest, ct);
             await admissionAuthorizer.AuthorizeAsync(
@@ -2192,6 +2242,7 @@ public static class ScopeServiceEndpoints
             request,
             appId,
             acceptedResourcePath: null,
+            RunKindService,
             invocationPort,
             catalogReader,
             revisionCatalogReader,
@@ -2207,6 +2258,7 @@ public static class ScopeServiceEndpoints
         InvokeScopeServiceHttpRequest request,
         string? appId,
         string? acceptedResourcePath,
+        string runKind,
         IServiceInvocationPort invocationPort,
         IServiceCatalogQueryReader catalogReader,
         IServiceRevisionCatalogQueryReader revisionCatalogReader,
@@ -2238,6 +2290,7 @@ public static class ScopeServiceEndpoints
                 CommandId = request.CommandId?.Trim() ?? string.Empty,
                 CorrelationId = request.CorrelationId?.Trim() ?? string.Empty,
                 RevisionId = resolvedRevisionId,
+                RunOrigin = runKind,
                 Payload = payload,
                 Caller = new ServiceInvocationCaller
                 {
@@ -3219,6 +3272,7 @@ const response = await fetch("{{invokePath}}", {
             snapshot?.LastError ?? string.Empty,
             snapshot?.SagaStatus ?? WorkflowSagaStatus.Unspecified,
             BuildScopeServiceRunDeadLetter(snapshot),
+            RunKindService,
             ServiceImplementationKind.Workflow.ToString(),
             ServiceRunStatus.Accepted.ToString(),
             string.Empty,
@@ -3269,6 +3323,7 @@ const response = await fetch("{{invokePath}}", {
             workflowSnapshot?.LastError ?? (registryBackedSummary ? snapshot.LastError : string.Empty),
             workflowSnapshot?.SagaStatus ?? WorkflowSagaStatus.Unspecified,
             BuildScopeServiceRunDeadLetter(workflowSnapshot),
+            ResolveServiceRunKind(snapshot),
             snapshot.ImplementationKind.ToString(),
             snapshot.Status.ToString(),
             snapshot.CommandId,
@@ -3342,7 +3397,23 @@ const response = await fetch("{{invokePath}}", {
             summary.LastOutput,
             summary.LastError,
             summary.SagaStatus,
-            summary.DeadLetter);
+            summary.DeadLetter,
+            RunKindMember,
+            summary.ImplementationKind,
+            summary.Status,
+            summary.CommandId,
+            summary.CorrelationId,
+            summary.EndpointId,
+            summary.TargetActorId,
+            summary.CreatedAt);
+    }
+
+    private static string ResolveServiceRunKind(ServiceRunSnapshot snapshot)
+    {
+        if (!string.IsNullOrWhiteSpace(snapshot.ScheduleId))
+            return WorkflowRunOrigins.Provisioned;
+
+        return RunKindService;
     }
 
     private static ScopeServiceRunDeadLetterHttpResponse? BuildScopeServiceRunDeadLetter(
@@ -3515,6 +3586,7 @@ const response = await fetch("{{invokePath}}", {
         IReadOnlyDictionary<string, string>? headers,
         WorkflowCallerCredential? callerCredential,
         string? revisionId,
+        string runKind,
         string? appId = null)
     {
         var payload = new ChatRequestEvent
@@ -3534,6 +3606,7 @@ const response = await fetch("{{invokePath}}", {
             Identity = BuildScopeServiceIdentity(options, scopeId, serviceId, appId),
             EndpointId = endpointId?.Trim() ?? string.Empty,
             RevisionId = revisionId?.Trim() ?? string.Empty,
+            RunOrigin = runKind,
             Payload = Any.Pack(payload),
             Caller = new ServiceInvocationCaller
             {
@@ -4174,12 +4247,31 @@ const response = await fetch("{{invokePath}}", {
         string? PayloadJson = null);
 
     public sealed record ScopeDraftRunHttpRequest(
-        string Prompt,
+        string? Prompt,
         IReadOnlyList<string>? WorkflowYamls,
         string? SessionId = null,
         Dictionary<string, string>? Headers = null,
         string? EventFormat = null,
-        IReadOnlyList<StreamContentPartHttpRequest>? InputParts = null);
+        IReadOnlyList<StreamContentPartHttpRequest>? InputParts = null,
+        string? StartInput = null)
+    {
+        public string ResolveStartInput()
+        {
+            var normalizedPrompt = Prompt?.Trim() ?? string.Empty;
+            var normalizedStartInput = StartInput?.Trim() ?? string.Empty;
+            if (!string.IsNullOrWhiteSpace(normalizedPrompt) &&
+                !string.IsNullOrWhiteSpace(normalizedStartInput) &&
+                !string.Equals(normalizedPrompt, normalizedStartInput, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "prompt and startInput cannot carry different values; use startInput for workflow-level input.");
+            }
+
+            return string.IsNullOrWhiteSpace(normalizedStartInput)
+                ? normalizedPrompt
+                : normalizedStartInput;
+        }
+    }
 
     public sealed record UpsertScopeBindingHttpRequest(
         string ImplementationKind,
@@ -4540,6 +4632,7 @@ const response = await fetch("{{invokePath}}", {
         string LastError,
         WorkflowSagaStatus SagaStatus,
         ScopeServiceRunDeadLetterHttpResponse? DeadLetter,
+        string RunKind,
         string ImplementationKind,
         string Status,
         string CommandId,
@@ -4571,7 +4664,15 @@ const response = await fetch("{{invokePath}}", {
         string LastOutput,
         string LastError,
         WorkflowSagaStatus SagaStatus,
-        ScopeServiceRunDeadLetterHttpResponse? DeadLetter);
+        ScopeServiceRunDeadLetterHttpResponse? DeadLetter,
+        string RunKind,
+        string ImplementationKind,
+        string Status,
+        string CommandId,
+        string CorrelationId,
+        string EndpointId,
+        string TargetActorId,
+        DateTimeOffset? CreatedAt = null);
 
     public sealed record ScopeServiceRunDeadLetterHttpResponse(
         string FailedCompensationStepId,

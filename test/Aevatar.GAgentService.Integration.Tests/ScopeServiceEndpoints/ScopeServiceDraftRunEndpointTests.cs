@@ -205,6 +205,61 @@ public sealed class ScopeServiceDraftRunEndpointTests : ScopeServiceEndpointTest
     }
 
     [Fact]
+    public async Task ScopeDraftRunEndpoint_ShouldAcceptStartInputAsWorkflowLevelInput()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.InteractionService.ResultFactory = async (_, _, onAcceptedAsync, ct) =>
+        {
+            var receipt = new WorkflowChatRunAcceptedReceipt("run-actor-1", "main", "cmd-1", "corr-1");
+            if (onAcceptedAsync != null)
+                await onAcceptedAsync(receipt, ct);
+
+            return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                .Success(
+                    receipt,
+                    new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(
+                        WorkflowProjectionCompletionStatus.Completed,
+                        true));
+        };
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/workflow/draft-run", new
+        {
+            startInput = "typed workflow input",
+            workflowYamls = new[]
+            {
+                "name: main\nsteps:\n  - run: echo hello",
+            },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        host.InteractionService.LastRequest.Should().NotBeNull();
+        host.InteractionService.LastRequest!.Prompt.Should().Be("typed workflow input");
+    }
+
+    [Fact]
+    public async Task ScopeDraftRunEndpoint_ShouldRejectConflictingPromptAndStartInput()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/workflow/draft-run", new
+        {
+            prompt = "legacy prompt",
+            startInput = "typed workflow input",
+            workflowYamls = new[]
+            {
+                "name: main\nsteps:\n  - run: echo hello",
+            },
+        });
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        body.Should().NotBeNull();
+        body!["code"].Should().Be("INVALID_SCOPE_DRAFT_RUN_REQUEST");
+        body["message"].Should().Contain("prompt and startInput cannot carry different values");
+        host.InteractionService.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
     public async Task ScopeDraftRunEndpoint_ShouldReturnBadRequest_WhenWorkflowYamlsAreMissing()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();

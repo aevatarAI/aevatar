@@ -610,6 +610,7 @@ public sealed class ScopeServiceStreamInvocationEndpointTests : ScopeServiceEndp
             new Dictionary<string, string>(),
             null,
             null,
+            "service-invoke",
             null);
 
         FluentActions.Invoking(() => InvokePrivateStaticVoid("EnsureWorkflowStreamTarget", target, request))

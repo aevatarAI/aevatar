@@ -363,11 +363,13 @@ public sealed class ScopeServiceEndpointPrivateHelperTests : ScopeServiceEndpoin
             new Dictionary<string, string> { ["trace-id"] = "abc" },
             new WorkflowCallerCredential("connector-token"),
             " rev-1 ",
+            "member-invoke",
             " app-x ");
         invocation.Identity.AppId.Should().Be("app-x");
         invocation.Identity.ServiceId.Should().Be("orders");
         invocation.EndpointId.Should().Be("chat");
         invocation.RevisionId.Should().Be("rev-1");
+        invocation.RunOrigin.Should().Be("member-invoke");
         var payload = invocation.Payload!.Unpack<ChatRequestEvent>();
         payload.Metadata["trace-id"].Should().Be("abc");
         payload.ConnectorHttpAuthorization.Should().Be("Bearer connector-token");

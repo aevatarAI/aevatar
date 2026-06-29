@@ -123,6 +123,7 @@ public sealed class ScopeServiceInvocationEndpointTests : ScopeServiceEndpointTe
             ServiceId = "orders",
         });
         host.InvocationPort.LastRequest.EndpointId.Should().Be("chat");
+        host.InvocationPort.LastRequest.RunOrigin.Should().Be("service-invoke");
         host.InvocationPort.LastRequest.Payload.TypeUrl.Should().Be("type.googleapis.com/google.protobuf.Empty");
     }
 
@@ -152,6 +153,7 @@ public sealed class ScopeServiceInvocationEndpointTests : ScopeServiceEndpointTe
             ServiceId = "default",
         });
         host.InvocationPort.LastRequest.EndpointId.Should().Be("run");
+        host.InvocationPort.LastRequest.RunOrigin.Should().Be("default-invoke");
     }
 
     [Fact]
@@ -187,6 +189,7 @@ public sealed class ScopeServiceInvocationEndpointTests : ScopeServiceEndpointTe
             ServiceId = "member-a",
         });
         host.InvocationPort.LastRequest.EndpointId.Should().Be("chat");
+        host.InvocationPort.LastRequest.RunOrigin.Should().Be("member-invoke");
     }
 
     [Fact]
@@ -221,6 +224,7 @@ public sealed class ScopeServiceInvocationEndpointTests : ScopeServiceEndpointTe
             ServiceId = "member-a",
         });
         host.InvocationPort.LastRequest.EndpointId.Should().Be("chat");
+        host.InvocationPort.LastRequest.RunOrigin.Should().Be("team-invoke");
     }
 
     [Fact]

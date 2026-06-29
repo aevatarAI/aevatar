@@ -101,6 +101,9 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
         response.Runs[0].RevisionId.Should().Be("rev-1");
         response.Runs[0].DeploymentId.Should().Be("dep-old");
         response.Runs[0].WorkflowName.Should().Be("default-flow");
+        response.Runs[0].RunKind.Should().Be("service-invoke");
+        response.Runs[0].CommandId.Should().Be("run-default-list-1");
+        response.Runs[0].CorrelationId.Should().Be("run-default-list-1");
     }
 
     [Fact]
@@ -226,6 +229,9 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
         response.Runs[0].RevisionId.Should().Be("rev-1");
         response.Runs[0].DeploymentId.Should().Be("dep-member-old");
         response.Runs[0].StateVersion.Should().Be(13);
+        response.Runs[0].RunKind.Should().Be("member-invoke");
+        response.Runs[0].CommandId.Should().Be("run-member-list-1");
+        response.Runs[0].CorrelationId.Should().Be("run-member-list-1");
     }
 
     [Fact]
@@ -287,6 +293,9 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
         response.WorkflowName.Should().Be("member-flow");
         response.StateVersion.Should().Be(14);
         response.LastEventId.Should().Be("evt-14");
+        response.RunKind.Should().Be("member-invoke");
+        response.CommandId.Should().BeEmpty();
+        response.CorrelationId.Should().BeEmpty();
         response.SagaStatus.Should().Be(WorkflowSagaStatus.CompensationDeadLetter);
         response.DeadLetter.Should().NotBeNull();
         response.DeadLetter!.FailedCompensationStepId.Should().Be("cancel_order");
