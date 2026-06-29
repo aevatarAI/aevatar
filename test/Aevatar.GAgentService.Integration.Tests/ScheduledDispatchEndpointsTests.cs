@@ -962,7 +962,7 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
-    public async Task Update_WithWorkflowServiceInvocationAndOmittedAuth_ShouldLeaveAuthOmittedForActorPreservation()
+    public async Task Update_WithWorkflowServiceInvocationAndOmittedAuth_ShouldDefaultScopeOwnerNyxId()
     {
         await using var host = await ScheduleEndpointTestHost.StartAsync();
         host.CatalogReader.Service = CreateServiceCatalog(activeRevisionId: "rev-chat");
@@ -997,7 +997,14 @@ public sealed class ScheduledDispatchEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.Accepted);
         var configuration = host.Schedules.Updated.Should().ContainSingle().Which.Configuration;
         configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
-        configuration.Target.ServiceInvocation!.Auth.Should().BeNull();
+        var auth = configuration.Target.ServiceInvocation!.Auth;
+        auth.Should().NotBeNull();
+        auth!.ScopeOwnerNyxId.Should().NotBeNull();
+        auth.ScopeOwnerNyxId!.Scope.Should().Be("proxy");
+        auth.ScopeOwnerNyxId.OwnerSubject.Should().BeEquivalentTo(new ScheduledServiceInvocationNyxIdSubjectRef(
+            OwnerScope.NyxIdPlatform,
+            string.Empty,
+            "owner-user-1"));
     }
 
     [Fact]
@@ -1042,8 +1049,63 @@ public sealed class ScheduledDispatchEndpointsTests
         invocation.EndpointId.Should().Be("chat");
         invocation.Payload.TypeUrl.Should().Be("type.googleapis.com/aevatar.ai.ChatRequestEvent");
         invocation.Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("refresh standup");
-        invocation.Auth.Should().BeNull();
+        invocation.Auth.Should().NotBeNull();
+        invocation.Auth!.ScopeOwnerNyxId.Should().NotBeNull();
+        invocation.Auth.ScopeOwnerNyxId!.Scope.Should().Be("proxy");
+        invocation.Auth.ScopeOwnerNyxId.OwnerSubject.Should().BeEquivalentTo(new ScheduledServiceInvocationNyxIdSubjectRef(
+            OwnerScope.NyxIdPlatform,
+            string.Empty,
+            "owner-user-1"));
         configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
+    }
+
+    [Fact]
+    public async Task Create_WithWorkflowServiceInvocationAndOmittedAuthWithoutOwner_ShouldReturnBadRequest()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+        var request = CreateWorkflowServiceInvocationRequest();
+        var (catalogReader, revisionCatalogReader) = CreateWorkflowServiceCatalogReaders();
+        var bindingQuery = new FakeExternalIdentityBindingQueryPort();
+        bindingQuery.Bindings[SubjectKey(OwnerSubject("owner-user-1"))] = "bnd-owner-1";
+
+        var result = await CreateAsync(
+            request,
+            service,
+            CreateHttpContext(),
+            bindingQuery,
+            catalogReader: catalogReader,
+            revisionCatalogReader: revisionCatalogReader);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        service.Created.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Update_WithWorkflowServiceInvocationAndOmittedAuthWithoutOwner_ShouldReturnBadRequest()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+        var request = CreateWorkflowServiceInvocationRequest();
+        var (catalogReader, revisionCatalogReader) = CreateWorkflowServiceCatalogReaders();
+        var bindingQuery = new FakeExternalIdentityBindingQueryPort();
+        bindingQuery.Bindings[SubjectKey(OwnerSubject("owner-user-1"))] = "bnd-owner-1";
+
+        var result = await UpdateAsync(
+            "schedule-chat",
+            request,
+            service,
+            CreateHttpContext(),
+            bindingQuery,
+            catalogReader: catalogReader,
+            revisionCatalogReader: revisionCatalogReader);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        service.Updated.Should().BeEmpty();
     }
 
     [Fact]
@@ -1333,18 +1395,61 @@ public sealed class ScheduledDispatchEndpointsTests
             },
         };
 
+    private static ScheduledDispatchConfigurationHttpRequest CreateWorkflowServiceInvocationRequest()
+    {
+        var chat = new ChatRequestEvent { Prompt = "run workflow" };
+        return new ScheduledDispatchConfigurationHttpRequest
+        {
+            ScheduleId = "schedule-chat",
+            DisplayName = "Workflow chat",
+            CronExpression = "0 9 * * *",
+            Timezone = "UTC",
+            ServiceInvocation = new ScheduledDispatchServiceInvocationTargetHttpRequest
+            {
+                Identity = new ServiceIdentity
+                {
+                    TenantId = "tenant",
+                    AppId = "app",
+                    Namespace = "default",
+                    ServiceId = "workflow",
+                },
+                EndpointId = "chat",
+                PayloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                PayloadBase64 = Convert.ToBase64String(chat.ToByteArray()),
+                RevisionId = "rev-chat",
+            },
+        };
+    }
+
+    private static (FakeServiceCatalogQueryReader CatalogReader, FakeServiceRevisionCatalogQueryReader RevisionCatalogReader)
+        CreateWorkflowServiceCatalogReaders()
+    {
+        var catalogReader = new FakeServiceCatalogQueryReader
+        {
+            Service = CreateServiceCatalog(activeRevisionId: "rev-chat"),
+        };
+        var revisionCatalogReader = new FakeServiceRevisionCatalogQueryReader();
+        revisionCatalogReader.UpsertRevision(
+            "tenant:app:default:workflow",
+            "rev-chat",
+            BuildPreparedArtifact(ChatRequestEvent.Descriptor));
+        return (catalogReader, revisionCatalogReader);
+    }
+
     private static Task<IResult> CreateAsync(
         ScheduledDispatchConfigurationHttpRequest request,
         RecordingScheduledDispatchApplicationService service,
         HttpContext? http = null,
         IExternalIdentityBindingQueryPort? bindingQueryPort = null,
-        IScheduledServiceInvocationCredentialExchangePort? credentialExchangePort = null) =>
+        IScheduledServiceInvocationCredentialExchangePort? credentialExchangePort = null,
+        IServiceCatalogQueryReader? catalogReader = null,
+        IServiceRevisionCatalogQueryReader? revisionCatalogReader = null) =>
         ScheduledDispatchEndpoints.Create(
             http ?? CreateHttpContext(),
             request,
             service,
-            new FakeServiceCatalogQueryReader(),
-            new FakeServiceRevisionCatalogQueryReader(),
+            catalogReader ?? new FakeServiceCatalogQueryReader(),
+            revisionCatalogReader ?? new FakeServiceRevisionCatalogQueryReader(),
             bindingQueryPort ?? new FakeExternalIdentityBindingQueryPort(),
             credentialExchangePort ?? new FakeScheduledServiceInvocationCredentialExchangePort());
 
@@ -1354,14 +1459,16 @@ public sealed class ScheduledDispatchEndpointsTests
         RecordingScheduledDispatchApplicationService service,
         HttpContext? http = null,
         IExternalIdentityBindingQueryPort? bindingQueryPort = null,
-        IScheduledServiceInvocationCredentialExchangePort? credentialExchangePort = null) =>
+        IScheduledServiceInvocationCredentialExchangePort? credentialExchangePort = null,
+        IServiceCatalogQueryReader? catalogReader = null,
+        IServiceRevisionCatalogQueryReader? revisionCatalogReader = null) =>
         ScheduledDispatchEndpoints.Update(
             http ?? CreateHttpContext(),
             scheduleId,
             request,
             service,
-            new FakeServiceCatalogQueryReader(),
-            new FakeServiceRevisionCatalogQueryReader(),
+            catalogReader ?? new FakeServiceCatalogQueryReader(),
+            revisionCatalogReader ?? new FakeServiceRevisionCatalogQueryReader(),
             bindingQueryPort ?? new FakeExternalIdentityBindingQueryPort(),
             credentialExchangePort ?? new FakeScheduledServiceInvocationCredentialExchangePort());
 
