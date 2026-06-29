@@ -78,7 +78,7 @@ public sealed class ScheduledDispatchCurrentStateProjector
             ServiceKey = BuildServiceKey(serviceIdentity),
             ServiceId = serviceIdentity?.ServiceId ?? string.Empty,
             ServiceEndpointId = target.ServiceInvocation?.EndpointId ?? string.Empty,
-            Prompt = ExtractPrompt(target.ServiceInvocation?.Payload),
+            Prompt = ExtractPrompt(target.ServiceInvocation?.Payload, state.TriggerEnvelope),
             TargetActorId = state.TargetActorId ?? string.Empty,
             Deleted = state.Deleted,
             StateVersion = stateEvent.Version,
@@ -95,6 +95,22 @@ public sealed class ScheduledDispatchCurrentStateProjector
             .ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal);
         document.FireRecords.Add(CreateFireRecords(state));
         return document;
+    }
+
+    private static string ExtractPrompt(Any? serviceInvocationPayload, EventEnvelope? triggerEnvelope)
+    {
+        var prompt = ExtractPrompt(serviceInvocationPayload);
+        return string.IsNullOrEmpty(prompt)
+            ? ExtractPromptFromTriggerEnvelope(triggerEnvelope)
+            : prompt;
+    }
+
+    private static string ExtractPromptFromTriggerEnvelope(EventEnvelope? triggerEnvelope)
+    {
+        if (triggerEnvelope?.Payload == null || !triggerEnvelope.Payload.Is(ServiceInvocationRequest.Descriptor))
+            return string.Empty;
+
+        return ExtractPrompt(triggerEnvelope.Payload.Unpack<ServiceInvocationRequest>().Payload);
     }
 
     private static string ExtractPrompt(Any? payload)

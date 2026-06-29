@@ -50,6 +50,46 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
     }
 
     [Fact]
+    public async Task ProjectAsync_ShouldMaterializePromptFromTriggerEnvelope_WhenTargetPayloadIsMissing()
+    {
+        var store = new RecordingDocumentStore<ScheduledDispatchDocument>(x => x.Id);
+        var projector = new ScheduledDispatchCurrentStateProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-06-18T00:00:00+00:00")));
+        var identity = new ServiceIdentity
+        {
+            TenantId = "tenant",
+            AppId = "app",
+            Namespace = "default",
+            ServiceId = "svc",
+        };
+        var state = CreateServiceInvocationState("schedule-envelope", identity);
+        state.Target.ServiceInvocation.Payload = null;
+        state.TriggerEnvelope = new EventEnvelope
+        {
+            Payload = Any.Pack(new ServiceInvocationRequest
+            {
+                Identity = identity.Clone(),
+                EndpointId = "chat",
+                Payload = Any.Pack(new ChatRequestEvent { Prompt = "from envelope" }),
+            }),
+        };
+
+        await projector.ProjectAsync(
+            CreateContext("scheduled-dispatch:schedule-envelope"),
+            WrapCommitted(
+                state,
+                version: 10,
+                eventId: "evt-envelope",
+                observedAt: DateTimeOffset.Parse("2026-06-18T01:15:00+00:00")));
+
+        var document = await store.GetAsync("schedule-envelope");
+        document.Should().NotBeNull();
+        document!.Prompt.Should().Be("from envelope");
+        document.StateVersion.Should().Be(10);
+    }
+
+    [Fact]
     public async Task ProjectAsync_ShouldNotProjectDurableSenderBearerToken()
     {
         var store = new RecordingDocumentStore<ScheduledDispatchDocument>(x => x.Id);
