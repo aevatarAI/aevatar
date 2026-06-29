@@ -77,9 +77,15 @@ public static class ScheduledDispatchEndpoints
         try
         {
             var ownerSubject = ResolveAuthenticatedNyxIdOwnerSubject(http);
-            await EnsureScopeOwnerNyxIdBindingExistsAsync(input, ownerSubject, bindingQueryPort, ct)
+            configuration = await input.ToConfigurationAsync(
+                input.ScheduleId,
+                catalogReader,
+                revisionCatalogReader,
+                ownerSubject,
+                defaultMissingWorkflowScheduleAuth: true,
+                ct);
+            await EnsureScopeOwnerNyxIdBindingExistsAsync(configuration, bindingQueryPort, ct)
                 .ConfigureAwait(false);
-            configuration = await input.ToConfigurationAsync(input.ScheduleId, catalogReader, revisionCatalogReader, ownerSubject, ct);
             await EnsureScopeOwnerNyxIdScopeCanBeIssuedAsync(configuration, credentialExchangePort, ct)
                 .ConfigureAwait(false);
         }
@@ -114,9 +120,15 @@ public static class ScheduledDispatchEndpoints
         try
         {
             var ownerSubject = ResolveAuthenticatedNyxIdOwnerSubject(http);
-            await EnsureScopeOwnerNyxIdBindingExistsAsync(input, ownerSubject, bindingQueryPort, ct)
+            configuration = await input.ToConfigurationAsync(
+                scheduleId,
+                catalogReader,
+                revisionCatalogReader,
+                ownerSubject,
+                defaultMissingWorkflowScheduleAuth: false,
+                ct);
+            await EnsureScopeOwnerNyxIdBindingExistsAsync(configuration, bindingQueryPort, ct)
                 .ConfigureAwait(false);
-            configuration = await input.ToConfigurationAsync(scheduleId, catalogReader, revisionCatalogReader, ownerSubject, ct);
             await EnsureScopeOwnerNyxIdScopeCanBeIssuedAsync(configuration, credentialExchangePort, ct)
                 .ConfigureAwait(false);
         }
@@ -251,19 +263,16 @@ public static class ScheduledDispatchEndpoints
     }
 
     private static async Task EnsureScopeOwnerNyxIdBindingExistsAsync(
-        ScheduledDispatchConfigurationHttpRequest input,
-        ScheduledServiceInvocationNyxIdSubjectRef? ownerSubject,
+        ScheduledDispatchConfiguration configuration,
         IExternalIdentityBindingQueryPort bindingQueryPort,
         CancellationToken ct)
     {
-        ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(configuration);
         ArgumentNullException.ThrowIfNull(bindingQueryPort);
 
-        if (input.ServiceInvocation?.Auth?.ScopeOwnerNyxId == null)
-            return;
-
+        var ownerSubject = configuration.Target.ServiceInvocation?.Auth?.ScopeOwnerNyxId?.OwnerSubject;
         if (ownerSubject == null)
-            throw new ArgumentException("Authenticated NyxID owner subject is required for scope owner schedule auth.", nameof(input));
+            return;
 
         var externalSubject = new ExternalSubjectRef
         {
@@ -276,7 +285,7 @@ public static class ScheduledDispatchEndpoints
 
         throw new ArgumentException(
             "Authenticated NyxID owner binding is required for scope owner schedule auth; complete or refresh NyxID login before creating a scope owner schedule.",
-            nameof(input));
+            nameof(configuration));
     }
 
     private static async Task EnsureScopeOwnerNyxIdScopeCanBeIssuedAsync(
@@ -392,6 +401,8 @@ public static class ScheduledDispatchEndpoints
 
 public sealed record ScheduledDispatchConfigurationHttpRequest
 {
+    private const string DefaultWorkflowScheduleNyxIdScope = "proxy";
+
     public string? ScheduleId { get; init; }
     public string? DisplayName { get; init; }
     [JsonConverter(typeof(JsonStringEnumConverter))]
@@ -408,18 +419,23 @@ public sealed record ScheduledDispatchConfigurationHttpRequest
         IServiceCatalogQueryReader catalogReader,
         IServiceRevisionCatalogQueryReader revisionCatalogReader,
         ScheduledServiceInvocationNyxIdSubjectRef? authenticatedOwnerSubject = null,
+        bool defaultMissingWorkflowScheduleAuth = true,
         CancellationToken ct = default)
     {
         var resolvedTarget = await ResolveTargetAsync(catalogReader, revisionCatalogReader, authenticatedOwnerSubject, ct);
+        var scheduleKind = ResolveScheduleKind(resolvedTarget);
+        var target = defaultMissingWorkflowScheduleAuth
+            ? ApplyDefaultWorkflowScheduleAuth(resolvedTarget.Target, scheduleKind, authenticatedOwnerSubject)
+            : resolvedTarget.Target;
         return new ScheduledDispatchConfiguration(
             ScheduleId: string.IsNullOrWhiteSpace(ScheduleId) ? fallbackScheduleId ?? string.Empty : ScheduleId,
             DisplayName: DisplayName ?? string.Empty,
-            Target: resolvedTarget.Target,
+            Target: target,
             CronExpression: CronExpression,
             Timezone: Timezone ?? string.Empty,
             Enabled: Enabled,
             Headers: Headers ?? new Dictionary<string, string>(StringComparer.Ordinal),
-            ScheduleKind: ResolveScheduleKind(resolvedTarget));
+            ScheduleKind: scheduleKind);
     }
 
     private async Task<ResolvedScheduledDispatchTarget> ResolveTargetAsync(
@@ -458,6 +474,39 @@ public sealed record ScheduledDispatchConfigurationHttpRequest
         }
 
         return ScheduleKind;
+    }
+
+    private static ScheduledDispatchTargetDescriptor ApplyDefaultWorkflowScheduleAuth(
+        ScheduledDispatchTargetDescriptor target,
+        ScheduledDispatchScheduleKind scheduleKind,
+        ScheduledServiceInvocationNyxIdSubjectRef? authenticatedOwnerSubject)
+    {
+        var serviceInvocation = target.ServiceInvocation;
+        if (scheduleKind != ScheduledDispatchScheduleKind.Workflow ||
+            target.Kind != ScheduledDispatchTargetKind.ServiceInvocation ||
+            serviceInvocation == null ||
+            serviceInvocation.Auth != null)
+        {
+            return target;
+        }
+
+        if (authenticatedOwnerSubject == null)
+        {
+            throw new ArgumentException(
+                "Authenticated NyxID owner subject is required for workflow schedule auth.",
+                nameof(authenticatedOwnerSubject));
+        }
+
+        return target with
+        {
+            ServiceInvocation = serviceInvocation with
+            {
+                Auth = new ScheduledServiceInvocationAuth(
+                    ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
+                        DefaultWorkflowScheduleNyxIdScope,
+                        authenticatedOwnerSubject)),
+            },
+        };
     }
 
     internal sealed record ResolvedScheduledDispatchTarget(

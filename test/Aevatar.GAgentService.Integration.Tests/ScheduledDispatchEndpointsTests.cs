@@ -773,6 +773,13 @@ public sealed class ScheduledDispatchEndpointsTests
         invocation.Payload.TypeUrl.Should().Be("type.googleapis.com/aevatar.ai.ChatRequestEvent");
         invocation.Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("summarize status");
         invocation.RevisionId.Should().Be("rev-chat");
+        invocation.Auth.Should().NotBeNull();
+        invocation.Auth!.ScopeOwnerNyxId.Should().NotBeNull();
+        invocation.Auth.ScopeOwnerNyxId!.Scope.Should().Be("proxy");
+        invocation.Auth.ScopeOwnerNyxId.OwnerSubject.Should().BeEquivalentTo(new ScheduledServiceInvocationNyxIdSubjectRef(
+            OwnerScope.NyxIdPlatform,
+            string.Empty,
+            "owner-user-1"));
         configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
     }
 
@@ -838,6 +845,45 @@ public sealed class ScheduledDispatchEndpointsTests
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
         service.Created.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Create_WithStaticServiceInvocationAndOmittedAuth_ShouldNotDefaultAuth()
+    {
+        await using var host = await ScheduleEndpointTestHost.StartAsync();
+        host.CatalogReader.Service = CreateServiceCatalog(activeRevisionId: "rev-chat");
+        host.RevisionCatalog.UpsertRevision(
+            "tenant:app:default:workflow",
+            "rev-chat",
+            BuildPreparedArtifact(ChatRequestEvent.Descriptor, ServiceImplementationKind.Static));
+        var chat = new ChatRequestEvent { Prompt = "run static" };
+
+        var response = await host.Client.PostAsJsonAsync("/api/schedules", new
+        {
+            scheduleId = "schedule-chat",
+            displayName = "Static chat",
+            cronExpression = "0 9 * * *",
+            timezone = "UTC",
+            serviceInvocation = new
+            {
+                identity = new
+                {
+                    tenantId = "tenant",
+                    appId = "app",
+                    @namespace = "default",
+                    serviceId = "workflow",
+                },
+                endpointId = "chat",
+                payloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                payloadBase64 = Convert.ToBase64String(chat.ToByteArray()),
+                revisionId = "rev-chat",
+            },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        var configuration = host.Schedules.Created.Should().ContainSingle().Which;
+        configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Generic);
+        configuration.Target.ServiceInvocation!.Auth.Should().BeNull();
     }
 
     [Fact]
@@ -916,6 +962,45 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
+    public async Task Update_WithWorkflowServiceInvocationAndOmittedAuth_ShouldLeaveAuthOmittedForActorPreservation()
+    {
+        await using var host = await ScheduleEndpointTestHost.StartAsync();
+        host.CatalogReader.Service = CreateServiceCatalog(activeRevisionId: "rev-chat");
+        host.RevisionCatalog.UpsertRevision(
+            "tenant:app:default:workflow",
+            "rev-chat",
+            BuildPreparedArtifact(ChatRequestEvent.Descriptor));
+        var chat = new ChatRequestEvent { Prompt = "refresh standup" };
+
+        var response = await host.Client.PutAsJsonAsync("/api/schedules/schedule-chat", new
+        {
+            displayName = "Workflow chat",
+            cronExpression = "0 10 * * *",
+            timezone = "UTC",
+            enabled = false,
+            serviceInvocation = new
+            {
+                identity = new
+                {
+                    tenantId = "tenant",
+                    appId = "app",
+                    @namespace = "default",
+                    serviceId = "workflow",
+                },
+                endpointId = "chat",
+                payloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                payloadBase64 = Convert.ToBase64String(chat.ToByteArray()),
+                revisionId = "rev-chat",
+            },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        var configuration = host.Schedules.Updated.Should().ContainSingle().Which.Configuration;
+        configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
+        configuration.Target.ServiceInvocation!.Auth.Should().BeNull();
+    }
+
+    [Fact]
     public async Task Update_WithServiceInvocationPayloadBase64Json_ShouldBindAndPackPayload()
     {
         await using var host = await ScheduleEndpointTestHost.StartAsync();
@@ -957,6 +1042,7 @@ public sealed class ScheduledDispatchEndpointsTests
         invocation.EndpointId.Should().Be("chat");
         invocation.Payload.TypeUrl.Should().Be("type.googleapis.com/aevatar.ai.ChatRequestEvent");
         invocation.Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("refresh standup");
+        invocation.Auth.Should().BeNull();
         configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
     }
 
@@ -1439,13 +1525,22 @@ public sealed class ScheduledDispatchEndpointsTests
             var schedules = new RecordingScheduledDispatchApplicationService();
             var catalogReader = new FakeServiceCatalogQueryReader();
             var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+            var bindingQuery = new FakeExternalIdentityBindingQueryPort();
+            bindingQuery.Bindings[SubjectKey(OwnerSubject("owner-user-1"))] = "bnd-owner-1";
             builder.Services.AddSingleton<IScheduledDispatchApplicationService>(schedules);
             builder.Services.AddSingleton<IServiceCatalogQueryReader>(catalogReader);
             builder.Services.AddSingleton<IServiceRevisionCatalogQueryReader>(revisionCatalog);
-            builder.Services.AddSingleton<IExternalIdentityBindingQueryPort, FakeExternalIdentityBindingQueryPort>();
+            builder.Services.AddSingleton<IExternalIdentityBindingQueryPort>(bindingQuery);
             builder.Services.AddSingleton<IScheduledServiceInvocationCredentialExchangePort, FakeScheduledServiceInvocationCredentialExchangePort>();
 
             var app = builder.Build();
+            app.Use(static (context, next) =>
+            {
+                context.User = new ClaimsPrincipal(new ClaimsIdentity(
+                    [new Claim("uid", "owner-user-1")],
+                    "test"));
+                return next(context);
+            });
             ScheduledDispatchEndpoints.Map(app.MapGroup("/api"));
             await app.StartAsync();
 
