@@ -57,6 +57,26 @@ namespace Aevatar.GAgentService.Hosting.DependencyInjection;
 
 public static class ServiceCollectionExtensions
 {
+    private static IServiceCollection ReplaceNoOpSkillWorkflowMountPort(this IServiceCollection services)
+    {
+        var existing = services.LastOrDefault(static descriptor =>
+            descriptor.ServiceType == typeof(ISkillWorkflowMountPort));
+        if (existing == null)
+        {
+            services.AddSingleton<ISkillWorkflowMountPort, SkillWorkflowMountAdapter>();
+            return services;
+        }
+
+        if (existing.ImplementationType == typeof(NoOpSkillWorkflowMountPort) ||
+            existing.ImplementationInstance is NoOpSkillWorkflowMountPort)
+        {
+            services.Remove(existing);
+            services.AddSingleton<ISkillWorkflowMountPort, SkillWorkflowMountAdapter>();
+        }
+
+        return services;
+    }
+
     public static IServiceCollection AddGAgentServiceCapability(
         this IServiceCollection services,
         IConfiguration configuration)
@@ -163,7 +183,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IScopeWorkflowQueryPort>(sp => sp.GetRequiredService<ScopeWorkflowQueryApplicationService>());
         services.TryAddSingleton<IScopeWorkflowCommandPort, ScopeWorkflowCommandApplicationService>();
         services.TryAddSingleton<IScopeWorkflowSaveAndBindPort, ScopeWorkflowSaveAndBindApplicationService>();
-        services.TryAddSingleton<ISkillWorkflowMountPort, SkillWorkflowMountAdapter>();
+        services.ReplaceNoOpSkillWorkflowMountPort();
         services.TryAddSingleton<IScopeBindingCommandPort, ScopeBindingCommandApplicationService>();
         services.TryAddSingleton<IScopeBindingReadinessQueryPort, ScopeBindingReadinessQueryService>();
         services.TryAddSingleton<IMemberPublishedServiceResolver, DefaultMemberPublishedServiceResolver>();

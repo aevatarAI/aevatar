@@ -112,6 +112,25 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
     }
 
     [Fact]
+    public void AddGAgentServiceCapability_ShouldReplaceSkillsNoOpWorkflowMountPort()
+    {
+        var services = new ServiceCollection();
+        services.AddSkills(_ => { });
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>())
+            .Build();
+
+        services.AddGAgentServiceCapability(configuration);
+
+        var registrations = services
+            .Where(static descriptor => descriptor.ServiceType == typeof(ISkillWorkflowMountPort))
+            .ToArray();
+
+        registrations.Should().ContainSingle();
+        registrations[0].ImplementationType.Should().Be(typeof(SkillWorkflowMountAdapter));
+    }
+
+    [Fact]
     public void AddGAgentServiceCapability_WhenLlmProviderFactoryExists_ShouldRegisterProviderBackedRunCore()
     {
         var services = new ServiceCollection();
