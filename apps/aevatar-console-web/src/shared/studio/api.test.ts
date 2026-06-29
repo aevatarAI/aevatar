@@ -627,6 +627,206 @@ describe('studioApi host-session requests', () => {
     expect(init?.method).toBe('POST');
   });
 
+  it('decodes scoped first-save 202 Accepted as a workflow draft receipt', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 202,
+      json: async () => ({
+        accepted: true,
+        workflowId: 'wf-alpha',
+        commandId: 'cmd-alpha',
+        ackStage: 'accepted',
+        actorId: 'studio-workspace:scope-1',
+        workspaceId: 'studio-workspace:scope-1',
+        expectedVersion: 11,
+        ackedAtUtc: '2026-06-16T00:00:00Z',
+        readiness: {
+          readable: false,
+          stage: 'projection_pending',
+          message:
+            'The workflow draft create command was accepted. Poll the workflow draft by id until the scoped workspace read model observes it.',
+        },
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      studioApi.saveWorkflow({
+        workflowId: 'wf-committed',
+        draftExists: false,
+        scopeId: 'scope-1',
+        directoryId: 'scope:scope-1',
+        workflowName: 'scope-demo',
+        yaml: 'name: scope-demo\nsteps: []\n',
+      }),
+    ).resolves.toEqual({
+      kind: 'accepted',
+      receipt: {
+        accepted: true,
+        workflowId: 'wf-alpha',
+        commandId: 'cmd-alpha',
+        ackStage: 'accepted',
+        actorId: 'studio-workspace:scope-1',
+        workspaceId: 'studio-workspace:scope-1',
+        expectedVersion: 11,
+        ackedAtUtc: '2026-06-16T00:00:00Z',
+        readiness: {
+          readable: false,
+          stage: 'projection_pending',
+          message:
+            'The workflow draft create command was accepted. Poll the workflow draft by id until the scoped workspace read model observes it.',
+        },
+      },
+    });
+
+    const [input, init] = fetchMock.mock.calls[0] as [
+      string,
+      RequestInit | undefined,
+    ];
+    expect(input).toBe('/api/workspace/workflow-drafts?scopeId=scope-1');
+    expect(init?.method).toBe('POST');
+  });
+
+  it('preserves unscoped 200 OK workflow draft create as a materialized draft', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        workflowId: 'workflow-local',
+        name: 'local-demo',
+        fileName: 'local-demo.yaml',
+        filePath: '/tmp/workflows/local-demo.yaml',
+        directoryId: 'dir-1',
+        directoryLabel: 'Workspace',
+        yaml: 'name: local-demo\nsteps: []\n',
+        layout: null,
+        updatedAtUtc: '2026-04-16T00:00:00Z',
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      studioApi.saveWorkflow({
+        directoryId: 'dir-1',
+        workflowName: 'local-demo',
+        yaml: 'name: local-demo\nsteps: []\n',
+      }),
+    ).resolves.toEqual({
+      kind: 'materialized',
+      workflow: {
+        workflowId: 'workflow-local',
+        name: 'local-demo',
+        fileName: 'local-demo.yaml',
+        filePath: '/tmp/workflows/local-demo.yaml',
+        directoryId: 'dir-1',
+        directoryLabel: 'Workspace',
+        yaml: 'name: local-demo\nsteps: []\n',
+        layout: null,
+        document: null,
+        draftExists: true,
+        findings: [],
+        updatedAtUtc: '2026-04-16T00:00:00Z',
+      },
+    });
+
+    const [input, init] = fetchMock.mock.calls[0] as [
+      string,
+      RequestInit | undefined,
+    ];
+    expect(input).toBe('/api/workspace/workflow-drafts');
+    expect(init?.method).toBe('POST');
+  });
+
+  it('loads a scoped materialized draft by id and exposes interim 404 as not found', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        statusText: 'Not Found',
+        text: async () => JSON.stringify({ title: 'Not Found', status: 404 }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          workflowId: 'wf-alpha',
+          name: 'scope-demo',
+          fileName: 'scope-demo.yaml',
+          filePath: 'scope://scope-1/wf-alpha.yaml',
+          directoryId: 'scope:scope-1',
+          directoryLabel: 'scope-1',
+          yaml: 'name: scope-demo\nsteps: []\n',
+          layout: null,
+          updatedAtUtc: '2026-06-16T00:00:01Z',
+        }),
+      } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      studioApi.getWorkflowDraftFile('wf-alpha', 'scope-1'),
+    ).rejects.toMatchObject({
+      status: 404,
+    });
+    await expect(
+      studioApi.getWorkflowDraftFile('wf-alpha', 'scope-1'),
+    ).resolves.toEqual({
+      workflowId: 'wf-alpha',
+      name: 'scope-demo',
+      fileName: 'scope-demo.yaml',
+      filePath: 'scope://scope-1/wf-alpha.yaml',
+      directoryId: 'scope:scope-1',
+      directoryLabel: 'scope-1',
+      yaml: 'name: scope-demo\nsteps: []\n',
+      layout: null,
+      document: null,
+      draftExists: true,
+      findings: [],
+      updatedAtUtc: '2026-06-16T00:00:01Z',
+    });
+
+    expect(fetchMock.mock.calls.map(([input]) => input)).toEqual([
+      '/api/workspace/workflow-drafts/wf-alpha?scopeId=scope-1',
+      '/api/workspace/workflow-drafts/wf-alpha?scopeId=scope-1',
+    ]);
+  });
+
   it('includes the requested scope when updating a scoped workflow draft', async () => {
     persistAuthSession({
       tokens: {

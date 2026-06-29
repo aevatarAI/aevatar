@@ -1028,6 +1028,7 @@ jest.mock("@/shared/studio/api", () => ({
       edges: [{ from: "step_prepare", to: "step_finish", label: "next" }],
     })),
     getWorkflow: jest.fn(async () => mockWorkflowFile),
+    getWorkflowDraftFile: jest.fn(async () => mockWorkflowFile),
     saveWorkflow: jest.fn(
       async (input: {
         workflowId?: string;
@@ -3362,6 +3363,10 @@ describe("StudioPage", () => {
     );
     (studioApi.getWorkflow as jest.Mock).mockReset();
     (studioApi.getWorkflow as jest.Mock).mockImplementation(
+      async () => mockWorkflowFile
+    );
+    (studioApi.getWorkflowDraftFile as jest.Mock).mockReset();
+    (studioApi.getWorkflowDraftFile as jest.Mock).mockImplementation(
       async () => mockWorkflowFile
     );
     (studioApi.authorWorkflow as jest.Mock).mockReset();
@@ -7063,6 +7068,104 @@ describe("StudioPage", () => {
         })
       );
     });
+  });
+
+  it("polls the scoped draft by returned workflow id after an accepted first save", async () => {
+    mockWorkflowFile = {
+      ...mockWorkflowFile,
+      draftExists: false,
+    };
+    (studioApi.saveWorkflow as jest.Mock).mockResolvedValueOnce({
+      kind: "accepted",
+      receipt: {
+        accepted: true,
+        workflowId: "wf-alpha",
+        commandId: "cmd-alpha",
+        ackStage: "accepted",
+        actorId: "studio-workspace:scope-1",
+        workspaceId: "studio-workspace:scope-1",
+        expectedVersion: 11,
+        ackedAtUtc: "2026-06-16T00:00:00Z",
+        readiness: {
+          readable: false,
+          stage: "projection_pending",
+          message:
+            "The workflow draft create command was accepted. Poll the workflow draft by id until the scoped workspace read model observes it.",
+        },
+      },
+    });
+    const pendingRead = Object.assign(
+      new Error("Workflow draft projection is pending."),
+      {
+        name: "StudioApiError",
+        status: 404,
+      },
+    );
+    (studioApi.getWorkflowDraftFile as jest.Mock)
+      .mockRejectedValueOnce(pendingRead)
+      .mockResolvedValueOnce({
+        workflowId: "wf-alpha",
+        name: "scope-demo",
+        fileName: "scope-demo.yaml",
+        filePath: "scope://scope-1/wf-alpha.yaml",
+        directoryId: "scope:scope-1",
+        directoryLabel: "scope-1",
+        yaml: "name: scope-demo\nsteps: []\n",
+        layout: null,
+        document: null,
+        draftExists: true,
+        findings: [],
+        updatedAtUtc: "2026-06-16T00:00:01Z",
+      });
+
+    renderStudioPage("/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=studio");
+
+    const editor = await screen.findByLabelText("定义 YAML");
+    fireEvent.change(editor, {
+      target: {
+        value: "name: scope-demo\nsteps: []\n",
+      },
+    });
+
+    const saveButton = screen.getByRole("button", { name: "Save draft" });
+    await waitFor(() => {
+      expect(saveButton).toBeEnabled();
+    });
+    fireEvent.click(saveButton);
+
+    await waitFor(() => {
+      expect(studioApi.saveWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workflowId: "workflow-1",
+          draftExists: false,
+          scopeId: "scope-1",
+          workflowName: "workspace-demo",
+        }),
+      );
+    });
+    await waitFor(() => {
+      expect(studioApi.getWorkflowDraftFile).toHaveBeenCalledTimes(2);
+    });
+    expect(studioApi.getWorkflowDraftFile).toHaveBeenNthCalledWith(
+      1,
+      "wf-alpha",
+      "scope-1",
+    );
+    expect(studioApi.getWorkflowDraftFile).toHaveBeenNthCalledWith(
+      2,
+      "wf-alpha",
+      "scope-1",
+    );
+    expect(studioApi.listWorkflows).not.toHaveBeenCalledWith("wf-alpha");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("studio-context-title")).toHaveTextContent(
+        "scope-demo",
+      );
+    });
+    expect(message.info).toHaveBeenCalledWith(
+      "The workflow draft create command was accepted. Poll the workflow draft by id until the scoped workspace read model observes it.",
+    );
   });
 
   it("keeps a backend Workflow member route selected after saving its draft", async () => {
