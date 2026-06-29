@@ -7,7 +7,6 @@ namespace Aevatar.GAgents.Platform.Lark;
 public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
 {
     public const int DefaultMaxMessageLength = 30_000;
-    private const string TruncationMarker = "\n\n...[truncated]";
 
     public static readonly ChannelCapabilities DefaultCapabilities = new()
     {
@@ -35,9 +34,48 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
         ArgumentNullException.ThrowIfNull(intent);
         ArgumentNullException.ThrowIfNull(context);
 
-        var effectiveText = Truncate(intent.Text, context.Capabilities?.MaxMessageLength ?? DefaultCapabilities.MaxMessageLength);
+        var effectiveText = intent.Text ?? string.Empty;
         if (intent.Actions.Count == 0 && intent.Cards.Count == 0)
         {
+            if (ExceedsLimit(effectiveText, context.Capabilities?.MaxMessageLength ?? DefaultCapabilities.MaxMessageLength))
+            {
+                var longTextCardJson = JsonSerializer.Serialize(new
+                {
+                    schema = "2.0",
+                    config = new
+                    {
+                        wide_screen_mode = true,
+                    },
+                    header = new
+                    {
+                        title = new
+                        {
+                            tag = "plain_text",
+                            content = "Aevatar",
+                        },
+                        template = "blue",
+                    },
+                    body = new
+                    {
+                        direction = "vertical",
+                        elements = new[]
+                        {
+                            new
+                            {
+                                tag = "markdown",
+                                content = effectiveText,
+                            },
+                        },
+                    },
+                });
+
+                return new LarkOutboundMessage(
+                    MessageType: "interactive",
+                    ContentJson: longTextCardJson,
+                    PlainText: effectiveText,
+                    IsInteractive: true);
+            }
+
             return new LarkOutboundMessage(
                 MessageType: "text",
                 ContentJson: JsonSerializer.Serialize(new { text = effectiveText }),
@@ -526,21 +564,6 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
         return string.Join("\n", parts.Where(part => !string.IsNullOrWhiteSpace(part)));
     }
 
-    private static string Truncate(string? value, int maxLength)
-    {
-        var text = value ?? string.Empty;
-        if (maxLength <= 0)
-            return text;
-
-        var textInfo = new StringInfo(text);
-        if (textInfo.LengthInTextElements <= maxLength)
-            return text;
-
-        var markerInfo = new StringInfo(TruncationMarker);
-        var markerLength = markerInfo.LengthInTextElements;
-        if (maxLength <= markerLength)
-            return textInfo.SubstringByTextElements(0, maxLength);
-
-        return textInfo.SubstringByTextElements(0, maxLength - markerLength) + TruncationMarker;
-    }
+    private static bool ExceedsLimit(string text, int maxLength) =>
+        maxLength > 0 && new StringInfo(text).LengthInTextElements > maxLength;
 }

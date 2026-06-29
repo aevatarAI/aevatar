@@ -4,6 +4,7 @@ using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
+using Aevatar.GAgents.Platform.Lark;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -53,6 +54,43 @@ public sealed class NyxIdRelayOutboundPortTests
         handler.Requests[0].Path.Should().Be("/api/v1/channel-relay/reply");
         handler.Requests[0].Authorization.Should().Be("Bearer relay-token");
         AssertSingleRelayTextRequest(handler, "msg-1", "rendered:hello relay");
+    }
+
+    [Fact]
+    public async Task SendAsync_LarkLongReply_ShouldUseSingleRichRelayPayloadWithoutDroppingFinalDraft()
+    {
+        var handler = new RecordingJsonHandler();
+        var draftOne = "DRAFT-1:" + new string('a', NyxIdRelayOutboundPort.LarkRelayTextMessageLimit - 7);
+        var draftThree = "DRAFT-3: Simple & Sweet final draft";
+        var fullReply = string.Join("\n", draftOne, draftThree);
+        var port = CreatePort(handler, new LarkMessageComposer());
+
+        var result = await port.SendAsync(
+            "lark",
+            BuildConversation(),
+            new MessageContent { Text = fullReply },
+            new OutboundDeliveryContext
+            {
+                ReplyMessageId = "msg-lark-long-1",
+            },
+            "relay-token",
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        handler.Requests.Should().ContainSingle();
+        handler.Requests[0].Path.Should().Be("/api/v1/channel-relay/reply");
+        var deliveredText = ReadRelayText(handler.Requests[0]);
+        deliveredText.Should().Contain("DRAFT-3: Simple & Sweet final draft");
+        deliveredText.Should().Be(fullReply);
+        using var document = JsonDocument.Parse(handler.Requests[0].Body);
+        document.RootElement
+            .GetProperty("reply")
+            .GetProperty("metadata")
+            .GetProperty("card")
+            .GetProperty("schema")
+            .GetString()
+            .Should()
+            .Be("2.0");
     }
 
     [Fact]
@@ -232,6 +270,58 @@ public sealed class NyxIdRelayOutboundPortTests
     }
 
     [Fact]
+    public async Task SendAsync_LarkLongReply_ShouldFailObservably_WhenRichPayloadIsRejected()
+    {
+        var handler = new SequencedRecordingJsonHandler(
+            (HttpStatusCode.BadRequest, """{"error":"lark_rejected_rich_payload"}"""));
+        var fullReply = new string('x', NyxIdRelayOutboundPort.LarkRelayTextMessageLimit) + "DRAFT-3";
+        var port = CreatePort(handler, new StubComposer(
+            "lark",
+            text: fullReply,
+            cardPayload: new { schema = "2.0" }));
+
+        var result = await port.SendAsync(
+            "lark",
+            BuildConversation(),
+            new MessageContent { Text = "workflow output" },
+            new OutboundDeliveryContext
+            {
+                ReplyMessageId = "msg-lark-long-fail-1",
+            },
+            "relay-token",
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.ErrorCode.Should().Be("relay_reply_rejected");
+        result.ErrorMessage.Should().Contain("lark_rejected_rich_payload");
+        handler.Requests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task SendAsync_LarkLongReply_ShouldFailBeforeHttp_WhenRichPayloadIsUnavailable()
+    {
+        var handler = new RecordingJsonHandler();
+        var fullReply = new string('x', NyxIdRelayOutboundPort.LarkRelayTextMessageLimit) + "DRAFT-3";
+        var port = CreatePort(handler, new StubComposer("lark", text: fullReply));
+
+        var result = await port.SendAsync(
+            "lark",
+            BuildConversation(),
+            new MessageContent { Text = "workflow output" },
+            new OutboundDeliveryContext
+            {
+                ReplyMessageId = "msg-lark-long-no-card-1",
+            },
+            "relay-token",
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.ErrorCode.Should().Be("relay_reply_text_too_long");
+        result.ErrorMessage.Should().Contain("30000");
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task SendAsync_ShouldUsePlainTextFallbackWhenComposerIsMissing()
     {
         var handler = new RecordingJsonHandler();
@@ -395,6 +485,28 @@ public sealed class NyxIdRelayOutboundPortTests
         handler.Requests.Should().ContainSingle();
         handler.Requests[0].Path.Should().Be("/api/v1/channel-relay/reply/update");
         handler.Requests[0].Body.Should().Contain("\"message_id\":\"om_abc\"");
+    }
+
+    [Fact]
+    public async Task UpdateAsync_LarkLongReply_ShouldFailObservablyInsteadOfTruncating()
+    {
+        var handler = new RecordingJsonHandler();
+        var finalReply = new string('x', NyxIdRelayOutboundPort.LarkRelayTextMessageLimit) + "DRAFT-3";
+        var port = CreatePort(handler, new StubComposer("lark", text: finalReply));
+
+        var result = await port.UpdateAsync(
+            "lark",
+            BuildConversation(),
+            new MessageContent { Text = "workflow output" },
+            new OutboundDeliveryContext { ReplyMessageId = "msg-1" },
+            platformMessageId: "om_abc",
+            "relay-token",
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.ErrorCode.Should().Be("relay_reply_text_too_long");
+        result.ErrorMessage.Should().Contain("30000");
+        handler.Requests.Should().BeEmpty();
     }
 
     [Fact]
@@ -578,6 +690,12 @@ public sealed class NyxIdRelayOutboundPortTests
         reply.TryGetProperty("metadata", out _).Should().BeFalse();
     }
 
+    private static string ReadRelayText((string Path, string? Authorization, string Body) request)
+    {
+        using var document = JsonDocument.Parse(request.Body);
+        return document.RootElement.GetProperty("reply").GetProperty("text").GetString() ?? string.Empty;
+    }
+
     private sealed class RecordingJsonHandler(
         HttpStatusCode status = HttpStatusCode.OK,
         string responseBody = """{"message_id":"reply-1","platform_message_id":"platform-1"}""",
@@ -603,23 +721,53 @@ public sealed class NyxIdRelayOutboundPortTests
         }
     }
 
+    private sealed class SequencedRecordingJsonHandler(params (HttpStatusCode Status, string Body)[] responses) : HttpMessageHandler
+    {
+        private int _index;
+
+        public List<(string Path, string? Authorization, string Body)> Requests { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Requests.Add((
+                request.RequestUri?.PathAndQuery ?? string.Empty,
+                request.Headers.Authorization?.ToString(),
+                request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken)));
+
+            var response = responses[Math.Min(_index, responses.Length - 1)];
+            _index++;
+            return new HttpResponseMessage(response.Status)
+            {
+                Content = new StringContent(response.Body, Encoding.UTF8, "application/json"),
+            };
+        }
+    }
+
     private sealed class StubComposer(
         string platform,
         ComposeCapability capability = ComposeCapability.Exact,
-        string? text = null)
+        string? text = null,
+        object? cardPayload = null)
         : IMessageComposer<StubNativePayload>
     {
         public ChannelId Channel { get; } = ChannelId.From(platform);
 
         public StubNativePayload Compose(MessageContent intent, ComposeContext context) =>
-            new(text ?? $"rendered:{intent.Text}");
+            new(text ?? $"rendered:{intent.Text}", cardPayload);
 
         object IMessageComposer.Compose(MessageContent intent, ComposeContext context) => Compose(intent, context);
 
         public ComposeCapability Evaluate(MessageContent intent, ComposeContext context) => capability;
     }
 
-    private sealed record StubNativePayload(string PlainText) : IPlainTextComposedMessage;
+    private sealed record StubNativePayload(string PlainText, object? CardPayload) : IInteractiveComposedMessage
+    {
+        public string MessageType => IsInteractive ? "interactive" : "text";
+
+        public string ContentJson => CardPayload is null ? string.Empty : JsonSerializer.Serialize(CardPayload);
+
+        public bool IsInteractive => CardPayload is not null;
+    }
 
     private sealed class NonPlainTextComposer(string platform) : IMessageComposer<object>
     {

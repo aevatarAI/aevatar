@@ -6,4 +6,4 @@ public sealed record LarkOutboundMessage(
     string MessageType,
     string ContentJson,
     string PlainText,
-    bool IsInteractive) : IPlainTextComposedMessage;
+    bool IsInteractive) : IInteractiveComposedMessage;

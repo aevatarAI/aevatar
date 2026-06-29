@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Globalization;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
@@ -8,6 +9,8 @@ namespace Aevatar.GAgents.Channel.NyxIdRelay;
 
 public sealed class NyxIdRelayOutboundPort
 {
+    internal const int LarkRelayTextMessageLimit = 30_000;
+
     private readonly NyxIdApiClient _nyxClient;
     private readonly IReadOnlyDictionary<string, IMessageComposer> _composers;
     private readonly ILogger<NyxIdRelayOutboundPort> _logger;
@@ -63,31 +66,39 @@ public sealed class NyxIdRelayOutboundPort
                 "Relay reply is missing the source message id required for channel-relay/reply.");
         }
 
-        if (TryComposeReplyText(platform, conversation, content, out var replyText) is { } composeFailure)
+        var normalizedPlatform = NormalizePlatformKey(platform);
+        if (TryComposeReplyPayload(platform, conversation, content, out var replyPayload) is { } composeFailure)
         {
             return composeFailure;
         }
 
-        var result = await _nyxClient.SendChannelRelayTextReplyAsync(
-            replyToken,
-            delivery.ReplyMessageId,
-            replyText,
-            ct);
-        if (!result.Succeeded)
+        if (ValidateRelayPayloadSize(normalizedPlatform, replyPayload, allowRichPayload: true) is { } sizeFailure)
+        {
+            return sizeFailure;
+        }
+
+        var sendResult = await SendRelayReplyAsync(
+                normalizedPlatform,
+                replyToken,
+                delivery.ReplyMessageId,
+                replyPayload,
+                ct)
+            .ConfigureAwait(false);
+        if (!sendResult.Succeeded)
         {
             _logger.LogWarning(
                 "Nyx relay reply delivery failed: platform={Platform}, messageId={MessageId}, detail={Detail}",
                 platform,
                 delivery.ReplyMessageId,
-                result.Detail);
+                sendResult.Detail);
             return EmitResult.Failed(
                 "relay_reply_rejected",
-                result.Detail ?? "Nyx relay reply rejected.");
+                sendResult.Detail ?? "Nyx relay reply rejected.");
         }
 
         return EmitResult.Sent(
-            result.MessageId ?? $"nyx-relay:{delivery.ReplyMessageId}",
-            platformMessageId: result.PlatformMessageId);
+            sendResult.MessageId ?? $"nyx-relay:{delivery.ReplyMessageId}",
+            platformMessageId: sendResult.PlatformMessageId);
     }
 
     public async Task<EmitResult> SendWithAgentKeyAsync(
@@ -153,15 +164,21 @@ public sealed class NyxIdRelayOutboundPort
                 "Relay reply update requires the upstream platform message id captured from the initial send.");
         }
 
-        if (TryComposeReplyText(platform, conversation, content, out var replyText) is { } composeFailure)
+        if (TryComposeReplyPayload(platform, conversation, content, out var replyPayload) is { } composeFailure)
         {
             return composeFailure;
+        }
+
+        var normalizedPlatform = NormalizePlatformKey(platform);
+        if (ValidateRelayPayloadSize(normalizedPlatform, replyPayload, allowRichPayload: false) is { } sizeFailure)
+        {
+            return sizeFailure;
         }
 
         var result = await _nyxClient.UpdateChannelRelayTextReplyAsync(
             replyToken,
             platformMessageId,
-            replyText,
+            replyPayload.Text,
             ct);
         if (!result.Succeeded)
         {
@@ -194,13 +211,13 @@ public sealed class NyxIdRelayOutboundPort
             platformMessageId: result.PlatformMessageId ?? platformMessageId);
     }
 
-    private EmitResult? TryComposeReplyText(
+    private EmitResult? TryComposeReplyPayload(
         string platform,
         ConversationReference conversation,
         MessageContent content,
-        out string replyText)
+        out RelayReplyPayload replyPayload)
     {
-        replyText = string.Empty;
+        replyPayload = new RelayReplyPayload(string.Empty, CardPayload: null);
         var normalizedPlatform = NormalizePlatformKey(platform);
         if (string.IsNullOrWhiteSpace(normalizedPlatform))
         {
@@ -222,21 +239,24 @@ public sealed class NyxIdRelayOutboundPort
                     $"Relay outbound composer for platform '{normalizedPlatform}' cannot express the requested message content.");
             }
 
-            if (composer.Compose(content, composeContext) is not IPlainTextComposedMessage plainTextPayload)
+            var composed = composer.Compose(content, composeContext);
+            if (composed is not IPlainTextComposedMessage plainTextPayload)
             {
                 return EmitResult.Failed(
                     "plain_text_payload_unavailable",
                     $"Relay outbound composer for platform '{normalizedPlatform}' does not expose a plain-text payload.");
             }
 
-            replyText = plainTextPayload.PlainText;
+            replyPayload = new RelayReplyPayload(
+                plainTextPayload.PlainText,
+                TryBuildRelayCardPayload(normalizedPlatform, composed));
         }
         else
         {
-            replyText = NyxIdRelayInteractiveReplyDispatcher.BuildTextFallback(content);
+            replyPayload = new RelayReplyPayload(NyxIdRelayInteractiveReplyDispatcher.BuildTextFallback(content), CardPayload: null);
         }
 
-        if (string.IsNullOrWhiteSpace(replyText))
+        if (string.IsNullOrWhiteSpace(replyPayload.Text))
         {
             return EmitResult.Failed(
                 "empty_reply",
@@ -246,8 +266,93 @@ public sealed class NyxIdRelayOutboundPort
         return null;
     }
 
+    private async Task<NyxIdChannelRelayReplyResult> SendRelayReplyAsync(
+        string normalizedPlatform,
+        string replyToken,
+        string replyMessageId,
+        RelayReplyPayload replyPayload,
+        CancellationToken ct)
+    {
+        var body = BuildRelayReplyBody(normalizedPlatform, replyPayload);
+        return await _nyxClient.SendChannelRelayReplyAsync(
+                    replyToken,
+                    replyMessageId,
+                    body,
+                    ct)
+                .ConfigureAwait(false);
+    }
+
+    private static int ResolveRelayTextLimit(string normalizedPlatform) =>
+        string.Equals(normalizedPlatform, "lark", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(normalizedPlatform, "feishu", StringComparison.OrdinalIgnoreCase)
+            ? LarkRelayTextMessageLimit
+            : 0;
+
+    private static EmitResult? ValidateRelayPayloadSize(
+        string normalizedPlatform,
+        RelayReplyPayload replyPayload,
+        bool allowRichPayload)
+    {
+        var limit = ResolveRelayTextLimit(normalizedPlatform);
+        if (limit <= 0 || new StringInfo(replyPayload.Text).LengthInTextElements <= limit)
+        {
+            return null;
+        }
+
+        if (allowRichPayload && replyPayload.CardPayload is not null)
+        {
+            return null;
+        }
+
+        return EmitResult.Failed(
+            "relay_reply_text_too_long",
+            $"Relay reply text exceeds the {limit} text-element limit for platform '{normalizedPlatform}'.",
+            capability: ComposeCapability.Degraded);
+    }
+
+    private static ChannelRelayReplyBody BuildRelayReplyBody(string normalizedPlatform, RelayReplyPayload replyPayload)
+    {
+        var limit = ResolveRelayTextLimit(normalizedPlatform);
+        if (limit > 0 &&
+            new StringInfo(replyPayload.Text).LengthInTextElements > limit &&
+            replyPayload.CardPayload is not null)
+        {
+            return new ChannelRelayReplyBody(
+                Text: replyPayload.Text,
+                Metadata: new ChannelRelayReplyMetadata(replyPayload.CardPayload));
+        }
+
+        return new ChannelRelayReplyBody(replyPayload.Text);
+    }
+
+    private static object? TryBuildRelayCardPayload(string normalizedPlatform, object composed)
+    {
+        if (!IsLarkPlatform(normalizedPlatform) ||
+            composed is not IInteractiveComposedMessage { IsInteractive: true } interactive ||
+            string.IsNullOrWhiteSpace(interactive.ContentJson))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var document = System.Text.Json.JsonDocument.Parse(interactive.ContentJson);
+            return document.RootElement.Clone();
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return interactive.ContentJson;
+        }
+    }
+
+    private static bool IsLarkPlatform(string normalizedPlatform) =>
+        string.Equals(normalizedPlatform, "lark", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(normalizedPlatform, "feishu", StringComparison.OrdinalIgnoreCase);
+
     private static string NormalizePlatformKey(string? value) =>
         string.IsNullOrWhiteSpace(value)
             ? string.Empty
             : value.Trim().ToLowerInvariant();
+
+    private readonly record struct RelayReplyPayload(string Text, object? CardPayload);
 }

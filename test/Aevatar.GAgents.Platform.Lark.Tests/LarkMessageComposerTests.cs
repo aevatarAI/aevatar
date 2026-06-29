@@ -39,11 +39,13 @@ public sealed class LarkMessageComposerTests : MessageComposerUnitTests<LarkMess
     protected override void AssertOverflowTruncation(object payload, int maxLength)
     {
         var native = payload.ShouldBeOfType<LarkOutboundMessage>();
-        native.PlainText.Length.ShouldBeLessThanOrEqualTo(maxLength);
+        native.PlainText.Length.ShouldBeGreaterThan(maxLength);
+        native.MessageType.ShouldBe("interactive");
+        native.IsInteractive.ShouldBeTrue();
     }
 
     [Fact]
-    public void Compose_WhenTextContainsSurrogatePair_DoesNotSplitTextElement()
+    public void Compose_WhenTextContainsSurrogatePair_PreservesFullLogicalReply()
     {
         var payload = CreateComposer().Compose(
             new MessageContent
@@ -64,7 +66,7 @@ public sealed class LarkMessageComposerTests : MessageComposerUnitTests<LarkMess
                 },
             });
 
-        payload.PlainText.ShouldBe("A🙂");
+        payload.PlainText.ShouldBe("A🙂B");
     }
 
     [Fact]
@@ -105,7 +107,7 @@ public sealed class LarkMessageComposerTests : MessageComposerUnitTests<LarkMess
     }
 
     [Fact]
-    public void Compose_WhenTextExceedsConfiguredLimit_AppendsTruncationMarker()
+    public void Compose_WhenTextExceedsConfiguredLimit_PreservesFullLogicalReply()
     {
         var payload = CreateComposer().Compose(
             new MessageContent
@@ -124,10 +126,18 @@ public sealed class LarkMessageComposerTests : MessageComposerUnitTests<LarkMess
                 {
                     MaxMessageLength = 18,
                 },
-            });
+        });
 
-        payload.PlainText.Length.ShouldBeLessThanOrEqualTo(18);
-        payload.PlainText.ShouldEndWith("...[truncated]");
+        payload.PlainText.ShouldBe("0123456789ABCDEFGHIJ");
+        payload.MessageType.ShouldBe("interactive");
+        payload.IsInteractive.ShouldBeTrue();
+        using var document = JsonDocument.Parse(payload.ContentJson);
+        document.RootElement
+            .GetProperty("body")
+            .GetProperty("elements")[0]
+            .GetProperty("content")
+            .GetString()
+            .ShouldBe("0123456789ABCDEFGHIJ");
     }
 
     [Fact]
