@@ -5168,17 +5168,24 @@ const StudioPage: React.FC = () => {
       queryKey: studioMembersQueryKey,
     });
     const servicesResult = await scopeServicesQuery.refetch();
+    const observedMemberBindingResult =
+      memberBindingRunOutcome?.kind === 'succeeded'
+        ? memberBindingRunOutcome.run.result
+        : null;
     const optimisticBoundServiceId =
+      trimOptional(observedMemberBindingResult?.publishedServiceId) ||
       trimOptional(buildPendingMemberSummary?.publishedServiceId) ||
       trimOptional(buildPendingBindCandidate.displayName) ||
       trimOptional(result?.displayName) ||
       trimOptional(result?.targetName) ||
       trimOptional(result?.workflowName);
     const boundServiceId =
+      trimOptional(observedMemberBindingResult?.publishedServiceId) ||
       trimOptional(result?.serviceId) ||
       resolveBoundServiceIdFromCatalog({
         services: servicesResult.data ?? [],
         candidates: [
+          observedMemberBindingResult?.publishedServiceId,
           buildPendingBindCandidate.displayName,
           buildPendingBindCandidate.kind === 'script'
             ? buildPendingBindCandidate.scriptId
@@ -5266,6 +5273,7 @@ const StudioPage: React.FC = () => {
           trimOptional(result?.displayName) ||
           trimOptional(buildPendingBindCandidate.displayName),
         revisionId:
+          trimOptional(observedMemberBindingResult?.revisionId) ||
           trimOptional(result?.revisionId) ||
           trimOptional(buildPendingMemberSummary?.lastBoundRevisionId),
         scopeId: resolvedStudioScopeId,
@@ -7846,8 +7854,10 @@ const StudioPage: React.FC = () => {
       trimOptional(workbenchPublishedServiceId);
     const memberPublishedServiceExists =
       Boolean(memberPublishedServiceId) &&
-      publishedScopeServices.some(
+      (publishedScopeServices.some(
         (service) => trimOptional(service.serviceId) === memberPublishedServiceId,
+      ) ||
+        trimOptional(recentlyBoundServiceId) === memberPublishedServiceId
       );
     if (memberPublishedServiceExists) {
       return;
@@ -7903,6 +7913,7 @@ const StudioPage: React.FC = () => {
     history,
     isStudioLocation,
     publishedScopeServices,
+    recentlyBoundServiceId,
     resolvedStudioScopeId,
     routeBuildFocus.kind,
     routeSelectedBackendMemberKey,
