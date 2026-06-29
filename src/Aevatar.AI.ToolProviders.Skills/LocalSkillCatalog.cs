@@ -87,6 +87,15 @@ public sealed class LocalSkillCatalog
                 .ToList();
     }
 
+    /// <summary>Gets local skills that advertise host-materialized capabilities.</summary>
+    public IReadOnlyList<SkillDefinition> GetCapabilityProviders()
+    {
+        lock (_lock)
+            return _skills.Values
+                .Where(s => s.Capabilities.Count > 0)
+                .ToList();
+    }
+
     /// <summary>已注册技能数量。</summary>
     // Refactor (iter27/cluster-027-skill-registry-remote-skill-process-state):
     //   Old pattern: SkillRegistry 暴露混合 local + remote skill 注册并用 5min TTL process-wide cache 缓存 remote skill,违反读写分离 + 多用户 token 共享 + 进程内事实状态

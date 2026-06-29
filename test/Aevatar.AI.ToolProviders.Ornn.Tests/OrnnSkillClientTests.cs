@@ -266,6 +266,35 @@ public sealed class OrnnSkillClientTests
     }
 
     [Fact]
+    public async Task RemoteSkillFetcher_LiftsFrontmatterCapabilitiesIntoTypedDescriptors()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson("""
+            {
+              "data": {
+                "name": "Lark Human Interaction",
+                "description": "Delivers human interaction cards",
+                "files": {
+                  "SKILL.md": "---\nname: lark-human-interaction\ncapabilities:\n  - human_interaction.delivery\n  - human_interaction.resolution_update\n---\nRun it."
+                }
+              }
+            }
+            """);
+        var fetcher = new OrnnRemoteSkillFetcher(CreateClient(handler));
+
+        var skill = await fetcher.FetchSkillAsync("access-token", "Lark Human Interaction");
+
+        skill.Should().NotBeNull();
+        skill!.Capabilities.Select(capability => capability.Capability)
+            .Should()
+            .Equal("human_interaction.delivery", "human_interaction.resolution_update");
+        skill.Capabilities.Select(capability => capability.ToolName)
+            .Should()
+            .Equal(
+                "lark_human_interaction_human_interaction_delivery",
+                "lark_human_interaction_human_interaction_resolution_update");
+    }
+
+    [Fact]
     public async Task GetSkillJsonAsync_ReturnsNullWhenNyxIdProxyReportsError()
     {
         var handler = OrnnTestHttpMessageHandler.ReturningJson(

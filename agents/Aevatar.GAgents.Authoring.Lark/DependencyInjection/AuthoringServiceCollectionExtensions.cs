@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgents.Scheduled;
@@ -29,7 +30,10 @@ public static class AuthoringServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        services.Replace(ServiceDescriptor.Singleton<IChannelInteractionNotificationPort, FeishuCardNotificationPort>());
+        if (!services.Any(IsLarkHumanInteractionSkillPackageRegistration))
+            services.AddSingleton(LarkHumanInteractionSkillPackage.Create());
+
+        services.TryAddSingleton<ISkillCapabilityExecutionPort, LarkHumanInteractionSkillCapabilityExecutionPort>();
         services.Replace(ServiceDescriptor.Singleton<IRemoteToolApprovalNotificationPort, LarkRemoteToolApprovalNotificationPort>());
         services.TryAddSingleton<ScheduledAgentCreatorOptions>();
         services.TryAddSingleton<ScheduledAgentCreateRequestMapper>();
@@ -45,6 +49,11 @@ public static class AuthoringServiceCollectionExtensions
         descriptor.ServiceType == typeof(IAgentToolSource) &&
         (descriptor.ImplementationType == typeof(AgentBuilderToolSource) ||
          descriptor.ImplementationFactory == AgentToolSourceFactory);
+
+    private static bool IsLarkHumanInteractionSkillPackageRegistration(ServiceDescriptor descriptor) =>
+        descriptor.ServiceType == typeof(SkillDefinition) &&
+        descriptor.ImplementationInstance is SkillDefinition skill &&
+        string.Equals(skill.Name, LarkHumanInteractionSkillPackage.SkillName, StringComparison.Ordinal);
 
     private static object CreateAgentBuilderToolSource(IServiceProvider sp) =>
         new AgentBuilderToolSource(

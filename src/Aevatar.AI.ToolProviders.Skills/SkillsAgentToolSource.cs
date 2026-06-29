@@ -21,32 +21,40 @@ public sealed class SkillsAgentToolSource : IAgentToolSource
     private readonly SkillsOptions _options;
     private readonly SkillDiscovery _discovery;
     private readonly LocalSkillCatalog _localCatalog;
+    private readonly IEnumerable<SkillDefinition> _builtInSkills;
     private readonly IRemoteSkillFetcher? _remoteFetcher;
     private readonly ISkillWorkflowMountPort _workflowMountPort;
     private readonly IScopeWorkflowCommandPort? _scopeWorkflowCommandPort;
+    private readonly ISkillCapabilityExecutionPort? _capabilityExecutionPort;
     private readonly ILogger _logger;
 
     public SkillsAgentToolSource(
         SkillsOptions options,
         SkillDiscovery discovery,
         LocalSkillCatalog localCatalog,
+        IEnumerable<SkillDefinition>? builtInSkills = null,
         IRemoteSkillFetcher? remoteFetcher = null,
         ISkillWorkflowMountPort? workflowMountPort = null,
         IScopeWorkflowCommandPort? scopeWorkflowCommandPort = null,
+        ISkillCapabilityExecutionPort? capabilityExecutionPort = null,
         ILogger<SkillsAgentToolSource>? logger = null)
     {
         _options = options;
         _discovery = discovery;
         _localCatalog = localCatalog;
+        _builtInSkills = builtInSkills ?? [];
         _remoteFetcher = remoteFetcher;
         _workflowMountPort = workflowMountPort ?? new NoOpSkillWorkflowMountPort();
         _scopeWorkflowCommandPort = scopeWorkflowCommandPort;
+        _capabilityExecutionPort = capabilityExecutionPort;
         _logger = logger ?? NullLogger<SkillsAgentToolSource>.Instance;
     }
 
     /// <inheritdoc />
     public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
     {
+        _localCatalog.RegisterRange(_builtInSkills);
+
         // 1. 扫描本地目录 → 注册到 LocalSkillCatalog
         foreach (var directory in _options.Directories)
         {
@@ -64,14 +72,56 @@ public sealed class SkillsAgentToolSource : IAgentToolSource
         }
 
         // 2. 返回统一的 UseSkillTool（单个工具）
-        IReadOnlyList<IAgentTool> tools =
-        [
+        var tools = new List<IAgentTool>
+        {
             new UseSkillTool(
                 _localCatalog,
                 _remoteFetcher,
                 workflowMountPort: _workflowMountPort,
                 scopeWorkflowCommandPort: _scopeWorkflowCommandPort),
+        };
+        if (_capabilityExecutionPort is not null)
+        {
+            tools.AddRange(_localCatalog
+                .GetCapabilityProviders()
+                .SelectMany(skill => skill.Capabilities
+                    .Where(static capability => !string.IsNullOrWhiteSpace(capability.Capability))
+                    .Select(capability => new SkillCapabilityTool(skill, capability, _capabilityExecutionPort))));
+        }
+
+        return Task.FromResult<IReadOnlyList<IAgentTool>>(tools);
+    }
+
+    private sealed class SkillCapabilityTool(
+        SkillDefinition skill,
+        SkillCapabilityDescriptor capability,
+        ISkillCapabilityExecutionPort executionPort)
+        : IAgentTool, IAgentToolCapabilityDescriptor
+    {
+        public string Name => capability.ToolName;
+
+        public string Description => string.IsNullOrWhiteSpace(capability.Description)
+            ? $"Skill capability: {capability.Capability}."
+            : capability.Description;
+
+        public string ParametersSchema => string.IsNullOrWhiteSpace(capability.ParametersSchema)
+            ? "{\"type\":\"object\"}"
+            : capability.ParametersSchema;
+
+        public IReadOnlyCollection<string> Capabilities { get; } =
+        [
+            capability.Capability,
+            AgentToolCapabilities.ExcludeFromDirectChannelChat,
         ];
-        return Task.FromResult(tools);
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            executionPort.ExecuteAsync(
+                new SkillCapabilityExecutionRequest
+                {
+                    Skill = skill,
+                    Capability = capability,
+                    ArgumentsJson = argumentsJson,
+                },
+                ct);
     }
 }

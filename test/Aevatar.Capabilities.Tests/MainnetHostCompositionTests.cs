@@ -151,13 +151,13 @@ public sealed class MainnetHostCompositionTests
         toolSources.Should().Contain(source => source is TelegramAgentToolSource);
         toolSources.Should().Contain(source => source is SkillsAgentToolSource);
         toolSources.Should().Contain(source => source is OrnnAgentToolSource);
-        toolSources.Should().Contain(source => source is HumanInteractionChannelToolSource);
+        toolSources.Should().NotContain(source => source is HumanInteractionChannelToolSource);
         app.Services.GetRequiredService<IHumanInteractionPort>()
             .Should()
             .BeOfType<SkillBackedHumanInteractionPort>();
-        app.Services.GetRequiredService<IChannelInteractionNotificationPort>()
+        app.Services.GetRequiredService<ISkillCapabilityExecutionPort>()
             .Should()
-            .BeOfType<FeishuCardNotificationPort>();
+            .BeOfType<LarkHumanInteractionSkillCapabilityExecutionPort>();
         // Yield capability follows the actor, never the container (#2004): a DI-global
         // yielding handler hands "I will resume you" to surfaces with no pending-approval
         // continuation, stranding dead-letter approvals. RoleGAgent wires its own handler;

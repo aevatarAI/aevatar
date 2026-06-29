@@ -64,6 +64,9 @@ public sealed class SkillDefinition
 
     /// <summary>技能附带的可编译 C# script 描述。</summary>
     public IReadOnlyList<SkillScriptDescriptor> Scripts { get; init; } = [];
+
+    /// <summary>Skill-provided capabilities that hosts can materialize as agent tools.</summary>
+    public IReadOnlyList<SkillCapabilityDescriptor> Capabilities { get; init; } = [];
 }
 
 /// <summary>
@@ -94,4 +97,25 @@ public sealed class SkillScriptDescriptor
 
     /// <summary>Optional behavior type name passed to script_compile.entry_behavior_type_name.</summary>
     public string EntryBehaviorTypeName { get; init; } = "";
+}
+
+/// <summary>
+/// Capability advertised by a skill package and materialized by host-provided execution ports.
+/// </summary>
+public sealed class SkillCapabilityDescriptor
+{
+    /// <summary>Generic capability token selected by consumers, for example "human_interaction.delivery".</summary>
+    public required string Capability { get; init; }
+
+    /// <summary>Tool name exposed through IAgentToolSource.</summary>
+    public required string ToolName { get; init; }
+
+    /// <summary>Human-readable tool description.</summary>
+    public string Description { get; init; } = "";
+
+    /// <summary>Script id inside this skill package that implements the capability.</summary>
+    public string ScriptId { get; init; } = "";
+
+    /// <summary>JSON schema for the exposed tool arguments.</summary>
+    public string ParametersSchema { get; init; } = "{\"type\":\"object\"}";
 }

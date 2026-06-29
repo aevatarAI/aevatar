@@ -252,6 +252,27 @@ public sealed class LocalSkillCatalogTests
     }
 
     [Fact]
+    public void SkillFrontmatterParser_ParsesCapabilityDeclarations()
+    {
+        var parser = new SkillFrontmatterParser();
+
+        var parsed = parser.Parse("""
+            ---
+            name: lark-human-interaction
+            capabilities:
+              - human_interaction.delivery
+              - human_interaction.resolution_update
+            ---
+            body
+            """);
+
+        parsed.Capabilities.Select(capability => capability.Capability)
+            .Should()
+            .Equal("human_interaction.delivery", "human_interaction.resolution_update");
+        parsed.Capabilities[0].ToolName.Should().Be("lark_human_interaction_human_interaction_delivery");
+    }
+
+    [Fact]
     public void SkillsSource_RemoteCacheRegressionTerms_DoNotAppearInExecutableCode()
     {
         var repoRoot = FindRepoRoot();

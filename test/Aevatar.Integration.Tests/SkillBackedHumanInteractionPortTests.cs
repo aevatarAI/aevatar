@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.Foundation.Abstractions.Interactions;
 using Aevatar.Workflow.Integration.AI;
@@ -153,6 +154,64 @@ public sealed class SkillBackedHumanInteractionPortTests
     }
 
     [Fact]
+    public async Task SkillsAgentToolSource_ShouldMaterializeSkillCapabilityTools()
+    {
+        var catalog = new LocalSkillCatalog();
+        var executionPort = new RecordingSkillCapabilityExecutionPort();
+        catalog.Register(new SkillDefinition
+        {
+            Name = "lark-human-interaction",
+            Description = "Lark delivery",
+            Instructions = "Deliver cards.",
+            Source = SkillSource.Local,
+            IsModelInvocable = false,
+            Capabilities =
+            [
+                new SkillCapabilityDescriptor
+                {
+                    Capability = "human_interaction.delivery",
+                    ToolName = "lark_human_interaction_delivery",
+                    Description = "Deliver Lark card.",
+                },
+                new SkillCapabilityDescriptor
+                {
+                    Capability = "human_interaction.resolution_update",
+                    ToolName = "lark_human_interaction_resolution_update",
+                    Description = "Update Lark card.",
+                },
+            ],
+        });
+        var source = new SkillsAgentToolSource(
+            new SkillsOptions(),
+            new SkillDiscovery(),
+            catalog,
+            capabilityExecutionPort: executionPort);
+        var port = new SkillBackedHumanInteractionPort([source]);
+
+        await port.DeliverSuspensionAsync(
+            new HumanInteractionRequest
+            {
+                ActorId = "workflow-actor",
+                RunId = "run-1",
+                StepId = "approval",
+                SuspensionType = "human_approval",
+                Prompt = "Approve?",
+                Options = ["approve", "reject"],
+            },
+            "delivery-target-1",
+            CancellationToken.None);
+
+        var tools = await source.DiscoverToolsAsync();
+        tools.OfType<IAgentToolCapabilityDescriptor>().Should().Contain(descriptor =>
+            descriptor.Capabilities.Contains("human_interaction.delivery"));
+        tools.OfType<IAgentToolCapabilityDescriptor>().Should().Contain(descriptor =>
+            descriptor.Capabilities.Contains("human_interaction.resolution_update"));
+        executionPort.Requests.Should().ContainSingle();
+        executionPort.Requests[0].Capability.Capability.Should().Be("human_interaction.delivery");
+        executionPort.Requests[0].Skill.Name.Should().Be("lark-human-interaction");
+    }
+
+    [Fact]
     public async Task DeliverSuspensionAsync_ShouldThrowWhenDeliveryToolIsMissing()
     {
         var port = new SkillBackedHumanInteractionPort(
@@ -271,6 +330,19 @@ public sealed class SkillBackedHumanInteractionPortTests
         {
             Calls.Add(argumentsJson);
             return Task.FromResult("{}");
+        }
+    }
+
+    private sealed class RecordingSkillCapabilityExecutionPort : ISkillCapabilityExecutionPort
+    {
+        public List<SkillCapabilityExecutionRequest> Requests { get; } = [];
+
+        public Task<string> ExecuteAsync(
+            SkillCapabilityExecutionRequest request,
+            CancellationToken ct = default)
+        {
+            Requests.Add(request);
+            return Task.FromResult("""{"success":true}""");
         }
     }
 }

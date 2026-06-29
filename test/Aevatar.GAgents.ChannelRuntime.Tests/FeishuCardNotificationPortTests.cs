@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.Foundation.Abstractions.Interactions;
 using Aevatar.GAgents.Authoring.Lark;
@@ -172,6 +173,66 @@ public sealed class FeishuCardNotificationPortTests
         rejectValue.GetProperty("actor_id").GetString().Should().Be("workflow-actor-approval-1");
         rejectValue.GetProperty("run_id").GetString().Should().Be("run-approval-1");
         rejectValue.GetProperty("step_id").GetString().Should().Be("approval-step-1");
+        rejectValue.GetProperty("approved").GetBoolean().Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task LarkHumanInteractionSkillCapability_ShouldSendWorkflowApprovalLarkCardWithResumeIdentity()
+    {
+        var registry = BuildRegistry("agent-skill-approval-1");
+        var handler = new RecordingHandler("""{"data":{"message_id":"om_skill_approval_1"}}""");
+        var port = new LarkHumanInteractionSkillCapabilityExecutionPort(
+            registry,
+            CreateNyxClient(handler),
+            new LarkMessageComposer(),
+            NullLogger<LarkHumanInteractionSkillCapabilityExecutionPort>.Instance);
+        var skill = LarkHumanInteractionSkillPackage.Create();
+        var capability = skill.Capabilities.Single(capability =>
+            capability.Capability == LarkHumanInteractionSkillCapabilityExecutionPort.DeliveryCapability);
+
+        var resultJson = await port.ExecuteAsync(
+            new SkillCapabilityExecutionRequest
+            {
+                Skill = skill,
+                Capability = capability,
+                ArgumentsJson = JsonSerializer.Serialize(new
+                {
+                    deliveryTargetId = "agent-skill-approval-1",
+                    interaction = new HumanInteractionRequest
+                    {
+                        ActorId = "workflow-actor-skill-approval-1",
+                        RunId = "run-skill-approval-1",
+                        StepId = "skill-approval-step-1",
+                        SuspensionType = "human_approval",
+                        Prompt = "Approve release?",
+                        Options = ["approve", "reject"],
+                        TimeoutSeconds = 300,
+                    },
+                }, new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+            },
+            CancellationToken.None);
+
+        using var result = JsonDocument.Parse(resultJson);
+        result.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
+
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.RequestUri!.ToString()
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages?receive_id_type=chat_id");
+        using var body = JsonDocument.Parse(handler.LastBody!);
+        body.RootElement.GetProperty("receive_id").GetString().Should().Be("oc_chat_1");
+        body.RootElement.GetProperty("msg_type").GetString().Should().Be("interactive");
+
+        using var content = JsonDocument.Parse(body.RootElement.GetProperty("content").GetString()!);
+        var approveValue = FindCallbackValue(content.RootElement, "approve");
+        approveValue.GetProperty("actor_id").GetString().Should().Be("workflow-actor-skill-approval-1");
+        approveValue.GetProperty("run_id").GetString().Should().Be("run-skill-approval-1");
+        approveValue.GetProperty("step_id").GetString().Should().Be("skill-approval-step-1");
+        approveValue.GetProperty("approved").GetBoolean().Should().BeTrue();
+
+        var rejectValue = FindCallbackValue(content.RootElement, "reject");
+        rejectValue.GetProperty("actor_id").GetString().Should().Be("workflow-actor-skill-approval-1");
+        rejectValue.GetProperty("run_id").GetString().Should().Be("run-skill-approval-1");
+        rejectValue.GetProperty("step_id").GetString().Should().Be("skill-approval-step-1");
         rejectValue.GetProperty("approved").GetBoolean().Should().BeFalse();
     }
 

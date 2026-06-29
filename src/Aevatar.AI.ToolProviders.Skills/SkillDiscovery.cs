@@ -115,6 +115,43 @@ public sealed class SkillDiscovery
             IsUserInvocable = parsed.IsUserInvocable,
             Workflows = workflows,
             Scripts = scripts,
+            Capabilities = BindCapabilities(parsed.Capabilities, scripts, name),
         };
+    }
+
+    private static IReadOnlyList<SkillCapabilityDescriptor> BindCapabilities(
+        IReadOnlyList<SkillCapabilityDescriptor> capabilities,
+        IReadOnlyList<SkillScriptDescriptor> scripts,
+        string skillName)
+    {
+        if (capabilities.Count == 0)
+            return [];
+
+        var defaultScriptId = scripts.Count == 1 ? scripts[0].ScriptId : "";
+        return capabilities.Select(capability => new SkillCapabilityDescriptor
+        {
+            Capability = capability.Capability,
+            ToolName = string.IsNullOrWhiteSpace(capability.ToolName)
+                ? $"{NormalizeIdentifier(skillName)}_{NormalizeIdentifier(capability.Capability)}"
+                : capability.ToolName,
+            Description = capability.Description,
+            ScriptId = string.IsNullOrWhiteSpace(capability.ScriptId) ? defaultScriptId : capability.ScriptId,
+            ParametersSchema = string.IsNullOrWhiteSpace(capability.ParametersSchema)
+                ? "{\"type\":\"object\"}"
+                : capability.ParametersSchema,
+        }).ToArray();
+    }
+
+    private static string NormalizeIdentifier(string value)
+    {
+        var chars = value
+            .Trim()
+            .Select(static c => char.IsLetterOrDigit(c) ? char.ToLowerInvariant(c) : '_')
+            .ToArray();
+        var normalized = new string(chars);
+        while (normalized.Contains("__", StringComparison.Ordinal))
+            normalized = normalized.Replace("__", "_", StringComparison.Ordinal);
+
+        return normalized.Trim('_');
     }
 }

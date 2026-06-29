@@ -37,6 +37,9 @@ public sealed class SkillParseResult
     /// <summary>Frontmatter 中的 script entry behavior type hint.</summary>
     public string? ScriptEntry { get; init; }
 
+    /// <summary>Frontmatter capability declarations.</summary>
+    public IReadOnlyList<SkillCapabilityDescriptor> Capabilities { get; init; } = [];
+
     /// <summary>是否存在 frontmatter。</summary>
     public bool HasFrontmatter { get; init; }
 }
@@ -92,10 +95,12 @@ public sealed class SkillFrontmatterParser
         string? name = null, description = null, arguments = null, whenToUse = null, workflowEntry = null, scriptEntry = null;
         var isModelInvocable = true;
         var isUserInvocable = true;
+        var capabilities = new List<SkillCapabilityDescriptor>();
 
-        foreach (var line in frontmatterBlock.Split('\n'))
+        var lines = frontmatterBlock.Split('\n');
+        for (var i = 0; i < lines.Length; i++)
         {
-            var trimmedLine = line.Trim();
+            var trimmedLine = lines[i].Trim();
             if (string.IsNullOrEmpty(trimmedLine) || trimmedLine.StartsWith('#'))
                 continue;
 
@@ -140,6 +145,25 @@ public sealed class SkillFrontmatterParser
                 case "user-invocable" or "user_invocable":
                     isUserInvocable = ParseBool(value);
                     break;
+                case "capability" or "capabilities":
+                    capabilities.AddRange(ParseCapabilityValue(value, name));
+                    break;
+            }
+
+            if (key is "capabilities" && string.IsNullOrWhiteSpace(value))
+            {
+                while (i + 1 < lines.Length)
+                {
+                    var next = lines[i + 1];
+                    if (!next.StartsWith("  -", StringComparison.Ordinal) &&
+                        !next.StartsWith("- ", StringComparison.Ordinal))
+                    {
+                        break;
+                    }
+
+                    i++;
+                    capabilities.AddRange(ParseCapabilityValue(next.Trim().TrimStart('-').Trim(), name));
+                }
             }
         }
 
@@ -153,6 +177,10 @@ public sealed class SkillFrontmatterParser
             IsUserInvocable = isUserInvocable,
             WorkflowEntry = workflowEntry,
             ScriptEntry = scriptEntry,
+            Capabilities = capabilities
+                .GroupBy(static capability => capability.Capability, StringComparer.OrdinalIgnoreCase)
+                .Select(static group => group.First())
+                .ToArray(),
             Body = body,
             HasFrontmatter = true,
         };
@@ -196,4 +224,48 @@ public sealed class SkillFrontmatterParser
         value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
         value == "1" ||
         value.Equals("yes", StringComparison.OrdinalIgnoreCase);
+
+    private static IReadOnlyList<SkillCapabilityDescriptor> ParseCapabilityValue(string value, string? skillName)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return [];
+
+        var tokens = value
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(static token => !string.IsNullOrWhiteSpace(token))
+            .ToArray();
+        if (tokens.Length == 0)
+            return [];
+
+        return tokens.Select(token => BuildCapabilityDescriptor(token, skillName)).ToArray();
+    }
+
+    private static SkillCapabilityDescriptor BuildCapabilityDescriptor(string capability, string? skillName)
+    {
+        var normalizedCapability = capability.Trim();
+        var normalizedSkillName = string.IsNullOrWhiteSpace(skillName)
+            ? "skill"
+            : NormalizeIdentifier(skillName);
+        return new SkillCapabilityDescriptor
+        {
+            Capability = normalizedCapability,
+            ToolName = $"{normalizedSkillName}_{NormalizeIdentifier(normalizedCapability)}",
+            Description = $"Skill capability: {normalizedCapability}.",
+            ScriptId = "",
+            ParametersSchema = "{\"type\":\"object\"}",
+        };
+    }
+
+    private static string NormalizeIdentifier(string value)
+    {
+        var chars = value
+            .Trim()
+            .Select(static c => char.IsLetterOrDigit(c) ? char.ToLowerInvariant(c) : '_')
+            .ToArray();
+        var normalized = new string(chars);
+        while (normalized.Contains("__", StringComparison.Ordinal))
+            normalized = normalized.Replace("__", "_", StringComparison.Ordinal);
+
+        return normalized.Trim('_');
+    }
 }

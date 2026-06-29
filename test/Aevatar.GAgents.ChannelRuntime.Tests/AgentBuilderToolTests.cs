@@ -4,6 +4,7 @@ using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -1385,17 +1386,22 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(nyxClient);
         services.AddSingleton(Substitute.For<IUserAgentDeliveryTargetReader>());
         services.AddSingleton<LarkMessageComposer>();
-        services.TryAddSingleton<ILogger<FeishuCardNotificationPort>>(NullLogger<FeishuCardNotificationPort>.Instance);
+        services.TryAddSingleton<ILogger<LarkHumanInteractionSkillCapabilityExecutionPort>>(
+            NullLogger<LarkHumanInteractionSkillCapabilityExecutionPort>.Instance);
         services.AddSingleton(callerScopeResolver);
 
         services.AddLarkAgentAuthoring();
         services.AddLarkAgentAuthoring();
 
         await using var provider = services.BuildServiceProvider();
-        var source = provider.GetServices<IAgentToolSource>().Should().ContainSingle().Subject;
-        source.Should().BeOfType<AgentBuilderToolSource>();
+        provider.GetServices<IAgentToolSource>()
+            .Should()
+            .ContainSingle(source => source is AgentBuilderToolSource);
+        var source = provider.GetServices<IAgentToolSource>().Single(source => source is AgentBuilderToolSource);
         provider.GetService<IHumanInteractionPort>().Should().BeNull();
-        provider.GetRequiredService<IChannelInteractionNotificationPort>().Should().BeOfType<FeishuCardNotificationPort>();
+        provider.GetRequiredService<ISkillCapabilityExecutionPort>()
+            .Should()
+            .BeOfType<LarkHumanInteractionSkillCapabilityExecutionPort>();
 
         var tools = await source.DiscoverToolsAsync();
 
