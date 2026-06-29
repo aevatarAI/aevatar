@@ -43,4 +43,29 @@ public class NyxApiResponseHelperTests
     {
         NyxApiResponseHelper.ExtractOptionalProxyUrlSlug(response).Should().BeNull();
     }
+
+    [Fact]
+    public void ExtractChannelBotIdsForApp_Returns_Ids_Matching_App_By_PlatformBotId_Or_AppId()
+    {
+        var response = """[{"id":"b1","platform_bot_id":"cli_x"},{"id":"b2","platform_bot_id":"cli_y"},{"id":"b3","app_id":"cli_x"}]""";
+        NyxApiResponseHelper.ExtractChannelBotIdsForApp(response, "cli_x")
+            .Should().BeEquivalentTo(new[] { "b1", "b3" });
+    }
+
+    [Fact]
+    public void ExtractChannelBotIdsForApp_Reads_Wrapped_Array_And_Ignores_NonMatches()
+    {
+        NyxApiResponseHelper.ExtractChannelBotIdsForApp("""{"data":[{"id":"b1","platform_bot_id":"cli_y"}]}""", "cli_x")
+            .Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("""{"error":true,"status":409}""")]   // Nyx error envelope
+    [InlineData("not-json")]                          // unparseable
+    [InlineData("[]")]                                // empty list
+    [InlineData("")]                                  // empty
+    public void ExtractChannelBotIdsForApp_Returns_Empty_On_Error_Or_NoMatch(string response)
+    {
+        NyxApiResponseHelper.ExtractChannelBotIdsForApp(response, "cli_x").Should().BeEmpty();
+    }
 }
