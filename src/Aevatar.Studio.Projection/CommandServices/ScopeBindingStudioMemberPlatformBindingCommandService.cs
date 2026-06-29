@@ -17,6 +17,7 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
     private const string BindingRunDirectRoute = "aevatar.studio.projection.studio-member-binding-run";
     private const string PlatformBindingFailedFailureCode = "STUDIO_MEMBER_PLATFORM_BINDING_FAILED";
     private const string ReadinessFailedFailureCode = "STUDIO_MEMBER_PLATFORM_BINDING_READINESS_FAILED";
+    private const string ReadinessTimeoutFailureCode = "STUDIO_MEMBER_PLATFORM_BINDING_READINESS_TIMEOUT";
 
     private readonly IScopeBindingCommandPort _scopeBindingCommandPort;
     private readonly IScopeBindingReadinessQueryPort _readinessQueryPort;
@@ -183,12 +184,16 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
         if (!readiness.InvokeReady)
         {
             _logger.LogWarning(
-                "StudioMember platform binding commands completed, but readiness was not observed before timeout. Leaving binding run pending for watchdog recovery. bindingRunId={BindingRunId} platformBindingCommandId={CommandId} readinessStatus={ReadinessStatus}",
+                "StudioMember platform binding commands completed, but readiness was not observed before timeout. Dispatching terminal failure continuation. bindingRunId={BindingRunId} platformBindingCommandId={CommandId} readinessStatus={ReadinessStatus}",
                 request.BindingRunId,
                 commandId,
                 readiness.Status);
 
-            return null;
+            return BuildFailedContinuation(
+                request.BindingRunId,
+                commandId,
+                ReadinessTimeoutFailureCode,
+                $"Platform binding readiness was not observed before timeout. readinessStatus={readiness.Status}");
         }
 
         StudioMemberImplementationRef implementationRef;
