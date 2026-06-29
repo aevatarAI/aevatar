@@ -17,6 +17,8 @@ internal sealed class GAgentServiceDemoBootstrapHostedService : IHostedService
     private readonly IOptions<GAgentServiceDemoOptions> _options;
     private readonly IHostEnvironment _hostEnvironment;
     private readonly ILogger<GAgentServiceDemoBootstrapHostedService> _logger;
+    private readonly Func<TimeSpan, CancellationToken, Task> _delayAsync;
+    private readonly Func<DateTimeOffset> _utcNow;
 
     public GAgentServiceDemoBootstrapHostedService(
         IServiceCommandPort commandPort,
@@ -25,6 +27,27 @@ internal sealed class GAgentServiceDemoBootstrapHostedService : IHostedService
         IOptions<GAgentServiceDemoOptions> options,
         IHostEnvironment hostEnvironment,
         ILogger<GAgentServiceDemoBootstrapHostedService> logger)
+        : this(
+            commandPort,
+            lifecycleQueryPort,
+            servingQueryPort,
+            options,
+            hostEnvironment,
+            logger,
+            Task.Delay,
+            () => DateTimeOffset.UtcNow)
+    {
+    }
+
+    internal GAgentServiceDemoBootstrapHostedService(
+        IServiceCommandPort commandPort,
+        IServiceLifecycleQueryPort lifecycleQueryPort,
+        IServiceServingQueryPort servingQueryPort,
+        IOptions<GAgentServiceDemoOptions> options,
+        IHostEnvironment hostEnvironment,
+        ILogger<GAgentServiceDemoBootstrapHostedService> logger,
+        Func<TimeSpan, CancellationToken, Task> delayAsync,
+        Func<DateTimeOffset> utcNow)
     {
         _commandPort = commandPort ?? throw new ArgumentNullException(nameof(commandPort));
         _lifecycleQueryPort = lifecycleQueryPort ?? throw new ArgumentNullException(nameof(lifecycleQueryPort));
@@ -32,6 +55,8 @@ internal sealed class GAgentServiceDemoBootstrapHostedService : IHostedService
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _hostEnvironment = hostEnvironment ?? throw new ArgumentNullException(nameof(hostEnvironment));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _delayAsync = delayAsync ?? throw new ArgumentNullException(nameof(delayAsync));
+        _utcNow = utcNow ?? throw new ArgumentNullException(nameof(utcNow));
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)
@@ -71,7 +96,7 @@ internal sealed class GAgentServiceDemoBootstrapHostedService : IHostedService
     {
         var identity = CreateIdentity(options, definition.ServiceId);
         var endpoint = GAgentServiceDemoDefinitions.CreateEndpointSpec(definition);
-        var expectedTarget = CreateServingTarget(identity, definition);
+        var expectedEndpointId = endpoint.EndpointId;
 
         var service = await _lifecycleQueryPort.GetServiceAsync(identity, ct);
         if (service == null)
@@ -158,7 +183,7 @@ internal sealed class GAgentServiceDemoBootstrapHostedService : IHostedService
         }
 
         var deployments = await _lifecycleQueryPort.GetServiceDeploymentsAsync(identity, ct);
-        if (!HasExpectedDeployment(deployments, expectedTarget))
+        if (!HasActiveDeployment(deployments, definition.RevisionId))
         {
             await _commandPort.ActivateServiceRevisionAsync(
                 new ActivateServiceRevisionCommand
@@ -169,17 +194,35 @@ internal sealed class GAgentServiceDemoBootstrapHostedService : IHostedService
                 ct);
         }
 
-        var servingSet = await _servingQueryPort.GetServiceServingSetAsync(identity, ct);
-        if (!HasExpectedServingTarget(servingSet, expectedTarget))
+        await WaitForServingTrafficViewAsync(identity, definition.RevisionId, expectedEndpointId, options, ct);
+    }
+
+    private async Task WaitForServingTrafficViewAsync(
+        ServiceIdentity identity,
+        string revisionId,
+        string endpointId,
+        GAgentServiceDemoOptions options,
+        CancellationToken ct)
+    {
+        var serviceKey = ServiceKeys.Build(identity);
+        var timeout = ResolvePositiveDuration(options.ServingReadinessTimeoutSeconds, 30, value => TimeSpan.FromSeconds(value));
+        var interval = ResolvePositiveDuration(options.ServingReadinessPollIntervalMilliseconds, 250, value => TimeSpan.FromMilliseconds(value));
+        var deadline = _utcNow() + timeout;
+        ServiceTrafficViewSnapshot? lastTrafficView = null;
+
+        while (true)
         {
-            await _commandPort.ReplaceServiceServingTargetsAsync(
-                new ReplaceServiceServingTargetsCommand
-                {
-                    Identity = identity.Clone(),
-                    Reason = "bootstrap demo service",
-                    Targets = { expectedTarget.Clone() },
-                },
-                ct);
+            ct.ThrowIfCancellationRequested();
+            lastTrafficView = await _servingQueryPort.GetServiceTrafficViewAsync(identity, ct);
+            if (HasActiveTrafficTarget(lastTrafficView, revisionId, endpointId))
+                return;
+
+            var remaining = deadline - _utcNow();
+            if (remaining <= TimeSpan.Zero)
+                throw new InvalidOperationException(
+                    $"Demo service '{serviceKey}' revision '{revisionId}' did not expose an active serving traffic view for endpoint '{endpointId}' within {timeout.TotalSeconds:F0}s. Last traffic view: {DescribeTrafficView(lastTrafficView)}");
+
+            await _delayAsync(remaining < interval ? remaining : interval, ct);
         }
     }
 
@@ -221,52 +264,53 @@ internal sealed class GAgentServiceDemoBootstrapHostedService : IHostedService
             },
         };
 
-    private static ServiceServingTargetSpec CreateServingTarget(
-        ServiceIdentity identity,
-        GAgentServiceDemoDefinition definition)
-    {
-        var deploymentActorId = ServiceActorIds.Deployment(identity);
-        var deploymentId = $"{deploymentActorId}:{definition.RevisionId}";
-        var target = new ServiceServingTargetSpec
-        {
-            DeploymentId = deploymentId,
-            RevisionId = definition.RevisionId,
-            PrimaryActorId = $"gagent-service:workflow-definition:{deploymentId}",
-            AllocationWeight = 100,
-            ServingState = ServiceServingState.Active,
-        };
-        target.EnabledEndpointIds.Add("chat");
-        return target;
-    }
-
-    private static bool HasExpectedDeployment(
+    private static bool HasActiveDeployment(
         ServiceDeploymentCatalogSnapshot? snapshot,
-        ServiceServingTargetSpec expectedTarget)
+        string revisionId)
     {
         if (snapshot == null)
             return false;
 
         return snapshot.Deployments.Any(x =>
-            string.Equals(x.DeploymentId, expectedTarget.DeploymentId, StringComparison.Ordinal) &&
-            string.Equals(x.RevisionId, expectedTarget.RevisionId, StringComparison.Ordinal) &&
-            string.Equals(x.PrimaryActorId, expectedTarget.PrimaryActorId, StringComparison.Ordinal) &&
+            string.Equals(x.RevisionId, revisionId, StringComparison.Ordinal) &&
+            !string.IsNullOrWhiteSpace(x.DeploymentId) &&
+            !string.IsNullOrWhiteSpace(x.PrimaryActorId) &&
             string.Equals(x.Status, ServiceDeploymentStatus.Active.ToString(), StringComparison.Ordinal));
     }
 
-    private static bool HasExpectedServingTarget(
-        ServiceServingSetSnapshot? snapshot,
-        ServiceServingTargetSpec expectedTarget)
+    private static bool HasActiveTrafficTarget(
+        ServiceTrafficViewSnapshot? snapshot,
+        string revisionId,
+        string endpointId)
     {
         if (snapshot == null)
             return false;
 
-        return snapshot.Targets.Any(x =>
-            string.Equals(x.DeploymentId, expectedTarget.DeploymentId, StringComparison.Ordinal) &&
-            string.Equals(x.RevisionId, expectedTarget.RevisionId, StringComparison.Ordinal) &&
-            string.Equals(x.PrimaryActorId, expectedTarget.PrimaryActorId, StringComparison.Ordinal) &&
-            x.AllocationWeight == expectedTarget.AllocationWeight &&
-            string.Equals(x.ServingState, expectedTarget.ServingState.ToString(), StringComparison.Ordinal) &&
-            x.EnabledEndpointIds.SequenceEqual(expectedTarget.EnabledEndpointIds, StringComparer.Ordinal));
+        return snapshot.Endpoints.Any(endpoint =>
+            string.Equals(endpoint.EndpointId, endpointId, StringComparison.Ordinal) &&
+            endpoint.Targets.Any(target =>
+                string.Equals(target.RevisionId, revisionId, StringComparison.Ordinal) &&
+                target.AllocationWeight > 0 &&
+                !string.IsNullOrWhiteSpace(target.DeploymentId) &&
+                !string.IsNullOrWhiteSpace(target.PrimaryActorId) &&
+                string.Equals(target.ServingState, ServiceServingState.Active.ToString(), StringComparison.Ordinal)));
+    }
+
+    private static TimeSpan ResolvePositiveDuration(
+        int configuredValue,
+        int fallbackValue,
+        Func<int, TimeSpan> factory) =>
+        factory(configuredValue > 0 ? configuredValue : fallbackValue);
+
+    private static string DescribeTrafficView(ServiceTrafficViewSnapshot? snapshot)
+    {
+        if (snapshot == null)
+            return "<missing>";
+
+        var endpoints = snapshot.Endpoints.Select(endpoint =>
+            $"{endpoint.EndpointId}=[{string.Join(", ", endpoint.Targets.Select(target =>
+                $"{target.RevisionId}:{target.ServingState}:{target.AllocationWeight}:{target.DeploymentId}:{target.PrimaryActorId}"))}]");
+        return $"generation={snapshot.Generation}; endpoints={string.Join("; ", endpoints)}";
     }
 
     private static bool NeedsServiceUpdate(

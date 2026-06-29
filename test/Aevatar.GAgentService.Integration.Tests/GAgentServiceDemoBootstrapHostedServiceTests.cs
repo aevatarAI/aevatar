@@ -4,9 +4,8 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Hosting.Demo;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgentService.Integration.Tests;
@@ -17,7 +16,10 @@ public sealed class GAgentServiceDemoBootstrapHostedServiceTests
     public async Task StartAsync_WhenEnabled_ShouldBootstrapAllDemoWorkflowServices()
     {
         var commandPort = new RecordingServiceCommandPort();
-        var queryPort = new RecordingServiceQueryPort();
+        var queryPort = new RecordingServiceQueryPort
+        {
+            TrafficViewFactory = CreateReadyTrafficView,
+        };
         var hostedService = CreateHostedService(
             commandPort,
             queryPort,
@@ -48,13 +50,8 @@ public sealed class GAgentServiceDemoBootstrapHostedServiceTests
         commandPort.ActivateServiceRevisionCommands.Select(x => x.RevisionId)
             .Should()
             .OnlyContain(x => x == "builtin-v1");
-        commandPort.ReplaceServingTargetsCommands.Should().HaveCount(3);
-        commandPort.ReplaceServingTargetsCommands.Should().OnlyContain(x =>
-            x.Targets.Count == 1 &&
-            x.Targets[0].AllocationWeight == 100 &&
-            x.Targets[0].ServingState == ServiceServingState.Active &&
-            x.Targets[0].EnabledEndpointIds.Count == 1 &&
-            x.Targets[0].EnabledEndpointIds[0] == "chat");
+        commandPort.ReplaceServingTargetsCommands.Should().BeEmpty();
+        queryPort.TrafficViewQueryCount.Should().Be(3);
     }
 
     [Fact]
@@ -82,30 +79,79 @@ public sealed class GAgentServiceDemoBootstrapHostedServiceTests
         commandPort.ReplaceServingTargetsCommands.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task StartAsync_WhenTrafficViewAppearsAfterActivation_ShouldWaitForReadiness()
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var queryPort = new RecordingServiceQueryPort();
+        queryPort.TrafficViewFactory = identity =>
+            queryPort.TrafficViewQueryCount < 2 ? null : CreateReadyTrafficView(identity);
+        var hostedService = CreateHostedService(
+            commandPort,
+            queryPort,
+            new GAgentServiceDemoOptions
+            {
+                Enabled = true,
+            },
+            Environments.Development);
+
+        await hostedService.StartAsync(CancellationToken.None);
+
+        queryPort.DelayCount.Should().Be(1);
+        queryPort.TrafficViewQueryCount.Should().Be(4);
+    }
+
+    [Fact]
+    public async Task StartAsync_WhenTrafficViewNeverAppears_ShouldReportSetupFailure()
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var queryPort = new RecordingServiceQueryPort();
+        var hostedService = CreateHostedService(
+            commandPort,
+            queryPort,
+            new GAgentServiceDemoOptions
+            {
+                Enabled = true,
+                ServingReadinessTimeoutSeconds = 1,
+                ServingReadinessPollIntervalMilliseconds = 1000,
+            },
+            Environments.Development);
+
+        var now = DateTimeOffset.Parse("2026-06-29T12:00:00Z");
+        queryPort.UtcNow = () => now;
+        queryPort.Delay = delay =>
+        {
+            now += delay;
+            return Task.CompletedTask;
+        };
+
+        var act = async () => await hostedService.StartAsync(CancellationToken.None);
+
+        await act.Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage("Demo service 'demo:gagent-service:samples:demo-uppercase' revision 'builtin-v1' did not expose an active serving traffic view for endpoint 'chat' within 1s. Last traffic view: <missing>");
+        queryPort.DelayCount.Should().Be(1);
+        queryPort.TrafficViewQueryCount.Should().BeGreaterThan(1);
+    }
+
     private static IHostedService CreateHostedService(
         RecordingServiceCommandPort commandPort,
         RecordingServiceQueryPort queryPort,
         GAgentServiceDemoOptions options,
         string environmentName)
     {
-        var bootstrapType = typeof(Aevatar.GAgentService.Hosting.DependencyInjection.ServiceCollectionExtensions)
-            .Assembly
-            .GetType("Aevatar.GAgentService.Hosting.Demo.GAgentServiceDemoBootstrapHostedService", throwOnError: true)!;
-
-        var services = new ServiceCollection();
-        services.AddLogging();
-        services.AddSingleton<IServiceCommandPort>(commandPort);
-        services.AddSingleton<IServiceLifecycleQueryPort>(queryPort);
-        services.AddSingleton<IServiceServingQueryPort>(queryPort);
-        services.AddSingleton<IOptions<GAgentServiceDemoOptions>>(Options.Create(options));
-        services.AddSingleton<IHostEnvironment>(new RecordingHostEnvironment
-        {
-            EnvironmentName = environmentName,
-        });
-        services.AddSingleton(typeof(IHostedService), sp =>
-            (IHostedService)ActivatorUtilities.CreateInstance(sp, bootstrapType));
-
-        return services.BuildServiceProvider().GetRequiredService<IHostedService>();
+        return new GAgentServiceDemoBootstrapHostedService(
+            commandPort,
+            queryPort,
+            queryPort,
+            Options.Create(options),
+            new RecordingHostEnvironment
+            {
+                EnvironmentName = environmentName,
+            },
+            NullLogger<GAgentServiceDemoBootstrapHostedService>.Instance,
+            (delay, _) => queryPort.DelayAsync(delay),
+            () => queryPort.UtcNow());
     }
 
     private sealed class RecordingServiceCommandPort : IServiceCommandPort
@@ -236,6 +282,22 @@ public sealed class GAgentServiceDemoBootstrapHostedServiceTests
 
     private sealed class RecordingServiceQueryPort : IServiceLifecycleQueryPort, IServiceServingQueryPort
     {
+        public Func<ServiceIdentity, ServiceTrafficViewSnapshot?>? TrafficViewFactory { get; set; }
+
+        public int TrafficViewQueryCount { get; private set; }
+
+        public int DelayCount { get; private set; }
+
+        public Func<DateTimeOffset> UtcNow { get; set; } = () => DateTimeOffset.UtcNow;
+
+        public Func<TimeSpan, Task> Delay { get; set; } = _ => Task.CompletedTask;
+
+        public async Task DelayAsync(TimeSpan delay)
+        {
+            DelayCount++;
+            await Delay(delay);
+        }
+
         public Task<ServiceCatalogSnapshot?> GetServiceAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             Task.FromResult<ServiceCatalogSnapshot?>(null);
 
@@ -265,8 +327,33 @@ public sealed class GAgentServiceDemoBootstrapHostedServiceTests
             CancellationToken ct = default) =>
             Task.FromResult<ServiceRolloutCommandObservationSnapshot?>(null);
 
-        public Task<ServiceTrafficViewSnapshot?> GetServiceTrafficViewAsync(ServiceIdentity identity, CancellationToken ct = default) =>
-            Task.FromResult<ServiceTrafficViewSnapshot?>(null);
+        public Task<ServiceTrafficViewSnapshot?> GetServiceTrafficViewAsync(ServiceIdentity identity, CancellationToken ct = default)
+        {
+            TrafficViewQueryCount++;
+            return Task.FromResult(TrafficViewFactory?.Invoke(identity));
+        }
+    }
+
+    private static ServiceTrafficViewSnapshot CreateReadyTrafficView(ServiceIdentity identity)
+    {
+        var deploymentId = $"{ServiceActorIds.Deployment(identity)}:builtin-v1";
+        return new ServiceTrafficViewSnapshot(
+            ServiceKeys.Build(identity),
+            1,
+            string.Empty,
+            [
+                new ServiceTrafficEndpointSnapshot(
+                    "chat",
+                    [
+                        new ServiceTrafficTargetSnapshot(
+                            deploymentId,
+                            "builtin-v1",
+                            $"gagent-service:workflow-definition:{deploymentId}",
+                            100,
+                            ServiceServingState.Active.ToString()),
+                    ]),
+            ],
+            DateTimeOffset.UtcNow);
     }
 
     private sealed class RecordingHostEnvironment : IHostEnvironment

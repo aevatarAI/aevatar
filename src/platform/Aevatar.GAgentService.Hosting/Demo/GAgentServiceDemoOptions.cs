@@ -9,4 +9,8 @@ public sealed class GAgentServiceDemoOptions
     public string AppId { get; set; } = "gagent-service";
 
     public string Namespace { get; set; } = "samples";
+
+    public int ServingReadinessTimeoutSeconds { get; set; } = 30;
+
+    public int ServingReadinessPollIntervalMilliseconds { get; set; } = 250;
 }
