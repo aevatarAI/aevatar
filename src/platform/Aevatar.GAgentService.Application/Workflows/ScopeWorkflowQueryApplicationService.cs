@@ -76,11 +76,19 @@ public sealed class ScopeWorkflowQueryApplicationService : IScopeWorkflowQueryPo
                 Reason: "service_catalog_missing");
         }
 
+        if (!HasCompleteCatalogRuntimeFacts(serviceSnapshot))
+        {
+            return new ScopeWorkflowLookupResult(
+                ScopeWorkflowLookupStatus.NotReady,
+                Workflow: null,
+                Reason: "service_runtime_facts_missing");
+        }
+
         var deploymentCatalog = await _serviceLifecycleQueryPort.GetServiceDeploymentsAsync(identity, ct);
         var deployment = ResolveActiveDeployment(serviceSnapshot, deploymentCatalog);
         if (deployment == null)
         {
-            if (HasCompleteCatalogRuntimeFacts(serviceSnapshot) && deploymentCatalog?.Deployments.Count > 0)
+            if (deploymentCatalog?.Deployments.Count > 0)
             {
                 return new ScopeWorkflowLookupResult(
                     ScopeWorkflowLookupStatus.Stale,
@@ -251,13 +259,11 @@ public sealed class ScopeWorkflowQueryApplicationService : IScopeWorkflowQueryPo
             return deploymentCatalog.Deployments.FirstOrDefault(x =>
                 string.Equals(x.DeploymentId, serviceSnapshot.DeploymentId, StringComparison.Ordinal) &&
                 string.Equals(x.RevisionId, serviceSnapshot.ActiveServingRevisionId, StringComparison.Ordinal) &&
-                string.Equals(x.PrimaryActorId, serviceSnapshot.PrimaryActorId, StringComparison.Ordinal));
+                string.Equals(x.PrimaryActorId, serviceSnapshot.PrimaryActorId, StringComparison.Ordinal) &&
+                string.Equals(x.Status, ServiceDeploymentStatus.Active.ToString(), StringComparison.OrdinalIgnoreCase));
         }
 
-        return deploymentCatalog.Deployments
-            .Where(static x => string.Equals(x.Status, ServiceDeploymentStatus.Active.ToString(), StringComparison.OrdinalIgnoreCase))
-            .OrderByDescending(static x => x.UpdatedAt)
-            .FirstOrDefault();
+        return null;
     }
 
     private static bool HasCompleteCatalogRuntimeFacts(ServiceCatalogSnapshot serviceSnapshot) =>

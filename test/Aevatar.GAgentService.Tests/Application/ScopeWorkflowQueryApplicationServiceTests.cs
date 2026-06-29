@@ -62,6 +62,39 @@ public sealed class ScopeWorkflowQueryApplicationServiceTests
     }
 
     [Fact]
+    public async Task ListAsync_ShouldNotFabricateRuntimeFacts_WhenServiceCatalogIsDefinitionOnly()
+    {
+        var definitionOnly = CreateServiceSnapshot(
+            serviceId: "wf-definition-only",
+            displayName: "Definition Only",
+            activeRevisionId: "",
+            deploymentId: "",
+            primaryActorId: "");
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(
+            listResult: new[] { definitionOnly },
+            deploymentResult: new ServiceDeploymentCatalogSnapshot(
+                definitionOnly.ServiceKey,
+                [new ServiceDeploymentSnapshot(
+                    "dep-materialized",
+                    "rev-materialized",
+                    "actor-materialized",
+                    ServiceDeploymentStatus.Active.ToString(),
+                    DateTimeOffset.UtcNow,
+                    DateTimeOffset.UtcNow)],
+                DateTimeOffset.UtcNow));
+        var bindingReader = new FakeWorkflowActorBindingReader(CreateBinding("actor-materialized", "workflow-name"));
+        var service = CreateService(lifecyclePort, bindingReader);
+
+        var result = await service.ListAsync(ScopeId);
+
+        result.Should().ContainSingle();
+        result[0].WorkflowId.Should().Be("wf-definition-only");
+        result[0].ActorId.Should().BeEmpty();
+        result[0].ActiveRevisionId.Should().BeEmpty();
+        result[0].DeploymentId.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task LookupByWorkflowIdAsync_ShouldReturnNotFound_WhenServiceCatalogMissing()
     {
         var lifecyclePort = new FakeServiceLifecycleQueryPort();
@@ -88,6 +121,37 @@ public sealed class ScopeWorkflowQueryApplicationServiceTests
         var result = await service.LookupByWorkflowIdAsync(ScopeId, "wf-runtime-missing");
 
         result.Status.Should().Be(ScopeWorkflowLookupStatus.NotReady);
+        result.Workflow.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task LookupByWorkflowIdAsync_ShouldReturnNotReady_WhenDefinitionOnlyCatalogHasActiveDeploymentReadModel()
+    {
+        var snapshot = CreateServiceSnapshot(
+            serviceId: "wf-definition-only",
+            displayName: "Definition Only",
+            activeRevisionId: "",
+            deploymentId: "",
+            primaryActorId: "");
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(
+            getResult: snapshot,
+            deploymentResult: new ServiceDeploymentCatalogSnapshot(
+                snapshot.ServiceKey,
+                [new ServiceDeploymentSnapshot(
+                    "dep-1",
+                    "rev-1",
+                    "actor-wf",
+                    ServiceDeploymentStatus.Active.ToString(),
+                    DateTimeOffset.UtcNow,
+                    DateTimeOffset.UtcNow)],
+                DateTimeOffset.UtcNow));
+        var bindingReader = new FakeWorkflowActorBindingReader(CreateBinding("actor-wf", "workflow-name"));
+        var service = CreateService(lifecyclePort, bindingReader);
+
+        var result = await service.LookupByWorkflowIdAsync(ScopeId, "wf-definition-only");
+
+        result.Status.Should().Be(ScopeWorkflowLookupStatus.NotReady);
+        result.Reason.Should().Be("service_runtime_facts_missing");
         result.Workflow.Should().BeNull();
     }
 
@@ -127,6 +191,27 @@ public sealed class ScopeWorkflowQueryApplicationServiceTests
         var service = CreateService(lifecyclePort, bindingReader);
 
         var result = await service.LookupByWorkflowIdAsync(ScopeId, "wf-stale");
+
+        result.Status.Should().Be(ScopeWorkflowLookupStatus.Stale);
+        result.Workflow.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task LookupByWorkflowIdAsync_ShouldReturnStale_WhenDeploymentReadModelIsNotActive()
+    {
+        var snapshot = CreateServiceSnapshot(
+            serviceId: "wf-inactive",
+            displayName: "Inactive",
+            activeRevisionId: "rev-5",
+            deploymentId: "dep-1",
+            primaryActorId: "actor-wf");
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(
+            getResult: snapshot,
+            deploymentResult: CreateDeploymentCatalog(snapshot, status: ServiceDeploymentStatus.Deactivated.ToString()));
+        var bindingReader = new FakeWorkflowActorBindingReader(CreateBinding("actor-wf", "workflow-name"));
+        var service = CreateService(lifecyclePort, bindingReader);
+
+        var result = await service.LookupByWorkflowIdAsync(ScopeId, "wf-inactive");
 
         result.Status.Should().Be(ScopeWorkflowLookupStatus.Stale);
         result.Workflow.Should().BeNull();
