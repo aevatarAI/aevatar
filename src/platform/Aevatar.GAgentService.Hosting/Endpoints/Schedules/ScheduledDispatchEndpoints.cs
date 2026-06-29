@@ -125,7 +125,7 @@ public static class ScheduledDispatchEndpoints
                 catalogReader,
                 revisionCatalogReader,
                 ownerSubject,
-                defaultMissingWorkflowScheduleAuth: false,
+                defaultMissingWorkflowScheduleAuth: true,
                 ct);
             await EnsureScopeOwnerNyxIdBindingExistsAsync(configuration, bindingQueryPort, ct)
                 .ConfigureAwait(false);
