@@ -21,6 +21,8 @@ public sealed class OrnnPublishSkillToolTests
         tool.SideEffectKind.Should().Be("ornn.publish.skill");
         tool.Description.Should().Contain("templates/import sources");
         tool.Description.Should().Contain("not Scope Workflow runtime publication");
+        tool.Description.Should().Contain("explicitly asks to publish a skill");
+        tool.Description.Should().Contain("ordinary runnable or page-visible workflow creation must go through scope_workflows_upsert first");
         using var schema = JsonDocument.Parse(tool.ParametersSchema);
         var root = schema.RootElement;
         root.GetProperty("additionalProperties").GetBoolean().Should().BeFalse();

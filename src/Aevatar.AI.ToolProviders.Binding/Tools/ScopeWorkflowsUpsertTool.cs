@@ -6,7 +6,7 @@ using Aevatar.GAgentService.Abstractions.Ports;
 namespace Aevatar.AI.ToolProviders.Binding.Tools;
 
 /// <summary>
-/// Upsert a scope workflow from an Ornn skill recipe.
+/// Upsert a runnable scope workflow.
 /// Delegates to IScopeWorkflowCommandPort.UpsertAsync.
 /// </summary>
 public sealed class ScopeWorkflowsUpsertTool : IAgentTool
@@ -21,8 +21,10 @@ public sealed class ScopeWorkflowsUpsertTool : IAgentTool
     public string Name => "scope_workflows_upsert";
 
     public string Description =>
-        "Create or update a workflow in the current scope. " +
-        "Use this after an Ornn skill has produced the workflow recipe YAML; this tool only persists it.";
+        "Create or update a runnable, page-visible Aevatar Scope Workflow in the current scope. " +
+        "Use this as the default write path when the user asks to create a workflow, run it later, reuse it in the current app, or make it visible in the workflow list. " +
+        "If an Ornn skill produced workflow YAML, mount/import that template here before starting or claiming the workflow is runnable. " +
+        "If the user also asks to publish a skill/template/share package, call this first as the primary runnable store, then optionally export with Ornn.";
 
     public string ParametersSchema => """
         {
@@ -34,7 +36,7 @@ public sealed class ScopeWorkflowsUpsertTool : IAgentTool
             },
             "workflow_yaml": {
               "type": "string",
-              "description": "Workflow YAML produced by an Ornn skill recipe"
+              "description": "Workflow YAML to store as the runnable Scope Workflow revision"
             },
             "workflow_name": {
               "type": "string",

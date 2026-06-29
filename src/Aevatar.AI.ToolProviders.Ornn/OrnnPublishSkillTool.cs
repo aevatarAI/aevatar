@@ -28,9 +28,10 @@ public sealed class OrnnPublishSkillTool : IAgentTool
 
     public string Description =>
         "Publish a new private Ornn skill package for the current NyxID caller. " +
+        "Use this only when the user explicitly asks to publish a skill, template, sharing package, or reusable Ornn package. " +
         "Private publishing executes directly and does not require NyxID approval. " +
         "Use only after building a complete skill from typed fields; this validates workflow template YAML, scripts, package format, then uploads the ZIP. " +
-        "Workflow YAMLs published here are Ornn package templates/import sources, not Scope Workflow runtime publication. " +
+        "Workflow YAMLs published here are Ornn package templates/import sources, not Scope Workflow runtime publication; ordinary runnable or page-visible workflow creation must go through scope_workflows_upsert first. " +
         "The tool never accepts credentials, service routing fields, raw file maps, metadata bags, public visibility, or skip-validation flags.";
 
     public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;

@@ -13,6 +13,7 @@ public class NyxIdChatSystemPromptTests
         prompt.Should().NotBeNullOrWhiteSpace();
         prompt.Should().Contain("## Long-running task automation playbook");
         prompt.Should().Contain("Recognize the request as automation.");
+        prompt.Should().Contain("Treat runnable/page-visible workflow creation as a Scope Workflow upsert");
         prompt.Should().Contain("reply_with_interaction");
         prompt.Should().Contain("ornn_publish_skill");
         prompt.Should().Contain("scheduled_agent_creator");
@@ -24,6 +25,23 @@ public class NyxIdChatSystemPromptTests
         prompt.Should().Contain("post the digest to the negotiated chat target");
         prompt.Should().Contain("api-github");
         prompt.Should().NotContain("deadline-monitor");
+    }
+
+    [Fact]
+    public void Value_ShouldRouteLarkWorkflowCreationIntentByCapability()
+    {
+        var prompt = NyxIdChatSystemPrompt.Value;
+
+        prompt.Should().Contain("## Workflow creation semantics");
+        prompt.Should().Contain("### Scope Workflow vs Ornn publish intent");
+        prompt.Should().Contain("`scope_workflows_upsert`");
+        prompt.Should().Contain("This is the default for runnable workflow creation");
+        prompt.Should().Contain("Do not use `ornn_publish_skill` for ordinary runnable/page-visible workflow creation");
+        prompt.Should().Contain("call `scope_workflows_upsert` first as the primary runnable store");
+        prompt.Should().Contain("then call `ornn_publish_skill` only for the explicit package/export part");
+        prompt.Should().Contain("`scope_workflows_get` or `scope_workflows_list`");
+        prompt.Should().Contain("then call `aevatar_start_workflow` with the stable `workflow_id`");
+        prompt.Should().Contain("Do not publish an Ornn skill just to run an existing workflow");
     }
 
     [Fact]

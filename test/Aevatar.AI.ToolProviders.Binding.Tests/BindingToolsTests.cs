@@ -232,6 +232,20 @@ public class BindingToolsTests
     #region ScopeWorkflows tools
 
     [Fact]
+    public void ScopeWorkflowsUpsertTool_Metadata_ShouldAdvertiseRunnableWorkflowCreationDefault()
+    {
+        var tool = new ScopeWorkflowsUpsertTool(new StubScopeWorkflowCommandPort());
+
+        tool.Name.Should().Be("scope_workflows_upsert");
+        tool.Description.Should().Contain("runnable, page-visible Aevatar Scope Workflow");
+        tool.Description.Should().Contain("default write path");
+        tool.Description.Should().Contain("run it later");
+        tool.Description.Should().Contain("visible in the workflow list");
+        tool.Description.Should().Contain("call this first as the primary runnable store");
+        tool.Description.Should().Contain("then optionally export with Ornn");
+    }
+
+    [Fact]
     public async Task ScopeWorkflowsUpsertTool_CallsCommandPort()
     {
         ScopeWorkflowUpsertRequest? captured = null;

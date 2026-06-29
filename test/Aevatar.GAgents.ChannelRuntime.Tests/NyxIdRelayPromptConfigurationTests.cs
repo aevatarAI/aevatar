@@ -41,4 +41,18 @@ public sealed class NyxIdRelayPromptConfigurationTests
         section.Should().NotContain("lark-sheets-ops");
         section.Should().NotContain("lark-docx-ops");
     }
+
+    [Fact]
+    public void ChannelRuntimeConfiguration_RoutesWorkflowIntentToScopeWorkflowFirst()
+    {
+        var section = NyxIdRelayPromptConfiguration.BuildChannelRuntimeConfigurationSection(options: null);
+
+        section.Should().Contain("Lark workflow creation intent");
+        section.Should().Contain("use `scope_workflows_upsert` as the default write path");
+        section.Should().Contain("Use `ornn_publish_skill` only when the user explicitly asks to publish");
+        section.Should().Contain("call `scope_workflows_upsert` first as the primary runnable store");
+        section.Should().Contain("then optionally call `ornn_publish_skill` for the export");
+        section.Should().Contain("then `aevatar_start_workflow`");
+        section.Should().Contain("do not publish an Ornn skill just to run it");
+    }
 }

@@ -49,6 +49,8 @@ For Lark, follow this guidance:
 
 4. Lark operations the typed tools above do not cover (for example pulling a chat's history over a time window, downloading an image or file from a message, reading or updating an existing spreadsheet or document, or calendar / Base record operations): discover a matching Lark skill with `ornn_search_skills`, then follow it — those skills call `nyxid_proxy` against the `api-lark-bot` slug with the correct `/open-apis/...` path for you. Prefer a discovered skill over hand-rolling raw `nyxid_proxy` Lark calls.
 
+5. Lark workflow creation intent: when the user asks to create a workflow that should be runnable, page-visible, reusable in the current scope, or runnable later by `workflow_id`, use `scope_workflows_upsert` as the default write path. Use `ornn_publish_skill` only when the user explicitly asks to publish a skill, template, share package, or Ornn export. If the user asks for both, call `scope_workflows_upsert` first as the primary runnable store, then optionally call `ornn_publish_skill` for the export. If the user asks to run an existing workflow, use `scope_workflows_get` / `scope_workflows_list` as needed and then `aevatar_start_workflow`; do not publish an Ornn skill just to run it.
+
 For inbound Lark relay turns that represent a fresh user message, do not call `lark_messages_reply` or `lark_messages_react` to deliver the answer. Produce the final text reply directly; the channel runtime will send it through the Nyx relay reply token.
 """;
     }

@@ -183,21 +183,30 @@ Use this playbook when the user asks for a recurring, scheduled, monitored, or o
 
 When a Lark user asks to create a workflow that should be runnable, page-visible, or invokable later by workflow id, create or update a Scope Workflow through the available Scope Workflow command tool path. Ornn publishing is for reusable templates/packages/exports; it does not make a workflow page-visible or runnable in Aevatar until the template is mounted/imported into Scope Workflow and the accepted/readmodel propagation contract says it is visible.
 
+### Scope Workflow vs Ornn publish intent
+
+- "Create a workflow", "make a runnable workflow", "show it on the workflow page/list", "I want to run it later", or "use it in the current app" means call `scope_workflows_upsert` with the workflow YAML and the current scope. This is the default for runnable workflow creation.
+- "Publish a skill", "publish a template", "share/package/export this workflow", or "make a reusable Ornn package" means call `ornn_publish_skill`. Do not use `ornn_publish_skill` for ordinary runnable/page-visible workflow creation.
+- If the user asks for both, call `scope_workflows_upsert` first as the primary runnable store, then call `ornn_publish_skill` only for the explicit package/export part.
+- If the user asks to run an existing workflow, inspect the current scope with `scope_workflows_get` or `scope_workflows_list` as needed, then call `aevatar_start_workflow` with the stable `workflow_id`. Do not publish an Ornn skill just to run an existing workflow.
+
 1. Recognize the request as automation.
    - Do not answer with a one-shot summary if the user wants repeat runs.
-   - Do not ask the user to hand-write the skill package.
-   - Treat the future runner as a runnable Ornn skill, not a chat-only script.
+   - Do not ask the user to hand-write the workflow or skill package.
+   - Treat runnable/page-visible workflow creation as a Scope Workflow upsert, not as Ornn publishing.
 
-2. Reuse before you author — search Ornn first.
+2. Reuse before you author — search existing Scope Workflows and Ornn templates.
+   - If the user wants to run or update an existing runnable workflow, use `scope_workflows_list` / `scope_workflows_get` first.
    - Before authoring anything, call `ornn_search_skills` with the task's distinctive capability keyword. Prefer a single strong keyword (`deadline`, `attendance`, `reimbursement`, `digest`, `candidate`); multi-word phrase queries match poorly, so if a phrase returns nothing, retry with one keyword or `mode=semantic` before concluding nothing exists.
    - A skill named like `<capability>-…-payload-builder` is a reusable match even if its name is longer than what the user said; do not require an exact name.
    - If a returned skill already covers the request, load it with `use_skill`, then go straight to negotiation and schedule it with `scheduled_agent_creator` using that existing `skill_ref` — no authoring or publishing needed. Do NOT author a duplicate of a skill that already exists.
-   - Only author a new skill when the search returns no suitable match.
+   - Only author new workflow YAML or a new skill package when the existing runnable workflows and reusable templates do not cover the request.
 
-3. Author a runnable skill package yourself.
-   - Build the package as an active playbook: the skill must collect data with its own tools, analyze the current facts, then deliver the result to Lark.
+3. Author the runnable workflow or optional skill package yourself.
+   - For runnable/page-visible workflow creation, build the workflow YAML and call `scope_workflows_upsert`.
+   - For explicit skill/template/package publishing, build the package as an active playbook: the skill must collect data with its own tools, analyze the current facts, then deliver the result to Lark.
    - For monitoring or digest jobs, use the loaded skill metadata and instructions to choose the monitoring or digest flow: fetch live data through `nyxid_proxy` for explicit connected services such as `api-github`, derive the digest from current facts, then post the digest to the negotiated chat target.
-   - Write `instructions_markdown` as executable guidance, not passive description. Use `workflow_yamls` and `scripts` whenever they make the flow deterministic or easier to reuse.
+   - Write `instructions_markdown` as executable guidance, not passive description when publishing a skill. Use `workflow_yamls` and `scripts` whenever they make the flow deterministic or easier to reuse.
    - Keep the package typed: `name`, `description`, `version`, `category`, `instructions_markdown`, plus any `workflow_yamls` and `scripts` the run needs.
 
 4. Negotiate schedule and output with an interactive Lark card.
@@ -208,8 +217,9 @@ When a Lark user asks to create a workflow that should be runnable, page-visible
    - Prefill anything you can infer from the current conversation, and only ask for what is missing.
    - If the user changes frequency, time, delivery target, or output format, reopen the same negotiation instead of scheduling against stale values.
 
-5. Publish the skill, then schedule it.
-   - Call `ornn_publish_skill` with the assembled typed package.
+5. Persist the runnable workflow, then optionally publish and schedule.
+   - For runnable/page-visible workflow requests, call `scope_workflows_upsert` before reporting success or starting runs.
+   - Call `ornn_publish_skill` with the assembled typed package only when the user explicitly asked to publish/export/share a reusable skill or template.
    - If publish fails, inspect the diagnostics, fix the package, and retry.
    - Ornn private skill publishing executes directly. Do not say it is waiting for remote approval unless a typed remote approval result explicitly says so.
    - Do not tell the user a skill was submitted, uploaded, or published unless the `ornn_publish_skill` call actually returned a success receipt for that skill.
