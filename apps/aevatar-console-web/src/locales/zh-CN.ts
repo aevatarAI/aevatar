@@ -618,7 +618,9 @@ const zhCNMessages = {
   'teams.automations.form.displayName': '名称',
   'teams.automations.form.displayNameAria': '自动化名称',
   'teams.automations.form.displayNamePlaceholder': '每日升级摘要',
-  'teams.automations.form.editPromptHint': '选填：留空也可以保存为无周期 Prompt。',
+  'teams.automations.form.clearPromptConfirm': '保存为无周期 Prompt',
+  'teams.automations.form.editPromptHint':
+    '已保存的 Prompt 不会在这里显示。输入新的 Prompt 会替换旧值，或确认保存为无周期 Prompt。',
   'teams.automations.form.editTitle': '编辑自动化',
   'teams.automations.form.enabled': '启用',
   'teams.automations.form.identityMissing': '正在等待这个成员的已发布服务身份。',
@@ -661,6 +663,8 @@ const zhCNMessages = {
   'teams.automations.messages.disableSuccess': '自动化已暂停。',
   'teams.automations.messages.enableSuccess': '自动化已恢复。',
   'teams.automations.messages.previewFailed': '预览失败：{message}',
+  'teams.automations.messages.promptClearRequired':
+    '请先确认清空周期 Prompt，再保存修改。',
   'teams.automations.messages.promptTooLong': '周期 Prompt 最多 {maxLength} 个字符。',
   'teams.automations.messages.runNowFailed': '立即运行请求失败：{message}',
   'teams.automations.messages.runNowSuccess': '已请求立即运行。',
