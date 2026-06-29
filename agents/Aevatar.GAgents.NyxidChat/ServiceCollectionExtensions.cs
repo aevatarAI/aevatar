@@ -99,6 +99,10 @@ public static class ServiceCollectionExtensions
                 return new ChannelCardConversationTurnRunner(
                     cardKit,
                     lark,
+                    // Routes each card reply through the inbound bot's own NyxID proxy slug (carried on
+                    // the reply activity's TransportExtras) instead of the process-wide default, so a DM
+                    // to one bot is answered by that bot's app and not a sibling under the same account.
+                    sp.GetService<ILarkOutboundClientFactory>(),
                     sp.GetRequiredService<ILogger<ChannelCardConversationTurnRunner>>());
             }));
         }

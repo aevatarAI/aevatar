@@ -315,6 +315,31 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunInboundAsync_ShouldStampInboundBotProviderSlugOntoDeferredReplyActivity()
+    {
+        // Cross-talk regression: the deferred reply activity must carry the slug of the bot that
+        // RECEIVED the inbound turn (resolved from its registration), so the downstream CardKit/im
+        // streaming sender proxies through that bot's NyxID app. Without this typed TransportExtras
+        // field the card path falls back to the process-wide default slug and a sibling bot under the
+        // same account answers the DM.
+        var registration = BuildRegistrationEntry();
+        registration.NyxProviderSlug = "api-lark-bot-4";
+        var registrationQueryPort = BuildRegistrationQueryPort(registration);
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity("hello", "msg-slug-1", ConversationScope.DirectMessage, "ou_user_1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.Activity.Should().NotBeNull();
+        result.LlmReplyRequest.Activity!.TransportExtras.Should().NotBeNull();
+        result.LlmReplyRequest.Activity.TransportExtras!.NyxProviderSlug.Should().Be("api-lark-bot-4");
+    }
+
+    [Fact]
     public async Task RunInboundAsync_ShouldThreadRegistrationScopeIntoLlmReplyToolContext()
     {
         // Regression: a plain (non-"::") automation turn must carry the bot's registration scope
