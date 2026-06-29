@@ -77,7 +77,13 @@ public static class ScheduledDispatchEndpoints
         try
         {
             var ownerSubject = ResolveAuthenticatedNyxIdOwnerSubject(http);
-            configuration = await input.ToConfigurationAsync(input.ScheduleId, catalogReader, revisionCatalogReader, ownerSubject, ct);
+            configuration = await input.ToConfigurationAsync(
+                input.ScheduleId,
+                catalogReader,
+                revisionCatalogReader,
+                ownerSubject,
+                defaultMissingWorkflowScheduleAuth: true,
+                ct);
             await EnsureScopeOwnerNyxIdBindingExistsAsync(configuration, bindingQueryPort, ct)
                 .ConfigureAwait(false);
             await EnsureScopeOwnerNyxIdScopeCanBeIssuedAsync(configuration, credentialExchangePort, ct)
@@ -114,7 +120,13 @@ public static class ScheduledDispatchEndpoints
         try
         {
             var ownerSubject = ResolveAuthenticatedNyxIdOwnerSubject(http);
-            configuration = await input.ToConfigurationAsync(scheduleId, catalogReader, revisionCatalogReader, ownerSubject, ct);
+            configuration = await input.ToConfigurationAsync(
+                scheduleId,
+                catalogReader,
+                revisionCatalogReader,
+                ownerSubject,
+                defaultMissingWorkflowScheduleAuth: false,
+                ct);
             await EnsureScopeOwnerNyxIdBindingExistsAsync(configuration, bindingQueryPort, ct)
                 .ConfigureAwait(false);
             await EnsureScopeOwnerNyxIdScopeCanBeIssuedAsync(configuration, credentialExchangePort, ct)
@@ -407,11 +419,14 @@ public sealed record ScheduledDispatchConfigurationHttpRequest
         IServiceCatalogQueryReader catalogReader,
         IServiceRevisionCatalogQueryReader revisionCatalogReader,
         ScheduledServiceInvocationNyxIdSubjectRef? authenticatedOwnerSubject = null,
+        bool defaultMissingWorkflowScheduleAuth = true,
         CancellationToken ct = default)
     {
         var resolvedTarget = await ResolveTargetAsync(catalogReader, revisionCatalogReader, authenticatedOwnerSubject, ct);
         var scheduleKind = ResolveScheduleKind(resolvedTarget);
-        var target = ApplyDefaultWorkflowScheduleAuth(resolvedTarget.Target, scheduleKind, authenticatedOwnerSubject);
+        var target = defaultMissingWorkflowScheduleAuth
+            ? ApplyDefaultWorkflowScheduleAuth(resolvedTarget.Target, scheduleKind, authenticatedOwnerSubject)
+            : resolvedTarget.Target;
         return new ScheduledDispatchConfiguration(
             ScheduleId: string.IsNullOrWhiteSpace(ScheduleId) ? fallbackScheduleId ?? string.Empty : ScheduleId,
             DisplayName: DisplayName ?? string.Empty,

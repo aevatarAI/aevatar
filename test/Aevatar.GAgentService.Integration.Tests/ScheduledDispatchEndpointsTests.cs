@@ -962,6 +962,45 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
+    public async Task Update_WithWorkflowServiceInvocationAndOmittedAuth_ShouldLeaveAuthOmittedForActorPreservation()
+    {
+        await using var host = await ScheduleEndpointTestHost.StartAsync();
+        host.CatalogReader.Service = CreateServiceCatalog(activeRevisionId: "rev-chat");
+        host.RevisionCatalog.UpsertRevision(
+            "tenant:app:default:workflow",
+            "rev-chat",
+            BuildPreparedArtifact(ChatRequestEvent.Descriptor));
+        var chat = new ChatRequestEvent { Prompt = "refresh standup" };
+
+        var response = await host.Client.PutAsJsonAsync("/api/schedules/schedule-chat", new
+        {
+            displayName = "Workflow chat",
+            cronExpression = "0 10 * * *",
+            timezone = "UTC",
+            enabled = false,
+            serviceInvocation = new
+            {
+                identity = new
+                {
+                    tenantId = "tenant",
+                    appId = "app",
+                    @namespace = "default",
+                    serviceId = "workflow",
+                },
+                endpointId = "chat",
+                payloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                payloadBase64 = Convert.ToBase64String(chat.ToByteArray()),
+                revisionId = "rev-chat",
+            },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        var configuration = host.Schedules.Updated.Should().ContainSingle().Which.Configuration;
+        configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
+        configuration.Target.ServiceInvocation!.Auth.Should().BeNull();
+    }
+
+    [Fact]
     public async Task Update_WithServiceInvocationPayloadBase64Json_ShouldBindAndPackPayload()
     {
         await using var host = await ScheduleEndpointTestHost.StartAsync();
@@ -1003,13 +1042,7 @@ public sealed class ScheduledDispatchEndpointsTests
         invocation.EndpointId.Should().Be("chat");
         invocation.Payload.TypeUrl.Should().Be("type.googleapis.com/aevatar.ai.ChatRequestEvent");
         invocation.Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("refresh standup");
-        invocation.Auth.Should().NotBeNull();
-        invocation.Auth!.ScopeOwnerNyxId.Should().NotBeNull();
-        invocation.Auth.ScopeOwnerNyxId!.Scope.Should().Be("proxy");
-        invocation.Auth.ScopeOwnerNyxId.OwnerSubject.Should().BeEquivalentTo(new ScheduledServiceInvocationNyxIdSubjectRef(
-            OwnerScope.NyxIdPlatform,
-            string.Empty,
-            "owner-user-1"));
+        invocation.Auth.Should().BeNull();
         configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
     }
 
