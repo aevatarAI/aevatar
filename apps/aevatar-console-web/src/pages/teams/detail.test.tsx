@@ -2677,13 +2677,20 @@ describe("TeamDetailPage", () => {
     expect(within(editDialog).getByLabelText("时区")).toHaveValue("Asia/Shanghai");
     expect(within(editDialog).getByText("目标服务为 alpha-service。")).toBeTruthy();
     expect(
-      within(editDialog).getByText("选填：留空也可以保存为无周期 Prompt。"),
+      within(editDialog).getByText(
+        "已保存的 Prompt 不会在这里显示。输入新的 Prompt 会替换旧值，或确认保存为无周期 Prompt。",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(editDialog).getByRole("checkbox", {
+        name: "保存为无周期 Prompt",
+      }),
     ).toBeTruthy();
 
     fireEvent.change(within(editDialog).getByLabelText("自动化名称"), {
       target: { value: "Daily escalation digest - edited" },
     });
-    fireEvent.change(within(editDialog).getByLabelText(/周期 Prompt/), {
+    fireEvent.change(within(editDialog).getByLabelText("周期 Prompt（选填）"), {
       target: { value: "Summarize edited escalations and owners." },
     });
     fireEvent.change(within(editDialog).getByLabelText("Cron 表达式"), {
@@ -2720,6 +2727,57 @@ describe("TeamDetailPage", () => {
     expect(JSON.stringify(payload)).not.toContain("member-team-alpha");
     expect(JSON.stringify(payload)).not.toContain("wf-team-alpha");
     expect(message.success).toHaveBeenCalledWith("自动化已更新。");
+  });
+
+  it("requires explicit confirmation before editing an automation to a blank recurring prompt", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?tab=automations",
+    );
+    (scheduledDispatchApi.listAll as jest.Mock).mockResolvedValueOnce({
+      items: [mockCreateScheduledDispatchSummary()],
+      nextCursor: null,
+      totalCount: 1,
+    });
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("Daily escalation digest")).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
+
+    const editDialog = await screen.findByRole("dialog", { name: "编辑自动化" });
+    expect(within(editDialog).getByLabelText("周期 Prompt（选填）")).toHaveValue("");
+    fireEvent.change(within(editDialog).getByLabelText("自动化名称"), {
+      target: { value: "Daily escalation digest - renamed" },
+    });
+
+    fireEvent.click(within(editDialog).getByRole("button", { name: "保存修改" }));
+
+    expect(scheduledDispatchApi.update).not.toHaveBeenCalled();
+    expect(message.warning).toHaveBeenCalledWith(
+      "请先确认清空周期 Prompt，再保存修改。",
+    );
+
+    fireEvent.click(
+      within(editDialog).getByRole("checkbox", {
+        name: "保存为无周期 Prompt",
+      }),
+    );
+    fireEvent.click(within(editDialog).getByRole("button", { name: "保存修改" }));
+
+    await waitFor(() => {
+      expect(scheduledDispatchApi.update).toHaveBeenCalled();
+    });
+    const [, payload] = (scheduledDispatchApi.update as jest.Mock).mock.calls[0];
+    expect(payload).toEqual(
+      expect.objectContaining({
+        displayName: "Daily escalation digest - renamed",
+        workflowChatTarget: expect.objectContaining({
+          prompt: "",
+        }),
+      }),
+    );
   });
 
   it("keeps invoke disabled for workflow members that are not bound yet", async () => {
