@@ -26,6 +26,8 @@ IScopeWorkflowCommandPort.UpsertAsync
 
 This ADR records the authority boundary before follow-up implementation issues align Lark, Ornn import/mount, and package conventions.
 
+The governing practice is `Single Source of Truth` with `CQRS`, materialized read models, and hexagonal application ports: writes enter through one command authority, reads use projected read models, and adapters do not assemble business truth through side reads. That practice is the basis for making Scope Workflow the only published runnable authority instead of treating every YAML-bearing surface as a workflow catalog.
+
 ## Decision
 
 **Scope Workflow is the only authoritative model for workflows that are published, queryable, and runnable inside Aevatar.**
@@ -39,7 +41,7 @@ Studio Draft = editor draft / authoring state
 Inline YAML = draft-run, preview, or import input
 ```
 
-Only YAML that enters the scope workflow path through `IScopeWorkflowCommandPort.UpsertAsync` and is materialized through the service revision, deployment, and workflow binding readmodels is a published runnable workflow. Other YAML-bearing surfaces may create drafts, templates, packages, previews, or migration inputs, but they do not create a published workflow identity until they explicitly upsert or mount into Scope Workflow.
+Only YAML that enters the scope workflow path through `IScopeWorkflowCommandPort.UpsertAsync` into a scope workflow/service revision and is materialized through the service revision, deployment, and workflow binding readmodels is a published runnable workflow. Other YAML-bearing surfaces may create drafts, templates, packages, previews, or migration inputs, but they do not create a published workflow identity until they explicitly upsert or mount into Scope Workflow.
 
 ## Locked Rules
 
