@@ -94,6 +94,14 @@ public sealed class SkillBackedHumanInteractionPortTests
                 Prompt = "Approve?",
                 Options = ["approve", "reject"],
                 TimeoutSeconds = 60,
+                TimeoutDefaultDecision = HumanInteractionTimeoutDefaultDecision.Reject,
+                Callback = new HumanInteractionCallback
+                {
+                    Kind = "workflow_resume",
+                    ActorId = "workflow-actor",
+                    RunId = "run-1",
+                    StepId = "approval",
+                },
             },
             "delivery-target-1",
             CancellationToken.None);
@@ -107,6 +115,12 @@ public sealed class SkillBackedHumanInteractionPortTests
         root.GetProperty("interaction").GetProperty("options").EnumerateArray()
             .Select(x => x.GetString())
             .Should().Equal("approve", "reject");
+        root.GetProperty("interaction").GetProperty("timeoutDefaultDecision").GetString().Should().Be("reject");
+        var callback = root.GetProperty("interaction").GetProperty("callback");
+        callback.GetProperty("kind").GetString().Should().Be("workflow_resume");
+        callback.GetProperty("actorId").GetString().Should().Be("workflow-actor");
+        callback.GetProperty("runId").GetString().Should().Be("run-1");
+        callback.GetProperty("stepId").GetString().Should().Be("approval");
     }
 
     [Fact]

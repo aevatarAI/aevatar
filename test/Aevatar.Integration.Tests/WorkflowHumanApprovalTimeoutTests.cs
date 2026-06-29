@@ -80,6 +80,13 @@ public sealed class WorkflowHumanApprovalTimeoutTests
             ctx,
             CancellationToken.None);
 
+        var suspended = ctx.Published.Select(x => x.evt).OfType<WorkflowSuspendedEvent>().Single();
+        suspended.TimeoutDefaultDecision.Should().Be(WorkflowHumanApprovalTimeoutDefaultDecision.Approve);
+        suspended.Callback.Should().NotBeNull();
+        suspended.Callback.Kind.Should().Be("workflow_resume");
+        suspended.Callback.ActorId.Should().Be("workflow-human-approval-timeout-test-agent");
+        suspended.Callback.RunId.Should().Be("run-auto-approve");
+        suspended.Callback.StepId.Should().Be("approval-auto-approve");
         var scheduled = ctx.Scheduled.Single();
         ctx.Published.Clear();
 

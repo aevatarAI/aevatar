@@ -37,6 +37,14 @@ public sealed class WorkflowHumanInteractionProjectorTests
                     Content = "Please review the summary.",
                     DeliveryTargetId = "agent-delivery-1",
                     TimeoutSeconds = 90,
+                    TimeoutDefaultDecision = WorkflowHumanApprovalTimeoutDefaultDecision.Reject,
+                    Callback = new WorkflowHumanInteractionCallback
+                    {
+                        Kind = "workflow_resume",
+                        ActorId = "workflow-actor-1",
+                        RunId = "run-1",
+                        StepId = "approval-1",
+                    },
                     Interaction = new InteractionSpec
                     {
                         Title = "Typed review",
@@ -70,6 +78,14 @@ public sealed class WorkflowHumanInteractionProjectorTests
         call.request.InteractionSpec!.Title.Should().Be("Typed review");
         call.request.InteractionSpec.Body.Should().Be("Approve the summary");
         call.request.TimeoutSeconds.Should().Be(90);
+        call.request.TimeoutDefaultDecision.Should().Be(HumanInteractionTimeoutDefaultDecision.Reject);
+        call.request.Callback.Should().BeEquivalentTo(new HumanInteractionCallback
+        {
+            Kind = "workflow_resume",
+            ActorId = "workflow-actor-1",
+            RunId = "run-1",
+            StepId = "approval-1",
+        });
         call.request.Annotations.Should().ContainKey("source").WhoseValue.Should().Be("workflow-test");
         call.request.Annotations.Should().ContainKey("variable").WhoseValue.Should().Be("approval_note");
         call.request.Annotations.Should().ContainKey("secure").WhoseValue.Should().Be("true");

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.Foundation.Abstractions.Interactions;
@@ -190,9 +191,16 @@ public sealed class HumanInteractionChannelToolSource : IAgentToolSource
         (request.Options.Contains("approve", StringComparer.OrdinalIgnoreCase) &&
          request.Options.Contains("reject", StringComparer.OrdinalIgnoreCase));
 
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 
     private const string SuccessJson = "{\"success\":true}";
+
+    private static JsonSerializerOptions CreateJsonOptions()
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        options.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
+        return options;
+    }
 
     private sealed record HumanInteractionDeliveryEnvelope
     {

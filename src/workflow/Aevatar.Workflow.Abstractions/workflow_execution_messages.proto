@@ -557,6 +557,15 @@ message WorkflowSuspendedEvent
   string redacted_output = 11;
   WorkflowToolApprovalSuspension tool_approval = 12;
   aevatar.foundation.interactions.InteractionSpec interaction = 13;
+  WorkflowHumanApprovalTimeoutDefaultDecision timeout_default_decision = 14;
+  WorkflowHumanInteractionCallback callback = 15;
+}
+message WorkflowHumanInteractionCallback
+{
+  string kind = 1;
+  string actor_id = 2;
+  string run_id = 3;
+  string step_id = 4;
 }
 message WorkflowToolApprovalSuspension
 {

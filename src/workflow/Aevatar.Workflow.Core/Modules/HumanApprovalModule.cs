@@ -120,6 +120,14 @@ public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext
                 SuspensionType = "human_approval",
                 Prompt = prompt,
                 TimeoutSeconds = timeoutSeconds,
+                TimeoutDefaultDecision = timeoutDecision,
+                Callback = new WorkflowHumanInteractionCallback
+                {
+                    Kind = "workflow_resume",
+                    ActorId = ctx.AgentId ?? string.Empty,
+                    RunId = runId,
+                    StepId = request.StepId,
+                },
             };
             WorkflowSuspensionRequestSupport.ApplyContent(suspended, request.Input);
             ApplyTypedInteraction(suspended, request);

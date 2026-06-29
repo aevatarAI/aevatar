@@ -22,5 +22,28 @@ public sealed record HumanInteractionRequest
 
     public int TimeoutSeconds { get; init; }
 
+    public HumanInteractionTimeoutDefaultDecision TimeoutDefaultDecision { get; init; } =
+        HumanInteractionTimeoutDefaultDecision.Unspecified;
+
+    public HumanInteractionCallback? Callback { get; init; }
+
     public IReadOnlyDictionary<string, string> Annotations { get; init; } = new Dictionary<string, string>();
+}
+
+public enum HumanInteractionTimeoutDefaultDecision
+{
+    Unspecified = 0,
+    Reject = 1,
+    Approve = 2,
+}
+
+public sealed record HumanInteractionCallback
+{
+    public required string Kind { get; init; }
+
+    public required string ActorId { get; init; }
+
+    public required string RunId { get; init; }
+
+    public required string StepId { get; init; }
 }

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Microsoft.Extensions.Options;
@@ -7,7 +8,7 @@ namespace Aevatar.Workflow.Integration.AI;
 
 public sealed class SkillBackedHumanInteractionPort : IHumanInteractionPort
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 
     private readonly IEnumerable<IAgentToolSource> _toolSources;
     private readonly SkillBackedHumanInteractionPortOptions _options;
@@ -104,6 +105,13 @@ public sealed class SkillBackedHumanInteractionPort : IHumanInteractionPort
     private static bool ContainsCapability(string? value, string capability) =>
         !string.IsNullOrWhiteSpace(value) &&
         value.Contains(capability, StringComparison.OrdinalIgnoreCase);
+
+    private static JsonSerializerOptions CreateJsonOptions()
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        options.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
+        return options;
+    }
 
     private static InvalidOperationException MissingTool(string? configuredToolName, string capability)
     {

@@ -81,6 +81,8 @@ public sealed class WorkflowHumanInteractionProjector
             Options = ResolveOptions(evt),
             InteractionSpec = StepPresentation.HasInteractionSpec(evt.Interaction) ? evt.Interaction.Clone() : null,
             TimeoutSeconds = evt.TimeoutSeconds,
+            TimeoutDefaultDecision = ResolveTimeoutDefaultDecision(evt.TimeoutDefaultDecision),
+            Callback = ResolveCallback(evt),
             Annotations = annotations,
         };
 
@@ -137,6 +139,29 @@ public sealed class WorkflowHumanInteractionProjector
             "human_input" => ["submit"],
             "secure_input" => ["submit"],
             _ => Array.Empty<string>(),
+        };
+    }
+
+    private static HumanInteractionTimeoutDefaultDecision ResolveTimeoutDefaultDecision(
+        WorkflowHumanApprovalTimeoutDefaultDecision decision) =>
+        decision switch
+        {
+            WorkflowHumanApprovalTimeoutDefaultDecision.Approve => HumanInteractionTimeoutDefaultDecision.Approve,
+            WorkflowHumanApprovalTimeoutDefaultDecision.Reject => HumanInteractionTimeoutDefaultDecision.Reject,
+            _ => HumanInteractionTimeoutDefaultDecision.Unspecified,
+        };
+
+    private static HumanInteractionCallback? ResolveCallback(WorkflowSuspendedEvent evt)
+    {
+        if (evt.Callback == null || string.IsNullOrWhiteSpace(evt.Callback.Kind))
+            return null;
+
+        return new HumanInteractionCallback
+        {
+            Kind = evt.Callback.Kind,
+            ActorId = evt.Callback.ActorId,
+            RunId = evt.Callback.RunId,
+            StepId = evt.Callback.StepId,
         };
     }
 
