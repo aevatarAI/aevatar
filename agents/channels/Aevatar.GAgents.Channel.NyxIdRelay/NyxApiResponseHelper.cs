@@ -99,6 +99,70 @@ internal static class NyxApiResponseHelper
         }
     }
 
+    /// <summary>
+    /// Returns the ids of channel-bots in a Nyx <c>GET /api/v1/channel-bots</c> list response whose
+    /// Lark app (<c>platform_bot_id</c>, falling back to <c>app_id</c>) equals <paramref name="appId"/>.
+    /// Used to delete a stale channel-bot for the SAME Lark app before re-registering it: NyxID
+    /// rejects a second channel-bot for an app that already has one with <c>409 already-exists</c>,
+    /// which otherwise aborts a re-bind (the 502 the /channels wizard surfaced). Returns an empty
+    /// list when the response is an error envelope, unparseable, or carries no match.
+    /// </summary>
+    public static IReadOnlyList<string> ExtractChannelBotIdsForApp(string listResponse, string appId)
+    {
+        var normalizedAppId = appId?.Trim();
+        if (string.IsNullOrWhiteSpace(normalizedAppId) || LooksLikeErrorEnvelope(listResponse))
+            return Array.Empty<string>();
+
+        try
+        {
+            using var document = JsonDocument.Parse(listResponse);
+            if (!TryGetBotArray(document.RootElement, out var bots))
+                return Array.Empty<string>();
+
+            var ids = new List<string>();
+            foreach (var bot in bots.EnumerateArray())
+            {
+                if (bot.ValueKind != JsonValueKind.Object)
+                    continue;
+
+                var botAppId = ReadNonEmptyString(bot, "platform_bot_id") ?? ReadNonEmptyString(bot, "app_id");
+                if (!string.Equals(botAppId, normalizedAppId, StringComparison.Ordinal))
+                    continue;
+
+                var id = ReadNonEmptyString(bot, "id");
+                if (id is not null)
+                    ids.Add(id);
+            }
+
+            return ids;
+        }
+        catch (JsonException)
+        {
+            return Array.Empty<string>();
+        }
+    }
+
+    private static bool TryGetBotArray(JsonElement root, out JsonElement array)
+    {
+        if (root.ValueKind == JsonValueKind.Array)
+        {
+            array = root;
+            return true;
+        }
+
+        foreach (var key in new[] { "data", "channel_bots", "channelBots", "items", "bots" })
+        {
+            if (root.TryGetProperty(key, out var element) && element.ValueKind == JsonValueKind.Array)
+            {
+                array = element;
+                return true;
+            }
+        }
+
+        array = default;
+        return false;
+    }
+
     private static string? NormalizeProxyUrlSlug(string? value)
     {
         var trimmed = value?.Trim();
@@ -163,7 +227,11 @@ internal static class NyxApiResponseHelper
         try
         {
             using var document = JsonDocument.Parse(response);
-            return document.RootElement.TryGetProperty("error", out var errorProp) &&
+            var root = document.RootElement;
+            // A list response (e.g. GET /api/v1/channel-bots) is a JSON array, never an error
+            // envelope; guard the object check so TryGetProperty does not throw on a non-object root.
+            return root.ValueKind == JsonValueKind.Object &&
+                   root.TryGetProperty("error", out var errorProp) &&
                    errorProp.ValueKind == JsonValueKind.True;
         }
         catch (JsonException)

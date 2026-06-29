@@ -148,13 +148,35 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
             // 502. NyxTelegramProvisioningService never persisted it either; the local mirror's
             // NyxReplyCredentialRef is left empty (it is not used by the live relay reply path).
 
-            channelBotId = await RegisterChannelBotAsync(
-                request.AccessToken,
-                request.AppId,
-                request.AppSecret,
-                request.VerificationToken,
-                label,
-                ct);
+            // Re-bind support: a fresh bot creates cleanly on the first try. But re-registering the
+            // SAME Lark app hits NyxID's 409 already-exists (a stale channel-bot from the prior
+            // registration), which previously aborted the whole flow as a 502 in the /channels
+            // wizard. On that conflict, delete the stale channel-bot(s) for this app on the user's
+            // behalf and retry once — so a re-bind completes without manual NyxID cleanup.
+            try
+            {
+                channelBotId = await RegisterChannelBotAsync(
+                    request.AccessToken,
+                    request.AppId,
+                    request.AppSecret,
+                    request.VerificationToken,
+                    label,
+                    ct);
+            }
+            catch (InvalidOperationException ex) when (IndicatesChannelBotAlreadyExists(ex))
+            {
+                _logger.LogInformation(
+                    "Nyx channel-bot already exists for Lark app; replacing it and retrying registration: appId={AppId}",
+                    request.AppId);
+                await RemoveExistingLarkChannelBotsForAppAsync(request.AccessToken, request.AppId, ct);
+                channelBotId = await RegisterChannelBotAsync(
+                    request.AccessToken,
+                    request.AppId,
+                    request.AppSecret,
+                    request.VerificationToken,
+                    label,
+                    ct);
+            }
             routeId = await CreateDefaultRouteAsync(request.AccessToken, channelBotId, apiKeyId, ct);
 
             // Connect the api-lark-bot NyxID proxy service (so card/typing calls can reach the Lark
@@ -261,6 +283,54 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
                 callback_url = relayCallbackUrl,
             }),
             ct);
+    }
+
+    /// <summary>
+    /// True when a channel-bot creation failure is NyxID's "already exists" conflict for this Lark
+    /// app (HTTP 409), i.e. the re-bind case that should delete the stale bot and retry — not a
+    /// credential/transport error, which must surface as-is. The structured failure string carries
+    /// <c>nyx_status=409</c> (see <see cref="NyxApiResponseHelper.ExtractErrorDetail"/>).
+    /// </summary>
+    private static bool IndicatesChannelBotAlreadyExists(InvalidOperationException ex) =>
+        ex.Message.Contains("nyx_status=409", StringComparison.Ordinal) ||
+        ex.Message.Contains("already", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Best-effort removal of any existing Nyx channel-bot bound to the SAME Lark app before a
+    /// (re-)registration creates a fresh one. NyxID rejects a second channel-bot for an app that
+    /// already has one with 409 already-exists; deleting the stale bot first is what lets a user
+    /// re-bind the same bot from /channels without manual NyxID cleanup. Failures are logged and
+    /// swallowed — a bot that could not be removed simply resurfaces as the create 409 it would
+    /// have produced anyway, so this never makes a fresh registration worse.
+    /// </summary>
+    private async Task RemoveExistingLarkChannelBotsForAppAsync(string accessToken, string appId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(appId))
+            return;
+
+        string listResponse;
+        try
+        {
+            listResponse = await _nyxClient.ListChannelBotsAsync(accessToken, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Could not list Nyx channel-bots before re-registration: appId={AppId}", appId);
+            return;
+        }
+
+        foreach (var existingBotId in NyxApiResponseHelper.ExtractChannelBotIdsForApp(listResponse, appId))
+        {
+            _logger.LogInformation(
+                "Replacing existing Nyx channel-bot for Lark app before re-registration: botId={BotId}, appId={AppId}",
+                existingBotId,
+                appId);
+            await NyxApiResponseHelper.TryRollbackAsync(
+                () => _nyxClient.DeleteChannelBotAsync(accessToken, existingBotId, ct),
+                "channel_bot_replace",
+                existingBotId,
+                _logger);
+        }
     }
 
     private async Task<string> RegisterChannelBotAsync(

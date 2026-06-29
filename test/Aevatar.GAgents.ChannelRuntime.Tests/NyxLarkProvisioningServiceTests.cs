@@ -203,6 +203,46 @@ public class NyxLarkProvisioningServiceTests
     }
 
     [Fact]
+    public async Task ProvisionAsync_Replaces_Existing_ChannelBot_On_409_Conflict_And_Retries()
+    {
+        // Re-binding the same Lark app: the first channel-bot create hits NyxID's 409 already-exists.
+        // The service deletes the stale channel-bot for THIS app (only the matching one) and retries,
+        // so a user can re-bind from /channels without manual NyxID cleanup (the 502 the wizard showed).
+        var handler = new RecordingHandler();
+        handler.Enqueue(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-1","full_key":"x"}""");
+        handler.Enqueue(HttpMethod.Post, "/api/v1/channel-bots", """{"error":true,"status":409,"message":"channel bot already exists"}""");
+        handler.Enqueue(HttpMethod.Get, "/api/v1/channel-bots", """[{"id":"old-bot","platform_bot_id":"cli_a1b2c3"},{"id":"other","platform_bot_id":"cli_zzz"}]""");
+        handler.Enqueue(HttpMethod.Delete, "/api/v1/channel-bots/old-bot", """{"ok":true}""");
+        handler.Enqueue(HttpMethod.Post, "/api/v1/channel-bots", """{"id":"bot-new"}""");
+        handler.Enqueue(HttpMethod.Post, "/api/v1/channel-conversations", """{"id":"route-1"}""");
+        handler.Enqueue(HttpMethod.Post, "/api/v1/keys", """{"id":"svc-1","slug":"api-lark-bot-2"}""");
+
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
+        ((IActorDispatchPort)actorRuntime).DispatchAsync(
+                ChannelBotRegistrationGAgent.WellKnownId,
+                Arg.Any<EventEnvelope>(),
+                Arg.Any<CancellationToken>())
+            .Returns(ActorDispatchPortTestSupport.AcceptAsync);
+
+        var service = new NyxLarkProvisioningService(
+            new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+                new HttpClient(handler)),
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
+            Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxLarkProvisioningService>>());
+
+        var result = await service.ProvisionAsync(BuildRequest(), CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        result.NyxChannelBotId.Should().Be("bot-new");
+        // Only the channel-bot for THIS Lark app was deleted before the retry.
+        handler.Requests.Should().Contain(r => r.Method == HttpMethod.Delete && r.Path == "/api/v1/channel-bots/old-bot");
+    }
+
+    [Fact]
     public async Task ProvisionAsync_ShouldReject_WhenNyxBaseUrlIsNotConfigured()
     {
         var handler = new RecordingHandler();
