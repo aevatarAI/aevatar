@@ -4,7 +4,7 @@ public sealed record WorkflowScheduleConfiguration(
     string ScheduleId,
     string DisplayName,
     string WorkflowName,
-    string Prompt,
+    string? Prompt,
     string CronExpression,
     string Timezone,
     bool Enabled,
@@ -54,7 +54,8 @@ public sealed record WorkflowScheduleSummary(
     IReadOnlyDictionary<string, string> Headers,
     string ScopeId,
     string ScheduleActorId,
-    string TargetActorId);
+    string TargetActorId,
+    string? Prompt = null);
 
 public sealed record WorkflowScheduleFireRecord(
     DateTimeOffset ScheduledFireAt,

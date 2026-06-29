@@ -48,7 +48,7 @@ internal static class WorkflowScheduleConfigurationMapper
     {
         var request = new ChatRequestEvent
         {
-            Prompt = NormalizeRequired(configuration.Prompt, nameof(configuration.Prompt)),
+            Prompt = NormalizeOptional(configuration.Prompt, string.Empty),
         };
 
         foreach (var (key, value) in BuildWorkflowScheduleHeaders(configuration))

@@ -146,7 +146,8 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
             summary.Headers,
             ResolveScopeId(summary.ServiceKey),
             summary.ScheduleActorId,
-            summary.TargetActorId);
+            summary.TargetActorId,
+            summary.Prompt);
 
     private async Task EnsureWorkflowScheduleAsync(string scheduleId, CancellationToken ct)
     {

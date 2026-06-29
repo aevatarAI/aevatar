@@ -125,6 +125,7 @@ public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
             document.FailureCount,
             document.Headers.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal),
             document.ScheduleActorId ?? string.Empty,
+            document.Prompt ?? string.Empty,
             ParseScheduleKind(document.ScheduleKind),
             document.Deleted);
 

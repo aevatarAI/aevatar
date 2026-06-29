@@ -714,6 +714,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
         var detail = await service.GetAsync(" schedule-1 ");
 
         detail.Should().NotBeNull();
+        detail!.Schedule.Prompt.Should().Be("saved prompt");
         queryPort.GetScheduleIds.Should().Equal("schedule-1");
     }
 
@@ -750,8 +751,9 @@ public sealed class WorkflowScheduleApplicationServiceTests
 
         var result = await service.ListAsync(25, "cursor", includeTotalCount: true);
 
-        result.Items.Should().ContainSingle()
-            .Which.ScheduleId.Should().Be("workflow-1");
+        var summary = result.Items.Should().ContainSingle().Subject;
+        summary.ScheduleId.Should().Be("workflow-1");
+        summary.Prompt.Should().Be("saved prompt");
         result.NextCursor.Should().Be("next-workflow");
         result.TotalCount.Should().Be(1);
         queryPort.LastQuery.Should().Be(new ScheduledDispatchListQuery(
@@ -1101,6 +1103,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
                 FailureCount: 0,
                 Headers: new Dictionary<string, string>(),
                 ScheduleActorId: string.Empty,
+                Prompt: "saved prompt",
                 ScheduleKind: ScheduledDispatchScheduleKind.Workflow),
             []);
 }
