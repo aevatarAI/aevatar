@@ -7,6 +7,16 @@ public static class ScheduledDispatchMetadataKeys
     public const string ScheduleId = "schedule.id";
     public const string FireAtUtc = "schedule.fire_at_utc";
     public const string IdempotencyKey = "schedule.idempotency_key";
+    public const string Origin = "schedule.origin";
+    public const string ScopeId = "schedule.scope_id";
+    public const string TeamId = "schedule.team_id";
+    public const string MemberId = "schedule.member_id";
+    public const string TargetName = "schedule.target_name";
+    public const string TargetKind = "schedule.target_kind";
+    public const string LarkConversationId = "schedule.lark.conversation_id";
+    public const string LarkReceiveId = "schedule.lark.receive_id";
+    public const string LarkReceiveIdType = "schedule.lark.receive_id_type";
+    public const string LarkOutboundProviderSlug = "schedule.lark.outbound_provider_slug";
 }
 
 public sealed record ScheduledDispatchValidationResult(

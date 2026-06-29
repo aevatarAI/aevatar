@@ -97,6 +97,14 @@ const createdScheduleHighlightMs = 4_000;
 const customPreset = "custom";
 const defaultPreset = "weekdays-0900";
 const defaultCronExpression = "0 9 * * 1-5";
+const scheduleHeaderScopeId = "schedule.scope_id";
+const scheduleHeaderTeamId = "schedule.team_id";
+const scheduleHeaderMemberId = "schedule.member_id";
+const scheduleHeaderTargetName = "schedule.target_name";
+const scheduleHeaderLarkConversationId = "schedule.lark.conversation_id";
+const scheduleHeaderLarkReceiveId = "schedule.lark.receive_id";
+const scheduleHeaderLarkReceiveIdType = "schedule.lark.receive_id_type";
+const scheduleHeaderLarkOutboundProviderSlug = "schedule.lark.outbound_provider_slug";
 
 const pageGridStyle: React.CSSProperties = {
   alignItems: "start",
@@ -368,6 +376,158 @@ function buildServiceIdentityKey(identity: ServiceIdentity | null | undefined): 
 
 function buildScheduleServiceKey(schedule: ScheduledDispatchSummary): string {
   return trimText(schedule.serviceKey);
+}
+
+function readScheduleHeader(
+  schedule: ScheduledDispatchSummary,
+  key: string,
+): string {
+  return trimText(schedule.headers[key]);
+}
+
+function isSkillRunnerSchedule(schedule: ScheduledDispatchSummary): boolean {
+  return schedule.scheduleKind === "skill_runner";
+}
+
+function scheduleBelongsToTeamSurface(
+  schedule: ScheduledDispatchSummary,
+  members: readonly TeamAutomationMemberRow[],
+  scopeId: string,
+  teamId: string,
+): boolean {
+  if (!isSkillRunnerSchedule(schedule)) {
+    return true;
+  }
+
+  const headerScopeId = readScheduleHeader(schedule, scheduleHeaderScopeId);
+  if (headerScopeId && headerScopeId !== trimText(scopeId)) {
+    return false;
+  }
+
+  const headerTeamId = readScheduleHeader(schedule, scheduleHeaderTeamId);
+  if (headerTeamId) {
+    return headerTeamId === trimText(teamId);
+  }
+
+  const headerMemberId = readScheduleHeader(schedule, scheduleHeaderMemberId);
+  return Boolean(
+    headerMemberId &&
+      members.some((member) => trimText(member.memberId) === headerMemberId),
+  );
+}
+
+function resolveSkillRunnerMember(
+  schedule: ScheduledDispatchSummary,
+  members: readonly TeamAutomationMemberRow[],
+): TeamAutomationMemberRow | undefined {
+  const memberId = readScheduleHeader(schedule, scheduleHeaderMemberId);
+  return memberId
+    ? members.find((member) => trimText(member.memberId) === memberId)
+    : undefined;
+}
+
+function resolveScheduleTargetText(
+  schedule: ScheduledDispatchSummary,
+  intl: IntlShape,
+): string {
+  if (isSkillRunnerSchedule(schedule)) {
+    const targetName = readScheduleHeader(schedule, scheduleHeaderTargetName);
+    return targetName
+      ? intl.formatMessage(
+          {
+            id: "teams.automations.row.skillRunnerTarget",
+            defaultMessage: "Skill runner · {targetName}",
+          },
+          { targetName },
+        )
+      : intl.formatMessage({
+          id: "teams.automations.row.skillRunner",
+          defaultMessage: "Skill runner",
+        });
+  }
+
+  return intl.formatMessage(
+    {
+      id: "teams.automations.row.target",
+      defaultMessage: "Workflow chat · {endpoint}",
+    },
+    { endpoint: schedule.serviceEndpointId || "chat" },
+  );
+}
+
+function resolveScheduleMemberCaption(
+  schedule: ScheduledDispatchSummary,
+  member: TeamAutomationMemberRow | undefined,
+  intl: IntlShape,
+): string {
+  if (member) {
+    return member.name;
+  }
+
+  if (isSkillRunnerSchedule(schedule)) {
+    return intl.formatMessage({
+      id: "teams.automations.member.externalScheduledAgent",
+      defaultMessage: "External scheduled agent",
+    });
+  }
+
+  return intl.formatMessage({
+    id: "teams.automations.member.unknown",
+    defaultMessage: "Unknown member",
+  });
+}
+
+function resolveScheduleMemberSubtext(
+  schedule: ScheduledDispatchSummary,
+  member: TeamAutomationMemberRow | undefined,
+  intl: IntlShape,
+): string {
+  if (isSkillRunnerSchedule(schedule)) {
+    const conversationId = readScheduleHeader(schedule, scheduleHeaderLarkConversationId);
+    const receiveId = readScheduleHeader(schedule, scheduleHeaderLarkReceiveId);
+    const receiveIdType = readScheduleHeader(schedule, scheduleHeaderLarkReceiveIdType);
+    const outboundSlug = readScheduleHeader(schedule, scheduleHeaderLarkOutboundProviderSlug);
+    if (conversationId) {
+      return intl.formatMessage(
+        {
+          id: "teams.automations.preview.larkConversation",
+          defaultMessage: "Lark conversation · {conversationId}",
+        },
+        { conversationId },
+      );
+    }
+    if (receiveId && receiveIdType) {
+      return intl.formatMessage(
+        {
+          id: "teams.automations.preview.larkDestination",
+          defaultMessage: "Lark {receiveIdType} · {receiveId}",
+        },
+        { receiveIdType, receiveId },
+      );
+    }
+    if (outboundSlug) {
+      return intl.formatMessage(
+        {
+          id: "teams.automations.preview.larkOutbound",
+          defaultMessage: "Lark outbound · {outboundSlug}",
+        },
+        { outboundSlug },
+      );
+    }
+
+    return intl.formatMessage({
+      id: "teams.automations.preview.skillRunnerSchedule",
+      defaultMessage: "Lark-created scheduled agent",
+    });
+  }
+
+  return intl.formatMessage(
+    {
+      id: "teams.automations.preview.runsThroughService",
+      defaultMessage: "Runs through {serviceId}",
+    },
+    { serviceId: schedule.serviceId || member?.serviceId || "--" },
+  );
 }
 
 function resolveDefaultTimezone(): string {
@@ -707,8 +867,10 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
   }, [automatableMembers]);
   const findMemberForSchedule = React.useCallback(
     (schedule: ScheduledDispatchSummary): TeamAutomationMemberRow | undefined =>
-      serviceKeyToMember.get(buildScheduleServiceKey(schedule)),
-    [serviceKeyToMember],
+      isSkillRunnerSchedule(schedule)
+        ? resolveSkillRunnerMember(schedule, automatableMembers)
+        : serviceKeyToMember.get(buildScheduleServiceKey(schedule)),
+    [automatableMembers, serviceKeyToMember],
   );
   const schedulesQuery = useQuery({
     enabled: scopeId.length > 0 && teamId.length > 0,
@@ -737,7 +899,8 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
           (schedule) =>
             !schedule.deleted &&
             !locallyDeletedScheduleIds.has(trimText(schedule.scheduleId)) &&
-            Boolean(findMemberForSchedule(schedule)),
+            scheduleBelongsToTeamSurface(schedule, members, scopeId, teamId) &&
+            (isSkillRunnerSchedule(schedule) || Boolean(findMemberForSchedule(schedule))),
         )
         .map((schedule) => {
           const scheduleId = trimText(schedule.scheduleId);
@@ -758,6 +921,9 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
       pendingCreatedSchedules,
       schedulesQuery.data?.items,
       findMemberForSchedule,
+      members,
+      scopeId,
+      teamId,
     ],
   );
   const activeFormMember =
@@ -1594,6 +1760,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
 
   const renderAutomationActionButton = ({
     danger,
+    disabled,
     icon,
     label,
     loading,
@@ -1601,6 +1768,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
     primary,
   }: {
     readonly danger?: boolean;
+    readonly disabled?: boolean;
     readonly icon: React.ReactNode;
     readonly label: string;
     readonly loading?: boolean;
@@ -1612,6 +1780,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
         className="team-automation-action-button"
         aria-label={label}
         danger={danger}
+        disabled={disabled}
         icon={icon}
         loading={loading}
         onClick={onClick}
@@ -1785,6 +1954,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
         {teamSchedules.map((schedule) => {
           const member = findMemberForSchedule(schedule);
           const scheduleId = trimText(schedule.scheduleId);
+          const isSkillRunner = isSkillRunnerSchedule(schedule);
           const scheduleCadence = describeCronExpression(
             schedule.cronExpression,
             intl,
@@ -1887,13 +2057,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
                 </div>
                 <FactLine
                   secondary
-                  text={intl.formatMessage(
-                    {
-                      id: "teams.automations.row.target",
-                      defaultMessage: "Workflow chat · {endpoint}",
-                    },
-                    { endpoint: schedule.serviceEndpointId || "chat" },
-                  )}
+                  text={resolveScheduleTargetText(schedule, intl)}
                 />
                 {schedule.lastError ? (
                   <Typography.Text
@@ -1906,22 +2070,12 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
               </div>
               <div style={{ display: "grid", gap: 5, minWidth: 0 }}>
                 <Typography.Text ellipsis strong>
-                  {member?.name ||
-                    intl.formatMessage({
-                      id: "teams.automations.member.unknown",
-                      defaultMessage: "Unknown member",
-                    })}
+                  {resolveScheduleMemberCaption(schedule, member, intl)}
                 </Typography.Text>
                 <FactLine
                   rows={2}
                   secondary
-                  text={intl.formatMessage(
-                    {
-                      id: "teams.automations.preview.runsThroughService",
-                      defaultMessage: "Runs through {serviceId}",
-                    },
-                    { serviceId: schedule.serviceId },
-                  )}
+                  text={resolveScheduleMemberSubtext(schedule, member, intl)}
                 />
               </div>
               <div style={{ display: "grid", gap: 5, minWidth: 0 }}>
@@ -1943,6 +2097,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
                 }}
               >
                 {renderAutomationActionButton({
+                  disabled: isSkillRunner,
                   icon: <EditOutlined />,
                   label: intl.formatMessage({
                     id: "teams.automations.actions.edit",

@@ -17,7 +17,7 @@ import {
 } from "@/shared/runs/protobufPayload";
 
 export type ScheduledDispatchTargetKind = "envelope" | "service_invocation";
-export type ScheduledDispatchScheduleKind = "generic" | "workflow";
+export type ScheduledDispatchScheduleKind = "generic" | "workflow" | "skill_runner";
 export const scheduledWorkflowPromptMaxLength = 4_000;
 
 export type ScheduledWorkflowChatTargetInput = {
@@ -203,6 +203,10 @@ function normalizeScheduleKind(value: string | number): ScheduledDispatchSchedul
     case "1":
     case "workflow":
       return "workflow";
+    case "2":
+    case "skillrunner":
+    case "skill_runner":
+      return "skill_runner";
     default:
       return "generic";
   }

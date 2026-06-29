@@ -82,8 +82,50 @@ internal sealed class SkillRunnerCronSchedulePort : ISkillRunnerCronSchedulePort
             command.ScheduleCron?.Trim() ?? string.Empty,
             NormalizeTimezone(command.ScheduleTimezone),
             command.Enabled,
-            new Dictionary<string, string>(StringComparer.Ordinal),
+            BuildHeaders(command),
             ScheduledDispatchScheduleKind.SkillRunner);
+    }
+
+    private static IReadOnlyDictionary<string, string> BuildHeaders(InitializeSkillRunnerCommand command)
+    {
+        var headers = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [ScheduledDispatchMetadataKeys.Origin] = "skill_runner",
+            [ScheduledDispatchMetadataKeys.TargetKind] = "skill_runner",
+        };
+
+        AddIfPresent(headers, ScheduledDispatchMetadataKeys.ScopeId, command.ScopeId);
+        AddIfPresent(headers, ScheduledDispatchMetadataKeys.TeamId, command.TeamId);
+        AddIfPresent(headers, ScheduledDispatchMetadataKeys.MemberId, command.MemberId);
+        AddIfPresent(headers, ScheduledDispatchMetadataKeys.TargetName, ResolveTargetName(command));
+
+        var outbound = command.OutboundConfig;
+        if (outbound != null)
+        {
+            AddIfPresent(headers, ScheduledDispatchMetadataKeys.LarkConversationId, outbound.ConversationId);
+            AddIfPresent(headers, ScheduledDispatchMetadataKeys.LarkReceiveId, outbound.LarkReceiveId);
+            AddIfPresent(headers, ScheduledDispatchMetadataKeys.LarkReceiveIdType, outbound.LarkReceiveIdType);
+            AddIfPresent(headers, ScheduledDispatchMetadataKeys.LarkOutboundProviderSlug, outbound.NyxProviderSlug);
+        }
+
+        return headers;
+    }
+
+    private static string ResolveTargetName(InitializeSkillRunnerCommand command)
+    {
+        if (!string.IsNullOrWhiteSpace(command.SkillRef?.Name))
+            return command.SkillRef.Name.Trim();
+        if (!string.IsNullOrWhiteSpace(command.SkillName))
+            return command.SkillName.Trim();
+
+        return ResolveDisplayName(command);
+    }
+
+    private static void AddIfPresent(IDictionary<string, string> headers, string key, string? value)
+    {
+        var normalized = value?.Trim();
+        if (!string.IsNullOrWhiteSpace(normalized))
+            headers[key] = normalized;
     }
 
     private static SkillRunnerScheduleMode NormalizeScheduleMode(SkillRunnerScheduleMode mode) =>

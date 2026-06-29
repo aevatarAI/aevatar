@@ -56,6 +56,8 @@ public sealed class ScheduledAgentCreatorToolTests
             .EnumerateArray()
             .Select(static x => x.GetString())
             .Should().BeEquivalentTo("webhook", "channel_inbound");
+        properties.TryGetProperty("team_id", out _).Should().BeFalse();
+        properties.TryGetProperty("member_id", out _).Should().BeFalse();
         schema.RootElement.GetProperty("required").EnumerateArray().Select(static x => x.GetString())
             .Should().BeEmpty();
     }
@@ -97,6 +99,8 @@ public sealed class ScheduledAgentCreatorToolTests
     [InlineData("""{"skill_ref":"daily","schedule_cron":"","schedule_timezone":"UTC"}""")]
     [InlineData("""{"skill_ref":"daily","schedule_cron":"0 9 * * *","schedule_timezone":""}""")]
     [InlineData("""{"skill_ref":"daily","schedule_cron":"0 9 * * *","schedule_timezone":"UTC","nyx_api_key":"bad"}""")]
+    [InlineData("""{"skill_ref":"daily","schedule_cron":"0 9 * * *","schedule_timezone":"UTC","team_id":"team-alpha"}""")]
+    [InlineData("""{"skill_ref":"daily","schedule_cron":"0 9 * * *","schedule_timezone":"UTC","member_id":"m-alpha"}""")]
     [InlineData("""{"skill_ref":"daily","schedule_cron":"0 9 * * *","schedule_timezone":"UTC","required_service_slugs":"tavily-search"}""")]
     [InlineData("""{"skill_ref":"daily","schedule_cron":"0 9 * * *","schedule_timezone":"UTC","required_service_slugs":["tavily-search",123]}""")]
     public async Task ExecuteAsync_InvalidRequests_ShouldFailBeforeKeyCreation(string argumentsJson)
@@ -718,7 +722,7 @@ public sealed class ScheduledAgentCreatorToolTests
                 Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
 
-        await WithToolContext(async () =>
+        await WithToolContext(CreateToolContext(externalMetadata: BaseExternalMetadataWithTeamMember()), async () =>
         {
             var result = await harness.Tool.ExecuteAsync("""
                 {
@@ -774,6 +778,8 @@ public sealed class ScheduledAgentCreatorToolTests
             captured.ScheduleTimezone.Should().Be("Asia/Singapore");
             captured.Enabled.Should().BeTrue();
             captured.ScopeId.Should().Be("scope-bot-1");
+            captured.TeamId.Should().Be("team-alpha");
+            captured.MemberId.Should().Be("m-alpha");
             captured.ProviderName.Should().Be("nyxid");
             captured.Model.Should().Be("gpt-5.1");
             captured.Temperature.Should().Be(0.2);
@@ -1199,6 +1205,16 @@ public sealed class ScheduledAgentCreatorToolTests
             metadata[ChannelMetadataKeys.LarkUnionId] = "on_union";
         if (includeOutboundSlug)
             metadata[ChannelMetadataKeys.LarkOutboundProxySlug] = "api-lark-bot";
+        return metadata;
+    }
+
+    private static IReadOnlyDictionary<string, string> BaseExternalMetadataWithTeamMember()
+    {
+        var metadata = new Dictionary<string, string>(BaseExternalMetadata(), StringComparer.Ordinal)
+        {
+            [ChannelMetadataKeys.TeamId] = "team-alpha",
+            [ChannelMetadataKeys.MemberId] = "m-alpha",
+        };
         return metadata;
     }
 

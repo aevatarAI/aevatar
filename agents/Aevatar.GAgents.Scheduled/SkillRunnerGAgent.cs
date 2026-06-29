@@ -309,6 +309,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             OutboundConfig = outboundConfig,
             Enabled = command.Enabled,
             ScopeId = command.ScopeId?.Trim() ?? string.Empty,
+            TeamId = command.TeamId?.Trim() ?? string.Empty,
+            MemberId = command.MemberId?.Trim() ?? string.Empty,
             ProviderName = NormalizeProviderName(command.ProviderName),
             Model = command.Model?.Trim() ?? string.Empty,
             RequiresNyxidProxySuccess = command.RequiresNyxidProxySuccess,
@@ -2119,6 +2121,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         next.OutboundConfig = evt.OutboundConfig?.Clone() ?? new SkillRunnerOutboundConfig();
         next.Enabled = evt.Enabled;
         next.ScopeId = evt.ScopeId ?? string.Empty;
+        next.TeamId = evt.TeamId ?? string.Empty;
+        next.MemberId = evt.MemberId ?? string.Empty;
         next.ProviderName = NormalizeProviderName(evt.ProviderName);
         next.Model = evt.Model ?? string.Empty;
         // Legacy actors created before proto field 16 existed replay an init event whose

@@ -21,6 +21,8 @@ public static class ChannelMetadataKeys
     public const string MessageId = "channel.message_id";
     public const string PlatformMessageId = "channel.platform_message_id";
     public const string ChatType = "channel.chat_type";
+    public const string TeamId = "channel.team_id";
+    public const string MemberId = "channel.member_id";
     /// <summary>
     /// Everyone @-mentioned in the inbound message, as a readable list of <c>name &lt;canonical_id&gt;</c>
     /// entries (on Lark the canonical id is the mentioned party's <c>open_id</c>), in the order their

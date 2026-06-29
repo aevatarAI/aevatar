@@ -159,6 +159,8 @@ internal sealed class ScheduledAgentCreateRequestMapper
                 OutputFormat: outputFormat,
                 ExternalTriggerSources: args.ExternalTriggerSources("external_trigger_sources"),
                 RunImmediately: args.Bool("run_immediately") ?? false,
+                TeamId: Normalize(AgentToolRequestContext.TryGetExternalMetadata(ChannelMetadataKeys.TeamId)),
+                MemberId: Normalize(AgentToolRequestContext.TryGetExternalMetadata(ChannelMetadataKeys.MemberId)),
                 ConversationId: conversationId,
                 PrimaryOutboundSlug: primarySlug,
                 FailureNotificationSlug: failureSlug,
@@ -208,6 +210,8 @@ internal sealed class ScheduledAgentCreateRequestMapper
             Model = request.Model ?? string.Empty,
             RequiresNyxidProxySuccess = request.RequiresNyxidProxySuccess,
             OutputFormat = request.OutputFormat,
+            TeamId = request.TeamId ?? string.Empty,
+            MemberId = request.MemberId ?? string.Empty,
             OutboundConfig = new SkillRunnerOutboundConfig
             {
                 ConversationId = request.ConversationId,
@@ -649,6 +653,8 @@ internal sealed record ScheduledAgentCreatePlannedRequest(
     SkillRunnerOutputFormat OutputFormat,
     IReadOnlyList<ExternalTriggerSource> ExternalTriggerSources,
     bool RunImmediately,
+    string? TeamId,
+    string? MemberId,
     string ConversationId,
     string PrimaryOutboundSlug,
     string? FailureNotificationSlug,

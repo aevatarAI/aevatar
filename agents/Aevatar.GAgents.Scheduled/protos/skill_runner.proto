@@ -182,6 +182,8 @@ message SkillRunnerState {
   repeated SkillRunnerCronOccurrenceTerminalRecord recent_cron_occurrence_terminals = 30;
   repeated aevatar.gagents.channel.abstractions.DeliveryLedgerEntry recent_deliveries = 31;
   aevatar.gagents.channel.abstractions.DeliveryLedgerEntry last_successful_delivery = 32;
+  string team_id = 33;
+  string member_id = 34;
 }
 
 message SkillRunnerExecutionDocument {
@@ -232,6 +234,8 @@ message InitializeSkillRunnerCommand {
   SkillRunnerScheduleMode schedule_mode = 20;
   google.protobuf.Timestamp one_shot_run_at = 21;
   string one_shot_message = 22;
+  string team_id = 23;
+  string member_id = 24;
 }
 
 message SkillRunnerInitializedEvent {
@@ -257,6 +261,8 @@ message SkillRunnerInitializedEvent {
   SkillRunnerScheduleMode schedule_mode = 19;
   google.protobuf.Timestamp one_shot_run_at = 20;
   string one_shot_message = 21;
+  string team_id = 22;
+  string member_id = 23;
 }
 
 message TriggerSkillRunnerExecutionCommand {

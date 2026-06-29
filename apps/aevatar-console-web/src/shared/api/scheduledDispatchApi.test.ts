@@ -553,4 +553,52 @@ describe("scheduledDispatchApi", () => {
       }),
     );
   });
+
+  it("decodes SkillRunner schedule summaries as a distinct schedule kind", () => {
+    expect(
+      decodeScheduledDispatchSummary({
+        scheduleId: "skill-runner.agent-alpha",
+        displayName: "Daily report",
+        targetKind: "envelope",
+        targetActorId: "skill-runner-agent-alpha",
+        payloadTypeUrl: "type.googleapis.com/aevatar.gagents.scheduled.TriggerSkillRunnerExecutionCommand",
+        serviceKey: "",
+        serviceId: "",
+        serviceEndpointId: "",
+        cronExpression: "0 9 * * *",
+        timezone: "UTC",
+        enabled: true,
+        createdAt: "2026-06-10T08:00:00Z",
+        updatedAt: "2026-06-10T08:30:00Z",
+        nextFireAt: null,
+        lastFireAt: null,
+        lastTargetActorId: "",
+        lastCommandId: "",
+        lastCorrelationId: "",
+        lastError: "",
+        fireCount: 0,
+        failureCount: 0,
+        headers: {
+          "schedule.scope_id": "scope-alpha",
+          "schedule.team_id": "team-alpha",
+          "schedule.member_id": "m-alpha",
+          "schedule.target_name": "daily-report",
+          "schedule.lark.conversation_id": "oc-alpha",
+        },
+        scheduleActorId: "scheduled-dispatch:skill-runner.agent-alpha",
+        scheduleKind: "SkillRunner",
+        deleted: false,
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        scheduleId: "skill-runner.agent-alpha",
+        scheduleKind: "skill_runner",
+        headers: expect.objectContaining({
+          "schedule.team_id": "team-alpha",
+          "schedule.member_id": "m-alpha",
+          "schedule.lark.conversation_id": "oc-alpha",
+        }),
+      }),
+    );
+  });
 });

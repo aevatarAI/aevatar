@@ -264,6 +264,16 @@ public sealed class SkillRunnerCommandPortTests
             ScheduleCron = "0 9 * * *",
             ScheduleTimezone = "Asia/Singapore",
             Enabled = true,
+            ScopeId = "scope-alpha",
+            TeamId = "team-alpha",
+            MemberId = "m-alpha",
+            OutboundConfig = new SkillRunnerOutboundConfig
+            {
+                ConversationId = "oc-conversation",
+                LarkReceiveId = "oc-chat",
+                LarkReceiveIdType = "chat_id",
+                NyxProviderSlug = "api-lark-bot",
+            },
         };
 
         await port.EnsureAsync(AgentId, command, CancellationToken.None);
@@ -274,6 +284,16 @@ public sealed class SkillRunnerCommandPortTests
         configuration.Timezone.Should().Be("Asia/Singapore");
         configuration.Enabled.Should().BeTrue();
         configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.SkillRunner);
+        configuration.Headers.Should().Contain(ScheduledDispatchMetadataKeys.Origin, "skill_runner");
+        configuration.Headers.Should().Contain(ScheduledDispatchMetadataKeys.TargetKind, "skill_runner");
+        configuration.Headers.Should().Contain(ScheduledDispatchMetadataKeys.ScopeId, "scope-alpha");
+        configuration.Headers.Should().Contain(ScheduledDispatchMetadataKeys.TeamId, "team-alpha");
+        configuration.Headers.Should().Contain(ScheduledDispatchMetadataKeys.MemberId, "m-alpha");
+        configuration.Headers.Should().Contain(ScheduledDispatchMetadataKeys.TargetName, "daily report");
+        configuration.Headers.Should().Contain(ScheduledDispatchMetadataKeys.LarkConversationId, "oc-conversation");
+        configuration.Headers.Should().Contain(ScheduledDispatchMetadataKeys.LarkReceiveId, "oc-chat");
+        configuration.Headers.Should().Contain(ScheduledDispatchMetadataKeys.LarkReceiveIdType, "chat_id");
+        configuration.Headers.Should().Contain(ScheduledDispatchMetadataKeys.LarkOutboundProviderSlug, "api-lark-bot");
         configuration.Target.Kind.Should().Be(ScheduledDispatchTargetKind.Envelope);
         configuration.Target.ActorId.Should().Be(AgentId);
         configuration.Target.Envelope.Should().NotBeNull();
