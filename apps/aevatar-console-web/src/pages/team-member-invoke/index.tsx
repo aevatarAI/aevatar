@@ -1,6 +1,6 @@
-import { EditOutlined } from "@ant-design/icons";
+import { EditOutlined, HistoryOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
-import { Button, Spin } from "antd";
+import { Button, Space, Spin } from "antd";
 import React from "react";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { getScopeServiceCurrentRevision } from "@/shared/models/runtime/scopeServices";
@@ -11,6 +11,7 @@ import {
 } from "@/shared/navigation/history";
 import {
   buildTeamDetailHref,
+  buildTeamMemberPublishedRunsHref,
   buildTeamMemberWorkflowStudioHref,
 } from "@/shared/navigation/teamRoutes";
 import {
@@ -25,6 +26,7 @@ import {
 } from "@/shared/studio/models";
 import {
   AevatarInspectorEmpty,
+  type AevatarBreadcrumbItem,
   AevatarPageShell,
   AevatarPanel,
 } from "@/shared/ui/aevatarPageShells";
@@ -107,6 +109,11 @@ const TeamMemberInvokePage: React.FC = () => {
     scopeId: route.scopeId,
     teamId: route.teamId,
   });
+  const publishedRunsHref = buildTeamMemberPublishedRunsHref({
+    memberId: route.memberId || undefined,
+    scopeId: route.scopeId,
+    teamId: route.teamId,
+  });
 
   const memberQuery = useQuery({
     queryKey: ["team-member-invoke", "member", route.scopeId, route.memberId],
@@ -126,6 +133,27 @@ const TeamMemberInvokePage: React.FC = () => {
         appId: scopeServiceAppId,
       }),
   });
+  const memberBreadcrumbLabel =
+    trimOptional(memberQuery.data?.summary.displayName) ||
+    trimOptional(route.memberId) ||
+    t("pages.teammemberinvoke.memberBreadcrumb", "Member");
+  const breadcrumbItems: AevatarBreadcrumbItem[] = [
+    {
+      href: backHref,
+      onClick: (event) => {
+        event.preventDefault();
+        history.push(backHref);
+      },
+      title: t("pages.teammemberinvoke.teamsBreadcrumb", "Teams"),
+    },
+    {
+      title: memberBreadcrumbLabel,
+    },
+    {
+      current: true,
+      title: t("pages.teammemberinvoke.invokeBreadcrumb", "Invoke"),
+    },
+  ];
 
   const memberSummary = memberQuery.data?.summary ?? null;
   const memberKind = normalizeStudioMemberBindingImplementationKind(
@@ -145,6 +173,22 @@ const TeamMemberInvokePage: React.FC = () => {
     ? trimOptional(lastBinding?.publishedServiceId) ||
       trimOptional(memberSummary?.publishedServiceId)
     : "";
+  const canOpenPublishedRuns = Boolean(
+    route.scopeId &&
+      route.teamId &&
+      route.memberId &&
+      memberBindingCompleted &&
+      boundPublishedServiceId,
+  );
+  const publishedRunsPlaceholderReason = canOpenPublishedRuns
+    ? t(
+        "pages.teammemberinvoke.publishedRuns.open",
+        "View runs from the published member service.",
+      )
+    : t(
+        "pages.teammemberinvoke.publishedRuns.publishFirst",
+        "Publish this member to start recording published runs.",
+      );
   const selectedService = React.useMemo(
     () =>
       boundPublishedServiceId
@@ -290,7 +334,32 @@ const TeamMemberInvokePage: React.FC = () => {
 
   return (
     <AevatarPageShell
+      backAriaLabel={t("pages.teammemberinvoke.backToTeam", "Back to team")}
+      backTitle={t("pages.teammemberinvoke.backToTeam", "Back to team")}
+      breadcrumbItems={breadcrumbItems}
       breadcrumbRender={false}
+      extra={
+        <Space data-testid="team-member-invoke-header-actions" size={8} wrap>
+          <Button
+            disabled={!canOpenPublishedRuns}
+            icon={<HistoryOutlined />}
+            onClick={() => {
+              if (canOpenPublishedRuns) {
+                history.push(publishedRunsHref);
+              }
+            }}
+            title={publishedRunsPlaceholderReason}
+          >
+            {t("pages.teammemberinvoke.publishedRuns", "Published runs")}
+          </Button>
+          <Button
+            icon={<EditOutlined />}
+            onClick={() => history.push(workflowStudioHref)}
+          >
+            {t("pages.teammemberinvoke.open.studio", "Workflow Studio")}
+          </Button>
+        </Space>
+      }
       layoutMode="document"
       onBack={() => history.push(backHref)}
       title={t("pages.teammemberinvoke.title", "Run workflow member")}
@@ -334,11 +403,12 @@ const TeamMemberInvokePage: React.FC = () => {
           </AevatarPanel>
         ) : (
           <StudioMemberInvokePanel
+            enableFileAttachments
             initialServiceId={boundPublishedServiceId}
             memberId={route.memberId}
             memberRevision={memberRevision}
             presentation="member-run"
-            runtimeTarget="service"
+            runtimeTarget="member"
             teamId={route.teamId}
             scopeId={route.scopeId}
             selectedMemberLabel={memberLabel}

@@ -22,6 +22,7 @@ const zhCNMessages = {
   'menu.Settings': '设置',
   'menu.Team Details': '团队详情',
   'menu.Team Member Invoke': '团队成员调用',
+  'menu.Team Member Published Runs': '团队成员发布运行记录',
   'menu.Team Member Workflow Studio': '团队成员 Workflow Studio',
   'menu.Topology': '拓扑',
   'nav.groups.platform': '平台',
@@ -34,6 +35,41 @@ const zhCNMessages = {
   'nav.items.services': '服务',
   'nav.items.settings': '设置',
   'nav.items.topology': '拓扑',
+  'pages.gagents.index.platformBreadcrumb': '平台',
+  'pages.gagents.index.teamMembersBreadcrumb': '团队成员',
+  'pages.missioncontrol.index.missionControlBreadcrumb': '任务控制',
+  'pages.missioncontrol.index.platformBreadcrumb': '平台',
+  'pages.scopes.assets.legacyAssetsBreadcrumb': '旧版资产',
+  'pages.scopes.assets.legacyAssetsContent':
+    '团队主页现在位于 /scopes/:scopeId/teams。这里保留给旧资产深链、源码检查和目录详情使用，直到 scoped team 流程完全接管。',
+  'pages.scopes.assets.legacyAssetsTitleHelp':
+    '这是旧版深链资产工作区。可用于源码检查和目录详情；主要团队叙事请回到团队主页。',
+  'pages.scopes.assets.teamHome': '团队主页',
+  'pages.scopes.assets.teamsBreadcrumb': '团队',
+  'pages.scopes.files.title': '文件',
+  'pages.scopes.files.titleHelp':
+    '从一个结构化入口浏览工作区 Workflow、scope 脚本和可复用 Studio 目录。',
+  'pages.scopes.invoke.legacyInvokeBreadcrumb': '旧版调用',
+  'pages.scopes.invoke.legacyInvokeTitleHelp':
+    '用于直接探测端点的旧版深链 playground。团队主页仍是主入口，这里处理原始载荷和旧操作流。',
+  'pages.scopes.invoke.teamsBreadcrumb': '团队',
+  'pages.settings.index.accountContent':
+    '当前浏览器的身份、会话和访问详情。',
+  'pages.settings.index.llmContent': 'Chat 和 Studio 的个人默认配置。',
+  'pages.settings.index.title': '设置',
+  'pages.studio.index.studioBreadcrumb': 'Studio',
+  'pages.studio.index.teamBreadcrumb': '团队',
+  'pages.studio.index.teamsBreadcrumb': '团队',
+  'pages.teammemberinvoke.backToTeam': '返回团队',
+  'pages.teammemberinvoke.invokeBreadcrumb': '调用',
+  'pages.teammemberinvoke.memberBreadcrumb': '成员',
+  'pages.teammemberinvoke.teamsBreadcrumb': '团队',
+  'pages.teams.new.teamsBreadcrumb': '团队',
+  'pages.workflows.index.platformBreadcrumb': '平台',
+  'pages.workflows.index.workflowLibraryBreadcrumb': 'Workflow 库',
+  'shared.ui.aevatarpageshells.breadcrumb': '面包屑',
+  'teamMemberWorkflowStudio.header.breadcrumbAria': 'Workflow 位置',
+  'teamMemberWorkflowStudio.header.statusAria': 'Workflow 状态',
   'teams.home.actions.createTeam': '组建新团队',
   'teams.home.actions.createMember': '创建成员',
   'teams.home.actions.createWorkflowMember': '创建工作流成员',
@@ -132,6 +168,7 @@ const zhCNMessages = {
   'teams.detail.archive.modal.title': '归档这支团队？',
   'teams.detail.breadcrumb.detail': '团队详情',
   'teams.detail.breadcrumb.teams': '团队',
+  'teams.detail.backToTeams': '返回团队列表',
   'teams.detail.edit.hint.noTeam': '当前路由还没有选中真实团队。',
   'teams.detail.edit.hint.ready': '团队摘要读取完成后才能编辑。',
   'teams.detail.edit.modal.description': '团队说明',
@@ -531,6 +568,8 @@ const zhCNMessages = {
   'teams.members.actions.automate': '自动化',
   'teams.members.actions.invokeRequiresBinding': '请先绑定这个 Workflow 成员再调用。',
   'teams.members.actions.invokeWorkflow': '调用',
+  'teams.members.actions.publishedRuns': '发布运行记录',
+  'teams.members.actions.publishedRuns.publishFirst': '请先发布这个成员再查看发布运行记录。',
   'teams.members.actions.setEntry': '设为入口成员',
   'teams.members.actions.workflowOnly': '仅支持 Workflow',
   'teams.members.actions.workflowOnlyTitle': '当前控制台暂只支持 Workflow 类型成员。',
@@ -724,6 +763,11 @@ const zhCNMessages = {
   'pages.teammemberinvoke.member': '成员',
   'pages.teammemberinvoke.next.step': '下一步',
   'pages.teammemberinvoke.open.studio': 'Workflow Studio',
+  'pages.teammemberinvoke.publishedRuns': '发布运行记录',
+  'pages.teammemberinvoke.publishedRuns.open':
+    '查看这个已发布成员服务的运行记录。',
+  'pages.teammemberinvoke.publishedRuns.publishFirst':
+    '先发布这个成员，才会开始记录发布运行。',
   'pages.teammemberinvoke.resolve.in.studio': '打开 Workflow Studio',
   'pages.teammemberinvoke.route.missing': '缺少成员路由',
   'pages.teammemberinvoke.route.missing.description':
@@ -740,6 +784,25 @@ const zhCNMessages = {
   'pages.teammemberinvoke.workflow.only': '只有 Workflow 成员可以在这里调用。',
   'pages.teammemberinvoke.workflow.only.description':
     '这个页面只运行 Workflow 成员。其他实现类型请使用对应成员自己的入口。',
+  'pages.runs.memberPublishedRuns.auditUnavailable':
+    '发布运行审计暂不可见。',
+  'pages.runs.memberPublishedRuns.backToTeamMembers': '返回团队成员',
+  'pages.runs.memberPublishedRuns.details': '详情',
+  'pages.runs.memberPublishedRuns.input': '输入',
+  'pages.runs.memberPublishedRuns.listUnavailable':
+    '发布运行记录暂不可见。',
+  'pages.runs.memberPublishedRuns.logs': '日志',
+  'pages.runs.memberPublishedRuns.noAuditSteps':
+    '这次发布运行没有记录审计步骤。',
+  'pages.runs.memberPublishedRuns.navigation': '发布运行记录导航',
+  'pages.runs.memberPublishedRuns.noRuns': '暂无发布运行记录。',
+  'pages.runs.memberPublishedRuns.openEditor': '打开编辑器',
+  'pages.runs.memberPublishedRuns.output': '输出',
+  'pages.runs.memberPublishedRuns.publishedRuns': '发布运行记录',
+  'pages.runs.memberPublishedRuns.refresh': '刷新',
+  'pages.runs.memberPublishedRuns.selectPublishedRun':
+    '选择一次发布运行',
+  'pages.runs.memberPublishedRuns.timeline': '时间线',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.description':
     '你可以在这里搭建或粘贴 workflow。保存时会创建可恢复的 workflow 草稿，直到成员关联完成物化。',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.title':
@@ -848,6 +911,13 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.header.primaryActionsAria':
     'Workflow 主操作',
   'teamMemberWorkflowStudio.header.prepareDraftRun': '准备草稿运行',
+  'teamMemberWorkflowStudio.header.publishedRuns': '发布运行记录',
+  'teamMemberWorkflowStudio.header.publishedRuns.open':
+    '查看这个已发布成员服务的运行记录。',
+  'teamMemberWorkflowStudio.header.publishedRuns.publishFirst':
+    '先发布这个成员，才会开始记录发布运行。',
+  'teamMemberWorkflowStudio.header.publishedRuns.saveFirst':
+    '先保存这个成员，再查看发布运行记录。',
   'teamMemberWorkflowStudio.header.publish': '发布',
   'teamMemberWorkflowStudio.header.runMessage': '运行消息',
   'teamMemberWorkflowStudio.header.refreshPublishStatus': '刷新状态',
@@ -923,12 +993,28 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.draftRunPanel.closeAria': '关闭草稿运行面板',
   'teamMemberWorkflowStudio.draftRunPanel.emptyInputHint':
     '留空则不携带用户输入运行。',
+  'teamMemberWorkflowStudio.draftRunPanel.addFiles': '添加文件',
+  'teamMemberWorkflowStudio.draftRunPanel.attachFiles': '添加文件',
+  'teamMemberWorkflowStudio.draftRunPanel.attachFilesButton': '添加文件',
+  'teamMemberWorkflowStudio.draftRunPanel.attachFilesInput': '添加文件',
+  'teamMemberWorkflowStudio.draftRunPanel.dropFiles': '拖放文件到这里',
+  'teamMemberWorkflowStudio.draftRunPanel.filesHint':
+    '为这次草稿运行添加文件。',
+  'teamMemberWorkflowStudio.draftRunPanel.filesLabel': '文件',
+  'teamMemberWorkflowStudio.draftRunPanel.filesLimitHint':
+    '支持图片、文档、音频、视频、CSV 和文本文件，单个文件最大 10 MB。',
   'teamMemberWorkflowStudio.draftRunPanel.messageLabel':
     '草稿运行输入',
   'teamMemberWorkflowStudio.draftRunPanel.messagePlaceholder':
     '本次 Workflow 草稿运行的可选输入',
+  'teamMemberWorkflowStudio.draftRunPanel.noFilesAttached':
+    '未添加文件',
+  'teamMemberWorkflowStudio.draftRunPanel.removeEmptyFile':
+    '开始草稿运行前请移除空文件 {name}。',
+  'teamMemberWorkflowStudio.draftRunPanel.removeFile': '移除 {name}',
   'teamMemberWorkflowStudio.draftRunPanel.sectionAria': '草稿运行面板',
   'teamMemberWorkflowStudio.draftRunPanel.startDraftRun': '开始草稿运行',
+  'teamMemberWorkflowStudio.draftRunPanel.thisFile': '此文件',
   'teamMemberWorkflowStudio.draftRunPanel.title': '草稿运行',
   'teamMemberWorkflowStudio.runsPanel.description':
     '这个 tab 只展示明确关联到当前 Workflow 成员的运行记录。',

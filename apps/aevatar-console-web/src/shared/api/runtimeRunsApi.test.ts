@@ -1,4 +1,4 @@
-import { RuntimeRunsApiError, runtimeRunsApi } from "./runtimeRunsApi";
+import { type RuntimeRunsApiError, runtimeRunsApi } from "./runtimeRunsApi";
 import {
   encodeAppScriptCommandBase64,
   encodeStringValueBase64,
@@ -14,6 +14,19 @@ describe("runtimeRunsApi", () => {
     global.fetch = originalFetch;
     jest.restoreAllMocks();
   });
+
+  function readBlobText(blob: Blob): Promise<string> {
+    if (typeof blob.text === "function") {
+      return blob.text();
+    }
+
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(reader.error);
+      reader.onload = () => resolve(String(reader.result ?? ""));
+      reader.readAsText(blob);
+    });
+  }
 
   it("surfaces non-OK streamChat responses from the runtime boundary", async () => {
     const fetchMock = jest.fn().mockResolvedValue({
@@ -342,6 +355,53 @@ describe("runtimeRunsApi", () => {
     });
   });
 
+  it("sends member stream endpoint file inputs as multipart form data", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+    } satisfies Partial<Response>);
+    const image = new File(["image-bytes"], "cat.png", { type: "image/png" });
+
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await runtimeRunsApi.streamEndpoint(
+      "scope-1",
+      {
+        endpointId: "chat",
+        files: [image],
+        headers: { source: "invoke-page" },
+        prompt: "Describe this image",
+        sessionId: "session-1",
+      },
+      new AbortController().signal,
+      { memberId: "member-alpha", serviceId: "svc-alpha" },
+    );
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const headers = new Headers(init.headers);
+    const formData = init.body as FormData;
+    const payload = formData.get("payload");
+    const uploadedFile = formData.get("file") as File;
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/scopes/scope-1/members/member-alpha/invoke/chat:stream",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
+    expect(headers.get("Accept")).toBe("text/event-stream");
+    expect(headers.has("Content-Type")).toBe(false);
+    expect(formData).toBeInstanceOf(FormData);
+    expect(typeof payload).toBe("string");
+    expect(JSON.parse(String(payload))).toEqual({
+      prompt: "Describe this image",
+      sessionId: "session-1",
+      headers: { source: "invoke-page" },
+    });
+    expect(uploadedFile.name).toBe("cat.png");
+    expect(uploadedFile.type).toBe("image/png");
+    expect(await readBlobText(uploadedFile)).toBe("image-bytes");
+  });
+
   it("routes draft runs through the scope draft endpoint", async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
@@ -370,9 +430,61 @@ describe("runtimeRunsApi", () => {
             source: "studio",
           },
         }),
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+        },
         method: "POST",
       })
     );
+  });
+
+  it("sends draft run file inputs as multipart form data", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+    } satisfies Partial<Response>);
+    const image = new File(["image-bytes"], "draft.png", { type: "image/png" });
+
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await runtimeRunsApi.streamDraftRun(
+      "scope-1",
+      {
+        files: [image],
+        metadata: { source: "studio-draft" },
+        prompt: "Describe this image",
+        workflowYamls: ["name: draft"],
+      },
+      new AbortController().signal,
+    );
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const headers = new Headers(init.headers);
+    const formData = init.body as FormData;
+    const payload = formData.get("payload");
+    const uploadedFile = formData.get("file") as File;
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/scopes/scope-1/workflow/draft-run",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
+    expect(headers.get("Accept")).toBe("text/event-stream");
+    expect(headers.has("Content-Type")).toBe(false);
+    expect(formData).toBeInstanceOf(FormData);
+    expect(typeof payload).toBe("string");
+    expect(JSON.parse(String(payload))).toEqual({
+      eventFormat: "agui",
+      prompt: "Describe this image",
+      workflowYamls: ["name: draft"],
+      headers: {
+        source: "studio-draft",
+      },
+    });
+    expect(uploadedFile.name).toBe("draft.png");
+    expect(uploadedFile.type).toBe("image/png");
+    expect(await readBlobText(uploadedFile)).toBe("image-bytes");
   });
 
   it("routes getRunSummary through the scope run endpoint", async () => {

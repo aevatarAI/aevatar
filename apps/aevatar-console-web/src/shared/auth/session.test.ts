@@ -73,7 +73,7 @@ describe('auth session storage', () => {
     expect(window.localStorage.length).toBe(0);
   });
 
-  it('keeps an expired session when a refresh token can restore it', () => {
+  it('keeps expired sessions with a refresh token available for async restoration', () => {
     persistAuthSession({
       tokens: {
         accessToken: 'token-3',
@@ -100,7 +100,18 @@ describe('auth session storage', () => {
         sub: 'user-3',
       },
     });
-    expect(readStoredAuthSession()).not.toBeNull();
+    expect(readStoredAuthSession()).toEqual({
+      tokens: {
+        accessToken: 'token-3',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() - 1,
+        refreshToken: 'refresh-token-3',
+      },
+      user: {
+        sub: 'user-3',
+      },
+    });
   });
 
   it('accepts only safe in-app redirect targets', () => {

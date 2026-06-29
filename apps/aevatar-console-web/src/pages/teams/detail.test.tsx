@@ -1080,12 +1080,16 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     expect(
-      await screen.findByText((_, node) => {
-        return node?.textContent === "Aevatar / 团队 / 团队详情 / 概览";
-      }),
+      await screen.findByRole("heading", { name: "Alpha Support Team" }),
     ).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Aevatar" })).toBeTruthy();
+    expect(await screen.findByRole("navigation", { name: "面包屑" }))
+      .toHaveTextContent("团队");
+    expect(screen.getByRole("navigation", { name: "面包屑" }))
+      .toHaveTextContent("Alpha Support Team");
+    expect(screen.getByRole("navigation", { name: "面包屑" }))
+      .toHaveTextContent("概览");
     expect(screen.getByRole("link", { name: "团队" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "返回团队列表" })).toBeTruthy();
     expect(screen.queryByText("工作区 ID")).toBeNull();
     expect(screen.queryByText("scope-1")).toBeNull();
     const currentPostureHeading = screen.getByText("启动状态");
@@ -1292,11 +1296,11 @@ describe("TeamDetailPage", () => {
     });
   });
 
-  it("returns to the teams list when clicking the breadcrumb aevatar link", async () => {
+  it("returns to the teams list when clicking the page back button", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     await screen.findByRole("button", { name: "编辑团队" });
-    fireEvent.click(screen.getByRole("link", { name: "Aevatar" }));
+    fireEvent.click(screen.getByRole("button", { name: "返回团队列表" }));
 
     await waitFor(() => {
       expect(window.location.pathname).toBe("/scopes/scope-1/teams");
@@ -1380,6 +1384,7 @@ describe("TeamDetailPage", () => {
     expect(screen.getByText("已绑定服务")).toBeTruthy();
     expect(screen.getByText("可以调用。")).toBeTruthy();
     expect(screen.getByRole("link", { name: "调用" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "发布运行记录" })).toBeTruthy();
     expect(screen.getByRole("link", { name: "Workflow Studio" })).toBeTruthy();
     expect(screen.queryByRole("link", { name: "编辑工作流" })).toBeNull();
     expect(screen.queryByRole("link", { name: "调试工作流" })).toBeNull();
@@ -1518,7 +1523,7 @@ describe("TeamDetailPage", () => {
     expect(scopeRuntimeApi.listMemberRuns).not.toHaveBeenCalled();
   });
 
-  it("does not sample runtime runs while browsing members with member-owned service ids", async () => {
+  it("resolves member studio links without sampling runtime runs while browsing members", async () => {
     window.history.replaceState(
       {},
       "",
@@ -1578,7 +1583,9 @@ describe("TeamDetailPage", () => {
     await waitFor(() => {
       expect(studioApi.listTeamMembers).toHaveBeenCalledWith("scope-1", "t-alpha");
     });
-    expect(scopeRuntimeApi.listServices).not.toHaveBeenCalled();
+    expect(scopeRuntimeApi.listServices).toHaveBeenCalledWith("scope-1", {
+      appId: "default",
+    });
     expect(scopeRuntimeApi.getServiceRevisions).not.toHaveBeenCalled();
     expect(scopeRuntimeApi.listServiceRuns).not.toHaveBeenCalled();
     expect(scopeRuntimeApi.listMemberRuns).not.toHaveBeenCalled();
@@ -1969,11 +1976,14 @@ describe("TeamDetailPage", () => {
       "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/workflow",
     );
     expect(new URLSearchParams(window.location.search).get("workflowId")).toBe(
-      "wf-team-alpha",
+      "workflow-1",
+    );
+    expect(new URLSearchParams(window.location.search).get("workflowSource")).toBe(
+      "published",
     );
   });
 
-  it("uses the roster implementation workflow id instead of the route workflow hint", async () => {
+  it("uses the published service workflow id instead of the route workflow hint", async () => {
     window.history.replaceState(
       {},
       "",
@@ -1988,11 +1998,14 @@ describe("TeamDetailPage", () => {
       "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/workflow",
     );
     expect(new URLSearchParams(window.location.search).get("workflowId")).toBe(
-      "wf-team-alpha",
+      "workflow-1",
+    );
+    expect(new URLSearchParams(window.location.search).get("workflowSource")).toBe(
+      "published",
     );
   });
 
-  it("does not recover workflow ids from session storage when the roster has no implementation workflow id", async () => {
+  it("recovers a published workflow id from the bound service when the roster omits the implementation ref", async () => {
     window.history.replaceState(
       {},
       "",
@@ -2034,7 +2047,12 @@ describe("TeamDetailPage", () => {
     expect(window.location.pathname).toBe(
       "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/workflow",
     );
-    expect(new URLSearchParams(window.location.search).get("workflowId")).toBeNull();
+    expect(new URLSearchParams(window.location.search).get("workflowId")).toBe(
+      "workflow-1",
+    );
+    expect(new URLSearchParams(window.location.search).get("workflowSource")).toBe(
+      "published",
+    );
   });
 
   it("does not reuse a route workflow hint for another Team member row", async () => {
@@ -2052,7 +2070,10 @@ describe("TeamDetailPage", () => {
       "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/workflow",
     );
     expect(new URLSearchParams(window.location.search).get("workflowId")).toBe(
-      "wf-team-alpha",
+      "workflow-1",
+    );
+    expect(new URLSearchParams(window.location.search).get("workflowSource")).toBe(
+      "published",
     );
   });
 
@@ -2066,6 +2087,19 @@ describe("TeamDetailPage", () => {
     expect(window.location.pathname).toBe(
       "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/invoke",
     );
+  });
+
+  it("routes workflow member published runs actions into the member runs page", async () => {
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    await screen.findByRole("button", { name: "编辑团队" });
+    fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
+    fireEvent.click(await screen.findByRole("link", { name: "发布运行记录" }));
+
+    expect(window.location.pathname).toBe(
+      "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/runs",
+    );
+    expect(window.location.search).toBe("");
   });
 
   it("routes workflow member automation actions into the Team automations tab", async () => {
@@ -2718,12 +2752,14 @@ describe("TeamDetailPage", () => {
     expect(screen.getByText("尚未绑定")).toBeTruthy();
     expect(screen.getByRole("link", { name: "Workflow Studio" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "调用" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "发布运行记录" })).toBeDisabled();
     expect(
       screen
         .getAllByRole("button", { name: "自动化" })
         .some((button) => button.hasAttribute("disabled")),
     ).toBe(true);
     expect(screen.queryByRole("link", { name: "调用" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "发布运行记录" })).toBeNull();
     expect(screen.queryByRole("link", { name: "自动化" })).toBeNull();
   });
 
@@ -2757,6 +2793,8 @@ describe("TeamDetailPage", () => {
     expect(screen.getByText("已绑定服务")).toBeTruthy();
     expect(screen.getByRole("button", { name: "调用" })).toBeDisabled();
     expect(screen.queryByRole("link", { name: "调用" })).toBeNull();
+    expect(screen.getByRole("button", { name: "发布运行记录" })).toBeDisabled();
+    expect(screen.queryByRole("link", { name: "发布运行记录" })).toBeNull();
     expect(screen.getByRole("button", { name: "Workflow Studio" })).toBeDisabled();
     fireEvent.click(await screen.findByRole("button", { name: "设为入口成员" }));
 
@@ -3120,7 +3158,9 @@ describe("TeamDetailPage", () => {
       screen.queryByText("当前仍会显示运行时视图；Team summary 暂时无法读取。"),
     ).toBeNull();
     expect(screen.queryByText("信任态势")).toBeNull();
-    expect(screen.getByText("Support Escalation Triage")).toBeTruthy();
+    expect(
+      screen.getByRole("heading", { name: "Support Escalation Triage" }),
+    ).toBeTruthy();
 
     await waitFor(() => {
       expect(studioApi.getTeam).toHaveBeenCalledWith("scope-1", "t-alpha");
@@ -3144,7 +3184,9 @@ describe("TeamDetailPage", () => {
     );
     renderWithQueryClient(React.createElement(TeamDetailPage), queryClient);
 
-    expect(await screen.findByText("Alpha Support Team")).toBeTruthy();
+    expect(
+      await screen.findByRole("heading", { name: "Alpha Support Team" }),
+    ).toBeTruthy();
     expect(await screen.findByText("成员清单正在同步")).toBeTruthy();
 
     await act(async () => {

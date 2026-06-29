@@ -231,7 +231,10 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
         automationsHref={studio.automationsHref}
         automationsPlaceholderReason={studio.automationsPlaceholderReason}
         canOpenAutomations={studio.canOpenAutomations}
+        canOpenPublishedRuns={studio.canOpenPublishedRuns}
         memberPublished={studio.memberPublished}
+        publishedRunsHref={studio.publishedRunsHref}
+        publishedRunsPlaceholderReason={studio.publishedRunsPlaceholderReason}
         publishDisabled={studio.publishDisabled}
         publishNotice={studio.publishNotice}
         publishPending={studio.publishPending}
@@ -245,6 +248,7 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
         dirty={studio.dirty}
         currentDraftRunPlaceholderReason={studio.currentDraftRunPlaceholderReason}
         onOpenAutomations={studio.navigateToAutomations}
+        onOpenPublishedRuns={studio.navigateToPublishedRuns}
         onPublishMember={studio.publishMember}
         onRefreshPublishStatus={studio.refreshPublishStatus}
         onAddNode={studio.openNodeLibrary}
@@ -369,6 +373,9 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
         <WorkflowStudioDraftRunPanel
           canRun={studio.canRunCurrentDraft}
           disabledReason={studio.currentDraftRunPlaceholderReason}
+          files={studio.draftRunFiles}
+          onFilesAdd={studio.addDraftRunFiles}
+          onFileRemove={studio.removeDraftRunFile}
           onClose={studio.selectCanvas}
           onRun={studio.runCurrentDraft}
           onRunMessageChange={studio.setExecutionRunMessage}

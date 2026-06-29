@@ -101,6 +101,8 @@ import {
 } from '@/shared/models/runtime/gagents';
 import {
   getScopeServiceCurrentRevision,
+  toScopeServiceRunAuditSnapshot,
+  toScopeServiceRunSummary,
   type ScopeServiceRunAuditSnapshot,
   type ScopeServiceRunAuditStep,
   type ScopeServiceRunSummary,
@@ -135,6 +137,11 @@ import {
   type StudioObserveSessionSeed,
 } from '@/shared/studio/observeSession';
 import { embeddedPanelStyle } from '@/shared/ui/proComponents';
+import {
+  AevatarBackButton,
+  AevatarBreadcrumb,
+  type AevatarBreadcrumbItem,
+} from '@/shared/ui/aevatarPageShells';
 import {
   AEVATAR_INTERACTIVE_BUTTON_CLASS,
   AEVATAR_INTERACTIVE_CHIP_CLASS,
@@ -8420,7 +8427,13 @@ const StudioPage: React.FC = () => {
             {
               take: 12,
             },
-          ),
+          ).then((catalog) => ({
+            displayName: catalog.displayName,
+            runs: catalog.runs.map(toScopeServiceRunSummary),
+            scopeId: catalog.scopeId,
+            serviceId: catalog.publishedServiceId,
+            serviceKey: catalog.publishedServiceKey,
+          })),
     retry: false,
   });
   const observeServiceRuns = useMemo(() => {
@@ -8493,7 +8506,7 @@ const StudioPage: React.FC = () => {
               actorId:
                 trimOptional(selectedObserveBackendRunSummary?.actorId) || undefined,
             },
-          ),
+          ).then(toScopeServiceRunAuditSnapshot),
     retry: false,
   });
   useEffect(() => {
@@ -10371,6 +10384,38 @@ const StudioPage: React.FC = () => {
           }))
     : buildTeamsHref();
   const studioReturnLabel = t("pages.studio.index.copy.18", "Back to Team");
+  const studioTeamLabel =
+    trimOptional(studioTeamSummaryQuery.data?.displayName) ||
+    (routeState.teamId ? t("pages.studio.index.teamBreadcrumb", "Team") : "");
+  const studioTeamsHref = resolvedStudioScopeId
+    ? buildTeamDetailHref({ scopeId: resolvedStudioScopeId })
+    : buildTeamsHref();
+  const studioBreadcrumbItems: AevatarBreadcrumbItem[] = [
+    {
+      href: studioTeamsHref,
+      onClick: (event) => {
+        event.preventDefault();
+        history.push(studioTeamsHref);
+      },
+      title: t("pages.studio.index.teamsBreadcrumb", "Teams"),
+    },
+    ...(studioTeamLabel
+      ? [
+          {
+            href: studioReturnHref,
+            onClick: (event: React.MouseEvent<HTMLAnchorElement>) => {
+              event.preventDefault();
+              history.push(studioReturnHref);
+            },
+            title: studioTeamLabel,
+          } satisfies AevatarBreadcrumbItem,
+        ]
+      : []),
+    {
+      current: true,
+      title: t("pages.studio.index.studioBreadcrumb", "Studio"),
+    },
+  ];
   const currentStudioReturnTo =
     routeState.returnTo ||
     (typeof window === 'undefined'
@@ -10549,28 +10594,12 @@ const StudioPage: React.FC = () => {
         padding: '8px 16px 4px',
       }}
     >
-      <button
-        aria-label={studioReturnLabel}
-        className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
-        type="button"
-        onClick={() => history.push(studioReturnHref)}
-        style={{
-          alignItems: 'center',
-          background: 'transparent',
-          border: 'none',
-          color: '#2452b5',
-          cursor: 'pointer',
-          display: 'inline-flex',
-          flexShrink: 0,
-          fontSize: 11,
-          fontWeight: 700,
-          gap: 4,
-          letterSpacing: 0,
-          padding: 0,
-        }}
-      >
-        ← {studioReturnLabel}
-      </button>
+      <AevatarBackButton
+        ariaLabel={studioReturnLabel}
+        onBack={() => history.push(studioReturnHref)}
+        title={studioReturnLabel}
+      />
+      <AevatarBreadcrumb items={studioBreadcrumbItems} />
       <div
         style={{
           alignItems: 'center',
@@ -10871,6 +10900,7 @@ const StudioPage: React.FC = () => {
 
   return (
     <PageContainer
+      breadcrumbRender={false}
       childrenContentStyle={{
         margin: 0,
         minHeight: '100%',

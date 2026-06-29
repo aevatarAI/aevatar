@@ -39,6 +39,7 @@ import type {
 } from "@/shared/models/services";
 import {
   AevatarContextDrawer,
+  type AevatarBreadcrumbItem,
   AevatarInspectorEmpty,
   AevatarPanel,
   AevatarStatusTag,
@@ -160,6 +161,15 @@ const compactHintTagStyle: React.CSSProperties = {
   fontWeight: 600,
   marginInlineEnd: 0,
 };
+const platformBreadcrumbItems: AevatarBreadcrumbItem[] = [
+  {
+    title: "Platform",
+  },
+  {
+    current: true,
+    title: "Services",
+  },
+];
 
 type ServiceSignalTone = "default" | "info" | "success" | "warning";
 
@@ -583,7 +593,7 @@ const ServicesPage: React.FC = () => {
 
   return (
     <ConsoleMenuPageShell
-      breadcrumb="Aevatar / Platform"
+      breadcrumbItems={platformBreadcrumbItems}
       description={t("pages.services.index.services.platform.governance.deployments", "Services is the authoritative service directory of Platform. It answers what services are in the current scope, where it is currently hung, and who hosts it, and guides you to continue to Governance, Deployments or Topology.")}
       title="Services"
     >

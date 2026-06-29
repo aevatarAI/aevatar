@@ -22,6 +22,7 @@ const enUSMessages = {
   'menu.Settings': 'Settings',
   'menu.Team Details': 'Team Details',
   'menu.Team Member Invoke': 'Team Member Invoke',
+  'menu.Team Member Published Runs': 'Team Member Published Runs',
   'menu.Team Member Workflow Studio': 'Team Member Workflow Studio',
   'menu.Topology': 'Topology',
   'nav.groups.platform': 'Platform',
@@ -34,6 +35,41 @@ const enUSMessages = {
   'nav.items.services': 'Services',
   'nav.items.settings': 'Settings',
   'nav.items.topology': 'Topology',
+  'pages.gagents.index.platformBreadcrumb': 'Platform',
+  'pages.gagents.index.teamMembersBreadcrumb': 'Team members',
+  'pages.missioncontrol.index.missionControlBreadcrumb': 'Mission Control',
+  'pages.missioncontrol.index.platformBreadcrumb': 'Platform',
+  'pages.scopes.assets.legacyAssetsBreadcrumb': 'Legacy Assets',
+  'pages.scopes.assets.legacyAssetsContent':
+    'Team home now lives under /scopes/:scopeId/teams. Keep this page for older asset deep links, source inspection, and catalog detail while the scoped team flow finishes taking over.',
+  'pages.scopes.assets.legacyAssetsTitleHelp':
+    'This is the legacy deep-link asset workspace. Use it for source inspection and catalog detail, but go back to team home for the main team narrative.',
+  'pages.scopes.assets.teamHome': 'Team Home',
+  'pages.scopes.assets.teamsBreadcrumb': 'Teams',
+  'pages.scopes.files.title': 'Files',
+  'pages.scopes.files.titleHelp':
+    'Browse workspace workflows, scope-backed scripts, and reusable Studio catalogs from one structured entry point.',
+  'pages.scopes.invoke.legacyInvokeBreadcrumb': 'Legacy Invoke',
+  'pages.scopes.invoke.legacyInvokeTitleHelp':
+    'Legacy deep-link playground for direct endpoint probing. Team home stays the primary surface, while this lab handles raw payloads and older operator flows.',
+  'pages.scopes.invoke.teamsBreadcrumb': 'Teams',
+  'pages.settings.index.accountContent':
+    'Identity, session, and access details for this browser.',
+  'pages.settings.index.llmContent': 'Personal defaults for Chat and Studio.',
+  'pages.settings.index.title': 'Settings',
+  'pages.studio.index.studioBreadcrumb': 'Studio',
+  'pages.studio.index.teamBreadcrumb': 'Team',
+  'pages.studio.index.teamsBreadcrumb': 'Teams',
+  'pages.teammemberinvoke.backToTeam': 'Back to team',
+  'pages.teammemberinvoke.invokeBreadcrumb': 'Invoke',
+  'pages.teammemberinvoke.memberBreadcrumb': 'Member',
+  'pages.teammemberinvoke.teamsBreadcrumb': 'Teams',
+  'pages.teams.new.teamsBreadcrumb': 'Teams',
+  'pages.workflows.index.platformBreadcrumb': 'Platform',
+  'pages.workflows.index.workflowLibraryBreadcrumb': 'Workflow Library',
+  'shared.ui.aevatarpageshells.breadcrumb': 'Breadcrumb',
+  'teamMemberWorkflowStudio.header.breadcrumbAria': 'Workflow location',
+  'teamMemberWorkflowStudio.header.statusAria': 'Workflow status',
   'teams.home.actions.createTeam': 'Create team',
   'teams.home.actions.createMember': 'Create member',
   'teams.home.actions.createWorkflowMember': 'Create workflow member',
@@ -139,6 +175,7 @@ const enUSMessages = {
   'teams.detail.archive.modal.title': 'Archive this team?',
   'teams.detail.breadcrumb.detail': 'Team detail',
   'teams.detail.breadcrumb.teams': 'Teams',
+  'teams.detail.backToTeams': 'Back to teams',
   'teams.detail.edit.hint.noTeam': 'Select a real team before editing.',
   'teams.detail.edit.hint.ready': 'The team summary must be loaded before editing.',
   'teams.detail.edit.modal.description': 'Team description',
@@ -564,6 +601,9 @@ const enUSMessages = {
   'teams.members.actions.invokeRequiresBinding':
     'Bind this workflow member before invoking it.',
   'teams.members.actions.invokeWorkflow': 'Invoke',
+  'teams.members.actions.publishedRuns': 'Published runs',
+  'teams.members.actions.publishedRuns.publishFirst':
+    'Publish this member before viewing published runs.',
   'teams.members.actions.setEntry': 'Set as entry member',
   'teams.members.actions.workflowOnly': 'Workflow only',
   'teams.members.actions.workflowOnlyTitle':
@@ -784,6 +824,11 @@ const enUSMessages = {
   'pages.teammemberinvoke.member': 'Member',
   'pages.teammemberinvoke.next.step': 'Next step',
   'pages.teammemberinvoke.open.studio': 'Workflow Studio',
+  'pages.teammemberinvoke.publishedRuns': 'Published runs',
+  'pages.teammemberinvoke.publishedRuns.open':
+    'View runs from the published member service.',
+  'pages.teammemberinvoke.publishedRuns.publishFirst':
+    'Publish this member to start recording published runs.',
   'pages.teammemberinvoke.resolve.in.studio': 'Open Workflow Studio',
   'pages.teammemberinvoke.route.missing': 'Missing member route',
   'pages.teammemberinvoke.route.missing.description':
@@ -802,6 +847,25 @@ const enUSMessages = {
     'Invoke is available for workflow members only.',
   'pages.teammemberinvoke.workflow.only.description':
     "This page only runs workflow members. Use the member's own surface for other implementation kinds.",
+  'pages.runs.memberPublishedRuns.auditUnavailable':
+    'Published run audit is unavailable.',
+  'pages.runs.memberPublishedRuns.backToTeamMembers': 'Back to team members',
+  'pages.runs.memberPublishedRuns.details': 'Details',
+  'pages.runs.memberPublishedRuns.input': 'Input',
+  'pages.runs.memberPublishedRuns.listUnavailable':
+    'Published runs are unavailable.',
+  'pages.runs.memberPublishedRuns.logs': 'Logs',
+  'pages.runs.memberPublishedRuns.noAuditSteps':
+    'No audit steps were recorded for this published run.',
+  'pages.runs.memberPublishedRuns.navigation': 'Published runs navigation',
+  'pages.runs.memberPublishedRuns.noRuns': 'No published runs yet.',
+  'pages.runs.memberPublishedRuns.openEditor': 'Open editor',
+  'pages.runs.memberPublishedRuns.output': 'Output',
+  'pages.runs.memberPublishedRuns.publishedRuns': 'Published runs',
+  'pages.runs.memberPublishedRuns.refresh': 'Refresh',
+  'pages.runs.memberPublishedRuns.selectPublishedRun':
+    'Select a published run',
+  'pages.runs.memberPublishedRuns.timeline': 'Timeline',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.description':
     'You can build or paste the workflow here. Saving creates a reusable workflow draft until the member link is materialized.',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.title':
@@ -910,6 +974,13 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.header.primaryActionsAria':
     'Workflow primary actions',
   'teamMemberWorkflowStudio.header.prepareDraftRun': 'Prepare draft run',
+  'teamMemberWorkflowStudio.header.publishedRuns': 'Published runs',
+  'teamMemberWorkflowStudio.header.publishedRuns.open':
+    'View runs from the published member service.',
+  'teamMemberWorkflowStudio.header.publishedRuns.publishFirst':
+    'Publish this member to start recording published runs.',
+  'teamMemberWorkflowStudio.header.publishedRuns.saveFirst':
+    'Save this member before viewing published runs.',
   'teamMemberWorkflowStudio.header.publish': 'Publish',
   'teamMemberWorkflowStudio.header.runMessage': 'Run message',
   'teamMemberWorkflowStudio.header.refreshPublishStatus': 'Refresh status',
@@ -987,13 +1058,29 @@ const enUSMessages = {
     'Close draft run panel',
   'teamMemberWorkflowStudio.draftRunPanel.emptyInputHint':
     'Leave blank to run this draft without user input.',
+  'teamMemberWorkflowStudio.draftRunPanel.addFiles': 'Add files',
+  'teamMemberWorkflowStudio.draftRunPanel.attachFiles': 'Attach files',
+  'teamMemberWorkflowStudio.draftRunPanel.attachFilesButton': 'Add files',
+  'teamMemberWorkflowStudio.draftRunPanel.attachFilesInput': 'Attach files',
+  'teamMemberWorkflowStudio.draftRunPanel.dropFiles': 'Drop files here',
+  'teamMemberWorkflowStudio.draftRunPanel.filesHint':
+    'Attach files for this draft run.',
+  'teamMemberWorkflowStudio.draftRunPanel.filesLabel': 'Files',
+  'teamMemberWorkflowStudio.draftRunPanel.filesLimitHint':
+    'Images, documents, audio, video, CSV, and text files up to 10 MB.',
   'teamMemberWorkflowStudio.draftRunPanel.messageLabel':
     'Draft run input',
   'teamMemberWorkflowStudio.draftRunPanel.messagePlaceholder':
     'Optional input sent to this workflow draft run',
+  'teamMemberWorkflowStudio.draftRunPanel.noFilesAttached':
+    'No files attached',
+  'teamMemberWorkflowStudio.draftRunPanel.removeEmptyFile':
+    'Remove empty file {name} before starting the draft run.',
+  'teamMemberWorkflowStudio.draftRunPanel.removeFile': 'Remove {name}',
   'teamMemberWorkflowStudio.draftRunPanel.sectionAria': 'Draft run panel',
   'teamMemberWorkflowStudio.draftRunPanel.startDraftRun':
     'Start draft run',
+  'teamMemberWorkflowStudio.draftRunPanel.thisFile': 'this file',
   'teamMemberWorkflowStudio.draftRunPanel.title': 'Draft run',
   'teamMemberWorkflowStudio.runsPanel.description':
     'This tab only shows runs with an explicit link to the current workflow member.',

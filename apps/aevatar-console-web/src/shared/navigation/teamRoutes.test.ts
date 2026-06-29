@@ -3,6 +3,7 @@ import {
   buildTeamDetailHref,
   buildTeamMemberAutomationsHref,
   buildTeamMemberInvokeHref,
+  buildTeamMemberPublishedRunsHref,
   buildTeamMemberWorkflowStudioHref,
   buildTeamStudioHref,
   buildTeamsHref,
@@ -87,9 +88,10 @@ describe("teamRoutes", () => {
         scopeId: "scope-alpha",
         teamId: "t-alpha",
         workflowId: " workflow-alpha ",
+        workflowSource: "published",
       }),
     ).toBe(
-      "/scopes/scope-alpha/teams/t-alpha/members/member-alpha/workflow?workflowId=workflow-alpha",
+      "/scopes/scope-alpha/teams/t-alpha/members/member-alpha/workflow?workflowId=workflow-alpha&workflowSource=published",
     );
 
     expect(
@@ -123,6 +125,35 @@ describe("teamRoutes", () => {
 
     expect(
       buildTeamMemberInvokeHref({
+        memberId: "member-alpha",
+        scopeId: "",
+        teamId: "t-alpha",
+      }),
+    ).toBe(buildTeamsHref());
+  });
+
+  it("builds explicit Team member published run routes", () => {
+    expect(
+      buildTeamMemberPublishedRunsHref({
+        actorId: " actor://scope-alpha/run-1 ",
+        memberId: " member-alpha ",
+        runId: " run-1 ",
+        scopeId: " scope-alpha ",
+        teamId: " t-alpha ",
+      }),
+    ).toBe(
+      "/scopes/scope-alpha/teams/t-alpha/members/member-alpha/runs?runId=run-1&actorId=actor%3A%2F%2Fscope-alpha%2Frun-1",
+    );
+
+    expect(
+      buildTeamMemberPublishedRunsHref({
+        scopeId: "scope-alpha",
+        teamId: "t-alpha",
+      }),
+    ).toBe("/scopes/scope-alpha/teams/t-alpha?tab=members");
+
+    expect(
+      buildTeamMemberPublishedRunsHref({
         memberId: "member-alpha",
         scopeId: "",
         teamId: "t-alpha",

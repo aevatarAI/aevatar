@@ -52,6 +52,7 @@ import {
 import { t } from "@/shared/i18n/messages";
 
 type StudioMemberInvokePanelProps = {
+  readonly enableFileAttachments?: boolean;
   readonly scopeId: string;
   readonly memberId?: string;
   readonly memberRevision?: StudioMemberBindingRevision | null;
@@ -91,6 +92,32 @@ function createClientId(prefix: string): string {
   }
 
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function formatAttachmentSummary(files: readonly File[]): string {
+  if (files.length === 0) {
+    return '';
+  }
+
+  const names = files.map((file) => file.name.trim()).filter(Boolean);
+  if (names.length <= 2) {
+    return names.join(', ');
+  }
+
+  return `${names.slice(0, 2).join(', ')} +${names.length - 2}`;
+}
+
+function formatRunInputDisplay(prompt: string, files: readonly File[]): string {
+  const attachmentSummary = formatAttachmentSummary(files);
+  if (!attachmentSummary) {
+    return prompt;
+  }
+
+  if (!prompt) {
+    return attachmentSummary;
+  }
+
+  return `${prompt}\n\nFiles: ${attachmentSummary}`;
 }
 
 function resolveInvokeRouteTarget(input: {
@@ -511,13 +538,6 @@ const invokeRunOutputSectionStyle: React.CSSProperties = {
   minWidth: 0,
 };
 
-const memberRunSectionStyle: React.CSSProperties = {
-  ...invokeSectionPanelBaseStyle,
-  borderColor: '#d8dee9',
-  borderRadius: 12,
-  boxShadow: '0 1px 2px rgba(15, 23, 42, 0.05)',
-};
-
 const memberRunWorkbenchStyle: React.CSSProperties = {
   background: '#ffffff',
   border: '1px solid #d8dee9',
@@ -637,6 +657,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   scopeId,
   memberId,
   memberRevision,
+  enableFileAttachments = false,
   teamId,
   runtimeTarget = 'default',
   services,
@@ -662,6 +683,8 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     trimOptional(initialEndpointId),
   );
   const [prompt, setPrompt] = useState('');
+  const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
+  const [submittedFiles, setSubmittedFiles] = useState<File[]>([]);
   const [formError, setFormError] = useState('');
   const [payloadTypeUrl, setPayloadTypeUrl] = useState('');
   const [payloadBase64, setPayloadBase64] = useState('');
@@ -911,6 +934,8 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     diagnosticsHistoryEntry?.endpointLabel || endpointLabel;
   const diagnosticsHasData = diagnosticsHistoryEntry ? true : currentRunHasData;
   const isMemberRunSurface = invokePresentation === 'member-run';
+  const canAttachFiles =
+    enableFileAttachments && isMemberRunSurface && isChatEndpoint;
 
   useEffect(() => {
     if (!services.length) {
@@ -1079,6 +1104,8 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     setDiagnosticsHistoryId('');
     setDiagnosticsDrawerOpen(false);
     setFormError('');
+    setAttachedFiles([]);
+    setSubmittedFiles([]);
     setInvokeResult(createIdleResult());
     setActiveRunCompletedAt(null);
   }, [scopeId, selectedEndpointId, selectedServiceId]);
@@ -1140,6 +1167,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
 
     setFormError('');
   }, [
+    attachedFiles,
     payloadBase64,
     payloadTypeUrl,
     prompt,
@@ -1213,6 +1241,8 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     }
 
     setPrompt(normalizedPrompt);
+    setAttachedFiles([]);
+    setSubmittedFiles([]);
     composerDockRef.current?.scrollIntoView({
       behavior: 'smooth',
       block: 'start',
@@ -1231,6 +1261,18 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
         : t("pages.studio.studiomemberinvokepanel.prompt.restored.click.invoke", "Request restored. Run workflow to create a new run."),
     );
   }, [isMemberRunSurface]);
+
+  const handleAttachmentsAdd = useCallback((files: readonly File[]) => {
+    if (!files.length) {
+      return;
+    }
+
+    setAttachedFiles((current) => [...current, ...files]);
+  }, []);
+
+  const handleAttachmentRemove = useCallback((index: number) => {
+    setAttachedFiles((current) => current.filter((_, itemIndex) => itemIndex !== index));
+  }, []);
 
   const handleAbort = useCallback(() => {
     abortControllerRef.current?.abort();
@@ -1279,15 +1321,33 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     const trimmedPrompt = prompt.trim();
     const trimmedPayloadTypeUrl = payloadTypeUrl.trim();
     const trimmedPayloadBase64 = payloadBase64.trim();
+    const runFiles = canAttachFiles ? [...attachedFiles] : [];
+    const displayRunInput = formatRunInputDisplay(trimmedPrompt, runFiles);
     const startedAt = Date.now();
     const currentEndpointLabel =
       selectedEndpoint.displayName || selectedEndpoint.endpointId;
     const currentRunMode = isChatServiceEndpoint(selectedEndpoint)
       ? 'stream'
       : 'invoke';
+    const emptyFile = runFiles.find((file) => file.size <= 0);
 
-    if (isChatServiceEndpoint(selectedEndpoint) && !trimmedPrompt) {
+    if (
+      isChatServiceEndpoint(selectedEndpoint) &&
+      !trimmedPrompt &&
+      runFiles.length === 0
+    ) {
       setFormError(t("pages.studio.studiomemberinvokepanel.please.enter.prompt.before", "Enter a request before running this workflow."));
+      return;
+    }
+
+    if (emptyFile) {
+      setFormError(
+        t(
+          "pages.studio.studiomemberinvokepanel.remove.empty.file.before.running",
+          "Remove empty file {name} before starting the run.",
+          { name: emptyFile.name || t("pages.studio.studiomemberinvokepanel.this.file", "this file") },
+        ),
+      );
       return;
     }
 
@@ -1324,10 +1384,11 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       mode: currentRunMode,
       payloadBase64: trimmedPayloadBase64,
       payloadTypeUrl: trimmedPayloadTypeUrl,
-      prompt: trimmedPrompt,
+      prompt: displayRunInput,
       startedAt,
     });
     setActiveRunCompletedAt(null);
+    setSubmittedFiles(runFiles);
 
     if (isChatServiceEndpoint(selectedEndpoint)) {
       const userMessageId = createClientId('user');
@@ -1344,7 +1405,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
         assistantError?: string,
       ): StudioInvokeChatMessage[] => [
         {
-          content: trimmedPrompt,
+          content: displayRunInput,
           id: userMessageId,
           role: 'user',
           status: 'complete',
@@ -1370,6 +1431,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       });
       setChatMessages(pendingMessages);
       setPrompt('');
+      setAttachedFiles([]);
       setInvokeResult(pendingResult);
       upsertRequestHistory(
         createPendingHistoryEntry({
@@ -1380,7 +1442,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
           mode: 'stream',
           payloadBase64: '',
           payloadTypeUrl: '',
-          prompt: trimmedPrompt,
+          prompt: displayRunInput,
           result: pendingResult,
           serviceId: selectedService.serviceId,
           startedAt,
@@ -1392,9 +1454,11 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
           await ensureNyxIdChatBound();
         }
 
-        const response = await runtimeRunsApi.streamChat(
+        const response = await runtimeRunsApi.streamEndpoint(
           scopeId,
           {
+            endpointId: selectedEndpoint.endpointId,
+            files: runFiles.length > 0 ? runFiles : undefined,
             prompt: trimmedPrompt,
           },
           controller.signal,
@@ -1443,6 +1507,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
               accumulator.errorText ||
               trimOptional(accumulator.finalOutput) ||
               accumulator.assistantText ||
+              displayRunInput ||
               entry.summary,
           }));
         }
@@ -1487,7 +1552,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
             mode: 'stream',
             payloadBase64: '',
             payloadTypeUrl: '',
-            prompt: trimmedPrompt,
+            prompt: displayRunInput,
             runId: accumulator.runId,
             serviceId: selectedService.serviceId,
             startedAt,
@@ -1496,6 +1561,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
               accumulator.errorText ||
               trimOptional(accumulator.finalOutput) ||
               accumulator.assistantText ||
+              displayRunInput ||
               t("pages.studio.studiomemberinvokepanel.this.run.returns.no", "This Run returns no additional text."),
             snapshot: {
               chatMessages: cloneChatMessages(finalChatMessages),
@@ -1544,7 +1610,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
             mode: 'stream',
             payloadBase64: '',
             payloadTypeUrl: '',
-            prompt: trimmedPrompt,
+            prompt: displayRunInput,
             runId: accumulator.runId,
             serviceId: selectedService.serviceId,
             startedAt,
@@ -1552,7 +1618,8 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
             summary:
               message ||
               trimOptional(accumulator.finalOutput) ||
-              accumulator.assistantText,
+              accumulator.assistantText ||
+              displayRunInput,
             snapshot: {
               chatMessages: cloneChatMessages(finalChatMessages),
               result: cloneInvokeResult(finalResult),
@@ -1717,6 +1784,8 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     payloadBase64,
     payloadTypeUrl,
     prompt,
+    attachedFiles,
+    canAttachFiles,
     invokeRouteTarget,
     scopeId,
     selectedEndpoint,
@@ -1729,6 +1798,8 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     setChatMessages([]);
     setCurrentRunRequest(null);
     setFormError('');
+    setAttachedFiles([]);
+    setSubmittedFiles([]);
     setInvokeResult(createIdleResult());
     setActiveRunCompletedAt(null);
     setSelectedHistoryId('');
@@ -1928,10 +1999,17 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
                 </div>
                 <div style={memberRunComposerShellStyle}>
                   <StudioMemberInvokeComposerPanel
+                    acceptedFileTypes="image/png,image/jpeg,image/webp,audio/mpeg,audio/wav,audio/wave,audio/x-wav,video/mp4,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/csv,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    attachments={
+                      invokeResult.status === 'running'
+                        ? submittedFiles
+                        : attachedFiles
+                    }
                     blockedReason={invokeBlockedReason}
                     canInvoke={canInvoke}
                     currentRunPrompt={currentRunRequest?.prompt || ''}
                     defaultPrompt={effectiveDefaultPrompt}
+                    enableFileAttachments={enableFileAttachments}
                     formError={formError}
                     invokeStatus={invokeResult.status}
                     isHistoricalRunSelected={Boolean(selectedHistoryEntry)}
@@ -1939,6 +2017,8 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
                     layout="member-run"
                     prompt={prompt}
                     onAbort={handleAbort}
+                    onAttachmentsAdd={handleAttachmentsAdd}
+                    onAttachmentRemove={handleAttachmentRemove}
                     onClear={handleClear}
                     onInvoke={() => void handleInvoke()}
                     onPromptChange={setPrompt}

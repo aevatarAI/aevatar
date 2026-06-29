@@ -26,6 +26,7 @@ jest.mock("@/shared/api/scopeRuntimeApi", () => ({
 jest.mock("../studio/components/StudioMemberInvokePanel", () => ({
   __esModule: true,
   default: (props: {
+    enableFileAttachments?: boolean;
     initialServiceId?: string;
     memberId?: string;
     presentation?: string;
@@ -41,6 +42,7 @@ jest.mock("../studio/components/StudioMemberInvokePanel", () => ({
       React.createElement("span", { key: "scope" }, `scope:${props.scopeId}`),
       React.createElement("span", { key: "member" }, `member:${props.memberId}`),
       React.createElement("span", { key: "target" }, `target:${props.runtimeTarget ?? "default"}`),
+      React.createElement("span", { key: "attachments" }, `attachments:${props.enableFileAttachments ? "on" : "off"}`),
       React.createElement("span", { key: "team" }, `team:${props.teamId}`),
       React.createElement("span", { key: "service" }, `service:${props.initialServiceId}`),
       React.createElement("span", { key: "label" }, `label:${props.selectedMemberLabel}`),
@@ -191,7 +193,10 @@ describe("TeamMemberInvokePage", () => {
       "member:member-alpha",
     );
     expect(screen.getByTestId("member-invoke-panel")).toHaveTextContent(
-      "target:service",
+      "target:member",
+    );
+    expect(screen.getByTestId("member-invoke-panel")).toHaveTextContent(
+      "attachments:on",
     );
     expect(screen.getByTestId("member-invoke-panel")).toHaveTextContent(
       "team:team-1",
@@ -209,7 +214,18 @@ describe("TeamMemberInvokePage", () => {
       "variant:undefined",
     );
     expect(screen.queryByRole("button", { name: "Team members" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Workflow Studio" })).toBeNull();
+    const publishedRunsButton = screen.getByRole("button", {
+      name: "Published runs",
+    });
+    expect(publishedRunsButton).toHaveAttribute(
+      "title",
+      "View runs from the published member service.",
+    );
+    fireEvent.click(publishedRunsButton);
+    expect(window.location.pathname).toBe(
+      "/scopes/scope-1/teams/team-1/members/member-alpha/runs",
+    );
+    expect(window.location.search).toBe("");
     expect(scopeRuntimeApi.listServices).toHaveBeenCalledWith("scope-1", {
       appId: "default",
     });
@@ -324,12 +340,20 @@ describe("TeamMemberInvokePage", () => {
       await screen.findByText("This workflow member is not bound yet."),
     ).toBeTruthy();
     expect(screen.queryByTestId("member-invoke-panel")).toBeNull();
+    const publishedRunsButton = screen.getByRole("button", {
+      name: "Published runs",
+    });
+    expect(publishedRunsButton).toBeDisabled();
+    expect(publishedRunsButton).toHaveAttribute(
+      "title",
+      "Publish this member to start recording published runs.",
+    );
     const workflowStudioButtons = screen.getAllByRole("button", {
       name: "Workflow Studio",
     });
-    expect(workflowStudioButtons).toHaveLength(1);
+    expect(workflowStudioButtons).toHaveLength(2);
 
-    fireEvent.click(workflowStudioButtons[0]);
+    fireEvent.click(workflowStudioButtons[1]);
 
     expect(window.location.pathname).toBe(
       "/scopes/scope-1/teams/team-1/members/member-alpha/workflow",

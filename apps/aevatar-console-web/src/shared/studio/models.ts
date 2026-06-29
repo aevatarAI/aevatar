@@ -152,6 +152,18 @@ export interface StudioSaveWorkflowInput {
   readonly layout?: unknown;
 }
 
+export interface StudioSaveAndBindWorkflowInput {
+  readonly scopeId: string;
+  readonly workflowId?: string | null;
+  readonly workflowYaml: string;
+  readonly workflowName?: string | null;
+  readonly displayName?: string | null;
+  readonly inlineWorkflowYamls?: Record<string, string> | null;
+  readonly appId?: string | null;
+  readonly serviceId?: string | null;
+  readonly exposureDesired?: boolean | null;
+}
+
 export interface StudioWorkflowDraftCreateReadiness {
   readonly readable: boolean;
   readonly stage: string;
@@ -193,6 +205,26 @@ export type StudioWorkflowSaveResult =
       readonly kind: "accepted";
       readonly receipt: StudioWorkflowDraftCreateAcceptedReceipt;
     };
+
+export interface StudioSaveAndBindWorkflowAcceptedResult {
+  readonly scopeId: string;
+  readonly workflowId: string;
+  readonly revisionId: string;
+  readonly workflow?: {
+    readonly scopeId: string;
+    readonly workflowId: string;
+    readonly serviceKey?: string;
+    readonly revisionId: string;
+    readonly readModelUrl?: string;
+    readonly acceptanceStage?: string;
+    readonly propagationStage?: string;
+    readonly displayName?: string;
+    readonly workflowName?: string;
+  };
+  readonly binding?: StudioScopeBindingResult;
+  readonly acceptanceStage: string;
+  readonly propagationStage: string;
+}
 
 export interface StudioSerializeYamlResult {
   readonly yaml: string;

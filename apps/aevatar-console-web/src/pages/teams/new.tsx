@@ -7,7 +7,10 @@ import { history } from '@/shared/navigation/history';
 import { buildTeamCreateHref, buildTeamDetailHref, buildTeamsHref } from '@/shared/navigation/teamRoutes';
 import { studioApi } from '@/shared/studio/api';
 import { describeError } from '@/shared/ui/errorText';
-import { AevatarPanel } from '@/shared/ui/aevatarPageShells';
+import {
+  AevatarPanel,
+  type AevatarBreadcrumbItem,
+} from '@/shared/ui/aevatarPageShells';
 import ConsoleMenuPageShell from '@/shared/ui/ConsoleMenuPageShell';
 import { rememberPendingTeamRosterSummary } from './pendingTeamRoster';
 import { resolveStudioScopeContext } from '../scopes/components/resolvedScope';
@@ -154,9 +157,27 @@ const TeamCreatePage: React.FC = () => {
       setIsCreatingTeam(false);
     }
   };
+  const teamsHref = scopeId
+    ? buildTeamDetailHref({ scopeId })
+    : buildTeamsHref();
+  const breadcrumbItems: AevatarBreadcrumbItem[] = [
+    {
+      href: teamsHref,
+      onClick: (event) => {
+        event.preventDefault();
+        history.push(teamsHref);
+      },
+      title: t("pages.teams.new.teamsBreadcrumb", "Teams"),
+    },
+    {
+      current: true,
+      title: t("pages.teams.new.create.team.2", "Create Team"),
+    },
+  ];
+
   return (
     <ConsoleMenuPageShell
-      breadcrumb={t("pages.teams.new.aevatar.teams", "Aevatar / Teams")}
+      breadcrumbItems={breadcrumbItems}
       extra={
         <Space wrap>
           <Button
@@ -239,7 +260,7 @@ const TeamCreatePage: React.FC = () => {
               type="primary"
             >
               {t("pages.teams.new.create.team.3", "Create Team")}</Button>
-            <Button onClick={() => history.push(buildTeamsHref())}>
+            <Button onClick={() => history.push(teamsHref)}>
               {t("pages.teams.new.back.to.my.teams", "Back to My Teams")}</Button>
           </Space>
         </div>
