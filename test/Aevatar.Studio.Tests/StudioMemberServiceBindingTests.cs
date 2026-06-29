@@ -45,6 +45,10 @@ public sealed class StudioMemberServiceBindingTests
         response.BindingRunId.Should().StartWith("bind-");
         response.ScopeId.Should().Be(ScopeId);
         response.MemberId.Should().Be(MemberId);
+        response.ObserveBindingRunUrl.Should()
+            .Be($"/api/scopes/{ScopeId}/members/{MemberId}/binding-runs/{response.BindingRunId}");
+        response.ObserveMemberBindingUrl.Should()
+            .Be($"/api/scopes/{ScopeId}/members/{MemberId}/binding");
 
         var started = commandPort.StartedRuns.Should().ContainSingle().Which;
         started.BindingRunId.Should().Be(response.BindingRunId);

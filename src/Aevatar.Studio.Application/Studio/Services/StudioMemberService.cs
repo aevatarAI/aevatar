@@ -112,7 +112,14 @@ public sealed class StudioMemberService : IStudioMemberService
             Status: StudioMemberBindingRunStatusNames.Accepted,
             BindingRunId: bindingRunId,
             ScopeId: normalizedScopeId,
-            MemberId: normalizedMemberId);
+            MemberId: normalizedMemberId)
+        {
+            ObserveBindingRunUrl = BuildMemberBindingRunUrl(
+                normalizedScopeId,
+                normalizedMemberId,
+                bindingRunId),
+            ObserveMemberBindingUrl = BuildMemberBindingUrl(normalizedScopeId, normalizedMemberId),
+        };
     }
 
     public async Task<StudioMemberBindingViewResponse> GetBindingAsync(
@@ -645,6 +652,15 @@ public sealed class StudioMemberService : IStudioMemberService
 
     private static string GenerateBindingRunId() =>
         $"bind-{Guid.NewGuid():N}";
+
+    private static string BuildMemberBindingRunUrl(
+        string scopeId,
+        string memberId,
+        string bindingRunId) =>
+        $"{BuildMemberBindingUrl(scopeId, memberId)}-runs/{Uri.EscapeDataString(bindingRunId)}";
+
+    private static string BuildMemberBindingUrl(string scopeId, string memberId) =>
+        $"/api/scopes/{Uri.EscapeDataString(scopeId)}/members/{Uri.EscapeDataString(memberId)}/binding";
 
     private static string ResolveBindingImplementationKind(
         string memberId,

@@ -45,6 +45,12 @@ public sealed class StudioMemberBindingHostedConsistencyTests
         accepted.BindingRunId.Should().StartWith("bind-");
         accepted.ScopeId.Should().Be(ScopeId);
         accepted.MemberId.Should().Be(MemberId);
+        accepted.AckStage.Should().Be(StudioMemberBindingAckStageNames.DispatchAccepted);
+        accepted.BindingRunRole.Should().Be(StudioMemberBindingRunRoleNames.Candidate);
+        accepted.ObserveBindingRunUrl.Should()
+            .Be($"/api/scopes/{ScopeId}/members/{MemberId}/binding-runs/{accepted.BindingRunId}");
+        accepted.ObserveMemberBindingUrl.Should()
+            .Be($"/api/scopes/{ScopeId}/members/{MemberId}/binding");
         bindResponse.Headers.Location!.OriginalString.Should()
             .Be($"/api/scopes/{ScopeId}/members/{MemberId}/binding-runs/{accepted.BindingRunId}");
 
@@ -119,6 +125,58 @@ public sealed class StudioMemberBindingHostedConsistencyTests
         completedBinding.CurrentBindingRun.PlatformBindingCommandId.Should().Be("platform-bind-1");
         host.BindingRunQueryPort.Requests.Should().ContainSingle()
             .Which.Should().Be((ScopeId, MemberId, accepted.BindingRunId));
+    }
+
+    [Fact]
+    public async Task BindingEndpoints_ShouldExposeRejectedCandidateWhenActiveRunRemainsAuthoritative()
+    {
+        await using var host = await StudioMemberEndpointHostedTestHost.StartAsync();
+        host.Scenario.SeedActiveRun("bind-active");
+
+        var bindResponse = await host.Client.PutAsJsonAsync(
+            $"/api/scopes/{ScopeId}/members/{MemberId}/binding",
+            new UpdateStudioMemberBindingRequest(
+                Workflow: new StudioMemberWorkflowBindingSpec(
+                    "workflow-stable-id",
+                    ["name: retry\nsteps:\n  - run: echo retry"])));
+
+        bindResponse.StatusCode.Should().Be(HttpStatusCode.Accepted);
+
+        var accepted = await bindResponse.Content.ReadFromJsonAsync<StudioMemberBindingAcceptedResponse>();
+        accepted.Should().NotBeNull();
+        accepted!.AckStage.Should().Be(StudioMemberBindingAckStageNames.DispatchAccepted);
+        accepted.BindingRunRole.Should().Be(StudioMemberBindingRunRoleNames.Candidate);
+        accepted.BindingRunId.Should().NotBe("bind-active");
+        accepted.ObserveBindingRunUrl.Should()
+            .Be($"/api/scopes/{ScopeId}/members/{MemberId}/binding-runs/{accepted.BindingRunId}");
+        accepted.ObserveMemberBindingUrl.Should()
+            .Be($"/api/scopes/{ScopeId}/members/{MemberId}/binding");
+
+        host.Scenario.RejectCandidate(
+            accepted.BindingRunId,
+            "STUDIO_MEMBER_BINDING_RUN_ALREADY_ACTIVE",
+            "member already has an active binding run.");
+
+        var candidateRun = await host.Client.GetFromJsonAsync<StudioMemberBindingRunStatusResponse>(
+            accepted.ObserveBindingRunUrl);
+        candidateRun.Should().NotBeNull();
+        candidateRun!.BindingRunId.Should().Be(accepted.BindingRunId);
+        candidateRun.Status.Should().Be(StudioMemberBindingRunStatusNames.Rejected);
+        candidateRun.Failure.Should().NotBeNull();
+        candidateRun.Failure!.Code.Should().Be("STUDIO_MEMBER_BINDING_RUN_ALREADY_ACTIVE");
+        candidateRun.Failure.Message.Should().Be("member already has an active binding run.");
+
+        host.BindingRunQueryPort.Requests.Clear();
+        var authoritativeBinding = await host.Client.GetFromJsonAsync<StudioMemberBindingViewResponse>(
+            accepted.ObserveMemberBindingUrl);
+        authoritativeBinding.Should().NotBeNull();
+        authoritativeBinding!.CurrentBindingRun.Should().NotBeNull();
+        authoritativeBinding.CurrentBindingRun!.BindingRunId.Should().Be("bind-active");
+        authoritativeBinding.CurrentBindingRun.Status.Should()
+            .Be(StudioMemberBindingRunStatusNames.PlatformBindingPending);
+        authoritativeBinding.CurrentBindingRun.Failure.Should().BeNull();
+        host.BindingRunQueryPort.Requests.Should().ContainSingle()
+            .Which.Should().Be((ScopeId, MemberId, "bind-active"));
     }
 
     private sealed class StudioMemberEndpointHostedTestHost : IAsyncDisposable
@@ -200,13 +258,85 @@ public sealed class StudioMemberBindingHostedConsistencyTests
 
     private sealed class StudioMemberBindingScenario
     {
-        public StudioMemberBindingRunStartRequest? StartedRun { get; set; }
+        public string? CurrentBindingRunId { get; private set; }
+        public StudioMemberBindingRunStartRequest? LatestStartedRun { get; private set; }
+        public Dictionary<string, StudioMemberBindingRunStatusResponse> Runs { get; } = new(StringComparer.Ordinal);
         public bool Completed { get; private set; }
+
+        public void StartRun(StudioMemberBindingRunStartRequest request)
+        {
+            LatestStartedRun = request;
+            if (CurrentBindingRunId == null)
+                CurrentBindingRunId = request.BindingRunId;
+
+            Runs[request.BindingRunId] = BuildRun(
+                request.BindingRunId,
+                request.ScopeId,
+                request.MemberId,
+                StudioMemberBindingRunStatusNames.PlatformBindingPending,
+                stateVersion: 1);
+        }
+
+        public void SeedActiveRun(string bindingRunId)
+        {
+            CurrentBindingRunId = bindingRunId;
+            Runs[bindingRunId] = BuildRun(
+                bindingRunId,
+                ScopeId,
+                MemberId,
+                StudioMemberBindingRunStatusNames.PlatformBindingPending,
+                stateVersion: 3);
+        }
+
+        public void RejectCandidate(string bindingRunId, string code, string message)
+        {
+            Runs[bindingRunId] = BuildRun(
+                bindingRunId,
+                ScopeId,
+                MemberId,
+                StudioMemberBindingRunStatusNames.Rejected,
+                stateVersion: 2,
+                failure: new StudioMemberBindingFailureResponse(
+                    Code: code,
+                    Message: message,
+                    FailedAt: DateTimeOffset.Parse("2026-05-21T00:01:00Z")));
+        }
 
         public void CompleteBinding()
         {
             Completed = true;
+            if (CurrentBindingRunId == null)
+                return;
+
+            Runs[CurrentBindingRunId] = BuildRun(
+                CurrentBindingRunId,
+                ScopeId,
+                MemberId,
+                StudioMemberBindingRunStatusNames.Succeeded,
+                stateVersion: 2);
         }
+
+        private static StudioMemberBindingRunStatusResponse BuildRun(
+            string bindingRunId,
+            string scopeId,
+            string memberId,
+            string status,
+            long stateVersion,
+            StudioMemberBindingFailureResponse? failure = null) =>
+            new(
+                BindingRunId: bindingRunId,
+                ScopeId: scopeId,
+                MemberId: memberId,
+                Status: status,
+                StateVersion: stateVersion,
+                Failure: failure,
+                UpdatedAt: DateTimeOffset.Parse("2026-05-21T00:00:00Z"))
+            {
+                PlatformBindingCommandId = status == StudioMemberBindingRunStatusNames.PlatformBindingPending
+                    || status == StudioMemberBindingRunStatusNames.Succeeded
+                    ? "platform-bind-1"
+                    : null,
+            };
     }
 
     private sealed class RecordingMemberCommandPort : IStudioMemberCommandPort
@@ -245,7 +375,7 @@ public sealed class StudioMemberBindingHostedConsistencyTests
             CancellationToken ct = default)
         {
             StartedRuns.Add(request);
-            _scenario.StartedRun = request;
+            _scenario.StartRun(request);
             return Task.CompletedTask;
         }
 
@@ -282,7 +412,7 @@ public sealed class StudioMemberBindingHostedConsistencyTests
         {
             var now = DateTimeOffset.Parse("2026-05-21T00:00:00Z");
             var completed = _scenario.Completed;
-            var startedRun = _scenario.StartedRun;
+            var currentBindingRunId = _scenario.CurrentBindingRunId;
 
             return new StudioMemberDetailResponse(
                 Summary: new StudioMemberSummaryResponse(
@@ -308,15 +438,9 @@ public sealed class StudioMemberBindingHostedConsistencyTests
                         BoundAt: now)
                     : null)
             {
-                CurrentBindingRun = startedRun == null
+                CurrentBindingRun = currentBindingRunId == null
                     ? null
-                    : new StudioMemberBindingRunStatusResponse(
-                        BindingRunId: startedRun.BindingRunId,
-                        ScopeId: scopeId,
-                        MemberId: memberId,
-                        Status: StudioMemberBindingRunStatusNames.Accepted,
-                        StateVersion: 1,
-                        UpdatedAt: now.AddMinutes(-1)),
+                    : _scenario.Runs[currentBindingRunId],
             };
         }
     }
@@ -340,28 +464,13 @@ public sealed class StudioMemberBindingHostedConsistencyTests
         {
             Requests.Add((scopeId, memberId, bindingRunId));
 
-            var startedRun = _scenario.StartedRun;
-            if (startedRun == null
-                || !string.Equals(startedRun.ScopeId, scopeId, StringComparison.Ordinal)
-                || !string.Equals(startedRun.MemberId, memberId, StringComparison.Ordinal)
-                || !string.Equals(startedRun.BindingRunId, bindingRunId, StringComparison.Ordinal))
+            if (!_scenario.Runs.TryGetValue(bindingRunId, out var run)
+                || !string.Equals(run.ScopeId, scopeId, StringComparison.Ordinal)
+                || !string.Equals(run.MemberId, memberId, StringComparison.Ordinal)
+                || !string.Equals(run.BindingRunId, bindingRunId, StringComparison.Ordinal))
             {
                 return Task.FromResult<StudioMemberBindingRunStatusResponse?>(null);
             }
-
-            var status = _scenario.Completed
-                ? StudioMemberBindingRunStatusNames.Succeeded
-                : StudioMemberBindingRunStatusNames.PlatformBindingPending;
-            var run = new StudioMemberBindingRunStatusResponse(
-                BindingRunId: bindingRunId,
-                ScopeId: scopeId,
-                MemberId: memberId,
-                Status: status,
-                StateVersion: _scenario.Completed ? 2 : 1,
-                UpdatedAt: DateTimeOffset.Parse("2026-05-21T00:00:00Z"))
-            {
-                PlatformBindingCommandId = "platform-bind-1",
-            };
 
             return Task.FromResult<StudioMemberBindingRunStatusResponse?>(run);
         }

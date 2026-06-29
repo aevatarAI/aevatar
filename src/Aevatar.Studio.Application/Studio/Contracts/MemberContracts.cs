@@ -316,6 +316,10 @@ public sealed record StudioMemberBindingAcceptedResponse(
     public string AckStage { get; init; } = StudioMemberBindingAckStageNames.DispatchAccepted;
 
     public string BindingRunRole { get; init; } = StudioMemberBindingRunRoleNames.Candidate;
+
+    public string? ObserveBindingRunUrl { get; init; }
+
+    public string? ObserveMemberBindingUrl { get; init; }
 }
 
 public sealed record StudioMemberBindingRunStartRequest(
