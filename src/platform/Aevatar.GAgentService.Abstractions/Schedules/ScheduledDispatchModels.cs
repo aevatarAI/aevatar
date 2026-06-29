@@ -100,6 +100,7 @@ public sealed record ScheduledDispatchSummary(
     int FailureCount,
     IReadOnlyDictionary<string, string> Headers,
     string ScheduleActorId,
+    string Prompt,
     ScheduledDispatchScheduleKind ScheduleKind = ScheduledDispatchScheduleKind.Generic,
     bool Deleted = false);
 

@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Services;
@@ -42,6 +43,8 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
         document!.ServiceKey.Should().Be(ServiceKeys.Build(identity));
         document.ServiceId.Should().Be("svc");
         document.ServiceEndpointId.Should().Be("chat");
+        document.Prompt.Should().Be("run");
+        document.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Generic.ToString());
         document.StateVersion.Should().Be(9);
         document.LastEventId.Should().Be("evt-9");
     }
@@ -148,7 +151,7 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
                 {
                     Identity = identity.Clone(),
                     EndpointId = "chat",
-                    Payload = Any.Pack(new StringValue { Value = "run" }),
+                    Payload = Any.Pack(new ChatRequestEvent { Prompt = "run" }),
                 },
             },
         };

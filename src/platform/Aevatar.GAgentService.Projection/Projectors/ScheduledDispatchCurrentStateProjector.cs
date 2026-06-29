@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.Foundation.Abstractions;
@@ -77,6 +78,7 @@ public sealed class ScheduledDispatchCurrentStateProjector
             ServiceKey = BuildServiceKey(serviceIdentity),
             ServiceId = serviceIdentity?.ServiceId ?? string.Empty,
             ServiceEndpointId = target.ServiceInvocation?.EndpointId ?? string.Empty,
+            Prompt = ExtractPrompt(target.ServiceInvocation?.Payload),
             TargetActorId = state.TargetActorId ?? string.Empty,
             Deleted = state.Deleted,
             StateVersion = stateEvent.Version,
@@ -93,6 +95,14 @@ public sealed class ScheduledDispatchCurrentStateProjector
             .ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal);
         document.FireRecords.Add(CreateFireRecords(state));
         return document;
+    }
+
+    private static string ExtractPrompt(Any? payload)
+    {
+        if (payload == null || !payload.Is(ChatRequestEvent.Descriptor))
+            return string.Empty;
+
+        return payload.Unpack<ChatRequestEvent>().Prompt ?? string.Empty;
     }
 
     private static string BuildServiceKey(ServiceIdentity? serviceIdentity)

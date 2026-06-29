@@ -800,6 +800,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
                     0,
                     new Dictionary<string, string>(),
                     "actor:schedule-1",
+                    string.Empty,
                     Deleted: true),
                 []),
         };

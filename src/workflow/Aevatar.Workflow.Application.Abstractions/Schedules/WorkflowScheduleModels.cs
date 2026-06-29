@@ -54,7 +54,8 @@ public sealed record WorkflowScheduleSummary(
     IReadOnlyDictionary<string, string> Headers,
     string ScopeId,
     string ScheduleActorId,
-    string TargetActorId);
+    string TargetActorId,
+    string Prompt);
 
 public sealed record WorkflowScheduleFireRecord(
     DateTimeOffset ScheduledFireAt,

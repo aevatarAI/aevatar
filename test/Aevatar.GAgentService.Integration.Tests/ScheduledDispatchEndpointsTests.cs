@@ -1448,7 +1448,8 @@ public sealed class ScheduledDispatchEndpointsTests
                 0,
                 0,
                 new Dictionary<string, string>(),
-                "actor:schedule-1"),
+                "actor:schedule-1",
+                string.Empty),
             []);
 
     private static DefaultHttpContext CreateHttpContext(
