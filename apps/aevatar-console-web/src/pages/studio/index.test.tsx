@@ -5805,6 +5805,20 @@ describe("StudioPage", () => {
         },
       ]);
     (studioApi.getScopeBinding as jest.Mock).mockResolvedValueOnce(null);
+    (studioApi.getMemberBindingRun as jest.Mock).mockResolvedValueOnce({
+      bindingRunId: "bind-member-workflow-1",
+      scopeId: "scope-1",
+      memberId: "workspace-demo",
+      status: "succeeded",
+      result: {
+        publishedServiceId: "default",
+        revisionId: "rev-2",
+        implementationKind: "workflow",
+        expectedActorId: "actor-default",
+      },
+      failure: null,
+      updatedAt: "2026-04-27T08:15:01Z",
+    });
     mockScopeRuntimeApi.getServiceRevisions.mockImplementation(
       async () =>
         mockBuildServiceRevisionCatalog({
@@ -5963,6 +5977,12 @@ describe("StudioPage", () => {
       scopeId: "scope-1",
       memberId: "draft1",
       status: "succeeded",
+      result: {
+        publishedServiceId: "draft1",
+        revisionId: "rev-draft1",
+        implementationKind: "workflow",
+        expectedActorId: "actor-draft1",
+      },
       failure: null,
       updatedAt: "2026-04-27T08:15:01Z",
     });
