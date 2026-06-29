@@ -1024,6 +1024,132 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
+    public async Task HandleEnsureAsync_WhenServiceInvocationNoOpOmitsAuth_ShouldPreserveExistingAuthWithoutConfiguredEvent()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var agent = CreateAgent(eventStore, dispatch);
+        await agent.ActivateAsync();
+        var triggerEnvelope = CreateTriggerEnvelope("target-actor-1", new ChatRequestEvent
+        {
+            Prompt = "hello",
+            SessionId = "template-session",
+        });
+        await agent.HandleConfigureAsync(CreateConfigureCommand(
+            enabled: false,
+            triggerEnvelope: triggerEnvelope,
+            scheduleKind: ScheduledDispatchScheduleKindState.Workflow,
+            target: new ScheduledDispatchTargetState
+            {
+                Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
+                ServiceInvocation = new ScheduledServiceInvocationTargetState
+                {
+                    Identity = new ServiceIdentity { ServiceId = "configured-service" },
+                    EndpointId = "chat",
+                    Payload = Any.Pack(new ChatRequestEvent { Prompt = "configured" }),
+                    Auth = new ScheduledServiceInvocationAuthState
+                    {
+                        ScopeOwnerNyxId = new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState
+                        {
+                            Scope = "proxy",
+                            OwnerSubject = new ScheduledServiceInvocationNyxIdSubjectRefState
+                            {
+                                Platform = OwnerScope.NyxIdPlatform,
+                                Tenant = string.Empty,
+                                ExternalUserId = "owner-nyx-user",
+                            },
+                        },
+                    },
+                },
+            }));
+        var eventCount = eventStore.GetEvents(ScheduleActorId).Count;
+
+        await agent.HandleEnsureAsync(CreateEnsureCommand(
+            triggerEnvelope: triggerEnvelope,
+            scheduleKind: ScheduledDispatchScheduleKindState.Workflow,
+            target: new ScheduledDispatchTargetState
+            {
+                Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
+                ServiceInvocation = new ScheduledServiceInvocationTargetState
+                {
+                    Identity = new ServiceIdentity { ServiceId = "configured-service" },
+                    EndpointId = "chat",
+                    Payload = Any.Pack(new ChatRequestEvent { Prompt = "configured" }),
+                },
+            }));
+
+        eventStore.GetEvents(ScheduleActorId).Should().HaveCount(eventCount);
+        agent.State.Target!.ServiceInvocation!.Auth.Should().NotBeNull();
+        agent.State.Target.ServiceInvocation.Auth!.ScopeOwnerNyxId!.Scope.Should().Be("proxy");
+    }
+
+    [Fact]
+    public async Task HandleEnsureAsync_WhenServiceInvocationUpdateOmitsAuth_ShouldPreserveExistingAuth()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var serviceInvocationDispatch = new RecordingScheduledServiceInvocationDispatchPort();
+        var agent = CreateAgent(
+            eventStore,
+            dispatch,
+            serviceInvocationDispatch: serviceInvocationDispatch);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(
+            enabled: false,
+            scheduleKind: ScheduledDispatchScheduleKindState.Workflow,
+            target: new ScheduledDispatchTargetState
+            {
+                Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
+                ServiceInvocation = new ScheduledServiceInvocationTargetState
+                {
+                    Identity = new ServiceIdentity { ServiceId = "configured-service" },
+                    EndpointId = "chat",
+                    Payload = Any.Pack(new ChatRequestEvent { Prompt = "configured" }),
+                    Auth = new ScheduledServiceInvocationAuthState
+                    {
+                        ScopeOwnerNyxId = new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState
+                        {
+                            Scope = "proxy",
+                            OwnerSubject = new ScheduledServiceInvocationNyxIdSubjectRefState
+                            {
+                                Platform = OwnerScope.NyxIdPlatform,
+                                Tenant = string.Empty,
+                                ExternalUserId = "owner-nyx-user",
+                            },
+                        },
+                    },
+                },
+            }));
+
+        await agent.HandleEnsureAsync(CreateEnsureCommand(
+            displayName: "Updated schedule",
+            targetActorId: ScheduledDispatchAdapterConventions.ServiceInvocationTargetActorId,
+            target: new ScheduledDispatchTargetState
+            {
+                Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
+                ServiceInvocation = new ScheduledServiceInvocationTargetState
+                {
+                    Identity = new ServiceIdentity { ServiceId = "configured-service" },
+                    EndpointId = "chat",
+                    Payload = Any.Pack(new ChatRequestEvent { Prompt = "updated" }),
+                },
+            }));
+        var scheduledFireAt = new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero);
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
+            Manual = true,
+        });
+
+        agent.State.Target!.ServiceInvocation!.Auth.Should().NotBeNull();
+        agent.State.Target.ServiceInvocation.Auth!.ScopeOwnerNyxId!.Scope.Should().Be("proxy");
+        var auth = serviceInvocationDispatch.Auths.Should().ContainSingle().Which;
+        auth.Should().NotBeNull();
+        auth!.ScopeOwnerNyxId!.Scope.Should().Be("proxy");
+        auth.ScopeOwnerNyxId.OwnerSubject!.ExternalUserId.Should().Be("owner-nyx-user");
+    }
+
+    [Fact]
     public async Task HandleFireAsync_ForWorkflowServiceInvocationAuth_ShouldRequestWorkflowCallerCredentialProjection()
     {
         var eventStore = new TestEventStore();
@@ -1749,7 +1875,8 @@ public sealed class ScheduledDispatchGAgentTests
         string cronExpression = "*/15 * * * *",
         bool enabled = false,
         EventEnvelope? triggerEnvelope = null,
-        ScheduledDispatchTargetState? target = null)
+        ScheduledDispatchTargetState? target = null,
+        ScheduledDispatchScheduleKindState scheduleKind = ScheduledDispatchScheduleKindState.Generic)
     {
         return new ScheduledDispatchEnsureCommand
         {
@@ -1765,6 +1892,7 @@ public sealed class ScheduledDispatchGAgentTests
             Timezone = "UTC",
             Enabled = enabled,
             Target = target ?? CreateTargetState(targetActorId, triggerEnvelope),
+            ScheduleKind = scheduleKind,
         };
     }
 
