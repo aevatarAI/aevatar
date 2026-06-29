@@ -181,6 +181,19 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         EnsureValidDefinition(targetActorId, target, triggerEnvelope, cronExpression, timezone);
 
         var now = DateTimeOffset.UtcNow;
+        var configuredTarget = PreserveExistingServiceInvocationAuth(
+            NormalizeTarget(target),
+            isCreate);
+        Logger.LogInformation(
+            "Scheduled dispatch configuration prepared. scheduleId={ScheduleId} isCreate={IsCreate} targetKind={TargetKind} scheduleKind={ScheduleKind} hasServiceInvocationAuth={HasServiceInvocationAuth} hasScopeOwnerNyxId={HasScopeOwnerNyxId} hasSenderNyxId={HasSenderNyxId} hasDurableSenderBearerToken={HasDurableSenderBearerToken}",
+            NormalizeRequired(scheduleId, nameof(scheduleId)),
+            isCreate,
+            configuredTarget.Kind,
+            scheduleKind,
+            HasServiceInvocationAuth(configuredTarget),
+            HasScopeOwnerNyxId(configuredTarget),
+            HasSenderNyxId(configuredTarget),
+            HasDurableSenderBearerToken(configuredTarget));
         var configured = new ScheduledDispatchConfiguredEvent
         {
             ScheduleId = NormalizeRequired(scheduleId, nameof(scheduleId)),
@@ -192,7 +205,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             Enabled = enabled,
             ConfiguredAt = Timestamp.FromDateTimeOffset(now),
             PayloadTypeUrl = ResolvePayloadTypeUrl(triggerEnvelope),
-            Target = NormalizeTarget(target),
+            Target = configuredTarget,
             ScheduleKind = scheduleKind,
         };
         foreach (var (key, value) in NormalizeHeaders(headers))
@@ -354,6 +367,17 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         {
             if (prepared.Envelope.Payload?.TryUnpack<ServiceInvocationRequest>(out var request) != true)
                 throw new InvalidOperationException("Scheduled service invocation payload is not configured.");
+
+            var stateTarget = State.Target;
+            Logger.LogInformation(
+                "Scheduled service invocation fire prepared from actor state. scheduleId={ScheduleId} scheduleKind={ScheduleKind} hasServiceInvocationAuth={HasServiceInvocationAuth} hasScopeOwnerNyxId={HasScopeOwnerNyxId} hasSenderNyxId={HasSenderNyxId} hasDurableSenderBearerToken={HasDurableSenderBearerToken} projectWorkflowCallerCredential={ProjectWorkflowCallerCredential}",
+                ResolveScheduleId(),
+                State.ScheduleKind,
+                HasServiceInvocationAuth(stateTarget),
+                HasScopeOwnerNyxId(stateTarget),
+                HasSenderNyxId(stateTarget),
+                HasDurableSenderBearerToken(stateTarget),
+                State.ScheduleKind == ScheduledDispatchScheduleKindState.Workflow);
 
             var receipt = await _serviceInvocationDispatchPort.DispatchAsync(
                 new ScheduledServiceInvocationDispatchRequest(
@@ -792,6 +816,25 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         };
     }
 
+    private ScheduledDispatchTargetState PreserveExistingServiceInvocationAuth(
+        ScheduledDispatchTargetState normalizedTarget,
+        bool isCreate)
+    {
+        if (isCreate || normalizedTarget.Kind != ScheduledDispatchTargetKindState.ServiceInvocation)
+            return normalizedTarget;
+        if (normalizedTarget.ServiceInvocation?.Auth != null)
+            return normalizedTarget;
+
+        var existingAuth = NormalizeServiceInvocationAuth(State.Target?.ServiceInvocation?.Auth);
+        if (existingAuth == null)
+            return normalizedTarget;
+
+        var preserved = normalizedTarget.Clone();
+        preserved.ServiceInvocation ??= new ScheduledServiceInvocationTargetState();
+        preserved.ServiceInvocation.Auth = existingAuth;
+        return preserved;
+    }
+
     private static ScheduledServiceInvocationAuthState? NormalizeServiceInvocationAuth(
         ScheduledServiceInvocationAuthState? auth)
     {
@@ -838,6 +881,18 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 Tenant = NormalizeOptional(subject.Tenant),
                 ExternalUserId = NormalizeOptional(subject.ExternalUserId),
             };
+
+    private static bool HasServiceInvocationAuth(ScheduledDispatchTargetState? target) =>
+        target?.ServiceInvocation?.Auth != null;
+
+    private static bool HasScopeOwnerNyxId(ScheduledDispatchTargetState? target) =>
+        target?.ServiceInvocation?.Auth?.ScopeOwnerNyxId != null;
+
+    private static bool HasSenderNyxId(ScheduledDispatchTargetState? target) =>
+        target?.ServiceInvocation?.Auth?.SenderNyxId != null;
+
+    private static bool HasDurableSenderBearerToken(ScheduledDispatchTargetState? target) =>
+        !string.IsNullOrWhiteSpace(target?.ServiceInvocation?.Auth?.DurableSenderBearerToken);
 
     private ScheduledDispatchState ApplyConfigured(
         ScheduledDispatchState current,
