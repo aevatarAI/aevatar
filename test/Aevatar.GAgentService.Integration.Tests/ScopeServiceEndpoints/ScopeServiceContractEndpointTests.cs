@@ -121,6 +121,71 @@ public sealed class ScopeServiceContractEndpointTests : ScopeServiceEndpointTest
     }
 
     [Fact]
+    public async Task GetEndpointContractEndpoint_ShouldTreatWorkflowChatEndpointAsStream_WhenEndpointKindIsStale()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.LifecycleQueryPort.Service = new ServiceCatalogSnapshot(
+            "scope-a:default:default:default",
+            "scope-a",
+            "default",
+            "default",
+            "default",
+            "Orders App",
+            "rev-chat",
+            "rev-chat",
+            "dep-chat",
+            "workflow-actor-1",
+            "Active",
+            [
+                new ServiceEndpointSnapshot(
+                    "chat",
+                    "Chat",
+                    "command",
+                    Any.Pack(new ChatRequestEvent()).TypeUrl,
+                    Any.Pack(new ChatResponseEvent()).TypeUrl,
+                    "Chat entrypoint"),
+            ],
+            [],
+            DateTimeOffset.UtcNow);
+        host.LifecycleQueryPort.Revisions = new ServiceRevisionCatalogSnapshot(
+            "scope-a:default:default:default",
+            [
+                new ServiceRevisionSnapshot(
+                    "rev-chat",
+                    ServiceImplementationKind.Workflow.ToString(),
+                    "Published",
+                    "hash-chat",
+                    string.Empty,
+                    [
+                        new ServiceEndpointSnapshot(
+                            "chat",
+                            "Chat",
+                            "command",
+                            Any.Pack(new ChatRequestEvent()).TypeUrl,
+                            Any.Pack(new ChatResponseEvent()).TypeUrl,
+                            "Chat entrypoint"),
+                    ],
+                    DateTimeOffset.UtcNow.AddMinutes(-10),
+                    DateTimeOffset.UtcNow.AddMinutes(-9),
+                    DateTimeOffset.UtcNow.AddMinutes(-8),
+                    null),
+            ],
+            DateTimeOffset.UtcNow);
+
+        var response = await host.Client.GetFromJsonAsync<ScopeServiceEndpoints.ScopeServiceEndpointContractHttpResponse>(
+            "/api/scopes/scope-a/services/default/endpoints/chat/contract");
+
+        response.Should().NotBeNull();
+        response!.InvokePath.Should().Be("/api/scopes/scope-a/services/default/invoke/chat:stream");
+        response.ResponseContentType.Should().Be("text/event-stream");
+        response.SupportsSse.Should().BeTrue();
+        response.SupportsAguiFrames.Should().BeFalse();
+        response.StreamFrameFormat.Should().Be("workflow-run-event");
+        response.DefaultSmokeInputMode.Should().Be("prompt");
+        response.SampleRequestJson.Should().BeNull();
+    }
+
+    [Fact]
     public async Task GetEndpointContractEndpoint_ShouldPreferServingRevisionThatContainsRequestedEndpoint()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();

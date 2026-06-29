@@ -2881,7 +2881,10 @@ public static class ScopeServiceEndpoints
             return null;
 
         var implementationKind = NormalizeOptional(currentRevision?.ImplementationKind);
-        var supportsSse = IsChatEndpoint(endpoint.Kind);
+        var supportsSse = ServiceEndpointContractMath.SupportsSse(
+            endpoint.EndpointId,
+            endpoint.Kind,
+            implementationKind);
         var streamFrameFormat = ResolveScopeServiceStreamFrameFormat(supportsSse, implementationKind);
         var supportsAguiFrames = string.Equals(streamFrameFormat, StreamFrameFormatAgui, StringComparison.Ordinal);
         var invokePath = supportsSse

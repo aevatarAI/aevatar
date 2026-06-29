@@ -97,6 +97,57 @@ public sealed class StudioMemberServiceContractAndRevisionTests
     }
 
     [Fact]
+    public async Task GetEndpointContractAsync_ShouldTreatWorkflowChatEndpointAsStream_WhenEndpointKindIsStale()
+    {
+        var detail = NewDetail();
+        var queryPort = new InMemoryMemberQueryPort(detail);
+        var lifecycle = new InMemoryServiceLifecycleQueryPort
+        {
+            Service = NewService(
+                endpoints:
+                [
+                    new ServiceEndpointSnapshot(
+                        EndpointId: "chat",
+                        DisplayName: "Chat",
+                        Kind: "command",
+                        RequestTypeUrl: "type.googleapis.com/x.Request",
+                        ResponseTypeUrl: "type.googleapis.com/x.Response",
+                        Description: string.Empty),
+                ]),
+            Revisions = NewRevisions(
+                implementationKind: ServiceImplementationKind.Workflow,
+                endpoints:
+                [
+                    new ServiceEndpointSnapshot(
+                        EndpointId: "chat",
+                        DisplayName: "Chat",
+                        Kind: "command",
+                        RequestTypeUrl: "type.googleapis.com/x.Request",
+                        ResponseTypeUrl: "type.googleapis.com/x.Response",
+                        Description: string.Empty),
+                ]),
+        };
+        var service = new StudioMemberService(
+            new InertMemberCommandPort(),
+            queryPort,
+            new InertBindingRunQueryPort(),
+            new InertTeamQueryPort(),
+            lifecycle,
+            new ReadyScopeBindingReadinessQueryPort(),
+            new RecordingServiceCommandPort());
+
+        var contract = await service.GetEndpointContractAsync(ScopeId, MemberId, "chat", CancellationToken.None);
+
+        contract.Should().NotBeNull();
+        contract!.InvokePath.Should().Be($"/api/scopes/{ScopeId}/members/{MemberId}/invoke/chat:stream");
+        contract.ResponseContentType.Should().Be("text/event-stream");
+        contract.SupportsSse.Should().BeTrue();
+        contract.StreamFrameFormat.Should().Be("workflow-run-event");
+        contract.DefaultSmokeInputMode.Should().Be("prompt");
+        contract.SampleRequestJson.Should().BeNull();
+    }
+
+    [Fact]
     public async Task GetEndpointContractAsync_ShouldExposePreparedArtifactMissingReadiness()
     {
         var detail = NewDetail();

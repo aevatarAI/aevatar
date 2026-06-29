@@ -86,6 +86,11 @@ public static class ServiceEndpointContractMath
     public static bool IsChatEndpoint(string? endpointKind) =>
         string.Equals(endpointKind?.Trim(), "chat", StringComparison.OrdinalIgnoreCase);
 
+    public static bool SupportsSse(string? endpointId, string? endpointKind, string? implementationKind) =>
+        IsChatEndpoint(endpointKind) ||
+        (string.Equals(implementationKind, ImplementationKindWorkflow, StringComparison.OrdinalIgnoreCase) &&
+         string.Equals(endpointId?.Trim(), "chat", StringComparison.Ordinal));
+
     /// <summary>
     /// Maps (supportsSse, implementationKind) to the SSE frame format the
     /// frontend should decode. Workflow runs emit run-event frames; static

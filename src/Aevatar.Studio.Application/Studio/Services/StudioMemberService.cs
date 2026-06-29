@@ -732,7 +732,10 @@ public sealed class StudioMemberService : IStudioMemberService
             return null;
 
         var implementationKind = ServiceEndpointContractMath.NullIfEmpty(currentRevision?.ImplementationKind);
-        var supportsSse = ServiceEndpointContractMath.IsChatEndpoint(endpoint.Kind);
+        var supportsSse = ServiceEndpointContractMath.SupportsSse(
+            endpoint.EndpointId,
+            endpoint.Kind,
+            implementationKind);
         var streamFrameFormat = ServiceEndpointContractMath.ResolveStreamFrameFormat(
             supportsSse, implementationKind);
         var supportsAguiFrames = string.Equals(
