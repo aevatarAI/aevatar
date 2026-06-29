@@ -78,6 +78,49 @@ describe("scheduledDispatchApi", () => {
     };
   }
 
+  function decodeChatRequestEventBase64(payloadBase64: string) {
+    const bytes = Uint8Array.from(Buffer.from(payloadBase64, "base64"));
+    const fields = new Map<number, string>();
+    let offset = 0;
+
+    const readVarint = () => {
+      let value = 0;
+      let shift = 0;
+      while (offset < bytes.length) {
+        const byte = bytes[offset++];
+        value |= (byte & 0x7f) << shift;
+        if ((byte & 0x80) === 0) {
+          return value;
+        }
+        shift += 7;
+      }
+      throw new Error("Invalid varint in ChatRequestEvent payload.");
+    };
+
+    while (offset < bytes.length) {
+      const tag = readVarint();
+      const fieldNumber = tag >> 3;
+      const wireType = tag & 0x7;
+      if (wireType !== 2) {
+        throw new Error(`Unsupported ChatRequestEvent wire type ${wireType}.`);
+      }
+
+      const length = readVarint();
+      const end = offset + length;
+      fields.set(
+        fieldNumber,
+        Buffer.from(bytes.slice(offset, end)).toString("utf8"),
+      );
+      offset = end;
+    }
+
+    return {
+      prompt: fields.get(1) ?? "",
+      sessionId: fields.get(2) ?? "",
+      scopeId: fields.get(5) ?? "",
+    };
+  }
+
   it("lists schedules through the backend schedules collection", async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
@@ -234,6 +277,40 @@ describe("scheduledDispatchApi", () => {
     expect(String(init.body)).not.toContain("memberId");
     expect(String(init.body)).not.toContain("workflowId");
     expect(String(init.body)).not.toContain("workflowChatTarget");
+  });
+
+  it("keeps the entered recurring prompt in the final create payload", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 202,
+      json: async () => createReceipt(),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await scheduledDispatchApi.create({
+      displayName: "Daily escalation digest",
+      cronExpression: "0 9 * * 1-5",
+      timezone: "Asia/Shanghai",
+      enabled: true,
+      workflowChatTarget: {
+        identity: {
+          tenantId: "scope-1",
+          appId: "default",
+          namespace: "default",
+          serviceId: "svc-alpha",
+        },
+        prompt: " Summarize escalations, blocked accounts, and follow-up owners. ",
+      },
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(String(init.body));
+    expect(decodeChatRequestEventBase64(body.serviceInvocation.payloadBase64)).toEqual(
+      expect.objectContaining({
+        prompt: "Summarize escalations, blocked accounts, and follow-up owners.",
+        scopeId: "scope-1",
+      }),
+    );
   });
 
   it("posts workflow chat as base64 service invocation when creating without a revision", async () => {
@@ -488,6 +565,40 @@ describe("scheduledDispatchApi", () => {
     expect(String(init.body)).not.toContain("memberId");
     expect(String(init.body)).not.toContain("workflowId");
     expect(String(init.body)).not.toContain("workflowChatTarget");
+  });
+
+  it("keeps the entered recurring prompt in the final update payload", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 202,
+      json: async () => createReceipt(),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await scheduledDispatchApi.update("sch-alpha", {
+      displayName: "Edited escalation digest",
+      cronExpression: "0 10 * * 1-5",
+      timezone: "Asia/Shanghai",
+      enabled: false,
+      workflowChatTarget: {
+        identity: {
+          tenantId: "scope-1",
+          appId: "default",
+          namespace: "default",
+          serviceId: "svc-alpha",
+        },
+        prompt: " Summarize changed escalations and follow-up owners. ",
+      },
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(String(init.body));
+    expect(decodeChatRequestEventBase64(body.serviceInvocation.payloadBase64)).toEqual(
+      expect.objectContaining({
+        prompt: "Summarize changed escalations and follow-up owners.",
+        scopeId: "scope-1",
+      }),
+    );
   });
 
   it("rejects oversized workflow prompts before storing the schedule payload", async () => {
