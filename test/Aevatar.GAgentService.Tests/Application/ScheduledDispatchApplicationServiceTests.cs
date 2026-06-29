@@ -887,6 +887,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
                         ServiceEndpointId = "chat",
                         ServiceId = "daily",
                         ScheduleKind = ScheduledDispatchScheduleKind.Workflow.ToString(),
+                        Prompt = "saved prompt",
                     },
                 ],
                 NextCursor = "workflow-cursor",
@@ -905,6 +906,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
 
         result.Items.Should().ContainSingle()
             .Which.ScheduleId.Should().Be("workflow-1");
+        result.Items.Single().Prompt.Should().Be("saved prompt");
         result.NextCursor.Should().Be("workflow-cursor");
         result.TotalCount.Should().Be(1);
         reader.LastQuery.Should().NotBeNull();
