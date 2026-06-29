@@ -45,7 +45,7 @@ public sealed class SkillWorkflowsWiringTests
     }
 
     [Fact]
-    public async Task OrnnRemoteSkillFetcher_FallsBackToAssetsYamlWhenNoWorkflowsDir()
+    public async Task OrnnRemoteSkillFetcher_LeavesAssetsYamlAsAssociatedFileWhenNoWorkflowsDir()
     {
         var handler = OrnnTestHttpMessageHandler.ReturningJson("""
             {
@@ -64,10 +64,8 @@ public sealed class SkillWorkflowsWiringTests
 
         var skill = await fetcher.FetchSkillAsync("token", "Translator");
 
-        skill!.Workflows.Should().ContainSingle(w => w.WorkflowId == "translate_asset");
-        skill.Workflows![0].WorkflowYamls.Should().ContainSingle()
-            .Which.Should().Contain("name: translate_asset");
-        skill.AssociatedFiles.Should().NotContainKey("assets/translate.yaml");
+        skill!.Workflows.Should().BeEmpty();
+        skill.AssociatedFiles.Should().ContainKey("assets/translate.yaml");
         skill.AssociatedFiles.Should().ContainKey("assets/prompt.txt");
     }
 

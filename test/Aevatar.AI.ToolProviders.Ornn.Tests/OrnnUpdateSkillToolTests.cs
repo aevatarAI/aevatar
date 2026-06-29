@@ -25,6 +25,7 @@ public sealed class OrnnUpdateSkillToolTests
         tool.SideEffectKind.Should().Be("ornn.update.skill");
         tool.Description.Should().Contain("search or GET the current skill JSON");
         tool.Description.Should().Contain("stable skill_id");
+        tool.Description.Should().Contain("workflows/{workflowId}.yaml");
         tool.Description.Should().Contain("templates/import sources");
         tool.Description.Should().Contain("not Scope Workflow runtime publication");
 

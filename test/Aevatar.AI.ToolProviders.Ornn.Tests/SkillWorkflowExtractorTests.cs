@@ -36,7 +36,7 @@ public sealed class SkillWorkflowExtractorTests
     }
 
     [Fact]
-    public void ExtractFromFiles_FallsBackToAssetsWhenWorkflowsAbsent()
+    public void ExtractFromFiles_DoesNotTreatAssetsYamlAsWorkflowWhenWorkflowsAbsent()
     {
         var files = new Dictionary<string, string>
         {
@@ -50,15 +50,13 @@ public sealed class SkillWorkflowExtractorTests
 
         var result = new SkillWorkflowExtractor().ExtractFromFiles(files);
 
-        result.Workflows.Should().ContainSingle(w => w.WorkflowId == "qa_flow");
-        result.Workflows[0].WorkflowYamls.Should().ContainSingle()
-            .Which.Should().Contain("name: qa_flow");
+        result.Workflows.Should().BeEmpty();
+        result.RemainingFiles.Should().ContainKey("assets/qa.yaml");
         result.RemainingFiles.Should().ContainKey("assets/prompt.txt");
-        result.RemainingFiles!.ContainsKey("assets/qa.yaml").Should().BeFalse();
     }
 
     [Fact]
-    public void ExtractFromFiles_SkipsAssetsYamlWithoutWorkflowShape()
+    public void ExtractFromFiles_KeepsAssetsYamlAsOrdinaryAssociatedFiles()
     {
         var files = new Dictionary<string, string>
         {
@@ -147,7 +145,7 @@ public sealed class SkillWorkflowExtractorTests
     }
 
     [Fact]
-    public void ExtractFromDirectory_FallsBackToAssetsWithWorkflowShape()
+    public void ExtractFromDirectory_DoesNotTreatAssetsYamlAsWorkflow()
     {
         using var tempDir = new TempDirectory();
         var assetsDir = Path.Combine(tempDir.Path, "assets");
@@ -165,9 +163,7 @@ public sealed class SkillWorkflowExtractorTests
 
         var workflows = new SkillWorkflowExtractor().ExtractFromDirectory(tempDir.Path);
 
-        workflows.Should().ContainSingle(w => w.WorkflowId == "qa_asset");
-        workflows[0].WorkflowYamls.Should().ContainSingle()
-            .Which.Should().Contain("name: qa_asset");
+        workflows.Should().BeEmpty();
     }
 
     [Fact]

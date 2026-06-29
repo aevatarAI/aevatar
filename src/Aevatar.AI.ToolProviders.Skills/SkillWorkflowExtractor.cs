@@ -1,76 +1,45 @@
-// ─────────────────────────────────────────────────────────────
-// SkillWorkflowExtractor — 从技能包中识别工作流 YAML
-// 优先 workflows/，否则在 assets/ 中按 workflow 结构（name + steps）挑出
-// ─────────────────────────────────────────────────────────────
-
 namespace Aevatar.AI.ToolProviders.Skills;
 
 /// <summary>
-/// 工作流抽取结果：识别出的工作流 + 去除工作流文件后的剩余关联文件。
+/// Workflow extraction result: typed workflow descriptors plus remaining associated files.
 /// </summary>
 public sealed class SkillWorkflowExtractionResult
 {
     public required IReadOnlyList<SkillWorkflowDescriptor> Workflows { get; init; }
 
     /// <summary>
-    /// 去除工作流文件之后的关联文件；若无剩余则为 null。
+    /// Associated files after removing workflow files; null when no files remain.
     /// </summary>
     public IReadOnlyDictionary<string, string>? RemainingFiles { get; init; }
 }
 
 /// <summary>
-/// 从 skill 包中识别可执行工作流。
-/// 优先扫描 <c>workflows/*.{yaml,yml}</c>；若该目录缺席，回退到 <c>assets/*.{yaml,yml}</c>，
-/// 仅当 YAML 顶层同时含 <c>name</c> 与 <c>steps</c> 时才视为工作流。
+/// Extracts workflow templates from the canonical <c>workflows/*.{yaml,yml}</c> package root.
 /// </summary>
 public sealed class SkillWorkflowExtractor
 {
     private const string WorkflowsDir = "workflows";
-    private const string AssetsDir = "assets";
 
     /// <summary>
-    /// 从 ornn 拉取得到的 files 字典中抽取工作流。
+    /// Extracts workflows from an Ornn files dictionary.
     /// </summary>
     public SkillWorkflowExtractionResult ExtractFromFiles(IReadOnlyDictionary<string, string>? files)
     {
         if (files == null || files.Count == 0)
             return new SkillWorkflowExtractionResult { Workflows = [], RemainingFiles = files };
 
-        var workflowsCandidates = files
+        var workflowCandidates = files
             .Where(kv => HasDirectoryPrefix(kv.Key, WorkflowsDir) && IsYamlFile(kv.Key))
             .ToList();
 
-        List<SkillWorkflowDescriptor> workflows;
-        HashSet<string> consumedKeys;
-
-        if (workflowsCandidates.Count > 0)
-        {
-            workflows = workflowsCandidates
-                .Select(kv => TryParse(kv.Key, kv.Value, requireWorkflowShape: false))
-                .Where(w => w != null)
-                .Select(w => w!)
-                .ToList();
-            consumedKeys = workflowsCandidates
-                .Select(kv => kv.Key)
-                .ToHashSet(StringComparer.Ordinal);
-        }
-        else
-        {
-            var assetsCandidates = files
-                .Where(kv => HasDirectoryPrefix(kv.Key, AssetsDir) && IsYamlFile(kv.Key))
-                .ToList();
-
-            workflows = [];
-            consumedKeys = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var kv in assetsCandidates)
-            {
-                var parsed = TryParse(kv.Key, kv.Value, requireWorkflowShape: true);
-                if (parsed == null)
-                    continue;
-                workflows.Add(parsed);
-                consumedKeys.Add(kv.Key);
-            }
-        }
+        var workflows = workflowCandidates
+            .Select(kv => TryParse(kv.Value))
+            .Where(w => w != null)
+            .Select(w => w!)
+            .ToList();
+        var consumedKeys = workflowCandidates
+            .Select(kv => kv.Key)
+            .ToHashSet(StringComparer.Ordinal);
 
         IReadOnlyDictionary<string, string>? remaining = null;
         if (consumedKeys.Count < files.Count)
@@ -90,7 +59,7 @@ public sealed class SkillWorkflowExtractor
     }
 
     /// <summary>
-    /// 扫描本地 skill 目录，从 <c>workflows/</c>（缺席则 <c>assets/</c>）中抽取工作流。
+    /// Extracts workflows from a local skill directory's canonical <c>workflows/</c> subdirectory.
     /// </summary>
     public IReadOnlyList<SkillWorkflowDescriptor> ExtractFromDirectory(string skillDir)
     {
@@ -99,18 +68,13 @@ public sealed class SkillWorkflowExtractor
 
         var workflowsDir = Path.Combine(skillDir, WorkflowsDir);
         if (Directory.Exists(workflowsDir))
-            return EnumerateYaml(workflowsDir, requireWorkflowShape: false, skillDir);
-
-        var assetsDir = Path.Combine(skillDir, AssetsDir);
-        if (Directory.Exists(assetsDir))
-            return EnumerateYaml(assetsDir, requireWorkflowShape: true, skillDir);
+            return EnumerateYaml(workflowsDir, skillDir);
 
         return [];
     }
 
     private static IReadOnlyList<SkillWorkflowDescriptor> EnumerateYaml(
         string dir,
-        bool requireWorkflowShape,
         string skillRoot)
     {
         var results = new List<SkillWorkflowDescriptor>();
@@ -129,7 +93,7 @@ public sealed class SkillWorkflowExtractor
             }
 
             var fileName = Path.GetRelativePath(skillRoot, path).Replace('\\', '/');
-            var parsed = TryParse(fileName, yaml, requireWorkflowShape);
+            var parsed = TryParse(yaml);
             if (parsed != null)
                 results.Add(parsed);
         }
@@ -137,12 +101,10 @@ public sealed class SkillWorkflowExtractor
         return results;
     }
 
-    private static SkillWorkflowDescriptor? TryParse(string fileName, string yaml, bool requireWorkflowShape)
+    private static SkillWorkflowDescriptor? TryParse(string yaml)
     {
         var meta = ReadTopLevelMetadata(yaml);
         if (string.IsNullOrWhiteSpace(meta.Name))
-            return null;
-        if (requireWorkflowShape && !meta.HasSteps)
             return null;
 
         return new SkillWorkflowDescriptor
@@ -155,9 +117,6 @@ public sealed class SkillWorkflowExtractor
     private static TopLevelMetadata ReadTopLevelMetadata(string yaml)
     {
         string? name = null;
-        string? description = null;
-        string? whenToUse = null;
-        var hasSteps = false;
 
         foreach (var raw in yaml.Split('\n'))
         {
@@ -182,19 +141,10 @@ public sealed class SkillWorkflowExtractor
                 case "name":
                     name ??= value;
                     break;
-                case "description":
-                    description ??= value;
-                    break;
-                case "when_to_use" or "when-to-use":
-                    whenToUse ??= value;
-                    break;
-                case "steps":
-                    hasSteps = true;
-                    break;
             }
         }
 
-        return new TopLevelMetadata(name, description, whenToUse, hasSteps);
+        return new TopLevelMetadata(name);
     }
 
     private static bool HasDirectoryPrefix(string key, string dirName)
@@ -232,8 +182,5 @@ public sealed class SkillWorkflowExtractor
         return value;
     }
 
-    private static string? NullIfEmpty(string? value) =>
-        string.IsNullOrWhiteSpace(value) ? null : value;
-
-    private sealed record TopLevelMetadata(string? Name, string? Description, string? WhenToUse, bool HasSteps);
+    private sealed record TopLevelMetadata(string? Name);
 }

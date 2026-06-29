@@ -57,7 +57,7 @@ Follow the workflow route when a scope/workflow runtime is available. Use the li
 
 - `description` 写清触发场景，Lark bot 靠它判断是否加载 skill。
 - `tool-list` 写出会用到的工具。轻量卡片需要 `reply_with_interaction`；正式流程需要 `aevatar_start_workflow`；检查脚本可用 `code_execute`。
-- 如果有 workflow YAML，通过 `ornn_publish_skill.workflow_yamls` 发布；包内路径会归一到 `workflows/{workflowId}.yaml`。这些 YAML 是模板/导入源，不是 scope 内已发布的可运行 workflow；需要先通过 Scope Workflow 命令链路挂载/导入，再启动运行。`assets/*.yaml` 只作为历史包读取兼容，不作为新发布路径。
+- 如果有 workflow YAML，通过 `ornn_publish_skill.workflow_yamls` 发布；包内路径会归一到 `workflows/{workflowId}.yaml`。这些 YAML 是模板/导入源，不是 scope 内已发布的可运行 workflow；需要先通过 Scope Workflow 命令链路挂载/导入，再启动运行。`assets/` 只承载普通资产，不承载 workflow template。
 
 ## 轻量卡片交互
 

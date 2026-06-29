@@ -56,7 +56,7 @@ public sealed class OrnnPublishRoundTripContractTests
     }
 
     [Fact]
-    public async Task LegacyAssetWorkflowYaml_ShouldRemainReadCompatibleWithoutBeingPublishPath()
+    public async Task AssetYaml_ShouldRemainAssociatedFileWithoutWorkflowFallback()
     {
         var handler = OrnnTestHttpMessageHandler.ReturningJson("""
             {
@@ -76,11 +76,9 @@ public sealed class OrnnPublishRoundTripContractTests
         var skill = await fetcher.FetchSkillAsync("token", "legacy-approval-skill");
 
         skill.Should().NotBeNull();
-        var workflow = skill!.Workflows.Should().ContainSingle().Subject;
-        workflow.WorkflowId.Should().Be("approval-flow");
-        workflow.WorkflowYamls.Should().Equal("name: approval-flow\nsteps: []");
+        skill!.Workflows.Should().BeEmpty();
+        skill.AssociatedFiles.Should().ContainKey("assets/approval-flow.yaml");
         skill.AssociatedFiles.Should().ContainKey("assets/readme.txt");
-        skill.AssociatedFiles.Should().NotContainKey("assets/approval-flow.yaml");
     }
 
     [Fact]

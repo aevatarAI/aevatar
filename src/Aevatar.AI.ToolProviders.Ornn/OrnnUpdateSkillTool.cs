@@ -31,7 +31,7 @@ public sealed class OrnnUpdateSkillTool : IAgentTool
         "Update an existing Ornn skill package for the current NyxID caller by stable skill_id. " +
         "Before calling, search or GET the current skill JSON, apply the requested full-package change, then submit the complete typed package with the same stable skill_id. " +
         "This validates workflow template YAML, scripts, package format, then uploads the ZIP with PUT by id. " +
-        "Workflow YAMLs updated here are Ornn package templates/import sources, not Scope Workflow runtime publication. " +
+        "Workflow YAMLs updated here are written to workflows/{workflowId}.yaml as Ornn package templates/import sources, not Scope Workflow runtime publication. " +
         "The tool never accepts credentials, service routing fields, raw file maps, metadata bags, public visibility, or skip-validation flags.";
 
     public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
