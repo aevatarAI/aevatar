@@ -9,6 +9,7 @@ using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Device;
 using Aevatar.GAgents.Scheduled;
+using Aevatar.GAgents.StatusDashboard;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -567,6 +568,40 @@ public sealed class RetiredActorCleanupHostedServiceTests
     private static IRetiredActorSpec CreateDeviceSpec() => new DeviceRetiredActorSpec();
 
     private static IRetiredActorSpec CreateScheduledSpec() => new ScheduledRetiredActorSpec();
+
+    [Fact]
+    public async Task StartAsync_ShouldResetStaleHealthProbeProjectionScopeActor()
+    {
+        var eventStore = new InMemoryEventStore();
+        var spec = new StatusDashboardRetiredActorSpec();
+        var target = spec.Targets.Should().ContainSingle().Subject;
+        await AppendSingleEventAsync(eventStore, target.ActorId);
+
+        var kindProbe = new StubActorKindProbe(new Dictionary<string, string?>
+        {
+            [target.ActorId] = "status.dashboard.health-probe-target",
+        });
+        var runtime = new RecordingActorRuntime();
+        var streamProvider = new RecordingStreamProvider();
+        streamProvider.SeedRelay("health-probe::aevatar-core-loop-tools", target.ActorId);
+        var service = CreateService(kindProbe, runtime, streamProvider, eventStore, spec);
+
+        await RunStartupCleanupAsync(service);
+
+        runtime.DestroyedActorIds.Should().ContainSingle().Which.Should().Be(target.ActorId);
+        streamProvider.RemovedRelays.Should().Contain(("health-probe::aevatar-core-loop-tools", target.ActorId));
+        (await eventStore.GetVersionAsync(target.ActorId)).Should().Be(0);
+    }
+
+    [Fact]
+    public void StatusDashboardRetiredActorSpec_ShouldNotRetireLiveHealthProbeMaterializationScopeKind()
+    {
+        var spec = new StatusDashboardRetiredActorSpec();
+        var retiredTokens = spec.Targets.SelectMany(static target => target.RetiredKindTokens).ToArray();
+
+        retiredTokens.Should().ContainSingle().Which.Should().Be("status.dashboard.health-probe-target");
+        retiredTokens.Should().NotContain("projection.materialization-scope.health-probe-materialization-context");
+    }
 
     private static RetiredActorCleanupHostedService CreateService(
         IActorKindProbe kindProbe,
