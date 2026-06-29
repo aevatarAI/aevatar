@@ -657,10 +657,6 @@ const enUSMessages = {
   'teams.automations.form.displayName': 'Name',
   'teams.automations.form.displayNameAria': 'Automation name',
   'teams.automations.form.displayNamePlaceholder': 'Daily escalation digest',
-  'teams.automations.form.clearPromptConfirm':
-    'Save this automation without a recurring prompt',
-  'teams.automations.form.editPromptHint':
-    'Saved prompts are not shown here. Enter a new prompt to replace it, or confirm saving without one.',
   'teams.automations.form.editTitle': 'Edit automation',
   'teams.automations.form.enabled': 'Enabled',
   'teams.automations.form.identityMissing':
@@ -711,8 +707,6 @@ const enUSMessages = {
   'teams.automations.messages.disableSuccess': 'Automation paused.',
   'teams.automations.messages.enableSuccess': 'Automation resumed.',
   'teams.automations.messages.previewFailed': 'Preview failed: {message}',
-  'teams.automations.messages.promptClearRequired':
-    'Confirm clearing the recurring prompt before saving.',
   'teams.automations.messages.promptTooLong':
     'Recurring prompt must be {maxLength} characters or fewer.',
   'teams.automations.messages.runNowFailed': 'Run request failed: {message}',
