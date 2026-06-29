@@ -44,6 +44,8 @@ internal static class StudioMemberEndpoints
             .WithTags("StudioMembers");
         app.MapGet("/api/scopes/{scopeId}/members/{memberId}", HandleGetAsync)
             .WithTags("StudioMembers");
+        app.MapDelete("/api/scopes/{scopeId}/members/{memberId}", HandleDeleteAsync)
+            .WithTags("StudioMembers");
         app.MapPut("/api/scopes/{scopeId}/members/{memberId}/binding", HandleBindAsync)
             .WithTags("StudioMembers");
         app.MapGet("/api/scopes/{scopeId}/members/{memberId}/binding", HandleGetBindingAsync)
@@ -137,6 +139,27 @@ internal static class StudioMemberEndpoints
         catch (StudioMemberNotFoundException ex)
         {
             return NotFound(ex);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest("INVALID_STUDIO_MEMBER_REQUEST", ex.Message);
+        }
+    }
+
+    internal static async Task<IResult> HandleDeleteAsync(
+        HttpContext http,
+        string scopeId,
+        string memberId,
+        [FromServices] IStudioMemberService memberService,
+        CancellationToken ct)
+    {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+
+        try
+        {
+            var receipt = await memberService.DeleteAsync(scopeId, memberId, ct);
+            return Results.Accepted(BuildMemberLocation(scopeId, memberId), receipt);
         }
         catch (InvalidOperationException ex)
         {

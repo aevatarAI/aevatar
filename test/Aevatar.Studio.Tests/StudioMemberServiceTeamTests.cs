@@ -152,6 +152,24 @@ public sealed class StudioMemberServiceTeamTests
         commandPort.LastTargetTeamId.Should().Be("t-1");
     }
 
+    [Fact]
+    public async Task DeleteAsync_ShouldDispatchDeleteWithoutQueryingMemberReadModel()
+    {
+        var commandPort = new RecordingMemberCommandPort();
+        var service = NewService(
+            commandPort: commandPort,
+            memberQueryPort: new InMemoryMemberQueryPort(null));
+
+        var response = await service.DeleteAsync(ScopeId, "m-deleted");
+
+        response.Status.Should().Be(StudioMemberCommandStatusNames.Accepted);
+        response.ScopeId.Should().Be(ScopeId);
+        response.MemberId.Should().Be("m-deleted");
+        commandPort.DeleteCalls.Should().Be(1);
+        commandPort.LastDeletedMemberId.Should().Be("m-deleted");
+    }
+
+
     private static StudioMemberService NewService(
         RecordingMemberCommandPort? commandPort = null,
         InMemoryMemberQueryPort? memberQueryPort = null,
@@ -252,7 +270,9 @@ public sealed class StudioMemberServiceTeamTests
     {
         public int CreateCalls { get; private set; }
         public int PatchTeamAssignmentCalls { get; private set; }
+        public int DeleteCalls { get; private set; }
         public string? LastTargetTeamId { get; private set; }
+        public string? LastDeletedMemberId { get; private set; }
 
         public Task<StudioMemberSummaryResponse> CreateAsync(
             string scopeId, CreateStudioMemberRequest request, CancellationToken ct = default)
@@ -294,6 +314,13 @@ public sealed class StudioMemberServiceTeamTests
         {
             PatchTeamAssignmentCalls++;
             LastTargetTeamId = targetTeamId;
+            return Task.CompletedTask;
+        }
+
+        public Task DeleteAsync(string scopeId, string memberId, CancellationToken ct = default)
+        {
+            DeleteCalls++;
+            LastDeletedMemberId = memberId;
             return Task.CompletedTask;
         }
     }

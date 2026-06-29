@@ -122,4 +122,16 @@ public interface IStudioMemberService
         string memberId,
         UpdateStudioMemberRequest request,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Physically deletes the Studio member authority. The command is
+    /// idempotent: deleting a missing or already-deleted member is accepted
+    /// and produces no new authority fact. Once projection catches up,
+    /// <see cref="GetAsync"/> returns 404 <c>STUDIO_MEMBER_NOT_FOUND</c>.
+    /// Published service artifacts and historical revisions remain untouched.
+    /// </summary>
+    Task<StudioMemberCommandResponse> DeleteAsync(
+        string scopeId,
+        string memberId,
+        CancellationToken ct = default);
 }

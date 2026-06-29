@@ -68,4 +68,15 @@ public interface IStudioMemberCommandPort
         string memberId,
         string? targetTeamId,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Dispatches an idempotent physical delete command to the StudioMember
+    /// authority. The member actor tombstones its state and projections remove
+    /// the member read model; published service artifacts and revisions remain
+    /// owned by the platform service subsystem.
+    /// </summary>
+    Task DeleteAsync(
+        string scopeId,
+        string memberId,
+        CancellationToken ct = default);
 }

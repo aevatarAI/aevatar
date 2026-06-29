@@ -529,6 +529,9 @@ public sealed class StudioMemberServicePatchTests
             string? targetTeamId,
             CancellationToken ct = default) =>
             throw new InvalidOperationException("implementationRef patch must not patch team assignment.");
+
+        public Task DeleteAsync(string scopeId, string memberId, CancellationToken ct = default) =>
+            throw new InvalidOperationException("member patch must not delete members.");
     }
 
     private sealed record ImplementationUpdate(

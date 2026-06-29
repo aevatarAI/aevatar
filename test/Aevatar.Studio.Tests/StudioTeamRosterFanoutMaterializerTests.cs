@@ -76,6 +76,108 @@ public sealed class StudioTeamRosterFanoutMaterializerTests
     }
 
     [Fact]
+    public async Task ProjectAsync_ShouldDispatchCommittedDeleteAsTeamRemoval()
+    {
+        var bootstrap = new RecordingBootstrap();
+        var dispatch = new RecordingDispatchPort();
+        var materializer = new StudioTeamRosterFanoutMaterializer(
+            bootstrap,
+            CreateCommandDispatch(dispatch));
+        var deletedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-06-29T12:00:00Z"));
+
+        await materializer.ProjectAsync(
+            NewContext(),
+            WrapCommitted(
+                new StudioMemberDeletedEvent
+                {
+                    ScopeId = "scope-1",
+                    MemberId = "m-1",
+                    TeamId = "t-old",
+                    DeletedAtUtc = deletedAt,
+                },
+                version: 10,
+                eventId: "evt-10"));
+
+        bootstrap.EnsuredActorIds.Should().ContainSingle()
+            .Which.Should().Be("studio-team:scope-1:t-old");
+        var payload = dispatch.Dispatches.Should().ContainSingle().Subject
+            .Envelope.Payload.Unpack<StudioMemberReassignedEvent>();
+        payload.ScopeId.Should().Be("scope-1");
+        payload.MemberId.Should().Be("m-1");
+        payload.FromTeamId.Should().Be("t-old");
+        payload.HasToTeamId.Should().BeFalse();
+        payload.ReassignedAtUtc.Should().Be(deletedAt);
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldNoOp_WhenCommittedDeleteHasNoTeam()
+    {
+        var dispatch = new RecordingDispatchPort();
+        var materializer = new StudioTeamRosterFanoutMaterializer(
+            new RecordingBootstrap(),
+            CreateCommandDispatch(dispatch));
+
+        await materializer.ProjectAsync(
+            NewContext(),
+            WrapCommitted(
+                new StudioMemberDeletedEvent
+                {
+                    ScopeId = "scope-1",
+                    MemberId = "m-1",
+                    DeletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-06-29T12:00:00Z")),
+                },
+                version: 11,
+                eventId: "evt-11"));
+
+        dispatch.Dispatches.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldUseStableDeleteRemovalCommandId_ForCommittedEventReplay()
+    {
+        var dispatch = new RecordingDispatchPort();
+        var materializer = new StudioTeamRosterFanoutMaterializer(
+            new RecordingBootstrap(),
+            CreateCommandDispatch(dispatch));
+        var envelope = WrapCommitted(new StudioMemberDeletedEvent
+        {
+            ScopeId = "scope-1",
+            MemberId = "m-1",
+            TeamId = "t-old",
+            DeletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-06-29T12:00:00Z")),
+        }, version: 12, eventId: "evt-12");
+
+        await materializer.ProjectAsync(NewContext(), envelope);
+        await materializer.ProjectAsync(NewContext(), envelope.Clone());
+
+        dispatch.Dispatches.Should().HaveCount(2);
+        dispatch.Dispatches[1].Envelope.Id.Should().Be(dispatch.Dispatches[0].Envelope.Id);
+        dispatch.Dispatches[1].Envelope.Runtime?.Deduplication?.OperationId
+            .Should().Be(dispatch.Dispatches[0].Envelope.Runtime?.Deduplication?.OperationId);
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldPropagateDeleteRemovalDispatchFailure_ForProjectionRetry()
+    {
+        var materializer = new StudioTeamRosterFanoutMaterializer(
+            new RecordingBootstrap(),
+            CreateCommandDispatch(new ThrowingDispatchPort()));
+
+        await FluentActions
+            .Awaiting(() => materializer.ProjectAsync(
+                NewContext(),
+                WrapCommitted(new StudioMemberDeletedEvent
+                {
+                    ScopeId = "scope-1",
+                    MemberId = "m-1",
+                    TeamId = "t-old",
+                    DeletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-06-29T12:00:00Z")),
+                }, version: 13, eventId: "evt-13")).AsTask())
+            .Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("dispatch failed");
+    }
+
+    [Fact]
     public async Task ProjectAsync_ShouldPropagateDispatchFailure_ForProjectionRetry()
     {
         var materializer = new StudioTeamRosterFanoutMaterializer(

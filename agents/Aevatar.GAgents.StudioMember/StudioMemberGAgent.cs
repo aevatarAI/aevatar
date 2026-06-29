@@ -62,6 +62,11 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
     [EventHandler(EndpointName = "createMember")]
     public async Task HandleCreated(StudioMemberCreatedEvent evt)
     {
+        if (State.Deleted)
+        {
+            throw new InvalidOperationException("member is deleted.");
+        }
+
         if (!string.IsNullOrEmpty(State.MemberId))
         {
             // First-write-wins on identity: a re-create with a different
@@ -100,6 +105,10 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         {
             throw new InvalidOperationException("member not yet created.");
         }
+        if (State.Deleted)
+        {
+            throw new InvalidOperationException("member is deleted.");
+        }
 
         var renamed = evt.Clone();
         if (string.IsNullOrEmpty(renamed.Description))
@@ -116,6 +125,10 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         if (string.IsNullOrEmpty(State.MemberId))
         {
             throw new InvalidOperationException("member not yet created.");
+        }
+        if (State.Deleted)
+        {
+            throw new InvalidOperationException("member is deleted.");
         }
 
         // ImplementationKind is locked at create. Reject mismatched kinds so
@@ -143,6 +156,12 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         if (string.IsNullOrEmpty(State.MemberId))
         {
             await SendToAsync(runActorId, BuildRejected(evt, "STUDIO_MEMBER_NOT_FOUND", "member not yet created.", failedAt));
+            return;
+        }
+
+        if (State.Deleted)
+        {
+            await SendToAsync(runActorId, BuildRejected(evt, "STUDIO_MEMBER_NOT_FOUND", "member is deleted.", failedAt));
             return;
         }
 
@@ -215,6 +234,10 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         {
             throw new InvalidOperationException("member not yet created.");
         }
+        if (State.Deleted)
+        {
+            return;
+        }
 
         if (!CanAcceptBindingRunProgress(State, evt.BindingRunId))
         {
@@ -236,6 +259,10 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         if (string.IsNullOrEmpty(State.MemberId))
         {
             throw new InvalidOperationException("member not yet created.");
+        }
+        if (State.Deleted)
+        {
+            return;
         }
 
         if (IsTerminalBindingRunReplay(State, evt.BindingRunId, StudioMemberBindingRunStatus.Succeeded))
@@ -259,6 +286,10 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         if (string.IsNullOrEmpty(State.MemberId))
         {
             throw new InvalidOperationException("member not yet created.");
+        }
+        if (State.Deleted)
+        {
+            return;
         }
 
         if (IsTerminalBindingRunReplay(State, evt.BindingRunId, StudioMemberBindingRunStatus.Failed))
@@ -292,6 +323,10 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         if (string.IsNullOrEmpty(State.MemberId))
         {
             throw new InvalidOperationException("member not yet created.");
+        }
+        if (State.Deleted)
+        {
+            return;
         }
 
         if (!string.Equals(State.ScopeId, evt.ScopeId, StringComparison.Ordinal))
@@ -360,14 +395,20 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
     /// later by the durable committed-state materializer.
     /// </summary>
     // Refactor (iter96/cluster-545):
-    //   Old pattern: member actor 直发 team(部分失败不可 replay).
-    //   New principle: 只 persist committed event,fanout 由 StudioTeamRosterFanoutMaterializer 物化(committed-state idempotent).
+    //   Old pattern: member actor directly dispatched to team actors, with
+    //   partial failures that could not be replayed.
+    //   New principle: persist only the committed event; fanout is materialized
+    //   by StudioTeamRosterFanoutMaterializer from committed state events.
     [EventHandler(EndpointName = "patchTeamAssignment")]
     public async Task HandleTeamAssignmentPatchRequested(StudioMemberTeamAssignmentPatchRequested evt)
     {
         if (string.IsNullOrEmpty(State.MemberId))
         {
             throw new InvalidOperationException("member not yet created.");
+        }
+        if (State.Deleted)
+        {
+            return;
         }
 
         if (!string.Equals(State.ScopeId, evt.ScopeId, StringComparison.Ordinal)
@@ -405,6 +446,36 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         await PersistDomainEventAsync(reassigned);
     }
 
+    [EventHandler(EndpointName = "deleteMember")]
+    public async Task HandleDeleted(DeleteStudioMember command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        if (string.IsNullOrEmpty(State.MemberId) || State.Deleted)
+        {
+            return;
+        }
+
+        if (!string.Equals(State.ScopeId, command.ScopeId, StringComparison.Ordinal)
+            || !string.Equals(State.MemberId, command.MemberId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "delete target does not match member authority state.");
+        }
+
+        var deleted = new StudioMemberDeletedEvent
+        {
+            MemberId = State.MemberId,
+            ScopeId = State.ScopeId,
+            DeletedAtUtc = command.RequestedAtUtc
+                ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+        if (State.HasTeamId)
+            deleted.TeamId = State.TeamId;
+
+        await PersistDomainEventAsync(deleted);
+    }
+
     protected override StudioMemberState TransitionState(
         StudioMemberState current, IMessage evt)
     {
@@ -420,6 +491,7 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
             .On<StudioMemberBindingCompletedEvent>(ApplyBindingCompleted)
             .On<StudioMemberBindingFailedEvent>(ApplyBindingFailed)
             .On<StudioMemberReassignedEvent>(ApplyReassigned)
+            .On<StudioMemberDeletedEvent>(ApplyDeleted)
             .OrCurrent();
     }
 
@@ -458,6 +530,18 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         next.DisplayName = evt.DisplayName;
         next.Description = evt.Description;
         next.UpdatedAtUtc = evt.UpdatedAtUtc;
+        return next;
+    }
+
+    private static StudioMemberState ApplyDeleted(
+        StudioMemberState state,
+        StudioMemberDeletedEvent evt)
+    {
+        var next = state.Clone();
+        next.Deleted = true;
+        next.DeletedAtUtc = evt.DeletedAtUtc;
+        next.UpdatedAtUtc = evt.DeletedAtUtc;
+        next.ClearTeamId();
         return next;
     }
 

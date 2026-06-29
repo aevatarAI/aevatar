@@ -201,6 +201,26 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
     }
 
     [Fact]
+    public async Task DeleteAsync_ShouldDispatchDeleteCommandToCanonicalActor()
+    {
+        var bootstrap = new RecordingBootstrap();
+        var dispatch = new RecordingDispatchPort();
+        var service = new ActorDispatchStudioMemberCommandService(bootstrap, CreateCommandDispatch(dispatch));
+
+        await service.DeleteAsync(ScopeId, "m-1", CancellationToken.None);
+
+        bootstrap.EnsuredActorIds.Should().ContainSingle()
+            .Which.Should().Be("studio-member:scope-1:m-1");
+        var dispatched = dispatch.Dispatches.Should().ContainSingle().Subject;
+        dispatched.ActorId.Should().Be("studio-member:scope-1:m-1");
+        dispatched.Envelope.Payload.Is(DeleteStudioMember.Descriptor).Should().BeTrue();
+        var command = dispatched.Envelope.Payload.Unpack<DeleteStudioMember>();
+        command.ScopeId.Should().Be(ScopeId);
+        command.MemberId.Should().Be("m-1");
+        command.RequestedAtUtc.Should().NotBeNull();
+    }
+
+    [Fact]
     public async Task StartBindingRunAsync_ShouldDispatchRequestedEventToRunActor()
     {
         var bootstrap = new RecordingBootstrap();

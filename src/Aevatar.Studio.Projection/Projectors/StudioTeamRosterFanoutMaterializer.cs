@@ -16,8 +16,10 @@ namespace Aevatar.Studio.Projection.Projectors;
 /// source-event watermark and retained failure envelopes; Team actor inbox
 /// retry owns per-target handler retry.
 /// Refactor (iter96/cluster-544):
-///   Old: command service dispatch 后顺序 fanout 到 team service(不可靠,无 durable)
-///   New: committed state event -> StudioTeamRosterFanoutMaterializer 投递 team actor inbox(durable + actor retry)
+///   Old: command service dispatched sequential fanout to the team service
+///   without a durable replay boundary.
+///   New: committed state event -> StudioTeamRosterFanoutMaterializer
+///   dispatches to the team actor inbox.
 /// </summary>
 internal sealed class StudioTeamRosterFanoutMaterializer
     : ICurrentStateProjectionMaterializer<StudioMaterializationContext>
@@ -44,17 +46,36 @@ internal sealed class StudioTeamRosterFanoutMaterializer
         ArgumentNullException.ThrowIfNull(envelope);
 
         if (!CommittedStateEventEnvelope.TryUnpack(envelope, out var published) ||
-            published?.StateEvent?.EventData == null ||
-            !published.StateEvent.EventData.Is(StudioMemberReassignedEvent.Descriptor))
+            published?.StateEvent?.EventData == null)
         {
             return;
         }
 
-        var evt = published.StateEvent.EventData.Unpack<StudioMemberReassignedEvent>();
-        if (evt.HasFromTeamId)
-            await DispatchToTeamAsync(evt.ScopeId, evt.FromTeamId, evt, ct).ConfigureAwait(false);
-        if (evt.HasToTeamId)
-            await DispatchToTeamAsync(evt.ScopeId, evt.ToTeamId, evt, ct).ConfigureAwait(false);
+        if (published.StateEvent.EventData.Is(StudioMemberReassignedEvent.Descriptor))
+        {
+            var evt = published.StateEvent.EventData.Unpack<StudioMemberReassignedEvent>();
+            if (evt.HasFromTeamId)
+                await DispatchToTeamAsync(evt.ScopeId, evt.FromTeamId, evt, ct).ConfigureAwait(false);
+            if (evt.HasToTeamId)
+                await DispatchToTeamAsync(evt.ScopeId, evt.ToTeamId, evt, ct).ConfigureAwait(false);
+            return;
+        }
+
+        if (published.StateEvent.EventData.Is(StudioMemberDeletedEvent.Descriptor))
+        {
+            var deleted = published.StateEvent.EventData.Unpack<StudioMemberDeletedEvent>();
+            if (!deleted.HasTeamId)
+                return;
+
+            var removal = new StudioMemberReassignedEvent
+            {
+                ScopeId = deleted.ScopeId,
+                MemberId = deleted.MemberId,
+                FromTeamId = deleted.TeamId,
+                ReassignedAtUtc = deleted.DeletedAtUtc,
+            };
+            await DispatchToTeamAsync(deleted.ScopeId, deleted.TeamId, removal, ct).ConfigureAwait(false);
+        }
     }
 
     private async Task DispatchToTeamAsync(

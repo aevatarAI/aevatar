@@ -448,6 +448,12 @@ public sealed class StudioMemberServiceBindingTests
             OperationsInOrder.Add("PatchTeamAssignment");
             return Task.CompletedTask;
         }
+
+        public Task DeleteAsync(string scopeId, string memberId, CancellationToken ct = default)
+        {
+            OperationsInOrder.Add("Delete");
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class ReadyScopeBindingReadinessQueryPort : IScopeBindingReadinessQueryPort

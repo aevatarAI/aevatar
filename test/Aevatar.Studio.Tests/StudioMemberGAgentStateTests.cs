@@ -605,6 +605,129 @@ public sealed class StudioMemberGAgentStateTests
     }
 
     [Fact]
+    public async Task HandleDeleted_ShouldPersistDeleteEventWithCurrentTeam()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var current = _agent.Apply(
+            NewCreatedScriptMember(now),
+            new StudioMemberReassignedEvent
+            {
+                MemberId = "m-1",
+                ScopeId = "scope-1",
+                ToTeamId = "team-1",
+                ReassignedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(1)),
+            });
+        var eventSourcing = new RecordingEventSourcing(current);
+        var agent = NewHandlerAgent(current, eventSourcing, new RecordingEventPublisher());
+        var requestedAt = Timestamp.FromDateTimeOffset(now.AddSeconds(2));
+
+        await agent.HandleDeleted(new DeleteStudioMember
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            RequestedAtUtc = requestedAt,
+        });
+
+        var deleted = eventSourcing.RaisedEvents.Should().ContainSingle().Subject
+            .Should().BeOfType<StudioMemberDeletedEvent>().Subject;
+        deleted.MemberId.Should().Be("m-1");
+        deleted.ScopeId.Should().Be("scope-1");
+        deleted.TeamId.Should().Be("team-1");
+        deleted.DeletedAtUtc.Should().Be(requestedAt);
+    }
+
+    [Fact]
+    public async Task HandleDeleted_ShouldNoOp_WhenMemberMissingOrAlreadyDeleted()
+    {
+        var eventSourcing = new RecordingEventSourcing(new StudioMemberState());
+        var agent = NewHandlerAgent(new StudioMemberState(), eventSourcing, new RecordingEventPublisher());
+
+        await agent.HandleDeleted(new DeleteStudioMember
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+
+        eventSourcing.RaisedEvents.Should().BeEmpty();
+        eventSourcing.ConfirmCallCount.Should().Be(0);
+
+        var deletedState = _agent.Apply(NewCreatedScriptMember(DateTimeOffset.UtcNow), new StudioMemberDeletedEvent
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            DeletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(1)),
+        });
+        var deletedEventSourcing = new RecordingEventSourcing(deletedState);
+        var deletedAgent = NewHandlerAgent(deletedState, deletedEventSourcing, new RecordingEventPublisher());
+
+        await deletedAgent.HandleDeleted(new DeleteStudioMember
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(2)),
+        });
+
+        deletedEventSourcing.RaisedEvents.Should().BeEmpty();
+        deletedEventSourcing.ConfirmCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public void Deleted_ShouldTombstoneStateAndClearTeamId()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var assigned = _agent.Apply(
+            NewCreatedScriptMember(now),
+            new StudioMemberReassignedEvent
+            {
+                MemberId = "m-1",
+                ScopeId = "scope-1",
+                ToTeamId = "team-1",
+                ReassignedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(1)),
+            });
+        var deletedAt = Timestamp.FromDateTimeOffset(now.AddSeconds(2));
+
+        var deleted = _agent.Apply(assigned, new StudioMemberDeletedEvent
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            TeamId = "team-1",
+            DeletedAtUtc = deletedAt,
+        });
+
+        deleted.Deleted.Should().BeTrue();
+        deleted.DeletedAtUtc.Should().Be(deletedAt);
+        deleted.UpdatedAtUtc.Should().Be(deletedAt);
+        deleted.HasTeamId.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task HandleBindingAdmissionRequested_ShouldRejectDeletedMemberAsNotFound()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var deleted = _agent.Apply(NewCreatedScriptMember(now), new StudioMemberDeletedEvent
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            DeletedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(1)),
+        });
+        var eventSourcing = new RecordingEventSourcing(deleted);
+        var publisher = new RecordingEventPublisher();
+        var agent = NewHandlerAgent(deleted, eventSourcing, publisher);
+
+        await agent.HandleBindingAdmissionRequested(NewAdmissionRequested(
+            bindingRunId: "bind-deleted",
+            requestHash: "hash-bind-deleted",
+            requestedAt: Timestamp.FromDateTimeOffset(now.AddSeconds(2))));
+
+        eventSourcing.RaisedEvents.Should().BeEmpty();
+        var rejected = publisher.SentMessages.Should().ContainSingle().Subject.Event
+            .Should().BeOfType<StudioMemberBindingRejectedEvent>().Subject;
+        rejected.Failure.Code.Should().Be("STUDIO_MEMBER_NOT_FOUND");
+        rejected.Failure.Message.Should().Be("member is deleted.");
+    }
+
+    [Fact]
     public void Bound_ShouldCaptureLastBindingAndAdvanceLifecycle()
     {
         var now = DateTimeOffset.UtcNow;

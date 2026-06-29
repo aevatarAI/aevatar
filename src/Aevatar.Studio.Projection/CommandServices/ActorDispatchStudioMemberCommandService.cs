@@ -141,6 +141,26 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
         await DispatchAsync(normalizedScopeId, normalizedMemberId, evt, ct);
     }
 
+    public async Task DeleteAsync(
+        string scopeId,
+        string memberId,
+        CancellationToken ct = default)
+    {
+        var normalizedScopeId = StudioMemberConventions.NormalizeScopeId(scopeId);
+        var normalizedMemberId = StudioMemberConventions.NormalizeMemberId(memberId);
+
+        await DispatchAsync(
+            normalizedScopeId,
+            normalizedMemberId,
+            new DeleteStudioMember
+            {
+                MemberId = normalizedMemberId,
+                ScopeId = normalizedScopeId,
+                RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+            ct);
+    }
+
     private async Task ReassignTeamInternalAsync(
         string normalizedScopeId,
         string normalizedMemberId,
@@ -149,8 +169,10 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
         CancellationToken ct)
     {
         // Refactor (iter96/cluster-544):
-        //   Old: command service dispatch 后顺序 fanout 到 team service(不可靠,无 durable)
-        //   New: committed state event -> StudioTeamRosterFanoutMaterializer 投递 team actor inbox(durable + actor retry)
+        //   Old: command service dispatched sequential fanout to the team
+        //   service without a durable replay boundary.
+        //   New: committed state event -> StudioTeamRosterFanoutMaterializer
+        //   dispatches to the team actor inbox.
         var reassignedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
 
         var evt = new StudioMemberReassignedEvent

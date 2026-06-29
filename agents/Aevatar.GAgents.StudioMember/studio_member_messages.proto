@@ -200,6 +200,11 @@ message StudioMemberState {
   // string is rejected at the application layer. Mutated only via committed
   // StudioMemberReassignedEvent.
   optional string team_id = 50;
+  // Terminal tombstone for physical Studio member deletion. Published
+  // service artifacts and historical revisions are intentionally left outside
+  // this authority and are not cleaned up by member deletion.
+  bool deleted = 60;
+  google.protobuf.Timestamp deleted_at_utc = 61;
 }
 
 // ─── Events ───
@@ -229,6 +234,12 @@ message EnsureStudioMember {
   string display_name = 3;
   string description = 4;
   google.protobuf.Timestamp requested_at_utc = 5;
+}
+
+message DeleteStudioMember {
+  string member_id = 1;
+  string scope_id = 2;
+  google.protobuf.Timestamp requested_at_utc = 3;
 }
 
 message StudioMemberRenamedEvent {
@@ -367,7 +378,7 @@ message StudioMemberTeamAssignmentPatchRequested {
 //   pure assign:   from_team_id absent,    to_team_id = "T2"
 //   pure unassign: from_team_id = "T1",    to_team_id absent
 //   move:          from_team_id = "T1",    to_team_id = "T2"
-// Constraints (enforced by `StudioMemberGAgent` member actor + materializer fanout 自动到 team(s)):
+// Constraints (enforced by `StudioMemberGAgent` member actor + materializer fanout to teams):
 //   - At least one of from_team_id / to_team_id must be present.
 //   - from_team_id == to_team_id (both present and equal) is rejected.
 //   - The teams identified by from_team_id / to_team_id (when present) must be
@@ -379,4 +390,11 @@ message StudioMemberReassignedEvent {
   optional string from_team_id  = 3;
   optional string to_team_id    = 4;
   google.protobuf.Timestamp reassigned_at_utc = 5;
+}
+
+message StudioMemberDeletedEvent {
+  string member_id = 1;
+  string scope_id = 2;
+  optional string team_id = 3;
+  google.protobuf.Timestamp deleted_at_utc = 4;
 }

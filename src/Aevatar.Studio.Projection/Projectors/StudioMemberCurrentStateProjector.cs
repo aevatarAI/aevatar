@@ -52,6 +52,12 @@ public sealed class StudioMemberCurrentStateProjector
 
         var updatedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow);
 
+        if (stateEvent.EventData.Is(StudioMemberDeletedEvent.Descriptor) || state.Deleted)
+        {
+            await _writeDispatcher.DeleteAsync(context.RootActorId, ct);
+            return;
+        }
+
         var document = new StudioMemberCurrentStateDocument
         {
             Id = context.RootActorId,
