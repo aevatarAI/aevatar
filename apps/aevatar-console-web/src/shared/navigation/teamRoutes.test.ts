@@ -88,9 +88,10 @@ describe("teamRoutes", () => {
         scopeId: "scope-alpha",
         teamId: "t-alpha",
         workflowId: " workflow-alpha ",
+        workflowSource: "published",
       }),
     ).toBe(
-      "/scopes/scope-alpha/teams/t-alpha/members/member-alpha/workflow?workflowId=workflow-alpha",
+      "/scopes/scope-alpha/teams/t-alpha/members/member-alpha/workflow?workflowId=workflow-alpha&workflowSource=published",
     );
 
     expect(

@@ -1523,7 +1523,7 @@ describe("TeamDetailPage", () => {
     expect(scopeRuntimeApi.listMemberRuns).not.toHaveBeenCalled();
   });
 
-  it("does not sample runtime runs while browsing members with member-owned service ids", async () => {
+  it("resolves member studio links without sampling runtime runs while browsing members", async () => {
     window.history.replaceState(
       {},
       "",
@@ -1583,7 +1583,9 @@ describe("TeamDetailPage", () => {
     await waitFor(() => {
       expect(studioApi.listTeamMembers).toHaveBeenCalledWith("scope-1", "t-alpha");
     });
-    expect(scopeRuntimeApi.listServices).not.toHaveBeenCalled();
+    expect(scopeRuntimeApi.listServices).toHaveBeenCalledWith("scope-1", {
+      appId: "default",
+    });
     expect(scopeRuntimeApi.getServiceRevisions).not.toHaveBeenCalled();
     expect(scopeRuntimeApi.listServiceRuns).not.toHaveBeenCalled();
     expect(scopeRuntimeApi.listMemberRuns).not.toHaveBeenCalled();
@@ -1974,11 +1976,14 @@ describe("TeamDetailPage", () => {
       "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/workflow",
     );
     expect(new URLSearchParams(window.location.search).get("workflowId")).toBe(
-      "wf-team-alpha",
+      "workflow-1",
+    );
+    expect(new URLSearchParams(window.location.search).get("workflowSource")).toBe(
+      "published",
     );
   });
 
-  it("uses the roster implementation workflow id instead of the route workflow hint", async () => {
+  it("uses the published service workflow id instead of the route workflow hint", async () => {
     window.history.replaceState(
       {},
       "",
@@ -1993,11 +1998,14 @@ describe("TeamDetailPage", () => {
       "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/workflow",
     );
     expect(new URLSearchParams(window.location.search).get("workflowId")).toBe(
-      "wf-team-alpha",
+      "workflow-1",
+    );
+    expect(new URLSearchParams(window.location.search).get("workflowSource")).toBe(
+      "published",
     );
   });
 
-  it("does not recover workflow ids from session storage when the roster has no implementation workflow id", async () => {
+  it("recovers a published workflow id from the bound service when the roster omits the implementation ref", async () => {
     window.history.replaceState(
       {},
       "",
@@ -2039,7 +2047,12 @@ describe("TeamDetailPage", () => {
     expect(window.location.pathname).toBe(
       "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/workflow",
     );
-    expect(new URLSearchParams(window.location.search).get("workflowId")).toBeNull();
+    expect(new URLSearchParams(window.location.search).get("workflowId")).toBe(
+      "workflow-1",
+    );
+    expect(new URLSearchParams(window.location.search).get("workflowSource")).toBe(
+      "published",
+    );
   });
 
   it("does not reuse a route workflow hint for another Team member row", async () => {
@@ -2057,7 +2070,10 @@ describe("TeamDetailPage", () => {
       "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/workflow",
     );
     expect(new URLSearchParams(window.location.search).get("workflowId")).toBe(
-      "wf-team-alpha",
+      "workflow-1",
+    );
+    expect(new URLSearchParams(window.location.search).get("workflowSource")).toBe(
+      "published",
     );
   });
 

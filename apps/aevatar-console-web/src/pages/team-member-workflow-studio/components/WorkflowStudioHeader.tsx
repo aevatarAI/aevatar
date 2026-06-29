@@ -966,17 +966,11 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
     pending: publishPending,
     tone: publishTone,
   });
-  const showPublishAction =
-    publishPending ||
-    (dirty && !publishDisabled) ||
-    (!showRefreshPublishStatus &&
-      (publishTone === 'processing' ||
-        publishTone === 'error' ||
-        dirty ||
-        !memberPublished ||
-        !publishDisabled));
+  const showPublishAction = Boolean(
+    !memberPublished && (publishPending || !showRefreshPublishStatus),
+  );
   const stablePublishedStatusVisible = Boolean(
-    memberPublished && publishTone === 'success' && !publishPending && !dirty,
+    memberPublished && publishTone === 'success' && !publishPending,
   );
   const publishStatusTitle = [
     publishNotice,
