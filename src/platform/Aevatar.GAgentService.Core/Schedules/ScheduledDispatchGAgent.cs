@@ -720,7 +720,9 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
     private bool MatchesConfiguredDefinition(ScheduledDispatchEnsureCommand command)
     {
-        var normalizedTarget = NormalizeTarget(command.Target);
+        var normalizedTarget = PreserveExistingServiceInvocationAuth(
+            NormalizeTarget(command.Target),
+            isCreate: false);
         var normalizedHeaders = NormalizeHeaders(command.Headers);
         var normalizedScheduleId = NormalizeRequired(command.ScheduleId, nameof(command.ScheduleId));
         var normalizedDisplayName = NormalizeOptional(command.DisplayName);
