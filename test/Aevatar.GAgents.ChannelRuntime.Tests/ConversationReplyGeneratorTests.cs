@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.Lark;
@@ -635,6 +636,76 @@ public sealed class ConversationReplyGeneratorTests
             .Messages.First(message => message.Role == "system").Content;
         systemPrompt.Should().Contain("operator_user_id: \"lark-user-1\"");
         systemPrompt.Should().Contain("operator_open_id: \"ou_operator_1\"");
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_WithSystemSkillOverlayProvider_IncludesOverlayAfterKernelBeforeChannelContext()
+    {
+        const string overlayMarkdown = "## Runtime system skills\n- prefer the committed overlay";
+        var providerFactory = new RecordingProviderFactory();
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            overlayProvider: new StubSystemSkillOverlayProvider(overlayMarkdown));
+
+        await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-overlay-channel",
+                ChannelId = ChannelId.From("lark"),
+                Conversation = new ConversationReference { CanonicalKey = "lark:group:oc_1" },
+                Content = new MessageContent { Text = "hello" },
+            },
+            new Dictionary<string, string>
+            {
+                [ChannelMetadataKeys.Platform] = "lark",
+                [ChannelMetadataKeys.ChatType] = "group",
+                [ChannelMetadataKeys.SenderId] = "ou_sender_1",
+                [ChannelMetadataKeys.MessageId] = "om_overlay",
+                [ChannelMetadataKeys.ConversationId] = "oc_1",
+            },
+            streamingSink: null,
+            CancellationToken.None);
+
+        var systemPrompt = providerFactory.Requests.Should().ContainSingle().Subject
+            .Messages.First(message => message.Role == "system").Content;
+        systemPrompt.Should().Contain(overlayMarkdown);
+        systemPrompt.Should().Contain("<channel-context>");
+        systemPrompt.Should().Contain("When you are following a loaded skill");
+        systemPrompt!.IndexOf("When you are following a loaded skill", StringComparison.Ordinal)
+            .Should()
+            .BeLessThan(systemPrompt.IndexOf(overlayMarkdown, StringComparison.Ordinal));
+        systemPrompt.IndexOf(overlayMarkdown, StringComparison.Ordinal)
+            .Should()
+            .BeLessThan(systemPrompt.IndexOf("<channel-context>", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task GenerateReplyAsync_WithEmptyOrMissingSystemSkillOverlayProvider_DoesNotInjectOverlay(string? overlayMarkdown)
+    {
+        var providerFactory = new RecordingProviderFactory();
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            overlayProvider: overlayMarkdown is null ? null : new StubSystemSkillOverlayProvider(overlayMarkdown));
+
+        await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = $"msg-overlay-empty-{overlayMarkdown?.Length ?? 0}",
+                ChannelId = ChannelId.From("lark"),
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-1" },
+                Content = new MessageContent { Text = "hello" },
+            },
+            new Dictionary<string, string>(),
+            streamingSink: null,
+            CancellationToken.None);
+
+        var systemPrompt = providerFactory.Requests.Should().ContainSingle().Subject
+            .Messages.First(message => message.Role == "system").Content;
+        systemPrompt.Should().NotContain("Runtime system skills");
+        systemPrompt.Should().NotContain("prefer the committed overlay");
     }
 
     [Fact]
@@ -2028,6 +2099,14 @@ public sealed class ConversationReplyGeneratorTests
                 ? prefs
                 : new NyxIdUserLlmPreferences(string.Empty, string.Empty));
         }
+    }
+
+    private sealed class StubSystemSkillOverlayProvider(string? overlayMarkdown) : ISystemSkillOverlayProvider
+    {
+        public SystemSkillOverlay? GetCurrent() =>
+            overlayMarkdown is null
+                ? null
+                : new SystemSkillOverlay { OverlayMarkdown = overlayMarkdown };
     }
 
     private sealed class RecordingStreamingSink : IStreamingReplySink
