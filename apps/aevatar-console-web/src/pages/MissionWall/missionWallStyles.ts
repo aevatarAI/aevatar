@@ -537,8 +537,19 @@ export const missionWallStyles = `
   filter: drop-shadow(0 0 8px rgba(45, 212, 191, 0.12));
 }
 
-.mission-wall-react-flow .react-flow__edge.animated path {
-  stroke-dasharray: 10 8;
+.mission-wall-react-flow .mission-wall-flow-edge--focused .react-flow__edge-path {
+  animation: mission-wall-flow-drift 1.8s linear infinite;
+  stroke-dasharray: 14 10;
+}
+
+@keyframes mission-wall-flow-drift {
+  from {
+    stroke-dashoffset: 0;
+  }
+
+  to {
+    stroke-dashoffset: -24;
+  }
 }
 
 .mission-wall-react-flow .react-flow__controls {

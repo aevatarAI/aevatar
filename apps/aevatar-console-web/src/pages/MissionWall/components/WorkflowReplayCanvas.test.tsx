@@ -5,6 +5,7 @@ import { WorkflowReplayCanvas } from "./WorkflowReplayCanvas";
 type MissionWallWorkflowGraph = import("../models").MissionWallWorkflowGraph;
 
 const mockReactFlowRender = jest.fn();
+const mockFitView = jest.fn();
 
 jest.mock("@xyflow/react", () => {
   const React = require("react");
@@ -26,6 +27,11 @@ jest.mock("@xyflow/react", () => {
     },
     ReactFlow: (props: any) => {
       mockReactFlowRender(props);
+      React.useEffect(() => {
+        props.onInit?.({
+          fitView: mockFitView,
+        });
+      }, []);
       return React.createElement(
         "div",
         { "data-testid": "react-flow-mock" },
@@ -125,6 +131,18 @@ function graphFixture(): MissionWallWorkflowGraph {
 
 describe("WorkflowReplayCanvas", () => {
   beforeEach(() => {
+    Object.defineProperty(window, "requestAnimationFrame", {
+      configurable: true,
+      value: (callback: FrameRequestCallback) => {
+        callback(0);
+        return 1;
+      },
+    });
+    Object.defineProperty(window, "cancelAnimationFrame", {
+      configurable: true,
+      value: jest.fn(),
+    });
+    mockFitView.mockClear();
     mockReactFlowRender.mockClear();
   });
 
@@ -153,7 +171,8 @@ describe("WorkflowReplayCanvas", () => {
     const focusedEdge = reactFlowProps.edges.find(
       (edge: any) => edge.id === "edge:normalize_input:capture_brief:next",
     );
-    expect(focusedEdge.animated).toBe(true);
+    expect(focusedEdge.animated).toBe(false);
+    expect(focusedEdge.className).toBe("mission-wall-flow-edge--focused");
     expect(focusedEdge.markerEnd.type).toBe("arrowclosed");
     expect(focusedEdge.style.stroke).toBe("#2dd4bf");
 
@@ -162,5 +181,38 @@ describe("WorkflowReplayCanvas", () => {
     );
     expect(failedEdge.style.stroke).toBe("#f87171");
     expect(failedEdge.markerEnd.color).toBe("#f87171");
+  });
+
+  it("does not let audit refreshes reset a manually panned viewport", async () => {
+    const { rerender } = render(
+      React.createElement(WorkflowReplayCanvas, { graph: graphFixture() }),
+    );
+
+    await screen.findByTestId("react-flow-mock");
+    expect(mockFitView).toHaveBeenCalledTimes(1);
+
+    const reactFlowProps = mockReactFlowRender.mock.calls.at(-1)?.[0] as any;
+    expect(reactFlowProps.fitView).toBeUndefined();
+
+    reactFlowProps.onMove?.({ type: "mousemove" }, { x: 120, y: 0, zoom: 1 });
+
+    const refreshedGraph = {
+      ...graphFixture(),
+      nodes: graphFixture().nodes.map((node) =>
+        node.stepId === "capture_brief"
+          ? {
+              ...node,
+              latencyMs: 1240,
+              outputPreview: "refreshed output",
+            }
+          : node,
+      ),
+    };
+
+    rerender(
+      React.createElement(WorkflowReplayCanvas, { graph: refreshedGraph }),
+    );
+
+    expect(mockFitView).toHaveBeenCalledTimes(1);
   });
 });
