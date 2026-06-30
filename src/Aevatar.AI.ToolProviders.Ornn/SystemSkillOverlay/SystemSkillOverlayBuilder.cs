@@ -10,12 +10,12 @@ public sealed class SystemSkillOverlayBuilder : ISystemSkillOverlayBuilder
     private const string Header = "## System Skill Overlay (force-injected)";
     private const string SkillMarkdownFileName = "SKILL.md";
 
-    private readonly SystemSkillOverlayOptions _options;
+    private readonly Aevatar.AI.Abstractions.ToolProviders.SystemSkillOverlayOptions _options;
     private readonly OrnnSkillClient _client;
     private readonly ILogger _logger;
 
     public SystemSkillOverlayBuilder(
-        SystemSkillOverlayOptions options,
+        Aevatar.AI.Abstractions.ToolProviders.SystemSkillOverlayOptions options,
         OrnnSkillClient client,
         ILogger<SystemSkillOverlayBuilder>? logger = null)
     {
@@ -84,7 +84,7 @@ public sealed class SystemSkillOverlayBuilder : ISystemSkillOverlayBuilder
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "System skill overlay build failed for tag '{Tag}'", _options.Tag);
-            return EmptyOverlay();
+            throw;
         }
     }
 

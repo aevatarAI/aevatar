@@ -342,6 +342,10 @@ message SystemSkillOverlayMaterializedEvent {
   SystemSkillOverlay overlay = 1;
 }
 
+message SystemSkillOverlayRefreshFiredEvent {
+  int32 attempt = 1;
+}
+
 // Agent → 前端：请求工具执行审批
 message ToolApprovalRequestEvent {
   string request_id = 1;

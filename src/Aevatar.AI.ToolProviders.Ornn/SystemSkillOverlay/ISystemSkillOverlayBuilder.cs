@@ -1,6 +1,6 @@
 namespace Aevatar.AI.ToolProviders.Ornn.SystemSkillOverlay;
 
-public interface ISystemSkillOverlayBuilder
+/// <summary>Compatibility alias for Ornn callers; the contract lives in AI abstractions.</summary>
+public interface ISystemSkillOverlayBuilder : Aevatar.AI.Abstractions.ToolProviders.ISystemSkillOverlayBuilder
 {
-    Task<Aevatar.AI.Abstractions.SystemSkillOverlay> BuildAsync(CancellationToken ct);
 }

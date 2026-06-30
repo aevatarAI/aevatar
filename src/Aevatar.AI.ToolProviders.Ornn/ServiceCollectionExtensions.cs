@@ -66,7 +66,12 @@ public static class ServiceCollectionExtensions
             return services;
 
         services.TryAddSingleton(options);
-        services.TryAddSingleton<ISystemSkillOverlayBuilder, SystemSkillOverlayBuilder>();
+        services.TryAddSingleton<Aevatar.AI.Abstractions.ToolProviders.SystemSkillOverlayOptions>(options);
+        services.TryAddSingleton<SystemSkillOverlayBuilder>();
+        services.TryAddSingleton<Aevatar.AI.Abstractions.ToolProviders.ISystemSkillOverlayBuilder>(
+            sp => sp.GetRequiredService<SystemSkillOverlayBuilder>());
+        services.TryAddSingleton<Aevatar.AI.ToolProviders.Ornn.SystemSkillOverlay.ISystemSkillOverlayBuilder>(
+            sp => sp.GetRequiredService<SystemSkillOverlayBuilder>());
         // TODO: consolidate NyxIdRelayPromptConfiguration flags with this overlay registration once the materializer owns injection.
         return services;
     }
