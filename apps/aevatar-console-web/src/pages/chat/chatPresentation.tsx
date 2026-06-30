@@ -19,6 +19,7 @@ import {
   AEVATAR_INTERACTIVE_CHIP_CLASS,
   joinInteractiveClassNames,
 } from "@/shared/ui/interactionStandards";
+import { sanitizeUserFacingText } from "@/shared/ui/userFacingIdentifiers";
 import {
   CONVERSATION_ROUTE_DEFAULT_VALUE,
   USER_LLM_ROUTE_GATEWAY,
@@ -46,6 +47,7 @@ import type {
   ToolCallInfo,
 } from "./chatTypes";
 import { t } from "@/shared/i18n/messages";
+import { isMachineIdentifierValue } from "@/shared/ui/userFacingIdentifiers";
 
 function renderInlineTokens(
   tokens: readonly InlineContentToken[],
@@ -470,7 +472,7 @@ function ToolCallIndicator({ tool }: { tool: ToolCallInfo }): React.ReactElement
             whiteSpace: "pre-wrap",
           }}
         >
-          {tool.result.slice(0, 500)}
+          {sanitizeUserFacingText(tool.result).slice(0, 500)}
         </pre>
       ) : null}
     </div>
@@ -2512,18 +2514,6 @@ export function ConversationSidebar({
                   marginTop: 4,
                 }}
               >
-                {conversation.serviceId ? (
-                  <span
-                    style={{
-                      color: "#6b7280",
-                      fontFamily:
-                        "SFMono-Regular, ui-monospace, SFMono-Regular, Menlo, monospace",
-                    }}
-                  >
-                    {conversation.serviceId}
-                  </span>
-                ) : null}
-                {conversation.serviceId ? " · " : ""}
                 {t(
                   conversation.messageCount === 1
                     ? "pages.chat.chatpresentation.message.count.one"
@@ -2606,16 +2596,10 @@ export function ChatMetaStrip({
 }): React.ReactElement {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const primaryItems = [
-    serviceId ? { label: t("pages.chat.chatpresentation.service", "Service"), value: serviceId } : null,
-    routeLabel ? { label: t("pages.chat.chatpresentation.route", "Route"), value: routeLabel } : null,
+    routeLabel && !isMachineIdentifierValue(routeLabel) ? { label: t("pages.chat.chatpresentation.route", "Route"), value: routeLabel } : null,
     modelLabel ? { label: t("pages.chat.chatpresentation.model", "Model"), value: modelLabel } : null,
   ].filter(Boolean) as Array<{ label: string; value: string }>;
-  const detailItems = [
-    scopeId ? { label: t("pages.chat.chatpresentation.workspace.id", "Workspace ID"), value: scopeId } : null,
-    runId ? { label: t("pages.chat.chatpresentation.run", "Run"), value: runId } : null,
-    actorId ? { label: t("pages.chat.chatpresentation.actor", "Actor"), value: actorId } : null,
-    commandId ? { label: t("pages.chat.chatpresentation.command", "Command"), value: commandId } : null,
-  ].filter(Boolean) as Array<{ label: string; value: string }>;
+  const detailItems: Array<{ label: string; value: string }> = [];
 
   const renderChip = (
     item: { label: string; value: string },

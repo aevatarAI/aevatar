@@ -116,14 +116,12 @@ const RunsStatusStrip: React.FC<RunsStatusStripProps> = ({
         </div>
 
         <div style={metricPillStyle}>
-          <Typography.Text style={metricLabelStyle}>{t("pages.runs.runsstatusstrip.run.id", "Run ID")}</Typography.Text>
-          <AevatarCompactText
-            maxWidth={180}
-            monospace
-            strong
-            style={metricValueStyle}
-            value={runId}
-          />
+          <Typography.Text style={metricLabelStyle}>{t("pages.runs.runsstatusstrip.run", "Run")}</Typography.Text>
+          <Typography.Text style={metricValueStyle}>
+            {runId
+              ? t("pages.runs.runsstatusstrip.current.run.ready", "Current run ready")
+              : t("pages.runs.runsstatusstrip.pending", "Pending")}
+          </Typography.Text>
         </div>
 
         <div style={metricPillStyle}>

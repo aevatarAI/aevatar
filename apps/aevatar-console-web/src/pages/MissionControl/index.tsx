@@ -299,8 +299,7 @@ function MissionHeaderBar({
           ) : null}
         </Space>
         <Typography.Text style={{ color: token.colorTextTertiary }}>
-          {snapshot.summary.workflowName} {t("pages.missioncontrol.index.scope.2", "· Scope")}{snapshot.summary.scopeId} {t("pages.missioncontrol.index.run.2", "· Run")}{' '}
-          {snapshot.summary.runId}
+          {snapshot.summary.workflowName}
         </Typography.Text>
         {connectionMessage ? (
           <Typography.Text style={{ color: token.colorTextTertiary }}>
@@ -616,7 +615,6 @@ function MissionStage({
                   </Typography.Text>
                   <Space wrap size={[8, 8]}>
                     {event.stepId ? <Tag>{event.stepId}</Tag> : null}
-                    {event.actorId ? <Tag color="cyan">{event.actorId}</Tag> : null}
                     <Tag color={resolveHandoffTagColor(event.handoff.severity)}>
                       {formatHandoffSeverityLabel(event.handoff.severity)}
                     </Tag>

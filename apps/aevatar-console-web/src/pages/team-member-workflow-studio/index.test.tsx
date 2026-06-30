@@ -1045,7 +1045,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
 
     expect(
       await screen.findByText(
-        "Workflow member m-untitled-member was created but is not visible yet. Retry saving in a moment.",
+        "Workflow member was created but is not visible yet. Retry saving in a moment.",
       ),
     ).toBeTruthy();
     expect(studioApi.saveWorkflow).toHaveBeenCalledTimes(1);
@@ -3997,8 +3997,11 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(within(consolePanel).getByLabelText("Log details")).not.toHaveTextContent(
       "Running",
     );
-    expect(within(consolePanel).getByLabelText("Log details")).toHaveTextContent(
+    expect(within(consolePanel).getByLabelText("Log details")).not.toHaveTextContent(
       "raw-observation-1",
+    );
+    expect(within(consolePanel).getByLabelText("Log details")).toHaveTextContent(
+      "runtime-observer",
     );
     expect(screen.queryByTestId("member-run-summary")).toBeNull();
     expect(screen.queryByText("run-1")).toBeNull();

@@ -285,9 +285,7 @@ function buildTimelineContext(event: AGUIEvent): {
       stepId: event.stepId || '',
       stepType: defaultStepType,
       timelineKey: event.stepId ? `step:${event.stepId}` : 'interaction:human',
-      timelineLabel: event.stepId
-        ? `Interaction · ${event.stepId}`
-        : 'Human input',
+      timelineLabel: event.stepId ? 'Interaction step' : 'Human input',
     };
   }
 
@@ -314,11 +312,7 @@ function buildTimelineContext(event: AGUIEvent): {
         stepId,
         stepType,
         timelineKey: stepId ? `step:${stepId}` : 'step:request',
-        timelineLabel: stepId
-          ? `Step · ${stepId}`
-          : stepType
-            ? `Step request · ${stepType}`
-            : 'Step request',
+        timelineLabel: stepType ? `Step request · ${stepType}` : 'Step request',
       };
     }
 
@@ -330,7 +324,7 @@ function buildTimelineContext(event: AGUIEvent): {
         stepId,
         stepType: '',
         timelineKey: stepId ? `step:${stepId}` : 'step:completed',
-        timelineLabel: stepId ? `Step · ${stepId}` : 'Step completed',
+        timelineLabel: 'Step completed',
       };
     }
 
@@ -435,7 +429,7 @@ function buildTimelineContext(event: AGUIEvent): {
 export function describeEvent(event: AGUIEvent): string {
   switch (event.type) {
     case AGUIEventType.RUN_STARTED:
-      return `Run started on ${event.threadId}`;
+      return 'Run started.';
     case AGUIEventType.RUN_FINISHED:
       return 'Run finished successfully.';
     case AGUIEventType.RUN_ERROR:
@@ -449,30 +443,29 @@ export function describeEvent(event: AGUIEvent): string {
     case AGUIEventType.TEXT_MESSAGE_CONTENT:
       return event.delta;
     case AGUIEventType.TEXT_MESSAGE_END:
-      return `Message completed: ${event.messageId}`;
+      return 'Message completed.';
     case AGUIEventType.STATE_SNAPSHOT:
       return 'State snapshot updated.';
     case AGUIEventType.TOOL_CALL_START:
       return `Tool started: ${event.toolName}`;
     case AGUIEventType.TOOL_CALL_END:
-      return `Tool finished: ${event.toolCallId}`;
+      return 'Tool finished.';
     case AGUIEventType.HUMAN_INPUT_REQUEST:
       return event.prompt;
     case AGUIEventType.HUMAN_INPUT_RESPONSE:
-      return `Human input submitted for ${event.stepId}`;
+      return 'Human input submitted.';
     case AGUIEventType.CUSTOM: {
       const custom = parseCustomEvent(event);
       if (custom.name === CustomEventName.RunContext) {
-        const data = parseRunContextData(custom.data);
-        return `Context attached to actor ${data?.actorId ?? 'unknown'}`;
+        return 'Context attached to runtime actor.';
       }
       if (custom.name === CustomEventName.StepRequest) {
         const data = parseStepRequestData(custom.data);
-        return `Step request: ${data?.stepId ?? 'unknown'} (${data?.stepType ?? 'unknown'})`;
+        return `Step request: ${data?.stepType ?? 'unknown'}`;
       }
       if (custom.name === CustomEventName.StepCompleted) {
         const data = parseStepCompletedData(custom.data);
-        return `Step completed: ${data?.stepId ?? 'unknown'} success=${String(data?.success)}`;
+        return `Step completed: success=${String(data?.success)}`;
       }
       if (custom.name === CustomEventName.HumanInputRequest) {
         return (

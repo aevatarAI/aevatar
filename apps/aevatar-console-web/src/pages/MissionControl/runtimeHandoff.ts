@@ -256,8 +256,7 @@ export function buildMissionEventHandoffCue(input: {
     detail: input.actorId
       ? t(
           'pages.missioncontrol.runtimehandoff.evidence.is.linked.to.actor',
-          'Evidence is linked to actor {actorId}.',
-          { actorId: input.actorId },
+          'Evidence is linked to the current runtime actor.',
         )
       : t(
           'pages.missioncontrol.runtimehandoff.evidence.is.linked.to.the.current',
@@ -295,15 +294,13 @@ export function buildMissionActionFeedbackMessage(input: {
   const commandSuffix = input.commandId
     ? t(
         'pages.missioncontrol.runtimehandoff.command.is.pending.observation',
-        ' Command {commandId} is pending observation.',
-        { commandId: input.commandId },
+        ' Command observation is pending.',
       )
     : '';
   const runSuffix = input.runId
     ? t(
         'pages.missioncontrol.runtimehandoff.run.remains.the.evidence.source',
-        ' Run {runId} remains the evidence source.',
-        { runId: input.runId },
+        ' The current run remains the evidence source.',
       )
     : '';
 

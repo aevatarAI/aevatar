@@ -284,14 +284,14 @@ describe('StudioMemberBindPanel', () => {
       'ready',
     );
     expect(screen.getByText('Current member publication')).toBeTruthy();
-    expect(screen.getByText('member:default')).toBeTruthy();
+    expect(screen.queryByText('member:default')).toBeNull();
     expect(screen.queryByRole('combobox')).toBeNull();
     expect(
       screen.queryByText('Select a published service'),
     ).toBeNull();
     expect(
       screen.getByRole('button', {
-        name: 'Chat Default test id ·chat Chat with the published workflow.',
+        name: 'Chat Default test Endpoint ready Chat with the published workflow.',
       }),
     ).toHaveAttribute(
       'aria-pressed',
@@ -427,7 +427,8 @@ describe('StudioMemberBindPanel', () => {
     expect(screen.getByTestId('studio-bind-flow-guidance')).toHaveTextContent(
       'ready',
     );
-    expect(screen.getByText('Run run-1')).toBeTruthy();
+    expect(screen.queryByText('Run run-1')).toBeNull();
+    expect(screen.queryByText('run-1')).toBeNull();
     expect(
       screen.queryByText('The current Studio draft accepted the request.'),
     ).toBeNull();

@@ -39,6 +39,7 @@ import {
 import { studioApi } from '@/shared/studio/api';
 import { AevatarPanel, AevatarStatusTag } from '@/shared/ui/aevatarPageShells';
 import { AEVATAR_INTERACTIVE_CHIP_CLASS } from '@/shared/ui/interactionStandards';
+import { getUserFacingIdentifierLabel } from '@/shared/ui/userFacingIdentifiers';
 import {
   buildStudioBindContract,
   type StudioBindContract,
@@ -1256,13 +1257,18 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
               <div style={sourceStatusStyle}>
                 <ApiOutlined />
                 <Typography.Text strong>
-                  {selectedService?.displayName ||
-                    selectedService?.serviceId ||
-                    t("pages.studio.bind.studiomemberbindpanel.no.published.service.2", "No published service")}
+                  {getUserFacingIdentifierLabel(
+                    selectedService?.displayName || selectedService?.serviceId,
+                    t("pages.studio.bind.studiomemberbindpanel.no.published.service.2", "No published service"),
+                  )}
                 </Typography.Text>
                 {selectedEndpoint ? (
                   <Typography.Text type="secondary">
-                    / {selectedEndpoint.displayName || selectedEndpoint.endpointId}
+                    /{" "}
+                    {getUserFacingIdentifierLabel(
+                      selectedEndpoint.displayName || selectedEndpoint.endpointId,
+                      t("pages.studio.bind.studiomemberbindpanel.endpoint", "Endpoint"),
+                    )}
                   </Typography.Text>
                 ) : null}
               </div>
@@ -1279,13 +1285,14 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                 <Typography.Text type="secondary">{t("pages.studio.bind.studiomemberbindpanel.current.member.4", "Current member")}</Typography.Text>
                 <div style={valueCardStyle}>
                   <Typography.Text strong style={{ wordBreak: 'break-word' }}>
-                    {selectedService?.displayName ||
-                      selectedService?.serviceId ||
-                      t("pages.studio.bind.studiomemberbindpanel.no.published.contract.2", "No published contract")}
+                    {getUserFacingIdentifierLabel(
+                      selectedService?.displayName || selectedService?.serviceId,
+                      t("pages.studio.bind.studiomemberbindpanel.no.published.contract.2", "No published contract"),
+                    )}
                   </Typography.Text>
                   <Typography.Text type="secondary">
                     {normalizedMemberId
-                      ? `member:${normalizedMemberId}`
+                      ? t("pages.studio.bind.studiomemberbindpanel.member.selected", "Member selected")
                       : t("pages.studio.bind.studiomemberbindpanel.no.member.selected.2", "No member selected")}
                   </Typography.Text>
                 </div>
@@ -1298,9 +1305,12 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                 </Space>
                 {selectedService && hasEndpointOptions ? (
                   <div style={endpointChoiceRowStyle}>
-                    {selectedService.endpoints.map((endpoint) => {
-                      const active = endpoint.endpointId === selectedEndpointId;
-                      const label = endpoint.displayName || endpoint.endpointId;
+	                {selectedService.endpoints.map((endpoint) => {
+	                  const active = endpoint.endpointId === selectedEndpointId;
+	                  const label = getUserFacingIdentifierLabel(
+	                    endpoint.displayName || endpoint.endpointId,
+	                    t("pages.studio.bind.studiomemberbindpanel.endpoint", "Endpoint"),
+	                  );
                       const foregroundColor = active ? '#ffffff' : '#0f172a';
                       const secondaryColor = active
                         ? 'rgba(255, 255, 255, 0.74)'
@@ -1340,7 +1350,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                               color: secondaryColor,
                             }}
                           >
-                            {t("pages.studio.bind.studiomemberbindpanel.id.2", "id ·")}{endpoint.endpointId}
+                            {t("pages.studio.bind.studiomemberbindpanel.endpoint.ready", "Endpoint ready")}
                           </span>
                           <span
                             style={{
@@ -1437,7 +1447,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                   </div>
                   <Space wrap size={[6, 6]}>
                     <Tag>{t("pages.studio.bind.studiomemberbindpanel.auth.2", "auth ·")}{bindContract.authLabel}</Tag>
-                    <Tag>{t("pages.studio.bind.studiomemberbindpanel.revision.3", "revision ·")}{bindContract.revisionId}</Tag>
+                    <Tag>{t("pages.studio.bind.studiomemberbindpanel.revision.3", "revision ready")}</Tag>
                     {bindContract.streaming.sse ? (
                       <Tag color="gold">{t("pages.studio.bind.studiomemberbindpanel.stream.text.event.stream.2", "stream · text/event-stream")}</Tag>
                     ) : (
@@ -1578,10 +1588,10 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                 <Alert
                   showIcon
                   message={`Smoke test passed in ${smokeTestResult.latencyMs}ms`}
-                  description={
-                    smokeTestResult.runId
-                      ? `Run ${smokeTestResult.runId}`
-                      : runsCurrentWorkflowDraft
+	                  description={
+	                    smokeTestResult.runId
+	                      ? t("pages.studio.bind.studiomemberbindpanel.run.completed", "Run completed")
+	                      : runsCurrentWorkflowDraft
                         ? 'The current Studio draft completed without an error.'
                         : 'The selected contract returned without an error.'
                   }
@@ -1700,11 +1710,11 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                 label: t("pages.studio.bind.studiomemberbindpanel.contract.details.2", "Contract details"),
                 children: bindContract ? (
                   <div style={parameterGridStyle}>
-                    <div style={valueCardStyle}>
-                      <Typography.Text type="secondary">{t("pages.studio.bind.studiomemberbindpanel.published.service.2", "Published service")}</Typography.Text>
-                      <Typography.Text strong style={{ wordBreak: 'break-word' }}>
-                        {bindContract.serviceId}
-                      </Typography.Text>
+	                    <div style={valueCardStyle}>
+	                      <Typography.Text type="secondary">{t("pages.studio.bind.studiomemberbindpanel.published.service.2", "Published service")}</Typography.Text>
+	                      <Typography.Text strong style={{ wordBreak: 'break-word' }}>
+	                        {t("pages.studio.bind.studiomemberbindpanel.service.ready", "Service ready")}
+	                      </Typography.Text>
                       <Typography.Text type="secondary">
                         {t("pages.studio.bind.studiomemberbindpanel.platform.diagnostic.id.for.this.2", "Platform diagnostic id for this member contract.")}</Typography.Text>
                     </div>
@@ -1724,10 +1734,10 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                       <Typography.Text strong>{bindContract.authLabel}</Typography.Text>
                       <Typography.Text type="secondary">{bindContract.authHint}</Typography.Text>
                     </div>
-                    <div style={valueCardStyle}>
-                      <Typography.Text type="secondary">{t("pages.studio.bind.studiomemberbindpanel.revision.4", "Revision")}</Typography.Text>
-                      <Typography.Text strong>{bindContract.revisionId}</Typography.Text>
-                      <Typography.Text type="secondary">{bindContract.serviceDisplayName}</Typography.Text>
+	                    <div style={valueCardStyle}>
+	                      <Typography.Text type="secondary">{t("pages.studio.bind.studiomemberbindpanel.revision.4", "Revision")}</Typography.Text>
+	                      <Typography.Text strong>{t("pages.studio.bind.studiomemberbindpanel.revision.ready", "Revision ready")}</Typography.Text>
+	                      <Typography.Text type="secondary">{bindContract.serviceDisplayName}</Typography.Text>
                     </div>
                     <div style={valueCardStyle}>
                       <Typography.Text type="secondary">{t("pages.studio.bind.studiomemberbindpanel.delivery.2", "Delivery")}</Typography.Text>
@@ -1780,11 +1790,14 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                 ) : bindingList.length > 0 ? (
                   <div style={listColumnStyle}>
                     {bindingList.map((binding) => (
-                      <div key={binding.bindingId} style={compactCardStyle}>
-                        <Space wrap size={[8, 8]}>
-                          <Typography.Text strong>
-                            {binding.displayName || binding.bindingId}
-                          </Typography.Text>
+	                      <div key={binding.bindingId} style={compactCardStyle}>
+	                        <Space wrap size={[8, 8]}>
+	                          <Typography.Text strong>
+	                            {getUserFacingIdentifierLabel(
+	                              binding.displayName || binding.bindingId,
+	                              t("pages.studio.bind.studiomemberbindpanel.binding", "Binding"),
+	                            )}
+	                          </Typography.Text>
                           <AevatarStatusTag
                             domain="governance"
                             label={binding.bindingKind}
@@ -1793,10 +1806,15 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                         </Space>
                         <Typography.Text type="secondary">
                           {t("pages.studio.bind.studiomemberbindpanel.target.2", "Target")}{describeScopeServiceBindingTarget(binding)}
-                        </Typography.Text>
-                        <Typography.Text type="secondary">
-                          {t("pages.studio.bind.studiomemberbindpanel.policies.2", "Policies")}{binding.policyIds.length > 0 ? binding.policyIds.join(', ') : 'none'}
-                        </Typography.Text>
+	                        </Typography.Text>
+	                        <Typography.Text type="secondary">
+	                          {t("pages.studio.bind.studiomemberbindpanel.policies.2", "Policies")}
+	                          {binding.policyIds.length > 0
+	                            ? t("pages.studio.bind.studiomemberbindpanel.policy.count", "{value1} policies", {
+	                                value1: binding.policyIds.length,
+	                              })
+	                            : 'none'}
+	                        </Typography.Text>
                       </div>
                     ))}
                   </div>
@@ -1837,10 +1855,14 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                               ? '0 0 0 1px rgba(107, 140, 255, 0.18)'
                               : 'none',
                           }}
-                        >
-                          <Space wrap size={[8, 8]}>
-                            <Typography.Text strong>{revision.revisionId}</Typography.Text>
-                            <AevatarStatusTag
+	                        >
+	                          <Space wrap size={[8, 8]}>
+	                            <Typography.Text strong>
+                                {formatStudioMemberBindingImplementationKind(
+                                  revision.implementationKind,
+                                )}
+                              </Typography.Text>
+	                            <AevatarStatusTag
                               domain="governance"
                               label={formatStudioMemberBindingImplementationKind(
                                 revision.implementationKind,
