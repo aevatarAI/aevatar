@@ -8,6 +8,10 @@ namespace Aevatar.GAgents.Channel.NyxIdRelay;
 
 public sealed class NyxIdRelayOutboundPort
 {
+    private const int LarkRelayReplyChunkLimit = 3_500;
+    private const int LarkRelayReplyMarkerBudget = 80;
+    private const string LarkPlatformKey = "lark";
+
     private readonly NyxIdApiClient _nyxClient;
     private readonly IReadOnlyDictionary<string, IMessageComposer> _composers;
     private readonly ILogger<NyxIdRelayOutboundPort> _logger;
@@ -105,14 +109,68 @@ public sealed class NyxIdRelayOutboundPort
                 "Relay reply is missing the bot agent key required for channel-relay/reply.");
         }
 
-        return await SendAsync(
-                platform,
-                conversation,
-                content,
-                delivery,
-                agentKey,
-                ct)
+        ArgumentNullException.ThrowIfNull(conversation);
+        ArgumentNullException.ThrowIfNull(content);
+        ArgumentNullException.ThrowIfNull(delivery);
+
+        if (string.IsNullOrWhiteSpace(delivery.ReplyMessageId))
+        {
+            return EmitResult.Failed(
+                "missing_reply_message_id",
+                "Relay reply is missing the source message id required for channel-relay/reply.");
+        }
+
+        if (TryComposeReplyText(platform, conversation, content, out var replyText) is { } composeFailure)
+        {
+            return composeFailure;
+        }
+
+        var normalizedPlatform = NormalizePlatformKey(platform);
+        var chunks = SplitRelayReplyText(normalizedPlatform, replyText);
+        if (chunks.Count == 1)
+        {
+            return await SendAsync(
+                    platform,
+                    conversation,
+                    content,
+                    delivery,
+                    agentKey,
+                    ct)
+                .ConfigureAwait(false);
+        }
+
+        string? firstMessageId = null;
+        string? firstPlatformMessageId = null;
+        for (var i = 0; i < chunks.Count; i++)
+        {
+            var result = await _nyxClient.SendChannelRelayTextReplyAsync(
+                    agentKey,
+                    delivery.ReplyMessageId,
+                    chunks[i],
+                    ct)
             .ConfigureAwait(false);
+
+            if (!result.Succeeded)
+            {
+                _logger.LogWarning(
+                    "Nyx relay chunked reply delivery failed: platform={Platform}, messageId={MessageId}, chunk={ChunkIndex}, chunks={ChunkCount}, detail={Detail}",
+                    platform,
+                    delivery.ReplyMessageId,
+                    i + 1,
+                    chunks.Count,
+                    result.Detail);
+                return EmitResult.Failed(
+                    "relay_reply_chunk_rejected",
+                    result.Detail ?? "Nyx relay reply chunk rejected.");
+            }
+
+            firstMessageId ??= result.MessageId;
+            firstPlatformMessageId ??= result.PlatformMessageId;
+        }
+
+        return EmitResult.Sent(
+            firstMessageId ?? $"nyx-relay:{delivery.ReplyMessageId}",
+            platformMessageId: firstPlatformMessageId);
     }
 
     /// <summary>
@@ -211,6 +269,17 @@ public sealed class NyxIdRelayOutboundPort
 
         if (_composers.TryGetValue(normalizedPlatform, out var composer))
         {
+            if (string.Equals(normalizedPlatform, LarkPlatformKey, StringComparison.OrdinalIgnoreCase) &&
+                content.Cards.Count == 0 &&
+                content.Actions.Count == 0 &&
+                content.Attachments.Count == 0 &&
+                !string.IsNullOrWhiteSpace(content.Text) &&
+                content.Text.Length > LarkRelayReplyChunkLimit)
+            {
+                replyText = content.Text;
+                return null;
+            }
+
             var composeContext = new ComposeContext
             {
                 Conversation = conversation.Clone(),
@@ -250,4 +319,62 @@ public sealed class NyxIdRelayOutboundPort
         string.IsNullOrWhiteSpace(value)
             ? string.Empty
             : value.Trim().ToLowerInvariant();
+
+    private static IReadOnlyList<string> SplitRelayReplyText(string normalizedPlatform, string replyText)
+    {
+        if (!string.Equals(normalizedPlatform, LarkPlatformKey, StringComparison.OrdinalIgnoreCase) ||
+            replyText.Length <= LarkRelayReplyChunkLimit)
+        {
+            return [replyText];
+        }
+
+        var contentBudget = LarkRelayReplyChunkLimit - LarkRelayReplyMarkerBudget;
+        if (contentBudget < 100)
+            contentBudget = LarkRelayReplyChunkLimit;
+
+        var rawChunks = SplitRaw(replyText, contentBudget);
+        if (rawChunks.Count == 1)
+            return rawChunks;
+
+        var rendered = new List<string>(rawChunks.Count);
+        for (var i = 0; i < rawChunks.Count; i++)
+        {
+            var partNumber = i + 1;
+            var prefix = i > 0 ? $"[part {partNumber}/{rawChunks.Count} continued]\n\n" : string.Empty;
+            var suffix = i < rawChunks.Count - 1 ? $"\n\n[part {partNumber}/{rawChunks.Count} continues]" : string.Empty;
+            rendered.Add(prefix + rawChunks[i] + suffix);
+        }
+
+        return rendered;
+    }
+
+    private static List<string> SplitRaw(string text, int contentBudget)
+    {
+        var chunks = new List<string>();
+        var offset = 0;
+        while (offset < text.Length)
+        {
+            var remaining = text.Length - offset;
+            if (remaining <= contentBudget)
+            {
+                chunks.Add(text[offset..]);
+                break;
+            }
+
+            var searchAnchor = offset + contentBudget - 1;
+            var boundary = text.LastIndexOf("\n\n", searchAnchor, contentBudget, StringComparison.Ordinal);
+            if (boundary <= offset)
+            {
+                chunks.Add(text[offset..(offset + contentBudget)]);
+                offset += contentBudget;
+            }
+            else
+            {
+                chunks.Add(text[offset..boundary]);
+                offset = boundary + 2;
+            }
+        }
+
+        return chunks;
+    }
 }

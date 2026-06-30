@@ -78,6 +78,72 @@ public sealed class NyxIdRelayOutboundPortTests
         AssertSingleRelayTextRequest(handler, "msg-1", "rendered:workflow done");
     }
 
+    [Fact]
+    public async Task SendWithAgentKeyAsync_LarkLongWorkflowReply_ShouldDeliverAllOrderedChunks()
+    {
+        var handler = new RecordingJsonHandler();
+        var port = CreatePort(handler, new StubComposer("lark"));
+        var longWorkflowOutput = BuildLongWorkflowOutput();
+
+        var result = await port.SendWithAgentKeyAsync(
+            "lark",
+            BuildConversation(),
+            new MessageContent { Text = longWorkflowOutput },
+            new OutboundDeliveryContext
+            {
+                ReplyMessageId = "msg-lark-workflow-1",
+            },
+            "bot-agent-key-1",
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        handler.Requests.Should().HaveCountGreaterThan(1);
+        handler.Requests.Select(request => request.Authorization)
+            .Should()
+            .OnlyContain(value => value == "Bearer bot-agent-key-1");
+        handler.Requests.Select(request => request.Path)
+            .Should()
+            .OnlyContain(path => path == "/api/v1/channel-relay/reply");
+
+        var delivered = handler.Requests.Select(ExtractReplyText).ToArray();
+        delivered[0].Should().Contain($"[part 1/{delivered.Length} continues]");
+        delivered[^1].Should().Contain($"[part {delivered.Length}/{delivered.Length} continued]");
+        delivered.Should().OnlyContain(chunk => chunk.Length <= 3_500);
+
+        var combined = string.Join("\n\n", delivered);
+        combined.Should().Contain("**1. Warm & Polite**");
+        combined.Should().Contain("**2. Friendly & Engaging**");
+        combined.Should().Contain("**3. Simple & Sweet**");
+        combined.Should().Contain("Wishing you all a lovely summer!");
+        combined.Should().Contain("CN draft 3 line delivered.");
+    }
+
+    [Fact]
+    public async Task SendWithAgentKeyAsync_LarkChunkRejection_ShouldFailObservably()
+    {
+        var handler = new RecordingJsonHandler(
+            requestIndex => requestIndex == 2
+                ? (HttpStatusCode.BadRequest, """{"error":"message_too_large"}""")
+                : (HttpStatusCode.OK, """{"message_id":"reply-1","platform_message_id":"platform-1"}"""));
+        var port = CreatePort(handler, new StubComposer("lark"));
+
+        var result = await port.SendWithAgentKeyAsync(
+            "lark",
+            BuildConversation(),
+            new MessageContent { Text = BuildLongWorkflowOutput() },
+            new OutboundDeliveryContext
+            {
+                ReplyMessageId = "msg-lark-workflow-1",
+            },
+            "bot-agent-key-1",
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.ErrorCode.Should().Be("relay_reply_chunk_rejected");
+        result.ErrorMessage.Should().Contain("message_too_large");
+        handler.Requests.Should().HaveCount(2);
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("   ")]
@@ -578,23 +644,57 @@ public sealed class NyxIdRelayOutboundPortTests
         reply.TryGetProperty("metadata", out _).Should().BeFalse();
     }
 
+    private static string ExtractReplyText((string Path, string? Authorization, string Body) request)
+    {
+        using var document = JsonDocument.Parse(request.Body);
+        return document.RootElement.GetProperty("reply").GetProperty("text").GetString() ?? string.Empty;
+    }
+
+    private static string BuildLongWorkflowOutput()
+    {
+        var repeatedContext = string.Concat(Enumerable.Repeat(
+            "Class funds covered classroom supplies, shared activities, and year-end coordination. ",
+            34));
+        return string.Join(
+            "\n\n",
+            "**Original (EN):** Hi Everyone! Below is a quick recap on how we used our class funds this year. " +
+            repeatedContext,
+            "**Translation (CN):** Class funds summary translated for parents. " +
+            string.Concat(Enumerable.Repeat("Translation detail preserved for relay delivery. ", 240)),
+            "**Suggested replies:**",
+            "**1. Warm & Polite**\nEN: Thank you so much for organizing everything and sharing such a thoughtful recap.\nCN: Warm polite translation line.",
+            "**2. Friendly & Engaging**\nEN: Thank you! It's so lovely to see how the class funds were used throughout the year. Have a wonderful summer, everyone!\nCN: Friendly engaging translation line.",
+            "**3. Simple & Sweet**\nEN: Thank you so much for everything this year. Wishing you all a lovely summer!\nCN: CN draft 3 line delivered.");
+    }
+
     private sealed class RecordingJsonHandler(
         HttpStatusCode status = HttpStatusCode.OK,
         string responseBody = """{"message_id":"reply-1","platform_message_id":"platform-1"}""",
         TimeSpan? retryAfter = null) : HttpMessageHandler
     {
+        private readonly Func<int, (HttpStatusCode Status, string Body)>? _responseByRequest;
+
+        public RecordingJsonHandler(Func<int, (HttpStatusCode Status, string Body)> responseByRequest)
+            : this()
+        {
+            _responseByRequest = responseByRequest ?? throw new ArgumentNullException(nameof(responseByRequest));
+        }
+
         public List<(string Path, string? Authorization, string Body)> Requests { get; } = [];
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
+            var requestIndex = Requests.Count + 1;
             Requests.Add((
                 request.RequestUri?.PathAndQuery ?? string.Empty,
                 request.Headers.Authorization?.ToString(),
                 request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken)));
 
-            var response = new HttpResponseMessage(status)
+            var effective = _responseByRequest?.Invoke(requestIndex) ?? (status, responseBody);
+
+            var response = new HttpResponseMessage(effective.Status)
             {
-                Content = new StringContent(responseBody, Encoding.UTF8, "application/json"),
+                Content = new StringContent(effective.Body, Encoding.UTF8, "application/json"),
             };
             if (retryAfter.HasValue)
                 response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(retryAfter.Value);
