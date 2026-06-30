@@ -13,6 +13,7 @@ import {
 } from '@/shared/agui/customEventData';
 import { formatDateTime } from '@/shared/datetime/dateTime';
 import { t } from '@/shared/i18n/messages';
+import { getUserFacingIdentifierLabel } from '@/shared/ui/userFacingIdentifiers';
 
 export type RunTransport = 'sse' | 'ws';
 export type RunEventStatus = 'processing' | 'success' | 'error' | 'default';
@@ -264,6 +265,15 @@ function buildTimelineContext(event: AGUIEvent): {
   const defaultStepId = readOptionalEventString(event, 'stepId');
   const defaultStepType = readOptionalEventString(event, 'stepType');
 
+  const formatStepTimelineLabel = (
+    value: string,
+    fallback: string,
+    prefix = 'Step',
+  ): string => {
+    const visibleValue = getUserFacingIdentifierLabel(value, '').trim();
+    return visibleValue ? `${prefix} · ${visibleValue}` : fallback;
+  };
+
   if (event.type === AGUIEventType.HUMAN_INPUT_REQUEST) {
     const approval = isHumanApprovalSuspension(event.suspensionType);
     return {
@@ -285,7 +295,11 @@ function buildTimelineContext(event: AGUIEvent): {
       stepId: event.stepId || '',
       stepType: defaultStepType,
       timelineKey: event.stepId ? `step:${event.stepId}` : 'interaction:human',
-      timelineLabel: event.stepId ? 'Interaction step' : 'Human input',
+      timelineLabel: formatStepTimelineLabel(
+        event.stepId || '',
+        event.stepId ? 'Interaction step' : 'Human input',
+        'Interaction',
+      ),
     };
   }
 
@@ -312,7 +326,10 @@ function buildTimelineContext(event: AGUIEvent): {
         stepId,
         stepType,
         timelineKey: stepId ? `step:${stepId}` : 'step:request',
-        timelineLabel: stepType ? `Step request · ${stepType}` : 'Step request',
+        timelineLabel: formatStepTimelineLabel(
+          stepId,
+          stepType ? `Step request · ${stepType}` : 'Step request',
+        ),
       };
     }
 
@@ -324,7 +341,7 @@ function buildTimelineContext(event: AGUIEvent): {
         stepId,
         stepType: '',
         timelineKey: stepId ? `step:${stepId}` : 'step:completed',
-        timelineLabel: 'Step completed',
+        timelineLabel: formatStepTimelineLabel(stepId, 'Step completed'),
       };
     }
 
