@@ -206,13 +206,22 @@ public class NyxLarkProvisioningServiceTests
     public async Task ProvisionAsync_Replaces_Existing_ChannelBot_On_409_Conflict_And_Retries()
     {
         // Re-binding the same Lark app: the first channel-bot create hits NyxID's 409 already-exists.
-        // The service deletes the stale channel-bot for THIS app (only the matching one) and retries,
-        // so a user can re-bind from /channels without manual NyxID cleanup (the 502 the wizard showed).
+        // The REAL `GET /api/v1/channel-bots` list omits `platform_bot_id` (it lives only on the
+        // per-bot detail), so the service lists Lark bots, GETs each one's detail, and deletes only
+        // the bot whose detail `platform_bot_id` equals THIS app, then retries — so a user can re-bind
+        // from /channels without manual NyxID cleanup (the 502 the wizard showed). A second Lark bot
+        // for a DIFFERENT app is fetched but left untouched.
         var handler = new RecordingHandler();
         handler.Enqueue(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-1","full_key":"x"}""");
         handler.Enqueue(HttpMethod.Post, "/api/v1/channel-bots", """{"error":true,"status":409,"message":"channel bot already exists"}""");
-        handler.Enqueue(HttpMethod.Get, "/api/v1/channel-bots", """[{"id":"old-bot","platform_bot_id":"cli_a1b2c3"},{"id":"other","platform_bot_id":"cli_zzz"}]""");
+        // Real list shape: items have id + platform, NO platform_bot_id. Includes a telegram bot
+        // (skipped) and a second lark bot for another app (fetched, not matched, not deleted).
+        handler.Enqueue(HttpMethod.Get, "/api/v1/channel-bots",
+            """{"bots":[{"id":"old-bot","platform":"lark","platform_bot_username":"lark_bot","status":"active"},{"id":"tg-bot","platform":"telegram","status":"active"},{"id":"other-lark","platform":"lark","platform_bot_username":"lark_bot","status":"active"}],"total":3}""");
+        // Real detail shape: WITH platform_bot_id. First lark bot matches this app; second does not.
+        handler.Enqueue(HttpMethod.Get, "/api/v1/channel-bots/old-bot", """{"id":"old-bot","platform":"lark","platform_bot_id":"cli_a1b2c3","status":"active"}""");
         handler.Enqueue(HttpMethod.Delete, "/api/v1/channel-bots/old-bot", """{"ok":true}""");
+        handler.Enqueue(HttpMethod.Get, "/api/v1/channel-bots/other-lark", """{"id":"other-lark","platform":"lark","platform_bot_id":"cli_zzz","status":"active"}""");
         handler.Enqueue(HttpMethod.Post, "/api/v1/channel-bots", """{"id":"bot-new"}""");
         handler.Enqueue(HttpMethod.Post, "/api/v1/channel-conversations", """{"id":"route-1"}""");
         handler.Enqueue(HttpMethod.Post, "/api/v1/keys", """{"id":"svc-1","slug":"api-lark-bot-2"}""");
@@ -238,8 +247,12 @@ public class NyxLarkProvisioningServiceTests
 
         result.Succeeded.Should().BeTrue();
         result.NyxChannelBotId.Should().Be("bot-new");
-        // Only the channel-bot for THIS Lark app was deleted before the retry.
-        handler.Requests.Should().Contain(r => r.Method == HttpMethod.Delete && r.Path == "/api/v1/channel-bots/old-bot");
+        // Only the channel-bot for THIS Lark app (resolved via detail) was deleted before the retry.
+        handler.Requests.Should().ContainSingle(r => r.Method == HttpMethod.Delete && r.Path.StartsWith("/api/v1/channel-bots/"))
+            .Which.Path.Should().Be("/api/v1/channel-bots/old-bot");
+        // The detail of the other-app Lark bot was read but it was never deleted.
+        handler.Requests.Should().Contain(r => r.Method == HttpMethod.Get && r.Path == "/api/v1/channel-bots/other-lark");
+        handler.Requests.Should().NotContain(r => r.Method == HttpMethod.Delete && r.Path == "/api/v1/channel-bots/other-lark");
     }
 
     [Fact]
