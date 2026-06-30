@@ -1,0 +1,717 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Aevatar Workflow Mission Wall Prototype</title>
+    <style>
+      :root {
+        --bg: #07110f;
+        --panel: #10181a;
+        --panel-2: #152022;
+        --line: #263437;
+        --line-strong: #375057;
+        --text: #f4f7f5;
+        --muted: #a8b3ae;
+        --faint: #6f7f7b;
+        --live: #2dd4bf;
+        --live-2: #6ee7d8;
+        --success: #7ddc83;
+        --warning: #f2b84b;
+        --error: #ef5b5b;
+        --projection: #60a5fa;
+        --purple: #b48cff;
+        --shadow: 0 26px 70px rgba(0, 0, 0, 0.32);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font-family:
+          "SF Pro Display",
+          "Aptos Display",
+          "Segoe UI",
+          sans-serif;
+        height: 100%;
+        margin: 0;
+      }
+
+      body {
+        overflow: hidden;
+      }
+
+      .wall {
+        background:
+          linear-gradient(rgba(255, 255, 255, 0.028) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.022) 1px, transparent 1px),
+          linear-gradient(145deg, #08110f 0%, #0c1517 48%, #090d10 100%);
+        background-size: 44px 44px, 44px 44px, auto;
+        display: grid;
+        grid-template-rows: 84px minmax(0, 1fr);
+        height: 100vh;
+        min-height: 760px;
+        padding: 18px;
+        width: 100vw;
+      }
+
+      .top-strip {
+        align-items: center;
+        background: rgba(16, 24, 26, 0.88);
+        border: 1px solid rgba(110, 231, 216, 0.18);
+        border-radius: 8px;
+        box-shadow: var(--shadow);
+        display: grid;
+        gap: 18px;
+        grid-template-columns: minmax(280px, 1.4fr) repeat(6, minmax(110px, 0.55fr));
+        min-width: 0;
+        padding: 14px 18px;
+      }
+
+      .brand-block {
+        min-width: 0;
+      }
+
+      .eyebrow {
+        color: var(--live-2);
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0;
+        text-transform: uppercase;
+      }
+
+      .title {
+        color: var(--text);
+        font-size: 28px;
+        font-weight: 780;
+        line-height: 1.05;
+        margin-top: 4px;
+        white-space: nowrap;
+      }
+
+      .metric {
+        border-left: 1px solid rgba(168, 179, 174, 0.15);
+        min-width: 0;
+        padding-left: 14px;
+      }
+
+      .metric-label {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+        line-height: 1.2;
+        text-transform: uppercase;
+      }
+
+      .metric-value {
+        align-items: center;
+        color: var(--text);
+        display: flex;
+        font-size: 30px;
+        font-weight: 760;
+        gap: 8px;
+        line-height: 1.05;
+        margin-top: 4px;
+      }
+
+      .pulse-dot {
+        background: var(--live);
+        border-radius: 999px;
+        box-shadow: 0 0 18px rgba(45, 212, 191, 0.75);
+        display: inline-block;
+        height: 12px;
+        width: 12px;
+      }
+
+      .main-grid {
+        display: grid;
+        gap: 16px;
+        grid-template-columns: 340px minmax(0, 1fr);
+        min-height: 0;
+        padding: 16px 0;
+      }
+
+      .panel {
+        background: rgba(16, 24, 26, 0.86);
+        border: 1px solid rgba(168, 179, 174, 0.14);
+        border-radius: 8px;
+        box-shadow: var(--shadow);
+        min-height: 0;
+        overflow: hidden;
+      }
+
+      .panel-header {
+        align-items: center;
+        border-bottom: 1px solid rgba(168, 179, 174, 0.12);
+        display: flex;
+        justify-content: space-between;
+        min-height: 48px;
+        padding: 12px 14px;
+      }
+
+      .panel-title {
+        color: var(--text);
+        font-size: 13px;
+        font-weight: 800;
+        text-transform: uppercase;
+      }
+
+      .panel-subtitle {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 650;
+      }
+
+      .workflow-list {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        padding: 14px;
+      }
+
+      .run-card {
+        background: linear-gradient(180deg, rgba(21, 32, 34, 0.96), rgba(14, 22, 24, 0.96));
+        border: 1px solid rgba(168, 179, 174, 0.13);
+        border-radius: 7px;
+        min-height: 112px;
+        padding: 14px;
+        position: relative;
+      }
+
+      .run-card.active {
+        border-color: rgba(45, 212, 191, 0.42);
+        box-shadow: inset 3px 0 0 rgba(45, 212, 191, 0.88);
+      }
+
+      .run-card.waiting {
+        border-color: rgba(242, 184, 75, 0.42);
+        box-shadow: inset 3px 0 0 rgba(242, 184, 75, 0.9);
+      }
+
+      .run-card.retry {
+        border-color: rgba(239, 91, 91, 0.34);
+        box-shadow: inset 3px 0 0 rgba(239, 91, 91, 0.8);
+      }
+
+      .run-card.completed {
+        border-color: rgba(125, 220, 131, 0.28);
+        box-shadow: inset 3px 0 0 rgba(125, 220, 131, 0.72);
+      }
+
+      .row {
+        align-items: center;
+        display: flex;
+        gap: 8px;
+        justify-content: space-between;
+        min-width: 0;
+      }
+
+      .run-name {
+        color: var(--text);
+        font-size: 19px;
+        font-weight: 760;
+        line-height: 1.2;
+        min-width: 0;
+      }
+
+      .badge {
+        border: 1px solid currentColor;
+        border-radius: 999px;
+        flex: 0 0 auto;
+        font-size: 11px;
+        font-weight: 760;
+        line-height: 1;
+        padding: 5px 8px;
+        text-transform: uppercase;
+      }
+
+      .badge.live {
+        color: var(--live);
+      }
+
+      .badge.wait {
+        color: var(--warning);
+      }
+
+      .badge.error {
+        color: var(--error);
+      }
+
+      .badge.projected {
+        color: var(--projection);
+      }
+
+      .badge.done {
+        color: var(--success);
+      }
+
+      .muted {
+        color: var(--muted);
+      }
+
+      .run-detail {
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.35;
+        margin-top: 10px;
+      }
+
+      .progress {
+        background: rgba(255, 255, 255, 0.08);
+        border-radius: 999px;
+        height: 8px;
+        margin-top: 14px;
+        overflow: hidden;
+        width: 100%;
+      }
+
+      .progress span {
+        background: linear-gradient(90deg, var(--live), var(--projection));
+        display: block;
+        height: 100%;
+      }
+
+      .canvas {
+        background:
+          linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+          rgba(8, 15, 17, 0.9);
+        background-size: 42px 42px;
+        border-radius: 8px;
+        height: 100%;
+        min-height: 0;
+        overflow: hidden;
+        position: relative;
+      }
+
+      .canvas-header {
+        align-items: center;
+        display: flex;
+        gap: 16px;
+        justify-content: space-between;
+        left: 0;
+        padding: 18px 20px;
+        position: absolute;
+        right: 0;
+        top: 0;
+        z-index: 5;
+      }
+
+      .canvas-title {
+        font-size: 15px;
+        font-weight: 800;
+        text-transform: uppercase;
+      }
+
+      .canvas-mode {
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 650;
+      }
+
+      .focus-strip {
+        align-items: center;
+        background: rgba(20, 28, 30, 0.94);
+        border: 1px solid rgba(242, 184, 75, 0.4);
+        border-radius: 999px;
+        color: var(--warning);
+        display: flex;
+        flex: 0 0 auto;
+        font-size: 13px;
+        font-weight: 760;
+        gap: 10px;
+        line-height: 1;
+        max-width: 520px;
+        padding: 10px 12px;
+        white-space: nowrap;
+      }
+
+      .focus-strip span {
+        color: var(--muted);
+        font-weight: 680;
+      }
+
+      .node {
+        background: linear-gradient(180deg, rgba(21, 32, 34, 0.98), rgba(11, 18, 20, 0.98));
+        border: 1px solid rgba(168, 179, 174, 0.18);
+        border-radius: 8px;
+        box-shadow: 0 22px 46px rgba(0, 0, 0, 0.32);
+        min-height: 96px;
+        padding: 14px;
+        position: absolute;
+        width: 190px;
+        z-index: 4;
+      }
+
+      .node.step {
+        border-left: 4px solid var(--projection);
+      }
+
+      .node.step.human {
+        border-left-color: var(--warning);
+      }
+
+      .node.step.integration {
+        border-left-color: var(--success);
+      }
+
+      .node.step.ai {
+        border-left-color: #ec4899;
+      }
+
+      .node.step.data {
+        border-left-color: var(--projection);
+      }
+
+      .node.large {
+        width: 230px;
+      }
+
+      .node.small {
+        min-height: 84px;
+        width: 170px;
+      }
+
+      .node.running {
+        border-color: rgba(45, 212, 191, 0.58);
+        box-shadow:
+          0 22px 46px rgba(0, 0, 0, 0.32),
+          0 0 26px rgba(45, 212, 191, 0.18);
+      }
+
+      .node.waiting {
+        border-color: rgba(242, 184, 75, 0.64);
+        box-shadow:
+          0 22px 46px rgba(0, 0, 0, 0.32),
+          0 0 24px rgba(242, 184, 75, 0.16);
+      }
+
+      .node.failed {
+        border-color: rgba(239, 91, 91, 0.68);
+      }
+
+      .node.projected {
+        border-color: rgba(96, 165, 250, 0.58);
+      }
+
+      .node-kicker {
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 800;
+        text-transform: uppercase;
+      }
+
+      .node-title {
+        color: var(--text);
+        font-size: 17px;
+        font-weight: 760;
+        line-height: 1.16;
+        margin-top: 6px;
+      }
+
+      .node-meta {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.35;
+        margin-top: 8px;
+      }
+
+      .node-status {
+        border-radius: 999px;
+        height: 10px;
+        position: absolute;
+        right: 12px;
+        top: 12px;
+        width: 10px;
+      }
+
+      .node-status.live {
+        background: var(--live);
+        box-shadow: 0 0 16px rgba(45, 212, 191, 0.8);
+      }
+
+      .node-status.wait {
+        background: var(--warning);
+        box-shadow: 0 0 16px rgba(242, 184, 75, 0.74);
+      }
+
+      .node-status.fail {
+        background: var(--error);
+        box-shadow: 0 0 16px rgba(239, 91, 91, 0.68);
+      }
+
+      .node-status.projected {
+        background: var(--projection);
+      }
+
+      .step-badge {
+        border-radius: 999px;
+        display: inline-block;
+        font-size: 10px;
+        font-weight: 820;
+        line-height: 1;
+        margin-top: 10px;
+        padding: 5px 8px;
+        text-transform: uppercase;
+      }
+
+      .step-badge.completed {
+        background: rgba(125, 220, 131, 0.14);
+        color: var(--success);
+      }
+
+      .step-badge.active {
+        background: rgba(96, 165, 250, 0.16);
+        color: var(--projection);
+      }
+
+      .step-badge.waiting {
+        background: rgba(242, 184, 75, 0.16);
+        color: var(--warning);
+      }
+
+      .component-note {
+        background: rgba(16, 24, 26, 0.9);
+        border: 1px solid rgba(168, 179, 174, 0.18);
+        border-radius: 999px;
+        bottom: 20px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 720;
+        left: 20px;
+        padding: 7px 10px;
+        position: absolute;
+        z-index: 5;
+      }
+
+      .edge-layer {
+        height: 100%;
+        inset: 0;
+        pointer-events: none;
+        position: absolute;
+        width: 100%;
+        z-index: 2;
+      }
+
+      .edge {
+        fill: none;
+        opacity: 0.95;
+        stroke-linecap: round;
+        stroke-width: 3;
+      }
+
+      .edge.live-flow {
+        stroke: var(--live);
+        stroke-dasharray: 18 12;
+      }
+
+      .edge.warning-flow {
+        stroke: var(--warning);
+        stroke-dasharray: 12 12;
+      }
+
+      .edge.project-flow {
+        stroke: var(--projection);
+        stroke-dasharray: 8 12;
+      }
+
+      .edge-muted {
+        fill: none;
+        opacity: 0.32;
+        stroke: var(--line-strong);
+        stroke-width: 2;
+      }
+
+      .flow-chip {
+        background: rgba(16, 24, 26, 0.96);
+        border: 1px solid rgba(45, 212, 191, 0.36);
+        border-radius: 999px;
+        color: var(--live-2);
+        font-size: 12px;
+        font-weight: 760;
+        padding: 5px 9px;
+        position: absolute;
+        z-index: 5;
+      }
+
+      @media (max-width: 1500px) {
+        .top-strip {
+          grid-template-columns: minmax(240px, 1.4fr) repeat(5, minmax(100px, 0.55fr));
+        }
+
+        .metric.optional {
+          display: none;
+        }
+
+        .main-grid {
+          grid-template-columns: 300px minmax(0, 1fr);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="wall">
+      <section class="top-strip">
+        <div class="brand-block">
+          <div class="eyebrow">Aevatar Operations</div>
+          <div class="title">Workflow Mission Wall</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Live</div>
+          <div class="metric-value"><span class="pulse-dot"></span> On</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Running</div>
+          <div class="metric-value">12</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Waiting</div>
+          <div class="metric-value" style="color: var(--warning)">2</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Failed</div>
+          <div class="metric-value" style="color: var(--error)">1</div>
+        </div>
+        <div class="metric optional">
+          <div class="metric-label">Avg Latency</div>
+          <div class="metric-value">1.8s</div>
+        </div>
+        <div class="metric optional">
+          <div class="metric-label">Fresh</div>
+          <div class="metric-value" style="color: var(--projection)">2s</div>
+        </div>
+      </section>
+
+      <section class="main-grid">
+        <aside class="panel">
+          <div class="panel-header">
+            <div class="panel-title">Live Run Window</div>
+            <div class="panel-subtitle">running + recent + priority</div>
+          </div>
+          <div class="workflow-list">
+            <div class="run-card active">
+              <div class="row">
+                <div class="run-name">Risk Review</div>
+                <div class="badge live">Live</div>
+              </div>
+              <div class="run-detail">llm_call · Collect evidence</div>
+              <div class="row" style="margin-top: 12px">
+                <span class="muted">8 / 12 steps</span>
+                <span class="muted">02:31</span>
+              </div>
+              <div class="progress"><span style="width: 67%"></span></div>
+            </div>
+
+            <div class="run-card waiting">
+              <div class="row">
+                <div class="run-name">Customer Onboarding</div>
+                <div class="badge wait">Wait</div>
+              </div>
+              <div class="run-detail">Approval Gate · human confirmation</div>
+              <div class="row" style="margin-top: 12px">
+                <span class="muted">6 / 9 steps</span>
+                <span class="muted">05:12</span>
+              </div>
+              <div class="progress"><span style="width: 62%; background: var(--warning)"></span></div>
+            </div>
+
+            <div class="run-card retry">
+              <div class="row">
+                <div class="run-name">Billing Reconciliation</div>
+                <div class="badge error">Retry</div>
+              </div>
+              <div class="run-detail">CRM Lookup · retry 2 of 3</div>
+              <div class="row" style="margin-top: 12px">
+                <span class="muted">4 / 11 steps</span>
+                <span class="muted">03:49</span>
+              </div>
+              <div class="progress"><span style="width: 36%; background: var(--error)"></span></div>
+            </div>
+
+            <div class="run-card completed">
+              <div class="row">
+                <div class="run-name">Invoice Classifier</div>
+                <div class="badge done">Done</div>
+              </div>
+              <div class="run-detail">Completed 18s ago · retained for wall visibility</div>
+              <div class="row" style="margin-top: 12px">
+                <span class="muted">5 / 5 steps</span>
+                <span class="muted">00:08</span>
+              </div>
+              <div class="progress"><span style="width: 100%; background: var(--success)"></span></div>
+            </div>
+          </div>
+        </aside>
+
+        <section class="panel canvas">
+          <div class="canvas-header">
+            <div>
+              <div class="canvas-title">Workflow Step Graph</div>
+              <div class="canvas-mode">Direct component: @xyflow/react via existing GraphCanvas · executionStatus overlay</div>
+            </div>
+            <div class="focus-strip">Focus: waiting for approval <span>2m · higher priority than live runs</span></div>
+            <div class="badge projected">Selected run v42 · fresh 2s</div>
+          </div>
+
+          <svg class="edge-layer" viewBox="0 0 900 620" preserveAspectRatio="none" aria-hidden="true">
+            <path class="edge live-flow" d="M200 245 C292 210, 334 210, 424 245" />
+            <path class="edge live-flow" d="M424 245 C520 210, 564 210, 656 245" />
+            <path class="edge-muted" d="M656 310 C656 358, 656 386, 656 430" />
+            <path class="edge warning-flow" d="M424 310 C498 360, 558 386, 656 430" />
+            <path class="edge project-flow" d="M656 515 C596 554, 516 566, 422 560" />
+          </svg>
+
+          <div class="node step data projected" style="left: 9%; top: 178px">
+            <div class="node-status projected"></div>
+            <div class="node-kicker">retrieve_facts</div>
+            <div class="node-title">collect_sources</div>
+            <div class="node-meta">role: researcher · sources: 3</div>
+            <span class="step-badge completed">completed</span>
+          </div>
+
+          <div class="node step ai running" style="left: calc(50% - 95px); top: 178px">
+            <div class="node-status live"></div>
+            <div class="node-kicker">llm_call</div>
+            <div class="node-title">risk_review</div>
+            <div class="node-meta">role: reviewer · evaluating evidence</div>
+            <span class="step-badge active">active</span>
+          </div>
+
+          <div class="node step integration projected" style="right: 9%; top: 178px">
+            <div class="node-status projected"></div>
+            <div class="node-kicker">connector_call</div>
+            <div class="node-title">chrono_lookup</div>
+            <div class="node-meta">ChronoStorage · 42 records · 820ms</div>
+            <span class="step-badge completed">completed</span>
+          </div>
+
+          <div class="node step human waiting" style="right: 9%; top: 430px">
+            <div class="node-status wait"></div>
+            <div class="node-kicker">human_approval</div>
+            <div class="node-title">release_gate</div>
+            <div class="node-meta">waiting for release confirmation</div>
+            <span class="step-badge waiting">waiting</span>
+          </div>
+
+          <div class="node step integration projected" style="left: 30%; top: 518px">
+            <div class="node-status projected"></div>
+            <div class="node-kicker">emit</div>
+            <div class="node-title">publish_result</div>
+            <div class="node-meta">selected run v42 · 2s fresh</div>
+            <span class="step-badge completed">projected</span>
+          </div>
+
+          <div class="flow-chip" style="left: 30%; top: 205px">next</div>
+          <div class="flow-chip" style="right: 31%; top: 205px">next</div>
+          <div class="flow-chip" style="right: 15%; top: 365px; border-color: rgba(242, 184, 75, 0.48); color: var(--warning)">branch: approval</div>
+          <div class="flow-chip" style="left: 45%; bottom: 74px; border-color: rgba(96, 165, 250, 0.48); color: var(--projection)">run v42</div>
+          <div class="component-note">Direct reuse: @xyflow/react + existing GraphCanvas + MemberPublishedRunsReplay mapping</div>
+        </section>
+      </section>
+    </main>
+  </body>
+</html>
