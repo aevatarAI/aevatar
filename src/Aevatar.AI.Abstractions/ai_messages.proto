@@ -332,6 +332,16 @@ message AIAgentConfigOverrides {
   reserved "stream_buffer_capacity";
 }
 
+message SystemSkillOverlay {
+  string overlay_markdown = 1;
+  string source_watermark = 2;
+  int64 materialized_at = 3;
+}
+
+message SystemSkillOverlayMaterializedEvent {
+  SystemSkillOverlay overlay = 1;
+}
+
 // Agent → 前端：请求工具执行审批
 message ToolApprovalRequestEvent {
   string request_id = 1;
@@ -378,6 +388,7 @@ message RoleGAgentState {
   string role_id = 8;
   map<string, aevatar.voice.VoicePresenceRuntimeState> voice_presence = 9;
   map<string, aevatar.voice.VoiceSessionDefaults> voice_session_defaults = 10;
+  SystemSkillOverlay system_skill_overlay = 11;
 }
 
 // ─── Multi-turn tool approval continuation ───

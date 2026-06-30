@@ -52,6 +52,22 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
+    /// <summary>
+    /// Registers the host-bound system skill overlay scaffold.
+    /// </summary>
+    public static IServiceCollection AddSystemSkillOverlay(
+        this IServiceCollection services,
+        Action<SystemSkillOverlayOptions>? configure = null)
+    {
+        var options = new SystemSkillOverlayOptions();
+        configure?.Invoke(options);
+        if (!options.Enabled || string.IsNullOrWhiteSpace(options.Tag))
+            return services;
+
+        services.TryAddSingleton(options);
+        return services;
+    }
+
     private static IAgentToolSource GetOrnnAgentToolSource(IServiceProvider sp) =>
         sp.GetRequiredService<OrnnAgentToolSource>();
 
