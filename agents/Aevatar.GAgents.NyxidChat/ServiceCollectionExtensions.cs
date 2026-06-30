@@ -20,6 +20,8 @@ using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.Platform.Lark;
+using Aevatar.GAgents.Platform.Lark.Abstractions;
 using Aevatar.GAgents.NyxidChat.LlmSelection;
 using Aevatar.GAgents.NyxidChat.Slash;
 using Aevatar.GAgents.NyxidChat.WorkflowDraftRun;

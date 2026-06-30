@@ -26,7 +26,7 @@ target_repo: aevatarAI/aevatar
 
 **消息形态**：Lark 卡片 / Telegram inline keyboard / Slack Block Kit / Discord Embed + Components / WeChat 富文本。能力也不对齐——Ephemeral / Thread / Modal / Action Buttons 各有支持/不支持。
 
-**当前受支持生产契约**：post-ADR-0012 / issue `#308` 的 ChannelRuntime 已收敛到 Nyx-backed Lark relay。Lark inbound 的唯一活跃入口是 `Aevatar.GAgents.NyxidChat` 映射的 `/api/webhooks/nyxid-relay`，并由 `ConversationGAgent` 承接权威会话事实；`Aevatar.GAgents.Platform.Lark` 只保留 HTTP client、message composer、native message producer、payload redactor 等 outbound/rendering 能力，不拥有 inbound runtime state。`TelegramPlatformAdapter` 与 `ChannelUserGAgent` 已从当前代码路径移除；本 RFC 下面若提到它们，均应理解为**历史基线/legacy 实现**，不是当前生产契约。
+**当前受支持生产契约**：post-ADR-0012 / issue `#308` 的 ChannelRuntime 已收敛到 Nyx-backed Lark relay。Lark inbound 的唯一活跃入口是 `Aevatar.GAgents.NyxidChat` 映射的 `/api/webhooks/nyxid-relay`，并由 `ConversationGAgent` 承接权威会话事实；`Aevatar.GAgents.Platform.Lark.Abstractions` 承载可被 agent / authoring / scheduled / tool-provider 共同依赖的 Lark 出站契约，`Aevatar.GAgents.Platform.Lark` 只保留 message composer、native message producer、payload redactor、receive-target resolver、CardKit shell 等渲染/组合能力，不拥有 inbound runtime state 或 NyxID HTTP 实现。NyxID 代理实现归属 `Aevatar.AI.ToolProviders.Lark`。`TelegramPlatformAdapter` 与 `ChannelUserGAgent` 已从当前代码路径移除；本 RFC 下面若提到它们，均应理解为**历史基线/legacy 实现**，不是当前生产契约。
 
 直接在这个大包里继续加 channel 会让边界进一步模糊。需要引入 **channel-agnostic 抽象层**，把业务逻辑和 channel 细节隔离，并把 ChannelRuntime 的多职责按概念拆成独立包。
 
@@ -1515,6 +1515,7 @@ agents/                                ← production code
 │   └── ConversationGAgent / BotRegistration / MiddlewarePipeline / ActionRouter /
 │     GatewaySupervisor
 ├── platforms/                        ← 新 subdir，所有 platform-specific rendering/composition
+│   ├── Aevatar.GAgents.Platform.Lark.Abstractions/
 │   ├── Aevatar.GAgents.Platform.Lark/
 │   ├── Aevatar.GAgents.Platform.Telegram/
 │   ├── Aevatar.GAgents.Platform.Slack/
@@ -1914,8 +1915,9 @@ ADR-0012 / issue `#308` 之后，`ChannelBotRegistrationEntry` / registration qu
 
 ### 10.1 Lark（`agents/platforms/Aevatar.GAgents.Platform.Lark`）
 
-- **平台职责**：`Platform.Lark` 现在只保留 Lark 平台渲染/组合能力，例如 `LarkMessageComposer`、`LarkOutboundMessage`
+- **平台职责**：`Platform.Lark.Abstractions` 承载 `ILarkOutboundDispatcher`、`ILarkCardKitClient`、`ILarkTextMessageEditPort`、`LarkReceiveTarget`、`LarkBotErrorCodes` 等纯契约；`Platform.Lark` 只保留 Lark 平台渲染/组合能力，例如 `LarkMessageComposer`、`LarkOutboundMessage`、`LarkConversationTargets`、`LarkStreamingCardShell`
 - **生产 transport**：Lark 生产 ingress/egress 已统一走 `Channel.NyxIdRelay`，不再由 `Platform.Lark` 直接承载 webhook 验签、payload 解密或 direct reply
+- **NyxID HTTP 实现**：Lark OpenAPI 代理实现归属 `Aevatar.AI.ToolProviders.Lark`，它只依赖 `Platform.Lark.Abstractions`，不得反向依赖完整 `Platform.Lark` rendering/composition 包。
 - **兼容性壳**：`LarkPlatformAdapter` 仅保留为 retired direct-callback shell；任何 direct callback / direct reply 尝试都返回 retired/410 语义
 - **Capability gap**：不支持 ephemeral / modal
 

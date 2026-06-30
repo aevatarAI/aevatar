@@ -29,6 +29,7 @@
     <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Abstractions\Aevatar.Workflow.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj" />
     <ProjectReference Include="..\Aevatar.GAgents.Channel.Runtime\Aevatar.GAgents.Channel.Runtime.csproj" />
+    <ProjectReference Include="..\platforms\Aevatar.GAgents.Platform.Lark.Abstractions\Aevatar.GAgents.Platform.Lark.Abstractions.csproj" />
     <ProjectReference Include="..\platforms\Aevatar.GAgents.Platform.Lark\Aevatar.GAgents.Platform.Lark.csproj" />
     <ProjectReference Include="..\Aevatar.GAgents.Channel.Abstractions\Aevatar.GAgents.Channel.Abstractions.csproj" />
   </ItemGroup>

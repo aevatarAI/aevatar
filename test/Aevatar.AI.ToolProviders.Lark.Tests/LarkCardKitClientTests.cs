@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.GAgents.Platform.Lark.Abstractions;
 using FluentAssertions;
 using Xunit;
 

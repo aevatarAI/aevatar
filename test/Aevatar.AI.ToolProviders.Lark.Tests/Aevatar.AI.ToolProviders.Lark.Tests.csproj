@@ -9,6 +9,7 @@
     <RootNamespace>Aevatar.AI.ToolProviders.Lark.Tests</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\agents\platforms\Aevatar.GAgents.Platform.Lark.Abstractions\Aevatar.GAgents.Platform.Lark.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.Core\Aevatar.AI.Core.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.Lark\Aevatar.AI.ToolProviders.Lark.csproj" />
     <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Abstractions\Aevatar.Workflow.Abstractions.csproj" />

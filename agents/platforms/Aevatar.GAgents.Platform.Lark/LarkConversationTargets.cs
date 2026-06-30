@@ -1,3 +1,5 @@
+using Aevatar.GAgents.Platform.Lark.Abstractions;
+
 namespace Aevatar.GAgents.Platform.Lark;
 
 public static class LarkConversationTargets
@@ -173,21 +175,3 @@ public static class LarkConversationTargets
         return new LarkReceiveTargetWithFallback(primary, Fallback: null);
     }
 }
-
-public readonly record struct LarkReceiveTarget(
-    string ReceiveId,
-    string ReceiveIdType,
-    bool FellBackToPrefixInference);
-
-/// <summary>
-/// Primary outbound delivery target plus a secondary fallback. Captured at agent-create time
-/// when the inbound surfaces both a chat_id (primary) and a union_id (fallback). The runtime
-/// tries the primary first; on a Lark <c>230002 bot not in chat</c> rejection — the failure
-/// mode for cross-app same-tenant deployments where the outbound app is not a member of the
-/// inbound DM chat — it retries once with the fallback. Without the fallback, switching to
-/// chat_id-first would regress those deployments because chat_id is bot-specific for DMs and
-/// only valid when the same Lark app received the inbound.
-/// </summary>
-public readonly record struct LarkReceiveTargetWithFallback(
-    LarkReceiveTarget Primary,
-    LarkReceiveTarget? Fallback);

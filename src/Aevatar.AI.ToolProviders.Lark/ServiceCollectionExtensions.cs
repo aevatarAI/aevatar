@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.GAgents.Platform.Lark.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -21,6 +22,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ILarkNyxClient, LarkNyxClient>();
         services.TryAddSingleton<ILarkCardKitClient, LarkCardKitClient>();
         services.TryAddSingleton<ILarkOutboundClientFactory, LarkOutboundClientFactory>();
+        services.TryAddSingleton<ILarkOutboundDispatcher, LarkOutboundDispatcher>();
+        services.TryAddSingleton<ILarkTextMessageEditPort, LarkTextMessageEditPort>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAgentToolSource, LarkAgentToolSource>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IWorkflowConnectedServiceResourceFetchAdapter,

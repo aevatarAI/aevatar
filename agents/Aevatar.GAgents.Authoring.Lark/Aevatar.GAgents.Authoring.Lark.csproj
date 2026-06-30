@@ -20,6 +20,7 @@
     <ProjectReference Include="..\Aevatar.GAgents.Channel.Abstractions\Aevatar.GAgents.Channel.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.GAgents.Channel.Runtime\Aevatar.GAgents.Channel.Runtime.csproj" />
     <ProjectReference Include="..\Aevatar.GAgents.Scheduled\Aevatar.GAgents.Scheduled.csproj" />
+    <ProjectReference Include="..\platforms\Aevatar.GAgents.Platform.Lark.Abstractions\Aevatar.GAgents.Platform.Lark.Abstractions.csproj" />
     <ProjectReference Include="..\platforms\Aevatar.GAgents.Platform.Lark\Aevatar.GAgents.Platform.Lark.csproj" />
   </ItemGroup>
   <ItemGroup>

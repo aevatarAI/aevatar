@@ -1,18 +1,12 @@
-namespace Aevatar.AI.ToolProviders.Lark;
+namespace Aevatar.GAgents.Platform.Lark.Abstractions;
 
 /// <summary>
 /// Wrapper over Lark CardKit 2.0 REST endpoints (<c>/open-apis/cardkit/v1/...</c>) routed
-/// through the NyxID API-key proxy. Used by the streaming reply sink to render LLM output
-/// as a streaming card instead of repeatedly editing a plain message — Lark caps the latter
-/// at ~15-20 edits per message (error 230072), CardKit element-content updates have no
-/// equivalent cap.
+/// through the NyxID API-key proxy.
 /// </summary>
 /// <remarks>
-/// All methods return raw JSON response bodies; the caller is responsible for parsing
-/// (mirrors <see cref="ILarkNyxClient"/>'s pattern). Required scopes on the Lark bot app:
-/// <c>cardkit:card:read</c> and <c>cardkit:card:write</c>. The actual <c>card_id</c> binding
-/// to a chat happens via <see cref="ILarkNyxClient.SendMessageAsync"/> with
-/// <c>msg_type=interactive</c> and <c>content={"type":"card","data":{"card_id":"..."}}</c>.
+/// All methods return raw JSON response bodies; the caller is responsible for parsing. Required
+/// scopes on the Lark bot app: <c>cardkit:card:read</c> and <c>cardkit:card:write</c>.
 /// </remarks>
 public interface ILarkCardKitClient
 {
@@ -32,16 +26,13 @@ public interface ILarkCardKitClient
     Task<string> StreamElementContentAsync(string token, LarkCardKitStreamElementContentRequest request, CancellationToken ct);
 
     /// <summary>
-    /// Toggles card-level settings (e.g. close <c>streaming_mode</c> at end-of-turn so the
-    /// typewriter cursor disappears). Endpoint:
+    /// Toggles card-level settings. Endpoint:
     /// <c>PATCH /open-apis/cardkit/v1/cards/{card_id}/settings</c>.
     /// </summary>
     Task<string> SetCardSettingsAsync(string token, LarkCardKitSettingsRequest request, CancellationToken ct);
 
     /// <summary>
-    /// Replaces the full card content. Used at end-of-turn to swap the streaming
-    /// element template for a finalized layout (e.g. plain markdown without the cursor).
-    /// Endpoint: <c>PUT /open-apis/cardkit/v1/cards/{card_id}</c>.
+    /// Replaces the full card content. Endpoint: <c>PUT /open-apis/cardkit/v1/cards/{card_id}</c>.
     /// </summary>
     Task<string> UpdateCardAsync(string token, LarkCardKitUpdateRequest request, CancellationToken ct);
 }
@@ -57,16 +48,9 @@ public interface ILarkCardKitClient
 public sealed record LarkCardKitCreateRequest(string Type, string DataJson);
 
 /// <param name="CardId">Card entity id returned by <c>CreateCardAsync</c>.</param>
-/// <param name="ElementId">
-/// Element id within the card to stream into. By convention the card's streaming element
-/// is named <c>streaming_main</c>; both producer (this client) and consumer (the card
-/// template) must agree on it.
-/// </param>
+/// <param name="ElementId">Element id within the card to stream into.</param>
 /// <param name="Content">Latest accumulated text to render into the element.</param>
-/// <param name="Sequence">
-/// Monotonically increasing sequence number for ordering. Lark rejects stale writes;
-/// the sink owns this counter and pre-increments before every call.
-/// </param>
+/// <param name="Sequence">Monotonically increasing sequence number for ordering.</param>
 /// <param name="IdempotencyKey">Optional <c>uuid</c> for safe retry under network loss.</param>
 public sealed record LarkCardKitStreamElementContentRequest(
     string CardId,
@@ -75,9 +59,7 @@ public sealed record LarkCardKitStreamElementContentRequest(
     long Sequence,
     string? IdempotencyKey = null);
 
-/// <param name="SettingsJson">
-/// JSON-serialized settings patch, e.g. <c>{"streaming_mode": false}</c> to close streaming.
-/// </param>
+/// <param name="SettingsJson">JSON-serialized settings patch.</param>
 public sealed record LarkCardKitSettingsRequest(
     string CardId,
     string SettingsJson,

@@ -1,9 +1,9 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.AI.ToolProviders.NyxId;
-using Aevatar.GAgents.Platform.Lark;
-using Aevatar.GAgents.Scheduled;
+using Aevatar.GAgents.Platform.Lark.Abstractions;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -134,7 +134,7 @@ public sealed class LarkOutboundDispatcherTests
 
     public static TheoryData<LarkSendNewMessageRequest, string> InvalidRequests => new()
     {
-        { CreateRequest(nyxApiKey: " "), "NyxID API key is required." },
+        { CreateRequest(nyxProxyBearerToken: " "), "NyxID proxy bearer token is required." },
         { CreateRequest(nyxProviderSlug: " "), "NyxID provider slug is required." },
         { CreateRequest(messageType: " "), "Lark message type is required." },
         { CreateRequest(contentJson: " "), "Lark message content JSON is required." },
@@ -187,13 +187,13 @@ public sealed class LarkOutboundDispatcherTests
 
     private static LarkSendNewMessageRequest CreateRequest(
         LarkReceiveTarget? fallback = null,
-        string nyxApiKey = "nyx-api-key",
+        string nyxProxyBearerToken = "nyx-proxy-bearer-token",
         string nyxProviderSlug = "api-lark-bot",
         string messageType = "text",
         string contentJson = """{"text":"hello"}""",
         LarkReceiveTarget? primaryTarget = null) =>
         new(
-            nyxApiKey,
+            nyxProxyBearerToken,
             nyxProviderSlug,
             messageType,
             contentJson,

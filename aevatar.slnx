@@ -13,6 +13,7 @@
     <Project Path="agents\Aevatar.GAgents.Channel.Identity.Abstractions\Aevatar.GAgents.Channel.Identity.Abstractions.csproj" />
     <Project Path="agents\Aevatar.GAgents.Channel.Identity\Aevatar.GAgents.Channel.Identity.csproj" />
     <Project Path="agents\channels\Aevatar.GAgents.Channel.NyxIdRelay\Aevatar.GAgents.Channel.NyxIdRelay.csproj" />
+    <Project Path="agents\platforms\Aevatar.GAgents.Platform.Lark.Abstractions\Aevatar.GAgents.Platform.Lark.Abstractions.csproj" />
     <Project Path="agents\platforms\Aevatar.GAgents.Platform.Lark\Aevatar.GAgents.Platform.Lark.csproj" />
     <Project Path="agents\platforms\Aevatar.GAgents.Platform.Telegram\Aevatar.GAgents.Platform.Telegram.csproj" />
     <Project Path="agents\Aevatar.GAgents.Channel.Runtime\Aevatar.GAgents.Channel.Runtime.csproj" />

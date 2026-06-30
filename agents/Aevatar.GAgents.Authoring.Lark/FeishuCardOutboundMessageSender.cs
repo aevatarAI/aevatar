@@ -1,6 +1,6 @@
 using System.Text.Json;
-using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgents.Platform.Lark;
+using Aevatar.GAgents.Platform.Lark.Abstractions;
 using Aevatar.GAgents.Scheduled;
 using Microsoft.Extensions.Logging;
 
@@ -9,18 +9,15 @@ namespace Aevatar.GAgents.Authoring.Lark;
 internal sealed class FeishuCardOutboundMessageSender
 {
     private readonly IUserAgentDeliveryTargetReader _deliveryTargetReader;
-    private readonly NyxIdApiClient _nyxIdApiClient;
     private readonly ILarkOutboundDispatcher? _larkOutboundDispatcher;
     private readonly ILogger _logger;
 
     public FeishuCardOutboundMessageSender(
         IUserAgentDeliveryTargetReader deliveryTargetReader,
-        NyxIdApiClient nyxIdApiClient,
         ILogger logger,
         ILarkOutboundDispatcher? larkOutboundDispatcher = null)
     {
         _deliveryTargetReader = deliveryTargetReader ?? throw new ArgumentNullException(nameof(deliveryTargetReader));
-        _nyxIdApiClient = nyxIdApiClient ?? throw new ArgumentNullException(nameof(nyxIdApiClient));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _larkOutboundDispatcher = larkOutboundDispatcher;
     }
@@ -182,7 +179,8 @@ internal sealed class FeishuCardOutboundMessageSender
     }
 
     private ILarkOutboundDispatcher ResolveLarkOutboundDispatcher() =>
-        _larkOutboundDispatcher ?? new LarkOutboundDispatcher(_nyxIdApiClient, _logger);
+        _larkOutboundDispatcher ??
+        throw new InvalidOperationException("ILarkOutboundDispatcher is not registered for Lark outbound delivery.");
 
     private static string BuildLarkRejectionMessage(string failurePrefix, int? larkCode, string detail)
     {

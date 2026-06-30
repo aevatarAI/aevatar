@@ -4,6 +4,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Platform.Lark;
+using Aevatar.GAgents.Platform.Lark.Abstractions;
 using Aevatar.GAgents.Scheduled;
 
 namespace Aevatar.GAgents.Authoring.Lark;

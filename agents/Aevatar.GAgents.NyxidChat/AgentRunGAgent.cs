@@ -94,6 +94,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             .On<AgentRunCardDeliveryCompletionPreparedEvent>(ApplyCardDeliveryCompletionPrepared)
             .On<AgentRunReplyDispatchedEvent>(ApplyReplyDispatched)
             .On<AgentRunLarkCardDeliveryChangedEvent>(ApplyLarkCardDeliveryChanged)
+            .On<AgentRunLarkCardTextFallbackChangedEvent>(ApplyLarkCardTextFallbackChanged)
             .On<DeliveryProducedEvent>(ApplyDeliveryProduced)
             .On<AgentRunDroppedEvent>(ApplyDropped)
             .On<AgentRunDropNotificationDispatchedEvent>(ApplyDropNotificationDispatched)

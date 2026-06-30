@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.GAgents.Platform.Lark.Abstractions;
 
 namespace Aevatar.AI.ToolProviders.Lark;
 

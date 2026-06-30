@@ -17,6 +17,7 @@
     <ProjectReference Include="..\Aevatar.GAgents.Channel.Identity\Aevatar.GAgents.Channel.Identity.csproj" />
     <ProjectReference Include="..\Aevatar.GAgents.Channel.Runtime\Aevatar.GAgents.Channel.Runtime.csproj" />
     <ProjectReference Include="..\channels\Aevatar.GAgents.Channel.NyxIdRelay\Aevatar.GAgents.Channel.NyxIdRelay.csproj" />
+    <ProjectReference Include="..\platforms\Aevatar.GAgents.Platform.Lark.Abstractions\Aevatar.GAgents.Platform.Lark.Abstractions.csproj" />
     <ProjectReference Include="..\platforms\Aevatar.GAgents.Platform.Lark\Aevatar.GAgents.Platform.Lark.csproj" />
     <ProjectReference Include="..\Aevatar.GAgents.Authoring.Lark\Aevatar.GAgents.Authoring.Lark.csproj" />
     <ProjectReference Include="..\Aevatar.GAgents.Scheduled\Aevatar.GAgents.Scheduled.csproj" />
