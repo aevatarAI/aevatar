@@ -55,6 +55,15 @@ const enUSMessages = {
   'pages.missionwall.freshnessUnavailable': 'n/a',
   'pages.missionwall.latencyMs': '{latency}ms',
   'pages.missionwall.latencySeconds': '{latency}s',
+  'pages.missionwall.liveState.connected':
+    'Connected to published workflow run read models.',
+  'pages.missionwall.liveState.empty':
+    'No published workflow runs are visible yet.',
+  'pages.missionwall.liveState.loading': 'Loading published workflow runs.',
+  'pages.missionwall.liveState.partialRunError':
+    'Some published service runs could not be loaded.',
+  'pages.missionwall.liveState.scopeUnavailable':
+    'Mission wall could not load the authenticated scope.',
   'pages.missionwall.liveStatus.degraded': 'Degraded',
   'pages.missionwall.liveStatus.disconnected': 'Disconnected',
   'pages.missionwall.liveStatus.idle': 'Idle',

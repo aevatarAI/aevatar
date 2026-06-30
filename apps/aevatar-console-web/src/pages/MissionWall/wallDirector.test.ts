@@ -234,6 +234,30 @@ describe("Mission Wall director", () => {
     ]);
   });
 
+  it("does not mark completed run edges as live flow", () => {
+    const snapshot = buildMissionWallSnapshot(
+      buildSource([
+        buildRun({
+          completedSteps: 5,
+          currentStepId: "step-5",
+          status: "completed",
+          steps: buildSteps(5).map((step) => ({
+            ...step,
+            status: "completed" as const,
+          })),
+          totalSteps: 5,
+        }),
+      ]),
+      { nowMs: NOW },
+    );
+
+    const edges = snapshot.topology.workflowGraph?.edges ?? [];
+
+    expect(edges).toHaveLength(4);
+    expect(edges.every((edge) => edge.traversed === true)).toBe(true);
+    expect(edges.every((edge) => edge.focused === false)).toBe(true);
+  });
+
   it("keeps all workflow nodes while marking the focused big-screen window", () => {
     const snapshot = buildMissionWallSnapshot(
       buildSource([

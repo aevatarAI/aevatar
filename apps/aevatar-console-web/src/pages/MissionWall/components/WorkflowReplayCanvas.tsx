@@ -105,6 +105,14 @@ function edgeTone(
     };
   }
 
+  if (edge.traversed) {
+    return {
+      animated: false,
+      color: "#86efac",
+      width: 3,
+    };
+  }
+
   if (edge.focused) {
     return {
       animated: false,
@@ -118,14 +126,6 @@ function edgeTone(
       animated: false,
       color: "#fbbf24",
       dash: "7 6",
-      width: 3,
-    };
-  }
-
-  if (edge.traversed) {
-    return {
-      animated: false,
-      color: "#86efac",
       width: 3,
     };
   }

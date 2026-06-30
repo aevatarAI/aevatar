@@ -55,6 +55,15 @@ const zhCNMessages = {
   'pages.missionwall.freshnessUnavailable': 'n/a',
   'pages.missionwall.latencyMs': '{latency}ms',
   'pages.missionwall.latencySeconds': '{latency}s',
+  'pages.missionwall.liveState.connected':
+    '已连接到已发布 workflow run read models。',
+  'pages.missionwall.liveState.empty':
+    '暂无可见的已发布 workflow runs。',
+  'pages.missionwall.liveState.loading': '正在加载已发布 workflow runs。',
+  'pages.missionwall.liveState.partialRunError':
+    '部分已发布 service runs 无法加载。',
+  'pages.missionwall.liveState.scopeUnavailable':
+    'Mission wall 无法加载已认证 scope。',
   'pages.missionwall.liveStatus.degraded': '降级',
   'pages.missionwall.liveStatus.disconnected': '已断开',
   'pages.missionwall.liveStatus.idle': '空闲',

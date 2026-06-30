@@ -638,6 +638,92 @@ describe("MissionWallPage", () => {
     );
   });
 
+  it("uses selected audit steps when the run catalog omits progress and duration", async () => {
+    const probeRun = runSummary({
+      actorId: "actor-probe-run",
+      completedSteps: 0,
+      completionStatus: "DONE",
+      lastUpdatedAt: "2026-06-30T04:58:36.000Z",
+      runId: "run-probe",
+      serviceId: "svc-risk",
+      totalSteps: 0,
+      workflowName: "Mission Wall Probe",
+    });
+    const auditStepsWithDurations = auditSteps(5).map((step, index) => ({
+      ...step,
+      completedAt: `2026-06-30T04:58:${String(10 + index).padStart(2, "0")}.000Z`,
+      durationMs: 1300 + index * 100,
+      success: true,
+    }));
+    const baseProbeAudit = auditSnapshot(probeRun, auditStepsWithDurations);
+    const probeAudit: ScopeServiceRunAuditSnapshot = {
+      ...baseProbeAudit,
+      audit: {
+        ...baseProbeAudit.audit,
+        durationMs: 0,
+        endedAt: null,
+        summary: {
+          completedSteps: 0,
+          requestedSteps: 0,
+          roleReplyCount: 0,
+          stepTypeCounts: {},
+          totalSteps: 0,
+        },
+      },
+    };
+
+    (scopeRuntimeApi.listServiceRuns as jest.Mock).mockImplementation(
+      async (
+        _scopeId: string,
+        serviceId: string,
+      ): Promise<ScopeServiceRunCatalogSnapshot> => {
+        if (serviceId === "svc-risk") {
+          return {
+            displayName: "Risk runtime service",
+            runs: [probeRun],
+            scopeId: "scope-real",
+            serviceId,
+            serviceKey: "scope-real:svc-risk",
+          };
+        }
+
+        return {
+          displayName: `${serviceId} service`,
+          runs: [],
+          scopeId: "scope-real",
+          serviceId,
+          serviceKey: `scope-real:${serviceId}`,
+        };
+      },
+    );
+    (scopeRuntimeApi.getServiceRunAudit as jest.Mock).mockResolvedValue(
+      probeAudit,
+    );
+
+    renderWithQueryClient(React.createElement(MissionWallPage));
+
+    const probeCard = (
+      await screen.findByText("Mission Wall Probe")
+    ).closest("button");
+    expect(probeCard).toBeTruthy();
+
+    fireEvent.click(probeCard as HTMLButtonElement);
+
+    await waitFor(() => {
+      expect(probeCard).toHaveTextContent("5 / 5 steps");
+      expect(probeCard).toHaveTextContent("00:08");
+    });
+    expect(probeCard).toHaveTextContent("DONE");
+    expect(probeCard).not.toHaveTextContent("0 / 0 steps");
+    expect(probeCard).not.toHaveTextContent("00:00");
+    expect(scopeRuntimeApi.getServiceRunAudit).toHaveBeenCalledWith(
+      "scope-real",
+      "svc-risk",
+      "run-probe",
+      { actorId: "actor-probe-run" },
+    );
+  });
+
   it("keeps every workflow node in the graph while focusing the default big-screen view", async () => {
     (scopeRuntimeApi.getServiceRunAudit as jest.Mock).mockImplementation(
       async (_scopeId: string, serviceId: string, runId: string) => {
