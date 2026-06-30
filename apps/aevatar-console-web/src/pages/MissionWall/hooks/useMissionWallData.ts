@@ -49,9 +49,7 @@ export const MISSION_WALL_RUN_REFETCH_INTERVAL_MS = 5_000;
 export const MISSION_WALL_AUDIT_REFETCH_INTERVAL_MS = 3_000;
 
 export interface MissionWallRuntimeData {
-  readonly buildSource: (
-    selectedAudit?: ScopeServiceRunAuditSnapshot,
-  ) => MissionWallSource;
+  readonly buildSource: () => MissionWallSource;
   readonly generatedAt: string;
   readonly isLoading: boolean;
   readonly live: MissionWallLiveState;
@@ -432,13 +430,12 @@ export function useMissionWallRuntimeData(): MissionWallRuntimeData {
     ],
   );
   const buildSource = React.useCallback(
-    (selectedAudit?: ScopeServiceRunAuditSnapshot) =>
+    () =>
       buildMissionWallSourceFromRuntime({
         generatedAt,
         live,
         runAudits,
         serviceRunCatalogs,
-        selectedAudit,
         teams,
       }),
     [generatedAt, live, runAudits, serviceRunCatalogs, teams],
@@ -454,40 +451,4 @@ export function useMissionWallRuntimeData(): MissionWallRuntimeData {
     teamId: routeOptions.teamId,
     workflowMembers,
   };
-}
-
-export function useMissionWallSelectedRunAudit(
-  scopeId: string | undefined,
-  selectedRun: MissionWallRun | undefined,
-) {
-  const publishedServiceId = selectedRun?.publishedServiceId;
-  const runId = selectedRun?.runId;
-  const actorId = selectedRun?.runtimeActorId;
-  const hasRuntimeRun = selectedRun?.hasRuntimeRun !== false;
-
-  return useQuery({
-    enabled: Boolean(scopeId && publishedServiceId && runId && hasRuntimeRun),
-    queryFn: () =>
-      scopeRuntimeApi.getServiceRunAudit(
-        scopeId ?? "",
-        publishedServiceId ?? "",
-        runId ?? "",
-        {
-          actorId,
-        },
-      ),
-    queryKey: [
-      "mission-wall",
-      "service-run-audit",
-      scopeId,
-      publishedServiceId,
-      runId,
-      actorId,
-    ],
-    refetchInterval: missionWallRefetchInterval(
-      MISSION_WALL_AUDIT_REFETCH_INTERVAL_MS,
-    ),
-    refetchIntervalInBackground: true,
-    retry: false,
-  });
 }

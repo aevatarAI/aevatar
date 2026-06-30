@@ -497,21 +497,6 @@ export const missionWallStyles = `
   max-width: 760px;
 }
 
-.mission-wall-audit-loading {
-  background: rgba(16, 25, 22, 0.9);
-  border: 1px solid rgba(45, 212, 191, 0.32);
-  border-radius: 999px;
-  color: var(--wall-live);
-  font-size: 12px;
-  font-weight: 780;
-  line-height: 1;
-  padding: 10px 12px;
-  position: absolute;
-  right: 36px;
-  top: 94px;
-  z-index: 6;
-}
-
 .mission-wall-graph {
   min-height: 0;
   overflow: hidden;

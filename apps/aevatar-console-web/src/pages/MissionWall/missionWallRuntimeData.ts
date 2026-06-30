@@ -36,7 +36,6 @@ type MissionWallSourceInput = {
   readonly live: MissionWallLiveState;
   readonly runAudits?: readonly ScopeServiceRunAuditSnapshot[];
   readonly serviceRunCatalogs: readonly ServiceRunCatalogResult[];
-  readonly selectedAudit?: ScopeServiceRunAuditSnapshot;
   readonly teams?: readonly StudioTeamSummary[];
 };
 
@@ -124,9 +123,9 @@ function calculateAuditStepDurationMs(
 }
 
 function calculateAuditDurationMs(
-  selectedAudit: ScopeServiceRunAuditSnapshot,
+  runAudit: ScopeServiceRunAuditSnapshot,
 ): number | undefined {
-  const audit = selectedAudit.audit;
+  const audit = runAudit.audit;
   const stepDurationMs = audit.steps
     .map(calculateAuditStepDurationMs)
     .filter((value): value is number => value !== undefined)
@@ -139,7 +138,7 @@ function calculateAuditDurationMs(
       trimOptional(audit.endedAt) || undefined,
     ) ??
     positiveFiniteNumber(stepDurationMs) ??
-    calculateDurationMs(selectedAudit.summary)
+    calculateDurationMs(runAudit.summary)
   );
 }
 
@@ -398,9 +397,9 @@ function buildTeamNameById(
   );
 }
 
-function withSelectedAudit(
+function withRunAudit(
   run: ScopeServiceRunSummary,
-  selectedAudit?: ScopeServiceRunAuditSnapshot,
+  runAudit?: ScopeServiceRunAuditSnapshot,
 ): {
   readonly run: ScopeServiceRunSummary;
   readonly steps: readonly MissionWallStepSource[];
@@ -410,9 +409,9 @@ function withSelectedAudit(
   readonly totalSteps?: number;
 } {
   if (
-    !selectedAudit ||
-    selectedAudit.summary.runId !== run.runId ||
-    selectedAudit.summary.serviceId !== run.serviceId
+    !runAudit ||
+    runAudit.summary.runId !== run.runId ||
+    runAudit.summary.serviceId !== run.serviceId
   ) {
     return {
       durationMs: calculateDurationMs(run),
@@ -421,7 +420,7 @@ function withSelectedAudit(
     };
   }
 
-  const audit = selectedAudit.audit;
+  const audit = runAudit.audit;
   const steps = sortAuditSteps(audit.steps).map(toMissionWallStepSource);
   const completedStepCount = steps.filter(
     (step) => step.status === "completed",
@@ -430,8 +429,8 @@ function withSelectedAudit(
     commandId: trimOptional(audit.commandId) || undefined,
     completedSteps:
       positiveStepCount(audit.summary.completedSteps) ?? completedStepCount,
-    durationMs: calculateAuditDurationMs(selectedAudit),
-    run: selectedAudit.summary,
+    durationMs: calculateAuditDurationMs(runAudit),
+    run: runAudit.summary,
     steps,
     totalSteps:
       positiveStepCount(audit.summary.totalSteps) ??
@@ -444,26 +443,16 @@ function toRunSource(input: {
   readonly runAudits?: ReadonlyMap<string, ScopeServiceRunAuditSnapshot>;
   readonly member: StudioMemberSummary;
   readonly run: ScopeServiceRunSummary;
-  readonly selectedAudit?: ScopeServiceRunAuditSnapshot;
   readonly service: ServiceCatalogSnapshot;
   readonly teamNameById: ReadonlyMap<string, string>;
 }): MissionWallRunSource {
-  const auditKey = missionWallRunAuditKey({
-    runId: input.run.runId,
-    scopeId: input.run.scopeId,
-    serviceId: input.run.serviceId,
-  });
-  const selectedAuditKey = input.selectedAudit
-    ? missionWallRunAuditKey({
-        runId: input.selectedAudit.summary.runId,
-        scopeId: input.selectedAudit.summary.scopeId,
-        serviceId: input.selectedAudit.summary.serviceId,
-      })
-    : undefined;
-  const runAudit =
-    selectedAuditKey === auditKey
-      ? input.selectedAudit
-      : input.runAudits?.get(auditKey);
+  const runAudit = input.runAudits?.get(
+    missionWallRunAuditKey({
+      runId: input.run.runId,
+      scopeId: input.run.scopeId,
+      serviceId: input.run.serviceId,
+    }),
+  );
   const {
     commandId,
     completedSteps,
@@ -471,7 +460,7 @@ function toRunSource(input: {
     run,
     steps,
     totalSteps,
-  } = withSelectedAudit(
+  } = withRunAudit(
     input.run,
     runAudit,
   );
@@ -597,7 +586,6 @@ export function buildMissionWallSourceFromRuntime(
           runAudits,
           run,
           service,
-          selectedAudit: input.selectedAudit,
           teamNameById,
         }),
       );
