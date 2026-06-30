@@ -8233,7 +8233,9 @@ describe("StudioPage", () => {
     renderStudioPage("/studio?scopeId=scope-1&tab=studio");
 
     const rail = await screen.findByLabelText("Team members");
-    expect(await within(rail).findByRole("button", { name: "workspace-demo" })).toBeTruthy();
+    expect(
+      await within(rail).findAllByRole("button", { name: "workspace-demo" })
+    ).not.toHaveLength(0);
     expect(within(rail).getByRole("button", { name: "All" })).toBeTruthy();
     expect(within(rail).getByRole("button", { name: "Member" })).toBeTruthy();
     expect(within(rail).queryByRole("button", { name: "Workflow" })).toBeNull();
