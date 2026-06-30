@@ -723,7 +723,7 @@ Long-workflow behavior:
 
 1. Do not fit all steps into the center graph when the workflow has many steps.
 2. Enlarge the current execution window, for example `steps 9-13 of 24`, so every visible step remains readable from a large screen.
-3. Add a full workflow strip/minimap under the enlarged window to show total progress, status colors, and viewport position.
+3. Add a **Workflow Step Overview** under the enlarged window to show total progress, status colors, and viewport position.
 4. Use ELKjs layer-based layout to compute stable directed positions for the workflow step graph before rendering with `GraphCanvas`.
 5. Let the wall director move the current window as execution advances or when a higher-priority waiting/failed step appears.
 6. Full pan/zoom and node-by-node exploration belong in Run Inspector, not the wall.

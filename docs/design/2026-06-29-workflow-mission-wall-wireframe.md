@@ -186,12 +186,12 @@ The center graph is a focus surface, not the only workflow on the wall. When sev
 
 Long-workflow rule:
 
-When a workflow has many steps, the wall must not shrink the whole graph until every node becomes unreadable. The default large-screen pattern is **current execution window + full workflow strip**:
+When a workflow has many steps, the wall must not shrink the whole graph until every node becomes unreadable. The default large-screen pattern is **current execution window + Workflow Step Overview**:
 
 1. Enlarge the current 4-7 relevant steps in the center graph.
 2. Show total step count, for example `Workflow steps 9-13 of 24`.
-3. Show a bottom full-workflow strip/minimap where each step has status color.
-4. Draw a viewport marker over the strip so viewers know which part is enlarged.
+3. Show a bottom **Workflow Step Overview** where each step has status color.
+4. Draw a viewport marker over the overview so viewers know which part is enlarged.
 5. Use ELKjs layer-based layout to compute the directed step graph positions before rendering through GraphCanvas.
 6. Use Run Inspector for full pan/zoom exploration.
 
@@ -204,7 +204,7 @@ GraphCanvas studio variant
   edges: next / branch edges
   node overlay: idle / active / waiting / completed / failed
   focused step: latest or selected run trace item
-  long workflow: current execution window + full workflow strip
+  long workflow: current execution window + Workflow Step Overview
   freshness: selected run state version badge
 ```
 
