@@ -295,13 +295,15 @@ Mission Wall:
 External component conclusion:
 
 1. `@xyflow/react` / React Flow is the direct-use component for the MVP topology canvas. It is already installed in Console Web and is documented as MIT-licensed open source.
-2. AntV X6 is also MIT-licensed and is a credible open-source fallback, but introducing it now would duplicate the graph stack we already have.
-3. GoJS and yFiles are mature paid diagram SDKs. They should be evaluated only if Aevatar later needs advanced diagram editing, automatic layout, BPMN-grade process diagrams, or commercial support that React Flow cannot cover.
-4. Full workflow/observability products such as Temporal UI, Kestra, Dify, n8n, Grafana, Langfuse, or LangSmith should not be embedded as the wall. Their backend semantics and product surfaces do not match Aevatar's Team/Member/Workflow Run model; copy IA patterns and link out for drilldown instead.
+2. `elkjs` is the recommended direct-use layout engine for long directed workflow graphs. Its layer-based layout is designed for node-link diagrams with a dominant direction, which matches workflow step graphs.
+3. AntV X6 is also MIT-licensed and is a credible open-source fallback, but introducing it now would duplicate the graph stack we already have.
+4. GoJS and yFiles are mature paid diagram SDKs. They should be evaluated only if Aevatar later needs advanced diagram editing, automatic layout, BPMN-grade process diagrams, or commercial support that React Flow + ELK cannot cover.
+5. Full workflow/observability products such as Temporal UI, Kestra, Dify, n8n, Grafana, Langfuse, or LangSmith should not be embedded as the wall. Their backend semantics and product surfaces do not match Aevatar's Team/Member/Workflow Run model; copy IA patterns and link out for drilldown instead.
 
 | Direct Use | Decision | Rationale |
 |---|---|---|
 | `@xyflow/react` / React Flow | Direct-use component for topology | MIT-licensed open-source React component; already in `apps/aevatar-console-web`; fits interactive node-edge canvas |
+| `elkjs` / Eclipse ELK layered layout | Direct-use layout engine for long directed workflow graphs | Layer-based layout is suited to directed node-link diagrams; use it to compute coordinates before passing nodes to `GraphCanvas` |
 | `GraphCanvas` studio variant | Directly reuse as wall primary workflow graph wrapper | Already renders workflow steps with `executionStatus` and `executionFocused` |
 | `MemberPublishedRunsReplay` graph/audit mapping | Reuse as the closest implementation pattern | Already maps published run audit steps into step graph, log list, selected step detail |
 | Aevatar readmodels | Use as durable truth | Existing architecture already requires query from readmodel |
@@ -312,11 +314,12 @@ External component conclusion:
 
 Direct component decision:
 
-1. **Use React Flow / `@xyflow/react` through existing `GraphCanvas`** for the MVP. This is the only external graph component we should directly embed for the wall.
-2. **Do not buy/build a second diagram component for MVP.** AntV X6 is a viable MIT alternative, but adopting it would duplicate the existing React Flow stack.
-3. **Do not adopt commercial diagram SDKs such as GoJS or yFiles for MVP** unless the team later needs advanced diagram editing/layout features that React Flow cannot cover.
-4. **Do not embed full workflow products such as Temporal UI, Kestra, Dify, n8n, Grafana, or Langfuse** into the wall. Copy their interaction patterns; link out to external tools for drilldown when useful.
-5. **If stakeholders ask whether a market component can be directly used, the MVP answer is yes for the topology canvas**: use the already-installed `@xyflow/react` / React Flow component and the existing `GraphCanvas` wrapper instead of self-developing a graph engine.
+1. **Use React Flow / `@xyflow/react` through existing `GraphCanvas`** for the MVP. This is the external graph renderer we should directly embed for the wall.
+2. **Add `elkjs` as the layout engine when step count or branching makes manual positioning unreadable.** React Flow renders nodes/edges; ELK computes stable layered positions.
+3. **Do not buy/build a second diagram component for MVP.** AntV X6 is a viable MIT alternative, but adopting it would duplicate the existing React Flow stack.
+4. **Do not adopt commercial diagram SDKs such as GoJS or yFiles for MVP** unless the team later needs advanced diagram editing/layout features that React Flow + ELK cannot cover.
+5. **Do not embed full workflow products such as Temporal UI, Kestra, Dify, n8n, Grafana, or Langfuse** into the wall. Copy their interaction patterns; link out to external tools for drilldown when useful.
+6. **If stakeholders ask whether a market component can be directly used, the MVP answer is yes for the topology canvas and layout**: use the already-installed `@xyflow/react` / React Flow component, the existing `GraphCanvas` wrapper, and add ELKjs for automatic layout instead of self-developing a graph engine.
 
 ## 5. What Not To Copy
 
@@ -721,8 +724,9 @@ Long-workflow behavior:
 1. Do not fit all steps into the center graph when the workflow has many steps.
 2. Enlarge the current execution window, for example `steps 9-13 of 24`, so every visible step remains readable from a large screen.
 3. Add a full workflow strip/minimap under the enlarged window to show total progress, status colors, and viewport position.
-4. Let the wall director move the current window as execution advances or when a higher-priority waiting/failed step appears.
-5. Full pan/zoom and node-by-node exploration belong in Run Inspector, not the wall.
+4. Use ELKjs layer-based layout to compute stable directed positions for the workflow step graph before rendering with `GraphCanvas`.
+5. Let the wall director move the current window as execution advances or when a higher-priority waiting/failed step appears.
+6. Full pan/zoom and node-by-node exploration belong in Run Inspector, not the wall.
 
 Focus run director:
 
@@ -1145,15 +1149,17 @@ Verification:
 ## 12. Implementation Notes For Aevatar
 
 1. Start from existing `GraphCanvas` studio variant and `MemberPublishedRunsReplay` audit-to-graph mapping rather than inventing a second graph component.
-2. Use `MissionControl/TopologyCanvas` only when the user explicitly switches to runtime topology or when a run lacks workflow-step audit data.
-3. Treat `RunsTracePane` as drilldown, and reuse its Timeline/Messages/Events content for compact wall summaries.
-4. Add a wall-specific presentation adapter that maps readmodel/timeline/AGUI events to:
+2. Add ELKjs as the automatic layout step for workflow graphs with many steps, branches, or long chains. Recommended ELK options for the wall are `elk.algorithm = layered`, left-to-right direction, fixed node dimensions, and explicit edge labels for branch keys.
+3. Keep layout as presentation-only data: ELK positions must not become durable workflow facts, and missing layout must fall back to the existing GraphCanvas layout.
+4. Use `MissionControl/TopologyCanvas` only when the user explicitly switches to runtime topology or when a run lacks workflow-step audit data.
+5. Treat `RunsTracePane` as drilldown, and reuse its Timeline/Messages/Events content for compact wall summaries.
+6. Add a wall-specific presentation adapter that maps readmodel/timeline/AGUI events to:
    - `MissionWallRun`
    - `MissionWallNode`
    - `MissionWallEdge`
-5. Do not let the adapter own durable state. It maps query results and live events for display.
-6. If missing semantics are stable and consumed by production code, add typed proto fields or typed submessages.
-7. Keep raw event details inside Run Inspector advanced tabs.
+7. Do not let the adapter own durable state. It maps query results and live events for display.
+8. If missing semantics are stable and consumed by production code, add typed proto fields or typed submessages.
+9. Keep raw event details inside Run Inspector advanced tabs.
 
 ## 13. Recommended Next Artifacts
 
@@ -1195,6 +1201,10 @@ Direct graph component references:
 
 1. [React Flow official site](https://reactflow.dev/)
 2. [React Flow / xyflow license](https://github.com/xyflow/xyflow/blob/main/LICENSE)
-3. [AntV X6 license](https://github.com/antvis/x6/blob/master/LICENSE)
-4. [GoJS deployment and license keys](https://gojs.net/latest/learn/deployment)
-5. [yFiles pricing and licensing](https://www.yfiles.com/pricing.html)
+3. [React Flow ELKjs layout example](https://reactflow.dev/examples/layout/elkjs)
+4. [ELKjs repository](https://github.com/kieler/elkjs)
+5. [Eclipse ELK layer-based layout documentation](https://eclipse.dev/elk/reference/algorithms/org-eclipse-elk-layered.html)
+6. [ELKjs npm package](https://www.npmjs.com/package/elkjs)
+7. [AntV X6 license](https://github.com/antvis/x6/blob/master/LICENSE)
+8. [GoJS deployment and license keys](https://gojs.net/latest/learn/deployment)
+9. [yFiles pricing and licensing](https://www.yfiles.com/pricing.html)
