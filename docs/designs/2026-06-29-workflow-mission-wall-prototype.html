@@ -392,6 +392,20 @@
         position: relative;
       }
 
+      .window-label {
+        background: rgba(17, 29, 25, 0.96);
+        border: 1px solid rgba(45, 212, 191, 0.28);
+        border-radius: 999px;
+        color: #5eead4;
+        font-size: 12px;
+        font-weight: 780;
+        left: 16px;
+        padding: 7px 10px;
+        position: absolute;
+        top: 56px;
+        z-index: 4;
+      }
+
       .edge-layer {
         inset: 0;
         pointer-events: none;
@@ -570,7 +584,7 @@
         background: rgba(17, 29, 25, 0.94);
         border: 1px solid var(--canvas-line);
         border-radius: 999px;
-        bottom: 14px;
+        bottom: 94px;
         color: var(--canvas-muted);
         font-size: 12px;
         font-weight: 720;
@@ -578,6 +592,89 @@
         padding: 8px 12px;
         position: absolute;
         z-index: 3;
+      }
+
+      .workflow-strip {
+        background: rgba(9, 17, 15, 0.94);
+        border-top: 1px solid var(--canvas-line);
+        bottom: 0;
+        left: 0;
+        min-height: 76px;
+        padding: 13px 16px 12px;
+        position: absolute;
+        right: 0;
+        z-index: 3;
+      }
+
+      .strip-head {
+        align-items: center;
+        color: var(--canvas-muted);
+        display: flex;
+        font-size: 12px;
+        font-weight: 760;
+        justify-content: space-between;
+        margin-bottom: 10px;
+      }
+
+      .strip-head strong {
+        color: var(--canvas-text);
+        font-weight: 820;
+      }
+
+      .strip-track {
+        display: grid;
+        gap: 5px;
+        grid-template-columns: repeat(24, minmax(0, 1fr));
+        position: relative;
+      }
+
+      .strip-window {
+        border: 2px solid rgba(45, 212, 191, 0.72);
+        border-radius: 8px;
+        bottom: -7px;
+        left: calc((100% - 115px) * 8 / 24 + 40px);
+        pointer-events: none;
+        position: absolute;
+        top: -7px;
+        width: calc((100% - 115px) * 5 / 24 + 20px);
+      }
+
+      .strip-step {
+        align-items: center;
+        background: rgba(201, 213, 206, 0.09);
+        border: 1px solid rgba(201, 213, 206, 0.14);
+        border-radius: 7px;
+        color: var(--canvas-muted);
+        display: flex;
+        font-size: 10px;
+        font-weight: 820;
+        height: 24px;
+        justify-content: center;
+        line-height: 1;
+      }
+
+      .strip-step.done {
+        background: rgba(22, 163, 74, 0.2);
+        border-color: rgba(22, 163, 74, 0.34);
+        color: #86efac;
+      }
+
+      .strip-step.active {
+        background: rgba(45, 212, 191, 0.22);
+        border-color: rgba(45, 212, 191, 0.48);
+        color: #5eead4;
+      }
+
+      .strip-step.wait {
+        background: rgba(217, 119, 6, 0.22);
+        border-color: rgba(217, 119, 6, 0.52);
+        color: #fbbf24;
+      }
+
+      .strip-step.next {
+        background: rgba(96, 165, 250, 0.14);
+        border-color: rgba(96, 165, 250, 0.28);
+        color: #93c5fd;
       }
 
       @media (max-width: 1500px) {
@@ -650,10 +747,10 @@
               </div>
               <div class="run-stage">release_gate · waiting for approval</div>
               <div class="run-meta">
-                <span>8 / 12 steps</span>
+                <span>12 / 24 steps</span>
                 <span>05:12</span>
               </div>
-              <div class="progress-line"><span style="background: #fbbf24; width: 67%"></span></div>
+              <div class="progress-line"><span style="background: #fbbf24; width: 50%"></span></div>
             </article>
 
             <article class="run-card running">
@@ -722,16 +819,17 @@
           <div class="canvas-shell">
             <div class="canvas-frame">
               <div class="canvas-toolbar">
-                <div><span>Workflow steps</span> · executionStatus overlay</div>
+                <div><span>Workflow steps 9-13 of 24</span> · current execution window</div>
                 <div>readmodel + live observation</div>
               </div>
 
               <div class="flow-area">
+                <div class="window-label">Current window: enlarged for 10-foot readability</div>
                 <svg class="edge-layer" viewBox="0 0 1398 760" preserveAspectRatio="none" aria-hidden="true">
                   <path class="edge next" d="M382 182 C450 182, 488 182, 556 182" />
                   <path class="edge next" d="M848 182 C914 182, 952 182, 1018 182" />
                   <path class="edge branch" d="M702 318 C778 436, 912 500, 1018 500" />
-                  <path class="edge project" d="M1164 625 C1056 676, 888 682, 738 650" />
+                  <path class="edge project" d="M1164 590 C1052 624, 896 622, 738 586" />
                 </svg>
 
                 <section class="node" style="left: 90px; top: 96px">
@@ -796,7 +894,7 @@
                   </div>
                 </section>
 
-                <section class="node" style="left: 556px; top: 590px">
+                <section class="node" style="left: 556px; top: 526px">
                   <div class="node-top">
                     <div class="icon emit">EV</div>
                     <div class="node-label">
@@ -812,6 +910,39 @@
                 </section>
 
                 <div class="source-note">Reuses @xyflow/react + existing GraphCanvas + MemberPublishedRunsReplay mapping</div>
+                <div class="workflow-strip">
+                  <div class="strip-head">
+                    <div><strong>Full workflow strip</strong> · 24 steps total</div>
+                    <div>viewport steps 9-13 · approval blocked</div>
+                  </div>
+                  <div class="strip-track">
+                    <div class="strip-window"></div>
+                    <div class="strip-step done">01</div>
+                    <div class="strip-step done">02</div>
+                    <div class="strip-step done">03</div>
+                    <div class="strip-step done">04</div>
+                    <div class="strip-step done">05</div>
+                    <div class="strip-step done">06</div>
+                    <div class="strip-step done">07</div>
+                    <div class="strip-step done">08</div>
+                    <div class="strip-step done">09</div>
+                    <div class="strip-step done">10</div>
+                    <div class="strip-step active">11</div>
+                    <div class="strip-step done">12</div>
+                    <div class="strip-step wait">13</div>
+                    <div class="strip-step next">14</div>
+                    <div class="strip-step next">15</div>
+                    <div class="strip-step next">16</div>
+                    <div class="strip-step">17</div>
+                    <div class="strip-step">18</div>
+                    <div class="strip-step">19</div>
+                    <div class="strip-step">20</div>
+                    <div class="strip-step">21</div>
+                    <div class="strip-step">22</div>
+                    <div class="strip-step">23</div>
+                    <div class="strip-step">24</div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>

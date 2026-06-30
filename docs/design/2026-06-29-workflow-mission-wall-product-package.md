@@ -716,6 +716,14 @@ Multi-run behavior:
 5. Waiting/failed/retrying/stale issues appear in run-card badges and as focus reasons instead of a separate queue.
 6. Timeline and event detail are available only after handoff to Run Inspector in MVP.
 
+Long-workflow behavior:
+
+1. Do not fit all steps into the center graph when the workflow has many steps.
+2. Enlarge the current execution window, for example `steps 9-13 of 24`, so every visible step remains readable from a large screen.
+3. Add a full workflow strip/minimap under the enlarged window to show total progress, status colors, and viewport position.
+4. Let the wall director move the current window as execution advances or when a higher-priority waiting/failed step appears.
+5. Full pan/zoom and node-by-node exploration belong in Run Inspector, not the wall.
+
 Focus run director:
 
 The center graph should act like an automatic director:
