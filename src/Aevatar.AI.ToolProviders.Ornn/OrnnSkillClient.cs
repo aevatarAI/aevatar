@@ -63,6 +63,14 @@ public sealed class OrnnSkillClient
     }
 
     /// <summary>Search skills.</summary>
+    /// <param name="scope">
+    /// Ornn API visibility scope (<c>public/private/mixed/shared-with-me/mine</c>). This is the
+    /// upstream query parameter, NOT a model-facing contract: the discovery tool
+    /// (<see cref="OrnnSearchSkillsTool"/>) deliberately does not expose it and always uses the
+    /// default <c>mixed</c> (the caller's full accessible set) so a model can't narrow visibility
+    /// and hide usable skills. Kept here as a faithful seam over the Ornn API for any future
+    /// non-discovery caller (e.g. a management tool).
+    /// </param>
     public async Task<OrnnSearchResult> SearchSkillsAsync(
         string accessToken,
         string query = "",

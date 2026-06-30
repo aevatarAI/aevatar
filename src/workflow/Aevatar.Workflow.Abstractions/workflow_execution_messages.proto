@@ -3,6 +3,7 @@ package aevatar.workflow;
 option csharp_namespace = "Aevatar.Workflow.Abstractions";
 
 import "google/protobuf/any.proto";
+import "google/protobuf/timestamp.proto";
 import "Interactions/interaction_spec.proto";
 
 enum WorkflowChatInputPartKind {
@@ -154,6 +155,13 @@ message BindWorkflowRunDefinitionEvent
   map<string, string> inline_workflow_yamls = 4;
   string run_id = 5;
   string scope_id = 6;
+  // Canonical run origin/type stamped by the creating ingress (draft | member-invoke |
+  // default-invoke | team-invoke | service-invoke | ad-hoc-chat | provisioned). Observatory
+  // filter dimension; empty for legacy/unstamped runs.
+  string run_origin = 7;
+  // Per-schedule correlation id stamped at bind for provisioned (cron-fired) runs; empty for
+  // non-scheduled runs. Carried from ServiceInvocationRequest.schedule_id via WorkflowDefinitionBinding.
+  string schedule_id = 8;
 }
 message BindWorkflowDefinitionEvent
 {
@@ -173,6 +181,7 @@ message WorkflowRunExecutionStartedEvent
   WorkflowRunExecutionContextDelta execution_context_delta = 6;
   int32 attempt = 7;
   repeated WorkflowFileRef input_file_refs = 8;
+  google.protobuf.Timestamp started_at_utc = 9;
 }
 message WorkflowRunExecutionContextDelta
 {
@@ -613,6 +622,10 @@ message WorkflowRoleReplyToolCall
 {
   string tool_name = 1;
   string call_id = 2;
+  string arguments_json = 3;
+  string result_json = 4;
+  bool success = 5;
+  string error = 6;
 }
 message WorkflowRoleReplyRecordedEvent
 {
@@ -647,6 +660,11 @@ message WorkflowLlmExecutionIntent
   WorkflowToolRuntimeContextPayload workflow_runtime_context = 15;
   repeated WorkflowFileRef input_file_refs = 16;
   WorkflowAgentToolScope agent_tool_scope = 17;
+  // Authoritative scope id of the owning workflow run (WorkflowRunGAgent.State.ScopeId).
+  // Threaded so the role actor can populate the tool caller scope on the channel-less
+  // Direct/studio path, where no inbound channel stamps the caller scope. Empty when the
+  // run has no scope (e.g. anonymous local runs); the role actor only fills an empty caller.
+  string scope_id = 18;
 }
 
 message WorkflowToolRuntimeContextPayload

@@ -93,6 +93,29 @@ public class WebRtcVoiceTransportTests
     }
 
     [Fact]
+    public async Task ReceiveFramesAsync_should_map_camera_frame_to_input_image()
+    {
+        var peer = new FakeWebRtcVoicePeer();
+        await using var transport = new WebRtcVoiceTransport(peer, new WebRtcVoiceTransportOptions());
+        var receiveTask = CollectFramesAsync(transport);
+
+        peer.EmitControl(JsonFormatter.Default.Format(new VoiceControlFrame
+        {
+            InputImage = new VoiceInputImage
+            {
+                MediaType = "image/png",
+                Data = ByteString.CopyFrom([7, 8, 9]),
+            },
+        }));
+        peer.EmitClosed();
+
+        var frame = (await receiveTask).ShouldHaveSingleItem();
+        frame.InputImage.ShouldNotBeNull();
+        frame.InputImage!.MediaType.ShouldBe("image/png");
+        frame.InputImage.Data.ToByteArray().ShouldBe([7, 8, 9]);
+    }
+
+    [Fact]
     public async Task DisposeAsync_should_dispose_peer_and_reject_further_sends()
     {
         var peer = new FakeWebRtcVoicePeer();

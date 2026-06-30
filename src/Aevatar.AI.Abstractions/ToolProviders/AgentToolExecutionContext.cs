@@ -128,9 +128,9 @@ public sealed record AgentToolChannelContext(
     public static AgentToolChannelContext Empty { get; } = new(null, null, null, null, null, null, null);
 }
 
-public sealed record AgentToolSenderBindingContext(string? BindingId)
+public sealed record AgentToolSenderBindingContext(string? BindingId, string? NyxUserId = null, string? SenderTenant = null)
 {
-    public static AgentToolSenderBindingContext Empty { get; } = new((string?)null);
+    public static AgentToolSenderBindingContext Empty { get; } = new((string?)null, null, null);
 }
 
 public sealed record AgentToolConnectedServicesContext(string? ContextJson)

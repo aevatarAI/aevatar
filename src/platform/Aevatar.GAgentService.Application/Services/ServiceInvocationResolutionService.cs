@@ -5,7 +5,7 @@ using Aevatar.GAgentService.Abstractions.Services;
 
 namespace Aevatar.GAgentService.Application.Services;
 
-public sealed class ServiceInvocationResolutionService
+public sealed class ServiceInvocationResolutionService : IServiceInvocationResolutionPort
 {
     private readonly IServiceCatalogQueryReader _catalogQueryReader;
     private readonly IServiceInvocationCatalogQueryReader _invocationCatalogQueryReader;

@@ -93,13 +93,19 @@ public class WorkflowRoleGAgent(
             if (managedHandoff != null)
                 completed.ManagedHandoff = managedHandoff;
             await PublishAsync(completed, TopologyAudience.Parent);
+            // O1 (06-19-workflow-run-observatory): the committed RoleChatSessionCompletedEvent is the only
+            // committed fact carrying both tool_calls (arguments) and tool_receipts (result/success/error);
+            // persist the receipts (previously dropped) so the run-artifact fact builder can enrich tool detail.
             await PersistRoleChatSessionCompletionAsync(
                 chatRequest,
                 replayRecord.Content,
                 replayRecord.ReasoningContent,
                 replayRecord.ToolCalls,
                 replayRecord.ContentParts,
-                replayRecord.ContentEmitted);
+                replayRecord.ContentEmitted,
+                replayRecord.Usage,
+                replayRecord.Model,
+                replayRecord.ToolReceipts);
         }
         catch (OperationCanceledException) when (timeoutCts is { IsCancellationRequested: true })
         {
@@ -155,6 +161,7 @@ public class WorkflowRoleGAgent(
             };
         }
         toolContext = ApplyToolVisibility(intent.AgentToolScope, toolContext);
+        toolContext = ApplyRunScopeToCaller(intent.ScopeId, toolContext);
 
         var request = new ChatRequestEvent
         {
@@ -221,6 +228,37 @@ public class WorkflowRoleGAgent(
         return toolContext with
         {
             ToolVisibility = AgentToolVisibilityScope.FromAllowedToolNames(scope.AllowedToolNames),
+        };
+    }
+
+    // Populate the tool caller scope from the owning run's scope on the channel-less
+    // Direct/studio path: WorkflowCallerCredentialToolContextMapper only sets credentials,
+    // leaving Caller empty, so scope-scoped tools (aevatar_*) would otherwise see no scope
+    // and fail. Scope-scoped tools require both ScopeId and OwnerSubject (see
+    // AevatarInvocationDispatcher.ResolveCallerScope), mirroring the channel inbound path
+    // that sets both from the registration scope. This is an "empty -> fill" guard: it is a
+    // no-op when the caller scope is already set (so any future inbound-stamped caller wins)
+    // and a no-op when the run carries no scope.
+    private static AgentToolExecutionContext ApplyRunScopeToCaller(
+        string? runScopeId,
+        AgentToolExecutionContext toolContext)
+    {
+        var scopeId = Normalize(runScopeId);
+        if (scopeId is null)
+            return toolContext;
+
+        if (!string.IsNullOrWhiteSpace(toolContext.Caller.ScopeId))
+            return toolContext;
+
+        return toolContext with
+        {
+            Caller = toolContext.Caller with
+            {
+                ScopeId = scopeId,
+                OwnerSubject = string.IsNullOrWhiteSpace(toolContext.Caller.OwnerSubject)
+                    ? scopeId
+                    : toolContext.Caller.OwnerSubject,
+            },
         };
     }
 

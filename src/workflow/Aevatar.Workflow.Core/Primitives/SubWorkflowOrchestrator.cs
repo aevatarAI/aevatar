@@ -105,6 +105,23 @@ internal sealed class SubWorkflowOrchestrator
         var invocationId = string.IsNullOrWhiteSpace(request.InvocationId)
             ? WorkflowCallInvocationIdFactory.Build(parentRunId, parentStepId)
             : request.InvocationId.Trim();
+        // A child sub-workflow's run id is its invocation id; it must never equal the parent run id.
+        // The projection-root adopts a relayed terminal whose run id == its own run id (R1), so a child
+        // colliding on the parent's run id would let a genuine child terminal clobber the parent doc.
+        // Fail closed on collision to keep that discriminator provably safe.
+        if (string.Equals(
+                WorkflowRunIdNormalizer.Normalize(invocationId),
+                WorkflowRunIdNormalizer.Normalize(parentRunId),
+                StringComparison.Ordinal))
+        {
+            await PublishWorkflowCallFailureAsync(
+                parentStepId,
+                parentRunId,
+                "workflow_call invocation id must differ from the parent run id",
+                ct);
+            return;
+        }
+
         var rootRunId = ResolveRootRunId(request.RootRunId, state, parentRunId);
         var parentDepth = ResolveParentDepth(state, parentRunId);
         var requestedDepth = WorkflowCallLimitPolicy.ResolveChildDepth(request.RequestedDepth, parentDepth);

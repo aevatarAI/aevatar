@@ -3,7 +3,9 @@ namespace Aevatar.Mainnet.Host.Api.Status;
 /// <summary>
 /// Inline status dashboard. Single self-contained HTML page, no build step,
 /// no external assets. It reads <c>/api/status</c> and renders current target
-/// state plus the retained two-hour probe history.
+/// state grouped by service layer, severity-aware, plus the retained two-hour
+/// probe history. Honest by design: an <c>unknown</c> target (e.g. an
+/// unconfigured canary) reads as "awaiting credentials", never as an outage.
 /// </summary>
 internal static class StatusHtml
 {
@@ -33,7 +35,19 @@ internal static class StatusHtml
     --down: #bd3b32;
     --down-soft: #f9cfc9;
     --unknown: #b6ac96;
+    --unknown-soft: #ece6d6;
     --focus: #315bba;
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 22px;
+    --space-6: 28px;
+    --radius-sm: 6px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --pill: 999px;
+    --mono: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -50,6 +64,7 @@ internal static class StatusHtml
       --degraded-soft: rgba(154, 106, 32, 0.26);
       --down-soft: rgba(189, 59, 50, 0.24);
       --unknown: #766d5c;
+      --unknown-soft: rgba(118, 109, 92, 0.22);
       --focus: #8fb3ff;
     }
   }
@@ -71,7 +86,7 @@ internal static class StatusHtml
     grid-template-columns: minmax(0, 1fr) auto;
     gap: 18px;
     align-items: end;
-    margin-bottom: 24px;
+    margin-bottom: var(--space-5);
   }
   h1 {
     margin: 0;
@@ -89,17 +104,41 @@ internal static class StatusHtml
     font-weight: 700;
     white-space: nowrap;
   }
+  .live {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .live-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--ok);
+    animation: pulse 2.4s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.35; transform: scale(0.78); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .live-dot { animation: none; }
+  }
   a { color: inherit; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+  a:focus-visible {
+    outline: 3px solid color-mix(in srgb, var(--focus) 40%, transparent);
+    outline-offset: 2px;
+    border-radius: 3px;
+  }
   .overall {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto;
-    gap: 16px;
+    gap: var(--space-4);
     align-items: center;
     min-height: 78px;
-    margin-bottom: 24px;
-    padding: 20px 28px;
+    margin-bottom: var(--space-5);
+    padding: 20px var(--space-6);
     border: 1px solid var(--border-strong);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     background: var(--paper-strong);
   }
   .overall.down { background: var(--down-soft); border-color: rgba(189, 59, 50, 0.45); }
@@ -125,11 +164,35 @@ internal static class StatusHtml
     font-weight: 800;
   }
   .overall-sub {
-    margin-top: 4px;
+    margin-top: var(--space-1);
     color: var(--muted);
     font-size: 13px;
     font-weight: 650;
   }
+  .tallies {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+  }
+  .tally {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    border-radius: var(--pill);
+    background: var(--faint);
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+  }
+  .tally .dot { width: 8px; height: 8px; }
+  .tally.ok { background: var(--ok-soft); color: var(--ok); }
+  .tally.degraded { background: var(--degraded-soft); color: var(--degraded); }
+  .tally.down { background: var(--down-soft); color: var(--down); }
+  .tally.unknown { background: var(--unknown-soft); color: var(--muted); }
+  .tally.zero { opacity: 0.5; }
   .updated {
     color: var(--muted);
     font-size: 14px;
@@ -137,23 +200,37 @@ internal static class StatusHtml
     text-align: right;
     white-space: nowrap;
   }
+  .updated .stamp {
+    display: block;
+    margin-top: 2px;
+    font-size: 12px;
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+  }
   main {
     display: flex;
     flex-direction: column;
-    gap: 22px;
+    gap: var(--space-5);
   }
   .group {
     border: 1px solid var(--border);
-    border-radius: 10px;
+    border-radius: var(--radius-lg);
     background: var(--paper);
-    padding: 22px;
+    padding: var(--space-5);
   }
   .group-head {
     display: flex;
     justify-content: space-between;
-    gap: 12px;
-    align-items: center;
+    gap: var(--space-3);
+    align-items: baseline;
+    flex-wrap: wrap;
     margin-bottom: 18px;
+  }
+  .group-head .lead {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+    min-width: 0;
   }
   .group h2 {
     margin: 0;
@@ -161,10 +238,15 @@ internal static class StatusHtml
     line-height: 1.25;
     font-weight: 800;
   }
-  .group-count {
+  .group-kind {
     color: var(--muted);
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 700;
+  }
+  .rollup {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
   }
   .target-list {
     display: flex;
@@ -172,21 +254,26 @@ internal static class StatusHtml
     gap: 10px;
   }
   .target {
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     background: color-mix(in srgb, var(--paper) 86%, var(--paper-soft));
+    border-left: 3px solid var(--unknown);
   }
+  .target.ok { border-left-color: var(--ok); }
+  .target.degraded { border-left-color: var(--degraded); }
+  .target.down { border-left-color: var(--down); }
+  .target.unknown { border-left-color: var(--unknown); border-left-style: dashed; }
   .target.open {
     background: color-mix(in srgb, var(--paper-soft) 70%, var(--paper));
   }
   .target-summary {
     width: 100%;
     display: grid;
-    grid-template-columns: minmax(300px, 390px) minmax(520px, 1fr) 132px 28px;
+    grid-template-columns: minmax(300px, 400px) minmax(460px, 1fr) 150px 28px;
     gap: 18px;
     align-items: center;
     padding: 16px 14px;
     border: 0;
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     background: transparent;
     color: inherit;
     font: inherit;
@@ -203,7 +290,7 @@ internal static class StatusHtml
   .identity {
     display: grid;
     grid-template-columns: 84px minmax(0, 1fr);
-    gap: 16px;
+    gap: var(--space-4);
     align-items: center;
     min-width: 0;
   }
@@ -213,7 +300,7 @@ internal static class StatusHtml
     justify-content: center;
     min-width: 84px;
     min-height: 34px;
-    border-radius: 999px;
+    border-radius: var(--pill);
     background: var(--ok-soft);
     color: var(--ok);
     font-size: 15px;
@@ -222,20 +309,71 @@ internal static class StatusHtml
   }
   .target.down .availability { background: var(--down-soft); color: var(--down); }
   .target.degraded .availability { background: var(--degraded-soft); color: var(--degraded); }
-  .target.unknown .availability { background: var(--faint); color: var(--muted); }
+  .target.unknown .availability { background: var(--unknown-soft); color: var(--muted); }
+  .name-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
   .name {
     font-size: 16px;
     line-height: 1.35;
     font-weight: 800;
     overflow-wrap: anywhere;
   }
+  .sev {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 8px;
+    border-radius: var(--pill);
+    font-size: 10px;
+    font-weight: 900;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .sev.critical {
+    color: var(--down);
+    border: 1.5px solid color-mix(in srgb, var(--down) 60%, transparent);
+    background: color-mix(in srgb, var(--down-soft) 50%, transparent);
+  }
+  .sev.standard {
+    color: var(--muted);
+    border: 1px solid var(--border);
+    background: var(--faint);
+  }
+  .sev.canary {
+    color: var(--degraded);
+    border: 1.5px dashed color-mix(in srgb, var(--degraded) 55%, transparent);
+    background: transparent;
+  }
   .signal {
     margin-top: 5px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
     color: var(--muted);
     font-size: 12px;
     line-height: 1.35;
     font-weight: 700;
     overflow-wrap: anywhere;
+  }
+  .probe-tag {
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 1px 6px;
+    border-radius: var(--radius-sm);
+    background: var(--faint);
+  }
+  .fail-flag {
+    color: var(--down);
+    font-weight: 900;
+  }
+  .config-hint {
+    color: var(--muted);
+    font-style: italic;
   }
   .timeline {
     min-width: 0;
@@ -250,7 +388,7 @@ internal static class StatusHtml
     display: grid;
     grid-template-columns: repeat(120, minmax(3px, 1fr));
     gap: 3px;
-    min-width: 650px;
+    min-width: 600px;
     height: 39px;
     align-items: stretch;
   }
@@ -261,6 +399,7 @@ internal static class StatusHtml
   .bar.ok { background: var(--ok); }
   .bar.degraded { background: var(--degraded); }
   .bar.down { background: var(--down); }
+  .bar.unknown { background: var(--unknown); opacity: 0.5; }
   .bar.empty { background: var(--faint); }
   .axis {
     display: flex;
@@ -273,7 +412,7 @@ internal static class StatusHtml
   }
   .latest {
     display: grid;
-    gap: 4px;
+    gap: var(--space-1);
     justify-items: end;
     min-width: 0;
   }
@@ -291,6 +430,7 @@ internal static class StatusHtml
     height: 10px;
     border-radius: 50%;
     background: var(--unknown);
+    flex: none;
   }
   .dot.ok { background: var(--ok); }
   .dot.degraded { background: var(--degraded); }
@@ -303,6 +443,8 @@ internal static class StatusHtml
     font-variant-numeric: tabular-nums;
     text-align: right;
   }
+  .age .lede { color: var(--ink); }
+  .age.alarm .lede { color: var(--down); font-weight: 900; }
   .chevron {
     display: grid;
     place-items: center;
@@ -325,7 +467,7 @@ internal static class StatusHtml
   }
   .details-grid {
     display: grid;
-    grid-template-columns: 116px minmax(0, 1fr);
+    grid-template-columns: 124px minmax(0, 1fr);
     gap: 9px 18px;
     font-size: 14px;
     line-height: 1.45;
@@ -339,13 +481,14 @@ internal static class StatusHtml
     font-weight: 700;
     overflow-wrap: anywhere;
   }
+  .details-grid dd.hot { color: var(--down); font-weight: 900; }
   .message {
     margin-top: 14px;
     padding: 12px;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     background: var(--paper-soft);
     color: var(--muted);
-    font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    font-family: var(--mono);
     font-size: 12px;
     line-height: 1.5;
     overflow-wrap: anywhere;
@@ -353,7 +496,7 @@ internal static class StatusHtml
   .empty {
     padding: 34px 20px;
     border: 1px dashed var(--border);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     background: var(--paper);
     color: var(--muted);
     text-align: center;
@@ -413,8 +556,8 @@ internal static class StatusHtml
   <header>
     <h1>Aevatar 服务状态</h1>
     <nav class="toolbar" aria-label="status links">
-      <span>最近 120 分钟</span>
-      <span>每 60 秒探测</span>
+      <span class="live"><span class="live-dot" aria-hidden="true"></span>每 60 秒探测</span>
+      <span>保留 120 分钟</span>
       <a href="/api/status">原始 JSON</a>
     </nav>
   </header>
@@ -427,7 +570,7 @@ internal static class StatusHtml
     <div id="updated" class="updated">--</div>
   </section>
   <main id="main"></main>
-  <footer>Aevatar Mainnet 服务状态</footer>
+  <footer>Aevatar Mainnet 服务状态 · 绿表示真实 API 可用，灰表示未配置凭据（非故障）</footer>
 </div>
 <script>
 (() => {
@@ -443,9 +586,19 @@ internal static class StatusHtml
     minute: '2-digit',
     second: '2-digit'
   });
+  // Layer order + labels. A category with no targets is skipped; unrecognised
+  // categories fall through to the end so nothing is ever silently dropped.
+  const GROUPS = [
+    { key: 'self', title: 'A. 自身服务', kind: '存活 / 就绪' },
+    { key: 'llm', title: 'B. LLM 接入', kind: '/v1 推理入口' },
+    { key: 'orchestration', title: 'C. 编排引擎', kind: '工作流 / 调度' },
+    { key: 'studio', title: 'D. Studio / 应用', kind: '应用接口' },
+    { key: 'upstream', title: 'E. 上游依赖', kind: 'NyxID 等' },
+    { key: 'feature', title: 'F. 功能入口', kind: '端到端能力' }
+  ];
   const overall = document.getElementById('overall');
   const main = document.getElementById('main');
-  const updated = document.getElementById('updated');
+  let updated = document.getElementById('updated');
 
   function escapeHtml(s) {
     return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -459,17 +612,24 @@ internal static class StatusHtml
     if (status === 'down') return '故障';
     return '未知';
   }
-  function groupTitle(cat) {
-    if (cat === 'self') return 'A. 自身服务';
-    if (cat === 'feature') return 'B. 功能入口';
-    return 'C. 上游依赖';
+  function severityLabel(sev) {
+    if (sev === 'critical') return '关键';
+    if (sev === 'canary') return '哨兵';
+    return '常规';
+  }
+  function groupMeta(cat) {
+    return GROUPS.find(g => g.key === cat) || { key: cat, title: cat || '其他', kind: '' };
+  }
+  function isUnconfigured(t) {
+    return (t.status || 'unknown') === 'unknown' && t.detail === 'credential_unavailable';
   }
   function ago(iso) {
     if (!iso) return '暂无';
     const sec = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
     if (sec < 60) return sec + ' 秒前';
     if (sec < 3600) return Math.round(sec / 60) + ' 分钟前';
-    return Math.round(sec / 3600) + ' 小时前';
+    if (sec < 86400) return Math.round(sec / 3600) + ' 小时前';
+    return Math.round(sec / 86400) + ' 天前';
   }
   function fullTime(iso) {
     return iso ? dateFmt.format(new Date(iso)) : '--';
@@ -509,10 +669,13 @@ internal static class StatusHtml
   }
   function overallTitle(status, counts) {
     if (!counts.total) return '还没有探针数据';
-    if (status === 'ok') return '全部服务运行正常';
+    if (status === 'ok') return '全部真实接口运行正常';
     if (status === 'down') return counts.down + ' 个服务故障';
     if (status === 'degraded') return counts.degraded + ' 个服务降级';
     return counts.unknown + ' 个服务状态未知';
+  }
+  function tally(kind, label, n) {
+    return `<span class="tally ${kind}${n ? '' : ' zero'}"><span class="dot ${kind}"></span>${n} ${label}</span>`;
   }
   function renderOverall(data) {
     const status = data.overall || 'unknown';
@@ -522,26 +685,47 @@ internal static class StatusHtml
       <span class="badge-dot ${escapeHtml(status)}">${status === 'ok' ? '✓' : status === 'unknown' ? '?' : '!'}</span>
       <div>
         <p class="overall-title">${escapeHtml(overallTitle(status, counts))}</p>
-        <div class="overall-sub">${escapeHtml(counts.ok + ' / ' + counts.total + ' 正常 · ' + counts.degraded + ' 降级 · ' + counts.down + ' 故障 · ' + counts.unknown + ' 未知')}</div>
+        <div class="overall-sub">${escapeHtml(counts.total + ' 个探针目标')}</div>
+        <div class="tallies">
+          ${tally('ok', '正常', counts.ok)}
+          ${tally('degraded', '降级', counts.degraded)}
+          ${tally('down', '故障', counts.down)}
+          ${tally('unknown', '未知', counts.unknown)}
+        </div>
       </div>
-      <div id="updated" class="updated">更新于 ${escapeHtml(fullTime(data.generated_at))}</div>`;
+      <div id="updated" class="updated">${escapeHtml(data.generated_at ? '更新于 ' + ago(data.generated_at) : '--')}<span class="stamp">${escapeHtml(fullTime(data.generated_at))}</span></div>`;
+    updated = document.getElementById('updated');
+  }
+  function rollup(groupTargets) {
+    const c = { ok: 0, degraded: 0, down: 0, unknown: 0 };
+    for (const t of groupTargets) c[t.status] !== undefined ? c[t.status]++ : c.unknown++;
+    const out = [];
+    if (c.ok) out.push(tally('ok', '正常', c.ok));
+    if (c.degraded) out.push(tally('degraded', '降级', c.degraded));
+    if (c.down) out.push(tally('down', '故障', c.down));
+    if (c.unknown) out.push(tally('unknown', '未配置', c.unknown));
+    return out.join('');
   }
   function renderDetails(t, samples, stats) {
     const lastFailureAt = stats.lastFailure?.observed_at;
     const lastFailureText = lastFailureAt ? fullTime(lastFailureAt) : '--';
     const lastFailureSignal = stats.lastFailure?.detail ? ' · ' + stats.lastFailure.detail : '';
     const latestError = t.error_message || stats.lastFailure?.error_message;
+    const fails = t.consecutive_failures ?? 0;
+    const lastSuccess = t.last_success_at || stats.lastSuccess?.observed_at;
     return `
       <dl class="details-grid">
         <dt>ID</dt><dd>${escapeHtml(t.slug)}</dd>
         <dt>名称</dt><dd>${escapeHtml(t.name)}</dd>
-        <dt>分组</dt><dd>${escapeHtml(groupTitle(t.category))}</dd>
-        <dt>探针</dt><dd>${escapeHtml(t.probe)}</dd>
+        <dt>分层</dt><dd>${escapeHtml(groupMeta(t.category).title)}</dd>
+        <dt>严重级</dt><dd>${escapeHtml(severityLabel(t.severity))}</dd>
+        <dt>探针类型</dt><dd>${escapeHtml(t.probe)}</dd>
+        <dt>探测间隔</dt><dd>${escapeHtml((t.interval_seconds ?? 0) + ' 秒')}</dd>
         <dt>最近窗口</dt><dd>${escapeHtml(stats.ok + ' / ' + stats.known + ' 成功，保留 ' + samples.length + ' 个样本')}</dd>
         <dt>当前信号</dt><dd>${escapeHtml((t.detail || '--') + ' · ' + (t.latency_ms ?? 0) + 'ms')}</dd>
-        <dt>连续失败</dt><dd>${escapeHtml(t.consecutive_failures ?? 0)}</dd>
+        <dt>连续失败</dt><dd class="${fails > 0 ? 'hot' : ''}">${escapeHtml(fails)}</dd>
         <dt>末次检查</dt><dd>${escapeHtml(fullTime(t.last_check_at))}</dd>
-        <dt>末次成功</dt><dd>${escapeHtml(fullTime(t.last_success_at || stats.lastSuccess?.observed_at))}</dd>
+        <dt>末次成功</dt><dd>${escapeHtml(lastSuccess ? fullTime(lastSuccess) + ' （' + ago(lastSuccess) + '）' : '暂无记录')}</dd>
         <dt>末次失败</dt><dd>${escapeHtml(lastFailureText + lastFailureSignal)}</dd>
       </dl>
       ${latestError ? `<div class="message">${escapeHtml(latestError)}</div>` : ''}`;
@@ -560,16 +744,21 @@ internal static class StatusHtml
 
     const groups = {};
     for (const t of targets) (groups[t.category] = groups[t.category] || []).push(t);
-    const order = ['self', 'feature', 'upstream'];
-    for (const cat of order.concat(Object.keys(groups).filter(c => !order.includes(c)))) {
+    const known = GROUPS.map(g => g.key);
+    const order = known.concat(Object.keys(groups).filter(c => !known.includes(c)));
+    for (const cat of order) {
       const groupTargets = groups[cat];
-      if (!groupTargets) continue;
+      if (!groupTargets || !groupTargets.length) continue;
+      const meta = groupMeta(cat);
       const sec = document.createElement('section');
       sec.className = 'group';
       sec.innerHTML = `
         <div class="group-head">
-          <h2>${escapeHtml(groupTitle(cat))}</h2>
-          <span class="group-count">${groupTargets.length} 个探针</span>
+          <div class="lead">
+            <h2>${escapeHtml(meta.title)}</h2>
+            ${meta.kind ? `<span class="group-kind">${escapeHtml(meta.kind)}</span>` : ''}
+          </div>
+          <div class="rollup">${rollup(groupTargets)}</div>
         </div>
         <div class="target-list"></div>`;
       const list = sec.querySelector('.target-list');
@@ -578,16 +767,42 @@ internal static class StatusHtml
         const stats = historyStats(samples);
         const id = safeId(t.slug);
         const isOpen = openTargets.has(t.slug);
-        const signal = t.detail || t.probe || '--';
+        const status = t.status || 'unknown';
+        const sev = t.severity || 'standard';
+        const fails = t.consecutive_failures ?? 0;
+        const unconfigured = isUnconfigured(t);
+        const lastSuccess = t.last_success_at || stats.lastSuccess?.observed_at;
+
+        // Signal line: probe kind, a config hint for unconfigured canaries, and a
+        // loud consecutive-failure flag — the very signals that exposed the 19-day lie.
+        const signalParts = [`<span class="probe-tag">${escapeHtml(t.probe || '--')}</span>`];
+        if (unconfigured) {
+          signalParts.push('<span class="config-hint">未配置凭据 · 等待密钥</span>');
+        } else if (t.detail) {
+          signalParts.push(escapeHtml(t.detail));
+        }
+        if (fails > 0) {
+          signalParts.push(`<span class="fail-flag">连续失败 ${escapeHtml(fails)} 次</span>`);
+        }
+
+        // Latest column: status + last-success relative time (alarming when failing).
+        const ageAlarm = status === 'down' || status === 'degraded';
+        const ageText = unconfigured
+          ? '未配置'
+          : (lastSuccess ? '成功 ' + ago(lastSuccess) : '无成功记录');
+
         const row = document.createElement('article');
-        row.className = `target ${escapeHtml(t.status || 'unknown')}${t.enabled === false ? ' disabled' : ''}${isOpen ? ' open' : ''}`;
+        row.className = `target ${escapeHtml(status)}${t.enabled === false ? ' disabled' : ''}${isOpen ? ' open' : ''}`;
         row.innerHTML = `
           <button class="target-summary" type="button" aria-expanded="${isOpen ? 'true' : 'false'}" aria-controls="details-${escapeHtml(id)}">
             <div class="identity">
               <span class="availability">${escapeHtml(availabilityText(t.availability_percent))}</span>
               <div>
-                <div class="name">${escapeHtml(t.name || t.slug)}</div>
-                <div class="signal">${escapeHtml(signal)}</div>
+                <div class="name-row">
+                  <span class="name">${escapeHtml(t.name || t.slug)}</span>
+                  <span class="sev ${escapeHtml(sev)}" title="严重级：${escapeHtml(severityLabel(sev))}">${escapeHtml(severityLabel(sev))}</span>
+                </div>
+                <div class="signal">${signalParts.join('')}</div>
               </div>
             </div>
             <div class="timeline">
@@ -595,8 +810,8 @@ internal static class StatusHtml
               <div class="axis"><span>2 小时前</span><span>${escapeHtml(stats.lastFailure ? ago(stats.lastFailure.observed_at) + ' 曾失败' : '现在')}</span></div>
             </div>
             <div class="latest">
-              <span class="status"><span class="dot ${escapeHtml(t.status || 'unknown')}"></span>${escapeHtml(statusLabel(t.status))}</span>
-              <span class="age">${escapeHtml((t.latency_ms ?? 0) + 'ms · ' + ago(t.last_check_at))}</span>
+              <span class="status"><span class="dot ${escapeHtml(status)}"></span>${escapeHtml(statusLabel(status))}</span>
+              <span class="age${ageAlarm ? ' alarm' : ''}"><span class="lede">${escapeHtml(ageText)}</span> · ${escapeHtml((t.latency_ms ?? 0) + 'ms')}</span>
             </div>
             <span class="chevron" aria-hidden="true">${isOpen ? '-' : '+'}</span>
           </button>

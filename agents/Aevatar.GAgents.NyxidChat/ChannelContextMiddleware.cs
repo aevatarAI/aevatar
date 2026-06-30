@@ -84,24 +84,35 @@ internal sealed class ChannelContextMiddleware : ILLMCallMiddleware
         static string Resolve(IReadOnlyDictionary<string, string> values, string key) =>
             values.TryGetValue(key, out var value) ? JsonSerializer.Serialize(value ?? string.Empty) : "\"\"";
 
-        return string.Join(
-            "\n",
-            [
-                "<channel-context>",
-                $"platform: {Resolve(metadata, ChannelMetadataKeys.Platform)}",
-                $"chat_type: {Resolve(metadata, ChannelMetadataKeys.ChatType)}",
-                $"sender_id: {Resolve(metadata, ChannelMetadataKeys.SenderId)}",
-                $"sender_name: {Resolve(metadata, ChannelMetadataKeys.SenderName)}",
-                $"conversation_id: {Resolve(metadata, ChannelMetadataKeys.ConversationId)}",
-                $"platform_message_id: {Resolve(metadata, ChannelMetadataKeys.PlatformMessageId)}",
-                $"lark_union_id: {Resolve(metadata, ChannelMetadataKeys.LarkUnionId)}",
-                $"lark_chat_id: {Resolve(metadata, ChannelMetadataKeys.LarkChatId)}",
-                $"operator_user_id: {Resolve(metadata, ChannelMetadataKeys.LarkOperatorUserId)}",
-                $"operator_open_id: {Resolve(metadata, ChannelMetadataKeys.LarkOperatorOpenId)}",
-                $"operator_union_id: {Resolve(metadata, ChannelMetadataKeys.LarkOperatorUnionId)}",
-                $"subject_user_id: {Resolve(metadata, ChannelMetadataKeys.LarkSubjectUserId)}",
-                $"subject_employee_id: {Resolve(metadata, ChannelMetadataKeys.LarkSubjectEmployeeId)}",
-                "</channel-context>",
-            ]);
+        var lines = new List<string>
+        {
+            "<channel-context>",
+            $"platform: {Resolve(metadata, ChannelMetadataKeys.Platform)}",
+            $"chat_type: {Resolve(metadata, ChannelMetadataKeys.ChatType)}",
+            $"sender_id: {Resolve(metadata, ChannelMetadataKeys.SenderId)}",
+            $"sender_name: {Resolve(metadata, ChannelMetadataKeys.SenderName)}",
+        };
+
+        // Only emit the mentions line when the message actually mentioned someone, so turns with no
+        // @-mentions don't carry a noisy empty field. The value is already a readable
+        // `name <open_id>; …` list, so emit it raw rather than through Resolve — JSON-escaping would
+        // mangle the `<>` delimiters and any non-ASCII (e.g. CJK) display names into `\uXXXX`.
+        if (metadata.TryGetValue(ChannelMetadataKeys.Mentions, out var mentions) &&
+            !string.IsNullOrWhiteSpace(mentions))
+        {
+            lines.Add($"mentions: {mentions}");
+        }
+
+        lines.Add($"conversation_id: {Resolve(metadata, ChannelMetadataKeys.ConversationId)}");
+        lines.Add($"platform_message_id: {Resolve(metadata, ChannelMetadataKeys.PlatformMessageId)}");
+        lines.Add($"lark_union_id: {Resolve(metadata, ChannelMetadataKeys.LarkUnionId)}");
+        lines.Add($"lark_chat_id: {Resolve(metadata, ChannelMetadataKeys.LarkChatId)}");
+        lines.Add($"operator_user_id: {Resolve(metadata, ChannelMetadataKeys.LarkOperatorUserId)}");
+        lines.Add($"operator_open_id: {Resolve(metadata, ChannelMetadataKeys.LarkOperatorOpenId)}");
+        lines.Add($"operator_union_id: {Resolve(metadata, ChannelMetadataKeys.LarkOperatorUnionId)}");
+        lines.Add($"subject_user_id: {Resolve(metadata, ChannelMetadataKeys.LarkSubjectUserId)}");
+        lines.Add($"subject_employee_id: {Resolve(metadata, ChannelMetadataKeys.LarkSubjectEmployeeId)}");
+        lines.Add("</channel-context>");
+        return string.Join("\n", lines);
     }
 }

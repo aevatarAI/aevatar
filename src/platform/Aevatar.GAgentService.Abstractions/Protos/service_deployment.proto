@@ -33,6 +33,10 @@ message ServiceDeploymentState {
 message ActivateServiceRevisionCommand {
   ServiceIdentity identity = 1;
   string revision_id = 2;
+  // Deadline after which the activation stops tolerating revision-catalog projection lag.
+  // Stamped by the deployment manager on first handling when unset; carried across self
+  // re-arm continuations so the bounded retry budget survives actor reactivation/replay.
+  google.protobuf.Timestamp activation_deadline_at = 3;
 }
 
 message DeactivateServiceDeploymentCommand {

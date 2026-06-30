@@ -104,7 +104,7 @@ public sealed class LocalSkillCatalogTests
     }
 
     [Fact]
-    public async Task UseSkillTool_RendersWorkflowHandoffBeforeAssociatedFiles()
+    public async Task UseSkillTool_RendersWorkflowTemplatesBeforeAssociatedFiles()
     {
         var catalog = new LocalSkillCatalog();
         var tool = new UseSkillTool(catalog);
@@ -127,11 +127,12 @@ public sealed class LocalSkillCatalogTests
         var result = await tool.ExecuteAsync("""{"skill":"workflow-skill"}""");
         var text = ExtractText(result);
 
-        text.Should().Contain("## aevatar_start_workflow Handoff");
+        text.Should().Contain("## Workflow Templates");
         text.Should().Contain("\"workflow_id\": \"summary-report\"");
         text.Should().Contain("\"workflow_yamls\"");
-        text.Should().Contain("after the workflow is mounted");
-        text.IndexOf("## aevatar_start_workflow Handoff", StringComparison.Ordinal)
+        text.Should().Contain("not runnable scope workflows by themselves");
+        text.Should().Contain("Scope Workflow command path");
+        text.IndexOf("## Workflow Templates", StringComparison.Ordinal)
             .Should().BeLessThan(text.IndexOf("## Associated Files", StringComparison.Ordinal));
     }
 

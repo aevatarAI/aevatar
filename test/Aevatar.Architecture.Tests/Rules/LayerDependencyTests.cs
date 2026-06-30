@@ -22,6 +22,19 @@ public class LayerDependencyTests
     }
 
     [Fact]
+    public void AevatarInvocationToolProvider_ShouldNot_DependOn_GAgentServiceApplication()
+    {
+        var root = FindRepositoryRoot();
+        var projectPath = Path.Combine(root, "src", "Aevatar.AI.ToolProviders.AevatarInvocation", "Aevatar.AI.ToolProviders.AevatarInvocation.csproj");
+        var project = File.ReadAllText(projectPath);
+
+        Assert.DoesNotContain(
+            "Aevatar.GAgentService.Application.csproj",
+            project,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void GAgentServiceAbstractions_ShouldNot_Reference_PresentationProjects()
     {
         var root = FindRepositoryRoot();

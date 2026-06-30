@@ -332,6 +332,9 @@ message LlmReplyCardStreamChunkEvent {
   // AgentRunGAgent run_id that owns the CardKit lifecycle. Card-mode chunks are
   // sent directly to that run actor; ConversationGAgent must not receive them.
   string run_id = 8;
+  // Set on the terminal chunk so the run actor never caps the final accumulated
+  // text on the text-edit fallback path.
+  bool is_final = 9;
 }
 
 message LarkCardDeliveryCompletedEvent {

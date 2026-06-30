@@ -3,7 +3,9 @@ using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Authentication.ScopeServiceTokens;
 using Aevatar.AI.ToolProviders.Skills;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -17,6 +19,7 @@ using Aevatar.GAgentService.Application.Scripts;
 using Aevatar.GAgentService.Application.Schedules;
 using Aevatar.GAgentService.Application.Workflows;
 using Aevatar.GAgentService.Core.Assemblers;
+using Aevatar.GAgentService.Core.Models;
 using Aevatar.GAgentService.Core.Schedules;
 using Aevatar.GAgentService.Core.Ports;
 using Aevatar.GAgentService.Core.Services;
@@ -26,6 +29,7 @@ using Aevatar.GAgentService.Infrastructure.Dispatch;
 using Aevatar.GAgentService.Infrastructure.Orchestration;
 using Aevatar.GAgentService.Infrastructure.Schedules;
 using Aevatar.GAgentService.Hosting.Demo;
+using Aevatar.GAgentService.Hosting.Responses;
 using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Hosting.DependencyInjection;
@@ -69,6 +73,20 @@ public static class ServiceCollectionExtensions
         services.AddAevatarAgentKindRegistry(builder => builder.ScanAssemblies(typeof(Aevatar.GAgentService.Core.GAgents.ServiceDefinitionGAgent).Assembly));
         services.AddOptions<GAgentServiceDemoOptions>()
             .Bind(configuration.GetSection("GAgentService:Demo"));
+        services.AddOptions<ServiceExternalExposureOptions>()
+            .Bind(configuration.GetSection(ServiceExternalExposureOptions.SectionName));
+        services.TryAddSingleton(sp =>
+        {
+            var options = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<ServiceExternalExposureOptions>>().Value;
+            return ServiceExternalExposureRetrySettings.Create(
+                options.RetryMaxAttempts,
+                TimeSpan.FromSeconds(options.RetryBaseDelaySeconds),
+                TimeSpan.FromSeconds(options.RetryMaxDelaySeconds));
+        });
+        services.AddOptions<NyxIdRegistrationTokenOptions>()
+            .Bind(configuration.GetSection(NyxIdRegistrationTokenOptions.SectionName));
+        if (configuration.GetSection(ScopeServiceTokenOptions.SectionName).Get<ScopeServiceTokenOptions>()?.Enabled == true)
+            services.AddScopeServiceTokens(configuration);
         services.AddGAgentServiceProjection();
         services.AddGAgentServiceProjectionReadModelProviders(configuration);
         services.AddGAgentServiceGovernanceCapability(configuration);
@@ -78,10 +96,41 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IServiceCommandTargetProvisioner, DefaultServiceCommandTargetProvisioner>();
         services.TryAddSingleton<IServiceRuntimeActivator, DefaultServiceRuntimeActivator>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<ICommittedStatePublicationHook, ScriptingServiceRevisionRepublishHook>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<ICommittedStatePublicationHook, ServiceExposureReconcileHook>());
+        services.TryAddSingleton<ServiceExternalExposureIntentService>();
+        services.TryAddSingleton<IServiceExternalExposureIntentPort>(sp => sp.GetRequiredService<ServiceExternalExposureIntentService>());
+        services.TryAddSingleton<NyxIdToolOptions>();
+        services.AddHttpClient<NyxIdApiClient>();
+        services.TryAddSingleton<INyxIdServiceRegistrationPort, NyxIdServiceRegistrationAdapter>();
+        services.TryAddSingleton<INyxIdRegistrationTokenAccessor, ConfiguredNyxIdRegistrationTokenAccessor>();
         services.TryAddSingleton<IServiceRunRegistrationPort, ServiceRunRegistrationAdapter>();
         services.TryAddSingleton<ILlmSessionRegistrationPort, LlmSessionRegistrationAdapter>();
         services.TryAddSingleton<IResponsesAgentToolStateCommandPort, ResponsesAgentToolStateCommandAdapter>();
         services.TryAddSingleton<ILlmSessionRunObservationService, LlmSessionRunObservationService>();
+        services.TryAddSingleton<ILlmRunCore>(sp =>
+        {
+            var providerFactory = sp.GetService<Aevatar.AI.Abstractions.LLMProviders.ILLMProviderFactory>();
+            return providerFactory == null
+                ? MissingLlmProviderRunCore.Instance
+                : new LlmRunCore(
+                    providerFactory,
+                    sp.GetServices<IResponsesToolProvider>(),
+                    sp.GetRequiredService<IToolSetRegistry>(),
+                    sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<LlmRunCore>>());
+        });
+        services.TryAddSingleton<LlmRunExecutor>();
+        services.TryAddSingleton<ILlmRunExecutor>(sp => sp.GetRequiredService<LlmRunExecutor>());
+        services.TryAddSingleton<ILlmRunExecutionService>(sp => sp.GetRequiredService<LlmRunExecutor>());
+        // Off-grain run execution (epic #2271 root fix): the scheduler enqueues to an
+        // in-process bounded queue that a hosted background worker drains off any Orleans
+        // grain turn, instead of provisioning a per-run execution grain that blocked its
+        // own event-handler turn for the whole run.
+        services.AddOptions<LlmRunExecutionWorkerOptions>()
+            .Bind(configuration.GetSection(LlmRunExecutionWorkerOptions.SectionName));
+        services.TryAddSingleton<ILlmRunExecutionQueue, LlmRunExecutionQueue>();
+        services.TryAddSingleton<LlmRunExecutionScheduler>();
+        services.TryAddSingleton<ILlmRunExecutionScheduler>(sp => sp.GetRequiredService<LlmRunExecutionScheduler>());
+        services.AddHostedService<LlmRunExecutionWorker>();
         services.TryAddSingleton<IResponsesToolClassificationService, ResponsesToolClassificationService>();
         services.AddToolSetRegistry();
         services.TryAddSingleton<IResponsesDirectToolPlanService, ResponsesDirectToolPlanService>();
@@ -92,6 +141,8 @@ public static class ServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IServiceImplementationAdapter, ScriptingServiceImplementationAdapter>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IServiceImplementationAdapter, WorkflowServiceImplementationAdapter>());
         services.TryAddSingleton<ServiceInvocationResolutionService>();
+        services.TryAddSingleton<IServiceInvocationResolutionPort>(sp =>
+            sp.GetRequiredService<ServiceInvocationResolutionService>());
         services.TryAddSingleton<ServiceInvokeReadinessErrorMapper>();
         services.TryAddSingleton<IServiceCommandPort, ServiceCommandApplicationService>();
         services.TryAddSingleton<IServiceLifecycleQueryPort, ServiceLifecycleQueryApplicationService>();
@@ -111,6 +162,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ScopeWorkflowQueryApplicationService>();
         services.TryAddSingleton<IScopeWorkflowQueryPort>(sp => sp.GetRequiredService<ScopeWorkflowQueryApplicationService>());
         services.TryAddSingleton<IScopeWorkflowCommandPort, ScopeWorkflowCommandApplicationService>();
+        services.TryAddSingleton<IScopeWorkflowSaveAndBindPort, ScopeWorkflowSaveAndBindApplicationService>();
         services.TryAddSingleton<ISkillWorkflowMountPort, SkillWorkflowMountAdapter>();
         services.TryAddSingleton<IScopeBindingCommandPort, ScopeBindingCommandApplicationService>();
         services.TryAddSingleton<IScopeBindingReadinessQueryPort, ScopeBindingReadinessQueryService>();
@@ -139,6 +191,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IServiceServingTargetResolver, DefaultServiceServingTargetResolver>();
         services.TryAddSingleton<IServiceRunRegistrationPort, ServiceRunRegistrationAdapter>();
         services.TryAddSingleton<ServiceInvocationResolutionService>();
+        services.TryAddSingleton<IServiceInvocationResolutionPort>(sp =>
+            sp.GetRequiredService<ServiceInvocationResolutionService>());
         services.TryAddSingleton<ServiceInvokeReadinessErrorMapper>();
         services.TryAddSingleton<IInvokeAdmissionAuthorizer, ScheduledDispatchInvokeAdmissionAuthorizer>();
         services.TryAddSingleton<IServiceInvocationDispatcher, DefaultServiceInvocationDispatcher>();

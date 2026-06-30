@@ -2,12 +2,16 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Studio.Application;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.DependencyInjection;
+using Aevatar.Studio.Application.Studio.WorkflowBoards;
 using Aevatar.Studio.Hosting.Controllers;
 using Aevatar.Studio.Hosting.Endpoints;
+using Aevatar.Studio.Hosting.WorkflowBoards;
 using Aevatar.Studio.Hosting.NyxId;
 using Aevatar.Studio.Infrastructure.DependencyInjection;
 using Aevatar.Studio.Infrastructure.ScopeResolution; // DefaultAppScopeResolver
 using Aevatar.Studio.Projection.DependencyInjection;
+using Aevatar.Studio.Projection.ReadModels;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -46,6 +50,7 @@ internal static class StudioHostingServiceCollectionExtensions
         services.AddStudioInfrastructure(configuration);
         services.AddStudioProjectionComponents(configuration);
         services.AddStudioProjectionReadModelProviders(configuration);
+        services.AddWorkflowBoardExecutionProjectionAdapter();
         return services;
     }
 
@@ -79,4 +84,18 @@ internal static class StudioHostingServiceCollectionExtensions
         services.AddSingleton<ScriptEditorValidationService>();
         return services;
     }
+
+    internal static IServiceCollection AddWorkflowBoardExecutionProjectionAdapter(this IServiceCollection services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        if (HasWorkflowBoardExecutionDocumentReader(services))
+            services.TryAddSingleton<IWorkflowBoardExecutionQueryPort, WorkflowProjectionBoardExecutionQueryPort>();
+
+        return services;
+    }
+
+    private static bool HasWorkflowBoardExecutionDocumentReader(IServiceCollection services) =>
+        services.Any(static descriptor =>
+            descriptor.ServiceType == typeof(IProjectionDocumentReader<WorkflowExecutionBoardDocument, string>));
 }

@@ -1,11 +1,15 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Security.Claims;
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
 using FluentAssertions;
 using Google.Protobuf;
@@ -171,6 +175,226 @@ public sealed class ScheduledDispatchEndpointsTests
     public async Task Create_ShouldReturnBadRequest_WhenServiceInvocationAuthIsEmpty()
     {
         var request = CreateServiceInvocationRequestWithAuth(new ScheduledServiceInvocationAuthHttpRequest());
+
+        var result = await CreateAsync(
+            request,
+            new RecordingScheduledDispatchApplicationService());
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+    }
+
+    [Fact]
+    public async Task Create_ShouldPersistScopeOwnerNyxIdFromAuthenticatedUser_WhenDurableBindingExists()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+        var request = CreateServiceInvocationRequestWithAuth(new ScheduledServiceInvocationAuthHttpRequest
+        {
+            ScopeOwnerNyxId = new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceHttpRequest
+            {
+                Scope = " proxy ",
+            },
+        });
+        var bindingQuery = new FakeExternalIdentityBindingQueryPort();
+        bindingQuery.Bindings[SubjectKey(OwnerSubject("owner-user-1"))] = "bnd-owner-1";
+
+        var result = await CreateAsync(
+            request,
+            service,
+            CreateHttpContext(scopeId: "scope-1", uid: "owner-user-1", sub: "owner-user-subject"),
+            bindingQuery);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        var auth = service.Created.Should().ContainSingle().Which.Target.ServiceInvocation!.Auth;
+        auth.Should().NotBeNull();
+        auth!.SenderNyxId.Should().BeNull();
+        auth.ScopeOwnerNyxId.Should().NotBeNull();
+        auth.ScopeOwnerNyxId!.Scope.Should().Be("proxy");
+        auth.ScopeOwnerNyxId.OwnerSubject.Should().BeEquivalentTo(new ScheduledServiceInvocationNyxIdSubjectRef(
+            OwnerScope.NyxIdPlatform,
+            string.Empty,
+            "owner-user-1"));
+    }
+
+    [Fact]
+    public async Task Create_ShouldRejectScopeOwnerNyxId_WhenDurableOwnerBindingIsMissing()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+        var request = CreateServiceInvocationRequestWithAuth(new ScheduledServiceInvocationAuthHttpRequest
+        {
+            ScopeOwnerNyxId = new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceHttpRequest
+            {
+                Scope = "proxy",
+            },
+        });
+
+        var result = await CreateAsync(
+            request,
+            service,
+            CreateHttpContext(uid: "owner-user-1"));
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        service.Created.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Create_ShouldRejectScopeOwnerNyxId_WhenRequestedScopeCannotBeIssued()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+        var request = CreateServiceInvocationRequestWithAuth(new ScheduledServiceInvocationAuthHttpRequest
+        {
+            ScopeOwnerNyxId = new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceHttpRequest
+            {
+                Scope = "schedule:workflow",
+            },
+        });
+        var bindingQuery = new FakeExternalIdentityBindingQueryPort();
+        bindingQuery.Bindings[SubjectKey(OwnerSubject("owner-user-1"))] = "bnd-owner-1";
+        var credentialExchange = new FakeScheduledServiceInvocationCredentialExchangePort
+        {
+            ScopeOwnerExchangeResult = ScheduledServiceInvocationCredentialExchangeResult.Failure(
+                "NyxID binding does not grant the requested schedule scope."),
+        };
+
+        var result = await CreateAsync(
+            request,
+            service,
+            CreateHttpContext(uid: "owner-user-1"),
+            bindingQuery,
+            credentialExchange);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        service.Created.Should().BeEmpty();
+        credentialExchange.ScopeOwnerSources.Should().ContainSingle()
+            .Which.Scope.Should().Be("schedule:workflow");
+    }
+
+    [Fact]
+    public async Task Update_ShouldPersistScopeOwnerNyxIdFromAuthenticatedUser_WhenDurableBindingExists()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+        var request = CreateServiceInvocationRequestWithAuth(new ScheduledServiceInvocationAuthHttpRequest
+        {
+            ScopeOwnerNyxId = new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceHttpRequest
+            {
+                Scope = "proxy",
+            },
+        });
+        var bindingQuery = new FakeExternalIdentityBindingQueryPort();
+        bindingQuery.Bindings[SubjectKey(OwnerSubject("owner-user-1"))] = "bnd-existing";
+
+        var result = await UpdateAsync(
+            "schedule-owner",
+            request,
+            service,
+            CreateHttpContext(uid: "owner-user-1"),
+            bindingQuery);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        var auth = service.Updated.Should().ContainSingle().Which.Configuration.Target.ServiceInvocation!.Auth;
+        auth.Should().NotBeNull();
+        auth!.ScopeOwnerNyxId.Should().NotBeNull();
+        auth.ScopeOwnerNyxId!.OwnerSubject.Should().BeEquivalentTo(new ScheduledServiceInvocationNyxIdSubjectRef(
+            OwnerScope.NyxIdPlatform,
+            string.Empty,
+            "owner-user-1"));
+    }
+
+    [Fact]
+    public async Task Create_ShouldAcceptDurableSenderBearerTokenWithoutOwnerBinding()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+        var request = CreateServiceInvocationRequestWithAuth(new ScheduledServiceInvocationAuthHttpRequest
+        {
+            DurableSenderBearerToken = " durable-sender-token ",
+        });
+
+        var result = await CreateAsync(request, service);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        var auth = service.Created.Should().ContainSingle().Which.Target.ServiceInvocation!.Auth;
+        auth.Should().NotBeNull();
+        auth!.SenderNyxId.Should().BeNull();
+        auth.ScopeOwnerNyxId.Should().BeNull();
+        auth.DurableSenderBearerToken.Should().Be("durable-sender-token");
+    }
+
+    [Fact]
+    public async Task Create_ShouldDefaultMissingScheduleKindToGeneric()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+
+        var result = await CreateAsync(CreateEnvelopeRequest(scheduleId: "schedule-1"), service);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        service.Created.Should().ContainSingle().Which.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Generic);
+    }
+
+    [Fact]
+    public async Task Update_ShouldRejectScopeOwnerNyxId_WhenDurableOwnerBindingIsMissing()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+        var request = CreateServiceInvocationRequestWithAuth(new ScheduledServiceInvocationAuthHttpRequest
+        {
+            ScopeOwnerNyxId = new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceHttpRequest
+            {
+                Scope = "proxy",
+            },
+        });
+
+        var result = await UpdateAsync(
+            "schedule-owner",
+            request,
+            service,
+            CreateHttpContext(uid: "owner-user-1"));
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        service.Updated.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Create_ShouldRejectServiceInvocationAuthWithMultipleCredentialSources()
+    {
+        var request = CreateServiceInvocationRequestWithAuth(new ScheduledServiceInvocationAuthHttpRequest
+        {
+            ScopeOwnerNyxId = new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceHttpRequest
+            {
+                Scope = "proxy",
+            },
+            DurableSenderBearerToken = "durable-sender-token",
+            SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceHttpRequest
+            {
+                Subject = new ScheduledServiceInvocationNyxIdSubjectRefHttpRequest
+                {
+                    Platform = "lark",
+                    ExternalUserId = "ou-user-1",
+                },
+                Scope = "proxy",
+            },
+        });
 
         var result = await CreateAsync(
             request,
@@ -511,6 +735,11 @@ public sealed class ScheduledDispatchEndpointsTests
     public async Task Create_WithServiceInvocationPayloadBase64Json_ShouldBindAndPackPayload()
     {
         await using var host = await ScheduleEndpointTestHost.StartAsync();
+        host.CatalogReader.Service = CreateServiceCatalog(activeRevisionId: "rev-chat");
+        host.RevisionCatalog.UpsertRevision(
+            "tenant:app:default:workflow",
+            "rev-chat",
+            BuildPreparedArtifact(ChatRequestEvent.Descriptor));
         var chat = new ChatRequestEvent { Prompt = "summarize status" };
 
         var response = await host.Client.PostAsJsonAsync("/api/schedules", new
@@ -544,12 +773,242 @@ public sealed class ScheduledDispatchEndpointsTests
         invocation.Payload.TypeUrl.Should().Be("type.googleapis.com/aevatar.ai.ChatRequestEvent");
         invocation.Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("summarize status");
         invocation.RevisionId.Should().Be("rev-chat");
+        invocation.Auth.Should().NotBeNull();
+        invocation.Auth!.ScopeOwnerNyxId.Should().NotBeNull();
+        invocation.Auth.ScopeOwnerNyxId!.Scope.Should().Be("proxy");
+        invocation.Auth.ScopeOwnerNyxId.OwnerSubject.Should().BeEquivalentTo(new ScheduledServiceInvocationNyxIdSubjectRef(
+            OwnerScope.NyxIdPlatform,
+            string.Empty,
+            "owner-user-1"));
+        configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
+    }
+
+    [Fact]
+    public async Task Create_WithWorkflowScheduleKindAndDurableSenderBearerToken_ShouldForwardScheduleKind()
+    {
+        await using var host = await ScheduleEndpointTestHost.StartAsync();
+        host.CatalogReader.Service = CreateServiceCatalog(activeRevisionId: "rev-chat");
+        host.RevisionCatalog.UpsertRevision(
+            "tenant:app:default:workflow",
+            "rev-chat",
+            BuildPreparedArtifact(ChatRequestEvent.Descriptor));
+        var chat = new ChatRequestEvent { Prompt = "run durable workflow" };
+
+        var response = await host.Client.PostAsJsonAsync("/api/schedules", new
+        {
+            scheduleId = "schedule-chat",
+            displayName = "Workflow chat",
+            scheduleKind = "Workflow",
+            cronExpression = "0 9 * * *",
+            timezone = "UTC",
+            serviceInvocation = new
+            {
+                identity = new
+                {
+                    tenantId = "tenant",
+                    appId = "app",
+                    @namespace = "default",
+                    serviceId = "workflow",
+                },
+                endpointId = "chat",
+                payloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                payloadBase64 = Convert.ToBase64String(chat.ToByteArray()),
+                revisionId = "rev-chat",
+                auth = new
+                {
+                    durableSenderBearerToken = " durable-sender-token ",
+                },
+            },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        var configuration = host.Schedules.Created.Should().ContainSingle().Which;
+        configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
+        var auth = configuration.Target.ServiceInvocation!.Auth;
+        auth.Should().NotBeNull();
+        auth!.DurableSenderBearerToken.Should().Be("durable-sender-token");
+    }
+
+    [Fact]
+    public async Task Create_WithWorkflowScheduleKindAndEnvelopeTarget_ShouldReturnBadRequest()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+        var request = CreateEnvelopeRequest(scheduleId: "schedule-1") with
+        {
+            ScheduleKind = ScheduledDispatchScheduleKind.Workflow,
+        };
+
+        var result = await CreateAsync(request, service);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        service.Created.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Create_WithStaticServiceInvocationAndOmittedAuth_ShouldNotDefaultAuth()
+    {
+        await using var host = await ScheduleEndpointTestHost.StartAsync();
+        host.CatalogReader.Service = CreateServiceCatalog(activeRevisionId: "rev-chat");
+        host.RevisionCatalog.UpsertRevision(
+            "tenant:app:default:workflow",
+            "rev-chat",
+            BuildPreparedArtifact(ChatRequestEvent.Descriptor, ServiceImplementationKind.Static));
+        var chat = new ChatRequestEvent { Prompt = "run static" };
+
+        var response = await host.Client.PostAsJsonAsync("/api/schedules", new
+        {
+            scheduleId = "schedule-chat",
+            displayName = "Static chat",
+            cronExpression = "0 9 * * *",
+            timezone = "UTC",
+            serviceInvocation = new
+            {
+                identity = new
+                {
+                    tenantId = "tenant",
+                    appId = "app",
+                    @namespace = "default",
+                    serviceId = "workflow",
+                },
+                endpointId = "chat",
+                payloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                payloadBase64 = Convert.ToBase64String(chat.ToByteArray()),
+                revisionId = "rev-chat",
+            },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        var configuration = host.Schedules.Created.Should().ContainSingle().Which;
+        configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Generic);
+        configuration.Target.ServiceInvocation!.Auth.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Create_WithWorkflowScheduleKindAndStaticServiceInvocation_ShouldReturnBadRequest()
+    {
+        await using var host = await ScheduleEndpointTestHost.StartAsync();
+        host.CatalogReader.Service = CreateServiceCatalog(activeRevisionId: "rev-chat");
+        host.RevisionCatalog.UpsertRevision(
+            "tenant:app:default:workflow",
+            "rev-chat",
+            BuildPreparedArtifact(ChatRequestEvent.Descriptor, ServiceImplementationKind.Static));
+        var chat = new ChatRequestEvent { Prompt = "run static" };
+
+        var response = await host.Client.PostAsJsonAsync("/api/schedules", new
+        {
+            scheduleId = "schedule-chat",
+            displayName = "Static chat",
+            scheduleKind = "Workflow",
+            cronExpression = "0 9 * * *",
+            timezone = "UTC",
+            serviceInvocation = new
+            {
+                identity = new
+                {
+                    tenantId = "tenant",
+                    appId = "app",
+                    @namespace = "default",
+                    serviceId = "workflow",
+                },
+                endpointId = "chat",
+                payloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                payloadBase64 = Convert.ToBase64String(chat.ToByteArray()),
+                revisionId = "rev-chat",
+            },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        host.Schedules.Created.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Update_WithWorkflowScheduleKindAndScriptingServiceInvocation_ShouldReturnBadRequest()
+    {
+        await using var host = await ScheduleEndpointTestHost.StartAsync();
+        host.CatalogReader.Service = CreateServiceCatalog(activeRevisionId: "rev-chat");
+        host.RevisionCatalog.UpsertRevision(
+            "tenant:app:default:workflow",
+            "rev-chat",
+            BuildPreparedArtifact(ChatRequestEvent.Descriptor, ServiceImplementationKind.Scripting));
+        var chat = new ChatRequestEvent { Prompt = "run script" };
+
+        var response = await host.Client.PutAsJsonAsync("/api/schedules/schedule-chat", new
+        {
+            displayName = "Script chat",
+            scheduleKind = "Workflow",
+            cronExpression = "0 10 * * *",
+            timezone = "UTC",
+            serviceInvocation = new
+            {
+                identity = new
+                {
+                    tenantId = "tenant",
+                    appId = "app",
+                    @namespace = "default",
+                    serviceId = "workflow",
+                },
+                endpointId = "chat",
+                payloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                payloadBase64 = Convert.ToBase64String(chat.ToByteArray()),
+                revisionId = "rev-chat",
+            },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        host.Schedules.Updated.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Update_WithWorkflowServiceInvocationAndOmittedAuth_ShouldLeaveAuthOmittedForActorPreservation()
+    {
+        await using var host = await ScheduleEndpointTestHost.StartAsync();
+        host.CatalogReader.Service = CreateServiceCatalog(activeRevisionId: "rev-chat");
+        host.RevisionCatalog.UpsertRevision(
+            "tenant:app:default:workflow",
+            "rev-chat",
+            BuildPreparedArtifact(ChatRequestEvent.Descriptor));
+        var chat = new ChatRequestEvent { Prompt = "refresh standup" };
+
+        var response = await host.Client.PutAsJsonAsync("/api/schedules/schedule-chat", new
+        {
+            displayName = "Workflow chat",
+            cronExpression = "0 10 * * *",
+            timezone = "UTC",
+            enabled = false,
+            serviceInvocation = new
+            {
+                identity = new
+                {
+                    tenantId = "tenant",
+                    appId = "app",
+                    @namespace = "default",
+                    serviceId = "workflow",
+                },
+                endpointId = "chat",
+                payloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                payloadBase64 = Convert.ToBase64String(chat.ToByteArray()),
+                revisionId = "rev-chat",
+            },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        var configuration = host.Schedules.Updated.Should().ContainSingle().Which.Configuration;
+        configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
+        configuration.Target.ServiceInvocation!.Auth.Should().BeNull();
     }
 
     [Fact]
     public async Task Update_WithServiceInvocationPayloadBase64Json_ShouldBindAndPackPayload()
     {
         await using var host = await ScheduleEndpointTestHost.StartAsync();
+        host.CatalogReader.Service = CreateServiceCatalog(activeRevisionId: "rev-chat");
+        host.RevisionCatalog.UpsertRevision(
+            "tenant:app:default:workflow",
+            "rev-chat",
+            BuildPreparedArtifact(ChatRequestEvent.Descriptor));
         var chat = new ChatRequestEvent { Prompt = "refresh standup" };
 
         var response = await host.Client.PutAsJsonAsync("/api/schedules/schedule-chat", new
@@ -583,6 +1042,8 @@ public sealed class ScheduledDispatchEndpointsTests
         invocation.EndpointId.Should().Be("chat");
         invocation.Payload.TypeUrl.Should().Be("type.googleapis.com/aevatar.ai.ChatRequestEvent");
         invocation.Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("refresh standup");
+        invocation.Auth.Should().BeNull();
+        configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
     }
 
     [Fact]
@@ -651,11 +1112,95 @@ public sealed class ScheduledDispatchEndpointsTests
         });
 
         response.StatusCode.Should().Be(HttpStatusCode.Accepted);
-        var serviceInvocation = host.Schedules.Created.Should().ContainSingle().Which.Target.ServiceInvocation;
+        var configuration = host.Schedules.Created.Should().ContainSingle().Which;
+        var serviceInvocation = configuration.Target.ServiceInvocation;
         serviceInvocation.Should().NotBeNull();
         var invocation = serviceInvocation!;
         invocation.RevisionId.Should().Be("rev-active");
         invocation.Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("json prompt");
+        configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
+    }
+
+    [Fact]
+    public async Task Create_WithServiceInvocationPayloadJson_ShouldInferKindFromResolvedActiveRevision()
+    {
+        await using var host = await ScheduleEndpointTestHost.StartAsync();
+        host.CatalogReader.Service = CreateServiceCatalog(
+            activeRevisionId: "rev-active-workflow",
+            defaultServingRevisionId: "rev-default-static");
+        host.RevisionCatalog.UpsertRevision(
+            "tenant:app:default:workflow",
+            "rev-default-static",
+            BuildPreparedArtifact(ChatRequestEvent.Descriptor, ServiceImplementationKind.Static));
+        host.RevisionCatalog.UpsertRevision(
+            "tenant:app:default:workflow",
+            "rev-active-workflow",
+            BuildPreparedArtifact(ChatRequestEvent.Descriptor));
+
+        var response = await host.Client.PostAsJsonAsync("/api/schedules", new
+        {
+            scheduleId = "schedule-chat",
+            displayName = "Workflow chat",
+            cronExpression = "0 9 * * *",
+            timezone = "UTC",
+            serviceInvocation = new
+            {
+                identity = new
+                {
+                    tenantId = "tenant",
+                    appId = "app",
+                    @namespace = "default",
+                    serviceId = "workflow",
+                },
+                endpointId = "chat",
+                payloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                payloadJson = """{"prompt":"json prompt"}""",
+            },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        var configuration = host.Schedules.Created.Should().ContainSingle().Which;
+        configuration.Target.ServiceInvocation!.RevisionId.Should().Be("rev-active-workflow");
+        configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
+    }
+
+    [Fact]
+    public async Task Create_WithExplicitGenericScheduleKindAndWorkflowServiceInvocation_ShouldInferWorkflow()
+    {
+        await using var host = await ScheduleEndpointTestHost.StartAsync();
+        host.CatalogReader.Service = CreateServiceCatalog(activeRevisionId: "rev-chat");
+        host.RevisionCatalog.UpsertRevision(
+            "tenant:app:default:workflow",
+            "rev-chat",
+            BuildPreparedArtifact(ChatRequestEvent.Descriptor));
+        var chat = new ChatRequestEvent { Prompt = "run generic" };
+
+        var response = await host.Client.PostAsJsonAsync("/api/schedules", new
+        {
+            scheduleId = "schedule-chat",
+            displayName = "Workflow chat",
+            scheduleKind = "Generic",
+            cronExpression = "0 9 * * *",
+            timezone = "UTC",
+            serviceInvocation = new
+            {
+                identity = new
+                {
+                    tenantId = "tenant",
+                    appId = "app",
+                    @namespace = "default",
+                    serviceId = "workflow",
+                },
+                endpointId = "chat",
+                payloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                payloadBase64 = Convert.ToBase64String(chat.ToByteArray()),
+                revisionId = "rev-chat",
+            },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        host.Schedules.Created.Should().ContainSingle()
+            .Which.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
     }
 
     [Fact]
@@ -790,25 +1335,39 @@ public sealed class ScheduledDispatchEndpointsTests
 
     private static Task<IResult> CreateAsync(
         ScheduledDispatchConfigurationHttpRequest request,
-        RecordingScheduledDispatchApplicationService service) =>
+        RecordingScheduledDispatchApplicationService service,
+        HttpContext? http = null,
+        IExternalIdentityBindingQueryPort? bindingQueryPort = null,
+        IScheduledServiceInvocationCredentialExchangePort? credentialExchangePort = null) =>
         ScheduledDispatchEndpoints.Create(
+            http ?? CreateHttpContext(),
             request,
             service,
             new FakeServiceCatalogQueryReader(),
-            new FakeServiceRevisionCatalogQueryReader());
+            new FakeServiceRevisionCatalogQueryReader(),
+            bindingQueryPort ?? new FakeExternalIdentityBindingQueryPort(),
+            credentialExchangePort ?? new FakeScheduledServiceInvocationCredentialExchangePort());
 
     private static Task<IResult> UpdateAsync(
         string scheduleId,
         ScheduledDispatchConfigurationHttpRequest request,
-        RecordingScheduledDispatchApplicationService service) =>
+        RecordingScheduledDispatchApplicationService service,
+        HttpContext? http = null,
+        IExternalIdentityBindingQueryPort? bindingQueryPort = null,
+        IScheduledServiceInvocationCredentialExchangePort? credentialExchangePort = null) =>
         ScheduledDispatchEndpoints.Update(
+            http ?? CreateHttpContext(),
             scheduleId,
             request,
             service,
             new FakeServiceCatalogQueryReader(),
-            new FakeServiceRevisionCatalogQueryReader());
+            new FakeServiceRevisionCatalogQueryReader(),
+            bindingQueryPort ?? new FakeExternalIdentityBindingQueryPort(),
+            credentialExchangePort ?? new FakeScheduledServiceInvocationCredentialExchangePort());
 
-    private static ServiceCatalogSnapshot CreateServiceCatalog(string activeRevisionId) =>
+    private static ServiceCatalogSnapshot CreateServiceCatalog(
+        string activeRevisionId,
+        string defaultServingRevisionId = "") =>
         new(
             "tenant:app:default:workflow",
             "tenant",
@@ -816,7 +1375,7 @@ public sealed class ScheduledDispatchEndpointsTests
             "default",
             "workflow",
             "Workflow",
-            string.Empty,
+            defaultServingRevisionId,
             activeRevisionId,
             string.Empty,
             string.Empty,
@@ -825,10 +1384,24 @@ public sealed class ScheduledDispatchEndpointsTests
             [],
             DateTimeOffset.UtcNow);
 
-    private static PreparedServiceRevisionArtifact BuildPreparedArtifact(MessageDescriptor descriptor) =>
+    private static PreparedServiceRevisionArtifact BuildPreparedArtifact(
+        MessageDescriptor descriptor,
+        ServiceImplementationKind implementationKind = ServiceImplementationKind.Workflow,
+        string endpointId = "chat") =>
         new()
         {
+            ImplementationKind = implementationKind,
             ProtocolDescriptorSet = BuildProtocolDescriptorSetFor(descriptor),
+            Endpoints =
+            {
+                new ServiceEndpointDescriptor
+                {
+                    EndpointId = endpointId,
+                    DisplayName = endpointId,
+                    Kind = ServiceEndpointKind.Command,
+                    RequestTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                },
+            },
         };
 
     private static ByteString BuildProtocolDescriptorSetFor(MessageDescriptor descriptor)
@@ -875,10 +1448,16 @@ public sealed class ScheduledDispatchEndpointsTests
                 0,
                 0,
                 new Dictionary<string, string>(),
-                "actor:schedule-1"),
+                "actor:schedule-1",
+                string.Empty),
             []);
 
-    private static DefaultHttpContext CreateHttpContext()
+    private static DefaultHttpContext CreateHttpContext(
+        string? scopeId = null,
+        string? uid = null,
+        string? sub = null,
+        string? nameIdentifier = null,
+        string? userId = null)
     {
         var http = new DefaultHttpContext
         {
@@ -887,6 +1466,25 @@ public sealed class ScheduledDispatchEndpointsTests
                 .AddOptions()
                 .BuildServiceProvider(),
         };
+        var claims = new List<Claim>();
+        if (!string.IsNullOrWhiteSpace(scopeId))
+            claims.Add(new Claim("scope_id", scopeId));
+        if (!string.IsNullOrWhiteSpace(uid))
+            claims.Add(new Claim("uid", uid));
+        if (!string.IsNullOrWhiteSpace(sub))
+            claims.Add(new Claim("sub", sub));
+        if (!string.IsNullOrWhiteSpace(nameIdentifier))
+            claims.Add(new Claim(ClaimTypes.NameIdentifier, nameIdentifier));
+        if (!string.IsNullOrWhiteSpace(userId))
+            claims.Add(new Claim("user_id", userId));
+
+        if (claims.Count > 0)
+        {
+            http.User = new ClaimsPrincipal(new ClaimsIdentity(
+                claims,
+                "test"));
+        }
+
         http.Response.Body = new MemoryStream();
         return http;
     }
@@ -928,11 +1526,22 @@ public sealed class ScheduledDispatchEndpointsTests
             var schedules = new RecordingScheduledDispatchApplicationService();
             var catalogReader = new FakeServiceCatalogQueryReader();
             var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+            var bindingQuery = new FakeExternalIdentityBindingQueryPort();
+            bindingQuery.Bindings[SubjectKey(OwnerSubject("owner-user-1"))] = "bnd-owner-1";
             builder.Services.AddSingleton<IScheduledDispatchApplicationService>(schedules);
             builder.Services.AddSingleton<IServiceCatalogQueryReader>(catalogReader);
             builder.Services.AddSingleton<IServiceRevisionCatalogQueryReader>(revisionCatalog);
+            builder.Services.AddSingleton<IExternalIdentityBindingQueryPort>(bindingQuery);
+            builder.Services.AddSingleton<IScheduledServiceInvocationCredentialExchangePort, FakeScheduledServiceInvocationCredentialExchangePort>();
 
             var app = builder.Build();
+            app.Use(static (context, next) =>
+            {
+                context.User = new ClaimsPrincipal(new ClaimsIdentity(
+                    [new Claim("uid", "owner-user-1")],
+                    "test"));
+                return next(context);
+            });
             ScheduledDispatchEndpoints.Map(app.MapGroup("/api"));
             await app.StartAsync();
 
@@ -1221,4 +1830,50 @@ public sealed class ScheduledDispatchEndpointsTests
                 AckStage: "accepted"));
         }
     }
+
+    private static ExternalSubjectRef OwnerSubject(string externalUserId) =>
+        new()
+        {
+            Platform = OwnerScope.NyxIdPlatform,
+            Tenant = string.Empty,
+            ExternalUserId = externalUserId,
+        };
+
+    private static string SubjectKey(ExternalSubjectRef subject) =>
+        $"{subject.Platform}:{subject.Tenant}:{subject.ExternalUserId}";
+
+    private sealed class FakeExternalIdentityBindingQueryPort : IExternalIdentityBindingQueryPort
+    {
+        public Dictionary<string, string> Bindings { get; } = new(StringComparer.Ordinal);
+
+        public Task<BindingId?> ResolveAsync(ExternalSubjectRef externalSubject, CancellationToken ct = default)
+        {
+            return Task.FromResult(Bindings.TryGetValue(SubjectKey(externalSubject), out var bindingId)
+                ? new BindingId { Value = bindingId }
+                : null);
+        }
+    }
+
+    private sealed class FakeScheduledServiceInvocationCredentialExchangePort : IScheduledServiceInvocationCredentialExchangePort
+    {
+        public ScheduledServiceInvocationCredentialExchangeResult ScopeOwnerExchangeResult { get; init; } =
+            ScheduledServiceInvocationCredentialExchangeResult.Success("owner-token");
+
+        public List<ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource> ScopeOwnerSources { get; } = [];
+
+        public Task<ScheduledServiceInvocationCredentialExchangeResult> IssueSenderNyxIdAsync(
+            ScheduledServiceInvocationNyxIdCredentialSource source,
+            CancellationToken ct = default) =>
+            Task.FromResult(ScheduledServiceInvocationCredentialExchangeResult.Success("sender-token"));
+
+        public Task<ScheduledServiceInvocationCredentialExchangeResult> IssueScopeOwnerNyxIdAsync(
+            ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource source,
+            ServiceIdentity serviceIdentity,
+            CancellationToken ct = default)
+        {
+            ScopeOwnerSources.Add(source);
+            return Task.FromResult(ScopeOwnerExchangeResult);
+        }
+    }
+
 }

@@ -594,6 +594,7 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
             RevisionId = evt.RevisionId,
             ImplementationKind = evt.ImplementationKind,
             BoundAtUtc = evt.CompletedAtUtc,
+            ExpectedActorId = ResolveExpectedActorId(evt),
         };
         if (HasResolvedImplementationRef(evt.ImplementationRef))
         {
@@ -640,6 +641,9 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
                && string.Equals(currentRun, bindingRunId, StringComparison.Ordinal)
                && !IsCurrentBindingTerminal(state);
     }
+
+    private static string ResolveExpectedActorId(StudioMemberBindingCompletedEvent evt) =>
+        evt.ExpectedActorId ?? string.Empty;
 
     private static bool HasActiveBindingRun(StudioMemberState state, string incomingBindingRunId)
     {

@@ -80,6 +80,100 @@ public sealed class WorkflowExecutionCurrentStateQueryPortFilterTests
             ["def-a", "def-b"]);
     }
 
+    [Fact]
+    public async Task ListWorkflowActorCurrentStatesAsync_ShouldEmitRecencyDescendingSort()
+    {
+        var reader = new RecordingCurrentStateReader();
+        var port = CreatePort(reader);
+
+        await port.ListWorkflowActorCurrentStatesAsync(
+            new WorkflowActorCurrentStateListQuery { Take = 100, ScopeId = "scope-a" });
+
+        reader.LastQuery.Should().NotBeNull();
+        var sort = reader.LastQuery!.Sorts.Should().ContainSingle().Subject;
+        sort.FieldPath.Should().Be(nameof(WorkflowExecutionCurrentStateDocument.UpdatedAtUtcValue));
+        sort.Direction.Should().Be(ProjectionDocumentSortDirection.Desc);
+    }
+
+    [Fact]
+    public async Task ListWorkflowActorCurrentStatesAsync_ShouldEmitOriginStatusAndTimeRangeFilters()
+    {
+        var reader = new RecordingCurrentStateReader();
+        var port = CreatePort(reader);
+        var from = new DateTimeOffset(2026, 6, 1, 0, 0, 0, TimeSpan.Zero);
+        var to = new DateTimeOffset(2026, 6, 23, 0, 0, 0, TimeSpan.Zero);
+
+        await port.ListWorkflowActorCurrentStatesAsync(
+            new WorkflowActorCurrentStateListQuery
+            {
+                Take = 50,
+                Status = " completed ",
+                RunOrigins = [" draft ", "member-invoke", "draft"],
+                UpdatedFromUtc = from,
+                UpdatedToUtc = to,
+            });
+
+        reader.LastQuery.Should().NotBeNull();
+        ShouldContainStringFilter(
+            reader.LastQuery!.Filters,
+            nameof(WorkflowExecutionCurrentStateDocument.Status),
+            ProjectionDocumentFilterOperator.Eq,
+            "completed");
+        ShouldContainStringListFilter(
+            reader.LastQuery.Filters,
+            nameof(WorkflowExecutionCurrentStateDocument.RunOrigin),
+            ProjectionDocumentFilterOperator.In,
+            ["draft", "member-invoke"]);
+        var rangeFilters = reader.LastQuery.Filters
+            .Where(filter => filter.FieldPath == nameof(WorkflowExecutionCurrentStateDocument.UpdatedAtUtcValue))
+            .ToList();
+        rangeFilters.Should().HaveCount(2);
+        rangeFilters.Should().Contain(filter => filter.Operator == ProjectionDocumentFilterOperator.Gte);
+        rangeFilters.Should().Contain(filter => filter.Operator == ProjectionDocumentFilterOperator.Lte);
+    }
+
+    [Fact]
+    public async Task ListWorkflowActorCurrentStatesAsync_ShouldEmitScheduleIdEqFilter_ForSingleScheduleId()
+    {
+        var reader = new RecordingCurrentStateReader();
+        var port = CreatePort(reader);
+
+        await port.ListWorkflowActorCurrentStatesAsync(
+            new WorkflowActorCurrentStateListQuery
+            {
+                Take = 50,
+                ScheduleIds = [" schedule-a "],
+            });
+
+        reader.LastQuery.Should().NotBeNull();
+        ShouldContainStringFilter(
+            reader.LastQuery!.Filters,
+            nameof(WorkflowExecutionCurrentStateDocument.ScheduleId),
+            ProjectionDocumentFilterOperator.Eq,
+            "schedule-a");
+    }
+
+    [Fact]
+    public async Task ListWorkflowActorCurrentStatesAsync_ShouldEmitScheduleIdInFilter_ForMultipleScheduleIds()
+    {
+        var reader = new RecordingCurrentStateReader();
+        var port = CreatePort(reader);
+
+        await port.ListWorkflowActorCurrentStatesAsync(
+            new WorkflowActorCurrentStateListQuery
+            {
+                Take = 50,
+                ScheduleIds = [" schedule-a ", "", "schedule-b", "schedule-a", "   "],
+            });
+
+        reader.LastQuery.Should().NotBeNull();
+        ShouldContainStringListFilter(
+            reader.LastQuery!.Filters,
+            nameof(WorkflowExecutionCurrentStateDocument.ScheduleId),
+            ProjectionDocumentFilterOperator.In,
+            ["schedule-a", "schedule-b"]);
+    }
+
     private static WorkflowExecutionCurrentStateQueryPort CreatePort(RecordingCurrentStateReader reader) =>
         new(
             reader,

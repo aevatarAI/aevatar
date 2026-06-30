@@ -12,6 +12,7 @@ using Aevatar.GAgentService.Governance.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgentService.Core.GAgents;
 
@@ -39,7 +40,7 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
         InitializeId();
     }
 
-    [EventHandler]
+    [EventHandler(AllowSelfHandling = true)]
     public async Task HandleActivateAsync(ActivateServiceRevisionCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -49,7 +50,20 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
 
         var revisionCatalog = await _revisionCatalogQueryReader.GetAsync(command.Identity, CancellationToken.None);
         // Refactor (iter100/cluster-100): Old activation read prepared artifacts from a process-local store. / New activation consumes the projected revision readmodel catalog.
-        var artifact = revisionCatalog.GetRequiredPreparedArtifact(command.Identity, command.RevisionId);
+        // The bind chain dispatches prepare->publish->activate fire-and-forget, so the revision-catalog
+        // projection can lag behind the just-committed prepare event when this handler runs. Treat an
+        // unmaterialized prepared artifact as transient and re-arm a bounded self-continuation
+        // (delay/timeout 事件化 + self continuation 事件化) instead of failing the activation terminally.
+        if (!revisionCatalog.TryGetPreparedArtifact(command.RevisionId, out var artifact))
+        {
+            if (revisionCatalog.IsRevisionPreparationFailed(command.RevisionId))
+                throw new InvalidOperationException(
+                    $"Prepared artifact for '{ServiceKeys.Build(command.Identity)}' revision '{command.RevisionId}' failed preparation.");
+
+            await ReArmActivationForProjectionLagAsync(command);
+            return;
+        }
+
         var currentState = State.Clone();
         var capabilityView = await _capabilityViewReader.GetAsync(command.Identity, command.RevisionId, CancellationToken.None);
         var admissionDecision = await _admissionEvaluator.EvaluateAsync(
@@ -101,6 +115,44 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             activation.PrimaryActorId,
             artifact,
             CancellationToken.None);
+    }
+
+    // Bounded retry budget for tolerating revision-catalog projection lag during activation.
+    private const string ActivationProjectionRetryCallbackPrefix = "service-deployment-activation-projection-retry";
+    private static readonly TimeSpan ActivationProjectionRetryInterval = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan ActivationProjectionRetryBudget = TimeSpan.FromMinutes(5);
+
+    private async Task ReArmActivationForProjectionLagAsync(ActivateServiceRevisionCommand command)
+    {
+        var nowUtc = DateTime.UtcNow;
+        var deadlineUtc = command.ActivationDeadlineAt?.ToDateTime() ?? nowUtc + ActivationProjectionRetryBudget;
+        if (nowUtc >= deadlineUtc)
+        {
+            // Projection never caught up within the bounded budget: surface the honest terminal failure
+            // so the runtime/operator can observe it (matches the pre-fix behaviour, just deferred).
+            throw new InvalidOperationException(
+                $"Prepared artifact for '{ServiceKeys.Build(command.Identity)}' revision '{command.RevisionId}' was not found before the activation deadline.");
+        }
+
+        var remaining = deadlineUtc - nowUtc;
+        var dueTime = remaining < ActivationProjectionRetryInterval ? remaining : ActivationProjectionRetryInterval;
+
+        var retryCommand = command.Clone();
+        retryCommand.ActivationDeadlineAt = Timestamp.FromDateTime(deadlineUtc);
+
+        Logger.LogInformation(
+            "Activation deferred: revision-catalog projection not yet visible for service '{ServiceKey}' revision '{RevisionId}'. Re-arming activation in {DueSeconds:F1}s (deadline {Deadline:O}).",
+            ServiceKeys.Build(command.Identity),
+            command.RevisionId,
+            dueTime.TotalSeconds,
+            deadlineUtc);
+
+        // Revision-scoped callback id so concurrent activations of different revisions on this deployment
+        // actor coalesce per-revision (a re-arm replaces only its own prior pending retry, not another's).
+        await ScheduleSelfDurableTimeoutAsync(
+            $"{ActivationProjectionRetryCallbackPrefix}:{command.RevisionId}",
+            dueTime,
+            retryCommand);
     }
 
     [EventHandler]

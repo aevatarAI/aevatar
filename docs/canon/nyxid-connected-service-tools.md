@@ -6,7 +6,7 @@ owner: eanzhao
 
 # NyxID Connected-Service LLM Tools
 
-把一个 Aevatar service 发布成 NyxID service 后，只要在它的 OpenAPI operation 上加显式标记，Aevatar 就能在直连 NyxID 的会话里把这些 endpoint 动态注册成独立 LLM 工具。工具调用经 NyxID proxy 下发，凭证注入、审计、approval、node routing、delegation 仍由 NyxID 负责。
+把一个 Aevatar service 发布成 NyxID service 后，只要在它的 live OpenAPI operation 上加显式标记，Aevatar 就能在直连 NyxID 的会话里把这些 endpoint 动态注册成独立 LLM 工具。工具调用经 NyxID proxy 下发，凭证注入、审计、approval、node routing、delegation 仍由 NyxID 负责。
 
 NyxID 始终是唯一真实源：service 列表与 OpenAPI spec 每次发现都从 NyxID live surface 读取，仓库内不保留 service/endpoint 影子目录，执行始终回到 NyxID proxy。
 
@@ -56,7 +56,7 @@ paths:
 
 每个准入的 operation 映射为一个独立 `IAgentTool`：
 
-- **Name**：`nyxid_{service_slug}__{name|operationId}`，稳定可预测；超长时按稳定哈希截断。同名冲突时保留第一个并打 `LogWarning`，其余丢弃（避免给模型歧义工具）。
+- **Name**：每个 operation 一个工具，格式为 `nyxid_{service_slug}__{name|operationId}`，稳定可预测；超长时按稳定哈希截断。同名冲突时保留第一个并打 `LogWarning`，其余丢弃（避免给模型歧义工具）。不提供 caller-facing `slug/method/path/body` 通用代理工具，也不新增 `nyxid_service_request` / `NyxIdServiceRequestTool`。
 - **Description**：取 OpenAPI `summary`/`description`，附带 service slug + `METHOD path`。
 - **ParametersSchema**：从结构化 OpenAPI 生成，不做字符串拼装。
   - `path` / `query` / `header` 参数各自成为顶层属性；`path` 参数恒为 required。
@@ -98,6 +98,7 @@ bearer 决定。
 - 不新增 NyxID endpoint / 字段 / 协议；只消费现有 `proxy/services`、`proxy/services/{id}/openapi.json`、`proxy/s/{slug}/...`。
 - 不绕过 NyxID proxy 直接打下游 base URL。
 - 不引入新的投影主链或 read model。
+- 不在 Aevatar 侧维护 shadow service catalog；tool schema、path、query、header、body 均来自该 operation 的 live OpenAPI contract。
 
 ## 6. `QuotaLedger` profile
 

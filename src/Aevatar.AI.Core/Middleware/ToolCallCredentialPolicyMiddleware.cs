@@ -46,7 +46,7 @@ public sealed class ToolCallCredentialPolicyMiddleware : IToolCallMiddleware
             return;
         }
 
-        var message = $"Tool '{context.ToolName}' was not executed because sender binding '{senderBindingId}' has no sender NyxID token. Owner credentials were not used.";
+        var message = $"Tool '{context.ToolName}' was not executed because sender binding '{senderBindingId}' has no valid NyxID credential. Send /init to re-bind your NyxID account and retry. Owner credentials were not used.";
         context.Terminate = true;
         context.TerminationKind = ToolCallTerminationKind.MiddlewareTerminated;
         context.TerminationReason = message;

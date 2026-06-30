@@ -469,11 +469,13 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
     [InlineData(true, false, 2)]
     [InlineData(false, true, 2)]
     [InlineData(false, false, 0)]
-    public async Task WorkflowRunCommandTarget_ReleaseAfterInteraction_ShouldDestroyCreatedActors_WhenCompletionRequiresCleanup(
+    public async Task WorkflowRunCommandTarget_ReleaseAfterInteraction_ShouldReclaimCreatedActors_WhenCompletionRequiresCleanup(
         bool observedCompleted,
         bool terminalDurableCompletion,
         int expectedDestroyCalls)
     {
+        // 06-20-observatory-run-state-feed (R2): in-request cleanup releases the lease/sink and never destroys
+        // synchronously; reclaim is scheduled (no gate → direct destroy on terminal), run inline for determinism.
         var projectionPort = new FakeProjectionPort();
         var actorPort = new FakeWorkflowRunActorPort();
         var target = new WorkflowRunCommandTarget("actor-1",
@@ -481,7 +483,8 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             ["definition-1", "run-1"],
             projectionPort,
             actorPort,
-            new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
+            new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()),
+            detachedReclaimLauncher: reclaim => reclaim());
         target.BindLiveObservation(
             new FakeProjectionLease("actor-1", "cmd-1"),
             new FakeLiveSinkLease("actor-1"),
@@ -496,12 +499,9 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
                     terminalDurableCompletion,
                     WorkflowProjectionCompletionStatus.Completed)),
             CancellationToken.None);
+        await target.PendingReclaimTask;
 
-        if (observedCompleted || terminalDurableCompletion)
-            projectionPort.Events.Should().Equal("detach:actor-1", "release:actor-1");
-        else
-            projectionPort.Events.Should().Equal("detach:actor-1", "release:actor-1");
-
+        projectionPort.Events.Should().Equal("detach:actor-1", "release:actor-1");
         actorPort.DestroyCalls.Should().HaveCount(expectedDestroyCalls);
     }
 

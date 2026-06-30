@@ -780,6 +780,13 @@ public sealed class ModelSlashCommandHandlerTests
                 Scope = scope.Value,
             });
         }
+
+        public Task<CapabilityHandle> IssueShortLivedByBindingIdAsync(
+            ExternalSubjectRef externalSubject,
+            string bindingId,
+            CapabilityScope scope,
+            CancellationToken ct = default) =>
+            IssueShortLivedAsync(externalSubject, scope, ct);
     }
 
     private sealed class ThrowingCapabilityBroker : INyxIdCapabilityBroker
@@ -800,6 +807,13 @@ public sealed class ModelSlashCommandHandlerTests
 
         public Task<CapabilityHandle> IssueShortLivedAsync(
             ExternalSubjectRef externalSubject,
+            CapabilityScope scope,
+            CancellationToken ct = default) =>
+            Task.FromException<CapabilityHandle>(_exception);
+
+        public Task<CapabilityHandle> IssueShortLivedByBindingIdAsync(
+            ExternalSubjectRef externalSubject,
+            string bindingId,
             CapabilityScope scope,
             CancellationToken ct = default) =>
             Task.FromException<CapabilityHandle>(_exception);

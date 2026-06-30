@@ -201,12 +201,43 @@ public sealed class ChannelConversationTurnRunnerTests
         result.Success.Should().BeTrue();
         result.WorkflowDraftRunRequest.Should().NotBeNull();
         result.LlmReplyRequest.Should().BeNull();
-        result.WorkflowDraftRunRequest!.WorkflowSource.WorkflowId.Should().Be("daily-greeting");
+        result.WorkflowDraftRunRequest!.WorkflowSource.Kind.Should().Be(ChannelWorkflowDraftRunSourceKind.DefinitionActor);
+        result.WorkflowDraftRunRequest.WorkflowSource.WorkflowId.Should().Be("daily-greeting");
         result.WorkflowDraftRunRequest.WorkflowSource.DefinitionActorId.Should().Be("actor-daily-greeting");
         result.WorkflowDraftRunRequest.RunId.Should().StartWith("workflow-draft-run-");
         result.WorkflowDraftRunRequest.TargetActorId.Should().BeEmpty();
         result.WorkflowDraftRunRequest.NyxUserAccessToken.Should().Be("user-token-1");
         adapter.Replies.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldReplyAndNotFallbackToLlm_WhenScopeWorkflowLookupIsNotRunnable()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var services = BuildAgentBuilderToolServices(new StubScopeWorkflowQueryPort(
+            BuildWorkflowSummary("scope-1", "daily-greeting", actorId: string.Empty)));
+        var runner = CreateRunner(registrationQueryPort, adapter, services);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "/workflow run daily-greeting",
+                "msg-workflow-not-ready",
+                transportExtras: new TransportExtras
+                {
+                    NyxRegistrationScopeId = "scope-1",
+                    NyxUserAccessToken = "user-token-1",
+                }),
+            RelayRuntimeContext(
+                "msg-workflow-not-ready",
+                nyxUserAccessToken: "user-token-1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.WorkflowDraftRunRequest.Should().BeNull();
+        result.LlmReplyRequest.Should().BeNull();
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().Contain("暂未绑定可运行的 actor");
     }
 
     [Fact]
@@ -281,6 +312,31 @@ public sealed class ChannelConversationTurnRunnerTests
         result.LlmReplyRequest.TargetActorId.Should().BeEmpty();
         result.LlmReplyRequest.Metadata[ChannelMetadataKeys.ChatType].Should().Be("group");
         adapter.Replies.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldStampInboundBotProviderSlugOntoDeferredReplyActivity()
+    {
+        // Cross-talk regression: the deferred reply activity must carry the slug of the bot that
+        // RECEIVED the inbound turn (resolved from its registration), so the downstream CardKit/im
+        // streaming sender proxies through that bot's NyxID app. Without this typed TransportExtras
+        // field the card path falls back to the process-wide default slug and a sibling bot under the
+        // same account answers the DM.
+        var registration = BuildRegistrationEntry();
+        registration.NyxProviderSlug = "api-lark-bot-4";
+        var registrationQueryPort = BuildRegistrationQueryPort(registration);
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity("hello", "msg-slug-1", ConversationScope.DirectMessage, "ou_user_1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.Activity.Should().NotBeNull();
+        result.LlmReplyRequest.Activity!.TransportExtras.Should().NotBeNull();
+        result.LlmReplyRequest.Activity.TransportExtras!.NyxProviderSlug.Should().Be("api-lark-bot-4");
     }
 
     [Fact]
@@ -1525,6 +1581,36 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunInboundAsync_ShouldEngageGroupCardAction_EvenWithoutMention()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            botIdentityResolver: BuildBotIdentityResolver("ou_bot_self"));
+        var activity = BuildCardActionActivity("evt-card-group-button-1");
+        activity.Conversation = ConversationReference.Create(
+            ChannelId.From("lark"),
+            BotInstanceId.From("reg-1"),
+            ConversationScope.Group,
+            partition: "oc_group_chat_1",
+            "group",
+            "oc_group_chat_1");
+        activity.Content.CardAction.ActionKind = ActionElementKind.Button;
+        activity.Content.CardAction.ActionId = "confirm_deploy";
+        activity.Content.CardAction.SubmittedValue = "deploy-staging";
+
+        var result = await runner.RunInboundAsync(activity, CancellationToken.None);
+
+        result.SentActivityId.Should().NotStartWith(GateIgnorePrefix);
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.Activity.Content.Text.Should().Be("[card_action] confirm_deploy: deploy-staging");
+        adapter.Replies.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task RunInboundAsync_ShouldNotPromoteButtonToLlm_WhenTypedWorkflowResumePayloadAttached()
     {
         // A button carrying a typed payload belongs to its dedicated router; if that
@@ -2233,6 +2319,10 @@ public sealed class ChannelConversationTurnRunnerTests
         var services = new ServiceCollection()
             .AddSingleton<IExternalIdentityBindingQueryPort>(broker)
             .AddSingleton<INyxIdCapabilityBroker>(broker)
+            .AddSingleton<INyxIdCurrentUserResolver>(new StubNyxIdCurrentUserResolver
+            {
+                ResolvedUserId = "nyx-user-1",
+            })
             .BuildServiceProvider();
         var registrationQueryPort = BuildRegistrationQueryPort();
         var adapter = new RecordingPlatformAdapter();
@@ -2309,9 +2399,14 @@ public sealed class ChannelConversationTurnRunnerTests
             },
             new BindingId { Value = "bnd-user-1" });
 
+        var userResolver = new StubNyxIdCurrentUserResolver
+        {
+            ResolvedUserId = "nyx-user-1",
+        };
         var services = new ServiceCollection()
             .AddSingleton<IExternalIdentityBindingQueryPort>(broker)
             .AddSingleton<INyxIdCapabilityBroker>(broker)
+            .AddSingleton<INyxIdCurrentUserResolver>(userResolver)
             .BuildServiceProvider();
         var registrationQueryPort = BuildRegistrationQueryPort();
         var adapter = new RecordingPlatformAdapter();
@@ -2342,7 +2437,9 @@ public sealed class ChannelConversationTurnRunnerTests
         toolContext.Caller.OwnerSubject.Should().Be("scope-1");
         toolContext.Credentials.SenderNyxIdAccessToken.Should().BeNull();
         toolContext.SenderBinding.BindingId.Should().Be("bnd-user-1");
+        toolContext.SenderBinding.NyxUserId.Should().Be("nyx-user-1");
         llmControl.SenderNyxIdAccessToken.Should().Be("test-access-token-for-bnd-user-1");
+        userResolver.Tokens.Should().ContainSingle().Which.Should().Be("test-access-token-for-bnd-user-1");
         adapter.Replies.Should().BeEmpty();
     }
 
@@ -3941,7 +4038,8 @@ public sealed class ChannelConversationTurnRunnerTests
             workflowResumeService: services.GetService<ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>(),
             workflowDraftRunAdmission: services.GetService<ChannelWorkflowDraftRunAdmission>(),
             remoteToolApprovalPort: remoteToolApprovalPort,
-            botIdentityResolver: botIdentityResolver);
+            botIdentityResolver: botIdentityResolver,
+            nyxIdCurrentUserResolver: services.GetService<INyxIdCurrentUserResolver>());
     }
 
     private static IServiceProvider BuildAgentBuilderToolServices(IScopeWorkflowQueryPort? workflowQueryPort = null)
@@ -4095,14 +4193,15 @@ public sealed class ChannelConversationTurnRunnerTests
 
     private static ScopeWorkflowSummary BuildWorkflowSummary(
         string scopeId,
-        string workflowId) =>
+        string workflowId,
+        string? actorId = null) =>
         new(
             scopeId,
             workflowId,
             $"Display {workflowId}",
             $"service-key-{workflowId}",
             workflowId,
-            $"actor-{workflowId}",
+            actorId ?? $"actor-{workflowId}",
             "rev-active",
             "deployment-1",
             "active",
@@ -4112,6 +4211,24 @@ public sealed class ChannelConversationTurnRunnerTests
     {
         public Task<IReadOnlyList<ScopeWorkflowSummary>> ListAsync(string scopeId, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<ScopeWorkflowSummary>>(workflow is null ? [] : [workflow]);
+
+        public Task<ScopeWorkflowLookupResult> LookupByWorkflowIdAsync(
+            string scopeId,
+            string workflowId,
+            CancellationToken ct = default)
+        {
+            var summary = workflow is not null &&
+                          string.Equals(workflow.ScopeId, scopeId, StringComparison.Ordinal) &&
+                          string.Equals(workflow.WorkflowId, workflowId, StringComparison.Ordinal)
+                ? workflow
+                : null;
+            return Task.FromResult(summary switch
+            {
+                null => new ScopeWorkflowLookupResult(ScopeWorkflowLookupStatus.NotFound, null, "test_not_found"),
+                { ActorId.Length: 0 } => new ScopeWorkflowLookupResult(ScopeWorkflowLookupStatus.NotReady, null, "test_not_ready"),
+                _ => new ScopeWorkflowLookupResult(ScopeWorkflowLookupStatus.Runnable, summary, "test_runnable"),
+            });
+        }
 
         public Task<ScopeWorkflowSummary?> GetByWorkflowIdAsync(
             string scopeId,
@@ -4445,6 +4562,18 @@ public sealed class ChannelConversationTurnRunnerTests
             if (_throwOnGet)
                 throw new InvalidOperationException("simulated owner-config lookup failure");
             return Task.FromResult(_config);
+        }
+    }
+
+    private sealed class StubNyxIdCurrentUserResolver : INyxIdCurrentUserResolver
+    {
+        public string? ResolvedUserId { get; init; }
+        public List<string> Tokens { get; } = [];
+
+        public Task<string?> ResolveCurrentUserIdAsync(string nyxIdAccessToken, CancellationToken ct = default)
+        {
+            Tokens.Add(nyxIdAccessToken);
+            return Task.FromResult(ResolvedUserId);
         }
     }
 }

@@ -93,6 +93,22 @@ internal sealed class InMemoryCapabilityBroker : INyxIdCapabilityBroker, IExtern
         return Task.FromResult(_handleFactory(externalSubject, bindingId, scope));
     }
 
+    public Task<CapabilityHandle> IssueShortLivedByBindingIdAsync(
+        ExternalSubjectRef externalSubject,
+        string bindingId,
+        CapabilityScope scope,
+        CancellationToken ct = default)
+    {
+        ExternalSubjectRefExtensions.EnsureValid(externalSubject);
+        ArgumentException.ThrowIfNullOrWhiteSpace(bindingId);
+        ArgumentNullException.ThrowIfNull(scope);
+
+        if (_revokedBindings.ContainsKey(bindingId))
+            throw new BindingRevokedException(externalSubject, "Binding revoked at NyxID.");
+
+        return Task.FromResult(_handleFactory(externalSubject, new BindingId { Value = bindingId }, scope));
+    }
+
     private static BindingChallenge DefaultChallenge(ExternalSubjectRef externalSubject) =>
         new()
         {

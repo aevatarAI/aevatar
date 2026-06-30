@@ -101,7 +101,9 @@ internal sealed class WorkflowRunActorPort :
                     definition.WorkflowYaml,
                     definition.WorkflowName,
                     definition.InlineWorkflowYamls,
-                    definition.ScopeId),
+                    definition.ScopeId,
+                    definition.RunOrigin,
+                    definition.ScheduleId),
                 ct);
 
             return new WorkflowRunCreationReceipt(
@@ -219,6 +221,27 @@ internal sealed class WorkflowRunActorPort :
             var binding = await _bindingReader.GetAsync(existingActor.Id, ct);
             if (binding == null || binding.ActorKind != WorkflowActorKind.Definition)
             {
+                // A missing binding doc, or one frozen to the Run kind, is the signature of a definition
+                // _id whose binding read-model was clobbered by a relayed run-bind (the studio failure).
+                // When the caller supplies the definition payload (built-in/catalog-resolved definitions
+                // always do), re-bind from that payload instead of failing the run; the binding heal
+                // write dispatcher (Definition supersedes a Run-kind slot) lets the re-bind win, so the
+                // actor self-heals back to a Definition document. A genuinely unsupported actor (not a
+                // workflow definition) still fails fast — re-binding onto it would be wrong.
+                var isClobberedDefinitionSlot =
+                    binding == null || binding.ActorKind == WorkflowActorKind.Run;
+                if (isClobberedDefinitionSlot && HasDefinitionPayload(definition))
+                {
+                    await BindWorkflowDefinitionAsync(
+                        existingActor.Id,
+                        definition.WorkflowYaml,
+                        definition.WorkflowName,
+                        definition.InlineWorkflowYamls,
+                        definition.ScopeId,
+                        ct);
+                    return new DefinitionActorResolutionResult(existingActor.Id, CreatedNow: false);
+                }
+
                 throw new InvalidOperationException(
                     $"Actor '{existingActor.Id}' is not a workflow definition actor and cannot be reused as a definition source.");
             }
@@ -335,6 +358,10 @@ internal sealed class WorkflowRunActorPort :
             : normalized;
     }
 
+    private static bool HasDefinitionPayload(WorkflowDefinitionBinding definition) =>
+        !string.IsNullOrWhiteSpace(definition.WorkflowYaml) ||
+        definition.InlineWorkflowYamls.Count > 0;
+
     private static bool IsSameDefinition(
         WorkflowActorBinding binding,
         WorkflowDefinitionBinding definition)
@@ -429,12 +456,14 @@ internal sealed class WorkflowRunActorPort :
         string workflowYaml,
         string workflowName,
         IReadOnlyDictionary<string, string> inlineWorkflowYamls,
-        string? scopeId) =>
+        string? scopeId,
+        string? runOrigin,
+        string? scheduleId) =>
         new()
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(BuildBindWorkflowRunDefinitionEvent(definitionActorId, runId, workflowYaml, workflowName, inlineWorkflowYamls, scopeId)),
+            Payload = Any.Pack(BuildBindWorkflowRunDefinitionEvent(definitionActorId, runId, workflowYaml, workflowName, inlineWorkflowYamls, scopeId, runOrigin, scheduleId)),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication(WorkflowRunActorPortPublisherId, TopologyAudience.Self),
             Propagation = new EnvelopePropagation
             {
@@ -491,7 +520,9 @@ internal sealed class WorkflowRunActorPort :
         string workflowYaml,
         string workflowName,
         IReadOnlyDictionary<string, string> inlineWorkflowYamls,
-        string? scopeId)
+        string? scopeId,
+        string? runOrigin,
+        string? scheduleId)
     {
         var bind = new BindWorkflowRunDefinitionEvent
         {
@@ -500,6 +531,8 @@ internal sealed class WorkflowRunActorPort :
             WorkflowYaml = workflowYaml ?? string.Empty,
             WorkflowName = workflowName ?? string.Empty,
             ScopeId = scopeId?.Trim() ?? string.Empty,
+            RunOrigin = runOrigin?.Trim() ?? string.Empty,
+            ScheduleId = scheduleId?.Trim() ?? string.Empty,
         };
 
         foreach (var (key, value) in inlineWorkflowYamls)

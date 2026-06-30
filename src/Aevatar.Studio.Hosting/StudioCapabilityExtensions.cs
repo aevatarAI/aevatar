@@ -59,8 +59,11 @@ public static class StudioCapabilityExtensions
             {
                 app.MapControllers();
                 StudioEndpoints.Map(app, embeddedWorkflowMode: true);
+                WorkflowBoardSnapshotEndpoints.Map(app);
                 StudioMemberEndpoints.Map(app);
+                StudioProvisioningEndpoints.Map(app);
                 StudioTeamEndpoints.Map(app);
+                NyxIdLoginFinalizationEndpoints.Map(app);
                 Controllers.ChatHistoryEndpoints.MapChatHistoryEndpoints(app);
                 app.MapExplorerEndpoints();
             });

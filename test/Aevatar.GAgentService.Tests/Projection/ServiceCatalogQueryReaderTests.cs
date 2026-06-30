@@ -22,6 +22,7 @@ public sealed class ServiceCatalogQueryReaderTests
             Namespace = "default",
             ServiceId = "svc",
             DisplayName = "Service",
+            StateVersion = 42,
             Endpoints =
             {
                 new ServiceCatalogEndpointReadModel
@@ -49,6 +50,39 @@ public sealed class ServiceCatalogQueryReaderTests
         snapshot.ExternalExposure.Should().NotBeNull();
         snapshot.ExternalExposure.NyxidSlug.Should().Be("aevatar-orders");
         snapshot.ExternalExposure.RegisteredAt.Should().Be(DateTimeOffset.Parse("2026-06-11T01:02:03+00:00"));
+        snapshot.ExternalExposure.SourceStateVersion.Should().Be(42);
+    }
+
+    [Fact]
+    public async Task GetAsync_ShouldMapFailedExposureWithoutSlugOrRegisteredAt()
+    {
+        var store = new RecordingDocumentStore<ServiceCatalogReadModel>(x => x.Id);
+        await store.UpsertAsync(new ServiceCatalogReadModel
+        {
+            Id = "tenant:app:default:svc",
+            TenantId = "tenant",
+            AppId = "app",
+            Namespace = "default",
+            ServiceId = "svc",
+            StateVersion = 7,
+            ExternalExposure = new ServiceCatalogExternalExposureReadModel
+            {
+                Status = ServiceRegistrationStatus.Failed,
+                DesiredSpecHash = "hash-1",
+                LastError = "retry_exhausted:MissingToken:missing_registration_token",
+                Attempt = 3,
+                ExposureDesired = true,
+            },
+        });
+        var reader = new ServiceCatalogQueryReader(store);
+
+        var snapshot = await reader.GetAsync(GAgentServiceTestKit.CreateIdentity());
+
+        snapshot.Should().NotBeNull();
+        snapshot!.ExternalExposure.Should().NotBeNull();
+        snapshot.ExternalExposure!.Status.Should().Be(ServiceRegistrationStatus.Failed);
+        snapshot.ExternalExposure.LastError.Should().Be("retry_exhausted:MissingToken:missing_registration_token");
+        snapshot.ExternalExposure.SourceStateVersion.Should().Be(7);
     }
 
     [Fact]

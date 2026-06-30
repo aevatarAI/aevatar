@@ -18,7 +18,7 @@ internal sealed class WorkflowInfrastructureCapabilitiesProvider : IWorkflowCapa
                 "Suspends workflow execution until an external signal arrives.",
                 [
                     new PrimitiveParameterDescriptor("signal_name", "string", true, "Signal name used to resume this waiter."),
-                    new PrimitiveParameterDescriptor("timeout_ms", "int", false, "Maximum wait duration in milliseconds."),
+                    new PrimitiveParameterDescriptor("timeout_ms", "int", false, "Maximum wait duration in milliseconds, capped at 86400000."),
                 ]),
             ["workflow_call"] = new(
                 "Invokes another workflow definition as a sub-workflow.",

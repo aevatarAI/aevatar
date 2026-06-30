@@ -141,7 +141,8 @@ public sealed class LarkCoverageTests
             descriptor.ServiceType == typeof(IAgentToolSource) &&
             descriptor.ImplementationType == typeof(LarkAgentToolSource));
         services.Should().NotContain(descriptor =>
-            descriptor.ServiceType == typeof(IWorkflowConnectedServiceFileSubmitAdapter));
+            descriptor.ServiceType.FullName != null &&
+            descriptor.ServiceType.FullName.Contains("WorkflowConnectedServiceFileSubmit", StringComparison.Ordinal));
 
         services.Single(descriptor => descriptor.ServiceType == typeof(LarkToolOptions))
             .ImplementationInstance.Should().BeOfType<LarkToolOptions>()
@@ -434,6 +435,22 @@ public sealed class LarkCoverageTests
             _ = request;
             _ = ct;
             return Task.FromResult("""{"code":0,"data":{}}""");
+        }
+
+        public Task<string> CreateBitableAppAsync(string token, LarkBitableCreateRequest request, CancellationToken ct)
+        {
+            _ = token;
+            _ = request;
+            _ = ct;
+            return Task.FromResult("""{"code":0,"data":{"app":{"app_token":"bascn_default","url":"https://example.feishu.cn/base/bascn_default"}}}""");
+        }
+
+        public Task<string> GrantResourceMemberAsync(string token, LarkResourceMemberGrantRequest request, CancellationToken ct)
+        {
+            _ = token;
+            _ = request;
+            _ = ct;
+            return Task.FromResult("""{"code":0,"data":{"member":{"member_id":"ou_default","perm":"full_access"}}}""");
         }
 
         public Task<string> UploadDriveMediaAsync(string token, LarkDriveMediaUploadRequest request, CancellationToken ct)

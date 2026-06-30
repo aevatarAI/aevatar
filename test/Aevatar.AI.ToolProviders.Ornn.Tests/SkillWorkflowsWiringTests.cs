@@ -99,7 +99,7 @@ public sealed class SkillWorkflowsWiringTests
     }
 
     [Fact]
-    public async Task UseSkillTool_RendersWorkflowsSectionWithStartWorkflowInstructions()
+    public async Task UseSkillTool_RendersUnMountedWorkflowsAsTemplates()
     {
         var catalog = new LocalSkillCatalog();
         catalog.Register(new SkillDefinition
@@ -125,8 +125,10 @@ public sealed class SkillWorkflowsWiringTests
         var output = await tool.ExecuteAsync("""{"skill":"translator","mount_workflows":false}""");
         var text = ExtractText(output);
 
-        text.Should().Contain("## aevatar_start_workflow Handoff");
-        text.Should().Contain("aevatar_start_workflow");
+        text.Should().Contain("## Workflow Templates");
+        text.Should().Contain("templates/import sources");
+        text.Should().Contain("Scope Workflow command path");
+        text.Should().Contain("not runnable scope workflows by themselves");
         text.Should().Contain("workflow_yamls");
         text.Should().Contain("translate_flow");
         text.Should().Contain("```json");
@@ -149,7 +151,7 @@ public sealed class SkillWorkflowsWiringTests
         var output = await tool.ExecuteAsync("""{"skill":"plain"}""");
         var text = ExtractText(output);
 
-        text.Should().NotContain("## aevatar_start_workflow Handoff");
+        text.Should().NotContain("## Workflow Templates");
         text.Should().NotContain("aevatar_start_workflow");
     }
 
@@ -209,7 +211,7 @@ public sealed class SkillWorkflowsWiringTests
         text.Should().Contain("### script_execute");
         text.Should().Contain("\"input\": \"Use the current user request and skill arguments.\"");
 
-        text.IndexOf("## aevatar_start_workflow Handoff", StringComparison.Ordinal)
+        text.IndexOf("## Workflow Templates", StringComparison.Ordinal)
             .Should().BeLessThan(text.IndexOf("## script_compile/script_execute Handoff", StringComparison.Ordinal));
         text.IndexOf("## script_compile/script_execute Handoff", StringComparison.Ordinal)
             .Should().BeLessThan(text.IndexOf("## Associated Files", StringComparison.Ordinal));
@@ -248,7 +250,8 @@ public sealed class SkillWorkflowsWiringTests
 
         var output = await tool.ExecuteAsync("""{"skill":"translator","mount_workflows":false}""");
 
-        output.Should().Contain("## aevatar_start_workflow Handoff");
+        output.Should().Contain("## Workflow Templates");
+        output.Should().Contain("templates/import sources");
         output.Should().NotContain("## Mounted Workflows");
         commandPort.Requests.Should().BeEmpty();
     }
@@ -394,13 +397,13 @@ public sealed class SkillWorkflowsWiringTests
         commandPort.Requests[0].ScopeId.Should().Be("scope-1");
         commandPort.Requests[0].WorkflowId.Should().Be("translate_flow");
         commandPort.Requests[0].WorkflowYaml.Should().Be("name: translate_flow\nsteps: []\n");
-        commandPort.Requests[0].WorkflowName.Should().Be("translate_flow");
+        commandPort.Requests[0].WorkflowName.Should().BeNull();
         commandPort.Requests[0].DisplayName.Should().Be("translate_flow");
         commandPort.Requests[0].InlineWorkflowYamls.Should().ContainSingle()
             .Which.Should().Be(new KeyValuePair<string, string>("workflow_1", "name: helper_flow\nsteps: []\n"));
         commandPort.Requests[1].WorkflowId.Should().Be("qa_flow");
         output.Should().Contain("## Mounted Workflows");
-        output.Should().Contain("Workflow mount commands were accepted for dispatch; read models may still be propagating.");
+        output.Should().Contain("Workflow mount/import commands were accepted for dispatch through the Scope Workflow command path; read models may still be propagating before the workflows are page-visible or runnable.");
         output.Should().Contain("\"accepted\": true");
         output.Should().Contain("\"acceptance_stage\": \"accepted\"");
         output.Should().Contain("\"propagation_stage\": \"readmodel_propagating\"");
@@ -408,6 +411,38 @@ public sealed class SkillWorkflowsWiringTests
         output.Should().Contain("\"command_handles\"");
         output.Should().NotContain("already visible");
         output.Should().NotContain("strongly consistent");
+    }
+
+    [Fact]
+    public async Task UseSkillTool_MountWorkflowsTrue_PreservesDescriptorWorkflowIdAndLetsCommandPortParseYamlName()
+    {
+        using var _ = BeginContextScope(scopeId: "scope-1");
+        var catalog = new LocalSkillCatalog();
+        catalog.Register(new SkillDefinition
+        {
+            Name = "packaged-skill",
+            Description = "Uses packaged workflow identity",
+            Instructions = "Follow these steps.",
+            Source = SkillSource.Local,
+            Workflows =
+            [
+                new SkillWorkflowDescriptor
+                {
+                    WorkflowId = "packaged-entry",
+                    WorkflowYamls = ["name: parsed_entry\nsteps: []\n"],
+                },
+            ],
+        });
+        var commandPort = new RecordingScopeWorkflowCommandPort();
+        var tool = new UseSkillTool(catalog, scopeWorkflowCommandPort: commandPort);
+
+        await tool.ExecuteAsync("""{"skill":"packaged-skill","mount_workflows":true}""");
+
+        commandPort.Requests.Should().ContainSingle();
+        commandPort.Requests[0].WorkflowId.Should().Be("packaged-entry");
+        commandPort.Requests[0].WorkflowYaml.Should().Be("name: parsed_entry\nsteps: []\n");
+        commandPort.Requests[0].WorkflowName.Should().BeNull();
+        commandPort.Requests[0].DisplayName.Should().Be("packaged-entry");
     }
 
     [Fact]

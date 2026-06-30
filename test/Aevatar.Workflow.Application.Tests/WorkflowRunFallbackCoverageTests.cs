@@ -148,6 +148,7 @@ public sealed class WorkflowRunFallbackCoverageTests
         result.Succeeded.Should().BeTrue();
         pipeline.Requests.Select(static x => x.Source.WorkflowName).Should().Equal("auto", "direct");
         pipeline.Requests.Select(static x => x.Source.ActorId).Should().Equal("actor-requested", null);
+        await target.PendingReclaimTask;
         actorPort.DestroyCalls.Should().ContainSingle().Which.Should().Be("actor-1");
     }
 
@@ -186,7 +187,10 @@ public sealed class WorkflowRunFallbackCoverageTests
             [actorId],
             projectionPort,
             actorPort,
-            new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
+            new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()),
+            // 06-20-observatory-run-state-feed (R2): run the scheduled created-actor reclaim inline so the
+            // destroy is observed deterministically within the test.
+            detachedReclaimLauncher: reclaim => reclaim());
         target.BindLiveObservation(
             new FakeProjectionLease(actorId, commandId),
             new FakeLiveSinkLease(),

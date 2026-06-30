@@ -33,6 +33,56 @@ public sealed class VoicePresenceBootstrapTests
     }
 
     [Fact]
+    public void AddAevatarAIFeatures_ShouldRegisterVoiceWebSocketAttachExecutor()
+    {
+        using var envScope = new EnvironmentVariablesScope(new Dictionary<string, string?>
+        {
+            ["OPENAI_API_KEY"] = null,
+        });
+        var services = new ServiceCollection();
+        var config = new ConfigurationBuilder().Build();
+
+        services.AddAevatarAIFeatures(config, options =>
+        {
+            options.EnableMEAIProviders = false;
+            options.VoicePresence.MiniCPMProvider = new VoiceProviderConfig
+            {
+                ProviderName = "minicpm",
+                Endpoint = "https://minicpm.example.com",
+            };
+            options.VoicePresence.MiniCPMSession = new VoiceSessionConfig
+            {
+                SampleRateHz = 16000,
+            };
+        });
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<VoiceWebSocketAttachExecutor>()
+            .Should().NotBeNull();
+        provider.GetRequiredService<Microsoft.Extensions.Options.IOptions<VoiceWebSocketAttachOptions>>()
+            .Value.ConflictRetryAfterSeconds.Should().Be(1);
+    }
+
+    [Fact]
+    public void VoiceWebSocketAttachOptionsValidator_ShouldRejectInvalidTimeouts()
+    {
+        var validator = new VoiceWebSocketAttachOptionsValidator();
+        var result = validator.Validate(null, new VoiceWebSocketAttachOptions
+        {
+            AttachTimeout = TimeSpan.Zero,
+            CloseWaitTimeout = TimeSpan.Zero,
+            PolicyViolationCloseTimeout = TimeSpan.Zero,
+            ConflictRetryAfterSeconds = 0,
+        });
+
+        result.Failed.Should().BeTrue();
+        result.Failures.Should().Contain(failure => failure.Contains(nameof(VoiceWebSocketAttachOptions.AttachTimeout)));
+        result.Failures.Should().Contain(failure => failure.Contains(nameof(VoiceWebSocketAttachOptions.CloseWaitTimeout)));
+        result.Failures.Should().Contain(failure => failure.Contains(nameof(VoiceWebSocketAttachOptions.PolicyViolationCloseTimeout)));
+        result.Failures.Should().Contain(failure => failure.Contains(nameof(VoiceWebSocketAttachOptions.ConflictRetryAfterSeconds)));
+    }
+
+    [Fact]
     public void AddAevatarAIFeatures_WhenVoicePresenceOpenAIEndpointOnlyConfigured_ShouldRegisterOpenAIThroughBroker()
     {
         using var envScope = new EnvironmentVariablesScope(new Dictionary<string, string?>

@@ -125,6 +125,10 @@ public static class IdentityServiceCollectionExtensions
             static command => new ChannelIdentityOAuthCommandTarget(
                 command.ExternalSubject.ToActorId(),
                 "channel-identity.broker-revocation"));
+        services.AddIdentityOAuthCommandDispatch<RefreshBindingCommand, ExternalIdentityBindingGAgent>(
+            static command => new ChannelIdentityOAuthCommandTarget(
+                command.ExternalSubject.ToActorId(),
+                "channel-identity.oauth-refresh"));
         services.AddIdentityOAuthCommandDispatch<ObserveBrokerCapabilityCommand, AevatarOAuthClientGAgent>(
             static _ => new ChannelIdentityOAuthCommandTarget(
                 AevatarOAuthClientGAgent.WellKnownId,
@@ -160,6 +164,12 @@ public static class IdentityServiceCollectionExtensions
         services.TryAddSingleton<NyxIdRemoteCapabilityBroker>();
         services.TryAddSingleton<INyxIdCapabilityBroker>(sp => sp.GetRequiredService<NyxIdRemoteCapabilityBroker>());
         services.TryAddSingleton<INyxIdBrokerCallbackClient>(sp => sp.GetRequiredService<NyxIdRemoteCapabilityBroker>());
+
+        // ─── Binding revocation reconciler (observed-invalid_grant self-heal) ───
+        // Event-sources a local revoke when a turn observes BindingRevokedException
+        // (NyxID invalid_grant). Lives here so the RevokeBindingCommand + dispatch
+        // stay in the identity layer; NyxidChat depends only on the abstraction.
+        services.TryAddSingleton<IBindingRevocationReconciler, BindingRevocationReconciler>();
 
         // ─── OAuth client bootstrap (self-registration via NyxID DCR) ───
         // DCR registrar stays as AddHttpClient<T>() (transient): the

@@ -44,6 +44,7 @@
     <Project Path="src/Aevatar.AI.ToolProviders.ChronoStorage/Aevatar.AI.ToolProviders.ChronoStorage.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.AgentCatalog/Aevatar.AI.ToolProviders.AgentCatalog.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.AevatarInvocation/Aevatar.AI.ToolProviders.AevatarInvocation.csproj" />
+    <Project Path="src/Aevatar.AI.ToolProviders.StudioProvisioning/Aevatar.AI.ToolProviders.StudioProvisioning.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.Channel/Aevatar.AI.ToolProviders.Channel.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.ChannelAdmin/Aevatar.AI.ToolProviders.ChannelAdmin.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.ToolSetRegistry/Aevatar.AI.ToolProviders.ToolSetRegistry.csproj" />
@@ -114,6 +115,7 @@
     <Project Path="src/Aevatar.Authentication.Abstractions/Aevatar.Authentication.Abstractions.csproj" />
     <Project Path="src/Aevatar.Authentication.Hosting/Aevatar.Authentication.Hosting.csproj" />
     <Project Path="src/Aevatar.Authentication.Providers.NyxId/Aevatar.Authentication.Providers.NyxId.csproj" />
+    <Project Path="src/Aevatar.Authentication.ScopeServiceTokens/Aevatar.Authentication.ScopeServiceTokens.csproj" />
   </Folder>
   <Folder Name="/src/studio/">
     <Project Path="src/Aevatar.Studio.Domain/Aevatar.Studio.Domain.csproj" />
@@ -160,6 +162,7 @@
     <Project Path="test\Aevatar.AI.Core.Tests\Aevatar.AI.Core.Tests.csproj" />
     <Project Path="test\Aevatar.AI.Tests\Aevatar.AI.Tests.csproj" />
     <Project Path="test/Aevatar.AI.ToolProviders.AevatarInvocation.Tests/Aevatar.AI.ToolProviders.AevatarInvocation.Tests.csproj" />
+    <Project Path="test/Aevatar.AI.ToolProviders.StudioProvisioning.Tests/Aevatar.AI.ToolProviders.StudioProvisioning.Tests.csproj" />
     <Project Path="test\Aevatar.AI.ToolProviders.Ornn.Tests\Aevatar.AI.ToolProviders.Ornn.Tests.csproj" />
     <Project Path="test\Aevatar.AI.ToolProviders.ServiceInvoke.Tests\Aevatar.AI.ToolProviders.ServiceInvoke.Tests.csproj" />
     <Project Path="test\Aevatar.AI.ToolProviders.Lark.Tests\Aevatar.AI.ToolProviders.Lark.Tests.csproj" />

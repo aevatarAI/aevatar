@@ -180,7 +180,7 @@ public class ConnectedServiceSpecCacheTests
     [Fact]
     public async Task GetOrFetchAsync_ReturnsNull_WhenNoBaseUrlAndNoSpecUrl()
     {
-        var options = new NyxIdToolOptions();
+        var options = new NyxIdToolOptions { BaseUrl = null };
         using var cache = new ConnectedServiceSpecCache(options);
 
         var ops = await cache.GetOrFetchAsync("github", "svc-github", null, "token");

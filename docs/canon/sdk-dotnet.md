@@ -74,7 +74,7 @@ await client.SignalAsync(signalRequest);
 Long-running external work should use continuation semantics instead of stretching a normal executor step past its `600s` timeout. The supported pattern is:
 
 1. Start the external job from the workflow.
-2. Park the run at `wait_signal` (up to `5400000ms`) or `human_approval` (for operator gates).
+2. Park the run at `wait_signal` (up to `86400000ms`, one durable callback/signal lease) or `human_approval` (for operator gates).
 3. Resume with `SignalAsync(...)` / `ResumeAsync(...)` when the callback arrives.
 
 ## 4. Run-level error handling

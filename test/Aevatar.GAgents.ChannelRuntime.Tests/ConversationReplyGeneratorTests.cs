@@ -518,7 +518,7 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
-    public async Task GenerateReplyAsync_WhenPriorHistoryWindowIsFull_StillExportsCurrentTurnHistory()
+    public async Task GenerateReplyAsync_CapsPriorHistoryToTenMostRecent_AndStillExportsCurrentTurnHistory()
     {
         var providerFactory = new SequentialResponseProviderFactory("window assistant");
         var generator = new NyxIdConversationReplyGenerator(providerFactory);
@@ -546,11 +546,18 @@ public sealed class ConversationReplyGeneratorTests
             CancellationToken.None);
 
         providerFactory.Requests.Should().HaveCount(1);
-        providerFactory.Requests[0].Messages
+        var promptHistory = providerFactory.Requests[0].Messages
             .Where(message => message.Role is "user" or "assistant")
             .Select(message => (message.Role, message.Content))
-            .Should()
-            .ContainInOrder(("user", "prior 0"), ("assistant", "prior 1"), ("user", "current user"));
+            .ToList();
+        // R1: never send the full group history. Only the 10 MOST RECENT prior entries (prior 90..99)
+        // reach the prompt, in order, followed by the current turn. The oldest (prior 0..89) are dropped.
+        promptHistory.Should().NotContain(("user", "prior 0"), "the oldest prior history must be dropped");
+        promptHistory.Should().NotContain(("user", "prior 88"), "only the 10 most recent prior entries are kept");
+        promptHistory.Should().ContainInOrder(
+            ("user", "prior 90"), ("assistant", "prior 91"), ("assistant", "prior 99"), ("user", "current user"));
+        promptHistory.Count(entry => entry.Content.StartsWith("prior ", StringComparison.Ordinal))
+            .Should().BeLessThanOrEqualTo(10, "prior history sent to the prompt is capped at the 10 most recent entries");
         reply.AppendedHistory.Should().NotBeNull();
         reply.AppendedHistory!.Select(message => (message.Role, message.Content))
             .Should()
@@ -666,6 +673,72 @@ public sealed class ConversationReplyGeneratorTests
         systemPrompt.Should().Contain("operator_user_id: \"\"");
         systemPrompt.Should().Contain("operator_open_id: \"\"");
         systemPrompt.Should().NotContain("operator_user_id: \"lark-subject-user-1\"");
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_WithChannelContextMiddleware_IncludesResolvedMentionsLine()
+    {
+        var providerFactory = new RecordingProviderFactory();
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            llmMiddlewares: [new ChannelContextMiddleware(NullLogger<ChannelContextMiddleware>.Instance)]);
+
+        var reply = await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-lark-mentions-context",
+                ChannelId = ChannelId.From("lark"),
+                Conversation = new ConversationReference { CanonicalKey = "lark:group:oc_1" },
+                Content = new MessageContent { Text = "@_user_1 给 @_user_2 加一下权限" },
+            },
+            new Dictionary<string, string>
+            {
+                [ChannelMetadataKeys.Platform] = "lark",
+                [ChannelMetadataKeys.ChatType] = "group",
+                [ChannelMetadataKeys.SenderId] = "ou_sender_1",
+                [ChannelMetadataKeys.ConversationId] = "oc_1",
+                [ChannelMetadataKeys.Mentions] = "Aevatar <ou_bot_1>; 张三 <ou_zhangsan>",
+            },
+            streamingSink: null,
+            CancellationToken.None);
+
+        reply.Text.Should().Be("ok");
+        var systemPrompt = providerFactory.Requests.Should().ContainSingle().Subject
+            .Messages.First(message => message.Role == "system").Content;
+        // Emitted raw (not JSON-escaped) so the open_id delimiters and CJK display name stay readable.
+        systemPrompt.Should().Contain("mentions: Aevatar <ou_bot_1>; 张三 <ou_zhangsan>");
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_WithChannelContextMiddleware_OmitsMentionsLineWhenNoneMentioned()
+    {
+        var providerFactory = new RecordingProviderFactory();
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            llmMiddlewares: [new ChannelContextMiddleware(NullLogger<ChannelContextMiddleware>.Instance)]);
+
+        var reply = await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-lark-no-mentions-context",
+                ChannelId = ChannelId.From("lark"),
+                Conversation = new ConversationReference { CanonicalKey = "lark:group:oc_1" },
+                Content = new MessageContent { Text = "hello" },
+            },
+            new Dictionary<string, string>
+            {
+                [ChannelMetadataKeys.Platform] = "lark",
+                [ChannelMetadataKeys.ChatType] = "group",
+                [ChannelMetadataKeys.SenderId] = "ou_sender_1",
+                [ChannelMetadataKeys.ConversationId] = "oc_1",
+            },
+            streamingSink: null,
+            CancellationToken.None);
+
+        reply.Text.Should().Be("ok");
+        var systemPrompt = providerFactory.Requests.Should().ContainSingle().Subject
+            .Messages.First(message => message.Role == "system").Content;
+        systemPrompt.Should().NotContain("mentions: ");
     }
 
     [Fact]
@@ -872,8 +945,10 @@ public sealed class ConversationReplyGeneratorTests
             .Content;
         toolResult.Should().Contain("credential_denied");
         toolResult.Should().Contain("Owner credentials were not used");
+        toolResult.Should().Contain("/init");
         reply.Text.Should().Contain("credential_denied");
         reply.Text.Should().Contain("Owner credentials were not used");
+        reply.Text.Should().Contain("/init");
         approvalHandler.RequestCount.Should().Be(0);
         tool.ExecuteCount.Should().Be(0);
     }
@@ -960,6 +1035,106 @@ public sealed class ConversationReplyGeneratorTests
             "aevatar_observe_run",
         ]);
         request.Tools!.Select(static tool => tool.Name).Should().NotContain("aevatar_invoke_workflow");
+    }
+
+    // Tools whose outcome lands off-chat (e.g. aevatar_provision_workflow_schedule, which
+    // delivers its scheduled runs to /workflow/observatory, never a chat/bot) self-declare the
+    // generic AgentToolCapabilities.ExcludeFromDirectChannelChat marker. The channel/Lark
+    // conversation agent must hide ANY tool carrying that capability — keyed off the capability,
+    // not the tool name — otherwise it could route a Lark user's request away from their chat.
+    // Ordinary channel workflow tools (no such capability) are unaffected.
+    [Fact]
+    public async Task GenerateReplyAsync_ForLarkRelayTurn_ExcludesChannelHiddenCapabilityToolFromLlmRequest()
+    {
+        var providerFactory = new RecordingProviderFactory();
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            toolSources:
+            [
+                new SingleToolSource(new CapabilityFixedResultTool(
+                    "aevatar_provision_workflow_schedule",
+                    """{"ok":true}""",
+                    AgentToolCapabilities.ExcludeFromDirectChannelChat)),
+                new SingleToolSource(new FixedResultTool("aevatar_start_workflow", """{"run_id":"run-1"}""")),
+            ]);
+
+        var reply = await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "lark-relay-msg-excluded-tool",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-excluded-tool" },
+                Content = new MessageContent { Text = "schedule it" },
+                TransportExtras = new TransportExtras
+                {
+                    NyxPlatform = "lark",
+                    NyxPlatformMessageId = "om_excluded_tool",
+                },
+            },
+            new Dictionary<string, string>
+            {
+                [ChannelMetadataKeys.Platform] = "lark",
+                [ChannelMetadataKeys.PlatformMessageId] = "om_excluded_tool",
+            },
+            streamingSink: null,
+            CancellationToken.None);
+
+        reply.Text.Should().Be("ok");
+        var request = providerFactory.Requests.Should().ContainSingle().Subject;
+        request.Tools.Should().NotBeNull();
+        // The capability-marked (Observatory-only) scheduling tool is hidden from the channel surface...
+        request.Tools!.Select(static tool => tool.Name).Should().NotContain("aevatar_provision_workflow_schedule");
+        // ...but ordinary channel workflow tools still flow through unchanged.
+        request.Tools!.Select(static tool => tool.Name).Should().Contain("aevatar_start_workflow");
+    }
+
+    // The exclusion is keyed off the GENERIC capability marker, not the tool name. A tool with the
+    // very same name but WITHOUT the capability stays on the channel surface; a differently-named
+    // tool that DOES declare the capability is hidden. This pins the no-hardcoded-tool-name contract
+    // (CLAUDE.md "不得对特定 skill/命令/模板名硬编码").
+    [Fact]
+    public async Task GenerateReplyAsync_ForLarkRelayTurn_KeysChannelExclusionOnCapabilityNotToolName()
+    {
+        var providerFactory = new RecordingProviderFactory();
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            toolSources:
+            [
+                // Same name as the Observatory tool, but no exclusion capability → stays visible.
+                new SingleToolSource(new FixedResultTool("aevatar_provision_workflow_schedule", """{"ok":true}""")),
+                // Arbitrary name, but declares the exclusion capability → hidden.
+                new SingleToolSource(new CapabilityFixedResultTool(
+                    "some_other_off_chat_tool",
+                    """{"ok":true}""",
+                    AgentToolCapabilities.ExcludeFromDirectChannelChat)),
+            ]);
+
+        var reply = await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "lark-relay-msg-capability-keyed",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-capability-keyed" },
+                Content = new MessageContent { Text = "do it" },
+                TransportExtras = new TransportExtras
+                {
+                    NyxPlatform = "lark",
+                    NyxPlatformMessageId = "om_capability_keyed",
+                },
+            },
+            new Dictionary<string, string>
+            {
+                [ChannelMetadataKeys.Platform] = "lark",
+                [ChannelMetadataKeys.PlatformMessageId] = "om_capability_keyed",
+            },
+            streamingSink: null,
+            CancellationToken.None);
+
+        reply.Text.Should().Be("ok");
+        var request = providerFactory.Requests.Should().ContainSingle().Subject;
+        request.Tools.Should().NotBeNull();
+        var toolNames = request.Tools!.Select(static tool => tool.Name).ToArray();
+        // Name alone never triggers exclusion — only the capability does.
+        toolNames.Should().Contain("aevatar_provision_workflow_schedule");
+        toolNames.Should().NotContain("some_other_off_chat_tool");
     }
 
     [Fact]
@@ -1988,6 +2163,12 @@ public sealed class ConversationReplyGeneratorTests
         public Task<string> SetDrivePermissionAsync(string token, LarkDrivePermissionRequest request, CancellationToken ct) =>
             throw new NotSupportedException();
 
+        public Task<string> CreateBitableAppAsync(string token, LarkBitableCreateRequest request, CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<string> GrantResourceMemberAsync(string token, LarkResourceMemberGrantRequest request, CancellationToken ct) =>
+            throw new NotSupportedException();
+
         public Task<string> UploadDriveMediaAsync(string token, LarkDriveMediaUploadRequest request, CancellationToken ct) =>
             throw new NotSupportedException();
 
@@ -2327,6 +2508,25 @@ public sealed class ConversationReplyGeneratorTests
         public string Description => "Returns a fixed test result.";
 
         public string ParametersSchema => "{}";
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult(result);
+    }
+
+    // A tool that self-declares an arbitrary set of generic capability tokens via
+    // IAgentToolCapabilityDescriptor. Used to prove the channel-discovery exclusion keys off
+    // the GENERIC capability marker (not the tool name): an excluded tool can have any name,
+    // and a same-named tool WITHOUT the capability is not excluded.
+    private sealed class CapabilityFixedResultTool(string name, string result, params string[] capabilities)
+        : IAgentTool, IAgentToolCapabilityDescriptor
+    {
+        public string Name => name;
+
+        public string Description => "Returns a fixed test result.";
+
+        public string ParametersSchema => "{}";
+
+        public IReadOnlyCollection<string> Capabilities { get; } = capabilities;
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
             Task.FromResult(result);

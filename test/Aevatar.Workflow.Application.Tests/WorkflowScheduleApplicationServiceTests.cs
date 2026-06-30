@@ -173,6 +173,68 @@ public sealed class WorkflowScheduleApplicationServiceTests
     }
 
     [Fact]
+    public async Task CreateAsync_ShouldMapWorkflowScheduleScopeOwnerAuthToServiceInvocationAuth()
+    {
+        var actorPort = new FakeWorkflowScheduleActorPort
+        {
+            ResolveActorId = string.Empty,
+        };
+        var service = CreateService(actorPort);
+
+        await service.CreateAsync(CreateConfiguration("owner-auth-schedule") with
+        {
+            Auth = new WorkflowScheduleAuth(
+                ScopeOwnerNyxId: new WorkflowScheduleScopeOwnerNyxIdCredentialSource(
+                    " owner-proxy ",
+                    new WorkflowScheduleNyxIdSubjectRef(" nyx ", " tenant-1 ", " owner-user-1 "))),
+        });
+
+        var invocation = actorPort.Created.Single().Configuration.Target.ServiceInvocation!;
+        invocation.Auth.Should().NotBeNull();
+        invocation.Auth!.SenderNyxId.Should().BeNull();
+        invocation.Auth.ScopeOwnerNyxId!.Scope.Should().Be("owner-proxy");
+        invocation.Auth.ScopeOwnerNyxId.OwnerSubject.Should().BeEquivalentTo(
+            new ScheduledServiceInvocationNyxIdSubjectRef("nyx", "tenant-1", "owner-user-1"));
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldRejectWorkflowScheduleAuthWithBothNyxIdSources()
+    {
+        var service = CreateService();
+
+        var act = () => service.CreateAsync(CreateConfiguration("auth-schedule") with
+        {
+            Auth = new WorkflowScheduleAuth(
+                new WorkflowScheduleNyxIdCredentialSource(
+                    new WorkflowScheduleNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
+                    "proxy"),
+                new WorkflowScheduleScopeOwnerNyxIdCredentialSource(
+                    "owner-proxy",
+                    new WorkflowScheduleNyxIdSubjectRef("nyx", string.Empty, "owner-user-1"))),
+        });
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*Exactly one workflow schedule NyxID credential source*");
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldRejectEmptyWorkflowScheduleScopeOwnerAuth()
+    {
+        var service = CreateService();
+
+        var act = () => service.CreateAsync(CreateConfiguration("auth-schedule") with
+        {
+            Auth = new WorkflowScheduleAuth(
+                ScopeOwnerNyxId: new WorkflowScheduleScopeOwnerNyxIdCredentialSource(
+                    " ",
+                    new WorkflowScheduleNyxIdSubjectRef("nyx", string.Empty, "owner-user-1"))),
+        });
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*Scope*required*");
+    }
+
+    [Fact]
     public async Task CreateAsync_ShouldRejectEmptyWorkflowScheduleAuth()
     {
         var service = CreateService();
@@ -652,6 +714,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
         var detail = await service.GetAsync(" schedule-1 ");
 
         detail.Should().NotBeNull();
+        detail!.Schedule.Prompt.Should().Be("saved prompt");
         queryPort.GetScheduleIds.Should().Equal("schedule-1");
     }
 
@@ -688,8 +751,9 @@ public sealed class WorkflowScheduleApplicationServiceTests
 
         var result = await service.ListAsync(25, "cursor", includeTotalCount: true);
 
-        result.Items.Should().ContainSingle()
-            .Which.ScheduleId.Should().Be("workflow-1");
+        var summary = result.Items.Should().ContainSingle().Subject;
+        summary.ScheduleId.Should().Be("workflow-1");
+        summary.Prompt.Should().Be("saved prompt");
         result.NextCursor.Should().Be("next-workflow");
         result.TotalCount.Should().Be(1);
         queryPort.LastQuery.Should().Be(new ScheduledDispatchListQuery(
@@ -1039,6 +1103,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
                 FailureCount: 0,
                 Headers: new Dictionary<string, string>(),
                 ScheduleActorId: string.Empty,
+                Prompt: "saved prompt",
                 ScheduleKind: ScheduledDispatchScheduleKind.Workflow),
             []);
 }

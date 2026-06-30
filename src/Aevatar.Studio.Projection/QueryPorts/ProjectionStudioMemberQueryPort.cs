@@ -185,7 +185,10 @@ public sealed class ProjectionStudioMemberQueryPort : IStudioMemberQueryPort
             PublishedServiceId: document.LastBoundPublishedServiceId,
             RevisionId: document.LastBoundRevisionId,
             ImplementationKind: NormalizeImplementationKindWire(document.LastBoundImplementationKind),
-            BoundAt: document.LastBoundAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue);
+            BoundAt: document.LastBoundAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
+            ExpectedActorId: string.IsNullOrEmpty(document.LastBoundExpectedActorId)
+                ? null
+                : document.LastBoundExpectedActorId);
     }
 
     private static StudioMemberBindingRunStatusResponse? ToBindingRunStatusResponse(
@@ -213,7 +216,29 @@ public sealed class ProjectionStudioMemberQueryPort : IStudioMemberQueryPort
             Status: NormalizeBindingRunStatusWire(document.BindingCurrentStatus),
             StateVersion: document.StateVersion,
             Failure: failure,
-            UpdatedAt: document.BindingUpdatedAt?.ToDateTimeOffset());
+            UpdatedAt: document.BindingUpdatedAt?.ToDateTimeOffset())
+        {
+            Result = ToBindingResultResponse(document),
+        };
+    }
+
+    private static StudioMemberBindingRunResultResponse? ToBindingResultResponse(
+        StudioMemberCurrentStateDocument document)
+    {
+        if (string.IsNullOrEmpty(document.LastBoundPublishedServiceId)
+            || string.IsNullOrEmpty(document.LastBoundRevisionId)
+            || string.IsNullOrEmpty(document.LastBoundImplementationKind))
+        {
+            return null;
+        }
+
+        return new StudioMemberBindingRunResultResponse(
+            PublishedServiceId: document.LastBoundPublishedServiceId,
+            RevisionId: document.LastBoundRevisionId,
+            ImplementationKind: document.LastBoundImplementationKind,
+            ExpectedActorId: string.IsNullOrEmpty(document.LastBoundExpectedActorId)
+                ? null
+                : document.LastBoundExpectedActorId);
     }
 
     private static string NormalizeImplementationKindWire(string? wire) => wire switch

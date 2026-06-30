@@ -355,6 +355,99 @@ public sealed class AgentRunLarkCardDeliveryTests
     }
 
     [Fact]
+    public async Task CreateFailure_TextFallback_CapsInterimEditsAtMaxInterimChunks()
+    {
+        var runner = new RecordingCardRunner
+        {
+            CreateResult = ConversationCardCreateResult.Failed(
+                "card_create_failed",
+                "create rejected",
+                isRateLimited: true),
+        };
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateAgent(
+            runner,
+            publisher: publisher,
+            relayOptions: new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                StreamingCardKitEnabled = true,
+                StreamingRepliesEnabled = true,
+                StreamingMaxInterimChunks = 3,
+                StreamingFlushIntervalMs = 0,
+            });
+
+        // First chunk drives create -> create-fail -> the create-failure fallback dispatches
+        // interim #1 from the original create chunk.
+        await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("interim 1")));
+        await DispatchPendingSelfEventsAsync(agent, publisher);
+        agent.State.LarkCardDelivery.Phase.Should().Be(AgentRunLarkCardDeliveryPhase.CreationFailed);
+
+        // Further interim chunks route straight to the text fallback. Only enough to fill the
+        // cap (#2, #3) are forwarded; the rest freeze on the last interim.
+        await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("interim 2")));
+        await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("interim 3")));
+        await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("interim 4")));
+        await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("interim 5")));
+
+        var dispatched = publisher.Sent
+            .Select(e => e.Event)
+            .OfType<LlmReplyStreamChunkEvent>()
+            .ToList();
+        dispatched.Should().HaveCount(3, "interim text-edit fallback is capped at StreamingMaxInterimChunks");
+        dispatched.Select(chunk => chunk.AccumulatedText)
+            .Should().Equal("interim 1", "interim 2", "interim 3");
+        publisher.Sent.Where(e => e.Event is LlmReplyStreamChunkEvent)
+            .Select(e => e.TargetActorId)
+            .Should().AllBe("conversation-1");
+    }
+
+    [Fact]
+    public async Task CreateFailure_TextFallback_AlwaysForwardsFinalChunkPastCap()
+    {
+        var runner = new RecordingCardRunner
+        {
+            CreateResult = ConversationCardCreateResult.Failed(
+                "card_create_failed",
+                "create rejected",
+                isRateLimited: true),
+        };
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateAgent(
+            runner,
+            publisher: publisher,
+            relayOptions: new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                StreamingCardKitEnabled = true,
+                StreamingRepliesEnabled = true,
+                StreamingMaxInterimChunks = 2,
+                StreamingFlushIntervalMs = 0,
+            });
+
+        await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("interim 1")));
+        await DispatchPendingSelfEventsAsync(agent, publisher);
+        agent.State.LarkCardDelivery.Phase.Should().Be(AgentRunLarkCardDeliveryPhase.CreationFailed);
+
+        // Exceed the interim cap so any further interim chunk would freeze.
+        await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("interim 2")));
+        await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("interim 3 frozen")));
+        await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("interim 4 frozen")));
+
+        // The terminal chunk carries the complete reply text and must bypass the cap.
+        await agent.HandleEventAsync(Envelope(
+            agent.Id,
+            CreateCardChunk("the complete final reply", isFinal: true)));
+
+        var dispatched = publisher.Sent
+            .Select(e => e.Event)
+            .OfType<LlmReplyStreamChunkEvent>()
+            .ToList();
+        dispatched.Select(chunk => chunk.AccumulatedText)
+            .Should().Contain("the complete final reply", "the final chunk is never dropped by the interim cap");
+        dispatched.Last().AccumulatedText.Should().Be("the complete final reply");
+        dispatched.Should().HaveCount(3, "only the 2 capped interims plus the exempt final are forwarded");
+    }
+
+    [Fact]
     public async Task CreateTimeout_MarksCreationFailedWithoutFallback()
     {
         var scheduler = new RecordingCallbackScheduler();
@@ -650,7 +743,8 @@ public sealed class AgentRunLarkCardDeliveryTests
     private static AgentRunGAgent CreateAgent(
         RecordingCardRunner runner,
         RecordingEventPublisher? publisher = null,
-        RecordingCallbackScheduler? scheduler = null)
+        RecordingCallbackScheduler? scheduler = null,
+        Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? relayOptions = null)
     {
         var actorRuntime = new RecordingActorRuntime();
         var executor = new NoopReplyGenerationExecutor();
@@ -658,7 +752,7 @@ public sealed class AgentRunLarkCardDeliveryTests
         var agent = new AgentRunGAgent(
             actorRuntime,
             executor,
-            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            relayOptions ?? new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
             {
                 StreamingCardKitEnabled = true,
                 StreamingRepliesEnabled = true,
@@ -876,7 +970,7 @@ public sealed class AgentRunLarkCardDeliveryTests
             ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
         };
 
-    private static LlmReplyCardStreamChunkEvent CreateCardChunk(string text) =>
+    private static LlmReplyCardStreamChunkEvent CreateCardChunk(string text, bool isFinal = false) =>
         new()
         {
             RunId = "run-1",
@@ -887,6 +981,7 @@ public sealed class AgentRunLarkCardDeliveryTests
             ChunkAtUnixMs = 42,
             ReplyToken = "runtime-reply-token",
             ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+            IsFinal = isFinal,
         };
 
     private static ChatActivity CreateActivity(string userAccessToken) =>

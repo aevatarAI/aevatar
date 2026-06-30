@@ -372,6 +372,9 @@ public sealed class WorkflowRunOrchestrationComponentTests
                 new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1"),
                 WorkflowProjectionCompletionStatus.Unknown),
             CancellationToken.None);
+        // 06-20-observatory-run-state-feed (R2): created-actor reclaim is scheduled detached; await it so the
+        // destroy is observed deterministically. (Resolver wired here without a gate → direct-destroy fallback.)
+        await result.Target.PendingReclaimTask;
 
         queryPort.ActorIds.Should().Equal("actor-1");
         actorPort.DestroyCalls.Should().Equal("actor-1", "definition-1");

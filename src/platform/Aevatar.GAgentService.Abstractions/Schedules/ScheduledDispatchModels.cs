@@ -39,8 +39,14 @@ public sealed record ScheduledServiceInvocationNyxIdCredentialSource(
     ScheduledServiceInvocationNyxIdSubjectRef Subject,
     string Scope);
 
+public sealed record ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
+    string Scope,
+    ScheduledServiceInvocationNyxIdSubjectRef? OwnerSubject = null);
+
 public sealed record ScheduledServiceInvocationAuth(
-    ScheduledServiceInvocationNyxIdCredentialSource? SenderNyxId = null);
+    ScheduledServiceInvocationNyxIdCredentialSource? SenderNyxId = null,
+    string? DurableSenderBearerToken = null,
+    ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource? ScopeOwnerNyxId = null);
 
 public sealed record ScheduledServiceInvocationCredentialExchangeResult(
     bool Succeeded,
@@ -94,6 +100,7 @@ public sealed record ScheduledDispatchSummary(
     int FailureCount,
     IReadOnlyDictionary<string, string> Headers,
     string ScheduleActorId,
+    string? Prompt = null,
     ScheduledDispatchScheduleKind ScheduleKind = ScheduledDispatchScheduleKind.Generic,
     bool Deleted = false);
 
@@ -228,7 +235,8 @@ public sealed record ScheduledServiceInvocationDispatchRequest(
     ServiceInvocationRequest Request,
     ScheduledServiceInvocationAuth? Auth = null,
     IReadOnlyDictionary<string, string>? Headers = null,
-    bool ProjectSenderNyxIdAccessTokenToWorkflowCallerCredential = false);
+    bool ProjectNyxIdAccessTokenToWorkflowCallerCredential = false,
+    string? ScheduleId = null);
 
 public interface IScheduledServiceInvocationDispatchPort
 {
@@ -241,6 +249,11 @@ public interface IScheduledServiceInvocationCredentialExchangePort
 {
     Task<ScheduledServiceInvocationCredentialExchangeResult> IssueSenderNyxIdAsync(
         ScheduledServiceInvocationNyxIdCredentialSource source,
+        CancellationToken ct = default);
+
+    Task<ScheduledServiceInvocationCredentialExchangeResult> IssueScopeOwnerNyxIdAsync(
+        ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource source,
+        ServiceIdentity serviceIdentity,
         CancellationToken ct = default);
 }
 

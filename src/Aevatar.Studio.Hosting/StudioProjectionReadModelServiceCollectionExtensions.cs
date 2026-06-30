@@ -46,6 +46,10 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
 
         if (documentProvider.ElasticsearchEnabled)
         {
+            RegisterElasticsearch<WorkflowExecutionBoardDocument>(
+                services,
+                configuration,
+                static document => document.RootActorId);
             RegisterElasticsearch<RoleCatalogCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<ConnectorCatalogCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<ChatHistoryIndexCurrentStateDocument>(services, configuration);
@@ -60,6 +64,10 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
         }
         else
         {
+            RegisterInMemory<WorkflowExecutionBoardDocument>(
+                services,
+                static document => document.RootActorId,
+                static document => document.UpdatedAt);
             RegisterInMemory<RoleCatalogCurrentStateDocument>(services);
             RegisterInMemory<ConnectorCatalogCurrentStateDocument>(services);
             RegisterInMemory<ChatHistoryIndexCurrentStateDocument>(services);
@@ -81,6 +89,18 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
         IConfiguration configuration)
         where TDoc : class, IProjectionReadModel<TDoc>, new()
     {
+        RegisterElasticsearch<TDoc>(
+            services,
+            configuration,
+            static readModel => readModel.ActorId);
+    }
+
+    private static void RegisterElasticsearch<TDoc>(
+        IServiceCollection services,
+        IConfiguration configuration,
+        Func<TDoc, string> keySelector)
+        where TDoc : class, IProjectionReadModel<TDoc>, new()
+    {
         EnsureCompatibleDocumentReaderProvider<TDoc>(services, ProjectionDocumentProviderKind.Elasticsearch);
         if (HasDocumentReaderForProvider<TDoc>(services, ProjectionDocumentProviderKind.Elasticsearch))
             return;
@@ -88,7 +108,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
         services.AddElasticsearchDocumentProjectionStore<TDoc, string>(
             optionsFactory: _ => ProjectionDocumentProviderConfiguration.BindRequiredElasticsearchOptions(configuration),
             metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<TDoc>>().Metadata,
-            keySelector: readModel => readModel.ActorId,
+            keySelector: keySelector,
             keyFormatter: key => key,
             typeRegistry: BuildStudioStateTypeRegistry());
     }
@@ -97,21 +117,34 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
         IServiceCollection services)
         where TDoc : class, IProjectionReadModel<TDoc>, new()
     {
+        RegisterInMemory<TDoc>(
+            services,
+            static readModel => readModel.ActorId,
+            static readModel => readModel.UpdatedAt);
+    }
+
+    private static void RegisterInMemory<TDoc>(
+        IServiceCollection services,
+        Func<TDoc, string> keySelector,
+        Func<TDoc, object?> defaultSortSelector)
+        where TDoc : class, IProjectionReadModel<TDoc>, new()
+    {
         EnsureCompatibleDocumentReaderProvider<TDoc>(services, ProjectionDocumentProviderKind.InMemory);
         if (HasDocumentReaderForProvider<TDoc>(services, ProjectionDocumentProviderKind.InMemory))
             return;
 
         services.AddInMemoryDocumentProjectionStore<TDoc, string>(
-            keySelector: readModel => readModel.ActorId,
+            keySelector: keySelector,
             keyFormatter: key => key,
-            defaultSortSelector: readModel => readModel.UpdatedAt);
+            defaultSortSelector: defaultSortSelector);
     }
 
     private static bool HasAllStudioDocumentReaders(
         IServiceCollection services,
         ProjectionDocumentProviderKind providerKind)
     {
-        return HasDocumentReaderForProvider<RoleCatalogCurrentStateDocument>(services, providerKind)
+        return HasDocumentReaderForProvider<WorkflowExecutionBoardDocument>(services, providerKind)
+               && HasDocumentReaderForProvider<RoleCatalogCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<ConnectorCatalogCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<ChatHistoryIndexCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<ChatConversationCurrentStateDocument>(services, providerKind)

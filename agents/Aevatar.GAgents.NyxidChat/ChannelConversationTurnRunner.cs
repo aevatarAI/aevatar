@@ -81,6 +81,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private readonly IExternalIdentityBindingQueryPort? _identityBindingQueryPort;
     private readonly ChannelSlashCommandRegistry? _slashCommandRegistry;
     private readonly INyxIdCapabilityBroker? _capabilityBroker;
+    private readonly IBindingRevocationReconciler? _bindingRevocationReconciler;
     private readonly IUserLlmSelectionService? _userLlmSelectionService;
     private readonly IUserLlmOptionsService? _userLlmOptionsService;
     private readonly IUserLlmOptionsRenderer<MessageContent>? _userLlmOptionsRenderer;
@@ -91,6 +92,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private readonly IRemoteToolApprovalPort? _remoteToolApprovalPort;
     private readonly ILogger<ChannelConversationTurnRunner> _logger;
     private readonly ILarkBotIdentityResolver? _botIdentityResolver;
+    private readonly INyxIdCurrentUserResolver? _nyxIdCurrentUserResolver;
 
     public ChannelConversationTurnRunner(
         IServiceProvider services,
@@ -105,6 +107,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         IExternalIdentityBindingQueryPort? identityBindingQueryPort = null,
         ChannelSlashCommandRegistry? slashCommandRegistry = null,
         INyxIdCapabilityBroker? capabilityBroker = null,
+        IBindingRevocationReconciler? bindingRevocationReconciler = null,
         IUserLlmSelectionService? userLlmSelectionService = null,
         IUserLlmOptionsService? userLlmOptionsService = null,
         IUserLlmOptionsRenderer<MessageContent>? userLlmOptionsRenderer = null,
@@ -113,7 +116,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>? workflowResumeService = null,
         ChannelWorkflowDraftRunAdmission? workflowDraftRunAdmission = null,
         IRemoteToolApprovalPort? remoteToolApprovalPort = null,
-        ILarkBotIdentityResolver? botIdentityResolver = null)
+        ILarkBotIdentityResolver? botIdentityResolver = null,
+        INyxIdCurrentUserResolver? nyxIdCurrentUserResolver = null)
     {
         _toolServiceProvider = services ?? throw new ArgumentNullException(nameof(services));
         _registrationQueryPort = registrationQueryPort ?? throw new ArgumentNullException(nameof(registrationQueryPort));
@@ -126,6 +130,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         _identityBindingQueryPort = identityBindingQueryPort;
         _slashCommandRegistry = slashCommandRegistry;
         _capabilityBroker = capabilityBroker;
+        _bindingRevocationReconciler = bindingRevocationReconciler;
         _userLlmSelectionService = userLlmSelectionService;
         _userLlmOptionsService = userLlmOptionsService;
         _userLlmOptionsRenderer = userLlmOptionsRenderer;
@@ -136,6 +141,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         _remoteToolApprovalPort = remoteToolApprovalPort;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _botIdentityResolver = botIdentityResolver;
+        _nyxIdCurrentUserResolver = nyxIdCurrentUserResolver;
     }
 
     public async Task<ConversationTurnResult> RunInboundAsync(
@@ -1836,6 +1842,22 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 metadata[ChannelMetadataKeys.LarkSubjectEmployeeId] = subjectContactIds.EmployeeId;
         }
 
+        // Surface resolved @-mentions (canonical id + name) so the agent can target a third party by a
+        // real id instead of the literal "@_user_N" text placeholder. Placeholder numbering follows the
+        // mention order, so the list order is preserved. The bot's own mention may be included; the
+        // prompt instructs the agent to pick the non-bot entry.
+        if (activity?.Mentions is { Count: > 0 } mentions)
+        {
+            var formattedMentions = string.Join(
+                "; ",
+                mentions
+                    .Where(mention => !string.IsNullOrWhiteSpace(mention.CanonicalId))
+                    .Select(mention =>
+                        $"{(string.IsNullOrWhiteSpace(mention.DisplayName) ? "?" : mention.DisplayName)} <{mention.CanonicalId}>"));
+            if (!string.IsNullOrWhiteSpace(formattedMentions))
+                metadata[ChannelMetadataKeys.Mentions] = formattedMentions;
+        }
+
         return metadata;
     }
 
@@ -2148,6 +2170,18 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             inboundEvent.Text,
             inboundEvent.Platform,
             _identityBindingQueryPort is null || senderBinding is not null);
+        // Stamp the inbound bot's outbound proxy slug onto the request activity so the deferred
+        // reply run (and its CardKit/im streaming sender) proxies through the bot that RECEIVED
+        // this turn, not the process-wide default. Without this, the singleton Lark clients route
+        // every card reply through the generic `api-lark-bot` slug, so a DM to one bot is answered
+        // by a sibling bot under the same NyxID account. Typed TransportExtras field, populated here
+        // where the matched registration is in hand (mirrors NyxRegistrationScopeId at ingress).
+        var inboundProviderSlug = NormalizeOptional(registration.NyxProviderSlug);
+        if (inboundProviderSlug is not null)
+        {
+            requestActivity.TransportExtras ??= new TransportExtras();
+            requestActivity.TransportExtras.NyxProviderSlug = inboundProviderSlug;
+        }
         var request = new NeedsLlmReplyEvent
         {
             CorrelationId = activity.Id,
@@ -2217,9 +2251,19 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         // falls back to the bot owner's upstream-pinned LLM config.
         if (senderBinding is not null)
         {
+            // Carry the binding-id AND the external-subject tenant as identity
+            // facts (not credentials). Both survive the ConversationGAgent
+            // transient-credential strip, so the deferred reply run can rebuild
+            // the exact ExternalSubjectRef and re-mint a fresh sender token by
+            // binding id (the synchronously-minted token below is stripped
+            // before persistence, so the deferred run cannot reuse it).
+            var senderTenant = NormalizeOptional(senderBinding.Subject.Tenant);
             request.ToolContext = (AgentToolExecutionContextMapper.FromPayload(request.ToolContext) with
             {
-                SenderBinding = new AgentToolSenderBindingContext(senderBinding.BindingId),
+                SenderBinding = new AgentToolSenderBindingContext(
+                    senderBinding.BindingId,
+                    NyxUserId: null,
+                    SenderTenant: senderTenant),
             }).ToPayload();
             var senderAccessToken = await TryIssueSenderLlmAccessTokenAsync(senderBinding.Subject, ct).ConfigureAwait(false);
             if (!string.IsNullOrWhiteSpace(senderAccessToken))
@@ -2233,6 +2277,18 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     currentControl.NyxIdRoutePreference,
                     currentControl.MaxToolRoundsOverride,
                     currentControl.UserMemoryPrompt).ToPayload();
+                var senderNyxUserId = await TryResolveSenderNyxUserIdAsync(senderAccessToken, senderBinding.Subject, ct)
+                    .ConfigureAwait(false);
+                if (!string.IsNullOrWhiteSpace(senderNyxUserId))
+                {
+                    request.ToolContext = (AgentToolExecutionContextMapper.FromPayload(request.ToolContext) with
+                    {
+                        SenderBinding = new AgentToolSenderBindingContext(
+                            senderBinding.BindingId,
+                            senderNyxUserId.Trim(),
+                            senderTenant),
+                    }).ToPayload();
+                }
             }
         }
 
@@ -2380,11 +2436,81 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         {
             throw;
         }
+        catch (BindingRevokedException ex)
+        {
+            // Grant is gone upstream (NyxID invalid_grant). Reconcile the local
+            // binding (best-effort, off the reply path) so /whoami shows unbound
+            // and /init lets the sender re-bind, then fall back to owner config.
+            _logger.LogWarning(
+                ex,
+                "Sender NyxID binding revoked at NyxID; reconciling local binding and falling back to bot owner LLM config. subject={Platform}:{Tenant}:{User}",
+                subject.Platform,
+                subject.Tenant,
+                subject.ExternalUserId);
+            TriggerBindingReconcile(subject);
+            return null;
+        }
         catch (Exception ex)
         {
             _logger.LogWarning(
                 ex,
                 "Failed to issue sender NyxID LLM token; falling back to bot owner LLM config. subject={Platform}:{Tenant}:{User}",
+                subject.Platform,
+                subject.Tenant,
+                subject.ExternalUserId);
+            return null;
+        }
+    }
+
+    private void TriggerBindingReconcile(ExternalSubjectRef subject)
+    {
+        var reconciler = _bindingRevocationReconciler;
+        if (reconciler is null)
+            return;
+
+        var subjectSnapshot = subject.Clone();
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await reconciler
+                    .ReconcileRevokedAsync(subjectSnapshot, "nyx_invalid_grant", CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                // Best-effort self-heal; reconcile failures must never surface on
+                // the reply path. The reconciler logs its own dispatch failures;
+                // this only catches unexpected faults so the fire-and-forget task
+                // never escapes unobserved.
+                _logger.LogWarning(ex, "Binding reconcile after invalid_grant failed (best-effort, ignored).");
+            }
+        });
+    }
+
+    private async Task<string?> TryResolveSenderNyxUserIdAsync(
+        string senderAccessToken,
+        ExternalSubjectRef subject,
+        CancellationToken ct)
+    {
+        var resolver = _nyxIdCurrentUserResolver;
+        if (resolver is null || string.IsNullOrWhiteSpace(senderAccessToken))
+            return null;
+
+        try
+        {
+            var nyxUserId = await resolver.ResolveCurrentUserIdAsync(senderAccessToken, ct).ConfigureAwait(false);
+            return NormalizeOptional(nyxUserId);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to resolve sender NyxID user id from short-lived token; team invocation will fall back to registration scope. subject={Platform}:{Tenant}:{User}",
                 subject.Platform,
                 subject.Tenant,
                 subject.ExternalUserId);

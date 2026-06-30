@@ -4,6 +4,7 @@ using System.Threading.Channels;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.Transport.Internal;
 using Google.Protobuf;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Foundation.VoicePresence.Transport;
 
@@ -22,16 +23,19 @@ public sealed class WebRtcVoiceTransport : IVoiceTransport
     private readonly IWebRtcVoicePeer _peer;
     private readonly OpusPcmCodec _codec;
     private readonly Channel<VoiceTransportFrame> _frames;
+    private readonly ILogger? _logger;
     private readonly List<byte> _pendingSendPcm = [];
     private bool _disposed;
 
     internal WebRtcVoiceTransport(
         IWebRtcVoicePeer peer,
-        WebRtcVoiceTransportOptions options)
+        WebRtcVoiceTransportOptions options,
+        ILogger? logger = null)
     {
         _peer = peer ?? throw new ArgumentNullException(nameof(peer));
         ArgumentNullException.ThrowIfNull(options);
 
+        _logger = logger;
         _codec = new OpusPcmCodec(options.PcmSampleRateHz, options.FrameDurationMs);
         _frames = Channel.CreateBounded<VoiceTransportFrame>(new BoundedChannelOptions(options.PendingSendFrameCapacity)
         {
@@ -108,9 +112,9 @@ public sealed class WebRtcVoiceTransport : IVoiceTransport
             var pcm16 = _codec.DecodePacket(encodedPacket.Span);
             _frames.Writer.TryWrite(VoiceTransportFrame.Audio(pcm16));
         }
-        catch
+        catch (Exception ex)
         {
-            // ignore malformed RTP payloads
+            _logger?.LogWarning(ex, "Ignoring malformed WebRTC voice RTP payload.");
         }
     }
 
@@ -122,11 +126,17 @@ public sealed class WebRtcVoiceTransport : IVoiceTransport
         try
         {
             var frame = ControlJsonReader.Parse<VoiceControlFrame>(json);
+            if (frame.FrameCase == VoiceControlFrame.FrameOneofCase.InputImage)
+            {
+                _frames.Writer.TryWrite(VoiceTransportFrame.InputImageFrame(frame.InputImage.Clone()));
+                return;
+            }
+
             _frames.Writer.TryWrite(VoiceTransportFrame.ControlFrame(frame));
         }
-        catch
+        catch (Exception ex)
         {
-            // ignore malformed control payloads
+            _logger?.LogWarning(ex, "Ignoring malformed WebRTC voice control payload.");
         }
     }
 

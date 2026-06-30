@@ -231,6 +231,96 @@ public sealed class ChannelCardConversationTurnRunnerTests
         cardKit.SettingsCalls[0].Request.SettingsJson.Should().Be("""{"config":{"streaming_mode":false}}""");
     }
 
+    [Fact]
+    public async Task RunCardCreateAsync_ShouldProxyThroughInboundBotSlug_WhenActivityCarriesProviderSlug()
+    {
+        // The inbound DM was received by the bot whose NyxID proxy slug is api-lark-bot-4. The
+        // streamed card reply must proxy through THAT slug, not the process-wide default — otherwise
+        // a sibling bot under the same account answers the DM (the cross-talk bug).
+        var defaultCardKit = new RecordingCardKitClient();
+        var defaultLark = new RecordingLarkNyxClient();
+        var perBotCardKit = new RecordingCardKitClient();
+        var perBotLark = new RecordingLarkNyxClient();
+        var factory = new RecordingOutboundClientFactory(
+            defaultCardKit,
+            defaultLark,
+            new Dictionary<string, (RecordingCardKitClient, RecordingLarkNyxClient)>
+            {
+                ["api-lark-bot-4"] = (perBotCardKit, perBotLark),
+            });
+        var runner = new ChannelCardConversationTurnRunner(
+            defaultCardKit,
+            defaultLark,
+            factory,
+            NullLogger<ChannelCardConversationTurnRunner>.Instance);
+
+        var result = await runner.RunCardCreateAsync(
+            BuildChunk(
+                "corr-card-slug-1",
+                BuildSanitizedActivity(
+                    scope: ConversationScope.DirectMessage,
+                    partition: "route-dm-1",
+                    scopeSegment: "dm",
+                    conversationIdentity: "ou_user_1",
+                    platformMessageId: "om_dm_1",
+                    providerSlug: "api-lark-bot-4")),
+            "streaming_main",
+            RuntimeContext("runtime-card-token-slug"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        // The factory was asked for the inbound bot's slug, and the per-bot clients carried the calls.
+        factory.RequestedCardKitSlugs.Should().Contain("api-lark-bot-4");
+        factory.RequestedNyxSlugs.Should().Contain("api-lark-bot-4");
+        perBotCardKit.CreateCalls.Should().ContainSingle();
+        perBotCardKit.StreamCalls.Should().ContainSingle();
+        perBotLark.SendCalls.Should().ContainSingle();
+        // The default-slug singleton clients were never used for this reply.
+        defaultCardKit.CreateCalls.Should().BeEmpty();
+        defaultCardKit.StreamCalls.Should().BeEmpty();
+        defaultLark.SendCalls.Should().BeEmpty();
+        defaultLark.ReplyCalls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunCardCreateAsync_ShouldUseDefaultClients_WhenActivityHasNoProviderSlug()
+    {
+        // No per-bot slug on the activity → fall back to the configured-default clients. The factory
+        // must not be consulted for a per-bot client in that case.
+        var defaultCardKit = new RecordingCardKitClient();
+        var defaultLark = new RecordingLarkNyxClient();
+        var factory = new RecordingOutboundClientFactory(
+            defaultCardKit,
+            defaultLark,
+            new Dictionary<string, (RecordingCardKitClient, RecordingLarkNyxClient)>());
+        var runner = new ChannelCardConversationTurnRunner(
+            defaultCardKit,
+            defaultLark,
+            factory,
+            NullLogger<ChannelCardConversationTurnRunner>.Instance);
+
+        var result = await runner.RunCardCreateAsync(
+            BuildChunk(
+                "corr-card-no-slug-1",
+                BuildSanitizedActivity(
+                    scope: ConversationScope.DirectMessage,
+                    partition: "route-dm-1",
+                    scopeSegment: "dm",
+                    conversationIdentity: "ou_user_1",
+                    platformMessageId: "om_dm_1",
+                    providerSlug: string.Empty)),
+            "streaming_main",
+            RuntimeContext("runtime-card-token-no-slug"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        factory.RequestedCardKitSlugs.Should().BeEmpty();
+        factory.RequestedNyxSlugs.Should().BeEmpty();
+        defaultCardKit.CreateCalls.Should().ContainSingle();
+        defaultCardKit.StreamCalls.Should().ContainSingle();
+        defaultLark.SendCalls.Should().ContainSingle();
+    }
+
     private static ConversationTurnRuntimeContext RuntimeContext(string token) =>
         new(NyxRelayReplyToken: null, NyxUserAccessToken: token);
 
@@ -266,7 +356,8 @@ public sealed class ChannelCardConversationTurnRunnerTests
         string partition = "oc_group_chat_1",
         string scopeSegment = "group",
         string conversationIdentity = "oc_group_chat_1",
-        string platformMessageId = "om_inbound_1") =>
+        string platformMessageId = "om_inbound_1",
+        string providerSlug = "") =>
         new()
         {
             Id = "msg-card-runtime-token-1",
@@ -293,6 +384,7 @@ public sealed class ChannelCardConversationTurnRunnerTests
                 NyxPlatformMessageId = platformMessageId,
                 NyxLarkChatId = "oc_group_chat_1",
                 NyxLarkUnionId = "on_union_1",
+                NyxProviderSlug = providerSlug,
             },
         };
 
@@ -389,10 +481,50 @@ public sealed class ChannelCardConversationTurnRunnerTests
         public Task<string> SetDrivePermissionAsync(string token, LarkDrivePermissionRequest request, CancellationToken ct) =>
             throw new NotSupportedException();
 
+        public Task<string> CreateBitableAppAsync(string token, LarkBitableCreateRequest request, CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<string> GrantResourceMemberAsync(string token, LarkResourceMemberGrantRequest request, CancellationToken ct) =>
+            throw new NotSupportedException();
+
         public Task<string> UploadDriveMediaAsync(string token, LarkDriveMediaUploadRequest request, CancellationToken ct) =>
             throw new NotSupportedException();
 
         public Task<string> UploadApprovalFileAsync(string token, LarkApprovalFileUploadRequest request, CancellationToken ct) =>
             throw new NotSupportedException();
+    }
+
+    private sealed class RecordingOutboundClientFactory : ILarkOutboundClientFactory
+    {
+        private readonly ILarkCardKitClient _defaultCardKit;
+        private readonly ILarkNyxClient _defaultLark;
+        private readonly IReadOnlyDictionary<string, (RecordingCardKitClient CardKit, RecordingLarkNyxClient Lark)> _perSlug;
+
+        public RecordingOutboundClientFactory(
+            ILarkCardKitClient defaultCardKit,
+            ILarkNyxClient defaultLark,
+            IReadOnlyDictionary<string, (RecordingCardKitClient, RecordingLarkNyxClient)> perSlug)
+        {
+            _defaultCardKit = defaultCardKit;
+            _defaultLark = defaultLark;
+            _perSlug = perSlug;
+        }
+
+        public List<string> RequestedCardKitSlugs { get; } = [];
+        public List<string> RequestedNyxSlugs { get; } = [];
+
+        public ILarkCardKitClient ResolveCardKitClient(string? providerSlug)
+        {
+            var slug = providerSlug?.Trim() ?? string.Empty;
+            RequestedCardKitSlugs.Add(slug);
+            return _perSlug.TryGetValue(slug, out var clients) ? clients.CardKit : _defaultCardKit;
+        }
+
+        public ILarkNyxClient ResolveNyxClient(string? providerSlug)
+        {
+            var slug = providerSlug?.Trim() ?? string.Empty;
+            RequestedNyxSlugs.Add(slug);
+            return _perSlug.TryGetValue(slug, out var clients) ? clients.Lark : _defaultLark;
+        }
     }
 }

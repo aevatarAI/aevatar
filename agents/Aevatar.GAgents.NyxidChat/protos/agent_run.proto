@@ -213,6 +213,10 @@ message AgentRunReplyStepState {
   repeated aevatar.ai.AgentToolReceipt tool_receipts = 22;
   aevatar.ai.LLMControlContextPayload owner_fallback_llm_control = 23;
   aevatar.ai.AgentToolExecutionContextPayload owner_fallback_tool_context = 24;
+  // One-shot empty-reply recovery marker. Gates re-recovery (recover at most once) WITHOUT the
+  // tool-stripping / server-default-routing semantics of final_no_tools_step: the recovery retry
+  // keeps tools + the user's routing + channel-context and only trims history to the recent floor.
+  bool empty_reply_retry = 25;
 }
 
 // Typed LLM IO facts returned by the executor. The run actor reconciles these

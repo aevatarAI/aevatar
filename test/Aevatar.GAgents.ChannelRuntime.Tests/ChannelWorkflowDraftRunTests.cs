@@ -97,6 +97,42 @@ public sealed class ChannelWorkflowDraftRunTests
     }
 
     [Fact]
+    public async Task Admission_ShouldBuildDefinitionActorSource_FromRunnableScopeWorkflowLookup()
+    {
+        var workflow = BuildWorkflowSummary(
+            "scope-1",
+            "daily-greeting",
+            actorId: "scope-workflow-definition-actor-1");
+        var admission = new ChannelWorkflowDraftRunAdmission(
+            new ChannelWorkflowDraftRunIntentParser(BuildWorkflowSlashRegistry()),
+            new StubScopeWorkflowQueryPort(workflow));
+
+        var result = await admission.TryAdmitAsync(
+            BuildWorkflowActivity("scope-1", "user-token-1"),
+            new ChannelBotRegistrationEntry { Id = "reg-1", ScopeId = "scope-1" },
+            new ChannelInboundEvent
+            {
+                Text = "/workflow run daily-greeting",
+                Platform = "lark",
+                MessageId = "msg-1",
+                ConversationId = "oc_group_chat_1",
+            },
+            new ConversationTurnRuntimeContext(null, "user-token-1"),
+            CancellationToken.None);
+
+        result.Matched.Should().BeTrue();
+        result.Rejection.Should().BeNull();
+        result.Request.Should().NotBeNull();
+        result.Request!.WorkflowSource.Kind.Should().Be(ChannelWorkflowDraftRunSourceKind.DefinitionActor);
+        result.Request.WorkflowSource.ScopeId.Should().Be("scope-1");
+        result.Request.WorkflowSource.WorkflowId.Should().Be("daily-greeting");
+        result.Request.WorkflowSource.WorkflowName.Should().Be("daily-greeting");
+        result.Request.WorkflowSource.DefinitionActorId.Should().Be("scope-workflow-definition-actor-1");
+        result.Request.Headers.Should().Contain("workflow_id", "daily-greeting");
+        result.Request.NyxUserAccessToken.Should().Be("user-token-1");
+    }
+
+    [Fact]
     public async Task InteractionPort_ShouldDispatchAcceptedStartToRunScopedActor()
     {
         var actorRuntime = new RecordingActorRuntime();
@@ -1015,6 +1051,24 @@ public sealed class ChannelWorkflowDraftRunTests
     {
         public Task<IReadOnlyList<ScopeWorkflowSummary>> ListAsync(string scopeId, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<ScopeWorkflowSummary>>(workflow is null ? [] : [workflow]);
+
+        public Task<ScopeWorkflowLookupResult> LookupByWorkflowIdAsync(
+            string scopeId,
+            string workflowId,
+            CancellationToken ct = default)
+        {
+            var summary = workflow is not null &&
+                          string.Equals(workflow.ScopeId, scopeId, StringComparison.Ordinal) &&
+                          string.Equals(workflow.WorkflowId, workflowId, StringComparison.Ordinal)
+                ? workflow
+                : null;
+            return Task.FromResult(summary switch
+            {
+                null => new ScopeWorkflowLookupResult(ScopeWorkflowLookupStatus.NotFound, null, "test_not_found"),
+                { ActorId.Length: 0 } => new ScopeWorkflowLookupResult(ScopeWorkflowLookupStatus.NotReady, null, "test_not_ready"),
+                _ => new ScopeWorkflowLookupResult(ScopeWorkflowLookupStatus.Runnable, summary, "test_runnable"),
+            });
+        }
 
         public Task<ScopeWorkflowSummary?> GetByWorkflowIdAsync(
             string scopeId,

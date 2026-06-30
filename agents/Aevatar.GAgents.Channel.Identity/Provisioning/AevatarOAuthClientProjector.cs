@@ -65,6 +65,7 @@ public sealed class AevatarOAuthClientProjector
             LastEventId = stateEvent.EventId ?? string.Empty,
             UpdatedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow),
         };
+        document.RedirectUris.AddRange(state.RedirectUris);
 
         await _writeDispatcher.UpsertAsync(document, ct);
     }

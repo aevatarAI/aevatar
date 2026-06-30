@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using Aevatar.Authentication.Abstractions;
+using Aevatar.Authentication.ScopeServiceTokens;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
@@ -32,6 +33,9 @@ public static class AevatarAuthenticationHostExtensions
         var options = builder.Configuration
             .GetSection(AevatarAuthenticationOptions.SectionName)
             .Get<AevatarAuthenticationOptions>() ?? new AevatarAuthenticationOptions();
+        var scopeTokenOptions = builder.Configuration
+            .GetSection(ScopeServiceTokenOptions.SectionName)
+            .Get<ScopeServiceTokenOptions>() ?? new ScopeServiceTokenOptions();
         var authenticationEnabled = ResolveAuthenticationEnabled(
             builder.Configuration[AevatarAuthenticationOptions.SectionName + ":Enabled"],
             builder.Environment);
@@ -46,6 +50,9 @@ public static class AevatarAuthenticationHostExtensions
             return builder;
         }
 
+        if (scopeTokenOptions.Enabled)
+            builder.Services.AddScopeServiceTokens(builder.Configuration);
+
         builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             .AddJwtBearer(jwt =>
             {
@@ -58,7 +65,8 @@ public static class AevatarAuthenticationHostExtensions
                 {
                     OnMessageReceived = context =>
                     {
-                        if (context.Request.Path.StartsWithSegments("/ws/voice") &&
+                        if ((context.Request.Path.StartsWithSegments("/ws/voice") ||
+                             context.Request.Path.StartsWithSegments("/whip/offer")) &&
                             context.Request.Query.TryGetValue("access_token", out var accessTokenValues))
                         {
                             var accessToken = accessTokenValues.FirstOrDefault();
@@ -70,6 +78,12 @@ public static class AevatarAuthenticationHostExtensions
                     },
                 };
             });
+        if (scopeTokenOptions.Enabled)
+        {
+            builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme)
+                .Configure<IScopeServiceTokenKeyProvider>((jwt, keyProvider) =>
+                    ConfigureScopeServiceTokenValidation(jwt, options, keyProvider));
+        }
 
         // When authentication is enabled, endpoints default to requiring an authenticated caller.
         // Public endpoints must opt out with [AllowAnonymous] / .AllowAnonymous().
@@ -82,6 +96,35 @@ public static class AevatarAuthenticationHostExtensions
         builder.Services.AddTransient<IClaimsTransformation, AevatarClaimsTransformation>();
 
         return builder;
+    }
+
+    private static void ConfigureScopeServiceTokenValidation(
+        JwtBearerOptions jwt,
+        AevatarAuthenticationOptions options,
+        IScopeServiceTokenKeyProvider keyProvider)
+    {
+        var issuers = new List<string>();
+        if (!string.IsNullOrWhiteSpace(options.Authority))
+        {
+            var authority = options.Authority.Trim();
+            issuers.Add(authority);
+            issuers.Add(authority.TrimEnd('/'));
+        }
+        issuers.Add(keyProvider.Issuer);
+
+        jwt.TokenValidationParameters.ValidIssuers = issuers.Distinct(StringComparer.Ordinal).ToArray();
+        var signingKeys = keyProvider.ValidationKeys.Select(key => key.ValidationKey).ToArray();
+        jwt.TokenValidationParameters.IssuerSigningKeys = signingKeys;
+
+        if (!string.IsNullOrWhiteSpace(keyProvider.Audience))
+        {
+            jwt.TokenValidationParameters.ValidAudiences = string.IsNullOrWhiteSpace(options.Audience)
+                ? [keyProvider.Audience]
+                : [options.Audience, keyProvider.Audience];
+            jwt.TokenValidationParameters.ValidateAudience = true;
+        }
+
+        jwt.TokenValidationParameters.ClockSkew = keyProvider.ClockSkew;
     }
 
     internal static bool ResolveAuthenticationEnabled(string? configuredValue, IHostEnvironment environment)

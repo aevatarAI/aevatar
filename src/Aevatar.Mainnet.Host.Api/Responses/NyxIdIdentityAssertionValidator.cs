@@ -17,7 +17,7 @@ internal sealed record NyxIdIdentityAssertionValidationResult(
 
 internal sealed record NyxIdJwksCacheEntry(
     string Issuer,
-    string Audience,
+    string? Audience,
     IReadOnlyList<SecurityKey> SigningKeys,
     DateTimeOffset ExpiresAtUtc);
 
@@ -32,15 +32,20 @@ internal sealed class NyxIdIdentityAssertionValidator
     private NyxIdJwksCacheEntry? _cachedKeys;
     private DateTimeOffset _lastForcedRefreshUtc = DateTimeOffset.MinValue;
 
+    // NyxIdToolOptions is registered as a plain singleton by AddNyxIdTools (carrying the real
+    // NyxID authority), NOT via Configure<NyxIdToolOptions>. Depend on it directly: an
+    // IOptions<NyxIdToolOptions> here would silently resolve to an empty default instance
+    // (BaseUrl == null), which left the issuer/authority fallback dead and surfaced as the
+    // generic "issuer is not configured" identity_assertion_invalid failure in production.
     public NyxIdIdentityAssertionValidator(
         IHttpClientFactory httpClientFactory,
         IOptions<ResponsesNyxIdIdentityAssertionOptions> options,
-        IOptions<NyxIdToolOptions>? nyxIdOptions = null,
+        NyxIdToolOptions? nyxIdOptions = null,
         ILogger<NyxIdIdentityAssertionValidator>? logger = null)
     {
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
-        _nyxIdOptions = nyxIdOptions?.Value;
+        _nyxIdOptions = nyxIdOptions;
         _logger = logger ?? NullLogger<NyxIdIdentityAssertionValidator>.Instance;
     }
 
@@ -91,7 +96,7 @@ internal sealed class NyxIdIdentityAssertionValidator
             ValidAlgorithms = [SecurityAlgorithms.RsaSha256],
             ValidateIssuer = true,
             ValidIssuer = keys.Issuer,
-            ValidateAudience = true,
+            ValidateAudience = keys.Audience is not null,
             ValidAudience = keys.Audience,
             ValidateLifetime = true,
             ClockSkew = TimeSpan.FromSeconds(Math.Max(0, _options.ClockSkewSeconds)),
@@ -271,14 +276,11 @@ internal sealed class NyxIdIdentityAssertionValidator
         throw new InvalidOperationException("NyxID identity assertion issuer is not configured.");
     }
 
-    private string ResolveAudience()
-    {
-        var audience = NormalizeOptional(_options.ExpectedAudience);
-        if (audience is not null)
-            return audience;
-
-        throw new InvalidOperationException("NyxID identity assertion audience is not configured.");
-    }
+    // Audience is optional. The proxy mints an assertion for THIS service only when forwarding
+    // to it, and the issuer + RSA signature already establish NyxID as the trusted minter. When
+    // ExpectedAudience is configured it is enforced (defense-in-depth against cross-service token
+    // replay); when absent, audience validation is skipped rather than failing closed.
+    private string? ResolveAudience() => NormalizeOptional(_options.ExpectedAudience);
 
     private string ResolveDiscoveryUrl()
     {
@@ -294,7 +296,8 @@ internal sealed class NyxIdIdentityAssertionValidator
     }
 
     private string? ResolveNyxIdAuthority() =>
-        NormalizeOptional(_nyxIdOptions?.BaseUrl)?.TrimEnd('/');
+        NormalizeOptional(_nyxIdOptions?.BaseUrl)?.TrimEnd('/')
+        ?? NormalizeOptional(_options.Issuer)?.TrimEnd('/');
 
     private static NyxIdIdentityAssertionValidationResult Fail(string code, string? summary) =>
         new(false, ErrorCode: code, ErrorSummary: summary);

@@ -544,11 +544,37 @@ public sealed class NyxIdRelayTransport
 
         // Lark posts carry an optional title; surface it as the leading line so the model
         // sees the same heading the user typed.
-        var title = ReadOptionalStringProperty(content, "title");
+        var title = ReadLarkPostTitle(content);
         if (title is not null)
             lines.Insert(0, title);
 
         return lines.Count == 0 ? null : string.Join("\n", lines);
+    }
+
+    private static string? ReadLarkPostTitle(JsonElement content)
+    {
+        var title = ReadOptionalStringProperty(content, "title");
+        if (title is not null)
+            return title;
+
+        if (content.ValueKind != JsonValueKind.Object)
+            return null;
+
+        foreach (var property in content.EnumerateObject())
+        {
+            if (property.Value.ValueKind != JsonValueKind.Object ||
+                !property.Value.TryGetProperty("content", out var nested) ||
+                nested.ValueKind != JsonValueKind.Array)
+            {
+                continue;
+            }
+
+            title = ReadOptionalStringProperty(property.Value, "title");
+            if (title is not null)
+                return title;
+        }
+
+        return null;
     }
 
     private static void AppendLarkPostSegmentText(JsonElement segment, StringBuilder builder)
