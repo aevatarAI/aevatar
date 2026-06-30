@@ -179,6 +179,19 @@ function toScopeWorkflowPath(scopeId: string, workflowId: string): string {
   return `scope://${scopeId}/${workflowId}.yaml`;
 }
 
+function normalizeCaseInsensitiveKey(value: string | null | undefined): string {
+  return trimOptional(value)?.toLowerCase() ?? "";
+}
+
+function buildScopedWorkflowDraftAssociationKey(input: {
+  readonly directoryId?: string | null;
+  readonly fileName?: string | null;
+}): string {
+  const directoryId = normalizeCaseInsensitiveKey(input.directoryId);
+  const fileName = normalizeCaseInsensitiveKey(input.fileName);
+  return directoryId && fileName ? `${directoryId}/${fileName}` : "";
+}
+
 function resolveScopeWorkflowName(workflow: ScopeWorkflowSummary): string {
   return workflow.displayName?.trim() || workflow.workflowName?.trim() || workflow.workflowId;
 }
@@ -201,6 +214,37 @@ function toCommittedWorkflowSummary(
     hasLayout: false,
     updatedAtUtc: workflow.updatedAt,
   };
+}
+
+function findScopedDraftForCommittedWorkflow(
+  drafts: readonly StudioWorkflowDraftSummary[],
+  committed: {
+    readonly workflowId: string;
+    readonly directoryId: string;
+    readonly fileName: string;
+  }
+): StudioWorkflowDraftSummary | null {
+  const committedWorkflowId = trimOptional(committed.workflowId);
+  const directMatch = drafts.find(
+    (draft) => trimOptional(draft.workflowId) === committedWorkflowId
+  );
+  if (directMatch) {
+    return directMatch;
+  }
+
+  const committedAssociationKey =
+    buildScopedWorkflowDraftAssociationKey(committed);
+  if (!committedAssociationKey) {
+    return null;
+  }
+
+  return (
+    drafts.find(
+      (draft) =>
+        buildScopedWorkflowDraftAssociationKey(draft) ===
+        committedAssociationKey
+    ) ?? null
+  );
 }
 
 function toCommittedWorkflowFile(
@@ -2249,15 +2293,40 @@ export const studioApi = {
       scopesApi.listWorkflows(normalizedScopeId),
     ]).then(([drafts, committed]) => {
       const merged = new Map<string, StudioWorkflowSummary>();
+      const associatedDraftIds = new Set<string>();
 
       for (const workflow of committed) {
-        merged.set(
-          workflow.workflowId,
-          toCommittedWorkflowSummary(normalizedScopeId, workflow)
+        const committedSummary = toCommittedWorkflowSummary(
+          normalizedScopeId,
+          workflow
         );
+        const draft = findScopedDraftForCommittedWorkflow(
+          drafts,
+          committedSummary
+        );
+
+        if (!draft) {
+          merged.set(workflow.workflowId, committedSummary);
+          continue;
+        }
+
+        associatedDraftIds.add(draft.workflowId);
+        merged.set(draft.workflowId, {
+          ...draft,
+          activeRevisionId: committedSummary.activeRevisionId ?? null,
+          serviceKey: committedSummary.serviceKey ?? null,
+          updatedAtUtc: selectLatestTimestamp(
+            draft.updatedAtUtc,
+            committedSummary.updatedAtUtc
+          ),
+        });
       }
 
       for (const draft of drafts) {
+        if (associatedDraftIds.has(draft.workflowId)) {
+          continue;
+        }
+
         const existing = merged.get(draft.workflowId);
         merged.set(
           draft.workflowId,
@@ -2302,9 +2371,21 @@ export const studioApi = {
       return toWorkflowFile(draft, true);
     }
 
-    return toCommittedWorkflowFile(
+    const committedWorkflow = toCommittedWorkflowFile(
       normalizedScopeId,
       await scopesApi.getWorkflowDetail(normalizedScopeId, workflowId)
+    );
+    const associatedDraftSummary = findScopedDraftForCommittedWorkflow(
+      await this.listWorkflowDrafts(normalizedScopeId),
+      committedWorkflow
+    );
+    if (!associatedDraftSummary) {
+      return committedWorkflow;
+    }
+
+    return this.getWorkflowDraftFile(
+      associatedDraftSummary.workflowId,
+      normalizedScopeId
     );
   },
 

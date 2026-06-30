@@ -510,6 +510,84 @@ describe('studioApi host-session requests', () => {
     ]);
   });
 
+  it('associates opaque first-edit scoped drafts with the published workflow entry', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockImplementation(async (input: string) => {
+      if (input === '/api/workspace/workflow-drafts?scopeId=scope-1') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => [
+            {
+              workflowId: 'opaque-draft-id',
+              name: 'published-demo',
+              description: 'first edit draft',
+              fileName: 'workflow-1.yaml',
+              filePath: 'scope://scope-1/workflow-1.yaml',
+              directoryId: 'scope:scope-1',
+              directoryLabel: 'scope-1',
+              stepCount: 2,
+              hasLayout: true,
+              updatedAtUtc: '2026-04-18T00:00:00Z',
+            },
+          ],
+        } as Response;
+      }
+
+      if (input === '/api/scopes/scope-1/workflows?includeSource=false') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => [
+            {
+              scopeId: 'scope-1',
+              workflowId: 'workflow-1',
+              displayName: 'published-demo',
+              serviceKey: 'svc-1',
+              workflowName: 'published-demo',
+              actorId: 'actor-1',
+              activeRevisionId: 'rev-1',
+              deploymentId: 'dep-1',
+              deploymentStatus: 'Running',
+              updatedAt: '2026-04-16T00:00:00Z',
+            },
+          ],
+        } as Response;
+      }
+
+      throw new Error(`Unexpected request: ${input}`);
+    });
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(studioApi.listWorkflows('scope-1')).resolves.toEqual([
+      {
+        activeRevisionId: 'rev-1',
+        serviceKey: 'svc-1',
+        workflowId: 'opaque-draft-id',
+        name: 'published-demo',
+        description: 'first edit draft',
+        fileName: 'workflow-1.yaml',
+        filePath: 'scope://scope-1/workflow-1.yaml',
+        directoryId: 'scope:scope-1',
+        directoryLabel: 'scope-1',
+        stepCount: 2,
+        hasLayout: true,
+        updatedAtUtc: '2026-04-18T00:00:00Z',
+      },
+    ]);
+  });
+
   it('falls back to the published scope workflow detail when a scoped draft is missing', async () => {
     persistAuthSession({
       tokens: {
@@ -561,6 +639,14 @@ describe('studioApi host-session requests', () => {
         } as Response;
       }
 
+      if (input === '/api/workspace/workflow-drafts?scopeId=scope-1') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => [],
+        } as Response;
+      }
+
       throw new Error(`Unexpected request: ${input}`);
     });
     global.fetch = fetchMock as typeof global.fetch;
@@ -577,6 +663,116 @@ describe('studioApi host-session requests', () => {
       draftExists: false,
       findings: [],
       updatedAtUtc: '2026-04-16T00:00:00Z',
+    });
+  });
+
+  it('loads an opaque first-edit scoped draft when opening the published workflow id', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockImplementation(async (input: string) => {
+      if (input === '/api/workspace/workflow-drafts/workflow-1?scopeId=scope-1') {
+        return {
+          ok: false,
+          status: 404,
+          statusText: 'Not Found',
+          text: async () => JSON.stringify({ title: 'Not Found', status: 404 }),
+        } as Response;
+      }
+
+      if (input === '/api/workspace/workflow-drafts?scopeId=scope-1') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => [
+            {
+              workflowId: 'opaque-draft-id',
+              name: 'published-demo',
+              description: 'first edit draft',
+              fileName: 'workflow-1.yaml',
+              filePath: 'scope://scope-1/workflow-1.yaml',
+              directoryId: 'scope:scope-1',
+              directoryLabel: 'scope-1',
+              stepCount: 2,
+              hasLayout: true,
+              updatedAtUtc: '2026-04-18T00:00:00Z',
+            },
+          ],
+        } as Response;
+      }
+
+      if (input === '/api/workspace/workflow-drafts/opaque-draft-id?scopeId=scope-1') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            workflowId: 'opaque-draft-id',
+            name: 'published-demo',
+            fileName: 'workflow-1.yaml',
+            filePath: 'scope://scope-1/workflow-1.yaml',
+            directoryId: 'scope:scope-1',
+            directoryLabel: 'scope-1',
+            yaml: 'name: published-demo\nsteps:\n  - id: approve_step\n',
+            layout: null,
+            updatedAtUtc: '2026-04-18T00:00:00Z',
+          }),
+        } as Response;
+      }
+
+      if (input === '/api/scopes/scope-1/workflows/workflow-1') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            available: true,
+            scopeId: 'scope-1',
+            workflow: {
+              scopeId: 'scope-1',
+              workflowId: 'workflow-1',
+              displayName: 'published-demo',
+              serviceKey: 'svc-1',
+              workflowName: 'published-demo',
+              actorId: 'actor-1',
+              activeRevisionId: 'rev-1',
+              deploymentId: 'dep-1',
+              deploymentStatus: 'Running',
+              updatedAt: '2026-04-16T00:00:00Z',
+            },
+            source: {
+              workflowYaml: 'name: published-demo\nsteps: []\n',
+              definitionActorId: 'definition-1',
+              inlineWorkflowYamls: null,
+            },
+          }),
+        } as Response;
+      }
+
+      throw new Error(`Unexpected request: ${input}`);
+    });
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(studioApi.getWorkflow('workflow-1', 'scope-1')).resolves.toEqual({
+      workflowId: 'opaque-draft-id',
+      name: 'published-demo',
+      fileName: 'workflow-1.yaml',
+      filePath: 'scope://scope-1/workflow-1.yaml',
+      directoryId: 'scope:scope-1',
+      directoryLabel: 'scope-1',
+      yaml: 'name: published-demo\nsteps:\n  - id: approve_step\n',
+      document: null,
+      draftExists: true,
+      findings: [],
+      layout: null,
+      updatedAtUtc: '2026-04-18T00:00:00Z',
     });
   });
 
