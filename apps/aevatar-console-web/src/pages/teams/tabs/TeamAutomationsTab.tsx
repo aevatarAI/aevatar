@@ -12,7 +12,6 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Button,
-  Checkbox,
   Input,
   Modal,
   Segmented,
@@ -665,8 +664,6 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
   const [createOpen, setCreateOpen] = React.useState(false);
   const [editingSchedule, setEditingSchedule] =
     React.useState<ScheduledDispatchSummary | null>(null);
-  const [editPromptClearConfirmed, setEditPromptClearConfirmed] =
-    React.useState(false);
   const [preview, setPreview] = React.useState<ScheduledDispatchPreview | null>(null);
   const [locallyDeletedScheduleIds, setLocallyDeletedScheduleIds] =
     React.useState<ReadonlySet<string>>(() => new Set());
@@ -771,8 +768,6 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
   const trimmedPromptLength = formState.prompt.trim().length;
   const promptTooLong =
     trimmedPromptLength > scheduledWorkflowPromptMaxLength;
-  const editPromptClearBlocked =
-    isEditingAutomation && trimmedPromptLength === 0 && !editPromptClearConfirmed;
   const cronPresets = React.useMemo(
     () => [
       {
@@ -1145,7 +1140,6 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
       showCreatedScheduleFeedback({ input, member, receipt });
       setCreateOpen(false);
       setPreview(null);
-      setEditPromptClearConfirmed(false);
       scheduleDelayedRefresh();
     },
   });
@@ -1178,7 +1172,6 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
       setCreateOpen(false);
       setEditingSchedule(null);
       setPreview(null);
-      setEditPromptClearConfirmed(false);
       await invalidateSchedules();
     },
   });
@@ -1261,7 +1254,6 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
   const openCreate = React.useCallback(() => {
     const member = selectedMember;
     setEditingSchedule(null);
-    setEditPromptClearConfirmed(false);
     setFormState({
       cronExpression: defaultCronExpression,
       displayName: "",
@@ -1284,7 +1276,6 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
         cronPresets.find((item) => item.cronExpression === cronExpression)?.value ??
         customPreset;
       setEditingSchedule(schedule);
-      setEditPromptClearConfirmed(false);
       setFormState({
         cronExpression,
         displayName: trimText(schedule.displayName),
@@ -1384,17 +1375,6 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
       );
       return;
     }
-    if (editPromptClearBlocked) {
-      void message.warning(
-        intl.formatMessage({
-          id: "teams.automations.messages.promptClearRequired",
-          defaultMessage:
-            "Confirm clearing the recurring prompt before saving.",
-        }),
-      );
-      return;
-    }
-
     const input: ScheduledDispatchConfigurationInput = {
       displayName:
         formState.displayName.trim() ||
@@ -1437,7 +1417,6 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
     formState.prompt,
     formState.timezone,
     intl,
-    editPromptClearBlocked,
     isEditingAutomation,
     serviceIdentitiesLoading,
     showCreatedScheduleFeedback,
@@ -2261,7 +2240,6 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
             setCreateOpen(false);
             setEditingSchedule(null);
             setPreview(null);
-            setEditPromptClearConfirmed(false);
           }
         }}
         onOk={handleSaveAutomation}
@@ -2391,13 +2369,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
                 autoSize={{ minRows: 4, maxRows: 7 }}
                 disabled={formSubmitting}
                 maxLength={scheduledWorkflowPromptMaxLength}
-                onChange={(event) => {
-                  const nextPrompt = event.target.value;
-                  updateForm({ prompt: nextPrompt });
-                  if (nextPrompt.trim().length > 0) {
-                    setEditPromptClearConfirmed(false);
-                  }
-                }}
+                onChange={(event) => updateForm({ prompt: event.target.value })}
                 placeholder={intl.formatMessage({
                   id: "teams.automations.form.promptPlaceholder",
                   defaultMessage:
@@ -2419,30 +2391,6 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
                   { maxLength: scheduledWorkflowPromptMaxLength },
                 )}
               </Typography.Text>
-              {isEditingAutomation ? (
-                <Typography.Text style={{ fontSize: 12 }} type="secondary">
-                  {intl.formatMessage({
-                    id: "teams.automations.form.editPromptHint",
-                    defaultMessage:
-                      "Saved prompts are not shown here. Enter a new prompt to replace it, or confirm saving without one.",
-                  })}
-                </Typography.Text>
-              ) : null}
-              {isEditingAutomation && trimmedPromptLength === 0 ? (
-                <Checkbox
-                  checked={editPromptClearConfirmed}
-                  disabled={formSubmitting}
-                  onChange={(event) =>
-                    setEditPromptClearConfirmed(event.target.checked)
-                  }
-                >
-                  {intl.formatMessage({
-                    id: "teams.automations.form.clearPromptConfirm",
-                    defaultMessage:
-                      "Save this automation without a recurring prompt",
-                  })}
-                </Checkbox>
-              ) : null}
             </div>
           </div>
 
