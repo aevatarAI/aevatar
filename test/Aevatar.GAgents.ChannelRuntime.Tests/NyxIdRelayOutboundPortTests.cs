@@ -4,6 +4,7 @@ using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
+using Aevatar.GAgents.Platform.Lark;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -76,6 +77,64 @@ public sealed class NyxIdRelayOutboundPortTests
         handler.Requests[0].Path.Should().Be("/api/v1/channel-relay/reply");
         handler.Requests[0].Authorization.Should().Be("Bearer bot-agent-key-1");
         AssertSingleRelayTextRequest(handler, "msg-1", "rendered:workflow done");
+    }
+
+    [Fact]
+    public async Task SendWithAgentKeyAsync_LarkLongWorkflowReply_ShouldDeliverOrderedChunksWithoutTruncation()
+    {
+        var handler = new RecordingJsonHandler();
+        var port = CreatePort(handler, new LarkMessageComposer());
+        var workflowReply = BuildLongWorkflowReply();
+
+        var result = await port.SendWithAgentKeyAsync(
+            "lark",
+            BuildConversation(),
+            new MessageContent { Text = workflowReply },
+            new OutboundDeliveryContext
+            {
+                ReplyMessageId = "msg-lark-long-workflow-1",
+            },
+            "bot-agent-key-1",
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        handler.Requests.Should().HaveCountGreaterThan(1);
+        handler.Requests.Select(request => request.Path)
+            .Should()
+            .OnlyContain(path => path == "/api/v1/channel-relay/reply");
+        handler.Requests.Select(request => request.Authorization)
+            .Should()
+            .OnlyContain(authorization => authorization == "Bearer bot-agent-key-1");
+
+        var chunks = handler.Requests.Select(ReadRelayText).ToArray();
+        chunks[0].Should().StartWith("(1/");
+        chunks[^1].Should().Contain("**3. Simple & Sweet**");
+        string.Concat(chunks).Should().Contain("**3. Simple & Sweet**");
+        string.Concat(chunks).Should().NotContain("...[truncated]");
+    }
+
+    [Fact]
+    public async Task SendWithAgentKeyAsync_LarkLongWorkflowReply_ShouldFailObservablyWhenAChunkIsRejected()
+    {
+        var handler = new SequenceJsonHandler(
+            (HttpStatusCode.OK, """{"message_id":"reply-1","platform_message_id":"platform-1"}"""),
+            (HttpStatusCode.BadRequest, """{"error":"chunk_rejected"}"""));
+        var port = CreatePort(handler, new LarkMessageComposer());
+
+        var result = await port.SendWithAgentKeyAsync(
+            "lark",
+            BuildConversation(),
+            new MessageContent { Text = BuildLongWorkflowReply() },
+            new OutboundDeliveryContext
+            {
+                ReplyMessageId = "msg-lark-long-workflow-1",
+            },
+            "bot-agent-key-1",
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.ErrorCode.Should().Be("relay_reply_chunk_rejected");
+        handler.Requests.Should().HaveCount(2);
     }
 
     [Theory]
@@ -578,6 +637,24 @@ public sealed class NyxIdRelayOutboundPortTests
         reply.TryGetProperty("metadata", out _).Should().BeFalse();
     }
 
+    private static string ReadRelayText((string Path, string? Authorization, string Body) request)
+    {
+        using var document = JsonDocument.Parse(request.Body);
+        return document.RootElement
+            .GetProperty("reply")
+            .GetProperty("text")
+            .GetString() ?? string.Empty;
+    }
+
+    private static string BuildLongWorkflowReply() =>
+        string.Join(
+            "\n",
+            "**Original (EN):** " + new string('A', 31_000),
+            "**Translation (CN):** " + new string('B', 1_200),
+            "**1. Warm & Polite** Thank you for organizing everything.",
+            "**2. Friendly & Engaging** Thank you for the lovely update.",
+            "**3. Simple & Sweet** Thank you so much for everything this year. Wishing you all a lovely summer!");
+
     private sealed class RecordingJsonHandler(
         HttpStatusCode status = HttpStatusCode.OK,
         string responseBody = """{"message_id":"reply-1","platform_message_id":"platform-1"}""",
@@ -600,6 +677,30 @@ public sealed class NyxIdRelayOutboundPortTests
                 response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(retryAfter.Value);
 
             return response;
+        }
+    }
+
+    private sealed class SequenceJsonHandler(params (HttpStatusCode Status, string Body)[] responses) : HttpMessageHandler
+    {
+        private int _nextResponse;
+
+        public List<(string Path, string? Authorization, string Body)> Requests { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Requests.Add((
+                request.RequestUri?.PathAndQuery ?? string.Empty,
+                request.Headers.Authorization?.ToString(),
+                request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken)));
+
+            var response = responses[Math.Min(_nextResponse, responses.Length - 1)];
+            _nextResponse++;
+            return new HttpResponseMessage(response.Status)
+            {
+                Content = new StringContent(response.Body, Encoding.UTF8, "application/json"),
+            };
         }
     }
 

@@ -11,6 +11,7 @@ using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
+using Aevatar.GAgents.Platform.Lark;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.NyxidChat.WorkflowRunDelivery;
 using Aevatar.Workflow.Application.Abstractions.Projections;
@@ -65,6 +66,41 @@ public sealed class WorkflowRunDeliveryGAgentTests
         nyxHandler.Requests[0].Body.Should().Contain("\"message_id\":\"reply-message-1\"");
         nyxHandler.Requests[0].Body.Should().Contain("\"text\":\"workflow completed text\"");
         credentialProvider.ResolvedRefs.Should().ContainSingle("secrets://nyx/reply-1");
+    }
+
+    [Fact]
+    public async Task TerminalWorkflowEvent_LongLarkReply_ShouldDeliverDraftThreeAcrossOrderedChunks()
+    {
+        var projectionPort = new RecordingWorkflowExecutionProjectionPort();
+        var nyxHandler = new RecordingJsonHandler();
+        var outboundPort = CreateOutboundPort(nyxHandler, new LarkMessageComposer());
+        var deferredDispatchPort = new DeferredDispatchPort();
+        var credentialProvider = new RecordingCredentialProvider
+        {
+            ["secrets://nyx/reply-1"] = "nyxid_ag_secret_1",
+        };
+        var agent = await CreateAgentAsync(projectionPort, outboundPort, deferredDispatchPort, credentialProvider);
+        deferredDispatchPort.Inner = new DirectActorDispatchPort(agent);
+        var output = BuildLongWorkflowReply();
+
+        await agent.HandleEventAsync(Envelope(StartRequest()));
+        await projectionPort.LastSink!.PushAsync(new WorkflowRunEventEnvelope
+        {
+            RunFinished = new WorkflowRunFinishedEventPayload
+            {
+                Result = Any.Pack(new WorkflowRunResultPayload { Output = output }),
+            },
+        });
+
+        agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Delivered);
+        agent.State.TerminalText.Should().Be(output);
+        nyxHandler.Requests.Should().HaveCountGreaterThan(1);
+        var delivered = string.Concat(nyxHandler.Requests.Select(ReadRelayText));
+        delivered.Should().Contain("**3. Simple & Sweet**");
+        delivered.Should().Contain("Wishing you all a lovely summer!");
+        delivered.Should().NotContain("...[truncated]");
+        ReadRelayText(nyxHandler.Requests[0]).Should().StartWith("(1/");
+        ReadRelayText(nyxHandler.Requests[^1]).Should().Contain("**3. Simple & Sweet**");
     }
 
     [Fact]
@@ -309,7 +345,9 @@ public sealed class WorkflowRunDeliveryGAgentTests
             .Last();
     }
 
-    private static NyxIdRelayOutboundPort CreateOutboundPort(HttpMessageHandler handler)
+    private static NyxIdRelayOutboundPort CreateOutboundPort(
+        HttpMessageHandler handler,
+        IMessageComposer? composer = null)
     {
         var client = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
@@ -318,8 +356,26 @@ public sealed class WorkflowRunDeliveryGAgentTests
         return new NyxIdRelayOutboundPort(
             client,
             NullLogger<NyxIdRelayOutboundPort>.Instance,
-            [new PlainTextComposer("lark")]);
+            [composer ?? new PlainTextComposer("lark")]);
     }
+
+    private static string ReadRelayText((string Path, string? Authorization, string Body) request)
+    {
+        using var document = System.Text.Json.JsonDocument.Parse(request.Body);
+        return document.RootElement
+            .GetProperty("reply")
+            .GetProperty("text")
+            .GetString() ?? string.Empty;
+    }
+
+    private static string BuildLongWorkflowReply() =>
+        string.Join(
+            "\n",
+            "**Original (EN):** " + new string('A', 31_000),
+            "**Translation (CN):** " + new string('B', 1_200),
+            "**1. Warm & Polite** Thank you for organizing everything.",
+            "**2. Friendly & Engaging** Thank you for the lovely update.",
+            "**3. Simple & Sweet** Thank you so much for everything this year. Wishing you all a lovely summer!");
 
     private sealed class DeferredDispatchPort : IActorDispatchPort
     {
