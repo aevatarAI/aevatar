@@ -962,6 +962,13 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.header.editWorkflowName': 'Edit workflow name',
   'teamMemberWorkflowStudio.header.identityAria': 'Workflow identity',
   'teamMemberWorkflowStudio.header.inputSet': 'input set',
+  'teamMemberWorkflowStudio.header.invoke': 'Invoke',
+  'teamMemberWorkflowStudio.header.invoke.open':
+    'Open the published member invoke workbench.',
+  'teamMemberWorkflowStudio.header.invoke.publishFirst':
+    'Publish this member before invoking it.',
+  'teamMemberWorkflowStudio.header.invoke.saveFirst':
+    'Save this member before invoking it.',
   'teamMemberWorkflowStudio.header.more': 'More',
   'teamMemberWorkflowStudio.header.moreActions': 'More workflow actions',
   'teamMemberWorkflowStudio.header.nodeActionsAria':

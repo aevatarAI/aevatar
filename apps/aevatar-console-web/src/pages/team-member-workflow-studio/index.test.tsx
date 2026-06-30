@@ -548,6 +548,12 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(await screen.findByDisplayValue("Untitled member")).toBeTruthy();
     expect(screen.getByText("Add first step")).toBeTruthy();
     expect(screen.getByText("nodes:0")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Invoke" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Invoke" })).toHaveAttribute(
+      "title",
+      "Save this member before invoking it.",
+    );
+    expect(screen.queryByRole("link", { name: "Invoke" })).toBeNull();
     expect(screen.getByRole("button", { name: "Recurring work" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Recurring work" })).toHaveAttribute(
       "title",
@@ -1694,6 +1700,68 @@ describe("TeamMemberWorkflowStudioPage", () => {
 
     expect(window.location.pathname).toBe(
       "/scopes/scope-1/teams/t-alpha/members/m-alpha/automations",
+    );
+    expect(window.location.search).toBe("");
+    expect(studioApi.getWorkflow).toHaveBeenCalledWith("wf-alpha", "scope-1");
+    expect(studioApi.getWorkflow).not.toHaveBeenCalledWith("m-alpha", "scope-1");
+    expect(studioApi.getWorkflow).not.toHaveBeenCalledWith("svc-alpha", "scope-1");
+  });
+
+  it("opens the published member invoke workbench without passing workflow or service identities", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/m-alpha/workflow?workflowId=wf-alpha&workflowSource=published",
+    );
+    (studioApi.getMember as jest.Mock).mockResolvedValue({
+      implementationRef: {
+        implementationKind: "workflow",
+        workflowId: "wf-alpha",
+      },
+      summary: {
+        createdAt: "2026-06-08T00:00:00Z",
+        description: "",
+        displayName: "Workflow Alpha",
+        implementationKind: "workflow",
+        lastBoundRevisionId: "rev-alpha",
+        lifecycleStage: "bind_ready",
+        memberId: "m-alpha",
+        publishedServiceId: "svc-alpha",
+        scopeId: "scope-1",
+        teamId: "t-alpha",
+        updatedAt: "2026-06-08T00:00:00Z",
+      },
+    });
+    (studioApi.getWorkflow as jest.Mock).mockResolvedValue({
+      directoryId: "scope:scope-1",
+      directoryLabel: "scope-1",
+      draftExists: true,
+      fileName: "wf-alpha.yaml",
+      filePath: "scope://scope-1/wf-alpha.yaml",
+      findings: [],
+      layout: null,
+      name: "Workflow Alpha",
+      workflowId: "wf-alpha",
+      yaml: "name: Workflow Alpha\nsteps: []\n",
+      document: mockWorkflowDocument,
+      updatedAtUtc: "2026-06-08T00:00:00Z",
+    });
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    expect(await screen.findByDisplayValue("Workflow Alpha")).toBeTruthy();
+    const invokeLink = await screen.findByRole("link", {
+      name: "Invoke",
+    });
+    expect(invokeLink).toHaveAttribute(
+      "href",
+      "/scopes/scope-1/teams/t-alpha/members/m-alpha/invoke",
+    );
+
+    fireEvent.click(invokeLink);
+
+    expect(window.location.pathname).toBe(
+      "/scopes/scope-1/teams/t-alpha/members/m-alpha/invoke",
     );
     expect(window.location.search).toBe("");
     expect(studioApi.getWorkflow).toHaveBeenCalledWith("wf-alpha", "scope-1");
