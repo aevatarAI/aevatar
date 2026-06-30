@@ -3,6 +3,7 @@ const runtimePaths = {
   primitives: "/runtime/primitives",
   runs: "/runtime/runs",
   missionControl: "/runtime/mission-control",
+  missionWall: "/runtime/mission-wall",
   explorer: "/runtime/explorer",
   explorerDetail: "/runtime/explorer/detail",
   gagents: "/runtime/gagents",
@@ -108,6 +109,18 @@ export function buildRuntimeMissionControlHref(options?: {
     runId: options?.runId,
     scopeId: options?.scopeId,
     serviceId: options?.serviceId ?? options?.serviceOverrideId,
+  });
+}
+
+export function buildRuntimeMissionWallHref(options?: {
+  focusRunId?: string;
+  scopeId?: string;
+  teamId?: string;
+}): string {
+  return buildHref(runtimePaths.missionWall, {
+    focusRunId: options?.focusRunId,
+    scopeId: options?.scopeId,
+    teamId: options?.teamId,
   });
 }
 

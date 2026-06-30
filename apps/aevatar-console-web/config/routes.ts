@@ -138,6 +138,11 @@ export default [
     hideInMenu: true,
   },
   {
+    path: "/runtime/mission-wall",
+    component: "./MissionWall",
+    hideInMenu: true,
+  },
+  {
     path: "/services",
     name: "Services",
     component: "./services",
@@ -257,6 +262,11 @@ export default [
   {
     path: "/mission-control",
     redirect: "/runtime/mission-control",
+    hideInMenu: true,
+  },
+  {
+    path: "/mission-wall",
+    redirect: "/runtime/mission-wall",
     hideInMenu: true,
   },
   {

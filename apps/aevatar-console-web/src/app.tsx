@@ -52,11 +52,16 @@ import {
 
 const PUBLIC_ROUTES = new Set(["/login", "/auth/callback"]);
 const DEFAULT_PROTECTED_ROUTE = CONSOLE_HOME_ROUTE;
+const FULLSCREEN_DISPLAY_ROUTES = new Set(["/runtime/mission-wall"]);
 const STUDIO_HOST_ROUTES = new Set([
   "/studio",
   "/scopes/:scopeId/teams/:teamId/members/new/workflow",
   "/scopes/:scopeId/teams/:teamId/members/:memberId/workflow",
 ]);
+
+function isFullscreenDisplayRoute(pathname: string): boolean {
+  return FULLSCREEN_DISPLAY_ROUTES.has(pathname);
+}
 
 function isStudioHostRoute(pathname: string): boolean {
   if (STUDIO_HOST_ROUTES.has(pathname)) {
@@ -147,6 +152,7 @@ type AuthSessionBootstrapProps = {
 
 type ConsoleRuntimeProvidersProps = {
   children: React.ReactNode;
+  isFullscreenDisplayRoute: boolean;
   isPublicRoute: boolean;
   isStudioRoute: boolean;
   pathname: string;
@@ -857,6 +863,7 @@ const AuthSessionBootstrap: React.FC<AuthSessionBootstrapProps> = ({
 
 const ConsoleRuntimeProviders: React.FC<ConsoleRuntimeProvidersProps> = ({
   children,
+  isFullscreenDisplayRoute,
   isPublicRoute,
   isStudioRoute,
   pathname,
@@ -864,7 +871,7 @@ const ConsoleRuntimeProviders: React.FC<ConsoleRuntimeProvidersProps> = ({
 }) => {
   const intl = useIntl();
   const currentLocale = normalizeConsoleLocale(intl.locale || getLocale());
-  const localizedContent = isPublicRoute ? (
+  const localizedContent = isPublicRoute || isFullscreenDisplayRoute ? (
     children
   ) : (
     <MainLayout>{children}</MainLayout>
@@ -897,6 +904,7 @@ export const layout = ({
   const pathname = window.location.pathname;
   const search = window.location.search;
   const collapseForRoute = shouldCollapseLayout(pathname, search);
+  const fullscreenDisplayRoute = isFullscreenDisplayRoute(pathname);
 
   return {
     onPageChange: () => {
@@ -916,6 +924,10 @@ export const layout = ({
     postMenuData: (menuData: NavigationMenuItem[]) =>
       decorateNavigationMenuItems(menuData),
     menuRender: (_: unknown, defaultDom: React.ReactNode) => {
+      if (isFullscreenDisplayRoute(window.location.pathname)) {
+        return false;
+      }
+
       if (!React.isValidElement(defaultDom)) {
         return defaultDom;
       }
@@ -928,6 +940,10 @@ export const layout = ({
       );
     },
     actionsRender: () => {
+      if (isFullscreenDisplayRoute(window.location.pathname)) {
+        return [];
+      }
+
       return [
         <ConsoleLanguageSwitch key="language-switch" />,
         <ConsoleAuthActions key="auth-actions" />,
@@ -940,6 +956,7 @@ export const layout = ({
           const search = window.location.search;
           const isPublicRoute = PUBLIC_ROUTES.has(pathname);
           const isStudioRoute = isStudioHostRoute(pathname);
+          const isDisplayRoute = isFullscreenDisplayRoute(pathname);
           const liveSession = loadStoredAuthSession();
           const needsProtectedRouteRedirect =
             !isPublicRoute &&
@@ -958,6 +975,7 @@ export const layout = ({
             );
           return (
             <ConsoleRuntimeProviders
+              isFullscreenDisplayRoute={isDisplayRoute}
               isPublicRoute={isPublicRoute}
               isStudioRoute={isStudioRoute}
               pathname={pathname}
@@ -979,16 +997,26 @@ export const layout = ({
       collapsedShowTitle: false,
       type: "group",
     },
-    contentStyle: {
-      background: "transparent",
-      display: "flex",
-      flexDirection: "column",
-      height: "calc(100vh - 56px)",
-      minHeight: 0,
-      overflow: "hidden",
-      padding: 0,
-    },
+    contentStyle: fullscreenDisplayRoute
+      ? {
+          background: "#09110f",
+          display: "block",
+          height: "100vh",
+          minHeight: 0,
+          overflow: "hidden",
+          padding: 0,
+        }
+      : {
+          background: "transparent",
+          display: "flex",
+          flexDirection: "column",
+          height: "calc(100vh - 56px)",
+          minHeight: 0,
+          overflow: "hidden",
+          padding: 0,
+        },
     defaultCollapsed: shouldDefaultCollapseLayout(pathname, search),
+    headerRender: fullscreenDisplayRoute ? false : undefined,
     ...(collapseForRoute ? { collapsed: true } : {}),
     logo: <BrandLogo />,
   };
