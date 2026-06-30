@@ -69,6 +69,7 @@ jobs:
               - '.github/workflows/ci.yml'
             product_runtime:
               - 'src/**'
+              - 'agents/**'
               - 'aevatar.slnx'
               - 'aevatar.*.slnf'
               - '.editorconfig'
