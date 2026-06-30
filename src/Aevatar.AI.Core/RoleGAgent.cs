@@ -36,12 +36,14 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
     private const string LlmFailureContentPrefix = "[[AEVATAR_LLM_ERROR]]";
     private const int MaxTrackedSessions = 128;
     private const string SystemSkillOverlayRefreshCallbackId = "system-skill-overlay-refresh";
+    private const int SystemSkillOverlayPromptLogSampleRate = 64;
     private static readonly TimeSpan DefaultSystemSkillOverlayRefreshTtl = TimeSpan.FromMinutes(15);
     private static readonly TimeSpan SystemSkillOverlayInitialRefreshDelay = TimeSpan.FromSeconds(1);
     private string _appliedEventModules = string.Empty;
     private string _appliedEventRoutes = string.Empty;
     private IServiceProvider? _appliedModuleServices;
     private SystemSkillOverlay? _systemSkillOverlay;
+    private int _systemSkillOverlayPromptLogCounter;
 
     public RoleGAgent(
         ILLMProviderFactory? llmProviderFactory = null,
@@ -1592,6 +1594,16 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         if (string.IsNullOrWhiteSpace(overlayMarkdown))
             return decorated;
 
+        if (_systemSkillOverlayPromptLogCounter++ % SystemSkillOverlayPromptLogSampleRate == 0)
+        {
+            Logger.LogInformation(
+                "[{Role}] System skill overlay prompt: source_watermark={SourceWatermark}, kernel_tokens_estimate={KernelTokensEstimate}, overlay_tokens_estimate={OverlayTokensEstimate}",
+                RoleName,
+                ResolveSystemSkillOverlayWatermark(_systemSkillOverlay),
+                EstimatePromptTokens(decorated),
+                EstimatePromptTokens(overlayMarkdown));
+        }
+
         if (string.IsNullOrWhiteSpace(decorated))
             return overlayMarkdown.Trim();
 
@@ -1661,6 +1673,14 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
     private static string ResolveSystemSkillOverlayWatermark(SystemSkillOverlay? overlay) =>
         overlay?.SourceWatermark ?? string.Empty;
+
+    private static int EstimatePromptTokens(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return 0;
+
+        return Math.Max(1, (Encoding.UTF8.GetByteCount(text) + 3) / 4);
+    }
 
     // Idempotently add a module name to a comma-separated EventModules string, matching the
     // delimiter/options RoleGAgentFactory.BuildModuleExtensions splits on (',' + RemoveEmptyEntries

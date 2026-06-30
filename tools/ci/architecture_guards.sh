@@ -2029,6 +2029,59 @@ check_orchestration_class_guard() {
   fi
 }
 
+check_system_skill_overlay_dual_seam_injection() {
+  local role_gagent_file="src/Aevatar.AI.Core/RoleGAgent.cs"
+  local conversation_reply_generator_file="agents/Aevatar.GAgents.NyxidChat/ConversationReplyGenerator.cs"
+  local prompt_injection_test_file="test/Aevatar.AI.Tests/SystemSkillOverlayPromptInjectionTests.cs"
+
+  if ! rg -q "DecorateSystemPrompt" "${role_gagent_file}" || ! rg -q "_systemSkillOverlay" "${role_gagent_file}"; then
+    echo "System skill overlay direct-chat seam must inject the overlay in RoleGAgent.DecorateSystemPrompt."
+    exit 1
+  fi
+
+  if ! awk '
+    /private string BuildSystemPrompt[[:space:]]*\(/ {
+      in_func = 1
+      body_started = 0
+      brace_depth = 0
+    }
+    in_func {
+      line = $0
+      if (line ~ /AppendSystemSkillOverlay[[:space:]]*\(/) {
+        found = 1
+      }
+
+      opens = gsub(/\{/, "{", line)
+      closes = gsub(/\}/, "}", line)
+      if (!body_started && opens > 0) {
+        body_started = 1
+      }
+      brace_depth += opens - closes
+      if (body_started && brace_depth == 0) {
+        in_func = 0
+      }
+    }
+    END { exit(found ? 0 : 1) }
+  ' "${conversation_reply_generator_file}"; then
+    echo "System skill overlay channel seam must call AppendSystemSkillOverlay from ConversationReplyGenerator.BuildSystemPrompt."
+    exit 1
+  fi
+
+  if [ ! -f "${prompt_injection_test_file}" ]; then
+    echo "System skill overlay prompt injection tests are required."
+    exit 1
+  fi
+}
+
+check_system_skill_overlay_eval_gate_present() {
+  local eval_file="tools/eval/system_skill_overlay_golden_tasks.md"
+
+  if [ ! -s "${eval_file}" ]; then
+    echo "System skill overlay golden-task eval gate artifact is required."
+    exit 1
+  fi
+}
+
 check_orchestration_class_guard \
   "src/workflow/Aevatar.Workflow.Application/Runs/WorkflowChatRunApplicationService.cs" \
   60 \
@@ -2041,6 +2094,8 @@ check_orchestration_class_guard \
   "src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionProjectionService.cs" \
   190 \
   10
+check_system_skill_overlay_dual_seam_injection
+check_system_skill_overlay_eval_gate_present
 
 echo "Running CQRS/EventSourcing boundary guard..."
 bash tools/ci/cqrs_eventsourcing_boundary_guard.sh
