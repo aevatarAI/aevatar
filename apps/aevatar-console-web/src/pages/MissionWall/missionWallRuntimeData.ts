@@ -80,6 +80,64 @@ function calculateDurationMs(run: ScopeServiceRunSummary): number | undefined {
   return durationMs >= 0 ? durationMs : undefined;
 }
 
+function positiveFiniteNumber(
+  value: number | null | undefined,
+): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : undefined;
+}
+
+function positiveDurationBetween(
+  startedAt: string | null | undefined,
+  endedAt: string | null | undefined,
+): number | undefined {
+  const startedAtMs = parseTimeMs(startedAt);
+  const endedAtMs = parseTimeMs(endedAt);
+  if (startedAtMs === undefined || endedAtMs === undefined) {
+    return undefined;
+  }
+
+  return positiveFiniteNumber(endedAtMs - startedAtMs);
+}
+
+function calculateAuditStepDurationMs(
+  step: ScopeServiceRunAuditStep,
+): number | undefined {
+  return (
+    positiveFiniteNumber(step.durationMs) ??
+    positiveDurationBetween(step.requestedAt, step.completedAt)
+  );
+}
+
+function calculateAuditDurationMs(
+  selectedAudit: ScopeServiceRunAuditSnapshot,
+): number | undefined {
+  const audit = selectedAudit.audit;
+  const stepDurationMs = audit.steps
+    .map(calculateAuditStepDurationMs)
+    .filter((value): value is number => value !== undefined)
+    .reduce((sum, value) => sum + value, 0);
+
+  return (
+    positiveFiniteNumber(audit.durationMs) ??
+    positiveDurationBetween(
+      trimOptional(audit.startedAt) || audit.createdAt,
+      trimOptional(audit.endedAt) || undefined,
+    ) ??
+    positiveFiniteNumber(stepDurationMs) ??
+    calculateDurationMs(selectedAudit.summary)
+  );
+}
+
+function positiveStepCount(
+  value: number | null | undefined,
+): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
+}
+
 export function isPublishedWorkflowMember(
   member: StudioMemberSummary,
 ): boolean {
@@ -162,6 +220,7 @@ export function toMissionWallRunStatus(
 ): MissionWallRunStatus {
   switch (normalizeStatus(completionStatus)) {
     case "completed":
+    case "done":
     case "succeeded":
     case "success":
       return "completed";
@@ -241,6 +300,10 @@ function toMissionWallStepStatus(
 
   if (step.success === false || trimOptional(step.error)) {
     return "failed";
+  }
+
+  if (trimOptional(step.completedAt)) {
+    return "completed";
   }
 
   if (
@@ -330,6 +393,8 @@ function withSelectedAudit(
   readonly steps: readonly MissionWallStepSource[];
   readonly durationMs?: number;
   readonly commandId?: string;
+  readonly completedSteps?: number;
+  readonly totalSteps?: number;
 } {
   if (
     !selectedAudit ||
@@ -344,14 +409,21 @@ function withSelectedAudit(
   }
 
   const audit = selectedAudit.audit;
+  const steps = sortAuditSteps(audit.steps).map(toMissionWallStepSource);
+  const completedStepCount = steps.filter(
+    (step) => step.status === "completed",
+  ).length;
   return {
     commandId: trimOptional(audit.commandId) || undefined,
-    durationMs:
-      typeof audit.durationMs === "number" && Number.isFinite(audit.durationMs)
-        ? audit.durationMs
-        : calculateDurationMs(selectedAudit.summary),
+    completedSteps:
+      positiveStepCount(audit.summary.completedSteps) ?? completedStepCount,
+    durationMs: calculateAuditDurationMs(selectedAudit),
     run: selectedAudit.summary,
-    steps: sortAuditSteps(audit.steps).map(toMissionWallStepSource),
+    steps,
+    totalSteps:
+      positiveStepCount(audit.summary.totalSteps) ??
+      positiveStepCount(audit.summary.requestedSteps) ??
+      steps.length,
   };
 }
 
@@ -362,7 +434,14 @@ function toRunSource(input: {
   readonly service: ServiceCatalogSnapshot;
   readonly teamNameById: ReadonlyMap<string, string>;
 }): MissionWallRunSource {
-  const { commandId, durationMs, run, steps } = withSelectedAudit(
+  const {
+    commandId,
+    completedSteps,
+    durationMs,
+    run,
+    steps,
+    totalSteps,
+  } = withSelectedAudit(
     input.run,
     input.selectedAudit,
   );
@@ -381,7 +460,7 @@ function toRunSource(input: {
 
   return {
     commandId,
-    completedSteps: Math.max(0, run.completedSteps),
+    completedSteps: completedSteps ?? Math.max(0, run.completedSteps),
     currentMemberId: trimOptional(currentStep?.targetRole) || undefined,
     currentMemberName: trimOptional(currentStep?.targetRole) || undefined,
     currentStepId: currentStep?.stepId,
@@ -406,7 +485,7 @@ function toRunSource(input: {
     steps,
     teamId,
     teamName: teamId ? input.teamNameById.get(teamId) || teamId : undefined,
-    totalSteps: Math.max(0, run.totalSteps),
+    totalSteps: totalSteps ?? Math.max(0, run.totalSteps),
     updatedAt: runUpdatedAt(run),
     workflowName,
   };

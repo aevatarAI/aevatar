@@ -316,6 +316,21 @@ function stepStatusToExecutionStatus(
   return "idle";
 }
 
+function isLiveFlowStatus(status: MissionWallRunStatus): boolean {
+  return status === "running" || status === "waiting" || status === "retrying";
+}
+
+function isFocusedLiveEdge(
+  source: MissionWallRunSource,
+  fromStepId: string,
+  toStepId: string,
+): boolean {
+  return (
+    isLiveFlowStatus(source.status) &&
+    (source.currentStepId === fromStepId || source.currentStepId === toStepId)
+  );
+}
+
 function buildStepEdges(
   nodes: readonly MissionWallWorkflowStepNode[],
   source: MissionWallRunSource,
@@ -333,9 +348,7 @@ function buildStepEdges(
 
     if (step.nextStepId && nodeIds.has(step.nextStepId)) {
       edges.push({
-        focused:
-          source.currentStepId === step.stepId ||
-          source.currentStepId === step.nextStepId,
+        focused: isFocusedLiveEdge(source, step.stepId, step.nextStepId),
         fromStepId: step.stepId,
         id: `edge:${step.stepId}:${step.nextStepId}:next`,
         kind: "next",
@@ -355,9 +368,7 @@ function buildStepEdges(
 
       edges.push({
         branchLabel,
-        focused:
-          source.currentStepId === step.stepId ||
-          source.currentStepId === targetStepId,
+        focused: isFocusedLiveEdge(source, step.stepId, targetStepId),
         fromStepId: step.stepId,
         id: `edge:${step.stepId}:${targetStepId}:branch:${branchLabel}`,
         kind: "branch",
@@ -377,9 +388,7 @@ function buildStepEdges(
 
     if (shouldUseSequentialFallback) {
       edges.push({
-        focused:
-          source.currentStepId === step.stepId ||
-          source.currentStepId === nextStep.stepId,
+        focused: isFocusedLiveEdge(source, step.stepId, nextStep.stepId),
         fromStepId: step.stepId,
         id: `edge:${step.stepId}:${nextStep.stepId}:sequence`,
         kind: "next",

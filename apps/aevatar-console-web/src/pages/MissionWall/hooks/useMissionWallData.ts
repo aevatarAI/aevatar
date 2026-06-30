@@ -1,6 +1,7 @@
 import { useQueries, useQuery } from "@tanstack/react-query";
 import React from "react";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
+import { t } from "@/shared/i18n/messages";
 import {
   getLocationSnapshot,
   subscribeToLocationChanges,
@@ -117,7 +118,10 @@ function buildLiveState(input: {
     return {
       durableFreshnessSeconds,
       lastObservedAt: input.latestObservedAt,
-      message: "Loading published workflow runs.",
+      message: t(
+        "pages.missionwall.liveState.loading",
+        "Loading published workflow runs.",
+      ),
       status: "idle",
     };
   }
@@ -126,7 +130,10 @@ function buildLiveState(input: {
     return {
       durableFreshnessSeconds,
       lastObservedAt: input.latestObservedAt,
-      message: "Mission wall could not load the authenticated scope.",
+      message: t(
+        "pages.missionwall.liveState.scopeUnavailable",
+        "Mission wall could not load the authenticated scope.",
+      ),
       status: "disconnected",
     };
   }
@@ -135,7 +142,10 @@ function buildLiveState(input: {
     return {
       durableFreshnessSeconds,
       lastObservedAt: input.latestObservedAt,
-      message: "Some published service runs could not be loaded.",
+      message: t(
+        "pages.missionwall.liveState.partialRunError",
+        "Some published service runs could not be loaded.",
+      ),
       status: "degraded",
     };
   }
@@ -144,7 +154,10 @@ function buildLiveState(input: {
     return {
       durableFreshnessSeconds,
       lastObservedAt: input.latestObservedAt,
-      message: "No published workflow runs are visible yet.",
+      message: t(
+        "pages.missionwall.liveState.empty",
+        "No published workflow runs are visible yet.",
+      ),
       status: "idle",
     };
   }
@@ -152,7 +165,10 @@ function buildLiveState(input: {
   return {
     durableFreshnessSeconds,
     lastObservedAt: input.latestObservedAt,
-    message: "Connected to published workflow run read models.",
+    message: t(
+      "pages.missionwall.liveState.connected",
+      "Connected to published workflow run read models.",
+    ),
     status: "live",
   };
 }
