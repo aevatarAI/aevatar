@@ -1254,6 +1254,10 @@ function clearStudioAutoReloginAttempt(returnTo: string): void {
 
 function isExecutionStopAllowed(status: string | undefined): boolean {
   const normalized = status?.trim().toLowerCase() ?? '';
+  if (!normalized) {
+    return false;
+  }
+
   return !['completed', 'failed', 'stopped', 'cancelled'].includes(normalized);
 }
 
@@ -10256,12 +10260,14 @@ const StudioPage: React.FC = () => {
       ? trimOptional(workbenchPublishedServiceRevision?.workflowName)
       : '') ||
     currentMemberImplementationLabel;
-  const executionCanStop = isExecutionStopAllowed(
-    selectedExecutionQuery.data?.status ||
-      (selectedObserveBackendRunSummary
-        ? normalizeObserveRunStatus(selectedObserveBackendRunSummary.completionStatus)
-        : selectedObserveFallbackExecution?.status),
-  );
+  const executionCanStop =
+    selectedExecutionInCurrentMember &&
+    isExecutionStopAllowed(
+      selectedExecutionQuery.data?.status ||
+        (selectedObserveBackendRunSummary
+          ? normalizeObserveRunStatus(selectedObserveBackendRunSummary.completionStatus)
+          : selectedObserveFallbackExecution?.status),
+    );
   const observeEmptyState = useMemo(() => {
     if (!hasSelectedMemberFocus) {
       return {

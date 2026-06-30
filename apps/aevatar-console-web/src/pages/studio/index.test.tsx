@@ -3064,15 +3064,17 @@ jest.mock("./components/StudioWorkbenchSections", () => {
           "Execution stop requested",
           "Execution stop failed"
         ),
-        React.createElement(
-          "button",
-          {
-            key: "stop",
-            type: "button",
-            onClick: () => props.onStopExecution?.(),
-          },
-          "Stop"
-        ),
+        props.executionCanStop
+          ? React.createElement(
+              "button",
+              {
+                key: "stop",
+                type: "button",
+                onClick: () => props.onStopExecution?.(),
+              },
+              "Stop"
+            )
+          : null,
       ].filter(Boolean)
     );
 
@@ -8197,6 +8199,30 @@ describe("StudioPage", () => {
     });
 
     expect(await screen.findByText("Execution stop requested")).toBeTruthy();
+  });
+
+  it("does not offer stop before the selected member has a runnable execution", async () => {
+    mockScopeRuntimeApi.listServiceRuns.mockResolvedValueOnce({
+      scopeId: "scope-1",
+      serviceId: "default",
+      serviceKey: "scope-1:default:default:default",
+      displayName: "workspace-demo",
+      runs: [],
+    });
+
+    renderStudioPage(
+      "/studio?scopeId=scope-1&memberId=default&step=observe&tab=executions"
+    );
+
+    expect(await screen.findByText("Logs")).toBeTruthy();
+
+    await waitFor(() => {
+      expect(screen.getByText("observe-runs:none")).toBeTruthy();
+      expect(screen.getByText("observe-selected:none")).toBeTruthy();
+    });
+
+    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+    expect(mockRuntimeRunsApi.stop).not.toHaveBeenCalled();
   });
 
   it("falls back to the build editor when a removed roles tab still carries a workflow draft", async () => {
