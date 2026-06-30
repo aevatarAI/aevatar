@@ -6,7 +6,9 @@ import {
   Position,
   ReactFlow,
   type Edge,
+  type NodeMouseHandler,
   type Node,
+  type OnMove,
   type ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
@@ -57,6 +59,16 @@ function focusWindowStepIds(
   return nodes.slice(start, start + FOCUS_WINDOW_SIZE).map((node) => node.id);
 }
 
+function graphIdentityKey(graph: MissionWallWorkflowGraph | undefined): string {
+  const nodeIds = (graph?.nodes ?? []).map((node) => node.id).join("|");
+  const runId = graph?.nodes.find((node) => node.runId)?.runId ?? "";
+  return `${runId}:${nodeIds}`;
+}
+
+function graphViewportKey(graph: MissionWallWorkflowGraph | undefined): string {
+  return `${graphIdentityKey(graph)}:${graph?.selectedStepId ?? ""}`;
+}
+
 function toFlowNodes(graph: MissionWallWorkflowGraph | undefined): WorkflowReplayNode[] {
   return (graph?.nodes ?? []).map((node, index) => ({
     data: { node },
@@ -95,7 +107,7 @@ function edgeTone(
 
   if (edge.focused) {
     return {
-      animated: true,
+      animated: false,
       color: "#2dd4bf",
       width: 4,
     };
@@ -148,6 +160,7 @@ function toFlowEdges(graph: MissionWallWorkflowGraph | undefined): WorkflowRepla
 
     return [{
       animated: tone.animated,
+      className: edge.focused ? "mission-wall-flow-edge--focused" : undefined,
       data: { edge },
       id: edge.id,
       label: edge.branchLabel,
@@ -196,11 +209,41 @@ export function WorkflowReplayCanvas({
   const nodes = React.useMemo(() => toFlowNodes(graph), [graph]);
   const edges = React.useMemo(() => toFlowEdges(graph), [graph]);
   const focusNodeIds = React.useMemo(() => focusWindowStepIds(graph), [graph]);
+  const identityKey = React.useMemo(() => graphIdentityKey(graph), [graph]);
+  const viewportKey = React.useMemo(() => graphViewportKey(graph), [graph]);
+  const lastFitIdentityKeyRef = React.useRef<string | undefined>(undefined);
+  const lastFitKeyRef = React.useRef<string | undefined>(undefined);
+  const userMovedViewportRef = React.useRef(false);
+
+  const markUserMovedViewport = React.useCallback(() => {
+    userMovedViewportRef.current = true;
+  }, []);
+
+  const handleMove: OnMove = React.useCallback((event) => {
+    if (event) {
+      markUserMovedViewport();
+    }
+  }, [markUserMovedViewport]);
+
+  const handleNodeDragStart: NodeMouseHandler = React.useCallback(() => {
+    markUserMovedViewport();
+  }, [markUserMovedViewport]);
 
   React.useLayoutEffect(() => {
     if (!flowInstance || !nodes.length) {
       return undefined;
     }
+    const graphIdentityChanged = lastFitIdentityKeyRef.current !== identityKey;
+    if (lastFitKeyRef.current === viewportKey) {
+      return undefined;
+    }
+    if (userMovedViewportRef.current && !graphIdentityChanged) {
+      return undefined;
+    }
+
+    lastFitIdentityKeyRef.current = identityKey;
+    lastFitKeyRef.current = viewportKey;
+    userMovedViewportRef.current = false;
 
     const focusNodes = focusNodeIds.length
       ? nodes.filter((node) => focusNodeIds.includes(node.id))
@@ -224,7 +267,7 @@ export function WorkflowReplayCanvas({
 
     fit();
     return undefined;
-  }, [flowInstance, focusNodeIds, graph?.selectedStepId, nodes]);
+  }, [flowInstance, focusNodeIds, identityKey, nodes, viewportKey]);
 
   return (
     <section className="mission-wall-canvas">
@@ -234,12 +277,6 @@ export function WorkflowReplayCanvas({
           edges={edges}
           edgesFocusable={false}
           elementsSelectable={false}
-          fitView
-          fitViewOptions={{
-            maxZoom: 1.05,
-            minZoom: 0.36,
-            padding: 0.24,
-          }}
           maxZoom={1.4}
           minZoom={0.28}
           nodeTypes={nodeTypes}
@@ -248,6 +285,8 @@ export function WorkflowReplayCanvas({
           nodesDraggable={false}
           nodesFocusable={false}
           onInit={setFlowInstance}
+          onMove={handleMove}
+          onNodeDragStart={handleNodeDragStart}
           panOnDrag
           proOptions={{ hideAttribution: true }}
           zoomOnDoubleClick={false}
