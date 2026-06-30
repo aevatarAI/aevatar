@@ -65,7 +65,7 @@ describe("NyxIDAuthClient", () => {
     window.localStorage.clear();
   });
 
-  it("starts authorize with the backend broker OAuth client config", async () => {
+  it("starts authorize with the backend broker OAuth client config and redirect URI", async () => {
     const assign = installLocationAssignSpy();
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
@@ -95,7 +95,7 @@ describe("NyxIDAuthClient", () => {
     );
     expect(authorizeUrl.searchParams.get("client_id")).toBe("broker-client-1");
     expect(authorizeUrl.searchParams.get("redirect_uri")).toBe(
-      "http://localhost:8000/auth/callback",
+      "https://backend.example/auth/callback",
     );
     expect(authorizeUrl.searchParams.get("scope")).toBe(
       "openid profile email offline_access urn:nyxid:scope:broker_binding proxy",
@@ -109,12 +109,39 @@ describe("NyxIDAuthClient", () => {
     expect(pending).toEqual(
       expect.objectContaining({
         clientId: "broker-client-1",
-        redirectUri: "http://localhost:8000/auth/callback",
+        redirectUri: "https://backend.example/auth/callback",
         returnTo: "/scopes/scope-1/teams",
         scope: "openid profile email offline_access urn:nyxid:scope:broker_binding proxy",
         state: authorizeUrl.searchParams.get("state"),
       }),
     );
+  });
+
+  it("falls back to the frontend callback redirect URI for older backend config responses", async () => {
+    const assign = installLocationAssignSpy();
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        baseUrl: "https://nyx.example",
+        clientId: "broker-client-1",
+        scope: "openid urn:nyxid:scope:broker_binding proxy",
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await new NyxIDAuthClient(runtimeConfig).loginWithRedirect();
+
+    const authorizeUrl = new URL(assign.mock.calls[0][0]);
+    expect(authorizeUrl.searchParams.get("redirect_uri")).toBe(
+      "http://localhost:8000/auth/callback",
+    );
+    const pending = JSON.parse(
+      window.localStorage.getItem(
+        "aevatar-console:nyxid:pending:broker-client-1",
+      ) ?? "{}",
+    );
+    expect(pending.redirectUri).toBe("http://localhost:8000/auth/callback");
   });
 
   it("finalizes callback through the backend without a browser token exchange", async () => {

@@ -5,7 +5,9 @@ import type { NyxIDAuthSession, NyxIDTokenSet, NyxIDUserInfo } from "./session";
 export type NyxIDBackendLoginConfig = Pick<
   NyxIDRuntimeConfig,
   "baseUrl" | "clientId" | "scope"
->;
+> & {
+  readonly redirectUri?: string;
+};
 
 export type NyxIDLoginFinalizationRequest = {
   readonly code: string;
@@ -29,6 +31,8 @@ type BackendLoginConfigResponse = {
   readonly BaseUrl?: unknown;
   readonly clientId?: unknown;
   readonly ClientId?: unknown;
+  readonly redirectUri?: unknown;
+  readonly RedirectUri?: unknown;
   readonly scope?: unknown;
   readonly Scope?: unknown;
 };
@@ -142,6 +146,9 @@ function decodeBackendLoginConfig(
 ): NyxIDBackendLoginConfig {
   const record = expectRecord(value, "NyxID backend login config") as
     BackendLoginConfigResponse;
+  const redirectUri = readOptionalString(
+    record.redirectUri ?? record.RedirectUri,
+  );
 
   return {
     baseUrl: readString(record.baseUrl ?? record.BaseUrl, "baseUrl").replace(
@@ -149,6 +156,7 @@ function decodeBackendLoginConfig(
       "",
     ),
     clientId: readString(record.clientId ?? record.ClientId, "clientId"),
+    ...(redirectUri ? { redirectUri } : {}),
     scope: readString(record.scope ?? record.Scope, "scope"),
   };
 }

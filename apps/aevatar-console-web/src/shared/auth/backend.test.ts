@@ -41,7 +41,7 @@ describe("NyxID backend auth API", () => {
     });
   });
 
-  it("ignores redirect URI fields on the backend login config boundary", async () => {
+  it("loads the optional broker redirect URI when the backend provides it", async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -58,6 +58,7 @@ describe("NyxID backend auth API", () => {
     await expect(loadBackendNyxIDLoginConfig()).resolves.toEqual({
       baseUrl: "https://nyx.example",
       clientId: "broker-client-1",
+      redirectUri: "https://backend.example/auth/callback",
       scope: "openid urn:nyxid:scope:broker_binding proxy",
     });
   });
