@@ -1590,7 +1590,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
     protected override string DecorateSystemPrompt(string basePrompt)
     {
         var decorated = base.DecorateSystemPrompt(basePrompt);
-        var overlayMarkdown = _systemSkillOverlay?.OverlayMarkdown;
+        var overlay = ResolveInjectableSystemSkillOverlay();
+        var overlayMarkdown = overlay?.OverlayMarkdown;
         if (string.IsNullOrWhiteSpace(overlayMarkdown))
             return decorated;
 
@@ -1599,7 +1600,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             Logger.LogInformation(
                 "[{Role}] System skill overlay prompt: source_watermark={SourceWatermark}, kernel_tokens_estimate={KernelTokensEstimate}, overlay_tokens_estimate={OverlayTokensEstimate}",
                 RoleName,
-                ResolveSystemSkillOverlayWatermark(_systemSkillOverlay),
+                ResolveSystemSkillOverlayWatermark(overlay),
                 EstimatePromptTokens(decorated),
                 EstimatePromptTokens(overlayMarkdown));
         }
@@ -1608,6 +1609,18 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             return overlayMarkdown.Trim();
 
         return $"{decorated.TrimEnd()}\n\n{overlayMarkdown.Trim()}";
+    }
+
+    // Direct-chat seam overlay source: the Ornn-materialized actor-state overlay when present,
+    // otherwise the deployment's built-in default overlay, so capability how-to stays whole even
+    // before a host enables the Ornn-sourced overlay. Mirrors the channel seam, which reads the
+    // same ISystemSkillOverlayProvider default through the conversation reply generator.
+    private SystemSkillOverlay? ResolveInjectableSystemSkillOverlay()
+    {
+        if (!IsSystemSkillOverlayEmpty(_systemSkillOverlay))
+            return _systemSkillOverlay;
+
+        return Services.GetService<ISystemSkillOverlayProvider>()?.GetCurrent();
     }
 
     private void HydrateSystemSkillOverlayMirror(RoleGAgentState state)

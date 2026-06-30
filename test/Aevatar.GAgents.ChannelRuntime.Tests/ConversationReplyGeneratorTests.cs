@@ -599,8 +599,9 @@ public sealed class ConversationReplyGeneratorTests
         systemPrompt.Should().Contain("https://dev.aevatar.local/api/webhooks/nyxid-relay");
         systemPrompt.Should().NotContain("https://aevatar-console-backend-api.aevatar.ai/api/webhooks/nyxid-relay");
         systemPrompt.Should().NotContain("chrono-ai-daily");
-        systemPrompt.Should().Contain("When you are following a loaded skill and you hit a missing capability");
-        systemPrompt.Should().Contain("ornn_search_skills");
+        // Kernel invariant still present alongside the configured relay callback URL. (Skill-discovery
+        // how-to moved from the kernel into the System Skill Overlay in #2468.)
+        systemPrompt.Should().Contain("## CRITICAL: Action-First Behavior");
     }
 
     [Fact]
@@ -670,13 +671,19 @@ public sealed class ConversationReplyGeneratorTests
             .Messages.First(message => message.Role == "system").Content;
         systemPrompt.Should().Contain(overlayMarkdown);
         systemPrompt.Should().Contain("<channel-context>");
-        systemPrompt.Should().Contain("When you are following a loaded skill");
-        systemPrompt!.IndexOf("When you are following a loaded skill", StringComparison.Ordinal)
+        // Kernel anchor: a stable invariant heading the slimmed kernel still carries, asserting the
+        // overlay is appended AFTER the kernel. (Capability how-to like skill-discovery moved out of
+        // the kernel into the overlay in #2468, so it is no longer a valid kernel anchor.)
+        systemPrompt.Should().Contain("Action-First Behavior");
+        systemPrompt!.IndexOf("Action-First Behavior", StringComparison.Ordinal)
             .Should()
             .BeLessThan(systemPrompt.IndexOf(overlayMarkdown, StringComparison.Ordinal));
+        // Anchor on the INJECTED channel-context runtime block (its rendered sender id), not the
+        // kernel's documentation of `<channel-context>`, to assert the overlay sits before the channel
+        // runtime facts.
         systemPrompt.IndexOf(overlayMarkdown, StringComparison.Ordinal)
             .Should()
-            .BeLessThan(systemPrompt.IndexOf("<channel-context>", StringComparison.Ordinal));
+            .BeLessThan(systemPrompt.IndexOf("ou_sender_1", StringComparison.Ordinal));
     }
 
     [Theory]

@@ -46,6 +46,31 @@ The materialized `SystemSkillOverlay` stores:
 The watermark is the operational provenance handle for a turn. It identifies
 which composed overlay was used without logging raw overlay content.
 
+## Injection Seams and Built-in Default
+
+The kernel (`system-prompt.md`) carries only invariants, runtime read contracts,
+the skill extension mechanism, and a one-line internal tool index. The
+per-domain capability how-to lives in the overlay layer and is force-injected on
+both reply seams:
+
+- Direct chat: `RoleGAgent.DecorateSystemPrompt` appends the Ornn-materialized
+  actor-state overlay when present, otherwise the built-in default overlay.
+- Channel/relay: `NyxIdConversationReplyGenerator.BuildSystemPrompt` appends the
+  overlay resolved from `ISystemSkillOverlayProvider`, after the kernel and
+  before the channel runtime facts (`kernel > overlay > runtime facts`).
+
+`ISystemSkillOverlayProvider` always resolves to a real implementation in
+production. `SystemSkillOverlayDefaultProvider` supplies a built-in default
+overlay (an embedded resource carrying the capability how-to the kernel no
+longer holds), so neither seam can silently lose capability behavior before a
+host wires the Ornn-sourced overlay. A host that enables the Ornn overlay
+augments or replaces the default; the default remains the no-regression floor.
+
+This invariant is enforced by `check_system_skill_overlay_dual_seam_injection`,
+which requires both injection seams, a non-test `ISystemSkillOverlayProvider`
+implementation, and its DI registration — so a test stub can never stand in for
+the production provider.
+
 ## Rollout Policy
 
 System skill overlays must roll out in stages:

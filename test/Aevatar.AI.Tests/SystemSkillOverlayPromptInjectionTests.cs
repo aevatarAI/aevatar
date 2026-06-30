@@ -45,16 +45,51 @@ public sealed class SystemSkillOverlayPromptInjectionTests
             .Be("kernel invariant");
     }
 
-    private static IServiceProvider BuildServices(IEventStore store)
+    [Fact]
+    public async Task DirectChat_ShouldFallBackToDefaultOverlay_WhenStateOverlayEmpty()
     {
-        return new ServiceCollection()
+        const string defaultOverlay = "## Built-in default overlay\n- provisioning how-to";
+        var store = new InMemoryEventStoreForTests();
+        var services = BuildServices(store, new StubSystemSkillOverlayProvider(defaultOverlay));
+        var agent = CreateAgent(services, "role-overlay-fallback");
+        await agent.ActivateAsync();
+
+        await agent.MaterializeOverlayAsync("   ");
+
+        agent.DecorateForTest("kernel invariant")
+            .Should()
+            .Be($"kernel invariant\n\n{defaultOverlay}");
+    }
+
+    [Fact]
+    public async Task DirectChat_ShouldPreferCommittedOverlayOverDefault()
+    {
+        var store = new InMemoryEventStoreForTests();
+        var services = BuildServices(store, new StubSystemSkillOverlayProvider("## default\n- fallback only"));
+        var agent = CreateAgent(services, "role-overlay-prefer-committed");
+        await agent.ActivateAsync();
+
+        await agent.MaterializeOverlayAsync(OverlayMarkdown);
+
+        agent.DecorateForTest("kernel invariant")
+            .Should()
+            .Be($"kernel invariant\n\n{OverlayMarkdown}");
+    }
+
+    private static IServiceProvider BuildServices(IEventStore store, ISystemSkillOverlayProvider? overlayProvider = null)
+    {
+        var services = new ServiceCollection()
             .AddSingleton(store)
             .AddSingleton<EventSourcingRuntimeOptions>()
             .AddSingleton<IActorRuntimeCallbackScheduler, NoOpCallbackScheduler>()
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
             .AddSingleton<ISystemSkillOverlayBuilder, EmptyOverlayBuilder>()
-            .AddSingleton(new SystemSkillOverlayOptions { Enabled = true })
-            .BuildServiceProvider();
+            .AddSingleton(new SystemSkillOverlayOptions { Enabled = true });
+
+        if (overlayProvider is not null)
+            services.AddSingleton(overlayProvider);
+
+        return services.BuildServiceProvider();
     }
 
     private static TestRoleGAgent CreateAgent(IServiceProvider services, string actorId)
@@ -97,6 +132,12 @@ public sealed class SystemSkillOverlayPromptInjectionTests
     {
         public Task<SystemSkillOverlay> BuildAsync(CancellationToken ct) =>
             Task.FromResult(new SystemSkillOverlay());
+    }
+
+    private sealed class StubSystemSkillOverlayProvider(string overlayMarkdown) : ISystemSkillOverlayProvider
+    {
+        public SystemSkillOverlay GetCurrent() =>
+            new() { OverlayMarkdown = overlayMarkdown, SourceWatermark = "builtin-default" };
     }
 
     private sealed class NoOpCallbackScheduler : IActorRuntimeCallbackScheduler

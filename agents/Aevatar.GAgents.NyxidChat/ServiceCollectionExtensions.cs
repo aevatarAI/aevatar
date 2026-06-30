@@ -106,6 +106,10 @@ public static class ServiceCollectionExtensions
                     sp.GetRequiredService<ILogger<ChannelCardConversationTurnRunner>>());
             }));
         }
+        // Built-in default System Skill Overlay: always force-inject the per-domain capability how-to
+        // the kernel no longer carries, so both reply seams stay behavior-complete even before a host
+        // wires the Ornn-sourced overlay. Registered ahead of the generator so GetService resolves it.
+        services.TryAddSingleton<ISystemSkillOverlayProvider, SystemSkillOverlayDefaultProvider>();
         services.TryAddSingleton<IConversationReplyGenerator>(sp =>
             new NyxIdConversationReplyGenerator(
                 sp.GetRequiredService<ILLMProviderFactory>(),
