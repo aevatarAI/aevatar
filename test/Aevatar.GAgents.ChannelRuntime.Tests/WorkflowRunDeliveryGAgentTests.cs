@@ -68,6 +68,42 @@ public sealed class WorkflowRunDeliveryGAgentTests
     }
 
     [Fact]
+    public async Task TerminalWorkflowEvent_LongLarkReply_ShouldDeliverDraftThreeAcrossChunks()
+    {
+        var projectionPort = new RecordingWorkflowExecutionProjectionPort();
+        var nyxHandler = new RecordingJsonHandler();
+        var outboundPort = CreateOutboundPort(nyxHandler);
+        var deferredDispatchPort = new DeferredDispatchPort();
+        var credentialProvider = new RecordingCredentialProvider
+        {
+            ["secrets://nyx/reply-1"] = "nyxid_ag_secret_1",
+        };
+        var agent = await CreateAgentAsync(projectionPort, outboundPort, deferredDispatchPort, credentialProvider);
+        var dispatchPort = new DirectActorDispatchPort(agent);
+        deferredDispatchPort.Inner = dispatchPort;
+        var output = BuildLongWorkflowReply();
+
+        await agent.HandleEventAsync(Envelope(StartRequest()));
+        await projectionPort.LastSink!.PushAsync(new WorkflowRunEventEnvelope
+        {
+            RunFinished = new WorkflowRunFinishedEventPayload
+            {
+                Result = Any.Pack(new WorkflowRunResultPayload { Output = output }),
+            },
+        });
+
+        agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Delivered);
+        agent.State.TerminalText.Should().Be(output);
+        nyxHandler.Requests.Should().HaveCountGreaterThan(1);
+        var deliveredTexts = nyxHandler.Requests.Select(ReadRelayText).ToArray();
+        deliveredTexts.Should().OnlyContain(text => text.Length <= NyxIdRelayTextChunker.LarkMaxTextLength);
+        deliveredTexts[^1].Should().Contain("**3. Simple & Sweet**");
+        deliveredTexts[^1].Should().Contain("Wishing you all a lovely summer!");
+        deliveredTexts[^1].Should().Contain("CN final line delivered.");
+        string.Concat(deliveredTexts).Should().NotContain("...[truncated]");
+    }
+
+    [Fact]
     public async Task StartValidationFailure_ShouldPersistFailedTerminalState()
     {
         var eventStore = new InMemoryEventStore();
@@ -307,6 +343,26 @@ public sealed class WorkflowRunDeliveryGAgentTests
             .Where(x => x.EventData.Is(WorkflowRunDeliveryFailedEvent.Descriptor))
             .Select(x => x.EventData.Unpack<WorkflowRunDeliveryFailedEvent>())
             .Last();
+    }
+
+    private static string ReadRelayText((string Path, string? Authorization, string Body) request)
+    {
+        using var document = System.Text.Json.JsonDocument.Parse(request.Body);
+        return document.RootElement
+            .GetProperty("reply")
+            .GetProperty("text")
+            .GetString()!;
+    }
+
+    private static string BuildLongWorkflowReply()
+    {
+        var prefix = new string('A', NyxIdRelayTextChunker.LarkMaxTextLength + 100);
+        return string.Join(
+            "\n\n",
+            prefix,
+            "**2. Friendly & Engaging** Thank you for the lovely update. Have a wonderful summer, everyone!",
+            "**3. Simple & Sweet** Thank you so much for everything this year. Wishing you all a lovely summer!",
+            "CN final line delivered.");
     }
 
     private static NyxIdRelayOutboundPort CreateOutboundPort(HttpMessageHandler handler)

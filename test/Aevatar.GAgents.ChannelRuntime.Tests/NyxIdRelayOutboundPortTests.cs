@@ -78,6 +78,42 @@ public sealed class NyxIdRelayOutboundPortTests
         AssertSingleRelayTextRequest(handler, "msg-1", "rendered:workflow done");
     }
 
+    [Fact]
+    public async Task SendWithAgentKeyAsync_LarkLongText_ShouldSendOrderedChunksWithoutTruncatingTail()
+    {
+        var handler = new RecordingJsonHandler();
+        var port = CreatePort(handler, new TruncatingLarkComposer());
+        var workflowReply = BuildLongWorkflowReply();
+
+        var result = await port.SendWithAgentKeyAsync(
+            "lark",
+            BuildConversation(),
+            new MessageContent { Text = workflowReply },
+            new OutboundDeliveryContext
+            {
+                ReplyMessageId = "msg-lark-long-1",
+            },
+            "bot-agent-key-1",
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        handler.Requests.Should().HaveCountGreaterThan(1);
+        handler.Requests.Should().OnlyContain(request => request.Path == "/api/v1/channel-relay/reply");
+        handler.Requests.Should().OnlyContain(request => request.Authorization == "Bearer bot-agent-key-1");
+
+        var sentTexts = handler.Requests.Select(ReadRelayText).ToArray();
+        sentTexts.Should().OnlyContain(text => text.Length <= NyxIdRelayTextChunker.LarkMaxTextLength);
+        sentTexts[0].Should().EndWith("[part 1/2 continues]");
+        sentTexts[1].Should().StartWith("[part 2/2 continued]");
+        sentTexts[0].Should().NotContain("composer truncated");
+        sentTexts[1].Should().Contain("**3. Simple & Sweet**");
+        sentTexts[1].Should().Contain("Wishing you all a lovely summer!");
+        sentTexts[1].Should().Contain("CN final line delivered.");
+        string.Concat(sentTexts)
+            .Should()
+            .NotContain("...[truncated]");
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("   ")]
@@ -578,6 +614,26 @@ public sealed class NyxIdRelayOutboundPortTests
         reply.TryGetProperty("metadata", out _).Should().BeFalse();
     }
 
+    private static string ReadRelayText((string Path, string? Authorization, string Body) request)
+    {
+        using var document = JsonDocument.Parse(request.Body);
+        return document.RootElement
+            .GetProperty("reply")
+            .GetProperty("text")
+            .GetString()!;
+    }
+
+    private static string BuildLongWorkflowReply()
+    {
+        var prefix = new string('A', NyxIdRelayTextChunker.LarkMaxTextLength + 100);
+        return string.Join(
+            "\n\n",
+            prefix,
+            "**2. Friendly & Engaging** Thank you for the lovely update. Have a wonderful summer, everyone!",
+            "**3. Simple & Sweet** Thank you so much for everything this year. Wishing you all a lovely summer!",
+            "CN final line delivered.");
+    }
+
     private sealed class RecordingJsonHandler(
         HttpStatusCode status = HttpStatusCode.OK,
         string responseBody = """{"message_id":"reply-1","platform_message_id":"platform-1"}""",
@@ -626,6 +682,18 @@ public sealed class NyxIdRelayOutboundPortTests
         public ChannelId Channel { get; } = ChannelId.From(platform);
 
         public object Compose(MessageContent intent, ComposeContext context) => new();
+
+        object IMessageComposer.Compose(MessageContent intent, ComposeContext context) => Compose(intent, context);
+
+        public ComposeCapability Evaluate(MessageContent intent, ComposeContext context) => ComposeCapability.Exact;
+    }
+
+    private sealed class TruncatingLarkComposer : IMessageComposer<StubNativePayload>
+    {
+        public ChannelId Channel { get; } = ChannelId.From("lark");
+
+        public StubNativePayload Compose(MessageContent intent, ComposeContext context) =>
+            new("composer truncated");
 
         object IMessageComposer.Compose(MessageContent intent, ComposeContext context) => Compose(intent, context);
 

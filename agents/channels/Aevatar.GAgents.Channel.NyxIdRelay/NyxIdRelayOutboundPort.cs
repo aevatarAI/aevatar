@@ -98,11 +98,31 @@ public sealed class NyxIdRelayOutboundPort
         string agentKey,
         CancellationToken ct)
     {
+        ArgumentNullException.ThrowIfNull(conversation);
+        ArgumentNullException.ThrowIfNull(content);
+        ArgumentNullException.ThrowIfNull(delivery);
+
         if (string.IsNullOrWhiteSpace(agentKey))
         {
             return EmitResult.Failed(
                 "bot_agent_key_missing",
                 "Relay reply is missing the bot agent key required for channel-relay/reply.");
+        }
+
+        if (TryComposeDurableReplyText(platform, conversation, content, out var replyText) is { } composeFailure)
+        {
+            return composeFailure;
+        }
+
+        if (ShouldChunkDurableTextReply(platform, replyText))
+        {
+            return await SendChunkedDurableTextReplyAsync(
+                    platform,
+                    delivery,
+                    agentKey,
+                    replyText,
+                    ct)
+                .ConfigureAwait(false);
         }
 
         return await SendAsync(
@@ -113,6 +133,54 @@ public sealed class NyxIdRelayOutboundPort
                 agentKey,
                 ct)
             .ConfigureAwait(false);
+    }
+
+    private async Task<EmitResult> SendChunkedDurableTextReplyAsync(
+        string platform,
+        OutboundDeliveryContext delivery,
+        string agentKey,
+        string replyText,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(delivery.ReplyMessageId))
+        {
+            return EmitResult.Failed(
+                "missing_reply_message_id",
+                "Relay reply is missing the source message id required for channel-relay/reply.");
+        }
+
+        var chunks = NyxIdRelayTextChunker.SplitForLark(replyText);
+        string? firstMessageId = null;
+        string? firstPlatformMessageId = null;
+        for (var i = 0; i < chunks.Count; i++)
+        {
+            var result = await _nyxClient.SendChannelRelayTextReplyAsync(
+                    agentKey,
+                    delivery.ReplyMessageId,
+                    chunks[i],
+                    ct)
+                .ConfigureAwait(false);
+            if (!result.Succeeded)
+            {
+                _logger.LogWarning(
+                    "Nyx relay durable chunk reply delivery failed: platform={Platform}, messageId={MessageId}, chunk={Chunk}, total={Total}, detail={Detail}",
+                    platform,
+                    delivery.ReplyMessageId,
+                    i + 1,
+                    chunks.Count,
+                    result.Detail);
+                return EmitResult.Failed(
+                    "relay_reply_rejected",
+                    result.Detail ?? $"Nyx relay reply chunk {i + 1}/{chunks.Count} rejected.");
+            }
+
+            firstMessageId ??= result.MessageId;
+            firstPlatformMessageId ??= result.PlatformMessageId;
+        }
+
+        return EmitResult.Sent(
+            firstMessageId ?? $"nyx-relay:{delivery.ReplyMessageId}",
+            platformMessageId: firstPlatformMessageId);
     }
 
     /// <summary>
@@ -246,8 +314,40 @@ public sealed class NyxIdRelayOutboundPort
         return null;
     }
 
+    private EmitResult? TryComposeDurableReplyText(
+        string platform,
+        ConversationReference conversation,
+        MessageContent content,
+        out string replyText)
+    {
+        if (IsLarkSimpleTextReply(platform, content))
+        {
+            replyText = content.Text ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(replyText))
+            {
+                return EmitResult.Failed(
+                    "empty_reply",
+                    "Relay outbound could not render a non-empty reply payload.");
+            }
+
+            return null;
+        }
+
+        return TryComposeReplyText(platform, conversation, content, out replyText);
+    }
+
+    private static bool IsLarkSimpleTextReply(string platform, MessageContent content) =>
+        string.Equals(NormalizePlatformKey(platform), "lark", StringComparison.Ordinal) &&
+        content.Actions.Count == 0 &&
+        content.Cards.Count == 0 &&
+        !string.IsNullOrWhiteSpace(content.Text);
+
     private static string NormalizePlatformKey(string? value) =>
         string.IsNullOrWhiteSpace(value)
             ? string.Empty
             : value.Trim().ToLowerInvariant();
+
+    private static bool ShouldChunkDurableTextReply(string platform, string replyText) =>
+        string.Equals(NormalizePlatformKey(platform), "lark", StringComparison.Ordinal) &&
+        replyText.Length > NyxIdRelayTextChunker.LarkMaxTextLength;
 }
