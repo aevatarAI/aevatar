@@ -106,7 +106,7 @@ button{font-family:inherit;cursor:pointer;}
 .ibtn{
   height:30px;min-width:30px;padding:0 9px;border:1px solid var(--border);
   background:var(--surface);border-radius:6px;color:var(--muted);font-size:13px;
-  display:inline-flex;align-items:center;gap:6px;transition:.14s;
+  display:inline-flex;align-items:center;gap:6px;transition:.14s;white-space:nowrap;
 }
 .ibtn:hover{border-color:var(--border-strong);color:var(--heading);background:var(--surface-2);}
 .ibtn svg{width:15px;height:15px;}
@@ -355,7 +355,7 @@ button{font-family:inherit;cursor:pointer;}
 .roster-table tbody tr:hover{background:var(--surface-3);}
 
 /* ============================ ProTable (L2 runs) ============================ */
-.protable-wrap{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-panel);overflow:hidden;}
+.protable-wrap{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-panel);overflow-x:auto;overflow-y:hidden;}
 .protable{width:100%;border-collapse:collapse;font-size:13px;}
 .protable th{text-align:left;font-size:11.5px;color:var(--faint);font-weight:550;padding:10px 14px;
   background:var(--surface-2);border-bottom:1px solid var(--border);white-space:nowrap;}
@@ -366,7 +366,7 @@ button{font-family:inherit;cursor:pointer;}
 .protable tr.run-stuck{background:var(--failed-bg);box-shadow:inset 3px 0 0 var(--failed);}
 .protable tr.run-stuck:hover{background:#fce4e4;}
 .protable .stuck-tag{font-size:10.5px;color:var(--failed);font-weight:550;margin-left:7px;}
-.tnum{font-family:var(--mono);font-variant-numeric:tabular-nums;}
+.tnum{font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap;}
 
 /* status tag (AevatarStatusTag) */
 .tag{display:inline-flex;align-items:center;gap:5px;height:21px;padding:0 8px;border-radius:4px;
@@ -716,7 +716,7 @@ button{font-family:inherit;cursor:pointer;}
 .obs-row-main{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;}
 .obs-row-name{font-size:13px;color:var(--heading);font-weight:550;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .obs-row-id{font-size:11px;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;display:block;}
-.origin-pill{font-size:10.5px;color:var(--subtle);background:var(--surface-3);border:1px solid var(--border);border-radius:4px;padding:1px 6px;flex:0 0 auto;}
+.origin-pill{font-size:10.5px;color:var(--subtle);background:var(--surface-3);border:1px solid var(--border);border-radius:4px;padding:1px 6px;flex:0 0 auto;white-space:nowrap;}
 .obs-detail{flex:1 1 auto;min-width:0;overflow:auto;padding:20px;}
 .obs-detail-head .odh-top{display:flex;align-items:center;gap:10px;margin-bottom:11px;}
 .run-chips{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
@@ -3978,8 +3978,11 @@ function bindEvents(){
     /* navigation: run > emp > company（顺序很重要） */
     var runEl=t.closest&&t.closest('[data-run]');
     if(runEl){ var rid=runEl.getAttribute('data-run');
-      var match=(typeof OBS_RUNS!=='undefined')&&OBS_RUNS.filter(function(r){return r.id.indexOf(rid)===0;})[0];
-      if(match) OBS_STATE.selectedId=match.id;
+      /* 深链进观测台并选中该 run：rid 即权威 run id（Fleet 与 observatory 同口径 mapXxxRuns 的 r.runId）。
+         不再依赖 OBS_RUNS 是否已含该 run（看板数据在 FLEET_RUNS_BY_SCOPE，与 OBS_RUNS 是两套加载）。
+         Fleet 为跨 scope __all__，强制 observatory 同口径，确保 loadObsRuns 后该 run 在列表内被选中、
+         详情按其自身 scope 拉取，而非因 selectedId 未命中回落到首行。 */
+      if(rid){ OBS_STATE.selectedId=rid; OBS_STATE.scope='__all__'; }
       navigate(['observatory'],{}); return; }
     var empEl=t.closest&&t.closest('[data-emp][data-co]');
     if(empEl){ navigate(['fleet','c',empEl.getAttribute('data-co'),'e',empEl.getAttribute('data-emp')],{}); return; }
