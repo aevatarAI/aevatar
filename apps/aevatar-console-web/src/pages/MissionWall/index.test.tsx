@@ -638,7 +638,7 @@ describe("MissionWallPage", () => {
     );
   });
 
-  it("uses selected audit steps when the run catalog omits progress and duration", async () => {
+  it("uses each run audit for card progress when the catalog omits progress and duration", async () => {
     const probeRun = runSummary({
       actorId: "actor-probe-run",
       completedSteps: 0,
@@ -687,6 +687,16 @@ describe("MissionWallPage", () => {
           };
         }
 
+        if (serviceId === "svc-billing") {
+          return {
+            displayName: "Billing runtime service",
+            runs: [billingRun],
+            scopeId: "scope-real",
+            serviceId,
+            serviceKey: "scope-real:svc-billing",
+          };
+        }
+
         return {
           displayName: `${serviceId} service`,
           runs: [],
@@ -696,8 +706,35 @@ describe("MissionWallPage", () => {
         };
       },
     );
-    (scopeRuntimeApi.getServiceRunAudit as jest.Mock).mockResolvedValue(
-      probeAudit,
+    (scopeRuntimeApi.getServiceRunAudit as jest.Mock).mockImplementation(
+      async (_scopeId: string, serviceId: string, runId: string) => {
+        if (serviceId === "svc-risk" && runId === "run-probe") {
+          return probeAudit;
+        }
+
+        return auditSnapshot(billingRun, [
+          auditStep({
+            completedAt: "2026-06-30T04:57:30.000Z",
+            nextStepId: "invoice_match",
+            requestedAt: "2026-06-30T04:57:00.000Z",
+            stepId: "ledger_lookup",
+            stepType: "connector_call",
+            success: true,
+            targetRole: "ledger",
+          }),
+          auditStep({
+            requestedAt: "2026-06-30T04:58:00.000Z",
+            stepId: "invoice_match",
+            stepType: "role_task",
+            targetRole: "billing_agent",
+          }),
+        ]);
+      },
+    );
+    window.history.replaceState(
+      {},
+      "",
+      "/runtime/mission-wall?focusRunId=run-billing",
     );
 
     renderWithQueryClient(React.createElement(MissionWallPage));
@@ -706,8 +743,10 @@ describe("MissionWallPage", () => {
       await screen.findByText("Mission Wall Probe")
     ).closest("button");
     expect(probeCard).toBeTruthy();
-
-    fireEvent.click(probeCard as HTMLButtonElement);
+    expect(probeCard).toHaveAttribute("aria-pressed", "false");
+    expect(
+      await screen.findByText(/Billing Workflow · Step Flow/),
+    ).toBeInTheDocument();
 
     await waitFor(() => {
       expect(probeCard).toHaveTextContent("5 / 5 steps");
@@ -721,6 +760,18 @@ describe("MissionWallPage", () => {
       "svc-risk",
       "run-probe",
       { actorId: "actor-probe-run" },
+    );
+    expect(scopeRuntimeApi.getServiceRunAudit).not.toHaveBeenCalledWith(
+      "scope-real",
+      "wf-risk-draft",
+      "run-probe",
+      expect.anything(),
+    );
+    expect(scopeRuntimeApi.getServiceRunAudit).not.toHaveBeenCalledWith(
+      "scope-real",
+      "m-risk",
+      "run-probe",
+      expect.anything(),
     );
   });
 

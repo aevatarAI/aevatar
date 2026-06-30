@@ -34,6 +34,7 @@ type ServiceRunCatalogResult = MissionWallServiceRunTarget & {
 type MissionWallSourceInput = {
   readonly generatedAt: string;
   readonly live: MissionWallLiveState;
+  readonly runAudits?: readonly ScopeServiceRunAuditSnapshot[];
   readonly serviceRunCatalogs: readonly ServiceRunCatalogResult[];
   readonly selectedAudit?: ScopeServiceRunAuditSnapshot;
   readonly teams?: readonly StudioTeamSummary[];
@@ -78,6 +79,18 @@ function calculateDurationMs(run: ScopeServiceRunSummary): number | undefined {
 
   const durationMs = updatedAtMs - startedAtMs;
   return durationMs >= 0 ? durationMs : undefined;
+}
+
+export function missionWallRunAuditKey(input: {
+  readonly runId?: string | null;
+  readonly scopeId?: string | null;
+  readonly serviceId?: string | null;
+}): string {
+  return [
+    trimOptional(input.scopeId),
+    trimOptional(input.serviceId),
+    trimOptional(input.runId),
+  ].join(":");
 }
 
 function positiveFiniteNumber(
@@ -428,12 +441,29 @@ function withSelectedAudit(
 }
 
 function toRunSource(input: {
+  readonly runAudits?: ReadonlyMap<string, ScopeServiceRunAuditSnapshot>;
   readonly member: StudioMemberSummary;
   readonly run: ScopeServiceRunSummary;
   readonly selectedAudit?: ScopeServiceRunAuditSnapshot;
   readonly service: ServiceCatalogSnapshot;
   readonly teamNameById: ReadonlyMap<string, string>;
 }): MissionWallRunSource {
+  const auditKey = missionWallRunAuditKey({
+    runId: input.run.runId,
+    scopeId: input.run.scopeId,
+    serviceId: input.run.serviceId,
+  });
+  const selectedAuditKey = input.selectedAudit
+    ? missionWallRunAuditKey({
+        runId: input.selectedAudit.summary.runId,
+        scopeId: input.selectedAudit.summary.scopeId,
+        serviceId: input.selectedAudit.summary.serviceId,
+      })
+    : undefined;
+  const runAudit =
+    selectedAuditKey === auditKey
+      ? input.selectedAudit
+      : input.runAudits?.get(auditKey);
   const {
     commandId,
     completedSteps,
@@ -443,7 +473,7 @@ function toRunSource(input: {
     totalSteps,
   } = withSelectedAudit(
     input.run,
-    input.selectedAudit,
+    runAudit,
   );
   const status = toMissionWallRunStatus(run.completionStatus);
   const currentStep = resolveCurrentStep(steps);
@@ -537,6 +567,16 @@ export function buildMissionWallSourceFromRuntime(
   input: MissionWallSourceInput,
 ): MissionWallSource {
   const teamNameById = buildTeamNameById(input.teams);
+  const runAudits = new Map(
+    (input.runAudits ?? []).map((audit) => [
+      missionWallRunAuditKey({
+        runId: audit.summary.runId,
+        scopeId: audit.summary.scopeId,
+        serviceId: audit.summary.serviceId,
+      }),
+      audit,
+    ]),
+  );
   const runs = input.serviceRunCatalogs.flatMap(
     ({ catalog, member, service }) => {
       const sortedRuns = sortServiceRuns(catalog?.runs ?? []);
@@ -554,6 +594,7 @@ export function buildMissionWallSourceFromRuntime(
       return sortedRuns.map((run) =>
         toRunSource({
           member,
+          runAudits,
           run,
           service,
           selectedAudit: input.selectedAudit,

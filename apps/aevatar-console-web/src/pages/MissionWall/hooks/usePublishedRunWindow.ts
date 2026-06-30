@@ -28,6 +28,11 @@ function sameWindowRuns(
       leftRun.runId === rightRun.runId &&
       leftRun.status === rightRun.status &&
       leftRun.updatedAt === rightRun.updatedAt &&
+      leftRun.durationMs === rightRun.durationMs &&
+      leftRun.progress?.completedSteps === rightRun.progress?.completedSteps &&
+      leftRun.progress?.totalSteps === rightRun.progress?.totalSteps &&
+      leftRun.currentStepId === rightRun.currentStepId &&
+      leftRun.currentStepLabel === rightRun.currentStepLabel &&
       leftRun.stateVersion === rightRun.stateVersion &&
       leftRun.lastEventId === rightRun.lastEventId
     );
