@@ -184,6 +184,16 @@ Make the selected workflow's real step graph visible, then overlay execution sta
 
 The center graph is a focus surface, not the only workflow on the wall. When several workflow runs are active, the wall director chooses one focus run to expand while the surrounding regions continue to show the rest of the live run window.
 
+Long-workflow rule:
+
+When a workflow has many steps, the wall must not shrink the whole graph until every node becomes unreadable. The default large-screen pattern is **current execution window + full workflow strip**:
+
+1. Enlarge the current 4-7 relevant steps in the center graph.
+2. Show total step count, for example `Workflow steps 9-13 of 24`.
+3. Show a bottom full-workflow strip/minimap where each step has status color.
+4. Draw a viewport marker over the strip so viewers know which part is enlarged.
+5. Use Run Inspector for full pan/zoom exploration.
+
 Canvas model:
 
 ```text
@@ -192,6 +202,7 @@ GraphCanvas studio variant
   edges: next / branch edges
   node overlay: idle / active / waiting / completed / failed
   focused step: latest or selected run trace item
+  long workflow: current execution window + full workflow strip
   freshness: selected run state version badge
 ```
 
