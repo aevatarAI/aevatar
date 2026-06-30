@@ -18,6 +18,10 @@ When `CLAUDE.md` changes, review whether this FKST projection or its conformance
 - If an issue is already assigned, treat it as owned by someone else and skip it unless the assignee explicitly delegates the issue.
 - If the issue appears to be user error, duplicate, obsolete, or missing reproduction, report that conclusion instead of forcing a code change.
 
+## Issue analysis
+
+Before implementation, FKST should first confirm the reported behavior still exists in the current codebase. Prefer identifying the general invariant and production path behind the issue, then fix the root cause rather than the narrow example symptom. If the issue is obsolete, too narrow, or lacks enough evidence for a safe general fix, report that clearly instead of adding a patch.
+
 ## Allowed auto-fix scope
 
 FKST may edit these paths when directly required by the assigned issue:
