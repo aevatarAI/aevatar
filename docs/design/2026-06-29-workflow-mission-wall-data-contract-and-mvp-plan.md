@@ -327,10 +327,10 @@ type MissionWallWorkflowLayout = {
   windowStartIndex?: number;
   windowEndIndex?: number;
   viewportStepIds?: string[];
-  minimap?: MissionWallWorkflowStripStep[];
+  stepOverview?: MissionWallWorkflowOverviewStep[];
 };
 
-type MissionWallWorkflowStripStep = {
+type MissionWallWorkflowOverviewStep = {
   stepId: string;
   index: number;
   status: MissionWallStepStatus;
@@ -389,7 +389,7 @@ Layout rules:
 1. `elk_layered` is a presentation layout strategy, not a durable workflow fact.
 2. ELKjs should receive stable node dimensions, step edges, branch labels, and a left-to-right direction for the wall.
 3. The adapter should compute all node `position` values before passing nodes to `GraphCanvas`.
-4. For long workflows, the wall renders `viewportStepIds` in the enlarged center graph and uses `minimap` for the full workflow strip.
+4. For long workflows, the wall renders `viewportStepIds` in the enlarged center graph and uses `stepOverview` for the Workflow Step Overview.
 5. If ELK layout fails or is unavailable, fallback to the existing GraphCanvas/MemberPublishedRunsReplay layout.
 
 ### 3.8 `MissionWallRuntimeTopology`
