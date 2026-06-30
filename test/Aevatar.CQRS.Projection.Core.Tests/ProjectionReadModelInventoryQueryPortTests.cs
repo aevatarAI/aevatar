@@ -173,6 +173,111 @@ public sealed class ProjectionReadModelInventoryQueryPortTests
         descriptor.ObservedToken.Should().Be(cts.Token);
     }
 
+    [Fact]
+    public async Task DocumentDescriptor_CaptureAsync_QueriesNewestDocumentWithTotalCount()
+    {
+        using var cts = new CancellationTokenSource();
+        var updated = new DateTimeOffset(2026, 6, 30, 1, 2, 3, TimeSpan.Zero);
+        var reader = new RecordingDocumentReader(new TestReadModel
+        {
+            Id = "read-1",
+            ActorId = "actor-1",
+            StateVersion = 42,
+            LastEventId = "event-42",
+            UpdatedAt = updated,
+        }, totalCount: 17);
+        var descriptor = new ProjectionDocumentReadModelDescriptor<TestReadModel>(
+            "test-documents",
+            ProjectionReadModelSinkShape.Document,
+            "InMemory",
+            "test.actor",
+            reader);
+
+        var snapshot = await descriptor.CaptureAsync(cts.Token);
+
+        snapshot.Count.Should().Be(17);
+        snapshot.MaxStateVersion.Should().Be(42);
+        snapshot.LatestUpdatedAt.Should().Be(updated);
+        reader.ObservedToken.Should().Be(cts.Token);
+        reader.LastQuery.Should().NotBeNull();
+        reader.LastQuery!.Take.Should().Be(1);
+        reader.LastQuery.IncludeTotalCount.Should().BeTrue();
+        reader.LastQuery.Sorts.Select(sort => (sort.FieldPath, sort.Direction)).Should().ContainInOrder(
+            (nameof(IProjectionReadModel.UpdatedAt), ProjectionDocumentSortDirection.Desc),
+            (nameof(IProjectionReadModel.StateVersion), ProjectionDocumentSortDirection.Desc));
+    }
+
+    [Fact]
+    public async Task DocumentDescriptor_CaptureAsync_ReturnsNullVersionAndUpdatedAtWhenStoreIsEmpty()
+    {
+        var descriptor = new ProjectionDocumentReadModelDescriptor<TestReadModel>(
+            "test-documents",
+            ProjectionReadModelSinkShape.Document,
+            "InMemory",
+            "test.actor",
+            new RecordingDocumentReader(readModel: null, totalCount: 0));
+
+        var snapshot = await descriptor.CaptureAsync();
+
+        snapshot.Count.Should().Be(0);
+        snapshot.MaxStateVersion.Should().BeNull();
+        snapshot.LatestUpdatedAt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task DocumentDescriptor_CaptureAsync_NormalizesDefaultUpdatedAtToNull()
+    {
+        var descriptor = new ProjectionDocumentReadModelDescriptor<TestReadModel>(
+            "test-documents",
+            ProjectionReadModelSinkShape.Document,
+            "InMemory",
+            "test.actor",
+            new RecordingDocumentReader(new TestReadModel
+            {
+                Id = "read-1",
+                ActorId = "actor-1",
+                StateVersion = 5,
+                LastEventId = "event-5",
+                UpdatedAt = default,
+            }, totalCount: 1));
+
+        var snapshot = await descriptor.CaptureAsync();
+
+        snapshot.MaxStateVersion.Should().Be(5);
+        snapshot.LatestUpdatedAt.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    public void DocumentDescriptor_Constructor_RejectsBlankIdentityFields(string value)
+    {
+        var reader = new RecordingDocumentReader(readModel: null, totalCount: 0);
+
+        var blankName = () => new ProjectionDocumentReadModelDescriptor<TestReadModel>(
+            value,
+            ProjectionReadModelSinkShape.Document,
+            "InMemory",
+            "test.actor",
+            reader);
+        var blankEngine = () => new ProjectionDocumentReadModelDescriptor<TestReadModel>(
+            "test-documents",
+            ProjectionReadModelSinkShape.Document,
+            value,
+            "test.actor",
+            reader);
+        var blankActorKind = () => new ProjectionDocumentReadModelDescriptor<TestReadModel>(
+            "test-documents",
+            ProjectionReadModelSinkShape.Document,
+            "InMemory",
+            value,
+            reader);
+
+        blankName.Should().Throw<ArgumentException>().WithParameterName("name");
+        blankEngine.Should().Throw<ArgumentException>().WithParameterName("engine");
+        blankActorKind.Should().Throw<ArgumentException>().WithParameterName("actorKind");
+    }
+
     private class FakeDescriptor : IProjectionReadModelDescriptor
     {
         private readonly ProjectionReadModelInventorySnapshot _snapshot;
@@ -246,5 +351,47 @@ public sealed class ProjectionReadModelInventoryQueryPortTests
             ObservedToken = ct;
             return base.CaptureAsync(ct);
         }
+    }
+
+    private sealed class RecordingDocumentReader(TestReadModel? readModel, long? totalCount)
+        : IProjectionDocumentReader<TestReadModel, string>
+    {
+        public ProjectionDocumentQuery? LastQuery { get; private set; }
+
+        public CancellationToken ObservedToken { get; private set; }
+
+        public Task<TestReadModel?> GetAsync(string key, CancellationToken ct = default)
+        {
+            _ = key;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<TestReadModel?>(null);
+        }
+
+        public Task<ProjectionDocumentQueryResult<TestReadModel>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default)
+        {
+            LastQuery = query;
+            ObservedToken = ct;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(new ProjectionDocumentQueryResult<TestReadModel>
+            {
+                Items = readModel is null ? [] : [readModel],
+                TotalCount = totalCount,
+            });
+        }
+    }
+
+    private sealed class TestReadModel : IProjectionReadModel
+    {
+        public string Id { get; init; } = string.Empty;
+
+        public string ActorId { get; init; } = string.Empty;
+
+        public long StateVersion { get; init; }
+
+        public string LastEventId { get; init; } = string.Empty;
+
+        public DateTimeOffset UpdatedAt { get; init; }
     }
 }
