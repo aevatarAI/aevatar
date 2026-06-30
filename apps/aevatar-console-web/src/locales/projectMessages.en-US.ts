@@ -3520,6 +3520,7 @@ const projectMessages = {
   "pages.studio.index.member.type.locked.after.creation": "Member type is fixed after this member is created.",
   "pages.studio.index.member.workbench": "Member workbench",
   "pages.studio.index.member.workflow.canvas.step": "Continue building around the current member workflow canvas, step details, and dry-run",
+  "pages.studio.index.navigation.blocked.by.unsaved.script": "Navigation stayed on Script Build because the current script draft has unsaved changes. Save or discard the draft before switching work areas.",
   "pages.studio.index.no.bound.service": "No bound service",
   "pages.studio.index.no.runs.for.member": "No runs for {member} yet.",
   "pages.studio.index.no.runs.for.yet": "No runs for {value1} yet.",

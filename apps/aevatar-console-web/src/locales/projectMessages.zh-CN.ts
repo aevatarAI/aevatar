@@ -3520,6 +3520,7 @@ const projectMessages = {
   "pages.studio.index.member.type.locked.after.creation": "成员创建后，类型不可再切换。",
   "pages.studio.index.member.workbench": "成员工作台",
   "pages.studio.index.member.workflow.canvas.step": "围绕当前成员的 Workflow 画布、步骤详情和试运行继续构建",
+  "pages.studio.index.navigation.blocked.by.unsaved.script": "导航仍停留在 Script Build，因为当前脚本草稿有未保存更改。请先保存或放弃草稿，再切换工作区。",
   "pages.studio.index.no.bound.service": "暂无绑定服务",
   "pages.studio.index.no.runs.for.member": "{member} 还没有运行记录。",
   "pages.studio.index.no.runs.for.yet": "{value1} 还没有运行记录。",

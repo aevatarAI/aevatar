@@ -4159,6 +4159,11 @@ describe("StudioPage", () => {
       expect(screen.getByTestId("studio-script-build-panel")).toBeTruthy();
       expect(screen.queryByTestId("studio-bind-surface")).toBeNull();
     });
+    expect(
+      screen.getByText(
+        "Navigation stayed on Script Build because the current script draft has unsaved changes. Save or discard the draft before switching work areas.",
+      ),
+    ).toBeTruthy();
   });
 
   it("saves edited workflow drafts back to the Studio workspace API", async () => {

@@ -30,6 +30,7 @@ import {
   normalizeUserLlmRoute,
 } from '../chat/chatConversationConfig';
 import {
+  Alert,
   Button,
   Modal,
   Popover,
@@ -2995,6 +2996,7 @@ const StudioPage: React.FC = () => {
   const [selectedGraphNodeId, setSelectedGraphNodeId] = useState('');
   const [executionStopPending, setExecutionStopPending] = useState(false);
   const [executionNotice, setExecutionNotice] = useState<StudioNotice | null>(null);
+  const [navigationNotice, setNavigationNotice] = useState<StudioNotice | null>(null);
   const [logsPopoutMode] = useState(() => readStudioRouteState().logsMode);
   const [recentlyBoundMemberKey, setRecentlyBoundMemberKey] = useState('');
   const [recentlyBoundServiceId, setRecentlyBoundServiceId] = useState('');
@@ -5578,8 +5580,27 @@ const StudioPage: React.FC = () => {
     }
 
     const leaveGuard = scriptLeaveGuardRef.current;
-    return leaveGuard ? await leaveGuard() : true;
-  }, [isBuildScriptsSurface]);
+    if (!leaveGuard) {
+      return true;
+    }
+
+    const canLeave = await leaveGuard();
+    if (!canLeave) {
+      const blockedMessage = t(
+        "pages.studio.index.navigation.blocked.by.unsaved.script",
+        "Navigation stayed on Script Build because the current script draft has unsaved changes. Save or discard the draft before switching work areas.",
+      );
+      setNavigationNotice({
+        type: 'warning',
+        message: blockedMessage,
+      });
+      void message.warning(blockedMessage);
+      return false;
+    }
+
+    setNavigationNotice(null);
+    return true;
+  }, [isBuildScriptsSurface, t]);
 
   const resolveWorkflowSavePayload = useCallback(
     async (
@@ -10906,6 +10927,22 @@ const StudioPage: React.FC = () => {
       />
     ) : null;
 
+  const studioAlerts = navigationNotice ? (
+    <Alert
+      message={navigationNotice.message}
+      showIcon
+      type={
+        navigationNotice.type === 'error'
+          ? 'error'
+          : navigationNotice.type === 'warning'
+            ? 'warning'
+            : navigationNotice.type === 'success'
+              ? 'success'
+              : 'info'
+      }
+    />
+  ) : null;
+
   const pageContainerTitle =
     logsPopoutMode === 'popout' ? 'Execution logs' : undefined;
 
@@ -10936,6 +10973,7 @@ const StudioPage: React.FC = () => {
         ) : (
           <>
             <StudioShell
+              alerts={studioAlerts}
               contentScrollMode={isInvokeSurface ? 'page' : 'contained'}
               contextBar={studioContextBar}
               currentLifecycleStep={currentLifecycleStep}
