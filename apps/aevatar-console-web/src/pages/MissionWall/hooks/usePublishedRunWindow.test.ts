@@ -9,6 +9,10 @@ function run(runId: string): MissionWallRun {
     focusPriority: 500,
     id: runId,
     priorityLevel: "none",
+    progress: {
+      completedSteps: 0,
+      totalSteps: 0,
+    },
     runId,
     status: "running",
     visibilityReason: "running",
@@ -67,5 +71,37 @@ describe("Published Run Window state", () => {
       "run-second",
     ]);
     expect(model.selectedRunId).toBe("run-third");
+  });
+
+  it("updates existing run progress without moving the manual list order", () => {
+    const first = run("run-first");
+    const second = run("run-second");
+    const updatedFirst: MissionWallRun = {
+      ...first,
+      durationMs: 8200,
+      progress: {
+        completedSteps: 5,
+        totalSteps: 5,
+      },
+    };
+
+    const model = reducePublishedRunWindowModel(
+      {
+        runs: [first, second],
+        selectedRunId: "run-second",
+      },
+      [updatedFirst, second],
+    );
+
+    expect(model.runs.map((item) => item.runId)).toEqual([
+      "run-first",
+      "run-second",
+    ]);
+    expect(model.runs[0].progress).toEqual({
+      completedSteps: 5,
+      totalSteps: 5,
+    });
+    expect(model.runs[0].durationMs).toBe(8200);
+    expect(model.selectedRunId).toBe("run-second");
   });
 });

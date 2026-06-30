@@ -25,7 +25,9 @@ import {
   latestRunObservedAt,
   MISSION_WALL_SERVICE_RUN_TAKE,
   MISSION_WALL_SERVICE_TAKE,
+  missionWallRunAuditKey,
   selectMissionWallServiceRunTargets,
+  toMissionWallRunStatus,
 } from "../missionWallRuntimeData";
 
 type MissionWallRouteOptions = {
@@ -58,6 +60,14 @@ export interface MissionWallRuntimeData {
   readonly teamId?: string;
   readonly workflowMembers: readonly StudioMemberSummary[];
 }
+
+type MissionWallRunAuditTarget = {
+  readonly actorId?: string;
+  readonly runId: string;
+  readonly scopeId: string;
+  readonly serviceId: string;
+  readonly status: MissionWallRun["status"];
+};
 
 function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? "";
@@ -96,6 +106,27 @@ function missionWallRefetchInterval(intervalMs: number): number | false {
   const isTest =
     typeof process !== "undefined" && process.env.NODE_ENV === "test";
   return isTest ? false : intervalMs;
+}
+
+function shouldBackfillRunAudit(target: MissionWallRunAuditTarget): boolean {
+  return (
+    target.status === "completed" ||
+    target.status === "failed" ||
+    target.status === "timed_out" ||
+    target.status === "running" ||
+    target.status === "waiting" ||
+    target.status === "retrying"
+  );
+}
+
+function auditRefetchIntervalForStatus(
+  status: MissionWallRun["status"],
+): number | false {
+  if (status === "running" || status === "waiting" || status === "retrying") {
+    return missionWallRefetchInterval(MISSION_WALL_AUDIT_REFETCH_INTERVAL_MS);
+  }
+
+  return false;
 }
 
 function buildLiveState(input: {
@@ -286,6 +317,76 @@ export function useMissionWallRuntimeData(): MissionWallRuntimeData {
       })),
     [runQueryVersion, serviceRunTargets],
   );
+  const runAuditTargets = React.useMemo(() => {
+    const targets = new Map<string, MissionWallRunAuditTarget>();
+    serviceRunCatalogs.forEach(({ catalog, service }) => {
+      const fallbackServiceId = trimOptional(service.serviceId);
+      (catalog?.runs ?? []).forEach((run) => {
+        const runId = trimOptional(run.runId);
+        const serviceId = trimOptional(run.serviceId) || fallbackServiceId;
+        const runScopeId = trimOptional(run.scopeId) || trimOptional(scopeId);
+        if (!runId || !serviceId || !runScopeId) {
+          return;
+        }
+
+        const target: MissionWallRunAuditTarget = {
+          actorId: trimOptional(run.actorId) || undefined,
+          runId,
+          scopeId: runScopeId,
+          serviceId,
+          status: toMissionWallRunStatus(run.completionStatus),
+        };
+        if (!shouldBackfillRunAudit(target)) {
+          return;
+        }
+
+        targets.set(missionWallRunAuditKey(target), target);
+      });
+    });
+
+    return [...targets.values()];
+  }, [runQueryVersion, scopeId, serviceRunCatalogs]);
+  const runAuditQueries = useQueries({
+    queries: runAuditTargets.map((target) => ({
+      enabled: Boolean(target.scopeId && target.serviceId && target.runId),
+      queryFn: () =>
+        scopeRuntimeApi.getServiceRunAudit(
+          target.scopeId,
+          target.serviceId,
+          target.runId,
+          {
+            actorId: target.actorId,
+          },
+        ),
+      queryKey: [
+        "mission-wall",
+        "service-run-audit",
+        "window",
+        target.scopeId,
+        target.serviceId,
+        target.runId,
+        target.actorId,
+      ],
+      refetchInterval: auditRefetchIntervalForStatus(target.status),
+      refetchIntervalInBackground: true,
+      retry: false,
+    })),
+  });
+  const runAuditVersion = runAuditQueries
+    .map((query, index) => {
+      const target = runAuditTargets[index];
+      return `${missionWallRunAuditKey(target)}:${query.dataUpdatedAt}:${query.errorUpdatedAt}:${query.fetchStatus}`;
+    })
+    .join("|");
+  const runAudits = React.useMemo(
+    () =>
+      runAuditQueries
+        .map((query) => query.data)
+        .filter(
+          (audit): audit is ScopeServiceRunAuditSnapshot => audit !== undefined,
+        ),
+    [runAuditVersion],
+  );
   const teams = React.useMemo<readonly StudioTeamSummary[]>(
     () => teamsQuery.data?.teams ?? [],
     [teamsQuery.data?.teams],
@@ -335,11 +436,12 @@ export function useMissionWallRuntimeData(): MissionWallRuntimeData {
       buildMissionWallSourceFromRuntime({
         generatedAt,
         live,
+        runAudits,
         serviceRunCatalogs,
         selectedAudit,
         teams,
       }),
-    [generatedAt, live, serviceRunCatalogs, teams],
+    [generatedAt, live, runAudits, serviceRunCatalogs, teams],
   );
 
   return {
