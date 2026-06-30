@@ -5,12 +5,10 @@ import { WorkflowReplayCanvas } from "./WorkflowReplayCanvas";
 
 export function MissionStage({
   focusRun,
-  isAuditLoading,
   isRuntimeLoading,
   snapshot,
 }: {
   readonly focusRun?: MissionWallRun;
-  readonly isAuditLoading?: boolean;
   readonly isRuntimeLoading?: boolean;
   readonly snapshot: MissionWallSnapshot;
 }) {
@@ -87,17 +85,7 @@ export function MissionStage({
           </div>
         </div>
       ) : (
-        <>
-          {isAuditLoading ? (
-            <div className="mission-wall-audit-loading">
-              {t(
-                "pages.missionwall.state.auditLoading",
-                "Loading selected run",
-              )}
-            </div>
-          ) : null}
-          <WorkflowReplayCanvas graph={graph} />
-        </>
+        <WorkflowReplayCanvas graph={graph} />
       )}
     </section>
   );

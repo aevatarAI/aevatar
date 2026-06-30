@@ -179,6 +179,7 @@ function auditSteps(count: number): ScopeServiceRunAuditStep[] {
 function auditSnapshot(
   summary: ScopeServiceRunSummary,
   steps: readonly ScopeServiceRunAuditStep[],
+  overrides?: Partial<ScopeServiceRunAuditReport>,
 ): ScopeServiceRunAuditSnapshot {
   const audit: ScopeServiceRunAuditReport = {
     commandId: `command-${summary.runId}`,
@@ -210,6 +211,7 @@ function auditSnapshot(
     topologySource: "readmodel",
     updatedAt: summary.lastUpdatedAt,
     workflowName: summary.workflowName,
+    ...overrides,
   };
 
   return {
@@ -773,6 +775,160 @@ describe("MissionWallPage", () => {
       "run-probe",
       expect.anything(),
     );
+  });
+
+  it("keeps a run card duration stable when focus moves between workflows", async () => {
+    const extractRun = runSummary({
+      actorId: "actor-extract-run",
+      completedSteps: 0,
+      completionStatus: "DONE",
+      lastUpdatedAt: "2026-06-30T04:58:36.000Z",
+      runId: "run-extract",
+      serviceId: "svc-risk",
+      totalSteps: 0,
+      workflowName: "Document Extract Run",
+    });
+    const probeRun = runSummary({
+      actorId: "actor-probe-run",
+      completedSteps: 0,
+      completionStatus: "DONE",
+      lastUpdatedAt: "2026-06-30T04:58:40.000Z",
+      runId: "run-probe",
+      serviceId: "svc-billing",
+      totalSteps: 0,
+      workflowName: "Mission Wall Probe",
+    });
+    const extractAudit = auditSnapshot(
+      extractRun,
+      [
+        auditStep({
+          completedAt: "2026-06-30T04:58:02.000Z",
+          requestedAt: "2026-06-30T04:58:01.000Z",
+          stepId: "extract_file",
+          stepType: "tool_call",
+          success: true,
+          targetRole: "extractor",
+        }),
+      ],
+      {
+        durationMs: 1000,
+        summary: {
+          completedSteps: 1,
+          requestedSteps: 1,
+          roleReplyCount: 1,
+          stepTypeCounts: {},
+          totalSteps: 1,
+        },
+      },
+    );
+    const probeAudit = auditSnapshot(
+      probeRun,
+      auditSteps(15).map((step, index) => ({
+        ...step,
+        completedAt: `2026-06-30T04:58:${String(10 + index).padStart(2, "0")}.000Z`,
+        durationMs: 1600,
+        success: true,
+      })),
+      {
+        durationMs: 24_000,
+        summary: {
+          completedSteps: 15,
+          requestedSteps: 15,
+          roleReplyCount: 15,
+          stepTypeCounts: {},
+          totalSteps: 15,
+        },
+      },
+    );
+
+    (scopeRuntimeApi.listServiceRuns as jest.Mock).mockImplementation(
+      async (
+        _scopeId: string,
+        serviceId: string,
+      ): Promise<ScopeServiceRunCatalogSnapshot> => {
+        if (serviceId === "svc-risk") {
+          return {
+            displayName: "Risk runtime service",
+            runs: [extractRun],
+            scopeId: "scope-real",
+            serviceId,
+            serviceKey: "scope-real:svc-risk",
+          };
+        }
+
+        if (serviceId === "svc-billing") {
+          return {
+            displayName: "Billing runtime service",
+            runs: [probeRun],
+            scopeId: "scope-real",
+            serviceId,
+            serviceKey: "scope-real:svc-billing",
+          };
+        }
+
+        return {
+          displayName: "Idle runtime service",
+          runs: [],
+          scopeId: "scope-real",
+          serviceId,
+          serviceKey: `scope-real:${serviceId}`,
+        };
+      },
+    );
+    (scopeRuntimeApi.getServiceRunAudit as jest.Mock).mockImplementation(
+      async (_scopeId: string, serviceId: string, runId: string) => {
+        if (serviceId === "svc-risk" && runId === "run-extract") {
+          return extractAudit;
+        }
+
+        if (serviceId === "svc-billing" && runId === "run-probe") {
+          return probeAudit;
+        }
+
+        throw new Error(`Unexpected audit lookup ${serviceId}/${runId}`);
+      },
+    );
+    window.history.replaceState(
+      {},
+      "",
+      "/runtime/mission-wall?focusRunId=run-extract",
+    );
+
+    renderWithQueryClient(React.createElement(MissionWallPage));
+
+    const extractCard = (
+      await screen.findByText("Document Extract Run")
+    ).closest("button");
+    const probeCard = (
+      await screen.findByText("Mission Wall Probe")
+    ).closest("button");
+    expect(extractCard).toBeTruthy();
+    expect(probeCard).toBeTruthy();
+
+    await waitFor(() => {
+      expect(extractCard).toHaveTextContent("1 / 1 steps");
+      expect(extractCard).toHaveTextContent("00:01");
+      expect(probeCard).toHaveTextContent("15 / 15 steps");
+      expect(probeCard).toHaveTextContent("00:24");
+    });
+
+    fireEvent.click(probeCard as HTMLButtonElement);
+
+    expect(
+      await screen.findByText(/Mission Wall Probe · Step Flow/),
+    ).toBeInTheDocument();
+    expect(extractCard).toHaveTextContent("1 / 1 steps");
+    expect(extractCard).toHaveTextContent("00:01");
+
+    fireEvent.click(extractCard as HTMLButtonElement);
+
+    expect(
+      await screen.findByText(/Document Extract Run · Step Flow/),
+    ).toBeInTheDocument();
+    expect(extractCard).toHaveTextContent("1 / 1 steps");
+    expect(extractCard).toHaveTextContent("00:01");
+    expect(probeCard).toHaveTextContent("15 / 15 steps");
+    expect(probeCard).toHaveTextContent("00:24");
   });
 
   it("keeps every workflow node in the graph while focusing the default big-screen view", async () => {

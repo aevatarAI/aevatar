@@ -2,10 +2,7 @@ import React from "react";
 import { MissionStage } from "./components/MissionStage";
 import { PublishedRunWindow } from "./components/PublishedRunWindow";
 import { TopStatusStrip } from "./components/TopStatusStrip";
-import {
-  useMissionWallRuntimeData,
-  useMissionWallSelectedRunAudit,
-} from "./hooks/useMissionWallData";
+import { useMissionWallRuntimeData } from "./hooks/useMissionWallData";
 import { usePublishedRunWindow } from "./hooks/usePublishedRunWindow";
 import { missionWallStyles } from "./missionWallStyles";
 import { buildMissionWallSnapshot } from "./wallDirector";
@@ -17,7 +14,6 @@ const MissionWallPage: React.FC = () => {
     generatedAt,
     isLoading,
     routeFocusRunId,
-    scopeId,
   } = runtimeData;
   const missionWallSource = React.useMemo(
     () => buildSource(),
@@ -37,17 +33,13 @@ const MissionWallPage: React.FC = () => {
     snapshot.runs,
     snapshot.focus.runId,
   );
-  const selectedAuditQuery = useMissionWallSelectedRunAudit(
-    scopeId,
-    publishedRunWindow.selectedRun,
-  );
   const focusSnapshot = React.useMemo(
     () =>
-      buildMissionWallSnapshot(buildSource(selectedAuditQuery.data), {
+      buildMissionWallSnapshot(missionWallSource, {
         focusRunId: publishedRunWindow.selectedRunId,
         nowMs,
       }),
-    [buildSource, nowMs, publishedRunWindow.selectedRunId, selectedAuditQuery.data],
+    [missionWallSource, nowMs, publishedRunWindow.selectedRunId],
   );
   const focusRun =
     focusSnapshot.runs.find(
@@ -73,7 +65,6 @@ const MissionWallPage: React.FC = () => {
         />
         <MissionStage
           focusRun={focusRun}
-          isAuditLoading={selectedAuditQuery.isLoading}
           isRuntimeLoading={isLoading}
           snapshot={focusSnapshot}
         />
