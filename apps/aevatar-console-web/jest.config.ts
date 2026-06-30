@@ -69,7 +69,7 @@ function createProjectConfig(target: 'browser' | 'node') {
     moduleNameMapper: buildModuleNameMapper(
       baseConfig.moduleNameMapper as Record<string, unknown> | undefined,
     ),
-    openHandlesTimeout: 5000,
+    openHandlesTimeout: 5_000,
     rootDir,
     roots: ['<rootDir>/src', '<rootDir>/tests'],
     transformIgnorePatterns: ['/node_modules/(?!.*(?:lodash-es)/)'],

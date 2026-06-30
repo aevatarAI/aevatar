@@ -119,12 +119,12 @@ const workflowWorkbenchLayoutStyle: React.CSSProperties = {
 
 const workflowEditingSurfaceHeight = 'clamp(560px, calc(100vh - 320px), 760px)';
 const SCRIPT_SAVE_OBSERVATION_POLL_DELAYS_MS = [
-  1000,
-  2000,
-  3000,
-  5000,
-  5000,
-  5000,
+  1_000,
+  2_000,
+  3_000,
+  5_000,
+  5_000,
+  5_000,
 ] as const;
 
 const SCRIPT_STARTER_SOURCE = `using System;
