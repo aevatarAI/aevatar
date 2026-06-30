@@ -120,6 +120,8 @@ priority_patterns = [
     ("P2", re.compile(r"^\s*P2\s*:", re.M)),
     ("P1", re.compile(r"priority\s*:\s*P1", re.I)),
     ("P2", re.compile(r"priority\s*:\s*P2", re.I)),
+    ("P1", re.compile(r"P1\s+Badge|badge/P1[-_]", re.I)),
+    ("P2", re.compile(r"P2\s+Badge|badge/P2[-_]", re.I)),
     ("P1", re.compile(r"fkst:review-comment:v1[^>]*priority=[\"']P1[\"']")),
     ("P2", re.compile(r"fkst:review-comment:v1[^>]*priority=[\"']P2[\"']")),
 ]

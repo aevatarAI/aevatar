@@ -16,7 +16,7 @@ This directory keeps CI gate scripts and smoke tests.
 - `tools/ci/test_solution_ownership_guard.sh`: verifies every `test/*.csproj` is owned by `aevatar.slnx` or the single slow-test project.
 - `tools/ci/projection_route_mapping_guard.sh`: projection reducer routing static guard.
 - `tools/ci/restore_and_build.sh`: shared restore/build entry used by CI jobs.
-- `tools/ci/event_sourcing_regression.sh`: EventSourcing regression entry (core tests + Orleans/Garnet + architecture guards).
+- `tools/ci/event_sourcing_regression.sh`: EventSourcing regression entry (core tests + Orleans/Garnet persistence smoke). Architecture guards run once via the `fast-gates` CI job.
 
 ## Integration/Smoke Scripts
 

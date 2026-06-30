@@ -78,7 +78,6 @@ jobs:
               - 'global.json'
               - 'scripts/run.sh'
               - 'tools/ci/main_flow_runtime_smoke.sh'
-              - 'tools/ci/mainnet_single_node_service_smoke.sh'
               - '.github/workflows/ci.yml'
             host_composition:
               - 'src/**'

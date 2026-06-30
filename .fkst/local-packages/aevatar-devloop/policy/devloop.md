@@ -104,7 +104,7 @@ For architecture, actor, projection, readmodel, query, or workflow-binding chang
 
 For runtime-sensitive or service-startup-sensitive fixes:
 
-- `scripts/run.sh service-smoke`
+- `scripts/run.sh main-flow-smoke`
 
 ## PR expectations
 
