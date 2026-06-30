@@ -304,6 +304,7 @@ function mockCreateScheduledDispatchSummary(overrides?: Record<string, any>) {
     serviceKey: "scope-1:default:default:alpha-service",
     serviceId: "alpha-service",
     serviceEndpointId: "chat",
+    prompt: "",
     cronExpression: "0 9 * * 1-5",
     timezone: "Asia/Shanghai",
     enabled: true,
@@ -2657,7 +2658,11 @@ describe("TeamDetailPage", () => {
       "/scopes/scope-1/teams/t-alpha?tab=automations",
     );
     (scheduledDispatchApi.listAll as jest.Mock).mockResolvedValueOnce({
-      items: [mockCreateScheduledDispatchSummary()],
+      items: [
+        mockCreateScheduledDispatchSummary({
+          prompt: "Summarize saved escalations and owners.",
+        }),
+      ],
       nextCursor: null,
       totalCount: 1,
     });
@@ -2681,6 +2686,9 @@ describe("TeamDetailPage", () => {
         "已保存的 Prompt 不会在这里显示。输入新的 Prompt 会替换旧值，留空保存则不带周期 Prompt。",
       ),
     ).toBeNull();
+    expect(within(editDialog).getByLabelText("周期 Prompt（选填）")).toHaveValue(
+      "Summarize saved escalations and owners.",
+    );
 
     fireEvent.change(within(editDialog).getByLabelText("自动化名称"), {
       target: { value: "Daily escalation digest - edited" },
