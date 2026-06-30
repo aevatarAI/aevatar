@@ -2170,6 +2170,18 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             inboundEvent.Text,
             inboundEvent.Platform,
             _identityBindingQueryPort is null || senderBinding is not null);
+        // Stamp the inbound bot's outbound proxy slug onto the request activity so the deferred
+        // reply run (and its CardKit/im streaming sender) proxies through the bot that RECEIVED
+        // this turn, not the process-wide default. Without this, the singleton Lark clients route
+        // every card reply through the generic `api-lark-bot` slug, so a DM to one bot is answered
+        // by a sibling bot under the same NyxID account. Typed TransportExtras field, populated here
+        // where the matched registration is in hand (mirrors NyxRegistrationScopeId at ingress).
+        var inboundProviderSlug = NormalizeOptional(registration.NyxProviderSlug);
+        if (inboundProviderSlug is not null)
+        {
+            requestActivity.TransportExtras ??= new TransportExtras();
+            requestActivity.TransportExtras.NyxProviderSlug = inboundProviderSlug;
+        }
         var request = new NeedsLlmReplyEvent
         {
             CorrelationId = activity.Id,

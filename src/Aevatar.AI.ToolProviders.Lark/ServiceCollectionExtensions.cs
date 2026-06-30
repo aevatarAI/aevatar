@@ -20,6 +20,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<NyxIdApiClient>();
         services.TryAddSingleton<ILarkNyxClient, LarkNyxClient>();
         services.TryAddSingleton<ILarkCardKitClient, LarkCardKitClient>();
+        services.TryAddSingleton<ILarkOutboundClientFactory, LarkOutboundClientFactory>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAgentToolSource, LarkAgentToolSource>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IWorkflowConnectedServiceResourceFetchAdapter,
