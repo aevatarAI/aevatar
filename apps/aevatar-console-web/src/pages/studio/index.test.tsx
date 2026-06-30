@@ -483,6 +483,32 @@ function mockCreateDefaultTeamSummary(overrides: Record<string, unknown> = {}) {
   };
 }
 
+async function mockBindMemberWorkflowSuccess(input: {
+  scopeId: string;
+  memberId: string;
+  displayName?: string;
+  workflowId: string;
+  workflowYamls: string[];
+}) {
+  mockStudioMembers = mockStudioMembers.map((member) =>
+    member.memberId === input.memberId
+      ? {
+          ...member,
+          lifecycleStage: "bind_ready",
+          lastBoundRevisionId: "rev-2",
+          updatedAt: "2026-04-27T08:15:00Z",
+        }
+      : member
+  );
+
+  return {
+    status: "accepted",
+    bindingRunId: "bind-member-workflow-1",
+    scopeId: input.scopeId,
+    memberId: input.memberId,
+  };
+}
+
 async function mockAuthorWorkflowSuccess(
   _input: { prompt: string },
   options?: {
@@ -1270,31 +1296,7 @@ jest.mock("@/shared/studio/api", () => ({
         expectedActorId: `scope-script:${input.scopeId}:${serviceId}:dep-1`,
       };
     }),
-    bindMemberWorkflow: jest.fn(async (input: {
-      scopeId: string;
-      memberId: string;
-      displayName?: string;
-      workflowId: string;
-      workflowYamls: string[];
-    }) => {
-      mockStudioMembers = mockStudioMembers.map((member) =>
-        member.memberId === input.memberId
-          ? {
-              ...member,
-              lifecycleStage: "bind_ready",
-              lastBoundRevisionId: "rev-2",
-              updatedAt: "2026-04-27T08:15:00Z",
-            }
-          : member
-      );
-
-      return {
-        status: "accepted",
-        bindingRunId: "bind-member-workflow-1",
-        scopeId: input.scopeId,
-        memberId: input.memberId,
-      };
-    }),
+    bindMemberWorkflow: jest.fn(mockBindMemberWorkflowSuccess),
     bindMemberGAgent: jest.fn(async (input: {
       scopeId: string;
       memberId: string;
@@ -3367,6 +3369,10 @@ describe("StudioPage", () => {
     (studioApi.authorWorkflow as jest.Mock).mockReset();
     (studioApi.authorWorkflow as jest.Mock).mockImplementation(
       mockAuthorWorkflowSuccess
+    );
+    (studioApi.bindMemberWorkflow as jest.Mock).mockReset();
+    (studioApi.bindMemberWorkflow as jest.Mock).mockImplementation(
+      mockBindMemberWorkflowSuccess
     );
     (studioApi.getScopeBinding as jest.Mock).mockReset();
     (studioApi.getScopeBinding as jest.Mock).mockResolvedValue({
@@ -5784,41 +5790,50 @@ describe("StudioPage", () => {
         updatedAtUtc: "2026-03-18T00:10:00Z",
       },
     ]);
-    mockScopeRuntimeApi.listServices
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([
+    let defaultServicePublished = false;
+    const defaultService = {
+      serviceId: "default",
+      displayName: "draft2",
+      deploymentStatus: "Active",
+      primaryActorId: "actor-default",
+      endpoints: [
         {
-          serviceId: "default",
-          displayName: "draft2",
-          deploymentStatus: "Active",
-          primaryActorId: "actor-default",
-          endpoints: [
-            {
-              endpointId: "chat",
-              displayName: "Chat",
-              kind: "chat",
-              description: "Chat with the published workflow.",
-              requestTypeUrl: "",
-              responseTypeUrl: "",
-            },
-          ],
+          endpointId: "chat",
+          displayName: "Chat",
+          kind: "chat",
+          description: "Chat with the published workflow.",
+          requestTypeUrl: "",
+          responseTypeUrl: "",
         },
-      ]);
-    (studioApi.getScopeBinding as jest.Mock).mockResolvedValueOnce(null);
-    (studioApi.getMemberBindingRun as jest.Mock).mockResolvedValueOnce({
-      bindingRunId: "bind-member-workflow-1",
-      scopeId: "scope-1",
-      memberId: "workspace-demo",
-      status: "succeeded",
-      result: {
-        publishedServiceId: "default",
-        revisionId: "rev-2",
-        implementationKind: "workflow",
-        expectedActorId: "actor-default",
+      ],
+    };
+    mockScopeRuntimeApi.listServices.mockImplementation(async () =>
+      defaultServicePublished ? [defaultService] : [],
+    );
+    (studioApi.bindMemberWorkflow as jest.Mock).mockImplementation(
+      async (input: Parameters<typeof mockBindMemberWorkflowSuccess>[0]) => {
+        defaultServicePublished = true;
+        return mockBindMemberWorkflowSuccess(input);
       },
-      failure: null,
-      updatedAt: "2026-04-27T08:15:01Z",
-    });
+    );
+    (studioApi.getScopeBinding as jest.Mock).mockResolvedValueOnce(null);
+    (studioApi.getMemberBindingRun as jest.Mock).mockImplementation(
+      async (scopeId: string, memberId: string, bindingRunId: string) => ({
+        bindingRunId,
+        scopeId,
+        memberId,
+        status: "succeeded",
+        result: {
+          publishedServiceId:
+            memberId === "workspace-demo" ? "default" : `member-${memberId}`,
+          revisionId: "rev-2",
+          implementationKind: "workflow",
+          expectedActorId: "actor-default",
+        },
+        failure: null,
+        updatedAt: "2026-04-27T08:15:01Z",
+      }),
+    );
     mockScopeRuntimeApi.getServiceRevisions.mockImplementation(
       async () =>
         mockBuildServiceRevisionCatalog({
@@ -5963,29 +5978,39 @@ describe("StudioPage", () => {
     mockScopeRuntimeApi.listServices.mockImplementation(async () =>
       draft1ServicePublished ? [draft2Service, draft1Service] : [draft2Service],
     );
-    (studioApi.bindMemberWorkflow as jest.Mock).mockImplementationOnce(async () => {
-      draft1ServicePublished = true;
-      return {
-      status: "accepted",
-      bindingRunId: "bind-draft1",
-      scopeId: "scope-1",
-      memberId: "draft1",
-      };
-    });
-    (studioApi.getMemberBindingRun as jest.Mock).mockResolvedValueOnce({
-      bindingRunId: "bind-draft1",
-      scopeId: "scope-1",
-      memberId: "draft1",
-      status: "succeeded",
-      result: {
-        publishedServiceId: "draft1",
-        revisionId: "rev-draft1",
-        implementationKind: "workflow",
-        expectedActorId: "actor-draft1",
+    (studioApi.bindMemberWorkflow as jest.Mock).mockImplementation(
+      async (input: Parameters<typeof mockBindMemberWorkflowSuccess>[0]) => {
+        if (input.memberId !== "draft1") {
+          return mockBindMemberWorkflowSuccess(input);
+        }
+
+        draft1ServicePublished = true;
+        await mockBindMemberWorkflowSuccess(input);
+        return {
+          status: "accepted",
+          bindingRunId: "bind-draft1",
+          scopeId: input.scopeId,
+          memberId: input.memberId,
+        };
       },
-      failure: null,
-      updatedAt: "2026-04-27T08:15:01Z",
-    });
+    );
+    (studioApi.getMemberBindingRun as jest.Mock).mockImplementation(
+      async (scopeId: string, memberId: string, bindingRunId: string) => ({
+        bindingRunId,
+        scopeId,
+        memberId,
+        status: "succeeded",
+        result: {
+          publishedServiceId: memberId === "draft1" ? "draft1" : "default",
+          revisionId: memberId === "draft1" ? "rev-draft1" : "rev-2",
+          implementationKind: "workflow",
+          expectedActorId:
+            memberId === "draft1" ? "actor-draft1" : "actor-default",
+        },
+        failure: null,
+        updatedAt: "2026-04-27T08:15:01Z",
+      }),
+    );
     (studioApi.getScopeBinding as jest.Mock).mockResolvedValue({
       available: true,
       scopeId: "scope-1",
