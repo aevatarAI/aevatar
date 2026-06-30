@@ -1041,6 +1041,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
           .join(":"),
         serviceId,
         serviceEndpointId: "chat",
+        prompt: trimText(input.workflowChatTarget.prompt),
         cronExpression: input.cronExpression,
         timezone: trimText(input.timezone) || resolveDefaultTimezone(),
         enabled: input.enabled ?? true,
@@ -1282,7 +1283,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
         enabled: schedule.enabled,
         memberId: member?.memberId ?? "",
         preset,
-        prompt: "",
+        prompt: trimText(schedule.prompt),
         timezone: trimText(schedule.timezone) || resolveDefaultTimezone(),
       });
       setPreview(null);

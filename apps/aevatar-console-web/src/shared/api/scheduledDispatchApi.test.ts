@@ -142,6 +142,7 @@ describe("scheduledDispatchApi", () => {
     ).resolves.toEqual({
       items: [
         expect.objectContaining({
+          prompt: "",
           scheduleId: "sch-alpha",
           scheduleKind: "workflow",
           serviceId: "svc-alpha",
@@ -205,6 +206,50 @@ describe("scheduledDispatchApi", () => {
       "/api/schedules?includeTotalCount=true&take=200",
       "/api/schedules?cursor=cursor-2&includeTotalCount=true&take=200",
     ]);
+  });
+
+  it("keeps saved recurring prompts from schedule list responses", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        items: [
+          createSummary({
+            prompt: "Summarize escalations, blocked accounts, and follow-up owners.",
+          }),
+          createSummary({
+            prompt: null,
+            scheduleId: "sch-without-prompt",
+          }),
+          createSummary({
+            scheduleId: "sch-legacy",
+          }),
+        ],
+        nextCursor: null,
+        totalCount: 3,
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(scheduledDispatchApi.list()).resolves.toEqual(
+      expect.objectContaining({
+        items: [
+          expect.objectContaining({
+            prompt:
+              "Summarize escalations, blocked accounts, and follow-up owners.",
+            scheduleId: "sch-alpha",
+          }),
+          expect.objectContaining({
+            prompt: "",
+            scheduleId: "sch-without-prompt",
+          }),
+          expect.objectContaining({
+            prompt: "",
+            scheduleId: "sch-legacy",
+          }),
+        ],
+      }),
+    );
   });
 
   it("posts workflow chat as base64 service invocation when creating a schedule with a revision", async () => {
@@ -729,6 +774,7 @@ describe("scheduledDispatchApi", () => {
         TargetKind: 1,
         TargetActorId: "actor-pascal",
         PayloadTypeUrl: "type.googleapis.com/aevatar.ChatRequestEvent",
+        Prompt: "Summarize Pascal escalations.",
         ServiceKey: "scope-1:default:default:svc-pascal",
         ServiceId: "svc-pascal",
         ServiceEndpointId: "chat",
@@ -757,6 +803,7 @@ describe("scheduledDispatchApi", () => {
         targetKind: "service_invocation",
         scheduleKind: "workflow",
         deleted: false,
+        prompt: "Summarize Pascal escalations.",
       }),
     );
   });

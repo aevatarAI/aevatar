@@ -55,6 +55,7 @@ export type ScheduledDispatchSummary = {
   readonly serviceKey: string;
   readonly serviceId: string;
   readonly serviceEndpointId: string;
+  readonly prompt: string;
   readonly cronExpression: string;
   readonly timezone: string;
   readonly enabled: boolean;
@@ -257,6 +258,7 @@ export function decodeScheduledDispatchSummary(
     serviceKey: readString(record, ["serviceKey", "ServiceKey"], `${label}.serviceKey`),
     serviceId: readString(record, ["serviceId", "ServiceId"], `${label}.serviceId`),
     serviceEndpointId: readString(record, ["serviceEndpointId", "ServiceEndpointId"], `${label}.serviceEndpointId`),
+    prompt: readNullableString(record, ["prompt", "Prompt"], `${label}.prompt`) ?? "",
     cronExpression: readString(record, ["cronExpression", "CronExpression"], `${label}.cronExpression`),
     timezone: readString(record, ["timezone", "Timezone"], `${label}.timezone`),
     enabled: readBoolean(record, ["enabled", "Enabled"], `${label}.enabled`),
