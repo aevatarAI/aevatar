@@ -106,6 +106,9 @@ describe('auth session storage', () => {
   it('accepts only safe in-app redirect targets', () => {
     expect(sanitizeReturnTo('/runs?tab=active')).toBe('/runtime/runs?tab=active');
     expect(sanitizeReturnTo('/gagents?scopeId=scope-a')).toBe('/runtime/gagents?scopeId=scope-a');
+    expect(sanitizeReturnTo('/mission-wall?focusRunId=run-1')).toBe(
+      '/runtime/mission-wall?focusRunId=run-1',
+    );
     expect(sanitizeReturnTo('https://example.com')).toBe(CONSOLE_HOME_ROUTE);
     expect(sanitizeReturnTo('/login?redirect=/overview')).toBe(CONSOLE_HOME_ROUTE);
     expect(sanitizeReturnTo('//evil.example.com')).toBe(CONSOLE_HOME_ROUTE);

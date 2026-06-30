@@ -44,6 +44,7 @@ const LEGACY_RETURN_TO_ALIASES = new Map<string, string>([
   ['/actors', '/runtime/explorer'],
   ['/gagents', '/runtime/gagents'],
   ['/mission-control', '/runtime/mission-control'],
+  ['/mission-wall', '/runtime/mission-wall'],
 ]);
 
 function getStorage(): Storage | undefined {

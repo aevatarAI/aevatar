@@ -121,6 +121,10 @@ describe("console routes", () => {
     expect(hasRoute(routes, "/mission-control")).toBe(true);
     expect(findRoute(routes, "/mission-control").redirect).toBe("/runtime/mission-control");
     expect(findRoute(routes, "/runtime/mission-control").hideInMenu).toBe(true);
+    expect(hasRoute(routes, "/mission-wall")).toBe(true);
+    expect(findRoute(routes, "/mission-wall").redirect).toBe("/runtime/mission-wall");
+    expect(findRoute(routes, "/runtime/mission-wall").hideInMenu).toBe(true);
+    expect(findRoute(routes, "/runtime/mission-wall").name).toBeUndefined();
     expect(findRoute(routes, "/runtime/explorer").menuGroupKey).toBe("platform");
     expect(findRoute(routes, "/runtime/explorer/detail").hideInMenu).toBe(true);
     expect(findRoute(routes, "/runtime/explorer/detail").parentKeys).toEqual([
