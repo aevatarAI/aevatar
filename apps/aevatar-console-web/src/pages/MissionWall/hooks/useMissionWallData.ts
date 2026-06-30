@@ -41,6 +41,10 @@ type RuntimeDataVersionInput = {
   readonly teamUpdatedAt: number;
 };
 
+export const MISSION_WALL_ROSTER_REFETCH_INTERVAL_MS = 15_000;
+export const MISSION_WALL_RUN_REFETCH_INTERVAL_MS = 5_000;
+export const MISSION_WALL_AUDIT_REFETCH_INTERVAL_MS = 3_000;
+
 export interface MissionWallRuntimeData {
   readonly buildSource: (
     selectedAudit?: ScopeServiceRunAuditSnapshot,
@@ -85,6 +89,12 @@ function runtimeDataVersion(input: RuntimeDataVersionInput): string {
     input.teamUpdatedAt,
     input.runQueryVersion,
   ].join(":");
+}
+
+function missionWallRefetchInterval(intervalMs: number): number | false {
+  const isTest =
+    typeof process !== "undefined" && process.env.NODE_ENV === "test";
+  return isTest ? false : intervalMs;
 }
 
 function buildLiveState(input: {
@@ -171,12 +181,20 @@ export function useMissionWallRuntimeData(): MissionWallRuntimeData {
     enabled: Boolean(scopeId),
     queryFn: () => studioApi.listMembers(scopeId ?? ""),
     queryKey: ["mission-wall", "members", scopeId],
+    refetchInterval: missionWallRefetchInterval(
+      MISSION_WALL_ROSTER_REFETCH_INTERVAL_MS,
+    ),
+    refetchIntervalInBackground: true,
     retry: false,
   });
   const teamsQuery = useQuery({
     enabled: Boolean(scopeId),
     queryFn: () => studioApi.listTeams(scopeId ?? ""),
     queryKey: ["mission-wall", "teams", scopeId],
+    refetchInterval: missionWallRefetchInterval(
+      MISSION_WALL_ROSTER_REFETCH_INTERVAL_MS,
+    ),
+    refetchIntervalInBackground: true,
     retry: false,
   });
   const servicesQuery = useQuery({
@@ -186,6 +204,10 @@ export function useMissionWallRuntimeData(): MissionWallRuntimeData {
         take: MISSION_WALL_SERVICE_TAKE,
       }),
     queryKey: ["mission-wall", "services", scopeId],
+    refetchInterval: missionWallRefetchInterval(
+      MISSION_WALL_ROSTER_REFETCH_INTERVAL_MS,
+    ),
+    refetchIntervalInBackground: true,
     retry: false,
   });
   const workflowMembers = React.useMemo(
@@ -214,6 +236,10 @@ export function useMissionWallRuntimeData(): MissionWallRuntimeData {
             take: MISSION_WALL_SERVICE_RUN_TAKE,
           }),
         queryKey: ["mission-wall", "service-runs", scopeId, serviceId],
+        refetchInterval: missionWallRefetchInterval(
+          MISSION_WALL_RUN_REFETCH_INTERVAL_MS,
+        ),
+        refetchIntervalInBackground: true,
         retry: false,
       };
     }),
@@ -340,6 +366,10 @@ export function useMissionWallSelectedRunAudit(
       runId,
       actorId,
     ],
+    refetchInterval: missionWallRefetchInterval(
+      MISSION_WALL_AUDIT_REFETCH_INTERVAL_MS,
+    ),
+    refetchIntervalInBackground: true,
     retry: false,
   });
 }

@@ -466,6 +466,129 @@ describe("MissionWallPage", () => {
     );
   });
 
+  it("refreshes the left run window when a new workflow member appears", async () => {
+    const freshMember = workflowMember({
+      displayName: "Fresh workflow member",
+      memberId: "m-fresh",
+      publishedServiceId: "svc-fresh",
+      teamId: "team-alpha",
+      workflowId: "wf-fresh-draft",
+    });
+    const freshService = serviceCatalog({
+      displayName: "Fresh runtime service",
+      serviceId: "svc-fresh",
+    });
+    const freshRun = runSummary({
+      actorId: "actor-fresh-run",
+      completedSteps: 0,
+      completionStatus: "running",
+      lastUpdatedAt: "2026-06-30T04:59:58.000Z",
+      runId: "run-fresh",
+      serviceId: "svc-fresh",
+      totalSteps: 15,
+      workflowName: "Fresh Workflow",
+    });
+    let includeFreshMember = false;
+    let includeFreshService = false;
+
+    (studioApi.listMembers as jest.Mock).mockImplementation(async () => ({
+      members: [
+        riskMember,
+        billingMember,
+        idleMember,
+        scriptMember,
+        staleRosterMember,
+        ...(includeFreshMember ? [freshMember] : []),
+      ],
+      scopeId: "scope-real",
+    }));
+    (scopeRuntimeApi.listServices as jest.Mock).mockImplementation(async () => [
+      riskService,
+      billingService,
+      idleService,
+      ...(includeFreshService ? [freshService] : []),
+    ]);
+    (scopeRuntimeApi.listServiceRuns as jest.Mock).mockImplementation(
+      async (
+        _scopeId: string,
+        serviceId: string,
+      ): Promise<ScopeServiceRunCatalogSnapshot> => {
+        if (serviceId === "svc-fresh") {
+          return {
+            displayName: "Fresh runtime service",
+            runs: [freshRun],
+            scopeId: "scope-real",
+            serviceId,
+            serviceKey: "scope-real:svc-fresh",
+          };
+        }
+
+        if (serviceId === "svc-risk") {
+          return {
+            displayName: "Risk runtime service",
+            runs: [riskRun],
+            scopeId: "scope-real",
+            serviceId,
+            serviceKey: "scope-real:svc-risk",
+          };
+        }
+
+        if (serviceId === "svc-billing") {
+          return {
+            displayName: "Billing runtime service",
+            runs: [billingRun],
+            scopeId: "scope-real",
+            serviceId,
+            serviceKey: "scope-real:svc-billing",
+          };
+        }
+
+        return {
+          displayName: "Idle runtime service",
+          runs: [],
+          scopeId: "scope-real",
+          serviceId,
+          serviceKey: "scope-real:svc-idle",
+        };
+      },
+    );
+
+    const { queryClient } = renderWithQueryClient(
+      React.createElement(MissionWallPage),
+    );
+
+    expect(await screen.findByText("Live Risk Workflow")).toBeInTheDocument();
+    expect(screen.queryByText("Fresh Workflow")).not.toBeInTheDocument();
+
+    includeFreshMember = true;
+    includeFreshService = true;
+    await queryClient.invalidateQueries({ queryKey: ["mission-wall"] });
+
+    expect(await screen.findByText("Fresh Workflow")).toBeInTheDocument();
+
+    const list = screen.getByTestId("mission-wall-run-list");
+    const cards = within(list).getAllByRole("button");
+    expect(cards[0]).toHaveTextContent("Fresh Workflow");
+    expect(cards[0]).toHaveTextContent("0 / 15 steps");
+    await waitFor(() => {
+      expect(scopeRuntimeApi.listServiceRuns).toHaveBeenCalledWith(
+        "scope-real",
+        "svc-fresh",
+        { take: 50 },
+      );
+    });
+    expect(scopeRuntimeApi.listServiceRuns).not.toHaveBeenCalledWith(
+      "scope-real",
+      "wf-fresh-draft",
+      expect.anything(),
+    );
+    expect(scopeRuntimeApi.listServiceRuns).not.toHaveBeenCalledWith(
+      "scope-real",
+      "m-fresh",
+      expect.anything(),
+    );
+  });
+
   it("shows the selected service run audit in the right workflow graph", async () => {
     renderWithQueryClient(React.createElement(MissionWallPage));
 
