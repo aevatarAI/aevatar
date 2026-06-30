@@ -122,7 +122,11 @@ The edge consumes a JSON projection of it (camelCase), hand-parsed by
   - down (aevatar → client): `sessionAccepted`, `realtimeFrame`
   - `sessionAccepted` advertises the typed wire contract version (`1.0`) and
     the input image policy (`maxBytes: 512000`, allowed media types
-    `image/jpeg`, `image/png`) owned by aevatar.
+    `image/jpeg`, `image/png`) owned by aevatar. It also carries
+    `attachOutcome`: `NEW_SESSION` for a fresh lease and `RESTARTED` when
+    aevatar intentionally evicted a previous lease before accepting the new
+    transport. Clients must not infer reset semantics from a changed
+    `sessionId`; `sessionId` remains identity.
   - `realtimeFrame` is itself a `VoiceRealtimeFrame` oneof: `responseStarted`/
     `Done`/`Cancelled`, `speechStarted`/`Stopped`, `functionCall`,
     `transcriptDelta`/`Completed`, `error`, `disconnected`, `sessionClosed`.
@@ -155,6 +159,14 @@ The edge consumes a JSON projection of it (camelCase), hand-parsed by
   results, and event injection are delivered only through the live media relay
   bound at attach time. A missing media port or relay for that lease is a
   delivery/topology gap, not permission to open a replacement provider socket.
+- **Attach lifecycle** — both the Foundation endpoint and the Mainnet
+  policy-aware endpoint use the same stateless Foundation WebSocket attach
+  executor. It sends the typed `sessionAccepted` ACK, subscribes realtime
+  control frames, attaches the volatile media relay with a bounded timeout, and
+  releases/detaches with a bounded close-wait. A pre-upgrade
+  `TransportAlreadyAttached` result returns `409` with `Retry-After: 1`;
+  post-upgrade media, credential, conflict, or timeout failures close the socket
+  with a policy-violation reason.
 - **Credential ref lifetime** — `/ws/voice` admission mints at most one
   `voice-tool:` ref for an attach attempt and hands a non-protobuf transport
   binding to the host attach path. The raw caller bearer becomes resolvable

@@ -22,6 +22,14 @@ public static class ChannelMetadataKeys
     public const string PlatformMessageId = "channel.platform_message_id";
     public const string ChatType = "channel.chat_type";
     /// <summary>
+    /// Everyone @-mentioned in the inbound message, as a readable list of <c>name &lt;canonical_id&gt;</c>
+    /// entries (on Lark the canonical id is the mentioned party's <c>open_id</c>), in the order their
+    /// <c>@_user_N</c> placeholders appear in the message text. Surfaced into the agent's
+    /// <c>&lt;channel-context&gt;</c> so the agent can resolve a third-party mention to a real id instead
+    /// of misusing the literal <c>@_user_N</c> placeholder as a member id. Absent when no one is mentioned.
+    /// </summary>
+    public const string Mentions = "channel.mentions";
+    /// <summary>
     /// Lark <c>union_id</c> (<c>on_*</c>) of the inbound sender. Tenant-stable and cross-app safe;
     /// downstream Lark senders prefer this over <see cref="SenderId"/> (<c>open_id</c>) for p2p
     /// outbound delivery so a relay-app vs outbound-app mismatch does not produce

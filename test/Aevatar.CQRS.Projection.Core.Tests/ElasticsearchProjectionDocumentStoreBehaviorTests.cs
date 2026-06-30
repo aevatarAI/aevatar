@@ -243,7 +243,7 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
     }
 
     [Fact]
-    public async Task UpsertAsync_WhenDescriptorContainsOpenFields_ShouldNotInitializeStaticMappingsForThem()
+    public async Task UpsertAsync_WhenDescriptorContainsOpenFields_ShouldOnlySkipOpenMessagesAndRepeatedPrimitives()
     {
         var handler = CreateSuccessfulUpsertHandler();
         var options = new ElasticsearchProjectionDocumentStoreOptions
@@ -274,10 +274,138 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         var properties = GetProperties(indexPayload);
         properties.Should().NotContainKey("fields_value");
         properties.Should().NotContainKey("open_payload");
-        properties.Should().NotContainKey("labels");
-        properties.Should().NotContainKey("entries");
         properties.Should().NotContainKey("tags");
+        GetMappingType(indexPayload, "labels").Should().Be("object");
+        GetFieldMapping(indexPayload, "labels").GetProperty("enabled").GetBoolean().Should().BeFalse();
         GetMappingType(indexPayload, "updated_at_utc_value").Should().Be("date");
+    }
+
+    [Fact]
+    public async Task UpsertAsync_WhenDescriptorContainsProtoMaps_ShouldDisableMapMappingsAndUseObjectParents()
+    {
+        var handler = CreateSuccessfulUpsertHandler();
+        var options = new ElasticsearchProjectionDocumentStoreOptions
+        {
+            AutoCreateIndex = true,
+        };
+        options.Endpoints = ["http://localhost:9200"];
+
+        using var store = new ElasticsearchProjectionDocumentStore<TestRecursiveWellKnownReadModel, string>(
+            options,
+            new DocumentIndexMetadata(
+                IndexName: "projection-core-tests",
+                Mappings: new Dictionary<string, object?>(),
+                Settings: new Dictionary<string, object?>(),
+                Aliases: new Dictionary<string, object?>()),
+            keySelector: model => model.Id,
+            keyFormatter: key => key,
+            httpMessageHandler: handler);
+
+        await store.UpsertAsync(new TestRecursiveWellKnownReadModel
+        {
+            Id = "actor-1",
+            ActorId = "actor-1",
+            UpdatedAt = DateTimeOffset.Parse("2026-05-15T00:00:00Z"),
+        });
+
+        var indexCreateRequest = GetIndexCreateRequest(handler);
+        var indexPayload = ParseJson(indexCreateRequest.Body);
+        var mappings = indexPayload.GetProperty("mappings");
+        mappings.TryGetProperty("dynamic", out _).Should().BeFalse();
+        indexCreateRequest.Body.Should().NotContain("\"nested\"");
+
+        GetMappingType(indexPayload, "labels").Should().Be("object");
+        GetFieldMapping(indexPayload, "labels").GetProperty("enabled").GetBoolean().Should().BeFalse();
+
+        GetMappingType(indexPayload, "primary_entry").Should().Be("object");
+        GetMappingType(indexPayload, "primary_entry", "entry_id").Should().Be("keyword");
+        GetMappingType(indexPayload, "primary_entry", "attributes").Should().Be("object");
+        GetFieldMapping(indexPayload, "primary_entry", "attributes")
+            .GetProperty("enabled")
+            .GetBoolean()
+            .Should()
+            .BeFalse();
+        GetMappingType(indexPayload, "primary_entry", "leaf").Should().Be("object");
+        GetMappingType(indexPayload, "primary_entry", "leaf", "leaf_id").Should().Be("keyword");
+        GetFieldMapping(indexPayload, "primary_entry", "leaf", "annotations")
+            .GetProperty("enabled")
+            .GetBoolean()
+            .Should()
+            .BeFalse();
+
+        GetMappingType(indexPayload, "entries").Should().Be("object");
+        GetFieldMapping(indexPayload, "entries").TryGetProperty("properties", out _).Should().BeTrue();
+        GetFieldMapping(indexPayload, "entries", "attributes")
+            .GetProperty("enabled")
+            .GetBoolean()
+            .Should()
+            .BeFalse();
+        GetMappingType(indexPayload, "child_entries").Should().Be("object");
+        GetFieldMapping(indexPayload, "child_entries", "leaf", "annotations")
+            .GetProperty("enabled")
+            .GetBoolean()
+            .Should()
+            .BeFalse();
+    }
+
+    [Fact]
+    public async Task UpsertAsync_WhenProviderDeclaresExplicitNestedMapMapping_ShouldPreserveExactPath()
+    {
+        var handler = CreateSuccessfulUpsertHandler();
+        var options = new ElasticsearchProjectionDocumentStoreOptions
+        {
+            AutoCreateIndex = true,
+        };
+        options.Endpoints = ["http://localhost:9200"];
+
+        using var store = new ElasticsearchProjectionDocumentStore<TestRecursiveWellKnownReadModel, string>(
+            options,
+            new DocumentIndexMetadata(
+                IndexName: "projection-core-tests",
+                Mappings: new Dictionary<string, object?>
+                {
+                    ["properties"] = new Dictionary<string, object?>
+                    {
+                        ["primary_entry"] = new Dictionary<string, object?>
+                        {
+                            ["type"] = "object",
+                            ["properties"] = new Dictionary<string, object?>
+                            {
+                                ["attributes"] = new Dictionary<string, object?>
+                                {
+                                    ["type"] = "object",
+                                    ["enabled"] = true,
+                                },
+                            },
+                        },
+                    },
+                },
+                Settings: new Dictionary<string, object?>(),
+                Aliases: new Dictionary<string, object?>()),
+            keySelector: model => model.Id,
+            keyFormatter: key => key,
+            httpMessageHandler: handler);
+
+        await store.UpsertAsync(new TestRecursiveWellKnownReadModel
+        {
+            Id = "actor-1",
+            ActorId = "actor-1",
+            UpdatedAt = DateTimeOffset.Parse("2026-05-15T00:00:00Z"),
+        });
+
+        var indexPayload = ParseJson(GetIndexCreateRequest(handler).Body);
+        GetMappingType(indexPayload, "primary_entry").Should().Be("object");
+        GetMappingType(indexPayload, "primary_entry", "attributes").Should().Be("object");
+        GetFieldMapping(indexPayload, "primary_entry", "attributes")
+            .GetProperty("enabled")
+            .GetBoolean()
+            .Should()
+            .BeTrue();
+        GetFieldMapping(indexPayload, "primary_entry", "leaf", "annotations")
+            .GetProperty("enabled")
+            .GetBoolean()
+            .Should()
+            .BeFalse();
     }
 
     [Fact]
@@ -1513,14 +1641,30 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
             .ToDictionary(x => x.Name, x => x.Value.Clone(), StringComparer.Ordinal);
     }
 
-    private static JsonElement GetFieldMapping(JsonElement indexPayload, string fieldName)
+    private static JsonElement GetFieldMapping(JsonElement indexPayload, params string[] fieldPath)
     {
-        return GetProperties(indexPayload)[fieldName];
+        fieldPath.Should().NotBeEmpty();
+
+        IReadOnlyDictionary<string, JsonElement> properties = GetProperties(indexPayload);
+        JsonElement mapping = default;
+        for (var index = 0; index < fieldPath.Length; index++)
+        {
+            mapping = properties[fieldPath[index]];
+            if (index == fieldPath.Length - 1)
+                return mapping;
+
+            properties = mapping
+                .GetProperty("properties")
+                .EnumerateObject()
+                .ToDictionary(x => x.Name, x => x.Value.Clone(), StringComparer.Ordinal);
+        }
+
+        throw new InvalidOperationException("The field path must contain at least one segment.");
     }
 
-    private static string? GetMappingType(JsonElement indexPayload, string fieldName)
+    private static string? GetMappingType(JsonElement indexPayload, params string[] fieldPath)
     {
-        return GetFieldMapping(indexPayload, fieldName).GetProperty("type").GetString();
+        return GetFieldMapping(indexPayload, fieldPath).GetProperty("type").GetString();
     }
 
     private static HttpResponseMessage CreateJsonResponse(HttpStatusCode statusCode, string json)

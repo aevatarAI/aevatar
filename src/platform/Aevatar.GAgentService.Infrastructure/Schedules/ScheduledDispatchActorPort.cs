@@ -284,21 +284,47 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
 
     private static ScheduledServiceInvocationAuthState? CreateAuthState(ScheduledServiceInvocationAuth? auth)
     {
-        if (auth?.SenderNyxId == null)
+        if (auth == null)
             return null;
 
-        return new ScheduledServiceInvocationAuthState
+        var durableToken = auth.DurableSenderBearerToken?.Trim() ?? string.Empty;
+        if (auth.SenderNyxId == null && durableToken.Length == 0 && auth.ScopeOwnerNyxId == null)
+            return null;
+
+        var state = new ScheduledServiceInvocationAuthState
         {
-            SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceState
-            {
-                Subject = new ScheduledServiceInvocationNyxIdSubjectRefState
-                {
-                    Platform = auth.SenderNyxId.Subject.Platform,
-                    Tenant = auth.SenderNyxId.Subject.Tenant,
-                    ExternalUserId = auth.SenderNyxId.Subject.ExternalUserId,
-                },
-                Scope = auth.SenderNyxId.Scope,
-            },
+            DurableSenderBearerToken = durableToken,
         };
+
+        if (auth.SenderNyxId != null)
+        {
+            state.SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceState
+            {
+                Subject = CreateSubjectState(auth.SenderNyxId.Subject),
+                Scope = auth.SenderNyxId.Scope,
+            };
+        }
+
+        if (auth.ScopeOwnerNyxId != null)
+        {
+            state.ScopeOwnerNyxId = new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState
+            {
+                Scope = auth.ScopeOwnerNyxId.Scope,
+                OwnerSubject = CreateSubjectState(auth.ScopeOwnerNyxId.OwnerSubject),
+            };
+        }
+
+        return state;
     }
+
+    private static ScheduledServiceInvocationNyxIdSubjectRefState? CreateSubjectState(
+        ScheduledServiceInvocationNyxIdSubjectRef? subject) =>
+        subject == null
+            ? null
+            : new ScheduledServiceInvocationNyxIdSubjectRefState
+            {
+                Platform = subject.Platform,
+                Tenant = subject.Tenant,
+                ExternalUserId = subject.ExternalUserId,
+            };
 }

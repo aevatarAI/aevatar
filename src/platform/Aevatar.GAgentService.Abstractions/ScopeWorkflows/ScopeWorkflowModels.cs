@@ -11,6 +11,25 @@ public sealed record ScopeWorkflowUpsertRequest(
     IReadOnlyDictionary<string, string>? InlineWorkflowYamls = null,
     string? RevisionId = null);
 
+public sealed record ScopeWorkflowSaveAndBindRequest(
+    string ScopeId,
+    string? WorkflowId,
+    string WorkflowYaml,
+    string? WorkflowName = null,
+    string? DisplayName = null,
+    IReadOnlyDictionary<string, string>? InlineWorkflowYamls = null,
+    string? AppId = null,
+    string? ServiceId = null,
+    bool? ExposureDesired = null);
+
+public enum ScopeWorkflowLookupStatus
+{
+    NotFound = 0,
+    NotReady = 1,
+    Stale = 2,
+    Runnable = 3,
+}
+
 public sealed record ScopeWorkflowSummary(
     string ScopeId,
     string WorkflowId,
@@ -22,6 +41,14 @@ public sealed record ScopeWorkflowSummary(
     string DeploymentId,
     string DeploymentStatus,
     DateTimeOffset UpdatedAt);
+
+public sealed record ScopeWorkflowLookupResult(
+    ScopeWorkflowLookupStatus Status,
+    ScopeWorkflowSummary? Workflow,
+    string Reason)
+{
+    public bool IsRunnable => Status == ScopeWorkflowLookupStatus.Runnable && Workflow != null;
+}
 
 public sealed record ScopeWorkflowSource(
     string WorkflowYaml,
@@ -61,3 +88,12 @@ public sealed record ScopeWorkflowUpsertResult(
     string PropagationStage = "readmodel_propagating",
     string DisplayName = "",
     string WorkflowName = "");
+
+public sealed record ScopeWorkflowSaveAndBindResult(
+    string ScopeId,
+    string WorkflowId,
+    string RevisionId,
+    ScopeWorkflowUpsertResult Workflow,
+    ScopeBindingUpsertResult Binding,
+    string AcceptanceStage = "accepted",
+    string PropagationStage = "readmodel_propagating");

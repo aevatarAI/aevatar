@@ -70,6 +70,8 @@ Immutable records of architectural choices and their rationale.
 - [Mainnet Production Clustering Uses Shared Garnet Membership](adr/0032-mainnet-garnet-clustering.md)
 - [Voice Provider Credential via NyxID Ephemeral Broker](adr/0033-voice-provider-nyxid-ephemeral-broker.md)
 - [Workflow Saga / Compensation Protocol](adr/0034-workflow-saga-compensation-protocol.md)
+- [已发布 workflow 服务自动注册到 NyxID](adr/0035-auto-register-published-service-to-nyxid.md)
+- [Scope Workflow as the Authoritative Runnable Workflow Model](adr/0036-scope-workflow-authoritative-runnable-model.md)
 - [Agent Kind Primary-Only Identity](adr/2026-06-04-agent-kind-primary-only-identity.md)
 
 ## History

@@ -13,12 +13,13 @@ The current authoritative resolver maps each normalized `memberId` to a stable p
 | `publishedServiceId` | Stable service id used by backend service runtime for that member. |
 | `publishedServiceKey` | Internal service identity key for diagnostics and contract inspection. |
 
-The resolver is exposed through `IMemberPublishedServiceResolver`, so a later actor-owned member catalog can replace the deterministic mapping without changing HTTP routes. Until that catalog is authoritative, member binding writes are restricted to scope administrators; member reads and invokes require either the matching authenticated member claim or a scope administrator role.
+The resolver is exposed through `IMemberPublishedServiceResolver`, so a later actor-owned member catalog can replace the deterministic mapping without changing HTTP routes. Member-first routes are authorized at the scope boundary; `memberId` identifies the target member-owned resource, not the authenticated principal. Binding write authority remains owned by the Studio member async protocol.
 
 ## Routes
 
 | Route | Purpose |
 |---|---|
+| `POST /api/scopes/{scopeId}/members` | Create a shell Studio member only. The request must omit `implementationRef`. |
 | `GET /api/scopes/{scopeId}/members/{memberId}/published-service` | Resolve the member-owned published service id. |
 | `GET /api/scopes/{scopeId}/members/{memberId}/binding` | Read the member authority's last successful binding and current async binding run. |
 | `PUT /api/scopes/{scopeId}/members/{memberId}/binding` | Start an async workflow/script/GAgent binding run for the member-owned published service. Returns `202 Accepted`. |
@@ -35,6 +36,8 @@ The resolver is exposed through `IMemberPublishedServiceResolver`, so a later ac
 ## Semantics
 
 - Member routes for Bind / Invoke / Observe-read / run lifecycle control do not require frontend callers to know or pass `serviceId`.
+- Member create is shell-only. `POST /api/scopes/{scopeId}/members` creates the member authority with lifecycle `created` and no `implementationRef`; workflow/script/GAgent implementation attachment is only accepted through post-create binding.
+- A create request that includes `implementationRef` returns `400 STUDIO_MEMBER_CREATE_IMPLEMENTATION_REF_NOT_ALLOWED` with `field = "implementationRef"`. Clients should omit `implementationRef`, create the shell member, then call `PUT /api/scopes/{scopeId}/members/{memberId}/binding`.
 - Binding writes are asynchronous. The `PUT /binding` response only means the command was accepted for dispatch and returns a stable `bindingRunId`; completion is observed through `GET /binding-runs/{bindingRunId}` or `GET /binding`.
 - Workflow binding requests must carry `workflow.workflowId` as the stable workflow identity. The first YAML document's `name` remains the runtime/display `workflowName` and may differ from `workflowId`; successful member binding returns the stable id in `implementationRef.workflow.workflowId`.
 - The binding-run `Location` is read-model backed and can be briefly unavailable immediately after `202 Accepted`. Clients should treat a short-lived `404` for the accepted run id as pending/read-model lag, not as terminal failure. Only explicit `failed` or `rejected` run status should surface as a binding error.

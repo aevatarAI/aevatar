@@ -14,6 +14,15 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
 {
     private static readonly TimeSpan LarkCardOperationTimeout = TimeSpan.FromSeconds(10);
 
+    // Per-run (run-scoped grain) in-memory render throttle for the text-edit fallback path.
+    // After card.create fails, every interim reply chunk is forwarded as a Lark message edit;
+    // Lark caps edits per message (code 230072), so the count is bounded by
+    // StreamingMaxInterimChunks and the interval by StreamingFlushIntervalMs. The final chunk is
+    // always forwarded (it carries the complete reply text), so reply completeness never depends
+    // on these counters surviving a mid-turn reactivation — only on the is_final marker.
+    private int _fallbackInterimEditsForwarded;
+    private long _lastFallbackInterimAtUnixMs;
+
     private sealed record LarkCardOperationInFlight(
         LarkCardOperationPhase Operation,
         long Sequence,
@@ -88,7 +97,7 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
         if (await HandleLarkCardStreamingChunkCoreAsync(evt, correlationId))
             return;
 
-        await DispatchTextFallbackChunkAsync(ToTextStreamChunk(evt));
+        await DispatchTextFallbackChunkAsync(ToTextStreamChunk(evt), evt.IsFinal);
     }
 
     [EventHandler(AllowSelfHandling = true)]
@@ -417,7 +426,7 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
                 terminalReason: $"create_failed:{result.ErrorCode}",
                 fieldUpdate: s => s with { InFlight = null });
             if (evt.Chunk is not null)
-                await DispatchTextFallbackChunkAsync(ToTextStreamChunk(evt.Chunk));
+                await DispatchTextFallbackChunkAsync(ToTextStreamChunk(evt.Chunk), evt.Chunk.IsFinal);
             return;
         }
 
@@ -813,11 +822,30 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
         return completed;
     }
 
-    private async Task DispatchTextFallbackChunkAsync(LlmReplyStreamChunkEvent chunk)
+    private async Task DispatchTextFallbackChunkAsync(LlmReplyStreamChunkEvent chunk, bool isFinal)
     {
         var targetActorId = NormalizeOptional(State.TargetActorId);
         if (targetActorId is null)
             return;
+
+        var nowMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+        if (!isFinal)
+        {
+            // Interim edits on the text-edit fallback are bounded so a long reply cannot exhaust
+            // Lark's per-message edit cap (code 230072). The final chunk below is exempt so the
+            // complete reply text always lands.
+            var maxInterimEdits = Math.Max(0, _relayOptions?.StreamingMaxInterimChunks ?? 15);
+            if (_fallbackInterimEditsForwarded >= maxInterimEdits)
+                return;
+
+            var flushIntervalMs = Math.Max(0, _relayOptions?.StreamingFlushIntervalMs ?? 750);
+            if (_fallbackInterimEditsForwarded > 0
+                && flushIntervalMs > 0
+                && nowMs - _lastFallbackInterimAtUnixMs < flushIntervalMs)
+            {
+                return;
+            }
+        }
 
         try
         {
@@ -830,6 +858,13 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
                 "Failed to dispatch card fallback text chunk to conversation actor; dropping. runId={RunId} correlation={CorrelationId}",
                 State.RunId,
                 chunk.CorrelationId);
+            return;
+        }
+
+        if (!isFinal)
+        {
+            _fallbackInterimEditsForwarded++;
+            _lastFallbackInterimAtUnixMs = nowMs;
         }
     }
 

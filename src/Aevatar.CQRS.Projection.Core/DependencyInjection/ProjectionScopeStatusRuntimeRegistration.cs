@@ -24,6 +24,7 @@ public static class ProjectionScopeStatusRuntimeRegistration
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ProjectionScopeStatusDocument>,
             ProjectionScopeStatusDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionScopeWatermarkQueryPort, ProjectionScopeStatusQueryPort>();
+        services.TryAddSingleton<IProjectionScopeStatusListQueryPort, ProjectionScopeStatusListQueryPort>();
         services.AddCurrentStateProjectionMaterializer<
             ProjectionScopeStatusMaterializationContext,
             ProjectionScopeStatusProjector>();

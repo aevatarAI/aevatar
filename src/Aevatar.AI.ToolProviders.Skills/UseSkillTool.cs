@@ -295,7 +295,6 @@ public sealed class UseSkillTool : IAgentTool
                     scopeId.Trim(),
                     workflow.WorkflowId.Trim(),
                     workflowYamls[0],
-                    WorkflowName: workflow.WorkflowId.Trim(),
                     DisplayName: workflow.WorkflowId.Trim(),
                     InlineWorkflowYamls: BuildInlineWorkflowYamls(workflowYamls)),
                 ct);
@@ -335,9 +334,12 @@ public sealed class UseSkillTool : IAgentTool
         try
         {
             using var doc = JsonDocument.Parse(argumentsJson);
-            if (doc.RootElement.TryGetProperty("skill", out var s))
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                return new UseSkillArguments("", "", null);
+
+            if (doc.RootElement.TryGetProperty("skill", out var s) && s.ValueKind == JsonValueKind.String)
                 skillName = s.GetString() ?? "";
-            if (doc.RootElement.TryGetProperty("args", out var a))
+            if (doc.RootElement.TryGetProperty("args", out var a) && a.ValueKind == JsonValueKind.String)
                 args = a.GetString() ?? "";
             if (doc.RootElement.TryGetProperty("mount_workflows", out var m) &&
                 (m.ValueKind == JsonValueKind.True || m.ValueKind == JsonValueKind.False))
@@ -345,7 +347,10 @@ public sealed class UseSkillTool : IAgentTool
                 mountWorkflows = m.GetBoolean();
             }
         }
-        catch { /* use defaults */ }
+        catch (JsonException)
+        {
+            return new UseSkillArguments("", "", null);
+        }
 
         return new UseSkillArguments(skillName, args, mountWorkflows);
     }
@@ -388,15 +393,12 @@ public sealed class UseSkillTool : IAgentTool
         sb.AppendLine(
             "If these instructions leave you blocked by a missing capability, ambiguous workflow step, unavailable service, unknown API contract, repeated tool failure, or any other unsolved dependency, call `ornn_search_skills` with the concrete blocker/task and then `use_skill` the best matching result before trying generic proxy discovery or path guessing. Continue from the newly loaded skill.");
 
-        // Refactor (iter161/cluster-triage-ornn-skill-workflow-tool-signal #1259-first):
-        //   Old pattern: Runnable workflow YAML attachments were rendered only as generic Associated Files, leaving aevatar_start_workflow handoff implicit.
-        //   New principle: Render an explicit handoff section before generic files, preserving workflow_id and workflow_yamls as single-semantics tool fields.
         if (skill.Workflows.Count > 0)
         {
             sb.AppendLine();
-            sb.AppendLine("## aevatar_start_workflow Handoff");
+            sb.AppendLine("## Workflow Templates");
             sb.AppendLine();
-            sb.AppendLine("Call `aevatar_start_workflow` with `workflow_id` after the workflow is mounted. Use `workflow_yamls` only if the Mounted Workflows section says mounting was unavailable.");
+            sb.AppendLine("These workflow YAMLs are Ornn skill templates/import sources, not runnable scope workflows by themselves. Mount or import them through the Scope Workflow command path before starting a run. Use the inline `workflow_yamls` fallback only when the Mounted Workflows section says mounting was unavailable.");
 
             foreach (var workflow in skill.Workflows)
             {
@@ -502,7 +504,7 @@ public sealed class UseSkillTool : IAgentTool
         var sb = new StringBuilder();
         sb.AppendLine("## Mounted Workflows");
         sb.AppendLine();
-        sb.AppendLine("Workflow mount commands were accepted for dispatch; read models may still be propagating.");
+        sb.AppendLine("Workflow mount/import commands were accepted for dispatch through the Scope Workflow command path; read models may still be propagating before the workflows are page-visible or runnable.");
         sb.AppendLine();
         sb.AppendLine("```json");
         sb.AppendLine(JsonSerializer.Serialize(new { workflows = mounted }, SnakeCaseJson));
@@ -531,6 +533,8 @@ public sealed class UseSkillTool : IAgentTool
     {
         var sb = new StringBuilder();
         sb.AppendLine("## Mounted Workflows");
+        sb.AppendLine();
+        sb.AppendLine("Workflow templates were not mounted. Treat any inline workflow YAMLs above as unmounted templates/import sources, not as page-visible runnable scope workflows.");
         sb.AppendLine();
         sb.AppendLine("```json");
         sb.AppendLine(JsonSerializer.Serialize(new

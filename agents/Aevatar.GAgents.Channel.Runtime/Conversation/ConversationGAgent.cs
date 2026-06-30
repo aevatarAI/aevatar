@@ -450,6 +450,7 @@ public sealed partial class ConversationGAgent :
         !string.IsNullOrWhiteSpace(context.Channel.PlatformMessageId) ||
         !string.IsNullOrWhiteSpace(context.Channel.DeliveryTargetId) ||
         !string.IsNullOrWhiteSpace(context.SenderBinding.BindingId) ||
+        !string.IsNullOrWhiteSpace(context.SenderBinding.NyxUserId) ||
         !string.IsNullOrWhiteSpace(context.Routing.ModelOverride) ||
         !string.IsNullOrWhiteSpace(context.Routing.NyxIdRoutePreference) ||
         context.Routing.MaxToolRoundsOverride.HasValue ||

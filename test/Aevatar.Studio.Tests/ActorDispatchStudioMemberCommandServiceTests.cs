@@ -14,8 +14,8 @@ namespace Aevatar.Studio.Tests;
 ///
 /// - CreateAsync routes through the canonical actor id and seeds the
 ///   immutable publishedServiceId from the member id (rename-safe).
-/// - All three implementation kinds (workflow / script / gagent) build the
-///   typed implementation_ref the actor expects.
+/// - CreateAsync is shell-only; implementation_ref enters through
+///   UpdateImplementationAsync / binding, not through the created event.
 /// - Binding requests route through the run actor with a stable payload hash.
 /// - Dispatch always goes through IStudioActorBootstrap before
 ///   IActorDispatchPort, so actor provisioning happens before the command
@@ -59,6 +59,7 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
         evt.PublishedServiceId.Should().Be("member-m-alpha");
         evt.DisplayName.Should().Be("Alpha");
         evt.Description.Should().Be("first member");
+        evt.ImplementationRef.Should().BeNull();
     }
 
     [Fact]
@@ -81,34 +82,31 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
     }
 
     [Fact]
-    public async Task CreateAsync_ShouldDispatchInitialImplementationRef_WhenProvided()
+    public async Task CreateAsync_ShouldRejectImplementationRefBeforeDispatch()
     {
+        var bootstrap = new RecordingBootstrap();
         var dispatch = new RecordingDispatchPort();
         var service = new ActorDispatchStudioMemberCommandService(
-            new RecordingBootstrap(),
+            bootstrap,
             CreateCommandDispatch(dispatch));
-        var implementationRef = new StudioMemberImplementationRefResponse(
-            ImplementationKind: MemberImplementationKindNames.Workflow,
-            WorkflowId: "wf-alpha",
-            WorkflowRevision: "rev-1");
 
-        var summary = await service.CreateAsync(
+        var act = () => service.CreateAsync(
             ScopeId,
             new CreateStudioMemberRequest(
                 DisplayName: "Alpha",
                 ImplementationKind: MemberImplementationKindNames.Workflow,
                 MemberId: "m-alpha",
-                ImplementationRef: implementationRef),
+                ImplementationRef: new StudioMemberImplementationRefResponse(
+                    ImplementationKind: MemberImplementationKindNames.Workflow,
+                    WorkflowId: "wf-alpha",
+                    WorkflowRevision: "rev-1")),
             CancellationToken.None);
 
-        summary.LifecycleStage.Should().Be(MemberLifecycleStageNames.BuildReady);
-        summary.ImplementationRef.Should().Be(implementationRef);
-
-        var evt = dispatch.Dispatches.Should().ContainSingle().Subject
-            .Envelope.Payload.Unpack<StudioMemberCreatedEvent>();
-        evt.ImplementationRef.Should().NotBeNull();
-        evt.ImplementationRef.Workflow.WorkflowId.Should().Be("wf-alpha");
-        evt.ImplementationRef.Workflow.WorkflowRevision.Should().Be("rev-1");
+        var thrown = await act.Should().ThrowAsync<StudioMemberCreateImplementationRefNotAllowedException>();
+        thrown.Which.ScopeId.Should().Be(ScopeId);
+        thrown.Which.Field.Should().Be("implementationRef");
+        bootstrap.EnsuredActorIds.Should().BeEmpty();
+        dispatch.Dispatches.Should().BeEmpty();
     }
 
     // Note: input validation (length caps, slug pattern, empty display

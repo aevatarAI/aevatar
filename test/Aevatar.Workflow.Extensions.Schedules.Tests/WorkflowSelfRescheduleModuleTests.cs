@@ -64,6 +64,29 @@ public sealed class WorkflowSelfRescheduleModuleTests
             .Which.Event.Unpack<StepCompletedEvent>().Success.Should().BeTrue();
     }
 
+    [Fact]
+    public async Task HandleAsync_WithEnabledFalse_ShouldDisableExistingDeterministicSchedule()
+    {
+        var port = new RecordingWorkflowScheduleCommandPort();
+        var module = new WorkflowSelfRescheduleModule(port);
+        var context = new RecordingWorkflowContext();
+        var request = CreateRequest();
+        request.Parameters["schedule_id"] = "firecrawl:job-1";
+        request.Parameters["workflow_name"] = "firecrawl_agent_async_poll";
+        request.Parameters["prompt"] = """{"job_id":"job-1","schedule_id":"firecrawl:job-1"}""";
+        request.Parameters["enabled"] = "false";
+
+        await module.HandleAsync(CreateEnvelope(request), context, CancellationToken.None);
+
+        var configuration = port.Configurations.Should().ContainSingle().Which;
+        configuration.ScheduleId.Should().Be("firecrawl:job-1");
+        configuration.WorkflowName.Should().Be("firecrawl_agent_async_poll");
+        configuration.Prompt.Should().Contain("\"job_id\":\"job-1\"");
+        configuration.Enabled.Should().BeFalse();
+        context.Published.Should().ContainSingle()
+            .Which.Event.Unpack<StepCompletedEvent>().Success.Should().BeTrue();
+    }
+
     [Theory]
     [InlineData("schedule_id", "schedule_id is required.")]
     [InlineData("cron_expression", "cron_expression is required.")]

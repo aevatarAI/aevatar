@@ -127,8 +127,8 @@ internal sealed class StartWorkflowTool : IAevatarInvocationTool
     public string Name => "aevatar_start_workflow";
 
     public string Description =>
-        "Start an Aevatar workflow by workflow_id with typed inputs. " +
-        "When use_skill returns inline workflow_yamls, pass that bundle in workflow_yamls instead of treating the YAMLs as ordinary text. " +
+        "Start a mounted/imported Aevatar Scope Workflow by workflow_id with typed inputs. " +
+        "Use inline workflow_yamls only as an explicit fallback when Scope Workflow mounting/import is unavailable; Ornn workflow YAMLs from use_skill are templates/import sources, not page-visible runnable workflow authority by themselves. " +
         "Use wait=stream for channel conversations so terminal completion can be delivered asynchronously to the same reply target.";
 
     public string ParametersSchema => AevatarInvocationToolSchemas.StartWorkflow;

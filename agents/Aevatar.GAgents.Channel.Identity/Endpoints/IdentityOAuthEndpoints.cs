@@ -243,10 +243,15 @@ public static class IdentityOAuthEndpoints
         {
             var snapshot = await provider.GetAsync(ct).ConfigureAwait(false);
             var resolvedRedirectUri = NyxIdRedirectUriResolver.Resolve();
+            var resolvedRedirectUris = NyxIdRedirectUriResolver.ResolveRegisteredRedirectUris();
+            var registeredRedirectUris = NyxIdRedirectUriResolver.NormalizeRedirectUris(snapshot.RedirectUris ?? []);
             var redirectUriDrifted = string.IsNullOrEmpty(snapshot.RedirectUri)
                 || !string.Equals(snapshot.RedirectUri, resolvedRedirectUri, StringComparison.Ordinal);
+            var redirectUriListDrifted = registeredRedirectUris.Count == 0
+                || registeredRedirectUris.Count != resolvedRedirectUris.Count
+                || !registeredRedirectUris.SequenceEqual(resolvedRedirectUris, StringComparer.Ordinal);
             var oauthScopeDrifted = !AevatarOAuthClientScopes.ContainsRequiredScopes(snapshot.OauthScope);
-            var status = redirectUriDrifted
+            var status = redirectUriDrifted || redirectUriListDrifted
                 ? "redirect_uri_drifted"
                 : oauthScopeDrifted ? "oauth_scope_drifted"
                 : snapshot.BrokerCapabilityObserved ? "ready" : "broker_capability_pending";
@@ -259,6 +264,9 @@ public static class IdentityOAuthEndpoints
                 redirect_uri_registered = snapshot.RedirectUri,
                 redirect_uri_resolved = resolvedRedirectUri,
                 redirect_uri_drifted = redirectUriDrifted,
+                redirect_uris_registered = registeredRedirectUris,
+                redirect_uris_resolved = resolvedRedirectUris,
+                redirect_uris_drifted = redirectUriListDrifted,
                 oauth_scope_registered = snapshot.OauthScope,
                 oauth_scope_required = AevatarOAuthClientScopes.AuthorizationScope,
                 oauth_scope_drifted = oauthScopeDrifted,
@@ -363,6 +371,7 @@ public static class IdentityOAuthEndpoints
 
         var authority = NyxIdAuthorityResolver.Resolve(logger);
         var redirectUri = NyxIdRedirectUriResolver.Resolve(logger);
+        var redirectUris = NyxIdRedirectUriResolver.ResolveRegisteredRedirectUris(logger);
         var oauthScope = AevatarOAuthClientScopes.AuthorizationScope;
 
         // Validate Unix-seconds before dispatching: AevatarOAuthClient
@@ -396,15 +405,17 @@ public static class IdentityOAuthEndpoints
         CommandDispatchResult<ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> accepted;
         try
         {
+            var command = new ProvisionAevatarOAuthClientCommand
+            {
+                ClientId = body.client_id!.Trim(),
+                ClientIdIssuedAtUnix = issuedAtUnix,
+                NyxidAuthority = authority,
+                OauthScope = oauthScope,
+                RedirectUri = redirectUri,
+            };
+            command.RedirectUris.AddRange(redirectUris);
             accepted = await rebuildDispatch
-                .DispatchAsync(new ProvisionAevatarOAuthClientCommand
-                {
-                    ClientId = body.client_id!.Trim(),
-                    ClientIdIssuedAtUnix = issuedAtUnix,
-                    NyxidAuthority = authority,
-                    OauthScope = oauthScope,
-                    RedirectUri = redirectUri,
-                }, ct)
+                .DispatchAsync(command, ct)
                 .ConfigureAwait(false);
         }
         catch (Exception ex)

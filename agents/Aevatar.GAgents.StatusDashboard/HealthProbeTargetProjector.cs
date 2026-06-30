@@ -57,6 +57,7 @@ public sealed class HealthProbeTargetProjector
             Slug = state.Spec.Slug,
             DisplayName = state.Spec.DisplayName ?? string.Empty,
             Category = state.Spec.Category ?? string.Empty,
+            Severity = state.Spec.Severity ?? string.Empty,
             ProbeKind = state.Spec.ProbeKind ?? string.Empty,
             IntervalSeconds = state.Spec.IntervalSeconds,
             Enabled = state.Spec.Enabled,

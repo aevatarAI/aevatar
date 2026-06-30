@@ -104,6 +104,60 @@ public sealed class SubWorkflowOrchestratorTests
     }
 
     [Fact]
+    public async Task HandleInvokeRequestedAsync_WhenInvocationIdEqualsParentRunId_ShouldFailClosed()
+    {
+        // R1a (06-20-observatory-run-state-feed): a child sub-workflow run id is its invocation id and
+        // must never equal the parent run id, otherwise a relayed child terminal could be adopted by the
+        // projection-root as its own terminal (R1) and clobber the parent's current-state doc.
+        var harness = CreateHarness();
+
+        await harness.Orchestrator.HandleInvokeRequestedAsync(
+            new SubWorkflowInvokeRequestedEvent
+            {
+                InvocationId = "parent-run",
+                ParentRunId = "parent-run",
+                ParentStepId = "step-a",
+                WorkflowName = "sub_flow",
+            },
+            new WorkflowRunState(),
+            CancellationToken.None);
+
+        var failure = harness.Published.Should().ContainSingle().Subject
+            .Message.Should().BeOfType<StepCompletedEvent>().Subject;
+        failure.RunId.Should().Be("parent-run");
+        failure.StepId.Should().Be("step-a");
+        failure.Success.Should().BeFalse();
+        failure.Error.Should().Contain("must differ from the parent run id");
+        harness.Runtime.CreateRequests.Should().BeEmpty();
+        harness.Persisted.Should().BeEmpty();
+        harness.Sent.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleInvokeRequestedAsync_WhenInvocationIdMatchesParentAfterTrim_ShouldFailClosed()
+    {
+        // The collision check normalizes both sides, so whitespace-padded collisions also fail closed.
+        var harness = CreateHarness();
+
+        await harness.Orchestrator.HandleInvokeRequestedAsync(
+            new SubWorkflowInvokeRequestedEvent
+            {
+                InvocationId = "  parent-run  ",
+                ParentRunId = "parent-run",
+                ParentStepId = "step-a",
+                WorkflowName = "sub_flow",
+            },
+            new WorkflowRunState(),
+            CancellationToken.None);
+
+        harness.Published.Should().ContainSingle().Subject
+            .Message.Should().BeOfType<StepCompletedEvent>().Which.Error
+            .Should().Contain("must differ from the parent run id");
+        harness.Runtime.CreateRequests.Should().BeEmpty();
+        harness.Persisted.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task HandleInvokeRequestedAsync_WhenDefinitionActorMustBeResolved_ShouldRegisterResolutionAndScheduleTimeout()
     {
         var harness = CreateHarness();

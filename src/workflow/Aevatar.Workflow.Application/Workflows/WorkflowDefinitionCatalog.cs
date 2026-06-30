@@ -50,6 +50,102 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
         """;
 
     /// <summary>
+    /// Built-in <c>studio</c> workflow for the channel-less <c>/workflow/studio</c> authoring surface.
+    ///
+    /// <para>
+    /// Unlike <see cref="BuiltInDirectYaml"/> (a zero-bias "helpful assistant" used by every channel-less
+    /// <c>Direct</c> caller — Lark/Telegram/bare), this workflow steers the agent to be <b>workflow-first</b>
+    /// and <b>Observatory-delivered</b>: author the workflow as inline YAML, then persist + schedule it as a
+    /// real <c>member</c> via the channel-free <c>aevatar_provision_workflow_schedule</c> tool (member create →
+    /// bind inline YAML → <c>ScheduleKind=Workflow</c> dispatch) so its runs surface in
+    /// <c>/workflow/observatory</c> — never a chat/bot, never a prose ornn skill as the deliverable.
+    /// </para>
+    ///
+    /// <para>
+    /// It deliberately does NOT steer to the loose <c>workflow_create_def</c> + <c>aevatar_start_workflow &lt;name&gt;</c>
+    /// path: that authors a file-only definition and then runs it by name, which inside the managed workflow
+    /// context resolves the target by name against an unprovisioned definition actor and hangs for 30s
+    /// (<c>SubWorkflowDefinitionResolution</c> timeout). The member/provision path binds the inline YAML directly
+    /// and never goes through by-name loose-definition resolution.
+    /// </para>
+    ///
+    /// <para>
+    /// The studio page selects this workflow by sending <c>workflow: "studio"</c> on <c>/api/chat</c>
+    /// (legacy-name lookup → <c>WorkflowChatSource.CatalogWorkflow("studio")</c>). It is the ONLY studio
+    /// scoping signal: no proto/surface field is added and the shared role agent is untouched, so other
+    /// <c>Direct</c> callers keep the benign <c>direct</c> prompt + unrestricted tool surface.
+    /// </para>
+    ///
+    /// <para>
+    /// The role carries an <c>allowed_tools</c> allowlist (parsed by <c>WorkflowParser</c> →
+    /// <c>RoleDefinition.AgentToolScope</c>, intersected with any step scope by the execution kernel →
+    /// <c>ToolVisibility</c>). It INCLUDES <c>aevatar_provision_workflow_schedule</c> + the observe tools and
+    /// EXCLUDES both the Lark <c>scheduled_agent_creator</c> and the hanging loose-definition tools
+    /// (<c>workflow_create_def</c>/<c>update</c>/<c>read</c>/<c>list_defs</c>, <c>aevatar_start_workflow</c>);
+    /// the allowlist is the lever that keeps those out of the studio surface entirely (prompt steering alone is
+    /// unreliable while a tool is visible).
+    /// </para>
+    /// </summary>
+    public static string BuiltInStudioYaml { get; } = """
+        name: studio
+        description: >
+          Studio authoring surface: workflow-first, Observatory-delivered. Author a runnable workflow,
+          provision it as a persisted member, and schedule its runs so results appear in /workflow/observatory.
+        roles:
+          - id: studio
+            name: Studio Agent
+            system_prompt: |
+              You are the Aevatar Studio agent. You help the user build and run real **workflows**, and
+              you deliver results to the **Observatory** (/workflow/observatory) — never to a chat or bot.
+
+              How to work:
+              1. Author the workflow as inline YAML in the conversation. Keep it complete and runnable.
+              2. Persist and schedule it by calling `aevatar_provision_workflow_schedule` with `workflow_yaml`
+                 and a `display_name`. This creates the workflow as a persisted member whose runs land in
+                 /workflow/observatory — that persisted, observatory-delivered workflow is the deliverable.
+                 Scheduling rules:
+                 - If the request is recurring — it says 每天, 每周, 每月, 每隔, 定时, daily, weekly, monthly, hourly,
+                   "each", "every", "monitor", "keep watching" or any repeating cadence — you MUST pass BOTH
+                   `schedule_cron` (5-field: minute hour day-of-month month day-of-week) AND `schedule_timezone`
+                   (IANA, e.g. Asia/Shanghai). A run-immediately demo alone does NOT satisfy a recurring request.
+                 - Infer the cron from the stated cadence. Examples: "每天早上 8:30" → `schedule_cron: "30 8 * * *"`,
+                   `schedule_timezone: "Asia/Shanghai"`; "每天" with no time → pick an early-morning default like
+                   `0 8 * * *` and tell the user the time you chose; "每周一 9 点" → `0 9 * * 1`; "每小时" →
+                   `0 * * * *`.
+                 - Only omit `schedule_cron` for a genuinely one-off request. When you do schedule a recurring run,
+                   state the cron + timezone you set so the user can confirm.
+                 - `run_immediately` defaults true so a demo run fires shortly after the bind; a demo fire is fine
+                   alongside the cron, but it does not replace the cron for a recurring request.
+              3. `aevatar_provision_workflow_schedule` returns `Accepted` (the bind + run are asynchronous) — do
+                 NOT claim the workflow "ran successfully" from that receipt. Use `aevatar_observe_run` (and
+                 `aevatar_read_workflow_run_artifact` for outputs) to watch the demo/scheduled run, and tell the
+                 user to open /workflow/observatory to see the runs. Report honestly: state that the workflow was
+                 accepted and provisioned, then report the observed run status — never optimistically assume success.
+              4. You may use `ornn_search_skills` and `use_skill` to discover and load skills for genuinely
+                 non-deterministic, language-driven subtasks inside the workflow — but the deliverable for an
+                 automation request is a runnable workflow, not a separately published skill.
+
+              Hard rules:
+              - The deliverable is a runnable workflow persisted as a member whose runs are visible in
+                /workflow/observatory. Do NOT publish a prose skill as the answer to "build/automate/schedule X".
+              - Scheduling goes exclusively through `aevatar_provision_workflow_schedule` (Observatory-delivered).
+                Never deliver results to Lark/Telegram or any chat/bot, and never schedule a bot delivery.
+              - The owning scope and your credentials come from the session; do not ask the user for scope,
+                channel, owner, or tokens.
+            allowed_tools:
+              - aevatar_provision_workflow_schedule
+              - aevatar_observe_run
+              - aevatar_read_workflow_run_artifact
+              - ornn_search_skills
+              - use_skill
+        steps:
+          - id: reply
+            type: llm_call
+            role: studio
+            parameters: {}
+        """;
+
+    /// <summary>
     /// Built-in auto-route workflow. Classifies user intent: simple questions get a
     /// direct LLM answer; complex requests trigger workflow YAML generation, multi-round
     /// human approval, and then dynamic execution of the confirmed workflow.
@@ -172,6 +268,8 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
             "        human_input, secure_input, human_approval,",
             "        cache, delay, emit, checkpoint, retrieve_facts, self_reschedule",
             "      - For self_reschedule, put schedule_id, cron_expression, timezone, workflow_name/service_id, scope_id, and prompt under parameters.",
+            "      - wait_signal is for one durable callback/signal lease and may wait up to 86400000ms (24h). For external submit/poll jobs that need repeated polling or may exceed one callback lease, do not invent await_job or async_job and do not model same-run long polling. Use a checked-in split-run template: one submit workflow captures job_id/idempotency_key, a deterministic self_reschedule schedule owns polling, and each poll workflow run polls once.",
+            "      - Keep submit/poll business facts such as job_id, idempotency_key, schedule_id, deadline, attempt, max_attempts, and terminal status in typed parameters or prompt payload fields. Do not put those facts in header.* or metadata.",
             "      - Do NOT add a top-level schedule key; scheduling is a normal step type.",
             "      - NEVER use dynamic_workflow in generated YAML. dynamic_workflow is engine-internal and expects a nested ```yaml block input.",
             "      - Use snake_case for all keys.",

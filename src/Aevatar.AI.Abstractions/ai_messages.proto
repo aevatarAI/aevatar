@@ -148,6 +148,13 @@ message AgentToolChannelContextPayload {
 
 message AgentToolSenderBindingContextPayload {
   string binding_id = 1;
+  string nyx_user_id = 2;
+  // External-subject tenant for the bound sender (e.g. Lark open_tenant_id).
+  // Identity fact (not a credential), so it survives the transient-credential
+  // strip and crosses the deferred-run boundary. Lets the deferred reply run
+  // rebuild the exact ExternalSubjectRef and re-mint a sender token by
+  // binding id without re-deriving tenant from registration scope.
+  string sender_tenant = 3;
 }
 
 message LLMRequestRoutingContextPayload {

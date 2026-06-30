@@ -9,6 +9,7 @@
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <ProjectReference Include="..\Aevatar.Authentication.Abstractions\Aevatar.Authentication.Abstractions.csproj" />
+    <ProjectReference Include="..\Aevatar.Authentication.ScopeServiceTokens\Aevatar.Authentication.ScopeServiceTokens.csproj" />
   </ItemGroup>
 
   <ItemGroup>

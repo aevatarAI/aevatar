@@ -82,6 +82,12 @@ public sealed class LarkConnectedServiceResourceFetchAdapterRegistrationTests
         public Task<string> SetDrivePermissionAsync(string token, LarkDrivePermissionRequest request, CancellationToken ct) =>
             throw new NotSupportedException();
 
+        public Task<string> CreateBitableAppAsync(string token, LarkBitableCreateRequest request, CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<string> GrantResourceMemberAsync(string token, LarkResourceMemberGrantRequest request, CancellationToken ct) =>
+            throw new NotSupportedException();
+
         public Task<string> UploadDriveMediaAsync(string token, LarkDriveMediaUploadRequest request, CancellationToken ct) =>
             throw new NotSupportedException();
 

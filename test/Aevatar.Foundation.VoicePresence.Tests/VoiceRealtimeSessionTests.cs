@@ -32,6 +32,207 @@ public class VoiceRealtimeSessionTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_should_self_heal_missing_capability_then_acquire()
+    {
+        // Auto-provisioned default agent: the capability event is committed to the grain, but the
+        // read-model row starts "missing" (projection lag). The session must self-heal via the recovery
+        // port, re-read, and acquire — not 404 — so attach works without a manual voice-presence/enable.
+        var healed = CreateCapability(
+            "agent-1",
+            "voice_presence_openai",
+            initialized: true,
+            remoteAudioSupport: VoiceRemoteAudioSupport.Supported);
+        var queryPort = new HealableCapabilityQueryPort();
+        var recovery = new RecordingCapabilityRecoveryPort(
+            result: true, onHeal: () => queryPort.Heal(healed));
+        var leasePort = new RecordingLeasePort();
+        var session = CreateSession(queryPort, leasePort, capabilityRecoveryPort: recovery);
+
+        var result = await session.ExecuteAsync(
+            new VoiceRealtimeSessionRequest("agent-1", "voice_presence_openai"),
+            static (_, _) => ValueTask.CompletedTask);
+
+        recovery.ActorIds.ShouldHaveSingleItem().ShouldBe("agent-1"); // self-heal fired once for the actor
+        queryPort.Lookups.ShouldBeGreaterThanOrEqualTo(2);            // initial null + re-read after heal
+        result.Succeeded.ShouldBeTrue();
+        result.Error.ShouldBe(VoiceRealtimeSessionStartError.None);
+        leasePort.AcquireRequests.ShouldHaveSingleItem().ActorId.ShouldBe("agent-1");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_should_still_return_not_found_when_recovery_cannot_rematerialize()
+    {
+        // Genuinely-unprovisioned actor: re-materialize finds no committed events, the row stays null, so
+        // the existing NotFound (→ 404) fires unchanged. Proves the self-heal does not mask a real
+        // no-capability condition.
+        var queryPort = new HealableCapabilityQueryPort();
+        var recovery = new RecordingCapabilityRecoveryPort(result: false);
+        var session = CreateSession(queryPort, capabilityRecoveryPort: recovery);
+
+        var result = await session.ExecuteAsync(
+            new VoiceRealtimeSessionRequest("agent-1", "voice_presence_openai"),
+            static (_, _) => ValueTask.CompletedTask);
+
+        recovery.ActorIds.ShouldHaveSingleItem(); // attempted self-heal once...
+        result.Succeeded.ShouldBeFalse();
+        result.Error.ShouldBe(VoiceRealtimeSessionStartError.NotFound); // ...still fails closed
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_should_auto_enable_never_enabled_default_agent_then_acquire()
+    {
+        // Zero-config first connect: the default voice agent was NEVER enabled, so the capability row is
+        // genuinely missing and the re-projection self-heal finds nothing to re-materialize (recovery →
+        // false). The session must AUTO-PROVISION it — commit an enable via the auto-enable port — then
+        // re-read and acquire, so /ws/voice "just works" on first connect without a manual
+        // voice-presence/enable. This is the requirement the projection self-heal alone cannot satisfy.
+        var enabled = CreateCapability(
+            "nyxid-chat-caller-1",
+            "voice_presence_openai",
+            initialized: true,
+            remoteAudioSupport: VoiceRemoteAudioSupport.Supported);
+        var queryPort = new HealableCapabilityQueryPort();
+        var recovery = new RecordingCapabilityRecoveryPort(result: false); // nothing committed to re-project
+        var autoEnable = new RecordingCapabilityAutoEnablePort(
+            result: true, onEnable: () => queryPort.Heal(enabled));
+        var leasePort = new RecordingLeasePort();
+        var session = CreateSession(
+            queryPort,
+            leasePort,
+            capabilityRecoveryPort: recovery,
+            capabilityAutoEnablePort: autoEnable);
+
+        var result = await session.ExecuteAsync(
+            new VoiceRealtimeSessionRequest("nyxid-chat-caller-1", "voice_presence_openai"),
+            static (_, _) => ValueTask.CompletedTask);
+
+        recovery.ActorIds.ShouldHaveSingleItem(); // re-projection self-heal tried first...
+        var enable = autoEnable.Enables.ShouldHaveSingleItem(); // ...then auto-enable provisioned the agent
+        enable.ActorId.ShouldBe("nyxid-chat-caller-1");
+        enable.ModuleName.ShouldBe("voice_presence_openai");
+        result.Succeeded.ShouldBeTrue();
+        result.Error.ShouldBe(VoiceRealtimeSessionStartError.None);
+        leasePort.AcquireRequests.ShouldHaveSingleItem().ActorId.ShouldBe("nyxid-chat-caller-1");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_should_return_capability_not_ready_when_auto_enable_commits_but_does_not_materialize()
+    {
+        // Auto-enable committed the enable, but the capability read model has not caught up within the
+        // bounded re-read window (enable is read-model-asynchronous). That is a retryable materialization
+        // lag, not a genuinely missing capability — surface the typed retryable 503 (CapabilityNotReady) so
+        // the client re-attaches, NOT a permanent 404.
+        var queryPort = new HealableCapabilityQueryPort(); // stays null even after the enable
+        var recovery = new RecordingCapabilityRecoveryPort(result: false);
+        var autoEnable = new RecordingCapabilityAutoEnablePort(result: true);
+        var leasePort = new RecordingLeasePort();
+        var session = CreateSession(
+            queryPort,
+            leasePort,
+            capabilityRecoveryPort: recovery,
+            capabilityAutoEnablePort: autoEnable);
+
+        var result = await session.ExecuteAsync(
+            new VoiceRealtimeSessionRequest("nyxid-chat-caller-1", "voice_presence_openai"),
+            static (_, _) => ValueTask.CompletedTask);
+
+        autoEnable.Enables.ShouldHaveSingleItem();
+        result.Succeeded.ShouldBeFalse();
+        result.Error.ShouldBe(VoiceRealtimeSessionStartError.CapabilityNotReady);
+        leasePort.AcquireRequests.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_should_still_return_not_found_when_auto_enable_cannot_provision()
+    {
+        // The actor genuinely cannot be provisioned (unknown/non-existent actor → auto-enable no-ops and
+        // returns false). The existing NotFound (→ 404) must still fire; auto-enable must not mask a real
+        // no-actor condition.
+        var queryPort = new HealableCapabilityQueryPort();
+        var recovery = new RecordingCapabilityRecoveryPort(result: false);
+        var autoEnable = new RecordingCapabilityAutoEnablePort(result: false);
+        var session = CreateSession(
+            queryPort,
+            capabilityRecoveryPort: recovery,
+            capabilityAutoEnablePort: autoEnable);
+
+        var result = await session.ExecuteAsync(
+            new VoiceRealtimeSessionRequest("nyxid-chat-caller-1", "voice_presence_openai"),
+            static (_, _) => ValueTask.CompletedTask);
+
+        autoEnable.Enables.ShouldHaveSingleItem(); // attempted to provision once...
+        result.Succeeded.ShouldBeFalse();
+        result.Error.ShouldBe(VoiceRealtimeSessionStartError.NotFound); // ...still fails closed
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_should_not_invoke_auto_enable_when_capability_is_fresh()
+    {
+        // Happy path: a fresh projection returns a snapshot on the first read, so neither the recovery port
+        // nor the auto-enable port is touched — zero added latency / no spurious enable on the common case.
+        var capability = CreateCapability(
+            "nyxid-chat-caller-1",
+            "voice_presence_openai",
+            initialized: true,
+            remoteAudioSupport: VoiceRemoteAudioSupport.Supported);
+        var autoEnable = new RecordingCapabilityAutoEnablePort(result: true);
+        var session = CreateSession(
+            new FakeCapabilityQueryPort(capability),
+            capabilityAutoEnablePort: autoEnable);
+
+        var result = await session.ExecuteAsync(
+            new VoiceRealtimeSessionRequest("nyxid-chat-caller-1", "voice_presence_openai"),
+            static (_, _) => ValueTask.CompletedTask);
+
+        autoEnable.Enables.ShouldBeEmpty(); // never invoked on the fresh path
+        result.Succeeded.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_should_not_invoke_recovery_when_capability_is_fresh()
+    {
+        // Happy path: a fresh projection returns a snapshot on the first read, so the recovery port is
+        // never touched — zero added latency / behavior on the common case.
+        var capability = CreateCapability(
+            "agent-1",
+            "voice_presence_openai",
+            initialized: true,
+            remoteAudioSupport: VoiceRemoteAudioSupport.Supported);
+        var recovery = new RecordingCapabilityRecoveryPort(result: true);
+        var session = CreateSession(new FakeCapabilityQueryPort(capability), capabilityRecoveryPort: recovery);
+
+        var result = await session.ExecuteAsync(
+            new VoiceRealtimeSessionRequest("agent-1", "voice_presence_openai"),
+            static (_, _) => ValueTask.CompletedTask);
+
+        recovery.ActorIds.ShouldBeEmpty(); // recovery never invoked on the fresh path
+        result.Succeeded.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_should_return_capability_not_ready_when_lease_observation_times_out()
+    {
+        // The grain accepted the lease, but its capability read-model projection never reflected the
+        // committed lease within the observation budget, so AcquireAsync throws TimeoutException. The
+        // session must surface a typed, retryable CapabilityNotReady (→ 503 voice_capability_not_ready)
+        // instead of letting the timeout bubble out of the ingress as an opaque empty-body 500.
+        var capability = CreateCapability(
+            "agent-1",
+            "voice_presence_openai",
+            initialized: true,
+            remoteAudioSupport: VoiceRemoteAudioSupport.Supported);
+        var leasePort = new TimeoutLeasePort();
+        var session = CreateSession(new FakeCapabilityQueryPort(capability), leasePort);
+
+        var result = await session.ExecuteAsync(
+            new VoiceRealtimeSessionRequest("agent-1", "voice_presence_openai"),
+            static (_, _) => ValueTask.CompletedTask);
+
+        result.Succeeded.ShouldBeFalse();
+        result.Error.ShouldBe(VoiceRealtimeSessionStartError.CapabilityNotReady);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_should_accept_supported_capability_and_acquire_typed_lease()
     {
         var capability = CreateCapability(
@@ -67,6 +268,7 @@ public class VoiceRealtimeSessionTests
         result.Receipt.PcmSampleRateHz.ShouldBe(16000);
         result.Receipt.ObservedStateVersion.ShouldBe(5);
         result.Receipt.LeaseHandle.LeaseEpoch.ShouldBe(7);
+        result.Receipt.AttachOutcome.ShouldBe(VoiceRealtimeAttachOutcome.NewSession);
         acceptedCallbacks.ShouldHaveSingleItem().SessionId.ShouldBe(result.Receipt.SessionId);
         var acquireRequest = leasePort.AcquireRequests.ShouldHaveSingleItem();
         acquireRequest.ModuleName.ShouldBe("voice_presence_openai");
@@ -198,6 +400,8 @@ public class VoiceRealtimeSessionTests
         result.Succeeded.ShouldBeTrue();
         mediaPort.DetachedHandles.ShouldHaveSingleItem().SessionId.ShouldBe("old-session");
         leasePort.AcquireRequests.ShouldHaveSingleItem();
+        result.Receipt.ShouldNotBeNull();
+        result.Receipt.AttachOutcome.ShouldBe(VoiceRealtimeAttachOutcome.Restarted);
     }
 
     [Fact]
@@ -260,6 +464,8 @@ public class VoiceRealtimeSessionTests
         attachResult.Succeeded.ShouldBeTrue();
         mediaPort.DetachedHandles.ShouldHaveSingleItem().SessionId.ShouldBe("session-1");
         leasePort.AcquireRequests.ShouldHaveSingleItem();
+        attachResult.Receipt.ShouldNotBeNull();
+        attachResult.Receipt.AttachOutcome.ShouldBe(VoiceRealtimeAttachOutcome.Restarted);
         detachResult.Succeeded.ShouldBeTrue();
         detachResult.Receipt.ShouldNotBeNull();
         detachResult.Receipt.SessionId.ShouldBe("session-1");
@@ -1061,11 +1267,15 @@ public class VoiceRealtimeSessionTests
     private static ActorOwnedVoiceRealtimeSession CreateSession(
         IVoicePresenceCapabilityQueryPort queryPort,
         IVoicePresenceSessionLeasePort? leasePort = null,
-        IVoiceVolatileMediaStreamPort? mediaPort = null) =>
+        IVoiceVolatileMediaStreamPort? mediaPort = null,
+        IVoicePresenceCapabilityProjectionRecoveryPort? capabilityRecoveryPort = null,
+        IVoicePresenceCapabilityAutoEnablePort? capabilityAutoEnablePort = null) =>
         new(
             queryPort,
             leasePort ?? new RecordingLeasePort(),
-            mediaPort ?? new RecordingMediaStreamPort(supportsRemoteAudio: true));
+            mediaPort ?? new RecordingMediaStreamPort(supportsRemoteAudio: true),
+            capabilityRecoveryPort,
+            capabilityAutoEnablePort);
 
     private static VoicePresenceSessionLeaseHandle CreateLeaseHandle(
         DateTimeOffset? expiresAt = null,
@@ -1164,6 +1374,84 @@ public class VoiceRealtimeSessionTests
                 string.Equals(snapshot.ActorId, actorId, StringComparison.Ordinal) &&
                 string.Equals(snapshot.ModuleName, resolvedModuleName, StringComparison.OrdinalIgnoreCase)));
         }
+    }
+
+    // A capability query port whose read-model row is "missing" (returns null) until a recovery
+    // re-materializes it via Heal(...), modelling idle-grain / projection-lag staleness.
+    private sealed class HealableCapabilityQueryPort : IVoicePresenceCapabilityQueryPort
+    {
+        private VoicePresenceCapabilitySnapshot? _snapshot;
+
+        public int Lookups { get; private set; }
+
+        public void Heal(VoicePresenceCapabilitySnapshot snapshot) => _snapshot = snapshot;
+
+        public Task<VoicePresenceCapabilitySnapshot?> GetAsync(
+            string actorId,
+            string? moduleName,
+            CancellationToken ct = default)
+        {
+            _ = (actorId, moduleName, ct);
+            Lookups++;
+            return Task.FromResult(_snapshot);
+        }
+    }
+
+    // Recovery port double. result controls TryRematerializeAsync's return; onHeal lets a test simulate
+    // the projection row re-materializing (so a subsequent lookup succeeds).
+    private sealed class RecordingCapabilityRecoveryPort(bool result = false, Action? onHeal = null)
+        : IVoicePresenceCapabilityProjectionRecoveryPort
+    {
+        public List<string> ActorIds { get; } = [];
+
+        public Task<bool> TryRematerializeAsync(string actorId, CancellationToken ct = default)
+        {
+            _ = ct;
+            ActorIds.Add(actorId);
+            onHeal?.Invoke();
+            return Task.FromResult(result);
+        }
+    }
+
+    // Auto-enable port double for the zero-config provisioning path. result controls
+    // TryAutoEnableAsync's return; onEnable lets a test simulate the enable materializing the capability
+    // (so a subsequent lookup succeeds), and records the (actorId, moduleName) it was asked to enable.
+    private sealed class RecordingCapabilityAutoEnablePort(bool result = false, Action? onEnable = null)
+        : IVoicePresenceCapabilityAutoEnablePort
+    {
+        public List<(string ActorId, string? ModuleName)> Enables { get; } = [];
+
+        public Task<bool> TryAutoEnableAsync(string actorId, string? moduleName, CancellationToken ct = default)
+        {
+            _ = ct;
+            Enables.Add((actorId, moduleName));
+            onEnable?.Invoke();
+            return Task.FromResult(result);
+        }
+    }
+
+    // A lease port that models the lease-observation timeout: the grain accepted the lease, but the
+    // capability projection never reflected it within the budget, so AcquireAsync surfaces TimeoutException.
+    private sealed class TimeoutLeasePort : IVoicePresenceSessionLeasePort
+    {
+        public Task<VoicePresenceSessionLeaseHandle> AcquireAsync(
+            VoicePresenceSessionLeaseRequest request,
+            CancellationToken ct = default)
+        {
+            _ = (request, ct);
+            throw new TimeoutException("Voice presence session lease was not observed.");
+        }
+
+        public Task ReleaseAsync(
+            VoicePresenceSessionLeaseHandle handle,
+            string reason,
+            CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task CompleteTransportLifetimeAsync(
+            VoicePresenceSessionLeaseHandle handle,
+            string transportLeaseId,
+            string reason,
+            CancellationToken ct = default) => Task.CompletedTask;
     }
 
     private sealed class RecordingLeaseObservationPort : IVoicePresenceLeaseObservationPort

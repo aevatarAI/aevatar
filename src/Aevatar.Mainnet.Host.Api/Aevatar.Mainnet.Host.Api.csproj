@@ -45,7 +45,13 @@
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.NyxId\Aevatar.AI.ToolProviders.NyxId.csproj" />
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.ChronoStorage\Aevatar.AI.ToolProviders.ChronoStorage.csproj" />
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.AevatarInvocation\Aevatar.AI.ToolProviders.AevatarInvocation.csproj" />
+    <ProjectReference Include="..\Aevatar.AI.ToolProviders.StudioProvisioning\Aevatar.AI.ToolProviders.StudioProvisioning.csproj" />
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.ToolSetRegistry\Aevatar.AI.ToolProviders.ToolSetRegistry.csproj" />
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.Web\Aevatar.AI.ToolProviders.Web.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Fused backend admin console served at /admin (BackendConsole/AdminConsoleEndpoints.cs).
+         Kept as a real .html asset embedded in the assembly rather than a C# raw-string. -->
+    <EmbeddedResource Include="BackendConsole\admin.html" />
   </ItemGroup>
 </Project>

@@ -80,7 +80,8 @@ public sealed class ScopeServiceCatalogEndpointTests : ScopeServiceEndpointTestK
                 DateTimeOffset.UtcNow,
                 new ServiceExternalExposureSnapshot(
                     "aevatar-orders",
-                    DateTimeOffset.Parse("2026-06-11T01:02:03+00:00"))),
+                    DateTimeOffset.Parse("2026-06-11T01:02:03+00:00"),
+                    SourceStateVersion: 44)),
             new ServiceCatalogSnapshot(
                 "scope-a:default:default:billing",
                 "scope-a",
@@ -190,6 +191,7 @@ public sealed class ScopeServiceCatalogEndpointTests : ScopeServiceEndpointTestK
         body.Single(x => x.ServiceId == "orders").ExternalExposure!.NyxidSlug.Should().Be("aevatar-orders");
         body.Single(x => x.ServiceId == "orders").ExternalExposure!.RegisteredAt.Should()
             .Be(DateTimeOffset.Parse("2026-06-11T01:02:03+00:00"));
+        body.Single(x => x.ServiceId == "orders").ExternalExposure!.SourceStateVersion.Should().Be(44);
         body.Single(x => x.ServiceId == "orders").InvokeReady.Should().BeTrue();
         body.Single(x => x.ServiceId == "orders").InvokeReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Ready.ToString());
         body.Single(x => x.ServiceId == "orders").InvokeUnavailableReason.Should().BeNull();
@@ -394,14 +396,20 @@ public sealed class ScopeServiceCatalogEndpointTests : ScopeServiceEndpointTestK
     }
 
     [Fact]
-    public async Task GetMemberPublishedServiceEndpoint_ShouldRejectDifferentAuthenticatedMember()
+    public async Task GetMemberPublishedServiceEndpoint_ShouldAllowDifferentAuthenticatedMemberInSameScope()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
         using var request = new HttpRequestMessage(HttpMethod.Get, "/api/scopes/scope-a/members/member-a/published-service");
+        request.Headers.Add("X-Test-Scope-Id", "scope-a");
         request.Headers.Add("X-Test-Member-Id", "member-b");
 
         var response = await host.Client.SendAsync(request);
+        var body = await response.Content.ReadFromJsonAsync<ScopeServiceEndpoints.MemberPublishedServiceHttpResponse>();
 
-        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        body.Should().NotBeNull();
+        body!.ScopeId.Should().Be("scope-a");
+        body.MemberId.Should().Be("member-a");
+        body.PublishedServiceId.Should().Be("member-a");
     }
 }

@@ -6,8 +6,16 @@ public sealed class NyxIdToolOptions
     public const long DefaultProxyFileArtifactMaxBytes = 25L * 1024 * 1024;
     public const long HardProxyFileArtifactMaxBytes = 100L * 1024 * 1024;
 
-    /// <summary>NyxID API base URL (e.g. https://nyx-api.chrono-ai.fun).</summary>
-    public string? BaseUrl { get; set; }
+    /// <summary>
+    /// The single default NyxID base URL (the identity/OIDC authority AND the proxy host — the
+    /// nyx-api.chrono-ai.fun alias is the same endpoint). This is the one place the default lives;
+    /// hosts override it from config (e.g. Aevatar:NyxId:Authority) only when a value is provided, so
+    /// when config is absent the relay OIDC discovery and nyxid_proxy calls still work out of the box.
+    /// </summary>
+    public const string DefaultBaseUrl = "https://nyx.chrono-ai.fun/";
+
+    /// <summary>NyxID base URL. Defaults to <see cref="DefaultBaseUrl"/>; set via config to override.</summary>
+    public string? BaseUrl { get; set; } = DefaultBaseUrl;
 
     /// <summary>
     /// When <c>true</c>, expose the <c>ssh_exec</c> tool to the LLM. Off by default

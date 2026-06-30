@@ -11,11 +11,13 @@ using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Ornn;
 using Aevatar.AI.ToolProviders.Skills;
+using Aevatar.AI.ToolProviders.StudioProvisioning;
 using Aevatar.AI.ToolProviders.Telegram;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.AI.ToolProviders.Web;
 using Aevatar.Authentication.Hosting;
 using Aevatar.Authentication.Providers.NyxId;
+using Aevatar.Authentication.ScopeServiceTokens;
 using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.ChatRouting.Core;
@@ -40,18 +42,24 @@ using Aevatar.GAgents.StatusDashboard.Executors;
 using Aevatar.GAgents.StreamingProxy;
 using Aevatar.Foundation.Runtime.Hosting.Maintenance;
 using Aevatar.Foundation.VoicePresence;
+using Aevatar.Mainnet.Host.Api.BackendConsole;
 using Aevatar.Mainnet.Host.Api.ChatCompletions;
 using Aevatar.Mainnet.Host.Api.ChatRouting;
+using Aevatar.Mainnet.Host.Api.Cqrs;
 using Aevatar.Mainnet.Host.Api.Messages;
 using Aevatar.Mainnet.Host.Api.Responses;
 using Aevatar.Mainnet.Host.Api.Scheduled;
+using Aevatar.Mainnet.Host.Api.Skills;
 using Aevatar.Mainnet.Host.Api.Status;
 using Aevatar.Mainnet.Host.Api.Voice;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Hosting;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Integration.AI;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
@@ -120,6 +128,10 @@ public static class MainnetHostBuilderExtensions
         builder.AddGAgentServiceCapabilityBundle();
         builder.AddStudioCapability();
 
+        // 06-26 ornn skills invocation page: host-side catalog read surface (composes the Ornn skill client).
+        builder.Services.AddSingleton<IUserSkillCatalogQueryService, UserSkillCatalogQueryService>();
+        builder.Services.AddSingleton<IUserSkillRunService, UserSkillRunService>();
+
         // Authentication: config-driven, provider-agnostic
         builder.Services.AddNyxIdAuthentication();
         builder.AddAevatarAuthentication();
@@ -145,6 +157,13 @@ public static class MainnetHostBuilderExtensions
             ServiceDescriptor.Singleton<IReadmodelFreshnessSource, ChannelBotRegistrationFreshnessSource>());
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IHealthProbeExecutor, AevatarCoreLoopStatusProbeExecutor>());
+        // Self-issued scope service token source for credentialed orchestration/observatory probes.
+        // IScopeServiceTokenIssuer is only registered when scope service tokens are enabled, so it is
+        // resolved optionally — absent it the provider returns null and those probes read "unknown".
+        builder.Services.AddSingleton<IProbeServiceTokenProvider>(
+            sp => new ScopeServiceProbeTokenProvider(
+                sp.GetRequiredService<TimeProvider>(),
+                sp.GetService<IScopeServiceTokenIssuer>()));
         builder.Services.AddChatRoutingAgents(builder.Configuration);
         builder.Services.AddMainnetAgentProjectionDocumentStores(builder.Configuration);
         builder.Services.AddChatRoutingCore();
@@ -200,6 +219,22 @@ public static class MainnetHostBuilderExtensions
         // layer between Studio and the AI/agent packages that consume the port.
         builder.Services.TryAddSingleton<IOwnerLlmConfigSource, StudioUserConfigOwnerLlmConfigSource>();
         builder.Services.AddLarkAgentAuthoring();
+        // Bridge the scheduled-agent key issuer (registered by AddLarkAgentAuthoring)
+        // onto the Studio IStudioRunCredentialIssuer port so C1-provisioned scheduled
+        // workflow runs mint a durable run credential under the caller's account.
+        // Lives here for the same reason as the LLM-config bridge: the host is the
+        // only layer that depends on both Studio.Application and the issuer. When no
+        // outbound slug is configured, the adapter mints nothing and provisioning
+        // falls back to the caller's forwarded token (C1 stays slug-free).
+        builder.Services.TryAddSingleton(sp =>
+        {
+            var options = new StudioRunCredentialIssuerOptions();
+            builder.Configuration
+                .GetSection(StudioRunCredentialIssuerOptions.ConfigurationSection)
+                .Bind(options);
+            return options;
+        });
+        builder.Services.TryAddSingleton<IStudioRunCredentialIssuer, ScheduledAgentKeyStudioRunCredentialIssuer>();
         builder.Services.AddSkillBackedHumanInteractionDelivery();
         builder.Services.AddChannelBackedHumanInteractionTools();
         builder.Services.AddNyxIdRelayChannel();
@@ -209,13 +244,25 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddChannelAdminTools();
         builder.Services.AddAgentCatalogTools();
         builder.Services.AddAevatarInvocationTools();
+        // Studio workflow scheduling tool (aevatar_provision_workflow_schedule): the channel-free,
+        // Observatory-delivered analogue of the Lark scheduled_agent_creator. Registered as an
+        // IAgentToolSource here; the studio workflow's allowed_tools allowlist (W2) scopes it to
+        // studio runs. The narrow IWorkflowScheduleProvisioningPort it depends on is registered by
+        // AddStudioApplication (via AddStudioCapability), composed in the same host container.
+        builder.Services.AddStudioProvisioningTools();
         builder.Services.Configure<DeviceEventOptions>(
             builder.Configuration.GetSection("Aevatar:DeviceEvents"));
+        // 06-20-observatory-admin-cross-scope: NyxID-backed platform-admin authorizer for the run observatory.
+        builder.Services.AddNyxIdPlatformAuthorization(builder.Configuration);
         builder.Services.AddNyxIdTools(o =>
         {
-            o.BaseUrl = builder.Configuration["Aevatar:NyxId:Authority"]
-                        ?? builder.Configuration["Cli:App:NyxId:Authority"]
-                        ?? builder.Configuration["Aevatar:Authentication:Authority"];
+            // Override the single default (NyxIdToolOptions.DefaultBaseUrl) only when config provides a
+            // non-empty value; an absent/empty config key must NOT clobber the default to null.
+            var nyxAuthority = builder.Configuration["Aevatar:NyxId:Authority"]
+                               ?? builder.Configuration["Cli:App:NyxId:Authority"]
+                               ?? builder.Configuration["Aevatar:Authentication:Authority"];
+            if (!string.IsNullOrWhiteSpace(nyxAuthority))
+                o.BaseUrl = nyxAuthority;
             // Opt-in: only the mainnet host (which runs the channel relay's approval-aware
             // tool execution pipeline) advertises ssh_exec to the LLM. Other hosts that pull
             // in NyxId tools (CLI, workflow runner) leave this off so a generic agent can't
@@ -230,6 +277,9 @@ public static class MainnetHostBuilderExtensions
             if (long.TryParse(builder.Configuration["Aevatar:NyxId:ProxyFileArtifactMaxBytes"], out var maxBytes))
                 o.ProxyFileArtifactMaxBytes = maxBytes;
         });
+        builder.Services.Replace(ServiceDescriptor.Singleton<
+            IWorkflowFileMultipartUploadPolicyResolver,
+            MainnetWorkflowFileMultipartUploadSafetyPolicyResolver>());
         builder.Services.AddLarkTools(o =>
         {
             o.ProviderSlug = builder.Configuration["Aevatar:Lark:NyxProviderSlug"] ?? "api-lark-bot";
@@ -309,14 +359,21 @@ public static class MainnetHostBuilderExtensions
         app.MapNyxIdChatEndpoints();
         app.MapChatRoutePolicyAdminEndpoints();
         app.MapVoicePresenceCapabilityAdminEndpoints();
+        app.MapVoiceConsoleEndpoints();
+        app.MapAutoConsoleCallbackEndpoints();
+        app.MapAdminConsoleEndpoints();
+        app.MapCqrsObservatoryPageEndpoints();
+        app.MapCqrsObservatoryApiEndpoints();
         app.MapStreamingProxyEndpoints();
         app.MapResponsesApiEndpoints();
         app.MapMessagesApiEndpoints();
         app.MapChatCompletionsApiEndpoints();
         app.MapChannelCallbackEndpoints();
+        app.MapChannels();
         app.MapDeviceEventEndpoints();
         app.MapIdentityOAuthEndpoints();
         app.MapSkillRunnerExternalTriggerEndpoints();
+        app.MapWorkflowSkillsEndpoints();
         app.MapStatusEndpoints();
 
         // Voice service registration is conditional on a configured provider
@@ -327,6 +384,7 @@ public static class MainnetHostBuilderExtensions
         if (PolicyAwareVoiceEndpoints.IsVoiceRealtimeConfigured(app.Services))
         {
             app.MapPolicyAwareVoiceEndpoint();
+            app.MapPolicyAwareVoiceWhipEndpoint();
         }
         else
         {

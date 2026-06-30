@@ -27,6 +27,10 @@ message ChannelBotRegistrationEntry {
   reserved 12;
   reserved "credential_ref";
   string nyx_reply_credential_ref = 13;
+  // Last verified inbound observed by aevatar's relay for this bot. Set the first
+  // time the relay accepts an inbound; powers cross-account "active/pending" status
+  // when NyxID's owner-scoped channel-bot API can't be queried (admin all-view).
+  google.protobuf.Timestamp last_inbound_at_utc = 14;
 }
 
 message ChannelBotRegistrationStoreState {
@@ -60,6 +64,19 @@ message ChannelBotRegisterCommand {
 
 message ChannelBotUnregisterCommand {
   string registration_id = 1;
+}
+
+// Fire-and-forget signal from the relay: a verified inbound was accepted for this
+// registration. Stamps last_inbound_at_utc so the readmodel can report
+// active/pending status for bots whose live status NyxID won't serve cross-account.
+message ChannelBotRecordInboundCommand {
+  string registration_id = 1;
+  google.protobuf.Timestamp observed_at_utc = 2;
+}
+
+message ChannelBotInboundObservedEvent {
+  string registration_id = 1;
+  google.protobuf.Timestamp observed_at_utc = 2;
 }
 
 message ChannelBotCompactTombstonesCommand {
@@ -110,6 +127,9 @@ message ChannelBotRegistrationDocument {
   reserved 13;
   reserved "credential_ref";
   string nyx_reply_credential_ref = 14;
+  // Mirrors ChannelBotRegistrationEntry.last_inbound_at_utc into the read model so
+  // the /channels status endpoint can report active/pending without a NyxID call.
+  google.protobuf.Timestamp last_inbound_at_utc = 15;
 }
 
 // ─── Relay / conversation normalization ───

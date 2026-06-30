@@ -55,6 +55,7 @@ public sealed class StudioMemberCurrentStateProjectorTests
                 RevisionId = "rev-9",
                 ImplementationKind = StudioMemberImplementationKind.Workflow,
                 BoundAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
+                ExpectedActorId = "scope-workflow:scope-1:m-1",
             },
             Binding = new StudioMemberBindingAuthorityState
             {
@@ -102,6 +103,7 @@ public sealed class StudioMemberCurrentStateProjectorTests
         written.LastBoundRevisionId.Should().Be("rev-9");
         written.LastBoundImplementationKind.Should().Be(MemberImplementationKindNames.Workflow);
         written.LastBoundAt.Should().NotBeNull();
+        written.LastBoundExpectedActorId.Should().Be("scope-workflow:scope-1:m-1");
 
         // async binding status denormalized from member authority state.
         written.BindingCurrentRunId.Should().Be("bind-1");

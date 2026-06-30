@@ -21,8 +21,15 @@ namespace Aevatar.GAgents.NyxidChat;
 public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationReplyGenerator
 {
     private const int MaxToolRounds = 40;
-    private const int MaxHistoryMessages = 100;
+    // R1: never put the full accumulated group history into the prompt. Cap the PRIOR conversation
+    // history to at most the most-recent N replayable entries on every round. Kept separate from the
+    // working-set cap below so a long in-turn tool loop (assistant tool calls + tool results) is not
+    // truncated mid-turn.
+    private const int MaxRecentPriorHistoryMessages = 10;
+    // Working-set ceiling for the ChatHistory during a turn (prior ≤10 + the live turn's growth).
+    private const int MaxWorkingSetMessages = 200;
     private const int MaxInlineImageBytes = 10 * 1024 * 1024;
+
     private readonly ILLMProviderFactory _llmProviderFactory;
     private readonly IReadOnlyList<IAgentToolSource> _toolSources;
     private readonly IReadOnlyList<IAgentRunMiddleware> _agentMiddlewares;
@@ -272,7 +279,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         {
             ChatMessage.System(BuildSystemPrompt(externalMetadata, input.AttachmentVisibilityInstruction)),
         };
-        initialMessages.AddRange((priorHistory ?? []).Where(IsReplayableHistoryEntry).Select(ToChatMessage));
+        initialMessages.AddRange((priorHistory ?? []).Where(IsReplayableHistoryEntry).TakeLast(MaxRecentPriorHistoryMessages).Select(ToChatMessage));
         initialMessages.Add(ChatMessage.User(input.Parts, input.Text));
 
         return new AgentRunReplyStepPlan(
@@ -341,9 +348,9 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         //   New principle: ChatRuntime owns the async stream directly; this caller only supplies provider, tools, middleware, and request identity.
         var history = new global::Aevatar.AI.Core.Chat.ChatHistory
         {
-            MaxMessages = MaxHistoryMessages + Math.Min(priorHistory?.Count ?? 0, MaxHistoryMessages),
+            MaxMessages = MaxWorkingSetMessages,
         };
-        history.AddRange((priorHistory ?? []).Where(IsReplayableHistoryEntry).Select(ToChatMessage));
+        history.AddRange((priorHistory ?? []).Where(IsReplayableHistoryEntry).TakeLast(MaxRecentPriorHistoryMessages).Select(ToChatMessage));
         var importedPriorCount = history.Messages.Count;
         var runtime = new ChatRuntime(
             providerFactory: ResolveProvider,
@@ -775,7 +782,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     {
         var history = new global::Aevatar.AI.Core.Chat.ChatHistory
         {
-            MaxMessages = MaxHistoryMessages,
+            MaxMessages = MaxWorkingSetMessages,
         };
         return new ChatRuntime(
             providerFactory: ResolveProvider,
@@ -995,11 +1002,34 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         {
             var tools = await source.DiscoverToolsAsync(ct);
             foreach (var tool in tools)
+            {
+                // Channel-side exclusion by GENERIC capability, not by tool name: a tool that
+                // declares AgentToolCapabilities.ExcludeFromDirectChannelChat completes its work
+                // off-chat (e.g. delivered to /workflow/observatory), so surfacing it on this
+                // direct-channel/Lark agent would let the model silently route a chat user's
+                // request away from their chat. Such tools stay in the global catalog for the
+                // workflow allowlist path; the exclusion is channel-side only. No channel agent
+                // depended on these tools, so this changes no existing channel flow.
+                if (IsExcludedFromDirectChannelChat(tool))
+                    continue;
                 discovered[tool.Name] = tool;
+            }
         }
 
         return discovered.Values.ToArray();
     }
+
+    // A tool is hidden from the direct channel/chat surface when it self-declares the
+    // generic ExcludeFromDirectChannelChat capability via IAgentToolCapabilityDescriptor.
+    // The channel path never inspects a specific tool name; eligibility is a property of
+    // the tool, keeping channel routing agnostic to individual tool/skill identities.
+    private static bool IsExcludedFromDirectChannelChat(IAgentTool tool) =>
+        tool is IAgentToolCapabilityDescriptor descriptor &&
+        descriptor.Capabilities.Any(static capability =>
+            string.Equals(
+                capability,
+                AgentToolCapabilities.ExcludeFromDirectChannelChat,
+                StringComparison.OrdinalIgnoreCase));
 
     private ILLMProvider ResolveProvider()
     {

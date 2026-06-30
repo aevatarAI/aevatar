@@ -893,6 +893,8 @@ public sealed class WorkflowExecutionProjectionProjectorTests
                     DefinitionActorId = "definition-1",
                     WorkflowName = "wf-current",
                     ScopeId = "scope-current",
+                    RunOrigin = "provisioned",
+                    ScheduleId = "schedule-current",
                     Status = status,
                     Compiled = true,
                     CompilationError = "none",
@@ -920,6 +922,8 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         document.DefinitionActorId.Should().Be("definition-1");
         document.WorkflowName.Should().Be("wf-current");
         document.ScopeId.Should().Be("scope-current");
+        document.RunOrigin.Should().Be("provisioned");
+        document.ScheduleId.Should().Be("schedule-current");
         document.Status.Should().Be(status);
         document.SagaStatus.Should().Be(WorkflowSagaStatus.CompensationDeadLetter);
         document.DeadLetterFailedCompensationStepId.Should().Be("refund_payment");
@@ -1062,6 +1066,53 @@ public sealed class WorkflowExecutionProjectionProjectorTests
     }
 
     [Fact]
+    public async Task WorkflowExecutionCurrentStateProjector_ShouldMapStartedAt_FromCommittedRunState()
+    {
+        // O2 (06-19-workflow-run-observatory): started_at is owned by the actor (WorkflowRunState.StartedAtUtc),
+        // set once when the run starts. The projector maps it straight through — no prior-readmodel read.
+        var startedAt = new DateTimeOffset(2026, 6, 19, 9, 0, 0, TimeSpan.Zero);
+        var dispatcher = new RecordingWriteDispatcher<WorkflowExecutionCurrentStateDocument>();
+        var projector = new WorkflowExecutionCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(new DateTimeOffset(2026, 6, 19, 10, 0, 0, TimeSpan.Zero)));
+
+        await projector.ProjectAsync(
+            CreateContext(),
+            WrapCommitted(
+                new WorkflowCompletedEvent { Success = true },
+                new WorkflowRunState
+                {
+                    RunId = "root-actor",
+                    Status = "completed",
+                    StartedAtUtc = Timestamp.FromDateTimeOffset(startedAt),
+                },
+                includeEnvelopeTimestamp: false));
+
+        var document = dispatcher.Upserts.Should().ContainSingle().Subject;
+        document.StartedAtUtcValue.Should().NotBeNull();
+        document.StartedAtUtcValue.ToDateTimeOffset().Should().Be(startedAt);
+    }
+
+    [Fact]
+    public async Task WorkflowExecutionCurrentStateProjector_ShouldLeaveStartedAtUnset_WhenStateHasNoStartFact()
+    {
+        var dispatcher = new RecordingWriteDispatcher<WorkflowExecutionCurrentStateDocument>();
+        var projector = new WorkflowExecutionCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(new DateTimeOffset(2026, 6, 19, 9, 0, 0, TimeSpan.Zero)));
+
+        await projector.ProjectAsync(
+            CreateContext(),
+            WrapCommitted(
+                new BindWorkflowRunDefinitionEvent { RunId = "root-actor" },
+                new WorkflowRunState { RunId = "root-actor", Status = "bound" },
+                includeEnvelopeTimestamp: false));
+
+        var document = dispatcher.Upserts.Should().ContainSingle().Subject;
+        document.StartedAtUtcValue.Should().BeNull();
+    }
+
+    [Fact]
     public void WorkflowRunGraphArtifactMaterializer_ShouldDeriveFromReportAndDeduplicateNodesAndEdges()
     {
         var readModel = new WorkflowRunInsightReportDocument
@@ -1109,6 +1160,37 @@ public sealed class WorkflowExecutionProjectionProjectorTests
                 x.ToNodeId == "child-1")
             .Should()
             .Be(1);
+    }
+
+    // 06-21: the graph carries the real run order — a step's NextStepId becomes a NEXT edge to that step
+    // (with the branch taken as branchKey), but only when the next step is a known step node.
+    [Fact]
+    public void WorkflowRunGraphArtifactMaterializer_ShouldEmitNextEdgesFromStepFlow()
+    {
+        var readModel = new WorkflowRunInsightReportDocument
+        {
+            RootActorId = "actor-1",
+            CommandId = "cmd-1",
+            WorkflowName = "wf-flow",
+            Steps =
+            [
+                new WorkflowExecutionStepTrace { StepId = "a", StepType = "tool_call", Success = true, NextStepId = "b", BranchKey = "success" },
+                new WorkflowExecutionStepTrace { StepId = "b", StepType = "llm_call", Success = true, NextStepId = "missing" },
+            ],
+        };
+
+        var materialization = new WorkflowRunGraphArtifactMaterializer().Materialize(readModel);
+
+        materialization.Edges.Should().Contain(x =>
+            x.EdgeType == WorkflowExecutionGraphConstants.EdgeTypeNext &&
+            x.FromNodeId == "step:actor-1:cmd-1:a" &&
+            x.ToNodeId == "step:actor-1:cmd-1:b" &&
+            x.Properties.ContainsKey("branchKey") &&
+            x.Properties["branchKey"] == "success");
+        // b -> "missing" is dropped because the target is not a known step node
+        materialization.Edges.Should().NotContain(x =>
+            x.EdgeType == WorkflowExecutionGraphConstants.EdgeTypeNext &&
+            x.FromNodeId == "step:actor-1:cmd-1:b");
     }
 
     [Fact]

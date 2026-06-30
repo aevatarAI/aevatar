@@ -77,6 +77,7 @@ public sealed class ScheduledDispatchTargetPreparationService : IScheduledDispat
             CommandId = commandId,
             CorrelationId = correlationId,
             RevisionId = target.RevisionId ?? string.Empty,
+            ScheduleId = configuration.ScheduleId ?? string.Empty,
         };
         if (target.Caller != null)
             invocation.Caller = target.Caller.Clone();

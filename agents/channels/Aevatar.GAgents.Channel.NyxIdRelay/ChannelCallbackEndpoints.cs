@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.Authentication.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.AspNetCore.Builder;
@@ -26,8 +27,10 @@ public static class ChannelCallbackEndpoints
         var group = app.MapGroup("/api/channels").WithTags("ChannelRuntime");
 
         // Registration CRUD — requires authentication
+        group.MapGet("/me", HandleGetCallerInfoAsync).RequireAuthorization();
         group.MapPost("/registrations", HandleRegisterAsync).RequireAuthorization();
         group.MapGet("/registrations", HandleListRegistrationsAsync).RequireAuthorization();
+        group.MapGet("/registrations/{registrationId}/status", HandleGetStatusAsync).RequireAuthorization();
         group.MapDelete("/registrations/{registrationId}", HandleDeleteRegistrationAsync).RequireAuthorization();
 
         // Diagnostic: test reply path without going through full LLM chat
@@ -130,12 +133,42 @@ public static class ChannelCallbackEndpoints
         return Results.Json(payload, statusCode: statusCode);
     }
 
+    /// <summary>
+    /// Lists channel-bot registrations. Scoped to the caller's own account by default
+    /// (a tenant must not see other tenants' bots, and their status is only queryable
+    /// for the caller's own bots anyway). <c>?scope=all</c> returns every account's bots
+    /// but is gated on a platform-admin role, verified server-side against the IdP.
+    /// </summary>
     private static async Task<IResult> HandleListRegistrationsAsync(
+        HttpContext http,
         [FromServices] IChannelBotRegistrationQueryPort queryPort,
+        [FromServices] IPlatformAdminAuthorizer adminAuthorizer,
+        string? scope,
         CancellationToken ct)
     {
+        var callerScope = ResolveScopeId(http, null, required: false).ScopeId;
+        var wantsAll = string.Equals(scope, "all", StringComparison.OrdinalIgnoreCase);
+
+        if (wantsAll)
+        {
+            var token = ResolveBearerAccessToken(http);
+            var caller = string.IsNullOrWhiteSpace(token)
+                ? PlatformCaller.NotElevated
+                : await adminAuthorizer.ResolveCallerAsync(token, ct);
+            if (!caller.IsElevated)
+            {
+                return Results.Json(
+                    new { error = "scope_admin_required", message = "Listing channel bots across accounts requires a platform admin role." },
+                    statusCode: StatusCodes.Status403Forbidden);
+            }
+        }
+
         var registrations = await queryPort.QueryAllAsync(ct);
-        var result = registrations.Select(e => new
+        var visible = wantsAll
+            ? registrations
+            : registrations.Where(e => string.Equals(e.ScopeId, callerScope, StringComparison.Ordinal));
+
+        var result = visible.Select(e => new
         {
             id = e.Id,
             platform = e.Platform,
@@ -146,9 +179,133 @@ public static class ChannelCallbackEndpoints
             nyx_channel_bot_id = e.NyxChannelBotId,
             nyx_agent_api_key_id = e.NyxAgentApiKeyId,
             nyx_conversation_route_id = e.NyxConversationRouteId,
+            // Whether this bot belongs to the caller's account. Cross-account bots
+            // (admin all-view) cannot have their live status read from NyxID.
+            owned = string.Equals(e.ScopeId, callerScope, StringComparison.Ordinal),
         });
 
         return Results.Ok(result);
+    }
+
+    /// <summary>
+    /// Caller info for the page: own scope id + whether the caller is a platform admin
+    /// (so the UI can offer the cross-account view). Admin is verified against the IdP.
+    /// </summary>
+    private static async Task<IResult> HandleGetCallerInfoAsync(
+        HttpContext http,
+        [FromServices] IPlatformAdminAuthorizer adminAuthorizer,
+        CancellationToken ct)
+    {
+        var callerScope = ResolveScopeId(http, null, required: false).ScopeId ?? string.Empty;
+        var token = ResolveBearerAccessToken(http);
+        var caller = string.IsNullOrWhiteSpace(token)
+            ? PlatformCaller.NotElevated
+            : await adminAuthorizer.ResolveCallerAsync(token, ct);
+
+        return Results.Json(new
+        {
+            scope_id = callerScope,
+            is_admin = caller.IsElevated,
+            role = caller.Role,
+        });
+    }
+
+    /// <summary>
+    /// Live bot status for the catalog badges and the verify-step lights. The facade
+    /// list returns the registration record only; the live <c>active</c> /
+    /// <c>pending_webhook</c> state lives on NyxID, so this reads it server-side via
+    /// the existing channel-bot client (no browser→NyxID CORS, no NyxID change).
+    /// Status read failures degrade to <c>unknown</c> — polling must never 500.
+    /// </summary>
+    private static async Task<IResult> HandleGetStatusAsync(
+        string registrationId,
+        HttpContext http,
+        [FromServices] IChannelBotRegistrationQueryPort queryPort,
+        [FromServices] NyxIdApiClient nyxClient,
+        [FromServices] ILoggerFactory loggerFactory,
+        CancellationToken ct)
+    {
+        var registration = await queryPort.GetAsync(registrationId, ct);
+        if (registration is null)
+            return Results.NotFound(new { error = "Registration not found" });
+
+        // Cross-account bot: NyxID's channel-bot API is strictly owner-scoped (even a
+        // platform admin gets 404 for another user's bot), so we can't query its live status.
+        // Instead report aevatar's OWN observation: the relay-activity read model marks a bot
+        // active once it has received a verified inbound. No historical backfill exists, so a
+        // bot that was active before this feature shipped shows pending until its next inbound.
+        var callerScope = ResolveScopeId(http, null, required: false).ScopeId;
+        if (!string.IsNullOrWhiteSpace(callerScope)
+            && !string.Equals(registration.ScopeId, callerScope, StringComparison.Ordinal))
+        {
+            var observedAt = registration.LastInboundAtUtc;
+            return Results.Json(new
+            {
+                registration_id = registrationId,
+                nyx_channel_bot_id = registration.NyxChannelBotId,
+                status = observedAt is not null ? "active" : "pending_webhook",
+                last_event_at = observedAt?.ToDateTimeOffset(),
+                owned = false,
+            });
+        }
+
+        var accessToken = ResolveBearerAccessToken(http);
+        if (string.IsNullOrWhiteSpace(accessToken))
+            return Results.Unauthorized();
+
+        if (string.IsNullOrWhiteSpace(registration.NyxChannelBotId))
+            return Results.Json(new { registration_id = registrationId, status = "unknown", note = "no channel bot id" });
+
+        string raw;
+        try
+        {
+            raw = await nyxClient.GetChannelBotAsync(accessToken, registration.NyxChannelBotId, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            loggerFactory.CreateLogger("Aevatar.ChannelRuntime.Status").LogWarning(
+                ex,
+                "Nyx channel-bot status read failed: registration={RegistrationId}, botId={BotId}",
+                registrationId,
+                registration.NyxChannelBotId);
+            return Results.Json(new { registration_id = registrationId, nyx_channel_bot_id = registration.NyxChannelBotId, status = "unknown", error = "status_query_failed" });
+        }
+
+        var (status, lastEventAt) = ParseChannelBotStatus(raw);
+        return Results.Json(new
+        {
+            registration_id = registrationId,
+            nyx_channel_bot_id = registration.NyxChannelBotId,
+            status,
+            last_event_at = lastEventAt,
+        });
+    }
+
+    private static (string Status, string? LastEventAt) ParseChannelBotStatus(string response)
+    {
+        if (NyxApiResponseHelper.LooksLikeErrorEnvelope(response))
+            return ("unknown", null);
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+            // NyxID may wrap the resource in { "data": { ... } }.
+            var element = root.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Object
+                ? data
+                : root;
+            var status = element.TryGetProperty("status", out var statusElement) && statusElement.ValueKind == JsonValueKind.String
+                ? statusElement.GetString()
+                : null;
+            var lastEventAt = element.TryGetProperty("last_event_at", out var lastEventElement) && lastEventElement.ValueKind == JsonValueKind.String
+                ? lastEventElement.GetString()
+                : null;
+            return (string.IsNullOrWhiteSpace(status) ? "unknown" : status!, lastEventAt);
+        }
+        catch (JsonException)
+        {
+            return ("unknown", null);
+        }
     }
 
     private static string? ResolveBearerAccessToken(HttpContext http)
@@ -163,19 +320,56 @@ public static class ChannelCallbackEndpoints
 
     private static async Task<IResult> HandleDeleteRegistrationAsync(
         string registrationId,
+        HttpContext http,
         [FromServices] ChannelRegistrationCommandFacade commandFacade,
         [FromServices] IChannelBotRegistrationQueryPort queryPort,
+        [FromServices] INyxChannelBotDeprovisioningService deprovision,
         CancellationToken ct)
     {
         // Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
         //   Old pattern: delete endpoint queried then dispatched unregister through raw helpers.
         //   New principle: query remains readmodel existence check; write enters typed command facade.
-        var exists = await queryPort.GetAsync(registrationId, ct);
-        if (exists is null)
+        // Deprovision (06-25-channel-delete-nyxid-deprovision):
+        //   Delete is the reverse of register — tear down the NyxID side (conversation route →
+        //   channel-bot → relay api-key) BEFORE tombstoning the local mirror, so deleting a bot
+        //   leaves no orphaned NyxID resources and the same app re-registers cleanly. A NyxID 404
+        //   is success (idempotent). A hard channel-bot delete failure returns a non-2xx and does
+        //   NOT tombstone the local mirror (row stays visible/retryable). Residual route/api-key
+        //   cleanup failures are surfaced as warnings but never block the tombstone. NyxID
+        //   channel-bot delete is owner-scoped, so a platform admin deleting another owner's
+        //   foreign registration cannot delete that owner's NyxID bot — that hard-fails here and
+        //   keeps the local mirror; a pure-local admin purge would be a separate explicit path.
+        var registration = await queryPort.GetAsync(registrationId, ct);
+        if (registration is null)
             return Results.NotFound(new { error = "Registration not found" });
 
+        var accessToken = ResolveBearerAccessToken(http);
+        if (string.IsNullOrWhiteSpace(accessToken))
+            return Results.Unauthorized();
+
+        var deprovisionResult = await deprovision.DeprovisionAsync(
+            accessToken,
+            registration.NyxConversationRouteId,
+            registration.NyxChannelBotId,
+            registration.NyxAgentApiKeyId,
+            ct);
+
+        if (!deprovisionResult.Succeeded)
+        {
+            // Hard channel-bot delete failure: leave the local mirror intact so the caller can
+            // retry and the registration row stays visible (no silent half-dead orphan).
+            return Results.Json(
+                new
+                {
+                    error = "nyx_channel_bot_delete_failed",
+                    registration_id = registrationId,
+                    note = "The NyxID channel-bot could not be deleted; the local registration was kept so you can retry.",
+                },
+                statusCode: StatusCodes.Status502BadGateway);
+        }
+
         await commandFacade.UnregisterAsync(registrationId, ct);
-        return Results.Ok(new { status = "deleted" });
+        return Results.Ok(new { status = "deleted", warnings = deprovisionResult.Warnings });
     }
 
     /// <summary>

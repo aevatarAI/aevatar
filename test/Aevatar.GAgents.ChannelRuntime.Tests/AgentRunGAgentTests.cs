@@ -109,7 +109,7 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
-    public async Task HandleNextLlmStepAsync_ReasoningOnlyEmptyStep_RetriesOnceWithFinalNoToolsStepInsteadOfFailing()
+    public async Task HandleNextLlmStepAsync_ReasoningOnlyEmptyStep_RetriesOnceKeepingToolsInsteadOfFailing()
     {
         // Regression for the prod incident where a reasoning model spent the whole
         // step on reasoning tokens (content empty, reasoning_content set, no tool
@@ -167,10 +167,12 @@ public sealed class AgentRunGAgentTests
 
         var step = runtime.State.GenerationStep;
         step.Should().NotBeNull();
-        step!.FinalNoToolsStep.Should().BeTrue("a reasoning-only step must advance to the bounded no-tools retry");
+        step!.EmptyReplyRetry.Should().BeTrue("a reasoning-only step must advance to the bounded empty-reply retry");
+        step.FinalNoToolsStep.Should().BeFalse("the empty-reply retry keeps tools — it must NOT be a no-tools step");
         step.NextStepIndex.Should().Be(3);
         executor.LlmStepExecutions.Should().ContainSingle("the run must re-dispatch one LLM retry step");
-        executor.LlmStepExecutions[0].StepState.FinalNoToolsStep.Should().BeTrue();
+        executor.LlmStepExecutions[0].StepState.EmptyReplyRetry.Should().BeTrue();
+        executor.LlmStepExecutions[0].StepState.FinalNoToolsStep.Should().BeFalse();
         var nudge = step.Messages[^1];
         nudge.Role.Should().Be("user");
         nudge.Content.Should().NotBeNullOrWhiteSpace();
@@ -242,8 +244,9 @@ public sealed class AgentRunGAgentTests
 
         var step = runtime.State.GenerationStep;
         step.Should().NotBeNull();
-        step!.FinalNoToolsStep.Should().BeTrue(
-            "an empty completed step must advance to the bounded no-tools retry even when no reasoning trace was captured");
+        step!.EmptyReplyRetry.Should().BeTrue(
+            "an empty completed step must advance to the bounded empty-reply retry even when no reasoning trace was captured");
+        step.FinalNoToolsStep.Should().BeFalse("the empty-reply retry keeps tools");
         executor.LlmStepExecutions.Should().ContainSingle("the run must re-dispatch one LLM retry step");
         runtime.State.Status.Should().Be(
             AgentRunStatus.ReplyGenerationRequested,
@@ -299,10 +302,13 @@ public sealed class AgentRunGAgentTests
         });
 
         var retry = executor.LlmStepExecutions.Should().ContainSingle().Subject;
-        retry.StepState.FinalNoToolsStep.Should().BeTrue();
+        retry.StepState.EmptyReplyRetry.Should().BeTrue();
+        retry.StepState.FinalNoToolsStep.Should().BeFalse("the empty-reply retry keeps tools");
         retry.StepState.Messages.Count(m => m.Role == "system").Should().BeGreaterThan(0);
-        // system (1) + recent floor (6) + recovery nudge (1) = 8 upper bound
-        retry.StepState.Messages.Count.Should().BeLessThanOrEqualTo(8);
+        // system (1) + recent floor (10) + recovery nudge (1) = 12 upper bound
+        retry.StepState.Messages.Count.Should().BeLessThanOrEqualTo(12);
+        retry.StepState.Messages.Count(m => m.Role != "system").Should().BeLessThanOrEqualTo(11,
+            "non-system history must be trimmed to the recent floor (10) plus the recovery nudge");
         retry.StepState.Messages.Should().NotContain(m => m.Content == "m0",
             "the oldest non-system messages must be dropped to fit within the recent floor");
     }
@@ -442,6 +448,72 @@ public sealed class AgentRunGAgentTests
         ready.TerminalState.Should().Be(LlmReplyTerminalState.Failed);
         ready.ErrorCode.Should().Be("empty_reply");
         ready.ErrorSummary.Should().Contain("reasoningOnly=True");
+    }
+
+    [Fact]
+    public async Task HandleNextLlmStepAsync_EmptyReplyRetryStep_FailsWithoutSecondRetry()
+    {
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        EventEnvelope? handled = null;
+        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => handled = call.Arg<EventEnvelope>());
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var executor = new PausedReplyGenerationExecutor();
+        var runtime = CreateRunAgentWithExecutor(
+            actorRuntime,
+            executor,
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions());
+        SetState(runtime, new AgentRunGAgentState
+        {
+            RunId = "run-empty-retry-used",
+            CorrelationId = "corr-empty-retry-used",
+            TargetActorId = "actor-1",
+            Status = AgentRunStatus.ReplyGenerationRequested,
+            GenerationAttempt = 1,
+            GenerationStep = new AgentRunReplyStepState
+            {
+                RunId = "run-empty-retry-used",
+                CorrelationId = "corr-empty-retry-used",
+                TargetActorId = "actor-1",
+                Attempt = 1,
+                NextStepIndex = 3,
+                MaxToolRounds = 4,
+                EmptyReplyRetry = true,
+            },
+        });
+
+        await runtime.HandleNextLlmStepAsync(new AgentRunNextLlmStepRequestedEvent
+        {
+            RunId = "run-empty-retry-used",
+            CorrelationId = "corr-empty-retry-used",
+            TargetActorId = "actor-1",
+            Attempt = 1,
+            StepIndex = 4,
+            Request = new NeedsLlmReplyEvent
+            {
+                CorrelationId = "corr-empty-retry-used",
+                RunId = "run-empty-retry-used",
+                TargetActorId = "actor-1",
+                RegistrationId = "reg-1",
+                Activity = BuildRelayActivity(),
+            },
+            LlmStepResult = new AgentRunLlmStepResult
+            {
+                AccumulatedText = string.Empty,
+                Content = string.Empty,
+                ReasoningContent = string.Empty,
+                FinishReason = "stop",
+                HasStreamedTextContent = false,
+            },
+        });
+
+        executor.LlmStepExecutions.Should().BeEmpty("EmptyReplyRetry is the one-shot recovery gate");
+        handled.Should().NotBeNull();
+        var ready = handled!.Payload.Unpack<LlmReplyReadyEvent>();
+        ready.TerminalState.Should().Be(LlmReplyTerminalState.Failed);
+        ready.ErrorCode.Should().Be("empty_reply");
+        ready.ErrorSummary.Should().Contain("Reply generator returned an empty response");
     }
 
     [Fact]
@@ -1357,7 +1429,7 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
-    public async Task HandleStartAsync_WhenOwnerConfiguredRouteReturnsEmptyReply_RetriesWithServerDefaultRouting()
+    public async Task HandleStartAsync_WhenOwnerConfiguredRouteReturnsEmptyReply_RetriesKeepingOwnerRouteAndTools()
     {
         var targetActor = Substitute.For<IActor>();
         targetActor.Id.Returns("conversation:c");
@@ -1397,14 +1469,14 @@ public sealed class AgentRunGAgentTests
         providerFactory.Requests.Should().HaveCount(2);
         providerFactory.Requests[0].LlmControl!.ModelOverride.Should().Be("gpt-5.5");
         providerFactory.Requests[0].LlmControl!.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/chrono-llm");
-        providerFactory.Requests[1].Tools.Should().BeNull();
+        // New behavior: the empty-reply retry KEEPS the owner's route + tools + context and only trims
+        // history — it no longer strips to a no-tools server-default route. This is the fix for the
+        // "no Lark context / no tools" apology on big-history conversations: the retry must still be
+        // able to do the task.
         providerFactory.Requests[1].LlmControl!.NyxIdAccessToken.Should().Be("owner-token");
-        providerFactory.Requests[1].LlmControl!.ModelOverride.Should().BeNull();
-        providerFactory.Requests[1].LlmControl!.NyxIdRoutePreference.Should().BeNull();
-        providerFactory.Requests[1].LlmControl!.MaxToolRoundsOverride.Should().BeNull();
-        providerFactory.Requests[1].ToolContext!.Routing.ModelOverride.Should().BeNull();
-        providerFactory.Requests[1].ToolContext!.Routing.NyxIdRoutePreference.Should().BeNull();
-        providerFactory.Requests[1].ToolContext!.Routing.MaxToolRoundsOverride.Should().BeNull();
+        providerFactory.Requests[1].LlmControl!.ModelOverride.Should().Be("gpt-5.5");
+        providerFactory.Requests[1].LlmControl!.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/chrono-llm");
+        providerFactory.Requests[1].Tools.Should().BeEquivalentTo(providerFactory.Requests[0].Tools);
     }
 
     [Fact]
@@ -3881,7 +3953,7 @@ public sealed class AgentRunGAgentTests
                     }
                 }
 
-                await sink.DispatchAsync(text, ct);
+                await sink.DispatchAsync(text, isFinal, ct);
                 if (sink.ChunksEmitted > _chunksEmitted)
                 {
                     _lastEmittedText = text;

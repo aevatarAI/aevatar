@@ -17,6 +17,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 {
     private const string NextFireCallbackId = "scheduled-dispatch-next-fire";
     private const int MaxFireRecordCount = 128;
+    private static readonly TimeSpan MaxNextFireCallbackHop = TimeSpan.FromDays(7);
     private readonly IActorDispatchPort _dispatchPort;
     private readonly IScheduledServiceInvocationDispatchPort _serviceInvocationDispatchPort;
 
@@ -39,6 +40,17 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 var pendingNextFireAt = State.PendingNextFireAt.ToDateTimeOffset();
                 var previousLease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
                 await ActivateNextFireIntentAsync(pendingNextFireAt, previousLease, ct);
+            }
+            else if (State.NextFireAt != null)
+            {
+                // A fire is already armed for State.NextFireAt. Re-arm for that exact time
+                // instead of computing from now: if reactivation happens at or after the armed
+                // time (pod churn at the boundary), recomputing from now would silently skip the
+                // due occurrence. Re-arming a past armed time fires it immediately (catch-up); the
+                // fire handler then advances to the next occurrence normally.
+                var armedNextFireAt = State.NextFireAt.Value;
+                var previousLease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
+                await ActivateNextFireIntentAsync(armedNextFireAt, previousLease, ct);
             }
             else
             {
@@ -169,6 +181,19 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         EnsureValidDefinition(targetActorId, target, triggerEnvelope, cronExpression, timezone);
 
         var now = DateTimeOffset.UtcNow;
+        var configuredTarget = PreserveExistingServiceInvocationAuth(
+            NormalizeTarget(target),
+            isCreate);
+        Logger.LogInformation(
+            "Scheduled dispatch configuration prepared. scheduleId={ScheduleId} isCreate={IsCreate} targetKind={TargetKind} scheduleKind={ScheduleKind} hasServiceInvocationAuth={HasServiceInvocationAuth} hasScopeOwnerNyxId={HasScopeOwnerNyxId} hasSenderNyxId={HasSenderNyxId} hasDurableSenderBearerToken={HasDurableSenderBearerToken}",
+            NormalizeRequired(scheduleId, nameof(scheduleId)),
+            isCreate,
+            configuredTarget.Kind,
+            scheduleKind,
+            HasServiceInvocationAuth(configuredTarget),
+            HasScopeOwnerNyxId(configuredTarget),
+            HasSenderNyxId(configuredTarget),
+            HasDurableSenderBearerToken(configuredTarget));
         var configured = new ScheduledDispatchConfiguredEvent
         {
             ScheduleId = NormalizeRequired(scheduleId, nameof(scheduleId)),
@@ -180,7 +205,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             Enabled = enabled,
             ConfiguredAt = Timestamp.FromDateTimeOffset(now),
             PayloadTypeUrl = ResolvePayloadTypeUrl(triggerEnvelope),
-            Target = NormalizeTarget(target),
+            Target = configuredTarget,
             ScheduleKind = scheduleKind,
         };
         foreach (var (key, value) in NormalizeHeaders(headers))
@@ -264,6 +289,14 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         }
 
         var scheduledFireAt = ResolveScheduledFireAt(command);
+        if (!command.Manual && ResolveCallbackFiredAt(inboundEnvelope) < scheduledFireAt)
+        {
+            var previousLease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
+            await RecordNextFireIntentAsync(scheduledFireAt, ct);
+            await ActivateNextFireIntentAsync(scheduledFireAt, previousLease, ct);
+            return;
+        }
+
         var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey(ResolveScheduleId(), scheduledFireAt);
         if (HasTerminalFireRecord(idempotencyKey))
         {
@@ -335,13 +368,25 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             if (prepared.Envelope.Payload?.TryUnpack<ServiceInvocationRequest>(out var request) != true)
                 throw new InvalidOperationException("Scheduled service invocation payload is not configured.");
 
+            var stateTarget = State.Target;
+            Logger.LogInformation(
+                "Scheduled service invocation fire prepared from actor state. scheduleId={ScheduleId} scheduleKind={ScheduleKind} hasServiceInvocationAuth={HasServiceInvocationAuth} hasScopeOwnerNyxId={HasScopeOwnerNyxId} hasSenderNyxId={HasSenderNyxId} hasDurableSenderBearerToken={HasDurableSenderBearerToken} projectWorkflowCallerCredential={ProjectWorkflowCallerCredential}",
+                ResolveScheduleId(),
+                State.ScheduleKind,
+                HasServiceInvocationAuth(stateTarget),
+                HasScopeOwnerNyxId(stateTarget),
+                HasSenderNyxId(stateTarget),
+                HasDurableSenderBearerToken(stateTarget),
+                State.ScheduleKind == ScheduledDispatchScheduleKindState.Workflow);
+
             var receipt = await _serviceInvocationDispatchPort.DispatchAsync(
                 new ScheduledServiceInvocationDispatchRequest(
                     request,
                     ToRuntimeAuth(State.Target?.ServiceInvocation?.Auth),
                     ReadOnlyCopy(prepared.Headers ?? EmptyHeaders),
-                    ProjectSenderNyxIdAccessTokenToWorkflowCallerCredential:
-                        State.ScheduleKind == ScheduledDispatchScheduleKindState.Workflow),
+                    ProjectNyxIdAccessTokenToWorkflowCallerCredential:
+                        State.ScheduleKind == ScheduledDispatchScheduleKindState.Workflow,
+                    ScheduleId: ResolveScheduleId()),
                 ct);
             return new ScheduledDispatchReceipt(
                 receipt.Accepted,
@@ -433,6 +478,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             CommandId = idempotencyKey,
             CorrelationId = idempotencyKey,
             RevisionId = target.RevisionId ?? string.Empty,
+            ScheduleId = ResolveScheduleId(),
         };
         if (target.Caller != null)
             request.Caller = target.Caller.Clone();
@@ -462,16 +508,41 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
     private static ScheduledServiceInvocationAuth? ToRuntimeAuth(ScheduledServiceInvocationAuthState? auth)
     {
-        if (auth?.SenderNyxId == null)
+        if (auth == null)
             return null;
 
-        return new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationNyxIdCredentialSource(
-            new ScheduledServiceInvocationNyxIdSubjectRef(
-                auth.SenderNyxId.Subject?.Platform ?? string.Empty,
-                auth.SenderNyxId.Subject?.Tenant ?? string.Empty,
-                auth.SenderNyxId.Subject?.ExternalUserId ?? string.Empty),
-            auth.SenderNyxId.Scope ?? string.Empty));
+        var durableToken = string.IsNullOrWhiteSpace(auth.DurableSenderBearerToken)
+            ? null
+            : auth.DurableSenderBearerToken.Trim();
+        if (auth.SenderNyxId == null && durableToken == null && auth.ScopeOwnerNyxId == null)
+            return null;
+
+        var senderNyxId = auth.SenderNyxId == null
+            ? null
+            : new ScheduledServiceInvocationNyxIdCredentialSource(
+                ToRuntimeSubject(auth.SenderNyxId.Subject) ?? new ScheduledServiceInvocationNyxIdSubjectRef(
+                    string.Empty,
+                    string.Empty,
+                    string.Empty),
+                auth.SenderNyxId.Scope ?? string.Empty);
+
+        var scopeOwnerNyxId = auth.ScopeOwnerNyxId == null
+            ? null
+            : new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
+                auth.ScopeOwnerNyxId.Scope ?? string.Empty,
+                ToRuntimeSubject(auth.ScopeOwnerNyxId.OwnerSubject));
+
+        return new ScheduledServiceInvocationAuth(senderNyxId, durableToken, scopeOwnerNyxId);
     }
+
+    private static ScheduledServiceInvocationNyxIdSubjectRef? ToRuntimeSubject(
+        ScheduledServiceInvocationNyxIdSubjectRefState? subject) =>
+        subject == null
+            ? null
+            : new ScheduledServiceInvocationNyxIdSubjectRef(
+                subject.Platform ?? string.Empty,
+                subject.Tenant ?? string.Empty,
+                subject.ExternalUserId ?? string.Empty);
 
     private static IReadOnlyDictionary<string, string> ReadOnlyCopy(IReadOnlyDictionary<string, string> headers) =>
         new Dictionary<string, string>(headers, StringComparer.Ordinal);
@@ -521,15 +592,18 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         var previousLease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
         var pendingNextFireAt = State.PendingNextFireAt?.ToDateTimeOffset();
         if (pendingNextFireAt != nextFireAtUtc)
-        {
-            await PersistDomainEventAsync(new ScheduledDispatchNextFireIntentRecordedEvent
-            {
-                NextFireAt = Timestamp.FromDateTimeOffset(nextFireAtUtc),
-                RequestedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            }, ct);
-        }
+            await RecordNextFireIntentAsync(nextFireAtUtc, ct);
 
         await ActivateNextFireIntentAsync(nextFireAtUtc, previousLease, ct);
+    }
+
+    private async Task RecordNextFireIntentAsync(DateTimeOffset nextFireAtUtc, CancellationToken ct)
+    {
+        await PersistDomainEventAsync(new ScheduledDispatchNextFireIntentRecordedEvent
+        {
+            NextFireAt = Timestamp.FromDateTimeOffset(nextFireAtUtc),
+            RequestedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        }, ct);
     }
 
     private async Task ActivateNextFireIntentAsync(
@@ -537,7 +611,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         RuntimeCallbackLease? previousLease,
         CancellationToken ct)
     {
-        var dueTime = ScheduledDispatchCalculator.ComputeDueTime(nextFireAtUtc, DateTimeOffset.UtcNow);
+        var dueTime = ComputeNextFireCallbackDueTime(nextFireAtUtc, DateTimeOffset.UtcNow);
         var lease = await ScheduleSelfDurableTimeoutAsync(
             NextFireCallbackId,
             dueTime,
@@ -564,6 +638,14 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         }
 
         await CancelNextFireLeaseAsync(previousLease, CancellationToken.None);
+    }
+
+    private static TimeSpan ComputeNextFireCallbackDueTime(
+        DateTimeOffset nextFireAtUtc,
+        DateTimeOffset nowUtc)
+    {
+        var dueTime = ScheduledDispatchCalculator.ComputeDueTime(nextFireAtUtc, nowUtc);
+        return dueTime <= MaxNextFireCallbackHop ? dueTime : MaxNextFireCallbackHop;
     }
 
     private async Task CancelNextFireLeaseAsync(CancellationToken ct)
@@ -605,6 +687,18 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         return DateTimeOffset.UtcNow;
     }
 
+    private static DateTimeOffset ResolveCallbackFiredAt(EventEnvelope? envelope)
+    {
+        if (envelope != null &&
+            RuntimeCallbackEnvelopeStateReader.TryRead(envelope, out var state) &&
+            state.FiredAtUnixTimeMs > 0)
+        {
+            return DateTimeOffset.FromUnixTimeMilliseconds(state.FiredAtUnixTimeMs);
+        }
+
+        return DateTimeOffset.UtcNow;
+    }
+
     private string ResolveScheduleId() =>
         string.IsNullOrWhiteSpace(State.ScheduleId) ? Id : State.ScheduleId;
 
@@ -626,7 +720,9 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
     private bool MatchesConfiguredDefinition(ScheduledDispatchEnsureCommand command)
     {
-        var normalizedTarget = NormalizeTarget(command.Target);
+        var normalizedTarget = PreserveExistingServiceInvocationAuth(
+            NormalizeTarget(command.Target),
+            isCreate: false);
         var normalizedHeaders = NormalizeHeaders(command.Headers);
         var normalizedScheduleId = NormalizeRequired(command.ScheduleId, nameof(command.ScheduleId));
         var normalizedDisplayName = NormalizeOptional(command.DisplayName);
@@ -722,26 +818,83 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         };
     }
 
+    private ScheduledDispatchTargetState PreserveExistingServiceInvocationAuth(
+        ScheduledDispatchTargetState normalizedTarget,
+        bool isCreate)
+    {
+        if (isCreate || normalizedTarget.Kind != ScheduledDispatchTargetKindState.ServiceInvocation)
+            return normalizedTarget;
+        if (normalizedTarget.ServiceInvocation?.Auth != null)
+            return normalizedTarget;
+
+        var existingAuth = NormalizeServiceInvocationAuth(State.Target?.ServiceInvocation?.Auth);
+        if (existingAuth == null)
+            return normalizedTarget;
+
+        var preserved = normalizedTarget.Clone();
+        preserved.ServiceInvocation ??= new ScheduledServiceInvocationTargetState();
+        preserved.ServiceInvocation.Auth = existingAuth;
+        return preserved;
+    }
+
     private static ScheduledServiceInvocationAuthState? NormalizeServiceInvocationAuth(
         ScheduledServiceInvocationAuthState? auth)
     {
-        if (auth?.SenderNyxId == null)
+        if (auth == null)
             return null;
 
-        return new ScheduledServiceInvocationAuthState
+        var durableToken = NormalizeOptional(auth.DurableSenderBearerToken);
+        if (auth.SenderNyxId == null && string.IsNullOrEmpty(durableToken) && auth.ScopeOwnerNyxId == null)
+            return null;
+
+        var normalized = new ScheduledServiceInvocationAuthState
         {
-            SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceState
-            {
-                Subject = new ScheduledServiceInvocationNyxIdSubjectRefState
-                {
-                    Platform = NormalizeOptional(auth.SenderNyxId.Subject?.Platform),
-                    Tenant = NormalizeOptional(auth.SenderNyxId.Subject?.Tenant),
-                    ExternalUserId = NormalizeOptional(auth.SenderNyxId.Subject?.ExternalUserId),
-                },
-                Scope = NormalizeOptional(auth.SenderNyxId.Scope),
-            },
+            DurableSenderBearerToken = durableToken,
         };
+
+        if (auth.SenderNyxId != null)
+        {
+            normalized.SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceState
+            {
+                Subject = NormalizeSubject(auth.SenderNyxId.Subject),
+                Scope = NormalizeOptional(auth.SenderNyxId.Scope),
+            };
+        }
+
+        if (auth.ScopeOwnerNyxId != null)
+        {
+            normalized.ScopeOwnerNyxId = new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState
+            {
+                Scope = NormalizeOptional(auth.ScopeOwnerNyxId.Scope),
+                OwnerSubject = NormalizeSubject(auth.ScopeOwnerNyxId.OwnerSubject),
+            };
+        }
+
+        return normalized;
     }
+
+    private static ScheduledServiceInvocationNyxIdSubjectRefState? NormalizeSubject(
+        ScheduledServiceInvocationNyxIdSubjectRefState? subject) =>
+        subject == null
+            ? null
+            : new ScheduledServiceInvocationNyxIdSubjectRefState
+            {
+                Platform = NormalizeOptional(subject.Platform),
+                Tenant = NormalizeOptional(subject.Tenant),
+                ExternalUserId = NormalizeOptional(subject.ExternalUserId),
+            };
+
+    private static bool HasServiceInvocationAuth(ScheduledDispatchTargetState? target) =>
+        target?.ServiceInvocation?.Auth != null;
+
+    private static bool HasScopeOwnerNyxId(ScheduledDispatchTargetState? target) =>
+        target?.ServiceInvocation?.Auth?.ScopeOwnerNyxId != null;
+
+    private static bool HasSenderNyxId(ScheduledDispatchTargetState? target) =>
+        target?.ServiceInvocation?.Auth?.SenderNyxId != null;
+
+    private static bool HasDurableSenderBearerToken(ScheduledDispatchTargetState? target) =>
+        !string.IsNullOrWhiteSpace(target?.ServiceInvocation?.Auth?.DurableSenderBearerToken);
 
     private ScheduledDispatchState ApplyConfigured(
         ScheduledDispatchState current,

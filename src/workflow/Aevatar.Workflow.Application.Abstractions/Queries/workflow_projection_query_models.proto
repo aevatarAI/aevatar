@@ -28,6 +28,9 @@ message WorkflowActorSnapshot {
   string dead_letter_failed_compensation_step_id = 17;
   int32 dead_letter_remaining_uncompensated = 18;
   string dead_letter_error = 19;
+  google.protobuf.Timestamp started_at_utc = 20;
+  string scope_id = 21;
+  string run_origin = 22;
 }
 
 message WorkflowRunFileRef {

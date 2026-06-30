@@ -162,6 +162,9 @@ public class WorkflowDefinitionCatalogTests
         WorkflowDefinitionCatalog.BuiltInAutoYaml.Should().Contain("name: normalize_text");
         WorkflowDefinitionCatalog.BuiltInAutoYaml.Should().Contain("name: review_summary");
         WorkflowDefinitionCatalog.BuiltInAutoYaml.Should().Contain("Do not invent extra fields.");
+        WorkflowDefinitionCatalog.BuiltInAutoYaml.Should().Contain("86400000ms");
+        WorkflowDefinitionCatalog.BuiltInAutoYaml.Should().Contain("do not invent await_job or async_job");
+        WorkflowDefinitionCatalog.BuiltInAutoYaml.Should().NotContain("5400000ms");
     }
 
     [Fact]
@@ -183,6 +186,63 @@ public class WorkflowDefinitionCatalogTests
         autoYaml.Should().Contain("id: classify_route");
         autoYaml.Should().Contain("next: route_intent");
         autoYaml.Should().NotContain("condition: \"```y\"");
+    }
+
+    [Fact]
+    public void BuiltInStudioYaml_ShouldParseAsMemberProvisionStudioRoleWithToolAllowlist()
+    {
+        var workflow = new WorkflowParser().Parse(WorkflowDefinitionCatalog.BuiltInStudioYaml);
+
+        workflow.Name.Should().Be("studio");
+        var role = workflow.Roles.Should().ContainSingle().Subject;
+
+        // The role carries a workflow-first, Observatory-delivered system prompt that steers to the
+        // member/provision path — NOT a bare "helpful assistant", NOT a Lark/skill-publishing playbook,
+        // and NOT the loose-definition author-then-run-by-name path that hangs.
+        role.SystemPrompt.Should().Contain("Studio agent");
+        role.SystemPrompt.Should().Contain("aevatar_provision_workflow_schedule");
+        role.SystemPrompt.Should().Contain("/workflow/observatory");
+        role.SystemPrompt.Should().Contain("Do NOT");
+        // Honesty: the receipt is Accepted (async), not a success claim.
+        role.SystemPrompt.Should().Contain("Accepted");
+        // The loose-definition tools that hang on by-name resolution are no longer steered to.
+        role.SystemPrompt.Should().NotContain("workflow_create_def");
+        role.SystemPrompt.Should().NotContain("aevatar_start_workflow");
+
+        // The allowlist is the lever that keeps both the Lark scheduler and the hanging loose-definition
+        // tools out of the studio surface, and brings the channel-free provision tool in.
+        role.AgentToolScope.Should().NotBeNull();
+        var allowed = role.AgentToolScope!.AllowedToolNames;
+        allowed.Should().Contain("aevatar_provision_workflow_schedule");
+        allowed.Should().Contain("aevatar_observe_run");
+        allowed.Should().Contain("aevatar_read_workflow_run_artifact");
+        // The loose-definition path (file-only create + run-by-name) hangs 30s on an unprovisioned
+        // definition actor — it must be absent from the studio surface.
+        allowed.Should().NotContain("workflow_create_def");
+        allowed.Should().NotContain("workflow_update_def");
+        allowed.Should().NotContain("workflow_read_def");
+        allowed.Should().NotContain("workflow_list_defs");
+        allowed.Should().NotContain("aevatar_start_workflow");
+        allowed.Should().NotContain("scheduled_agent_creator");
+        // Studio is workflow-first: publishing a prose skill is not the deliverable.
+        allowed.Should().NotContain("ornn_publish_skill");
+
+        // The single llm_call step runs under the studio role.
+        var step = workflow.Steps.Should().ContainSingle().Subject;
+        step.Type.Should().Be("llm_call");
+        step.TargetRole.Should().Be("studio");
+    }
+
+    [Fact]
+    public void Catalog_ShouldRegisterStudioWorkflowAlongsideDirect()
+    {
+        var registry = new WorkflowDefinitionCatalog();
+        registry.Register("direct", WorkflowDefinitionCatalog.BuiltInDirectYaml);
+        registry.Register("studio", WorkflowDefinitionCatalog.BuiltInStudioYaml);
+
+        registry.GetYaml("studio").Should().Contain("name: studio");
+        registry.GetDefinition("studio")!.DefinitionActorId
+            .Should().Be(WorkflowDefinitionActorId.Format("studio"));
     }
 
     [Fact]
@@ -208,6 +268,24 @@ public class WorkflowDefinitionCatalogTests
     }
 
     [Fact]
+    public void FileLoader_ShouldLoadFirecrawlAsyncJobTemplates()
+    {
+        var registry = new WorkflowDefinitionCatalog();
+        var loader = new WorkflowDefinitionFileLoader();
+
+        var count = loader.LoadInto(
+            registry,
+            [Path.Combine(FindRepositoryRoot(), "workflows")],
+            NullLogger.Instance);
+
+        count.Should().BeGreaterThanOrEqualTo(4);
+        registry.GetYaml("firecrawl_agent_async_submit").Should().Contain("firecrawl_crawl_submit");
+        registry.GetYaml("firecrawl_agent_async_submit").Should().Contain("firecrawl_agent_async_poll");
+        registry.GetYaml("firecrawl_agent_async_poll").Should().Contain("firecrawl_crawl_status");
+        registry.GetYaml("firecrawl_agent_async_poll").Should().Contain("enabled: \"false\"");
+    }
+
+    [Fact]
     public void LarkApprovalWaitTemplates_ShouldUseExpectedWorkflowPrimitives()
     {
         var root = FindRepositoryRoot();
@@ -226,6 +304,16 @@ public class WorkflowDefinitionCatalogTests
         pollYaml.Should().Contain("value: \"${steps.get_instance.json.instance_code}\"");
         waitYaml.Should().NotContain("nyxid_proxy");
         pollYaml.Should().NotContain("nyxid_proxy");
+    }
+
+    [Fact]
+    public void BuiltInAutoYaml_ShouldSteerLongExternalJobsToSplitRunTemplates()
+    {
+        WorkflowDefinitionCatalog.BuiltInAutoYaml.Should().Contain("may wait up to 86400000ms (24h)");
+        WorkflowDefinitionCatalog.BuiltInAutoYaml.Should().Contain("do not invent await_job or async_job");
+        WorkflowDefinitionCatalog.BuiltInAutoYaml.Should().Contain("do not model same-run long polling");
+        WorkflowDefinitionCatalog.BuiltInAutoYaml.Should().Contain("deterministic self_reschedule schedule owns polling");
+        WorkflowDefinitionCatalog.BuiltInAutoYaml.Should().Contain("Do not put those facts in header.* or metadata.");
     }
 
     [Fact]

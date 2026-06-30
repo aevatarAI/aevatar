@@ -48,7 +48,7 @@ internal static class WorkflowScheduleConfigurationMapper
     {
         var request = new ChatRequestEvent
         {
-            Prompt = NormalizeRequired(configuration.Prompt, nameof(configuration.Prompt)),
+            Prompt = NormalizeOptional(configuration.Prompt, string.Empty),
         };
 
         foreach (var (key, value) in BuildWorkflowScheduleHeaders(configuration))
@@ -62,20 +62,39 @@ internal static class WorkflowScheduleConfigurationMapper
     {
         if (configuration.Auth == null)
             return null;
-        if (configuration.Auth.SenderNyxId == null)
-            throw new ArgumentException("Sender NyxID credential source is required.", nameof(configuration.Auth));
 
-        var senderNyxId = configuration.Auth.SenderNyxId;
+        var hasSenderNyxId = configuration.Auth.SenderNyxId != null;
+        var hasScopeOwnerNyxId = configuration.Auth.ScopeOwnerNyxId != null;
+        if (hasSenderNyxId == hasScopeOwnerNyxId)
+            throw new ArgumentException("Exactly one workflow schedule NyxID credential source is required.", nameof(configuration.Auth));
+
+        if (hasScopeOwnerNyxId)
+        {
+            var scopeOwnerNyxId = configuration.Auth.ScopeOwnerNyxId!;
+            if (scopeOwnerNyxId.OwnerSubject == null)
+                throw new ArgumentException("Scope owner NyxID subject is required.", nameof(configuration.Auth));
+
+            return new ScheduledServiceInvocationAuth(
+                ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
+                    NormalizeRequired(scopeOwnerNyxId.Scope, nameof(scopeOwnerNyxId.Scope)),
+                    MapNyxIdSubject(scopeOwnerNyxId.OwnerSubject)));
+        }
+
+        var senderNyxId = configuration.Auth.SenderNyxId!;
         if (senderNyxId.Subject == null)
             throw new ArgumentException("Sender NyxID subject is required.", nameof(configuration.Auth));
 
-        return new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationNyxIdCredentialSource(
-            new ScheduledServiceInvocationNyxIdSubjectRef(
-                NormalizeRequired(senderNyxId.Subject.Platform, nameof(senderNyxId.Subject.Platform)),
-                NormalizeOptional(senderNyxId.Subject.Tenant, string.Empty),
-                NormalizeRequired(senderNyxId.Subject.ExternalUserId, nameof(senderNyxId.Subject.ExternalUserId))),
+        return new ScheduledServiceInvocationAuth(SenderNyxId: new ScheduledServiceInvocationNyxIdCredentialSource(
+            MapNyxIdSubject(senderNyxId.Subject),
             NormalizeRequired(senderNyxId.Scope, nameof(senderNyxId.Scope))));
     }
+
+    private static ScheduledServiceInvocationNyxIdSubjectRef MapNyxIdSubject(
+        WorkflowScheduleNyxIdSubjectRef subject) =>
+        new(
+            NormalizeRequired(subject.Platform, nameof(subject.Platform)),
+            NormalizeOptional(subject.Tenant, string.Empty),
+            NormalizeRequired(subject.ExternalUserId, nameof(subject.ExternalUserId)));
 
     private static IReadOnlyDictionary<string, string> BuildWorkflowScheduleHeaders(
         WorkflowScheduleConfiguration configuration)

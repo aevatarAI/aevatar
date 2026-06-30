@@ -4,8 +4,8 @@ using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
-using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgents.StatusDashboard;
 using Aevatar.Mainnet.Host.Api.Status;
 using Aevatar.AGUI.Contracts;
@@ -91,6 +91,9 @@ public sealed class AevatarCoreLoopStatusProbeExecutorTests
         services.AddSingleton(Substitute.For<IStaticGAgentStreamInvocationPort<AGUIEvent>>());
         services.AddSingleton(Substitute.For<
             ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>>());
+        services.AddSingleton(Substitute.For<IServiceInvocationResolutionPort>());
+        services.AddSingleton(Substitute.For<IServiceInvocationDispatcher>());
+        services.AddSingleton(Substitute.For<IInvokeAdmissionAuthorizer>());
         services.AddSingleton(Substitute.For<IServiceRunQueryPort>());
         services.AddSingleton(Substitute.For<IGAgentRunTerminalQueryPort>());
         services.AddSingleton(Substitute.For<IWorkflowExecutionQueryApplicationService>());

@@ -87,6 +87,7 @@ public class NyxIdConnectedServiceToolSourceTests
         tools.Select(t => t.Name).Should().BeEquivalentTo(
             ["nyxid_api-shop__get_order", "nyxid_api-shop__search_orders"]);
         tools.Should().NotContain(t => t.Name.Contains("secret"));
+        tools.Should().NotContain(t => t.Name == "nyxid_service_request");
     }
 
     [Fact]
@@ -138,6 +139,24 @@ public class NyxIdConnectedServiceToolSourceTests
         postCall.RelativePath.Should().Be("api-shop/orders/search");
         using var postBody = JsonDocument.Parse(postCall.Body);
         postBody.RootElement.GetProperty("q").GetString().Should().Be("shoes");
+    }
+
+    [Fact]
+    public async Task ExecuteTool_MissingRequiredBody_ReturnsErrorWithoutCallingProxy()
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.ServicesByToken["user-token"] = """[{ "slug": "api-shop", "id": "svc-1" }]""";
+        handler.SpecsByServiceId["svc-1"] = ShopSpec;
+        var (source, _) = CreateSource(handler);
+
+        using var _scope = PushContext("user-token");
+        var tools = await source.DiscoverToolsAsync();
+        var search = tools.Single(t => t.Name == "nyxid_api-shop__search_orders");
+
+        var result = await search.ExecuteAsync("{}");
+
+        result.Should().Contain("error").And.Contain("body");
+        handler.ProxyRequests.Should().BeEmpty("a missing required operation body must not reach the NyxID proxy");
     }
 
     [Fact]

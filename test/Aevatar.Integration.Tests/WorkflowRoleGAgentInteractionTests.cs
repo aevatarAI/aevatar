@@ -352,6 +352,66 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
             completion.ToolCalls.Should().BeEmpty();
         }
 
+        // 06-24-studio-workflow-first-delivery W1: the channel-less Direct/studio chat runs as a
+        // workflow whose llm_call step dispatches a WorkflowLlmExecutionIntent carrying the run's
+        // scope. No inbound channel stamps the caller scope on this path, so without threading the
+        // run scope into the tool caller, scope-scoped tools (aevatar_*) see no scope and fail with
+        // caller_scope_unavailable. Assert the role actor fills Caller.ScopeId + OwnerSubject from
+        // the intent scope (mirrors the channel inbound path that sets both from the registration scope).
+        [Fact]
+        public async Task WorkflowRoleGAgent_WhenWorkflowIntentCarriesScope_ShouldPopulateToolCallerScope()
+        {
+            var eventStore = new InMemoryEventStore();
+            var llm = new RecordingWorkflowIntentLlmProvider();
+            var (agent, _) = await CreateActivatedWorkflowRoleAgentAsync(
+                eventStore,
+                llm,
+                "workflow-role-agent-scope");
+
+            await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
+            {
+                RunId = "run-scope",
+                StepId = "step-scope",
+                SessionId = "session-scope",
+                Prompt = "make a daily tech-news workflow",
+                ScopeId = "scope-studio-1",
+            });
+
+            llm.Requests.Should().ContainSingle();
+            var toolContext = llm.Requests[0].ToolContext;
+            toolContext.Should().NotBeNull();
+            toolContext!.Caller.ScopeId.Should().Be("scope-studio-1");
+            toolContext.Caller.OwnerSubject.Should().Be("scope-studio-1");
+        }
+
+        // No-op guards: the role actor must not fabricate a scope when the run has none (scope-less
+        // local runs stay scope-less), and an already-populated caller scope must win over the run
+        // scope (so any future inbound-stamped caller is never overwritten).
+        [Fact]
+        public async Task WorkflowRoleGAgent_WhenWorkflowIntentHasNoScope_ShouldLeaveToolCallerScopeEmpty()
+        {
+            var eventStore = new InMemoryEventStore();
+            var llm = new RecordingWorkflowIntentLlmProvider();
+            var (agent, _) = await CreateActivatedWorkflowRoleAgentAsync(
+                eventStore,
+                llm,
+                "workflow-role-agent-no-scope");
+
+            await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
+            {
+                RunId = "run-no-scope",
+                StepId = "step-no-scope",
+                SessionId = "session-no-scope",
+                Prompt = "hello",
+            });
+
+            llm.Requests.Should().ContainSingle();
+            var toolContext = llm.Requests[0].ToolContext;
+            toolContext.Should().NotBeNull();
+            toolContext!.Caller.ScopeId.Should().BeNullOrEmpty();
+            toolContext.Caller.OwnerSubject.Should().BeNullOrEmpty();
+        }
+
         [Fact]
         public async Task WorkflowRoleGAgent_WhenWorkflowLlmIntentHasMetadataOnlyAuthorization_ShouldNotPromoteToolCredentials()
         {

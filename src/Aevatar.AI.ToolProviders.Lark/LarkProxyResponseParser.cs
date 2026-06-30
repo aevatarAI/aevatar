@@ -380,6 +380,33 @@ internal static class LarkProxyResponseParser
                       TryReadString(data, "document_url"));
     }
 
+    public static LarkBitableCreateResult ParseBitableCreateSuccess(string response)
+    {
+        using var document = JsonDocument.Parse(response);
+        var data = ResolveDataRoot(document.RootElement);
+        var appData = data.TryGetProperty("app", out var appProp) &&
+                      appProp.ValueKind == JsonValueKind.Object
+            ? appProp
+            : data;
+        return new LarkBitableCreateResult(
+            AppToken: TryReadString(appData, "app_token") ?? TryReadString(appData, "token"),
+            Url: TryReadString(appData, "url"),
+            DefaultTableId: TryReadString(appData, "default_table_id"));
+    }
+
+    public static LarkMemberGrantResult ParseMemberGrantSuccess(string response)
+    {
+        using var document = JsonDocument.Parse(response);
+        var data = ResolveDataRoot(document.RootElement);
+        var memberData = data.TryGetProperty("member", out var memberProp) &&
+                         memberProp.ValueKind == JsonValueKind.Object
+            ? memberProp
+            : data;
+        return new LarkMemberGrantResult(
+            MemberId: TryReadString(memberData, "member_id"),
+            Perm: TryReadString(memberData, "perm"));
+    }
+
     private static JsonElement ResolveDataRoot(JsonElement root) =>
         root.TryGetProperty("data", out var dataProp) && dataProp.ValueKind == JsonValueKind.Object
             ? dataProp
@@ -615,3 +642,12 @@ internal sealed record LarkDrivePermissionResult(
     string? LinkShareEntity,
     bool? ExternalAccess,
     string? ShareUrl);
+
+internal sealed record LarkBitableCreateResult(
+    string? AppToken,
+    string? Url,
+    string? DefaultTableId);
+
+internal sealed record LarkMemberGrantResult(
+    string? MemberId,
+    string? Perm);

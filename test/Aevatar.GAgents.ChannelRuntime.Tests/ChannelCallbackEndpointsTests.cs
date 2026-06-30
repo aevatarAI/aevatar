@@ -13,6 +13,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Xunit;
+using Aevatar.Authentication.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
 
@@ -195,29 +196,152 @@ public sealed class ChannelCallbackEndpointsTests
         response.Body.Should().Contain("missing_bot_token");
     }
 
-    [Fact]
-    public async Task HandleListRegistrationsAsync_ReturnsRelayModeOnly()
+    private static IChannelBotRegistrationQueryPort QueryPortWith(params ChannelBotRegistrationEntry[] entries)
     {
         var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
         queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>(
-            [
-                new ChannelBotRegistrationEntry
-                {
-                    Id = "reg-1",
-                    Platform = "lark",
-                    NyxProviderSlug = "api-lark-bot",
-                    ScopeId = "scope-1",
-                    NyxChannelBotId = "bot-1",
-                },
-            ]));
+            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>(entries));
+        return queryPort;
+    }
 
-        var result = await InvokeAsync("HandleListRegistrationsAsync", queryPort, CancellationToken.None);
+    private static IPlatformAdminAuthorizer AdminAuthorizer(bool elevated)
+    {
+        var authorizer = Substitute.For<IPlatformAdminAuthorizer>();
+        authorizer.ResolveCallerAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new PlatformCaller(elevated, elevated ? "admin" : string.Empty, "e@x", "u")));
+        return authorizer;
+    }
+
+    [Fact]
+    public async Task HandleListRegistrationsAsync_ReturnsRelayModeOnly_AndScopesToCaller()
+    {
+        var queryPort = QueryPortWith(new ChannelBotRegistrationEntry
+        {
+            Id = "reg-1",
+            Platform = "lark",
+            NyxProviderSlug = "api-lark-bot",
+            ScopeId = "scope-1",
+            NyxChannelBotId = "bot-1",
+        });
+        var http = CreateHttpContext("scope-1");
+
+        var result = await InvokeAsync("HandleListRegistrationsAsync", http, queryPort, AdminAuthorizer(false), (string?)null, CancellationToken.None);
         var response = await ExecuteResultAsync(result);
 
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
         response.Body.Should().Contain("\"registration_mode\":\"nyx_relay_webhook\"");
         response.Body.Should().Contain("\"callback_url\":\"\"");
+        response.Body.Should().Contain("\"owned\":true");
+    }
+
+    [Fact]
+    public async Task HandleListRegistrationsAsync_ExcludesOtherAccountsByDefault()
+    {
+        var queryPort = QueryPortWith(
+            new ChannelBotRegistrationEntry { Id = "mine", Platform = "lark", ScopeId = "scope-1", NyxChannelBotId = "bot-mine" },
+            new ChannelBotRegistrationEntry { Id = "theirs", Platform = "lark", ScopeId = "scope-2", NyxChannelBotId = "bot-theirs" });
+        var http = CreateHttpContext("scope-1");
+
+        var result = await InvokeAsync("HandleListRegistrationsAsync", http, queryPort, AdminAuthorizer(false), (string?)null, CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        response.Body.Should().Contain("bot-mine");
+        response.Body.Should().NotContain("bot-theirs");
+    }
+
+    [Fact]
+    public async Task HandleListRegistrationsAsync_ScopeAll_Forbidden_WhenNotAdmin()
+    {
+        var queryPort = QueryPortWith(new ChannelBotRegistrationEntry { Id = "x", Platform = "lark", ScopeId = "scope-2" });
+        var http = CreateHttpContext("scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        var result = await InvokeAsync("HandleListRegistrationsAsync", http, queryPort, AdminAuthorizer(false), "all", CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        response.Body.Should().Contain("scope_admin_required");
+    }
+
+    [Fact]
+    public async Task HandleListRegistrationsAsync_ScopeAll_ReturnsAllAccounts_WhenAdmin()
+    {
+        var queryPort = QueryPortWith(
+            new ChannelBotRegistrationEntry { Id = "mine", Platform = "lark", ScopeId = "scope-1", NyxChannelBotId = "bot-mine" },
+            new ChannelBotRegistrationEntry { Id = "theirs", Platform = "lark", ScopeId = "scope-2", NyxChannelBotId = "bot-theirs" });
+        var http = CreateHttpContext("scope-1");
+        http.Request.Headers.Authorization = "Bearer admin-token";
+
+        var result = await InvokeAsync("HandleListRegistrationsAsync", http, queryPort, AdminAuthorizer(true), "all", CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        response.Body.Should().Contain("bot-mine");
+        response.Body.Should().Contain("bot-theirs");
+        response.Body.Should().Contain("\"owned\":false");
+    }
+
+    [Fact]
+    public async Task HandleGetStatusAsync_CrossAccount_PendingWhenNoInboundObserved()
+    {
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        queryPort.GetAsync("reg-foreign", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
+            {
+                Id = "reg-foreign",
+                Platform = "lark",
+                ScopeId = "scope-2",
+                NyxChannelBotId = "bot-foreign",
+                // no LastInboundAtUtc → aevatar has not observed an inbound for it
+            }));
+        var http = CreateHttpContext("scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        // nyxClient (arg 4) null: the cross-account path reports from the read model, no NyxID call.
+        var result = await InvokeAsync("HandleGetStatusAsync", "reg-foreign", http, queryPort, null, NullLoggerFactory.Instance, CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        response.Body.Should().Contain("\"status\":\"pending_webhook\"");
+        response.Body.Should().Contain("\"owned\":false");
+    }
+
+    [Fact]
+    public async Task HandleGetStatusAsync_CrossAccount_ActiveWhenInboundObserved()
+    {
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        queryPort.GetAsync("reg-foreign", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
+            {
+                Id = "reg-foreign",
+                Platform = "lark",
+                ScopeId = "scope-2",
+                NyxChannelBotId = "bot-foreign",
+                LastInboundAtUtc = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            }));
+        var http = CreateHttpContext("scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        var result = await InvokeAsync("HandleGetStatusAsync", "reg-foreign", http, queryPort, null, NullLoggerFactory.Instance, CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        response.Body.Should().Contain("\"status\":\"active\"");
+    }
+
+    [Fact]
+    public async Task HandleGetCallerInfoAsync_ReturnsAdminFlag()
+    {
+        var http = CreateHttpContext("scope-1");
+        http.Request.Headers.Authorization = "Bearer admin-token";
+
+        var result = await InvokeAsync("HandleGetCallerInfoAsync", http, AdminAuthorizer(true), CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        response.Body.Should().Contain("\"is_admin\":true");
+        response.Body.Should().Contain("\"scope_id\":\"scope-1\"");
     }
 
     [Fact]
@@ -242,7 +366,7 @@ public sealed class ChannelCallbackEndpointsTests
     }
 
     [Fact]
-    public async Task HandleDeleteRegistrationAsync_DispatchesUnregisterCommand()
+    public async Task HandleDeleteRegistrationAsync_DeprovisionsNyxThenDispatchesUnregisterCommand()
     {
         var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
         queryPort.GetAsync("reg-1", Arg.Any<CancellationToken>())
@@ -250,6 +374,9 @@ public sealed class ChannelCallbackEndpointsTests
             {
                 Id = "reg-1",
                 Platform = "lark",
+                NyxConversationRouteId = "route-1",
+                NyxChannelBotId = "bot-1",
+                NyxAgentApiKeyId = "key-1",
             }));
 
         EventEnvelope? capturedEnvelope = null;
@@ -262,18 +389,198 @@ public sealed class ChannelCallbackEndpointsTests
                 Arg.Any<CancellationToken>())
             .Returns(ActorDispatchPortTestSupport.AcceptAsync);
 
+        var deprovision = Substitute.For<INyxChannelBotDeprovisioningService>();
+        deprovision.DeprovisionAsync(
+                Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new NyxChannelBotDeprovisioningResult(true, true, Array.Empty<string>())));
+
+        var http = CreateHttpContext("scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
         var result = await InvokeAsync(
             "HandleDeleteRegistrationAsync",
             "reg-1",
+            http,
             ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
             queryPort,
+            deprovision,
             CancellationToken.None);
         var response = await ExecuteResultAsync(result);
 
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        await deprovision.Received(1).DeprovisionAsync(
+            "test-token", "route-1", "bot-1", "key-1", Arg.Any<CancellationToken>());
         capturedEnvelope.Should().NotBeNull();
         capturedEnvelope!.Payload.Is(ChannelBotUnregisterCommand.Descriptor).Should().BeTrue();
         capturedEnvelope.Payload.Unpack<ChannelBotUnregisterCommand>().RegistrationId.Should().Be("reg-1");
+    }
+
+    [Fact]
+    public async Task HandleDeleteRegistrationAsync_HardChannelBotFailure_ReturnsBadGateway_AndDoesNotTombstone()
+    {
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        queryPort.GetAsync("reg-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
+            {
+                Id = "reg-1",
+                Platform = "lark",
+                NyxChannelBotId = "bot-1",
+            }));
+
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
+
+        var deprovision = Substitute.For<INyxChannelBotDeprovisioningService>();
+        deprovision.DeprovisionAsync(
+                Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new NyxChannelBotDeprovisioningResult(false, false, Array.Empty<string>())));
+
+        var http = CreateHttpContext("scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        var result = await InvokeAsync(
+            "HandleDeleteRegistrationAsync",
+            "reg-1",
+            http,
+            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
+            queryPort,
+            deprovision,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status502BadGateway);
+        response.Body.Should().Contain("nyx_channel_bot_delete_failed");
+        // Local mirror must NOT be tombstoned → no unregister command dispatched.
+        await ((IActorDispatchPort)actorRuntime).DidNotReceiveWithAnyArgs()
+            .DispatchAsync(default!, default!, default);
+    }
+
+    [Fact]
+    public async Task HandleDeleteRegistrationAsync_ResidualWarnings_StillTombstones_AndSurfacesWarnings()
+    {
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        queryPort.GetAsync("reg-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
+            {
+                Id = "reg-1",
+                Platform = "lark",
+                NyxConversationRouteId = "route-1",
+                NyxChannelBotId = "bot-1",
+                NyxAgentApiKeyId = "key-1",
+            }));
+
+        EventEnvelope? capturedEnvelope = null;
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
+        ((IActorDispatchPort)actorRuntime).DispatchAsync(
+                ChannelBotRegistrationGAgent.WellKnownId,
+                Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope),
+                Arg.Any<CancellationToken>())
+            .Returns(ActorDispatchPortTestSupport.AcceptAsync);
+
+        var deprovision = Substitute.For<INyxChannelBotDeprovisioningService>();
+        deprovision.DeprovisionAsync(
+                Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new NyxChannelBotDeprovisioningResult(
+                true, true, new[] { "relay_api_key_delete_failed id=key-1" })));
+
+        var http = CreateHttpContext("scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        var result = await InvokeAsync(
+            "HandleDeleteRegistrationAsync",
+            "reg-1",
+            http,
+            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
+            queryPort,
+            deprovision,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        response.Body.Should().Contain("relay_api_key_delete_failed id=key-1");
+        capturedEnvelope.Should().NotBeNull();
+        capturedEnvelope!.Payload.Unpack<ChannelBotUnregisterCommand>().RegistrationId.Should().Be("reg-1");
+    }
+
+    [Fact]
+    public async Task HandleDeleteRegistrationAsync_Telegram_RoutesThroughSamePlatformNeutralPath()
+    {
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        queryPort.GetAsync("reg-tg", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
+            {
+                Id = "reg-tg",
+                Platform = "telegram",
+                NyxConversationRouteId = "route-tg",
+                NyxChannelBotId = "bot-tg",
+                NyxAgentApiKeyId = "key-tg",
+            }));
+
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
+        ((IActorDispatchPort)actorRuntime).DispatchAsync(
+                ChannelBotRegistrationGAgent.WellKnownId,
+                Arg.Any<EventEnvelope>(),
+                Arg.Any<CancellationToken>())
+            .Returns(ActorDispatchPortTestSupport.AcceptAsync);
+
+        var deprovision = Substitute.For<INyxChannelBotDeprovisioningService>();
+        deprovision.DeprovisionAsync(
+                Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new NyxChannelBotDeprovisioningResult(true, true, Array.Empty<string>())));
+
+        var http = CreateHttpContext("scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        var result = await InvokeAsync(
+            "HandleDeleteRegistrationAsync",
+            "reg-tg",
+            http,
+            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
+            queryPort,
+            deprovision,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        await deprovision.Received(1).DeprovisionAsync(
+            "test-token", "route-tg", "bot-tg", "key-tg", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task HandleDeleteRegistrationAsync_ReturnsUnauthorized_WhenBearerMissing()
+    {
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        queryPort.GetAsync("reg-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
+            {
+                Id = "reg-1",
+                Platform = "lark",
+                NyxChannelBotId = "bot-1",
+            }));
+
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        var deprovision = Substitute.For<INyxChannelBotDeprovisioningService>();
+
+        var http = CreateHttpContext("scope-1"); // no Authorization header
+
+        var result = await InvokeAsync(
+            "HandleDeleteRegistrationAsync",
+            "reg-1",
+            http,
+            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
+            queryPort,
+            deprovision,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
+        await deprovision.DidNotReceiveWithAnyArgs().DeprovisionAsync(
+            default!, default, default, default, default);
     }
 
     [Fact]
@@ -284,16 +591,24 @@ public sealed class ChannelCallbackEndpointsTests
             .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(null));
 
         var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        var deprovision = Substitute.For<INyxChannelBotDeprovisioningService>();
+        var http = CreateHttpContext("scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
         var result = await InvokeAsync(
             "HandleDeleteRegistrationAsync",
             "missing",
+            http,
             ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
             queryPort,
+            deprovision,
             CancellationToken.None);
         var response = await ExecuteResultAsync(result);
 
         response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
         await actorRuntime.DidNotReceiveWithAnyArgs().GetAsync(default!);
+        await deprovision.DidNotReceiveWithAnyArgs().DeprovisionAsync(
+            default!, default, default, default, default);
     }
 
     [Fact]
@@ -340,6 +655,105 @@ public sealed class ChannelCallbackEndpointsTests
         response.Body.Should().Contain("process-local diagnostic history is retired");
         response.Body.Should().NotContain("entry_count");
         response.Body.Should().NotContain("entries");
+    }
+
+    [Fact]
+    public void MapChannelCallbackEndpoints_ShouldRegisterStatusRoute_RequiringAuthorization()
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = "Development",
+        });
+
+        var app = builder.Build();
+        var routeBuilder = (IEndpointRouteBuilder)app;
+        app.MapChannelCallbackEndpoints();
+
+        var endpoint = routeBuilder.DataSources
+            .SelectMany(source => source.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Single(route => string.Equals(route.RoutePattern.RawText, "/api/channels/registrations/{registrationId}/status", StringComparison.Ordinal));
+
+        endpoint.Metadata.OfType<IAuthorizeData>().Should().NotBeEmpty();
+        endpoint.Metadata.OfType<Microsoft.AspNetCore.Routing.HttpMethodMetadata>()
+            .Single().HttpMethods.Should().Contain("GET");
+    }
+
+    [Fact]
+    public async Task HandleGetStatusAsync_ReturnsNotFound_WhenMissing()
+    {
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        queryPort.GetAsync("missing", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(null));
+        var http = CreateHttpContext("scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        // nyxClient (arg 4) is null on purpose: the not-found path returns before it is used.
+        var result = await InvokeAsync("HandleGetStatusAsync", "missing", http, queryPort, null, NullLoggerFactory.Instance, CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+    }
+
+    [Fact]
+    public async Task HandleGetStatusAsync_ReturnsUnknown_WhenNoChannelBotId()
+    {
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        queryPort.GetAsync("reg-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
+            {
+                Id = "reg-1",
+                Platform = "lark",
+                ScopeId = "scope-1",   // owned by the caller, so it passes the foreign-scope check
+                NyxChannelBotId = string.Empty,
+            }));
+        var http = CreateHttpContext("scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        // No channel bot id → returns "unknown" before touching the Nyx client (arg 4 null).
+        var result = await InvokeAsync("HandleGetStatusAsync", "reg-1", http, queryPort, null, NullLoggerFactory.Instance, CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        response.Body.Should().Contain("\"status\":\"unknown\"");
+    }
+
+    [Fact]
+    public void ParseChannelBotStatus_MapsActiveWithLastEvent()
+    {
+        var (status, lastEventAt) = InvokeParseStatus(
+            """{"id":"bot-1","status":"active","last_event_at":"2026-06-24T00:00:00Z"}""");
+
+        status.Should().Be("active");
+        lastEventAt.Should().Be("2026-06-24T00:00:00Z");
+    }
+
+    [Fact]
+    public void ParseChannelBotStatus_HandlesDataWrapperAndPending()
+    {
+        var (status, lastEventAt) = InvokeParseStatus(
+            """{"data":{"status":"pending_webhook","last_event_at":null}}""");
+
+        status.Should().Be("pending_webhook");
+        lastEventAt.Should().BeNull();
+    }
+
+    [Fact]
+    public void ParseChannelBotStatus_DegradesToUnknown_OnErrorEnvelopeOrMalformed()
+    {
+        InvokeParseStatus("""{"error":true,"status":404}""").Status.Should().Be("unknown");
+        InvokeParseStatus("not-json").Status.Should().Be("unknown");
+        InvokeParseStatus("""{"id":"bot-1"}""").Status.Should().Be("unknown");
+    }
+
+    private static (string Status, string? LastEventAt) InvokeParseStatus(string response)
+    {
+        var method = typeof(ChannelCallbackEndpoints)
+            .GetMethod("ParseChannelBotStatus", BindingFlags.Static | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("ParseChannelBotStatus not found.");
+        var boxed = method.Invoke(null, [response]) ?? throw new InvalidOperationException("null result");
+        var tuple = (ValueTuple<string, string?>)boxed;
+        return (tuple.Item1, tuple.Item2);
     }
 
     private static HttpContext CreateHttpContext(string? scopeId = null)

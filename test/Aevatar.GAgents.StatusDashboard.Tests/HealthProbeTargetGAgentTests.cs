@@ -154,6 +154,31 @@ public sealed class HealthProbeTargetGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Tick_SuccessfulProbe_DeliversCompletionThroughSelfHandlingGate()
+    {
+        await _agent.HandleConfigureAsync(new HealthProbeConfigureCommand
+        {
+            Spec = NewDescriptor("nyxid-auth"),
+        });
+
+        _executor.NextOutcome = new HealthProbeOutcome
+        {
+            Status = HealthOutcomeStatus.Ok,
+            Detail = "http_200",
+        };
+
+        await _agent.HandleTickAsync(new HealthProbeTickRequested { Slug = "nyxid-auth" });
+
+        // Regression guard for 298fb1355: HandleCompletedAsync is OnlySelfHandling, so the
+        // completion must be published with a Self topology route. SendToAsync builds a Direct
+        // route that the dispatch gate drops, stranding every probe on the timeout path forever.
+        _publisher.LastCompletionRoute.GetTopologyAudience().Should().Be(TopologyAudience.Self);
+        _publisher.LastCompletionDelivered.Should().BeTrue();
+        _agent.State.LastOutcome.Should().NotBeNull();
+        _agent.State.LastOutcome.Status.Should().Be(HealthOutcomeStatus.Ok);
+    }
+
+    [Fact]
     public async Task Tick_StampsObservedAtAndLatencyFromInjectedClock()
     {
         await _agent.HandleConfigureAsync(new HealthProbeConfigureCommand
@@ -237,7 +262,7 @@ public sealed class HealthProbeTargetGAgentTests : IAsyncLifetime
         _agent.State.ActiveExecution.Should().BeNull();
 
         _executor.ProbeCompletion.SetResult();
-        await _publisher.CompletedHandled.Task;
+        await _publisher.CompletionSettled.Task;
         await tickTask;
 
         _agent.State.LastOutcome.Status.Should().Be(HealthOutcomeStatus.Down);
@@ -515,10 +540,27 @@ public sealed class HealthProbeTargetGAgentTests : IAsyncLifetime
         public Task PurgeActorAsync(string actorId, CancellationToken ct = default) => Task.CompletedTask;
     }
 
+    // Models the real OnlySelfHandling dispatch gate instead of blindly invoking the handler.
+    // HandleCompletedAsync is [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)], so
+    // the runtime (StaticHandlerAdapter) only invokes it when the envelope route resolves to
+    // TopologyAudience.Self. A Direct route — what SendToAsync builds — resolves to Unspecified and
+    // is silently dropped; that is exactly the 298fb1355 regression that stranded every probe on the
+    // timeout path. Routing self events through this gate makes any Direct-routed completion fail loudly.
     private sealed class InlineSelfPublisher(HealthProbeTargetGAgent agent) : IEventPublisher
     {
+        private const string SelfActorId = "health-probe::test";
+
         public TaskCompletionSource<HealthProbeCompletedEvent> CompletedHandled { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // Completes whether the completion was delivered or dropped, so tests can await the
+        // settlement without hanging when the gate (correctly) drops a misrouted completion.
+        public TaskCompletionSource CompletionSettled { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public EnvelopeRoute? LastCompletionRoute { get; private set; }
+
+        public bool LastCompletionDelivered { get; private set; }
 
         public Task PublishAsync<TEvent>(
             TEvent evt,
@@ -528,10 +570,9 @@ public sealed class HealthProbeTargetGAgentTests : IAsyncLifetime
             EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
-            _ = audience;
             _ = sourceEnvelope;
             _ = options;
-            return DispatchAsync(evt, ct);
+            return DispatchAsync(evt, EnvelopeRouteSemantics.CreateTopologyPublication(SelfActorId, audience), ct);
         }
 
         public Task SendToAsync<TEvent>(
@@ -542,19 +583,26 @@ public sealed class HealthProbeTargetGAgentTests : IAsyncLifetime
             EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
-            _ = targetActorId;
             _ = sourceEnvelope;
             _ = options;
-            return DispatchAsync(evt, ct);
+            return DispatchAsync(evt, EnvelopeRouteSemantics.CreateDirect(SelfActorId, targetActorId), ct);
         }
 
-        private async Task DispatchAsync(IMessage evt, CancellationToken ct)
+        private async Task DispatchAsync(IMessage evt, EnvelopeRoute route, CancellationToken ct)
         {
+            _ = ct;
             switch (evt)
             {
                 case HealthProbeCompletedEvent completed:
-                    await agent.HandleCompletedAsync(completed);
-                    CompletedHandled.TrySetResult(completed);
+                    LastCompletionRoute = route;
+                    if (route.GetTopologyAudience() == TopologyAudience.Self)
+                    {
+                        LastCompletionDelivered = true;
+                        await agent.HandleCompletedAsync(completed);
+                        CompletedHandled.TrySetResult(completed);
+                    }
+
+                    CompletionSettled.TrySetResult();
                     break;
             }
         }

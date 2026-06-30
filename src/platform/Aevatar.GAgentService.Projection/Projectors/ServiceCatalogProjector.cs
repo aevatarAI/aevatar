@@ -91,9 +91,7 @@ public sealed class ServiceCatalogProjector
 
     private static ServiceCatalogExternalExposureReadModel? MapExternalExposure(ExternalExposure? externalExposure)
     {
-        if (externalExposure == null ||
-            string.IsNullOrWhiteSpace(externalExposure.NyxidSlug) &&
-            externalExposure.RegisteredAt == null)
+        if (externalExposure == null)
         {
             return null;
         }
@@ -102,6 +100,15 @@ public sealed class ServiceCatalogProjector
         {
             NyxidSlug = externalExposure.NyxidSlug ?? string.Empty,
             RegisteredAtUtcValue = externalExposure.RegisteredAt?.Clone(),
+            Status = externalExposure.Status,
+            NyxidServiceId = externalExposure.NyxidServiceId ?? string.Empty,
+            DesiredSpecHash = externalExposure.DesiredSpecHash ?? string.Empty,
+            RegisteredSpecHash = externalExposure.RegisteredSpecHash ?? string.Empty,
+            LastError = externalExposure.LastError ?? string.Empty,
+            Attempt = externalExposure.Attempt,
+            NextAttemptAtUtcValue = externalExposure.NextAttemptAt?.Clone(),
+            CredentialKid = externalExposure.CredentialKid ?? string.Empty,
+            ExposureDesired = externalExposure.ExposureDesired,
         };
     }
 }

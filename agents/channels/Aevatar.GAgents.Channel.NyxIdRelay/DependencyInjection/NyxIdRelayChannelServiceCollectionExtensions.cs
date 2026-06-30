@@ -46,7 +46,9 @@ public static class NyxIdRelayChannelServiceCollectionExtensions
         services.TryAddSingleton<ICommandDispatchService<ChannelBotUnregisterCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>, DefaultCommandDispatchService<ChannelBotUnregisterCommand, ChannelBotRegistrationCommandTarget, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>>();
         services.TryAddSingleton<INyxLarkProvisioningService, NyxLarkProvisioningService>();
         services.TryAddSingleton<INyxTelegramProvisioningService, NyxTelegramProvisioningService>();
+        services.TryAddSingleton<INyxChannelBotDeprovisioningService, NyxChannelBotDeprovisioningService>();
         services.TryAddSingleton<INyxIdRelayScopeResolver, NyxIdRelayScopeResolver>();
+        services.TryAddSingleton<IChannelRelayActivityRecorder, ChannelRelayActivityRecorder>();
 
         // Provisioning service set — both Lark + Telegram are concrete provisioning sources.
         services.TryAddEnumerable(ServiceDescriptor.Singleton<INyxChannelBotProvisioningService, NyxLarkProvisioningService>());

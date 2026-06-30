@@ -70,6 +70,7 @@ public static class ChatRoutingServiceCollectionExtensions
             IProjectionActivationPlanProvider,
             ChatRoutePolicyCommittedStateProjectionActivationPlanProvider>());
         services.TryAddSingleton<IChatRoutePolicyCommandPort, ChatRoutePolicyCommandPort>();
+        services.TryAddSingleton<IChatRoutePolicyProjectionRecoveryPort, ChatRoutePolicyProjectionRecoveryPort>();
 
         return services;
     }

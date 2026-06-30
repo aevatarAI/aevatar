@@ -49,6 +49,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.Bootstrap.Extensions.AI;
 
@@ -120,6 +121,11 @@ public static class ServiceCollectionExtensions
             ResolveVoiceCredentialProviders(sp),
             sp.GetService<ILogger<AgentToolVoiceCatalog>>()));
         services.TryAddSingleton<IVoicePresenceCapabilityCommandPort, VoicePresenceCapabilityCommandPort>();
+        // Zero-config /ws/voice: auto-provision a never-enabled default voice agent on first connect by
+        // committing the same enable voice-presence/enable issues. The attach path (ActorOwnedVoiceRealtimeSession)
+        // resolves this optionally and only invokes it when the capability is still null after the
+        // re-projection self-heal — i.e. a genuinely-unprovisioned default agent.
+        services.TryAddSingleton<IVoicePresenceCapabilityAutoEnablePort, VoicePresenceCapabilityAutoEnablePort>();
         services.TryAddSingleton<IWorkflowYamlValidator, WorkflowYamlValidatorImpl>();
         services.TryAddSingleton<IWorkflowDefinitionCommandAdapter>(sp =>
             new LocalWorkflowDefinitionCommandAdapter(
@@ -194,7 +200,11 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton(sp => new VoiceVolatileToolCredentialPort(sp.GetService<TimeProvider>()));
         services.TryAddSingleton<IVoiceVolatileToolCredentialPort>(sp => sp.GetRequiredService<VoiceVolatileToolCredentialPort>());
         services.TryAddSingleton<IVoiceToolCredentialIssuer>(sp => sp.GetRequiredService<VoiceVolatileToolCredentialPort>());
+        services.AddOptions<VoiceWebSocketAttachOptions>();
         services.TryAddSingleton<IVoiceVolatileMediaStreamPort, VoiceVolatileMediaStreamPort>();
+        services.TryAddSingleton<IValidateOptions<VoiceWebSocketAttachOptions>, VoiceWebSocketAttachOptionsValidator>();
+        services.TryAddSingleton<VoiceWebSocketAttachExecutor>();
+        services.AddVoiceWebRtcTransport();
         services.TryAddSingleton<IRealtimeSession<VoiceRealtimeSessionRequest, VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeFrame, VoiceRealtimeSessionCompletion>, ActorOwnedVoiceRealtimeSession>();
         services.AddVoicePresenceCapabilityProjection();
         services.AddVoicePresenceCapabilityProjectionStore(configuration);

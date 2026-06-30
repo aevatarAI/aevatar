@@ -66,16 +66,51 @@ public static class StatusEndpoints
                 .ToArray();
 
             var counts = StatusCounts.Tally(targets);
-            var overall = counts switch
-            {
-                { Total: 0 } => "unknown",
-                { Down: > 0 } => "down",
-                { Degraded: > 0 } => "degraded",
-                { Unknown: > 0, Ok: 0 } => "unknown",
-                _ => "ok",
-            };
+            var overall = ComputeOverall(targets);
 
             return new StatusResponse(DateTimeOffset.UtcNow, overall, counts, targets);
+        }
+
+        // Honest, severity-weighted roll-up. Only targets with a *known* status count, so an
+        // unconfigured canary (status "unknown") can never force the board red. A "critical"
+        // target being down is the only thing that blacks out the whole board; lesser-severity
+        // failures and critical degradations surface as "degraded" without masking a real outage.
+        private static string ComputeOverall(IReadOnlyList<StatusTarget> targets)
+        {
+            var anyKnown = false;
+            var anyOk = false;
+            var criticalDown = false;
+            var degraded = false;
+
+            foreach (var t in targets)
+            {
+                if (!t.Enabled) continue;
+                var isCritical = string.Equals(t.Severity, "critical", StringComparison.Ordinal);
+                switch (t.Status)
+                {
+                    case "ok":
+                        anyKnown = true;
+                        anyOk = true;
+                        break;
+                    case "degraded":
+                        anyKnown = true;
+                        degraded = true;
+                        break;
+                    case "down":
+                        anyKnown = true;
+                        if (isCritical) criticalDown = true;
+                        else degraded = true;
+                        break;
+                    default:
+                        // "unknown" — excluded from the verdict.
+                        break;
+                }
+            }
+
+            if (!anyKnown) return "unknown";
+            if (criticalDown) return "down";
+            if (degraded) return "degraded";
+            return anyOk ? "ok" : "unknown";
         }
     }
 
@@ -107,6 +142,7 @@ public static class StatusEndpoints
         [property: JsonPropertyName("slug")] string Slug,
         [property: JsonPropertyName("name")] string Name,
         [property: JsonPropertyName("category")] string Category,
+        [property: JsonPropertyName("severity")] string Severity,
         [property: JsonPropertyName("probe")] string Probe,
         [property: JsonPropertyName("status")] string Status,
         [property: JsonPropertyName("enabled")] bool Enabled,
@@ -127,6 +163,7 @@ public static class StatusEndpoints
                 d.Slug,
                 string.IsNullOrWhiteSpace(d.DisplayName) ? d.Slug : d.DisplayName,
                 string.IsNullOrWhiteSpace(d.Category) ? "upstream" : d.Category,
+                string.IsNullOrWhiteSpace(d.Severity) ? "standard" : d.Severity,
                 d.ProbeKind,
                 MapStatus(d.Status),
                 d.Enabled,

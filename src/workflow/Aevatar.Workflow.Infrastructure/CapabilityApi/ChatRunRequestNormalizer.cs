@@ -33,7 +33,8 @@ internal static class ChatRunRequestNormalizer
     public static ChatRunRequestNormalizationResult Normalize(
         ChatInput input,
         IReadOnlyDictionary<string, string>? defaultMetadata = null,
-        WorkflowCallerCredential? trustedCallerCredential = null)
+        WorkflowCallerCredential? trustedCallerCredential = null,
+        string? trustedScopeId = null)
     {
         // Refactor (iter112/cluster-3): Old pattern: host passed normalized legacy mirror fields into Application commands. New principle: host normalizes wire aliases once into typed WorkflowChatSource.
         // Refactor (iter349/cluster-349):
@@ -45,7 +46,8 @@ internal static class ChatRunRequestNormalizer
             input,
             NormalizeInputParts(input.InputParts),
             defaultMetadata,
-            trustedCallerCredential);
+            trustedCallerCredential,
+            trustedScopeId);
     }
 
     private readonly record struct CallerCredentialNormalizationResult(
@@ -93,7 +95,8 @@ internal static class ChatRunRequestNormalizer
         IWorkflowFileIngressPort? fileIngressPort,
         IReadOnlyDictionary<string, string>? defaultMetadata = null,
         WorkflowCallerCredential? trustedCallerCredential = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? trustedScopeId = null)
     {
         ArgumentNullException.ThrowIfNull(input);
         var normalizedInputParts = fileIngressPort == null
@@ -103,14 +106,16 @@ internal static class ChatRunRequestNormalizer
             input,
             normalizedInputParts,
             defaultMetadata,
-            trustedCallerCredential);
+            trustedCallerCredential,
+            trustedScopeId);
     }
 
     private static ChatRunRequestNormalizationResult NormalizeWithInputParts(
         ChatInput input,
         InputPartsNormalizationResult normalizedInputPartsResult,
         IReadOnlyDictionary<string, string>? defaultMetadata,
-        WorkflowCallerCredential? trustedCallerCredential)
+        WorkflowCallerCredential? trustedCallerCredential,
+        string? trustedScopeId)
     {
         if (normalizedInputPartsResult.Error != WorkflowChatRunStartError.None)
             return ChatRunRequestNormalizationResult.Failed(normalizedInputPartsResult.Error);
@@ -119,7 +124,12 @@ internal static class ChatRunRequestNormalizer
         if (HasOnlyUnsupportedInputParts(input, normalizedInputParts))
             return ChatRunRequestNormalizationResult.Failed(WorkflowChatRunStartError.PromptRequired);
 
-        var normalizedContext = NormalizeContext(input.ScopeId, input.Metadata, input.Headers, defaultMetadata);
+        // 06-20-observatory-run-state-feed (R2d): when the ingress resolved a scope from the authenticated
+        // caller claim, that claim is authoritative for the run's scope_id — the body-supplied scopeId must
+        // NOT override it (closes a scope-spoofing hole and ensures the materialized current-state doc is
+        // attributed to the caller's observatory). Without a caller claim, fall back to the body scopeId.
+        var effectiveScopeId = string.IsNullOrWhiteSpace(trustedScopeId) ? input.ScopeId : trustedScopeId;
+        var normalizedContext = NormalizeContext(effectiveScopeId, input.Metadata, input.Headers, defaultMetadata);
         var normalizedMetadata = normalizedContext.Metadata;
         var sourceResult = NormalizeSource(input);
         if (!sourceResult.Succeeded)

@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 
 namespace Aevatar.GAgentService.Application.Schedules;
@@ -273,10 +274,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
     {
         var invocation = target.ServiceInvocation
             ?? throw new ArgumentException("Service invocation scheduled dispatch target is required.", nameof(target));
-        if (invocation.Identity == null)
-            throw new ArgumentException("Service invocation identity is required.", nameof(target));
-        if (string.IsNullOrWhiteSpace(invocation.Identity.ServiceId))
-            throw new ArgumentException("Service invocation service id is required.", nameof(target));
+        var identity = NormalizeServiceInvocationIdentity(invocation.Identity);
         if (string.IsNullOrWhiteSpace(invocation.EndpointId))
             throw new ArgumentException("Service invocation endpoint id is required.", nameof(target));
         if (invocation.Payload == null)
@@ -290,7 +288,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             {
                 EndpointId = NormalizeRequired(invocation.EndpointId, nameof(invocation.EndpointId)),
                 RevisionId = NormalizeNullable(invocation.RevisionId),
-                Identity = invocation.Identity.Clone(),
+                Identity = identity,
                 Payload = invocation.Payload.Clone(),
                 Caller = invocation.Caller?.Clone(),
                 Auth = NormalizeServiceInvocationAuth(invocation.Auth),
@@ -298,25 +296,84 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         };
     }
 
+    private static ServiceIdentity NormalizeServiceInvocationIdentity(ServiceIdentity? identity)
+    {
+        if (identity == null)
+            throw new ArgumentException("Service invocation identity is required.", nameof(identity));
+
+        return new ServiceIdentity
+        {
+            TenantId = NormalizeRequiredServiceIdentityField(identity.TenantId, "tenant id", nameof(identity.TenantId)),
+            AppId = NormalizeRequiredServiceIdentityField(identity.AppId, "app id", nameof(identity.AppId)),
+            Namespace = NormalizeRequiredServiceIdentityField(identity.Namespace, "namespace", nameof(identity.Namespace)),
+            ServiceId = NormalizeRequiredServiceIdentityField(identity.ServiceId, "service id", nameof(identity.ServiceId)),
+        };
+    }
+
+    private static string NormalizeRequiredServiceIdentityField(
+        string? value,
+        string fieldDescription,
+        string parameterName)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            throw new ArgumentException($"Service invocation {fieldDescription} is required.", parameterName);
+
+        return value.Trim();
+    }
+
     private static ScheduledServiceInvocationAuth? NormalizeServiceInvocationAuth(
         ScheduledServiceInvocationAuth? auth)
     {
         if (auth == null)
             return null;
-        if (auth.SenderNyxId == null)
-            throw new ArgumentException("Service invocation sender NyxID credential source is required.", nameof(auth));
 
-        var source = auth.SenderNyxId;
+        var hasSenderNyxId = auth.SenderNyxId != null;
+        var durableToken = NormalizeOptional(auth.DurableSenderBearerToken);
+        var hasDurableSenderBearerToken = durableToken.Length > 0;
+        var hasScopeOwnerNyxId = auth.ScopeOwnerNyxId != null;
+        if (Convert.ToInt32(hasSenderNyxId) +
+            Convert.ToInt32(hasDurableSenderBearerToken) +
+            Convert.ToInt32(hasScopeOwnerNyxId) != 1)
+        {
+            throw new ArgumentException("Exactly one service invocation credential source is required.", nameof(auth));
+        }
+
+        if (hasScopeOwnerNyxId)
+        {
+            var ownerSource = auth.ScopeOwnerNyxId!;
+            return new ScheduledServiceInvocationAuth(
+                ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
+                    NormalizeRequired(ownerSource.Scope, nameof(ownerSource.Scope)),
+                    NormalizeOwnerSubject(ownerSource.OwnerSubject)));
+        }
+
+        if (hasDurableSenderBearerToken)
+            return new ScheduledServiceInvocationAuth(DurableSenderBearerToken: durableToken);
+
+        var source = auth.SenderNyxId!;
         if (source.Subject == null)
             throw new ArgumentException("Service invocation sender NyxID subject is required.", nameof(auth));
 
-        return new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationNyxIdCredentialSource(
-            new ScheduledServiceInvocationNyxIdSubjectRef(
-                NormalizeRequired(source.Subject.Platform, nameof(source.Subject.Platform)),
-                NormalizeOptional(source.Subject.Tenant),
-                NormalizeRequired(source.Subject.ExternalUserId, nameof(source.Subject.ExternalUserId))),
+        return new ScheduledServiceInvocationAuth(SenderNyxId: new ScheduledServiceInvocationNyxIdCredentialSource(
+            NormalizeSubject(source.Subject),
             NormalizeRequired(source.Scope, nameof(source.Scope))));
     }
+
+    private static ScheduledServiceInvocationNyxIdSubjectRef NormalizeOwnerSubject(
+        ScheduledServiceInvocationNyxIdSubjectRef? subject)
+    {
+        if (subject == null)
+            throw new ArgumentException("Service invocation scope owner NyxID subject is required.", nameof(subject));
+
+        return NormalizeSubject(subject);
+    }
+
+    private static ScheduledServiceInvocationNyxIdSubjectRef NormalizeSubject(
+        ScheduledServiceInvocationNyxIdSubjectRef subject) =>
+        new(
+            NormalizeRequired(subject.Platform, nameof(subject.Platform)),
+            NormalizeOptional(subject.Tenant),
+            NormalizeRequired(subject.ExternalUserId, nameof(subject.ExternalUserId)));
 
     private static void ValidateSchedule(ScheduledDispatchConfiguration configuration)
     {
