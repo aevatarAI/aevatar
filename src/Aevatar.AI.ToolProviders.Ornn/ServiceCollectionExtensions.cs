@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Ornn.Publishing;
+using Aevatar.AI.ToolProviders.Ornn.SystemSkillOverlay;
 using Aevatar.AI.ToolProviders.Skills;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -65,6 +66,8 @@ public static class ServiceCollectionExtensions
             return services;
 
         services.TryAddSingleton(options);
+        services.TryAddSingleton<ISystemSkillOverlayBuilder, SystemSkillOverlayBuilder>();
+        // TODO: consolidate NyxIdRelayPromptConfiguration flags with this overlay registration once the materializer owns injection.
         return services;
     }
 
