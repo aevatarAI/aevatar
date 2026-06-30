@@ -5704,7 +5704,7 @@ describe("StudioPage", () => {
     const notFoundError = new Error("not found");
     notFoundError.name = "StudioApiError";
     Object.assign(notFoundError, { status: 404 });
-    (studioApi.getMemberBindingRun as jest.Mock).mockRejectedValueOnce(notFoundError);
+    (studioApi.getMemberBindingRun as jest.Mock).mockRejectedValue(notFoundError);
 
     renderStudioPage("/studio?scopeId=scope-1&member=member%3Aworkspace-demo&focus=workflow%3Aworkflow-1&tab=studio");
 
@@ -5721,8 +5721,8 @@ describe("StudioPage", () => {
     });
 
     await waitFor(() => {
-      expect(studioApi.getMemberBindingRun).toHaveBeenCalledTimes(1);
-    });
+      expect(studioApi.getMemberBindingRun).toHaveBeenCalledTimes(8);
+    }, { timeout: 10_000 });
     expect(screen.getByText("service:no-service")).toBeTruthy();
     expect(screen.getByText("candidate:workspace-demo")).toBeTruthy();
   });
