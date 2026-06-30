@@ -68,6 +68,46 @@ public sealed class WorkflowRunDeliveryGAgentTests
     }
 
     [Fact]
+    public async Task TerminalWorkflowEvent_LongLarkOutput_ShouldDeliverAllDraftsInOrderedChunks()
+    {
+        var projectionPort = new RecordingWorkflowExecutionProjectionPort();
+        var nyxHandler = new RecordingJsonHandler();
+        var outboundPort = CreateOutboundPort(nyxHandler);
+        var deferredDispatchPort = new DeferredDispatchPort();
+        var credentialProvider = new RecordingCredentialProvider
+        {
+            ["secrets://nyx/reply-1"] = "nyxid_ag_secret_1",
+        };
+        var agent = await CreateAgentAsync(projectionPort, outboundPort, deferredDispatchPort, credentialProvider);
+        var dispatchPort = new DirectActorDispatchPort(agent);
+        deferredDispatchPort.Inner = dispatchPort;
+
+        var fullOutput = BuildLongWhatsappDraftOutput();
+        await agent.HandleEventAsync(Envelope(StartRequest()));
+        await projectionPort.LastSink!.PushAsync(new WorkflowRunEventEnvelope
+        {
+            RunFinished = new WorkflowRunFinishedEventPayload
+            {
+                Result = Any.Pack(new WorkflowRunResultPayload { Output = fullOutput }),
+            },
+        });
+
+        agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Delivered);
+        agent.State.TerminalText.Should().Be(fullOutput);
+        nyxHandler.Requests.Count.Should().BeGreaterThan(1);
+        nyxHandler.Requests.Should().OnlyContain(x => x.Path == "/api/v1/channel-relay/reply");
+        nyxHandler.Requests.Should().OnlyContain(x => x.Authorization == "Bearer nyxid_ag_secret_1");
+        nyxHandler.Requests.Select(x => ReadReplyText(x.Body)).Should().AllSatisfy(x =>
+            x.Length.Should().BeLessThan(2850));
+
+        var delivered = string.Join("\n", nyxHandler.Requests.Select(x => StripChunkHeader(ReadReplyText(x.Body))));
+        delivered.Should().Be(fullOutput);
+        delivered.Should().Contain("**3. Simple & Sweet**");
+        delivered.Should().Contain("Wishing you all a lovely summer!");
+        delivered.Should().Contain("祝大家暑假愉快！");
+    }
+
+    [Fact]
     public async Task StartValidationFailure_ShouldPersistFailedTerminalState()
     {
         var eventStore = new InMemoryEventStore();
@@ -319,6 +359,42 @@ public sealed class WorkflowRunDeliveryGAgentTests
             client,
             NullLogger<NyxIdRelayOutboundPort>.Instance,
             [new PlainTextComposer("lark")]);
+    }
+
+    private static string BuildLongWhatsappDraftOutput()
+    {
+        var source = string.Join(
+            "\n",
+            "**Original (EN):** Hi Everyone! Below is a quick recap on how we used our class funds this year.",
+            "**Translation (CN):** 大家好！下面是今年班级基金使用情况的简要回顾。",
+            "---",
+            "**Suggested replies:**",
+            "**1. Warm & Polite** 🇬🇧 Thank you so much for organizing everything and for sharing such a thoughtful recap.",
+            "🇨🇳 非常感谢你们的组织和分享总结。",
+            "**2. Friendly & Engaging** 🇬🇧 Thank you! It's so lovely to see how the class funds were used this year. Have a wonderful summer, everyone!",
+            "🇨🇳 谢谢这份总结！很高兴看到这一年班级基金的使用情况。",
+            "**3. Simple & Sweet** 🇬🇧 Thank you so much for everything this year. Wishing you all a lovely summer!",
+            "🇨🇳 非常感谢这一年的所有付出。祝大家暑假愉快！");
+
+        return string.Join(
+            "\n",
+            Enumerable
+                .Repeat(
+                    "Context paragraph: the observatory output remains complete and the channel relay must preserve the logical reply.",
+                    36)
+                .Append(source));
+    }
+
+    private static string ReadReplyText(string body)
+    {
+        using var document = System.Text.Json.JsonDocument.Parse(body);
+        return document.RootElement.GetProperty("reply").GetProperty("text").GetString() ?? string.Empty;
+    }
+
+    private static string StripChunkHeader(string text)
+    {
+        var newline = text.IndexOf('\n', StringComparison.Ordinal);
+        return newline < 0 ? text : text[(newline + 1)..];
     }
 
     private sealed class DeferredDispatchPort : IActorDispatchPort

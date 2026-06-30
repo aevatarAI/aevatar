@@ -78,6 +78,37 @@ public sealed class NyxIdRelayOutboundPortTests
         AssertSingleRelayTextRequest(handler, "msg-1", "rendered:workflow done");
     }
 
+    [Fact]
+    public async Task SendWithAgentKeyAsync_LongLarkText_ShouldSendOrderedBoundedChunks()
+    {
+        var handler = new RecordingJsonHandler();
+        var port = CreatePort(handler, new StubComposer("lark", text: BuildLongReplyText()));
+
+        var result = await port.SendWithAgentKeyAsync(
+            "lark",
+            BuildConversation(),
+            new MessageContent { Text = "workflow done" },
+            new OutboundDeliveryContext
+            {
+                ReplyMessageId = "msg-lark-long-1",
+            },
+            "bot-agent-key-1",
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        handler.Requests.Count.Should().BeGreaterThan(1);
+        handler.Requests.Should().OnlyContain(x => x.Path == "/api/v1/channel-relay/reply");
+        handler.Requests.Should().OnlyContain(x => x.Authorization == "Bearer bot-agent-key-1");
+        var chunks = handler.Requests.Select(x => ReadReplyText(x.Body)).ToArray();
+        chunks.Should().AllSatisfy(x => x.Length.Should().BeLessThan(2800));
+        chunks[0].Should().StartWith($"[1/{chunks.Length}]\n");
+        chunks[^1].Should().StartWith($"[{chunks.Length}/{chunks.Length}]\n");
+
+        var delivered = string.Join("\n", chunks.Select(StripChunkHeader));
+        delivered.Should().Be(BuildLongReplyText());
+        delivered.Should().Contain("**3. Simple & Sweet**");
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("   ")]
@@ -576,6 +607,40 @@ public sealed class NyxIdRelayOutboundPortTests
         var reply = root.GetProperty("reply");
         reply.GetProperty("text").GetString().Should().Be(expectedText);
         reply.TryGetProperty("metadata", out _).Should().BeFalse();
+    }
+
+    private static string BuildLongReplyText()
+    {
+        var source = string.Join(
+            "\n",
+            "**Original (EN):** Hi Everyone! Below is a quick recap on how we used our class funds this year.",
+            "**Translation (CN):** 大家好！下面是今年班级基金使用情况的简要回顾。",
+            "---",
+            "**Suggested replies:**",
+            "**1. Warm & Polite** Thank you so much for organizing everything.",
+            "**2. Friendly & Engaging** Have a wonderful summer, everyone!",
+            "**3. Simple & Sweet** Thank you so much for everything this year. Wishing you all a lovely summer!",
+            "非常感谢这一年的所有付出。祝大家暑假愉快！");
+
+        return string.Join(
+            "\n",
+            Enumerable
+                .Repeat(
+                    "Context paragraph: the observatory output remains complete and the channel relay must preserve the logical reply.",
+                    36)
+                .Append(source));
+    }
+
+    private static string ReadReplyText(string body)
+    {
+        using var document = JsonDocument.Parse(body);
+        return document.RootElement.GetProperty("reply").GetProperty("text").GetString() ?? string.Empty;
+    }
+
+    private static string StripChunkHeader(string text)
+    {
+        var newline = text.IndexOf('\n', StringComparison.Ordinal);
+        return newline < 0 ? text : text[(newline + 1)..];
     }
 
     private sealed class RecordingJsonHandler(
