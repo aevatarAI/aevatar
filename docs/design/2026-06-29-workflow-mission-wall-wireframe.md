@@ -192,12 +192,14 @@ When a workflow has many steps, the wall must not shrink the whole graph until e
 2. Show total step count, for example `Workflow steps 9-13 of 24`.
 3. Show a bottom full-workflow strip/minimap where each step has status color.
 4. Draw a viewport marker over the strip so viewers know which part is enlarged.
-5. Use Run Inspector for full pan/zoom exploration.
+5. Use ELKjs layer-based layout to compute the directed step graph positions before rendering through GraphCanvas.
+6. Use Run Inspector for full pan/zoom exploration.
 
 Canvas model:
 
 ```text
 GraphCanvas studio variant
+  layout: ELKjs layered layout for directed workflow graph coordinates
   nodes: workflow steps
   edges: next / branch edges
   node overlay: idle / active / waiting / completed / failed
