@@ -104,6 +104,7 @@ internal static class ChannelsPage
   .copybtn { display:inline-flex; align-items:center; gap:5px; font-size:11.5px; color:var(--muted); background:var(--panel-2); border:1px solid var(--border); border-radius:var(--r-sm); padding:4px 9px; white-space:nowrap; }
   .copybtn:hover { color:var(--fg); border-color:var(--muted-2); }
   .copybtn.done { color:var(--ok); border-color:color-mix(in oklab,var(--ok) 40%,transparent); }
+  .copybtn.err { color:var(--err); border-color:color-mix(in oklab,var(--err) 40%,transparent); }
 
   /* =========================================================================
      Top bar (thin header) — 同 studio/observatory topbar 模式
@@ -974,8 +975,32 @@ function copyRow(label,value,extra){
   else { const b=el("button",{class:"copybtn","aria-label":"复制 "+label},`${ICON.copy}<span>复制</span>`); bindCopy(b,value); row.appendChild(b); }
   return row;
 }
+function flashCopyResult(btn,ok){
+  const sp=btn.querySelector("span"); const old=sp?sp.dataset.label||sp.textContent:"";
+  if(sp&&!sp.dataset.label)sp.dataset.label=old;
+  const cls=ok?"done":"err";
+  btn.classList.remove("done","err"); btn.classList.add(cls);
+  if(sp)sp.textContent=ok?"已复制":"复制失败";
+  setTimeout(()=>{ btn.classList.remove(cls); if(sp&&sp.dataset.label)sp.textContent=sp.dataset.label; },1400);
+}
+// Legacy fallback for non-secure contexts where navigator.clipboard is absent.
+function execCommandCopy(value){
+  const ta=document.createElement("textarea");
+  ta.value=value; ta.setAttribute("readonly",""); ta.style.position="fixed"; ta.style.opacity="0"; ta.style.pointerEvents="none";
+  document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0,value.length);
+  let ok=false; try{ ok=document.execCommand("copy"); }catch(_){ ok=false; }
+  ta.remove(); return ok;
+}
 function bindCopy(btn,value){
-  btn.addEventListener("click",async()=>{ try{await navigator.clipboard.writeText(value);}catch(e){const ta=document.createElement("textarea");ta.value=value;document.body.appendChild(ta);ta.select();try{document.execCommand("copy");}catch(_){}ta.remove();} btn.classList.add("done"); const sp=btn.querySelector("span"); const old=sp?sp.textContent:""; if(sp)sp.textContent="已复制"; setTimeout(()=>{btn.classList.remove("done"); if(sp)sp.textContent=old;},1400); });
+  btn.addEventListener("click",()=>{
+    if(navigator.clipboard&&navigator.clipboard.writeText){
+      navigator.clipboard.writeText(value)
+        .then(()=>flashCopyResult(btn,true))
+        .catch(()=>flashCopyResult(btn,execCommandCopy(value)));
+    } else {
+      flashCopyResult(btn,execCommandCopy(value));
+    }
+  });
 }
 function footer(nodes){ const f=el("div",{class:"step-foot"}); nodes.forEach(n=>{ if(n==="spacer")f.appendChild(el("div",{class:"spacer"})); else f.appendChild(n); }); return f; }
 function btn(label,kind,icon,onClick,opts={}){ const b=el("button",{class:`btn btn-${kind}`},`${icon?icon+" ":""}<span>${label}</span>`); if(opts.disabled)b.disabled=true; if(onClick)b.addEventListener("click",onClick); return b; }
@@ -1194,13 +1219,20 @@ function renderStep4(){
   if(state.llmSel.route==null) state.llmSel.route = llm.savedRoute || llm.effectiveRoute || (routeOpts[0]&&routeOpts[0].routeValue) || "";
   const curRoute = state.llmSel.route;
   const modelsForRoute = (llm.modelGroupsByRoute||[]).filter(g=>g.routeValue===curRoute).flatMap(g=>g.models||[]);
-  if(state.llmSel.model==null) state.llmSel.model = llm.defaultModel || modelsForRoute[0] || DEFAULT_LLM.model;
+  // No fabricated model names: only offer what NyxID actually lists for this route.
+  // When the live catalog has a defaultModel it is a real option; otherwise the only honest
+  // choice is the platform default (empty value -> server resolves it on save).
+  const liveModels = modelsForRoute.length
+    ? modelsForRoute.slice()
+    : (llm.defaultModel ? [llm.defaultModel] : []);
+  if(state.llmSel.model==null) state.llmSel.model = liveModels[0] || "";
 
   const grid=el("div",{class:"select-grid"});
   const routeSel=selField("LLM 路由（route）", routeOpts.map(o=>({value:o.routeValue,label:o.label||o.routeValue})), curRoute);
   routeSel.querySelector("select").addEventListener("change",(e)=>{ state.llmSel.route=e.target.value; state.llmSel.model=null; state.llmSaved=false; render(); });
   grid.appendChild(routeSel);
-  const modelChoices = modelsForRoute.length ? modelsForRoute.map(m=>({value:m,label:m})) : [{value:state.llmSel.model,label:state.llmSel.model+"（默认）"}];
+  // Always offer the genuine "(平台默认)" sentinel; append real models when the catalog has them.
+  const modelChoices = [{value:"",label:"（平台默认）"}].concat(liveModels.map(m=>({value:m,label:m})));
   const modelSel=selField("模型 model", modelChoices, state.llmSel.model);
   modelSel.querySelector("select").addEventListener("change",(e)=>{ state.llmSel.model=e.target.value; state.llmSaved=false; });
   grid.appendChild(modelSel);
