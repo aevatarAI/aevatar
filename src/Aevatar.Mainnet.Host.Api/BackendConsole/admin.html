@@ -106,7 +106,7 @@ button{font-family:inherit;cursor:pointer;}
 .ibtn{
   height:30px;min-width:30px;padding:0 9px;border:1px solid var(--border);
   background:var(--surface);border-radius:6px;color:var(--muted);font-size:13px;
-  display:inline-flex;align-items:center;gap:6px;transition:.14s;
+  display:inline-flex;align-items:center;gap:6px;transition:.14s;white-space:nowrap;
 }
 .ibtn:hover{border-color:var(--border-strong);color:var(--heading);background:var(--surface-2);}
 .ibtn svg{width:15px;height:15px;}
@@ -355,7 +355,7 @@ button{font-family:inherit;cursor:pointer;}
 .roster-table tbody tr:hover{background:var(--surface-3);}
 
 /* ============================ ProTable (L2 runs) ============================ */
-.protable-wrap{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-panel);overflow:hidden;}
+.protable-wrap{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-panel);overflow-x:auto;overflow-y:hidden;}
 .protable{width:100%;border-collapse:collapse;font-size:13px;}
 .protable th{text-align:left;font-size:11.5px;color:var(--faint);font-weight:550;padding:10px 14px;
   background:var(--surface-2);border-bottom:1px solid var(--border);white-space:nowrap;}
@@ -366,7 +366,7 @@ button{font-family:inherit;cursor:pointer;}
 .protable tr.run-stuck{background:var(--failed-bg);box-shadow:inset 3px 0 0 var(--failed);}
 .protable tr.run-stuck:hover{background:#fce4e4;}
 .protable .stuck-tag{font-size:10.5px;color:var(--failed);font-weight:550;margin-left:7px;}
-.tnum{font-family:var(--mono);font-variant-numeric:tabular-nums;}
+.tnum{font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap;}
 
 /* status tag (AevatarStatusTag) */
 .tag{display:inline-flex;align-items:center;gap:5px;height:21px;padding:0 8px;border-radius:4px;
@@ -716,7 +716,7 @@ button{font-family:inherit;cursor:pointer;}
 .obs-row-main{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;}
 .obs-row-name{font-size:13px;color:var(--heading);font-weight:550;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .obs-row-id{font-size:11px;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;display:block;}
-.origin-pill{font-size:10.5px;color:var(--subtle);background:var(--surface-3);border:1px solid var(--border);border-radius:4px;padding:1px 6px;flex:0 0 auto;}
+.origin-pill{font-size:10.5px;color:var(--subtle);background:var(--surface-3);border:1px solid var(--border);border-radius:4px;padding:1px 6px;flex:0 0 auto;white-space:nowrap;}
 .obs-detail{flex:1 1 auto;min-width:0;overflow:auto;padding:20px;}
 .obs-detail-head .odh-top{display:flex;align-items:center;gap:10px;margin-bottom:11px;}
 .run-chips{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
@@ -1764,6 +1764,17 @@ async function loadChannelStatus(c){
   try{ var s=await adminJson('/api/channels/registrations/'+encodeURIComponent(c.id)+'/status');
     if(s&&!s.forbidden){ mapChannelStatus(c,s); chanRerender(); } }
   catch(e){ /* status probe failed: leave row as 'unknown', don't fabricate */ }
+}
+/* Step 4 reply-model options come from the owner LLM config (GET /api/user-config/llm) —
+   the real routes/models NyxID lists for this account, NOT a hardcoded vendor menu. Mirrors
+   the /channels facade page. On failure WZ.model.llm stays null and the step degrades to the
+   genuine "（平台默认）" choice only. */
+async function loadWzLlm(){
+  WZ.model.llmLoading=true; chanRerender();
+  try{ var v=await adminJson('/api/user-config/llm');
+    WZ.model.llm=(v&&!v.forbidden)?v:null; }
+  catch(e){ if(!(e&&e.unauthorized)) WZ.model.llm=null; }
+  WZ.model.llmLoading=false; chanRerender();
 }
 async function loadChannels(){
   CHAN_LOADING=true; CHAN_ERR=null; CHAN_FORBIDDEN=false; chanRerender();
@@ -2895,8 +2906,7 @@ function bindObservatory(root){
     else if(a==='obsReload'){ loadObsRuns(function(){ reList(); reDetail(); }); }
     else if(a==='obsReloadDetail'){ var rid=act.getAttribute('data-run'); if(rid){ delete OBS_DETAIL[rid]; loadObsDetail(rid,reDetail); } }
     else if(a==='obsCopy'){ var cv=act.getAttribute('data-copy');
-      if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(cv).then(function(){ toast('已复制 run id：'+cv); },function(){ toast('复制失败，请手动选择：'+cv); }); }
-      else { toast('run id：'+cv); } }
+      copyWithToast(cv, '已复制 run id：'+cv, '复制失败，请手动选择：'+cv); }
     else if(a==='artDl'){ var sel=obsSelected(), cache=sel&&OBS_DETAIL[sel.id], d=cache&&cache.detail;
       var art=d&&(d.artifacts||[]).filter(function(x){return x.name===act.getAttribute('data-name');})[0];
       if(art&&art.content!=null){ try{ var blob=new Blob([art.content],{type:'text/plain'}); var u=URL.createObjectURL(blob);
@@ -3273,7 +3283,7 @@ function bindSkills(root){
     var act=ev.target.closest('[data-act]'); if(!act||act.hasAttribute('disabled')) return; var a=act.getAttribute('data-act');
     if(a==='skBack'){ SKILL_STATE.mobileDetail=false; reDetail(); }
     else if(a==='skInvoke'){ capture(); runInvoke(); }
-    else if(a==='skCopy'){ toast('已复制：'+act.getAttribute('data-copy')); }
+    else if(a==='skCopy'){ copyWithToast(act.getAttribute('data-copy')); }
     else if(a==='skOpenRun'){ var u=act.getAttribute('data-url'); if(u){ location.assign(u); } else { navigate(['observatory'],{}); } }
     else if(a==='skReload'){ SKILL_STATE.loaded=false; SKILLS_LOADED=false; SKILL_STATE.loading=true; reList(); loadSkills(function(){ SKILL_STATE.loaded=true; SKILL_STATE.loading=false; reList(); }); }
     else if(a==='skPreset'){ capture(); SKILL_STATE.sched.cron=act.getAttribute('data-cron'); reDetail(); }
@@ -3387,7 +3397,8 @@ var CHAN_MANAGE={idx:null};
 var CHAN_CONFIRM=null;            /* 解绑确认 idx */
 function newWZ(provider){ return { provider:provider||null, step:provider?1:0, maxReached:provider?1:0, data:{}, errors:{},
   reg:{state:'idle', ticks:[false,false,false,false], botId:null, webhookUrl:null, apiKeyId:null, fail:null},
-  perm:{imported:false, open:false}, pub:{state:'idle'}, model:{route:'', model:'', state:'idle'},
+  perm:{imported:false, open:false}, pub:{state:'idle'},
+  model:{route:null, model:null, state:'idle', llm:null, llmLoading:false},
   verify:{inbound:'pending', active:'pending', started:false} }; }
 var WZ=newWZ();
 function chanMeta(id){ return CHAN_CATALOG.filter(function(c){return c.id===id;})[0]; }
@@ -3535,14 +3546,42 @@ function chanStep3(){
     wzFoot({back:true, next:{label:'下一步：回复模型', act:'wzCfgNext', disabled:WZ.pub.state!=='done'}});
 }
 function chanStep4(){
-  var m=WZ.model, routes=['NyxID 默认路由','OpenAI 直连','Anthropic 直连','自建网关'], models=['（平台默认）','gpt-4o','claude-sonnet-4','gpt-4o-mini','qwen-max'];
+  var m=WZ.model;
+  if(m.llmLoading && !m.llm){
+    return '<div class="wz-h">配置回复模型</div><div class="wz-sub">不配置则使用平台默认模型回复入站消息。</div>'+
+      '<div class="cfg-pub" style="margin-top:14px"><span class="spinner"></span> 正在读取你的回复模型配置…</div>'+
+      wzFoot({back:true, next:{label:'下一步：验证', act:'wzModelNext'}});
+  }
+  var llm=m.llm;
+  /* Honest options: real routes/models from the owner LLM catalog. No fabricated vendor menu. */
+  var routeOpts=(llm&&llm.routeOptions)||[];
+  if(m.route==null) m.route=(llm&&(llm.savedRoute||llm.effectiveRoute))||(routeOpts[0]&&routeOpts[0].routeValue)||'';
+  var curRoute=m.route;
+  var liveModels=(((llm&&llm.modelGroupsByRoute)||[]).filter(function(g){return g.routeValue===curRoute;})
+    .reduce(function(acc,g){return acc.concat(g.models||[]);},[]));
+  if(!liveModels.length && llm && llm.defaultModel) liveModels=[llm.defaultModel];
+  if(m.model==null) m.model='';
+  /* route select: when the catalog is unavailable, the only honest route is the gateway default (empty value). */
+  var routeChoices = routeOpts.length
+    ? routeOpts.map(function(o){ return {value:o.routeValue, label:o.label||o.routeValue}; })
+    : [{value:'', label:'平台默认路由'}];
+  var routeSel='<select class="std-select" id="m-route">'+routeChoices.map(function(o){
+    return '<option value="'+esc(o.value)+'"'+(curRoute===o.value?' selected':'')+'>'+esc(o.label)+'</option>'; }).join('')+'</select>';
+  /* model select: always offer the genuine "（平台默认）" sentinel (empty -> server resolves), then real models. */
+  var modelChoices=[{value:'',label:'（平台默认）'}].concat(liveModels.map(function(x){return {value:x,label:x};}));
+  var modelSel='<select class="std-select" id="m-model">'+modelChoices.map(function(o){
+    return '<option value="'+esc(o.value)+'"'+(m.model===o.value?' selected':'')+'>'+esc(o.label)+'</option>'; }).join('')+'</select>';
+  var catalogNote = (llm && llm.catalogStatus && llm.catalogStatus!=='ready')
+    ? '<div class="warn-box">⚠ 模型目录暂不可用（'+esc(llm.catalogStatus)+'）—— 现在只能选平台默认。可保存后稍后回来调整。</div>' : '';
   var saveBlk = m.state==='saved' ? '<span class="invoke-result ok" style="display:inline-flex">✓ 已保存回复模型</span>'
     : m.state==='saving' ? '<span class="cfg-pub"><span class="spinner"></span> 保存中…</span>'
     : '<button class="btn" data-act="wzSaveModel">保存回复模型</button>';
-  return '<div class="wz-h">配置回复模型</div><div class="wz-sub">不配置则使用平台默认模型回复入站消息。</div>'+
+  var errBlk = m.err ? '<div class="warn-box">'+esc(m.err)+'</div>' : '';
+  return '<div class="wz-h">配置回复模型</div><div class="wz-sub">不配置则使用平台默认模型回复入站消息。下面只列你账户实际可用的路由与模型。</div>'+
     '<div class="wz-form" style="max-width:380px">'+
-      '<div class="wz-field"><label>LLM 路由</label><select class="std-select" id="m-route">'+routes.map(function(r){return '<option'+(m.route===r?' selected':'')+'>'+r+'</option>';}).join('')+'</select></div>'+
-      '<div class="wz-field"><label>模型</label><select class="std-select" id="m-model">'+models.map(function(x){return '<option'+(m.model===x?' selected':'')+'>'+x+'</option>';}).join('')+'</select></div></div>'+
+      '<div class="wz-field"><label>LLM 路由</label>'+routeSel+'</div>'+
+      '<div class="wz-field"><label>模型</label>'+modelSel+'</div></div>'+
+    catalogNote+errBlk+
     '<div class="reg-actions">'+saveBlk+'</div>'+
     wzFoot({back:true, next:{label:'下一步：验证', act:'wzModelNext'}});
 }
@@ -3625,7 +3664,7 @@ function bindChannels(root){
     /* 向导 */
     else if(a==='wzCancel'){ CHAN_VIEW.mode='list'; CHAN_CONFIRM=null; re(); }
     else if(a==='wzPick'){ WZ.provider=act.getAttribute('data-prov'); WZ.step=1; WZ.maxReached=Math.max(WZ.maxReached,1); re(); }
-    else if(a==='wzGoto'){ capture(); var gi=+act.getAttribute('data-i'); if(gi<=WZ.maxReached){ WZ.step=gi; re(); } }
+    else if(a==='wzGoto'){ capture(); var gi=+act.getAttribute('data-i'); if(gi<=WZ.maxReached){ WZ.step=gi; re(); if(gi===4 && !WZ.model.llm) loadWzLlm(); } }
     else if(a==='wzBack'){ capture(); WZ.step=Math.max(0,WZ.step-1); re(); }
     else if(a==='wzCredNext'){ capture(); var fs=CHAN_FIELDS[WZ.provider]||[], errs={};
       fs.forEach(function(f){ if(f.req && !(WZ.data[f.k]||'').trim()) errs[f.k]='必填'; });
@@ -3635,7 +3674,7 @@ function bindChannels(root){
     else if(a==='wzPermImport'){ WZ.perm.imported=true; re(); }
     else if(a==='wzPermToggle'){ WZ.perm.open=!WZ.perm.open; re(); }
     else if(a==='wzPublish'){ WZ.pub.state='done'; re(); }   /* manual Lark-console publish; no aevatar backend — acknowledge, don't fake a server round-trip */
-    else if(a==='wzCfgNext'){ WZ.step=4; WZ.maxReached=Math.max(WZ.maxReached,4); re(); }
+    else if(a==='wzCfgNext'){ WZ.step=4; WZ.maxReached=Math.max(WZ.maxReached,4); re(); if(!WZ.model.llm) loadWzLlm(); }
     else if(a==='wzSaveModel'){ capture(); WZ.model.state='saving'; re();
       adminApi('/api/user-config/llm', { method:'PUT', headers:{'Content-Type':'application/json'},
         body:JSON.stringify({ routeValue:WZ.model.route||'', model:WZ.model.model||null }) })
@@ -3644,7 +3683,12 @@ function bindChannels(root){
     else if(a==='wzModelNext'){ capture(); WZ.step=5; WZ.maxReached=Math.max(WZ.maxReached,5); re(); }
     else if(a==='wzFinish'){
       stopVerify(); CHAN_VIEW.mode='list'; WZ=newWZ(); re(); loadChannels(); }
-    else if(a==='wzCopy'){ toast('已复制：'+act.getAttribute('data-copy')); }
+    else if(a==='wzCopy'){ copyWithToast(act.getAttribute('data-copy')); }
+  });
+  /* Switching the LLM route must refresh the per-route model list — models are route-scoped. */
+  root.addEventListener('change',function(ev){
+    if(ev.target&&ev.target.id==='m-route'){ WZ.model.route=ev.target.value; WZ.model.model=null; WZ.model.state='idle'; WZ.model.err=null; re(); }
+    else if(ev.target&&ev.target.id==='m-model'){ WZ.model.model=ev.target.value; WZ.model.state='idle'; }
   });
 }
 
@@ -3850,6 +3894,28 @@ function toast(msg){
   el.innerHTML=ICON.check+'<span>'+esc(msg)+'</span>'; r.appendChild(el);
   setTimeout(function(){ el.style.opacity='0'; el.style.transition='opacity .3s'; setTimeout(function(){el.remove();},300); },2200);
 }
+/* Real clipboard copy. Tries the async Clipboard API, then a hidden-textarea + execCommand
+   fallback for non-secure / older contexts. Resolves to the genuine success boolean so callers
+   only ever claim "已复制" when the value actually reached the clipboard. No fake toasts. */
+function execCommandCopy(value){
+  var ta=document.createElement('textarea');
+  ta.value=value; ta.setAttribute('readonly','');
+  ta.style.position='fixed'; ta.style.top='0'; ta.style.left='0'; ta.style.opacity='0'; ta.style.pointerEvents='none';
+  document.body.appendChild(ta); ta.select(); try{ ta.setSelectionRange(0,value.length); }catch(_){}
+  var ok=false; try{ ok=document.execCommand('copy'); }catch(_){ ok=false; }
+  ta.remove(); return ok;
+}
+function copyToClipboard(value){
+  value=value==null?'':String(value);
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    return navigator.clipboard.writeText(value).then(function(){ return true; },function(){ return execCommandCopy(value); });
+  }
+  return Promise.resolve(execCommandCopy(value));
+}
+/* Copy `value`; toast the honest outcome. okMsg/errMsg accept the value for interpolation. */
+function copyWithToast(value,okMsg,errMsg){
+  copyToClipboard(value).then(function(ok){ toast(ok?(okMsg||('已复制：'+value)):(errMsg||('复制失败，请手动选择：'+value))); });
+}
 
 /* ---------- 数据来源 popover ---------- */
 var _srcPopEl=null;
@@ -3912,8 +3978,11 @@ function bindEvents(){
     /* navigation: run > emp > company（顺序很重要） */
     var runEl=t.closest&&t.closest('[data-run]');
     if(runEl){ var rid=runEl.getAttribute('data-run');
-      var match=(typeof OBS_RUNS!=='undefined')&&OBS_RUNS.filter(function(r){return r.id.indexOf(rid)===0;})[0];
-      if(match) OBS_STATE.selectedId=match.id;
+      /* 深链进观测台并选中该 run：rid 即权威 run id（Fleet 与 observatory 同口径 mapXxxRuns 的 r.runId）。
+         不再依赖 OBS_RUNS 是否已含该 run（看板数据在 FLEET_RUNS_BY_SCOPE，与 OBS_RUNS 是两套加载）。
+         Fleet 为跨 scope __all__，强制 observatory 同口径，确保 loadObsRuns 后该 run 在列表内被选中、
+         详情按其自身 scope 拉取，而非因 selectedId 未命中回落到首行。 */
+      if(rid){ OBS_STATE.selectedId=rid; OBS_STATE.scope='__all__'; }
       navigate(['observatory'],{}); return; }
     var empEl=t.closest&&t.closest('[data-emp][data-co]');
     if(empEl){ navigate(['fleet','c',empEl.getAttribute('data-co'),'e',empEl.getAttribute('data-emp')],{}); return; }

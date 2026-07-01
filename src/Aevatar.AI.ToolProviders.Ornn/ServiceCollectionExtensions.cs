@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Ornn.Publishing;
+using Aevatar.AI.ToolProviders.Ornn.SystemSkillOverlay;
 using Aevatar.AI.ToolProviders.Skills;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -49,6 +50,29 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IRemoteSkillFetcher, OrnnRemoteSkillFetcher>();
         services.TryAddSingleton<OrnnAgentToolSource>();
         services.TryAddAgentToolSourceAlias<OrnnAgentToolSource>(GetOrnnAgentToolSource);
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the host-bound system skill overlay scaffold.
+    /// </summary>
+    public static IServiceCollection AddSystemSkillOverlay(
+        this IServiceCollection services,
+        Action<SystemSkillOverlayOptions>? configure = null)
+    {
+        var options = new SystemSkillOverlayOptions();
+        configure?.Invoke(options);
+        if (!options.Enabled || string.IsNullOrWhiteSpace(options.Tag))
+            return services;
+
+        services.TryAddSingleton(options);
+        services.TryAddSingleton<Aevatar.AI.Abstractions.ToolProviders.SystemSkillOverlayOptions>(options);
+        services.TryAddSingleton<SystemSkillOverlayBuilder>();
+        services.TryAddSingleton<Aevatar.AI.Abstractions.ToolProviders.ISystemSkillOverlayBuilder>(
+            sp => sp.GetRequiredService<SystemSkillOverlayBuilder>());
+        services.TryAddSingleton<Aevatar.AI.ToolProviders.Ornn.SystemSkillOverlay.ISystemSkillOverlayBuilder>(
+            sp => sp.GetRequiredService<SystemSkillOverlayBuilder>());
+        // TODO: consolidate NyxIdRelayPromptConfiguration flags with this overlay registration once the materializer owns injection.
         return services;
     }
 

@@ -23,6 +23,7 @@ using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Google.Protobuf;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 namespace Aevatar.AI.Core;
 
@@ -34,9 +35,15 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 {
     private const string LlmFailureContentPrefix = "[[AEVATAR_LLM_ERROR]]";
     private const int MaxTrackedSessions = 128;
+    private const string SystemSkillOverlayRefreshCallbackId = "system-skill-overlay-refresh";
+    private const int SystemSkillOverlayPromptLogSampleRate = 64;
+    private static readonly TimeSpan DefaultSystemSkillOverlayRefreshTtl = TimeSpan.FromMinutes(15);
+    private static readonly TimeSpan SystemSkillOverlayInitialRefreshDelay = TimeSpan.FromSeconds(1);
     private string _appliedEventModules = string.Empty;
     private string _appliedEventRoutes = string.Empty;
     private IServiceProvider? _appliedModuleServices;
+    private SystemSkillOverlay? _systemSkillOverlay;
+    private int _systemSkillOverlayPromptLogCounter;
 
     public RoleGAgent(
         ILLMProviderFactory? llmProviderFactory = null,
@@ -443,6 +450,54 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         }
     }
 
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandleSystemSkillOverlayRefresh(SystemSkillOverlayRefreshFiredEvent evt)
+    {
+        var builder = Services.GetService<ISystemSkillOverlayBuilder>();
+        var options = Services.GetService<SystemSkillOverlayOptions>();
+        if (!IsSystemSkillOverlayEnabled(builder, options))
+        {
+            _systemSkillOverlay = new SystemSkillOverlay();
+            return;
+        }
+
+        SystemSkillOverlay? nextOverlay;
+        try
+        {
+            nextOverlay = await builder!.BuildAsync(CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            var nextAttempt = Math.Max(0, evt.Attempt) + 1;
+            Logger.LogWarning(
+                ex,
+                "[{Role}] System skill overlay refresh failed; keeping last-known-good overlay. attempt={Attempt}",
+                RoleName,
+                nextAttempt);
+            await ScheduleSystemSkillOverlayRefreshAsync(
+                ComputeSystemSkillOverlayRefreshBackoff(nextAttempt),
+                nextAttempt,
+                CancellationToken.None);
+            return;
+        }
+
+        var nextWatermark = ResolveSystemSkillOverlayWatermark(nextOverlay);
+        var currentWatermark = ResolveSystemSkillOverlayWatermark(State.SystemSkillOverlay);
+
+        if (!string.Equals(nextWatermark, currentWatermark, StringComparison.Ordinal))
+        {
+            await PersistDomainEventAsync(new SystemSkillOverlayMaterializedEvent
+            {
+                Overlay = nextOverlay?.Clone() ?? new SystemSkillOverlay(),
+            });
+        }
+
+        await ScheduleSystemSkillOverlayRefreshAsync(
+            ResolveSystemSkillOverlayRefreshTtl(options),
+            attempt: 0,
+            CancellationToken.None);
+    }
+
     // ─── Approval continuation constants ───
 
     private const int ApprovalLocalTimeoutSeconds = 15;
@@ -724,6 +779,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         StateTransitionMatcher
             .Match(current, evt)
             .On<InitializeRoleAgentEvent>(ApplyInitializeRoleAgent)
+            .On<SystemSkillOverlayMaterializedEvent>(ApplySystemSkillOverlayMaterialized)
             .On<RoleChatSessionStartedEvent>(ApplyChatSessionStarted)
             .On<RoleChatSessionCompletedEvent>(ApplyChatSessionCompleted)
             .On<PendingToolApprovalPersistedEvent>(ApplyPendingApproval)
@@ -740,6 +796,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         //   New principle: replay restores the typed RoleId from committed RoleGAgent state.
         RoleId = state.RoleId ?? string.Empty;
         RoleName = state.RoleName ?? string.Empty;
+        HydrateSystemSkillOverlayMirror(state);
         await ApplyModuleExtensionsFromStateIfNeededAsync(state, ct);
     }
 
@@ -1349,6 +1406,15 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         return next;
     }
 
+    private static RoleGAgentState ApplySystemSkillOverlayMaterialized(
+        RoleGAgentState current,
+        SystemSkillOverlayMaterializedEvent evt)
+    {
+        var next = current.Clone();
+        next.SystemSkillOverlay = evt.Overlay?.Clone() ?? new SystemSkillOverlay();
+        return next;
+    }
+
     private static RoleGAgentState ApplyChatSessionStarted(
         RoleGAgentState current,
         RoleChatSessionStartedEvent evt)
@@ -1512,6 +1578,122 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
     private static string NormalizeModuleExtensionText(string? value) =>
         string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
+
+    protected override async Task OnActivateAsync(CancellationToken ct)
+    {
+        await base.OnActivateAsync(ct);
+        HydrateSystemSkillOverlayMirror(State);
+        if (IsSystemSkillOverlayEmpty(_systemSkillOverlay))
+            await ScheduleSystemSkillOverlayRefreshAsync(SystemSkillOverlayInitialRefreshDelay, attempt: 0, ct);
+    }
+
+    protected override string DecorateSystemPrompt(string basePrompt)
+    {
+        var decorated = base.DecorateSystemPrompt(basePrompt);
+        var overlay = ResolveInjectableSystemSkillOverlay();
+        var overlayMarkdown = overlay?.OverlayMarkdown;
+        if (string.IsNullOrWhiteSpace(overlayMarkdown))
+            return decorated;
+
+        if (_systemSkillOverlayPromptLogCounter++ % SystemSkillOverlayPromptLogSampleRate == 0)
+        {
+            Logger.LogInformation(
+                "[{Role}] System skill overlay prompt: source_watermark={SourceWatermark}, kernel_tokens_estimate={KernelTokensEstimate}, overlay_tokens_estimate={OverlayTokensEstimate}",
+                RoleName,
+                ResolveSystemSkillOverlayWatermark(overlay),
+                EstimatePromptTokens(decorated),
+                EstimatePromptTokens(overlayMarkdown));
+        }
+
+        if (string.IsNullOrWhiteSpace(decorated))
+            return overlayMarkdown.Trim();
+
+        return $"{decorated.TrimEnd()}\n\n{overlayMarkdown.Trim()}";
+    }
+
+    // Direct-chat seam overlay source: the Ornn-materialized actor-state overlay when present,
+    // otherwise the deployment's built-in default overlay, so capability how-to stays whole even
+    // before a host enables the Ornn-sourced overlay. Mirrors the channel seam, which reads the
+    // same ISystemSkillOverlayProvider default through the conversation reply generator.
+    private SystemSkillOverlay? ResolveInjectableSystemSkillOverlay()
+    {
+        if (!IsSystemSkillOverlayEmpty(_systemSkillOverlay))
+            return _systemSkillOverlay;
+
+        return Services.GetService<ISystemSkillOverlayProvider>()?.GetCurrent();
+    }
+
+    private void HydrateSystemSkillOverlayMirror(RoleGAgentState state)
+    {
+        if (!IsSystemSkillOverlayEnabled())
+        {
+            _systemSkillOverlay = new SystemSkillOverlay();
+            return;
+        }
+
+        _systemSkillOverlay = state.SystemSkillOverlay?.Clone();
+    }
+
+    private bool IsSystemSkillOverlayEnabled() =>
+        IsSystemSkillOverlayEnabled(
+            Services.GetService<ISystemSkillOverlayBuilder>(),
+            Services.GetService<SystemSkillOverlayOptions>());
+
+    private static bool IsSystemSkillOverlayEnabled(
+        ISystemSkillOverlayBuilder? builder,
+        SystemSkillOverlayOptions? options) =>
+        builder != null && options?.Enabled != false;
+
+    private async Task ScheduleSystemSkillOverlayRefreshAsync(
+        TimeSpan dueTime,
+        int attempt,
+        CancellationToken ct)
+    {
+        if (!IsSystemSkillOverlayEnabled())
+            return;
+
+        try
+        {
+            await ScheduleSelfDurableTimeoutAsync(
+                SystemSkillOverlayRefreshCallbackId,
+                NormalizeSystemSkillOverlayDueTime(dueTime),
+                new SystemSkillOverlayRefreshFiredEvent
+                {
+                    Attempt = Math.Max(0, attempt),
+                },
+                ct: ct);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "[{Role}] Failed to schedule system skill overlay refresh", RoleName);
+        }
+    }
+
+    private static TimeSpan ResolveSystemSkillOverlayRefreshTtl(SystemSkillOverlayOptions? options) =>
+        options?.RefreshTtl > TimeSpan.Zero ? options.RefreshTtl : DefaultSystemSkillOverlayRefreshTtl;
+
+    private static TimeSpan NormalizeSystemSkillOverlayDueTime(TimeSpan dueTime) =>
+        dueTime > TimeSpan.Zero ? dueTime : SystemSkillOverlayInitialRefreshDelay;
+
+    private static TimeSpan ComputeSystemSkillOverlayRefreshBackoff(int failedAttempt)
+    {
+        var exponent = Math.Clamp(failedAttempt - 1, 0, 4);
+        return TimeSpan.FromMinutes(1 << exponent);
+    }
+
+    private static bool IsSystemSkillOverlayEmpty(SystemSkillOverlay? overlay) =>
+        overlay == null || string.IsNullOrWhiteSpace(overlay.OverlayMarkdown);
+
+    private static string ResolveSystemSkillOverlayWatermark(SystemSkillOverlay? overlay) =>
+        overlay?.SourceWatermark ?? string.Empty;
+
+    private static int EstimatePromptTokens(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return 0;
+
+        return Math.Max(1, (Encoding.UTF8.GetByteCount(text) + 3) / 4);
+    }
 
     // Idempotently add a module name to a comma-separated EventModules string, matching the
     // delimiter/options RoleGAgentFactory.BuildModuleExtensions splits on (',' + RemoveEmptyEntries
