@@ -638,6 +638,122 @@ export interface StudioMemberRoster {
   readonly nextPageToken?: string | null;
 }
 
+export interface StudioWorkflowBoardSnapshotRequest {
+  readonly teamSelections: readonly StudioWorkflowBoardTeamSelectionRequest[];
+  readonly previousWatermark?: string | null;
+}
+
+export interface StudioWorkflowBoardTeamSelectionRequest {
+  readonly teamId: string;
+  readonly memberIds: readonly string[];
+}
+
+export interface StudioWorkflowBoardSnapshot {
+  readonly scopeId: string;
+  readonly generatedAt: string;
+  readonly watermark: string;
+  readonly totals: StudioWorkflowBoardTotals;
+  readonly teams: readonly StudioWorkflowBoardTeamSnapshot[];
+  readonly invalidSelections: readonly StudioWorkflowBoardInvalidSelection[];
+  readonly lastNodeUpdatedAt?: string | null;
+}
+
+export interface StudioWorkflowBoardTotals {
+  readonly completedSteps?: number | null;
+  readonly runningNodes?: number | null;
+  readonly waitingOrPendingNodes?: number | null;
+  readonly failedNodes?: number | null;
+}
+
+export interface StudioWorkflowBoardTeamSnapshot {
+  readonly teamId: string;
+  readonly teamName: string;
+  readonly totalMemberCount?: number | null;
+  readonly selectedMemberCount: number;
+  readonly members: readonly StudioWorkflowBoardMemberSnapshot[];
+}
+
+export type StudioWorkflowBoardExecutionAvailability =
+  | 'available'
+  | 'unavailable'
+  | 'pending_backend_contract'
+  | 'unknown';
+
+export type StudioWorkflowBoardCurrentNodeStatus =
+  | 'running'
+  | 'waiting'
+  | 'pending'
+  | 'failed'
+  | 'completed'
+  | 'unknown';
+
+export type StudioWorkflowBoardPendingNodeStatus =
+  | 'waiting'
+  | 'pending'
+  | 'queued'
+  | 'unknown';
+
+export type StudioWorkflowBoardInvalidSelectionReason =
+  | 'team_not_found'
+  | 'member_not_found'
+  | 'member_not_in_team'
+  | 'unauthorized'
+  | 'archived'
+  | 'unknown';
+
+export interface StudioWorkflowBoardMemberSnapshot {
+  readonly memberId: string;
+  readonly displayName: string;
+  readonly executionAvailability: StudioWorkflowBoardExecutionAvailability;
+  readonly completedNodes: readonly StudioWorkflowBoardCompletedNode[];
+  readonly pendingNodes: readonly StudioWorkflowBoardPendingNode[];
+  readonly failedNodes: readonly StudioWorkflowBoardFailedNode[];
+  readonly workflowId?: string | null;
+  readonly workflowName?: string | null;
+  readonly publishedServiceId?: string | null;
+  readonly actorId?: string | null;
+  readonly roleSummary?: string | null;
+  readonly currentExecutionId?: string | null;
+  readonly currentNode?: StudioWorkflowBoardCurrentNode | null;
+  readonly lastNodeUpdatedAt?: string | null;
+}
+
+export interface StudioWorkflowBoardCurrentNode {
+  readonly nodeId: string;
+  readonly name: string;
+  readonly status: StudioWorkflowBoardCurrentNodeStatus;
+  readonly startedAt?: string | null;
+  readonly updatedAt?: string | null;
+  readonly durationMs?: number | null;
+}
+
+export interface StudioWorkflowBoardCompletedNode {
+  readonly nodeId: string;
+  readonly name: string;
+  readonly completedAt?: string | null;
+  readonly durationMs?: number | null;
+}
+
+export interface StudioWorkflowBoardPendingNode {
+  readonly nodeId: string;
+  readonly name: string;
+  readonly status: StudioWorkflowBoardPendingNodeStatus;
+  readonly reason?: string | null;
+}
+
+export interface StudioWorkflowBoardFailedNode {
+  readonly nodeId: string;
+  readonly name: string;
+  readonly failedAt?: string | null;
+}
+
+export interface StudioWorkflowBoardInvalidSelection {
+  readonly teamId: string;
+  readonly memberId?: string | null;
+  readonly reason: StudioWorkflowBoardInvalidSelectionReason;
+  readonly message: string;
+}
+
 export type StudioTeamLifecycleStage = 'active' | 'archived' | 'unknown';
 
 export function normalizeStudioTeamLifecycleStage(

@@ -294,6 +294,70 @@ function mockCreateTeamSummary() {
   };
 }
 
+function mockCreateWorkflowBoardSnapshot(overrides?: Record<string, any>) {
+  return {
+    scopeId: "scope-1",
+    generatedAt: "2026-06-24T13:24:16Z",
+    watermark: "workflow-board:v1:selection:facts",
+    totals: {
+      completedSteps: 7,
+      runningNodes: 1,
+      waitingOrPendingNodes: 2,
+      failedNodes: 0,
+    },
+    teams: [
+      {
+        teamId: "t-alpha",
+        teamName: "Alpha Support Team",
+        totalMemberCount: 3,
+        selectedMemberCount: 1,
+        members: [
+          {
+            memberId: "member-team-alpha",
+            displayName: "Backend Board Operator",
+            executionAvailability: "available",
+            completedNodes: [
+              {
+                nodeId: "completed-1",
+                name: "Intake completed",
+                completedAt: "2026-06-24T13:18:00Z",
+                durationMs: 120000,
+              },
+            ],
+            pendingNodes: [
+              {
+                nodeId: "pending-1",
+                name: "Review queued",
+                status: "queued",
+                reason: "waiting for reviewer",
+              },
+            ],
+            failedNodes: [],
+            workflowId: "wf-alpha",
+            workflowName: "Backend Snapshot Workflow",
+            publishedServiceId: "svc-alpha",
+            actorId: "actor-alpha",
+            roleSummary: "Backend board member",
+            currentExecutionId: "exec-alpha",
+            currentNode: {
+              nodeId: "current-1",
+              name: "Backend Current Node",
+              status: "running",
+              startedAt: "2026-06-24T13:20:00Z",
+              updatedAt: "2026-06-24T13:24:00Z",
+              durationMs: 240000,
+            },
+            lastNodeUpdatedAt: "2026-06-24T13:24:00Z",
+          },
+        ],
+      },
+    ],
+    invalidSelections: [],
+    lastNodeUpdatedAt: "2026-06-24T13:24:00Z",
+    ...overrides,
+  };
+}
+
 function mockCreateScheduledDispatchSummary(overrides?: Record<string, any>) {
   return {
     scheduleId: "sch-alpha",
@@ -891,6 +955,7 @@ jest.mock("@/shared/studio/api", () => ({
       lifecycleStage: "archived",
     })),
     listTeamMembers: jest.fn(async () => mockCreateTeamMembersCatalog()),
+    getWorkflowBoardSnapshot: jest.fn(async () => mockCreateWorkflowBoardSnapshot()),
     parseYaml: jest.fn(async () => ({
       document: {
         name: "support-triage",
@@ -1042,6 +1107,10 @@ describe("TeamDetailPage", () => {
     (studioApi.listTeamMembers as jest.Mock).mockImplementation(
       async () => mockCreateTeamMembersCatalog(),
     );
+    (studioApi.getWorkflowBoardSnapshot as jest.Mock).mockReset();
+    (studioApi.getWorkflowBoardSnapshot as jest.Mock).mockImplementation(
+      async () => mockCreateWorkflowBoardSnapshot(),
+    );
     (runtimeRunsApi.streamTeamChat as jest.Mock).mockClear();
     (message.success as jest.Mock).mockClear();
     (message.error as jest.Mock).mockClear();
@@ -1100,7 +1169,7 @@ describe("TeamDetailPage", () => {
     expect(currentPostureHeading).toBeTruthy();
     expect(await screen.findByText(/ReadModel ·/)).toBeTruthy();
     expect(await screen.findByText("版本 · 运行中")).toBeTruthy();
-    expect(await screen.findByText("运行 · 等待处理")).toBeTruthy();
+    expect(await screen.findByText("运行 · Running")).toBeTruthy();
     expect(compositionHeading).toBeTruthy();
     expect(configurationHeading).toBeTruthy();
     expect(screen.queryByLabelText("Team test prompt")).toBeNull();
@@ -1131,6 +1200,88 @@ describe("TeamDetailPage", () => {
     expect(screen.queryByRole("button", { name: "部署记录" })).toBeNull();
     expect(screen.queryByText("稳定")).toBeNull();
     expect(studioApi.getTeam).toHaveBeenCalledWith("scope-1", "t-alpha");
+  });
+
+  it("loads the Workflow Board overview from the backend snapshot API", async () => {
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("Workflow board")).toBeTruthy();
+    expect((await screen.findAllByText("Backend Board Operator")).length).toBeGreaterThan(0);
+    expect(await screen.findByText("Backend Current Node")).toBeTruthy();
+    expect(screen.getByText("Backend Snapshot Workflow")).toBeTruthy();
+    expect(screen.getByText("Completed steps")).toBeTruthy();
+    expect(screen.getByText("Running nodes")).toBeTruthy();
+    expect(screen.getByText("Waiting nodes")).toBeTruthy();
+    expect(screen.getByText("Failed nodes")).toBeTruthy();
+    expect(screen.getByText("From Workflow Board snapshot")).toBeTruthy();
+    expect(screen.queryByText("member-team-alpha")).toBeNull();
+
+    await waitFor(() => {
+      expect(studioApi.getWorkflowBoardSnapshot).toHaveBeenCalledWith("scope-1", {
+        teamSelections: [
+          {
+            teamId: "t-alpha",
+            memberIds: ["member-team-alpha"],
+          },
+        ],
+      });
+    });
+  });
+
+  it("shows the Workflow Board loading state while the snapshot request is pending", async () => {
+    let resolveSnapshot: (value: unknown) => void = () => undefined;
+    (studioApi.getWorkflowBoardSnapshot as jest.Mock).mockImplementationOnce(
+      () =>
+        new Promise<unknown>((resolve) => {
+          resolveSnapshot = resolve;
+        }),
+    );
+
+    const { unmount } = renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("Loading workflow board")).toBeTruthy();
+    expect(screen.getByText("Reading the backend workflow board snapshot.")).toBeTruthy();
+
+    unmount();
+    await act(async () => {
+      resolveSnapshot(mockCreateWorkflowBoardSnapshot());
+    });
+  });
+
+  it("shows a Workflow Board error state when the backend snapshot API fails", async () => {
+    (studioApi.getWorkflowBoardSnapshot as jest.Mock).mockRejectedValueOnce(
+      new Error("snapshot unavailable"),
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("Workflow board unavailable")).toBeTruthy();
+    expect(await screen.findByText("snapshot unavailable")).toBeTruthy();
+  });
+
+  it("shows a Workflow Board empty state when no selected members are returned", async () => {
+    (studioApi.getWorkflowBoardSnapshot as jest.Mock).mockResolvedValueOnce(
+      mockCreateWorkflowBoardSnapshot({
+        teams: [
+          {
+            teamId: "t-alpha",
+            teamName: "Alpha Support Team",
+            totalMemberCount: 3,
+            selectedMemberCount: 0,
+            members: [],
+          },
+        ],
+      }),
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("No workflow board snapshot")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "The backend snapshot did not return visible workflow members for this team.",
+      ),
+    ).toBeTruthy();
   });
 
   it("keeps compare diagnostics out of the overview when no successful baseline exists", async () => {
@@ -1447,8 +1598,8 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     expect(await screen.findByText("当前成员")).toBeTruthy();
-    expect((await screen.findAllByText("Team Alpha Operator")).length).toBeGreaterThan(0);
-    expect(screen.getByText("当前从团队成员中选中。")).toBeTruthy();
+    expect((await screen.findAllByText("Backend Board Operator")).length).toBeGreaterThan(0);
+    expect(screen.getByText("From backend workflow board snapshot.")).toBeTruthy();
     expect(screen.queryByText("member-team-alpha")).toBeNull();
     expect(screen.queryByText("memberId · member-team-alpha")).toBeNull();
   });
@@ -2975,7 +3126,7 @@ describe("TeamDetailPage", () => {
     expect(screen.getByText("已启用")).toBeTruthy();
     expect((await screen.findAllByText("Team summary")).length).toBeGreaterThan(0);
     expect(screen.getAllByText("3 个成员").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("来自团队更新时间").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("From Workflow Board snapshot").length).toBeGreaterThan(0);
     expect(screen.getByText("启动状态")).toBeTruthy();
     expect(screen.getByText("团队构成")).toBeTruthy();
     expect(screen.getByText("配置明细")).toBeTruthy();

@@ -67,6 +67,12 @@ import type {
   StudioWorkflowDraftSummary,
   StudioWorkflowDocument,
   StudioWorkflowFile,
+  StudioWorkflowBoardCurrentNodeStatus,
+  StudioWorkflowBoardExecutionAvailability,
+  StudioWorkflowBoardInvalidSelectionReason,
+  StudioWorkflowBoardPendingNodeStatus,
+  StudioWorkflowBoardSnapshot,
+  StudioWorkflowBoardSnapshotRequest,
   StudioWorkflowSaveResult,
   StudioWorkflowSummary,
   StudioWorkspaceSettings,
@@ -319,6 +325,31 @@ function readOptionalNumber(value: unknown): number | undefined {
 
 function readOptionalBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
+}
+
+function readNullableNumber(
+  record: Record<string, unknown>,
+  keys: string[],
+  label: string
+): number | null {
+  for (const key of keys) {
+    if (!(key in record)) {
+      continue;
+    }
+
+    const rawValue = record[key];
+    if (rawValue == null) {
+      return null;
+    }
+
+    if (typeof rawValue !== "number" || Number.isNaN(rawValue)) {
+      throw new Error(`${label} must be a number.`);
+    }
+
+    return rawValue;
+  }
+
+  return null;
 }
 
 function decodeOrnnSkillSearchResult(
@@ -1468,6 +1499,324 @@ function decodeStudioMemberRoster(value: unknown): StudioMemberRoster {
   };
 }
 
+function normalizeWorkflowBoardExecutionAvailability(
+  value: string | null | undefined
+): StudioWorkflowBoardExecutionAvailability {
+  switch (String(value || "").trim().toLowerCase()) {
+    case "available":
+      return "available";
+    case "unavailable":
+      return "unavailable";
+    case "pending_backend_contract":
+      return "pending_backend_contract";
+    default:
+      return "unknown";
+  }
+}
+
+function normalizeWorkflowBoardCurrentNodeStatus(
+  value: string | null | undefined
+): StudioWorkflowBoardCurrentNodeStatus {
+  switch (String(value || "").trim().toLowerCase()) {
+    case "running":
+      return "running";
+    case "waiting":
+      return "waiting";
+    case "pending":
+      return "pending";
+    case "failed":
+      return "failed";
+    case "completed":
+      return "completed";
+    default:
+      return "unknown";
+  }
+}
+
+function normalizeWorkflowBoardPendingNodeStatus(
+  value: string | null | undefined
+): StudioWorkflowBoardPendingNodeStatus {
+  switch (String(value || "").trim().toLowerCase()) {
+    case "waiting":
+      return "waiting";
+    case "pending":
+      return "pending";
+    case "queued":
+      return "queued";
+    default:
+      return "unknown";
+  }
+}
+
+function normalizeWorkflowBoardInvalidSelectionReason(
+  value: string | null | undefined
+): StudioWorkflowBoardInvalidSelectionReason {
+  switch (String(value || "").trim().toLowerCase()) {
+    case "team_not_found":
+      return "team_not_found";
+    case "member_not_found":
+      return "member_not_found";
+    case "member_not_in_team":
+      return "member_not_in_team";
+    case "unauthorized":
+      return "unauthorized";
+    case "archived":
+      return "archived";
+    default:
+      return "unknown";
+  }
+}
+
+function decodeWorkflowBoardCurrentNode(value: unknown, label: string) {
+  const record = expectRecord(value, label);
+  return {
+    nodeId: readString(record, ["nodeId", "NodeId"], `${label}.nodeId`),
+    name: readString(record, ["name", "Name"], `${label}.name`),
+    status: normalizeWorkflowBoardCurrentNodeStatus(
+      readNullableString(record, ["status", "Status"], `${label}.status`)
+    ),
+    startedAt: readNullableString(
+      record,
+      ["startedAt", "StartedAt"],
+      `${label}.startedAt`
+    ),
+    updatedAt: readNullableString(
+      record,
+      ["updatedAt", "UpdatedAt"],
+      `${label}.updatedAt`
+    ),
+    durationMs: readNullableNumber(
+      record,
+      ["durationMs", "DurationMs"],
+      `${label}.durationMs`
+    ),
+  };
+}
+
+function decodeWorkflowBoardCompletedNode(value: unknown, label?: string) {
+  const nodeLabel = label ?? "StudioWorkflowBoardCompletedNode";
+  const record = expectRecord(value, nodeLabel);
+  return {
+    nodeId: readString(record, ["nodeId", "NodeId"], `${nodeLabel}.nodeId`),
+    name: readString(record, ["name", "Name"], `${nodeLabel}.name`),
+    completedAt: readNullableString(
+      record,
+      ["completedAt", "CompletedAt"],
+      `${nodeLabel}.completedAt`
+    ),
+    durationMs: readNullableNumber(
+      record,
+      ["durationMs", "DurationMs"],
+      `${nodeLabel}.durationMs`
+    ),
+  };
+}
+
+function decodeWorkflowBoardPendingNode(value: unknown, label?: string) {
+  const nodeLabel = label ?? "StudioWorkflowBoardPendingNode";
+  const record = expectRecord(value, nodeLabel);
+  return {
+    nodeId: readString(record, ["nodeId", "NodeId"], `${nodeLabel}.nodeId`),
+    name: readString(record, ["name", "Name"], `${nodeLabel}.name`),
+    status: normalizeWorkflowBoardPendingNodeStatus(
+      readNullableString(record, ["status", "Status"], `${nodeLabel}.status`)
+    ),
+    reason: readNullableString(
+      record,
+      ["reason", "Reason"],
+      `${nodeLabel}.reason`
+    ),
+  };
+}
+
+function decodeWorkflowBoardFailedNode(value: unknown, label?: string) {
+  const nodeLabel = label ?? "StudioWorkflowBoardFailedNode";
+  const record = expectRecord(value, nodeLabel);
+  return {
+    nodeId: readString(record, ["nodeId", "NodeId"], `${nodeLabel}.nodeId`),
+    name: readString(record, ["name", "Name"], `${nodeLabel}.name`),
+    failedAt: readNullableString(
+      record,
+      ["failedAt", "FailedAt"],
+      `${nodeLabel}.failedAt`
+    ),
+  };
+}
+
+function decodeWorkflowBoardMemberSnapshot(value: unknown, label?: string) {
+  const memberLabel = label ?? "StudioWorkflowBoardMemberSnapshot";
+  const record = expectRecord(value, memberLabel);
+  const currentNodeValue = record.currentNode ?? record.CurrentNode;
+  return {
+    memberId: readString(record, ["memberId", "MemberId"], `${memberLabel}.memberId`),
+    displayName: readString(
+      record,
+      ["displayName", "DisplayName"],
+      `${memberLabel}.displayName`
+    ),
+    executionAvailability: normalizeWorkflowBoardExecutionAvailability(
+      readNullableString(
+        record,
+        ["executionAvailability", "ExecutionAvailability"],
+        `${memberLabel}.executionAvailability`
+      )
+    ),
+    completedNodes: expectArray(
+      record.completedNodes ?? record.CompletedNodes,
+      `${memberLabel}.completedNodes`,
+      decodeWorkflowBoardCompletedNode
+    ),
+    pendingNodes: expectArray(
+      record.pendingNodes ?? record.PendingNodes,
+      `${memberLabel}.pendingNodes`,
+      decodeWorkflowBoardPendingNode
+    ),
+    failedNodes: expectArray(
+      record.failedNodes ?? record.FailedNodes,
+      `${memberLabel}.failedNodes`,
+      decodeWorkflowBoardFailedNode
+    ),
+    workflowId: readNullableString(
+      record,
+      ["workflowId", "WorkflowId"],
+      `${memberLabel}.workflowId`
+    ),
+    workflowName: readNullableString(
+      record,
+      ["workflowName", "WorkflowName"],
+      `${memberLabel}.workflowName`
+    ),
+    publishedServiceId: readNullableString(
+      record,
+      ["publishedServiceId", "PublishedServiceId"],
+      `${memberLabel}.publishedServiceId`
+    ),
+    actorId: readNullableString(record, ["actorId", "ActorId"], `${memberLabel}.actorId`),
+    roleSummary: readNullableString(
+      record,
+      ["roleSummary", "RoleSummary"],
+      `${memberLabel}.roleSummary`
+    ),
+    currentExecutionId: readNullableString(
+      record,
+      ["currentExecutionId", "CurrentExecutionId"],
+      `${memberLabel}.currentExecutionId`
+    ),
+    currentNode:
+      currentNodeValue == null
+        ? null
+        : decodeWorkflowBoardCurrentNode(currentNodeValue, `${memberLabel}.currentNode`),
+    lastNodeUpdatedAt: readNullableString(
+      record,
+      ["lastNodeUpdatedAt", "LastNodeUpdatedAt"],
+      `${memberLabel}.lastNodeUpdatedAt`
+    ),
+  };
+}
+
+function decodeWorkflowBoardTeamSnapshot(value: unknown, label?: string) {
+  const teamLabel = label ?? "StudioWorkflowBoardTeamSnapshot";
+  const record = expectRecord(value, teamLabel);
+  return {
+    teamId: readString(record, ["teamId", "TeamId"], `${teamLabel}.teamId`),
+    teamName: readString(record, ["teamName", "TeamName"], `${teamLabel}.teamName`),
+    totalMemberCount: readNullableNumber(
+      record,
+      ["totalMemberCount", "TotalMemberCount"],
+      `${teamLabel}.totalMemberCount`
+    ),
+    selectedMemberCount: readNumber(
+      record,
+      ["selectedMemberCount", "SelectedMemberCount"],
+      `${teamLabel}.selectedMemberCount`
+    ),
+    members: expectArray(
+      record.members ?? record.Members,
+      `${teamLabel}.members`,
+      decodeWorkflowBoardMemberSnapshot
+    ),
+  };
+}
+
+function decodeWorkflowBoardInvalidSelection(value: unknown, label?: string) {
+  const selectionLabel = label ?? "StudioWorkflowBoardInvalidSelection";
+  const record = expectRecord(value, selectionLabel);
+  return {
+    teamId: readString(record, ["teamId", "TeamId"], `${selectionLabel}.teamId`),
+    memberId: readNullableString(
+      record,
+      ["memberId", "MemberId"],
+      `${selectionLabel}.memberId`
+    ),
+    reason: normalizeWorkflowBoardInvalidSelectionReason(
+      readNullableString(record, ["reason", "Reason"], `${selectionLabel}.reason`)
+    ),
+    message: readString(
+      record,
+      ["message", "Message"],
+      `${selectionLabel}.message`
+    ),
+  };
+}
+
+function decodeWorkflowBoardSnapshot(value: unknown): StudioWorkflowBoardSnapshot {
+  const record = expectRecord(value, "StudioWorkflowBoardSnapshot");
+  const totals = expectRecord(
+    record.totals ?? record.Totals,
+    "StudioWorkflowBoardSnapshot.totals"
+  );
+  return {
+    scopeId: readString(record, ["scopeId", "ScopeId"], "StudioWorkflowBoardSnapshot.scopeId"),
+    generatedAt: readString(
+      record,
+      ["generatedAt", "GeneratedAt"],
+      "StudioWorkflowBoardSnapshot.generatedAt"
+    ),
+    watermark: readString(
+      record,
+      ["watermark", "Watermark"],
+      "StudioWorkflowBoardSnapshot.watermark"
+    ),
+    totals: {
+      completedSteps: readNullableNumber(
+        totals,
+        ["completedSteps", "CompletedSteps"],
+        "StudioWorkflowBoardSnapshot.totals.completedSteps"
+      ),
+      runningNodes: readNullableNumber(
+        totals,
+        ["runningNodes", "RunningNodes"],
+        "StudioWorkflowBoardSnapshot.totals.runningNodes"
+      ),
+      waitingOrPendingNodes: readNullableNumber(
+        totals,
+        ["waitingOrPendingNodes", "WaitingOrPendingNodes"],
+        "StudioWorkflowBoardSnapshot.totals.waitingOrPendingNodes"
+      ),
+      failedNodes: readNullableNumber(
+        totals,
+        ["failedNodes", "FailedNodes"],
+        "StudioWorkflowBoardSnapshot.totals.failedNodes"
+      ),
+    },
+    teams: expectArray(
+      record.teams ?? record.Teams,
+      "StudioWorkflowBoardSnapshot.teams",
+      decodeWorkflowBoardTeamSnapshot
+    ),
+    invalidSelections: expectArray(
+      record.invalidSelections ?? record.InvalidSelections,
+      "StudioWorkflowBoardSnapshot.invalidSelections",
+      decodeWorkflowBoardInvalidSelection
+    ),
+    lastNodeUpdatedAt: readNullableString(
+      record,
+      ["lastNodeUpdatedAt", "LastNodeUpdatedAt"],
+      "StudioWorkflowBoardSnapshot.lastNodeUpdatedAt"
+    ),
+  };
+}
+
 function decodeStudioMemberImplementationRef(
   value: unknown
 ): StudioMemberImplementationRef {
@@ -2000,6 +2349,27 @@ export const studioApi = {
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(scopeId.trim())}/teams/${encodeURIComponent(teamId.trim())}/members`,
       decodeStudioMemberRoster
+    );
+  },
+
+  getWorkflowBoardSnapshot(
+    scopeId: string,
+    input: StudioWorkflowBoardSnapshotRequest
+  ): Promise<StudioWorkflowBoardSnapshot> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(scopeId.trim())}/workflow-board/snapshot`,
+      decodeWorkflowBoardSnapshot,
+      {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          teamSelections: input.teamSelections.map((selection) => ({
+            teamId: selection.teamId.trim(),
+            memberIds: selection.memberIds.map((memberId) => memberId.trim()),
+          })),
+          previousWatermark: trimOptional(input.previousWatermark),
+        }),
+      }
     );
   },
 

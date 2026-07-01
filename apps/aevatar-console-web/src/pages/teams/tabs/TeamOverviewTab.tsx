@@ -24,7 +24,16 @@ type OverviewConfigurationRow = {
   readonly value: string;
 };
 
+type WorkflowBoardMetric = {
+  readonly label: string;
+  readonly value: string;
+  readonly caption: string;
+};
+
 type TeamOverviewTabProps = {
+  readonly boardErrorMessage?: string;
+  readonly boardMetrics?: readonly WorkflowBoardMetric[];
+  readonly boardState?: "empty" | "error" | "loading" | "ready";
   readonly configurationDetailRows: readonly OverviewConfigurationRow[];
   readonly compositionRows: readonly OverviewCompositionRow[];
   readonly currentDeploymentPillStyle: React.CSSProperties;
@@ -67,6 +76,9 @@ const surfaceStyle = (
 });
 
 const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
+  boardErrorMessage,
+  boardMetrics = [],
+  boardState = "ready",
   configurationDetailRows,
   compositionRows,
   currentDeploymentPillStyle,
@@ -97,6 +109,7 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
   const intl = useIntl();
   const { token } = theme.useToken();
   const hasEntryMember = Boolean(entryMemberId?.trim());
+  const showBoardMetrics = boardState === "ready" && boardMetrics.length > 0;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
@@ -201,6 +214,63 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
           </div>
         ) : null}
       </section>
+
+      {boardState === "loading" ? (
+        <section style={surfaceStyle(token)}>
+          <AevatarInspectorEmpty
+            title={t("pages.teams.tabs.teamoverviewtab.board.loading.title", "Loading workflow board")}
+            description={t(
+              "pages.teams.tabs.teamoverviewtab.board.loading.description",
+              "Reading the backend workflow board snapshot."
+            )}
+          />
+        </section>
+      ) : boardState === "error" ? (
+        <section style={surfaceStyle(token)}>
+          <AevatarInspectorEmpty
+            title={t("pages.teams.tabs.teamoverviewtab.board.error.title", "Workflow board unavailable")}
+            description={
+              boardErrorMessage ||
+              t(
+                "pages.teams.tabs.teamoverviewtab.board.error.description",
+                "The backend workflow board snapshot could not be loaded."
+              )
+            }
+          />
+        </section>
+      ) : boardState === "empty" ? (
+        <section style={surfaceStyle(token)}>
+          <AevatarInspectorEmpty
+            title={t("pages.teams.tabs.teamoverviewtab.board.empty.title", "No workflow board snapshot")}
+            description={t(
+              "pages.teams.tabs.teamoverviewtab.board.empty.description",
+              "The backend snapshot did not return visible workflow members for this team."
+            )}
+          />
+        </section>
+      ) : showBoardMetrics ? (
+        <section style={surfaceStyle(token)}>
+          <Typography.Title level={3} style={{ margin: 0 }}>
+            {t("pages.teams.tabs.teamoverviewtab.board.title", "Workflow board")}
+          </Typography.Title>
+          <div
+            style={{
+              display: "grid",
+              gap: 14,
+              gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+            }}
+          >
+            {boardMetrics.map((metric) => (
+              <SignalCard
+                key={metric.label}
+                label={metric.label}
+                value={metric.value}
+                caption={metric.caption}
+              />
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       <div
         style={{

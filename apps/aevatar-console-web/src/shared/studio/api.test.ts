@@ -406,6 +406,157 @@ describe('studioApi host-session requests', () => {
     );
   });
 
+  it('posts Workflow Board selections to the scoped backend snapshot API', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        scopeId: 'scope-1',
+        generatedAt: '2026-06-24T13:24:16Z',
+        watermark: 'workflow-board:v1:selection:facts',
+        totals: {
+          completedSteps: 8,
+          runningNodes: 1,
+          waitingOrPendingNodes: 2,
+          failedNodes: 0,
+        },
+        teams: [
+          {
+            teamId: 't-alpha',
+            teamName: 'Alpha',
+            totalMemberCount: 8,
+            selectedMemberCount: 1,
+            members: [
+              {
+                memberId: 'm-alpha',
+                displayName: 'Alpha member',
+                executionAvailability: 'available',
+                completedNodes: [
+                  {
+                    nodeId: 'node-completed',
+                    name: 'Completed',
+                    completedAt: '2026-06-24T13:20:00Z',
+                    durationMs: 120000,
+                  },
+                ],
+                pendingNodes: [
+                  {
+                    nodeId: 'node-pending',
+                    name: 'Pending',
+                    status: 'queued',
+                    reason: 'waiting for worker',
+                  },
+                ],
+                failedNodes: [],
+                workflowId: 'wf-alpha',
+                workflowName: 'Workflow Alpha',
+                publishedServiceId: 'svc-alpha',
+                actorId: 'actor-alpha',
+                roleSummary: 'role alpha',
+                currentExecutionId: 'exec-alpha',
+                currentNode: {
+                  nodeId: 'node-current',
+                  name: 'Current',
+                  status: 'running',
+                  startedAt: '2026-06-24T13:20:00Z',
+                  updatedAt: '2026-06-24T13:24:00Z',
+                  durationMs: 240000,
+                },
+                lastNodeUpdatedAt: '2026-06-24T13:24:00Z',
+              },
+            ],
+          },
+        ],
+        invalidSelections: [
+          {
+            teamId: 't-alpha',
+            memberId: 'm-missing',
+            reason: 'member_not_found',
+            message: 'Selected member is no longer available.',
+          },
+        ],
+        lastNodeUpdatedAt: '2026-06-24T13:24:00Z',
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      studioApi.getWorkflowBoardSnapshot('scope-1', {
+        teamSelections: [
+          {
+            teamId: 't-alpha',
+            memberIds: ['m-alpha', 'm-missing'],
+          },
+        ],
+        previousWatermark: 'previous',
+      }),
+    ).resolves.toMatchObject({
+      scopeId: 'scope-1',
+      watermark: 'workflow-board:v1:selection:facts',
+      totals: {
+        completedSteps: 8,
+        runningNodes: 1,
+        waitingOrPendingNodes: 2,
+        failedNodes: 0,
+      },
+      teams: [
+        {
+          teamId: 't-alpha',
+          members: [
+            {
+              memberId: 'm-alpha',
+              executionAvailability: 'available',
+              currentNode: {
+                status: 'running',
+              },
+              pendingNodes: [
+                {
+                  status: 'queued',
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      invalidSelections: [
+        {
+          reason: 'member_not_found',
+        },
+      ],
+    });
+
+    const [input, init] = fetchMock.mock.calls[0] as [
+      string,
+      RequestInit | undefined,
+    ];
+    expect(input).toBe('/api/scopes/scope-1/workflow-board/snapshot');
+    expect(init?.method).toBe('POST');
+    expect(new Headers(init?.headers).get('Authorization')).toBe(
+      'Bearer access-token',
+    );
+    expect(JSON.parse(String(init?.body))).toEqual({
+      teamSelections: [
+        {
+          teamId: 't-alpha',
+          memberIds: ['m-alpha', 'm-missing'],
+        },
+      ],
+      previousWatermark: 'previous',
+    });
+  });
+
   it('merges scoped published workflows with draft workflows when listing workflows', async () => {
     persistAuthSession({
       tokens: {

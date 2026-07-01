@@ -30,7 +30,12 @@ import { isStudioApiStatus, studioApi } from "@/shared/studio/api";
 import {
   formatStudioMemberLifecycleStage,
 } from "@/shared/studio/models";
-import type { StudioMemberRoster, StudioTeamSummary } from "@/shared/studio/models";
+import type {
+  StudioMemberRoster,
+  StudioTeamSummary,
+  StudioWorkflowBoardMemberSnapshot,
+  StudioWorkflowBoardSnapshot,
+} from "@/shared/studio/models";
 import type { ScopeWorkflowSummary } from "@/shared/models/scopes";
 import { describeError } from "@/shared/ui/errorText";
 import {
@@ -415,6 +420,72 @@ function formatCompactTimestamp(value: string | null | undefined): string {
   return formatCompactDateTime(value, t("pages.teams.detail.copy.13", "None"));
 }
 
+function formatWorkflowBoardAvailability(value: string | null | undefined): string {
+  switch (normalizeStatus(value)) {
+    case "available":
+      return t("pages.teams.detail.workflowboard.availability.available", "Available");
+    case "unavailable":
+      return t("pages.teams.detail.workflowboard.availability.unavailable", "Unavailable");
+    case "pending_backend_contract":
+      return t(
+        "pages.teams.detail.workflowboard.availability.pendingbackendcontract",
+        "Pending backend contract"
+      );
+    default:
+      return t("pages.teams.detail.workflowboard.availability.unknown", "Unknown");
+  }
+}
+
+function formatWorkflowBoardNodeStatus(value: string | null | undefined): string {
+  switch (normalizeStatus(value)) {
+    case "running":
+      return t("pages.teams.detail.workflowboard.node.running", "Running");
+    case "waiting":
+      return t("pages.teams.detail.workflowboard.node.waiting", "Waiting");
+    case "pending":
+      return t("pages.teams.detail.workflowboard.node.pending", "Pending");
+    case "failed":
+      return t("pages.teams.detail.workflowboard.node.failed", "Failed");
+    case "completed":
+      return t("pages.teams.detail.workflowboard.node.completed", "Completed");
+    case "queued":
+      return t("pages.teams.detail.workflowboard.node.queued", "Queued");
+    default:
+      return t("pages.teams.detail.workflowboard.node.unknown", "Unknown");
+  }
+}
+
+function selectWorkflowBoardTimestamp(
+  snapshot: StudioWorkflowBoardSnapshot | null | undefined,
+): string {
+  return (
+    trimText(snapshot?.lastNodeUpdatedAt) ||
+    trimText(snapshot?.generatedAt) ||
+    ""
+  );
+}
+
+function findSelectedWorkflowBoardMember(input: {
+  readonly preferredMemberId: string;
+  readonly snapshot: StudioWorkflowBoardSnapshot | null | undefined;
+}): StudioWorkflowBoardMemberSnapshot | null {
+  const members = input.snapshot?.teams.flatMap((team) => team.members) ?? [];
+  if (members.length === 0) {
+    return null;
+  }
+
+  const normalizedPreferredMemberId = trimText(input.preferredMemberId);
+  if (normalizedPreferredMemberId) {
+    return (
+      members.find(
+        (member) => trimText(member.memberId) === normalizedPreferredMemberId,
+      ) ?? members[0]
+    );
+  }
+
+  return members[0];
+}
+
 function formatLocalTimeLabel(date: Date): string {
   return new Intl.DateTimeFormat(undefined, {
     hour: "2-digit",
@@ -567,6 +638,56 @@ const TeamDetailPage: React.FC = () => {
     ((teamMembersQuery.failureCount > 0 &&
       isProjectionSyncing404(teamMembersQuery.failureReason)) ||
       (teamMembersQuery.isError && isProjectionSyncing404(teamMembersQuery.error)));
+  const workflowBoardMemberIds = React.useMemo(
+    () =>
+      (teamMembersQuery.data?.members ?? [])
+        .map((member) => trimText(member.memberId))
+        .filter(Boolean),
+    [teamMembersQuery.data?.members],
+  );
+  const workflowBoardQuery = useQuery({
+    enabled:
+      hasTeamIdentity &&
+      activeTab === "overview" &&
+      teamMembersQuery.isSuccess &&
+      workflowBoardMemberIds.length > 0,
+    queryFn: () =>
+      studioApi.getWorkflowBoardSnapshot(scopeId, {
+        teamSelections: [
+          {
+            teamId: selectedTeamId,
+            memberIds: workflowBoardMemberIds,
+          },
+        ],
+      }),
+    queryKey: [
+      "teams",
+      "workflow-board-snapshot",
+      scopeId,
+      selectedTeamId,
+      workflowBoardMemberIds,
+    ],
+    retry: false,
+  });
+  const workflowBoardSnapshot = workflowBoardQuery.data ?? null;
+  const workflowBoardMembers = React.useMemo(
+    () => workflowBoardSnapshot?.teams.flatMap((team) => team.members) ?? [],
+    [workflowBoardSnapshot],
+  );
+  const selectedWorkflowBoardMember = React.useMemo(
+    () =>
+      findSelectedWorkflowBoardMember({
+        preferredMemberId,
+        snapshot: workflowBoardSnapshot,
+      }),
+    [preferredMemberId, workflowBoardSnapshot],
+  );
+  const shouldUseWorkflowBoardPrimaryFacts =
+    workflowBoardSnapshot != null && trimText(preferredRunId).length === 0;
+  const primaryWorkflowBoardMember = shouldUseWorkflowBoardPrimaryFacts
+    ? selectedWorkflowBoardMember
+    : null;
+  const workflowBoardTimestamp = selectWorkflowBoardTimestamp(workflowBoardSnapshot);
   const teamRuntimeServiceIds = React.useMemo(() => {
     if (activeTab !== "overview") {
       return [];
@@ -998,16 +1119,19 @@ const TeamDetailPage: React.FC = () => {
     [scopeId, selectedTeamId],
   );
   const latestVisibleUpdate =
+    (shouldUseWorkflowBoardPrimaryFacts ? workflowBoardTimestamp : "") ||
     teamSummaryQuery.data?.updatedAt ||
     lens.currentRun?.lastUpdatedAt ||
     activeWorkflowSummary?.updatedAt ||
     "";
-  const latestVisibleUpdateNote = teamSummaryQuery.data?.updatedAt
-    ? t("pages.teams.detail.team", "From Team update time")
-    : lens.currentRun?.lastUpdatedAt
-      ? trimText(lens.currentRun?.runId)
-      ? t("pages.teams.detail.run", "From latest run")
-      : t("pages.teams.detail.copy.15", "From latest visible run")
+  const latestVisibleUpdateNote = shouldUseWorkflowBoardPrimaryFacts && workflowBoardTimestamp
+    ? t("pages.teams.detail.workflowboard.updated", "From Workflow Board snapshot")
+    : teamSummaryQuery.data?.updatedAt
+      ? t("pages.teams.detail.team", "From Team update time")
+      : lens.currentRun?.lastUpdatedAt
+        ? trimText(lens.currentRun?.runId)
+          ? t("pages.teams.detail.run", "From latest run")
+          : t("pages.teams.detail.copy.15", "From latest visible run")
       : activeWorkflowSummary?.updatedAt
         ? t("pages.teams.detail.workflow", "From workflow update time")
         : t("pages.teams.detail.copy.16", "No visible update time yet");
@@ -1043,22 +1167,38 @@ const TeamDetailPage: React.FC = () => {
   const currentRunFriendly = hasVisibleRun
     ? formatFriendlyStatus(currentRunStatus, intl)
     : t("pages.teams.detail.copy.17", "Waiting for first test");
+  const boardCurrentNodeStatus = trimText(primaryWorkflowBoardMember?.currentNode?.status);
+  const boardCurrentNodeFriendly = boardCurrentNodeStatus
+    ? formatWorkflowBoardNodeStatus(boardCurrentNodeStatus)
+    : "";
+  const boardRunFriendly =
+    boardCurrentNodeFriendly ||
+    formatWorkflowBoardAvailability(primaryWorkflowBoardMember?.executionAvailability);
+  const displayedRunFriendly = primaryWorkflowBoardMember
+    ? boardRunFriendly
+    : currentRunFriendly;
   const currentMemberLabel =
+    trimText(primaryWorkflowBoardMember?.displayName) ||
     trimText(preferredMemberSummary?.displayName) ||
     teamRosterRows.find((row) => row.memberId === currentMemberId)?.name ||
     "--";
-  const currentMemberCardCaption = currentMemberId
-    ? t("teams.detail.overview.member.selectedCaption", "Selected from this team's members.")
+  const currentMemberCardCaption = primaryWorkflowBoardMember
+    ? t("pages.teams.detail.workflowboard.member.caption", "From backend workflow board snapshot.")
+    : currentMemberId
+      ? t("teams.detail.overview.member.selectedCaption", "Selected from this team's members.")
     : t("pages.teams.detail.copy.18", "No member selected yet");
   const currentMemberCardTooltip = currentMemberId
     ? currentMemberCardCaption
     : t("pages.teams.detail.copy.19", "No member selected yet");
+  const boardServiceId = trimText(primaryWorkflowBoardMember?.publishedServiceId);
   const currentServiceFriendly =
-    currentServiceDisplayName !== "--"
-      ? currentServiceDisplayName
-      : runtimeServiceId
-        ? t("teams.detail.overview.service.boundFallback", "Bound service")
-        : "--";
+    boardServiceId
+      ? t("teams.detail.overview.service.boundFallback", "Bound service")
+      : currentServiceDisplayName !== "--"
+        ? currentServiceDisplayName
+        : runtimeServiceId
+          ? t("teams.detail.overview.service.boundFallback", "Bound service")
+          : "--";
   const hasRunnableTeamEntry =
     Boolean(entryMemberId) ||
     Boolean(currentMemberId) ||
@@ -1067,14 +1207,16 @@ const TeamDetailPage: React.FC = () => {
     Boolean(runtimeServiceId);
   const currentHeaderStatus = hasVisibleRun
     ? currentRunStatus
-    : hasRunnableTeamEntry
+    : boardCurrentNodeStatus || (hasRunnableTeamEntry
       ? "waiting"
-      : currentDeploymentStatus;
+      : currentDeploymentStatus);
   const currentHeaderStatusFriendly = hasVisibleRun
     ? formatFriendlyStatus(currentRunStatus, intl)
-    : hasRunnableTeamEntry
-      ? t("pages.teams.detail.copy.20", "Waiting for first test")
-      : formatFriendlyStatus(currentDeploymentStatus, intl);
+    : primaryWorkflowBoardMember
+      ? boardRunFriendly
+      : hasRunnableTeamEntry
+        ? t("pages.teams.detail.copy.20", "Waiting for first test")
+        : formatFriendlyStatus(currentDeploymentStatus, intl);
   const currentVersionFriendly =
     currentRevisionFriendly !== "--"
       ? currentRevisionFriendly
@@ -1088,30 +1230,93 @@ const TeamDetailPage: React.FC = () => {
       ? t("pages.teams.detail.copy.23", "Version ·{value1}", { value1: currentVersionFriendly })
       : t("pages.teams.detail.copy.24", "Version to be confirmed");
   const currentRunPillText = hasVisibleRun
-    ? t("pages.teams.detail.copy.25", "Run ·{value1}", { value1: currentRunFriendly })
+    ? t("pages.teams.detail.copy.25", "Run ·{value1}", { value1: displayedRunFriendly })
     : t("pages.teams.detail.copy.26", "Next steps · Test team");
-  const currentServiceCardCaption = runtimeServiceId
-    ? t("teams.detail.overview.service.boundCaption", "Traffic is routed through the bound service.")
-    : currentServiceKey !== "--" && currentServiceKey !== currentServiceFriendly
-      ? t("teams.detail.overview.service.configuredCaption", "Service routing is configured.")
-      : t("pages.teams.detail.copy.27", "No service is visible yet.");
-  const currentServiceCardTooltip = runtimeServiceId
+  const currentServiceCardCaption = boardServiceId
+    ? t("pages.teams.detail.workflowboard.service.caption", "Published service from backend snapshot.")
+    : runtimeServiceId
+      ? t("teams.detail.overview.service.boundCaption", "Traffic is routed through the bound service.")
+      : currentServiceKey !== "--" && currentServiceKey !== currentServiceFriendly
+        ? t("teams.detail.overview.service.configuredCaption", "Service routing is configured.")
+        : t("pages.teams.detail.copy.27", "No service is visible yet.");
+  const currentServiceCardTooltip = boardServiceId
     ? currentServiceCardCaption
-    : currentServiceKey !== "--" && currentServiceKey !== currentServiceFriendly
-      ? t("teams.detail.overview.service.configuredCaption", "Service routing is configured.")
-      : t("pages.teams.detail.copy.28", "No service is visible yet.");
-  const currentRunCardCaption = hasVisibleRun
-    ? t("teams.detail.overview.run.visibleCaption", "Latest run is available.")
-    : t("pages.teams.detail.copy.29", "The latest runs will be displayed here after the testing team.");
-  const currentRunCardTooltip = hasVisibleRun
+    : runtimeServiceId
+      ? currentServiceCardCaption
+      : currentServiceKey !== "--" && currentServiceKey !== currentServiceFriendly
+        ? t("teams.detail.overview.service.configuredCaption", "Service routing is configured.")
+        : t("pages.teams.detail.copy.28", "No service is visible yet.");
+  const currentRunCardCaption = primaryWorkflowBoardMember?.currentNode
+    ? trimText(primaryWorkflowBoardMember.currentNode.name) ||
+      t("pages.teams.detail.workflowboard.run.caption", "Current node from backend snapshot.")
+    : hasVisibleRun
+      ? t("teams.detail.overview.run.visibleCaption", "Latest run is available.")
+      : t("pages.teams.detail.copy.29", "The latest runs will be displayed here after the testing team.");
+  const currentRunCardTooltip = primaryWorkflowBoardMember?.currentNode
     ? currentRunCardCaption
-    : t("pages.teams.detail.copy.30", "The latest runs will be displayed here after the testing team.");
+    : hasVisibleRun
+      ? currentRunCardCaption
+      : t("pages.teams.detail.copy.30", "The latest runs will be displayed here after the testing team.");
   const teamStartupGuidance = hasVisibleRun
     ? t("pages.teams.detail.copy.31", "The recent runs are visible and you can continue to test the team or adjust the member configuration.")
     : hasRunnableTeamEntry
       ? t("pages.teams.detail.copy.32", "The team portal is ready, but not yet visibly running. Click \"Test Team\" to generate the first run.")
       : t("pages.teams.detail.copy.33", "No entrance available yet. Configure entry members and services first, and then test the team.");
+  const workflowBoardMetrics = React.useMemo(() => {
+    if (!workflowBoardSnapshot) {
+      return [];
+    }
+
+    const totals = workflowBoardSnapshot.totals;
+    return [
+      {
+        label: t("pages.teams.detail.workflowboard.metrics.completed", "Completed steps"),
+        value: totals.completedSteps == null ? "--" : String(totals.completedSteps),
+        caption: t("pages.teams.detail.workflowboard.metrics.completed.caption", "Committed completed nodes."),
+      },
+      {
+        label: t("pages.teams.detail.workflowboard.metrics.running", "Running nodes"),
+        value: totals.runningNodes == null ? "--" : String(totals.runningNodes),
+        caption: t("pages.teams.detail.workflowboard.metrics.running.caption", "Currently active nodes."),
+      },
+      {
+        label: t("pages.teams.detail.workflowboard.metrics.waiting", "Waiting nodes"),
+        value:
+          totals.waitingOrPendingNodes == null
+            ? "--"
+            : String(totals.waitingOrPendingNodes),
+        caption: t("pages.teams.detail.workflowboard.metrics.waiting.caption", "Waiting, pending, or queued nodes."),
+      },
+      {
+        label: t("pages.teams.detail.workflowboard.metrics.failed", "Failed nodes"),
+        value: totals.failedNodes == null ? "--" : String(totals.failedNodes),
+        caption: t("pages.teams.detail.workflowboard.metrics.failed.caption", "Failed nodes in the snapshot."),
+      },
+    ];
+  }, [workflowBoardSnapshot]);
+  const workflowBoardState =
+    workflowBoardQuery.isLoading || (teamMembersQuery.isLoading && activeTab === "overview")
+      ? "loading"
+      : teamMembersQuery.isSuccess && workflowBoardMemberIds.length === 0
+        ? "empty"
+      : workflowBoardQuery.isError
+        ? "error"
+        : workflowBoardSnapshot && workflowBoardMembers.length === 0
+          ? "empty"
+          : workflowBoardSnapshot
+            ? "ready"
+            : "empty";
+  const workflowBoardErrorMessage = workflowBoardQuery.isError
+    ? describeError(
+        workflowBoardQuery.error,
+        t(
+          "pages.teams.detail.workflowboard.error",
+          "The backend workflow board snapshot could not be loaded."
+        ),
+      )
+    : undefined;
   const workflowNameValue =
+    trimText(primaryWorkflowBoardMember?.workflowName) ||
     trimText(activeWorkflowSummary?.workflowName) ||
     trimText(lens.activeRevision?.workflowName) ||
     "--";
@@ -1161,6 +1366,42 @@ const TeamDetailPage: React.FC = () => {
     ],
   );
   const compositionDisplayRows = React.useMemo(() => {
+    if (workflowBoardMembers.length > 0) {
+      return workflowBoardMembers.map((member) => {
+        const currentNodeLabel = trimText(member.currentNode?.name);
+        const pendingLabel =
+          member.pendingNodes.length > 0
+            ? t("pages.teams.detail.workflowboard.composition.pending", "{count} pending", {
+                count: member.pendingNodes.length,
+              })
+            : "";
+        const failedLabel =
+          member.failedNodes.length > 0
+            ? t("pages.teams.detail.workflowboard.composition.failed", "{count} failed", {
+                count: member.failedNodes.length,
+              })
+            : "";
+        const summaryParts = [
+          currentNodeLabel
+            ? t("pages.teams.detail.workflowboard.composition.current", "Current: {value1}", {
+                value1: currentNodeLabel,
+              })
+            : formatWorkflowBoardAvailability(member.executionAvailability),
+          pendingLabel,
+          failedLabel,
+        ].filter(Boolean);
+
+        return {
+          key: member.memberId,
+          kind: "workflow role",
+          name:
+            trimText(member.displayName) ||
+            t("teams.members.unnamed", "Unnamed member"),
+          summary: summaryParts.join(" · "),
+        };
+      });
+    }
+
     if (teamRosterRows.length > 0) {
       return teamRosterRows.map((row) => ({
         key: row.key,
@@ -1205,6 +1446,7 @@ const TeamDetailPage: React.FC = () => {
     hasExplicitRuntimeFocus,
     hasVisibleRun,
     teamRosterRows,
+    workflowBoardMembers,
     workflowNameValue,
   ]);
   const overviewCompositionRows = React.useMemo(
@@ -1669,6 +1911,9 @@ const TeamDetailPage: React.FC = () => {
   const renderOverviewTab = () => {
     return (
       <TeamOverviewTab
+        boardErrorMessage={workflowBoardErrorMessage}
+        boardMetrics={workflowBoardMetrics}
+        boardState={workflowBoardState}
         configurationDetailRows={configurationDetailRows}
         compositionRows={overviewCompositionRows}
         currentDeploymentPillStyle={resolveStatusPillStyle(token, currentDeploymentStatus)}
@@ -1683,7 +1928,7 @@ const TeamDetailPage: React.FC = () => {
         currentMemberLabel={currentMemberLabel}
         currentRunCardCaption={currentRunCardCaption}
         currentRunCardTooltip={currentRunCardTooltip}
-        currentRunFriendly={currentRunFriendly}
+        currentRunFriendly={displayedRunFriendly}
         currentRunPillStyle={resolveStatusPillStyle(token, currentHeaderStatus)}
         currentRunPillText={currentRunPillText}
         currentServiceCardCaption={currentServiceCardCaption}
