@@ -725,12 +725,112 @@
 
       .plan-card,
       .result-card,
-      .progress-card {
+      .progress-card,
+      .backend-result-card,
+      .conditional-resource-card {
         background: #ffffff;
         border: 1px solid var(--border);
         border-radius: 14px;
         box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
         padding: 14px;
+      }
+
+      .backend-result-card {
+        border-color: var(--border-secondary);
+      }
+
+      .assistant-output {
+        background: var(--bg-soft);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-control);
+        color: var(--text);
+        font-size: 14px;
+        line-height: 1.75;
+        margin-top: 10px;
+        padding: 14px;
+      }
+
+      .assistant-output p {
+        margin: 0;
+      }
+
+      .assistant-output p + p {
+        margin-top: 8px;
+      }
+
+      .usage-row {
+        align-items: center;
+        border-top: 1px solid var(--border);
+        color: var(--text-tertiary);
+        display: flex;
+        flex-wrap: wrap;
+        font-size: 12px;
+        gap: 8px;
+        margin-top: 12px;
+        padding-top: 12px;
+      }
+
+      .usage-pill {
+        background: #f5f5f4;
+        border: 1px solid #e7e5e4;
+        border-radius: 999px;
+        color: #57534e;
+        display: inline-flex;
+        font-size: 12px;
+        font-weight: 600;
+        line-height: 1;
+        padding: 6px 10px;
+      }
+
+      .observatory-button {
+        margin-top: 12px;
+      }
+
+      .conditional-resource-card {
+        background: #fcfcfb;
+        border-style: dashed;
+      }
+
+      .conditional-resource-grid {
+        display: grid;
+        gap: 8px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        margin-top: 12px;
+      }
+
+      .conditional-resource-item {
+        background: #ffffff;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        min-width: 0;
+        padding: 10px;
+      }
+
+      .conditional-resource-item strong {
+        color: var(--text-heading);
+        display: block;
+        font-size: 12px;
+        line-height: 1.35;
+      }
+
+      .conditional-resource-item span {
+        color: var(--text-tertiary);
+        display: block;
+        font-size: 12px;
+        line-height: 1.45;
+        margin-top: 4px;
+      }
+
+      .disabled-action-chip {
+        background: #f5f5f4;
+        border: 1px solid #e7e5e4;
+        border-radius: 999px;
+        color: #a8a29e;
+        display: inline-flex;
+        font-size: 12px;
+        font-weight: 600;
+        line-height: 1;
+        padding: 7px 10px;
       }
 
       .card-head {
@@ -969,7 +1069,8 @@
 
         .metric-grid,
         .starter-grid,
-        .context-summary {
+        .context-summary,
+        .conditional-resource-grid {
           grid-template-columns: 1fr;
         }
       }
@@ -1164,7 +1265,7 @@
                     <div class="api-step"><span>1</span>Send prompt to /api/chat</div>
                     <div class="api-step"><span>2</span>Read SSE data frames</div>
                     <div class="api-step"><span>3</span>Update local history</div>
-                    <div class="api-step"><span>4</span>Open created resources</div>
+                    <div class="api-step"><span>4</span>Open run or resources</div>
                   </section>
 
                   <div class="divider-label">Plan state</div>
@@ -1257,105 +1358,110 @@
                         <div class="progress-list">
                           <div class="progress-row">
                             <span class="status-dot accepted"></span>
-                            <span>Team accepted</span>
+                            <span>Run context accepted</span>
                           </div>
                           <div class="progress-row">
                             <span class="status-dot accepted"></span>
-                            <span>Member shell accepted</span>
+                            <span>Assistant output streaming</span>
                           </div>
                           <div class="progress-row">
                             <span class="status-dot pending"></span>
-                            <span>Workflow member accepted</span>
+                            <span>Usage and tool events captured</span>
                           </div>
                           <div class="progress-row">
                             <span class="status-dot pending"></span>
-                            <span>Result identifiers extracted</span>
+                            <span>Resource identifiers conditional</span>
                           </div>
                         </div>
                       </article>
                     </div>
                   </div>
 
-                  <div class="divider-label">Accepted result</div>
+                  <div class="divider-label">Backend-native result</div>
 
                   <div class="message assistant">
                     <div class="assistant-avatar">A</div>
                     <div class="message-stack">
-                      <div class="bubble">
-                        Creation accepted. Some resources may take a moment to
-                        appear in Team pages.
-                      </div>
-
-                      <article class="result-card" aria-label="Team result card">
+                      <article
+                        class="backend-result-card"
+                        aria-label="Backend native chat result"
+                      >
                         <div class="card-head">
                           <div>
-                            <div class="card-title">Customer Support</div>
+                            <div class="card-title">Aevatar Studio</div>
                             <div class="card-subtitle">
-                              scope-a / team-support
+                              Default P0 rendering for current /api/chat output.
                             </div>
                           </div>
                           <span class="tag success">
                             <span class="status-dot accepted"></span>
-                            Accepted
+                            Run finished
                           </span>
                         </div>
 
-                        <div class="metric-grid">
-                          <div class="metric-card">
-                            <span class="metric-label">Team</span>
-                            <span class="metric-value">team-support</span>
-                          </div>
-                          <div class="metric-card">
-                            <span class="metric-label">Members</span>
-                            <span class="metric-value">2 accepted</span>
-                          </div>
-                          <div class="metric-card">
-                            <span class="metric-label">Workflow</span>
-                            <span class="metric-value">accepted</span>
-                          </div>
+                        <div class="assistant-output">
+                          <p>
+                            已收到你的创建请求。我已经通过当前会话运行了
+                            Team、Member 和 Workflow 创建流程。
+                          </p>
+                          <p>
+                            第一版会先保留这条对话和运行上下文；请到运行观测台查看本次运行的
+                            step、tool call、usage 和最终状态。
+                          </p>
                         </div>
 
+                        <div class="usage-row" aria-label="Token usage">
+                          <span class="usage-pill">prompt 1,284</span>
+                          <span class="usage-pill">completion 436</span>
+                          <span class="usage-pill">total 1,720 tokens</span>
+                          <span>runId: run-20260701-chat-42</span>
+                        </div>
                         <div class="actions">
-                          <button class="button primary" type="button">Open Team</button>
-                          <button class="button" type="button">Test Team</button>
+                          <button
+                            class="button primary observatory-button"
+                            type="button"
+                          >
+                            到运行观测台查看本次运行
+                          </button>
                         </div>
                       </article>
 
-                      <article class="result-card" aria-label="Member result card">
+                      <article
+                        class="conditional-resource-card"
+                        aria-label="Conditional structured resource result"
+                      >
                         <div class="card-head">
                           <div>
-                            <div class="card-title">Refund Agent</div>
+                            <div class="card-title">Structured resource cards</div>
                             <div class="card-subtitle">
-                              workflow member / member-refund
+                              Only render when /api/chat returns reliable IDs.
                             </div>
                           </div>
-                          <span class="tag success">
-                            <span class="status-dot accepted"></span>
-                            Workflow accepted
+                          <span class="tag info">
+                            <span class="status-dot running"></span>
+                            Conditional
                           </span>
                         </div>
 
-                        <div class="metric-grid">
-                          <div class="metric-card">
-                            <span class="metric-label">Member</span>
-                            <span class="metric-value">member-refund</span>
+                        <div class="conditional-resource-grid">
+                          <div class="conditional-resource-item">
+                            <strong>Team card</strong>
+                            <span>Requires scopeId + teamId.</span>
                           </div>
-                          <div class="metric-card">
-                            <span class="metric-label">Studio</span>
-                            <span class="metric-value">available when visible</span>
+                          <div class="conditional-resource-item">
+                            <strong>Member actions</strong>
+                            <span>Requires teamId + memberId.</span>
                           </div>
-                          <div class="metric-card">
-                            <span class="metric-label">Runs</span>
-                            <span class="metric-value">via member page</span>
+                          <div class="conditional-resource-item">
+                            <strong>Workflow link</strong>
+                            <span>Requires workflowId or studioUrl.</span>
                           </div>
                         </div>
 
                         <div class="actions">
-                          <button class="button primary" type="button">
-                            Edit Workflow
-                          </button>
-                          <button class="button" type="button">Invoke</button>
-                          <button class="button" type="button">Runs</button>
+                          <span class="disabled-action-chip">Open Team when teamId exists</span>
+                          <span class="disabled-action-chip">Edit Workflow when workflowId exists</span>
+                          <span class="disabled-action-chip">Runs when memberId exists</span>
                         </div>
                       </article>
                     </div>

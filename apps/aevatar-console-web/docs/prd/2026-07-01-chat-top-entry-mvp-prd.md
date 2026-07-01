@@ -22,7 +22,8 @@ durable backend chat history.
 - User mental model is simply `Chat`.
 - MVP backend integration uses `POST /api/chat` directly.
 - `POST /api/chat` is an SSE endpoint. The frontend reads `data:` frames and
-  updates the assistant message, progress state, and result cards.
+  updates the assistant message, progress state, token/usage details, and run
+  handoff.
 - Default create flow is `Plan -> Confirm -> Create`.
 - Button confirmation is the primary path.
 - Natural-language confirmation is also supported, including phrases such as
@@ -32,8 +33,11 @@ durable backend chat history.
 - MVP supports both creating a Team from scratch and adding a Member to an
   existing Team.
 - Conversation history is saved in frontend local storage for the first version.
-- Chat result cards connect to existing Team, Member Workflow Studio, Invoke,
-  Runs, and Observatory pages when reliable identifiers are available.
+- The default P0 result shape follows the current backend demo: assistant text,
+  usage/tokens when provided, and an Observatory/run CTA when a run id or URL is
+  available.
+- Rich Team/Member/Workflow resource cards are conditional enhancements. They
+  render only when `/api/chat` or tool results provide structured identifiers.
 
 ## Product Direction
 
@@ -81,7 +85,8 @@ accepted.
 - Make direct creation available when the prompt explicitly asks for it.
 - Persist first-version history locally so users can revisit recent attempts
   during validation.
-- Turn created resource identifiers into useful links.
+- Turn created resource identifiers into useful links when those identifiers are
+  returned structurally.
 - Preserve existing Team and Workflow pages as the source of detailed editing,
   testing, invoking, and run inspection.
 
@@ -94,7 +99,11 @@ accepted.
 - Do not rebuild the Team detail page inside Chat.
 - Do not rebuild the Workflow editor inside Chat.
 - Do not make Chat a generic LLM playground.
-- Do not fabricate resource links when identifiers are missing.
+- Do not fabricate resource links or resource cards when identifiers are
+  missing.
+- Do not parse arbitrary assistant prose as proof that a Team, Member, or
+  Workflow exists. Natural-language output can be shown as text, but links and
+  cards require structured identifiers.
 - Do not label accepted or streamed intermediate states as fully complete until
   the stream or linked read model proves the final state.
 
@@ -146,8 +155,9 @@ Relevant optional fields from the backend contract:
 - Surface step/tool/progress frames as a compact progress card when possible.
 - Treat `runFinished` as terminal success for the current request.
 - Treat `runError` or HTTP errors as recoverable error states.
-- Extract resource identifiers conservatively from structured frames or final
-  assistant output.
+- Extract resource identifiers conservatively from structured frames, tool
+  results, or a final JSON object. Do not infer identifiers from arbitrary
+  assistant prose.
 
 Useful event concepts already visible in backend examples:
 
@@ -166,11 +176,28 @@ acceptable behavior is: stream assistant output, show the run as active while
 the response is open, then show success/error when the stream terminates with a
 known final frame or failure.
 
-### Resource Result Model
+### Current Rendering Capability
 
-The backend may return created resource identifiers in structured frames, tool
-results, or assistant text. The frontend result extractor should recognize these
-fields when present:
+Current frontend/backend capability supports a backend-native Chat result:
+
+- Plain assistant messages rendered as sanitized markdown-ish text.
+- Runtime step/tool progress when corresponding SSE frames are present.
+- Token/usage display when the stream provides usage fields.
+- Observatory/run handoff when the stream exposes `runId`, `observatoryUrl`, or
+  enough run context to build an existing Observatory link.
+- Approval and intervention cards already supported by the existing Chat runtime
+  model.
+
+The current project does not have a stable first-class `createdResources`
+contract for rich Team/Member/Workflow cards. The frontend can render those
+cards once it receives reliable structured data, but it should not infer them
+from a sentence such as `已创建团队`.
+
+### Conditional Resource Result Model
+
+The backend may later return created resource identifiers in structured frames,
+tool results, or a final JSON object. The frontend result extractor should
+recognize these fields when present:
 
 - `scopeId`
 - `teamId`
@@ -183,7 +210,12 @@ fields when present:
 - `runId`
 - `serviceId`
 
-No identifier means no generated resource card. Show the assistant message only.
+No identifier means no generated resource card. Show the assistant message,
+token/usage line if present, and Observatory CTA if run context exists.
+
+If identifiers are returned only in free-form assistant prose, treat the
+response as text-only for P0. This avoids fake links and avoids implying that a
+resource is visible in Team pages before the read model proves it.
 
 ## Local History
 
@@ -204,7 +236,8 @@ Each local conversation record should include:
 - `updatedAt`
 - `messages`: user and assistant messages needed to redraw the thread.
 - `lastStatus`: `draft | streaming | plan_ready | accepted | error`.
-- `createdResources`: conservative list of extracted resources and links.
+- `createdResources`: conservative list of extracted resources and links; empty
+  for text-only backend responses.
 
 Local history behavior:
 
@@ -255,7 +288,9 @@ Chat page layout:
 8. Frontend sends the confirmation through `POST /api/chat` with the same
    `sessionId`.
 9. Chat streams creation progress.
-10. Result cards link to existing pages when identifiers are available:
+10. Chat shows the backend-native result: assistant text, usage/tokens when
+    present, and an Observatory CTA when run context is available.
+11. Resource cards link to existing pages only when identifiers are available:
     - `Open Team`
     - `Edit Workflow`
     - `Invoke`
@@ -269,15 +304,16 @@ Chat page layout:
 4. Chat presents a plan for the new Member and optional Workflow.
 5. User confirms by button or natural language.
 6. Chat streams creation/binding progress.
-7. Result card links to Team detail and Member Workflow Studio when IDs are
-   reliable.
+7. Chat first shows assistant text and run handoff; result cards appear only
+   when IDs are reliable.
 
 ### Flow 3: Direct Create
 
 1. User enters: `Directly create a demo FAQ team, no confirmation needed.`
 2. Frontend sends the prompt to `/api/chat`.
 3. Chat shows `Direct create requested` and starts displaying streamed progress.
-4. Result cards show accepted/created resources and next actions.
+4. Chat shows streamed text, usage, run handoff, and conditional resource cards
+   only if structured IDs are present.
 
 ### Flow 4: Resume Local History
 
@@ -315,8 +351,12 @@ Chat page layout:
 - Natural-language confirmation uses the same send path as the button.
 - Direct-create starter sends a prompt that clearly asks the backend to skip
   confirmation.
-- Chat renders structured resource result cards when reliable identifiers are
-  present.
+- Chat renders the backend-native response shape by default:
+  - assistant text
+  - token/usage row when present
+  - `View in Observatory` or equivalent run CTA when run context is present
+- Chat renders structured resource result cards only when reliable identifiers
+  are present.
 - Chat renders a plain assistant message when no reliable identifiers are
   present.
 - Result cards use existing routes for details and editing.
@@ -332,6 +372,8 @@ Chat page layout:
 - Poll linked read models after creation only when the result includes enough
   identifiers and the user opens a result action.
 - Group result cards by Team, Member, Workflow, Schedule, and Run/Observatory.
+- Ask backend for a stable `createdResources` or equivalent custom SSE payload
+  if rich cards become a P0 requirement.
 
 ### P2
 
@@ -351,8 +393,10 @@ Chat page layout:
 | `scopeId + teamId + memberId` | Runs | `/scopes/{scopeId}/teams/{teamId}/members/{memberId}/runs` |
 | `studioUrl` | Workflow Studio | Use returned `studioUrl` |
 | `observatoryUrl` | Observatory | Use returned `observatoryUrl` |
+| `runId` | Observatory | Build or open the existing Observatory run route |
 | `bindingRunId` | Binding status | Show `Binding accepted`; polling is not P0 |
 | `scheduleId` | Schedule status | Show `Schedule accepted` |
+| Text + usage/run context | Backend-native result | Show assistant text, usage/tokens, and Observatory CTA |
 | Text only | Assistant message | Do not generate a fake card |
 
 ## UI States
@@ -400,7 +444,9 @@ Show progress as streamed milestones:
 
 ### Accepted / Created
 
-Show result cards and next actions. Avoid saying everything is fully ready if
+Show the assistant's final text, usage/tokens if present, and Observatory/run
+CTA when available. Show resource cards and next actions only when structured
+resource identifiers are available. Avoid saying everything is fully ready if
 the stream only proves an accepted stage.
 
 ### Error
@@ -433,6 +479,11 @@ Accepted state:
 
 > Creation accepted. Some resources may take a moment to appear in Team pages.
 
+Text-only successful state:
+
+> Creation request completed. Review this run in the Observatory for execution
+> details.
+
 Local history note:
 
 > History is saved in this browser for the MVP.
@@ -446,6 +497,7 @@ Local history note:
 - Direct create usage rate.
 - Successful accepted/created resource rate.
 - Open Team / Edit Workflow / Invoke / Runs click-through after result cards.
+- Observatory CTA click-through for text-only backend responses.
 - Time from initial prompt to first result card.
 - User fallback rate to manual Team creation.
 
@@ -454,7 +506,8 @@ Local history note:
 - `/api/chat` may stream useful text before it streams structured identifiers.
   The UI must handle text-only success.
 - The exact created-resource fields may appear in tool output, custom frames, or
-  final assistant text. The extractor must be conservative.
+  a final JSON object. The extractor must be conservative and must not treat
+  arbitrary assistant prose as a resource contract.
 - Backend session continuity for repeated `sessionId` should be verified. The
   frontend can reuse `sessionId`, but backend semantics own whether that is a
   true multi-turn memory boundary.
@@ -473,11 +526,13 @@ Local history note:
    `/api/chat` flow.
 4. Direct-create test: direct prompt skips the plan wait and streams progress.
 5. Existing-Team test: prompt adds a Member to a named existing Team.
-6. Result-link test: result cards only appear when IDs are present and route to
+6. Text-only result test: backend-demo-style response renders assistant text,
+   usage/tokens, and Observatory CTA without resource cards.
+7. Result-link test: result cards only appear when IDs are present and route to
    existing pages.
-7. Local-history test: refresh page and see the recent conversation restored
+8. Local-history test: refresh page and see the recent conversation restored
    from local storage.
-8. Error test: failed `/api/chat` request preserves the user prompt and allows
+9. Error test: failed `/api/chat` request preserves the user prompt and allows
    retry.
 
 ## Implementation Handoff
@@ -499,14 +554,17 @@ Implement the Chat Top Entry MVP in `apps/aevatar-console-web` only.
 10. Add a plan card presentation with `Confirm Create` and `Edit Plan`.
 11. Wire `Confirm Create` to send a confirmation message through `/api/chat`.
 12. Treat natural-language confirmation as a normal prompt path.
-13. Add conservative result extraction for known resource fields.
-14. Render resource result cards only when identifiers are reliable.
-15. Use existing routes for Team, Member Workflow Studio, Invoke, Runs, and
+13. Render backend-demo-style text results, token/usage details, and Observatory
+    CTA from run context.
+14. Add conservative result extraction for known resource fields.
+15. Render resource result cards only when identifiers are reliable.
+16. Use existing routes for Team, Member Workflow Studio, Invoke, Runs, and
     Observatory actions.
-16. Label stream/accepted states honestly.
-17. Add focused tests for navigation order, starter prompts, `/api/chat` send
+17. Label stream/accepted states honestly.
+18. Add focused tests for navigation order, starter prompts, `/api/chat` send
     payload, SSE frame parsing, local history persistence, confirmation button,
-    direct create starter text, and result link generation.
+    direct create starter text, text-only result rendering, Observatory CTA, and
+    result link generation.
 
 ## Acceptance Criteria
 
@@ -516,6 +574,9 @@ Implement the Chat Top Entry MVP in `apps/aevatar-console-web` only.
 - Sending a prompt calls `POST /api/chat`.
 - The request includes `prompt`, local `sessionId`, and available `scopeId`.
 - SSE frames update the visible assistant/progress state.
+- Backend-demo-style text responses render without fabricated resource cards.
+- Token/usage details render when the stream provides usage fields.
+- Observatory/run CTA renders when run context is available.
 - Conversations persist in browser local storage.
 - Default starter flow asks for a plan before creation.
 - Direct create starter explicitly asks to skip confirmation.
