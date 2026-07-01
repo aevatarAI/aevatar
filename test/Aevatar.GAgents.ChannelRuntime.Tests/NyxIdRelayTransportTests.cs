@@ -1182,6 +1182,42 @@ public sealed class NyxIdRelayTransportTests
     }
 
     [Fact]
+    public void Parse_ShouldPreferCompleteLarkPostText_WhenNormalizedTextOnlyContainsFirstLine()
+    {
+        var body = """
+            {
+              "message_id": "msg-lark-post-whatsapp-draft",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "route-uuid", "platform_id": "oc_group_1", "type": "group" },
+              "sender": { "platform_id": "ou_user_1", "display_name": "User One" },
+              "content": {
+                "type": "text",
+                "text": "/whatsapp-reply-draft Hi Everyone!"
+              },
+              "raw_platform_data": {
+                "event": {
+                  "message": {
+                    "message_id": "om_post_whatsapp_draft",
+                    "chat_id": "oc_group_1",
+                    "chat_type": "group",
+                    "message_type": "post",
+                    "content": "{\"content\":[[{\"tag\":\"text\",\"text\":\"/whatsapp-reply-draft Hi Everyone!\"}],[{\"tag\":\"text\",\"text\":\"Below is a quick recap.\"}],[{\"tag\":\"text\",\"text\":\"Have a great summer!\"}]]}"
+                  }
+                }
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        parsed.Ignored.Should().BeFalse();
+        parsed.Activity!.Content.Text.Should().Be(
+            "/whatsapp-reply-draft Hi Everyone!\nBelow is a quick recap.\nHave a great summer!");
+    }
+
+    [Fact]
     public void Parse_ShouldAcceptLarkPostMessage_WithFormattedTextButNoImage()
     {
         // A rich-text post without an image (formatting / @ / links only) still arrives

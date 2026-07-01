@@ -37,15 +37,14 @@ public sealed class NyxIdRelayTransport
         var normalizedContentType = NormalizeContentType(payload.Content);
         var isCardAction = string.Equals(normalizedContentType, CardActionContentType, StringComparison.Ordinal);
 
-        var text = payload.Content?.Text?.Trim();
         var platform = NormalizePlatform(payload.Platform);
-        if (!isCardAction && string.IsNullOrWhiteSpace(text) && IsLark(platform))
+        var text = payload.Content?.Text?.Trim();
+        if (!isCardAction && IsLark(platform) && NormalizeOptional(ExtractLarkRawText(payload)) is { } larkRawText)
         {
-            // NyxID only normalizes Lark `text`/`image`/`file` messages; a rich-text `post`
-            // (图文夹杂) arrives as content_type=unknown with no normalized text, so recover
-            // the user's words from the raw post body or the turn is dropped as empty_text
-            // and the bot never replies.
-            text = NormalizeOptional(ExtractLarkRawText(payload));
+            // Lark `post` rich-text can arrive with a lossy normalized text value that only
+            // contains the first paragraph. Prefer the raw post body when available so
+            // command payloads keep every user-authored line.
+            text = larkRawText;
         }
         var attachments = BuildAttachments(payload, platform);
         if (!isCardAction && string.IsNullOrWhiteSpace(text) && attachments.Count == 0)
