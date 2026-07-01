@@ -4,29 +4,24 @@ namespace Aevatar.AI.Abstractions.ToolProviders;
 public class SystemSkillOverlayOptions
 {
     /// <summary>
-    /// Host-bound Ornn tag used to select the system skills that may be materialized into the
-    /// persisted role-agent overlay.
+    /// Non-secret name of the public, org-owned Ornn skillset that sources the overlay (issue #2498).
+    /// Ownership is the trust anchor, so no organization service token secret is needed; the set is
+    /// resolved to a stable guid once and read by that guid to resist same-name squatting.
     /// </summary>
-    public string Tag { get; set; } = string.Empty;
+    public string SetName { get; set; } = string.Empty;
 
     /// <summary>
-    /// Host-bound organization service token used by the materializer to read system skills.
-    /// This is a secret and must be supplied by host configuration.
-    /// </summary>
-    public string OrgServiceToken { get; set; } = string.Empty;
-
-    /// <summary>
-    /// Minimum interval before the materializer should refresh the overlay from its source.
+    /// Minimum interval before the overlay provider should refresh the overlay from its source.
     /// </summary>
     public TimeSpan RefreshTtl { get; set; } = TimeSpan.Zero;
 
     /// <summary>
-    /// Maximum number of source skills the materializer should include in one overlay.
+    /// Maximum number of source skills the provider should include in one overlay.
     /// </summary>
     public int MaxSkills { get; set; }
 
     /// <summary>
-    /// Maximum UTF-8 byte budget the materializer should allow for one overlay.
+    /// Maximum UTF-8 byte budget the provider should allow for one overlay.
     /// </summary>
     public int MaxBytes { get; set; }
 

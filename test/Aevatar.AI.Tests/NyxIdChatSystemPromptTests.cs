@@ -11,7 +11,7 @@ public class NyxIdChatSystemPromptTests
     // composition while invariant assertions stay on the kernel itself.
     private static string ComposedAgentPrompt()
     {
-        var overlay = new SystemSkillOverlayDefaultProvider().GetCurrent();
+        var overlay = new SystemSkillOverlayDefaultProvider().GetCurrent(default);
         overlay.Should().NotBeNull();
         return $"{NyxIdChatSystemPrompt.Value}\n\n{overlay!.OverlayMarkdown}";
     }
