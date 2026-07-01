@@ -9,6 +9,7 @@ import {
 } from "@/shared/runs/draftRunSession";
 import { saveRecentRun } from "@/shared/runs/recentRuns";
 import { runtimeCatalogApi } from "@/shared/api/runtimeCatalogApi";
+import { runtimeActorsApi } from "@/shared/api/runtimeActorsApi";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
 import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
@@ -318,6 +319,9 @@ describe("RunsPage", () => {
     signal: jest.Mock;
     stop: jest.Mock;
   };
+  const mockedRuntimeActorsApi = runtimeActorsApi as unknown as {
+    getActorSnapshot: jest.Mock;
+  };
   const mockedParseBackendSSEStream = parseBackendSSEStream as jest.Mock;
 
   beforeEach(() => {
@@ -346,6 +350,27 @@ describe("RunsPage", () => {
       body: {},
     });
     mockedRuntimeRunsApi.streamDraftRun.mockResolvedValue({});
+    mockedRuntimeActorsApi.getActorSnapshot.mockResolvedValue({
+      actorId: "actor-1",
+      workflowName: "Test workflow",
+      lastCommandId: "cmd-1",
+      completionStatusValue: 0,
+      stateVersion: 1,
+      lastEventId: "event-1",
+      lastUpdatedAt: "2026-06-30T00:00:00Z",
+      lastSuccess: true,
+      lastOutput: "",
+      lastError: "",
+      totalSteps: 0,
+      requestedSteps: 0,
+      completedSteps: 0,
+      roleReplyCount: 0,
+      currentStateJson: "{}",
+      timelineCount: 0,
+      parentActorId: null,
+      childActorIds: [],
+      latestEvents: [],
+    });
     mockedRuntimeCatalogApi.listWorkflowCatalog.mockResolvedValue([]);
     mockedParseBackendSSEStream.mockImplementation(
       () => (async function* () {})()
@@ -353,9 +378,13 @@ describe("RunsPage", () => {
   });
 
   it("renders the run console header and setup-first state before any run starts", async () => {
+    const consoleError = jest.spyOn(console, "error");
     const { container } = renderWithQueryClient(React.createElement(RunsPage));
 
     expect(container.textContent).toContain("Run Console");
+    expect(consoleError).not.toHaveBeenCalledWith(
+      expect.stringContaining("`NaN` is an invalid value for the `height`")
+    );
     expect(
       screen.getByRole("button", { name: "Open runtime console guide" })
     );
