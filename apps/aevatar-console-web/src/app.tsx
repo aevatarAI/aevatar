@@ -168,6 +168,7 @@ const CONSOLE_LOCALE_OPTIONS: readonly ConsoleLocaleOption[] = [
   { key: "en-US", messageId: "common.language.english" },
 ];
 const NAVIGATION_MENU_MESSAGE_IDS: Readonly<Record<string, string>> = {
+  "/chat": "nav.items.chat",
   "/scopes": "nav.items.myTeams",
   "/runtime/runs": "nav.items.eventStream",
   "/services": "nav.items.services",

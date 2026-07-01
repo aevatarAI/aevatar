@@ -1,5 +1,6 @@
 import {
   DashboardOutlined,
+  MessageOutlined,
   SettingOutlined,
   TeamOutlined,
 } from "@ant-design/icons";
@@ -15,6 +16,14 @@ export type NavigationGroup = {
 
 const TEAM_FIRST_NAVIGATION_GROUP_ORDER: readonly NavigationGroup[] = [
   {
+    flattenSingleItem: true,
+    icon: <MessageOutlined />,
+    key: "chat",
+    label: "Chat",
+    labelMessageId: "nav.groups.chat",
+  },
+  {
+    flattenSingleItem: true,
     icon: <TeamOutlined />,
     key: "teams",
     label: "Teams",

@@ -45,14 +45,19 @@ describe("console routes", () => {
   it("keeps scoped Team navigation as the default resource route model", () => {
     const routes = loadRoutes();
 
+    expect(findRoute(routes, "/chat").hideInMenu).toBe(false);
+    expect(findRoute(routes, "/chat").name).toBe("Chat");
+    expect(findRoute(routes, "/chat").menuGroupKey).toBe("chat");
     expect(findRoute(routes, "/scopes").hideInMenu).toBe(false);
     expect(findRoute(routes, "/studio").hideInMenu).toBe(true);
-    expect(findRoute(routes, "/chat").hideInMenu).toBe(true);
     expect(findRoute(routes, "/runtime/runs").hideInMenu).toBeUndefined();
     expect(findRoute(routes, "/runtime/runs").menuGroupKey).toBe("platform");
     expect(findRoute(routes, "/scopes/overview").hideInMenu).toBe(true);
     expect(findRoute(routes, "/scopes").name).toBe("My Teams");
     expect(findRoute(routes, "/scopes").component).toBe("./teams");
+    expect(findRouteIndex(routes, "/chat")).toBeLessThan(
+      findRouteIndex(routes, "/scopes"),
+    );
     expect(hasRoute(routes, "/teams")).toBe(false);
     expect(hasRoute(routes, "/teams/new")).toBe(false);
     expect(hasRoute(routes, "/teams/:scopeId")).toBe(false);

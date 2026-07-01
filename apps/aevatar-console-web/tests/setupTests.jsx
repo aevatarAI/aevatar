@@ -1,9 +1,35 @@
 ﻿import { defaultConfig } from 'antd/lib/theme/internal';
+import { ReadableStream } from 'node:stream/web';
+import { TextDecoder, TextEncoder } from 'node:util';
 
 defaultConfig.hashed = false;
 
 // React 19 expects the test environment to opt into act-aware updates.
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+
+if (typeof global.TextEncoder === 'undefined') {
+  global.TextEncoder = TextEncoder;
+}
+
+if (typeof global.TextDecoder === 'undefined') {
+  global.TextDecoder = TextDecoder;
+}
+
+if (typeof global.ReadableStream === 'undefined') {
+  global.ReadableStream = ReadableStream;
+}
+
+if (typeof window !== 'undefined') {
+  if (typeof window.TextEncoder === 'undefined') {
+    window.TextEncoder = TextEncoder;
+  }
+  if (typeof window.TextDecoder === 'undefined') {
+    window.TextDecoder = TextDecoder;
+  }
+  if (typeof window.ReadableStream === 'undefined') {
+    window.ReadableStream = ReadableStream;
+  }
+}
 
 const localStorageState = new Map();
 

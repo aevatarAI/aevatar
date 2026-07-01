@@ -13,15 +13,17 @@ describe("app navigation groups", () => {
     jest.resetModules();
   });
 
-  it("uses the scoped Team group model by default", () => {
+  it("puts Chat first, then scoped Teams, then platform items", () => {
     const groups = loadNavigationGroups();
 
     expect(groups.map((group) => group.label)).toEqual([
+      "Chat",
       "Teams",
       "Platform",
       "Settings",
     ]);
     expect(groups.map((group) => group.labelMessageId)).toEqual([
+      "nav.groups.chat",
       "nav.groups.teams",
       "nav.groups.platform",
       "nav.groups.settings",

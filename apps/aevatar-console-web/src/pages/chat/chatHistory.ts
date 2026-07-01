@@ -1,14 +1,12 @@
 import type {
   ChatMessage,
   ConversationMeta,
+  LocalChatConversation,
+  LocalChatStatus,
   StoredChatMessage,
 } from "./chatTypes";
 
-type StoredConversationPayload = {
-  messages: StoredChatMessage[];
-};
-
-const CHAT_HISTORY_STORAGE_PREFIX = "aevatar-console-web.chat.v1";
+const CHAT_HISTORY_STORAGE_PREFIX = "aevatar.chat.localHistory.v1";
 
 function readStorage(): Storage | null {
   if (typeof window === "undefined") {
@@ -19,11 +17,7 @@ function readStorage(): Storage | null {
 }
 
 function buildIndexKey(scopeId: string): string {
-  return `${CHAT_HISTORY_STORAGE_PREFIX}.index.${scopeId.trim()}`;
-}
-
-function buildConversationKey(scopeId: string, conversationId: string): string {
-  return `${CHAT_HISTORY_STORAGE_PREFIX}.conversation.${scopeId.trim()}.${conversationId.trim()}`;
+  return `${CHAT_HISTORY_STORAGE_PREFIX}:${scopeId.trim()}`;
 }
 
 function createSafeId(): string {
@@ -59,23 +53,19 @@ export function listConversationMetas(scopeId: string): ConversationMeta[] {
     return [];
   }
 
-  const items = readJson<ConversationMeta[]>(
+  const items = readJson<LocalChatConversation[]>(
     storage.getItem(buildIndexKey(normalizedScopeId)),
     []
   );
 
-  return [...items].sort((left, right) =>
-    right.updatedAt.localeCompare(left.updatedAt)
-  );
+  return items
+    .map(toConversationMeta)
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 }
 
-export function loadConversation(
-  scopeId: string,
-  conversationId: string
-): StoredChatMessage[] {
+export function listConversations(scopeId: string): LocalChatConversation[] {
   const normalizedScopeId = scopeId.trim();
-  const normalizedConversationId = conversationId.trim();
-  if (!normalizedScopeId || !normalizedConversationId) {
+  if (!normalizedScopeId) {
     return [];
   }
 
@@ -84,14 +74,43 @@ export function loadConversation(
     return [];
   }
 
-  const payload = readJson<StoredConversationPayload>(
-    storage.getItem(buildConversationKey(normalizedScopeId, normalizedConversationId)),
-    {
-      messages: [],
-    }
+  const items = readJson<LocalChatConversation[]>(
+    storage.getItem(buildIndexKey(normalizedScopeId)),
+    []
   );
 
-  return Array.isArray(payload.messages) ? payload.messages : [];
+  return items
+    .filter((item) => item.scopeId === normalizedScopeId && item.id.trim())
+    .map((item) => ({
+      ...item,
+      messages: Array.isArray(item.messages) ? item.messages : [],
+      status: normalizeStatus(item.status),
+    }))
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+}
+
+export function loadConversationRecord(
+  scopeId: string,
+  conversationId: string
+): LocalChatConversation | null {
+  const normalizedScopeId = scopeId.trim();
+  const normalizedConversationId = conversationId.trim();
+  if (!normalizedScopeId || !normalizedConversationId) {
+    return null;
+  }
+
+  return (
+    listConversations(normalizedScopeId).find(
+      (item) => item.id === normalizedConversationId
+    ) ?? null
+  );
+}
+
+export function loadConversation(
+  scopeId: string,
+  conversationId: string
+): StoredChatMessage[] {
+  return loadConversationRecord(scopeId, conversationId)?.messages ?? [];
 }
 
 export function saveConversation(
@@ -110,19 +129,24 @@ export function saveConversation(
     return;
   }
 
-  storage.setItem(
-    buildConversationKey(normalizedScopeId, normalizedConversationId),
-    JSON.stringify({
-      messages,
-    } satisfies StoredConversationPayload)
-  );
-
-  const previous = listConversationMetas(normalizedScopeId).filter(
+  const previous = listConversations(normalizedScopeId).filter(
     (item) => item.id !== normalizedConversationId
   );
+  const conversation = fromMeta(normalizedScopeId, meta, messages);
   storage.setItem(
     buildIndexKey(normalizedScopeId),
-    JSON.stringify([meta, ...previous])
+    JSON.stringify([conversation, ...previous])
+  );
+}
+
+export function saveConversationRecord(
+  scopeId: string,
+  conversation: LocalChatConversation
+): void {
+  saveConversation(
+    scopeId,
+    toConversationMeta(conversation),
+    conversation.messages
   );
 }
 
@@ -141,17 +165,44 @@ export function deleteConversation(
     return;
   }
 
-  storage.removeItem(
-    buildConversationKey(normalizedScopeId, normalizedConversationId)
-  );
   storage.setItem(
     buildIndexKey(normalizedScopeId),
     JSON.stringify(
-      listConversationMetas(normalizedScopeId).filter(
+      listConversations(normalizedScopeId).filter(
         (item) => item.id !== normalizedConversationId
       )
     )
   );
+}
+
+export function renameConversation(
+  scopeId: string,
+  conversationId: string,
+  title: string
+): void {
+  const normalizedScopeId = scopeId.trim();
+  const normalizedConversationId = conversationId.trim();
+  const normalizedTitle = title.trim();
+  if (!normalizedScopeId || !normalizedConversationId || !normalizedTitle) {
+    return;
+  }
+
+  const storage = readStorage();
+  if (!storage) {
+    return;
+  }
+
+  const nextItems = listConversations(normalizedScopeId).map((item) =>
+    item.id === normalizedConversationId
+      ? {
+          ...item,
+          title: normalizedTitle,
+          updatedAt: new Date().toISOString(),
+        }
+      : item
+  );
+
+  storage.setItem(buildIndexKey(normalizedScopeId), JSON.stringify(nextItems));
 }
 
 export function serializeChatMessages(
@@ -200,4 +251,55 @@ export function hydrateChatMessages(
     timestamp: message.timestamp,
     toolCalls: message.toolCalls ? [...message.toolCalls] : undefined,
   }));
+}
+
+function normalizeStatus(status: LocalChatStatus | undefined): LocalChatStatus {
+  switch (status) {
+    case "draft":
+    case "streaming":
+    case "needs_confirmation":
+    case "creating":
+    case "completed_text":
+    case "completed_with_studio_target":
+    case "error":
+      return status;
+    default:
+      return "draft";
+  }
+}
+
+function toConversationMeta(
+  conversation: LocalChatConversation
+): ConversationMeta {
+  return {
+    createdAt: conversation.createdAt,
+    id: conversation.id,
+    messageCount: conversation.messages.length,
+    scopeId: conversation.scopeId,
+    serviceId: "chat",
+    serviceKind: "chat",
+    status: normalizeStatus(conversation.status),
+    target: conversation.target,
+    title: conversation.title,
+    updatedAt: conversation.updatedAt,
+    usage: conversation.usage,
+  };
+}
+
+function fromMeta(
+  scopeId: string,
+  meta: ConversationMeta,
+  messages: StoredChatMessage[]
+): LocalChatConversation {
+  return {
+    createdAt: meta.createdAt,
+    id: meta.id,
+    messages,
+    scopeId,
+    status: normalizeStatus(meta.status),
+    target: meta.target,
+    title: meta.title,
+    updatedAt: meta.updatedAt,
+    usage: meta.usage,
+  };
 }
