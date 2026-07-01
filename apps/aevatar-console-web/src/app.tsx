@@ -696,8 +696,13 @@ function groupNavigationMenuItems(items: NavigationMenuItem[]): NavigationMenuIt
       if (group.flattenSingleItem && children.length === 1) {
         result.push({
           ...children[0],
-          icon: children[0].icon ?? group.icon,
+          icon: group.flattenSingleItemAsGroupLabel
+            ? children[0].icon
+            : (children[0].icon ?? group.icon),
           menuGroupKey: group.key,
+          name: group.flattenSingleItemAsGroupLabel
+            ? React.createElement(NavigationGroupLabel, { group })
+            : children[0].name,
         });
         return result;
       }

@@ -13,19 +13,23 @@ describe("app navigation groups", () => {
     jest.resetModules();
   });
 
-  it("keeps scoped Teams, platform, and Settings in their menu groups", () => {
+  it("puts Chat at the top-level next to Teams, Platform, and Settings", () => {
     const groups = loadNavigationGroups();
 
     expect(groups.map((group) => group.label)).toEqual([
+      "Chat",
       "Teams",
       "Platform",
       "Settings",
     ]);
     expect(groups.map((group) => group.labelMessageId)).toEqual([
+      "nav.groups.chat",
       "nav.groups.teams",
       "nav.groups.platform",
       "nav.groups.settings",
     ]);
+    expect(groups.find((group) => group.key === "chat")?.flattenSingleItem).toBe(true);
+    expect(groups.find((group) => group.key === "chat")?.flattenSingleItemAsGroupLabel).toBe(true);
     expect(groups.find((group) => group.key === "teams")?.flattenSingleItem).toBeUndefined();
   });
 });

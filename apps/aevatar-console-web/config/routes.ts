@@ -30,6 +30,7 @@ export default [
     path: "/chat",
     name: "Chat",
     component: "./chat",
+    menuGroupKey: "chat",
     hideInMenu: false,
   },
   {

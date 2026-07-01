@@ -6,14 +6,22 @@ import {
 import React from "react";
 
 export type NavigationGroup = {
+  flattenSingleItemAsGroupLabel?: boolean;
   flattenSingleItem?: boolean;
-  icon: React.ReactNode;
+  icon?: React.ReactNode;
   key: string;
   label: string;
   labelMessageId: string;
 };
 
 const TEAM_FIRST_NAVIGATION_GROUP_ORDER: readonly NavigationGroup[] = [
+  {
+    flattenSingleItemAsGroupLabel: true,
+    flattenSingleItem: true,
+    key: "chat",
+    label: "Chat",
+    labelMessageId: "nav.groups.chat",
+  },
   {
     icon: <TeamOutlined />,
     key: "teams",
