@@ -1,158 +1,220 @@
 # Chat Top Entry MVP PRD
 
 Date: 2026-07-01
-Status: Draft for product/design review
+Status: Revised for product/design review
 Target surface: `apps/aevatar-console-web`
 Related prototype: `../prototypes/2026-07-01-chat-top-entry-prototype.html`
+Related PNG: `../prototypes/2026-07-01-chat-top-entry-prototype.png`
 
 ## Product Thesis
 
-Chat becomes the first top-level entry in Aevatar Console. It is not a hidden
-debug chat or a generic LLM playground. It is the primary natural-language
-creation surface for planning, confirming, creating, and iterating Aevatar
-Teams, Members, and Workflows while handing off detailed management to the
-existing Team, Member Workflow Studio, Invoke, Runs, and Observatory surfaces.
+`Chat` becomes the first top-level entry in Aevatar Console. The first usable
+version is intentionally narrow: use the backend `POST /api/chat` stream
+directly to validate that a user can create a Team, add or create Members, and
+bind/create Workflow behavior through a chat flow. Conversation history is local
+to the browser in v1 so the team can validate the creation loop before building
+durable backend chat history.
 
 ## Confirmed Decisions
 
 - Top-level navigation order is `Chat`, `My Teams`, then Platform items, then
   `Settings`.
 - User mental model is simply `Chat`.
+- MVP backend integration uses `POST /api/chat` directly.
+- `POST /api/chat` is an SSE endpoint. The frontend reads `data:` frames and
+  updates the assistant message, progress state, and result cards.
 - Default create flow is `Plan -> Confirm -> Create`.
 - Button confirmation is the primary path.
 - Natural-language confirmation is also supported, including phrases such as
   `confirm`, `create it`, `go ahead`, `确认`, `确认创建`, and `开始创建`.
-- If the user explicitly asks to create directly, Chat skips the confirmation
-  step and starts provisioning.
-- MVP supports both creating a new Team from scratch and adding a Member to an
+- If the user explicitly asks to create directly, Chat sends the direct-create
+  request to `/api/chat` without waiting for the confirmation button.
+- MVP supports both creating a Team from scratch and adding a Member to an
   existing Team.
-- Chat result cards must connect to existing pages instead of recreating Team or
-  Workflow management inside Chat.
+- Conversation history is saved in frontend local storage for the first version.
+- Chat result cards connect to existing Team, Member Workflow Studio, Invoke,
+  Runs, and Observatory pages when reliable identifiers are available.
+
+## Product Direction
+
+Working title: `Chat`
+
+One-line positioning: A Chat-first creation surface for Aevatar resources,
+backed by `/api/chat`, with local conversation history and result handoff to
+existing Console pages.
+
+Design stance: operational and console-native. This should feel like the
+existing Aevatar Chat page and ProLayout shell, not a marketing assistant or a
+separate demo app.
+
+Primary promise: a builder can type what they want, review a plan, confirm, and
+land on created Team / Member / Workflow resources without manually switching
+between setup pages.
 
 ## Target Users
 
-- New builders who know the outcome they want, but do not yet know the Aevatar
+- New builders who know the outcome they want but do not yet know the Aevatar
   object model.
-- Operators who know Team, Member, and Workflow concepts, but want a faster
-  creation path than jumping between multiple pages.
+- Operators who know Team, Member, and Workflow concepts but want a faster
+  creation path than moving across multiple pages.
 - Demo and sales users who need to create a usable AI Team from a prompt and
   then inspect it in the existing console.
 
 ## Problem
 
-The current console already has separate surfaces for Teams, Members, Workflows,
-Invocations, and Runs. That is powerful after the user understands the model,
-but it makes first-time creation feel fragmented. A user asking "create a
-support team with refund and order lookup members" should not need to decide
-which page or endpoint owns each object. Chat should translate intent into a
-plan, get confirmation, then create the required Aevatar resources and expose
-clear next actions.
+The console already has pages for Teams, Members, Workflows, Invocations, and
+Runs. That is powerful after a user understands the model, but first-time
+creation still feels fragmented. A user asking `create a customer support team
+with refund and order lookup members` should not have to decide which page owns
+each object. Chat should translate intent into a plan, call `/api/chat`, display
+streamed progress, and expose next actions when resources are created or
+accepted.
 
 ## Goals
 
 - Make Chat the obvious first action in the console.
-- Let users describe a Team or Member addition in natural language.
+- Validate the complete chat creation loop through the existing backend
+  `POST /api/chat` endpoint.
+- Let users describe Team creation, Member addition, and Workflow creation in
+  natural language.
 - Give users a readable creation plan before writes by default.
-- Make direct creation available when the user explicitly asks for it.
-- Surface backend async semantics honestly: `accepted` is not the same as
-  fully materialized.
-- Turn created resource identities into useful links.
+- Make direct creation available when the prompt explicitly asks for it.
+- Persist first-version history locally so users can revisit recent attempts
+  during validation.
+- Turn created resource identifiers into useful links.
 - Preserve existing Team and Workflow pages as the source of detailed editing,
   testing, invoking, and run inspection.
 
 ## Non-Goals
 
+- Do not build backend-backed chat history in the first version.
+- Do not introduce a separate provisioning endpoint for the Chat UI.
+- Do not call `POST /api/scopes/{scopeId}/provision-workflow` from the Chat UI
+  for this MVP.
 - Do not rebuild the Team detail page inside Chat.
 - Do not rebuild the Workflow editor inside Chat.
-- Do not make Chat a general LLM playground.
-- Do not require users to understand raw actor, command, binding run, or schedule
-  identifiers for normal success.
-- Do not imply strong consistency from a weak or asynchronous acknowledgement.
+- Do not make Chat a generic LLM playground.
+- Do not fabricate resource links when identifiers are missing.
+- Do not label accepted or streamed intermediate states as fully complete until
+  the stream or linked read model proves the final state.
 
-## Backend Contract Notes
+## Backend Contract
 
-These notes come from the `feature/integrate` backend branch and should guide the
-frontend result model.
+### Primary Endpoint
 
-### Team
+Use:
 
-Endpoint shape:
+```http
+POST /api/chat
+Accept: text/event-stream
+Content-Type: application/json
+```
 
-- `POST /api/scopes/{scopeId}/teams`
-- `GET /api/scopes/{scopeId}/teams`
-- `GET /api/scopes/{scopeId}/teams/{teamId}`
+The endpoint supports `application/json` and `multipart/form-data`. The Chat
+Top Entry MVP only requires JSON.
 
-Useful response fields:
+Minimum JSON request shape:
 
-- `teamId`
+```json
+{
+  "prompt": "Create a customer support team with refund and order lookup members.",
+  "sessionId": "local-chat-session-id",
+  "scopeId": "scope-a"
+}
+```
+
+Relevant optional fields from the backend contract:
+
+- `prompt`: user message for this run.
+- `sessionId`: frontend-generated local conversation id for correlation.
+- `scopeId`: current workspace/scope when available.
+- `workflow`: registered workflow lookup. The prototype assumes the default
+  backend routing can handle creation prompts; implementation can supply a
+  product-approved workflow value only if backend requires it.
+- `workflowYamls`: inline workflow YAML bundle; not required for the Chat Top
+  Entry MVP UI.
+- `source`: typed source for advanced run targeting; out of scope for the first
+  creation UI.
+
+### Streaming Response
+
+`POST /api/chat` returns SSE frames. The frontend should:
+
+- Parse `data:` lines.
+- Ignore SSE comments/heartbeats.
+- Append assistant text as frames arrive.
+- Surface step/tool/progress frames as a compact progress card when possible.
+- Treat `runFinished` as terminal success for the current request.
+- Treat `runError` or HTTP errors as recoverable error states.
+- Extract resource identifiers conservatively from structured frames or final
+  assistant output.
+
+Useful event concepts already visible in backend examples:
+
+- `runFinished`
+- `runError`
+- `usage`
+- `stepStarted`
+- `stepFinished`
+- `custom.name = "aevatar.run.context"`
+- `custom.name = "aevatar.step.request"`
+- `custom.name = "aevatar.step.completed"`
+- `custom.name = "aevatar.raw.observed"`
+
+The frontend should not depend on every frame type being present. The minimum
+acceptable behavior is: stream assistant output, show the run as active while
+the response is open, then show success/error when the stream terminates with a
+known final frame or failure.
+
+### Resource Result Model
+
+The backend may return created resource identifiers in structured frames, tool
+results, or assistant text. The frontend result extractor should recognize these
+fields when present:
+
 - `scopeId`
-- `displayName`
-- `description`
-- `lifecycleStage`
-- `memberCount`
-- `entryMemberId`
+- `teamId`
+- `memberId`
+- `workflowId`
+- `studioUrl`
+- `observatoryUrl`
+- `bindingRunId`
+- `scheduleId`
+- `runId`
+- `serviceId`
+
+No identifier means no generated resource card. Show the assistant message only.
+
+## Local History
+
+First version history is frontend-only.
+
+Recommended local storage key:
+
+```text
+aevatar.chat.localHistory.v1:{scopeId}
+```
+
+Each local conversation record should include:
+
+- `id`: local conversation/session id, reused as `/api/chat` `sessionId`.
+- `scopeId`
+- `title`: derived from first user message.
 - `createdAt`
 - `updatedAt`
+- `messages`: user and assistant messages needed to redraw the thread.
+- `lastStatus`: `draft | streaming | plan_ready | accepted | error`.
+- `createdResources`: conservative list of extracted resources and links.
 
-### Member
+Local history behavior:
 
-Endpoint shape:
-
-- `POST /api/scopes/{scopeId}/members`
-- `GET /api/scopes/{scopeId}/members`
-- `GET /api/scopes/{scopeId}/members/{memberId}`
-- `PUT /api/scopes/{scopeId}/members/{memberId}/binding`
-
-Useful response fields:
-
-- `memberId`
-- `scopeId`
-- `displayName`
-- `description`
-- `implementationKind`
-- `lifecycleStage`
-- `publishedServiceId`
-- `lastBoundRevisionId`
-- `teamId`
-- `implementationRef.workflowId`
-- `implementationRef.workflowRevision`
-
-Important constraint:
-
-- Member creation should generally create the shell first. Workflow or script
-  implementation details are bound through the binding route rather than being
-  treated as inline creation metadata.
-
-### Workflow Provisioning
-
-Feature branch introduces a one-call provisioning path:
-
-- HTTP: `POST /api/scopes/{scopeId}/provision-workflow`
-- Tool: `aevatar_provision_workflow_schedule`
-
-Provisioning composes:
-
-- Create workflow member shell.
-- Bind inline workflow YAML.
-- Create schedule or near-future demo fire.
-
-Useful tool/result fields:
-
-- `status` / `bindingStatus`
-- `memberId`
-- `scopeId`
-- `scheduleId`
-- `bindingRunId`
-- `observatoryUrl`
-- `studioUrl`
-
-Important async semantics:
-
-- Provisioning returns accepted state.
-- It does not return a synchronous `runId`.
-- Binding and run materialization can lag behind the acknowledgement.
-- The user should be sent to Observatory, Team detail, or Workflow Studio instead
-  of being told everything is fully ready immediately.
+- `New Chat` creates a new local conversation id.
+- Sending a prompt appends a user message and a streaming assistant placeholder.
+- Streamed frames update the active assistant message and local record.
+- Confirmation button sends a normal user message, such as `确认创建`, through
+  `/api/chat` with the same `sessionId`.
+- Local history can be cleared by browser storage cleanup; no cross-device or
+  server persistence is promised in MVP.
 
 ## Information Architecture
 
@@ -170,45 +232,61 @@ Top-level navigation:
 
 Chat page layout:
 
-- Left rail: conversation history and `New Chat`.
-- Main rail: chat messages, empty starters, plan cards, progress cards, result
-  cards, and composer.
-- Right rail: current workspace, selected target Team, pending plan summary,
-  created items, and next actions.
+- Existing Aevatar console shell and light ProLayout side navigation.
+- Chat container based on the current `/chat` page structure:
+  - top internal `Console` bar with `New Chat` and `Tools`.
+  - left local history rail.
+  - main chat rail with messages, starter prompts, plan cards, progress cards,
+    result cards, and composer.
+- No permanent right context rail in MVP. Context appears inside the chat stage
+  as compact status chips or summary cards.
 
-The right rail can collapse on narrow screens.
+## Core User Flows
 
-## User Journeys
-
-### Journey 1: Create a Team From Scratch
+### Flow 1: Create a Team From Scratch
 
 1. User opens `Chat`.
 2. Empty state asks what Aevatar should create.
 3. User enters: `Create a customer support team with refund and order lookup members.`
-4. Chat produces a plan and does not write yet.
-5. User clicks `Confirm Create` or replies `confirm`.
-6. Chat provisions the Team, Members, Workflow bindings, and optional demo run.
-7. Result cards show accepted resources and next actions:
-   - `Open Team`
-   - `Edit Workflow`
-   - `Test Team`
-   - `View Runs`
+4. Frontend creates or reuses a local `sessionId`.
+5. Frontend calls `POST /api/chat` with `prompt`, `sessionId`, and `scopeId`.
+6. Chat streams a plan and does not write yet by default.
+7. User clicks `Confirm Create` or replies `confirm`.
+8. Frontend sends the confirmation through `POST /api/chat` with the same
+   `sessionId`.
+9. Chat streams creation progress.
+10. Result cards link to existing pages when identifiers are available:
+    - `Open Team`
+    - `Edit Workflow`
+    - `Invoke`
+    - `Runs`
 
-### Journey 2: Add a Member to an Existing Team
+### Flow 2: Add a Member to an Existing Team
 
 1. User enters: `Add a QA reviewer member to Customer Support.`
-2. Chat identifies or asks to confirm the target Team.
-3. Chat produces a plan for the new Member and optional Workflow.
-4. User confirms by button or natural language.
-5. Chat provisions the Member and binding.
-6. Result card links to Team detail and Member Workflow Studio.
+2. Frontend sends the prompt to `/api/chat`.
+3. Backend/assistant identifies the target Team or asks the user to clarify.
+4. Chat presents a plan for the new Member and optional Workflow.
+5. User confirms by button or natural language.
+6. Chat streams creation/binding progress.
+7. Result card links to Team detail and Member Workflow Studio when IDs are
+   reliable.
 
-### Journey 3: Direct Create
+### Flow 3: Direct Create
 
 1. User enters: `Directly create a demo FAQ team, no confirmation needed.`
-2. Chat marks direct create requested.
-3. Chat starts provisioning immediately.
-4. Result cards show accepted resources and next actions.
+2. Frontend sends the prompt to `/api/chat`.
+3. Chat shows `Direct create requested` and starts displaying streamed progress.
+4. Result cards show accepted/created resources and next actions.
+
+### Flow 4: Resume Local History
+
+1. User returns to Chat in the same browser.
+2. Left rail loads local conversations from `localStorage`.
+3. User selects a previous conversation.
+4. Messages and extracted resource cards are restored locally.
+5. If the previous run is not active, the composer can continue the same
+   `sessionId`; backend continuity depends on `/api/chat` session behavior.
 
 ## Functional Requirements
 
@@ -221,34 +299,45 @@ The right rail can collapse on narrow screens.
   - `Add member to existing team`
   - `Create workflow member`
   - `Direct create demo team`
+- Sending a message calls `POST /api/chat`.
+- Request uses JSON with at least `prompt`, local `sessionId`, and current
+  `scopeId` when available.
+- Frontend parses SSE `data:` frames from `/api/chat`.
+- Frontend saves conversations locally in the browser.
 - Chat supports a plan card with:
   - Team summary
   - Member list
   - Workflow summary
   - `Confirm Create`
   - `Edit Plan`
-- `Confirm Create` sends a confirmation action through the chat flow.
-- Natural-language confirmation uses the same backend flow as the button.
-- Direct create prompt starter sends a prompt that clearly asks the backend to
-  skip confirmation.
-- Chat renders structured resource result cards when a tool result or assistant
-  message includes known identifiers.
-- Chat renders a plain message when no reliable identifiers are present.
+- `Confirm Create` sends a confirmation message through `/api/chat` using the
+  same local `sessionId`.
+- Natural-language confirmation uses the same send path as the button.
+- Direct-create starter sends a prompt that clearly asks the backend to skip
+  confirmation.
+- Chat renders structured resource result cards when reliable identifiers are
+  present.
+- Chat renders a plain assistant message when no reliable identifiers are
+  present.
 - Result cards use existing routes for details and editing.
-- Async accepted states are labeled as accepted or pending, not complete.
+- Active and accepted states are labeled honestly.
 
 ### P1
 
-- Preserve target Team context from recent navigation or query params.
-- Poll binding or read model status after `bindingRunId`.
-- Show Observatory status when `observatoryUrl` is available.
-- Allow a plan card to be revised in-place through a follow-up prompt.
+- Preserve target Team context from recent navigation or query params and
+  include it in the prompt context only when product-approved.
+- Add a small local-history management menu: rename conversation, delete
+  conversation, clear local history.
+- Show raw stream/debug details behind `Tools`, not on the default path.
+- Poll linked read models after creation only when the result includes enough
+  identifiers and the user opens a result action.
 - Group result cards by Team, Member, Workflow, Schedule, and Run/Observatory.
 
 ### P2
 
-- Provide a compact "creation timeline" across conversations.
-- Offer reusable prompt templates.
+- Replace local history with backend-backed history only after the creation loop
+  is validated.
+- Provide reusable prompt templates.
 - Show a diff between prior plan and revised plan.
 - Support multi-Team creation plans.
 
@@ -257,12 +346,12 @@ The right rail can collapse on narrow screens.
 | Available fields | Card | Action |
 | --- | --- | --- |
 | `scopeId + teamId` | Team | `/scopes/{scopeId}/teams/{teamId}` |
-| `scopeId + teamId + memberId` | Member | `/scopes/{scopeId}/teams/{teamId}/members/{memberId}/workflow` |
+| `scopeId + teamId + memberId` | Member Workflow | `/scopes/{scopeId}/teams/{teamId}/members/{memberId}/workflow` |
 | `scopeId + teamId + memberId` | Invoke | `/scopes/{scopeId}/teams/{teamId}/members/{memberId}/invoke` |
 | `scopeId + teamId + memberId` | Runs | `/scopes/{scopeId}/teams/{teamId}/members/{memberId}/runs` |
 | `studioUrl` | Workflow Studio | Use returned `studioUrl` |
 | `observatoryUrl` | Observatory | Use returned `observatoryUrl` |
-| `bindingRunId` | Binding status | Show `Binding accepted`; polling is P1 |
+| `bindingRunId` | Binding status | Show `Binding accepted`; polling is not P0 |
 | `scheduleId` | Schedule status | Show `Schedule accepted` |
 | Text only | Assistant message | Do not generate a fake card |
 
@@ -272,13 +361,25 @@ The right rail can collapse on narrow screens.
 
 The first screen should communicate creation immediately:
 
-> Tell Aevatar what you want to create. Chat drafts a plan first, then creates
-> Teams, Members, and Workflows after you confirm.
+> Tell Aevatar what you want to create. Chat sends your request to `/api/chat`
+> and drafts a plan before creating resources.
+
+### Streaming
+
+After send:
+
+- Disable duplicate send for the same composer.
+- Show assistant placeholder with streaming indicator.
+- Show compact progress when SSE frames provide steps/tools.
+- Save every visible update to local history.
 
 ### Plan Ready
 
-Show a creation plan card with a clear primary action:
+Show a creation plan card with:
 
+- planned Team
+- planned Members
+- planned Workflow
 - `Confirm Create`
 - `Edit Plan`
 
@@ -286,30 +387,30 @@ Show a creation plan card with a clear primary action:
 
 When the user explicitly asks to skip confirmation, show:
 
-> Direct create requested. Aevatar will start provisioning now.
+> Direct create requested. Streaming creation from `/api/chat`.
 
 ### Creating
 
-Show progress as accepted milestones:
+Show progress as streamed milestones:
 
-- Team accepted
-- Member shell accepted
-- Workflow binding accepted
-- Demo run scheduled
+- Team create accepted or created
+- Member shell accepted or created
+- Workflow binding accepted or created
+- Optional run/schedule accepted
 
-### Accepted
+### Accepted / Created
 
-Show result cards and next actions. Avoid "fully ready" language until the
-existing read models or binding status prove it.
+Show result cards and next actions. Avoid saying everything is fully ready if
+the stream only proves an accepted stage.
 
 ### Error
 
-Show the failing step, preserve any accepted resources, and offer a next action:
+Show the failing step, preserve any already extracted resources, and offer:
 
-- `Open Team`
-- `Retry binding`
-- `Edit plan`
+- `Retry`
+- `Edit prompt`
 - `Start new chat`
+- relevant resource links if available
 
 ## Copy
 
@@ -324,65 +425,103 @@ Starter prompts:
 - `Create a workflow member that summarizes failed runs every morning.`
 - `Directly create a demo FAQ team, no confirmation needed.`
 
+Streaming state:
+
+> Sending to `/api/chat`...
+
 Accepted state:
 
-> Provisioning accepted. Some resources may take a moment to appear in Team
-> pages.
+> Creation accepted. Some resources may take a moment to appear in Team pages.
+
+Local history note:
+
+> History is saved in this browser for the MVP.
 
 ## Metrics
 
 - Chat starter prompt click-through rate.
+- `/api/chat` send success rate.
+- SSE stream completion rate.
 - Plan confirmation rate.
 - Direct create usage rate.
-- Successful accepted provisioning rate.
-- Open Team / Edit Workflow / Invoke action click-through after result cards.
-- Time from initial prompt to first accepted resource.
+- Successful accepted/created resource rate.
+- Open Team / Edit Workflow / Invoke / Runs click-through after result cards.
+- Time from initial prompt to first result card.
 - User fallback rate to manual Team creation.
 
 ## Risks And Open Assumptions
 
-- The chat stream may return structured identifiers only inside tool result JSON.
-  The frontend should parse conservatively and never invent missing IDs.
-- The one-call workflow provisioning path can return `studioUrl` only when the
-  member is assigned to a Team. If no Team is available, Chat should fall back to
-  Observatory or My Teams.
-- A plan/confirm protocol may need backend prompt alignment. The frontend can
-  send confirmation prompts, but reliable action gating depends on the backend
-  assistant respecting plan-first behavior.
-- Binding and schedule status are asynchronous. The MVP should show accepted
-  status honestly and leave polling to P1.
+- `/api/chat` may stream useful text before it streams structured identifiers.
+  The UI must handle text-only success.
+- The exact created-resource fields may appear in tool output, custom frames, or
+  final assistant text. The extractor must be conservative.
+- Backend session continuity for repeated `sessionId` should be verified. The
+  frontend can reuse `sessionId`, but backend semantics own whether that is a
+  true multi-turn memory boundary.
+- Local history can be lost if the user clears browser storage.
+- Direct create depends on backend prompt behavior; the frontend can only pass a
+  clear direct-create prompt.
+- Accepted and read-model-visible are different states. The UI should label
+  them honestly.
 
-## Implementation Handoff Prompt
+## Validation Plan
+
+1. 3-second comprehension test: user can tell Chat creates Team / Member /
+   Workflow resources.
+2. First-task test: user creates a simple Team from a prompt and sees a plan.
+3. Confirmation test: button confirmation and `确认创建` both continue the same
+   `/api/chat` flow.
+4. Direct-create test: direct prompt skips the plan wait and streams progress.
+5. Existing-Team test: prompt adds a Member to a named existing Team.
+6. Result-link test: result cards only appear when IDs are present and route to
+   existing pages.
+7. Local-history test: refresh page and see the recent conversation restored
+   from local storage.
+8. Error test: failed `/api/chat` request preserves the user prompt and allows
+   retry.
+
+## Implementation Handoff
 
 Implement the Chat Top Entry MVP in `apps/aevatar-console-web` only.
 
 1. Make `Chat` visible as the first top-level navigation item.
 2. Keep `My Teams` second and Platform items after it.
-3. Update the Chat empty state to present creation-oriented starter prompts.
-4. Add a plan card presentation with `Confirm Create` and `Edit Plan` actions.
-5. Wire `Confirm Create` to send a confirmation message through the existing
-   chat stream.
-6. Treat natural-language confirmation as a supported user prompt path.
-7. Add conservative result extraction for known resource fields:
-   `scopeId`, `teamId`, `memberId`, `studioUrl`, `observatoryUrl`,
-   `bindingRunId`, `scheduleId`, `workflowId`, `runId`, and `serviceId`.
-8. Render resource result cards only when identifiers are reliable.
-9. Use existing routes for Team, Member Workflow Studio, Invoke, Runs, and
-   Observatory actions.
-10. Label async states as accepted or pending.
-11. Add focused tests for navigation order, empty starter prompts,
-   confirmation button behavior, direct create starter text, and result link
-   generation.
+3. Use the existing Chat page visual structure and controls.
+4. Update the Chat empty state to present creation-oriented starter prompts.
+5. On send, call `POST /api/chat` with JSON:
+   - `prompt`
+   - frontend-generated `sessionId`
+   - current `scopeId` when available
+6. Read the SSE response from `response.body`.
+7. Parse `data:` frames and ignore heartbeat comments.
+8. Update assistant message/progress from stream frames.
+9. Store conversation state in local storage by scope.
+10. Add a plan card presentation with `Confirm Create` and `Edit Plan`.
+11. Wire `Confirm Create` to send a confirmation message through `/api/chat`.
+12. Treat natural-language confirmation as a normal prompt path.
+13. Add conservative result extraction for known resource fields.
+14. Render resource result cards only when identifiers are reliable.
+15. Use existing routes for Team, Member Workflow Studio, Invoke, Runs, and
+    Observatory actions.
+16. Label stream/accepted states honestly.
+17. Add focused tests for navigation order, starter prompts, `/api/chat` send
+    payload, SSE frame parsing, local history persistence, confirmation button,
+    direct create starter text, and result link generation.
 
 ## Acceptance Criteria
 
 - `Chat` is the first visible navigation item.
 - `My Teams` is the second visible navigation item.
 - Chat empty state clearly supports creating Teams, Members, and Workflows.
+- Sending a prompt calls `POST /api/chat`.
+- The request includes `prompt`, local `sessionId`, and available `scopeId`.
+- SSE frames update the visible assistant/progress state.
+- Conversations persist in browser local storage.
 - Default starter flow asks for a plan before creation.
 - Direct create starter explicitly asks to skip confirmation.
 - `Confirm Create` is available on a plan card.
+- `Confirm Create` sends a confirmation message to `/api/chat`.
 - Natural-language confirmation remains possible via the composer.
-- Result cards link to existing pages when the required IDs are available.
+- Result cards link to existing pages when required IDs are available.
 - Result cards do not fabricate links when IDs are missing.
-- Accepted async states are not mislabeled as completed.
+- Accepted or streamed states are not mislabeled as completed.

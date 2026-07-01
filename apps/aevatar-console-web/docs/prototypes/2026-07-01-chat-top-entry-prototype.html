@@ -542,6 +542,45 @@
         margin-top: 4px;
       }
 
+      .api-flow {
+        background: #ffffff;
+        border: 1px solid var(--border-secondary);
+        border-radius: 14px;
+        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        padding: 12px;
+      }
+
+      .api-step {
+        align-items: center;
+        background: var(--bg-soft);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        color: var(--text);
+        display: inline-flex;
+        flex: 1 1 160px;
+        font-size: 12px;
+        font-weight: 650;
+        gap: 8px;
+        min-height: 38px;
+        padding: 9px 10px;
+      }
+
+      .api-step span:first-child {
+        align-items: center;
+        background: var(--primary-bg);
+        border-radius: 999px;
+        color: var(--primary);
+        display: inline-flex;
+        flex: 0 0 auto;
+        font-size: 11px;
+        height: 20px;
+        justify-content: center;
+        width: 20px;
+      }
+
       .eyebrow {
         color: #9ca3af;
         font-size: 11px;
@@ -942,13 +981,13 @@
         <div>
           <h1>Aevatar Chat Top Entry Prototype</h1>
           <p>
-            Static review artifact restyled to match the current Aevatar Console
-            shell: ProLayout side navigation, PageContainer density, existing
-            Chat message patterns, accepted async status, and result cards that
-            link back to Teams and Workflow Studio.
+            Static review artifact for the revised MVP: Chat calls
+            <code>/api/chat</code> directly, streams SSE progress, keeps first
+            version history in the browser, and validates Team / Member /
+            Workflow creation before backend-backed chat history.
           </p>
         </div>
-        <span class="prototype-chip">Aevatar UI aligned wireframe</span>
+        <span class="prototype-chip">/api/chat + local history MVP</span>
       </header>
 
       <section class="console-frame" aria-label="Aevatar Console prototype">
@@ -1010,8 +1049,9 @@
               <header class="workbench-header">
                 <div class="workbench-title">
                   <strong>Console</strong>
-                  <span class="service-pill">Team builder service</span>
-                  <span class="service-pill">Plan first by default</span>
+                  <span class="service-pill">POST /api/chat</span>
+                  <span class="service-pill">SSE stream</span>
+                  <span class="service-pill">Local history</span>
                 </div>
                 <div class="header-actions">
                   <button class="button" type="button">
@@ -1024,7 +1064,7 @@
 
               <aside class="conversation-rail" aria-label="Conversation history">
                 <div class="rail-head">
-                  <span class="rail-title">History</span>
+                  <span class="rail-title">Local history</span>
                   <div class="actions">
                     <button class="button icon-only" aria-label="New chat" type="button">
                       <span class="button-symbol">+</span>
@@ -1042,11 +1082,11 @@
                 <div class="conversation-list">
                   <article class="conversation-item active">
                     <div class="conversation-title">Customer support plan</div>
-                    <div class="conversation-meta">4 msgs. Plan ready</div>
+                    <div class="conversation-meta">4 msgs. Saved in browser</div>
                   </article>
                   <article class="conversation-item">
                     <div class="conversation-title">QA reviewer member</div>
-                    <div class="conversation-meta">7 msgs. Accepted</div>
+                    <div class="conversation-meta">7 msgs. Member created</div>
                   </article>
                   <article class="conversation-item">
                     <div class="conversation-title">Demo FAQ team</div>
@@ -1060,8 +1100,8 @@
                   <div>
                     <div class="toolbar-title">Customer support plan</div>
                     <div class="meta-strip">
-                      <span class="chip"><strong>Route</strong> Gateway</span>
-                      <span class="chip"><strong>Model</strong> Team builder</span>
+                      <span class="chip"><strong>Endpoint</strong> /api/chat</span>
+                      <span class="chip"><strong>Session</strong> local-42</span>
                     </div>
                   </div>
                   <div class="toolbar-chips">
@@ -1076,8 +1116,9 @@
                       <div class="eyebrow">Ready in Console</div>
                       <h2>What do you want Aevatar to create?</h2>
                       <p>
-                        Describe the outcome. Chat drafts a plan first, then
-                        creates Teams, Members, and Workflows after you confirm.
+                        Describe the outcome. Chat sends the prompt to
+                        /api/chat, streams a plan, then uses the same local
+                        session when you confirm.
                       </p>
                       <div class="starter-grid">
                         <button class="starter" type="button">
@@ -1114,9 +1155,16 @@
                       <span>2 members. Intent routing workflow.</span>
                     </div>
                     <div class="context-summary-item">
-                      <strong>Created Items</strong>
-                      <span>Team, binding, and schedule accepted.</span>
+                      <strong>API</strong>
+                      <span>POST /api/chat. Local session local-42.</span>
                     </div>
+                  </section>
+
+                  <section class="api-flow" aria-label="API flow">
+                    <div class="api-step"><span>1</span>Send prompt to /api/chat</div>
+                    <div class="api-step"><span>2</span>Read SSE data frames</div>
+                    <div class="api-step"><span>3</span>Update local history</div>
+                    <div class="api-step"><span>4</span>Open created resources</div>
                   </section>
 
                   <div class="divider-label">Plan state</div>
@@ -1141,7 +1189,8 @@
                           <div>
                             <div class="card-title">Creation Plan</div>
                             <div class="card-subtitle">
-                              No write will happen until the user confirms.
+                              Confirm Create sends a confirmation message to the
+                              same /api/chat session.
                             </div>
                           </div>
                           <span class="tag info">
@@ -1161,7 +1210,7 @@
                           </div>
                           <div class="metric-card soft">
                             <span class="metric-label">Workflow</span>
-                            <span class="metric-value">Route by intent</span>
+                            <span class="metric-value">Intent workflow</span>
                           </div>
                         </div>
 
@@ -1187,14 +1236,16 @@
                     <div class="assistant-avatar">A</div>
                     <div class="message-stack">
                       <div class="bubble">
-                        Direct create requested. I am provisioning it now.
+                        Direct create requested. Streaming creation from
+                        /api/chat now.
                       </div>
                       <article class="progress-card" aria-label="Creation progress card">
                         <div class="card-head">
                           <div>
-                            <div class="card-title">Creation Progress</div>
+                            <div class="card-title">/api/chat Stream</div>
                             <div class="card-subtitle">
-                              Backend acknowledgements are shown as accepted or pending.
+                              SSE frames update progress in this local
+                              conversation.
                             </div>
                           </div>
                           <span class="tag warning">
@@ -1214,11 +1265,11 @@
                           </div>
                           <div class="progress-row">
                             <span class="status-dot pending"></span>
-                            <span>Workflow binding accepted</span>
+                            <span>Workflow member accepted</span>
                           </div>
                           <div class="progress-row">
                             <span class="status-dot pending"></span>
-                            <span>Demo run scheduled</span>
+                            <span>Result identifiers extracted</span>
                           </div>
                         </div>
                       </article>
@@ -1231,8 +1282,8 @@
                     <div class="assistant-avatar">A</div>
                     <div class="message-stack">
                       <div class="bubble">
-                        Provisioning accepted. Some resources may take a moment
-                        to appear in Team pages.
+                        Creation accepted. Some resources may take a moment to
+                        appear in Team pages.
                       </div>
 
                       <article class="result-card" aria-label="Team result card">
@@ -1259,7 +1310,7 @@
                             <span class="metric-value">2 accepted</span>
                           </div>
                           <div class="metric-card">
-                            <span class="metric-label">Binding</span>
+                            <span class="metric-label">Workflow</span>
                             <span class="metric-value">accepted</span>
                           </div>
                         </div>
@@ -1325,7 +1376,7 @@
                     </div>
                     <div class="composer-footer">
                       <span>Button confirmation is the primary path.</span>
-                      <span>Natural-language confirmation remains supported.</span>
+                      <span>History is saved in this browser for the MVP.</span>
                     </div>
                   </div>
                 </footer>
