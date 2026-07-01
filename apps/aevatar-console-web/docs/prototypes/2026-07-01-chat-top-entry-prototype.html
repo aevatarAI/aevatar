@@ -6,912 +6,1333 @@
     <title>Aevatar Chat Top Entry Prototype</title>
     <style>
       :root {
-        --bg: #f5f3ef;
-        --panel: #ffffff;
-        --panel-soft: #fbfaf7;
-        --text: #171717;
-        --muted: #6b7280;
-        --line: #dedbd2;
-        --line-strong: #c8c2b6;
-        --ink: #202423;
-        --teal: #0f766e;
-        --blue: #2563eb;
-        --amber: #b45309;
-        --green: #15803d;
-        --red: #b91c1c;
-        --shadow: 0 18px 50px rgba(33, 30, 24, 0.08);
+        --bg-layout: #f5f7fb;
+        --bg-container: #ffffff;
+        --bg-sider: #f8fbff;
+        --bg-sider-muted: #f3f7fc;
+        --bg-soft: #f8fafc;
+        --bg-softer: #f9fafb;
+        --bg-selected: #eff6ff;
+        --bg-menu-selected: #eef2f6;
+        --text: #1f2937;
+        --text-heading: #111827;
+        --text-secondary: #4b5563;
+        --text-tertiary: #667085;
+        --text-quaternary: #98a2b3;
+        --border: #e5e7eb;
+        --border-secondary: #e7e5e4;
+        --border-subtle: #f3f4f6;
+        --primary: #2563eb;
+        --primary-antd: #1677ff;
+        --primary-bg: #eff6ff;
+        --success: #16a34a;
+        --success-bg: #f0fdf4;
+        --success-border: #bbf7d0;
+        --warning: #d97706;
+        --warning-bg: #fffbeb;
+        --warning-border: #fde68a;
+        --danger: #dc2626;
+        --danger-bg: #fef2f2;
+        --danger-border: #fecaca;
+        --ink: #18181b;
+        --shadow-panel: 0 6px 16px rgba(15, 23, 42, 0.06);
+        --shadow-soft: 0 20px 50px rgba(15, 23, 42, 0.08);
+        --radius: 4px;
+        --radius-control: 8px;
+        --radius-chat: 18px;
+        --content-padding: 20px;
+        --section-gap: 16px;
       }
 
       * {
         box-sizing: border-box;
       }
 
+      html,
       body {
-        background: var(--bg);
+        min-height: 100%;
+      }
+
+      body {
+        background: var(--bg-layout);
         color: var(--text);
-        font-family: "Aptos", "Segoe UI", "Helvetica Neue", sans-serif;
+        font-family:
+          AlibabaSans, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
         margin: 0;
-        min-height: 100vh;
       }
 
-      .page {
+      button {
+        font: inherit;
+      }
+
+      .prototype-page {
         margin: 0 auto;
-        max-width: 1440px;
-        padding: 24px;
+        max-width: 1480px;
+        padding: 20px;
       }
 
-      .prototype-title {
+      .prototype-header {
         align-items: flex-end;
         display: flex;
         gap: 16px;
         justify-content: space-between;
-        margin-bottom: 16px;
+        margin-bottom: 12px;
       }
 
-      .prototype-title h1 {
-        font-size: 22px;
+      .prototype-header h1 {
+        color: var(--text-heading);
+        font-size: 20px;
+        font-weight: 700;
         letter-spacing: 0;
-        line-height: 1.25;
+        line-height: 1.3;
         margin: 0;
       }
 
-      .prototype-title p {
-        color: var(--muted);
+      .prototype-header p {
+        color: var(--text-tertiary);
         font-size: 13px;
-        line-height: 1.5;
+        line-height: 1.6;
         margin: 4px 0 0;
-        max-width: 720px;
+        max-width: 760px;
       }
 
-      .stage {
-        background: var(--panel);
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        box-shadow: var(--shadow);
+      .prototype-chip {
+        align-items: center;
+        background: var(--bg-soft);
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        color: var(--text-secondary);
+        display: inline-flex;
+        font-size: 12px;
+        font-weight: 600;
+        gap: 6px;
+        min-height: 28px;
+        padding: 5px 10px;
+        white-space: nowrap;
+      }
+
+      .console-frame {
+        background: var(--bg-container);
+        border: 1px solid rgba(148, 163, 184, 0.22);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow-panel);
         display: grid;
-        grid-template-columns: 184px minmax(0, 1fr);
-        min-height: 820px;
+        grid-template-columns: 236px minmax(0, 1fr);
+        min-height: 860px;
         overflow: hidden;
       }
 
-      .nav {
-        background: #242623;
-        color: #f7f4ed;
+      .sider {
+        background: var(--bg-sider);
+        border-right: 1px solid rgba(148, 163, 184, 0.18);
         display: flex;
         flex-direction: column;
-        gap: 18px;
-        padding: 20px 14px;
+        min-width: 0;
+        padding: 14px 0 18px;
       }
 
       .brand {
         align-items: center;
         display: flex;
         gap: 10px;
-        margin-bottom: 2px;
+        min-height: 44px;
+        padding: 0 18px 12px;
       }
 
       .brand-mark {
-        background: #f7f4ed;
-        border-radius: 6px;
-        color: #242623;
-        display: grid;
+        align-items: center;
+        background: var(--ink);
+        border-radius: var(--radius-control);
+        color: #ffffff;
+        display: inline-flex;
         font-size: 13px;
         font-weight: 800;
-        height: 32px;
-        place-items: center;
-        width: 32px;
+        height: 30px;
+        justify-content: center;
+        width: 30px;
       }
 
       .brand-name {
+        color: var(--text-heading);
         font-size: 15px;
         font-weight: 700;
       }
 
-      .nav-section {
+      .menu {
+        display: flex;
+        flex: 1;
+        flex-direction: column;
+        gap: 0;
+        min-height: 0;
+        padding: 0 10px;
+      }
+
+      .menu-group {
         display: flex;
         flex-direction: column;
-        gap: 4px;
+        margin-bottom: 8px;
       }
 
-      .nav-label {
-        color: rgba(247, 244, 237, 0.52);
+      .menu-group.platform {
+        border-top: 1px solid rgba(148, 163, 184, 0.28);
+        margin-top: 2px;
+        padding-top: 12px;
+      }
+
+      .menu-group.account {
+        border-top: 1px solid rgba(148, 163, 184, 0.28);
+        margin-top: auto;
+        padding-top: 12px;
+      }
+
+      .menu-label {
+        color: #7b8797;
         font-size: 11px;
         font-weight: 700;
-        letter-spacing: 0.08em;
-        padding: 10px 10px 4px;
-        text-transform: uppercase;
+        letter-spacing: 0.02em;
+        line-height: 1.2;
+        padding: 0 10px 8px;
       }
 
-      .nav-item {
+      .menu-item {
         align-items: center;
-        border: 1px solid transparent;
-        border-radius: 8px;
-        color: rgba(247, 244, 237, 0.78);
+        background: transparent;
+        border: 0;
+        border-radius: 10px;
+        color: #475467;
         display: flex;
-        font-size: 13px;
+        font-size: 14px;
+        font-weight: 500;
+        gap: 10px;
+        height: 38px;
+        margin: 0 6px 4px;
+        padding: 0 12px;
+        text-align: left;
+      }
+
+      .menu-item.active {
+        background: var(--bg-menu-selected);
+        color: #1d2129;
         font-weight: 650;
-        gap: 9px;
-        min-height: 38px;
-        padding: 9px 10px;
       }
 
-      .nav-item.active {
-        background: #f7f4ed;
-        color: #242623;
+      .menu-icon {
+        align-items: center;
+        border: 1px solid rgba(148, 163, 184, 0.42);
+        border-radius: 7px;
+        color: #64748b;
+        display: inline-flex;
+        flex: 0 0 auto;
+        font-size: 10px;
+        font-weight: 800;
+        height: 20px;
+        justify-content: center;
+        line-height: 1;
+        width: 20px;
       }
 
-      .nav-dot {
-        border: 1px solid currentColor;
-        border-radius: 999px;
-        height: 9px;
-        width: 9px;
+      .menu-item.active .menu-icon {
+        background: #ffffff;
+        border-color: rgba(37, 99, 235, 0.26);
+        color: var(--primary);
       }
 
-      .nav-item.active .nav-dot {
-        background: var(--teal);
-        border-color: var(--teal);
-      }
-
-      .app {
-        background: var(--bg);
-        display: grid;
-        grid-template-rows: auto 1fr;
+      .console-main {
+        background: var(--bg-layout);
+        display: flex;
+        flex-direction: column;
         min-width: 0;
       }
 
-      .topbar {
-        align-items: center;
-        background: rgba(255, 255, 255, 0.94);
-        border-bottom: 1px solid var(--line);
+      .page-shell {
         display: flex;
-        gap: 16px;
-        justify-content: space-between;
-        padding: 14px 18px;
+        flex: 1;
+        flex-direction: column;
+        gap: var(--section-gap);
+        min-height: 0;
+        padding: 16px 20px 20px;
       }
 
-      .topbar h2 {
-        font-size: 18px;
-        line-height: 1.2;
-        margin: 0;
-      }
-
-      .topbar-meta {
-        color: var(--muted);
+      .header-actions,
+      .actions {
+        align-items: center;
         display: flex;
         flex-wrap: wrap;
-        font-size: 12px;
         gap: 8px;
-        margin-top: 3px;
+      }
+
+      .button {
+        align-items: center;
+        background: #ffffff;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-control);
+        color: var(--text);
+        display: inline-flex;
+        font-size: 13px;
+        font-weight: 600;
+        gap: 7px;
+        height: 32px;
+        justify-content: center;
+        padding: 0 12px;
+      }
+
+      .button.primary {
+        background: var(--primary-antd);
+        border-color: var(--primary-antd);
+        color: #ffffff;
+      }
+
+      .button.dark {
+        background: var(--ink);
+        border-color: var(--ink);
+        color: #ffffff;
+      }
+
+      .button.icon-only {
+        padding: 0;
+        width: 32px;
+      }
+
+      .button-symbol {
+        font-size: 14px;
+        font-weight: 800;
+        line-height: 1;
+      }
+
+      .chat-workbench {
+        background: #f2f1ee;
+        border: 1px solid var(--border-secondary);
+        border-radius: 18px;
+        box-shadow: var(--shadow-panel);
+        display: grid;
+        flex: 1;
+        grid-template-columns: 260px minmax(0, 1fr);
+        grid-template-rows: auto minmax(0, 1fr);
+        min-height: 0;
+        overflow: hidden;
+      }
+
+      .workbench-header {
+        align-items: center;
+        background: rgba(255, 255, 255, 0.95);
+        backdrop-filter: blur(10px);
+        border-bottom: 1px solid var(--border-secondary);
+        display: flex;
+        gap: 12px;
+        grid-column: 1 / -1;
+        justify-content: space-between;
+        min-height: 54px;
+        overflow: visible;
+        padding: 0 20px;
+        position: relative;
+        z-index: 4;
+      }
+
+      .workbench-title {
+        align-items: center;
+        display: flex;
+        gap: 12px;
+        min-width: 0;
+      }
+
+      .workbench-title strong {
+        color: var(--text-heading);
+        font-size: 14px;
+        font-weight: 600;
+      }
+
+      .service-pill {
+        align-items: center;
+        background: #ffffff;
+        border: 1px solid var(--border-secondary);
+        border-radius: 10px;
+        color: var(--text-secondary);
+        display: inline-flex;
+        font-size: 12px;
+        font-weight: 600;
+        gap: 8px;
+        min-height: 32px;
+        padding: 7px 10px;
+      }
+
+      .conversation-rail {
+        background: #ffffff;
+        border-right: 1px solid var(--border-secondary);
+        display: flex;
+        flex-direction: column;
+        grid-column: 1;
+        grid-row: 2;
+        min-width: 0;
+      }
+
+      .rail-head {
+        align-items: center;
+        border-bottom: 1px solid var(--border-secondary);
+        display: flex;
+        justify-content: space-between;
+        min-height: 48px;
+        padding: 10px 12px;
+      }
+
+      .rail-title {
+        color: #6b7280;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .conversation-list {
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
+      }
+
+      .conversation-item {
+        background: #ffffff;
+        border-bottom: 1px solid var(--border-subtle);
+        border-left: 2px solid transparent;
+        padding: 10px 12px;
+        position: relative;
+      }
+
+      .conversation-item.active {
+        background: var(--bg-selected);
+        border-left-color: #3b82f6;
+      }
+
+      .conversation-title {
+        color: #374151;
+        font-size: 13px;
+        font-weight: 600;
+        overflow: hidden;
+        padding-right: 20px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .conversation-meta {
+        color: #9ca3af;
+        font-size: 11px;
+        margin-top: 4px;
+      }
+
+      .chat-stage {
+        background: #f2f1ee;
+        display: grid;
+        grid-column: 2;
+        grid-row: 2;
+        grid-template-rows: auto 1fr auto;
+        min-height: 0;
+        min-width: 0;
+      }
+
+      .chat-toolbar {
+        align-items: center;
+        background: rgba(255, 255, 255, 0.95);
+        backdrop-filter: blur(10px);
+        border-bottom: 1px solid var(--border-secondary);
+        display: flex;
+        gap: 10px;
+        justify-content: space-between;
+        min-height: 54px;
+        padding: 10px 20px;
+      }
+
+      .toolbar-title {
+        color: var(--text-heading);
+        font-size: 14px;
+        font-weight: 700;
+        min-width: 0;
+      }
+
+      .toolbar-chips,
+      .meta-strip {
+        align-items: center;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
       }
 
       .chip {
         align-items: center;
-        background: var(--panel-soft);
-        border: 1px solid var(--line);
+        background: #f5f5f4;
+        border: 1px solid #e7e5e4;
         border-radius: 999px;
-        color: #3f3f3f;
+        color: #57534e;
         display: inline-flex;
-        font-size: 12px;
-        font-weight: 650;
+        font-size: 11px;
         gap: 6px;
-        min-height: 28px;
-        padding: 5px 10px;
+        line-height: 1;
+        padding: 6px 10px;
       }
 
-      .actions {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        justify-content: flex-end;
-      }
-
-      .btn {
-        align-items: center;
-        background: #fff;
-        border: 1px solid var(--line-strong);
-        border-radius: 8px;
-        color: var(--ink);
-        display: inline-flex;
-        font-size: 12px;
+      .chip strong {
         font-weight: 700;
-        justify-content: center;
-        min-height: 34px;
-        padding: 8px 12px;
-      }
-
-      .btn.primary {
-        background: var(--ink);
-        border-color: var(--ink);
-        color: #fff;
-      }
-
-      .btn.blue {
-        background: var(--blue);
-        border-color: var(--blue);
-        color: #fff;
-      }
-
-      .workspace {
-        display: grid;
-        grid-template-columns: 220px minmax(0, 1fr) 280px;
-        min-height: 0;
-      }
-
-      .rail,
-      .context {
-        background: rgba(255, 255, 255, 0.72);
-        min-width: 0;
-        padding: 16px;
-      }
-
-      .rail {
-        border-right: 1px solid var(--line);
-      }
-
-      .context {
-        border-left: 1px solid var(--line);
-      }
-
-      .rail h3,
-      .context h3,
-      .section-title {
-        font-size: 12px;
-        font-weight: 800;
-        letter-spacing: 0.04em;
-        margin: 0 0 10px;
-        text-transform: uppercase;
-      }
-
-      .rail-list {
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-      }
-
-      .conversation {
-        background: #fff;
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        padding: 10px;
-      }
-
-      .conversation strong {
-        display: block;
-        font-size: 13px;
-        line-height: 1.3;
-      }
-
-      .conversation span {
-        color: var(--muted);
-        display: block;
-        font-size: 12px;
-        line-height: 1.45;
-        margin-top: 4px;
-      }
-
-      .chat {
-        display: grid;
-        grid-template-rows: 1fr auto;
-        min-height: 0;
-        min-width: 0;
       }
 
       .chat-scroll {
+        background: #fafaf8;
         display: flex;
         flex-direction: column;
-        gap: 18px;
+        gap: 20px;
+        min-height: 0;
         overflow: auto;
-        padding: 18px;
+        padding: 24px 20px;
       }
 
-      .screen {
-        background: var(--panel);
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        padding: 18px;
+      .chat-scroll > * {
+        margin-left: auto;
+        margin-right: auto;
+        max-width: 840px;
+        width: 100%;
       }
 
-      .screen h3 {
-        font-size: 18px;
-        letter-spacing: 0;
-        line-height: 1.3;
-        margin: 0;
+      .empty-state-wrap {
+        align-items: center;
+        display: flex;
+        justify-content: center;
+        min-height: 320px;
+        padding: 8px 0 16px;
+        text-align: center;
       }
 
-      .screen p {
-        color: var(--muted);
-        font-size: 13px;
-        line-height: 1.55;
-        margin: 7px 0 0;
+      .empty-card {
+        background: #ffffff;
+        border: 1px solid #ece8e1;
+        border-radius: 24px;
+        box-shadow: var(--shadow-soft);
+        max-width: 560px;
+        padding: 28px 28px 24px;
+        width: 100%;
       }
 
-      .starter-grid {
+      .context-summary {
+        background: #ffffff;
+        border: 1px solid var(--border-secondary);
+        border-radius: 14px;
+        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
         display: grid;
-        gap: 10px;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        margin-top: 18px;
+        gap: 8px;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        padding: 12px;
       }
 
-      .starter {
-        background: var(--panel-soft);
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        padding: 14px;
+      .context-summary-item {
+        background: var(--bg-soft);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        min-width: 0;
+        padding: 10px;
       }
 
-      .starter strong {
-        display: block;
-        font-size: 14px;
-        line-height: 1.35;
-      }
-
-      .starter span {
-        color: var(--muted);
+      .context-summary-item strong {
+        color: var(--text-heading);
         display: block;
         font-size: 12px;
-        line-height: 1.5;
-        margin-top: 6px;
-      }
-
-      .message {
-        display: grid;
-        gap: 8px;
-        max-width: 760px;
-      }
-
-      .message.user {
-        justify-self: end;
-      }
-
-      .message.assistant {
-        justify-self: start;
-      }
-
-      .bubble {
-        border-radius: 8px;
-        font-size: 14px;
-        line-height: 1.55;
-        padding: 12px 14px;
-      }
-
-      .user .bubble {
-        background: var(--ink);
-        color: #fff;
-      }
-
-      .assistant .bubble {
-        background: #fff;
-        border: 1px solid var(--line);
-      }
-
-      .card {
-        background: #fff;
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        padding: 14px;
-      }
-
-      .card + .card {
-        margin-top: 10px;
-      }
-
-      .card-head {
-        align-items: center;
-        display: flex;
-        gap: 10px;
-        justify-content: space-between;
-        margin-bottom: 12px;
-      }
-
-      .card-title {
-        font-size: 15px;
-        font-weight: 800;
-        line-height: 1.3;
-      }
-
-      .status {
-        border-radius: 999px;
-        font-size: 11px;
-        font-weight: 800;
-        padding: 4px 8px;
-      }
-
-      .status.plan {
-        background: #e0f2fe;
-        color: #075985;
-      }
-
-      .status.accepted {
-        background: #dcfce7;
-        color: var(--green);
-      }
-
-      .status.pending {
-        background: #fef3c7;
-        color: var(--amber);
-      }
-
-      .facts {
-        display: grid;
-        gap: 8px;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        margin: 12px 0;
-      }
-
-      .fact {
-        background: var(--panel-soft);
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        padding: 10px;
-      }
-
-      .fact span {
-        color: var(--muted);
-        display: block;
-        font-size: 11px;
-      }
-
-      .fact strong {
-        display: block;
-        font-size: 13px;
-        line-height: 1.3;
-        margin-top: 4px;
-      }
-
-      .progress {
-        display: grid;
-        gap: 8px;
-        margin-top: 10px;
-      }
-
-      .progress-row {
-        align-items: center;
-        background: var(--panel-soft);
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        display: flex;
-        gap: 10px;
-        min-height: 38px;
-        padding: 9px 10px;
-      }
-
-      .step-dot {
-        border-radius: 999px;
-        flex: 0 0 auto;
-        height: 10px;
-        width: 10px;
-      }
-
-      .step-dot.done {
-        background: var(--green);
-      }
-
-      .step-dot.wait {
-        background: var(--amber);
-      }
-
-      .step-text {
-        font-size: 13px;
         line-height: 1.35;
       }
 
-      .composer {
-        background: rgba(255, 255, 255, 0.96);
-        border-top: 1px solid var(--line);
-        padding: 14px 18px;
-      }
-
-      .composer-box {
-        align-items: center;
-        background: #fff;
-        border: 1px solid var(--line-strong);
-        border-radius: 8px;
-        display: flex;
-        gap: 10px;
-        min-height: 48px;
-        padding: 8px 8px 8px 14px;
-      }
-
-      .composer-placeholder {
-        color: var(--muted);
-        flex: 1;
-        font-size: 13px;
-        min-width: 0;
-      }
-
-      .context-section {
-        border-bottom: 1px solid var(--line);
-        padding-bottom: 16px;
-      }
-
-      .context-section + .context-section {
-        padding-top: 16px;
-      }
-
-      .mini-list {
-        display: grid;
-        gap: 8px;
-      }
-
-      .mini-item {
-        background: #fff;
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        padding: 10px;
-      }
-
-      .mini-item strong {
-        display: block;
-        font-size: 13px;
-        line-height: 1.35;
-      }
-
-      .mini-item span {
-        color: var(--muted);
+      .context-summary-item span {
+        color: var(--text-tertiary);
         display: block;
         font-size: 12px;
         line-height: 1.4;
         margin-top: 4px;
       }
 
+      .eyebrow {
+        color: #9ca3af;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.14em;
+        margin-bottom: 14px;
+        text-transform: uppercase;
+      }
+
+      .empty-card h2 {
+        color: var(--text-heading);
+        font-size: 24px;
+        font-weight: 700;
+        letter-spacing: 0;
+        line-height: 1.25;
+        margin: 0;
+      }
+
+      .empty-card p {
+        color: var(--text-secondary);
+        font-size: 14px;
+        line-height: 1.65;
+        margin: 10px auto 0;
+        max-width: 480px;
+      }
+
+      .starter-grid {
+        display: grid;
+        gap: 8px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        margin-top: 22px;
+        text-align: left;
+      }
+
+      .starter {
+        background: var(--bg-soft);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        color: var(--text);
+        min-height: 76px;
+        padding: 12px;
+      }
+
+      .starter strong {
+        color: var(--text-heading);
+        display: block;
+        font-size: 13px;
+        font-weight: 700;
+        line-height: 1.35;
+      }
+
+      .starter span {
+        color: var(--text-tertiary);
+        display: block;
+        font-size: 12px;
+        line-height: 1.45;
+        margin-top: 5px;
+      }
+
+      .message {
+        display: flex;
+        gap: 12px;
+      }
+
+      .message.user {
+        justify-content: flex-end;
+      }
+
+      .assistant-avatar {
+        align-items: center;
+        background: #4f46e5;
+        border-radius: 999px;
+        box-shadow: 0 10px 25px rgba(79, 70, 229, 0.18);
+        color: #ffffff;
+        display: flex;
+        flex: 0 0 auto;
+        font-size: 12px;
+        font-weight: 800;
+        height: 28px;
+        justify-content: center;
+        margin-top: 4px;
+        width: 28px;
+      }
+
+      .message-stack {
+        display: flex;
+        flex: 1;
+        flex-direction: column;
+        gap: 10px;
+        max-width: 82%;
+        min-width: 0;
+      }
+
+      .bubble {
+        font-size: 14px;
+        line-height: 1.7;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .message.user .bubble {
+        background: var(--primary);
+        border-radius: var(--radius-chat);
+        border-bottom-right-radius: 8px;
+        color: #ffffff;
+        max-width: 80%;
+        padding: 12px 16px;
+      }
+
+      .message.assistant .bubble {
+        color: var(--text);
+        padding: 2px 0;
+      }
+
+      .action-disclosure {
+        align-items: center;
+        color: #9ca3af;
+        display: inline-flex;
+        font-size: 12px;
+        font-weight: 600;
+        gap: 6px;
+      }
+
+      .status-dot {
+        border-radius: 999px;
+        display: inline-flex;
+        height: 6px;
+        width: 6px;
+      }
+
+      .status-dot.running {
+        background: #f59e0b;
+      }
+
+      .status-dot.accepted {
+        background: var(--success);
+      }
+
+      .status-dot.pending {
+        background: var(--warning);
+      }
+
+      .plan-card,
+      .result-card,
+      .progress-card {
+        background: #ffffff;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+        padding: 14px;
+      }
+
+      .card-head {
+        align-items: flex-start;
+        display: flex;
+        gap: 12px;
+        justify-content: space-between;
+        margin-bottom: 12px;
+      }
+
+      .card-title {
+        color: var(--text-heading);
+        font-size: 15px;
+        font-weight: 700;
+        line-height: 1.4;
+      }
+
+      .card-subtitle {
+        color: var(--text-tertiary);
+        font-size: 12px;
+        line-height: 1.45;
+        margin-top: 2px;
+      }
+
+      .tag {
+        align-items: center;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        display: inline-flex;
+        flex: 0 0 auto;
+        font-size: 12px;
+        font-weight: 600;
+        gap: 6px;
+        line-height: 1.2;
+        padding: 4px 10px;
+      }
+
+      .tag.info {
+        background: var(--primary-bg);
+        border-color: #bfdbfe;
+        color: var(--primary);
+      }
+
+      .tag.success {
+        background: var(--success-bg);
+        border-color: var(--success-border);
+        color: var(--success);
+      }
+
+      .tag.warning {
+        background: var(--warning-bg);
+        border-color: var(--warning-border);
+        color: var(--warning);
+      }
+
+      .metric-grid {
+        display: grid;
+        gap: 8px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        margin: 12px 0;
+      }
+
+      .metric-card {
+        background: #ffffff;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        min-width: 0;
+        padding: 12px 14px;
+      }
+
+      .metric-card.soft {
+        background: var(--bg-soft);
+      }
+
+      .metric-label {
+        color: var(--text-secondary);
+        display: block;
+        font-size: 12px;
+        line-height: 1.35;
+      }
+
+      .metric-value {
+        color: var(--text-heading);
+        display: block;
+        font-size: 14px;
+        font-weight: 700;
+        line-height: 1.35;
+        margin-top: 4px;
+      }
+
+      .progress-list {
+        display: grid;
+        gap: 8px;
+        margin-top: 8px;
+      }
+
+      .progress-row {
+        align-items: center;
+        background: var(--bg-soft);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        display: flex;
+        gap: 10px;
+        min-height: 38px;
+        padding: 9px 10px;
+      }
+
+      .progress-row span:last-child {
+        color: var(--text);
+        font-size: 13px;
+        line-height: 1.35;
+      }
+
       .divider-label {
         align-items: center;
-        color: var(--muted);
+        color: #9ca3af;
         display: flex;
         font-size: 11px;
-        font-weight: 800;
+        font-weight: 700;
         gap: 10px;
         letter-spacing: 0.08em;
-        margin: 4px 0;
+        margin: 2px 0;
         text-transform: uppercase;
       }
 
       .divider-label::before,
       .divider-label::after {
-        background: var(--line);
+        background: var(--border);
         content: "";
         flex: 1;
         height: 1px;
       }
 
-      @media (max-width: 1120px) {
-        .workspace {
-          grid-template-columns: 200px minmax(0, 1fr);
-        }
+      .composer {
+        background: #ffffff;
+        border-top: 1px solid var(--border-secondary);
+        padding: 14px 18px;
+      }
 
-        .context {
-          display: none;
+      .composer-box {
+        background: #ffffff;
+        border: 1px solid var(--border-secondary);
+        border-radius: var(--radius-chat);
+        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+
+      .composer-row {
+        align-items: flex-end;
+        display: flex;
+      }
+
+      .composer-placeholder {
+        color: var(--text-heading);
+        flex: 1;
+        font-size: 14px;
+        min-height: 62px;
+        padding: 12px 16px 8px;
+      }
+
+      .send-wrap {
+        padding: 6px 8px 6px 0;
+      }
+
+      .send-button {
+        align-items: center;
+        background: var(--ink);
+        border: 0;
+        border-radius: 10px;
+        color: #ffffff;
+        display: flex;
+        height: 34px;
+        justify-content: center;
+        width: 34px;
+      }
+
+      .composer-footer {
+        align-items: center;
+        color: #9ca3af;
+        display: flex;
+        flex-wrap: wrap;
+        font-size: 12px;
+        gap: 8px;
+        min-height: 34px;
+        padding: 0 16px 10px;
+      }
+
+      @media (max-width: 1220px) {
+        .chat-workbench {
+          grid-template-columns: 240px minmax(0, 1fr);
         }
       }
 
-      @media (max-width: 820px) {
-        .page {
+      @media (max-width: 900px) {
+        .prototype-page {
           padding: 12px;
         }
 
-        .stage {
+        .prototype-header {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .console-frame {
           grid-template-columns: 1fr;
         }
 
-        .nav {
+        .sider {
+          border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+          border-right: 0;
+        }
+
+        .menu {
           display: grid;
           grid-template-columns: repeat(2, minmax(0, 1fr));
         }
 
-        .brand,
-        .nav-label {
-          grid-column: 1 / -1;
+        .menu-group.account {
+          margin-top: 0;
         }
 
-        .workspace {
+        .chat-workbench {
           grid-template-columns: 1fr;
+          grid-template-rows: auto minmax(0, 1fr);
         }
 
-        .rail {
+        .conversation-rail {
           display: none;
         }
 
+        .chat-stage {
+          grid-column: 1;
+        }
+
+        .metric-grid,
         .starter-grid,
-        .facts {
+        .context-summary {
           grid-template-columns: 1fr;
         }
       }
     </style>
   </head>
   <body>
-    <main class="page">
-      <div class="prototype-title">
+    <main class="prototype-page">
+      <header class="prototype-header">
         <div>
           <h1>Aevatar Chat Top Entry Prototype</h1>
           <p>
-            Low-fidelity review artifact for the Chat-first MVP: top-level
-            navigation, plan-first creation, direct create, accepted async
-            progress, and result cards linking to existing Aevatar pages.
+            Static review artifact restyled to match the current Aevatar Console
+            shell: ProLayout side navigation, PageContainer density, existing
+            Chat message patterns, accepted async status, and result cards that
+            link back to Teams and Workflow Studio.
           </p>
         </div>
-        <span class="chip">MVP wireframe</span>
-      </div>
+        <span class="prototype-chip">Aevatar UI aligned wireframe</span>
+      </header>
 
-      <section class="stage" aria-label="Aevatar Console prototype">
-        <nav class="nav" aria-label="Main navigation">
+      <section class="console-frame" aria-label="Aevatar Console prototype">
+        <aside class="sider" aria-label="Main navigation">
           <div class="brand">
             <div class="brand-mark">A</div>
             <div class="brand-name">Aevatar</div>
           </div>
 
-          <div class="nav-section">
-            <div class="nav-item active"><span class="nav-dot"></span>Chat</div>
-            <div class="nav-item"><span class="nav-dot"></span>My Teams</div>
-          </div>
-
-          <div class="nav-section">
-            <div class="nav-label">Platform</div>
-            <div class="nav-item"><span class="nav-dot"></span>Event Stream</div>
-            <div class="nav-item"><span class="nav-dot"></span>Services</div>
-            <div class="nav-item"><span class="nav-dot"></span>Governance</div>
-            <div class="nav-item"><span class="nav-dot"></span>Deployments</div>
-            <div class="nav-item"><span class="nav-dot"></span>Topology</div>
-          </div>
-
-          <div class="nav-section">
-            <div class="nav-label">Account</div>
-            <div class="nav-item"><span class="nav-dot"></span>Settings</div>
-          </div>
-        </nav>
-
-        <div class="app">
-          <header class="topbar">
-            <div>
-              <h2>Chat</h2>
-              <div class="topbar-meta">
-                <span>Workspace: scope-a</span>
-                <span>Plan first by default</span>
-              </div>
+          <nav class="menu" aria-label="Aevatar sections">
+            <div class="menu-group">
+              <button class="menu-item active" type="button">
+                <span class="menu-icon">C</span>
+                <span>Chat</span>
+              </button>
+              <button class="menu-item" type="button">
+                <span class="menu-icon">T</span>
+                <span>My Teams</span>
+              </button>
             </div>
-            <div class="actions">
-              <button class="btn" type="button">New Chat</button>
-              <button class="btn" type="button">Tools</button>
+
+            <div class="menu-group platform">
+              <div class="menu-label">Platform</div>
+              <button class="menu-item" type="button">
+                <span class="menu-icon">R</span>
+                <span>Event Stream</span>
+              </button>
+              <button class="menu-item" type="button">
+                <span class="menu-icon">S</span>
+                <span>Services</span>
+              </button>
+              <button class="menu-item" type="button">
+                <span class="menu-icon">G</span>
+                <span>Governance</span>
+              </button>
+              <button class="menu-item" type="button">
+                <span class="menu-icon">D</span>
+                <span>Deployments</span>
+              </button>
+              <button class="menu-item" type="button">
+                <span class="menu-icon">X</span>
+                <span>Topology</span>
+              </button>
             </div>
-          </header>
 
-          <div class="workspace">
-            <aside class="rail" aria-label="Conversations">
-              <h3>Conversations</h3>
-              <div class="rail-list">
-                <button class="btn primary" type="button">New Chat</button>
-                <div class="conversation">
-                  <strong>Customer support plan</strong>
-                  <span>Plan ready · 2 members</span>
+            <div class="menu-group account">
+              <div class="menu-label">Account</div>
+              <button class="menu-item" type="button">
+                <span class="menu-icon">P</span>
+                <span>Settings</span>
+              </button>
+            </div>
+          </nav>
+        </aside>
+
+        <section class="console-main">
+          <div class="page-shell">
+            <section class="chat-workbench" aria-label="Chat workspace">
+              <header class="workbench-header">
+                <div class="workbench-title">
+                  <strong>Console</strong>
+                  <span class="service-pill">Team builder service</span>
+                  <span class="service-pill">Plan first by default</span>
                 </div>
-                <div class="conversation">
-                  <strong>QA reviewer member</strong>
-                  <span>Accepted · schedule pending</span>
+                <div class="header-actions">
+                  <button class="button" type="button">
+                    <span class="button-symbol">+</span>
+                    New Chat
+                  </button>
+                  <button class="button" type="button">Tools</button>
                 </div>
-                <div class="conversation">
-                  <strong>Demo FAQ team</strong>
-                  <span>Direct create requested</span>
-                </div>
-              </div>
-            </aside>
+              </header>
 
-            <section class="chat" aria-label="Chat workspace">
-              <div class="chat-scroll">
-                <section class="screen" aria-label="Empty state">
-                  <h3>What do you want Aevatar to create?</h3>
-                  <p>
-                    Tell Aevatar what you want to build. Chat drafts a plan
-                    first, then creates Teams, Members, and Workflows after you
-                    confirm.
-                  </p>
-                  <div class="starter-grid">
-                    <div class="starter">
-                      <strong>Create a team</strong>
-                      <span>Customer support team with refund and order lookup members.</span>
-                    </div>
-                    <div class="starter">
-                      <strong>Add member</strong>
-                      <span>Add a QA reviewer member to an existing team.</span>
-                    </div>
-                    <div class="starter">
-                      <strong>Create workflow</strong>
-                      <span>Build a workflow member that summarizes failed runs.</span>
-                    </div>
-                    <div class="starter">
-                      <strong>Direct create demo</strong>
-                      <span>Create a demo FAQ team and skip confirmation.</span>
-                    </div>
-                  </div>
-                </section>
-
-                <div class="divider-label">Plan state</div>
-
-                <div class="message user">
-                  <div class="bubble">
-                    Create a customer support team with refund and order lookup
-                    members.
+              <aside class="conversation-rail" aria-label="Conversation history">
+                <div class="rail-head">
+                  <span class="rail-title">History</span>
+                  <div class="actions">
+                    <button class="button icon-only" aria-label="New chat" type="button">
+                      <span class="button-symbol">+</span>
+                    </button>
+                    <button
+                      class="button icon-only"
+                      aria-label="Hide conversations"
+                      type="button"
+                    >
+                      <span class="button-symbol">&lt;</span>
+                    </button>
                   </div>
                 </div>
 
-                <div class="message assistant">
-                  <div class="bubble">I drafted a creation plan.</div>
-                  <article class="card" aria-label="Creation plan card">
-                    <div class="card-head">
-                      <div class="card-title">Creation Plan</div>
-                      <span class="status plan">Plan ready</span>
-                    </div>
-                    <div class="facts">
-                      <div class="fact">
-                        <span>Team</span>
-                        <strong>Customer Support</strong>
-                      </div>
-                      <div class="fact">
-                        <span>Members</span>
-                        <strong>Refund Agent, Order Lookup</strong>
-                      </div>
-                      <div class="fact">
-                        <span>Workflow</span>
-                        <strong>Route by customer intent</strong>
-                      </div>
-                    </div>
-                    <div class="actions" style="justify-content: flex-start">
-                      <button class="btn primary" type="button">Confirm Create</button>
-                      <button class="btn" type="button">Edit Plan</button>
-                    </div>
+                <div class="conversation-list">
+                  <article class="conversation-item active">
+                    <div class="conversation-title">Customer support plan</div>
+                    <div class="conversation-meta">4 msgs. Plan ready</div>
+                  </article>
+                  <article class="conversation-item">
+                    <div class="conversation-title">QA reviewer member</div>
+                    <div class="conversation-meta">7 msgs. Accepted</div>
+                  </article>
+                  <article class="conversation-item">
+                    <div class="conversation-title">Demo FAQ team</div>
+                    <div class="conversation-meta">3 msgs. Direct create</div>
                   </article>
                 </div>
+              </aside>
 
-                <div class="divider-label">Direct create</div>
+              <section class="chat-stage" aria-label="Chat conversation">
+                <header class="chat-toolbar">
+                  <div>
+                    <div class="toolbar-title">Customer support plan</div>
+                    <div class="meta-strip">
+                      <span class="chip"><strong>Route</strong> Gateway</span>
+                      <span class="chip"><strong>Model</strong> Team builder</span>
+                    </div>
+                  </div>
+                  <div class="toolbar-chips">
+                    <span class="chip"><strong>Workspace</strong> scope-a</span>
+                    <span class="chip"><strong>Mode</strong> Plan first</span>
+                  </div>
+                </header>
 
-                <div class="message user">
-                  <div class="bubble">
-                    Directly create a demo FAQ team, no confirmation needed.
+                <div class="chat-scroll">
+                  <section class="empty-state-wrap" aria-label="Empty state">
+                    <div class="empty-card">
+                      <div class="eyebrow">Ready in Console</div>
+                      <h2>What do you want Aevatar to create?</h2>
+                      <p>
+                        Describe the outcome. Chat drafts a plan first, then
+                        creates Teams, Members, and Workflows after you confirm.
+                      </p>
+                      <div class="starter-grid">
+                        <button class="starter" type="button">
+                          <strong>Create a team</strong>
+                          <span>Customer support team with refund and order lookup.</span>
+                        </button>
+                        <button class="starter" type="button">
+                          <strong>Add member</strong>
+                          <span>Add a QA reviewer member to an existing team.</span>
+                        </button>
+                        <button class="starter" type="button">
+                          <strong>Create workflow</strong>
+                          <span>Build a workflow member for failed run summaries.</span>
+                        </button>
+                        <button class="starter" type="button">
+                          <strong>Direct create demo</strong>
+                          <span>Create a demo FAQ team and skip confirmation.</span>
+                        </button>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section class="context-summary" aria-label="Creation context">
+                    <div class="context-summary-item">
+                      <strong>Workspace</strong>
+                      <span>scope-a</span>
+                    </div>
+                    <div class="context-summary-item">
+                      <strong>Target Team</strong>
+                      <span>Not selected</span>
+                    </div>
+                    <div class="context-summary-item">
+                      <strong>Pending Plan</strong>
+                      <span>2 members. Intent routing workflow.</span>
+                    </div>
+                    <div class="context-summary-item">
+                      <strong>Created Items</strong>
+                      <span>Team, binding, and schedule accepted.</span>
+                    </div>
+                  </section>
+
+                  <div class="divider-label">Plan state</div>
+
+                  <div class="message user">
+                    <div class="bubble">
+                      Create a customer support team with refund and order lookup
+                      members.
+                    </div>
+                  </div>
+
+                  <div class="message assistant">
+                    <div class="assistant-avatar">A</div>
+                    <div class="message-stack">
+                      <div class="action-disclosure">
+                        <span class="status-dot running"></span>
+                        3 actions inspected
+                      </div>
+                      <div class="bubble">I drafted a creation plan.</div>
+                      <article class="plan-card" aria-label="Creation plan card">
+                        <div class="card-head">
+                          <div>
+                            <div class="card-title">Creation Plan</div>
+                            <div class="card-subtitle">
+                              No write will happen until the user confirms.
+                            </div>
+                          </div>
+                          <span class="tag info">
+                            <span class="status-dot running"></span>
+                            Plan ready
+                          </span>
+                        </div>
+
+                        <div class="metric-grid">
+                          <div class="metric-card soft">
+                            <span class="metric-label">Team</span>
+                            <span class="metric-value">Customer Support</span>
+                          </div>
+                          <div class="metric-card soft">
+                            <span class="metric-label">Members</span>
+                            <span class="metric-value">Refund, Order Lookup</span>
+                          </div>
+                          <div class="metric-card soft">
+                            <span class="metric-label">Workflow</span>
+                            <span class="metric-value">Route by intent</span>
+                          </div>
+                        </div>
+
+                        <div class="actions">
+                          <button class="button primary" type="button">
+                            Confirm Create
+                          </button>
+                          <button class="button" type="button">Edit Plan</button>
+                        </div>
+                      </article>
+                    </div>
+                  </div>
+
+                  <div class="divider-label">Direct create</div>
+
+                  <div class="message user">
+                    <div class="bubble">
+                      Directly create a demo FAQ team, no confirmation needed.
+                    </div>
+                  </div>
+
+                  <div class="message assistant">
+                    <div class="assistant-avatar">A</div>
+                    <div class="message-stack">
+                      <div class="bubble">
+                        Direct create requested. I am provisioning it now.
+                      </div>
+                      <article class="progress-card" aria-label="Creation progress card">
+                        <div class="card-head">
+                          <div>
+                            <div class="card-title">Creation Progress</div>
+                            <div class="card-subtitle">
+                              Backend acknowledgements are shown as accepted or pending.
+                            </div>
+                          </div>
+                          <span class="tag warning">
+                            <span class="status-dot pending"></span>
+                            In progress
+                          </span>
+                        </div>
+
+                        <div class="progress-list">
+                          <div class="progress-row">
+                            <span class="status-dot accepted"></span>
+                            <span>Team accepted</span>
+                          </div>
+                          <div class="progress-row">
+                            <span class="status-dot accepted"></span>
+                            <span>Member shell accepted</span>
+                          </div>
+                          <div class="progress-row">
+                            <span class="status-dot pending"></span>
+                            <span>Workflow binding accepted</span>
+                          </div>
+                          <div class="progress-row">
+                            <span class="status-dot pending"></span>
+                            <span>Demo run scheduled</span>
+                          </div>
+                        </div>
+                      </article>
+                    </div>
+                  </div>
+
+                  <div class="divider-label">Accepted result</div>
+
+                  <div class="message assistant">
+                    <div class="assistant-avatar">A</div>
+                    <div class="message-stack">
+                      <div class="bubble">
+                        Provisioning accepted. Some resources may take a moment
+                        to appear in Team pages.
+                      </div>
+
+                      <article class="result-card" aria-label="Team result card">
+                        <div class="card-head">
+                          <div>
+                            <div class="card-title">Customer Support</div>
+                            <div class="card-subtitle">
+                              scope-a / team-support
+                            </div>
+                          </div>
+                          <span class="tag success">
+                            <span class="status-dot accepted"></span>
+                            Accepted
+                          </span>
+                        </div>
+
+                        <div class="metric-grid">
+                          <div class="metric-card">
+                            <span class="metric-label">Team</span>
+                            <span class="metric-value">team-support</span>
+                          </div>
+                          <div class="metric-card">
+                            <span class="metric-label">Members</span>
+                            <span class="metric-value">2 accepted</span>
+                          </div>
+                          <div class="metric-card">
+                            <span class="metric-label">Binding</span>
+                            <span class="metric-value">accepted</span>
+                          </div>
+                        </div>
+
+                        <div class="actions">
+                          <button class="button primary" type="button">Open Team</button>
+                          <button class="button" type="button">Test Team</button>
+                        </div>
+                      </article>
+
+                      <article class="result-card" aria-label="Member result card">
+                        <div class="card-head">
+                          <div>
+                            <div class="card-title">Refund Agent</div>
+                            <div class="card-subtitle">
+                              workflow member / member-refund
+                            </div>
+                          </div>
+                          <span class="tag success">
+                            <span class="status-dot accepted"></span>
+                            Workflow accepted
+                          </span>
+                        </div>
+
+                        <div class="metric-grid">
+                          <div class="metric-card">
+                            <span class="metric-label">Member</span>
+                            <span class="metric-value">member-refund</span>
+                          </div>
+                          <div class="metric-card">
+                            <span class="metric-label">Studio</span>
+                            <span class="metric-value">available when visible</span>
+                          </div>
+                          <div class="metric-card">
+                            <span class="metric-label">Runs</span>
+                            <span class="metric-value">via member page</span>
+                          </div>
+                        </div>
+
+                        <div class="actions">
+                          <button class="button primary" type="button">
+                            Edit Workflow
+                          </button>
+                          <button class="button" type="button">Invoke</button>
+                          <button class="button" type="button">Runs</button>
+                        </div>
+                      </article>
+                    </div>
                   </div>
                 </div>
 
-                <div class="message assistant">
-                  <div class="bubble">
-                    Direct create requested. I am provisioning it now.
+                <footer class="composer">
+                  <div class="composer-box">
+                    <div class="composer-row">
+                      <div class="composer-placeholder">
+                        Ask Aevatar to create, revise the plan, or confirm creation...
+                      </div>
+                      <div class="send-wrap">
+                        <button class="send-button" aria-label="Send" type="button">
+                          ^
+                        </button>
+                      </div>
+                    </div>
+                    <div class="composer-footer">
+                      <span>Button confirmation is the primary path.</span>
+                      <span>Natural-language confirmation remains supported.</span>
+                    </div>
                   </div>
-                  <article class="card" aria-label="Creation progress card">
-                    <div class="card-head">
-                      <div class="card-title">Creation Progress</div>
-                      <span class="status pending">In progress</span>
-                    </div>
-                    <div class="progress">
-                      <div class="progress-row">
-                        <span class="step-dot done"></span>
-                        <span class="step-text">Team accepted</span>
-                      </div>
-                      <div class="progress-row">
-                        <span class="step-dot done"></span>
-                        <span class="step-text">Member shell accepted</span>
-                      </div>
-                      <div class="progress-row">
-                        <span class="step-dot wait"></span>
-                        <span class="step-text">Workflow binding accepted</span>
-                      </div>
-                      <div class="progress-row">
-                        <span class="step-dot wait"></span>
-                        <span class="step-text">Demo run scheduled</span>
-                      </div>
-                    </div>
-                  </article>
-                </div>
-
-                <div class="divider-label">Accepted result</div>
-
-                <div class="message assistant">
-                  <div class="bubble">
-                    Provisioning accepted. Some resources may take a moment to
-                    appear in Team pages.
-                  </div>
-                  <article class="card" aria-label="Team result card">
-                    <div class="card-head">
-                      <div class="card-title">Customer Support</div>
-                      <span class="status accepted">Accepted</span>
-                    </div>
-                    <div class="facts">
-                      <div class="fact">
-                        <span>Team</span>
-                        <strong>team-support</strong>
-                      </div>
-                      <div class="fact">
-                        <span>Members</span>
-                        <strong>2 accepted</strong>
-                      </div>
-                      <div class="fact">
-                        <span>Binding</span>
-                        <strong>accepted</strong>
-                      </div>
-                    </div>
-                    <div class="actions" style="justify-content: flex-start">
-                      <button class="btn primary" type="button">Open Team</button>
-                      <button class="btn" type="button">Test Team</button>
-                    </div>
-                  </article>
-                  <article class="card" aria-label="Member result card">
-                    <div class="card-head">
-                      <div class="card-title">Refund Agent</div>
-                      <span class="status accepted">Workflow accepted</span>
-                    </div>
-                    <div class="facts">
-                      <div class="fact">
-                        <span>Member</span>
-                        <strong>member-refund</strong>
-                      </div>
-                      <div class="fact">
-                        <span>Studio</span>
-                        <strong>available when visible</strong>
-                      </div>
-                      <div class="fact">
-                        <span>Runs</span>
-                        <strong>via member page</strong>
-                      </div>
-                    </div>
-                    <div class="actions" style="justify-content: flex-start">
-                      <button class="btn primary" type="button">Edit Workflow</button>
-                      <button class="btn" type="button">Invoke</button>
-                      <button class="btn" type="button">Runs</button>
-                    </div>
-                  </article>
-                </div>
-              </div>
-
-              <footer class="composer">
-                <div class="composer-box">
-                  <div class="composer-placeholder">
-                    Ask Aevatar to create, revise the plan, or confirm creation...
-                  </div>
-                  <button class="btn blue" type="button">Send</button>
-                </div>
-              </footer>
+                </footer>
+              </section>
             </section>
-
-            <aside class="context" aria-label="Creation context">
-              <section class="context-section">
-                <h3>Context</h3>
-                <div class="mini-list">
-                  <div class="mini-item">
-                    <strong>Workspace</strong>
-                    <span>scope-a</span>
-                  </div>
-                  <div class="mini-item">
-                    <strong>Target Team</strong>
-                    <span>Not selected</span>
-                  </div>
-                </div>
-              </section>
-
-              <section class="context-section">
-                <h3>Pending Plan</h3>
-                <div class="mini-list">
-                  <div class="mini-item">
-                    <strong>Customer Support</strong>
-                    <span>2 members · intent routing workflow</span>
-                  </div>
-                </div>
-              </section>
-
-              <section class="context-section">
-                <h3>Created Items</h3>
-                <div class="mini-list">
-                  <div class="mini-item">
-                    <strong>Team accepted</strong>
-                    <span>Open Team when read model catches up</span>
-                  </div>
-                  <div class="mini-item">
-                    <strong>Workflow binding</strong>
-                    <span>Accepted · bindingRunId available</span>
-                  </div>
-                  <div class="mini-item">
-                    <strong>Schedule</strong>
-                    <span>Accepted · Observatory link available</span>
-                  </div>
-                </div>
-              </section>
-            </aside>
           </div>
-        </div>
+        </section>
       </section>
     </main>
   </body>
