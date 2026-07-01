@@ -160,7 +160,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         }
 
         var replyPlan = await BuildEffectiveReplyPlanAsync(metadata, llmControl, toolContext, ct);
-        var primaryTools = await BuildTurnToolsAsync(replyPlan.DisableTools, ct);
+        var isChannelTurn = IsChannelRelayTurn(toolContext);
+        var primaryTools = await BuildTurnToolsAsync(replyPlan.DisableTools, isChannelTurn, ct);
 
         try
         {
@@ -186,7 +187,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 "Sender LLM request failed; retrying with bot owner LLM config and no tools. activity={ActivityId}",
                 activity.Id);
 
-            var fallbackTools = await BuildTurnToolsAsync(disableTools: true, ct);
+            var fallbackTools = await BuildTurnToolsAsync(disableTools: true, isChannelTurn, ct);
             return await GenerateWithMetadataAsync(
                     activity,
                     replyPlan.OwnerFallback,
@@ -257,7 +258,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         var replyPlan = await BuildEffectiveReplyPlanAsync(metadata, llmControl, toolContext, ct);
         var provider = ResolveProvider();
         var disableTools = forceDisableTools || replyPlan.DisableTools;
-        var tools = await BuildTurnToolsAsync(disableTools, ct);
+        var tools = await BuildTurnToolsAsync(disableTools, IsChannelRelayTurn(toolContext), ct);
         var externalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(replyPlan.Primary);
         var effectiveToolContext = replyPlan.PrimaryControl.ToToolContext(
             replyPlan.PrimaryToolContext ?? AgentToolExecutionContext.Empty with
@@ -301,13 +302,13 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     // slash silently consumed.
     // New: unbound sender disables tool dispatch; unknown slash gates to /init bootstrap;
     // non-slash text path unchanged (owner-LLM chat fallback).
-    private async Task<ToolManager> BuildTurnToolsAsync(bool disableTools, CancellationToken ct)
+    private async Task<ToolManager> BuildTurnToolsAsync(bool disableTools, bool isChannelTurn, CancellationToken ct)
     {
         var tools = new ToolManager();
         if (disableTools)
             return tools;
 
-        foreach (var tool in await DiscoverToolsAsync(ct))
+        foreach (var tool in await DiscoverToolsAsync(isChannelTurn, ct))
             tools.Register(tool);
 
         // Refactor (iter27/cluster-027-skill-registry-remote-skill-process-state):
@@ -995,7 +996,22 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         metadata.ContainsKey(ChannelMetadataKeys.SenderId) &&
         metadata.ContainsKey(ChannelMetadataKeys.MessageId);
 
-    private async Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct)
+    // Channel-relay detection for the human-only tool gate (issue #2580 Item 2). It must read the
+    // TYPED channel context, not metadata: channel.platform / sender_id / message_id are owned control
+    // keys that AgentToolExecutionContextMapper.StripOwnedControlKeys removes before the step state is
+    // persisted, so from the second LLM round the per-step metadata no longer carries them. The typed
+    // toolContext.Channel is an identity fact that survives stripping and every round, so the gate
+    // stays on for the whole relay turn (mirrors IsChannelTurn's Platform+SenderId+MessageId shape).
+    private static bool IsChannelRelayTurn(AgentToolExecutionContext? toolContext)
+    {
+        var channel = toolContext?.Channel;
+        return channel is not null &&
+            !string.IsNullOrWhiteSpace(channel.Platform) &&
+            !string.IsNullOrWhiteSpace(channel.SenderId) &&
+            !string.IsNullOrWhiteSpace(channel.MessageId);
+    }
+
+    private async Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(bool isChannelTurn, CancellationToken ct)
     {
         if (_toolSources.Count == 0)
             return [];
@@ -1015,6 +1031,15 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 // depended on these tools, so this changes no existing channel flow.
                 if (IsExcludedFromDirectChannelChat(tool))
                     continue;
+
+                // Issue #2580 Item 2: in a channel-relay turn the effective credential is a
+                // bot-class relay/API-key token that the broker rejects on human-only surfaces, so a
+                // tool self-declaring RequiresHumanSession can only fail. Filter it out of channel
+                // turns — never offered to the model, never registered so it cannot be invoked.
+                // Console/studio human-session turns keep the full set. Name-agnostic, like above.
+                if (isChannelTurn && DeclaresCapability(tool, AgentToolCapabilities.RequiresHumanSession))
+                    continue;
+
                 discovered[tool.Name] = tool;
             }
         }
@@ -1027,12 +1052,12 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     // The channel path never inspects a specific tool name; eligibility is a property of
     // the tool, keeping channel routing agnostic to individual tool/skill identities.
     private static bool IsExcludedFromDirectChannelChat(IAgentTool tool) =>
+        DeclaresCapability(tool, AgentToolCapabilities.ExcludeFromDirectChannelChat);
+
+    private static bool DeclaresCapability(IAgentTool tool, string capability) =>
         tool is IAgentToolCapabilityDescriptor descriptor &&
-        descriptor.Capabilities.Any(static capability =>
-            string.Equals(
-                capability,
-                AgentToolCapabilities.ExcludeFromDirectChannelChat,
-                StringComparison.OrdinalIgnoreCase));
+        descriptor.Capabilities.Any(declared =>
+            string.Equals(declared, capability, StringComparison.OrdinalIgnoreCase));
 
     private ILLMProvider ResolveProvider()
     {
