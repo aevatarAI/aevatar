@@ -245,10 +245,13 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
     ///   <item>a forwarded session token is short-lived — valid for a single
     ///   near-future demo fire but expired well before a recurring monitor's next
     ///   tick — so it is used ONLY for a one-shot demo, never pinned to a recurring
-    ///   schedule (which would silently fail every later fire);</item>
-    ///   <item>otherwise the caller's NyxID subject reference is the authoritative
-    ///   identity: the dispatch re-mints a fresh sender token from it on every fire,
-    ///   the only honest credential for a recurring monitor on a re-mintable host.</item>
+    ///   schedule;</item>
+    ///   <item>a recurring monitor must have a minted durable key; otherwise
+    ///   provisioning fails before creating the schedule instead of accepting a
+    ///   schedule whose future fires depend on an unproven ambient binding;</item>
+    ///   <item>for non-recurring demo fires, when no caller token is available, the
+    ///   caller's NyxID subject reference remains the explicit credential source for
+    ///   hosts whose subject binding is known to be re-mintable.</item>
     /// </list>
     /// </summary>
     private async Task<ScheduledServiceInvocationAuth> BuildScheduleAuthAsync(
@@ -264,8 +267,16 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         if (credential.Kind == RunCredentialKind.MintedDurable)
             return new ScheduledServiceInvocationAuth(DurableSenderBearerToken: credential.Token);
 
-        if (credential.Kind == RunCredentialKind.ForwardedEphemeral && !isRecurringMonitor)
+        if (isRecurringMonitor)
+        {
+            throw new InvalidOperationException(
+                "Recurring workflow schedules require a durable run credential; the caller credential could not be minted into a durable scheduled-run credential.");
+        }
+
+        if (credential.Kind == RunCredentialKind.ForwardedEphemeral)
+        {
             return new ScheduledServiceInvocationAuth(DurableSenderBearerToken: credential.Token);
+        }
 
         return new ScheduledServiceInvocationAuth(SenderNyxId: subjectRef);
     }

@@ -215,14 +215,14 @@ public sealed class StudioWorkflowProvisioningServiceTests
     }
 
     [Fact]
-    public async Task ProvisionAsync_RecurringMonitor_WithForwardedTokenOnly_UsesSubjectRef_NotEphemeralToken()
+    public async Task ProvisionAsync_RecurringMonitor_WithForwardedTokenOnly_ShouldRejectBeforeCreatingSchedule()
     {
         var member = NewMemberService();
         var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
         var issuer = new RecordingRunCredentialIssuer { MintedKey = null };
         var sut = NewService(member, schedule, issuer);
 
-        await sut.ProvisionAsync(
+        var act = () => sut.ProvisionAsync(
             ScopeId,
             Caller,
             new ProvisionWorkflowRequest(
@@ -233,15 +233,32 @@ public sealed class StudioWorkflowProvisioningServiceTests
                 Timezone: "Asia/Shanghai"),
             callerBearerToken: CallerBearerToken);
 
-        // A forwarded session token is short-lived: pinning it to a recurring monitor
-        // would authenticate only the first ~15 minutes, then every later fire would
-        // silently fail. The re-mintable subject reference is the only honest
-        // credential for a recurring schedule, so it — not the ephemeral token — is
-        // the sole source.
-        var auth = schedule.Configuration!.Target.ServiceInvocation!.Auth;
-        auth!.SenderNyxId.Should().NotBeNull();
-        auth.DurableSenderBearerToken.Should().BeNull();
-        AssertExactlyOneCredentialSource(auth);
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Recurring workflow schedules require a durable run credential;*");
+        issuer.IssueInvoked.Should().BeTrue();
+        schedule.Created.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_RecurringMonitor_WithoutBearerToken_ShouldRejectBeforeCreatingSchedule()
+    {
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var sut = NewService(member, schedule);
+
+        var act = () => sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest(
+                DisplayName: "Monitor",
+                WorkflowYaml: "name: monitor",
+                Prompt: "go",
+                Cron: "0 8 * * *",
+                Timezone: "Asia/Shanghai"));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Recurring workflow schedules require a durable run credential;*");
+        schedule.Created.Should().BeFalse();
     }
 
     [Fact]
@@ -317,7 +334,8 @@ public sealed class StudioWorkflowProvisioningServiceTests
     {
         var member = NewMemberService();
         var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
-        var sut = NewService(member, schedule);
+        var issuer = new RecordingRunCredentialIssuer { MintedKey = MintedKey };
+        var sut = NewService(member, schedule, issuer);
 
         await sut.ProvisionAsync(
             ScopeId,
@@ -327,7 +345,8 @@ public sealed class StudioWorkflowProvisioningServiceTests
                 WorkflowYaml: "name: monitor",
                 Prompt: "go",
                 Cron: "*/15 * * * *",
-                Timezone: "Asia/Shanghai"));
+                Timezone: "Asia/Shanghai"),
+            callerBearerToken: CallerBearerToken);
 
         schedule.Configuration!.CronExpression.Should().Be("*/15 * * * *");
         schedule.Configuration.Timezone.Should().Be("Asia/Shanghai");
@@ -360,7 +379,8 @@ public sealed class StudioWorkflowProvisioningServiceTests
     {
         var member = NewMemberService();
         var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
-        var sut = NewService(member, schedule);
+        var issuer = new RecordingRunCredentialIssuer { MintedKey = MintedKey };
+        var sut = NewService(member, schedule, issuer);
 
         var response = await sut.ProvisionAsync(
             ScopeId,
@@ -369,7 +389,8 @@ public sealed class StudioWorkflowProvisioningServiceTests
                 DisplayName: "Monitor",
                 WorkflowYaml: "name: monitor",
                 RunImmediately: false,
-                Cron: "*/15 * * * *"));
+                Cron: "*/15 * * * *"),
+            callerBearerToken: CallerBearerToken);
 
         schedule.Created.Should().BeTrue();
         schedule.Configuration!.CronExpression.Should().Be("*/15 * * * *");
