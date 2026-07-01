@@ -96,7 +96,26 @@ function mockCloneValue<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-function mockBuildWorkflowYaml(document: typeof mockWorkflowDocument): string {
+type MockWorkflowYamlDocument = {
+  readonly name: string;
+  readonly description?: string;
+  readonly roles: ReadonlyArray<{
+    readonly id: string;
+    readonly name?: string;
+    readonly provider?: string;
+    readonly model?: string;
+  }>;
+  readonly steps: ReadonlyArray<{
+    readonly id: string;
+    readonly type: string;
+    readonly targetRole?: string | null;
+    readonly parameters?: Record<string, unknown> | null;
+    readonly next?: string | null;
+    readonly branches?: Record<string, string>;
+  }>;
+};
+
+function mockBuildWorkflowYaml(document: MockWorkflowYamlDocument): string {
   const roleLines = document.roles.flatMap((role) => {
     const lines = [`  - id: ${role.id}`];
     if (role.name) {
@@ -1212,6 +1231,43 @@ jest.mock("@/shared/studio/api", () => ({
       workflowName: input.displayName || "workspace-demo",
       definitionActorIdPrefix: "scope-workflow:scope-1:default",
       expectedActorId: "scope-workflow:scope-1:default:dep-1",
+    })),
+    saveAndBindWorkflow: jest.fn(async (input: {
+      scopeId: string;
+      workflowId?: string;
+      workflowYaml: string;
+      workflowName?: string;
+      displayName?: string;
+      inlineWorkflowYamls?: Record<string, string>;
+      appId?: string;
+      serviceId?: string;
+      exposureDesired?: boolean;
+    }) => ({
+      scopeId: input.scopeId,
+      workflowId: input.workflowId || "workflow-1",
+      revisionId: "rev-save-bind",
+      workflow: {
+        scopeId: input.scopeId,
+        workflowId: input.workflowId || "workflow-1",
+        revisionId: "rev-save-bind",
+        workflowName: input.workflowName || input.displayName || "workspace-demo",
+        acceptanceStage: "accepted",
+        propagationStage: "readmodel_propagating",
+      },
+      binding: {
+        scopeId: input.scopeId,
+        serviceId: input.serviceId || "default",
+        displayName: input.displayName || input.workflowName || "workspace-demo",
+        targetKind: "workflow",
+        targetName: input.workflowName || input.displayName || "workspace-demo",
+        implementationKind: "workflow",
+        revisionId: "rev-save-bind",
+        workflowName: input.workflowName || input.displayName || "workspace-demo",
+        definitionActorIdPrefix: "scope-workflow:scope-1:default",
+        expectedActorId: "scope-workflow:scope-1:default:dep-1",
+      },
+      acceptanceStage: "accepted",
+      propagationStage: "readmodel_propagating",
     })),
     bindScopeScript: jest.fn(async (input: {
       scopeId: string;
@@ -5359,6 +5415,178 @@ describe("StudioPage", () => {
     expect(screen.queryByTestId("studio-invoke-surface")).toBeNull();
     const searchParams = new URLSearchParams(window.location.search);
     expect(searchParams.get("step")).not.toBe("invoke");
+  });
+
+  it("uses save-and-bind for scope workflow publishing without a backend member", async () => {
+    mockStudioMembers = [];
+    mockScopeRuntimeApi.listServices.mockReset();
+    mockScopeRuntimeApi.listServices
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          serviceId: "default",
+          displayName: "workspace-demo",
+          deploymentStatus: "Active",
+          primaryActorId: "actor-default",
+          endpoints: [
+            {
+              endpointId: "chat",
+              displayName: "Chat",
+              kind: "chat",
+              description: "Chat with workspace-demo.",
+              requestTypeUrl: "",
+              responseTypeUrl: "",
+            },
+          ],
+        },
+      ]);
+    (studioApi.getScopeBinding as jest.Mock).mockResolvedValueOnce(null);
+
+    renderStudioPage("/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=studio");
+
+    expect(await screen.findByTestId("studio-workflow-build-panel")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Continue to Bind" }));
+    expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByText("candidate:workspace-demo")).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Bind current member" }));
+    });
+
+    await waitFor(() => {
+      expect(studioApi.saveAndBindWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          scopeId: "scope-1",
+          workflowId: "workflow-1",
+          workflowName: "workspace-demo",
+          displayName: "workspace-demo",
+          workflowYaml: expect.stringContaining("name: workspace-demo"),
+          inlineWorkflowYamls: {},
+          appId: "studio",
+          serviceId: "default",
+          exposureDesired: true,
+        }),
+      );
+    });
+    expect(studioApi.bindScopeWorkflow).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(screen.getByText("service:default")).toBeTruthy();
+      expect(screen.getByText("services:default")).toBeTruthy();
+    });
+  });
+
+  it("passes referenced child workflows as save-and-bind inline YAMLs", async () => {
+    mockStudioMembers = [];
+    const rootDocument: MockWorkflowYamlDocument = {
+      ...mockCloneValue(mockWorkflowDocument),
+      steps: [
+        {
+          id: "call_child",
+          type: "workflow_call",
+          targetRole: "",
+          parameters: {
+            workflow: "child-flow",
+          },
+          next: null,
+          branches: {},
+        },
+      ],
+    };
+    const childDocument: MockWorkflowYamlDocument = {
+      ...mockCloneValue(mockWorkflowDocument),
+      name: "child-flow",
+      steps: [
+        {
+          id: "child_answer",
+          type: "llm_call",
+          targetRole: "assistant",
+          parameters: {
+            prompt_prefix: "Answer from the child workflow",
+          },
+          next: null,
+          branches: {},
+        },
+      ],
+    };
+    const rootWorkflowFile = {
+      ...mockWorkflowFile,
+      workflowId: "workflow-1",
+      name: "workspace-demo",
+      fileName: "workspace-demo.yaml",
+      yaml: mockBuildWorkflowYaml(rootDocument),
+      document: rootDocument,
+    };
+    const childWorkflowFile = {
+      ...mockWorkflowFile,
+      workflowId: "child-flow-id",
+      name: "child-flow",
+      fileName: "child-flow.yaml",
+      filePath: "/tmp/workflows/child-flow.yaml",
+      yaml: mockBuildWorkflowYaml(childDocument),
+      document: childDocument,
+    };
+    mockParsedDocument = mockCloneValue(rootDocument) as typeof mockWorkflowDocument;
+    mockWorkflowFile = rootWorkflowFile;
+    mockWorkflowSummaries = [
+      ...mockCreateDefaultWorkflowSummaries(),
+      {
+        workflowId: "child-flow-id",
+        name: "child-flow",
+        description: "Child workflow",
+        fileName: "child-flow.yaml",
+        filePath: "/tmp/workflows/child-flow.yaml",
+        directoryId: "dir-1",
+        directoryLabel: "Workspace",
+        stepCount: 1,
+        hasLayout: true,
+        updatedAtUtc: "2026-03-18T00:01:00Z",
+      },
+    ];
+    (studioApi.listWorkflows as jest.Mock).mockResolvedValue(mockWorkflowSummaries);
+    (studioApi.getWorkflow as jest.Mock).mockImplementation(
+      async (workflowId: string) =>
+        workflowId === "child-flow-id" ? childWorkflowFile : rootWorkflowFile,
+    );
+    mockScopeRuntimeApi.listServices.mockReset();
+    mockScopeRuntimeApi.listServices
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          serviceId: "default",
+          displayName: "workspace-demo",
+          deploymentStatus: "Active",
+          primaryActorId: "actor-default",
+          endpoints: [],
+        },
+      ]);
+    (studioApi.getScopeBinding as jest.Mock).mockResolvedValueOnce(null);
+
+    renderStudioPage("/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=studio");
+
+    expect(await screen.findByTestId("studio-workflow-build-panel")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Continue to Bind" }));
+    expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByText("candidate:workspace-demo")).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Bind current member" }));
+    });
+
+    await waitFor(() => {
+      expect(studioApi.saveAndBindWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workflowYaml: expect.stringContaining("workflow: child-flow"),
+          inlineWorkflowYamls: {
+            "child-flow.yaml": expect.stringContaining("name: child-flow"),
+          },
+        }),
+      );
+    });
+    expect(studioApi.bindScopeWorkflow).not.toHaveBeenCalled();
   });
 
   it("pins Invoke to the selected member instead of exposing every runtime service", async () => {

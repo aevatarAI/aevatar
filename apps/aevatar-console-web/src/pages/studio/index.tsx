@@ -249,6 +249,28 @@ const WORKFLOW_DRAFT_MATERIALIZATION_ATTEMPTS = 10;
 const WORKFLOW_DRAFT_MATERIALIZATION_DELAY_MS = 900;
 const SAVED_WORKFLOW_QUERY_STALE_MS = 30_000;
 
+type StudioWorkflowYamlBundleEntry = {
+  readonly workflowName: string;
+  readonly yaml: string;
+};
+
+function buildInlineWorkflowYamlMap(
+  workflowBundle: readonly StudioWorkflowYamlBundleEntry[],
+): Record<string, string> {
+  const inlineWorkflowYamls: Record<string, string> = {};
+
+  for (let index = 1; index < workflowBundle.length; index += 1) {
+    const entry = workflowBundle[index];
+    const yaml = trimOptional(entry.yaml);
+    if (yaml) {
+      const workflowName = trimOptional(entry.workflowName);
+      inlineWorkflowYamls[workflowName ? `${workflowName}.yaml` : `workflow-${index}.yaml`] = yaml;
+    }
+  }
+
+  return inlineWorkflowYamls;
+}
+
 // Refactor (iter160/cluster-1200): member binding run waiting uses shared
 //   probeAsyncOperation normalized states instead of duplicated page-local
 //   status mapping. The fixed timeout remains pre-refactor page-local pacing;
@@ -4487,12 +4509,12 @@ const StudioPage: React.FC = () => {
     [availableStepTypes],
   );
 
-  const buildWorkflowYamlBundle = useCallback(async (
+  const buildWorkflowYamlBundleEntries = useCallback(async (
     pendingStepDraft?: {
       readonly stepId: string;
       readonly draft: StudioStepInspectorDraft;
     } | null,
-  ): Promise<string[]> => {
+  ): Promise<StudioWorkflowYamlBundleEntry[]> => {
     let rootYaml = draftYaml.trim();
     let rootDocument: StudioWorkflowDocument | null | undefined =
       activeWorkflowDocument;
@@ -4549,7 +4571,7 @@ const StudioPage: React.FC = () => {
     const workflowIdsByName = new Map(
       workspaceWorkflows.map((item) => [item.name, item.workflowId]),
     );
-    const bundle: string[] = [];
+    const bundle: StudioWorkflowYamlBundleEntry[] = [];
     const seen = new Set<string>();
     const queue: Array<{
       workflowName: string;
@@ -4599,7 +4621,10 @@ const StudioPage: React.FC = () => {
             current.document,
             availableWorkflowNames,
           );
-      bundle.push(normalizedCurrent.yaml);
+      bundle.push({
+        workflowName: normalizedWorkflowName,
+        yaml: normalizedCurrent.yaml,
+      });
 
       for (const targetWorkflow of readWorkflowCallTargets(normalizedCurrent.document)) {
         if (seen.has(targetWorkflow)) {
@@ -4650,6 +4675,18 @@ const StudioPage: React.FC = () => {
     visibleWorkflowSummaries,
     workflowNames,
   ]);
+  const buildWorkflowYamlBundle = useCallback(
+    async (
+      pendingStepDraft?: {
+        readonly stepId: string;
+        readonly draft: StudioStepInspectorDraft;
+      } | null,
+    ): Promise<string[]> => {
+      const bundle = await buildWorkflowYamlBundleEntries(pendingStepDraft);
+      return bundle.map((entry) => entry.yaml);
+    },
+    [buildWorkflowYamlBundleEntries],
+  );
   const recentPromptHistory = useMemo(
     () => promptHistory.slice(0, 3),
     [promptHistory],
@@ -5072,11 +5109,39 @@ const StudioPage: React.FC = () => {
           );
         }
       } else {
-        result = await studioApi.bindScopeWorkflow({
+        const workflowBundle = await buildWorkflowYamlBundleEntries();
+        const workflowYaml = trimOptional(workflowBundle[0]?.yaml);
+        if (!workflowYaml) {
+          throw new Error('Workflow YAML is required before save-and-bind.');
+        }
+
+        const saveAndBindResult = await studioApi.saveAndBindWorkflow({
           scopeId: resolvedStudioScopeId,
+          workflowId: selectedWorkflowId || activeWorkflowFile?.workflowId || undefined,
+          workflowYaml,
+          workflowName: activeWorkflowName || draftWorkflowName,
           displayName: buildPendingBindCandidate.displayName,
-          workflowYamls: await buildWorkflowYamlBundle(),
+          inlineWorkflowYamls: buildInlineWorkflowYamlMap(workflowBundle),
+          appId: 'studio',
+          serviceId: 'default',
+          exposureDesired: true,
         });
+        result = saveAndBindResult.binding ?? {
+          scopeId: saveAndBindResult.scopeId,
+          serviceId: 'default',
+          displayName: buildPendingBindCandidate.displayName,
+          implementationKind: 'workflow',
+          targetKind: 'workflow',
+          targetName:
+            saveAndBindResult.workflow?.workflowName ||
+            buildPendingBindCandidate.displayName,
+          revisionId: saveAndBindResult.revisionId,
+          workflowName:
+            saveAndBindResult.workflow?.workflowName ||
+            buildPendingBindCandidate.displayName,
+          definitionActorIdPrefix: '',
+          expectedActorId: '',
+        };
       }
     } else if (buildPendingBindCandidate.kind === 'script') {
       if (resolvedBuildMemberId) {
