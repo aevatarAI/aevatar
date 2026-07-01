@@ -453,6 +453,55 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
+    public async Task ChatStreamAsync_WhenNoExplicitMaxToolRounds_ShouldUseBoundedDefault()
+    {
+        const int expectedDefaultMaxToolRounds = 40;
+        var tool = new DelegateTool("lookup", args => $"RESULT:{args}", isReadOnly: true);
+        var toolRounds = Enumerable.Range(0, expectedDefaultMaxToolRounds)
+            .Select(round => (IReadOnlyList<LLMStreamChunk>)
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = $"tc-default-{round}",
+                        Name = "lookup",
+                        ArgumentsJson = $"{{\"round\":{round}}}",
+                    },
+                },
+            ]);
+        var provider = new QueuedStreamingProvider(
+        [
+            ..toolRounds,
+            [new LLMStreamChunk { DeltaContent = "bounded-summary" }],
+        ]);
+        var tools = new ToolManager();
+        tools.Register(tool);
+        var runtime = CreateRuntime(
+            provider,
+            tools: tools,
+            requestBuilder: () => new LLMRequest
+            {
+                Messages = [],
+                Tools = [tool],
+            });
+        var output = new StringBuilder();
+
+        await foreach (var chunk in runtime.ChatStreamAsync("hello"))
+        {
+            if (!string.IsNullOrEmpty(chunk.DeltaContent))
+                output.Append(chunk.DeltaContent);
+        }
+
+        output.ToString().Should().Contain("bounded-summary");
+        provider.StreamRequests.Should().HaveCount(expectedDefaultMaxToolRounds + 1);
+        provider.StreamRequests.Take(expectedDefaultMaxToolRounds)
+            .Should()
+            .OnlyContain(request => request.Tools != null && request.Tools.Count == 1);
+        provider.StreamRequests.Last().Tools.Should().BeNull();
+    }
+
+    [Fact]
     public async Task ChatStreamAsync_WhenToolCallRoundHasReasoning_ShouldPreserveItInFollowUpRequest()
     {
         var provider = new QueuedStreamingProvider(

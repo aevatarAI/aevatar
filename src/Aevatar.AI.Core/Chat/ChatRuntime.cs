@@ -34,11 +34,8 @@ public sealed record ContextCompressionConfig(
 //   New principle: ChatStreamAsync owns the stream flow directly; the Task.Run + Channel owned-stream loop and stream_buffer_capacity config were removed; middleware wrapping stays inside private bridge adapters.
 public sealed class ChatRuntime
 {
-    /// <summary>
-    /// Default max tool rounds. int.MaxValue = no artificial limit;
-    /// the loop runs until the LLM stops calling tools (matching Claude Code behaviour).
-    /// </summary>
-    private const int DefaultMaxToolRounds = int.MaxValue;
+    /// <summary>Default max tool rounds used when no positive caller limit is provided.</summary>
+    private const int DefaultMaxToolRounds = 40;
     private readonly Func<ILLMProvider> _providerFactory;
     private readonly ChatHistory _history;
     private readonly ToolCallLoop _toolLoop;
