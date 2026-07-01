@@ -338,6 +338,79 @@ describe('StudioFilesPage', () => {
     });
   });
 
+  it('preserves locally appended provider settings across settings refreshes', async () => {
+    const props = createProps();
+    const StudioFilesPageRefreshHarness = () => {
+      const [settingsState, setSettingsState] = React.useState(props.settings);
+
+      return React.createElement(
+        React.Fragment,
+        null,
+        React.createElement(
+          'button',
+          {
+            onClick: () =>
+              setSettingsState({
+                ...props.settings,
+                data: {
+                  ...settings,
+                  providerTypes: [
+                    {
+                      id: 'openai',
+                      displayName: 'OpenAI',
+                      category: 'llm',
+                      description: 'OpenAI compatible provider',
+                      defaultEndpoint: 'https://api.openai.example.test/v1',
+                      defaultModel: 'gpt-4o-mini',
+                      recommended: true,
+                    },
+                  ],
+                },
+              }),
+            type: 'button',
+          },
+          'Refresh settings',
+        ),
+        React.createElement(StudioFilesPage, {
+          ...props,
+          settings: settingsState,
+        }),
+      );
+    };
+
+    renderWithQueryClient(React.createElement(StudioFilesPageRefreshHarness));
+
+    const editor = screen.getByLabelText(
+      'Settings.json editor',
+    ) as HTMLTextAreaElement;
+    const nextProvider = {
+      providerName: 'openai-1',
+      providerType: 'openai',
+      model: 'gpt-4o-mini',
+      endpoint: 'https://api.openai.example.test/v1',
+      apiKey: '',
+      clearApiKeyRequested: false,
+    };
+    const nextSettingsDocument = {
+      ...JSON.parse(editor.value),
+      providers: [nextProvider],
+    };
+
+    fireEvent.change(editor, {
+      target: {
+        value: JSON.stringify(nextSettingsDocument, null, 2),
+      },
+    });
+    expect(editor.value).toContain('"providerName": "openai-1"');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh settings' }));
+
+    expect(
+      (screen.getByLabelText('Settings.json editor') as HTMLTextAreaElement).value,
+    ).toContain('"providerName": "openai-1"');
+    expect(screen.getByRole('button', { name: 'Save' })).not.toBeDisabled();
+  });
+
   it('lets roles and connectors follow the cli-style catalog workflow', async () => {
     const props = createProps();
 

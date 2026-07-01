@@ -979,9 +979,10 @@ const StudioFilesDetailPane: React.FC<Props> = ({
     () => formatJson(settingsDocument),
     [settingsDocument],
   );
-  const [settingsEditorValue, setSettingsEditorValue] = React.useState(
-    settingsSnapshot,
-  );
+  const [settingsEditorDraft, setSettingsEditorDraft] = React.useState(() => ({
+    acceptedSnapshot: settingsSnapshot,
+    value: settingsSnapshot,
+  }));
   const [settingsPending, setSettingsPending] = React.useState(false);
   const [settingsNotice, setSettingsNotice] = React.useState<NoticeState | null>(
     null,
@@ -1008,7 +1009,21 @@ const StudioFilesDetailPane: React.FC<Props> = ({
   const [chatNotice, setChatNotice] = React.useState<NoticeState | null>(null);
 
   React.useEffect(() => {
-    setSettingsEditorValue(settingsSnapshot);
+    setSettingsEditorDraft((current) => {
+      const localDirty = current.value !== current.acceptedSnapshot;
+      if (!localDirty && current.acceptedSnapshot === settingsSnapshot) {
+        return current;
+      }
+
+      if (localDirty && current.value !== settingsSnapshot) {
+        return current;
+      }
+
+      return {
+        acceptedSnapshot: settingsSnapshot,
+        value: settingsSnapshot,
+      };
+    });
   }, [settingsSnapshot]);
 
   React.useEffect(() => {
@@ -1035,7 +1050,9 @@ const StudioFilesDetailPane: React.FC<Props> = ({
     [connectorCatalogDraft, connectors.data?.connectors],
   );
 
-  const settingsDirty = settingsEditorValue !== settingsSnapshot;
+  const settingsEditorValue = settingsEditorDraft.value;
+  const settingsDirty =
+    settingsEditorDraft.value !== settingsEditorDraft.acceptedSnapshot;
 
   const editingRole =
     roleCatalogDraft.find((role) => role.key === editingRoleKey) ?? null;
@@ -1340,7 +1357,12 @@ const StudioFilesDetailPane: React.FC<Props> = ({
             aria-label={t("pages.studio.studiofilesdetailpane.settings.json.editor", "settings.json editor")}
             spellCheck={false}
             value={settingsEditorValue}
-            onChange={(event) => setSettingsEditorValue(event.target.value)}
+            onChange={(event) =>
+              setSettingsEditorDraft((current) => ({
+                ...current,
+                value: event.target.value,
+              }))
+            }
             style={editorTextAreaStyle}
           />
         </div>
