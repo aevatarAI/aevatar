@@ -48,6 +48,7 @@ describe("console routes", () => {
     expect(findRoute(routes, "/chat").hideInMenu).toBe(false);
     expect(findRoute(routes, "/chat").name).toBe("Chat");
     expect(findRoute(routes, "/chat").menuGroupKey).toBeUndefined();
+    expect(findRoute(routes, "/chat").icon).toBeUndefined();
     expect(findRoute(routes, "/scopes").hideInMenu).toBe(false);
     expect(findRoute(routes, "/studio").hideInMenu).toBe(true);
     expect(findRoute(routes, "/runtime/runs").hideInMenu).toBeUndefined();

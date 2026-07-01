@@ -6,7 +6,6 @@ import {
   DownOutlined,
   GlobalOutlined,
   LogoutOutlined,
-  MessageOutlined,
   SettingOutlined,
   UserOutlined,
 } from "@ant-design/icons";
@@ -177,9 +176,6 @@ const NAVIGATION_MENU_MESSAGE_IDS: Readonly<Record<string, string>> = {
   "/deployments": "nav.items.deployments",
   "/runtime/explorer": "nav.items.topology",
   "/settings": "nav.items.settings",
-};
-const NAVIGATION_MENU_ICONS: Readonly<Record<string, React.ReactNode>> = {
-  "/chat": <MessageOutlined />,
 };
 const LIVE_OPS_DEFAULT_ATTENTION_SNAPSHOT: LiveOpsAttentionSnapshot = {
   hasPendingAttention: false,
@@ -757,13 +753,12 @@ function decorateNavigationMenuItems(
             showLiveOpsDot: isLiveOpsGroup && !hasRenderableIcon,
           })
         : localizedName;
-    const routeIcon = path ? NAVIGATION_MENU_ICONS[path] : undefined;
     const icon =
       isLiveOpsGroup && hasRenderableIcon
         ? React.createElement(LiveOpsGroupIcon, {
             icon: item.icon,
           })
-        : (item.icon ?? routeIcon);
+        : item.icon;
 
     return {
       ...item,
