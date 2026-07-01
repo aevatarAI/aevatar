@@ -4,6 +4,20 @@ import { persistAuthSession } from '@/shared/auth/session';
 describe('scriptsApi host-session requests', () => {
   const originalFetch = global.fetch;
 
+  function jsonResponse(body: unknown, status = 200): Response {
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      statusText: status === 400 ? 'Bad Request' : 'OK',
+      headers: {
+        get: (name: string) =>
+          name.toLowerCase() === 'content-type' ? 'application/json' : null,
+      },
+      json: async () => body,
+      text: async () => JSON.stringify(body),
+    } as Response;
+  }
+
   beforeEach(() => {
     window.localStorage.clear();
     jest.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
@@ -122,6 +136,66 @@ describe('scriptsApi host-session requests', () => {
       definitionActorId: 'definition-1',
       runtimeActorId: 'runtime-1',
     });
+  });
+
+  it('falls back to script summaries when the backend rejects includeSource list requests', async () => {
+    const scripts = [
+      {
+        available: true,
+        scopeId: 'scope-1',
+        script: {
+          scopeId: 'scope-1',
+          scriptId: 'demo',
+          catalogActorId: 'catalog-1',
+          definitionActorId: 'definition-1',
+          activeRevision: 'rev-1',
+          activeSourceHash: 'hash-1',
+          updatedAt: '2026-03-27T00:00:00Z',
+        },
+        source: null,
+      },
+    ];
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ message: 'includeSource is unsupported' }, 400))
+      .mockResolvedValueOnce(jsonResponse(scripts));
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(scriptsApi.listScripts('scope-1', true)).resolves.toEqual(scripts);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      '/api/scopes/scope-1/scripts?includeSource=true',
+      expect.objectContaining({ credentials: 'same-origin' }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      '/api/scopes/scope-1/scripts?includeSource=false',
+      expect.objectContaining({ credentials: 'same-origin' }),
+    );
+  });
+
+  it('does not retry script list failures that are unrelated to includeSource compatibility', async () => {
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ message: 'Forbidden' }, 403));
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(scriptsApi.listScripts('scope-1', true)).rejects.toThrow('Forbidden');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('requests script summaries directly when source is not required', async () => {
+    const fetchMock = jest.fn().mockResolvedValueOnce(jsonResponse([]));
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(scriptsApi.listScripts('scope-1')).resolves.toEqual([]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/scopes/scope-1/scripts?includeSource=false',
+      expect.objectContaining({ credentials: 'same-origin' }),
+    );
   });
 
   it('reads runtime activity from the Studio app host routes', async () => {

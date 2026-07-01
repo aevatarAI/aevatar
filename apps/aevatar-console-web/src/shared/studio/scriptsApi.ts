@@ -53,6 +53,10 @@ async function requestJson<T>(
   init?: RequestInit,
 ): Promise<T> {
   const response = await scriptsFetch(input, init);
+  return readJsonResponse(response);
+}
+
+async function readJsonResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     throw new Error(await readResponseError(response));
   }
@@ -188,6 +192,10 @@ function scopePath(scopeId: string): string {
   return `/api/scopes/${encodeURIComponent(scopeId)}`;
 }
 
+function scriptsListPath(scopeId: string, includeSource: boolean): string {
+  return `${scopePath(scopeId)}/scripts?includeSource=${includeSource ? 'true' : 'false'}`;
+}
+
 export const scriptsApi = {
   validateDraft(
     payload: {
@@ -206,10 +214,17 @@ export const scriptsApi = {
     });
   },
 
-  listScripts(scopeId: string, includeSource = false): Promise<ScopedScriptDetail[]> {
-    return requestJson(
-      `${scopePath(scopeId)}/scripts?includeSource=${includeSource ? 'true' : 'false'}`,
-    );
+  async listScripts(scopeId: string, includeSource = false): Promise<ScopedScriptDetail[]> {
+    if (!includeSource) {
+      return requestJson(scriptsListPath(scopeId, false));
+    }
+
+    const response = await scriptsFetch(scriptsListPath(scopeId, true));
+    if (response.status === 400) {
+      return requestJson(scriptsListPath(scopeId, false));
+    }
+
+    return readJsonResponse(response);
   },
 
   getScript(scopeId: string, scriptId: string): Promise<ScopedScriptDetail> {
