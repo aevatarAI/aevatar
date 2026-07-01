@@ -686,6 +686,37 @@ public sealed class ConversationReplyGeneratorTests
             .BeLessThan(systemPrompt.IndexOf("ou_sender_1", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task GenerateReplyAsync_ThreadsChannelPlatformIntoOverlayRequest()
+    {
+        // Context-aware injection (issue #2498): the channel seam must resolve the overlay for the
+        // turn's channel platform so a lark turn gets lark-scoped members and other platforms do not.
+        var overlayProvider = new StubSystemSkillOverlayProvider("## overlay\n- context-aware");
+        var generator = new NyxIdConversationReplyGenerator(
+            new RecordingProviderFactory(),
+            overlayProvider: overlayProvider);
+
+        await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-overlay-platform",
+                ChannelId = ChannelId.From("lark"),
+                Conversation = new ConversationReference { CanonicalKey = "lark:group:oc_2" },
+                Content = new MessageContent { Text = "hello" },
+            },
+            new Dictionary<string, string>
+            {
+                [ChannelMetadataKeys.Platform] = "lark",
+                [ChannelMetadataKeys.ChatType] = "group",
+                [ChannelMetadataKeys.SenderId] = "ou_sender_2",
+                [ChannelMetadataKeys.ConversationId] = "oc_2",
+            },
+            streamingSink: null,
+            CancellationToken.None);
+
+        overlayProvider.LastRequest.Platform.Should().Be("lark");
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]
@@ -2110,10 +2141,15 @@ public sealed class ConversationReplyGeneratorTests
 
     private sealed class StubSystemSkillOverlayProvider(string? overlayMarkdown) : ISystemSkillOverlayProvider
     {
-        public SystemSkillOverlay? GetCurrent() =>
-            overlayMarkdown is null
+        public SystemSkillOverlayRequest LastRequest { get; private set; }
+
+        public SystemSkillOverlay? GetCurrent(SystemSkillOverlayRequest request)
+        {
+            LastRequest = request;
+            return overlayMarkdown is null
                 ? null
                 : new SystemSkillOverlay { OverlayMarkdown = overlayMarkdown };
+        }
     }
 
     private sealed class RecordingStreamingSink : IStreamingReplySink

@@ -13,78 +13,72 @@ namespace Aevatar.AI.Tests;
 
 public sealed class SystemSkillOverlayPromptInjectionTests
 {
-    private const string OverlayMarkdown = "## Runtime system skills\n- prefer the committed overlay";
+    private const string OverlayMarkdown = "## Runtime system skills\n- prefer the host overlay";
 
     [Fact]
-    public async Task DirectChat_ShouldAppendCommittedSystemSkillOverlay()
+    public async Task DirectChat_ShouldAppendProviderOverlayForDmTurn()
     {
-        var store = new InMemoryEventStoreForTests();
-        var services = BuildServices(store);
-        var agent = CreateAgent(services, "role-overlay-direct");
-        await agent.ActivateAsync();
+        var provider = new StubSystemSkillOverlayProvider(OverlayMarkdown);
+        var agent = await CreateActivatedAgentAsync(provider, "role-overlay-direct");
 
-        await agent.MaterializeOverlayAsync(OverlayMarkdown);
+        agent.DecorateForTest("kernel invariant")
+            .Should()
+            .Be($"kernel invariant\n\n{OverlayMarkdown}");
+
+        // Direct chat is inherently a dm turn: the seam resolves the dm platform (global-scope members).
+        provider.LastRequest.Platform.Should().Be(SystemSkillOverlayRequest.DirectChatPlatform);
+    }
+
+    [Fact]
+    public async Task DirectChat_ShouldSkipEmptyProviderOverlay()
+    {
+        var agent = await CreateActivatedAgentAsync(new StubSystemSkillOverlayProvider("   "), "role-overlay-empty");
+
+        agent.DecorateForTest("kernel invariant").Should().Be("kernel invariant");
+    }
+
+    [Fact]
+    public async Task DirectChat_ShouldReturnKernelOnly_WhenNoProviderRegistered()
+    {
+        var agent = await CreateActivatedAgentAsync(overlayProvider: null, "role-overlay-none");
+
+        agent.DecorateForTest("kernel invariant").Should().Be("kernel invariant");
+    }
+
+    [Fact]
+    public async Task LegacyMaterializedEvent_ReplaysAsNoOp_WithoutAffectingPrompt()
+    {
+        // Retirement replay-safety (issue #2498): grains activated before the overlay moved host-level
+        // may have a SystemSkillOverlayMaterializedEvent in their journal. The retired event type must
+        // still deserialize and replay through its no-op reducer, leaving the overlay provider-sourced.
+        var provider = new StubSystemSkillOverlayProvider(OverlayMarkdown);
+        var agent = await CreateActivatedAgentAsync(provider, "role-overlay-legacy-replay");
+
+        var replay = async () => await agent.PersistLegacyMaterializedEventAsync("## stale actor-state overlay");
+        await replay.Should().NotThrowAsync();
 
         agent.DecorateForTest("kernel invariant")
             .Should()
             .Be($"kernel invariant\n\n{OverlayMarkdown}");
     }
 
-    [Fact]
-    public async Task DirectChat_ShouldSkipEmptySystemSkillOverlay()
+    private static async Task<TestRoleGAgent> CreateActivatedAgentAsync(
+        ISystemSkillOverlayProvider? overlayProvider,
+        string actorId)
     {
-        var store = new InMemoryEventStoreForTests();
-        var services = BuildServices(store);
-        var agent = CreateAgent(services, "role-overlay-empty");
+        var services = BuildServices(new InMemoryEventStoreForTests(), overlayProvider);
+        var agent = CreateAgent(services, actorId);
         await agent.ActivateAsync();
-
-        await agent.MaterializeOverlayAsync("   ");
-
-        agent.DecorateForTest("kernel invariant")
-            .Should()
-            .Be("kernel invariant");
+        return agent;
     }
 
-    [Fact]
-    public async Task DirectChat_ShouldFallBackToDefaultOverlay_WhenStateOverlayEmpty()
-    {
-        const string defaultOverlay = "## Built-in default overlay\n- provisioning how-to";
-        var store = new InMemoryEventStoreForTests();
-        var services = BuildServices(store, new StubSystemSkillOverlayProvider(defaultOverlay));
-        var agent = CreateAgent(services, "role-overlay-fallback");
-        await agent.ActivateAsync();
-
-        await agent.MaterializeOverlayAsync("   ");
-
-        agent.DecorateForTest("kernel invariant")
-            .Should()
-            .Be($"kernel invariant\n\n{defaultOverlay}");
-    }
-
-    [Fact]
-    public async Task DirectChat_ShouldPreferCommittedOverlayOverDefault()
-    {
-        var store = new InMemoryEventStoreForTests();
-        var services = BuildServices(store, new StubSystemSkillOverlayProvider("## default\n- fallback only"));
-        var agent = CreateAgent(services, "role-overlay-prefer-committed");
-        await agent.ActivateAsync();
-
-        await agent.MaterializeOverlayAsync(OverlayMarkdown);
-
-        agent.DecorateForTest("kernel invariant")
-            .Should()
-            .Be($"kernel invariant\n\n{OverlayMarkdown}");
-    }
-
-    private static IServiceProvider BuildServices(IEventStore store, ISystemSkillOverlayProvider? overlayProvider = null)
+    private static IServiceProvider BuildServices(IEventStore store, ISystemSkillOverlayProvider? overlayProvider)
     {
         var services = new ServiceCollection()
             .AddSingleton(store)
             .AddSingleton<EventSourcingRuntimeOptions>()
             .AddSingleton<IActorRuntimeCallbackScheduler, NoOpCallbackScheduler>()
-            .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
-            .AddSingleton<ISystemSkillOverlayBuilder, EmptyOverlayBuilder>()
-            .AddSingleton(new SystemSkillOverlayOptions { Enabled = true });
+            .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
 
         if (overlayProvider is not null)
             services.AddSingleton(overlayProvider);
@@ -114,13 +108,13 @@ public sealed class SystemSkillOverlayPromptInjectionTests
 
     private sealed class TestRoleGAgent : RoleGAgent
     {
-        public Task MaterializeOverlayAsync(string overlayMarkdown) =>
+        public Task PersistLegacyMaterializedEventAsync(string overlayMarkdown) =>
             PersistDomainEventAsync(new SystemSkillOverlayMaterializedEvent
             {
                 Overlay = new SystemSkillOverlay
                 {
                     OverlayMarkdown = overlayMarkdown,
-                    SourceWatermark = "test-watermark",
+                    SourceWatermark = "legacy-watermark",
                     MaterializedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                 },
             });
@@ -128,16 +122,15 @@ public sealed class SystemSkillOverlayPromptInjectionTests
         public string DecorateForTest(string basePrompt) => DecorateSystemPrompt(basePrompt);
     }
 
-    private sealed class EmptyOverlayBuilder : ISystemSkillOverlayBuilder
-    {
-        public Task<SystemSkillOverlay> BuildAsync(CancellationToken ct) =>
-            Task.FromResult(new SystemSkillOverlay());
-    }
-
     private sealed class StubSystemSkillOverlayProvider(string overlayMarkdown) : ISystemSkillOverlayProvider
     {
-        public SystemSkillOverlay GetCurrent() =>
-            new() { OverlayMarkdown = overlayMarkdown, SourceWatermark = "builtin-default" };
+        public SystemSkillOverlayRequest LastRequest { get; private set; }
+
+        public SystemSkillOverlay GetCurrent(SystemSkillOverlayRequest request)
+        {
+            LastRequest = request;
+            return new SystemSkillOverlay { OverlayMarkdown = overlayMarkdown, SourceWatermark = "test-watermark" };
+        }
     }
 
     private sealed class NoOpCallbackScheduler : IActorRuntimeCallbackScheduler

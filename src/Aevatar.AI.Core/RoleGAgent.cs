@@ -35,14 +35,13 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 {
     private const string LlmFailureContentPrefix = "[[AEVATAR_LLM_ERROR]]";
     private const int MaxTrackedSessions = 128;
-    private const string SystemSkillOverlayRefreshCallbackId = "system-skill-overlay-refresh";
     private const int SystemSkillOverlayPromptLogSampleRate = 64;
-    private static readonly TimeSpan DefaultSystemSkillOverlayRefreshTtl = TimeSpan.FromMinutes(15);
-    private static readonly TimeSpan SystemSkillOverlayInitialRefreshDelay = TimeSpan.FromSeconds(1);
     private string _appliedEventModules = string.Empty;
     private string _appliedEventRoutes = string.Empty;
     private IServiceProvider? _appliedModuleServices;
-    private SystemSkillOverlay? _systemSkillOverlay;
+    // Per-turn NyxID token, stashed before ChatStreamAsync so the direct-chat seam can hand it to the
+    // host-level overlay provider for its out-of-band refresh (DecorateSystemPrompt has no context param).
+    private string? _currentTurnNyxIdAccessToken;
     private int _systemSkillOverlayPromptLogCounter;
 
     public RoleGAgent(
@@ -451,51 +450,12 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
     }
 
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
-    public async Task HandleSystemSkillOverlayRefresh(SystemSkillOverlayRefreshFiredEvent evt)
+    public Task HandleSystemSkillOverlayRefresh(SystemSkillOverlayRefreshFiredEvent evt)
     {
-        var builder = Services.GetService<ISystemSkillOverlayBuilder>();
-        var options = Services.GetService<SystemSkillOverlayOptions>();
-        if (!IsSystemSkillOverlayEnabled(builder, options))
-        {
-            _systemSkillOverlay = new SystemSkillOverlay();
-            return;
-        }
-
-        SystemSkillOverlay? nextOverlay;
-        try
-        {
-            nextOverlay = await builder!.BuildAsync(CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            var nextAttempt = Math.Max(0, evt.Attempt) + 1;
-            Logger.LogWarning(
-                ex,
-                "[{Role}] System skill overlay refresh failed; keeping last-known-good overlay. attempt={Attempt}",
-                RoleName,
-                nextAttempt);
-            await ScheduleSystemSkillOverlayRefreshAsync(
-                ComputeSystemSkillOverlayRefreshBackoff(nextAttempt),
-                nextAttempt,
-                CancellationToken.None);
-            return;
-        }
-
-        var nextWatermark = ResolveSystemSkillOverlayWatermark(nextOverlay);
-        var currentWatermark = ResolveSystemSkillOverlayWatermark(State.SystemSkillOverlay);
-
-        if (!string.Equals(nextWatermark, currentWatermark, StringComparison.Ordinal))
-        {
-            await PersistDomainEventAsync(new SystemSkillOverlayMaterializedEvent
-            {
-                Overlay = nextOverlay?.Clone() ?? new SystemSkillOverlay(),
-            });
-        }
-
-        await ScheduleSystemSkillOverlayRefreshAsync(
-            ResolveSystemSkillOverlayRefreshTtl(options),
-            attempt: 0,
-            CancellationToken.None);
+        // Retired (issue #2498): the overlay is now sourced by the host-level ISystemSkillOverlayProvider,
+        // not materialized per-actor. This no-op absorbs any durable refresh timeout still queued for
+        // grains activated before this change; no new refreshes are ever scheduled.
+        return Task.CompletedTask;
     }
 
     // ─── Approval continuation constants ───
@@ -796,7 +756,6 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         //   New principle: replay restores the typed RoleId from committed RoleGAgent state.
         RoleId = state.RoleId ?? string.Empty;
         RoleName = state.RoleName ?? string.Empty;
-        HydrateSystemSkillOverlayMirror(state);
         await ApplyModuleExtensionsFromStateIfNeededAsync(state, ct);
     }
 
@@ -989,6 +948,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             : null;
         var llmControl = LLMControlContextMapper.FromPayload(request.LlmControl);
         var toolContext = llmControl.ToToolContext(AgentToolExecutionContextMapper.FromPayload(request.ToolContext));
+        // Hand this turn's token to the overlay provider (via DecorateSystemPrompt) for its out-of-band
+        // public-set refresh. Kept in memory only for the turn; never persisted or logged.
+        _currentTurnNyxIdAccessToken = toolContext.Credentials.NyxIdAccessToken;
         var inputParts = ResolveRequestInputParts(request);
 
         await foreach (var chunk in ChatStreamAsync(inputParts, request.SessionId, llmControl, toolContext, metadata, streamCt))
@@ -1410,9 +1372,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         RoleGAgentState current,
         SystemSkillOverlayMaterializedEvent evt)
     {
-        var next = current.Clone();
-        next.SystemSkillOverlay = evt.Overlay?.Clone() ?? new SystemSkillOverlay();
-        return next;
+        // Retired (issue #2498): the overlay is no longer stored in actor state. Kept as a no-op reducer
+        // so historical journals containing this event still replay without an unknown-event error.
+        return current;
     }
 
     private static RoleGAgentState ApplyChatSessionStarted(
@@ -1582,9 +1544,6 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         await base.OnActivateAsync(ct);
-        HydrateSystemSkillOverlayMirror(State);
-        if (IsSystemSkillOverlayEmpty(_systemSkillOverlay))
-            await ScheduleSystemSkillOverlayRefreshAsync(SystemSkillOverlayInitialRefreshDelay, attempt: 0, ct);
     }
 
     protected override string DecorateSystemPrompt(string basePrompt)
@@ -1611,78 +1570,13 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         return $"{decorated.TrimEnd()}\n\n{overlayMarkdown.Trim()}";
     }
 
-    // Direct-chat seam overlay source: the Ornn-materialized actor-state overlay when present,
-    // otherwise the deployment's built-in default overlay, so capability how-to stays whole even
-    // before a host enables the Ornn-sourced overlay. Mirrors the channel seam, which reads the
-    // same ISystemSkillOverlayProvider default through the conversation reply generator.
-    private SystemSkillOverlay? ResolveInjectableSystemSkillOverlay()
-    {
-        if (!IsSystemSkillOverlayEmpty(_systemSkillOverlay))
-            return _systemSkillOverlay;
-
-        return Services.GetService<ISystemSkillOverlayProvider>()?.GetCurrent();
-    }
-
-    private void HydrateSystemSkillOverlayMirror(RoleGAgentState state)
-    {
-        if (!IsSystemSkillOverlayEnabled())
-        {
-            _systemSkillOverlay = new SystemSkillOverlay();
-            return;
-        }
-
-        _systemSkillOverlay = state.SystemSkillOverlay?.Clone();
-    }
-
-    private bool IsSystemSkillOverlayEnabled() =>
-        IsSystemSkillOverlayEnabled(
-            Services.GetService<ISystemSkillOverlayBuilder>(),
-            Services.GetService<SystemSkillOverlayOptions>());
-
-    private static bool IsSystemSkillOverlayEnabled(
-        ISystemSkillOverlayBuilder? builder,
-        SystemSkillOverlayOptions? options) =>
-        builder != null && options?.Enabled != false;
-
-    private async Task ScheduleSystemSkillOverlayRefreshAsync(
-        TimeSpan dueTime,
-        int attempt,
-        CancellationToken ct)
-    {
-        if (!IsSystemSkillOverlayEnabled())
-            return;
-
-        try
-        {
-            await ScheduleSelfDurableTimeoutAsync(
-                SystemSkillOverlayRefreshCallbackId,
-                NormalizeSystemSkillOverlayDueTime(dueTime),
-                new SystemSkillOverlayRefreshFiredEvent
-                {
-                    Attempt = Math.Max(0, attempt),
-                },
-                ct: ct);
-        }
-        catch (Exception ex)
-        {
-            Logger.LogWarning(ex, "[{Role}] Failed to schedule system skill overlay refresh", RoleName);
-        }
-    }
-
-    private static TimeSpan ResolveSystemSkillOverlayRefreshTtl(SystemSkillOverlayOptions? options) =>
-        options?.RefreshTtl > TimeSpan.Zero ? options.RefreshTtl : DefaultSystemSkillOverlayRefreshTtl;
-
-    private static TimeSpan NormalizeSystemSkillOverlayDueTime(TimeSpan dueTime) =>
-        dueTime > TimeSpan.Zero ? dueTime : SystemSkillOverlayInitialRefreshDelay;
-
-    private static TimeSpan ComputeSystemSkillOverlayRefreshBackoff(int failedAttempt)
-    {
-        var exponent = Math.Clamp(failedAttempt - 1, 0, 4);
-        return TimeSpan.FromMinutes(1 << exponent);
-    }
-
-    private static bool IsSystemSkillOverlayEmpty(SystemSkillOverlay? overlay) =>
-        overlay == null || string.IsNullOrWhiteSpace(overlay.OverlayMarkdown);
+    // Direct-chat seam overlay source (issue #2498): the host-level, context-aware overlay provider,
+    // resolved for a dm turn (global-scope members only). The per-turn token lets the provider refresh
+    // the public Ornn set out of band; the provider degrades to the built-in default when the set is
+    // unreachable or empty. Both reply seams now read this same host-level source.
+    private SystemSkillOverlay? ResolveInjectableSystemSkillOverlay() =>
+        Services.GetService<ISystemSkillOverlayProvider>()
+            ?.GetCurrent(SystemSkillOverlayRequest.DirectChat(_currentTurnNyxIdAccessToken));
 
     private static string ResolveSystemSkillOverlayWatermark(SystemSkillOverlay? overlay) =>
         overlay?.SourceWatermark ?? string.Empty;

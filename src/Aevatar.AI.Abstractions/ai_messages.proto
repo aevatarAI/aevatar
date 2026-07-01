@@ -338,6 +338,10 @@ message SystemSkillOverlay {
   int64 materialized_at = 3;
 }
 
+// Retired (issue #2498): no longer emitted — the overlay is sourced by the host-level provider, not
+// materialized per-actor. Kept defined so historical journals / queued durable timeouts still
+// deserialize and replay through their no-op handlers. Remove in a later release once no grain journal
+// or pending timeout references them.
 message SystemSkillOverlayMaterializedEvent {
   SystemSkillOverlay overlay = 1;
 }
@@ -392,7 +396,10 @@ message RoleGAgentState {
   string role_id = 8;
   map<string, aevatar.voice.VoicePresenceRuntimeState> voice_presence = 9;
   map<string, aevatar.voice.VoiceSessionDefaults> voice_session_defaults = 10;
-  SystemSkillOverlay system_skill_overlay = 11;
+  // Retired (issue #2498): the system skill overlay is now sourced by the host-level provider, not
+  // materialized into actor state. Reserved so the tag is never reused and old snapshots parse cleanly.
+  reserved 11;
+  reserved "system_skill_overlay";
 }
 
 // ─── Multi-turn tool approval continuation ───

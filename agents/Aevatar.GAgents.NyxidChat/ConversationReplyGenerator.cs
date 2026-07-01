@@ -280,7 +280,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
 
         var initialMessages = new List<ChatMessage>
         {
-            ChatMessage.System(BuildSystemPrompt(externalMetadata, input.AttachmentVisibilityInstruction)),
+            ChatMessage.System(BuildSystemPrompt(externalMetadata, effectiveToolContext.Credentials.NyxIdAccessToken, input.AttachmentVisibilityInstruction)),
         };
         initialMessages.AddRange((priorHistory ?? []).Where(IsReplayableHistoryEntry).TakeLast(MaxRecentPriorHistoryMessages).Select(ToChatMessage));
         initialMessages.Add(ChatMessage.User(input.Parts, input.Text));
@@ -368,7 +368,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             {
                 Messages =
                 [
-                    ChatMessage.System(BuildSystemPrompt(effectiveMetadata, input.AttachmentVisibilityInstruction)),
+                    ChatMessage.System(BuildSystemPrompt(effectiveMetadata, toolContext.Credentials.NyxIdAccessToken, input.AttachmentVisibilityInstruction)),
                 ],
                 Metadata = externalMetadata,
                 ToolContext = toolContext,
@@ -800,7 +800,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             {
                 Messages =
                 [
-                    ChatMessage.System(BuildSystemPrompt(externalMetadata, attachmentVisibilityInstruction)),
+                    ChatMessage.System(BuildSystemPrompt(externalMetadata, toolContext.Credentials.NyxIdAccessToken, attachmentVisibilityInstruction)),
                 ],
                 Metadata = externalMetadata,
                 ToolContext = toolContext,
@@ -1056,10 +1056,11 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
 
     private string BuildSystemPrompt(
         IReadOnlyDictionary<string, string> metadata,
+        string? nyxIdAccessToken,
         string? attachmentVisibilityInstruction = null)
     {
         var prompt = LoadBaseSystemPrompt();
-        prompt = AppendSystemSkillOverlay(prompt);
+        prompt = AppendSystemSkillOverlay(prompt, ResolveChannelPlatform(metadata), nyxIdAccessToken);
         prompt += NyxIdRelayPromptConfiguration.BuildChannelRuntimeConfigurationSection(_relayOptions);
         var channelContext = ChannelContextMiddleware.BuildChannelContextSection(metadata);
         if (!string.IsNullOrWhiteSpace(channelContext))
@@ -1078,9 +1079,16 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         return prompt;
     }
 
-    private string AppendSystemSkillOverlay(string prompt)
+    private static string? ResolveChannelPlatform(IReadOnlyDictionary<string, string> metadata) =>
+        metadata.TryGetValue(ChannelMetadataKeys.Platform, out var platform) && !string.IsNullOrWhiteSpace(platform)
+            ? platform
+            : null;
+
+    private string AppendSystemSkillOverlay(string prompt, string? platform, string? nyxIdAccessToken)
     {
-        var overlayMarkdown = _overlayProvider?.GetCurrent()?.OverlayMarkdown;
+        var overlayMarkdown = _overlayProvider
+            ?.GetCurrent(new SystemSkillOverlayRequest(platform, nyxIdAccessToken))
+            ?.OverlayMarkdown;
         if (string.IsNullOrWhiteSpace(overlayMarkdown))
             return prompt;
 

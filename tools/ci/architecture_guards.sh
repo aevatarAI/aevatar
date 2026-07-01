@@ -2034,8 +2034,8 @@ check_system_skill_overlay_dual_seam_injection() {
   local conversation_reply_generator_file="agents/Aevatar.GAgents.NyxidChat/ConversationReplyGenerator.cs"
   local prompt_injection_test_file="test/Aevatar.AI.Tests/SystemSkillOverlayPromptInjectionTests.cs"
 
-  if ! rg -q "DecorateSystemPrompt" "${role_gagent_file}" || ! rg -q "_systemSkillOverlay" "${role_gagent_file}"; then
-    echo "System skill overlay direct-chat seam must inject the overlay in RoleGAgent.DecorateSystemPrompt."
+  if ! rg -q "DecorateSystemPrompt" "${role_gagent_file}" || ! rg -q "SystemSkillOverlayRequest\.DirectChat" "${role_gagent_file}"; then
+    echo "System skill overlay direct-chat seam must inject the overlay in RoleGAgent.DecorateSystemPrompt via the shared provider (SystemSkillOverlayRequest.DirectChat)."
     exit 1
   fi
 
@@ -2095,6 +2095,39 @@ check_system_skill_overlay_eval_gate_present() {
   fi
 }
 
+check_system_skill_overlay_set_source() {
+  local options_file="src/Aevatar.AI.Abstractions/ToolProviders/SystemSkillOverlayOptions.cs"
+  local provider_file="src/Aevatar.AI.ToolProviders.Ornn/SystemSkillOverlay/OrnnSystemSkillOverlayProvider.cs"
+  local provider_interface="src/Aevatar.AI.Abstractions/ToolProviders/ISystemSkillOverlayProvider.cs"
+
+  # The overlay source is a public, org-owned skillset resolved by a non-secret name — never an org
+  # service token secret (issue #2498). Reintroducing OrgServiceToken re-adds a secret and a squat vector.
+  if rg -q -e 'OrgServiceToken' agents src -g '*.cs'; then
+    echo "System skill overlay must not reintroduce OrgServiceToken; the public org-owned set is read with no secret."
+    exit 1
+  fi
+  if ! rg -q -e '\bSetName\b' "${options_file}"; then
+    echo "System skill overlay options must expose the non-secret SetName as the overlay source."
+    exit 1
+  fi
+
+  # Members come from the skillset (membership = trust anchor), not a squattable tag search.
+  if ! rg -q -e 'GetSkillSetAsync' "${provider_file}"; then
+    echo "The Ornn overlay provider must resolve members from the skillset (GetSkillSetAsync)."
+    exit 1
+  fi
+  if rg -q -e 'SearchSkillsAsync' "${provider_file}"; then
+    echo "The Ornn overlay provider must not fall back to a tag search (SearchSkillsAsync); the set is the source."
+    exit 1
+  fi
+
+  # Never query-time: the seam read GetCurrent must be a synchronous cached read, not an awaited fetch.
+  if rg -q -e 'Task<[^>]*>[[:space:]]+GetCurrent' "${provider_interface}"; then
+    echo "ISystemSkillOverlayProvider.GetCurrent must be a synchronous cached read (never a query-time fetch)."
+    exit 1
+  fi
+}
+
 check_orchestration_class_guard \
   "src/workflow/Aevatar.Workflow.Application/Runs/WorkflowChatRunApplicationService.cs" \
   60 \
@@ -2109,6 +2142,7 @@ check_orchestration_class_guard \
   10
 check_system_skill_overlay_dual_seam_injection
 check_system_skill_overlay_eval_gate_present
+check_system_skill_overlay_set_source
 
 echo "Running CQRS/EventSourcing boundary guard..."
 bash tools/ci/cqrs_eventsourcing_boundary_guard.sh

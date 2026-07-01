@@ -14,7 +14,7 @@ public sealed class SystemSkillOverlayDefaultProviderTests
 {
     private static string DefaultOverlayMarkdown()
     {
-        var overlay = new SystemSkillOverlayDefaultProvider().GetCurrent();
+        var overlay = new SystemSkillOverlayDefaultProvider().GetCurrent(default);
         overlay.Should().NotBeNull();
         return overlay!.OverlayMarkdown;
     }
@@ -22,7 +22,7 @@ public sealed class SystemSkillOverlayDefaultProviderTests
     [Fact]
     public void GetCurrent_ShouldReturnNonEmptyDefaultOverlay()
     {
-        var overlay = new SystemSkillOverlayDefaultProvider().GetCurrent();
+        var overlay = new SystemSkillOverlayDefaultProvider().GetCurrent(default);
 
         overlay.Should().NotBeNull();
         overlay!.OverlayMarkdown.Should().NotBeNullOrWhiteSpace();

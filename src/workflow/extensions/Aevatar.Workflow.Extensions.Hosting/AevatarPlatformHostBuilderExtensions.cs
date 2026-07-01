@@ -50,8 +50,7 @@ public static class AevatarPlatformHostBuilderExtensions
                 aiOptions.EnableOrnnSkills = true;
                 aiOptions.OrnnNyxIdSlug = builder.Configuration["Aevatar:Ornn:NyxIdSlug"];
                 aiOptions.EnableSystemSkillOverlay = ReadBoolean(builder.Configuration["Aevatar:SystemSkills:Enabled"]);
-                aiOptions.SystemSkillOverlayTag = builder.Configuration["Aevatar:SystemSkills:Tag"];
-                aiOptions.SystemSkillOverlayOrgServiceToken = builder.Configuration["Aevatar:SystemSkills:OrgServiceToken"];
+                aiOptions.SystemSkillOverlaySetName = builder.Configuration["Aevatar:SystemSkills:SetName"];
                 if (TimeSpan.TryParse(builder.Configuration["Aevatar:SystemSkills:RefreshTtl"], out var refreshTtl))
                     aiOptions.SystemSkillOverlayRefreshTtl = refreshTtl;
                 if (int.TryParse(builder.Configuration["Aevatar:SystemSkills:MaxSkills"], out var maxSkills))
