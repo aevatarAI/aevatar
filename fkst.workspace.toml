@@ -1,0 +1,6 @@
+[workspace]
+units = [".fkst/local-packages/*"]
+packages = [".fkst/local-packages/*"]
+
+[registries]
+workspace = "workspace"
