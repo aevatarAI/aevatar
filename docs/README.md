@@ -15,6 +15,7 @@ Authoritative architecture and developer guides. Each covers one topic.
 - [Connector 配置与执行逻辑](canon/connector.md)
 - [Aevatar CQRS 架构（Maker 插件化后）](canon/cqrs-projection.md)
 - [Event Sourcing 基线文档（2026-02-23）](canon/event-sourcing.md)
+- [External Exposure Receipt](canon/external-exposure-receipt.md)
 - [Aevatar 前端设计基线](canon/frontend-design.md)
 - [GAgent Registry Ownership](canon/gagent-registry-ownership.md)
 - [Lark Reply Chain Completion Semantics](canon/lark-reply-completion-semantics.md)
@@ -30,6 +31,8 @@ Authoritative architecture and developer guides. Each covers one topic.
 - [Aevatar.Scripting 架构文档](canon/scripting.md)
 - [.NET Workflow SDK Quick Start](canon/sdk-dotnet.md)
 - [Aevatar /status 状态面板架构](canon/status-dashboard.md)
+- [System Skill Overlay Authoring Contract](canon/system-skill-overlay-authoring-contract.md)
+- [Aevatar API v1 Integration Test Plan](canon/v1-api-integration-test-plan.md)
 - [Voice Presence Integration — aevatar as the /ws/voice Brain](canon/voice-presence-integration.md)
 - [Workflow Primitives 参考手册](canon/workflow-primitives.md)
 - [工作流引擎设计与实践](canon/workflow-runtime.md)
@@ -72,6 +75,7 @@ Immutable records of architectural choices and their rationale.
 - [Workflow Saga / Compensation Protocol](adr/0034-workflow-saga-compensation-protocol.md)
 - [已发布 workflow 服务自动注册到 NyxID](adr/0035-auto-register-published-service-to-nyxid.md)
 - [Scope Workflow as the Authoritative Runnable Workflow Model](adr/0036-scope-workflow-authoritative-runnable-model.md)
+- [定时任务调用凭证的权威来源模型](adr/0037-scheduled-invocation-credential-source-model.md)
 - [Agent Kind Primary-Only Identity](adr/2026-06-04-agent-kind-primary-only-identity.md)
 
 ## History
@@ -113,3 +117,4 @@ Point-in-time design snapshots. Not authoritative — for context only.
 ## Templates
 
 - [architecture.md](templates/architecture.md)
+

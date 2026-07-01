@@ -138,7 +138,10 @@ public sealed class MainnetHostCompositionTests
         routePatterns.Should().Contain("/api/oauth/nyxid-callback");
         routePatterns.Should().Contain("/api/services/");
         routePatterns.Should().Contain("/api/skill-runners/{agentId}/external-trigger-sources/{sourceId}/deliveries");
+        routePatterns.Should().Contain("/v1/models");
         routePatterns.Should().Contain("/v1/responses");
+        routePatterns.Should().Contain("/v1/responses/{id}/cancel");
+        routePatterns.Should().Contain("/v1/messages");
         routePatterns.Should().Contain("/v1/chat/completions");
         routePatterns.Should().NotContain("/v1/chat/completion");
 
