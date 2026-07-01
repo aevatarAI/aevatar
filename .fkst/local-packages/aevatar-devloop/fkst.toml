@@ -6,7 +6,7 @@ persistence_class = "stateless_adapter"
 root = "."
 
 [event_deps]
-packages = ["github-devloop"]
+packages = ["github-devloop", "github-devloop-pr"]
 
 [conformance]
 pack = "conformance/pack.toml"

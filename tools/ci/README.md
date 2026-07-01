@@ -32,6 +32,8 @@ This directory keeps CI gate scripts and smoke tests.
     - `.github/actions/prepare-runner/action.yml` (`setup-dotnet` + NuGet cache + optional `ripgrep` install)
   - Job `changes`
     - Uses path filters to detect whether projection-provider or Kafka-runtime integration jobs must run.
+  - Job `fkst-host-policy`
+    - Runs on PR updates, review/review-comment events, and PR issue-comment events so unresolved P1/P2 review feedback is rechecked after automated review arrives; comment-only self-triggers are skipped when `FKST_GITHUB_BOT_LOGIN` is configured.
   - Job `fast-gates`
     - Runs static architecture and test-stability guards.
   - Test authority
