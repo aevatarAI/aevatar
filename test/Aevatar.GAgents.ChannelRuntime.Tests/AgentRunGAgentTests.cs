@@ -1359,6 +1359,91 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
+    public async Task HandleStartAsync_PersistsStepStateWithoutRuntimeCredentials_ButStillRepliesWithLiveToken()
+    {
+        // Issue #2580 Item 1: the persisted per-step waterline must never carry a bearer token.
+        // The inbound carries owner + sender tokens on LlmControl, a sender runtime token on the
+        // Activity, and a sender binding on the tool context. After the turn, the persisted step
+        // state (State.GenerationStep, rebuilt from the committed AgentRunReplyStepStateUpdatedEvent)
+        // must be token-less, yet the LLM request must still have executed with a live credential
+        // re-supplied from the transient request.
+        var targetActor = Substitute.For<IActor>();
+        targetActor.Id.Returns("conversation:c");
+        targetActor.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+        var providerFactory = new SingleReplyProviderFactory("clean reply");
+        var replyGenerator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            toolSources: [new CountingAgentRunToolSource(new AgentRunNoopTool())],
+            localSkillCatalog: new LocalSkillCatalog());
+        var actorRuntime = new DispatchingActorRuntime(("conversation:c", targetActor));
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            replyGenerator,
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true });
+        var activity = BuildRelayActivity();
+        activity.TransportExtras ??= new TransportExtras();
+        activity.TransportExtras.NyxUserAccessToken = "sender-runtime-token";
+
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-strip-persisted-credentials",
+            TargetActorId = "conversation:c",
+            RegistrationId = "reg-1",
+            Activity = activity,
+            ReplyToken = "relay-token-strip-persisted-credentials",
+            ToolContext = (AgentToolExecutionContext.Empty with
+            {
+                SenderBinding = new AgentToolSenderBindingContext("bnd-user-1"),
+            }).ToPayload(),
+            LlmControl = new LLMControlContext(
+                "owner-token",
+                "owner-token",
+                "inbound-sender-token",
+                "owner-model",
+                "/api/v1/proxy/s/owner",
+                4,
+                null).ToPayload(),
+            Metadata =
+            {
+                [ChannelMetadataKeys.Platform] = "lark",
+                [ChannelMetadataKeys.SenderId] = "ou_user_1",
+                [ChannelMetadataKeys.MessageId] = "msg-strip-persisted-credentials",
+            },
+        });
+
+        // The turn completed with a live credential re-supplied from the transient request.
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
+        runtime.State.ProducedReplyText.Should().Be("clean reply");
+        providerFactory.Requests.Should().ContainSingle();
+        providerFactory.Requests[0].LlmControl!.NyxIdAccessToken.Should().NotBeNullOrEmpty(
+            "the executor re-supplies a live credential from the transient request even though the persisted state is stripped");
+
+        // The persisted per-step waterline carries no bearer token in any of the four sub-messages.
+        var persisted = runtime.State.GenerationStep;
+        persisted.Should().NotBeNull();
+        (persisted!.LlmControl?.NyxIdAccessToken ?? string.Empty).Should().BeEmpty();
+        (persisted.LlmControl?.NyxIdOrgToken ?? string.Empty).Should().BeEmpty();
+        (persisted.LlmControl?.SenderNyxIdAccessToken ?? string.Empty).Should().BeEmpty();
+        (persisted.ToolContext?.Credentials?.NyxIdAccessToken ?? string.Empty).Should().BeEmpty();
+        (persisted.ToolContext?.Credentials?.NyxIdOrgToken ?? string.Empty).Should().BeEmpty();
+        (persisted.ToolContext?.Credentials?.SenderNyxIdAccessToken ?? string.Empty).Should().BeEmpty();
+        (persisted.OwnerFallbackLlmControl?.NyxIdAccessToken ?? string.Empty).Should().BeEmpty();
+        (persisted.OwnerFallbackLlmControl?.NyxIdOrgToken ?? string.Empty).Should().BeEmpty();
+        (persisted.OwnerFallbackLlmControl?.SenderNyxIdAccessToken ?? string.Empty).Should().BeEmpty();
+        (persisted.OwnerFallbackToolContext?.Credentials?.NyxIdAccessToken ?? string.Empty).Should().BeEmpty();
+        (persisted.OwnerFallbackToolContext?.Credentials?.NyxIdOrgToken ?? string.Empty).Should().BeEmpty();
+        (persisted.OwnerFallbackToolContext?.Credentials?.SenderNyxIdAccessToken ?? string.Empty).Should().BeEmpty();
+
+        // Belt-and-suspenders: no inbound token value survives anywhere in the committed state bytes.
+        var persistedText = System.Text.Encoding.UTF8.GetString(persisted.ToByteArray());
+        persistedText.Should().NotContain("owner-token");
+        persistedText.Should().NotContain("inbound-sender-token");
+        persistedText.Should().NotContain("sender-runtime-token");
+    }
+
+    [Fact]
     public async Task HandleStartAsync_WhenBoundToolSchemaIsRejected_RetriesWithOwnerNoTools()
     {
         var targetActor = Substitute.For<IActor>();
