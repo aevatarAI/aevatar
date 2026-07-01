@@ -15,8 +15,6 @@
     <ProjectReference Include="..\Aevatar.Scripting.Abstractions\Aevatar.Scripting.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.Scripting.Application\Aevatar.Scripting.Application.csproj" />
     <ProjectReference Include="..\Aevatar.Scripting.Core\Aevatar.Scripting.Core.csproj" />
-    <ProjectReference Include="..\Aevatar.Scripting.Hosting\Aevatar.Scripting.Hosting.csproj" />
-    <ProjectReference Include="..\Aevatar.Scripting.Infrastructure\Aevatar.Scripting.Infrastructure.csproj" />
     <ProjectReference Include="..\workflow\Aevatar.Workflow.Application.Abstractions\Aevatar.Workflow.Application.Abstractions.csproj" />
     <ProjectReference Include="..\workflow\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj" />
   </ItemGroup>
