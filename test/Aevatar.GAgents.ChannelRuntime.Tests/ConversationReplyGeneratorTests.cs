@@ -374,6 +374,79 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
+    public async Task BuildStepPlanAsync_InChannelRelayTurn_GatesOutHumanSessionTools()
+    {
+        // Issue #2580 Item 2: in a channel-relay turn the effective credential is bot-class, so a
+        // tool declaring RequiresHumanSession is filtered out (never offered), while a delegated tool
+        // stays. A console/studio (non-channel) turn keeps the full set.
+        var providerFactory = new RecordingProviderFactory { Capabilities = MultimodalCapabilities };
+        var toolSource = new StubToolSource(
+            new HumanSessionStubTool("human_only_tool"),
+            new StubTool("delegated_tool"));
+        IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            toolSources: [toolSource]);
+        var activity = CreateLarkActivity("msg-gate", "hi", "om_gate", token: "runtime-token");
+        var channelMetadata = new Dictionary<string, string>
+        {
+            [ChannelMetadataKeys.Platform] = "lark",
+            [ChannelMetadataKeys.SenderId] = "ou_user_1",
+            [ChannelMetadataKeys.MessageId] = "msg-gate",
+        };
+
+        var channelPlan = await generator.BuildStepPlanAsync(
+            activity, channelMetadata, Control(token: "runtime-token"), ToolContext("bnd-1"),
+            priorHistory: null, attachmentContext: null, forceDisableTools: false, CancellationToken.None);
+        var channelToolNames = OfferedToolNames(channelPlan);
+
+        channelToolNames.Should().Contain("delegated_tool");
+        channelToolNames.Should().NotContain("human_only_tool",
+            "the human-session tool would be rejected by the broker in a relay turn, so it must not be offered");
+
+        // A non-channel (console/studio) human-session turn keeps the full set.
+        var consolePlan = await generator.BuildStepPlanAsync(
+            activity, new Dictionary<string, string>(), Control(token: "runtime-token"), ToolContext("bnd-1"),
+            priorHistory: null, attachmentContext: null, forceDisableTools: false, CancellationToken.None);
+        var consoleToolNames = OfferedToolNames(consolePlan);
+
+        consoleToolNames.Should().Contain("delegated_tool");
+        consoleToolNames.Should().Contain("human_only_tool");
+    }
+
+    private static IReadOnlyList<string> OfferedToolNames(AgentRunReplyStepPlan plan)
+    {
+        var llmRequest = plan.StepExecutor.BuildLlmStepRequest(
+            [ChatMessage.User("hi")],
+            requestId: "req",
+            plan.Metadata,
+            plan.ToolContext,
+            plan.LlmControl,
+            round: 0,
+            finalNoTools: false);
+        return (llmRequest.Tools ?? []).Select(tool => tool.Name).ToArray();
+    }
+
+    private sealed class StubToolSource(params IAgentTool[] tools) : IAgentToolSource
+    {
+        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<IAgentTool>>(tools);
+    }
+
+    private class StubTool(string name) : IAgentTool
+    {
+        public string Name => name;
+        public string Description => name;
+        public string ParametersSchema => """{"type":"object","properties":{}}""";
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("{}");
+    }
+
+    private sealed class HumanSessionStubTool(string name) : StubTool(name), IAgentToolCapabilityDescriptor
+    {
+        public IReadOnlyCollection<string> Capabilities => [AgentToolCapabilities.RequiresHumanSession];
+    }
+
+    [Fact]
     public async Task GenerateReplyAsync_WithTextOnlyProviderAndImageAttachment_AddsHonestVisibilityWarning()
     {
         var lark = new RecordingLarkNyxClient(

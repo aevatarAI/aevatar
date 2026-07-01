@@ -4,8 +4,10 @@ using Aevatar.AI.Abstractions.ToolProviders;
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
 /// <summary>Tool to list NyxID active sessions.</summary>
-public sealed class NyxIdSessionsTool : IAgentTool
+public sealed class NyxIdSessionsTool : IAgentTool, IAgentToolCapabilityDescriptor
 {
+    public IReadOnlyCollection<string> Capabilities => NyxIdToolSurfaces.HumanSessionOnly;
+
     private readonly NyxIdApiClient _client;
 
     public NyxIdSessionsTool(NyxIdApiClient client) => _client = client;

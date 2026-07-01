@@ -5,8 +5,10 @@ using Aevatar.AI.Abstractions.ToolProviders;
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
 /// <summary>Tool to manage NyxID notification settings and Telegram integration.</summary>
-public sealed class NyxIdNotificationsTool : IAgentTool
+public sealed class NyxIdNotificationsTool : IAgentTool, IAgentToolCapabilityDescriptor
 {
+    public IReadOnlyCollection<string> Capabilities => NyxIdToolSurfaces.HumanSessionOnly;
+
     private readonly NyxIdApiClient _client;
 
     public NyxIdNotificationsTool(NyxIdApiClient client) => _client = client;
