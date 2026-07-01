@@ -231,7 +231,10 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
         automationsHref={studio.automationsHref}
         automationsPlaceholderReason={studio.automationsPlaceholderReason}
         canOpenAutomations={studio.canOpenAutomations}
+        canOpenInvoke={studio.canOpenInvoke}
         canOpenPublishedRuns={studio.canOpenPublishedRuns}
+        invokeHref={studio.invokeHref}
+        invokePlaceholderReason={studio.invokePlaceholderReason}
         memberPublished={studio.memberPublished}
         publishedRunsHref={studio.publishedRunsHref}
         publishedRunsPlaceholderReason={studio.publishedRunsPlaceholderReason}
@@ -248,6 +251,7 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
         dirty={studio.dirty}
         currentDraftRunPlaceholderReason={studio.currentDraftRunPlaceholderReason}
         onOpenAutomations={studio.navigateToAutomations}
+        onOpenInvoke={studio.navigateToInvoke}
         onOpenPublishedRuns={studio.navigateToPublishedRuns}
         onPublishMember={studio.publishMember}
         onRefreshPublishStatus={studio.refreshPublishStatus}

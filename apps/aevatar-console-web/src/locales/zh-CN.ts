@@ -901,6 +901,13 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.header.editWorkflowName': '编辑 Workflow 名称',
   'teamMemberWorkflowStudio.header.identityAria': 'Workflow 身份信息',
   'teamMemberWorkflowStudio.header.inputSet': '已设置输入',
+  'teamMemberWorkflowStudio.header.invoke': '调用',
+  'teamMemberWorkflowStudio.header.invoke.open':
+    '打开已发布成员的调用工作台。',
+  'teamMemberWorkflowStudio.header.invoke.publishFirst':
+    '先发布这个成员，再调用它。',
+  'teamMemberWorkflowStudio.header.invoke.saveFirst':
+    '先保存这个成员，再调用它。',
   'teamMemberWorkflowStudio.header.more': '更多',
   'teamMemberWorkflowStudio.header.moreActions': '更多 Workflow 操作',
   'teamMemberWorkflowStudio.header.nodeActionsAria':

@@ -17,6 +17,7 @@ import { t } from "@/shared/i18n/messages";
 import {
   buildTeamDetailHref,
   buildTeamMemberAutomationsHref,
+  buildTeamMemberInvokeHref,
   buildTeamMemberPublishedRunsHref,
   buildTeamMemberWorkflowStudioHref,
   buildTeamsHref,
@@ -161,6 +162,9 @@ type TeamMemberWorkflowStudioState = {
   readonly automationsHref: string;
   readonly canOpenAutomations: boolean;
   readonly automationsPlaceholderReason: string;
+  readonly canOpenInvoke: boolean;
+  readonly invokeHref: string;
+  readonly invokePlaceholderReason: string;
   readonly canOpenPublishedRuns: boolean;
   readonly publishedRunsHref: string;
   readonly publishedRunsPlaceholderReason: string;
@@ -176,6 +180,7 @@ type TeamMemberWorkflowStudioState = {
   readonly showRefreshPublishStatus: boolean;
   readonly backHref: string;
   readonly navigateToTeam: () => void;
+  readonly navigateToInvoke: () => void;
   readonly navigateToPublishedRuns: () => void;
   readonly navigateToAutomations: () => void;
   readonly navigateToTeams: () => void;
@@ -2087,6 +2092,33 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const memberPublishedServiceId = trimOptional(
     memberQuery.data?.summary.publishedServiceId,
   );
+  const invokeHref = buildTeamMemberInvokeHref({
+    memberId: route.memberId || undefined,
+    scopeId: route.scopeId,
+    teamId: route.teamId,
+  });
+  const canOpenInvoke = Boolean(
+    route.mode === "existing" &&
+      route.scopeId &&
+      route.teamId &&
+      route.memberId &&
+      memberIsPublished &&
+      memberPublishedServiceId,
+  );
+  const invokePlaceholderReason = !route.memberId
+    ? t(
+        "teamMemberWorkflowStudio.header.invoke.saveFirst",
+        "Save this member before invoking it.",
+      )
+    : !memberIsPublished || !memberPublishedServiceId
+      ? t(
+          "teamMemberWorkflowStudio.header.invoke.publishFirst",
+          "Publish this member before invoking it.",
+        )
+      : t(
+          "teamMemberWorkflowStudio.header.invoke.open",
+          "Open the published member invoke workbench.",
+        );
   const publishedRunsHref = buildTeamMemberPublishedRunsHref({
     memberId: route.memberId || undefined,
     scopeId: route.scopeId,
@@ -2644,6 +2676,9 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     automationsHref,
     canOpenAutomations,
     automationsPlaceholderReason,
+    canOpenInvoke,
+    invokeHref,
+    invokePlaceholderReason,
     canOpenPublishedRuns,
     publishedRunsHref,
     publishedRunsPlaceholderReason,
@@ -2681,6 +2716,11 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     navigateToTeams: () => {
       if (!dirty || confirmDiscardUnsavedChanges()) {
         history.push(teamsHref);
+      }
+    },
+    navigateToInvoke: () => {
+      if (canOpenInvoke && (!dirty || confirmDiscardUnsavedChanges())) {
+        history.push(invokeHref);
       }
     },
     navigateToPublishedRuns: () => {
