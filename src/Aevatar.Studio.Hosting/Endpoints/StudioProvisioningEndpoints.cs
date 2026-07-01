@@ -75,10 +75,9 @@ internal static class StudioProvisioningEndpoints
             return BadRequest("INVALID_PROVISION_WORKFLOW_REQUEST", credentialError);
 
         // The `aevatar` nyxid downstream forwards the caller's access token
-        // (forward_access_token), so the bearer is on the request. Thread it into
-        // the service as the run's durable credential (or the seed for minting a
-        // durable agent key) so the scheduled run's LLM call authenticates — a raw
-        // nyxid caller has no re-mintable subject binding for the dispatch to use.
+        // (forward_access_token), so the bearer is on the request. Keep it as an
+        // explicit boundary parameter; scheduled-dispatch auth must not persist or
+        // replay this bearer.
         var callerBearerToken = ExtractBearerToken(http);
 
         try

@@ -27,10 +27,10 @@ public interface IStudioWorkflowProvisioningService
     /// <param name="callerBearerToken">
     /// The caller's forwarded NyxID bearer token (the <c>aevatar</c> nyxid
     /// downstream sets <c>forward_access_token</c>, so the caller's token is on the
-    /// request). Threaded as the run's durable credential — or used to mint a
-    /// durable agent key when a <see cref="IStudioRunCredentialIssuer"/> is wired —
-    /// so the scheduled run's LLM call authenticates without a re-mintable subject
-    /// binding. Optional: when absent, the flow falls back to the subject ref.
+    /// request). Kept as an optional boundary parameter for callers that already
+    /// forward it; scheduled-dispatch auth does not persist or replay this bearer.
+    /// The schedule uses <paramref name="callerCredential"/> as the re-mintable
+    /// subject source.
     /// </param>
     Task<ProvisionWorkflowResponse> ProvisionAsync(
         string scopeId,

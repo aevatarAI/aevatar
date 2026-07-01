@@ -127,7 +127,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
-    public async Task CreateAsync_ShouldNormalizeDurableSenderBearerTokenAuth()
+    public async Task CreateAsync_ShouldRejectDurableSenderBearerTokenAuth()
     {
         var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
         var service = new ScheduledDispatchApplicationService(
@@ -135,7 +135,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
             new RecordingScheduledDispatchQueryPort(),
             new ScheduledDispatchTargetPreparationService());
 
-        await service.CreateAsync(new ScheduledDispatchConfiguration(
+        var act = () => service.CreateAsync(new ScheduledDispatchConfiguration(
             "schedule-durable-auth",
             "Invoke",
             new ScheduledDispatchTargetDescriptor(
@@ -150,13 +150,9 @@ public sealed class ScheduledDispatchApplicationServiceTests
             true,
             new Dictionary<string, string>()));
 
-        var created = actorPort.Created.Should().ContainSingle().Which;
-        var configurationAuth = created.Configuration.Target.ServiceInvocation!.Auth;
-        configurationAuth.Should().NotBeNull();
-        configurationAuth!.SenderNyxId.Should().BeNull();
-        configurationAuth.ScopeOwnerNyxId.Should().BeNull();
-        configurationAuth.DurableSenderBearerToken.Should().Be("durable-run-key");
-        created.Dispatch.Descriptor.ServiceInvocation!.Auth!.DurableSenderBearerToken.Should().Be("durable-run-key");
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*Durable sender bearer token schedule auth is no longer supported*");
+        actorPort.Created.Should().BeEmpty();
     }
 
     [Fact]
@@ -440,7 +436,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
             new Dictionary<string, string>()));
 
         await act.Should().ThrowAsync<ArgumentException>()
-            .WithMessage("*Exactly one service invocation credential source*");
+            .WithMessage("*Durable sender bearer token schedule auth is no longer supported*");
     }
 
     [Fact]
@@ -606,7 +602,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
-    public async Task ScheduledDispatchActorPort_ShouldPersistDurableSenderBearerTokenAuth()
+    public async Task ScheduledDispatchActorPort_ShouldRejectDurableSenderBearerTokenAuth()
     {
         var dispatchPort = new RecordingActorDispatchPort();
         var port = new ScheduledDispatchActorPort(new RecordingActorRuntime(), dispatchPort);
@@ -628,12 +624,11 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var prepared = await new ScheduledDispatchTargetPreparationService()
             .PrepareAsync(configuration, "cmd-1", "corr-1");
 
-        await port.DispatchCreateAsync("scheduled-dispatch:schedule-durable", configuration, prepared);
+        var act = () => port.DispatchCreateAsync("scheduled-dispatch:schedule-durable", configuration, prepared);
 
-        var command = dispatchPort.Envelopes.Should().ContainSingle().Which.Payload.Unpack<ScheduledDispatchCreateCommand>();
-        command.Target.ServiceInvocation.Auth.SenderNyxId.Should().BeNull();
-        command.Target.ServiceInvocation.Auth.ScopeOwnerNyxId.Should().BeNull();
-        command.Target.ServiceInvocation.Auth.DurableSenderBearerToken.Should().Be("durable-run-key");
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*Durable sender bearer token schedule auth is no longer supported*");
+        dispatchPort.Envelopes.Should().BeEmpty();
     }
 
     [Fact]

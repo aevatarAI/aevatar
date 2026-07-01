@@ -17,6 +17,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 {
     private const string NextFireCallbackId = "scheduled-dispatch-next-fire";
     private const int MaxFireRecordCount = 128;
+    private const string LegacyDurableSenderBearerBlockedError =
+        "Scheduled service invocation contains legacy durable bearer auth; reconfigure the schedule with senderNyxId or scopeOwnerNyxId.";
     private static readonly TimeSpan MaxNextFireCallbackHop = TimeSpan.FromDays(7);
     private readonly IActorDispatchPort _dispatchPort;
     private readonly IScheduledServiceInvocationDispatchPort _serviceInvocationDispatchPort;
@@ -185,7 +187,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             NormalizeTarget(target),
             isCreate);
         Logger.LogInformation(
-            "Scheduled dispatch configuration prepared. scheduleId={ScheduleId} isCreate={IsCreate} targetKind={TargetKind} scheduleKind={ScheduleKind} hasServiceInvocationAuth={HasServiceInvocationAuth} hasScopeOwnerNyxId={HasScopeOwnerNyxId} hasSenderNyxId={HasSenderNyxId} hasDurableSenderBearerToken={HasDurableSenderBearerToken}",
+            "Scheduled dispatch configuration prepared. scheduleId={ScheduleId} isCreate={IsCreate} targetKind={TargetKind} scheduleKind={ScheduleKind} hasServiceInvocationAuth={HasServiceInvocationAuth} hasScopeOwnerNyxId={HasScopeOwnerNyxId} hasSenderNyxId={HasSenderNyxId} hasLegacyDurableSenderBearerBlocked={HasLegacyDurableSenderBearerBlocked}",
             NormalizeRequired(scheduleId, nameof(scheduleId)),
             isCreate,
             configuredTarget.Kind,
@@ -193,7 +195,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             HasServiceInvocationAuth(configuredTarget),
             HasScopeOwnerNyxId(configuredTarget),
             HasSenderNyxId(configuredTarget),
-            HasDurableSenderBearerToken(configuredTarget));
+            HasLegacyDurableSenderBearerBlocked(configuredTarget));
         var configured = new ScheduledDispatchConfiguredEvent
         {
             ScheduleId = NormalizeRequired(scheduleId, nameof(scheduleId)),
@@ -370,14 +372,16 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
             var stateTarget = State.Target;
             Logger.LogInformation(
-                "Scheduled service invocation fire prepared from actor state. scheduleId={ScheduleId} scheduleKind={ScheduleKind} hasServiceInvocationAuth={HasServiceInvocationAuth} hasScopeOwnerNyxId={HasScopeOwnerNyxId} hasSenderNyxId={HasSenderNyxId} hasDurableSenderBearerToken={HasDurableSenderBearerToken} projectWorkflowCallerCredential={ProjectWorkflowCallerCredential}",
+                "Scheduled service invocation fire prepared from actor state. scheduleId={ScheduleId} scheduleKind={ScheduleKind} hasServiceInvocationAuth={HasServiceInvocationAuth} hasScopeOwnerNyxId={HasScopeOwnerNyxId} hasSenderNyxId={HasSenderNyxId} hasLegacyDurableSenderBearerBlocked={HasLegacyDurableSenderBearerBlocked} projectWorkflowCallerCredential={ProjectWorkflowCallerCredential}",
                 ResolveScheduleId(),
                 State.ScheduleKind,
                 HasServiceInvocationAuth(stateTarget),
                 HasScopeOwnerNyxId(stateTarget),
                 HasSenderNyxId(stateTarget),
-                HasDurableSenderBearerToken(stateTarget),
+                HasLegacyDurableSenderBearerBlocked(stateTarget),
                 State.ScheduleKind == ScheduledDispatchScheduleKindState.Workflow);
+            if (HasLegacyDurableSenderBearerBlocked(stateTarget))
+                throw new InvalidOperationException(LegacyDurableSenderBearerBlockedError);
 
             var receipt = await _serviceInvocationDispatchPort.DispatchAsync(
                 new ScheduledServiceInvocationDispatchRequest(
@@ -511,10 +515,13 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         if (auth == null)
             return null;
 
-        var durableToken = string.IsNullOrWhiteSpace(auth.DurableSenderBearerToken)
-            ? null
-            : auth.DurableSenderBearerToken.Trim();
-        if (auth.SenderNyxId == null && durableToken == null && auth.ScopeOwnerNyxId == null)
+        if (auth.LegacyDurableSenderBearerBlocked ||
+            !string.IsNullOrWhiteSpace(auth.DurableSenderBearerToken))
+        {
+            throw new InvalidOperationException(LegacyDurableSenderBearerBlockedError);
+        }
+
+        if (auth.SenderNyxId == null && auth.ScopeOwnerNyxId == null)
             return null;
 
         var senderNyxId = auth.SenderNyxId == null
@@ -532,7 +539,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 auth.ScopeOwnerNyxId.Scope ?? string.Empty,
                 ToRuntimeSubject(auth.ScopeOwnerNyxId.OwnerSubject));
 
-        return new ScheduledServiceInvocationAuth(senderNyxId, durableToken, scopeOwnerNyxId);
+        return new ScheduledServiceInvocationAuth(senderNyxId, null, scopeOwnerNyxId);
     }
 
     private static ScheduledServiceInvocationNyxIdSubjectRef? ToRuntimeSubject(
@@ -843,13 +850,14 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         if (auth == null)
             return null;
 
-        var durableToken = NormalizeOptional(auth.DurableSenderBearerToken);
-        if (auth.SenderNyxId == null && string.IsNullOrEmpty(durableToken) && auth.ScopeOwnerNyxId == null)
+        var hasLegacyDurableToken = !string.IsNullOrWhiteSpace(auth.DurableSenderBearerToken) ||
+                                    auth.LegacyDurableSenderBearerBlocked;
+        if (auth.SenderNyxId == null && !hasLegacyDurableToken && auth.ScopeOwnerNyxId == null)
             return null;
 
         var normalized = new ScheduledServiceInvocationAuthState
         {
-            DurableSenderBearerToken = durableToken,
+            LegacyDurableSenderBearerBlocked = hasLegacyDurableToken,
         };
 
         if (auth.SenderNyxId != null)
@@ -893,7 +901,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     private static bool HasSenderNyxId(ScheduledDispatchTargetState? target) =>
         target?.ServiceInvocation?.Auth?.SenderNyxId != null;
 
-    private static bool HasDurableSenderBearerToken(ScheduledDispatchTargetState? target) =>
+    private static bool HasLegacyDurableSenderBearerBlocked(ScheduledDispatchTargetState? target) =>
+        target?.ServiceInvocation?.Auth?.LegacyDurableSenderBearerBlocked == true ||
         !string.IsNullOrWhiteSpace(target?.ServiceInvocation?.Auth?.DurableSenderBearerToken);
 
     private ScheduledDispatchState ApplyConfigured(

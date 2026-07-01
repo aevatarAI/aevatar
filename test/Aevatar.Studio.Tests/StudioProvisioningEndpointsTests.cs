@@ -94,8 +94,8 @@ public sealed class StudioProvisioningEndpointsTests
             CancellationToken.None);
 
         // The forwarded caller bearer token (Authorization header) is extracted at
-        // the endpoint and threaded into the service so the run's durable credential
-        // can be resolved; the service holds no HttpContext.
+        // the endpoint and threaded as an explicit boundary parameter; the service
+        // holds no HttpContext and schedule auth must not persist the bearer.
         service.ProvisionCallerBearerToken.Should().Be("forwarded-caller-token");
     }
 
