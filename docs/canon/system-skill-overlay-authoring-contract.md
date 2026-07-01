@@ -45,7 +45,13 @@ The provider pre-renders one overlay variant per platform seen in the set:
 
 - `overlay-scope-global` members are included in **every** variant.
 - `overlay-scope-<platform>` members are included **only** in that platform's variant.
-- Direct chat is inherently a `dm` turn → it resolves the global-only variant.
+- Direct chat is inherently a `dm` turn → it resolves the `dm` platform like any other
+  (an `overlay-scope-dm` member targets direct chat); with no `dm`-scoped members that
+  is exactly the global-only variant.
+- Channel platform resolution is **typed-context first**: the seam reads
+  `AgentToolExecutionContext.Channel.Platform` and only falls back to the
+  `channel.platform` metadata key, because the per-step plan path strips owned control
+  keys from metadata before prompt construction.
 
 Each variant is rendered within `MaxSkills`/`MaxBytes` (full bodies first, degrading
 to catalog lines, then a catalog-only block). A deterministic `source_watermark`

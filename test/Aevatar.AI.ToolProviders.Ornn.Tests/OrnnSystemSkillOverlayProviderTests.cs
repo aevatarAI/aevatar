@@ -120,6 +120,21 @@ public sealed class OrnnSystemSkillOverlayProviderTests
     }
 
     [Fact]
+    public async Task RefreshAsync_SkipsUnrecognizedMemberShapesInsteadOfFailingTheSnapshot()
+    {
+        // The member converter yields null for JSON shapes that are neither a string nor an object
+        // (e.g. a bare number); the snapshot build must skip those and keep the valid members.
+        var handler = new OrnnTestHttpMessageHandler(
+            _ => Json("""{ "data": { "guid": "sg", "name": "aevatar-system", "members": [ 123, { "guid": "m-global" } ] } }"""),
+            _ => Json(MemberJson("aevatar-skill-loading", "overlay-scope-global", GlobalBody)));
+        var provider = CreateProvider(CreateClient(handler));
+
+        await provider.RefreshAsync("token");
+
+        provider.GetCurrent(new SystemSkillOverlayRequest("dm", null))!.OverlayMarkdown.Should().Contain(GlobalBody);
+    }
+
+    [Fact]
     public async Task RefreshAsync_DoesNotLeakTheAccessTokenIntoTheOverlayOrWatermark()
     {
         const string token = "super-secret-nyxid-token-xyz";

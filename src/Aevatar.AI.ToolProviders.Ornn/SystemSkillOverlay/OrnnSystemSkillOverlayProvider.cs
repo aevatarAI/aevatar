@@ -159,8 +159,10 @@ public sealed class OrnnSystemSkillOverlayProvider : ISystemSkillOverlayProvider
         {
             ct.ThrowIfCancellationRequested();
 
-            var memberReference = member.Reference;
-            if (string.IsNullOrWhiteSpace(memberReference))
+            // The member converter yields null for unrecognized JSON shapes; skip those instead of
+            // failing the whole refresh with an NRE.
+            var memberReference = member?.Reference;
+            if (member is null || string.IsNullOrWhiteSpace(memberReference))
                 continue;
 
             OrnnSkillJson? skill;

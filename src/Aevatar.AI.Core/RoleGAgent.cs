@@ -882,6 +882,12 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                     ? BuildLlmFailureContent(ex.Message)
                     : $"LLM request failed [tools={toolNames}]: {SanitizeFailureMessage(ex.Message)}");
         }
+        finally
+        {
+            // The stashed per-turn token must not outlive its turn: a later turn without a token
+            // (e.g. an internal continuation) must not trigger an overlay refresh with a stale credential.
+            _currentTurnNyxIdAccessToken = null;
+        }
 
         // ─── Detect approval-pending tool result and set up continuation ───
         var pendingApproval = DetectPendingApproval(replayRecord, request);

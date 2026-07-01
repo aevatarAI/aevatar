@@ -89,6 +89,24 @@ public sealed class SystemSkillOverlayPromptInjectionTests
             .Be($"kernel invariant\n\n{OverlayMarkdown}");
     }
 
+    [Fact]
+    public async Task QueuedRefreshTimeout_IsAbsorbedAsNoOp_AndSchedulesNothing()
+    {
+        // Retirement replay-safety (issue #2498): grains activated before the overlay moved host-level
+        // may still have a durable refresh timeout queued. The retired handler must absorb it without
+        // scheduling a follow-up refresh or disturbing the provider-sourced overlay.
+        var provider = new StubSystemSkillOverlayProvider(OverlayMarkdown);
+        var agent = await CreateActivatedAgentAsync(provider, "role-overlay-legacy-timeout");
+
+        var absorb = async () => await agent.HandleSystemSkillOverlayRefresh(
+            new SystemSkillOverlayRefreshFiredEvent { Attempt = 3 });
+        await absorb.Should().NotThrowAsync();
+
+        agent.DecorateForTest("kernel invariant")
+            .Should()
+            .Be($"kernel invariant\n\n{OverlayMarkdown}");
+    }
+
     private static async Task<TestRoleGAgent> CreateActivatedAgentAsync(
         ISystemSkillOverlayProvider? overlayProvider,
         string actorId)

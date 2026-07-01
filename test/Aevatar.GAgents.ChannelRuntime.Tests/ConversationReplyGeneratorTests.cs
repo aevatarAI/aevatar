@@ -717,6 +717,47 @@ public sealed class ConversationReplyGeneratorTests
         overlayProvider.LastRequest.Platform.Should().Be("lark");
     }
 
+    [Fact]
+    public async Task BuildStepPlanAsync_ResolvesOverlayPlatformFromTypedChannelContext()
+    {
+        // The per-step plan path strips owned control keys (channel.platform included) from the
+        // external metadata it hands to prompt construction, so the overlay platform must come from
+        // the typed channel context — reading metadata alone would silently degrade platform-scoped
+        // overlay members to global-only on every AgentRun turn (issue #2498).
+        var overlayProvider = new StubSystemSkillOverlayProvider("## overlay\n- per-step context-aware");
+        IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
+            new RecordingProviderFactory(),
+            overlayProvider: overlayProvider);
+        var toolContext = AgentToolExecutionContext.Empty with
+        {
+            Channel = AgentToolChannelContext.Empty with { Platform = "lark" },
+        };
+
+        var plan = await generator.BuildStepPlanAsync(
+            new ChatActivity
+            {
+                Id = "msg-overlay-step-platform",
+                ChannelId = ChannelId.From("lark"),
+                Conversation = new ConversationReference { CanonicalKey = "lark:group:oc_3" },
+                Content = new MessageContent { Text = "hello" },
+            },
+            new Dictionary<string, string>
+            {
+                [ChannelMetadataKeys.Platform] = "lark",
+                [ChannelMetadataKeys.SenderId] = "ou_sender_3",
+            },
+            llmControl: null,
+            toolContext: toolContext,
+            priorHistory: null,
+            attachmentContext: null,
+            forceDisableTools: false,
+            CancellationToken.None);
+
+        overlayProvider.LastRequest.Platform.Should().Be("lark");
+        plan.InitialMessages.First(message => message.Role == "system").Content
+            .Should().Contain("per-step context-aware");
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]

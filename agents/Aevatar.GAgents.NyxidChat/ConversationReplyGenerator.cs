@@ -280,7 +280,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
 
         var initialMessages = new List<ChatMessage>
         {
-            ChatMessage.System(BuildSystemPrompt(externalMetadata, effectiveToolContext.Credentials.NyxIdAccessToken, input.AttachmentVisibilityInstruction)),
+            ChatMessage.System(BuildSystemPrompt(externalMetadata, effectiveToolContext, input.AttachmentVisibilityInstruction)),
         };
         initialMessages.AddRange((priorHistory ?? []).Where(IsReplayableHistoryEntry).TakeLast(MaxRecentPriorHistoryMessages).Select(ToChatMessage));
         initialMessages.Add(ChatMessage.User(input.Parts, input.Text));
@@ -368,7 +368,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             {
                 Messages =
                 [
-                    ChatMessage.System(BuildSystemPrompt(effectiveMetadata, toolContext.Credentials.NyxIdAccessToken, input.AttachmentVisibilityInstruction)),
+                    ChatMessage.System(BuildSystemPrompt(effectiveMetadata, toolContext, input.AttachmentVisibilityInstruction)),
                 ],
                 Metadata = externalMetadata,
                 ToolContext = toolContext,
@@ -800,7 +800,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             {
                 Messages =
                 [
-                    ChatMessage.System(BuildSystemPrompt(externalMetadata, toolContext.Credentials.NyxIdAccessToken, attachmentVisibilityInstruction)),
+                    ChatMessage.System(BuildSystemPrompt(externalMetadata, toolContext, attachmentVisibilityInstruction)),
                 ],
                 Metadata = externalMetadata,
                 ToolContext = toolContext,
@@ -1056,11 +1056,14 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
 
     private string BuildSystemPrompt(
         IReadOnlyDictionary<string, string> metadata,
-        string? nyxIdAccessToken,
+        AgentToolExecutionContext toolContext,
         string? attachmentVisibilityInstruction = null)
     {
         var prompt = LoadBaseSystemPrompt();
-        prompt = AppendSystemSkillOverlay(prompt, ResolveChannelPlatform(metadata), nyxIdAccessToken);
+        prompt = AppendSystemSkillOverlay(
+            prompt,
+            ResolveChannelPlatform(toolContext, metadata),
+            toolContext.Credentials.NyxIdAccessToken);
         prompt += NyxIdRelayPromptConfiguration.BuildChannelRuntimeConfigurationSection(_relayOptions);
         var channelContext = ChannelContextMiddleware.BuildChannelContextSection(metadata);
         if (!string.IsNullOrWhiteSpace(channelContext))
@@ -1079,10 +1082,21 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         return prompt;
     }
 
-    private static string? ResolveChannelPlatform(IReadOnlyDictionary<string, string> metadata) =>
-        metadata.TryGetValue(ChannelMetadataKeys.Platform, out var platform) && !string.IsNullOrWhiteSpace(platform)
+    // The typed channel context is the authoritative platform source: the per-step plan path hands
+    // BuildSystemPrompt the STRIPPED external metadata (StripOwnedControlKeys removes channel.platform),
+    // so reading metadata alone would silently degrade platform-scoped overlay members to global-only
+    // on every AgentRun turn. Metadata stays as the fallback for callers without a typed context.
+    private static string? ResolveChannelPlatform(
+        AgentToolExecutionContext toolContext,
+        IReadOnlyDictionary<string, string> metadata)
+    {
+        if (!string.IsNullOrWhiteSpace(toolContext.Channel.Platform))
+            return toolContext.Channel.Platform;
+
+        return metadata.TryGetValue(ChannelMetadataKeys.Platform, out var platform) && !string.IsNullOrWhiteSpace(platform)
             ? platform
             : null;
+    }
 
     private string AppendSystemSkillOverlay(string prompt, string? platform, string? nyxIdAccessToken)
     {
