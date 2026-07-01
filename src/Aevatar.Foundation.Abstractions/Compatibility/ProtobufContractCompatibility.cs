@@ -10,6 +10,7 @@ public static class ProtobufContractCompatibility
 {
     private const string TypeUrlPrefix = "type.googleapis.com/";
     private static readonly ConcurrentDictionary<System.Type, CompatibilityInfo> Cache = new();
+    private static readonly ConcurrentDictionary<string, System.Type> LegacyProtoAliasOwners = new(StringComparer.Ordinal);
 
     public static bool MatchesPayload(Any? payload, System.Type messageType)
     {
@@ -88,14 +89,49 @@ public static class ProtobufContractCompatibility
             ResolvePrimaryTypeUrl(messageType, primaryClrTypeName),
         };
 
-        foreach (var alias in messageType.GetCustomAttributes<LegacyProtoFullNameAttribute>())
+        foreach (var alias in EnumerateLegacyProtoTypeUrls(messageType))
         {
-            if (!string.IsNullOrWhiteSpace(alias.FullName))
-                typeUrls.Add(TypeUrlPrefix + alias.FullName.Trim());
+            EnsureLegacyProtoAliasOwner(LegacyProtoAliasOwners, alias, messageType);
+            if (!typeUrls.Add(alias))
+                throw CreateDuplicateLegacyProtoAliasException(alias, messageType, messageType);
         }
 
         return new CompatibilityInfo(typeUrls, clrTypeNames);
     }
+
+    private static IEnumerable<string> EnumerateLegacyProtoTypeUrls(System.Type messageType)
+    {
+        foreach (var alias in messageType.GetCustomAttributes<LegacyProtoFullNameAttribute>())
+        {
+            if (!string.IsNullOrWhiteSpace(alias.FullName))
+                yield return TypeUrlPrefix + alias.FullName.Trim();
+        }
+    }
+
+    private static void EnsureLegacyProtoAliasOwner(
+        ConcurrentDictionary<string, System.Type> owners,
+        string typeUrl,
+        System.Type messageType)
+    {
+        if (owners.TryAdd(typeUrl, messageType))
+            return;
+
+        var existing = owners[typeUrl];
+        if (existing == messageType)
+            return;
+
+        throw CreateDuplicateLegacyProtoAliasException(typeUrl, existing, messageType);
+    }
+
+    private static InvalidOperationException CreateDuplicateLegacyProtoAliasException(
+        string typeUrl,
+        System.Type existing,
+        System.Type duplicate) =>
+        new(
+            $"Duplicate legacy protobuf TypeUrl alias '{typeUrl}' is declared by " +
+            $"'{FormatTypeName(existing)}' and '{FormatTypeName(duplicate)}'.");
+
+    private static string FormatTypeName(System.Type type) => type.FullName ?? type.Name;
 
     private static string ResolvePrimaryTypeUrl(System.Type messageType, string primaryClrTypeName)
     {
