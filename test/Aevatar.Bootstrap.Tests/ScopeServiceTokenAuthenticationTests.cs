@@ -128,6 +128,155 @@ public sealed class ScopeServiceTokenAuthenticationTests
     }
 
     [Fact]
+    public void ScopeServiceTokenKeyProvider_WhenLegacySingleHmacKeyConfigured_ShouldUseItAsCurrentKey()
+    {
+        var options = Options.Create(new ScopeServiceTokenOptions
+        {
+            Issuer = " https://aevatar.example.com ",
+            Audience = " ",
+            ClockSkewSeconds = -10,
+            SigningKey = new ScopeServiceTokenSigningKeyOptions
+            {
+                Kid = " scope-hmac-kid-1 ",
+                Algorithm = "hmac_sha256",
+                KeyBase64 = Convert.ToBase64String("0123456789abcdef0123456789abcdef"u8.ToArray()),
+            },
+        });
+
+        using var keyProvider = new ConfiguredScopeServiceTokenKeyProvider(options);
+
+        keyProvider.Issuer.Should().Be("https://aevatar.example.com");
+        keyProvider.Audience.Should().BeNull();
+        keyProvider.ClockSkew.Should().Be(TimeSpan.Zero);
+        keyProvider.CurrentSigningKey.Kid.Should().Be("scope-hmac-kid-1");
+        keyProvider.CurrentSigningKey.Algorithm.Should().Be(SecurityAlgorithms.HmacSha256);
+        keyProvider.CurrentSigningKey.SigningKey.Should().BeSameAs(keyProvider.CurrentSigningKey.ValidationKey);
+        keyProvider.ValidationKeys.Should().ContainSingle();
+    }
+
+    [Fact]
+    public void ScopeServiceTokenKeyProvider_WhenMultipleKeysConfigured_ShouldSelectMarkedCurrentKey()
+    {
+        using var keyProvider = new ConfiguredScopeServiceTokenKeyProvider(Options.Create(new ScopeServiceTokenOptions
+        {
+            Issuer = "https://aevatar.example.com",
+            SigningKeys =
+            [
+                new ScopeServiceTokenSigningKeyOptions
+                {
+                    Kid = "scope-old",
+                    Algorithm = "HS256",
+                    Key = "0123456789abcdef0123456789abcdef",
+                },
+                new ScopeServiceTokenSigningKeyOptions
+                {
+                    Kid = "scope-current",
+                    Algorithm = "HS256",
+                    Key = "abcdef0123456789abcdef0123456789",
+                    Current = true,
+                },
+            ],
+        }));
+
+        keyProvider.CurrentSigningKey.Kid.Should().Be("scope-current");
+        keyProvider.ValidationKeys.Select(key => key.Kid).Should().ContainInOrder("scope-old", "scope-current");
+    }
+
+    [Fact]
+    public void ScopeServiceTokenKeyProvider_WhenMultipleCurrentKeysConfigured_ShouldFailFast()
+    {
+        var act = () => new ConfiguredScopeServiceTokenKeyProvider(Options.Create(new ScopeServiceTokenOptions
+        {
+            Issuer = "https://aevatar.example.com",
+            SigningKeys =
+            [
+                new ScopeServiceTokenSigningKeyOptions
+                {
+                    Kid = "scope-a",
+                    Algorithm = "HS256",
+                    Key = "0123456789abcdef0123456789abcdef",
+                    Current = true,
+                },
+                new ScopeServiceTokenSigningKeyOptions
+                {
+                    Kid = "scope-b",
+                    Algorithm = "HS256",
+                    Key = "abcdef0123456789abcdef0123456789",
+                    Current = true,
+                },
+            ],
+        }));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("Only one scope service token signing key can be marked current.");
+    }
+
+    [Fact]
+    public void ScopeServiceTokenKeyProvider_WhenHmacKeyIsTooShort_ShouldRejectIt()
+    {
+        var act = () => new ConfiguredScopeServiceTokenKeyProvider(Options.Create(new ScopeServiceTokenOptions
+        {
+            Issuer = "https://aevatar.example.com",
+            SigningKey = new ScopeServiceTokenSigningKeyOptions
+            {
+                Kid = "short",
+                Algorithm = "HS256",
+                Key = "too-short",
+            },
+        }));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("Scope service token HS256 signing key must be at least 32 bytes.");
+    }
+
+    [Fact]
+    public void ScopeServiceTokenKeyProvider_WhenUnsupportedAlgorithmConfigured_ShouldRejectIt()
+    {
+        var act = () => new ConfiguredScopeServiceTokenKeyProvider(Options.Create(new ScopeServiceTokenOptions
+        {
+            Issuer = "https://aevatar.example.com",
+            SigningKey = new ScopeServiceTokenSigningKeyOptions
+            {
+                Kid = "scope-key",
+                Algorithm = "ES256",
+                Key = "0123456789abcdef0123456789abcdef",
+            },
+        }));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("Unsupported scope service token signing algorithm 'ES256'.");
+    }
+
+    [Fact]
+    public void ScopeServiceTokenKeyProvider_WhenRsaPemPathConfigured_ShouldLoadPrivateKeyFromFile()
+    {
+        using var rsa = RSA.Create(2048);
+        var path = Path.Combine(Path.GetTempPath(), $"scope-service-token-{Guid.NewGuid():N}.pem");
+        File.WriteAllText(path, rsa.ExportPkcs8PrivateKeyPem());
+        try
+        {
+            using var keyProvider = new ConfiguredScopeServiceTokenKeyProvider(Options.Create(new ScopeServiceTokenOptions
+            {
+                Issuer = "https://aevatar.example.com",
+                SigningKey = new ScopeServiceTokenSigningKeyOptions
+                {
+                    Kid = "scope-rsa-path",
+                    Algorithm = "rsa_sha256",
+                    PemPath = path,
+                },
+            }));
+
+            keyProvider.CurrentSigningKey.Kid.Should().Be("scope-rsa-path");
+            keyProvider.CurrentSigningKey.Algorithm.Should().Be(SecurityAlgorithms.RsaSha256);
+            keyProvider.CurrentSigningKey.ValidationKey.Should().BeOfType<RsaSecurityKey>();
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void ScopeServiceTokenIssuer_ShouldMintScopeClaimAcceptedByScopeGuard()
     {
         var services = new ServiceCollection();

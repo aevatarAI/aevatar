@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.Lark;
@@ -598,8 +599,9 @@ public sealed class ConversationReplyGeneratorTests
         systemPrompt.Should().Contain("https://dev.aevatar.local/api/webhooks/nyxid-relay");
         systemPrompt.Should().NotContain("https://aevatar-console-backend-api.aevatar.ai/api/webhooks/nyxid-relay");
         systemPrompt.Should().NotContain("chrono-ai-daily");
-        systemPrompt.Should().Contain("When you are following a loaded skill and you hit a missing capability");
-        systemPrompt.Should().Contain("ornn_search_skills");
+        // Kernel invariant still present alongside the configured relay callback URL. (Skill-discovery
+        // how-to moved from the kernel into the System Skill Overlay in #2468.)
+        systemPrompt.Should().Contain("## CRITICAL: Action-First Behavior");
     }
 
     [Fact]
@@ -635,6 +637,82 @@ public sealed class ConversationReplyGeneratorTests
             .Messages.First(message => message.Role == "system").Content;
         systemPrompt.Should().Contain("operator_user_id: \"lark-user-1\"");
         systemPrompt.Should().Contain("operator_open_id: \"ou_operator_1\"");
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_WithSystemSkillOverlayProvider_IncludesOverlayAfterKernelBeforeChannelContext()
+    {
+        const string overlayMarkdown = "## Runtime system skills\n- prefer the committed overlay";
+        var providerFactory = new RecordingProviderFactory();
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            overlayProvider: new StubSystemSkillOverlayProvider(overlayMarkdown));
+
+        await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-overlay-channel",
+                ChannelId = ChannelId.From("lark"),
+                Conversation = new ConversationReference { CanonicalKey = "lark:group:oc_1" },
+                Content = new MessageContent { Text = "hello" },
+            },
+            new Dictionary<string, string>
+            {
+                [ChannelMetadataKeys.Platform] = "lark",
+                [ChannelMetadataKeys.ChatType] = "group",
+                [ChannelMetadataKeys.SenderId] = "ou_sender_1",
+                [ChannelMetadataKeys.MessageId] = "om_overlay",
+                [ChannelMetadataKeys.ConversationId] = "oc_1",
+            },
+            streamingSink: null,
+            CancellationToken.None);
+
+        var systemPrompt = providerFactory.Requests.Should().ContainSingle().Subject
+            .Messages.First(message => message.Role == "system").Content;
+        systemPrompt.Should().Contain(overlayMarkdown);
+        systemPrompt.Should().Contain("<channel-context>");
+        // Kernel anchor: a stable invariant heading the slimmed kernel still carries, asserting the
+        // overlay is appended AFTER the kernel. (Capability how-to like skill-discovery moved out of
+        // the kernel into the overlay in #2468, so it is no longer a valid kernel anchor.)
+        systemPrompt.Should().Contain("Action-First Behavior");
+        systemPrompt!.IndexOf("Action-First Behavior", StringComparison.Ordinal)
+            .Should()
+            .BeLessThan(systemPrompt.IndexOf(overlayMarkdown, StringComparison.Ordinal));
+        // Anchor on the INJECTED channel-context runtime block (its rendered sender id), not the
+        // kernel's documentation of `<channel-context>`, to assert the overlay sits before the channel
+        // runtime facts.
+        systemPrompt.IndexOf(overlayMarkdown, StringComparison.Ordinal)
+            .Should()
+            .BeLessThan(systemPrompt.IndexOf("ou_sender_1", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task GenerateReplyAsync_WithEmptyOrMissingSystemSkillOverlayProvider_DoesNotInjectOverlay(string? overlayMarkdown)
+    {
+        var providerFactory = new RecordingProviderFactory();
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            overlayProvider: overlayMarkdown is null ? null : new StubSystemSkillOverlayProvider(overlayMarkdown));
+
+        await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = $"msg-overlay-empty-{overlayMarkdown?.Length ?? 0}",
+                ChannelId = ChannelId.From("lark"),
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-1" },
+                Content = new MessageContent { Text = "hello" },
+            },
+            new Dictionary<string, string>(),
+            streamingSink: null,
+            CancellationToken.None);
+
+        var systemPrompt = providerFactory.Requests.Should().ContainSingle().Subject
+            .Messages.First(message => message.Role == "system").Content;
+        systemPrompt.Should().NotContain("Runtime system skills");
+        systemPrompt.Should().NotContain("prefer the committed overlay");
     }
 
     [Fact]
@@ -2028,6 +2106,14 @@ public sealed class ConversationReplyGeneratorTests
                 ? prefs
                 : new NyxIdUserLlmPreferences(string.Empty, string.Empty));
         }
+    }
+
+    private sealed class StubSystemSkillOverlayProvider(string? overlayMarkdown) : ISystemSkillOverlayProvider
+    {
+        public SystemSkillOverlay? GetCurrent() =>
+            overlayMarkdown is null
+                ? null
+                : new SystemSkillOverlay { OverlayMarkdown = overlayMarkdown };
     }
 
     private sealed class RecordingStreamingSink : IStreamingReplySink

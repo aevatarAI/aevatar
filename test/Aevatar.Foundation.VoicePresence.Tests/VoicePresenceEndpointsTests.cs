@@ -5,6 +5,7 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.Abstractions.Sessions;
 using Aevatar.Foundation.VoicePresence.Hosting;
+using Aevatar.Foundation.VoicePresence.Transport;
 using Google.Protobuf;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -460,6 +461,91 @@ public class VoicePresenceEndpointsTests
         mediaPort.DetachCalls.ShouldBe(1);
     }
 
+    [Fact]
+    public async Task WhipAttachExecutor_should_return_answer_and_attach_transport()
+    {
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var transport = new RecordingVoiceTransport();
+        var factory = new RecordingWebRtcVoiceTransportFactory(transport, "answer-sdp", completion.Task);
+        var mediaPort = new NonDisposingRecordingVolatileMediaStreamPort();
+        var executor = new VoiceWhipAttachExecutor(mediaPort, factory);
+        await using var app = CreateApp(new RecordingRealtimeSession(), mediaPort);
+        var context = CreateHttpContext(app);
+        var accepted = CreateAccepted();
+
+        var result = await executor.AttachAsync(
+            context,
+            accepted,
+            "offer-sdp",
+            "/voice/agent-1/whip/resource",
+            new VoiceToolCredentialTransportBinding(
+                "voice-tool:issued-1",
+                "caller-jwt",
+                DateTimeOffset.Parse("2026-06-30T00:00:00Z")));
+
+        result.AnswerSdp.ShouldBe("answer-sdp");
+        result.ResourceLocation.ShouldBe("/voice/agent-1/whip/resource");
+        factory.RemoteOfferSdps.ShouldBe(["offer-sdp"]);
+        factory.LastOptions.ShouldNotBeNull();
+        factory.LastOptions!.PcmSampleRateHz.ShouldBe(24000);
+        factory.LastOptions.ControlDataChannelLabel.ShouldBe("vp-control");
+        mediaPort.AttachCalls.ShouldBe(1);
+        mediaPort.LastToolCredentialBinding.ShouldNotBeNull();
+        mediaPort.LastToolCredentialBinding!.CredentialRef.ShouldBe("voice-tool:issued-1");
+        mediaPort.LastToolCredentialBinding.NyxIdAccessToken.ShouldBe("caller-jwt");
+
+        completion.SetResult();
+        await mediaPort.WaitForLifetimeCompletionAsync();
+        mediaPort.LifetimeCompletionCalls.ShouldBe(1);
+        transport.DisposeCalls.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task WhipAttachExecutor_should_dispose_transport_when_attach_conflicts_before_attach()
+    {
+        var transport = new RecordingVoiceTransport();
+        var factory = new RecordingWebRtcVoiceTransportFactory(
+            transport,
+            "answer-sdp",
+            Task.CompletedTask);
+        var mediaPort = new NonDisposingRecordingVolatileMediaStreamPort
+        {
+            AttachException = new InvalidOperationException("already attached"),
+        };
+        var executor = new VoiceWhipAttachExecutor(mediaPort, factory);
+        await using var app = CreateApp(new RecordingRealtimeSession(), mediaPort);
+        var context = CreateHttpContext(app);
+
+        var act = () => executor.AttachAsync(context, CreateAccepted(), "offer-sdp", "/resource");
+
+        await act.ShouldThrowAsync<VoiceWhipTransportAttachConflictException>();
+        transport.DisposeCalls.ShouldBe(1);
+        mediaPort.LifetimeCompletionCalls.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task WhipAttachExecutor_should_dispose_transport_when_factory_or_attach_fails()
+    {
+        var transport = new RecordingVoiceTransport();
+        var factory = new RecordingWebRtcVoiceTransportFactory(
+            transport,
+            "answer-sdp",
+            Task.CompletedTask);
+        var mediaPort = new NonDisposingRecordingVolatileMediaStreamPort
+        {
+            AttachException = new VoiceVolatileMediaStreamUnavailableException(),
+        };
+        var executor = new VoiceWhipAttachExecutor(mediaPort, factory);
+        await using var app = CreateApp(new RecordingRealtimeSession(), mediaPort);
+        var context = CreateHttpContext(app);
+
+        var act = () => executor.AttachAsync(context, CreateAccepted(), "offer-sdp", "/resource");
+
+        await act.ShouldThrowAsync<VoiceVolatileMediaStreamUnavailableException>();
+        transport.DisposeCalls.ShouldBe(1);
+        mediaPort.LifetimeCompletionCalls.ShouldBe(0);
+    }
+
     private static WebApplication CreateApp(
         RecordingRealtimeSession session,
         IVoiceVolatileMediaStreamPort? mediaPort = null,
@@ -523,6 +609,15 @@ public class VoicePresenceEndpointsTests
             DateTimeOffset.UtcNow.AddMinutes(5),
             VoiceRemoteAudioSupport.Supported,
             "transport-1");
+
+    private static VoiceRealtimeSessionAccepted CreateAccepted() =>
+        new(
+            "agent-1",
+            "voice_presence",
+            "session-1",
+            24000,
+            42,
+            CreateLeaseHandle());
 
     private static VoiceWebSocketAttachExecutor CreateExecutor(
         TimeProvider timeProvider,
@@ -614,6 +709,8 @@ public class VoicePresenceEndpointsTests
 
         public VoicePresenceSessionLeaseHandle? LastDetachedHandle { get; private set; }
 
+        public VoiceToolCredentialTransportBinding? LastToolCredentialBinding { get; protected set; }
+
         public virtual async Task<VoiceTransportLifetimeCompleted?> AttachAsync(
             VoicePresenceSessionLeaseHandle handle,
             IVoiceTransport transport,
@@ -626,7 +723,7 @@ public class VoicePresenceEndpointsTests
             VoiceToolCredentialTransportBinding? toolCredentialBinding,
             CancellationToken ct = default)
         {
-            _ = toolCredentialBinding;
+            LastToolCredentialBinding = toolCredentialBinding;
             AttachCalls++;
             if (attachAsync != null)
             {
@@ -676,6 +773,39 @@ public class VoicePresenceEndpointsTests
             LifetimeCompletionCalls++;
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class NonDisposingRecordingVolatileMediaStreamPort()
+        : RecordingVolatileMediaStreamPort(attachAsync: static (_, _) => Task.CompletedTask)
+    {
+        private readonly TaskCompletionSource _lifetimeCompleted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Exception? AttachException { get; init; }
+
+        public override Task<VoiceTransportLifetimeCompleted?> AttachAsync(
+            VoicePresenceSessionLeaseHandle handle,
+            IVoiceTransport transport,
+            VoiceToolCredentialTransportBinding? toolCredentialBinding,
+            CancellationToken ct = default)
+        {
+            if (AttachException != null)
+                return Task.FromException<VoiceTransportLifetimeCompleted?>(AttachException);
+
+            return base.AttachAsync(handle, transport, toolCredentialBinding, ct);
+        }
+
+        public override async Task CompleteTransportLifetimeAsync(
+            VoicePresenceSessionLeaseHandle handle,
+            VoiceTransportLifetimeCompleted? completed,
+            string reason,
+            CancellationToken ct = default)
+        {
+            await base.CompleteTransportLifetimeAsync(handle, completed, reason, ct);
+            _lifetimeCompleted.TrySetResult();
+        }
+
+        public Task WaitForLifetimeCompletionAsync() => _lifetimeCompleted.Task;
     }
 
     private sealed class TimeoutAttachMediaStreamPort(
@@ -972,6 +1102,8 @@ public class VoicePresenceEndpointsTests
     {
         public List<VoiceControlFrame> SentControls { get; } = [];
 
+        public int DisposeCalls { get; private set; }
+
         public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
@@ -993,7 +1125,32 @@ public class VoicePresenceEndpointsTests
             yield break;
         }
 
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        public ValueTask DisposeAsync()
+        {
+            DisposeCalls++;
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingWebRtcVoiceTransportFactory(
+        IVoiceTransport transport,
+        string answerSdp,
+        Task completion) : IWebRtcVoiceTransportFactory
+    {
+        public List<string> RemoteOfferSdps { get; } = [];
+
+        public WebRtcVoiceTransportOptions? LastOptions { get; private set; }
+
+        public Task<WebRtcVoiceTransportSession> CreateAsync(
+            string remoteOfferSdp,
+            WebRtcVoiceTransportOptions options,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            RemoteOfferSdps.Add(remoteOfferSdp);
+            LastOptions = options;
+            return Task.FromResult(new WebRtcVoiceTransportSession(transport, answerSdp, completion));
+        }
     }
 
     private sealed class RecordingCloseWebSocket : WebSocket

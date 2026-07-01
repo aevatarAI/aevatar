@@ -299,13 +299,17 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
     /// Best-effort removal of any existing Nyx channel-bot bound to the SAME Lark app before a
     /// (re-)registration creates a fresh one. NyxID rejects a second channel-bot for an app that
     /// already has one with 409 already-exists; deleting the stale bot first is what lets a user
-    /// re-bind the same bot from /channels without manual NyxID cleanup. Failures are logged and
-    /// swallowed — a bot that could not be removed simply resurfaces as the create 409 it would
-    /// have produced anyway, so this never makes a fresh registration worse.
+    /// re-bind the same bot from /channels without manual NyxID cleanup. The list response carries
+    /// only <c>id</c> + <c>platform</c>, not the per-app <c>platform_bot_id</c>, so each Lark bot's
+    /// detail is fetched to confirm it belongs to THIS app before deleting — a bot for a different
+    /// Lark app is never touched. Failures are logged and swallowed: a bot that could not be removed
+    /// simply resurfaces as the create 409 it would have produced anyway, so this never makes a fresh
+    /// registration worse.
     /// </summary>
     private async Task RemoveExistingLarkChannelBotsForAppAsync(string accessToken, string appId, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(appId))
+        var normalizedAppId = appId?.Trim();
+        if (string.IsNullOrWhiteSpace(normalizedAppId))
             return;
 
         string listResponse;
@@ -315,20 +319,38 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _logger.LogWarning(ex, "Could not list Nyx channel-bots before re-registration: appId={AppId}", appId);
+            _logger.LogWarning(ex, "Could not list Nyx channel-bots before re-registration: appId={AppId}", normalizedAppId);
             return;
         }
 
-        foreach (var existingBotId in NyxApiResponseHelper.ExtractChannelBotIdsForApp(listResponse, appId))
+        foreach (var candidateBotId in NyxApiResponseHelper.ExtractLarkChannelBotIds(listResponse))
         {
+            string detailResponse;
+            try
+            {
+                detailResponse = await _nyxClient.GetChannelBotAsync(accessToken, candidateBotId, ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Could not read Nyx channel-bot detail while resolving the conflicting Lark app bot: botId={BotId}, appId={AppId}",
+                    candidateBotId,
+                    normalizedAppId);
+                continue;
+            }
+
+            if (!NyxApiResponseHelper.ChannelBotDetailMatchesApp(detailResponse, normalizedAppId))
+                continue;
+
             _logger.LogInformation(
                 "Replacing existing Nyx channel-bot for Lark app before re-registration: botId={BotId}, appId={AppId}",
-                existingBotId,
-                appId);
+                candidateBotId,
+                normalizedAppId);
             await NyxApiResponseHelper.TryRollbackAsync(
-                () => _nyxClient.DeleteChannelBotAsync(accessToken, existingBotId, ct),
+                () => _nyxClient.DeleteChannelBotAsync(accessToken, candidateBotId, ct),
                 "channel_bot_replace",
-                existingBotId,
+                candidateBotId,
                 _logger);
         }
     }

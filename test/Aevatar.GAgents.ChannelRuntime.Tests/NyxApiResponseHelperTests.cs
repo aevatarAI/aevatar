@@ -45,27 +45,54 @@ public class NyxApiResponseHelperTests
     }
 
     [Fact]
-    public void ExtractChannelBotIdsForApp_Returns_Ids_Matching_App_By_PlatformBotId_Or_AppId()
+    public void ExtractLarkChannelBotIds_Returns_Only_Lark_Bot_Ids_From_Real_List_Shape()
     {
-        var response = """[{"id":"b1","platform_bot_id":"cli_x"},{"id":"b2","platform_bot_id":"cli_y"},{"id":"b3","app_id":"cli_x"}]""";
-        NyxApiResponseHelper.ExtractChannelBotIdsForApp(response, "cli_x")
-            .Should().BeEquivalentTo(new[] { "b1", "b3" });
-    }
-
-    [Fact]
-    public void ExtractChannelBotIdsForApp_Reads_Wrapped_Array_And_Ignores_NonMatches()
-    {
-        NyxApiResponseHelper.ExtractChannelBotIdsForApp("""{"data":[{"id":"b1","platform_bot_id":"cli_y"}]}""", "cli_x")
-            .Should().BeEmpty();
+        // The REAL `GET /api/v1/channel-bots` list item carries `id` + `platform` but NOT
+        // `platform_bot_id`/`app_id` (those live only on the per-bot detail). Cleanup must select by
+        // platform here, then disambiguate the app via each bot's detail. A list-time match on
+        // `platform_bot_id` (the prior fix) always returned empty against this shape.
+        var response = """
+        {"bots":[
+          {"id":"0b19376b","platform":"lark","label":"Aevatar Lark Bot","platform_bot_username":"lark_bot","webhook_registered":true,"status":"active","is_active":true},
+          {"id":"39a20d2b","platform":"telegram","label":"Aevatar Telegram Bot","platform_bot_username":"x_bot","status":"active"},
+          {"id":"133ddba3","platform":"lark","label":"Lark Bot (cli)","platform_bot_username":"lark_bot","status":"active"}
+        ],"total":3}
+        """;
+        NyxApiResponseHelper.ExtractLarkChannelBotIds(response)
+            .Should().BeEquivalentTo(new[] { "0b19376b", "133ddba3" });
     }
 
     [Theory]
-    [InlineData("""{"error":true,"status":409}""")]   // Nyx error envelope
-    [InlineData("not-json")]                          // unparseable
-    [InlineData("[]")]                                // empty list
-    [InlineData("")]                                  // empty
-    public void ExtractChannelBotIdsForApp_Returns_Empty_On_Error_Or_NoMatch(string response)
+    [InlineData("""{"error":true,"status":409}""")]                                                      // Nyx error envelope
+    [InlineData("not-json")]                                                                              // unparseable
+    [InlineData("""{"bots":[],"total":0}""")]                                                             // empty list
+    [InlineData("""{"bots":[{"id":"t1","platform":"telegram"}],"total":1}""")]                            // no lark bot
+    [InlineData("")]                                                                                      // empty
+    public void ExtractLarkChannelBotIds_Returns_Empty_On_Error_Or_NoLarkBot(string response)
     {
-        NyxApiResponseHelper.ExtractChannelBotIdsForApp(response, "cli_x").Should().BeEmpty();
+        NyxApiResponseHelper.ExtractLarkChannelBotIds(response).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ChannelBotDetailMatchesApp_Matches_When_Detail_PlatformBotId_Equals_App()
+    {
+        // The REAL `GET /api/v1/channel-bots/{id}` detail DOES carry `platform_bot_id` (the Lark app id).
+        var detail = """
+        {"id":"0b19376b","platform":"lark","label":"Aevatar Lark Bot","platform_bot_id":"cli_aab147d27238deed","platform_bot_username":"lark_bot","status":"active"}
+        """;
+        NyxApiResponseHelper.ChannelBotDetailMatchesApp(detail, "cli_aab147d27238deed").Should().BeTrue();
+        NyxApiResponseHelper.ChannelBotDetailMatchesApp(detail, " cli_aab147d27238deed ").Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("""{"id":"b","platform":"lark","platform_bot_id":"cli_other"}""", "cli_x")]   // different Lark app
+    [InlineData("""{"id":"b","platform":"telegram","platform_bot_id":"cli_x"}""", "cli_x")]   // not a Lark bot
+    [InlineData("""{"id":"b","platform":"lark"}""", "cli_x")]                                  // detail missing platform_bot_id
+    [InlineData("""{"error":true,"status":404}""", "cli_x")]                                   // Nyx error envelope
+    [InlineData("not-json", "cli_x")]                                                          // unparseable
+    [InlineData("""{"id":"b","platform":"lark","platform_bot_id":"cli_x"}""", "")]             // empty app id
+    public void ChannelBotDetailMatchesApp_Returns_False_When_Not_This_Lark_App(string detail, string appId)
+    {
+        NyxApiResponseHelper.ChannelBotDetailMatchesApp(detail, appId).Should().BeFalse();
     }
 }
