@@ -78,6 +78,8 @@ public sealed class NyxTelegramProvisioningService : INyxTelegramProvisioningSer
             return Failure("missing_bot_token");
         if (string.IsNullOrWhiteSpace(request.WebhookBaseUrl))
             return Failure("missing_webhook_base_url");
+        if (!NyxRelayCallbackUrl.IsSecureBaseUrl(request.WebhookBaseUrl))
+            return Failure("insecure_webhook_base_url");
         if (string.IsNullOrWhiteSpace(request.ScopeId))
             return Failure("missing_scope_id");
         if (string.IsNullOrWhiteSpace(_nyxOptions.BaseUrl))
@@ -85,7 +87,7 @@ public sealed class NyxTelegramProvisioningService : INyxTelegramProvisioningSer
 
         var registrationId = Guid.NewGuid().ToString("N");
         var nyxBaseUrl = _nyxOptions.BaseUrl.TrimEnd('/');
-        var relayCallbackUrl = $"{request.WebhookBaseUrl.Trim().TrimEnd('/')}/api/webhooks/nyxid-relay";
+        var relayCallbackUrl = NyxRelayCallbackUrl.Build(request.WebhookBaseUrl);
         var label = string.IsNullOrWhiteSpace(request.Label)
             ? $"Aevatar Telegram Bot {registrationId[..8]}"
             : request.Label.Trim();

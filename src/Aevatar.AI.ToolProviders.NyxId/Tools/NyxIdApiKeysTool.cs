@@ -125,11 +125,30 @@ public sealed class NyxIdApiKeysTool : IAgentTool
         var name = args.Str("name");
         if (string.IsNullOrWhiteSpace(name))
             return """{"error":"'name' is required for create"}""";
+        if (RejectInsecureCallbackUrl(args) is { } callbackError)
+            return callbackError;
         return await _client.CreateApiKeyAsync(token, JsonSerializer.Serialize(BuildPayload(args, name)), ct);
     }
 
-    private async Task<string> UpdateKeyAsync(string token, string id, ToolArgs args, CancellationToken ct) =>
-        await _client.UpdateApiKeyAsync(token, id, JsonSerializer.Serialize(BuildPayload(args, args.Str("name"))), ct);
+    private async Task<string> UpdateKeyAsync(string token, string id, ToolArgs args, CancellationToken ct)
+    {
+        if (RejectInsecureCallbackUrl(args) is { } callbackError)
+            return callbackError;
+        return await _client.UpdateApiKeyAsync(token, id, JsonSerializer.Serialize(BuildPayload(args, args.Str("name"))), ct);
+    }
+
+    // A channel-bot relay callback_url receives NyxID's inbound relay callback carrying the
+    // short-lived X-NyxID-User-Token. Refuse to register a cleartext callback on this agent-facing
+    // key create/update path — the same fail-closed policy the Lark/Telegram provisioning services
+    // apply — so it cannot be used (via nyxid_api_keys create/update + nyxid_channel_bots
+    // create_route) to route that credential to a cleartext public host. Empty is left to NyxID.
+    private static string? RejectInsecureCallbackUrl(ToolArgs args)
+    {
+        var callbackUrl = args.Str("callback_url");
+        if (string.IsNullOrWhiteSpace(callbackUrl) || NyxRelayCallbackUrlPolicy.IsSecureUrl(callbackUrl))
+            return null;
+        return """{"error":"callback_url must be https (or http only for loopback hosts); refusing to register a cleartext callback that would leak the relay user token."}""";
+    }
 
     private async Task<string> BindKeyAsync(string token, string keyId, ToolArgs args, CancellationToken ct)
     {

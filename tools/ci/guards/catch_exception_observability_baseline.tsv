@@ -15,8 +15,8 @@ src/Aevatar.AI.ToolProviders.ChronoStorage/Tools/ChronoGlobTool.cs	51	empty broa
 src/Aevatar.AI.ToolProviders.ChronoStorage/Tools/ChronoGrepTool.cs	65	empty broad catch block
 src/Aevatar.AI.ToolProviders.ChronoStorage/Tools/ChronoTreeTool.cs	70	empty broad catch block
 src/Aevatar.AI.ToolProviders.MCP/MCPConnector.cs	209	empty broad catch block
-src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdApiKeysTool.cs	161	empty broad catch block
-src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdApiKeysTool.cs	188	empty broad catch block
+src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdApiKeysTool.cs	180	empty broad catch block
+src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdApiKeysTool.cs	207	empty broad catch block
 src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdServicesTool.cs	149	empty broad catch block
 src/Aevatar.AI.ToolProviders.ServiceInvoke/Schema/EndpointSchemaProvider.cs	92	broad catch returns null without visible failure signal
 src/Aevatar.AI.ToolProviders.ServiceInvoke/Schema/EndpointSchemaProvider.cs	153	empty broad catch block
