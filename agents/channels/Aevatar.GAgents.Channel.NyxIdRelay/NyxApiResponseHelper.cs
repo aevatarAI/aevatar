@@ -100,17 +100,19 @@ internal static class NyxApiResponseHelper
     }
 
     /// <summary>
-    /// Returns the ids of channel-bots in a Nyx <c>GET /api/v1/channel-bots</c> list response whose
-    /// Lark app (<c>platform_bot_id</c>, falling back to <c>app_id</c>) equals <paramref name="appId"/>.
-    /// Used to delete a stale channel-bot for the SAME Lark app before re-registering it: NyxID
-    /// rejects a second channel-bot for an app that already has one with <c>409 already-exists</c>,
-    /// which otherwise aborts a re-bind (the 502 the /channels wizard surfaced). Returns an empty
-    /// list when the response is an error envelope, unparseable, or carries no match.
+    /// Returns the ids of every Lark channel-bot in a Nyx <c>GET /api/v1/channel-bots</c> list
+    /// response (each list item carries <c>id</c> + <c>platform</c>, but NOT <c>platform_bot_id</c>:
+    /// the per-app identifier lives only on the per-bot detail <c>GET /channel-bots/{id}</c>). The
+    /// caller fetches each returned bot's detail and matches <c>platform_bot_id</c> against the Lark
+    /// app being (re-)registered via <see cref="ChannelBotDetailMatchesApp"/>, so only the conflicting
+    /// app's bot is deleted before the create retry — NyxID rejects a second channel-bot for an app
+    /// that already has one with <c>409 already-exists</c>, which otherwise aborts a re-bind (the 502
+    /// the /channels wizard surfaced). Returns an empty list when the response is an error envelope,
+    /// unparseable, or carries no Lark bot.
     /// </summary>
-    public static IReadOnlyList<string> ExtractChannelBotIdsForApp(string listResponse, string appId)
+    public static IReadOnlyList<string> ExtractLarkChannelBotIds(string listResponse)
     {
-        var normalizedAppId = appId?.Trim();
-        if (string.IsNullOrWhiteSpace(normalizedAppId) || LooksLikeErrorEnvelope(listResponse))
+        if (LooksLikeErrorEnvelope(listResponse))
             return Array.Empty<string>();
 
         try
@@ -125,8 +127,8 @@ internal static class NyxApiResponseHelper
                 if (bot.ValueKind != JsonValueKind.Object)
                     continue;
 
-                var botAppId = ReadNonEmptyString(bot, "platform_bot_id") ?? ReadNonEmptyString(bot, "app_id");
-                if (!string.Equals(botAppId, normalizedAppId, StringComparison.Ordinal))
+                var platform = ReadNonEmptyString(bot, "platform");
+                if (!string.Equals(platform, "lark", StringComparison.OrdinalIgnoreCase))
                     continue;
 
                 var id = ReadNonEmptyString(bot, "id");
@@ -139,6 +141,38 @@ internal static class NyxApiResponseHelper
         catch (JsonException)
         {
             return Array.Empty<string>();
+        }
+    }
+
+    /// <summary>
+    /// Returns true when a Nyx per-bot detail <c>GET /api/v1/channel-bots/{id}</c> response is for
+    /// the Lark app <paramref name="appId"/>, i.e. its <c>platform_bot_id</c> equals the app id.
+    /// This is the field the list response omits, so the conflicting-bot match must be made against
+    /// the detail. Returns false for an error envelope, an unparseable body, a non-Lark bot, or any
+    /// other app, so cleanup never deletes a bot belonging to a different Lark app.
+    /// </summary>
+    public static bool ChannelBotDetailMatchesApp(string detailResponse, string appId)
+    {
+        var normalizedAppId = appId?.Trim();
+        if (string.IsNullOrWhiteSpace(normalizedAppId) || LooksLikeErrorEnvelope(detailResponse))
+            return false;
+
+        try
+        {
+            using var document = JsonDocument.Parse(detailResponse);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return false;
+
+            var platform = ReadNonEmptyString(root, "platform");
+            if (!string.Equals(platform, "lark", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            return string.Equals(ReadNonEmptyString(root, "platform_bot_id"), normalizedAppId, StringComparison.Ordinal);
+        }
+        catch (JsonException)
+        {
+            return false;
         }
     }
 

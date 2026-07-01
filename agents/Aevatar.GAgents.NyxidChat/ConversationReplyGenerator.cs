@@ -42,6 +42,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     private readonly INyxIdUserLlmPreferencesStore? _preferencesStore;
     private readonly IUserMemoryStore? _userMemoryStore;
     private readonly ILarkNyxClient? _larkClient;
+    private readonly ISystemSkillOverlayProvider? _overlayProvider;
     private readonly ILogger<NyxIdConversationReplyGenerator> _logger;
 
     // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
@@ -80,7 +81,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         IUserMemoryStore? userMemoryStore = null,
         ILarkNyxClient? larkClient = null,
         IToolApprovalHandler? approvalHandler = null,
-        ILogger<NyxIdConversationReplyGenerator>? logger = null)
+        ILogger<NyxIdConversationReplyGenerator>? logger = null,
+        ISystemSkillOverlayProvider? overlayProvider = null)
     {
         _llmProviderFactory = llmProviderFactory ?? throw new ArgumentNullException(nameof(llmProviderFactory));
         _toolSources = (toolSources ?? []).ToArray();
@@ -94,6 +96,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         _preferencesStore = preferencesStore;
         _userMemoryStore = userMemoryStore;
         _larkClient = larkClient;
+        _overlayProvider = overlayProvider;
         _logger = logger ?? NullLogger<NyxIdConversationReplyGenerator>.Instance;
     }
 
@@ -1056,6 +1059,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         string? attachmentVisibilityInstruction = null)
     {
         var prompt = LoadBaseSystemPrompt();
+        prompt = AppendSystemSkillOverlay(prompt);
         prompt += NyxIdRelayPromptConfiguration.BuildChannelRuntimeConfigurationSection(_relayOptions);
         var channelContext = ChannelContextMiddleware.BuildChannelContextSection(metadata);
         if (!string.IsNullOrWhiteSpace(channelContext))
@@ -1074,8 +1078,22 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         return prompt;
     }
 
+    private string AppendSystemSkillOverlay(string prompt)
+    {
+        var overlayMarkdown = _overlayProvider?.GetCurrent()?.OverlayMarkdown;
+        if (string.IsNullOrWhiteSpace(overlayMarkdown))
+            return prompt;
+
+        if (string.IsNullOrWhiteSpace(prompt))
+            return overlayMarkdown.Trim();
+
+        return $"{prompt.TrimEnd()}\n\n{overlayMarkdown.Trim()}";
+    }
+
     private static string LoadBaseSystemPrompt()
     {
+        // Kernel source lock: channel replies and NyxIdChatSystemPrompt.Load both read the same
+        // embedded system-prompt.md resource; channel-only runtime facts are appended after it.
         var assembly = typeof(NyxIdChatGAgent).Assembly;
         var resourceName = assembly.GetManifestResourceNames()
             .FirstOrDefault(name => name.EndsWith("system-prompt.md", StringComparison.OrdinalIgnoreCase));
