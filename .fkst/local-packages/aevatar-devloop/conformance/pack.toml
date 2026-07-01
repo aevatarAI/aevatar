@@ -139,12 +139,12 @@ pattern = "tools/ci/\\*guard\\*\\.sh"
 message = "Aevatar FKST policy must require matching guard scripts for guarded change areas."
 
 [[rules]]
-id = "require-service-smoke-command-reference"
+id = "require-main-flow-smoke-command-reference"
 severity = "error"
 kind = "text_require_regex"
 include = ["policy/**/*.md"]
-pattern = "scripts/run\\.sh service-smoke"
-message = "Aevatar service verification should reference scripts/run.sh service-smoke."
+pattern = "scripts/run\\.sh main-flow-smoke"
+message = "Aevatar service verification should reference scripts/run.sh main-flow-smoke."
 
 [[rules]]
 id = "forbid-github-token-in-host-package"

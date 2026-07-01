@@ -2,6 +2,12 @@ name: ci
 
 on:
   pull_request:
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+  pull_request_review_comment:
+    types: [created, edited, deleted]
+  issue_comment:
+    types: [created, edited, deleted]
   push:
     branches:
       - main
@@ -11,7 +17,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 env:
@@ -26,6 +32,7 @@ env:
 
 jobs:
   changes:
+    if: github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     outputs:
       docs_only: ${{ steps.docs_only_route.outputs.docs_only }}
@@ -135,8 +142,24 @@ jobs:
           fi
 
   fkst-host-policy:
-    if: github.event_name == 'pull_request'
-    needs: changes
+    if: |
+      github.event_name == 'pull_request' ||
+      (
+        vars.FKST_GITHUB_BOT_LOGIN != '' &&
+        github.event_name == 'pull_request_review' &&
+        github.actor != vars.FKST_GITHUB_BOT_LOGIN
+      ) ||
+      (
+        vars.FKST_GITHUB_BOT_LOGIN != '' &&
+        github.event_name == 'pull_request_review_comment' &&
+        github.actor != vars.FKST_GITHUB_BOT_LOGIN
+      ) ||
+      (
+        vars.FKST_GITHUB_BOT_LOGIN != '' &&
+        github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request &&
+        github.actor != vars.FKST_GITHUB_BOT_LOGIN
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -151,9 +174,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
-          GITHUB_BASE_REF: ${{ github.base_ref }}
+          GITHUB_BASE_REF: ${{ github.base_ref || github.event.pull_request.base.ref }}
           GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           GITHUB_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
         run: bash tools/ci/fkst_host_policy_guard.sh
 
   runtime-main-flow-smoke:

@@ -137,7 +137,7 @@ def excerpt(body):
     text = re.sub(r"\s+", " ", (body or "").strip())
     return text[:237] + "..." if len(text) > 240 else text
 
-query = r'''
+review_threads_query = r'''
 query($owner: String!, $name: String!, $number: Int!, $after: String) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
@@ -156,10 +156,23 @@ query($owner: String!, $name: String!, $number: Int!, $after: String) {
 }
 '''
 
+pr_comments_query = r'''
+query($owner: String!, $name: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      comments(first: 100, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes { body url }
+      }
+    }
+  }
+}
+'''
+
 blockers = []
 after = None
 while True:
-    response = gh_graphql(query, owner=owner, name=name, number=pr_number, after=after)
+    response = gh_graphql(review_threads_query, owner=owner, name=name, number=pr_number, after=after)
     if response.get("errors"):
         print(json.dumps(response["errors"], indent=2), file=sys.stderr)
         raise SystemExit(1)
@@ -180,6 +193,30 @@ while True:
                     "excerpt": excerpt(comment.get("body")),
                 })
     page = threads.get("pageInfo") or {}
+    if not page.get("hasNextPage"):
+        break
+    after = page.get("endCursor")
+
+after = None
+while True:
+    response = gh_graphql(pr_comments_query, owner=owner, name=name, number=pr_number, after=after)
+    if response.get("errors"):
+        print(json.dumps(response["errors"], indent=2), file=sys.stderr)
+        raise SystemExit(1)
+    data = response.get("data") or {}
+    repository = data.get("repository") or {}
+    pull_request = repository.get("pullRequest") or {}
+    comments = pull_request.get("comments") or {"nodes": [], "pageInfo": {}}
+    for comment in comments.get("nodes") or []:
+        priority = priority_for(comment.get("body"))
+        if priority in {"P1", "P2"}:
+            blockers.append({
+                "priority": priority,
+                "path": "PR comment",
+                "url": comment.get("url") or "",
+                "excerpt": excerpt(comment.get("body")),
+            })
+    page = comments.get("pageInfo") or {}
     if not page.get("hasNextPage"):
         break
     after = page.get("endCursor")
