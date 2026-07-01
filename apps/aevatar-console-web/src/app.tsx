@@ -873,8 +873,8 @@ const ConsoleRuntimeProviders: React.FC<ConsoleRuntimeProvidersProps> = ({
 
   return (
     <ConfigProvider
-      autoInsertSpaceInButton={false}
       locale={resolveAntdLocale(currentLocale)}
+      button={{ autoInsertSpace: false }}
       theme={aevatarThemeConfig}
     >
       <ProConfigProvider intl={resolveProIntl(currentLocale)}>
