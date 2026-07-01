@@ -408,6 +408,17 @@ const ChatPage: React.FC = () => {
     []
   );
 
+  useEffect(() => {
+    if (typeof document === "undefined") {
+      return undefined;
+    }
+
+    document.body.classList.add("aevatar-chat-page-host");
+    return () => {
+      document.body.classList.remove("aevatar-chat-page-host");
+    };
+  }, []);
+
   const persistConversation = useCallback(
     async (conversation: ConversationState) => {
       if (!scopeId) {
@@ -754,21 +765,29 @@ const ChatPage: React.FC = () => {
   const messageCount = activeConversation?.messages.length ?? 0;
 
   return (
-    <AevatarPageShell pageHeaderRender={false} title={t("pages.chat.index.title", "Chat")}>
+    <AevatarPageShell
+      layoutMode="viewport"
+      pageHeaderRender={false}
+      title={t("pages.chat.index.title", "Chat")}
+    >
       <div
+        className="aevatar-chat-page"
         style={{
           background: token.colorBgContainer,
           border: `1px solid ${token.colorBorderSecondary}`,
-          borderRadius: 4,
+          borderRadius: token.borderRadius,
+          boxShadow: "0 1px 2px rgba(15, 23, 42, 0.04)",
           display: "grid",
           flex: 1,
-          gridTemplateColumns: "280px minmax(0, 1fr)",
+          gridTemplateColumns: "260px minmax(0, 1fr)",
+          height: "100%",
           minHeight: 0,
           overflow: "hidden",
         }}
       >
         <aside
           style={{
+            background: token.colorBgContainer,
             borderRight: `1px solid ${token.colorBorderSecondary}`,
             display: "flex",
             flexDirection: "column",
@@ -780,14 +799,15 @@ const ChatPage: React.FC = () => {
               borderBottom: `1px solid ${token.colorBorderSecondary}`,
               display: "flex",
               flexDirection: "column",
-              gap: 10,
-              padding: 16,
+              gap: 8,
+              padding: 12,
             }}
           >
             <Button
               block
               icon={<PlusOutlined />}
               onClick={handleNewChat}
+              style={{ height: 36 }}
               type="primary"
             >
               {t("pages.chat.index.newChatAction", "New Chat")}
@@ -800,12 +820,19 @@ const ChatPage: React.FC = () => {
             </Typography.Text>
           </div>
 
-          <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 8 }}>
+          <div
+            style={{
+              flex: 1,
+              minHeight: 0,
+              overflow: "auto",
+              padding: "8px 6px 10px",
+            }}
+          >
             {conversations.length === 0 ? (
               <Empty
                 description={t("pages.chat.index.noChatHistory", "No chat history")}
                 image={Empty.PRESENTED_IMAGE_SIMPLE}
-                style={{ marginTop: 40 }}
+                style={{ marginTop: 24 }}
               />
             ) : null}
             <Space direction="vertical" size={6} style={{ width: "100%" }}>
@@ -828,11 +855,14 @@ const ChatPage: React.FC = () => {
                       border: `1px solid ${
                         active ? token.colorPrimaryBorder : "transparent"
                       }`,
-                      borderRadius: 4,
+                      borderRadius: token.borderRadius,
+                      boxShadow: active
+                        ? `inset 3px 0 0 ${token.colorPrimary}`
+                        : undefined,
                       cursor: "pointer",
                       display: "flex",
-                      gap: 10,
-                      padding: 10,
+                      gap: 8,
+                      padding: "9px 8px",
                       textAlign: "left",
                       width: "100%",
                     }}
@@ -844,7 +874,8 @@ const ChatPage: React.FC = () => {
                           ? token.colorPrimary
                           : token.colorTextTertiary,
                         flex: "0 0 auto",
-                        marginTop: 3,
+                        fontSize: 14,
+                        marginTop: 2,
                       }}
                     />
                     <span style={{ flex: 1, minWidth: 0 }}>
@@ -867,7 +898,8 @@ const ChatPage: React.FC = () => {
                           display: "flex",
                           fontSize: 11,
                           gap: 6,
-                          marginTop: 4,
+                          lineHeight: 1.35,
+                          marginTop: 3,
                         }}
                       >
                         <span>{formatStatusLabel(conversation.status || "draft")}</span>
@@ -918,6 +950,7 @@ const ChatPage: React.FC = () => {
 
         <main
           style={{
+            background: token.colorBgContainer,
             display: "flex",
             flexDirection: "column",
             minHeight: 0,
@@ -930,18 +963,34 @@ const ChatPage: React.FC = () => {
               display: "flex",
               gap: 12,
               justifyContent: "space-between",
-              minHeight: 64,
-              padding: "12px 18px",
+              minHeight: 54,
+              padding: "10px 14px",
             }}
           >
             <div style={{ minWidth: 0 }}>
-              <Typography.Title
-                level={4}
-                style={{ margin: 0, overflow: "hidden", textOverflow: "ellipsis" }}
+              <Typography.Text
+                strong
+                style={{
+                  color: token.colorTextHeading,
+                  display: "block",
+                  fontSize: 18,
+                  lineHeight: 1.25,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
               >
                 {activeConversation?.title || t("pages.chat.index.title", "Chat")}
-              </Typography.Title>
-              <Typography.Text style={{ color: token.colorTextTertiary, fontSize: 12 }}>
+              </Typography.Text>
+              <Typography.Text
+                style={{
+                  color: token.colorTextTertiary,
+                  display: "block",
+                  fontSize: 12,
+                  lineHeight: 1.4,
+                  marginTop: 3,
+                }}
+              >
                 {scopeId
                   ? t("pages.chat.index.scopeValue", "Scope {scopeId}", { scopeId })
                   : t("pages.chat.index.resolvingScope", "Resolving scope")}
@@ -974,24 +1023,55 @@ const ChatPage: React.FC = () => {
 
           <div
             style={{
-              background: "#fafcff",
+              background: token.colorBgLayout,
+              display: "flex",
+              flexDirection: "column",
               flex: 1,
               minHeight: 0,
               overflow: "auto",
-              padding: 24,
+              padding: 16,
             }}
           >
             {messageCount === 0 ? (
-              <Empty
-                description={t(
-                  "pages.chat.index.emptyDescription",
-                  "Describe the Team, Member, or Workflow you want to create."
-                )}
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-                style={{ marginTop: 100 }}
-              />
+              <div
+                style={{
+                  alignItems: "center",
+                  background: token.colorBgContainer,
+                  border: `1px solid ${token.colorBorderSecondary}`,
+                  borderRadius: token.borderRadius,
+                  color: token.colorTextTertiary,
+                  display: "flex",
+                  gap: 10,
+                  lineHeight: 1.55,
+                  margin: "8px 0 0",
+                  maxWidth: 720,
+                  padding: "14px 16px",
+                  width: "100%",
+                }}
+              >
+                <MessageOutlined
+                  style={{
+                    color: token.colorPrimary,
+                    flex: "0 0 auto",
+                    fontSize: 16,
+                  }}
+                />
+                <Typography.Text style={{ color: token.colorTextSecondary }}>
+                  {t(
+                    "pages.chat.index.emptyDescription",
+                    "Describe the Team, Member, or Workflow you want to create."
+                  )}
+                </Typography.Text>
+              </div>
             ) : (
-              <Space direction="vertical" size={18} style={{ width: "100%" }}>
+              <Space
+                direction="vertical"
+                size={14}
+                style={{
+                  maxWidth: 920,
+                  width: "100%",
+                }}
+              >
                 {activeConversation?.messages.map((message) => (
                   <ChatMessageBubble key={message.id} message={message} />
                 ))}
@@ -1000,9 +1080,10 @@ const ChatPage: React.FC = () => {
                     style={{
                       background: token.colorWarningBg,
                       border: `1px solid ${token.colorWarningBorder}`,
-                      borderRadius: 4,
-                      marginLeft: 40,
-                      padding: 14,
+                      borderRadius: token.borderRadius,
+                      marginLeft: 34,
+                      maxWidth: 760,
+                      padding: 12,
                     }}
                   >
                     <Space direction="vertical" size={10}>
@@ -1029,8 +1110,9 @@ const ChatPage: React.FC = () => {
 
           <div
             style={{
+              background: token.colorBgContainer,
               borderTop: `1px solid ${token.colorBorderSecondary}`,
-              padding: 16,
+              padding: "10px 14px 12px",
             }}
           >
             {hasUsage(activeConversation?.usage) ? (
