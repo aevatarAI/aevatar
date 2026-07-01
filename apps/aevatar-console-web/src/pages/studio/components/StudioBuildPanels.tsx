@@ -8,6 +8,7 @@ import {
   CheckCircleOutlined,
   CodeOutlined,
   PlayCircleOutlined,
+  PlusOutlined,
   RobotOutlined,
   ApartmentOutlined,
 } from '@ant-design/icons';
@@ -2762,6 +2763,14 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
             </Space>
             {hasActiveScript ? (
               <Space wrap size={[8, 8]}>
+                {onCreateScriptDraft ? (
+                  <Button
+                    className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                    icon={<PlusOutlined />}
+                    onClick={onCreateScriptDraft}
+                  >
+                    {t("pages.studio.studiobuildpanels.add.script.2", "Add script")}</Button>
+                ) : null}
                 <Button
                   className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                   disabled={validationPending}
@@ -2824,6 +2833,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
             <div style={{ display: 'grid', gap: 12 }}>
               <details
                 aria-label={t("pages.studio.studiobuildpanels.script.package.tree.2", "Script package tree")}
+                open
                 style={{
                   border: '1px solid #efe7da',
                   borderRadius: 16,
@@ -2841,7 +2851,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
                     listStyle: 'none',
                   }}
                 >
-                  <span style={sectionEyebrowStyle}>{t("pages.studio.studiobuildpanels.advanced.package.2", "Advanced package")}</span>
+                  <span style={sectionEyebrowStyle}>{t("pages.studio.studiobuildpanels.script.files", "Script files")}</span>
                   <Typography.Text type="secondary">
                     {packageEntries.length} {t("pages.studio.studiobuildpanels.file.2", "file")}{packageEntries.length === 1 ? '' : 's'} ·{' '}
                     {scriptPackage.entrySourcePath || t("pages.studio.studiobuildpanels.no.entry.2", "no entry")} {t("pages.studio.studiobuildpanels.entry.2", "entry")}</Typography.Text>

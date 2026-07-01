@@ -3676,6 +3676,7 @@ const projectMessages = {
   "pages.studio.studiobuildpanels.advanced.package.2": "高级包",
   "pages.studio.studiobuildpanels.advanced.routing.json": "高级路由 JSON",
   "pages.studio.studiobuildpanels.advanced.routing.json.2": "高级路由 JSON",
+  "pages.studio.studiobuildpanels.script.files": "脚本文件",
   "pages.studio.studiobuildpanels.applied": "{value1}（已应用）",
   "pages.studio.studiobuildpanels.apply.changes": "应用更改",
   "pages.studio.studiobuildpanels.apply.changes.2": "应用更改",

@@ -606,6 +606,35 @@ describe('StudioWorkflowBuildPanel', () => {
     expect(handleCreateScriptDraft).toHaveBeenCalled();
   });
 
+  it('keeps a visible Script create and file editing path after a script is selected', () => {
+    const handleCreateScriptDraft = jest.fn();
+
+    render(
+      <StudioScriptBuildPanel
+        scopeId="scope-1"
+        scriptsQuery={{
+          data: [scriptDetail],
+          error: null,
+          isError: false,
+          isLoading: false,
+        }}
+        selectedScriptId="script-alpha"
+        onContinueToBind={jest.fn()}
+        onCreateScriptDraft={handleCreateScriptDraft}
+        onSelectScriptId={jest.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Add script' })).toBeEnabled();
+    expect(screen.getByText('Script files')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add C#' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Add proto' })).toBeVisible();
+    expect(screen.getByLabelText('Mock script code editor')).toBeVisible();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add script' }));
+    expect(handleCreateScriptDraft).toHaveBeenCalledTimes(1);
+  });
+
   it('starts a named Script draft without a saved catalog script', async () => {
     const handleDraftSaved = jest.fn();
     mockedScriptsApi.saveScript.mockResolvedValueOnce({
@@ -1084,7 +1113,7 @@ describe('StudioWorkflowBuildPanel', () => {
     );
 
     expect(screen.getByLabelText('Script package tree')).toBeInTheDocument();
-    fireEvent.click(screen.getByText('Advanced package'));
+    expect(screen.getByText('Script files')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Add C#' }));
     expect(screen.getByRole('button', { name: /Support\.cs/ })).toBeInTheDocument();
 

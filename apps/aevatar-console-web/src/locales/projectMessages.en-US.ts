@@ -3676,6 +3676,7 @@ const projectMessages = {
   "pages.studio.studiobuildpanels.advanced.package.2": "Advanced package",
   "pages.studio.studiobuildpanels.advanced.routing.json": "Advanced routing JSON",
   "pages.studio.studiobuildpanels.advanced.routing.json.2": "Advanced routing JSON",
+  "pages.studio.studiobuildpanels.script.files": "Script files",
   "pages.studio.studiobuildpanels.applied": "{value1} (applied)",
   "pages.studio.studiobuildpanels.apply.changes": "Apply changes",
   "pages.studio.studiobuildpanels.apply.changes.2": "Apply changes",
