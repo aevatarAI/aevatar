@@ -8,6 +8,9 @@ namespace Aevatar.GAgents.Channel.NyxIdRelay;
 
 public sealed class NyxIdRelayOutboundPort
 {
+    internal const int LarkReplyTextChunkLimit = 1_800;
+    internal const int LarkReplyMaxChunks = 32;
+
     private readonly NyxIdApiClient _nyxClient;
     private readonly IReadOnlyDictionary<string, IMessageComposer> _composers;
     private readonly ILogger<NyxIdRelayOutboundPort> _logger;
@@ -63,31 +66,29 @@ public sealed class NyxIdRelayOutboundPort
                 "Relay reply is missing the source message id required for channel-relay/reply.");
         }
 
-        if (TryComposeReplyText(platform, conversation, content, out var replyText) is { } composeFailure)
+        if (TryComposeReplyText(
+                platform,
+                conversation,
+                content,
+                out var normalizedPlatform,
+                out var replyText) is { } composeFailure)
         {
             return composeFailure;
         }
 
-        var result = await _nyxClient.SendChannelRelayTextReplyAsync(
-            replyToken,
-            delivery.ReplyMessageId,
-            replyText,
-            ct);
-        if (!result.Succeeded)
-        {
-            _logger.LogWarning(
-                "Nyx relay reply delivery failed: platform={Platform}, messageId={MessageId}, detail={Detail}",
-                platform,
+        var result = await SendRelayTextReplyAsync(
+                normalizedPlatform,
+                replyToken,
                 delivery.ReplyMessageId,
-                result.Detail);
-            return EmitResult.Failed(
-                "relay_reply_rejected",
-                result.Detail ?? "Nyx relay reply rejected.");
+                replyText,
+                ct)
+            .ConfigureAwait(false);
+        if (!result.Success)
+        {
+            return result;
         }
 
-        return EmitResult.Sent(
-            result.MessageId ?? $"nyx-relay:{delivery.ReplyMessageId}",
-            platformMessageId: result.PlatformMessageId);
+        return result;
     }
 
     public async Task<EmitResult> SendWithAgentKeyAsync(
@@ -153,7 +154,12 @@ public sealed class NyxIdRelayOutboundPort
                 "Relay reply update requires the upstream platform message id captured from the initial send.");
         }
 
-        if (TryComposeReplyText(platform, conversation, content, out var replyText) is { } composeFailure)
+        if (TryComposeReplyText(
+                platform,
+                conversation,
+                content,
+                out _,
+                out var replyText) is { } composeFailure)
         {
             return composeFailure;
         }
@@ -194,14 +200,72 @@ public sealed class NyxIdRelayOutboundPort
             platformMessageId: result.PlatformMessageId ?? platformMessageId);
     }
 
+    private async Task<EmitResult> SendRelayTextReplyAsync(
+        string normalizedPlatform,
+        string replyToken,
+        string replyMessageId,
+        string replyText,
+        CancellationToken ct)
+    {
+        var chunks = ShouldChunkRelayText(normalizedPlatform, replyText)
+            ? SplitReplyText(replyText, LarkReplyTextChunkLimit).ToArray()
+            : [replyText];
+
+        if (chunks.Length > LarkReplyMaxChunks)
+        {
+            return EmitResult.Failed(
+                "relay_reply_too_large",
+                $"Relay reply would require {chunks.Length} Lark messages, above the supported bound of {LarkReplyMaxChunks}.");
+        }
+
+        string? firstMessageId = null;
+        string? lastPlatformMessageId = null;
+        for (var index = 0; index < chunks.Length; index++)
+        {
+            var chunkText = chunks.Length == 1
+                ? chunks[index]
+                : $"[{index + 1}/{chunks.Length}]\n{chunks[index]}";
+            var result = await _nyxClient.SendChannelRelayTextReplyAsync(
+                    replyToken,
+                    replyMessageId,
+                    chunkText,
+                    ct)
+                .ConfigureAwait(false);
+            if (!result.Succeeded)
+            {
+                _logger.LogWarning(
+                    "Nyx relay reply delivery failed: platform={Platform}, messageId={MessageId}, chunk={ChunkIndex}/{ChunkCount}, detail={Detail}",
+                    normalizedPlatform,
+                    replyMessageId,
+                    index + 1,
+                    chunks.Length,
+                    result.Detail);
+                return EmitResult.Failed(
+                    "relay_reply_rejected",
+                    chunks.Length == 1
+                        ? result.Detail ?? "Nyx relay reply rejected."
+                        : $"Nyx relay reply chunk {index + 1}/{chunks.Length} rejected: {result.Detail ?? "unknown error"}");
+            }
+
+            firstMessageId ??= result.MessageId;
+            lastPlatformMessageId = result.PlatformMessageId ?? lastPlatformMessageId;
+        }
+
+        return EmitResult.Sent(
+            firstMessageId ?? $"nyx-relay:{replyMessageId}",
+            platformMessageId: lastPlatformMessageId);
+    }
+
     private EmitResult? TryComposeReplyText(
         string platform,
         ConversationReference conversation,
         MessageContent content,
+        out string normalizedPlatform,
         out string replyText)
     {
+        normalizedPlatform = string.Empty;
         replyText = string.Empty;
-        var normalizedPlatform = NormalizePlatformKey(platform);
+        normalizedPlatform = NormalizePlatformKey(platform);
         if (string.IsNullOrWhiteSpace(normalizedPlatform))
         {
             return EmitResult.Failed(
@@ -244,6 +308,59 @@ public sealed class NyxIdRelayOutboundPort
         }
 
         return null;
+    }
+
+    private static bool ShouldChunkRelayText(string normalizedPlatform, string text) =>
+        IsLarkPlatform(normalizedPlatform) && text.Length > LarkReplyTextChunkLimit;
+
+    private static bool IsLarkPlatform(string normalizedPlatform) =>
+        string.Equals(normalizedPlatform, "lark", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(normalizedPlatform, "feishu", StringComparison.OrdinalIgnoreCase);
+
+    internal static IEnumerable<string> SplitReplyText(string text, int chunkLimit)
+    {
+        if (chunkLimit <= 0)
+            throw new ArgumentOutOfRangeException(nameof(chunkLimit), "Chunk limit must be positive.");
+        if (string.IsNullOrEmpty(text))
+            yield break;
+
+        var offset = 0;
+        while (offset < text.Length)
+        {
+            var remaining = text.Length - offset;
+            if (remaining <= chunkLimit)
+            {
+                yield return text[offset..];
+                yield break;
+            }
+
+            var length = FindChunkLength(text, offset, chunkLimit);
+            yield return text.Substring(offset, length).TrimEnd();
+            offset += length;
+            while (offset < text.Length && char.IsWhiteSpace(text[offset]))
+                offset++;
+        }
+    }
+
+    private static int FindChunkLength(string text, int offset, int chunkLimit)
+    {
+        var hardEnd = Math.Min(text.Length, offset + chunkLimit);
+        for (var index = hardEnd - 1; index > offset; index--)
+        {
+            if (text[index] == '\n')
+                return index - offset + 1;
+        }
+
+        for (var index = hardEnd - 1; index > offset; index--)
+        {
+            if (char.IsWhiteSpace(text[index]))
+                return index - offset;
+        }
+
+        if (chunkLimit > 1 && char.IsHighSurrogate(text[hardEnd - 1]) && hardEnd < text.Length)
+            return chunkLimit - 1;
+
+        return chunkLimit;
     }
 
     private static string NormalizePlatformKey(string? value) =>

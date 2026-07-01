@@ -56,6 +56,100 @@ public sealed class NyxIdRelayOutboundPortTests
     }
 
     [Fact]
+    public async Task SendAsync_LarkLongWorkflowReply_ShouldSendOrderedChunksWithoutDroppingFinalDraft()
+    {
+        var handler = new RecordingJsonHandler();
+        var port = CreatePort(handler, new StubComposer("lark", text: BuildLongWorkflowReply()));
+
+        var result = await port.SendAsync(
+            "lark",
+            BuildConversation(),
+            new MessageContent { Text = "workflow done" },
+            new OutboundDeliveryContext
+            {
+                ReplyMessageId = "msg-lark-workflow-1",
+            },
+            "relay-token",
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        handler.Requests.Should().HaveCountGreaterThan(1);
+        handler.Requests.Select(request => request.Authorization).Should().OnlyContain(auth => auth == "Bearer relay-token");
+
+        var chunks = handler.Requests.Select(request => ReadRelayReplyText(request.Body)).ToArray();
+        chunks[0].Should().StartWith("[1/");
+        chunks[^1].Should().StartWith($"[{chunks.Length}/{chunks.Length}]");
+        chunks.Should().OnlyContain(chunk => chunk.Length <= NyxIdRelayOutboundPort.LarkReplyTextChunkLimit + 12);
+
+        var reassembled = string.Join(
+                string.Empty,
+                chunks.Select(chunk => chunk[(chunk.IndexOf('\n', StringComparison.Ordinal) + 1)..]))
+            .Replace("\n", string.Empty, StringComparison.Ordinal)
+            .Replace(" ", string.Empty, StringComparison.Ordinal);
+        reassembled.Should().Contain("**3.Simple&Sweet**");
+        reassembled.Should().Contain("Wishingyouallalovelysummer!");
+        reassembled.Should().Contain("Translationdraftthreeisstillpresent.");
+    }
+
+    [Fact]
+    public async Task SendAsync_NonLarkLongReply_ShouldRemainSingleShot()
+    {
+        var handler = new RecordingJsonHandler();
+        var longReply = new string('x', NyxIdRelayOutboundPort.LarkReplyTextChunkLimit + 100);
+        var port = CreatePort(handler, new StubComposer("slack", text: longReply));
+
+        var result = await port.SendAsync(
+            "slack",
+            BuildConversation(),
+            new MessageContent { Text = "workflow done" },
+            new OutboundDeliveryContext
+            {
+                ReplyMessageId = "msg-slack-workflow-1",
+            },
+            "relay-token",
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        AssertSingleRelayTextRequest(handler, "msg-slack-workflow-1", longReply);
+    }
+
+    [Fact]
+    public async Task SendAsync_LarkLongWorkflowReply_ShouldFailObservablyWhenAnyChunkIsRejected()
+    {
+        var handler = new RecordingJsonHandler(
+            responses:
+            [
+                (HttpStatusCode.OK, """{"message_id":"reply-1","platform_message_id":"platform-1"}""", null),
+                (HttpStatusCode.BadRequest, """{"error":"lark_payload_too_large"}""", null),
+            ]);
+        var port = CreatePort(handler, new StubComposer("lark", text: BuildLongWorkflowReply()));
+
+        var result = await port.SendAsync(
+            "lark",
+            BuildConversation(),
+            new MessageContent { Text = "workflow done" },
+            new OutboundDeliveryContext
+            {
+                ReplyMessageId = "msg-lark-workflow-1",
+            },
+            "relay-token",
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.ErrorCode.Should().Be("relay_reply_rejected");
+        result.ErrorMessage.Should().Contain("chunk 2/");
+        handler.Requests.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public void SplitReplyText_ShouldRespectSurrogatePairBoundaries()
+    {
+        var chunks = NyxIdRelayOutboundPort.SplitReplyText("ab\ud83d\ude00cd", 3).ToArray();
+
+        chunks.Should().Equal("ab", "\ud83d\ude00c", "d");
+    }
+
+    [Fact]
     public async Task SendWithAgentKeyAsync_ShouldUseLongLivedAgentKeyAsBearer()
     {
         var handler = new RecordingJsonHandler();
@@ -570,18 +664,47 @@ public sealed class NyxIdRelayOutboundPortTests
         string expectedText)
     {
         handler.Requests.Should().ContainSingle();
+        ReadRelayMessageId(handler.Requests[0].Body).Should().Be(expectedMessageId);
+        ReadRelayReplyText(handler.Requests[0].Body).Should().Be(expectedText);
         using var document = JsonDocument.Parse(handler.Requests[0].Body);
-        var root = document.RootElement;
-        root.GetProperty("message_id").GetString().Should().Be(expectedMessageId);
-        var reply = root.GetProperty("reply");
-        reply.GetProperty("text").GetString().Should().Be(expectedText);
+        var reply = document.RootElement.GetProperty("reply");
         reply.TryGetProperty("metadata", out _).Should().BeFalse();
+    }
+
+    private static string ReadRelayMessageId(string body)
+    {
+        using var document = JsonDocument.Parse(body);
+        var root = document.RootElement;
+        return root.GetProperty("message_id").GetString() ?? string.Empty;
+    }
+
+    private static string ReadRelayReplyText(string body)
+    {
+        using var document = JsonDocument.Parse(body);
+        return document.RootElement.GetProperty("reply").GetProperty("text").GetString() ?? string.Empty;
+    }
+
+    private static string BuildLongWorkflowReply()
+    {
+        var paragraph = string.Join(
+            " ",
+            Enumerable.Repeat(
+                "Thank you for the lovely update and for organizing everything for the class fund this year.",
+                35));
+        return string.Join(
+            "\n\n",
+            "**Original (EN):** " + paragraph,
+            "**Translation (CN):** Class fund recap translated for parents. " + paragraph,
+            "**1. Warm & Polite** Thank you so much for organizing everything. Translation draft one is present.",
+            "**2. Friendly & Engaging** Thank you! It's so lovely to see how the class funds were used. Translation draft two is present.",
+            "**3. Simple & Sweet** Thank you so much for everything this year. Wishing you all a lovely summer! Translation draft three is still present.");
     }
 
     private sealed class RecordingJsonHandler(
         HttpStatusCode status = HttpStatusCode.OK,
         string responseBody = """{"message_id":"reply-1","platform_message_id":"platform-1"}""",
-        TimeSpan? retryAfter = null) : HttpMessageHandler
+        TimeSpan? retryAfter = null,
+        IReadOnlyList<(HttpStatusCode Status, string Body, TimeSpan? RetryAfter)>? responses = null) : HttpMessageHandler
     {
         public List<(string Path, string? Authorization, string Body)> Requests { get; } = [];
 
@@ -592,12 +715,19 @@ public sealed class NyxIdRelayOutboundPortTests
                 request.Headers.Authorization?.ToString(),
                 request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken)));
 
-            var response = new HttpResponseMessage(status)
+            var index = Requests.Count - 1;
+            (HttpStatusCode Status, string Body, TimeSpan? RetryAfter) configured = responses is { Count: > 0 }
+                ? responses[Math.Min(index, responses.Count - 1)]
+                : (status, responseBody, retryAfter);
+            var response = new HttpResponseMessage(configured.Status)
             {
-                Content = new StringContent(responseBody, Encoding.UTF8, "application/json"),
+                Content = new StringContent(configured.Body, Encoding.UTF8)
+                {
+                    Headers = { ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json") },
+                },
             };
-            if (retryAfter.HasValue)
-                response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(retryAfter.Value);
+            if (configured.RetryAfter.HasValue)
+                response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(configured.RetryAfter.Value);
 
             return response;
         }
