@@ -127,7 +127,9 @@ public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
             document.ScheduleActorId ?? string.Empty,
             document.Prompt ?? string.Empty,
             ParseScheduleKind(document.ScheduleKind),
-            document.Deleted);
+            document.Deleted,
+            document.OverdueFireDetectedCount,
+            document.LastOverdueFireAt);
 
     private static ScheduledDispatchFireRecord MapFireRecord(ScheduledDispatchFireRecordDocument document) =>
         new(
