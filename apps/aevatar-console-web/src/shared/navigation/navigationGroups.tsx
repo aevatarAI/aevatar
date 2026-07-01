@@ -16,17 +16,17 @@ export type NavigationGroup = {
 
 const TEAM_FIRST_NAVIGATION_GROUP_ORDER: readonly NavigationGroup[] = [
   {
+    icon: <TeamOutlined />,
+    key: "teams",
+    label: "Teams",
+    labelMessageId: "nav.groups.teams",
+  },
+  {
     flattenSingleItemAsGroupLabel: true,
     flattenSingleItem: true,
     key: "chat",
     label: "Chat",
     labelMessageId: "nav.groups.chat",
-  },
-  {
-    icon: <TeamOutlined />,
-    key: "teams",
-    label: "Teams",
-    labelMessageId: "nav.groups.teams",
   },
   {
     icon: <DashboardOutlined />,

@@ -37,6 +37,10 @@ import {
   type NavigationGroup,
 } from "./shared/navigation/navigationGroups";
 import { getNavigationSelectedKeys } from "./shared/navigation/navigationMenuSelection";
+import {
+  groupNavigationMenuItems,
+  type NavigationMenuItem,
+} from "./shared/navigation/navigationMenuGrouping";
 import { runtimeActorsApi } from "@/shared/api/runtimeActorsApi";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { buildMissionSnapshotFromRuntime } from "@/pages/MissionControl/runtimeAdapter";
@@ -125,19 +129,6 @@ type LiveOpsAttentionCandidate = {
   runId?: string;
   scopeId?: string;
   serviceId?: string;
-};
-
-type NavigationMenuItem = {
-  children?: NavigationMenuItem[];
-  className?: string;
-  disabled?: boolean;
-  icon?: React.ReactNode;
-  menuBadgeKey?: string;
-  menuGroupKey?: string;
-  name?: React.ReactNode;
-  path?: string;
-  key?: React.Key;
-  [key: string]: unknown;
 };
 
 type AuthSessionBootstrapProps = {
@@ -648,85 +639,17 @@ const LiveOpsGroupIcon: React.FC<{
 
 LiveOpsGroupIcon.displayName = "LiveOpsGroupIcon";
 
-function groupNavigationMenuItems(items: NavigationMenuItem[]): NavigationMenuItem[] {
-  const grouped = new Map<string, NavigationMenuItem[]>();
-
-  for (const item of items) {
-    const groupKey =
-      typeof item.menuGroupKey === "string" ? item.menuGroupKey : undefined;
-    if (!groupKey) {
-      continue;
-    }
-
-    const existing = grouped.get(groupKey);
-    if (existing) {
-      existing.push(item);
-      continue;
-    }
-
-    grouped.set(groupKey, [item]);
-  }
-
-  const groupByKey = new Map(NAVIGATION_GROUP_ORDER.map((group) => [group.key, group]));
-  const emittedGroups = new Set<string>();
-
-  return items.reduce<NavigationMenuItem[]>(
-    (result, item) => {
-      const groupKey =
-        typeof item.menuGroupKey === "string" ? item.menuGroupKey : undefined;
-      if (!groupKey) {
-        result.push(item);
-        return result;
-      }
-
-      if (emittedGroups.has(groupKey)) {
-        return result;
-      }
-
-      emittedGroups.add(groupKey);
-      const group = groupByKey.get(groupKey);
-      const children = grouped.get(groupKey);
-      if (!group) {
-        return result;
-      }
-      if (!children || children.length === 0) {
-        return result;
-      }
-
-      if (group.flattenSingleItem && children.length === 1) {
-        result.push({
-          ...children[0],
-          icon: group.flattenSingleItemAsGroupLabel
-            ? children[0].icon
-            : (children[0].icon ?? group.icon),
-          menuGroupKey: group.key,
-          name: group.flattenSingleItemAsGroupLabel
-            ? React.createElement(NavigationGroupLabel, { group })
-            : children[0].name,
-        });
-        return result;
-      }
-
-      result.push({
-        children: children.map((child) => ({
-          ...child,
-          menuGroupKey: group.key,
-        })),
-        key: `menu-group:${group.key}`,
-        menuGroupKey: group.key,
-        name: React.createElement(NavigationGroupLabel, { group }),
-      });
-      return result;
-    },
-    []
-  );
-}
-
 function decorateNavigationMenuItems(
   items: NavigationMenuItem[],
   groupItems = true
 ): NavigationMenuItem[] {
-  const sourceItems = groupItems ? groupNavigationMenuItems(items) : items;
+  const sourceItems = groupItems
+    ? groupNavigationMenuItems(
+        items,
+        NAVIGATION_GROUP_ORDER,
+        (group) => React.createElement(NavigationGroupLabel, { group }),
+      )
+    : items;
 
   return sourceItems.map((item) => {
     const path = typeof item.path === "string" ? item.path : undefined;
