@@ -37,6 +37,13 @@ message ScheduledDispatchState
   ScheduledDispatchScheduleKindState schedule_kind = 26;
   bool deleted = 27;
   google.protobuf.Timestamp deleted_at_utc_value = 28;
+  // Number of times the actor reactivated and found an armed occurrence overdue
+  // past the grace window with no terminal fire record. This is a detection
+  // counter (once per overdue armed occurrence), not a total-missed-occurrence
+  // tally: a long-dormant actor that misses many ticks records one detection
+  // when it reactivates against the earliest still-armed occurrence.
+  int32 overdue_fire_detected_count = 29;
+  google.protobuf.Timestamp last_overdue_fire_at_utc_value = 30;
 }
 
 enum ScheduledDispatchScheduleKindState
@@ -259,6 +266,13 @@ message ScheduledDispatchFireFailedEvent
   string idempotency_key = 3;
   string error = 4;
   bool manual = 5;
+}
+
+message ScheduledDispatchFireOverdueDetectedEvent
+{
+  google.protobuf.Timestamp scheduled_fire_at = 1;
+  google.protobuf.Timestamp detected_at = 2;
+  int64 overdue_seconds = 3;
 }
 
 message ScheduledDispatchFireRecordState
