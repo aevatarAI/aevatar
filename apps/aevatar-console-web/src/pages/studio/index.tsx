@@ -1254,7 +1254,24 @@ function clearStudioAutoReloginAttempt(returnTo: string): void {
 
 function isExecutionStopAllowed(status: string | undefined): boolean {
   const normalized = status?.trim().toLowerCase() ?? '';
-  return !['completed', 'failed', 'stopped', 'cancelled'].includes(normalized);
+  return [
+    'running',
+    'in_progress',
+    'in-progress',
+    'pending',
+    'accepted',
+    'waiting',
+    'waiting_input',
+    'waiting-input',
+    'waiting_human_input',
+    'waiting-human-input',
+    'awaiting_input',
+    'awaiting-input',
+    'awaiting_approval',
+    'awaiting-approval',
+    'awaiting_signal',
+    'awaiting-signal',
+  ].includes(normalized);
 }
 
 function buildBlankDraftYaml(workflowName: string): string {

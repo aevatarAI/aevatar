@@ -171,6 +171,32 @@ describe('StudioExecutionPage', () => {
     expect(screen.getByText('Graph canvas')).toBeInTheDocument();
   });
 
+  it('does not expose Stop run before a selected run is stoppable', () => {
+    render(
+      React.createElement(
+        StudioExecutionPage,
+        createBaseProps({
+          executionCanStop: false,
+          executions: {
+            isLoading: false,
+            isError: false,
+            error: null,
+            data: [],
+          },
+          selectedExecution: {
+            isLoading: false,
+            isError: false,
+            error: null,
+            data: undefined,
+          },
+        }) as any,
+      ),
+    );
+
+    expect(screen.getByText('未选择运行')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '停止运行' })).toBeNull();
+  });
+
   it('shows the selected execution actor id and lets users copy it', async () => {
     const writeText = jest.fn().mockResolvedValue(undefined);
     Object.defineProperty(window.navigator, 'clipboard', {
