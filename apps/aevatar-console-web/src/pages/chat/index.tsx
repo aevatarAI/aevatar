@@ -317,6 +317,20 @@ function hasUsage(usage: ChatUsageSummary | undefined): boolean {
   );
 }
 
+function isEmptyDraftConversation(
+  conversation: ConversationState | null | undefined
+): boolean {
+  return Boolean(
+    conversation &&
+      conversation.status === "draft" &&
+      conversation.messages.length === 0
+  );
+}
+
+function isEmptyDraftMeta(conversation: ConversationMeta): boolean {
+  return conversation.status === "draft" && conversation.messageCount === 0;
+}
+
 function formatRelativeTime(isoString: string): string {
   const timestamp = Date.parse(isoString);
   if (!Number.isFinite(timestamp)) {
@@ -347,6 +361,7 @@ function formatRelativeTime(isoString: string): string {
 
 const ChatPage: React.FC = () => {
   const { token } = theme.useToken();
+  const activeConversationRef = useRef<ConversationState | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const scrollAnchorRef = useRef<HTMLDivElement | null>(null);
   const [activeConversation, setActiveConversation] =
@@ -393,6 +408,10 @@ const ChatPage: React.FC = () => {
     setSession(createIdleSession(scopeId));
     void refreshConversations();
   }, [refreshConversations, scopeId]);
+
+  useEffect(() => {
+    activeConversationRef.current = activeConversation;
+  }, [activeConversation]);
 
   useEffect(() => {
     scrollAnchorRef.current?.scrollIntoView?.({
@@ -453,26 +472,14 @@ const ChatPage: React.FC = () => {
 
   const commitConversation = useCallback(
     (conversation: ConversationState) => {
+      activeConversationRef.current = conversation;
       setActiveConversation(conversation);
       void persistConversation(conversation);
     },
     [persistConversation]
   );
 
-  const handleNewChat = useCallback(() => {
-    abortControllerRef.current?.abort();
-    const conversation: ConversationState = {
-      id: createConversationId(),
-      messages: [],
-      status: "draft",
-      title: t("pages.chat.index.newChat", "New chat"),
-    };
-    setPrompt("");
-    setSession(createIdleSession(scopeId));
-    commitConversation(conversation);
-  }, [commitConversation, scopeId]);
-
-  const handleSelectConversation = useCallback(
+  const restoreConversation = useCallback(
     async (conversationId: string) => {
       if (!scopeId) {
         return;
@@ -491,6 +498,7 @@ const ChatPage: React.FC = () => {
         title: meta?.title || t("pages.chat.index.newChat", "New chat"),
         usage: meta?.usage,
       };
+      activeConversationRef.current = restoredConversation;
       setActiveConversation(restoredConversation);
       setPrompt("");
       setSession({
@@ -509,6 +517,37 @@ const ChatPage: React.FC = () => {
     [conversations, scopeId]
   );
 
+  const handleNewChat = useCallback(() => {
+    const currentConversation = activeConversationRef.current;
+    if (isEmptyDraftConversation(currentConversation)) {
+      return;
+    }
+
+    const reusableDraft = conversations.find(isEmptyDraftMeta);
+    if (reusableDraft) {
+      void restoreConversation(reusableDraft.id);
+      return;
+    }
+
+    abortControllerRef.current?.abort();
+    const conversation: ConversationState = {
+      id: createConversationId(),
+      messages: [],
+      status: "draft",
+      title: t("pages.chat.index.newChat", "New chat"),
+    };
+    setPrompt("");
+    setSession(createIdleSession(scopeId));
+    commitConversation(conversation);
+  }, [commitConversation, conversations, restoreConversation, scopeId]);
+
+  const handleSelectConversation = useCallback(
+    async (conversationId: string) => {
+      await restoreConversation(conversationId);
+    },
+    [restoreConversation]
+  );
+
   const handleDeleteConversation = useCallback(
     async (conversationId: string) => {
       if (!scopeId) {
@@ -519,6 +558,7 @@ const ChatPage: React.FC = () => {
         current.filter((item) => item.id !== conversationId)
       );
       if (activeConversation?.id === conversationId) {
+        activeConversationRef.current = null;
         setActiveConversation(null);
         setSession(createIdleSession(scopeId));
       }

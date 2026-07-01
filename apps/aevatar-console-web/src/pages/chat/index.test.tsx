@@ -93,6 +93,29 @@ describe("ChatPage MVP", () => {
     window.localStorage.clear();
   });
 
+  it("does not create another local draft when the active New Chat is empty", async () => {
+    renderWithQueryClient(<ChatPage />);
+
+    const newChatButton = await screen.findByRole("button", { name: "New Chat" });
+    fireEvent.click(newChatButton);
+    fireEvent.click(newChatButton);
+    fireEvent.click(newChatButton);
+
+    await waitFor(() =>
+      expect(screen.getAllByText("New chat")).toHaveLength(2)
+    );
+
+    const stored = JSON.parse(
+      window.localStorage.getItem("aevatar.chat.localHistory.v1:scope-a") || "[]"
+    );
+    expect(stored).toHaveLength(1);
+    expect(stored[0]).toMatchObject({
+      messages: [],
+      status: "draft",
+      title: "New chat",
+    });
+  });
+
   it("calls POST /api/chat with a local session id and keeps text-only results in Chat", async () => {
     (authFetch as jest.Mock).mockResolvedValueOnce(
       createSseResponse([
