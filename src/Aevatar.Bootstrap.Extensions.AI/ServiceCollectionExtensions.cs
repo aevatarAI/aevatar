@@ -70,6 +70,33 @@ public sealed class AevatarAIFeatureOptions
     /// NyxID catalog uses a different slug (e.g. organisations that re-registered the service).
     /// </summary>
     public string? OrnnNyxIdSlug { get; set; }
+    /// <summary>
+    /// Enables the host-bound system skill overlay scaffold. Mainnet-style hosts bind this from
+    /// <c>Aevatar:SystemSkills:Enabled</c>.
+    /// </summary>
+    public bool EnableSystemSkillOverlay { get; set; }
+    /// <summary>
+    /// Host-bound Ornn tag used to select system skills. Bound from
+    /// <c>Aevatar:SystemSkills:Tag</c>; this value is sensitive and should come from host secrets.
+    /// </summary>
+    public string? SystemSkillOverlayTag { get; set; }
+    /// <summary>
+    /// Host-bound organization service token used by the future materializer. Bound from
+    /// <c>Aevatar:SystemSkills:OrgServiceToken</c>; this value is a secret.
+    /// </summary>
+    public string? SystemSkillOverlayOrgServiceToken { get; set; }
+    /// <summary>
+    /// Bound from <c>Aevatar:SystemSkills:RefreshTtl</c>.
+    /// </summary>
+    public TimeSpan SystemSkillOverlayRefreshTtl { get; set; }
+    /// <summary>
+    /// Bound from <c>Aevatar:SystemSkills:MaxSkills</c>.
+    /// </summary>
+    public int SystemSkillOverlayMaxSkills { get; set; }
+    /// <summary>
+    /// Bound from <c>Aevatar:SystemSkills:MaxBytes</c>.
+    /// </summary>
+    public int SystemSkillOverlayMaxBytes { get; set; }
     public IAevatarSecretsStore? SecretsStore { get; set; }
     public string? ApiKey { get; set; }
     public NyxIdLlmEndpointSpec? NyxIdLlmEndpoint { get; set; }
@@ -145,6 +172,9 @@ public static class ServiceCollectionExtensions
 
         if (options.EnableOrnnSkills)
             RegisterOrnnSkills(services, options);
+
+        if (options.EnableSystemSkillOverlay)
+            RegisterSystemSkillOverlay(services, options);
 
         if (options.EnableServiceInvokeTools)
             RegisterServiceInvokeTools(services, options);
@@ -1165,6 +1195,22 @@ public static class ServiceCollectionExtensions
         });
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IOrnnSkillPublishAssetValidator, WorkflowOrnnSkillPublishAssetValidator>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IOrnnSkillPublishAssetValidator, ScriptOrnnSkillPublishAssetValidator>());
+    }
+
+    private static void RegisterSystemSkillOverlay(IServiceCollection services, AevatarAIFeatureOptions options)
+    {
+        if (!options.EnableSystemSkillOverlay || string.IsNullOrWhiteSpace(options.SystemSkillOverlayTag))
+            return;
+
+        services.AddSystemSkillOverlay(o =>
+        {
+            o.Enabled = options.EnableSystemSkillOverlay;
+            o.Tag = options.SystemSkillOverlayTag ?? string.Empty;
+            o.OrgServiceToken = options.SystemSkillOverlayOrgServiceToken ?? string.Empty;
+            o.RefreshTtl = options.SystemSkillOverlayRefreshTtl;
+            o.MaxSkills = options.SystemSkillOverlayMaxSkills;
+            o.MaxBytes = options.SystemSkillOverlayMaxBytes;
+        });
     }
 
     private static void RegisterWebTools(IServiceCollection services, AevatarAIFeatureOptions options)

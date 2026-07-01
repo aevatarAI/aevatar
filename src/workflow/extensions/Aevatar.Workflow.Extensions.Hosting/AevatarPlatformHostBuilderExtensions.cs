@@ -49,6 +49,15 @@ public static class AevatarPlatformHostBuilderExtensions
                 aiOptions.EnableSkills = true;
                 aiOptions.EnableOrnnSkills = true;
                 aiOptions.OrnnNyxIdSlug = builder.Configuration["Aevatar:Ornn:NyxIdSlug"];
+                aiOptions.EnableSystemSkillOverlay = ReadBoolean(builder.Configuration["Aevatar:SystemSkills:Enabled"]);
+                aiOptions.SystemSkillOverlayTag = builder.Configuration["Aevatar:SystemSkills:Tag"];
+                aiOptions.SystemSkillOverlayOrgServiceToken = builder.Configuration["Aevatar:SystemSkills:OrgServiceToken"];
+                if (TimeSpan.TryParse(builder.Configuration["Aevatar:SystemSkills:RefreshTtl"], out var refreshTtl))
+                    aiOptions.SystemSkillOverlayRefreshTtl = refreshTtl;
+                if (int.TryParse(builder.Configuration["Aevatar:SystemSkills:MaxSkills"], out var maxSkills))
+                    aiOptions.SystemSkillOverlayMaxSkills = maxSkills;
+                if (int.TryParse(builder.Configuration["Aevatar:SystemSkills:MaxBytes"], out var maxBytes))
+                    aiOptions.SystemSkillOverlayMaxBytes = maxBytes;
                 aiOptions.EnableWebTools = true;
                 aiOptions.WebSearchNyxIdSlug = builder.Configuration["Aevatar:WebSearch:NyxIdSlug"];
                 aiOptions.WebSearchApiBaseUrl = builder.Configuration["Aevatar:WebSearch:ApiBaseUrl"];
@@ -132,4 +141,7 @@ public static class AevatarPlatformHostBuilderExtensions
                 "Maker extensions require workflow capability to be enabled.");
         }
     }
+
+    private static bool ReadBoolean(string? value) =>
+        bool.TryParse(value, out var result) && result;
 }
