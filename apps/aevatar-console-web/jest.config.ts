@@ -80,6 +80,7 @@ const browserProjectConfig = createProjectConfig('browser');
 const nodeProjectConfig = createProjectConfig('node');
 
 const nodeTestFiles = [
+  '<rootDir>/tests/packageScripts.test.ts',
   '<rootDir>/src/pages/MissionControl/runtimeAdapter.test.ts',
   '<rootDir>/src/pages/actors/actorPresentation.test.ts',
   '<rootDir>/src/pages/governance/components/governanceQuery.test.ts',
