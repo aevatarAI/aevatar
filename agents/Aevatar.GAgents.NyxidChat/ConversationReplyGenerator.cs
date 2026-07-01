@@ -160,7 +160,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         }
 
         var replyPlan = await BuildEffectiveReplyPlanAsync(metadata, llmControl, toolContext, ct);
-        var isChannelTurn = IsChannelTurn(metadata);
+        var isChannelTurn = IsChannelRelayTurn(toolContext);
         var primaryTools = await BuildTurnToolsAsync(replyPlan.DisableTools, isChannelTurn, ct);
 
         try
@@ -258,7 +258,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         var replyPlan = await BuildEffectiveReplyPlanAsync(metadata, llmControl, toolContext, ct);
         var provider = ResolveProvider();
         var disableTools = forceDisableTools || replyPlan.DisableTools;
-        var tools = await BuildTurnToolsAsync(disableTools, IsChannelTurn(metadata), ct);
+        var tools = await BuildTurnToolsAsync(disableTools, IsChannelRelayTurn(toolContext), ct);
         var externalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(replyPlan.Primary);
         var effectiveToolContext = replyPlan.PrimaryControl.ToToolContext(
             replyPlan.PrimaryToolContext ?? AgentToolExecutionContext.Empty with
@@ -995,6 +995,21 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         metadata.ContainsKey(ChannelMetadataKeys.Platform) &&
         metadata.ContainsKey(ChannelMetadataKeys.SenderId) &&
         metadata.ContainsKey(ChannelMetadataKeys.MessageId);
+
+    // Channel-relay detection for the human-only tool gate (issue #2580 Item 2). It must read the
+    // TYPED channel context, not metadata: channel.platform / sender_id / message_id are owned control
+    // keys that AgentToolExecutionContextMapper.StripOwnedControlKeys removes before the step state is
+    // persisted, so from the second LLM round the per-step metadata no longer carries them. The typed
+    // toolContext.Channel is an identity fact that survives stripping and every round, so the gate
+    // stays on for the whole relay turn (mirrors IsChannelTurn's Platform+SenderId+MessageId shape).
+    private static bool IsChannelRelayTurn(AgentToolExecutionContext? toolContext)
+    {
+        var channel = toolContext?.Channel;
+        return channel is not null &&
+            !string.IsNullOrWhiteSpace(channel.Platform) &&
+            !string.IsNullOrWhiteSpace(channel.SenderId) &&
+            !string.IsNullOrWhiteSpace(channel.MessageId);
+    }
 
     private async Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(bool isChannelTurn, CancellationToken ct)
     {
