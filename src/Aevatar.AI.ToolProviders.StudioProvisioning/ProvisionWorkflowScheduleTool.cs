@@ -15,7 +15,8 @@ namespace Aevatar.AI.ToolProviders.StudioProvisioning;
 /// The tool takes ONLY workflow/scheduling inputs from the LLM. The owning scope and
 /// caller identity come from the tool execution context (W1 threads
 /// <c>Caller.ScopeId</c>/<c>OwnerSubject</c> on the workflow llm_call path; the
-/// forwarded NyxID access token is the run's durable credential). There are NO
+/// forwarded NyxID access token remains a boundary input and is not persisted in
+/// schedule auth). There are NO
 /// channel / Lark / owner / scope / credential inputs, and the result carries no
 /// channel/Lark fields — only the schedule id, member id, and the Observatory link.
 ///

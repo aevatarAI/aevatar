@@ -315,7 +315,7 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
-    public async Task Create_ShouldAcceptDurableSenderBearerTokenWithoutOwnerBinding()
+    public async Task Create_ShouldRejectDurableSenderBearerToken()
     {
         var service = new RecordingScheduledDispatchApplicationService();
         var request = CreateServiceInvocationRequestWithAuth(new ScheduledServiceInvocationAuthHttpRequest
@@ -328,12 +328,8 @@ public sealed class ScheduledDispatchEndpointsTests
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
 
-        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
-        var auth = service.Created.Should().ContainSingle().Which.Target.ServiceInvocation!.Auth;
-        auth.Should().NotBeNull();
-        auth!.SenderNyxId.Should().BeNull();
-        auth.ScopeOwnerNyxId.Should().BeNull();
-        auth.DurableSenderBearerToken.Should().Be("durable-sender-token");
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        service.Created.Should().BeEmpty();
     }
 
     [Fact]
@@ -784,7 +780,7 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
-    public async Task Create_WithWorkflowScheduleKindAndDurableSenderBearerToken_ShouldForwardScheduleKind()
+    public async Task Create_WithWorkflowScheduleKindAndSenderNyxId_ShouldForwardScheduleKind()
     {
         await using var host = await ScheduleEndpointTestHost.StartAsync();
         host.CatalogReader.Service = CreateServiceCatalog(activeRevisionId: "rev-chat");
@@ -792,7 +788,7 @@ public sealed class ScheduledDispatchEndpointsTests
             "tenant:app:default:workflow",
             "rev-chat",
             BuildPreparedArtifact(ChatRequestEvent.Descriptor));
-        var chat = new ChatRequestEvent { Prompt = "run durable workflow" };
+        var chat = new ChatRequestEvent { Prompt = "run workflow" };
 
         var response = await host.Client.PostAsJsonAsync("/api/schedules", new
         {
@@ -816,7 +812,16 @@ public sealed class ScheduledDispatchEndpointsTests
                 revisionId = "rev-chat",
                 auth = new
                 {
-                    durableSenderBearerToken = " durable-sender-token ",
+                    senderNyxId = new
+                    {
+                        subject = new
+                        {
+                            platform = "nyxid",
+                            tenant = "tenant-1",
+                            externalUserId = "user-42",
+                        },
+                        scope = "proxy",
+                    },
                 },
             },
         });
@@ -826,7 +831,8 @@ public sealed class ScheduledDispatchEndpointsTests
         configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
         var auth = configuration.Target.ServiceInvocation!.Auth;
         auth.Should().NotBeNull();
-        auth!.DurableSenderBearerToken.Should().Be("durable-sender-token");
+        auth!.SenderNyxId.Should().NotBeNull();
+        auth.DurableSenderBearerToken.Should().BeNull();
     }
 
     [Fact]

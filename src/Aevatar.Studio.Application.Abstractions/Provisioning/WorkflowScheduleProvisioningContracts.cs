@@ -13,9 +13,9 @@ namespace Aevatar.Studio.Application.Provisioning;
 /// NyxID subject reference (re-minted into a short-lived token on every fire). On
 /// the channel-free studio path the scope IS the caller's NyxID subject, so the
 /// subject platform defaults to <c>nyxid</c> and the external user id defaults to
-/// the scope owner subject; <see cref="CallerBearerToken"/> (the caller's forwarded
-/// NyxID access token) is threaded as the run's durable credential so a soon-firing
-/// run authenticates without a re-mintable binding.
+/// the scope owner subject. <see cref="CallerBearerToken"/> remains an optional
+/// boundary input for callers that already forward it; schedule auth does not
+/// persist or replay that bearer.
 /// </summary>
 public sealed record WorkflowScheduleProvisioningRequest(
     string ScopeId,

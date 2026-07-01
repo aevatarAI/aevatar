@@ -288,13 +288,17 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
             return null;
 
         var durableToken = auth.DurableSenderBearerToken?.Trim() ?? string.Empty;
-        if (auth.SenderNyxId == null && durableToken.Length == 0 && auth.ScopeOwnerNyxId == null)
+        if (durableToken.Length > 0)
+        {
+            throw new ArgumentException(
+                "Durable sender bearer token schedule auth is no longer supported.",
+                nameof(auth));
+        }
+
+        if (auth.SenderNyxId == null && auth.ScopeOwnerNyxId == null)
             return null;
 
-        var state = new ScheduledServiceInvocationAuthState
-        {
-            DurableSenderBearerToken = durableToken,
-        };
+        var state = new ScheduledServiceInvocationAuthState();
 
         if (auth.SenderNyxId != null)
         {

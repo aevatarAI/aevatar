@@ -1208,7 +1208,7 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
-    public async Task HandleFireAsync_ForDurableBearerTokenAuth_ShouldCarryDurableTokenToRuntimeAuth()
+    public async Task HandleFireAsync_ForLegacyDurableBearerTokenAuth_ShouldFailClosed()
     {
         var eventStore = new TestEventStore();
         var dispatch = new RecordingActorDispatchPort();
@@ -1229,14 +1229,16 @@ public sealed class ScheduledDispatchGAgentTests
                     Identity = new ServiceIdentity { ServiceId = "configured-service" },
                     EndpointId = "chat",
                     Payload = Any.Pack(new ChatRequestEvent { Prompt = "configured" }),
-                    // A C1-provisioned run carries a durable credential (minted agent
-                    // key or forwarded caller token) instead of a re-mintable subject.
                     Auth = new ScheduledServiceInvocationAuthState
                     {
                         DurableSenderBearerToken = "durable-run-key",
                     },
                 },
             }));
+
+        var stateAuth = agent.State.Target.ServiceInvocation!.Auth!;
+        stateAuth.DurableSenderBearerToken.Should().BeEmpty();
+        stateAuth.LegacyDurableSenderBearerBlocked.Should().BeTrue();
 
         var scheduledFireAt = new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero);
         await agent.HandleFireAsync(new ScheduledDispatchFireCommand
@@ -1245,15 +1247,11 @@ public sealed class ScheduledDispatchGAgentTests
             Manual = true,
         });
 
-        // The durable token survives the proto state round-trip and reaches the
-        // dispatch runtime auth (which projects it directly, no subject exchange).
-        var auth = serviceInvocationDispatch.Auths.Should().ContainSingle().Which;
-        auth.Should().NotBeNull();
-        auth!.DurableSenderBearerToken.Should().Be("durable-run-key");
-        auth.SenderNyxId.Should().BeNull();
-        serviceInvocationDispatch.Requests.Should().ContainSingle();
+        serviceInvocationDispatch.Auths.Should().BeEmpty();
+        serviceInvocationDispatch.Requests.Should().BeEmpty();
         agent.State.FireCount.Should().Be(1);
-        agent.State.FailureCount.Should().Be(0);
+        agent.State.FailureCount.Should().Be(1);
+        agent.State.LastError.Should().Contain("legacy durable bearer auth");
     }
 
     [Fact]

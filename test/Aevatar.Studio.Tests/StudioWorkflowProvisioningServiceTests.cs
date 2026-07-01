@@ -114,7 +114,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
     }
 
     [Fact]
-    public async Task ProvisionAsync_ThreadsForwardedCallerToken_AsDurableRunCredential_WhenNoIssuer()
+    public async Task ProvisionAsync_WithForwardedCallerToken_StillUsesSubjectRef()
     {
         var member = NewMemberService();
         var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
@@ -126,88 +126,27 @@ public sealed class StudioWorkflowProvisioningServiceTests
             new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "p"),
             callerBearerToken: CallerBearerToken);
 
-        // One-shot demo (no caller cron) with no credential issuer: the forwarded
-        // caller token is valid for the single near-future fire, so it is the run's
-        // sole credential. The schedule carries EXACTLY ONE source — the subject ref
-        // is NOT also attached (the validator admits only one, and the dispatch never
-        // falls back to a subject ref once a token is present).
+        // Forwarded caller tokens are boundary input only; schedules must not
+        // persist or replay them.
         var auth = schedule.Configuration!.Target.ServiceInvocation!.Auth;
         auth.Should().NotBeNull();
-        auth!.DurableSenderBearerToken.Should().Be(CallerBearerToken);
-        auth.SenderNyxId.Should().BeNull();
+        auth!.SenderNyxId.Should().NotBeNull();
+        auth.DurableSenderBearerToken.Should().BeNull();
         AssertExactlyOneCredentialSource(auth);
     }
 
     [Fact]
-    public async Task ProvisionAsync_MintsDurableKey_AndThreadsItAsRunCredential_WhenIssuerWired()
+    public async Task ProvisionAsync_UsesSubjectRef_WhenNoBearerToken()
     {
         var member = NewMemberService();
         var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
-        var issuer = new RecordingRunCredentialIssuer { MintedKey = MintedKey };
-        var sut = NewService(member, schedule, issuer);
-
-        await sut.ProvisionAsync(
-            ScopeId,
-            Caller,
-            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "p"),
-            callerBearerToken: CallerBearerToken);
-
-        // The issuer minted a durable key under the caller's account, keyed by the
-        // member id and scope, using the caller bearer token.
-        issuer.IssueInvoked.Should().BeTrue();
-        issuer.CallerBearerToken.Should().Be(CallerBearerToken);
-        issuer.AgentId.Should().Be(MemberId);
-        issuer.ScopeId.Should().Be(ScopeId);
-
-        // The minted key (NOT the forwarded token) is the run's sole credential; a
-        // long-lived key needs no subject-ref fallback, so none is attached.
-        var auth = schedule.Configuration!.Target.ServiceInvocation!.Auth;
-        auth!.DurableSenderBearerToken.Should().Be(MintedKey);
-        auth.SenderNyxId.Should().BeNull();
-        AssertExactlyOneCredentialSource(auth);
-    }
-
-    [Fact]
-    public async Task ProvisionAsync_FallsBackToForwardedToken_WhenIssuerMintsNothing()
-    {
-        var member = NewMemberService();
-        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
-        var issuer = new RecordingRunCredentialIssuer { MintedKey = null };
-        var sut = NewService(member, schedule, issuer);
-
-        await sut.ProvisionAsync(
-            ScopeId,
-            Caller,
-            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "p"),
-            callerBearerToken: CallerBearerToken);
-
-        issuer.IssueInvoked.Should().BeTrue();
-        // The issuer minted nothing (e.g. no host slug configured); for a one-shot
-        // demo the forwarded caller token is the sole credential so provisioning still
-        // produces an authenticatable run.
-        var auth = schedule.Configuration!.Target.ServiceInvocation!.Auth;
-        auth!.DurableSenderBearerToken.Should().Be(CallerBearerToken);
-        auth.SenderNyxId.Should().BeNull();
-        AssertExactlyOneCredentialSource(auth);
-    }
-
-    [Fact]
-    public async Task ProvisionAsync_NoDurableCredential_WhenNoBearerToken()
-    {
-        var member = NewMemberService();
-        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
-        var issuer = new RecordingRunCredentialIssuer { MintedKey = MintedKey };
-        var sut = NewService(member, schedule, issuer);
+        var sut = NewService(member, schedule);
 
         await sut.ProvisionAsync(
             ScopeId,
             Caller,
             new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "p"));
 
-        // No forwarded token → nothing to mint from and nothing to thread; the
-        // subject ref is the schedule's sole credential (the dispatch re-mints a
-        // fresh sender token from it on every fire).
-        issuer.IssueInvoked.Should().BeFalse();
         var auth = schedule.Configuration!.Target.ServiceInvocation!.Auth;
         auth!.DurableSenderBearerToken.Should().BeNull();
         auth.SenderNyxId.Should().NotBeNull();
@@ -215,12 +154,11 @@ public sealed class StudioWorkflowProvisioningServiceTests
     }
 
     [Fact]
-    public async Task ProvisionAsync_RecurringMonitor_WithForwardedTokenOnly_UsesSubjectRef_NotEphemeralToken()
+    public async Task ProvisionAsync_RecurringMonitor_WithForwardedToken_UsesSubjectRef()
     {
         var member = NewMemberService();
         var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
-        var issuer = new RecordingRunCredentialIssuer { MintedKey = null };
-        var sut = NewService(member, schedule, issuer);
+        var sut = NewService(member, schedule);
 
         await sut.ProvisionAsync(
             ScopeId,
@@ -233,41 +171,10 @@ public sealed class StudioWorkflowProvisioningServiceTests
                 Timezone: "Asia/Shanghai"),
             callerBearerToken: CallerBearerToken);
 
-        // A forwarded session token is short-lived: pinning it to a recurring monitor
-        // would authenticate only the first ~15 minutes, then every later fire would
-        // silently fail. The re-mintable subject reference is the only honest
-        // credential for a recurring schedule, so it — not the ephemeral token — is
-        // the sole source.
+        // The re-mintable subject reference is the only schedule credential.
         var auth = schedule.Configuration!.Target.ServiceInvocation!.Auth;
         auth!.SenderNyxId.Should().NotBeNull();
         auth.DurableSenderBearerToken.Should().BeNull();
-        AssertExactlyOneCredentialSource(auth);
-    }
-
-    [Fact]
-    public async Task ProvisionAsync_RecurringMonitor_WithMintedKey_UsesDurableKey()
-    {
-        var member = NewMemberService();
-        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
-        var issuer = new RecordingRunCredentialIssuer { MintedKey = MintedKey };
-        var sut = NewService(member, schedule, issuer);
-
-        await sut.ProvisionAsync(
-            ScopeId,
-            Caller,
-            new ProvisionWorkflowRequest(
-                DisplayName: "Monitor",
-                WorkflowYaml: "name: monitor",
-                Prompt: "go",
-                Cron: "0 8 * * *",
-                Timezone: "Asia/Shanghai"),
-            callerBearerToken: CallerBearerToken);
-
-        // A minted durable key authenticates every fire with no re-mint dependency,
-        // so a recurring monitor uses it directly as the sole source.
-        var auth = schedule.Configuration!.Target.ServiceInvocation!.Auth;
-        auth!.DurableSenderBearerToken.Should().Be(MintedKey);
-        auth.SenderNyxId.Should().BeNull();
         AssertExactlyOneCredentialSource(auth);
     }
 
@@ -276,8 +183,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
     {
         var member = NewMemberService();
         var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
-        var issuer = new RecordingRunCredentialIssuer { MintedKey = MintedKey };
-        var sut = NewService(member, schedule, issuer);
+        var sut = NewService(member, schedule);
 
         var response = await sut.ProvisionAsync(
             ScopeId,
@@ -287,9 +193,8 @@ public sealed class StudioWorkflowProvisioningServiceTests
 
         response.BindingStatus.Should().Be(ProvisionWorkflowBindingStatusNames.Accepted);
         response.ScheduleId.Should().Be(ScheduleId);
-        // Minting a durable credential must not turn the non-blocking flow into a
-        // bind poll.
         member.GetBindingRunCallCount.Should().Be(0);
+        schedule.Configuration!.Target.ServiceInvocation!.Auth!.DurableSenderBearerToken.Should().BeNull();
     }
 
     [Fact]
@@ -450,8 +355,6 @@ public sealed class StudioWorkflowProvisioningServiceTests
     }
 
     private const string CallerBearerToken = "caller-bearer-token";
-    private const string MintedKey = "minted-durable-agent-key";
-
     /// <summary>
     /// The platform validator (<see cref="IScheduledDispatchApplicationService"/>
     /// CreateAsync → NormalizeServiceInvocationAuth) admits a schedule only when its
@@ -472,18 +375,16 @@ public sealed class StudioWorkflowProvisioningServiceTests
 
     private static StudioWorkflowProvisioningService NewService(
         RecordingMemberService member,
-        RecordingScheduleService schedule,
-        IStudioRunCredentialIssuer? credentialIssuer = null) =>
-        NewService(member, schedule, out _, credentialIssuer);
+        RecordingScheduleService schedule) =>
+        NewService(member, schedule, out _);
 
     private static StudioWorkflowProvisioningService NewService(
         RecordingMemberService member,
         RecordingScheduleService schedule,
-        out FakeTimeProvider time,
-        IStudioRunCredentialIssuer? credentialIssuer = null)
+        out FakeTimeProvider time)
     {
         time = new FakeTimeProvider();
-        return new StudioWorkflowProvisioningService(member, schedule, credentialIssuer, time);
+        return new StudioWorkflowProvisioningService(member, schedule, time);
     }
 
     private static RecordingMemberService NewMemberService() =>
@@ -657,29 +558,6 @@ public sealed class StudioWorkflowProvisioningServiceTests
         public Task<ScheduledDispatchRunNowReceipt> RunNowAsync(
             string scheduleId, CancellationToken ct = default) =>
             throw new NotSupportedException();
-    }
-
-    /// <summary>
-    /// Records the durable run-credential mint request and returns a fixed minted
-    /// key (or null to simulate "could not mint", e.g. no host slug configured).
-    /// </summary>
-    private sealed class RecordingRunCredentialIssuer : IStudioRunCredentialIssuer
-    {
-        public string? MintedKey { get; set; }
-        public bool IssueInvoked { get; private set; }
-        public string? CallerBearerToken { get; private set; }
-        public string? AgentId { get; private set; }
-        public string? ScopeId { get; private set; }
-
-        public Task<string?> IssueDurableRunCredentialAsync(
-            string callerBearerToken, string agentId, string scopeId, CancellationToken ct = default)
-        {
-            IssueInvoked = true;
-            CallerBearerToken = callerBearerToken;
-            AgentId = agentId;
-            ScopeId = scopeId;
-            return Task.FromResult(MintedKey);
-        }
     }
 
     /// <summary>

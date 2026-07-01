@@ -445,7 +445,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
     }
 
     [Fact]
-    public async Task ScheduledServiceInvocationDispatchPort_WithDurableToken_ShouldProjectDirectlyWithoutExchange()
+    public async Task ScheduledServiceInvocationDispatchPort_WithDurableToken_ShouldRejectBeforeExchange()
     {
         var invocationPort = new RecordingServiceInvocationPort();
         var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("ignored-subject-token");
@@ -460,29 +460,24 @@ public sealed class ScheduledDispatchServiceInvocationTests
                 LlmControl = new LLMControlContextPayload { ModelOverride = "opus" },
             }),
         };
-        // Durable credential present (e.g. a minted agent key or forwarded caller
-        // token): the dispatch projects it directly and skips the subject exchange.
         var auth = new ScheduledServiceInvocationAuth(
             SenderNyxId: null,
             DurableSenderBearerToken: "durable-run-key");
 
-        await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
+        var act = () => port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
             original,
             auth,
             Headers: null,
             ProjectNyxIdAccessTokenToWorkflowCallerCredential: true));
 
-        // The subject token-exchange port was never called — no re-mint, no
-        // BindingNotFound throw for a raw nyxid caller.
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*durable bearer auth is no longer supported*");
         credentialExchange.Sources.Should().BeEmpty();
-        var invokedChat = invocationPort.Requests.Should().ContainSingle().Which.Payload.Unpack<ChatRequestEvent>();
-        invokedChat.LlmControl.SenderNyxIdAccessToken.Should().Be("durable-run-key");
-        invokedChat.LlmControl.ModelOverride.Should().Be("opus");
-        invokedChat.ConnectorHttpAuthorization.Should().Be("Bearer durable-run-key");
+        invocationPort.Requests.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task ScheduledServiceInvocationDispatchPort_WithDurableTokenAndSubjectRef_ShouldPreferDurableToken()
+    public async Task ScheduledServiceInvocationDispatchPort_WithDurableTokenAndSubjectRef_ShouldRejectBeforeExchange()
     {
         var invocationPort = new RecordingServiceInvocationPort();
         var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("subject-token");
@@ -493,19 +488,18 @@ public sealed class ScheduledDispatchServiceInvocationTests
             CorrelationId = "corr-invoke",
             Payload = Any.Pack(new ChatRequestEvent { Prompt = "hello" }),
         };
-        // Both a subject ref and a durable token are present; the durable token wins
-        // and the subject exchange is not attempted.
         var auth = new ScheduledServiceInvocationAuth(
             new ScheduledServiceInvocationNyxIdCredentialSource(
                 new ScheduledServiceInvocationNyxIdSubjectRef("nyxid", "tenant-1", "user-42"),
                 "proxy"),
             DurableSenderBearerToken: "durable-run-key");
 
-        await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(original, auth));
+        var act = () => port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(original, auth));
 
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*durable bearer auth is no longer supported*");
         credentialExchange.Sources.Should().BeEmpty();
-        var invokedChat = invocationPort.Requests.Should().ContainSingle().Which.Payload.Unpack<ChatRequestEvent>();
-        invokedChat.LlmControl.SenderNyxIdAccessToken.Should().Be("durable-run-key");
+        invocationPort.Requests.Should().BeEmpty();
     }
 
     [Theory]
