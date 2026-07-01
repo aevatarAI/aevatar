@@ -33,6 +33,10 @@ import {
   studioInvokeColors,
   trimOptional,
 } from './studioInvokeUi';
+import {
+  getUserFacingIdentifierLabel,
+  sanitizeUserFacingText,
+} from '@/shared/ui/userFacingIdentifiers';
 import { t } from "@/shared/i18n/messages";
 
 type RunViewMode = 'latest' | 'historical';
@@ -152,6 +156,10 @@ function getRunMarker(input: {
   return input.presentation === 'member-run'
     ? 'Latest result'
     : 'Latest response';
+}
+
+function sanitizeVisibleText(value: string | null | undefined): string {
+  return sanitizeUserFacingText(value) || '';
 }
 
 function buildStatusSummary(input: {
@@ -285,7 +293,10 @@ function buildInvokeRunLogEntries(
       status,
       statusLog: log,
       stepId: log.stepId || '',
-      title: log.stepId || log.title,
+      title: getUserFacingIdentifierLabel(
+        log.stepId,
+        log.title || 'Node',
+      ),
     });
 
     if (log.tone === 'started') {
@@ -1149,7 +1160,7 @@ function renderRunLogSnippet(
   value: string,
   options: { readonly danger?: boolean; readonly keyName?: string } = {},
 ): React.ReactNode {
-  const text = value.trim();
+  const text = sanitizeVisibleText(value);
   if (!text) {
     return null;
   }
@@ -1235,6 +1246,8 @@ function renderRunLogEntry(entry: InvokeRunLogEntry): React.ReactNode {
   const duration = entry.completedAt
     ? formatDurationBetween(entry.startedAt, entry.completedAt)
     : '';
+  const entryTitle = getUserFacingIdentifierLabel(entry.title, 'Node');
+  const entryMeta = sanitizeVisibleText(entry.meta) || runLogCategoryLabels[entry.category];
   const details =
     entry.rowType === 'node'
       ? [
@@ -1267,9 +1280,9 @@ function renderRunLogEntry(entry: InvokeRunLogEntry): React.ReactNode {
       <div style={runLogEntryHeaderStyle}>
         {renderRunLogStatusIcon(entry.status)}
         <span style={{ display: 'grid', gap: 1, minWidth: 0 }}>
-          <span style={runLogEntryTitleStyle}>{entry.title}</span>
+          <span style={runLogEntryTitleStyle}>{entryTitle}</span>
           <span style={runLogEntryMetaStyle}>
-            {entry.meta || runLogCategoryLabels[entry.category]}
+            {entryMeta}
           </span>
         </span>
         <span style={runLogSubtleStyle}>{formatRunLogTime(entry.startedAt)}</span>

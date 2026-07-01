@@ -1376,12 +1376,12 @@ describe('StudioMemberInvokePanel', () => {
     expect(screen.getAllByText('Succeeded').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('Endpoint')).toBeTruthy();
     expect(screen.getAllByText('Submit').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('Run ID')).toBeTruthy();
-    expect(screen.getByText('run-1')).toBeTruthy();
-    expect(screen.getByText('Command ID')).toBeTruthy();
-    expect(screen.getByText('cmd-1')).toBeTruthy();
-    expect(screen.getByText('Actor ID')).toBeTruthy();
-    expect(screen.getByText('actor-1')).toBeTruthy();
+    expect(screen.queryByText('Run ID')).toBeNull();
+    expect(screen.queryByText('run-1')).toBeNull();
+    expect(screen.queryByText('Command ID')).toBeNull();
+    expect(screen.queryByText('cmd-1')).toBeNull();
+    expect(screen.queryByText('Actor ID')).toBeNull();
+    expect(screen.queryByText('actor-1')).toBeNull();
     expect(screen.queryByText('Member ID')).toBeNull();
     expect(screen.getByText('Event payload')).toBeTruthy();
     expect(screen.queryByTestId('studio-invoke-selected-run-detail')).toBeNull();
@@ -1717,8 +1717,8 @@ describe('StudioMemberInvokePanel', () => {
       await screen.findByTestId('studio-invoke-diagnostics-drawer'),
     ).toBeTruthy();
     expect(screen.getByText('Run details')).toBeTruthy();
-    expect(screen.getByText('Command ID')).toBeTruthy();
-    expect(screen.getByText('cmd-only')).toBeTruthy();
+    expect(screen.queryByText('Command ID')).toBeNull();
+    expect(screen.queryByText('cmd-only')).toBeNull();
     expect(screen.queryByRole('button', { name: '打开运行记录' })).toBeNull();
   });
 

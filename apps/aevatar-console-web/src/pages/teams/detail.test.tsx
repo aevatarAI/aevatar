@@ -2157,7 +2157,8 @@ describe("TeamDetailPage", () => {
     expect(screen.getByText("需要关注")).toBeTruthy();
     expect(screen.getByText("工作日 · 09:00")).toBeTruthy();
     expect(screen.getAllByText("Team Alpha Operator").length).toBeGreaterThan(0);
-    expect(screen.getByText("通过 alpha-service 运行")).toBeTruthy();
+    expect(screen.getAllByText("Workflow chat · chat").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("通过已发布服务运行").length).toBeGreaterThan(0);
     expect(screen.queryByText("Other team task")).toBeNull();
     expect(screen.queryByText("Other service task")).toBeNull();
 
@@ -2556,7 +2557,7 @@ describe("TeamDetailPage", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "添加周期任务" }));
     expect(
-      await screen.findByText("目标服务为 alpha-service。"),
+      await screen.findByText("目标为该成员的已发布服务。"),
     ).toBeTruthy();
     fireEvent.change(await screen.findByLabelText("自动化名称"), {
       target: { value: "Daily escalation digest" },
@@ -2600,7 +2601,7 @@ describe("TeamDetailPage", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "添加周期任务" }));
     expect(
-      await screen.findByText("目标服务为 alpha-service。"),
+      await screen.findByText("目标为该成员的已发布服务。"),
     ).toBeTruthy();
     fireEvent.change(await screen.findByLabelText(/周期 Prompt/), {
       target: { value: "Summarize escalations and follow-up owners." },
@@ -2680,7 +2681,7 @@ describe("TeamDetailPage", () => {
       "0 9 * * 1-5",
     );
     expect(within(editDialog).getByLabelText("时区")).toHaveValue("Asia/Shanghai");
-    expect(within(editDialog).getByText("目标服务为 alpha-service。")).toBeTruthy();
+    expect(within(editDialog).getByText("目标为该成员的已发布服务。")).toBeTruthy();
     expect(
       within(editDialog).queryByText(
         "已保存的 Prompt 不会在这里显示。输入新的 Prompt 会替换旧值，留空保存则不带周期 Prompt。",

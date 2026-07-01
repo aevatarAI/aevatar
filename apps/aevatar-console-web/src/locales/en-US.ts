@@ -235,7 +235,7 @@ const enUSMessages = {
   'teams.detail.overview.fallback.currentExecution': 'Current execution',
   'teams.detail.overview.fallback.noRecentRun': 'No recent run',
   'teams.detail.overview.fallback.primaryService': 'Primary service',
-  'teams.detail.overview.fallback.serviceEntry': 'Service entry {serviceId}',
+  'teams.detail.overview.fallback.serviceEntry': 'Service entry',
   'teams.detail.overview.fallback.teamWorkflow': 'Team workflow',
   'teams.detail.overview.identity.noService': 'No service is visible yet',
   'teams.detail.overview.identity.noVisibleRun': 'No visible run synced yet',
@@ -371,7 +371,7 @@ const enUSMessages = {
   'teams.detail.test.archivedHint': 'Archived teams cannot start new tests.',
   'teams.detail.test.subtitle': 'Start a real team invocation through the entry member.',
   'teams.detail.update.empty': 'No visible update time yet',
-  'teams.detail.update.fromRun': 'From run {runId}',
+  'teams.detail.update.fromRun': 'From latest run',
   'teams.detail.update.fromTeam': 'From team update time',
   'teams.detail.update.fromVisibleRun': 'From the latest visible run',
   'teams.detail.update.fromWorkflow': 'From workflow update time',
@@ -661,7 +661,8 @@ const enUSMessages = {
   'teams.automations.form.enabled': 'Enabled',
   'teams.automations.form.identityMissing':
     "Waiting for this member's published service identity.",
-  'teams.automations.form.identityReady': 'Targets published service {serviceId}.',
+  'teams.automations.form.identityReady':
+    "Targets the member's published service.",
   'teams.automations.form.member': 'Member',
   'teams.automations.form.memberAria': 'Automation member',
   'teams.automations.form.preset.custom': 'Custom cron',
@@ -696,6 +697,8 @@ const enUSMessages = {
   'teams.automations.form.title': 'New member automation',
   'teams.automations.member.publishFirst':
     'Publish this member before adding recurring work.',
+  'teams.automations.member.publishedServiceReady':
+    'Published service ready',
   'teams.automations.member.unknown': 'Unknown member',
   'teams.automations.member.workflowOnly':
     'Only workflow members can have recurring work.',
@@ -730,7 +733,7 @@ const enUSMessages = {
   'teams.automations.preview.runsThroughMember':
     'Runs through the member service',
   'teams.automations.preview.runsThroughService':
-    'Runs through {serviceId}',
+    'Runs through published service',
   'teams.automations.preview.status.active': 'Active',
   'teams.automations.preview.status.attention': 'Needs attention',
   'teams.automations.preview.weekly.cadence': 'Friday · 16:30',
@@ -934,7 +937,7 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.executionsPanel.sectionAria':
     'Workflow executions',
   'teamMemberWorkflowStudio.executionsPanel.serviceMeta':
-    'service {serviceId}',
+    'Service ready',
   'teamMemberWorkflowStudio.executionsPanel.title': 'Executions',
   'teamMemberWorkflowStudio.executionsPanel.unknownStatus': 'unknown',
   'teamMemberWorkflowStudio.header.activateAria': 'Activate workflow member',
@@ -1151,6 +1154,174 @@ const enUSMessages = {
   'pages.studio.studiomemberinvokeinspector.title': 'Details',
   'pages.studio.studiomemberinvokepanel.endpoint': 'Endpoint',
   'pages.studio.studiomemberinvokepanel.inspector': 'Details',
+  'pages.actors.index.actor': 'Actor',
+  'pages.actors.index.command.recorded': 'Command recorded',
+  'pages.actors.index.snapshot.available': 'Snapshot available',
+  'pages.deployments.index.actor.available': 'Actor available',
+  'pages.deployments.index.artifact.ready': 'Artifact ready',
+  'pages.deployments.index.deployment.attached': 'Deployment attached',
+  'pages.deployments.index.endpoint.ready': 'Endpoint ready',
+  'pages.deployments.index.rollout.active': 'Rollout active',
+  'pages.deployments.index.service': 'Service',
+  'pages.deployments.index.traffic.target.number': 'Target {value1}',
+  'pages.deployments.index.traffic.target.summary': '{value1}% {value2}',
+  'pages.deployments.index.version.ready': 'Version ready',
+  'pages.gagents.index.actor.not.assigned': '· Actor not assigned',
+  'pages.gagents.index.actor.ready': '· Actor ready',
+  'pages.gagents.index.attached': 'Attached',
+  'pages.gagents.index.available': 'Available',
+  'pages.gagents.index.configured': 'Configured',
+  'pages.gagents.index.deployment.ready': 'Deployment ready',
+  'pages.gagents.index.draft.deployment': 'Draft deployment',
+  'pages.gagents.index.latest.run.output': 'Latest Run Output',
+  'pages.gagents.index.service': 'Service',
+  'pages.governance.columns.binding': 'Binding',
+  'pages.governance.columns.binding.count': '{value1} bindings',
+  'pages.governance.columns.caller.count': '{value1} callers',
+  'pages.governance.columns.connector.target': 'Connector target',
+  'pages.governance.columns.endpoint': 'Endpoint',
+  'pages.governance.columns.policy': 'Policy',
+  'pages.governance.columns.policy.count': '{value1} policies',
+  'pages.governance.columns.request.contract.ready': 'Request contract ready',
+  'pages.governance.columns.secret.target': 'Secret target',
+  'pages.governance.columns.service.endpoint.target': 'Service endpoint target',
+  'pages.governance.columns.service.target': 'Service target',
+  'pages.governance.governanceinspectordrawer.version.ready': 'Version ready',
+  'pages.governance.governanceworkbench.binding.accepted.for.creation':
+    'Binding was accepted for governance creation.',
+  'pages.governance.governanceworkbench.binding.accepted.for.retirement':
+    'Binding was accepted for retirement.',
+  'pages.governance.governanceworkbench.binding.accepted.for.update':
+    'Binding was accepted for update.',
+  'pages.governance.governanceworkbench.endpoint.accepted.for.creation':
+    'Endpoint was accepted for governance creation.',
+  'pages.governance.governanceworkbench.endpoint.accepted.for.exposure':
+    'Endpoint was accepted for {value1} exposure.',
+  'pages.governance.governanceworkbench.endpoint.accepted.for.update':
+    'Endpoint was accepted for update.',
+  'pages.governance.governanceworkbench.policy': 'Policy',
+  'pages.governance.governanceworkbench.policy.accepted.for.creation':
+    'Policy was accepted for governance creation.',
+  'pages.governance.governanceworkbench.policy.accepted.for.retirement':
+    'Policy was accepted for retirement.',
+  'pages.governance.governanceworkbench.policy.accepted.for.update':
+    'Policy was accepted for update.',
+  'pages.governance.governanceworkbench.service': 'Service',
+  'pages.governance.governanceworkbench.service.endpoint.target':
+    'Service endpoint target',
+  'pages.governance.governanceworkbench.service.target': 'Service target',
+  'pages.governance.governanceworkbench.version.pending': 'Version pending',
+  'pages.governance.governanceworkbench.version.ready': 'Version ready',
+  'pages.governance.governanceworkbench.revision.was.published.for.governance.evaluation':
+    'Revision was published for governance evaluation.',
+  'pages.governance.governanceworkbench.revision.is.prepared.and.waiting.for':
+    'Revision is prepared and waiting for promotion decisions.',
+  'pages.governance.governanceworkbench.revision.missing.policies':
+    'Revision is missing {value1} required policies.',
+  'pages.runs.memberPublishedRuns.event': 'Event',
+  'pages.runs.memberPublishedRuns.member': 'Team member',
+  'pages.runs.memberPublishedRuns.step': 'Step',
+  'pages.runs.runsinspectorpane.actor': 'Actor',
+  'pages.runs.runsinspectorpane.command': 'Command',
+  'pages.runs.runsinspectorpane.command.accepted': 'Command accepted',
+  'pages.runs.runsinspectorpane.command.accepted.2': 'Command accepted',
+  'pages.runs.runsinspectorpane.current.run': 'Current run',
+  'pages.runs.runsinspectorpane.current.run.2': 'Current run',
+  'pages.runs.runsinspectorpane.current.run.ready': 'Current run ready',
+  'pages.runs.runsinspectorpane.event.recorded': 'Event recorded',
+  'pages.runs.runsinspectorpane.no.user.visible.payload':
+    'No user-visible payload fields.',
+  'pages.runs.runsinspectorpane.runtime.actor.ready': 'Runtime actor ready',
+  'pages.runs.runsinspectorpane.runtime.actor.ready.2': 'Runtime actor ready',
+  'pages.runs.runsinspectorpane.runtime.actor.ready.3': 'Runtime actor ready',
+  'pages.runs.runslaunchrail.no.run': 'No run',
+  'pages.runs.runslaunchrail.run.ready': 'Run ready',
+  'pages.runs.runsstatusstrip.current.run.ready': 'Current run ready',
+  'pages.runs.runsstatusstrip.pending': 'Pending',
+  'pages.runs.runsstatusstrip.run': 'Run',
+  'pages.runs.runworkbenchconfig.available': 'Available',
+  'pages.runs.runworkbenchconfig.command.accepted': 'Command accepted',
+  'pages.runs.runworkbenchconfig.current.run': 'Current run',
+  'pages.runs.runworkbenchconfig.current.run.2': 'Current run',
+  'pages.runs.runworkbenchconfig.current.run.ready': 'Current run ready',
+  'pages.runs.runworkbenchconfig.runtime.actor.ready': 'Runtime actor ready',
+  'pages.scopes.assets.actor.available': 'Actor available',
+  'pages.scopes.invoke.endpoint': 'Endpoint',
+  'pages.scopes.invoke.run': 'Run',
+  'pages.scopes.invoke.run.available': 'Run available',
+  'pages.scopes.invoke.runtime': 'Runtime',
+  'pages.scopes.invoke.runtime.ready': 'Runtime ready',
+  'pages.scopes.invoke.selected.service': 'the selected service',
+  'pages.scopes.invoke.service': 'Service',
+  'pages.scopes.invoke.version.ready': 'Version ready',
+  'pages.scopes.scopeserviceruntimeworkbench.actor.available': 'Actor available',
+  'pages.scopes.scopeserviceruntimeworkbench.binding': 'Binding',
+  'pages.scopes.scopeserviceruntimeworkbench.binding.accepted.for.retirement':
+    'Binding was accepted for retirement.',
+  'pages.scopes.scopeserviceruntimeworkbench.binding.created':
+    'Binding was created.',
+  'pages.scopes.scopeserviceruntimeworkbench.binding.updated':
+    'Binding was updated.',
+  'pages.scopes.scopeserviceruntimeworkbench.endpoint': 'Endpoint',
+  'pages.scopes.scopeserviceruntimeworkbench.endpoints': 'endpoints',
+  'pages.scopes.scopeserviceruntimeworkbench.policy.count': '{value1} policies',
+  'pages.scopes.scopeserviceruntimeworkbench.ready': 'Ready',
+  'pages.scopes.scopeserviceruntimeworkbench.revision.accepted.for.retirement':
+    'Revision was accepted for retirement.',
+  'pages.scopes.scopeserviceruntimeworkbench.service': 'Service',
+  'pages.scopes.scopeserviceruntimeworkbench.service.target': 'Service target',
+  'pages.scopes.scopeserviceruntimeworkbench.serving.version.ready':
+    'serving version ready',
+  'pages.scopes.scopeserviceruntimeworkbench.version': 'Version',
+  'pages.services.index.artifact.attached': 'Artifact attached',
+  'pages.services.index.endpoint': 'Endpoint',
+  'pages.services.index.endpoint.ready': 'Endpoint ready',
+  'pages.services.index.request.contract.ready': 'Request contract ready',
+  'pages.services.index.service': 'Service',
+  'pages.services.index.service.identity.ready': 'Service identity ready',
+  'pages.services.index.version.ready': 'Version ready',
+  'pages.studio.bind.studiomemberbindpanel.binding': 'Binding',
+  'pages.studio.bind.studiomemberbindpanel.endpoint': 'Endpoint',
+  'pages.studio.bind.studiomemberbindpanel.endpoint.ready': 'Endpoint ready',
+  'pages.studio.bind.studiomemberbindpanel.member.selected': 'Member selected',
+  'pages.studio.bind.studiomemberbindpanel.policy.count': '{value1} policies',
+  'pages.studio.bind.studiomemberbindpanel.revision.ready': 'Revision ready',
+  'pages.studio.bind.studiomemberbindpanel.run.completed': 'Run completed',
+  'pages.studio.bind.studiomemberbindpanel.service.ready': 'Service ready',
+  'pages.studio.studiobuildpanels.command.accepted': 'command: accepted',
+  'pages.studio.studiobuildpanels.current.run.ready': 'current run: ready',
+  'pages.studio.studiobuildpanels.events.count': 'events: {count}',
+  'pages.studio.studiobuildpanels.runtime.actor.ready': 'runtime actor: ready',
+  'pages.studio.studiobuildpanels.save.accepted.checking.again':
+    'Save accepted. Waiting for catalog; checking again in {value1}s.',
+  'pages.studio.studiobuildpanels.save.accepted.waiting.for.catalog':
+    'Save accepted. Still waiting for catalog; use Refresh catalog to check again.',
+  'pages.studio.studiobuildpanels.save.applied': 'Save applied.',
+  'pages.studio.studiobuildpanels.save.rejected': 'Save rejected.',
+  'pages.studio.studiobuildpanels.script': 'Script',
+  'pages.studio.studiobuildpanels.script.applied': 'Applied script',
+  'pages.studio.studiobuildpanels.script.draft': 'Script draft',
+  'pages.studio.studiobuildpanels.script.promotion.version.summary':
+    'Script promotion version summary',
+  'pages.studio.studiobuildpanels.version.ready': 'version ready',
+  'pages.studio.studiofilesdetailpane.draft': 'Draft',
+  'pages.studio.studiofilesdetailpane.version.ready': 'Version ready',
+  'pages.studio.studiofilespage.chat.history': 'Chat history',
+  'pages.studio.studiofilespage.draft': 'Draft',
+  'pages.studio.studiofilespage.version.ready': 'Version ready',
+  'pages.studio.studioinvokediagnosticsdrawer.endpoint.ready': 'Endpoint ready',
+  'pages.studio.studiomemberinvokeinspector.service.ready': 'Service ready',
+  'pages.studio.studiomemberinvokeinspector.version.ready': 'Version ready',
+  'pages.studio.studioworkbenchsections.runtime.available':
+    'Runtime available',
+  'pages.studio.studioworkbenchsections.runtime.available.2':
+    'Runtime available',
+  'pages.studio.studioworkbenchsections.runtime.available.3':
+    'Runtime available',
+  'pages.studio.studioworkbenchsections.runtime.available.4':
+    'Runtime available',
+  'pages.studio.studioworkbenchsections.runtime.facts.available':
+    'Runtime facts available',
 };
 
 export default enUSMessages;

@@ -715,7 +715,7 @@ describe('ScopeInvokePage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Observed Events' }));
     expect(await screen.findByText('Observed Events (3)')).toBeTruthy();
     expect(await screen.findByText('Latest raw payloads')).toBeTruthy();
-    expect(screen.getByText('run-1')).toBeTruthy();
+    expect(screen.queryByText('run-1')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Continue in Runs' }));
 
     expect(window.location.pathname).toBe('/runtime/runs');
