@@ -13,20 +13,19 @@ describe("app navigation groups", () => {
     jest.resetModules();
   });
 
-  it("puts Chat first, then scoped Teams, then platform items", () => {
+  it("keeps scoped Teams, platform, and Settings in their menu groups", () => {
     const groups = loadNavigationGroups();
 
     expect(groups.map((group) => group.label)).toEqual([
-      "Chat",
       "Teams",
       "Platform",
       "Settings",
     ]);
     expect(groups.map((group) => group.labelMessageId)).toEqual([
-      "nav.groups.chat",
       "nav.groups.teams",
       "nav.groups.platform",
       "nav.groups.settings",
     ]);
+    expect(groups.find((group) => group.key === "teams")?.flattenSingleItem).toBeUndefined();
   });
 });

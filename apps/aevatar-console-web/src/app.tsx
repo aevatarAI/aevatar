@@ -6,6 +6,7 @@ import {
   DownOutlined,
   GlobalOutlined,
   LogoutOutlined,
+  MessageOutlined,
   SettingOutlined,
   UserOutlined,
 } from "@ant-design/icons";
@@ -176,6 +177,9 @@ const NAVIGATION_MENU_MESSAGE_IDS: Readonly<Record<string, string>> = {
   "/deployments": "nav.items.deployments",
   "/runtime/explorer": "nav.items.topology",
   "/settings": "nav.items.settings",
+};
+const NAVIGATION_MENU_ICONS: Readonly<Record<string, React.ReactNode>> = {
+  "/chat": <MessageOutlined />,
 };
 const LIVE_OPS_DEFAULT_ATTENTION_SNAPSHOT: LiveOpsAttentionSnapshot = {
   hasPendingAttention: false,
@@ -650,13 +654,11 @@ LiveOpsGroupIcon.displayName = "LiveOpsGroupIcon";
 
 function groupNavigationMenuItems(items: NavigationMenuItem[]): NavigationMenuItem[] {
   const grouped = new Map<string, NavigationMenuItem[]>();
-  const ungrouped: NavigationMenuItem[] = [];
 
   for (const item of items) {
     const groupKey =
       typeof item.menuGroupKey === "string" ? item.menuGroupKey : undefined;
     if (!groupKey) {
-      ungrouped.push(item);
       continue;
     }
 
@@ -669,9 +671,28 @@ function groupNavigationMenuItems(items: NavigationMenuItem[]): NavigationMenuIt
     grouped.set(groupKey, [item]);
   }
 
-  const menuGroups = NAVIGATION_GROUP_ORDER.reduce<NavigationMenuItem[]>(
-    (result, group) => {
-      const children = grouped.get(group.key);
+  const groupByKey = new Map(NAVIGATION_GROUP_ORDER.map((group) => [group.key, group]));
+  const emittedGroups = new Set<string>();
+
+  return items.reduce<NavigationMenuItem[]>(
+    (result, item) => {
+      const groupKey =
+        typeof item.menuGroupKey === "string" ? item.menuGroupKey : undefined;
+      if (!groupKey) {
+        result.push(item);
+        return result;
+      }
+
+      if (emittedGroups.has(groupKey)) {
+        return result;
+      }
+
+      emittedGroups.add(groupKey);
+      const group = groupByKey.get(groupKey);
+      const children = grouped.get(groupKey);
+      if (!group) {
+        return result;
+      }
       if (!children || children.length === 0) {
         return result;
       }
@@ -698,8 +719,6 @@ function groupNavigationMenuItems(items: NavigationMenuItem[]): NavigationMenuIt
     },
     []
   );
-
-  return [...menuGroups, ...ungrouped];
 }
 
 function decorateNavigationMenuItems(
@@ -738,12 +757,13 @@ function decorateNavigationMenuItems(
             showLiveOpsDot: isLiveOpsGroup && !hasRenderableIcon,
           })
         : localizedName;
+    const routeIcon = path ? NAVIGATION_MENU_ICONS[path] : undefined;
     const icon =
       isLiveOpsGroup && hasRenderableIcon
         ? React.createElement(LiveOpsGroupIcon, {
             icon: item.icon,
           })
-        : item.icon;
+        : (item.icon ?? routeIcon);
 
     return {
       ...item,
