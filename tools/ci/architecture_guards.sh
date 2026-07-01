@@ -2075,12 +2075,12 @@ check_system_skill_overlay_dual_seam_injection() {
   # Both seams must resolve a REAL overlay provider, not just declare the interface or lean on a test
   # stub: a non-test implementation of ISystemSkillOverlayProvider must exist and be registered in DI,
   # otherwise the channel seam injects nothing in production and the dual-seam claim is hollow.
-  if ! rg -qE '[:,][[:space:]]*ISystemSkillOverlayProvider\b' agents src -g '*.cs'; then
+  if ! rg -q -e '[:,][[:space:]]*ISystemSkillOverlayProvider\b' agents src -g '*.cs'; then
     echo "A production ISystemSkillOverlayProvider implementation is required so the channel seam injects a real overlay (not a test stub)."
     exit 1
   fi
 
-  if ! rg -qE 'AddSingleton<ISystemSkillOverlayProvider' agents src -g '*.cs'; then
+  if ! rg -q -e 'AddSingleton<ISystemSkillOverlayProvider' agents src -g '*.cs'; then
     echo "ISystemSkillOverlayProvider must be registered in production DI so both reply seams resolve a real overlay."
     exit 1
   fi

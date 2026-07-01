@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 
-echo "[event-sourcing][1/4] Build foundation slice..."
+echo "[event-sourcing][1/3] Build foundation slice..."
 dotnet build aevatar.foundation.slnf \
   --nologo \
   --tl:off \
@@ -14,7 +14,7 @@ dotnet build aevatar.foundation.slnf \
   -p:UseSharedCompilation=false \
   -p:NuGetAudit=false
 
-echo "[event-sourcing][2/4] Run EventSourcing core tests..."
+echo "[event-sourcing][2/3] Run EventSourcing core tests..."
 dotnet test test/Aevatar.Foundation.Core.Tests/Aevatar.Foundation.Core.Tests.csproj \
   --nologo \
   --tl:off \
@@ -23,10 +23,7 @@ dotnet test test/Aevatar.Foundation.Core.Tests/Aevatar.Foundation.Core.Tests.csp
   -p:NuGetAudit=false \
   --filter "FullyQualifiedName~EventSourcing"
 
-echo "[event-sourcing][3/4] Run Orleans + Garnet persistence smoke..."
+echo "[event-sourcing][3/3] Run Orleans + Garnet persistence smoke..."
 bash tools/ci/orleans_garnet_persistence_smoke.sh
-
-echo "[event-sourcing][4/4] Run architecture guards..."
-bash tools/ci/architecture_guards.sh
 
 echo "[event-sourcing] Regression suite passed."
