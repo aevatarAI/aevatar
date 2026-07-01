@@ -33,7 +33,7 @@ This directory keeps CI gate scripts and smoke tests.
   - Job `changes`
     - Uses path filters to detect whether projection-provider or Kafka-runtime integration jobs must run.
   - Job `fkst-host-policy`
-    - Runs on PR updates, review/review-comment events, and PR issue-comment events so unresolved P1/P2 review feedback is rechecked after automated review arrives; comment-only self-triggers are skipped when `FKST_GITHUB_BOT_LOGIN` is configured.
+    - Runs the host FKST policy gate for PR updates; PR-side comment/review automation is handled by the `github-devloop-pr` package in FKST supervise.
   - Job `fast-gates`
     - Runs static architecture and test-stability guards.
   - Test authority

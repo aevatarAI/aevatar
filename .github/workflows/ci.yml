@@ -2,12 +2,6 @@ name: ci
 
 on:
   pull_request:
-  pull_request_review:
-    types: [submitted, edited, dismissed]
-  pull_request_review_comment:
-    types: [created, edited, deleted]
-  issue_comment:
-    types: [created, edited, deleted]
   push:
     branches:
       - main
@@ -29,8 +23,6 @@ env:
   # Optional test overrides for real OpenAI integration test.
   AEVATAR_TEST_OPENAI_BASE_URL: ${{ secrets.AEVATAR_TEST_OPENAI_BASE_URL }}
   AEVATAR_TEST_OPENAI_MODEL: ${{ secrets.AEVATAR_TEST_OPENAI_MODEL }}
-  # Optional FKST actor login used to avoid self-triggering comment-only policy checks.
-  FKST_GITHUB_BOT_LOGIN: ${{ vars.FKST_GITHUB_BOT_LOGIN }}
 
 jobs:
   changes:
@@ -144,11 +136,7 @@ jobs:
           fi
 
   fkst-host-policy:
-    if: |
-      github.event_name == 'pull_request' ||
-      github.event_name == 'pull_request_review' ||
-      (github.event_name == 'pull_request_review_comment' && (env.FKST_GITHUB_BOT_LOGIN == '' || github.actor != env.FKST_GITHUB_BOT_LOGIN)) ||
-      (github.event_name == 'issue_comment' && github.event.issue.pull_request && (env.FKST_GITHUB_BOT_LOGIN == '' || github.actor != env.FKST_GITHUB_BOT_LOGIN))
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
