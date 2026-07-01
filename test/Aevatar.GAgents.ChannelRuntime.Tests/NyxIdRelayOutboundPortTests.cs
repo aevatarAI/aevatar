@@ -56,6 +56,67 @@ public sealed class NyxIdRelayOutboundPortTests
     }
 
     [Fact]
+    public async Task SendAsync_LarkLongText_ShouldSplitOrderedRelayRepliesPreservingTail()
+    {
+        var handler = new RecordingJsonHandler();
+        var fullReply = BuildLongWorkflowReply();
+        var port = CreatePort(handler, new StubComposer("lark", text: fullReply));
+
+        var result = await port.SendAsync(
+            "lark",
+            BuildConversation(),
+            new MessageContent { Text = "workflow output" },
+            new OutboundDeliveryContext
+            {
+                ReplyMessageId = "msg-lark-long-1",
+            },
+            "relay-token",
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        handler.Requests.Should().HaveCount(2);
+        handler.Requests.Should().OnlyContain(request =>
+            request.Path == "/api/v1/channel-relay/reply" &&
+            request.Authorization == "Bearer relay-token");
+
+        var first = ReadRelayText(handler.Requests[0].Body);
+        var second = ReadRelayText(handler.Requests[1].Body);
+        first.Length.Should().BeLessThanOrEqualTo(30_000);
+        second.Length.Should().BeLessThanOrEqualTo(30_000);
+        first.Should().Contain("**1. Warm & Polite**");
+        first.Should().Contain("[part 1/2 - continues]");
+        second.Should().Contain("[part 2/2 - continued]");
+        second.Should().Contain("**3. Simple & Sweet**");
+        second.Should().Contain("Wishing you all a lovely summer!");
+        second.Should().Contain("CN summer wishes preserved.");
+    }
+
+    [Fact]
+    public async Task SendAsync_LarkLongText_WhenLaterChunkRejected_ShouldFailObservable()
+    {
+        var handler = new SequencedRecordingJsonHandler(
+            (HttpStatusCode.OK, """{"message_id":"reply-1","platform_message_id":"platform-1"}"""),
+            (HttpStatusCode.BadRequest, """{"error":"platform_limit"}"""));
+        var port = CreatePort(handler, new StubComposer("lark", text: BuildLongWorkflowReply()));
+
+        var result = await port.SendAsync(
+            "lark",
+            BuildConversation(),
+            new MessageContent { Text = "workflow output" },
+            new OutboundDeliveryContext
+            {
+                ReplyMessageId = "msg-lark-long-1",
+            },
+            "relay-token",
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.ErrorCode.Should().Be("relay_reply_rejected");
+        result.ErrorMessage.Should().Contain("platform_limit");
+        handler.Requests.Should().HaveCount(2);
+    }
+
+    [Fact]
     public async Task SendWithAgentKeyAsync_ShouldUseLongLivedAgentKeyAsBearer()
     {
         var handler = new RecordingJsonHandler();
@@ -578,6 +639,26 @@ public sealed class NyxIdRelayOutboundPortTests
         reply.TryGetProperty("metadata", out _).Should().BeFalse();
     }
 
+    private static string ReadRelayText(string body)
+    {
+        using var document = JsonDocument.Parse(body);
+        return document.RootElement.GetProperty("reply").GetProperty("text").GetString()!;
+    }
+
+    private static string BuildLongWorkflowReply()
+    {
+        var draft1 = "**1. Warm & Polite** Thank you so much for organizing everything. " + new string('A', 15_000);
+        var draft2 = "**2. Friendly & Engaging** Thank you for the lovely update. " + new string('B', 15_000);
+        var draft3 = "**3. Simple & Sweet** Thank you so much for everything this year. Wishing you all a lovely summer! CN summer wishes preserved.";
+        return string.Join(
+            "\n\n",
+            "**Original (EN):** Hi Everyone! Below is a quick recap on how we used our class funds this year.",
+            "**Translation (CN):** Class fund recap translation placeholder.",
+            draft1,
+            draft2,
+            draft3);
+    }
+
     private sealed class RecordingJsonHandler(
         HttpStatusCode status = HttpStatusCode.OK,
         string responseBody = """{"message_id":"reply-1","platform_message_id":"platform-1"}""",
@@ -600,6 +681,33 @@ public sealed class NyxIdRelayOutboundPortTests
                 response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(retryAfter.Value);
 
             return response;
+        }
+    }
+
+    private sealed class SequencedRecordingJsonHandler : HttpMessageHandler
+    {
+        private readonly Queue<(HttpStatusCode Status, string Body)> _responses;
+        public List<(string Path, string? Authorization, string Body)> Requests { get; } = [];
+
+        public SequencedRecordingJsonHandler(params (HttpStatusCode Status, string Body)[] responses)
+        {
+            _responses = new Queue<(HttpStatusCode Status, string Body)>(responses);
+        }
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Requests.Add((
+                request.RequestUri?.PathAndQuery ?? string.Empty,
+                request.Headers.Authorization?.ToString(),
+                request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken)));
+
+            var (status, body) = _responses.Count > 0
+                ? _responses.Dequeue()
+                : (HttpStatusCode.OK, """{"message_id":"reply-1","platform_message_id":"platform-1"}""");
+            return new HttpResponseMessage(status)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+            };
         }
     }
 

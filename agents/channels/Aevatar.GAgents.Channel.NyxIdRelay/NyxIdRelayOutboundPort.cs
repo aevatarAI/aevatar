@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Globalization;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
@@ -8,6 +9,11 @@ namespace Aevatar.GAgents.Channel.NyxIdRelay;
 
 public sealed class NyxIdRelayOutboundPort
 {
+    private const int MaxLarkTextLength = 30_000;
+    private const int ChunkMarkerOverhead = 60;
+    private const string ContinuesSuffixFormat = "\n\n[part {0}/{1} - continues]";
+    private const string ContinuedPrefixFormat = "[part {0}/{1} - continued]\n\n";
+
     private readonly NyxIdApiClient _nyxClient;
     private readonly IReadOnlyDictionary<string, IMessageComposer> _composers;
     private readonly ILogger<NyxIdRelayOutboundPort> _logger;
@@ -68,26 +74,39 @@ public sealed class NyxIdRelayOutboundPort
             return composeFailure;
         }
 
-        var result = await _nyxClient.SendChannelRelayTextReplyAsync(
-            replyToken,
-            delivery.ReplyMessageId,
-            replyText,
-            ct);
-        if (!result.Succeeded)
+        var normalizedPlatform = NormalizePlatformKey(platform);
+        var chunks = SplitRelayReplyText(normalizedPlatform, replyText);
+        var sentActivityIds = new List<string>(chunks.Count);
+        var platformMessageIds = new List<string>(chunks.Count);
+        for (var i = 0; i < chunks.Count; i++)
         {
-            _logger.LogWarning(
-                "Nyx relay reply delivery failed: platform={Platform}, messageId={MessageId}, detail={Detail}",
-                platform,
+            var result = await _nyxClient.SendChannelRelayTextReplyAsync(
+                replyToken,
                 delivery.ReplyMessageId,
-                result.Detail);
-            return EmitResult.Failed(
-                "relay_reply_rejected",
-                result.Detail ?? "Nyx relay reply rejected.");
+                chunks[i],
+                ct);
+            if (!result.Succeeded)
+            {
+                _logger.LogWarning(
+                    "Nyx relay reply delivery failed: platform={Platform}, messageId={MessageId}, chunk={Chunk}, totalChunks={TotalChunks}, detail={Detail}",
+                    platform,
+                    delivery.ReplyMessageId,
+                    i + 1,
+                    chunks.Count,
+                    result.Detail);
+                return EmitResult.Failed(
+                    "relay_reply_rejected",
+                    result.Detail ?? "Nyx relay reply rejected.");
+            }
+
+            sentActivityIds.Add(result.MessageId ?? $"nyx-relay:{delivery.ReplyMessageId}:{i + 1}");
+            if (!string.IsNullOrWhiteSpace(result.PlatformMessageId))
+                platformMessageIds.Add(result.PlatformMessageId);
         }
 
         return EmitResult.Sent(
-            result.MessageId ?? $"nyx-relay:{delivery.ReplyMessageId}",
-            platformMessageId: result.PlatformMessageId);
+            string.Join(",", sentActivityIds),
+            platformMessageId: string.Join(",", platformMessageIds));
     }
 
     public async Task<EmitResult> SendWithAgentKeyAsync(
@@ -250,4 +269,64 @@ public sealed class NyxIdRelayOutboundPort
         string.IsNullOrWhiteSpace(value)
             ? string.Empty
             : value.Trim().ToLowerInvariant();
+
+    private static IReadOnlyList<string> SplitRelayReplyText(string normalizedPlatform, string replyText)
+    {
+        if (!IsLarkPlatform(normalizedPlatform) ||
+            new StringInfo(replyText).LengthInTextElements <= MaxLarkTextLength)
+            return [replyText];
+
+        var contentBudget = Math.Max(1, MaxLarkTextLength - ChunkMarkerOverhead);
+        var rawChunks = SplitRaw(replyText, contentBudget);
+        if (rawChunks.Count == 1)
+            return rawChunks;
+
+        var total = rawChunks.Count;
+        var rendered = new List<string>(total);
+        for (var i = 0; i < total; i++)
+        {
+            var partNumber = i + 1;
+            var prefix = i > 0
+                ? string.Format(ContinuedPrefixFormat, partNumber, total)
+                : string.Empty;
+            var suffix = i < total - 1
+                ? string.Format(ContinuesSuffixFormat, partNumber, total)
+                : string.Empty;
+            rendered.Add(prefix + rawChunks[i] + suffix);
+        }
+
+        return rendered;
+    }
+
+    private static List<string> SplitRaw(string text, int contentBudget)
+    {
+        var chunks = new List<string>();
+        var offset = 0;
+        while (offset < text.Length)
+        {
+            var remaining = text[offset..];
+            if (new StringInfo(remaining).LengthInTextElements <= contentBudget)
+            {
+                chunks.Add(remaining);
+                break;
+            }
+
+            var end = offset + new StringInfo(remaining).SubstringByTextElements(0, contentBudget).Length;
+            var boundary = text.LastIndexOf("\n\n", end - 1, end - offset, StringComparison.Ordinal);
+            if (boundary <= offset)
+            {
+                chunks.Add(text[offset..end]);
+                offset = end;
+                continue;
+            }
+
+            chunks.Add(text[offset..boundary]);
+            offset = boundary + 2;
+        }
+
+        return chunks;
+    }
+
+    private static bool IsLarkPlatform(string normalizedPlatform) =>
+        normalizedPlatform is "lark" or "feishu";
 }

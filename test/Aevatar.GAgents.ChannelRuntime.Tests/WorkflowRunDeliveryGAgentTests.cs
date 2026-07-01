@@ -68,6 +68,48 @@ public sealed class WorkflowRunDeliveryGAgentTests
     }
 
     [Fact]
+    public async Task TerminalWorkflowEvent_WhenLarkOutputExceedsRelayLimit_ShouldDeliverOrderedChunks()
+    {
+        var projectionPort = new RecordingWorkflowExecutionProjectionPort();
+        var nyxHandler = new RecordingJsonHandler();
+        var outboundPort = CreateOutboundPort(nyxHandler);
+        var deferredDispatchPort = new DeferredDispatchPort();
+        var credentialProvider = new RecordingCredentialProvider
+        {
+            ["secrets://nyx/reply-1"] = "nyxid_ag_secret_1",
+        };
+        var agent = await CreateAgentAsync(projectionPort, outboundPort, deferredDispatchPort, credentialProvider);
+        var dispatchPort = new DirectActorDispatchPort(agent);
+        deferredDispatchPort.Inner = dispatchPort;
+        var output = BuildLongWorkflowReply();
+
+        await agent.HandleEventAsync(Envelope(StartRequest()));
+        await projectionPort.LastSink!.PushAsync(new WorkflowRunEventEnvelope
+        {
+            RunFinished = new WorkflowRunFinishedEventPayload
+            {
+                Result = Any.Pack(new WorkflowRunResultPayload { Output = output }),
+            },
+        });
+
+        agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Delivered);
+        agent.State.TerminalText.Should().Be(output);
+        nyxHandler.Requests.Should().HaveCount(2);
+        nyxHandler.Requests.Should().OnlyContain(request =>
+            request.Path == "/api/v1/channel-relay/reply" &&
+            request.Authorization == "Bearer nyxid_ag_secret_1");
+
+        var first = ReadRelayText(nyxHandler.Requests[0].Body);
+        var second = ReadRelayText(nyxHandler.Requests[1].Body);
+        first.Should().Contain("**1. Warm & Polite**");
+        first.Should().Contain("[part 1/2 - continues]");
+        second.Should().Contain("[part 2/2 - continued]");
+        second.Should().Contain("**3. Simple & Sweet**");
+        second.Should().Contain("Wishing you all a lovely summer!");
+        second.Should().Contain("CN summer wishes preserved.");
+    }
+
+    [Fact]
     public async Task StartValidationFailure_ShouldPersistFailedTerminalState()
     {
         var eventStore = new InMemoryEventStore();
@@ -319,6 +361,26 @@ public sealed class WorkflowRunDeliveryGAgentTests
             client,
             NullLogger<NyxIdRelayOutboundPort>.Instance,
             [new PlainTextComposer("lark")]);
+    }
+
+    private static string ReadRelayText(string body)
+    {
+        using var document = System.Text.Json.JsonDocument.Parse(body);
+        return document.RootElement.GetProperty("reply").GetProperty("text").GetString()!;
+    }
+
+    private static string BuildLongWorkflowReply()
+    {
+        var draft1 = "**1. Warm & Polite** Thank you so much for organizing everything. " + new string('A', 15_000);
+        var draft2 = "**2. Friendly & Engaging** Thank you for the lovely update. " + new string('B', 15_000);
+        var draft3 = "**3. Simple & Sweet** Thank you so much for everything this year. Wishing you all a lovely summer! CN summer wishes preserved.";
+        return string.Join(
+            "\n\n",
+            "**Original (EN):** Hi Everyone! Below is a quick recap on how we used our class funds this year.",
+            "**Translation (CN):** Class fund recap translation placeholder.",
+            draft1,
+            draft2,
+            draft3);
     }
 
     private sealed class DeferredDispatchPort : IActorDispatchPort
