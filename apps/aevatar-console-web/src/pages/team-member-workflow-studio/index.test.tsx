@@ -9,7 +9,9 @@ import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { history } from "@/shared/navigation/history";
-import TeamMemberWorkflowStudioPage from "./index";
+import TeamMemberWorkflowStudioPage, {
+  buildTeamMemberWorkflowStudioRootStyle,
+} from "./index";
 import { StudioApiError, studioApi } from "@/shared/studio/api";
 
 jest.mock("@/shared/graphs/GraphCanvas", () => ({
@@ -534,6 +536,20 @@ describe("TeamMemberWorkflowStudioPage", () => {
 
   afterEach(() => {
     cleanupTestQueryClients();
+  });
+
+  it("assigns vertical scroll ownership to the workflow editor page", () => {
+    expect(buildTeamMemberWorkflowStudioRootStyle()).toMatchObject({
+      display: "flex",
+      flexDirection: "column",
+      minHeight: "100%",
+      overflowX: "hidden",
+      overflowY: "auto",
+    });
+    expect(buildTeamMemberWorkflowStudioRootStyle()).not.toHaveProperty(
+      "height",
+      "100vh",
+    );
   });
 
   it("renders a blank new workflow member editor before backend creation", async () => {

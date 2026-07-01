@@ -32,6 +32,7 @@ import {
   sanitizeReturnTo,
 } from "./shared/auth/session";
 import { ProtectedRouteRedirectGate } from "./shared/auth/ProtectedRouteRedirectGate";
+import { isStudioHostRoute } from "@/shared/studio/studioLayout";
 import {
   getNavigationGroupOrder,
   type NavigationGroup,
@@ -52,24 +53,6 @@ import {
 
 const PUBLIC_ROUTES = new Set(["/login", "/auth/callback"]);
 const DEFAULT_PROTECTED_ROUTE = CONSOLE_HOME_ROUTE;
-const STUDIO_HOST_ROUTES = new Set([
-  "/studio",
-  "/scopes/:scopeId/teams/:teamId/members/new/workflow",
-  "/scopes/:scopeId/teams/:teamId/members/:memberId/workflow",
-]);
-
-function isStudioHostRoute(pathname: string): boolean {
-  if (STUDIO_HOST_ROUTES.has(pathname)) {
-    return true;
-  }
-
-  return (
-    /^\/scopes\/[^/]+\/teams\/[^/]+\/members\/(?:new|[^/]+)\/workflow$/.test(
-      pathname,
-    )
-  );
-}
-
 function shouldDefaultCollapseLayout(pathname: string, search: string): boolean {
   if (!isStudioHostRoute(pathname)) {
     return false;

@@ -57,4 +57,18 @@ describe("MainLayout", () => {
       expect(document.body.classList.contains(STUDIO_HOST_BODY_CLASS)).toBe(false);
     });
   });
+
+  it("marks canonical member workflow editor routes as Studio hosts", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-alpha/teams/t-alpha/members/m-alpha/workflow",
+    );
+
+    renderMainLayout();
+
+    await waitFor(() => {
+      expect(document.body.classList.contains(STUDIO_HOST_BODY_CLASS)).toBe(true);
+    });
+  });
 });

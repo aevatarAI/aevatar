@@ -20,6 +20,18 @@ const EXECUTION_PANEL_MIN_HEIGHT = 160;
 const EXECUTION_PANEL_MAX_HEIGHT = 520;
 const RESIZE_KEYBOARD_STEP = 24;
 
+export function buildTeamMemberWorkflowStudioRootStyle(): React.CSSProperties {
+  return {
+    background: "#f3f4f6",
+    display: "flex",
+    flexDirection: "column",
+    minHeight: "100%",
+    overflowX: "hidden",
+    overflowY: "auto",
+    width: "100%",
+  };
+}
+
 function clampDimension(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
@@ -218,14 +230,7 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
     <main
       data-testid="team-member-workflow-studio"
       ref={mainRef}
-      style={{
-        background: "#f3f4f6",
-        display: "flex",
-        flexDirection: "column",
-        height: "100vh",
-        minHeight: 0,
-        width: "100%",
-      }}
+      style={buildTeamMemberWorkflowStudioRootStyle()}
     >
       <WorkflowStudioHeader
         automationsHref={studio.automationsHref}
