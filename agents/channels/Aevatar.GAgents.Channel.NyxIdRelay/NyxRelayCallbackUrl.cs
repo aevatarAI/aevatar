@@ -1,3 +1,5 @@
+using Aevatar.AI.ToolProviders.NyxId;
+
 namespace Aevatar.GAgents.Channel.NyxIdRelay;
 
 /// <summary>
@@ -13,19 +15,12 @@ internal static class NyxRelayCallbackUrl
 
     /// <summary>
     /// True when <paramref name="webhookBaseUrl"/> is an absolute https URL, or an http URL whose
-    /// host is loopback (localhost / 127.0.0.1 / ::1). Everything else is rejected because the
-    /// registered callback would ship the relay user token over the wire in the clear.
+    /// host is loopback (localhost / 127.0.0.1 / ::1). Delegates to
+    /// <see cref="NyxRelayCallbackUrlPolicy.IsSecureUrl"/> so this provisioning path and the
+    /// nyxid_api_keys tool enforce one shared policy.
     /// </summary>
-    public static bool IsSecureBaseUrl(string? webhookBaseUrl)
-    {
-        if (!Uri.TryCreate(webhookBaseUrl?.Trim(), UriKind.Absolute, out var uri))
-            return false;
-
-        if (uri.Scheme == Uri.UriSchemeHttps)
-            return true;
-
-        return uri.Scheme == Uri.UriSchemeHttp && uri.IsLoopback;
-    }
+    public static bool IsSecureBaseUrl(string? webhookBaseUrl) =>
+        NyxRelayCallbackUrlPolicy.IsSecureUrl(webhookBaseUrl);
 
     /// <summary>
     /// Builds the relay callback URL from an already-validated <paramref name="webhookBaseUrl"/>.
