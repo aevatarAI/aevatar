@@ -10,6 +10,9 @@ public sealed class NyxIdRelayOutboundPort
 {
     internal const int LarkReplyTextChunkLimit = 1_800;
     internal const int LarkReplyMaxChunks = 32;
+    private static readonly int LarkReplyChunkHeaderReserve = FormatChunkHeader(
+        LarkReplyMaxChunks,
+        LarkReplyMaxChunks).Length;
 
     private readonly NyxIdApiClient _nyxClient;
     private readonly IReadOnlyDictionary<string, IMessageComposer> _composers;
@@ -207,8 +210,9 @@ public sealed class NyxIdRelayOutboundPort
         string replyText,
         CancellationToken ct)
     {
+        var chunkPayloadLimit = LarkReplyTextChunkLimit - LarkReplyChunkHeaderReserve;
         var chunks = ShouldChunkRelayText(normalizedPlatform, replyText)
-            ? SplitReplyText(replyText, LarkReplyTextChunkLimit).ToArray()
+            ? SplitReplyText(replyText, chunkPayloadLimit).ToArray()
             : [replyText];
 
         if (chunks.Length > LarkReplyMaxChunks)
@@ -224,7 +228,7 @@ public sealed class NyxIdRelayOutboundPort
         {
             var chunkText = chunks.Length == 1
                 ? chunks[index]
-                : $"[{index + 1}/{chunks.Length}]\n{chunks[index]}";
+                : $"{FormatChunkHeader(index + 1, chunks.Length)}{chunks[index]}";
             var result = await _nyxClient.SendChannelRelayTextReplyAsync(
                     replyToken,
                     replyMessageId,
@@ -316,6 +320,9 @@ public sealed class NyxIdRelayOutboundPort
     private static bool IsLarkPlatform(string normalizedPlatform) =>
         string.Equals(normalizedPlatform, "lark", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(normalizedPlatform, "feishu", StringComparison.OrdinalIgnoreCase);
+
+    private static string FormatChunkHeader(int chunkIndex, int chunkCount) =>
+        $"[{chunkIndex}/{chunkCount}]\n";
 
     internal static IEnumerable<string> SplitReplyText(string text, int chunkLimit)
     {

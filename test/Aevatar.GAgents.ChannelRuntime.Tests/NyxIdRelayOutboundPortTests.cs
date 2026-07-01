@@ -79,16 +79,41 @@ public sealed class NyxIdRelayOutboundPortTests
         var chunks = handler.Requests.Select(request => ReadRelayReplyText(request.Body)).ToArray();
         chunks[0].Should().StartWith("[1/");
         chunks[^1].Should().StartWith($"[{chunks.Length}/{chunks.Length}]");
-        chunks.Should().OnlyContain(chunk => chunk.Length <= NyxIdRelayOutboundPort.LarkReplyTextChunkLimit + 12);
+        chunks.Should().OnlyContain(chunk => chunk.Length <= NyxIdRelayOutboundPort.LarkReplyTextChunkLimit);
 
         var reassembled = string.Join(
                 string.Empty,
-                chunks.Select(chunk => chunk[(chunk.IndexOf('\n', StringComparison.Ordinal) + 1)..]))
+                chunks.Select(RemoveChunkHeader))
             .Replace("\n", string.Empty, StringComparison.Ordinal)
             .Replace(" ", string.Empty, StringComparison.Ordinal);
         reassembled.Should().Contain("**3.Simple&Sweet**");
         reassembled.Should().Contain("Wishingyouallalovelysummer!");
         reassembled.Should().Contain("Translationdraftthreeisstillpresent.");
+    }
+
+    [Fact]
+    public async Task SendAsync_LarkHardSplitReply_ShouldKeepActualPayloadsWithinLarkLimit()
+    {
+        var handler = new RecordingJsonHandler();
+        var longReply = new string('x', NyxIdRelayOutboundPort.LarkReplyTextChunkLimit + 1);
+        var port = CreatePort(handler, new StubComposer("lark", text: longReply));
+
+        var result = await port.SendAsync(
+            "lark",
+            BuildConversation(),
+            new MessageContent { Text = "workflow done" },
+            new OutboundDeliveryContext
+            {
+                ReplyMessageId = "msg-lark-hard-split-1",
+            },
+            "relay-token",
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        handler.Requests.Should().HaveCount(2);
+        var chunks = handler.Requests.Select(request => ReadRelayReplyText(request.Body)).ToArray();
+        chunks.Should().OnlyContain(chunk => chunk.Length <= NyxIdRelayOutboundPort.LarkReplyTextChunkLimit);
+        string.Concat(chunks.Select(RemoveChunkHeader)).Should().Be(longReply);
     }
 
     [Fact]
@@ -682,6 +707,12 @@ public sealed class NyxIdRelayOutboundPortTests
     {
         using var document = JsonDocument.Parse(body);
         return document.RootElement.GetProperty("reply").GetProperty("text").GetString() ?? string.Empty;
+    }
+
+    private static string RemoveChunkHeader(string chunk)
+    {
+        var headerEnd = chunk.IndexOf('\n', StringComparison.Ordinal);
+        return headerEnd < 0 ? chunk : chunk[(headerEnd + 1)..];
     }
 
     private static string BuildLongWorkflowReply()
