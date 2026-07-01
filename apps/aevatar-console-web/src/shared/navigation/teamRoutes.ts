@@ -203,6 +203,52 @@ export function buildTeamMemberWorkflowStudioHref(options: {
   );
 }
 
+export function buildTeamMemberGAgentStudioHref(options: {
+  memberId?: string;
+  mode: 'create-member' | 'edit-member';
+  returnTo?: string;
+  scopeId: string;
+  teamId: string;
+}): string {
+  const scopeId = trimOptional(options.scopeId);
+  const teamId = trimOptional(options.teamId);
+  if (!scopeId || !teamId) {
+    return buildTeamsHref();
+  }
+
+  const memberId = trimOptional(options.memberId);
+  if (options.mode === 'create-member') {
+    return buildStudioRoute({
+      scopeId,
+      teamId,
+      tab: 'gagents',
+      intent: 'create-member',
+      returnTo:
+        trimOptional(options.returnTo) ||
+        buildTeamDetailHref({
+          scopeId,
+          tab: 'members',
+          teamId,
+        }),
+    });
+  }
+
+  if (!memberId) {
+    return buildTeamDetailHref({
+      scopeId,
+      tab: 'members',
+      teamId,
+    });
+  }
+
+  return buildHref(
+    `/scopes/${encodeURIComponent(scopeId)}/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(memberId)}/gagent`,
+    {
+      returnTo: options.returnTo,
+    },
+  );
+}
+
 export function buildTeamMemberInvokeHref(options: {
   memberId?: string;
   scopeId: string;

@@ -21,6 +21,7 @@ const enUSMessages = {
   'menu.Services': 'Services',
   'menu.Settings': 'Settings',
   'menu.Team Details': 'Team Details',
+  'menu.Team Member GAgent Studio': 'Team Member GAgent Studio',
   'menu.Team Member Invoke': 'Team Member Invoke',
   'menu.Team Member Published Runs': 'Team Member Published Runs',
   'menu.Team Member Workflow Studio': 'Team Member Workflow Studio',
@@ -599,8 +600,9 @@ const enUSMessages = {
   'teams.members.actions.editInStudio': 'Edit in Studio',
   'teams.members.actions.automate': 'Automate',
   'teams.members.actions.invokeRequiresBinding':
-    'Bind this workflow member before invoking it.',
+    'Bind this member before invoking it.',
   'teams.members.actions.invokeWorkflow': 'Invoke',
+  'teams.members.actions.memberStudio': 'Member Studio',
   'teams.members.actions.publishedRuns': 'Published runs',
   'teams.members.actions.publishedRuns.publishFirst':
     'Publish this member before viewing published runs.',
@@ -608,6 +610,8 @@ const enUSMessages = {
   'teams.members.actions.workflowOnly': 'Workflow only',
   'teams.members.actions.workflowOnlyTitle':
     'This console currently supports workflow members only.',
+  'teams.members.actions.workflowOrGAgentOnlyTitle':
+    'This console currently supports workflow and GAgent members only.',
   'teams.members.actions.workflowStudio': 'Workflow Studio',
   'teams.automations.actions.addRecurringWork': 'Add recurring work',
   'teams.automations.actions.create': 'New automation',

@@ -282,3 +282,14 @@ export function buildStudioScriptsWorkspaceRoute(options?: {
     tab: 'scripts',
   });
 }
+
+export function buildStudioGAgentWorkspaceRoute(options?: {
+  scopeId?: string;
+  memberId?: string;
+  memberKey?: StudioMemberKey | string;
+} & Record<string, unknown>): string {
+  return buildStudioRoute({
+    ...options,
+    tab: 'gagents',
+  });
+}

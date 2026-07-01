@@ -62,6 +62,13 @@ export default [
     parentKeys: ["/scopes"],
   },
   {
+    path: "/scopes/:scopeId/teams/:teamId/members/:memberId/gagent",
+    name: "Team Member GAgent Studio",
+    component: "./studio",
+    hideInMenu: true,
+    parentKeys: ["/scopes"],
+  },
+  {
     path: "/scopes/:scopeId/teams/:teamId/members/:memberId/invoke",
     name: "Team Member Invoke",
     component: "./team-member-invoke",

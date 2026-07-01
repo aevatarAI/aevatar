@@ -44,7 +44,7 @@ type TeamRosterMemberRow = {
   readonly publishedRunsHref: string;
   readonly serviceId: string;
   readonly studioHref: string;
-  readonly workflowSupported: boolean;
+  readonly memberStudioSupported: boolean;
 };
 
 type TeamMembersTabProps = {
@@ -502,12 +502,14 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                 <style>{responsiveTableStyle}</style>
                 {renderTableHeader()}
                 {rosterRows.map((row, index) => {
-                  const invokeDisabledReason = row.workflowSupported
+                  const invokeDisabledReason = row.memberStudioSupported
                     ? intl.formatMessage({
                         id: "teams.members.actions.invokeRequiresBinding",
                       })
                     : intl.formatMessage({
-                        id: "teams.members.actions.workflowOnlyTitle",
+                        defaultMessage:
+                          "This console currently supports workflow and GAgent members only.",
+                        id: "teams.members.actions.workflowOrGAgentOnlyTitle",
                       });
                   const rowBusy = entryActionBusyMemberId === row.memberId;
                   const invokeActionLabel = intl.formatMessage({
@@ -521,7 +523,8 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                     id: "teams.members.actions.publishedRuns",
                   });
                   const studioActionLabel = intl.formatMessage({
-                    id: "teams.members.actions.workflowStudio",
+                    defaultMessage: "Member Studio",
+                    id: "teams.members.actions.memberStudio",
                   });
                   const entryActionLabel = row.isEntryMember
                     ? intl.formatMessage({ id: "teams.members.actions.clearEntry" })
@@ -733,21 +736,25 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                           </Tooltip>
                           <Tooltip
                             title={
-                              row.workflowSupported
+                              row.memberStudioSupported
                                 ? studioActionLabel
                                 : intl.formatMessage({
-                                    id: "teams.members.actions.workflowOnlyTitle",
+                                    defaultMessage:
+                                      "This console currently supports workflow and GAgent members only.",
+                                    id: "teams.members.actions.workflowOrGAgentOnlyTitle",
                                   })
                             }
                           >
                             <Button
                               aria-label={studioActionLabel}
                               className="team-members-table-action-button team-members-table-studio-action"
-                              href={row.workflowSupported ? row.studioHref : undefined}
-                              disabled={!row.workflowSupported}
+                              href={
+                                row.memberStudioSupported ? row.studioHref : undefined
+                              }
+                              disabled={!row.memberStudioSupported}
                               icon={<ToolOutlined />}
                               onClick={
-                                row.workflowSupported
+                                row.memberStudioSupported
                                   ? handleNavigate(row.studioHref)
                                   : undefined
                               }

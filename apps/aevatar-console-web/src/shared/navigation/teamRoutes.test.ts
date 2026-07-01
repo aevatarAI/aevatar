@@ -2,6 +2,7 @@ import {
   buildTeamCreateHref,
   buildTeamDetailHref,
   buildTeamMemberAutomationsHref,
+  buildTeamMemberGAgentStudioHref,
   buildTeamMemberInvokeHref,
   buildTeamMemberPublishedRunsHref,
   buildTeamMemberWorkflowStudioHref,
@@ -105,6 +106,34 @@ describe("teamRoutes", () => {
     ).toBe(
       "/scopes/scope-alpha/teams/t-alpha/members/member-alpha/workflow?workflowId=wf-alpha-next",
     );
+  });
+
+  it("builds explicit Team member GAgent studio routes without using workflow identity", () => {
+    const memberId = "m-alpha";
+    const workflowId = "wf-alpha";
+    const publishedServiceId = "svc-alpha";
+
+    expect(
+      buildTeamMemberGAgentStudioHref({
+        mode: "create-member",
+        scopeId: " scope-alpha ",
+        teamId: " t-alpha ",
+      }),
+    ).toBe(
+      "/studio?scopeId=scope-alpha&teamId=t-alpha&tab=gagents&intent=create-member&returnTo=%2Fscopes%2Fscope-alpha%2Fteams%2Ft-alpha%3Ftab%3Dmembers",
+    );
+
+    expect(
+      buildTeamMemberGAgentStudioHref({
+        memberId: ` ${memberId} `,
+        mode: "edit-member",
+        scopeId: " scope-alpha ",
+        teamId: " t-alpha ",
+      }),
+    ).toBe("/scopes/scope-alpha/teams/t-alpha/members/m-alpha/gagent");
+
+    expect(workflowId).not.toBe(memberId);
+    expect(publishedServiceId).not.toBe(memberId);
   });
 
   it("builds explicit Team member invoke routes", () => {

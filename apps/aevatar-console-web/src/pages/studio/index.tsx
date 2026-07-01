@@ -82,6 +82,7 @@ import type { ScopedScriptDetail } from '@/shared/studio/scriptsModels';
 import {
   buildStudioWorkflowMemberKey,
   buildStudioRoute,
+  buildStudioGAgentWorkspaceRoute,
   resolveStudioWorkflowMemberRouteValue,
   type StudioBuildFocus,
   type StudioIntent,
@@ -256,6 +257,28 @@ const SAVED_WORKFLOW_QUERY_STALE_MS = 30_000;
 function waitForAsyncOperationProbeTick(): Promise<void> {
   return new Promise((resolve) => {
     window.setTimeout(resolve, 900);
+  });
+}
+
+function buildCanonicalTeamMemberGAgentStudioRoute(input: {
+  readonly memberId: string;
+  readonly returnTo?: string;
+  readonly scopeId: string;
+  readonly teamId: string;
+}): string {
+  return buildStudioGAgentWorkspaceRoute({
+    scopeId: input.scopeId,
+    teamId: input.teamId,
+    memberId: input.memberId,
+    step: 'build',
+    returnTo:
+      input.returnTo ||
+      buildTeamDetailHref({
+        memberId: input.memberId,
+        scopeId: input.scopeId,
+        tab: 'members',
+        teamId: input.teamId,
+      }),
   });
 }
 
@@ -1564,6 +1587,31 @@ function readStudioRouteState(search?: string): StudioRouteState {
     executionId: trimOptional(params.get('execution')),
     logsMode: parseLogsMode(params.get('logs')),
     returnTo: readStudioReturnToParam(params),
+  };
+}
+
+function readCanonicalTeamMemberGAgentStudioPath(
+  pathname = typeof window === 'undefined' ? '' : window.location.pathname,
+): {
+  readonly memberId: string;
+  readonly scopeId: string;
+  readonly teamId: string;
+} | null {
+  const segments = pathname.split('/').filter(Boolean);
+  if (
+    segments.length !== 7 ||
+    segments[0] !== 'scopes' ||
+    segments[2] !== 'teams' ||
+    segments[4] !== 'members' ||
+    segments[6] !== 'gagent'
+  ) {
+    return null;
+  }
+
+  return {
+    scopeId: trimOptional(decodeURIComponent(segments[1] ?? '')),
+    teamId: trimOptional(decodeURIComponent(segments[3] ?? '')),
+    memberId: trimOptional(decodeURIComponent(segments[5] ?? '')),
   };
 }
 
@@ -2918,6 +2966,23 @@ const StudioPage: React.FC = () => {
       trimOptional(routeState.memberKey),
     [routeState.memberKey],
   );
+  React.useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const routePath = readCanonicalTeamMemberGAgentStudioPath(window.location.pathname);
+    if (!routePath?.scopeId || !routePath.teamId || !routePath.memberId) {
+      return;
+    }
+
+    history.replace(
+      buildCanonicalTeamMemberGAgentStudioRoute({
+        ...routePath,
+        returnTo: routeState.returnTo || undefined,
+      }),
+    );
+  }, [locationSnapshot, routeState.returnTo]);
   const currentRouteMemberToken = readMemberIdFromMemberKey(routeSelectedMemberKey);
   const isStudioLocation =
     typeof window !== 'undefined' && window.location.pathname === '/studio';

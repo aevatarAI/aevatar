@@ -1386,7 +1386,7 @@ describe("TeamDetailPage", () => {
     expect(screen.getByText("可以调用。")).toBeTruthy();
     expect(screen.getByRole("link", { name: "调用" })).toBeTruthy();
     expect(screen.getByRole("link", { name: "发布运行记录" })).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Workflow Studio" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Member Studio" })).toBeTruthy();
     expect(screen.queryByRole("link", { name: "编辑工作流" })).toBeNull();
     expect(screen.queryByRole("link", { name: "调试工作流" })).toBeNull();
     expect(screen.queryByRole("button", { name: "移出团队" })).toBeNull();
@@ -1971,7 +1971,7 @@ describe("TeamDetailPage", () => {
 
     await screen.findByRole("button", { name: "编辑团队" });
     fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
-    fireEvent.click(await screen.findByRole("link", { name: "Workflow Studio" }));
+    fireEvent.click(await screen.findByRole("link", { name: "Member Studio" }));
 
     expect(window.location.pathname).toBe(
       "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/workflow",
@@ -1993,7 +1993,7 @@ describe("TeamDetailPage", () => {
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    fireEvent.click(await screen.findByRole("link", { name: "Workflow Studio" }));
+    fireEvent.click(await screen.findByRole("link", { name: "Member Studio" }));
 
     expect(window.location.pathname).toBe(
       "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/workflow",
@@ -2043,7 +2043,7 @@ describe("TeamDetailPage", () => {
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    fireEvent.click(await screen.findByRole("link", { name: "Workflow Studio" }));
+    fireEvent.click(await screen.findByRole("link", { name: "Member Studio" }));
 
     expect(window.location.pathname).toBe(
       "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/workflow",
@@ -2065,7 +2065,7 @@ describe("TeamDetailPage", () => {
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    fireEvent.click(await screen.findByRole("link", { name: "Workflow Studio" }));
+    fireEvent.click(await screen.findByRole("link", { name: "Member Studio" }));
 
     expect(window.location.pathname).toBe(
       "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/workflow",
@@ -2760,7 +2760,7 @@ describe("TeamDetailPage", () => {
 
     expect(await screen.findByText("Draft Workflow")).toBeTruthy();
     expect(screen.getByText("尚未绑定")).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Workflow Studio" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Member Studio" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "调用" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "发布运行记录" })).toBeDisabled();
     expect(
@@ -2773,7 +2773,7 @@ describe("TeamDetailPage", () => {
     expect(screen.queryByRole("link", { name: "自动化" })).toBeNull();
   });
 
-  it("allows non-workflow bind-ready members to become Team entry members", async () => {
+  it("opens Team-first Studio actions for GAgent members", async () => {
     (studioApi.listTeamMembers as jest.Mock).mockResolvedValueOnce({
       scopeId: "scope-1",
       members: [
@@ -2801,11 +2801,20 @@ describe("TeamDetailPage", () => {
 
     expect(await screen.findByText("Agent Alpha")).toBeTruthy();
     expect(screen.getByText("已绑定服务")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "调用" })).toBeDisabled();
-    expect(screen.queryByRole("link", { name: "调用" })).toBeNull();
-    expect(screen.getByRole("button", { name: "发布运行记录" })).toBeDisabled();
-    expect(screen.queryByRole("link", { name: "发布运行记录" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Workflow Studio" })).toBeDisabled();
+    expect(screen.getByRole("link", { name: "调用" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "发布运行记录" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Member Studio" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("link", { name: "Member Studio" }));
+
+    expect(window.location.pathname).toBe(
+      "/scopes/scope-1/teams/t-alpha/members/member-agent-alpha/gagent",
+    );
+
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?tab=members",
+    );
     fireEvent.click(await screen.findByRole("button", { name: "设为入口成员" }));
 
     await waitFor(() => {

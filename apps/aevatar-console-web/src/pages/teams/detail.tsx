@@ -20,6 +20,7 @@ import { buildTeamWorkspaceRoute } from "@/shared/navigation/scopeRoutes";
 import {
   buildTeamDetailHref,
   buildTeamMemberAutomationsHref,
+  buildTeamMemberGAgentStudioHref,
   buildTeamMemberInvokeHref,
   buildTeamMemberPublishedRunsHref,
   buildTeamMemberWorkflowStudioHref,
@@ -892,8 +893,10 @@ const TeamDetailPage: React.FC = () => {
   const teamRosterRows = React.useMemo(
     () =>
       (teamMembersQuery.data?.members ?? []).map((member) => {
-        const isWorkflowMember =
-          trimText(member.implementationKind).toLowerCase() === "workflow";
+        const normalizedImplementationKind =
+          trimText(member.implementationKind).toLowerCase();
+        const isWorkflowMember = normalizedImplementationKind === "workflow";
+        const isGAgentMember = normalizedImplementationKind === "gagent";
         const publishedServiceId = trimText(member.publishedServiceId);
         const isBoundMember =
           normalizeStatus(member.lifecycleStage) === "bind_ready" &&
@@ -917,6 +920,17 @@ const TeamDetailPage: React.FC = () => {
               ? "published"
               : undefined,
         });
+        const gAgentStudioHref = buildTeamMemberGAgentStudioHref({
+          memberId: member.memberId,
+          mode: "edit-member",
+          scopeId,
+          teamId: selectedTeamId,
+        });
+        const memberStudioHref = isWorkflowMember
+          ? workflowStudioHref
+          : isGAgentMember
+            ? gAgentStudioHref
+            : "";
         const memberInvokeHref = buildTeamMemberInvokeHref({
           memberId: member.memberId,
           scopeId,
@@ -934,16 +948,16 @@ const TeamDetailPage: React.FC = () => {
         });
 
         return {
-          buildStudioHref: isWorkflowMember ? workflowStudioHref : "",
+          buildStudioHref: memberStudioHref,
           description: trimText(member.description),
           canInvokeAsEntry: isBoundMember,
-          canInvokeMember: isWorkflowMember && isBoundMember,
-          canOpenPublishedRuns: isWorkflowMember && isBoundMember,
+          canInvokeMember: (isWorkflowMember || isGAgentMember) && isBoundMember,
+          canOpenPublishedRuns: (isWorkflowMember || isGAgentMember) && isBoundMember,
           canSetAsEntry: Boolean(trimText(member.memberId)),
-          editStudioHref: isWorkflowMember ? workflowStudioHref : "",
+          editStudioHref: memberStudioHref,
           automationsHref: memberAutomationsHref,
           implementationKind: formatCompositionKind(member.implementationKind),
-          invokeHref: isWorkflowMember ? memberInvokeHref : "",
+          invokeHref: isWorkflowMember || isGAgentMember ? memberInvokeHref : "",
           isServiceBound: isBoundMember,
           key: member.memberId,
           lifecycleLabel: formatStudioMemberLifecycleStage(member.lifecycleStage),
@@ -955,7 +969,11 @@ const TeamDetailPage: React.FC = () => {
             trimText(member.displayName) ||
             intl.formatMessage({ id: "teams.members.unnamed" }),
           publishedRunsDisabledReason: !isWorkflowMember
-            ? t("teams.members.actions.workflowOnlyTitle", "This console currently supports workflow members only.")
+            ? isGAgentMember
+              ? !isBoundMember
+                ? t("teams.members.actions.publishedRuns.publishFirst", "Publish this member before viewing published runs.")
+                : ""
+              : t("teams.members.actions.workflowOrGAgentOnlyTitle", "This console currently supports workflow and GAgent members only.")
             : !isBoundMember
               ? t("teams.members.actions.publishedRuns.publishFirst", "Publish this member before viewing published runs.")
               : "",
@@ -965,7 +983,7 @@ const TeamDetailPage: React.FC = () => {
           serviceRevisionId:
             trimText(automationServiceRuntime?.activeServingRevisionId) ||
             trimText(automationServiceRuntime?.defaultServingRevisionId),
-          studioHref: isWorkflowMember ? workflowStudioHref : "",
+          studioHref: memberStudioHref,
           canAutomateMember: isWorkflowMember && isBoundMember,
           automationDisabledReason: !isWorkflowMember
             ? t("teams.automations.member.workflowOnly", "Only workflow members can have recurring work.")
@@ -973,6 +991,7 @@ const TeamDetailPage: React.FC = () => {
               ? t("teams.automations.member.publishFirst", "Publish this member before adding recurring work.")
               : "",
           workflowSupported: isWorkflowMember,
+          memberStudioSupported: isWorkflowMember || isGAgentMember,
         };
       }),
     [
