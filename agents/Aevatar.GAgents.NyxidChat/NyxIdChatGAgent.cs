@@ -277,7 +277,11 @@ public sealed class NyxIdChatGAgent : RoleGAgent
 
     protected override string DecorateSystemPrompt(string basePrompt)
     {
-        var prompt = basePrompt;
+        // Start from base decoration so this direct-chat actor gets the force-injected System Skill
+        // Overlay from RoleGAgent.DecorateSystemPrompt (issue #2498). Without calling base, direct chat
+        // would bypass the overlay entirely. Relay + local-skill sections follow the overlay (kernel >
+        // overlay > runtime facts), matching the channel seam ordering.
+        var prompt = base.DecorateSystemPrompt(basePrompt);
         prompt += NyxIdRelayPromptConfiguration.BuildChannelRuntimeConfigurationSection(_relayOptions);
 
         // Refactor (iter27/cluster-027-skill-registry-remote-skill-process-state):

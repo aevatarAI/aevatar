@@ -6,6 +6,7 @@ using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.GAgents.NyxidChat;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -43,6 +44,32 @@ public sealed class SystemSkillOverlayPromptInjectionTests
         var agent = await CreateActivatedAgentAsync(overlayProvider: null, "role-overlay-none");
 
         agent.DecorateForTest("kernel invariant").Should().Be("kernel invariant");
+    }
+
+    [Fact]
+    public async Task NyxIdChatGAgent_DirectChat_InjectsOverlayViaBaseDecoration()
+    {
+        // #2498 P1 regression guard: the real direct-chat actor (NyxIdChatGAgent) overrides
+        // DecorateSystemPrompt. It must call base so RoleGAgent's overlay injection still runs —
+        // otherwise direct chat silently loses the overlay (and its built-in fallback).
+        var services = BuildServices(
+            new InMemoryEventStoreForTests(),
+            new StubSystemSkillOverlayProvider(OverlayMarkdown));
+        var agent = new NyxIdChatGAgent
+        {
+            Services = services,
+            EventSourcingBehaviorFactory = services.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
+        };
+        AssignActorId(agent, "nyxid-chat-overlay");
+        await agent.ActivateAsync();
+
+        var decorate = typeof(NyxIdChatGAgent).GetMethod(
+            "DecorateSystemPrompt",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        decorate.Should().NotBeNull();
+        var prompt = (string)decorate!.Invoke(agent, ["kernel invariant"])!;
+
+        prompt.Should().Contain(OverlayMarkdown);
     }
 
     [Fact]

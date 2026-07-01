@@ -62,9 +62,12 @@ public sealed class OrnnSystemSkillOverlayProvider : ISystemSkillOverlayProvider
             _logger.LogWarning(ex, "System skill overlay refresh scheduling failed; serving cached overlay");
         }
 
-        var snapshot = _snapshot;
-        if (snapshot is not null && snapshot.HasContent)
-            return snapshot.Resolve(request.Platform);
+        // Fall back per RESOLVED platform variant, not per whole snapshot: a set with only
+        // platform-scoped members leaves the global-only variant empty, so a dm/telegram turn must
+        // still get the built-in default rather than an empty overlay (the no-regression floor).
+        var resolved = _snapshot?.Resolve(request.Platform);
+        if (resolved is not null && !string.IsNullOrWhiteSpace(resolved.OverlayMarkdown))
+            return resolved;
 
         return _fallback?.GetFallback();
     }
@@ -300,10 +303,6 @@ public sealed class OrnnSystemSkillOverlayProvider : ISystemSkillOverlayProvider
         public string Guid { get; } = guid;
         public string Watermark { get; } = watermark;
         public int PlatformCount => byPlatform.Count;
-
-        public bool HasContent =>
-            !string.IsNullOrWhiteSpace(globalOnly.OverlayMarkdown) ||
-            byPlatform.Values.Any(static overlay => !string.IsNullOrWhiteSpace(overlay.OverlayMarkdown));
 
         public OverlayMessage Resolve(string? platform)
         {

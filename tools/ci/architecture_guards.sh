@@ -2039,6 +2039,16 @@ check_system_skill_overlay_dual_seam_injection() {
     exit 1
   fi
 
+  # The real direct-chat actor NyxIdChatGAgent overrides DecorateSystemPrompt; it MUST call
+  # base.DecorateSystemPrompt or it silently bypasses RoleGAgent's overlay injection (issue #2498 P1).
+  local nyxid_chat_gagent_file="agents/Aevatar.GAgents.NyxidChat/NyxIdChatGAgent.cs"
+  if [ -f "${nyxid_chat_gagent_file}" ] && rg -q "override string DecorateSystemPrompt" "${nyxid_chat_gagent_file}"; then
+    if ! rg -q "base\.DecorateSystemPrompt" "${nyxid_chat_gagent_file}"; then
+      echo "NyxIdChatGAgent.DecorateSystemPrompt must call base.DecorateSystemPrompt so direct chat receives the System Skill Overlay."
+      exit 1
+    fi
+  fi
+
   if ! awk '
     /private string BuildSystemPrompt[[:space:]]*\(/ {
       in_func = 1

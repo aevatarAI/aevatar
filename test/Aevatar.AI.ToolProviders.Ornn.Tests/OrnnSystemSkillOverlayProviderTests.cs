@@ -48,6 +48,27 @@ public sealed class OrnnSystemSkillOverlayProviderTests
     }
 
     [Fact]
+    public async Task GetCurrent_FallsBackToBuiltInDefault_WhenOnlyOtherPlatformScopedMembersExist()
+    {
+        // Set has only a lark member: a dm/telegram turn's global-only variant is empty and must fall
+        // back to the built-in default, not serve an empty overlay (per-variant no-regression floor).
+        var handler = new OrnnTestHttpMessageHandler(
+            _ => Json(SetJson("set-guid-1", "m-lark")),
+            _ => Json(MemberJson("aevatar-lark-provisioning", "overlay-scope-lark", LarkBody)));
+        var provider = CreateProvider(CreateClient(handler), new StubFallback("BUILT-IN DEFAULT"));
+
+        await provider.RefreshAsync("token");
+
+        provider.GetCurrent(new SystemSkillOverlayRequest("dm", null))!
+            .OverlayMarkdown.Should().Be("BUILT-IN DEFAULT");
+        provider.GetCurrent(new SystemSkillOverlayRequest("telegram", null))!
+            .OverlayMarkdown.Should().Be("BUILT-IN DEFAULT");
+        // The lark turn still gets its scoped member.
+        provider.GetCurrent(new SystemSkillOverlayRequest("lark", null))!
+            .OverlayMarkdown.Should().Contain(LarkBody);
+    }
+
+    [Fact]
     public async Task GetCurrent_FallsBackToBuiltInDefault_WhenNoMemberHasOverlayScopeTag()
     {
         var handler = new OrnnTestHttpMessageHandler(
