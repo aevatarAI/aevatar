@@ -85,7 +85,7 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool, IAgentToolCapa
         }
         """;
 
-    public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
+    public ToolApprovalMode ApprovalMode => ToolApprovalPolicies.CreateScopedResource;
     public bool IsReadOnly => false;
     public bool IsDestructive => false;
 
