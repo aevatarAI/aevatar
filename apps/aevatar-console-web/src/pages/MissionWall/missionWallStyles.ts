@@ -106,6 +106,19 @@ export const missionWallStyles = `
   white-space: nowrap;
 }
 
+.mission-wall-brand__title,
+.mission-wall-run-card__name,
+.mission-wall-run-card__team,
+.mission-wall-run-card__stage,
+.mission-wall-stage-title,
+.mission-wall-stage-subtitle,
+.mission-wall-step-node__name,
+.mission-wall-step-node__type,
+.mission-wall-step-node__meta span {
+  pointer-events: none;
+  user-select: none;
+}
+
 .mission-wall-metric__value--live {
   color: var(--wall-text);
 }
@@ -242,7 +255,7 @@ export const missionWallStyles = `
   min-height: 126px;
   padding: 14px;
   text-align: left;
-  transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+  transition: border-color 140ms ease, transform 140ms ease;
   width: 100%;
 }
 
@@ -253,11 +266,6 @@ export const missionWallStyles = `
 
 .mission-wall-run-card:hover {
   transform: translateY(-1px);
-}
-
-.mission-wall-run-card--focus {
-  border-color: rgba(217, 119, 6, 0.64);
-  box-shadow: 0 0 0 1px rgba(217, 119, 6, 0.16), 0 20px 40px rgba(0, 0, 0, 0.18);
 }
 
 .mission-wall-tone--blue {

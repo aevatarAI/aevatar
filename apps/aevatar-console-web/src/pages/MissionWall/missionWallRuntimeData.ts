@@ -1,14 +1,17 @@
 import { t } from "@/shared/i18n/messages";
 import type {
   ScopeServiceRunAuditSnapshot,
-  ScopeServiceRunCatalogSnapshot,
   ScopeServiceRunSummary,
   ScopeServiceRunAuditStep,
 } from "@/shared/models/runtime/scopeServices";
-import type { ServiceCatalogSnapshot } from "@/shared/models/services";
 import type {
-  StudioMemberSummary,
-  StudioTeamSummary,
+  StudioWorkflowBoardCompletedNode,
+  StudioWorkflowBoardCurrentNode,
+  StudioWorkflowBoardFailedNode,
+  StudioWorkflowBoardMemberSnapshot,
+  StudioWorkflowBoardPendingNode,
+  StudioWorkflowBoardSnapshot,
+  StudioWorkflowBoardTeamSnapshot,
 } from "@/shared/studio/models";
 import type {
   MissionWallLiveState,
@@ -19,24 +22,11 @@ import type {
   MissionWallStepStatus,
 } from "./models";
 
-export const MISSION_WALL_SERVICE_TAKE = 200;
-export const MISSION_WALL_SERVICE_RUN_TAKE = 50;
-
-export type MissionWallServiceRunTarget = {
-  readonly member: StudioMemberSummary;
-  readonly service: ServiceCatalogSnapshot;
-};
-
-type ServiceRunCatalogResult = MissionWallServiceRunTarget & {
-  readonly catalog?: ScopeServiceRunCatalogSnapshot;
-};
-
-type MissionWallSourceInput = {
+type MissionWallWorkflowBoardSourceInput = {
   readonly generatedAt: string;
   readonly live: MissionWallLiveState;
   readonly runAudits?: readonly ScopeServiceRunAuditSnapshot[];
-  readonly serviceRunCatalogs: readonly ServiceRunCatalogResult[];
-  readonly teams?: readonly StudioTeamSummary[];
+  readonly snapshot?: StudioWorkflowBoardSnapshot;
 };
 
 function trimOptional(value: string | null | undefined): string {
@@ -54,19 +44,6 @@ function normalizeStatus(value: string | null | undefined): string {
 function parseTimeMs(value: string | null | undefined): number | undefined {
   const parsed = Date.parse(trimOptional(value));
   return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-function runUpdatedAt(run: ScopeServiceRunSummary): string | undefined {
-  return (
-    trimOptional(run.lastUpdatedAt) ||
-    trimOptional(run.boundAt) ||
-    trimOptional(run.bindingUpdatedAt) ||
-    undefined
-  );
-}
-
-function runTimestamp(run: ScopeServiceRunSummary): number {
-  return parseTimeMs(runUpdatedAt(run)) ?? 0;
 }
 
 function calculateDurationMs(run: ScopeServiceRunSummary): number | undefined {
@@ -148,83 +125,6 @@ function positiveStepCount(
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.floor(value)
     : undefined;
-}
-
-export function isPublishedWorkflowMember(
-  member: StudioMemberSummary,
-): boolean {
-  const implementationKind = normalizeStatus(member.implementationKind);
-  if (implementationKind !== "workflow") {
-    return false;
-  }
-
-  return Boolean(
-    trimOptional(member.publishedServiceId) ||
-    trimOptional(member.lastBoundRevisionId),
-  );
-}
-
-export function filterMissionWallWorkflowMembers(
-  members: readonly StudioMemberSummary[],
-  teamId?: string,
-): StudioMemberSummary[] {
-  const normalizedTeamId = trimOptional(teamId);
-  return members.filter((member) => {
-    if (!isPublishedWorkflowMember(member)) {
-      return false;
-    }
-
-    return (
-      !normalizedTeamId || trimOptional(member.teamId) === normalizedTeamId
-    );
-  });
-}
-
-export function selectMissionWallServiceRunTargets(
-  workflowMembers: readonly StudioMemberSummary[],
-  services: readonly ServiceCatalogSnapshot[],
-): MissionWallServiceRunTarget[] {
-  const memberByPublishedServiceId = new Map<string, StudioMemberSummary>();
-  workflowMembers.forEach((member) => {
-    const publishedServiceId = trimOptional(member.publishedServiceId);
-    if (
-      !publishedServiceId ||
-      memberByPublishedServiceId.has(publishedServiceId)
-    ) {
-      return;
-    }
-
-    memberByPublishedServiceId.set(publishedServiceId, member);
-  });
-
-  return services
-    .map((service) => {
-      const serviceId = trimOptional(service.serviceId);
-      if (!serviceId) {
-        return null;
-      }
-
-      const member = memberByPublishedServiceId.get(serviceId);
-      if (!member) {
-        return null;
-      }
-
-      return { member, service };
-    })
-    .filter((target): target is MissionWallServiceRunTarget => Boolean(target));
-}
-
-export function sortServiceRuns(
-  runs: readonly ScopeServiceRunSummary[],
-): ScopeServiceRunSummary[] {
-  return [...runs].sort((left, right) => {
-    const timestampDelta = runTimestamp(right) - runTimestamp(left);
-    if (timestampDelta !== 0) {
-      return timestampDelta;
-    }
-
-    return right.runId.localeCompare(left.runId);
-  });
 }
 
 export function toMissionWallRunStatus(
@@ -384,19 +284,6 @@ function resolveCurrentStep(
   );
 }
 
-function buildTeamNameById(
-  teams: readonly StudioTeamSummary[] | undefined,
-): ReadonlyMap<string, string> {
-  return new Map(
-    (teams ?? [])
-      .map(
-        (team) =>
-          [trimOptional(team.teamId), trimOptional(team.displayName)] as const,
-      )
-      .filter(([teamId]) => Boolean(teamId)),
-  );
-}
-
 function withRunAudit(
   run: ScopeServiceRunSummary,
   runAudit?: ScopeServiceRunAuditSnapshot,
@@ -439,123 +326,279 @@ function withRunAudit(
   };
 }
 
-function toRunSource(input: {
-  readonly runAudits?: ReadonlyMap<string, ScopeServiceRunAuditSnapshot>;
-  readonly member: StudioMemberSummary;
-  readonly run: ScopeServiceRunSummary;
-  readonly service: ServiceCatalogSnapshot;
-  readonly teamNameById: ReadonlyMap<string, string>;
+function toWorkflowBoardStepStatus(
+  status: string | null | undefined,
+): MissionWallStepStatus {
+  switch (normalizeStatus(status)) {
+    case "completed":
+    case "done":
+    case "succeeded":
+      return "completed";
+    case "failed":
+      return "failed";
+    case "retrying":
+      return "retrying";
+    case "running":
+    case "active":
+    case "in_progress":
+      return "active";
+    case "waiting":
+    case "pending":
+    case "queued":
+      return "waiting";
+    default:
+      return "unknown";
+  }
+}
+
+function toCompletedNodeStep(
+  node: StudioWorkflowBoardCompletedNode,
+): MissionWallStepSource {
+  return {
+    latencyMs: positiveFiniteNumber(node.durationMs),
+    status: "completed",
+    stepId: node.nodeId,
+    stepType: "workflow_node",
+    targetRole: trimOptional(node.name) || undefined,
+  };
+}
+
+function toPendingNodeStep(
+  node: StudioWorkflowBoardPendingNode,
+): MissionWallStepSource {
+  return {
+    parametersSummary: trimOptional(node.reason) || undefined,
+    status: toWorkflowBoardStepStatus(node.status),
+    stepId: node.nodeId,
+    stepType: "workflow_node",
+    targetRole: trimOptional(node.name) || undefined,
+  };
+}
+
+function toFailedNodeStep(
+  node: StudioWorkflowBoardFailedNode,
+): MissionWallStepSource {
+  return {
+    status: "failed",
+    stepId: node.nodeId,
+    stepType: "workflow_node",
+    targetRole: trimOptional(node.name) || undefined,
+  };
+}
+
+function toCurrentNodeStep(
+  node: StudioWorkflowBoardCurrentNode,
+): MissionWallStepSource {
+  return {
+    latencyMs: positiveFiniteNumber(node.durationMs),
+    status: toWorkflowBoardStepStatus(node.status),
+    stepId: node.nodeId,
+    stepType: "workflow_node",
+    targetRole: trimOptional(node.name) || undefined,
+  };
+}
+
+function withSequentialNextSteps(
+  steps: readonly MissionWallStepSource[],
+): MissionWallStepSource[] {
+  return steps.map((step, index) => {
+    if (step.nextStepId || step.branchTargets) {
+      return step;
+    }
+
+    const nextStepId = steps[index + 1]?.stepId;
+    return nextStepId ? { ...step, nextStepId } : step;
+  });
+}
+
+function buildWorkflowBoardSteps(
+  member: StudioWorkflowBoardMemberSnapshot,
+): MissionWallStepSource[] {
+  const stepsById = new Map<string, MissionWallStepSource>();
+  const pushStep = (step: MissionWallStepSource): void => {
+    const stepId = trimOptional(step.stepId);
+    if (!stepId) {
+      return;
+    }
+
+    stepsById.set(stepId, { ...step, stepId });
+  };
+
+  member.completedNodes.forEach((node) => pushStep(toCompletedNodeStep(node)));
+  if (member.currentNode) {
+    pushStep(toCurrentNodeStep(member.currentNode));
+  }
+  member.pendingNodes.forEach((node) => pushStep(toPendingNodeStep(node)));
+  member.failedNodes.forEach((node) => pushStep(toFailedNodeStep(node)));
+
+  return withSequentialNextSteps([...stepsById.values()]);
+}
+
+function workflowBoardMemberUpdatedAt(
+  member: StudioWorkflowBoardMemberSnapshot,
+  generatedAt: string,
+): string | undefined {
+  return (
+    trimOptional(member.lastNodeUpdatedAt) ||
+    trimOptional(member.currentNode?.updatedAt) ||
+    trimOptional(member.currentNode?.startedAt) ||
+    trimOptional(generatedAt) ||
+    undefined
+  );
+}
+
+function calculateWorkflowBoardDurationMs(
+  member: StudioWorkflowBoardMemberSnapshot,
+): number | undefined {
+  return (
+    positiveFiniteNumber(member.currentNode?.durationMs) ??
+    positiveDurationBetween(
+      member.currentNode?.startedAt,
+      member.currentNode?.updatedAt ?? member.lastNodeUpdatedAt,
+    )
+  );
+}
+
+function workflowBoardRunId(
+  member: StudioWorkflowBoardMemberSnapshot,
+): string {
+  const currentExecutionId = trimOptional(member.currentExecutionId);
+  if (currentExecutionId) {
+    return currentExecutionId;
+  }
+
+  const publishedServiceId = trimOptional(member.publishedServiceId);
+  if (publishedServiceId) {
+    return `published:${publishedServiceId}`;
+  }
+
+  return `member:${member.memberId}`;
+}
+
+function toWorkflowBoardRunSummary(input: {
+  readonly generatedAt: string;
+  readonly member: StudioWorkflowBoardMemberSnapshot;
+  readonly scopeId: string;
+}): ScopeServiceRunSummary {
+  const updatedAt = workflowBoardMemberUpdatedAt(
+    input.member,
+    input.generatedAt,
+  );
+  return {
+    actorId: trimOptional(input.member.actorId) || "",
+    bindingUpdatedAt: updatedAt ?? null,
+    boundAt: trimOptional(input.member.currentNode?.startedAt) || null,
+    completedSteps: Math.max(0, input.member.progress.completedSteps),
+    completionStatus: input.member.executionStatus,
+    definitionActorId: "",
+    deploymentId: "",
+    lastError: "",
+    lastEventId: "",
+    lastOutput: "",
+    lastSuccess: null,
+    lastUpdatedAt: updatedAt ?? null,
+    revisionId: "",
+    roleReplyCount: 0,
+    runId: workflowBoardRunId(input.member),
+    scopeId: input.scopeId,
+    serviceId: trimOptional(input.member.publishedServiceId) || "",
+    stateVersion: 0,
+    totalSteps: Math.max(0, input.member.progress.totalSteps),
+    workflowName:
+      trimOptional(input.member.workflowName) ||
+      trimOptional(input.member.displayName) ||
+      "",
+  };
+}
+
+function toWorkflowBoardSource(input: {
+  readonly generatedAt: string;
+  readonly runAudits: ReadonlyMap<string, ScopeServiceRunAuditSnapshot>;
+  readonly scopeId: string;
+  readonly team: StudioWorkflowBoardTeamSnapshot;
+  readonly member: StudioWorkflowBoardMemberSnapshot;
 }): MissionWallRunSource {
-  const runAudit = input.runAudits?.get(
+  const fallbackRun = toWorkflowBoardRunSummary(input);
+  const runAudit = input.runAudits.get(
     missionWallRunAuditKey({
-      runId: input.run.runId,
-      scopeId: input.run.scopeId,
-      serviceId: input.run.serviceId,
+      runId: fallbackRun.runId,
+      scopeId: fallbackRun.scopeId,
+      serviceId: fallbackRun.serviceId,
     }),
   );
-  const {
-    commandId,
-    completedSteps,
-    durationMs,
-    run,
-    steps,
-    totalSteps,
-  } = withRunAudit(
-    input.run,
-    runAudit,
-  );
-  const status = toMissionWallRunStatus(run.completionStatus);
-  const currentStep = resolveCurrentStep(steps);
-  const teamId = trimOptional(input.member?.teamId) || undefined;
-  const serviceId =
-    trimOptional(run.serviceId) ||
-    trimOptional(input.service.serviceId) ||
-    undefined;
-  const workflowName =
-    trimOptional(run.workflowName) ||
-    trimOptional(input.member?.displayName) ||
-    trimOptional(input.service.displayName) ||
+  const auditOverlay = withRunAudit(fallbackRun, runAudit);
+  const status = toMissionWallRunStatus(input.member.executionStatus);
+  const snapshotSteps = buildWorkflowBoardSteps(input.member);
+  const steps = auditOverlay.steps.length
+    ? auditOverlay.steps
+    : snapshotSteps;
+  const currentStep =
+    steps.find((step) => step.stepId === input.member.currentNode?.nodeId) ??
+    resolveCurrentStep(steps);
+  const hasRuntimeRun = Boolean(trimOptional(input.member.currentExecutionId));
+  const displayName =
+    trimOptional(input.member.displayName) ||
+    trimOptional(input.member.roleSummary) ||
     t("pages.missionwall.runtimeData.unnamedWorkflow", "Unnamed workflow");
+  const workflowName =
+    trimOptional(input.member.workflowName) ||
+    displayName;
+  const durationMs =
+    auditOverlay.durationMs ?? calculateWorkflowBoardDurationMs(input.member);
+  const updatedAt = workflowBoardMemberUpdatedAt(input.member, input.generatedAt);
 
   return {
-    commandId,
-    completedSteps: completedSteps ?? Math.max(0, run.completedSteps),
+    commandId: auditOverlay.commandId,
+    completedSteps:
+      auditOverlay.completedSteps ??
+      Math.max(0, input.member.progress.completedSteps),
     currentMemberId: trimOptional(currentStep?.targetRole) || undefined,
     currentMemberName: trimOptional(currentStep?.targetRole) || undefined,
-    currentStepId: currentStep?.stepId,
-    currentStepLabel: currentStep?.stepId || statusLabel(status),
+    currentStepId:
+      trimOptional(input.member.currentNode?.nodeId) ||
+      currentStep?.stepId,
+    currentStepLabel:
+      trimOptional(input.member.currentNode?.name) ||
+      currentStep?.stepId ||
+      (hasRuntimeRun
+        ? statusLabel(status)
+        : t(
+            "pages.missionwall.runtimeData.noRuntimeRun",
+            "No visible run",
+          )),
     durationMs,
-    entryMemberId: trimOptional(input.member?.memberId) || undefined,
-    entryMemberName:
-      trimOptional(input.member?.displayName) ||
-      trimOptional(input.service.displayName) ||
-      undefined,
-    lastEventId: trimOptional(run.lastEventId) || undefined,
-    hasRuntimeRun: true,
-    publishedServiceId: serviceId,
-    runId: run.runId,
-    runtimeActorId: trimOptional(run.actorId) || undefined,
-    scopeId: run.scopeId,
-    startedAt: trimOptional(run.boundAt) || undefined,
-    stateVersion: Number.isFinite(run.stateVersion)
-      ? run.stateVersion
-      : undefined,
+    entryMemberId: trimOptional(input.member.memberId) || undefined,
+    entryMemberName: displayName,
+    hasRuntimeRun,
+    lastEventId: trimOptional(auditOverlay.run.lastEventId) || undefined,
+    publishedServiceId:
+      trimOptional(input.member.publishedServiceId) || undefined,
+    runId: fallbackRun.runId,
+    runtimeActorId: trimOptional(input.member.actorId) || undefined,
+    scopeId: input.scopeId,
+    startedAt: trimOptional(input.member.currentNode?.startedAt) || undefined,
+    stateVersion:
+      Number.isFinite(auditOverlay.run.stateVersion) &&
+      auditOverlay.run.stateVersion > 0
+        ? auditOverlay.run.stateVersion
+        : undefined,
     status,
     steps,
-    teamId,
-    teamName: teamId ? input.teamNameById.get(teamId) || teamId : undefined,
-    totalSteps: totalSteps ?? Math.max(0, run.totalSteps),
-    updatedAt: runUpdatedAt(run),
+    teamId: trimOptional(input.team.teamId) || undefined,
+    teamName:
+      trimOptional(input.team.teamName) ||
+      trimOptional(input.team.teamId) ||
+      undefined,
+    totalSteps:
+      auditOverlay.totalSteps ?? Math.max(0, input.member.progress.totalSteps),
+    updatedAt,
     workflowName,
   };
 }
 
-function toPublishedWorkflowSource(input: {
-  readonly catalog?: ScopeServiceRunCatalogSnapshot;
-  readonly member: StudioMemberSummary;
-  readonly service: ServiceCatalogSnapshot;
-  readonly teamNameById: ReadonlyMap<string, string>;
-}): MissionWallRunSource {
-  const teamId = trimOptional(input.member.teamId) || undefined;
-  const serviceId = trimOptional(input.service.serviceId);
-  const displayName =
-    trimOptional(input.member.displayName) ||
-    trimOptional(input.service.displayName) ||
-    t("pages.missionwall.runtimeData.unnamedWorkflow", "Unnamed workflow");
-  const updatedAt =
-    trimOptional(input.catalog?.runs[0]?.lastUpdatedAt) ||
-    trimOptional(input.service.updatedAt) ||
-    trimOptional(input.member.updatedAt) ||
-    undefined;
-
-  return {
-    completedSteps: 0,
-    currentStepLabel: t(
-      "pages.missionwall.runtimeData.noRuntimeRun",
-      "No visible run",
-    ),
-    entryMemberId: trimOptional(input.member.memberId) || undefined,
-    entryMemberName: displayName,
-    hasRuntimeRun: false,
-    publishedServiceId: serviceId || undefined,
-    runId: serviceId
-      ? `published:${serviceId}`
-      : `member:${input.member.memberId}`,
-    scopeId: trimOptional(input.member.scopeId) || undefined,
-    status: "unknown",
-    steps: [],
-    teamId,
-    teamName: teamId ? input.teamNameById.get(teamId) || teamId : undefined,
-    totalSteps: 0,
-    updatedAt,
-    workflowName: displayName,
-  };
-}
-
-export function buildMissionWallSourceFromRuntime(
-  input: MissionWallSourceInput,
+export function buildMissionWallSourceFromWorkflowBoardSnapshot(
+  input: MissionWallWorkflowBoardSourceInput,
 ): MissionWallSource {
-  const teamNameById = buildTeamNameById(input.teams);
   const runAudits = new Map(
     (input.runAudits ?? []).map((audit) => [
       missionWallRunAuditKey({
@@ -566,51 +609,25 @@ export function buildMissionWallSourceFromRuntime(
       audit,
     ]),
   );
-  const runs = input.serviceRunCatalogs.flatMap(
-    ({ catalog, member, service }) => {
-      const sortedRuns = sortServiceRuns(catalog?.runs ?? []);
-      if (!sortedRuns.length) {
-        return [
-          toPublishedWorkflowSource({
-            catalog,
-            member,
-            service,
-            teamNameById,
-          }),
-        ];
-      }
-
-      return sortedRuns.map((run) =>
-        toRunSource({
+  const scopeId = trimOptional(input.snapshot?.scopeId);
+  const runs =
+    input.snapshot?.teams.flatMap((team) =>
+      team.members.map((member) =>
+        toWorkflowBoardSource({
+          generatedAt: input.generatedAt,
           member,
           runAudits,
-          run,
-          service,
-          teamNameById,
+          scopeId: scopeId || "",
+          team,
         }),
-      );
-    },
-  );
+      ),
+    ) ?? [];
 
   return {
     generatedAt: input.generatedAt,
     live: input.live,
     runs,
   };
-}
-
-export function latestRunObservedAt(
-  catalogs: readonly (ScopeServiceRunCatalogSnapshot | undefined)[],
-): string | undefined {
-  const latest = catalogs
-    .flatMap((catalog) => catalog?.runs ?? [])
-    .map(runUpdatedAt)
-    .filter((value): value is string => Boolean(value))
-    .sort(
-      (left, right) => (parseTimeMs(right) ?? 0) - (parseTimeMs(left) ?? 0),
-    )[0];
-
-  return latest;
 }
 
 export function freshnessSecondsSince(
