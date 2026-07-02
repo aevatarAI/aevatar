@@ -115,7 +115,8 @@ public sealed class ProjectionWorkflowBoardExecutionQueryPortTests
         snapshot.FailedNodes.Should().ContainSingle()
             .Which.NodeId.Should().Be("node-failed");
         snapshot.LastNodeUpdatedAt.Should().Be(DateTimeOffset.Parse("2026-06-24T13:20:00Z"));
-        snapshot.Totals.Should().Be(new WorkflowBoardTotals(1, 1, 1, 1));
+        snapshot.ExecutionStatus.Should().Be(WorkflowBoardMemberExecutionStatus.Running);
+        snapshot.Summary.Should().Be(new WorkflowBoardExecutionSummary(1, 1, 1, 1));
         snapshot.Revision.Should().Be("state-version-9:event-evt-9");
     }
 
@@ -177,7 +178,8 @@ public sealed class ProjectionWorkflowBoardExecutionQueryPortTests
         snapshot.CurrentExecutionId.Should().Be("run-actor-alpha");
         snapshot.PendingNodes.Should().ContainSingle()
             .Which.NodeId.Should().Be("wait_for_board_signal");
-        snapshot.Totals.Should().Be(new WorkflowBoardTotals(0, 0, 1, 0));
+        snapshot.ExecutionStatus.Should().Be(WorkflowBoardMemberExecutionStatus.Waiting);
+        snapshot.Summary.Should().Be(new WorkflowBoardExecutionSummary(0, 0, 1, 0));
         serviceRuns.Queries.Should().ContainSingle()
             .Which.Should().Be(new ServiceRunQuery("scope-alpha", "svc-alpha", 1));
     }
@@ -227,10 +229,7 @@ public sealed class ProjectionWorkflowBoardExecutionQueryPortTests
             WorkflowBoardExecutionAvailability.Unavailable,
             [],
             [],
-            [])
-        {
-            Totals = new WorkflowBoardTotals(null, null, null, null),
-        };
+            []);
 
     private static ServiceRunSnapshot BuildServiceRun(
         string scopeId,
