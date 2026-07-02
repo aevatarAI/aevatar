@@ -110,13 +110,13 @@ public sealed class ProvisionWorkflowScheduleToolTests
     }
 
     [Fact]
-    public async Task CreateTeam_ShouldIgnoreModelSuppliedScope()
+    public async Task CreateTeam_WhenModelSuppliesScope_ShouldRejectUnknownArgumentAndNotCallPort()
     {
         var teamPort = new RecordingTeamProvisioningPort();
         var tool = await DiscoverCreateTeamToolAsync(teamPort);
 
         using var _ = PushContext(scopeId: "scope-context", ownerSubject: "owner-1", accessToken: "access-token-1");
-        await tool.ExecuteAsync("""
+        var output = await tool.ExecuteAsync("""
             {
               "scope_id": "scope-model",
               "display_name": "Alpha Team",
@@ -124,8 +124,27 @@ public sealed class ProvisionWorkflowScheduleToolTests
             }
             """);
 
-        teamPort.LastRequest.Should().NotBeNull();
-        teamPort.LastRequest!.ScopeId.Should().Be("scope-context");
+        ErrorCode(output).Should().Be("invalid_arguments");
+        ErrorMessage(output).Should().Be("Unknown argument: scope_id");
+        teamPort.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task CreateTeam_ShouldRemainAvailableToChatSurfaceWithApproval()
+    {
+        var tool = await DiscoverCreateTeamToolAsync(new RecordingTeamProvisioningPort());
+
+        tool.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
+        tool.Should().NotBeAssignableTo<IAgentToolCapabilityDescriptor>();
+    }
+
+    [Fact]
+    public async Task ScheduleTool_ShouldDeclareDirectChannelChatExclusion()
+    {
+        var tool = await DiscoverToolAsync(new RecordingProvisioningPort());
+
+        var descriptor = tool.Should().BeAssignableTo<IAgentToolCapabilityDescriptor>().Subject;
+        descriptor.Capabilities.Should().Contain(AgentToolCapabilities.ExcludeFromDirectChannelChat);
     }
 
     [Fact]
@@ -313,6 +332,15 @@ public sealed class ProvisionWorkflowScheduleToolTests
         return document.RootElement.TryGetProperty("error", out var error)
             && error.TryGetProperty("code", out var code)
             ? code.GetString()
+            : null;
+    }
+
+    private static string? ErrorMessage(string output)
+    {
+        using var document = JsonDocument.Parse(output);
+        return document.RootElement.TryGetProperty("error", out var error)
+            && error.TryGetProperty("message", out var message)
+            ? message.GetString()
             : null;
     }
 

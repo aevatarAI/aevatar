@@ -72,6 +72,10 @@ internal sealed class CreateStudioTeamTool : IAgentTool
         CreateStudioTeamArguments? args;
         try
         {
+            var unknownArgument = FindUnknownArgument(argumentsJson);
+            if (unknownArgument is not null)
+                return ErrorJson("invalid_arguments", $"Unknown argument: {unknownArgument}");
+
             args = JsonSerializer.Deserialize<CreateStudioTeamArguments>(argumentsJson, s_jsonOptions);
         }
         catch (JsonException ex)
@@ -131,6 +135,21 @@ internal sealed class CreateStudioTeamTool : IAgentTool
 
     private static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static string? FindUnknownArgument(string argumentsJson)
+    {
+        using var document = JsonDocument.Parse(argumentsJson);
+        if (document.RootElement.ValueKind != JsonValueKind.Object)
+            return null;
+
+        foreach (var property in document.RootElement.EnumerateObject())
+        {
+            if (property.Name is not "display_name" and not "description" and not "team_id")
+                return property.Name;
+        }
+
+        return null;
+    }
 
     private sealed record CreateStudioTeamArguments(
         [property: JsonPropertyName("display_name")] string? DisplayName,
