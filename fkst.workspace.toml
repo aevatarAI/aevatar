@@ -4,3 +4,19 @@ packages = [".fkst/local-packages/*"]
 
 [registries]
 workspace = "workspace"
+
+[[external_sources]]
+id = "fkst-packages"
+git = "https://github.com/ChronoAIProject/fkst-packages.git"
+rev = "7b0bbca4501ec47a25d2a43600708fbc0ae66f71"
+libraries = ["contract", "forge", "testkit", "workflow", "devloop"]
+packages = [
+  "github-proxy",
+  "consensus",
+  "github-devloop-decompose",
+  "github-devloop-intake",
+  "github-devloop-intake-default",
+  "github-devloop",
+  "github-devloop-pr",
+  "github-devloop-ops",
+]

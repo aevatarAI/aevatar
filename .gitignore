@@ -7,6 +7,10 @@
 .env
 local-dev/
 
+# FKST local runtime state
+.fkst/env
+.fkst/run/
+
 # User-specific files
 *.rsuser
 *.suo
