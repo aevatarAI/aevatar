@@ -19,22 +19,6 @@ export function formatDuration(ms?: number): string {
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
-export function formatFreshness(seconds?: number): string {
-  if (seconds === undefined || !Number.isFinite(seconds)) {
-    return t("pages.missionwall.freshnessUnavailable", "n/a");
-  }
-
-  if (seconds < 60) {
-    return t("pages.missionwall.freshnessSeconds", "{seconds}s", {
-      seconds: String(Math.max(1, Math.round(seconds))),
-    });
-  }
-
-  return t("pages.missionwall.freshnessMinutes", "{minutes}m", {
-    minutes: String(Math.round(seconds / 60)),
-  });
-}
-
 export function formatLatency(ms?: number): string | undefined {
   if (ms === undefined || !Number.isFinite(ms) || ms <= 0) {
     return undefined;
@@ -186,16 +170,6 @@ export function stepTone(
     default:
       return "grey";
   }
-}
-
-export function formatRunSubtitle(run: MissionWallRun): string {
-  return t("pages.missionwall.runSubtitle", "{teamName} · {memberName}", {
-    memberName:
-      run.entryMemberName ||
-      t("pages.missionwall.unknownEntryMember", "Unknown entry member"),
-    teamName:
-      run.teamName || t("pages.missionwall.unknownTeam", "Unknown team"),
-  });
 }
 
 export function formatRunStage(run: MissionWallRun): string {

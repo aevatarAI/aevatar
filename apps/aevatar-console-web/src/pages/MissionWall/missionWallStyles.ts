@@ -50,7 +50,10 @@ export const missionWallStyles = `
   box-shadow: 0 28px 80px rgba(0, 0, 0, 0.32);
   display: grid;
   gap: 18px;
-  grid-template-columns: minmax(330px, 1.35fr) repeat(6, minmax(126px, 0.55fr));
+  grid-template-columns:
+    minmax(300px, 1.15fr)
+    repeat(5, minmax(104px, 0.48fr))
+    minmax(210px, auto);
   min-width: 0;
   padding: 16px 18px;
 }
@@ -108,7 +111,6 @@ export const missionWallStyles = `
 
 .mission-wall-brand__title,
 .mission-wall-run-card__name,
-.mission-wall-run-card__team,
 .mission-wall-run-card__stage,
 .mission-wall-stage-title,
 .mission-wall-stage-subtitle,
@@ -123,8 +125,106 @@ export const missionWallStyles = `
   color: var(--wall-text);
 }
 
-.mission-wall-metric__value--fresh {
-  color: var(--wall-blue-soft);
+.mission-wall-header-actions {
+  align-items: center;
+  align-self: center;
+  display: inline-flex;
+  gap: 10px;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.mission-wall-header-actions .console-header-actions__language,
+.mission-wall-header-actions .console-header-actions__login {
+  background: rgba(45, 212, 191, 0.08);
+  border: 1px solid rgba(45, 212, 191, 0.18);
+  border-radius: 999px;
+  color: var(--wall-text) !important;
+  font-weight: 720;
+  padding-inline: 13px;
+  text-shadow: 0 0 18px rgba(45, 212, 191, 0.18);
+}
+
+.mission-wall-header-actions .console-header-actions__language .anticon,
+.mission-wall-header-actions .console-header-actions__login .anticon {
+  color: var(--wall-live);
+}
+
+.mission-wall-header-actions .console-header-actions__language:hover,
+.mission-wall-header-actions .console-header-actions__language:focus-visible,
+.mission-wall-header-actions .console-header-actions__login:hover,
+.mission-wall-header-actions .console-header-actions__login:focus-visible {
+  background: rgba(45, 212, 191, 0.14) !important;
+  border-color: rgba(45, 212, 191, 0.42) !important;
+  color: var(--wall-live) !important;
+}
+
+.mission-wall-header-actions .console-header-actions__user {
+  background: rgba(45, 212, 191, 0.08) !important;
+  border-color: rgba(45, 212, 191, 0.22) !important;
+  box-shadow: inset 0 0 0 1px rgba(201, 213, 206, 0.06);
+  color: var(--wall-text) !important;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease;
+}
+
+.mission-wall-header-actions .console-header-actions__user:hover {
+  background: rgba(45, 212, 191, 0.14) !important;
+  border-color: rgba(45, 212, 191, 0.42) !important;
+}
+
+.mission-wall-header-actions .console-header-actions__user .ant-avatar {
+  background: rgba(45, 212, 191, 0.14);
+  border: 1px solid rgba(45, 212, 191, 0.34);
+}
+
+.mission-wall-header-actions .console-header-actions__user-name {
+  color: var(--wall-text) !important;
+}
+
+.mission-wall-header-actions .console-header-actions__user-caret {
+  color: rgba(201, 213, 206, 0.78) !important;
+}
+
+.mission-wall-header-menu {
+  --wall-text: #f8faf8;
+  --wall-muted: #aebbb4;
+  --wall-live: #2dd4bf;
+}
+
+.mission-wall-header-menu .ant-dropdown-menu {
+  background: rgba(13, 22, 19, 0.98);
+  border: 1px solid rgba(45, 212, 191, 0.28);
+  border-radius: 8px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
+  padding: 6px;
+}
+
+.mission-wall-header-menu .ant-dropdown-menu-item,
+.mission-wall-header-menu .ant-dropdown-menu-submenu-title {
+  border-radius: 6px;
+  color: var(--wall-text) !important;
+  font-weight: 680;
+}
+
+.mission-wall-header-menu .ant-dropdown-menu-item .ant-dropdown-menu-title-content,
+.mission-wall-header-menu .ant-dropdown-menu-item .anticon {
+  color: inherit !important;
+}
+
+.mission-wall-header-menu .ant-dropdown-menu-item-disabled,
+.mission-wall-header-menu .ant-dropdown-menu-item-disabled .ant-dropdown-menu-title-content,
+.mission-wall-header-menu .ant-dropdown-menu-item-disabled .anticon {
+  color: rgba(174, 187, 180, 0.5) !important;
+}
+
+.mission-wall-header-menu .ant-dropdown-menu-item-selected,
+.mission-wall-header-menu .ant-dropdown-menu-item-active,
+.mission-wall-header-menu .ant-dropdown-menu-item:hover {
+  background: rgba(45, 212, 191, 0.16) !important;
+  color: var(--wall-live) !important;
 }
 
 .mission-wall-metric__value--red {
@@ -245,6 +345,7 @@ export const missionWallStyles = `
 .mission-wall-run-card {
   appearance: none;
   background: linear-gradient(180deg, rgba(22, 35, 31, 0.98), rgba(13, 22, 19, 0.98));
+  --mission-wall-card-focus-ring: rgba(116, 132, 124, 0.62);
   border: 1px solid var(--wall-line);
   border-left: 4px solid var(--wall-faint);
   border-radius: 8px;
@@ -259,9 +360,14 @@ export const missionWallStyles = `
   width: 100%;
 }
 
+.mission-wall-run-card--focus {
+  outline: 2px solid var(--mission-wall-card-focus-ring);
+  outline-offset: 3px;
+}
+
 .mission-wall-run-card:focus-visible {
-  outline: 2px solid rgba(45, 212, 191, 0.82);
-  outline-offset: 2px;
+  outline: 2px solid var(--mission-wall-card-focus-ring);
+  outline-offset: 3px;
 }
 
 .mission-wall-run-card:hover {
@@ -269,26 +375,32 @@ export const missionWallStyles = `
 }
 
 .mission-wall-tone--blue {
+  --mission-wall-card-focus-ring: rgba(147, 197, 253, 0.9);
   border-left-color: var(--wall-blue);
 }
 
 .mission-wall-tone--green {
+  --mission-wall-card-focus-ring: rgba(134, 239, 172, 0.88);
   border-left-color: var(--wall-green);
 }
 
 .mission-wall-tone--grey {
+  --mission-wall-card-focus-ring: rgba(174, 187, 180, 0.7);
   border-left-color: var(--wall-faint);
 }
 
 .mission-wall-tone--red {
+  --mission-wall-card-focus-ring: rgba(248, 113, 113, 0.88);
   border-left-color: var(--wall-red);
 }
 
 .mission-wall-tone--teal {
+  --mission-wall-card-focus-ring: rgba(45, 212, 191, 0.86);
   border-left-color: var(--wall-live);
 }
 
 .mission-wall-tone--yellow {
+  --mission-wall-card-focus-ring: rgba(251, 191, 36, 0.88);
   border-left-color: var(--wall-yellow);
 }
 
@@ -306,17 +418,6 @@ export const missionWallStyles = `
   font-weight: 760;
   line-height: 1.15;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.mission-wall-run-card__team {
-  color: var(--wall-muted);
-  font-size: 13px;
-  font-weight: 650;
-  line-height: 1.25;
-  margin-top: 4px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -686,7 +787,10 @@ export const missionWallStyles = `
   }
 
   .mission-wall-top-strip {
-    grid-template-columns: minmax(280px, 1fr) repeat(6, minmax(92px, 0.45fr));
+    grid-template-columns:
+      minmax(260px, 0.95fr)
+      repeat(5, minmax(82px, 0.42fr))
+      minmax(190px, auto);
   }
 
   .mission-wall-screen {

@@ -11,16 +11,14 @@ const MissionWallPage: React.FC = () => {
   const runtimeData = useMissionWallRuntimeData();
   const {
     buildSource,
-    generatedAt,
     isLoading,
+    nowMs,
     routeFocusRunId,
   } = runtimeData;
   const missionWallSource = React.useMemo(
     () => buildSource(),
     [buildSource],
   );
-  const generatedAtMs = Date.parse(generatedAt);
-  const nowMs = Number.isFinite(generatedAtMs) ? generatedAtMs : Date.now();
   const snapshot = React.useMemo(
     () =>
       buildMissionWallSnapshot(missionWallSource, {

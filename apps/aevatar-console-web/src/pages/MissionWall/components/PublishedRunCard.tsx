@@ -5,7 +5,6 @@ import {
   formatDuration,
   formatRunStage,
   formatRunStatus,
-  formatRunSubtitle,
   priorityTone,
 } from "../missionWallFormatters";
 
@@ -56,9 +55,6 @@ export function PublishedRunCard({
       <div className="mission-wall-row">
         <div style={{ minWidth: 0 }}>
           <div className="mission-wall-run-card__name">{run.workflowName}</div>
-          <div className="mission-wall-run-card__team">
-            {formatRunSubtitle(run)}
-          </div>
         </div>
         <span className={`mission-wall-pill mission-wall-pill--${tone}`}>
           {formatRunStatus(run.status)}
