@@ -6,10 +6,9 @@ import {
   Position,
   ReactFlow,
   type Edge,
-  type NodeMouseHandler,
   type Node,
-  type OnMove,
   type ReactFlowInstance,
+  type FitViewOptions,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import React from "react";
@@ -37,6 +36,13 @@ type WorkflowReplayEdge = Edge<{ readonly edge: MissionWallWorkflowStepEdge }>;
 const nodeTypes = {
   missionWallWorkflowStep: WorkflowStepNode,
 };
+
+const FIT_VIEW_BASE_OPTIONS = {
+  duration: 0,
+  maxZoom: 1.05,
+  minZoom: 0.36,
+  padding: 0.24,
+} as const;
 
 function focusWindowStepIds(
   graph: MissionWallWorkflowGraph | undefined,
@@ -67,6 +73,22 @@ function graphIdentityKey(graph: MissionWallWorkflowGraph | undefined): string {
 
 function graphViewportKey(graph: MissionWallWorkflowGraph | undefined): string {
   return `${graphIdentityKey(graph)}:${graph?.selectedStepId ?? ""}`;
+}
+
+function graphRevisionKey(graph: MissionWallWorkflowGraph | undefined): string {
+  return (graph?.nodes ?? [])
+    .map(
+      (node) =>
+        [
+          node.id,
+          node.status,
+          node.focused ? "focused" : "",
+          node.latencyMs ?? "",
+          node.outputPreview ?? "",
+          node.error ?? "",
+        ].join(":"),
+    )
+    .join("|");
 }
 
 function toFlowNodes(graph: MissionWallWorkflowGraph | undefined): WorkflowReplayNode[] {
@@ -211,39 +233,30 @@ export function WorkflowReplayCanvas({
   const focusNodeIds = React.useMemo(() => focusWindowStepIds(graph), [graph]);
   const identityKey = React.useMemo(() => graphIdentityKey(graph), [graph]);
   const viewportKey = React.useMemo(() => graphViewportKey(graph), [graph]);
-  const lastFitIdentityKeyRef = React.useRef<string | undefined>(undefined);
+  const revisionKey = React.useMemo(() => graphRevisionKey(graph), [graph]);
+  const fitViewKey = `${viewportKey}:${revisionKey}`;
   const lastFitKeyRef = React.useRef<string | undefined>(undefined);
-  const userMovedViewportRef = React.useRef(false);
-
-  const markUserMovedViewport = React.useCallback(() => {
-    userMovedViewportRef.current = true;
-  }, []);
-
-  const handleMove: OnMove = React.useCallback((event) => {
-    if (event) {
-      markUserMovedViewport();
-    }
-  }, [markUserMovedViewport]);
-
-  const handleNodeDragStart: NodeMouseHandler = React.useCallback(() => {
-    markUserMovedViewport();
-  }, [markUserMovedViewport]);
+  const fitNodeIds = React.useMemo(
+    () => (focusNodeIds.length ? focusNodeIds : nodes.map((node) => node.id)),
+    [focusNodeIds, nodes],
+  );
+  const fitViewOptions = React.useMemo<FitViewOptions<WorkflowReplayNode>>(
+    () => ({
+      ...FIT_VIEW_BASE_OPTIONS,
+      nodes: fitNodeIds.map((id) => ({ id })),
+    }),
+    [fitNodeIds],
+  );
 
   React.useLayoutEffect(() => {
     if (!flowInstance || !nodes.length) {
       return undefined;
     }
-    const graphIdentityChanged = lastFitIdentityKeyRef.current !== identityKey;
-    if (lastFitKeyRef.current === viewportKey) {
-      return undefined;
-    }
-    if (userMovedViewportRef.current && !graphIdentityChanged) {
+    if (lastFitKeyRef.current === fitViewKey) {
       return undefined;
     }
 
-    lastFitIdentityKeyRef.current = identityKey;
-    lastFitKeyRef.current = viewportKey;
-    userMovedViewportRef.current = false;
+    lastFitKeyRef.current = fitViewKey;
 
     const focusNodes = focusNodeIds.length
       ? nodes.filter((node) => focusNodeIds.includes(node.id))
@@ -252,11 +265,8 @@ export function WorkflowReplayCanvas({
 
     const fit = () => {
       void flowInstance.fitView({
-        duration: 0,
-        maxZoom: 1.05,
-        minZoom: 0.36,
+        ...FIT_VIEW_BASE_OPTIONS,
         nodes: fitNodes,
-        padding: 0.24,
       });
     };
 
@@ -267,16 +277,19 @@ export function WorkflowReplayCanvas({
 
     fit();
     return undefined;
-  }, [flowInstance, focusNodeIds, identityKey, nodes, viewportKey]);
+  }, [fitViewKey, flowInstance, focusNodeIds, nodes]);
 
   return (
     <section className="mission-wall-canvas">
       <div className="mission-wall-graph" data-testid="mission-wall-graph">
         <ReactFlow
+          key={identityKey}
           className="mission-wall-react-flow"
           edges={edges}
           edgesFocusable={false}
           elementsSelectable={false}
+          fitView
+          fitViewOptions={fitViewOptions}
           maxZoom={1.4}
           minZoom={0.28}
           nodeTypes={nodeTypes}
@@ -285,8 +298,6 @@ export function WorkflowReplayCanvas({
           nodesDraggable={false}
           nodesFocusable={false}
           onInit={setFlowInstance}
-          onMove={handleMove}
-          onNodeDragStart={handleNodeDragStart}
           panOnDrag
           proOptions={{ hideAttribution: true }}
           zoomOnDoubleClick={false}

@@ -1,10 +1,5 @@
 import { t } from "@/shared/i18n/messages";
 import type {
-  ScopeServiceRunAuditSnapshot,
-  ScopeServiceRunSummary,
-  ScopeServiceRunAuditStep,
-} from "@/shared/models/runtime/scopeServices";
-import type {
   StudioWorkflowBoardCompletedNode,
   StudioWorkflowBoardCurrentNode,
   StudioWorkflowBoardFailedNode,
@@ -25,7 +20,6 @@ import type {
 type MissionWallWorkflowBoardSourceInput = {
   readonly generatedAt: string;
   readonly live: MissionWallLiveState;
-  readonly runAudits?: readonly ScopeServiceRunAuditSnapshot[];
   readonly snapshot?: StudioWorkflowBoardSnapshot;
 };
 
@@ -44,29 +38,6 @@ function normalizeStatus(value: string | null | undefined): string {
 function parseTimeMs(value: string | null | undefined): number | undefined {
   const parsed = Date.parse(trimOptional(value));
   return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-function calculateDurationMs(run: ScopeServiceRunSummary): number | undefined {
-  const startedAtMs = parseTimeMs(run.boundAt);
-  const updatedAtMs = parseTimeMs(run.lastUpdatedAt);
-  if (startedAtMs === undefined || updatedAtMs === undefined) {
-    return undefined;
-  }
-
-  const durationMs = updatedAtMs - startedAtMs;
-  return durationMs >= 0 ? durationMs : undefined;
-}
-
-export function missionWallRunAuditKey(input: {
-  readonly runId?: string | null;
-  readonly scopeId?: string | null;
-  readonly serviceId?: string | null;
-}): string {
-  return [
-    trimOptional(input.scopeId),
-    trimOptional(input.serviceId),
-    trimOptional(input.runId),
-  ].join(":");
 }
 
 function positiveFiniteNumber(
@@ -88,43 +59,6 @@ function positiveDurationBetween(
   }
 
   return positiveFiniteNumber(endedAtMs - startedAtMs);
-}
-
-function calculateAuditStepDurationMs(
-  step: ScopeServiceRunAuditStep,
-): number | undefined {
-  return (
-    positiveFiniteNumber(step.durationMs) ??
-    positiveDurationBetween(step.requestedAt, step.completedAt)
-  );
-}
-
-function calculateAuditDurationMs(
-  runAudit: ScopeServiceRunAuditSnapshot,
-): number | undefined {
-  const audit = runAudit.audit;
-  const stepDurationMs = audit.steps
-    .map(calculateAuditStepDurationMs)
-    .filter((value): value is number => value !== undefined)
-    .reduce((sum, value) => sum + value, 0);
-
-  return (
-    positiveFiniteNumber(audit.durationMs) ??
-    positiveDurationBetween(
-      trimOptional(audit.startedAt) || audit.createdAt,
-      trimOptional(audit.endedAt) || undefined,
-    ) ??
-    positiveFiniteNumber(stepDurationMs) ??
-    calculateDurationMs(runAudit.summary)
-  );
-}
-
-function positiveStepCount(
-  value: number | null | undefined,
-): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : undefined;
 }
 
 export function toMissionWallRunStatus(
@@ -186,92 +120,6 @@ function statusLabel(status: MissionWallRunStatus): string {
   }
 }
 
-function stepTimestamp(step: ScopeServiceRunAuditStep): number {
-  return parseTimeMs(step.requestedAt) ?? parseTimeMs(step.completedAt) ?? 0;
-}
-
-function sortAuditSteps(
-  steps: readonly ScopeServiceRunAuditStep[],
-): ScopeServiceRunAuditStep[] {
-  return [...steps].sort((left, right) => {
-    const timestampDelta = stepTimestamp(left) - stepTimestamp(right);
-    if (timestampDelta !== 0) {
-      return timestampDelta;
-    }
-
-    return left.stepId.localeCompare(right.stepId);
-  });
-}
-
-function toMissionWallStepStatus(
-  step: ScopeServiceRunAuditStep,
-): MissionWallStepStatus {
-  if (step.success === true) {
-    return "completed";
-  }
-
-  if (step.success === false || trimOptional(step.error)) {
-    return "failed";
-  }
-
-  if (trimOptional(step.completedAt)) {
-    return "completed";
-  }
-
-  if (
-    trimOptional(step.suspensionType) ||
-    trimOptional(step.suspensionPrompt)
-  ) {
-    return "waiting";
-  }
-
-  if (trimOptional(step.requestedAt) && !trimOptional(step.completedAt)) {
-    return "active";
-  }
-
-  return "idle";
-}
-
-function summarizeStepParameters(
-  step: ScopeServiceRunAuditStep,
-): string | undefined {
-  const entries = Object.entries(step.requestParameters).filter(
-    ([key, value]) => trimOptional(key) || trimOptional(value),
-  );
-  if (!entries.length) {
-    return trimOptional(step.targetRole) || undefined;
-  }
-
-  return entries
-    .slice(0, 2)
-    .map(([key, value]) => `${key}: ${value}`)
-    .join(" | ");
-}
-
-function toMissionWallStepSource(
-  step: ScopeServiceRunAuditStep,
-): MissionWallStepSource {
-  const branchKey = trimOptional(step.branchKey);
-  const nextStepId = trimOptional(step.nextStepId);
-
-  return {
-    branchTargets:
-      branchKey && nextStepId ? { [branchKey]: nextStepId } : undefined,
-    error: trimOptional(step.error) || undefined,
-    latencyMs:
-      typeof step.durationMs === "number" && Number.isFinite(step.durationMs)
-        ? step.durationMs
-        : undefined,
-    nextStepId: branchKey ? undefined : nextStepId || undefined,
-    outputPreview: trimOptional(step.outputPreview) || undefined,
-    parametersSummary: summarizeStepParameters(step),
-    status: toMissionWallStepStatus(step),
-    stepId: step.stepId,
-    stepType: trimOptional(step.stepType) || "step",
-    targetRole: trimOptional(step.targetRole) || undefined,
-  };
-}
-
 function resolveCurrentStep(
   steps: readonly MissionWallStepSource[],
 ): MissionWallStepSource | undefined {
@@ -282,48 +130,6 @@ function resolveCurrentStep(
     [...steps].reverse().find((step) => step.status === "completed") ??
     steps[0]
   );
-}
-
-function withRunAudit(
-  run: ScopeServiceRunSummary,
-  runAudit?: ScopeServiceRunAuditSnapshot,
-): {
-  readonly run: ScopeServiceRunSummary;
-  readonly steps: readonly MissionWallStepSource[];
-  readonly durationMs?: number;
-  readonly commandId?: string;
-  readonly completedSteps?: number;
-  readonly totalSteps?: number;
-} {
-  if (
-    !runAudit ||
-    runAudit.summary.runId !== run.runId ||
-    runAudit.summary.serviceId !== run.serviceId
-  ) {
-    return {
-      durationMs: calculateDurationMs(run),
-      run,
-      steps: [],
-    };
-  }
-
-  const audit = runAudit.audit;
-  const steps = sortAuditSteps(audit.steps).map(toMissionWallStepSource);
-  const completedStepCount = steps.filter(
-    (step) => step.status === "completed",
-  ).length;
-  return {
-    commandId: trimOptional(audit.commandId) || undefined,
-    completedSteps:
-      positiveStepCount(audit.summary.completedSteps) ?? completedStepCount,
-    durationMs: calculateAuditDurationMs(runAudit),
-    run: runAudit.summary,
-    steps,
-    totalSteps:
-      positiveStepCount(audit.summary.totalSteps) ??
-      positiveStepCount(audit.summary.requestedSteps) ??
-      steps.length,
-  };
 }
 
 function toWorkflowBoardStepStatus(
@@ -475,63 +281,14 @@ function workflowBoardRunId(
   return `member:${member.memberId}`;
 }
 
-function toWorkflowBoardRunSummary(input: {
-  readonly generatedAt: string;
-  readonly member: StudioWorkflowBoardMemberSnapshot;
-  readonly scopeId: string;
-}): ScopeServiceRunSummary {
-  const updatedAt = workflowBoardMemberUpdatedAt(
-    input.member,
-    input.generatedAt,
-  );
-  return {
-    actorId: trimOptional(input.member.actorId) || "",
-    bindingUpdatedAt: updatedAt ?? null,
-    boundAt: trimOptional(input.member.currentNode?.startedAt) || null,
-    completedSteps: Math.max(0, input.member.progress.completedSteps),
-    completionStatus: input.member.executionStatus,
-    definitionActorId: "",
-    deploymentId: "",
-    lastError: "",
-    lastEventId: "",
-    lastOutput: "",
-    lastSuccess: null,
-    lastUpdatedAt: updatedAt ?? null,
-    revisionId: "",
-    roleReplyCount: 0,
-    runId: workflowBoardRunId(input.member),
-    scopeId: input.scopeId,
-    serviceId: trimOptional(input.member.publishedServiceId) || "",
-    stateVersion: 0,
-    totalSteps: Math.max(0, input.member.progress.totalSteps),
-    workflowName:
-      trimOptional(input.member.workflowName) ||
-      trimOptional(input.member.displayName) ||
-      "",
-  };
-}
-
 function toWorkflowBoardSource(input: {
   readonly generatedAt: string;
-  readonly runAudits: ReadonlyMap<string, ScopeServiceRunAuditSnapshot>;
   readonly scopeId: string;
   readonly team: StudioWorkflowBoardTeamSnapshot;
   readonly member: StudioWorkflowBoardMemberSnapshot;
 }): MissionWallRunSource {
-  const fallbackRun = toWorkflowBoardRunSummary(input);
-  const runAudit = input.runAudits.get(
-    missionWallRunAuditKey({
-      runId: fallbackRun.runId,
-      scopeId: fallbackRun.scopeId,
-      serviceId: fallbackRun.serviceId,
-    }),
-  );
-  const auditOverlay = withRunAudit(fallbackRun, runAudit);
   const status = toMissionWallRunStatus(input.member.executionStatus);
-  const snapshotSteps = buildWorkflowBoardSteps(input.member);
-  const steps = auditOverlay.steps.length
-    ? auditOverlay.steps
-    : snapshotSteps;
+  const steps = buildWorkflowBoardSteps(input.member);
   const currentStep =
     steps.find((step) => step.stepId === input.member.currentNode?.nodeId) ??
     resolveCurrentStep(steps);
@@ -543,15 +300,11 @@ function toWorkflowBoardSource(input: {
   const workflowName =
     trimOptional(input.member.workflowName) ||
     displayName;
-  const durationMs =
-    auditOverlay.durationMs ?? calculateWorkflowBoardDurationMs(input.member);
+  const durationMs = calculateWorkflowBoardDurationMs(input.member);
   const updatedAt = workflowBoardMemberUpdatedAt(input.member, input.generatedAt);
 
   return {
-    commandId: auditOverlay.commandId,
-    completedSteps:
-      auditOverlay.completedSteps ??
-      Math.max(0, input.member.progress.completedSteps),
+    completedSteps: Math.max(0, input.member.progress.completedSteps),
     currentMemberId: trimOptional(currentStep?.targetRole) || undefined,
     currentMemberName: trimOptional(currentStep?.targetRole) || undefined,
     currentStepId:
@@ -570,18 +323,12 @@ function toWorkflowBoardSource(input: {
     entryMemberId: trimOptional(input.member.memberId) || undefined,
     entryMemberName: displayName,
     hasRuntimeRun,
-    lastEventId: trimOptional(auditOverlay.run.lastEventId) || undefined,
     publishedServiceId:
       trimOptional(input.member.publishedServiceId) || undefined,
-    runId: fallbackRun.runId,
+    runId: workflowBoardRunId(input.member),
     runtimeActorId: trimOptional(input.member.actorId) || undefined,
     scopeId: input.scopeId,
     startedAt: trimOptional(input.member.currentNode?.startedAt) || undefined,
-    stateVersion:
-      Number.isFinite(auditOverlay.run.stateVersion) &&
-      auditOverlay.run.stateVersion > 0
-        ? auditOverlay.run.stateVersion
-        : undefined,
     status,
     steps,
     teamId: trimOptional(input.team.teamId) || undefined,
@@ -589,8 +336,7 @@ function toWorkflowBoardSource(input: {
       trimOptional(input.team.teamName) ||
       trimOptional(input.team.teamId) ||
       undefined,
-    totalSteps:
-      auditOverlay.totalSteps ?? Math.max(0, input.member.progress.totalSteps),
+    totalSteps: Math.max(0, input.member.progress.totalSteps),
     updatedAt,
     workflowName,
   };
@@ -599,16 +345,6 @@ function toWorkflowBoardSource(input: {
 export function buildMissionWallSourceFromWorkflowBoardSnapshot(
   input: MissionWallWorkflowBoardSourceInput,
 ): MissionWallSource {
-  const runAudits = new Map(
-    (input.runAudits ?? []).map((audit) => [
-      missionWallRunAuditKey({
-        runId: audit.summary.runId,
-        scopeId: audit.summary.scopeId,
-        serviceId: audit.summary.serviceId,
-      }),
-      audit,
-    ]),
-  );
   const scopeId = trimOptional(input.snapshot?.scopeId);
   const runs =
     input.snapshot?.teams.flatMap((team) =>
@@ -616,7 +352,6 @@ export function buildMissionWallSourceFromWorkflowBoardSnapshot(
         toWorkflowBoardSource({
           generatedAt: input.generatedAt,
           member,
-          runAudits,
           scopeId: scopeId || "",
           team,
         }),

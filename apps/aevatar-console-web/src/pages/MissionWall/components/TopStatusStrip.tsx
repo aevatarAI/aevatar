@@ -1,7 +1,8 @@
 import React from "react";
 import { t } from "@/shared/i18n/messages";
+import { ConsoleHeaderActions } from "@/shared/ui/ConsoleHeaderActions";
 import type { MissionWallSnapshot } from "../models";
-import { formatFreshness, formatLiveStatus } from "../missionWallFormatters";
+import { formatLiveStatus } from "../missionWallFormatters";
 
 function Metric({
   label,
@@ -9,7 +10,7 @@ function Metric({
   value,
 }: {
   readonly label: string;
-  readonly tone?: "fresh" | "live" | "red" | "yellow";
+  readonly tone?: "live" | "red" | "yellow";
   readonly value: React.ReactNode;
 }) {
   const valueClassName = [
@@ -76,10 +77,9 @@ export function TopStatusStrip({
         label={t("pages.missionwall.metric.retrying", "Retrying")}
         value={snapshot.summary.retryingRuns}
       />
-      <Metric
-        label={t("pages.missionwall.metric.freshness", "Fresh")}
-        tone="fresh"
-        value={formatFreshness(snapshot.summary.projectionFreshnessSeconds)}
+      <ConsoleHeaderActions
+        className="mission-wall-header-actions"
+        dropdownRootClassName="mission-wall-header-menu"
       />
     </header>
   );

@@ -131,6 +131,7 @@ function graphFixture(): MissionWallWorkflowGraph {
 
 describe("WorkflowReplayCanvas", () => {
   beforeEach(() => {
+    jest.useRealTimers();
     Object.defineProperty(window, "requestAnimationFrame", {
       configurable: true,
       value: (callback: FrameRequestCallback) => {
@@ -144,6 +145,10 @@ describe("WorkflowReplayCanvas", () => {
     });
     mockFitView.mockClear();
     mockReactFlowRender.mockClear();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
   });
 
   it("renders the workflow flow with directional runtime edges", () => {
@@ -183,7 +188,7 @@ describe("WorkflowReplayCanvas", () => {
     expect(failedEdge.markerEnd.color).toBe("#f87171");
   });
 
-  it("does not let audit refreshes reset a manually panned viewport", async () => {
+  it("refits after audit refreshes so nodes cannot remain stranded off-screen", async () => {
     const { rerender } = render(
       React.createElement(WorkflowReplayCanvas, { graph: graphFixture() }),
     );
@@ -192,7 +197,7 @@ describe("WorkflowReplayCanvas", () => {
     expect(mockFitView).toHaveBeenCalledTimes(1);
 
     const reactFlowProps = mockReactFlowRender.mock.calls.at(-1)?.[0] as any;
-    expect(reactFlowProps.fitView).toBeUndefined();
+    expect(reactFlowProps.fitView).toBe(true);
 
     reactFlowProps.onMove?.({ type: "mousemove" }, { x: 120, y: 0, zoom: 1 });
 
@@ -213,6 +218,48 @@ describe("WorkflowReplayCanvas", () => {
       React.createElement(WorkflowReplayCanvas, { graph: refreshedGraph }),
     );
 
-    expect(mockFitView).toHaveBeenCalledTimes(1);
+    expect(mockFitView).toHaveBeenCalledTimes(2);
   });
+
+  it("refits the graph when the focused step changes after a viewport move", async () => {
+    const { rerender } = render(
+      React.createElement(WorkflowReplayCanvas, { graph: graphFixture() }),
+    );
+
+    await screen.findByTestId("react-flow-mock");
+    expect(mockFitView).toHaveBeenCalledTimes(1);
+
+    const reactFlowProps = mockReactFlowRender.mock.calls.at(-1)?.[0] as any;
+    reactFlowProps.onMove?.({ type: "mousemove" }, { x: 120, y: 0, zoom: 1 });
+
+    rerender(
+      React.createElement(WorkflowReplayCanvas, {
+        graph: {
+          ...graphFixture(),
+          selectedStepId: "validate_report",
+        },
+      }),
+    );
+
+    expect(mockFitView).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps React Flow auto-fit queued for the focused window", () => {
+    render(React.createElement(WorkflowReplayCanvas, { graph: graphFixture() }));
+
+    const reactFlowProps = mockReactFlowRender.mock.calls.at(-1)?.[0] as any;
+
+    expect(reactFlowProps.fitView).toBe(true);
+    expect(reactFlowProps.fitViewOptions).toEqual({
+      duration: 0,
+      maxZoom: 1.05,
+      minZoom: 0.36,
+      nodes: expect.arrayContaining([
+        expect.objectContaining({ id: "step:validate_input" }),
+        expect.objectContaining({ id: "step:capture_brief" }),
+      ]),
+      padding: 0.24,
+    });
+  });
+
 });

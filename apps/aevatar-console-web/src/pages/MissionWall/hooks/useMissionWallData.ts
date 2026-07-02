@@ -1,27 +1,19 @@
-import { useQueries, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import React from "react";
-import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { t } from "@/shared/i18n/messages";
 import {
   getLocationSnapshot,
   subscribeToLocationChanges,
 } from "@/shared/navigation/history";
 import { resolveStudioScopeContext } from "@/shared/scope/context";
-import {
-  toScopeServiceRunAuditSnapshot,
-  type ScopeServiceRunAuditSnapshot,
-} from "@/shared/models/runtime/scopeServices";
 import { studioApi } from "@/shared/studio/api";
 import type {
   MissionWallLiveState,
-  MissionWallRun,
   MissionWallSource,
 } from "../models";
 import {
   buildMissionWallSourceFromWorkflowBoardSnapshot,
   freshnessSecondsSince,
-  missionWallRunAuditKey,
-  toMissionWallRunStatus,
 } from "../missionWallRuntimeData";
 
 type MissionWallRouteOptions = {
@@ -31,7 +23,6 @@ type MissionWallRouteOptions = {
 };
 
 export const MISSION_WALL_RUN_REFETCH_INTERVAL_MS = 5_000;
-export const MISSION_WALL_AUDIT_REFETCH_INTERVAL_MS = 3_000;
 export const MISSION_WALL_SNAPSHOT_TAKE = 100;
 
 export interface MissionWallRuntimeData {
@@ -39,19 +30,11 @@ export interface MissionWallRuntimeData {
   readonly generatedAt: string;
   readonly isLoading: boolean;
   readonly live: MissionWallLiveState;
+  readonly nowMs: number;
   readonly routeFocusRunId?: string;
   readonly scopeId?: string;
   readonly teamId?: string;
 }
-
-type MissionWallRunAuditTarget = {
-  readonly actorId?: string;
-  readonly memberId: string;
-  readonly publishedServiceId?: string;
-  readonly runId: string;
-  readonly scopeId: string;
-  readonly status: MissionWallRun["status"];
-};
 
 function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? "";
@@ -82,25 +65,20 @@ function missionWallRefetchInterval(intervalMs: number): number | false {
   return isTest ? false : intervalMs;
 }
 
-function shouldBackfillRunAudit(target: MissionWallRunAuditTarget): boolean {
-  return (
-    target.status === "completed" ||
-    target.status === "failed" ||
-    target.status === "timed_out" ||
-    target.status === "running" ||
-    target.status === "waiting" ||
-    target.status === "retrying"
-  );
-}
+function useNowMs(): number {
+  const [nowMs, setNowMs] = React.useState(() => Date.now());
 
-function auditRefetchIntervalForStatus(
-  status: MissionWallRun["status"],
-): number | false {
-  if (status === "running" || status === "waiting" || status === "retrying") {
-    return missionWallRefetchInterval(MISSION_WALL_AUDIT_REFETCH_INTERVAL_MS);
-  }
+  React.useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, 1000);
 
-  return false;
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, []);
+
+  return nowMs;
 }
 
 function buildLiveState(input: {
@@ -110,13 +88,13 @@ function buildLiveState(input: {
   readonly hasPartialRunError: boolean;
   readonly isLoading: boolean;
   readonly latestObservedAt?: string;
+  readonly nowMs: number;
   readonly runCount: number;
   readonly scopeId?: string;
 }): MissionWallLiveState {
-  const generatedAtMs = Date.parse(input.generatedAt);
   const durableFreshnessSeconds = freshnessSecondsSince(
     input.latestObservedAt,
-    Number.isFinite(generatedAtMs) ? generatedAtMs : Date.now(),
+    input.nowMs,
   );
 
   if (input.isLoading) {
@@ -179,6 +157,7 @@ function buildLiveState(input: {
 }
 
 export function useMissionWallRuntimeData(): MissionWallRuntimeData {
+  const nowMs = useNowMs();
   const locationSnapshot = React.useSyncExternalStore(
     subscribeToLocationChanges,
     getLocationSnapshot,
@@ -227,94 +206,6 @@ export function useMissionWallRuntimeData(): MissionWallRuntimeData {
       snapshotQuery.fetchStatus,
     ],
   );
-  const runAuditTargets = React.useMemo(() => {
-    const targets = new Map<string, MissionWallRunAuditTarget>();
-    snapshotQuery.data?.teams.forEach((team) => {
-      team.members.forEach((member) => {
-        const runId = trimOptional(member.currentExecutionId);
-        const memberId = trimOptional(member.memberId);
-        const publishedServiceId = trimOptional(member.publishedServiceId);
-        const runScopeId =
-          trimOptional(snapshotQuery.data?.scopeId) || trimOptional(scopeId);
-        if (!runId || !memberId || !publishedServiceId || !runScopeId) {
-          return;
-        }
-
-        const target: MissionWallRunAuditTarget = {
-          actorId: trimOptional(member.actorId) || undefined,
-          memberId,
-          publishedServiceId,
-          runId,
-          scopeId: runScopeId,
-          status: toMissionWallRunStatus(member.executionStatus),
-        };
-        if (!shouldBackfillRunAudit(target)) {
-          return;
-        }
-
-        targets.set(
-          [
-            target.scopeId,
-            target.memberId,
-            target.publishedServiceId,
-            target.runId,
-          ].join(":"),
-          target,
-        );
-      });
-    });
-
-    return [...targets.values()];
-  }, [scopeId, snapshotQuery.data]);
-  const runAuditQueries = useQueries({
-    queries: runAuditTargets.map((target) => ({
-      enabled: Boolean(target.scopeId && target.memberId && target.runId),
-      queryFn: async () => {
-        const audit = await scopeRuntimeApi.getMemberRunAudit(
-          target.scopeId,
-          target.memberId,
-          target.runId,
-          {
-            actorId: target.actorId,
-          },
-        );
-        return toScopeServiceRunAuditSnapshot(audit);
-      },
-      queryKey: [
-        "mission-wall",
-        "member-run-audit",
-        "window",
-        target.scopeId,
-        target.memberId,
-        target.publishedServiceId,
-        target.runId,
-        target.actorId,
-      ],
-      refetchInterval: auditRefetchIntervalForStatus(target.status),
-      refetchIntervalInBackground: true,
-      retry: false,
-    })),
-  });
-  const runAuditVersion = runAuditQueries
-    .map((query, index) => {
-      const target = runAuditTargets[index];
-      const auditKey = missionWallRunAuditKey({
-        runId: target?.runId,
-        scopeId: target?.scopeId,
-        serviceId: target?.publishedServiceId,
-      });
-      return `${auditKey}:${target?.memberId ?? index}:${query.dataUpdatedAt}:${query.errorUpdatedAt}:${query.fetchStatus}`;
-    })
-    .join("|");
-  const runAudits = React.useMemo(
-    () =>
-      runAuditQueries
-        .map((query) => query.data)
-        .filter(
-          (audit): audit is ScopeServiceRunAuditSnapshot => audit !== undefined,
-        ),
-    [runAuditVersion],
-  );
   const latestObservedAt =
     trimOptional(snapshotQuery.data?.lastNodeUpdatedAt) || undefined;
   const runCount =
@@ -335,6 +226,7 @@ export function useMissionWallRuntimeData(): MissionWallRuntimeData {
         hasPartialRunError: snapshotQuery.isError,
         isLoading,
         latestObservedAt,
+        nowMs,
         runCount,
         scopeId,
       }),
@@ -343,6 +235,7 @@ export function useMissionWallRuntimeData(): MissionWallRuntimeData {
       hasCriticalError,
       isLoading,
       latestObservedAt,
+      nowMs,
       runCount,
       snapshotQuery.isError,
       snapshotQuery.isSuccess,
@@ -354,10 +247,9 @@ export function useMissionWallRuntimeData(): MissionWallRuntimeData {
       buildMissionWallSourceFromWorkflowBoardSnapshot({
         generatedAt,
         live,
-        runAudits,
         snapshot: snapshotQuery.data,
       }),
-    [generatedAt, live, runAudits, snapshotQuery.data],
+    [generatedAt, live, snapshotQuery.data],
   );
 
   return {
@@ -365,6 +257,7 @@ export function useMissionWallRuntimeData(): MissionWallRuntimeData {
     generatedAt,
     isLoading,
     live,
+    nowMs,
     routeFocusRunId: routeOptions.focusRunId,
     scopeId,
     teamId: routeOptions.teamId,

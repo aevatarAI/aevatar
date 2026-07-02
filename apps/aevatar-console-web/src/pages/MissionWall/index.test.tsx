@@ -1,22 +1,14 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import React from "react";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
+import {
+  clearStoredAuthSession,
+  persistAuthSession,
+} from "@/shared/auth/session";
 import { studioApi } from "@/shared/studio/api";
 import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
 import MissionWallPage from "./index";
 
-type ScopeServiceRunAuditSnapshot =
-  import("@/shared/models/runtime/scopeServices").ScopeServiceRunAuditSnapshot;
-type ScopeMemberRunAuditSnapshot =
-  import("@/shared/models/runtime/scopeServices").ScopeMemberRunAuditSnapshot;
-type ScopeMemberRunSummary =
-  import("@/shared/models/runtime/scopeServices").ScopeMemberRunSummary;
-type ScopeServiceRunAuditReport =
-  import("@/shared/models/runtime/scopeServices").ScopeServiceRunAuditReport;
-type ScopeServiceRunAuditStep =
-  import("@/shared/models/runtime/scopeServices").ScopeServiceRunAuditStep;
-type ScopeServiceRunSummary =
-  import("@/shared/models/runtime/scopeServices").ScopeServiceRunSummary;
 type StudioAuthSession = import("@/shared/studio/models").StudioAuthSession;
 type StudioMemberSummary = import("@/shared/studio/models").StudioMemberSummary;
 type StudioWorkflowBoardSnapshot =
@@ -67,177 +59,6 @@ function workflowMember(input: {
     scopeId: "scope-real",
     teamId: input.teamId,
     updatedAt: "2026-06-29T01:15:00.000Z",
-  };
-}
-
-function runSummary(input: {
-  readonly actorId: string;
-  readonly completedSteps: number;
-  readonly completionStatus: string;
-  readonly lastUpdatedAt: string;
-  readonly runId: string;
-  readonly serviceId: string;
-  readonly totalSteps: number;
-  readonly workflowName: string;
-}): ScopeServiceRunSummary {
-  return {
-    actorId: input.actorId,
-    bindingUpdatedAt: "2026-06-30T04:40:00.000Z",
-    boundAt: "2026-06-30T04:40:00.000Z",
-    completedSteps: input.completedSteps,
-    completionStatus: input.completionStatus,
-    definitionActorId: `definition-${input.runId}`,
-    deploymentId: `deployment-${input.runId}`,
-    lastError: "",
-    lastEventId: `event-${input.runId}`,
-    lastOutput: "",
-    lastSuccess: input.completionStatus === "completed",
-    lastUpdatedAt: input.lastUpdatedAt,
-    revisionId: `revision-${input.runId}`,
-    roleReplyCount: input.completedSteps,
-    runId: input.runId,
-    scopeId: "scope-real",
-    serviceId: input.serviceId,
-    stateVersion: input.completedSteps + 10,
-    totalSteps: input.totalSteps,
-    workflowName: input.workflowName,
-  };
-}
-
-function memberRunSummary(
-  run: ScopeServiceRunSummary,
-  member: StudioMemberSummary,
-): ScopeMemberRunSummary {
-  return {
-    actorId: run.actorId,
-    bindingUpdatedAt: run.bindingUpdatedAt,
-    boundAt: run.boundAt,
-    completedSteps: run.completedSteps,
-    completionStatus: run.completionStatus,
-    definitionActorId: run.definitionActorId,
-    deploymentId: run.deploymentId,
-    lastError: run.lastError,
-    lastEventId: run.lastEventId,
-    lastOutput: run.lastOutput,
-    lastSuccess: run.lastSuccess,
-    lastUpdatedAt: run.lastUpdatedAt,
-    memberId: member.memberId,
-    publishedServiceId: member.publishedServiceId,
-    revisionId: run.revisionId,
-    roleReplyCount: run.roleReplyCount,
-    runId: run.runId,
-    scopeId: run.scopeId,
-    stateVersion: run.stateVersion,
-    totalSteps: run.totalSteps,
-    workflowName: run.workflowName,
-  };
-}
-
-function auditStep(input: {
-  readonly completedAt?: string | null;
-  readonly nextStepId?: string;
-  readonly requestedAt: string;
-  readonly stepId: string;
-  readonly stepType: string;
-  readonly success?: boolean | null;
-  readonly targetRole: string;
-}): ScopeServiceRunAuditStep {
-  return {
-    assignedValue: "",
-    assignedVariable: "",
-    branchKey: "",
-    completedAt: input.completedAt ?? null,
-    completionAnnotations: {},
-    durationMs: input.completedAt ? 1000 : null,
-    error: "",
-    nextStepId: input.nextStepId ?? "",
-    outputPreview: input.success ? `${input.stepId} output` : "",
-    requestParameters: {
-      prompt: `${input.stepId} prompt`,
-    },
-    requestedAt: input.requestedAt,
-    requestedVariableName: "",
-    stepId: input.stepId,
-    stepType: input.stepType,
-    success: input.success ?? null,
-    suspensionPrompt: "",
-    suspensionTimeoutSeconds: null,
-    suspensionType: "",
-    targetRole: input.targetRole,
-    workerId: `${input.targetRole}-worker`,
-  };
-}
-
-function auditSteps(count: number): ScopeServiceRunAuditStep[] {
-  return Array.from({ length: count }, (_, index) => {
-    const stepNumber = index + 1;
-    return auditStep({
-      completedAt:
-        stepNumber < count ? "2026-06-30T04:58:20.000Z" : undefined,
-      nextStepId: stepNumber < count ? `flow_step_${stepNumber + 1}` : undefined,
-      requestedAt: `2026-06-30T04:${String(50 + index).padStart(2, "0")}:00.000Z`,
-      stepId: `flow_step_${stepNumber}`,
-      stepType: "role_task",
-      success: stepNumber < count ? true : null,
-      targetRole: "analyst",
-    });
-  });
-}
-
-function auditSnapshot(
-  summary: ScopeServiceRunSummary,
-  steps: readonly ScopeServiceRunAuditStep[],
-  overrides?: Partial<ScopeServiceRunAuditReport>,
-): ScopeServiceRunAuditSnapshot {
-  const audit: ScopeServiceRunAuditReport = {
-    commandId: `command-${summary.runId}`,
-    completionStatus: summary.completionStatus,
-    createdAt: summary.boundAt,
-    durationMs: 24_000,
-    endedAt: null,
-    finalError: "",
-    finalOutput: "",
-    input: "",
-    lastEventId: summary.lastEventId,
-    projectionScope: "scope",
-    reportVersion: "1",
-    roleReplies: [],
-    rootActorId: summary.actorId,
-    startedAt: summary.boundAt,
-    stateVersion: summary.stateVersion,
-    steps,
-    success: summary.lastSuccess,
-    summary: {
-      completedSteps: summary.completedSteps,
-      requestedSteps: steps.length,
-      roleReplyCount: summary.roleReplyCount,
-      stepTypeCounts: {},
-      totalSteps: summary.totalSteps,
-    },
-    timeline: [],
-    topology: [],
-    topologySource: "readmodel",
-    updatedAt: summary.lastUpdatedAt,
-    workflowName: summary.workflowName,
-    ...overrides,
-  };
-
-  return {
-    audit,
-    summary,
-  };
-}
-
-function memberAuditSnapshot(
-  summary: ScopeServiceRunSummary,
-  member: StudioMemberSummary,
-  steps: readonly ScopeServiceRunAuditStep[],
-  overrides?: Partial<ScopeServiceRunAuditReport>,
-): ScopeMemberRunAuditSnapshot {
-  const serviceAudit = auditSnapshot(summary, steps, overrides);
-  return {
-    audit: serviceAudit.audit,
-    summary: memberRunSummary(serviceAudit.summary, member),
   };
 }
 
@@ -304,6 +125,11 @@ function workflowBoardMember(input: {
   readonly totalSteps: number;
   readonly workflowName: string;
 }): StudioWorkflowBoardSnapshot["teams"][number]["members"][number] {
+  const currentNodeName =
+    input.currentNodeStatus === "waiting" || input.executionStatus === "waiting"
+      ? "risk_gate"
+      : "Current";
+
   return {
     actorId: input.actorId,
     completedNodes: Array.from({ length: input.completedSteps }, (_, index) => ({
@@ -315,8 +141,8 @@ function workflowBoardMember(input: {
     currentExecutionId: input.runId,
     currentNode: {
       durationMs: input.durationMs,
-      name: input.executionStatus === "waiting" ? "risk_gate" : "Current",
-      nodeId: input.executionStatus === "waiting" ? "risk_gate" : "current",
+      name: currentNodeName,
+      nodeId: currentNodeName,
       startedAt: "2026-06-30T04:58:00.000Z",
       status:
         input.currentNodeStatus ??
@@ -339,7 +165,7 @@ function workflowBoardMember(input: {
     lastNodeUpdatedAt: input.lastNodeUpdatedAt,
     memberId: input.member.memberId,
     pendingNodes:
-      input.executionStatus === "waiting"
+      input.currentNodeStatus === "waiting" || input.executionStatus === "waiting"
         ? [
             {
               name: "risk_gate",
@@ -375,26 +201,6 @@ describe("MissionWallPage", () => {
     teamId: "team-alpha",
     workflowId: "wf-billing-draft",
   });
-  const riskRun = runSummary({
-    actorId: "actor-risk-run",
-    completedSteps: 1,
-    completionStatus: "running",
-    lastUpdatedAt: "2026-06-30T04:59:20.000Z",
-    runId: "run-risk",
-    serviceId: "svc-risk",
-    totalSteps: 3,
-    workflowName: "Live Risk Workflow",
-  });
-  const billingRun = runSummary({
-    actorId: "actor-billing-run",
-    completedSteps: 2,
-    completionStatus: "failed",
-    lastUpdatedAt: "2026-06-29T21:53:00.000Z",
-    runId: "run-billing",
-    serviceId: "svc-billing",
-    totalSteps: 3,
-    workflowName: "Billing Workflow",
-  });
   const idleMember = workflowMember({
     displayName: "Idle member",
     memberId: "m-idle",
@@ -404,6 +210,8 @@ describe("MissionWallPage", () => {
   });
 
   beforeEach(() => {
+    clearStoredAuthSession();
+    jest.clearAllMocks();
     window.history.replaceState({}, "", "/runtime/mission-wall");
     jest.spyOn(Date, "now").mockReturnValue(Date.parse(NOW));
     (studioApi.getAuthSession as jest.Mock).mockResolvedValue({
@@ -458,47 +266,80 @@ describe("MissionWallPage", () => {
         },
       ]),
     );
-    (scopeRuntimeApi.getMemberRunAudit as jest.Mock).mockImplementation(
-      async (_scopeId: string, memberId: string, runId: string) => {
-        if (memberId === "m-risk" && runId === "run-risk") {
-          return memberAuditSnapshot(riskRun, riskMember, [
-            auditStep({
-              completedAt: "2026-06-30T04:58:20.000Z",
-              nextStepId: "risk_gate",
-              requestedAt: "2026-06-30T04:58:10.000Z",
-              stepId: "risk_collect",
-              stepType: "role_task",
-              success: true,
-              targetRole: "analyst",
-            }),
-            auditStep({
-              requestedAt: "2026-06-30T04:59:10.000Z",
-              stepId: "risk_gate",
-              stepType: "human_approval",
-              targetRole: "approver",
-            }),
-          ]);
-        }
+  });
 
-        return memberAuditSnapshot(billingRun, billingMember, [
-          auditStep({
-            completedAt: "2026-06-30T04:57:30.000Z",
-            nextStepId: "invoice_match",
-            requestedAt: "2026-06-30T04:57:00.000Z",
-            stepId: "ledger_lookup",
-            stepType: "connector_call",
-            success: true,
-            targetRole: "ledger",
-          }),
-          auditStep({
-            requestedAt: "2026-06-30T04:58:00.000Z",
-            stepId: "invoice_match",
-            stepType: "role_task",
-            targetRole: "billing_agent",
-          }),
-        ]);
+  afterEach(() => {
+    jest.useRealTimers();
+    jest.restoreAllMocks();
+    clearStoredAuthSession();
+  });
+
+  it("renders the shared language switch and authenticated user entry in fullscreen mode", async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: "token",
+        expiresAt: Date.now() + 60_000,
+        expiresIn: 60,
+        tokenType: "Bearer",
       },
+      user: {
+        email: "abigail@example.com",
+        name: "Abigail Deng",
+        picture: "https://example.com/avatar.png",
+        sub: "user-abigail",
+      },
+    });
+
+    renderWithQueryClient(React.createElement(MissionWallPage));
+
+    expect(await screen.findByText("Live Risk Workflow")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Switch language" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("English")).toBeInTheDocument();
+    expect(screen.getByText("Abigail Deng")).toBeInTheDocument();
+  });
+
+  it("themes the fullscreen header actions with mission wall colors", async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: "token",
+        expiresAt: Date.now() + 60_000,
+        expiresIn: 60,
+        tokenType: "Bearer",
+      },
+      user: {
+        email: "abigail@example.com",
+        name: "Abigail Deng",
+        picture: "https://example.com/avatar.png",
+        sub: "user-abigail",
+      },
+    });
+
+    renderWithQueryClient(React.createElement(MissionWallPage));
+
+    expect(await screen.findByText("Live Risk Workflow")).toBeInTheDocument();
+    const actions = document.querySelector(".mission-wall-header-actions");
+    expect(actions).toBeInstanceOf(HTMLElement);
+    expect(actions).toHaveAttribute(
+      "data-dropdown-root-class-name",
+      "mission-wall-header-menu",
     );
+
+    const missionWallStyle = Array.from(document.querySelectorAll("style"))
+      .map((style) => style.textContent ?? "")
+      .join("\n");
+
+    const dropdownRootRule =
+      missionWallStyle.match(/\.mission-wall-header-menu\s*{[^}]*}/)?.[0] ??
+      "";
+    expect(dropdownRootRule).toContain("--wall-text: #f8faf8;");
+    expect(dropdownRootRule).toContain("--wall-live: #2dd4bf;");
+    expect(missionWallStyle).toContain(
+      ".mission-wall-header-actions .console-header-actions__language",
+    );
+    expect(missionWallStyle).toContain("rgba(45, 212, 191, 0.14)");
+    expect(missionWallStyle).toContain("var(--wall-live)");
   });
 
   it("loads one latest execution row per workflow member from the backend snapshot", async () => {
@@ -520,6 +361,15 @@ describe("MissionWallPage", () => {
     expect(scopeRuntimeApi.listServices).not.toHaveBeenCalled();
     expect(scopeRuntimeApi.listServiceRuns).not.toHaveBeenCalled();
     expect(scopeRuntimeApi.listMemberRuns).not.toHaveBeenCalled();
+  });
+
+  it("does not render a refresh freshness metric in the fullscreen header", async () => {
+    renderWithQueryClient(React.createElement(MissionWallPage));
+
+    expect(await screen.findByText("Live Risk Workflow")).toBeInTheDocument();
+    const topStrip = document.querySelector(".mission-wall-top-strip");
+    expect(topStrip).toBeInstanceOf(HTMLElement);
+    expect(within(topStrip as HTMLElement).queryByText("Fresh")).toBeNull();
   });
 
   it("does not expand multiple service catalog runs into duplicate member rows", async () => {
@@ -572,7 +422,6 @@ describe("MissionWallPage", () => {
         [
           ".mission-wall-brand__title",
           ".mission-wall-run-card__name",
-          ".mission-wall-run-card__team",
           ".mission-wall-run-card__stage",
           ".mission-wall-stage-title",
           ".mission-wall-stage-subtitle",
@@ -594,7 +443,20 @@ describe("MissionWallPage", () => {
     }
   });
 
-  it("keeps selected run cards visually aligned to their status tone", async () => {
+  it("does not repeat team and member context inside run cards", async () => {
+    renderWithQueryClient(React.createElement(MissionWallPage));
+
+    const riskCard = (await screen.findByText("Live Risk Workflow")).closest(
+      "button",
+    );
+    expect(riskCard).toBeTruthy();
+    expect(riskCard).not.toHaveTextContent("Alpha Team · Risk desk member");
+    expect(
+      riskCard!.querySelector(".mission-wall-run-card__team"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("highlights the selected run card without adding another shadow layer", async () => {
     renderWithQueryClient(React.createElement(MissionWallPage));
 
     const riskCard = (await screen.findByText("Live Risk Workflow")).closest(
@@ -610,6 +472,7 @@ describe("MissionWallPage", () => {
       missionWallStyle.match(/\.mission-wall-run-card--focus\s*{[^}]*}/)?.[0] ??
       "";
 
+    expect(focusRule).toContain("outline");
     expect(focusRule).not.toContain("border-color");
     expect(focusRule).not.toContain("box-shadow");
   });
@@ -686,27 +549,8 @@ describe("MissionWallPage", () => {
       await screen.findByText(/Live Risk Workflow · Step Flow/),
     ).toBeInTheDocument();
     expect(cards[0]).toHaveAttribute("aria-pressed", "false");
-    await waitFor(() => {
-      expect(scopeRuntimeApi.getMemberRunAudit).toHaveBeenCalledWith(
-        "scope-real",
-        "m-fresh",
-        "run-fresh",
-        { actorId: "actor-fresh-run" },
-      );
-    });
     expect(scopeRuntimeApi.listServiceRuns).not.toHaveBeenCalled();
-    expect(scopeRuntimeApi.getMemberRunAudit).not.toHaveBeenCalledWith(
-      "scope-real",
-      "wf-fresh-draft",
-      "run-fresh",
-      expect.anything(),
-    );
-    expect(scopeRuntimeApi.getMemberRunAudit).not.toHaveBeenCalledWith(
-      "scope-real",
-      "svc-fresh",
-      "run-fresh",
-      expect.anything(),
-    );
+    expect(scopeRuntimeApi.getMemberRunAudit).not.toHaveBeenCalled();
 
     riskExecutionStatus = "completed";
     await queryClient.invalidateQueries({ queryKey: ["mission-wall"] });
@@ -717,7 +561,7 @@ describe("MissionWallPage", () => {
     expect(cards[0]).toHaveAttribute("aria-pressed", "true");
   });
 
-  it("shows the selected member run audit in the right workflow graph", async () => {
+  it("shows the selected member snapshot nodes in the right workflow graph", async () => {
     renderWithQueryClient(React.createElement(MissionWallPage));
 
     const riskCard = (await screen.findByText("Live Risk Workflow")).closest(
@@ -740,76 +584,25 @@ describe("MissionWallPage", () => {
     expect(
       await screen.findByText(/Billing Workflow · Step Flow/),
     ).toBeInTheDocument();
-    expect(await screen.findAllByText("ledger_lookup")).not.toHaveLength(0);
+    expect(await screen.findAllByText("invoice_match")).not.toHaveLength(0);
     expect(billingCard).toHaveTextContent("2 / 3 steps");
     expect(billingCard).not.toHaveTextContent("0 / 0 steps");
-    await waitFor(() => {
-      expect(scopeRuntimeApi.getMemberRunAudit).toHaveBeenCalledWith(
-        "scope-real",
-        "m-billing",
-        "run-billing",
-        { actorId: "actor-billing-run" },
-      );
-    });
     expect(scopeRuntimeApi.getServiceRunAudit).not.toHaveBeenCalled();
-    expect(scopeRuntimeApi.getMemberRunAudit).not.toHaveBeenCalledWith(
-      "scope-real",
-      "wf-billing-draft",
-      "run-billing",
-      expect.anything(),
-    );
-    expect(scopeRuntimeApi.getMemberRunAudit).not.toHaveBeenCalledWith(
-      "scope-real",
-      "svc-billing",
-      "run-billing",
-      expect.anything(),
-    );
+    expect(scopeRuntimeApi.getMemberRunAudit).not.toHaveBeenCalled();
   });
 
-  it("uses each run audit for card progress when the catalog omits progress and duration", async () => {
-    const probeRun = runSummary({
-      actorId: "actor-probe-run",
-      completedSteps: 0,
-      completionStatus: "DONE",
-      lastUpdatedAt: "2026-06-30T04:58:36.000Z",
-      runId: "run-probe",
-      serviceId: "svc-risk",
-      totalSteps: 0,
-      workflowName: "Mission Wall Probe",
-    });
-    const auditStepsWithDurations = auditSteps(5).map((step, index) => ({
-      ...step,
-      completedAt: `2026-06-30T04:58:${String(10 + index).padStart(2, "0")}.000Z`,
-      durationMs: 1300 + index * 100,
-      success: true,
-    }));
-    const baseProbeAudit = auditSnapshot(probeRun, auditStepsWithDurations);
-    const probeAudit: ScopeServiceRunAuditSnapshot = {
-      ...baseProbeAudit,
-      audit: {
-        ...baseProbeAudit.audit,
-        durationMs: 0,
-        endedAt: null,
-        summary: {
-          completedSteps: 0,
-          requestedSteps: 0,
-          roleReplyCount: 0,
-          stepTypeCounts: {},
-          totalSteps: 0,
-        },
-      },
-    };
-
+  it("uses the workflow-board snapshot for card progress and duration", async () => {
     (studioApi.getWorkflowBoardSnapshot as jest.Mock).mockResolvedValue(
       workflowBoardSnapshot([
         workflowBoardMember({
           actorId: "actor-probe-run",
-          completedSteps: 0,
+          completedSteps: 5,
+          durationMs: 8000,
           executionStatus: "completed",
           lastNodeUpdatedAt: "2026-06-30T04:58:36.000Z",
           member: riskMember,
           runId: "run-probe",
-          totalSteps: 0,
+          totalSteps: 5,
           workflowName: "Mission Wall Probe",
         }),
         workflowBoardMember({
@@ -823,34 +616,6 @@ describe("MissionWallPage", () => {
           workflowName: "Billing Workflow",
         }),
       ]),
-    );
-    (scopeRuntimeApi.getMemberRunAudit as jest.Mock).mockImplementation(
-      async (_scopeId: string, memberId: string, runId: string) => {
-        if (memberId === "m-risk" && runId === "run-probe") {
-          return {
-            audit: probeAudit.audit,
-            summary: memberRunSummary(probeAudit.summary, riskMember),
-          } satisfies ScopeMemberRunAuditSnapshot;
-        }
-
-        return memberAuditSnapshot(billingRun, billingMember, [
-          auditStep({
-            completedAt: "2026-06-30T04:57:30.000Z",
-            nextStepId: "invoice_match",
-            requestedAt: "2026-06-30T04:57:00.000Z",
-            stepId: "ledger_lookup",
-            stepType: "connector_call",
-            success: true,
-            targetRole: "ledger",
-          }),
-          auditStep({
-            requestedAt: "2026-06-30T04:58:00.000Z",
-            stepId: "invoice_match",
-            stepType: "role_task",
-            targetRole: "billing_agent",
-          }),
-        ]);
-      },
     );
     window.history.replaceState(
       {},
@@ -869,139 +634,40 @@ describe("MissionWallPage", () => {
       await screen.findByText(/Billing Workflow · Step Flow/),
     ).toBeInTheDocument();
 
-    await waitFor(() => {
-      expect(probeCard).toHaveTextContent("5 / 5 steps");
-      expect(probeCard).toHaveTextContent("00:08");
-    });
+    expect(probeCard).toHaveTextContent("5 / 5 steps");
+    expect(probeCard).toHaveTextContent("00:08");
     expect(probeCard).toHaveTextContent("DONE");
     expect(probeCard).not.toHaveTextContent("0 / 0 steps");
     expect(probeCard).not.toHaveTextContent("00:00");
-    expect(scopeRuntimeApi.getMemberRunAudit).toHaveBeenCalledWith(
-      "scope-real",
-      "m-risk",
-      "run-probe",
-      { actorId: "actor-probe-run" },
-    );
-    expect(scopeRuntimeApi.getMemberRunAudit).not.toHaveBeenCalledWith(
-      "scope-real",
-      "wf-risk-draft",
-      "run-probe",
-      expect.anything(),
-    );
-    expect(scopeRuntimeApi.getMemberRunAudit).not.toHaveBeenCalledWith(
-      "scope-real",
-      "svc-risk",
-      "run-probe",
-      expect.anything(),
-    );
+    expect(scopeRuntimeApi.getMemberRunAudit).not.toHaveBeenCalled();
   });
 
   it("keeps a run card duration stable when focus moves between workflows", async () => {
-    const extractRun = runSummary({
-      actorId: "actor-extract-run",
-      completedSteps: 0,
-      completionStatus: "DONE",
-      lastUpdatedAt: "2026-06-30T04:58:36.000Z",
-      runId: "run-extract",
-      serviceId: "svc-risk",
-      totalSteps: 0,
-      workflowName: "Document Extract Run",
-    });
-    const probeRun = runSummary({
-      actorId: "actor-probe-run",
-      completedSteps: 0,
-      completionStatus: "DONE",
-      lastUpdatedAt: "2026-06-30T04:58:40.000Z",
-      runId: "run-probe",
-      serviceId: "svc-billing",
-      totalSteps: 0,
-      workflowName: "Mission Wall Probe",
-    });
-    const extractAudit = auditSnapshot(
-      extractRun,
-      [
-        auditStep({
-          completedAt: "2026-06-30T04:58:02.000Z",
-          requestedAt: "2026-06-30T04:58:01.000Z",
-          stepId: "extract_file",
-          stepType: "tool_call",
-          success: true,
-          targetRole: "extractor",
-        }),
-      ],
-      {
-        durationMs: 1000,
-        summary: {
-          completedSteps: 1,
-          requestedSteps: 1,
-          roleReplyCount: 1,
-          stepTypeCounts: {},
-          totalSteps: 1,
-        },
-      },
-    );
-    const probeAudit = auditSnapshot(
-      probeRun,
-      auditSteps(15).map((step, index) => ({
-        ...step,
-        completedAt: `2026-06-30T04:58:${String(10 + index).padStart(2, "0")}.000Z`,
-        durationMs: 1600,
-        success: true,
-      })),
-      {
-        durationMs: 24_000,
-        summary: {
-          completedSteps: 15,
-          requestedSteps: 15,
-          roleReplyCount: 15,
-          stepTypeCounts: {},
-          totalSteps: 15,
-        },
-      },
-    );
-
     (studioApi.getWorkflowBoardSnapshot as jest.Mock).mockResolvedValue(
       workflowBoardSnapshot([
         workflowBoardMember({
           actorId: "actor-extract-run",
-          completedSteps: 0,
+          completedSteps: 1,
+          durationMs: 1000,
           executionStatus: "completed",
           lastNodeUpdatedAt: "2026-06-30T04:58:36.000Z",
           member: riskMember,
           runId: "run-extract",
-          totalSteps: 0,
+          totalSteps: 1,
           workflowName: "Document Extract Run",
         }),
         workflowBoardMember({
           actorId: "actor-probe-run",
-          completedSteps: 0,
+          completedSteps: 15,
+          durationMs: 24_000,
           executionStatus: "completed",
           lastNodeUpdatedAt: "2026-06-30T04:58:40.000Z",
           member: billingMember,
           runId: "run-probe",
-          totalSteps: 0,
+          totalSteps: 15,
           workflowName: "Mission Wall Probe",
         }),
       ]),
-    );
-    (scopeRuntimeApi.getMemberRunAudit as jest.Mock).mockImplementation(
-      async (_scopeId: string, memberId: string, runId: string) => {
-        if (memberId === "m-risk" && runId === "run-extract") {
-          return {
-            audit: extractAudit.audit,
-            summary: memberRunSummary(extractAudit.summary, riskMember),
-          } satisfies ScopeMemberRunAuditSnapshot;
-        }
-
-        if (memberId === "m-billing" && runId === "run-probe") {
-          return {
-            audit: probeAudit.audit,
-            summary: memberRunSummary(probeAudit.summary, billingMember),
-          } satisfies ScopeMemberRunAuditSnapshot;
-        }
-
-        throw new Error(`Unexpected audit lookup ${memberId}/${runId}`);
-      },
     );
     window.history.replaceState(
       {},
@@ -1020,12 +686,10 @@ describe("MissionWallPage", () => {
     expect(extractCard).toBeTruthy();
     expect(probeCard).toBeTruthy();
 
-    await waitFor(() => {
-      expect(extractCard).toHaveTextContent("1 / 1 steps");
-      expect(extractCard).toHaveTextContent("00:01");
-      expect(probeCard).toHaveTextContent("15 / 15 steps");
-      expect(probeCard).toHaveTextContent("00:24");
-    });
+    expect(extractCard).toHaveTextContent("1 / 1 steps");
+    expect(extractCard).toHaveTextContent("00:01");
+    expect(probeCard).toHaveTextContent("15 / 15 steps");
+    expect(probeCard).toHaveTextContent("00:24");
 
     fireEvent.click(probeCard as HTMLButtonElement);
 
@@ -1044,17 +708,34 @@ describe("MissionWallPage", () => {
     expect(extractCard).toHaveTextContent("00:01");
     expect(probeCard).toHaveTextContent("15 / 15 steps");
     expect(probeCard).toHaveTextContent("00:24");
+    expect(scopeRuntimeApi.getMemberRunAudit).not.toHaveBeenCalled();
   });
 
   it("keeps every workflow node in the graph while focusing the default big-screen view", async () => {
-    (scopeRuntimeApi.getMemberRunAudit as jest.Mock).mockImplementation(
-      async (_scopeId: string, memberId: string, runId: string) => {
-        if (memberId === "m-risk" && runId === "run-risk") {
-          return memberAuditSnapshot(riskRun, riskMember, auditSteps(7));
-        }
-
-        return memberAuditSnapshot(billingRun, billingMember, auditSteps(2));
-      },
+    (studioApi.getWorkflowBoardSnapshot as jest.Mock).mockResolvedValue(
+      workflowBoardSnapshot([
+        workflowBoardMember({
+          actorId: "actor-risk-run",
+          completedSteps: 7,
+          currentNodeStatus: "waiting",
+          executionStatus: "running",
+          lastNodeUpdatedAt: "2026-06-30T04:59:20.000Z",
+          member: riskMember,
+          runId: "run-risk",
+          totalSteps: 8,
+          workflowName: "Live Risk Workflow",
+        }),
+        workflowBoardMember({
+          actorId: "actor-billing-run",
+          completedSteps: 2,
+          executionStatus: "failed",
+          lastNodeUpdatedAt: "2026-06-29T21:53:00.000Z",
+          member: billingMember,
+          runId: "run-billing",
+          totalSteps: 3,
+          workflowName: "Billing Workflow",
+        }),
+      ]),
     );
 
     renderWithQueryClient(React.createElement(MissionWallPage));
@@ -1071,8 +752,9 @@ describe("MissionWallPage", () => {
     ).toBeInTheDocument();
 
     const graph = screen.getByTestId("mission-wall-graph");
-    expect(within(graph).getByText("flow_step_1")).toBeInTheDocument();
-    expect(within(graph).getByText("flow_step_7")).toBeInTheDocument();
+    expect(within(graph).getByText("completed_1")).toBeInTheDocument();
+    expect(within(graph).getByText("completed_7")).toBeInTheDocument();
+    expect(scopeRuntimeApi.getMemberRunAudit).not.toHaveBeenCalled();
     expect(screen.queryByText(/Focused steps/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/current execution/i)).not.toBeInTheDocument();
   });
