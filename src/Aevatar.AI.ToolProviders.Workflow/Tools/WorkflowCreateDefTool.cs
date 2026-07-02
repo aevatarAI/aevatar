@@ -44,7 +44,7 @@ public sealed class WorkflowCreateDefTool : IAgentTool
 
     public bool IsReadOnly => false;
 
-    public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
+    public ToolApprovalMode ApprovalMode => ToolApprovalPolicies.CreateScopedResource;
 
     private static readonly JsonSerializerOptions s_json = new()
     {

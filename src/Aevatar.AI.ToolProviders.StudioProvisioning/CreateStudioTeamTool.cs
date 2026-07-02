@@ -54,7 +54,7 @@ internal sealed class CreateStudioTeamTool : IAgentTool
         }
         """;
 
-    public ToolApprovalMode ApprovalMode => ToolApprovalMode.AlwaysRequire;
+    public ToolApprovalMode ApprovalMode => ToolApprovalPolicies.CreateScopedResource;
     public bool IsReadOnly => false;
     public bool IsDestructive => false;
     public string SideEffectKind => "studio.team.create";

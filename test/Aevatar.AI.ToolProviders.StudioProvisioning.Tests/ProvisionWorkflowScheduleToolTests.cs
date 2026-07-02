@@ -130,11 +130,11 @@ public sealed class ProvisionWorkflowScheduleToolTests
     }
 
     [Fact]
-    public async Task CreateTeam_ShouldRemainAvailableToChatSurfaceWithApproval()
+    public async Task CreateTeam_ShouldUseSharedCreateScopedResourceApprovalPolicy()
     {
         var tool = await DiscoverCreateTeamToolAsync(new RecordingTeamProvisioningPort());
 
-        tool.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
+        tool.ApprovalMode.Should().Be(ToolApprovalPolicies.CreateScopedResource);
         tool.Should().NotBeAssignableTo<IAgentToolCapabilityDescriptor>();
     }
 
