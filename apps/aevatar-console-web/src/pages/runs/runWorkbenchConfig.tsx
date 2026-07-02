@@ -245,7 +245,7 @@ const runWorkbenchConfigMessages = {
   },
   runId: {
     id: "pages.runs.runworkbenchconfig.run.id",
-    defaultMessage: "Run ID",
+    defaultMessage: "Run",
   },
   serviceSse: {
     id: "pages.runs.runworkbenchconfig.service.sse",
@@ -426,31 +426,19 @@ export const runSummaryColumns: ProDescriptionsItemProps<RunSummaryRecord>[] = [
     title: <ConsoleMessage descriptor={runWorkbenchConfigMessages.actor} />,
     dataIndex: "actorId",
     render: (_, record) =>
-      record.actorId ? (
-        <Typography.Text copyable>{record.actorId}</Typography.Text>
-      ) : (
-        "n/a"
-      ),
+      record.actorId ? t("pages.runs.runworkbenchconfig.runtime.actor.ready", "Runtime actor ready") : "n/a",
   },
   {
     title: <ConsoleMessage descriptor={runWorkbenchConfigMessages.command} />,
     dataIndex: "commandId",
     render: (_, record) =>
-      record.commandId ? (
-        <Typography.Text copyable>{record.commandId}</Typography.Text>
-      ) : (
-        "n/a"
-      ),
+      record.commandId ? t("pages.runs.runworkbenchconfig.command.accepted", "Command accepted") : "n/a",
   },
   {
     title: <ConsoleMessage descriptor={runWorkbenchConfigMessages.runId} />,
     dataIndex: "runId",
     render: (_, record) =>
-      record.runId ? (
-        <Typography.Text copyable>{record.runId}</Typography.Text>
-      ) : (
-        "n/a"
-      ),
+      record.runId ? t("pages.runs.runworkbenchconfig.current.run.ready", "Current run ready") : "n/a",
   },
   {
     title: <ConsoleMessage descriptor={runSummaryColumnMessages.currentFocus} />,
@@ -492,7 +480,8 @@ export const humanInputColumns: ProDescriptionsItemProps<HumanInputRecord>[] = [
   {
     title: <ConsoleMessage descriptor={runWorkbenchConfigMessages.run} />,
     dataIndex: "runId",
-    render: (_, record) => record.runId || "n/a",
+    render: (_, record) =>
+      record.runId ? t("pages.runs.runworkbenchconfig.current.run", "Current run") : "n/a",
   },
   {
     title: <ConsoleMessage descriptor={runWorkbenchConfigMessages.suspension} />,
@@ -557,7 +546,8 @@ export const waitingSignalColumns: ProDescriptionsItemProps<WaitingSignalRecord>
     {
       title: <ConsoleMessage descriptor={runWorkbenchConfigMessages.run} />,
       dataIndex: "runId",
-      render: (_, record) => record.runId || "n/a",
+      render: (_, record) =>
+        record.runId ? t("pages.runs.runworkbenchconfig.current.run.2", "Current run") : "n/a",
     },
     {
       title: <ConsoleMessage descriptor={runWorkbenchConfigMessages.prompt} />,
@@ -789,7 +779,8 @@ export const recentRunColumns: ProColumns<RecentRunTableRow>[] = [
     title: <ConsoleMessage descriptor={runWorkbenchConfigMessages.runId} />,
     dataIndex: "runId",
     width: 180,
-    render: (_, record) => record.runId || "n/a",
+    render: (_, record) =>
+      record.runId ? t("pages.runs.runworkbenchconfig.available", "Available") : "n/a",
   },
   {
     title: <ConsoleMessage descriptor={runWorkbenchConfigMessages.preview} />,

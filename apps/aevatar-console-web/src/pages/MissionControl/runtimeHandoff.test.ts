@@ -129,7 +129,8 @@ describe('Mission Control runtime handoff cues', () => {
 
     expect(cue.severity).toBe('observe');
     expect(cue.title).toBe('Event evidence');
-    expect(cue.detail).toContain('actor actor-1');
+    expect(cue.detail).toContain('current runtime actor');
+    expect(cue.detail).not.toContain('actor-1');
     expect(cue.nextStep).toContain('Keep observing');
   });
 
@@ -163,8 +164,10 @@ describe('Mission Control runtime handoff cues', () => {
     });
 
     expect(message).toContain('Wait for runtime to confirm');
-    expect(message).toContain('Command cmd-1');
-    expect(message).toContain('Run run-1');
+    expect(message).toContain('Command observation is pending');
+    expect(message).toContain('current run remains the evidence source');
+    expect(message).not.toContain('cmd-1');
+    expect(message).not.toContain('run-1');
   });
 
   it('keeps accepted signals honest until a new runtime snapshot arrives', () => {

@@ -17,6 +17,7 @@ import { t } from "@/shared/i18n/messages";
 import {
   buildTeamDetailHref,
   buildTeamMemberAutomationsHref,
+  buildTeamMemberInvokeHref,
   buildTeamMemberPublishedRunsHref,
   buildTeamMemberWorkflowStudioHref,
   buildTeamsHref,
@@ -161,6 +162,9 @@ type TeamMemberWorkflowStudioState = {
   readonly automationsHref: string;
   readonly canOpenAutomations: boolean;
   readonly automationsPlaceholderReason: string;
+  readonly canOpenInvoke: boolean;
+  readonly invokeHref: string;
+  readonly invokePlaceholderReason: string;
   readonly canOpenPublishedRuns: boolean;
   readonly publishedRunsHref: string;
   readonly publishedRunsPlaceholderReason: string;
@@ -176,6 +180,7 @@ type TeamMemberWorkflowStudioState = {
   readonly showRefreshPublishStatus: boolean;
   readonly backHref: string;
   readonly navigateToTeam: () => void;
+  readonly navigateToInvoke: () => void;
   readonly navigateToPublishedRuns: () => void;
   readonly navigateToAutomations: () => void;
   readonly navigateToTeams: () => void;
@@ -281,7 +286,7 @@ function describeWorkflowDraftAcceptedReceipt(
 ): string {
   return (
     trimOptional(receipt.readiness.message) ||
-    `Workflow draft ${receipt.workflowId} was accepted. Studio is waiting for the scoped workspace projection.`
+    "Workflow draft was accepted. Studio is waiting for the scoped workspace projection."
   );
 }
 
@@ -661,11 +666,11 @@ async function waitForCreatedMemberVisible(input: {
 
   throw lastNotFound instanceof Error
     ? new Error(
-        `Workflow member ${input.memberId} was created but is not visible yet. Retry saving in a moment.`,
+        "Workflow member was created but is not visible yet. Retry saving in a moment.",
         { cause: lastNotFound },
       )
     : new Error(
-        `Workflow member ${input.memberId} was created but is not visible yet. Retry saving in a moment.`,
+        "Workflow member was created but is not visible yet. Retry saving in a moment.",
       );
 }
 
@@ -699,11 +704,11 @@ async function waitForWorkflowDraftMaterialized(input: {
 
   throw lastNotFound instanceof Error
     ? new Error(
-        `Workflow draft ${input.receipt.workflowId} was accepted but is not readable yet. Retry saving in a moment.`,
+        "Workflow draft was accepted but is not readable yet. Retry saving in a moment.",
         { cause: lastNotFound },
       )
     : new Error(
-        `Workflow draft ${input.receipt.workflowId} was accepted but is not readable yet. Retry saving in a moment.`,
+        "Workflow draft was accepted but is not readable yet. Retry saving in a moment.",
       );
 }
 
@@ -1542,7 +1547,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         });
         const savedWorkflowId = trimOptional(savedDraft.workflow.workflowId);
         if (!savedWorkflowId) {
-          throw new Error("Workflow draft save did not return a stable workflow id.");
+          throw new Error("Workflow draft save did not return a stable reference.");
         }
 
         const currentLink: PendingCreatedWorkflowMemberLink = {
@@ -1591,7 +1596,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       });
       const savedWorkflowId = trimOptional(savedDraft.workflow.workflowId);
       if (!savedWorkflowId) {
-        throw new Error("Workflow draft save did not return a stable workflow id.");
+        throw new Error("Workflow draft save did not return a stable reference.");
       }
 
       const createdMember = await studioApi.createMember({
@@ -1602,7 +1607,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       });
       const createdMemberId = trimOptional(createdMember.memberId);
       if (!createdMemberId) {
-        throw new Error("Workflow member creation did not return a stable member id.");
+        throw new Error("Workflow member creation did not return a stable reference.");
       }
       const createdLink: PendingCreatedWorkflowMemberLink = {
         memberId: createdMemberId,
@@ -1684,7 +1689,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       });
       const savedWorkflowId = trimOptional(savedDraft.workflow.workflowId);
       if (!savedWorkflowId) {
-        throw new Error("Workflow draft save did not return a stable workflow id.");
+        throw new Error("Workflow draft save did not return a stable reference.");
       }
 
       await studioApi.updateMemberImplementationRef({
@@ -2087,6 +2092,33 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const memberPublishedServiceId = trimOptional(
     memberQuery.data?.summary.publishedServiceId,
   );
+  const invokeHref = buildTeamMemberInvokeHref({
+    memberId: route.memberId || undefined,
+    scopeId: route.scopeId,
+    teamId: route.teamId,
+  });
+  const canOpenInvoke = Boolean(
+    route.mode === "existing" &&
+      route.scopeId &&
+      route.teamId &&
+      route.memberId &&
+      memberIsPublished &&
+      memberPublishedServiceId,
+  );
+  const invokePlaceholderReason = !route.memberId
+    ? t(
+        "teamMemberWorkflowStudio.header.invoke.saveFirst",
+        "Save this member before invoking it.",
+      )
+    : !memberIsPublished || !memberPublishedServiceId
+      ? t(
+          "teamMemberWorkflowStudio.header.invoke.publishFirst",
+          "Publish this member before invoking it.",
+        )
+      : t(
+          "teamMemberWorkflowStudio.header.invoke.open",
+          "Open the published member invoke workbench.",
+        );
   const publishedRunsHref = buildTeamMemberPublishedRunsHref({
     memberId: route.memberId || undefined,
     scopeId: route.scopeId,
@@ -2644,6 +2676,9 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     automationsHref,
     canOpenAutomations,
     automationsPlaceholderReason,
+    canOpenInvoke,
+    invokeHref,
+    invokePlaceholderReason,
     canOpenPublishedRuns,
     publishedRunsHref,
     publishedRunsPlaceholderReason,
@@ -2681,6 +2716,11 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     navigateToTeams: () => {
       if (!dirty || confirmDiscardUnsavedChanges()) {
         history.push(teamsHref);
+      }
+    },
+    navigateToInvoke: () => {
+      if (canOpenInvoke && (!dirty || confirmDiscardUnsavedChanges())) {
+        history.push(invokeHref);
       }
     },
     navigateToPublishedRuns: () => {

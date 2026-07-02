@@ -48,6 +48,7 @@ import {
   AevatarStatusTag,
 } from "@/shared/ui/aevatarPageShells";
 import { t } from "@/shared/i18n/messages";
+import { getUserFacingIdentifierLabel } from "@/shared/ui/userFacingIdentifiers";
 
 type ScopeServiceRuntimeWorkbenchProps = {
   readonly scopeId: string;
@@ -425,7 +426,10 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
         }),
       ]);
       messageApi.success(
-        `Revision ${result.revisionId} was accepted for retirement.`,
+        t(
+          "pages.scopes.scopeserviceruntimeworkbench.revision.accepted.for.retirement",
+          "Revision was accepted for retirement.",
+        ),
       );
     },
     onError: (error) => {
@@ -471,7 +475,10 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
   const bindingTargetEndpointOptions = (
     selectedBindingTargetService?.endpoints ?? []
   ).map((endpoint) => ({
-    label: endpoint.displayName || endpoint.endpointId,
+    label: getUserFacingIdentifierLabel(
+      endpoint.displayName || endpoint.endpointId,
+      t("pages.scopes.scopeserviceruntimeworkbench.endpoint", "Endpoint"),
+    ),
     value: endpoint.endpointId,
   }));
 
@@ -502,7 +509,10 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
         >
           <Space wrap size={[8, 8]}>
             <Typography.Text strong>
-              {binding.displayName || binding.bindingId}
+              {getUserFacingIdentifierLabel(
+                binding.displayName || binding.bindingId,
+                t("pages.scopes.scopeserviceruntimeworkbench.binding", "Binding"),
+              )}
             </Typography.Text>
             <AevatarStatusTag
               domain="governance"
@@ -511,11 +521,18 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
             />
           </Space>
           <Typography.Text type="secondary">
-            {t("pages.scopes.scopeserviceruntimeworkbench.target", "Target")}{describeScopeServiceBindingTarget(binding)}
+            {t("pages.scopes.scopeserviceruntimeworkbench.target", "Target")}
+            {binding.serviceRef
+              ? t("pages.scopes.scopeserviceruntimeworkbench.service.target", "Service target")
+              : describeScopeServiceBindingTarget(binding)}
           </Typography.Text>
           <Typography.Text type="secondary">
             {t("pages.scopes.scopeserviceruntimeworkbench.policies", "Policies")}{" "}
-            {binding.policyIds.length > 0 ? binding.policyIds.join(", ") : "none"}
+            {binding.policyIds.length > 0
+              ? t("pages.scopes.scopeserviceruntimeworkbench.policy.count", "{value1} policies", {
+                  value1: binding.policyIds.length,
+                })
+              : "none"}
           </Typography.Text>
           <Space wrap>
             <Button
@@ -551,7 +568,10 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                     ],
                   });
                   messageApi.success(
-                    `Binding ${binding.bindingId} was accepted for retirement.`,
+                    t(
+                      "pages.scopes.scopeserviceruntimeworkbench.binding.accepted.for.retirement",
+                      "Binding was accepted for retirement.",
+                    ),
                   );
                 } catch (error) {
                   messageApi.error(
@@ -595,7 +615,11 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
             }}
           >
             <Space wrap size={[8, 8]}>
-              <Typography.Text strong>{revision.revisionId}</Typography.Text>
+              <Typography.Text strong>
+                {formatStudioMemberBindingImplementationKind(
+                  revision.implementationKind,
+                )}
+              </Typography.Text>
               <AevatarStatusTag
                 domain="governance"
                 status={revision.status || "draft"}
@@ -787,7 +811,10 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                   >
                     <Space wrap size={[8, 8]}>
                       <Typography.Text strong>
-                        {endpoint.displayName || endpoint.endpointId}
+                        {getUserFacingIdentifierLabel(
+                          endpoint.displayName || endpoint.endpointId,
+                          t("pages.scopes.scopeserviceruntimeworkbench.endpoint", "Endpoint"),
+                        )}
                       </Typography.Text>
                       <AevatarStatusTag
                         domain="observation"
@@ -927,8 +954,11 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                 }}
               >
                 <RuntimeMetricCard
-                  label="Revision"
-                  value={currentRevision.revisionId}
+                  label={t("pages.scopes.scopeserviceruntimeworkbench.version", "Version")}
+                  value={
+                    currentRevision.status ||
+                    t("pages.scopes.scopeserviceruntimeworkbench.ready", "Ready")
+                  }
                 />
                 <RuntimeMetricCard
                   label="Implementation"
@@ -942,7 +972,14 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                 />
                 <RuntimeMetricCard
                   label="Actor"
-                  value={currentRevision.primaryActorId || "n/a"}
+                  value={
+                    currentRevision.primaryActorId
+                      ? t(
+                          "pages.scopes.scopeserviceruntimeworkbench.actor.available",
+                          "Actor available",
+                        )
+                      : "n/a"
+                  }
                 />
               </div>
               {describeStudioMemberBindingRevisionContext(currentRevision) ? (
@@ -1182,7 +1219,10 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                 >
                   <Space wrap size={[8, 8]}>
                     <Typography.Text strong>
-                      {service.displayName || service.serviceId}
+                      {getUserFacingIdentifierLabel(
+                        service.displayName || service.serviceId,
+                        t("pages.scopes.scopeserviceruntimeworkbench.service", "Service"),
+                      )}
                     </Typography.Text>
                     <AevatarStatusTag
                       domain="governance"
@@ -1190,10 +1230,15 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                     />
                   </Space>
                   <Typography.Text type="secondary">
-                    {service.endpoints.length} {t("pages.scopes.scopeserviceruntimeworkbench.endpoints.revision", "endpoints · Revision")}{" "}
-                    {service.activeServingRevisionId ||
-                      service.defaultServingRevisionId ||
-                      "n/a"}
+                    {service.endpoints.length}{" "}
+                    {t("pages.scopes.scopeserviceruntimeworkbench.endpoints", "endpoints")}{" "}
+                    ·{" "}
+                    {service.activeServingRevisionId || service.defaultServingRevisionId
+                      ? t(
+                          "pages.scopes.scopeserviceruntimeworkbench.serving.version.ready",
+                          "serving version ready",
+                        )
+                      : "n/a"}
                   </Typography.Text>
                   <Space wrap>
                     <Button
@@ -1303,8 +1348,14 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
             });
             messageApi.success(
               bindingEditorState?.mode === "edit"
-                ? `Binding ${payload.bindingId} was updated.`
-                : `Binding ${payload.bindingId} was created.`,
+                ? t(
+                    "pages.scopes.scopeserviceruntimeworkbench.binding.updated",
+                    "Binding was updated.",
+                  )
+                : t(
+                    "pages.scopes.scopeserviceruntimeworkbench.binding.created",
+                    "Binding was created.",
+                  ),
             );
             setBindingEditorState(null);
             setBindingEditorDraft(createEmptyBindingDraft());
@@ -1319,7 +1370,7 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
         open={Boolean(bindingEditorState)}
         title={
           bindingEditorState?.mode === "edit"
-            ? `Edit binding ${bindingEditorState.bindingId || ""}`
+            ? t("pages.scopes.scopeserviceruntimeworkbench.edit.binding", "Edit binding")
             : "Create default route"
         }
       >
@@ -1375,7 +1426,10 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                 options={services
                   .filter((service) => service.serviceId !== selectedService?.serviceId)
                   .map((service) => ({
-                    label: service.displayName || service.serviceId,
+                    label: getUserFacingIdentifierLabel(
+                      service.displayName || service.serviceId,
+                      t("pages.scopes.scopeserviceruntimeworkbench.service", "Service"),
+                    ),
                     value: service.serviceId,
                   }))}
                 placeholder={t("pages.scopes.scopeserviceruntimeworkbench.target.service", "target service")}
@@ -1468,7 +1522,9 @@ const RunSummaryCard: React.FC<{
     }}
   >
     <Space wrap size={[8, 8]}>
-      <Typography.Text strong>{run.runId}</Typography.Text>
+      <Typography.Text strong>
+        {formatDateTime(run.lastUpdatedAt || run.boundAt || run.bindingUpdatedAt)}
+      </Typography.Text>
       <AevatarStatusTag
         domain="run"
         status={run.completionStatus || "unknown"}
@@ -1480,18 +1536,14 @@ const RunSummaryCard: React.FC<{
     </Space>
     <Typography.Text type="secondary">
       {t("pages.scopes.scopeserviceruntimeworkbench.workflow", "Workflow")}
-      {run.workflowName ||
-        t("pages.scopes.scopeserviceruntimeworkbench.not.available", "n/a")}{" "}
-      {t("pages.scopes.scopeserviceruntimeworkbench.revision", "· Revision")}
-      {run.revisionId ||
-        t("pages.scopes.scopeserviceruntimeworkbench.not.available", "n/a")}
+      {getUserFacingIdentifierLabel(
+        run.workflowName,
+        t("pages.scopes.scopeserviceruntimeworkbench.not.available", "n/a"),
+      )}
     </Typography.Text>
     <Typography.Text type="secondary">
       {t("pages.scopes.scopeserviceruntimeworkbench.updated", "Updated")}
-      {formatDateTime(run.lastUpdatedAt)}{" "}
-      {t("pages.scopes.scopeserviceruntimeworkbench.actor", "· Actor")}
-      {run.actorId ||
-        t("pages.scopes.scopeserviceruntimeworkbench.not.available", "n/a")}
+      {formatDateTime(run.lastUpdatedAt)}
     </Typography.Text>
     <Typography.Text type="secondary">
       {run.lastError ||

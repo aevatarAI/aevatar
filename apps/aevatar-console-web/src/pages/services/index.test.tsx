@@ -216,7 +216,8 @@ describe('ServicesPage', () => {
     expect(screen.getByRole('button', { name: '打开 Governance' })).toBeTruthy();
     expect(screen.getByRole('button', { name: '打开部署' })).toBeTruthy();
     expect(screen.getByRole('button', { name: '打开 Topology' })).toBeTruthy();
-    expect(screen.getAllByText('tenant-a/app-a/default/service-alpha').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('服务工作区').length).toBeGreaterThan(0);
+    expect(screen.queryByText('tenant-a/app-a/default/service-alpha')).toBeNull();
     expect(screen.getByText('当前服务态版本')).toBeTruthy();
     expect(screen.getByText('权威对象')).toBeTruthy();
     expect(screen.getByRole('tab', { name: '入口' })).toBeTruthy();

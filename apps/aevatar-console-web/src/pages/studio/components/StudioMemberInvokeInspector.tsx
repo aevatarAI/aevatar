@@ -546,14 +546,18 @@ const StudioMemberInvokeInspector: React.FC<
         "pages.studio.studiomemberinvokeinspector.service.target",
         "Service target",
       ),
-      value: trimOptional(publishedServiceId) || '—',
+      value: trimOptional(publishedServiceId)
+        ? t("pages.studio.studiomemberinvokeinspector.service.ready", "Service ready")
+        : '—',
     },
     {
       label: t(
         "pages.studio.studiomemberinvokeinspector.revision",
         "Revision",
       ),
-      value: trimOptional(revisionId) || '—',
+      value: trimOptional(revisionId)
+        ? t("pages.studio.studiomemberinvokeinspector.version.ready", "Version ready")
+        : '—',
     },
     {
       label: t(

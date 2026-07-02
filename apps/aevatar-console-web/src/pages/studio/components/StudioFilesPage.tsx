@@ -28,6 +28,7 @@ import type {
   StudioWorkspaceSettings,
 } from '@/shared/studio/models';
 import { scriptsApi } from '@/shared/studio/scriptsApi';
+import type { ScopedScriptDetail } from '@/shared/studio/scriptsModels';
 import {
   cardStackStyle,
   embeddedPanelStyle,
@@ -191,6 +192,20 @@ function matchesSearch(values: Array<string | null | undefined>, search: string)
   }
 
   return values.some((value) => String(value || '').toLowerCase().includes(keyword));
+}
+
+function formatScriptTreeLabel(detail: ScopedScriptDetail, index: number): string {
+  const record = detail as ScopedScriptDetail & {
+    script?: { displayName?: string | null; name?: string | null } | null;
+    source?: { displayName?: string | null; name?: string | null } | null;
+  };
+  const candidate =
+    record.script?.displayName ||
+    record.script?.name ||
+    record.source?.displayName ||
+    record.source?.name ||
+    '';
+  return candidate.trim() || `script-${index + 1}.cs`;
 }
 
 function fileKeyIsVisible(
@@ -638,14 +653,18 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
                   {scriptsOpen ? (
                     scopeId ? (
                       filteredScripts.length > 0 ? (
-                        filteredScripts.map((detail) => (
+                        filteredScripts.map((detail, index) => (
                           <TreeRow
                             key={detail.script?.scriptId}
                             active={selectedFile === `script:${detail.script?.scriptId || ''}`}
                             icon={<CodeOutlined />}
                             indent
-                            label={`${detail.script?.scriptId || 'script'}.cs`}
-                            meta={detail.script?.activeRevision || 'Draft'}
+                            label={formatScriptTreeLabel(detail, index)}
+                            meta={
+                              detail.script?.activeRevision
+                                ? t("pages.studio.studiofilespage.version.ready", "Version ready")
+                                : t("pages.studio.studiofilespage.draft", "Draft")
+                            }
                             onClick={() =>
                               detail.script?.scriptId
                                 ? setSelectedFile(`script:${detail.script.scriptId}`)
@@ -709,8 +728,8 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
                         active={selectedFile === `chat-history:${conversation.id}`}
                         icon={<MessageOutlined />}
                         indent
-                        label={conversation.actorId || conversation.id}
-                        meta={conversation.title || `${conversation.messageCount} messages`}
+                        label={conversation.title || t("pages.studio.studiofilespage.chat.history", "Chat history")}
+                        meta={`${conversation.messageCount} messages`}
                         onClick={() => setSelectedFile(`chat-history:${conversation.id}`)}
                       />
                     ))

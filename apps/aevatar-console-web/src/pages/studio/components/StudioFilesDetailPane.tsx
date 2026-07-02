@@ -99,6 +99,25 @@ type NoticeState = {
   readonly message: string;
 };
 
+function formatScriptDetailLabel(
+  detail: ScopedScriptDetail | null | undefined,
+): string {
+  const record = detail as
+    | (ScopedScriptDetail & {
+        script?: { displayName?: string | null; name?: string | null } | null;
+        source?: { displayName?: string | null; name?: string | null } | null;
+      })
+    | null
+    | undefined;
+  const candidate =
+    record?.script?.displayName ||
+    record?.script?.name ||
+    record?.source?.displayName ||
+    record?.source?.name ||
+    '';
+  return candidate.trim() || 'Script source';
+}
+
 type Props = {
   readonly selectedFile: StudioFileKey;
   readonly workflows: QueryState<StudioWorkflowSummary[]>;
@@ -2658,10 +2677,12 @@ const StudioFilesDetailPane: React.FC<Props> = ({
         <div style={cliEditorShellStyle}>
           <div style={editorHeaderRowStyle}>
             <div>
-              <div style={editorHeaderTitleStyle}>{scriptId}.cs</div>
+              <div style={editorHeaderTitleStyle}>{formatScriptDetailLabel(selectedScriptDetail)}</div>
               <div style={catalogMetaStyle}>
-                {t("pages.studio.studiofilesdetailpane.revision.label", "Revision:")}{' '}
-                {selectedScriptDetail.script.activeRevision} {t("pages.studio.studiofilesdetailpane.updated", "· Updated:")}{' '}
+                {selectedScriptDetail.script.activeRevision
+                  ? t("pages.studio.studiofilesdetailpane.version.ready", "Version ready")
+                  : t("pages.studio.studiofilesdetailpane.draft", "Draft")}{' '}
+                {t("pages.studio.studiofilesdetailpane.updated", "· Updated:")}{' '}
                 {selectedScriptDetail.script.updatedAt
                   ? formatDateTime(selectedScriptDetail.script.updatedAt)
                   : t("pages.studio.studiofilesdetailpane.unknown", "unknown")}

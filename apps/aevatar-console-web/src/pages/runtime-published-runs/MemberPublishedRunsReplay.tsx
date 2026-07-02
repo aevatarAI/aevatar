@@ -43,6 +43,12 @@ import type {
   StudioGraphNodeData,
 } from "@/shared/studio/graph";
 import { t } from "@/shared/i18n/messages";
+import {
+  getUserFacingIdentifierLabel,
+  isMachineIdentifierValue,
+  sanitizeUserFacingRecord,
+  sanitizeUserFacingText,
+} from "@/shared/ui/userFacingIdentifiers";
 
 type MemberPublishedRunsReplayProps = {
   readonly initialActorId?: string;
@@ -636,6 +642,20 @@ function formatRunTime(run: ScopeMemberRunSummary): string {
   return formatDateTime(run.lastUpdatedAt || run.boundAt || run.bindingUpdatedAt);
 }
 
+function getRunDisplayName(run: ScopeMemberRunSummary | null | undefined): string {
+  const workflowName = trimOptional(run?.workflowName);
+  return workflowName && !isMachineIdentifierValue(workflowName) ? workflowName : "";
+}
+
+function getStepDisplayName(step: ScopeServiceRunAuditStep | null | undefined): string {
+  const stepId = trimOptional(step?.stepId);
+  const stepType = trimOptional(step?.stepType);
+  return getUserFacingIdentifierLabel(
+    stepId,
+    stepType || t("pages.runs.memberPublishedRuns.step", "Step"),
+  );
+}
+
 function getRunSortTimestamp(run: ScopeMemberRunSummary): number {
   return (
     Date.parse(
@@ -841,11 +861,11 @@ function renderDetailsSkeleton(): React.ReactNode {
 }
 
 function summarizeStepParameters(step: ScopeServiceRunAuditStep): string {
-  const entries = Object.entries(step.requestParameters).filter(
+  const entries = Object.entries(sanitizeUserFacingRecord(step.requestParameters)).filter(
     ([key, value]) => trimOptional(key) || trimOptional(value),
   );
   if (!entries.length) {
-    return step.targetRole ? `role: ${step.targetRole}` : step.stepType || "step";
+    return step.stepType || t("pages.runs.memberPublishedRuns.step", "step");
   }
 
   return entries
@@ -889,13 +909,13 @@ function buildExecutionGraph(
       executionFocused: step.stepId === selectedStepId,
       executionStatus: getStepExecutionStatus(step),
       kind: "step",
-      label: step.stepId,
+      label: getStepDisplayName(step),
       parametersSummary: summarizeStepParameters(step),
       stepId: step.stepId,
       stepType: step.stepType || "step",
-      subtitle: step.stepType || "Step",
+      subtitle: step.stepType || t("pages.runs.memberPublishedRuns.step", "Step"),
       targetRole: step.targetRole,
-      title: step.stepId,
+      title: getStepDisplayName(step),
     },
     id: `step:${step.stepId}`,
     position: {
@@ -994,7 +1014,7 @@ function filterTimelineForStep(
 }
 
 function renderKeyValueRows(values: Readonly<Record<string, string>>) {
-  const entries = Object.entries(values).filter(
+  const entries = Object.entries(sanitizeUserFacingRecord(values)).filter(
     ([key, value]) => trimOptional(key) || trimOptional(value),
   );
   if (!entries.length) {
@@ -1014,7 +1034,7 @@ function renderKeyValueRows(values: Readonly<Record<string, string>>) {
 }
 
 function renderTextBlock(value: string) {
-  const normalized = trimOptional(value);
+  const normalized = sanitizeUserFacingText(value);
   if (!normalized) {
     return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} />;
   }
@@ -1175,6 +1195,11 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
   const selectedRunTime = selectedRun ? formatRunTime(selectedRun) : "n/a";
   const auditDuration = getAuditDurationMs(audit);
   const selectedRunDuration = formatDurationMs(auditDuration);
+  const memberDisplayName =
+    trimOptional(runsQuery.data?.displayName) ||
+    trimOptional(memberQuery.data?.summary.displayName) ||
+    t("pages.runs.memberPublishedRuns.member", "Team member");
+  const selectedRunDisplayName = getRunDisplayName(selectedRun);
   const teamOverviewHref = buildTeamDetailHref({
     scopeId,
     tab: "overview",
@@ -1241,7 +1266,7 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
                 href={teamMembersHref}
                 onClick={navigateToTeamMembers}
               >
-                {runsQuery.data?.displayName || memberId}
+                {memberDisplayName}
               </a>
               <span className="member-published-runs-replay__breadcrumb-separator">/</span>
               <span className="member-published-runs-replay__breadcrumb-current">
@@ -1260,7 +1285,7 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
                   style={{ display: "block", maxWidth: 260 }}
                   type="secondary"
                 >
-                  {runsQuery.data?.displayName || memberId}
+                  {memberDisplayName}
                 </Typography.Text>
               </div>
             </div>
@@ -1316,9 +1341,9 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
                       {formatRunTime(run)}
                     </Typography.Text>
                   </div>
-                  {run.workflowName ? (
+                  {getRunDisplayName(run) ? (
                     <Typography.Text ellipsis type="secondary">
-                      {run.workflowName}
+                      {getRunDisplayName(run)}
                     </Typography.Text>
                   ) : null}
                 </button>
@@ -1364,9 +1389,9 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
                   ) : null}
                   {audit ? <Tag>{selectedRunDuration}</Tag> : null}
                 </Space>
-                {selectedRun?.workflowName ? (
+                {selectedRunDisplayName ? (
                   <Typography.Text ellipsis type="secondary">
-                    {selectedRun.workflowName}
+                    {selectedRunDisplayName}
                   </Typography.Text>
                 ) : !selectedRun ? (
                   <Typography.Text ellipsis type="secondary">
@@ -1472,7 +1497,7 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
                         {renderStepStatusIcon(step)}
                         <span style={{ minWidth: 0 }}>
                           <Typography.Text ellipsis style={{ display: "block" }}>
-                            {step.stepId}
+                            {getStepDisplayName(step)}
                           </Typography.Text>
                           <Typography.Text ellipsis type="secondary">
                             {step.stepType || "step"}
@@ -1495,7 +1520,7 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
                   <Space size={8} style={{ minWidth: 0 }}>
                     <NodeIndexOutlined style={{ color: "#1677ff" }} />
                     <Typography.Text ellipsis strong style={{ maxWidth: 360 }}>
-                      {selectedStep?.stepId ||
+                      {getStepDisplayName(selectedStep) ||
                         t("pages.runs.memberPublishedRuns.details", "Details")}
                     </Typography.Text>
                     {selectedStep ? (
@@ -1554,7 +1579,11 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
                                   </Typography.Text>
                                   <br />
                                   <Typography.Text type="secondary">
-                                    {event.message || event.agentId || "n/a"}
+                                    {sanitizeUserFacingText(event.message) ||
+                                      getUserFacingIdentifierLabel(
+                                        event.agentId,
+                                        t("pages.runs.memberPublishedRuns.event", "Event"),
+                                      )}
                                   </Typography.Text>
                                 </div>
                               </div>

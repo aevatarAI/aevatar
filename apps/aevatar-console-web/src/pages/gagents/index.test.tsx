@@ -520,9 +520,8 @@ describe("GAgentsPage", () => {
       });
     });
 
-    expect(
-      await screen.findByText("Published Orders Assistant on revision rev-2.")
-    ).toBeTruthy();
+    expect(await screen.findByText("Published Orders Assistant.")).toBeTruthy();
+    expect(screen.queryByText("Published Orders Assistant on revision rev-2.")).toBeNull();
   });
 
   it("activates and retires a selectable binding revision", async () => {
@@ -606,8 +605,9 @@ describe("GAgentsPage", () => {
       ).toHaveBeenCalledWith("scope-a", "rev-2");
     });
     expect(
-      await screen.findByText("Workspace scope-a is now serving revision rev-2.")
+      await screen.findByText("Workspace is now serving the selected revision.")
     ).toBeTruthy();
+    expect(screen.queryByText("Workspace scope-a is now serving revision rev-2.")).toBeNull();
 
     const retireButton = screen
       .getAllByRole("button", { name: "Retire" })
@@ -620,8 +620,7 @@ describe("GAgentsPage", () => {
         mockedRuntimeGAgentApi.retireMemberBindingRevision
       ).toHaveBeenCalledWith("scope-a", "rev-2");
     });
-    expect(
-      await screen.findByText("Revision rev-2 was accepted for retirement.")
-    ).toBeTruthy();
+    expect(await screen.findByText("Revision was accepted for retirement.")).toBeTruthy();
+    expect(screen.queryByText("Revision rev-2 was accepted for retirement.")).toBeNull();
   });
 });

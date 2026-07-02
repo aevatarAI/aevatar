@@ -836,9 +836,9 @@ describe("ChatPage", () => {
     expect(screen.getByText("Inspecting the request")).toBeTruthy();
     expect(screen.getByText("lookup_context")).toBeTruthy();
     expect(screen.getByText("knowledge.search")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Runtime details" }));
-    expect(screen.getByText("run-1")).toBeTruthy();
-    expect(screen.getByText("actor://support")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Runtime details" })).toBeNull();
+    expect(screen.queryByText("run-1")).toBeNull();
+    expect(screen.queryByText("actor://support")).toBeNull();
   });
 
   it("binds and uses the built-in NyxID chat service", async () => {
@@ -1749,8 +1749,8 @@ describe("ChatPage", () => {
       "conversation-1"
     );
     expect(screen.getByText("stored reasoning")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Runtime details" }));
-    expect(screen.getByText("run-history")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Runtime details" })).toBeNull();
+    expect(screen.queryByText("run-history")).toBeNull();
   });
 
   it("restores NyxID approval identity from stored runtime events", async () => {
