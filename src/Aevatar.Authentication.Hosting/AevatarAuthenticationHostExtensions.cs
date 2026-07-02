@@ -65,13 +65,27 @@ public static class AevatarAuthenticationHostExtensions
                 {
                     OnMessageReceived = context =>
                     {
-                        if ((context.Request.Path.StartsWithSegments("/ws/voice") ||
-                             context.Request.Path.StartsWithSegments("/whip/offer")) &&
-                            context.Request.Query.TryGetValue("access_token", out var accessTokenValues))
+                        if (context.Request.Path.StartsWithSegments("/ws/voice") ||
+                            context.Request.Path.StartsWithSegments("/whip/offer"))
                         {
-                            var accessToken = accessTokenValues.FirstOrDefault();
-                            if (!string.IsNullOrWhiteSpace(accessToken))
-                                context.Token = accessToken.Trim();
+                            // Preferred: token carried in the Sec-WebSocket-Protocol header, so
+                            // it never appears in the request URL (request-URL logging → stdout
+                            // → Elasticsearch/ingress logs). See WebSocketSubprotocolToken.
+                            var subprotocolToken = WebSocketSubprotocolToken.ExtractBearer(
+                                context.HttpContext.WebSockets.WebSocketRequestedProtocols);
+                            if (!string.IsNullOrWhiteSpace(subprotocolToken))
+                            {
+                                context.Token = subprotocolToken;
+                            }
+                            // Fallback: legacy ?access_token= query param (older clients). The
+                            // request-log redactor scrubs it from logs; new clients should use
+                            // the subprotocol so the token never reaches a URL at all.
+                            else if (context.Request.Query.TryGetValue("access_token", out var accessTokenValues))
+                            {
+                                var accessToken = accessTokenValues.FirstOrDefault();
+                                if (!string.IsNullOrWhiteSpace(accessToken))
+                                    context.Token = accessToken.Trim();
+                            }
                         }
 
                         return Task.CompletedTask;
