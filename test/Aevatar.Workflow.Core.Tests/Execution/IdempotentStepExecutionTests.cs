@@ -72,6 +72,30 @@ public sealed class IdempotentStepExecutionTests
     }
 
     [Fact]
+    public async Task Dispatch_ShouldNotLogRawStepInputContent()
+    {
+        // Tool-call inputs routinely carry secrets (e.g. {"token":"<NyxID JWT>"}).
+        // The dispatch log previously previewed up to 200 chars of raw input, which
+        // leaked partial credentials into stdout -> Elasticsearch. Regression guard:
+        // the dispatch line is still emitted, but the raw content never is.
+        const string secret = "eyJhbGciOiJSENTINEL.secret-credential-payload-must-never-be-logged";
+        var ctx = new RecordingEventHandlerContext();
+        var host = new RecordingStateHost();
+        var kernel = new WorkflowExecutionKernel(SingleStepWorkflow(), host);
+
+        await kernel.HandleAsync(
+            Wrap(new StartWorkflowEvent { RunId = "run-1", Input = secret }),
+            ctx, CancellationToken.None);
+
+        ctx.RecordingLogger.Messages.Should()
+            .Contain(m => m.Contains("workflow_loop: dispatch") && m.Contains("input=("),
+                "the dispatch log line must still be emitted with a length marker");
+        ctx.RecordingLogger.Messages.Should()
+            .NotContain(m => m.Contains(secret),
+                "raw step input content may carry secrets and must never be logged");
+    }
+
+    [Fact]
     public async Task StepRequest_ShouldResolveAndPersistDefaultIdempotencyKeyBeforePublish()
     {
         var ctx = new RecordingEventHandlerContext();
@@ -1075,7 +1099,9 @@ public sealed class IdempotentStepExecutionTests
 
         public IServiceProvider Services { get; } = new NullServiceProvider();
 
-        public ILogger Logger { get; } = NullLogger.Instance;
+        public RecordingLogger RecordingLogger { get; } = new();
+
+        public ILogger Logger => RecordingLogger;
 
         public List<(Any Event, TopologyAudience Direction)> Published { get; } = [];
 
@@ -1141,6 +1167,29 @@ public sealed class IdempotentStepExecutionTests
             ct.ThrowIfCancellationRequested();
             Canceled.Add(lease);
             return Task.CompletedTask;
+        }
+    }
+
+    internal sealed class RecordingLogger : ILogger
+    {
+        public List<string> Messages { get; } = [];
+
+        public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+            => Messages.Add(formatter(state, exception));
+
+        private sealed class NullScope : IDisposable
+        {
+            public static readonly NullScope Instance = new();
+            public void Dispose() { }
         }
     }
 

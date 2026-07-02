@@ -102,7 +102,9 @@ public sealed record ScheduledDispatchSummary(
     string ScheduleActorId,
     string? Prompt = null,
     ScheduledDispatchScheduleKind ScheduleKind = ScheduledDispatchScheduleKind.Generic,
-    bool Deleted = false);
+    bool Deleted = false,
+    int OverdueFireDetectedCount = 0,
+    DateTimeOffset? LastOverdueFireAt = null);
 
 public sealed record ScheduledDispatchFireRecord(
     DateTimeOffset ScheduledFireAt,

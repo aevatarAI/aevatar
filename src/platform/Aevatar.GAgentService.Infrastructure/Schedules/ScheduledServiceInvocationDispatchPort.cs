@@ -60,20 +60,8 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         ScheduledServiceInvocationDispatchRequest dispatch,
         CancellationToken ct)
     {
-        if (dispatch.Auth?.ScopeOwnerNyxId == null)
-        {
-            var durableToken = dispatch.Auth?.DurableSenderBearerToken;
-            if (!string.IsNullOrWhiteSpace(durableToken))
-            {
-                return EnrichChatPayload(
-                    dispatch.Request,
-                    dispatch.Headers,
-                    new ExchangedCredential(
-                        CredentialRole.Sender,
-                        NormalizeNyxIdAccessToken(durableToken, ToErrorSubject(CredentialRole.Sender))),
-                    dispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredential);
-            }
-        }
+        if (!string.IsNullOrWhiteSpace(dispatch.Auth?.DurableSenderBearerToken))
+            throw new InvalidOperationException("Scheduled service invocation durable bearer auth is no longer supported.");
 
         var exchange = await ExchangeCredentialAsync(dispatch, ct);
         if (exchange == null)

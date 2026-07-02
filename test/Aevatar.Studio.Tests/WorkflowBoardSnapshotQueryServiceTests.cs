@@ -11,135 +11,136 @@ public sealed class WorkflowBoardSnapshotQueryServiceTests
     private const string ScopeId = "scope-mainnet-01";
 
     [Fact]
-    public void WorkflowBoardSnapshotRequestLimits_ShouldExposeApplicationContractLimits()
+    public void WorkflowBoardSnapshotRequestLimits_ShouldExposeMemberRowLimits()
     {
-        WorkflowBoardSnapshotRequestLimits.MaxSelectedTeams.Should().Be(4);
-        WorkflowBoardSnapshotRequestLimits.MaxSelectedMembers.Should().Be(24);
-        WorkflowBoardSnapshotRequestLimits.MaxPreviousWatermarkLength.Should().Be(256);
+        WorkflowBoardSnapshotRequestLimits.DefaultMemberRows.Should().Be(20);
+        WorkflowBoardSnapshotRequestLimits.MaxMemberRows.Should().Be(100);
     }
 
     [Fact]
-    public async Task GetSnapshotAsync_ShouldReturnSelectedMembersWithoutExpandingTeamRoster()
+    public async Task GetSnapshotAsync_ShouldReturnVisibleScopeMembers_WhenNoFilterIsSupplied()
     {
         var roster = new InMemoryBoardRosterQueryPort()
-            .AddTeam(new WorkflowBoardRosterTeam(
-                TeamId: "t-protocol",
-                ScopeId: ScopeId,
-                DisplayName: "protocol-ops",
-                IsArchived: false,
-                TotalMemberCount: 8,
-                UpdatedAt: DateTimeOffset.Parse("2026-06-24T10:00:00Z")))
-            .AddMember(new WorkflowBoardRosterMember(
-                MemberId: "m-alpha",
-                ScopeId: ScopeId,
-                TeamId: "t-protocol",
-                DisplayName: "Alpha",
-                IsArchived: false,
-                PublishedServiceId: "svc-alpha",
-                WorkflowId: "wf-alpha",
-                WorkflowName: "Deploy workflow",
-                ActorId: "actor-alpha",
-                RoleSummary: "deploy coordinator",
-                UpdatedAt: DateTimeOffset.Parse("2026-06-24T10:01:00Z")))
-            .AddMember(new WorkflowBoardRosterMember(
-                MemberId: "m-unselected",
-                ScopeId: ScopeId,
-                TeamId: "t-protocol",
-                DisplayName: "Unselected",
-                IsArchived: false,
-                PublishedServiceId: "svc-unselected",
-                WorkflowId: "wf-unselected",
-                WorkflowName: "Unselected workflow",
-                ActorId: "actor-unselected",
-                RoleSummary: "not selected",
-                UpdatedAt: DateTimeOffset.Parse("2026-06-24T10:02:00Z")));
-        var service = new WorkflowBoardSnapshotQueryService(
-            roster,
-            executionQueryPort: null,
-            new FixedWorkflowBoardClock(DateTimeOffset.Parse("2026-06-24T13:24:16Z")));
+            .AddTeam(NewTeam("t-protocol", name: "Protocol"))
+            .AddTeam(NewTeam("t-ops", name: "Ops"))
+            .AddMember(NewMember("m-alpha", "t-protocol"))
+            .AddMember(NewMember("m-beta", "t-protocol"))
+            .AddMember(NewMember("m-gamma", "t-ops"));
+        var execution = new LookupExecutionQueryPort()
+            .Add("m-alpha", Available(WorkflowBoardMemberExecutionStatus.Running, completed: 3, running: 1, waiting: 2, failed: 0))
+            .Add("m-beta", Available(WorkflowBoardMemberExecutionStatus.Completed, completed: 4, running: 0, waiting: 0, failed: 0))
+            .Add("m-gamma", Available(WorkflowBoardMemberExecutionStatus.Waiting, completed: 1, running: 0, waiting: 1, failed: 0));
+        var service = NewService(roster, execution);
 
-        var snapshot = await service.GetSnapshotAsync(new WorkflowBoardSnapshotRequest(
-            ScopeId,
-            [new WorkflowBoardTeamSelection("t-protocol", ["m-alpha"])]));
+        var snapshot = await service.GetSnapshotAsync(new WorkflowBoardSnapshotRequest(ScopeId));
 
         snapshot.ScopeId.Should().Be(ScopeId);
         snapshot.GeneratedAt.Should().Be(DateTimeOffset.Parse("2026-06-24T13:24:16Z"));
+        snapshot.Teams.Select(static team => team.TeamId).Should().Equal("t-protocol", "t-ops");
+        snapshot.Teams[0].Members.Select(static member => member.MemberId).Should().Equal("m-alpha", "m-beta");
+        snapshot.Teams[1].Members.Select(static member => member.MemberId).Should().Equal("m-gamma");
+        snapshot.Counts.Should().Be(new WorkflowBoardSnapshotCounts(
+            Running: 1,
+            Waiting: 1,
+            Failed: 0,
+            Retrying: 0,
+            Completed: 1));
+        snapshot.Watermark.Should().StartWith("workflow-board:v2:");
+        roster.TeamListRequests.Should().ContainSingle(ScopeId);
+        roster.MemberListRequests.Should().ContainSingle()
+            .Which.Should().Be((ScopeId, null, WorkflowBoardSnapshotRequestLimits.DefaultMemberRows));
+    }
+
+    [Fact]
+    public async Task GetSnapshotAsync_ShouldFilterMembersByTeamAndApplyTakeAsRowLimit()
+    {
+        var roster = new InMemoryBoardRosterQueryPort()
+            .AddTeam(NewTeam("t-protocol", name: "Protocol", memberCount: 3))
+            .AddTeam(NewTeam("t-ops", name: "Ops"))
+            .AddMember(NewMember("m-alpha", "t-protocol"))
+            .AddMember(NewMember("m-beta", "t-protocol"))
+            .AddMember(NewMember("m-gamma", "t-protocol"))
+            .AddMember(NewMember("m-ops", "t-ops"));
+        var service = NewService(roster);
+
+        var snapshot = await service.GetSnapshotAsync(new WorkflowBoardSnapshotRequest(
+            ScopeId,
+            TeamId: "t-protocol",
+            Take: 2));
+
         snapshot.Teams.Should().ContainSingle();
         snapshot.Teams[0].TeamId.Should().Be("t-protocol");
-        snapshot.Teams[0].SelectedMemberCount.Should().Be(1);
-        snapshot.Teams[0].TotalMemberCount.Should().Be(8);
-        snapshot.Teams[0].Members.Should().ContainSingle();
-        var member = snapshot.Teams[0].Members[0];
+        snapshot.Teams[0].TeamName.Should().Be("Protocol");
+        snapshot.Teams[0].TotalMemberCount.Should().Be(3);
+        snapshot.Teams[0].Members.Select(static member => member.MemberId).Should().Equal("m-alpha", "m-beta");
+        snapshot.Counts.Should().Be(new WorkflowBoardSnapshotCounts(0, 0, 0, 0, 0));
+        roster.MemberListRequests.Should().ContainSingle()
+            .Which.Should().Be((ScopeId, "t-protocol", 2));
+    }
+
+    [Fact]
+    public async Task GetSnapshotAsync_ShouldReturnOnlyExactMember_WhenTeamAndMemberAreSupplied()
+    {
+        var roster = new InMemoryBoardRosterQueryPort()
+            .AddTeam(NewTeam("t-protocol"))
+            .AddMember(NewMember("m-alpha", "t-protocol") with
+            {
+                WorkflowId = "wf-alpha",
+                PublishedServiceId = "svc-alpha",
+                ActorId = "actor-alpha",
+            })
+            .AddMember(NewMember("m-beta", "t-protocol"));
+        var execution = new RecordingExecutionQueryPort(Available(
+            WorkflowBoardMemberExecutionStatus.Running,
+            completed: 3,
+            running: 1,
+            waiting: 2,
+            failed: 0,
+            currentExecutionId: "run-alpha"));
+        var service = NewService(roster, execution);
+
+        var snapshot = await service.GetSnapshotAsync(new WorkflowBoardSnapshotRequest(
+            ScopeId,
+            TeamId: "t-protocol",
+            MemberId: "m-alpha",
+            Take: 100));
+
+        var member = snapshot.Teams.Should().ContainSingle().Subject.Members.Should().ContainSingle().Subject;
         member.MemberId.Should().Be("m-alpha");
         member.WorkflowId.Should().Be("wf-alpha");
         member.PublishedServiceId.Should().Be("svc-alpha");
-        member.ActorId.Should().Be("actor-alpha");
-        member.ExecutionAvailability.Should().Be(WorkflowBoardExecutionAvailability.PendingBackendContract);
-        member.CompletedNodes.Should().BeEmpty();
-        member.PendingNodes.Should().BeEmpty();
-        member.FailedNodes.Should().BeEmpty();
-        snapshot.Totals.CompletedSteps.Should().BeNull();
-        snapshot.Totals.RunningNodes.Should().BeNull();
-        snapshot.Totals.WaitingOrPendingNodes.Should().BeNull();
-        snapshot.Totals.FailedNodes.Should().BeNull();
-        snapshot.InvalidSelections.Should().BeEmpty();
-        snapshot.Watermark.Should().StartWith("workflow-board:v1:");
+        member.CurrentExecutionId.Should().Be("run-alpha");
+        member.ExecutionStatus.Should().Be(WorkflowBoardMemberExecutionStatus.Running);
+        member.Progress.Should().Be(new WorkflowBoardMemberProgress(3, 6));
+        snapshot.Counts.Should().Be(new WorkflowBoardSnapshotCounts(1, 0, 0, 0, 0));
+        roster.MemberListRequests.Should().BeEmpty();
+        execution.Lookups.Should().ContainSingle()
+            .Which.Should().Be(new WorkflowBoardExecutionLookup(
+                ScopeId,
+                "t-protocol",
+                "m-alpha",
+                "wf-alpha",
+                "svc-alpha",
+                "actor-alpha"));
     }
 
     [Fact]
-    public async Task GetSnapshotAsync_ShouldReturnInvalidSelectionsWithoutDroppingValidRows()
+    public async Task GetSnapshotAsync_ShouldRejectMemberFilterWithoutTeamBeforeQueryingRoster()
     {
         var roster = new InMemoryBoardRosterQueryPort()
-            .AddTeam(NewTeam("t-alpha", name: "Alpha Team"))
-            .AddTeam(NewTeam("t-archived", archived: true))
-            .AddMember(NewMember("m-alpha", "t-alpha"))
-            .AddMember(NewMember("m-other-team", "t-other"))
-            .AddMember(NewMember("m-archived", "t-alpha", archived: true));
+            .AddTeam(NewTeam("t-protocol"))
+            .AddMember(NewMember("m-alpha", "t-protocol"));
         var service = NewService(roster);
 
-        var snapshot = await service.GetSnapshotAsync(new WorkflowBoardSnapshotRequest(
+        var act = () => service.GetSnapshotAsync(new WorkflowBoardSnapshotRequest(
             ScopeId,
-            [
-                new WorkflowBoardTeamSelection(
-                    "t-alpha",
-                    ["m-alpha", "m-missing", "m-other-team", "m-archived"]),
-                new WorkflowBoardTeamSelection("t-missing", ["m-any"]),
-                new WorkflowBoardTeamSelection("t-archived", ["m-any"]),
-            ]));
+            MemberId: "m-alpha"));
 
-        snapshot.Teams.Should().ContainSingle();
-        snapshot.Teams[0].Members.Should().ContainSingle()
-            .Which.MemberId.Should().Be("m-alpha");
-        snapshot.InvalidSelections.Select(x => (x.TeamId, x.MemberId, x.Reason)).Should().Equal(
-            ("t-alpha", "m-missing", WorkflowBoardInvalidSelectionReason.MemberNotFound),
-            ("t-alpha", "m-other-team", WorkflowBoardInvalidSelectionReason.MemberNotInTeam),
-            ("t-alpha", "m-archived", WorkflowBoardInvalidSelectionReason.Archived),
-            ("t-missing", "m-any", WorkflowBoardInvalidSelectionReason.TeamNotFound),
-            ("t-archived", "m-any", WorkflowBoardInvalidSelectionReason.Archived));
-    }
-
-    [Fact]
-    public async Task GetSnapshotAsync_ShouldDedupeRowsAndPreserveRequestOrder()
-    {
-        var roster = new InMemoryBoardRosterQueryPort()
-            .AddTeam(NewTeam("t-beta"))
-            .AddTeam(NewTeam("t-alpha"))
-            .AddMember(NewMember("m-beta-2", "t-beta"))
-            .AddMember(NewMember("m-beta-1", "t-beta"))
-            .AddMember(NewMember("m-alpha-1", "t-alpha"));
-        var service = NewService(roster);
-
-        var snapshot = await service.GetSnapshotAsync(new WorkflowBoardSnapshotRequest(
-            ScopeId,
-            [
-                new WorkflowBoardTeamSelection("t-beta", ["m-beta-2", "m-beta-1", "m-beta-2"]),
-                new WorkflowBoardTeamSelection("t-alpha", ["m-alpha-1"]),
-            ]));
-
-        snapshot.Teams.Select(x => x.TeamId).Should().Equal("t-beta", "t-alpha");
-        snapshot.Teams[0].Members.Select(x => x.MemberId).Should().Equal("m-beta-2", "m-beta-1");
-        snapshot.Teams[0].SelectedMemberCount.Should().Be(2);
-        snapshot.Teams[1].Members.Select(x => x.MemberId).Should().Equal("m-alpha-1");
+        await act.Should().ThrowAsync<WorkflowBoardSnapshotRequestException>()
+            .WithMessage("memberId requires teamId.");
+        roster.TeamQueryCount.Should().Be(0);
+        roster.MemberQueryCount.Should().Be(0);
+        roster.MemberListRequests.Should().BeEmpty();
     }
 
     [Fact]
@@ -147,28 +148,18 @@ public sealed class WorkflowBoardSnapshotQueryServiceTests
     {
         var roster = new InMemoryBoardRosterQueryPort();
         var service = NewService(roster);
-        var tooManyMembers = Enumerable.Range(0, 25)
-            .Select(index => $"m-{index}")
-            .ToArray();
 
         var cases = new[]
         {
-            new WorkflowBoardSnapshotRequest(ScopeId, []),
-            new WorkflowBoardSnapshotRequest(ScopeId, [new WorkflowBoardTeamSelection("", ["m-1"])]),
-            new WorkflowBoardSnapshotRequest(ScopeId, [new WorkflowBoardTeamSelection("t-1", [])]),
-            new WorkflowBoardSnapshotRequest(ScopeId, [new WorkflowBoardTeamSelection("t-1", ["m-1"])], " "),
+            new WorkflowBoardSnapshotRequest(" "),
+            new WorkflowBoardSnapshotRequest(ScopeId, TeamId: " "),
+            new WorkflowBoardSnapshotRequest(ScopeId, TeamId: "t-alpha", MemberId: " "),
+            new WorkflowBoardSnapshotRequest(ScopeId, TeamId: "t-alpha", Take: 0),
+            new WorkflowBoardSnapshotRequest(ScopeId, TeamId: "t-alpha", Take: -1),
             new WorkflowBoardSnapshotRequest(
                 ScopeId,
-                Enumerable.Range(0, 5)
-                    .Select(index => new WorkflowBoardTeamSelection($"t-{index}", ["m-1"]))
-                    .ToArray()),
-            new WorkflowBoardSnapshotRequest(
-                ScopeId,
-                [new WorkflowBoardTeamSelection("t-1", tooManyMembers)]),
-            new WorkflowBoardSnapshotRequest(
-                ScopeId,
-                [new WorkflowBoardTeamSelection("t-1", ["m-1"])],
-                new string('w', 257)),
+                TeamId: "t-alpha",
+                Take: WorkflowBoardSnapshotRequestLimits.MaxMemberRows + 1),
         };
 
         foreach (var invalidRequest in cases)
@@ -180,66 +171,108 @@ public sealed class WorkflowBoardSnapshotQueryServiceTests
 
         roster.TeamQueryCount.Should().Be(0);
         roster.MemberQueryCount.Should().Be(0);
+        roster.MemberListRequests.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task GetSnapshotAsync_ShouldUseExecutionQueryOnlyForValidRowsAndMapAvailableExecution()
+    public async Task GetSnapshotAsync_ShouldRejectMissingOrWrongTeamMemberWithoutPartialInvalidRows()
     {
         var roster = new InMemoryBoardRosterQueryPort()
             .AddTeam(NewTeam("t-alpha"))
-            .AddMember(NewMember("m-alpha", "t-alpha") with
-            {
-                WorkflowId = "wf-from-roster",
-                PublishedServiceId = "svc-from-roster",
-                ActorId = "actor-from-roster",
-            })
             .AddMember(NewMember("m-other-team", "t-other"));
-        var execution = new RecordingExecutionQueryPort(new WorkflowBoardExecutionSnapshot(
-            WorkflowBoardExecutionAvailability.Available,
-            [new WorkflowBoardCompletedNode("n-1", "Validate", DateTimeOffset.Parse("2026-06-24T13:20:00Z"), 1000)],
-            [new WorkflowBoardPendingNode("n-3", "Deploy", WorkflowBoardPendingNodeStatus.Pending)],
-            [new WorkflowBoardFailedNode("n-2", "Check", DateTimeOffset.Parse("2026-06-24T13:21:00Z"))])
-        {
-            CurrentExecutionId = "run-alpha",
-            CurrentNode = new WorkflowBoardCurrentNode(
-                "n-current",
-                "Run",
-                WorkflowBoardCurrentNodeStatus.Running,
-                DateTimeOffset.Parse("2026-06-24T13:22:00Z"),
-                DateTimeOffset.Parse("2026-06-24T13:24:00Z"),
-                120000),
-            LastNodeUpdatedAt = DateTimeOffset.Parse("2026-06-24T13:24:00Z"),
-            Totals = new WorkflowBoardTotals(1, 1, 1, 1),
-            Revision = "state-version-7",
-        });
+        var service = NewService(roster);
+
+        await FluentActions.Invoking(() => service.GetSnapshotAsync(new WorkflowBoardSnapshotRequest(
+                ScopeId,
+                TeamId: "t-missing")))
+            .Should()
+            .ThrowAsync<WorkflowBoardSnapshotRequestException>()
+            .WithMessage("teamId was not found.");
+        await FluentActions.Invoking(() => service.GetSnapshotAsync(new WorkflowBoardSnapshotRequest(
+                ScopeId,
+                TeamId: "t-alpha",
+                MemberId: "m-missing")))
+            .Should()
+            .ThrowAsync<WorkflowBoardSnapshotRequestException>()
+            .WithMessage("memberId was not found.");
+        await FluentActions.Invoking(() => service.GetSnapshotAsync(new WorkflowBoardSnapshotRequest(
+                ScopeId,
+                TeamId: "t-alpha",
+                MemberId: "m-other-team")))
+            .Should()
+            .ThrowAsync<WorkflowBoardSnapshotRequestException>()
+            .WithMessage("memberId does not belong to teamId.");
+    }
+
+    [Fact]
+    public async Task GetSnapshotAsync_ShouldMapProgressOnlyFromCompleteAvailableExecutionSummary()
+    {
+        var roster = new InMemoryBoardRosterQueryPort()
+            .AddTeam(NewTeam("t-alpha"))
+            .AddMember(NewMember("m-available", "t-alpha"))
+            .AddMember(NewMember("m-incomplete", "t-alpha"))
+            .AddMember(NewMember("m-unavailable", "t-alpha"));
+        var execution = new LookupExecutionQueryPort()
+            .Add("m-available", Available(WorkflowBoardMemberExecutionStatus.Completed, completed: 2, running: 1, waiting: 3, failed: 4))
+            .Add("m-incomplete", new WorkflowBoardExecutionSnapshot(
+                WorkflowBoardExecutionAvailability.Available,
+                [],
+                [],
+                [])
+            {
+                ExecutionStatus = WorkflowBoardMemberExecutionStatus.Running,
+                Summary = new WorkflowBoardExecutionSummary(1, null, 0, 0),
+            })
+            .Add("m-unavailable", new WorkflowBoardExecutionSnapshot(
+                WorkflowBoardExecutionAvailability.Unavailable,
+                [],
+                [],
+                []));
         var service = NewService(roster, execution);
 
         var snapshot = await service.GetSnapshotAsync(new WorkflowBoardSnapshotRequest(
             ScopeId,
-            [new WorkflowBoardTeamSelection("t-alpha", ["m-alpha", "m-other-team"])]));
+            TeamId: "t-alpha"));
 
-        execution.Lookups.Should().ContainSingle();
-        execution.Lookups[0].Should().Be(new WorkflowBoardExecutionLookup(
+        var members = snapshot.Teams.Single().Members.ToDictionary(static member => member.MemberId);
+        members["m-available"].Progress.Should().Be(new WorkflowBoardMemberProgress(2, 10));
+        members["m-incomplete"].Progress.Should().BeNull();
+        members["m-unavailable"].Progress.Should().BeNull();
+        members["m-unavailable"].ExecutionStatus.Should().Be(WorkflowBoardMemberExecutionStatus.Unknown);
+    }
+
+    [Fact]
+    public async Task GetSnapshotAsync_ShouldLeaveStoppedAndUnknownOutsideCounts()
+    {
+        var roster = new InMemoryBoardRosterQueryPort()
+            .AddTeam(NewTeam("t-alpha"))
+            .AddMember(NewMember("m-running", "t-alpha"))
+            .AddMember(NewMember("m-waiting", "t-alpha"))
+            .AddMember(NewMember("m-failed", "t-alpha"))
+            .AddMember(NewMember("m-retrying", "t-alpha"))
+            .AddMember(NewMember("m-completed", "t-alpha"))
+            .AddMember(NewMember("m-stopped", "t-alpha"))
+            .AddMember(NewMember("m-unknown", "t-alpha"));
+        var execution = new LookupExecutionQueryPort()
+            .Add("m-running", Available(WorkflowBoardMemberExecutionStatus.Running))
+            .Add("m-waiting", Available(WorkflowBoardMemberExecutionStatus.Waiting))
+            .Add("m-failed", Available(WorkflowBoardMemberExecutionStatus.Failed))
+            .Add("m-retrying", Available(WorkflowBoardMemberExecutionStatus.Retrying))
+            .Add("m-completed", Available(WorkflowBoardMemberExecutionStatus.Completed))
+            .Add("m-stopped", Available(WorkflowBoardMemberExecutionStatus.Stopped))
+            .Add("m-unknown", Available(WorkflowBoardMemberExecutionStatus.Unknown));
+        var service = NewService(roster, execution);
+
+        var snapshot = await service.GetSnapshotAsync(new WorkflowBoardSnapshotRequest(
             ScopeId,
-            "t-alpha",
-            "m-alpha",
-            "wf-from-roster",
-            "svc-from-roster",
-            "actor-from-roster"));
-        var member = snapshot.Teams.Single().Members.Single();
-        member.ExecutionAvailability.Should().Be(WorkflowBoardExecutionAvailability.Available);
-        member.CurrentExecutionId.Should().Be("run-alpha");
-        member.CurrentNode!.Status.Should().Be(WorkflowBoardCurrentNodeStatus.Running);
-        member.CompletedNodes.Should().ContainSingle();
-        member.PendingNodes.Should().ContainSingle();
-        member.FailedNodes.Should().ContainSingle();
-        snapshot.LastNodeUpdatedAt.Should().Be(DateTimeOffset.Parse("2026-06-24T13:24:00Z"));
-        snapshot.Totals.CompletedSteps.Should().Be(1);
-        snapshot.Totals.RunningNodes.Should().Be(1);
-        snapshot.Totals.WaitingOrPendingNodes.Should().Be(1);
-        snapshot.Totals.FailedNodes.Should().Be(1);
-        snapshot.InvalidSelections.Should().ContainSingle()
-            .Which.Reason.Should().Be(WorkflowBoardInvalidSelectionReason.MemberNotInTeam);
+            TeamId: "t-alpha"));
+
+        snapshot.Counts.Should().Be(new WorkflowBoardSnapshotCounts(
+            Running: 1,
+            Waiting: 1,
+            Failed: 1,
+            Retrying: 1,
+            Completed: 1));
     }
 
     [Fact]
@@ -248,56 +281,51 @@ public sealed class WorkflowBoardSnapshotQueryServiceTests
         var roster = new InMemoryBoardRosterQueryPort()
             .AddTeam(NewTeam("t-alpha"))
             .AddMember(NewMember("m-alpha", "t-alpha"));
-        var execution = new MutableExecutionQueryPort(new WorkflowBoardExecutionSnapshot(
-            WorkflowBoardExecutionAvailability.Available,
-            [],
-            [],
-            [])
-        {
-            Totals = new WorkflowBoardTotals(0, 1, 0, 0),
-            Revision = "state-version-1:event-evt-1",
-        });
+        var execution = new MutableExecutionQueryPort(Available(
+            WorkflowBoardMemberExecutionStatus.Running,
+            revision: "state-version-1:event-evt-1"));
         var service = NewService(roster, execution);
 
         var first = await service.GetSnapshotAsync(new WorkflowBoardSnapshotRequest(
             ScopeId,
-            [new WorkflowBoardTeamSelection("t-alpha", ["m-alpha"])]));
+            TeamId: "t-alpha",
+            MemberId: "m-alpha"));
 
-        execution.Snapshot = new WorkflowBoardExecutionSnapshot(
-            WorkflowBoardExecutionAvailability.Available,
-            [],
-            [],
-            [])
-        {
-            Totals = new WorkflowBoardTotals(1, 0, 0, 0),
-            Revision = "state-version-2:event-evt-2",
-        };
+        execution.Snapshot = Available(
+            WorkflowBoardMemberExecutionStatus.Completed,
+            revision: "state-version-2:event-evt-2");
 
         var second = await service.GetSnapshotAsync(new WorkflowBoardSnapshotRequest(
             ScopeId,
-            [new WorkflowBoardTeamSelection("t-alpha", ["m-alpha"])]));
+            TeamId: "t-alpha",
+            MemberId: "m-alpha"));
 
         first.Watermark.Should().NotBe(second.Watermark);
-        first.Watermark.Should().StartWith("workflow-board:v1:");
-        second.Watermark.Should().StartWith("workflow-board:v1:");
+        first.Watermark.Should().StartWith("workflow-board:v2:");
+        second.Watermark.Should().StartWith("workflow-board:v2:");
     }
 
     [Theory]
     [InlineData("team")]
     [InlineData("member")]
+    [InlineData("list")]
     public async Task GetSnapshotAsync_ShouldWrapTransientRosterReadFailuresAsUnavailable(string failingRead)
     {
-        Exception transientFailure = failingRead == "team"
-            ? new TimeoutException("team roster read timed out")
-            : new IOException("member roster read failed");
+        Exception transientFailure = new TimeoutException("roster read timed out");
         var roster = new ThrowingBoardRosterQueryPort(
             failingRead == "team" ? transientFailure : null,
-            failingRead == "member" ? transientFailure : null);
+            failingRead == "member" ? transientFailure : null,
+            failingRead == "list" ? transientFailure : null);
         var service = NewService(roster);
-
-        var act = () => service.GetSnapshotAsync(new WorkflowBoardSnapshotRequest(
-            ScopeId,
-            [new WorkflowBoardTeamSelection("t-alpha", ["m-alpha"])]));
+        Func<Task> act = failingRead switch
+        {
+            "team" => () => service.GetSnapshotAsync(new WorkflowBoardSnapshotRequest(ScopeId, TeamId: "t-alpha")),
+            "member" => () => service.GetSnapshotAsync(new WorkflowBoardSnapshotRequest(
+                ScopeId,
+                TeamId: "t-alpha",
+                MemberId: "m-alpha")),
+            _ => () => service.GetSnapshotAsync(new WorkflowBoardSnapshotRequest(ScopeId)),
+        };
 
         var exception = await act.Should().ThrowAsync<WorkflowBoardReadModelUnavailableException>();
         exception.Which.InnerException.Should().BeSameAs(transientFailure);
@@ -314,107 +342,11 @@ public sealed class WorkflowBoardSnapshotQueryServiceTests
 
         var act = () => service.GetSnapshotAsync(new WorkflowBoardSnapshotRequest(
             ScopeId,
-            [new WorkflowBoardTeamSelection("t-alpha", ["m-alpha"])]));
+            TeamId: "t-alpha",
+            MemberId: "m-alpha"));
 
         var exception = await act.Should().ThrowAsync<WorkflowBoardReadModelUnavailableException>();
         exception.Which.InnerException.Should().BeSameAs(transientFailure);
-    }
-
-    [Fact]
-    public async Task GetSnapshotAsync_ShouldNotMapRequestValidationFailuresAsReadModelUnavailable()
-    {
-        var roster = new ThrowingBoardRosterQueryPort(new TimeoutException("must not be queried"));
-        var service = NewService(roster);
-
-        var act = () => service.GetSnapshotAsync(new WorkflowBoardSnapshotRequest(ScopeId, []));
-
-        await act.Should().ThrowAsync<WorkflowBoardSnapshotRequestException>();
-    }
-
-    [Theory]
-    [InlineData(WorkflowBoardExecutionAvailability.Unavailable)]
-    [InlineData(WorkflowBoardExecutionAvailability.Unknown)]
-    [InlineData(WorkflowBoardExecutionAvailability.PendingBackendContract)]
-    public async Task GetSnapshotAsync_ShouldReturnNullableTotals_WhenExecutionAvailabilityIsNotAuthoritative(
-        WorkflowBoardExecutionAvailability availability)
-    {
-        var roster = new InMemoryBoardRosterQueryPort()
-            .AddTeam(NewTeam("t-alpha"))
-            .AddMember(NewMember("m-alpha", "t-alpha"));
-        var execution = new RecordingExecutionQueryPort(new WorkflowBoardExecutionSnapshot(
-            availability,
-            [],
-            [],
-            []));
-        var service = NewService(roster, execution);
-
-        var snapshot = await service.GetSnapshotAsync(new WorkflowBoardSnapshotRequest(
-            ScopeId,
-            [new WorkflowBoardTeamSelection("t-alpha", ["m-alpha"])]));
-
-        snapshot.Totals.CompletedSteps.Should().BeNull();
-        snapshot.Totals.RunningNodes.Should().BeNull();
-        snapshot.Totals.WaitingOrPendingNodes.Should().BeNull();
-        snapshot.Totals.FailedNodes.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task GetSnapshotAsync_ShouldReturnNullableTotals_WhenAvailableExecutionLacksAuthoritativeTotals()
-    {
-        var roster = new InMemoryBoardRosterQueryPort()
-            .AddTeam(NewTeam("t-alpha"))
-            .AddMember(NewMember("m-alpha", "t-alpha"));
-        var execution = new RecordingExecutionQueryPort(new WorkflowBoardExecutionSnapshot(
-            WorkflowBoardExecutionAvailability.Available,
-            [],
-            [],
-            []));
-        var service = NewService(roster, execution);
-
-        var snapshot = await service.GetSnapshotAsync(new WorkflowBoardSnapshotRequest(
-            ScopeId,
-            [new WorkflowBoardTeamSelection("t-alpha", ["m-alpha"])]));
-
-        snapshot.Totals.CompletedSteps.Should().BeNull();
-        snapshot.Totals.RunningNodes.Should().BeNull();
-        snapshot.Totals.WaitingOrPendingNodes.Should().BeNull();
-        snapshot.Totals.FailedNodes.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task GetSnapshotAsync_ShouldAggregateAuthoritativeExecutionTotals()
-    {
-        var roster = new InMemoryBoardRosterQueryPort()
-            .AddTeam(NewTeam("t-alpha"))
-            .AddMember(NewMember("m-alpha", "t-alpha"))
-            .AddMember(NewMember("m-beta", "t-alpha"));
-        var execution = new LookupExecutionQueryPort()
-            .Add("m-alpha", new WorkflowBoardExecutionSnapshot(
-                WorkflowBoardExecutionAvailability.Available,
-                [],
-                [],
-                [])
-            {
-                Totals = new WorkflowBoardTotals(2, 1, 3, 0),
-            })
-            .Add("m-beta", new WorkflowBoardExecutionSnapshot(
-                WorkflowBoardExecutionAvailability.Available,
-                [],
-                [],
-                [])
-            {
-                Totals = new WorkflowBoardTotals(4, 2, 5, 1),
-            });
-        var service = NewService(roster, execution);
-
-        var snapshot = await service.GetSnapshotAsync(new WorkflowBoardSnapshotRequest(
-            ScopeId,
-            [new WorkflowBoardTeamSelection("t-alpha", ["m-alpha", "m-beta"])]));
-
-        snapshot.Totals.CompletedSteps.Should().Be(6);
-        snapshot.Totals.RunningNodes.Should().Be(3);
-        snapshot.Totals.WaitingOrPendingNodes.Should().Be(8);
-        snapshot.Totals.FailedNodes.Should().Be(1);
     }
 
     [Theory]
@@ -458,6 +390,23 @@ public sealed class WorkflowBoardSnapshotQueryServiceTests
         member!.ActorId.Should().Be("actor-alpha");
     }
 
+    [Fact]
+    public async Task StudioWorkflowBoardRosterQueryPort_ShouldListTeamMembersUsingReadModelTeamFilter()
+    {
+        var teamPort = new FixedStudioTeamQueryPort(NewStudioTeamSummary("t-alpha"));
+        var memberPort = new FixedStudioMemberQueryPort(NewStudioMemberDetail(
+            "m-alpha",
+            "t-alpha",
+            MemberLifecycleStageNames.BindReady));
+        var adapter = new StudioWorkflowBoardRosterQueryPort(teamPort, memberPort);
+
+        var members = await adapter.ListMembersAsync(ScopeId, "t-alpha", 7);
+
+        members.Should().ContainSingle().Which.MemberId.Should().Be("m-alpha");
+        memberPort.ListPages.Should().ContainSingle()
+            .Which.Should().Be(new StudioMemberRosterPageRequest(PageSize: 7, TeamId: "t-alpha"));
+    }
+
     private sealed class InMemoryBoardRosterQueryPort : IWorkflowBoardRosterQueryPort
     {
         private readonly Dictionary<(string ScopeId, string TeamId), WorkflowBoardRosterTeam> _teams = new();
@@ -465,6 +414,8 @@ public sealed class WorkflowBoardSnapshotQueryServiceTests
 
         public int TeamQueryCount { get; private set; }
         public int MemberQueryCount { get; private set; }
+        public List<string> TeamListRequests { get; } = [];
+        public List<(string ScopeId, string? TeamId, int Take)> MemberListRequests { get; } = [];
 
         public InMemoryBoardRosterQueryPort AddTeam(WorkflowBoardRosterTeam team)
         {
@@ -476,6 +427,32 @@ public sealed class WorkflowBoardSnapshotQueryServiceTests
         {
             _members[(member.ScopeId, member.MemberId)] = member;
             return this;
+        }
+
+        public Task<IReadOnlyList<WorkflowBoardRosterTeam>> ListTeamsAsync(
+            string scopeId,
+            CancellationToken ct = default)
+        {
+            TeamListRequests.Add(scopeId);
+            var teams = _teams.Values
+                .Where(team => string.Equals(team.ScopeId, scopeId, StringComparison.Ordinal))
+                .ToArray();
+            return Task.FromResult<IReadOnlyList<WorkflowBoardRosterTeam>>(teams);
+        }
+
+        public Task<IReadOnlyList<WorkflowBoardRosterMember>> ListMembersAsync(
+            string scopeId,
+            string? teamId,
+            int take,
+            CancellationToken ct = default)
+        {
+            MemberListRequests.Add((scopeId, teamId, take));
+            var members = _members.Values
+                .Where(member => string.Equals(member.ScopeId, scopeId, StringComparison.Ordinal))
+                .Where(member => teamId == null || string.Equals(member.TeamId, teamId, StringComparison.Ordinal))
+                .Take(take)
+                .ToArray();
+            return Task.FromResult<IReadOnlyList<WorkflowBoardRosterMember>>(members);
         }
 
         public Task<WorkflowBoardRosterTeam?> GetTeamAsync(
@@ -499,8 +476,31 @@ public sealed class WorkflowBoardSnapshotQueryServiceTests
 
     private sealed class ThrowingBoardRosterQueryPort(
         Exception? teamException = null,
-        Exception? memberException = null) : IWorkflowBoardRosterQueryPort
+        Exception? memberException = null,
+        Exception? listException = null) : IWorkflowBoardRosterQueryPort
     {
+        public Task<IReadOnlyList<WorkflowBoardRosterTeam>> ListTeamsAsync(
+            string scopeId,
+            CancellationToken ct = default)
+        {
+            if (listException != null)
+                return Task.FromException<IReadOnlyList<WorkflowBoardRosterTeam>>(listException);
+
+            return Task.FromResult<IReadOnlyList<WorkflowBoardRosterTeam>>([NewTeam("t-alpha")]);
+        }
+
+        public Task<IReadOnlyList<WorkflowBoardRosterMember>> ListMembersAsync(
+            string scopeId,
+            string? teamId,
+            int take,
+            CancellationToken ct = default)
+        {
+            if (listException != null)
+                return Task.FromException<IReadOnlyList<WorkflowBoardRosterMember>>(listException);
+
+            return Task.FromResult<IReadOnlyList<WorkflowBoardRosterMember>>([NewMember("m-alpha", teamId ?? "t-alpha")]);
+        }
+
         public Task<WorkflowBoardRosterTeam?> GetTeamAsync(
             string scopeId,
             string teamId,
@@ -590,11 +590,16 @@ public sealed class WorkflowBoardSnapshotQueryServiceTests
 
     private sealed class FixedStudioMemberQueryPort(StudioMemberDetailResponse? member) : IStudioMemberQueryPort
     {
+        public List<StudioMemberRosterPageRequest?> ListPages { get; } = [];
+
         public Task<StudioMemberRosterResponse> ListAsync(
             string scopeId,
             StudioMemberRosterPageRequest? page = null,
-            CancellationToken ct = default) =>
-            Task.FromResult(new StudioMemberRosterResponse(scopeId, member == null ? [] : [member.Summary]));
+            CancellationToken ct = default)
+        {
+            ListPages.Add(page);
+            return Task.FromResult(new StudioMemberRosterResponse(scopeId, member == null ? [] : [member.Summary]));
+        }
 
         public Task<StudioMemberDetailResponse?> GetAsync(
             string scopeId,
@@ -615,6 +620,26 @@ public sealed class WorkflowBoardSnapshotQueryServiceTests
             roster,
             execution,
             new FixedWorkflowBoardClock(DateTimeOffset.Parse("2026-06-24T13:24:16Z")));
+
+    private static WorkflowBoardExecutionSnapshot Available(
+        WorkflowBoardMemberExecutionStatus status,
+        int completed = 0,
+        int running = 0,
+        int waiting = 0,
+        int failed = 0,
+        string? currentExecutionId = null,
+        string? revision = null) =>
+        new(
+            WorkflowBoardExecutionAvailability.Available,
+            [],
+            [],
+            [])
+        {
+            CurrentExecutionId = currentExecutionId,
+            ExecutionStatus = status,
+            Summary = new WorkflowBoardExecutionSummary(completed, running, waiting, failed),
+            Revision = revision,
+        };
 
     private static WorkflowBoardRosterTeam NewTeam(
         string teamId,
@@ -639,12 +664,23 @@ public sealed class WorkflowBoardSnapshotQueryServiceTests
             teamId,
             memberId,
             archived,
-            PublishedServiceId: $"svc-{memberId}",
-            WorkflowId: $"wf-{memberId}",
+            PublishedServiceId: memberId == "m-alpha" ? "svc-alpha" : $"svc-{memberId}",
+            WorkflowId: memberId == "m-alpha" ? "wf-alpha" : $"wf-{memberId}",
             WorkflowName: $"Workflow {memberId}",
             ActorId: $"actor-{memberId}",
             RoleSummary: $"role {memberId}",
             UpdatedAt: DateTimeOffset.Parse("2026-06-24T10:01:00Z"));
+
+    private static StudioTeamSummaryResponse NewStudioTeamSummary(string teamId) =>
+        new(
+            teamId,
+            ScopeId,
+            teamId,
+            $"team {teamId}",
+            TeamLifecycleStageNames.Active,
+            1,
+            DateTimeOffset.Parse("2026-06-24T10:00:00Z"),
+            DateTimeOffset.Parse("2026-06-24T10:01:00Z"));
 
     private static StudioMemberDetailResponse NewStudioMemberDetail(
         string memberId,

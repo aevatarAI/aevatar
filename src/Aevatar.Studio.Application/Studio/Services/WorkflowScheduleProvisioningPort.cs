@@ -20,9 +20,8 @@ namespace Aevatar.Studio.Application.Studio.Services;
 ///
 /// On the channel-free studio path the scope IS the caller's NyxID subject, so the
 /// subject external user id defaults to the scope when the caller does not supply
-/// one; the caller's forwarded bearer token is what makes a soon-firing run
-/// authenticate (the subject ref is the re-mint fallback for hosts whose callers
-/// have a re-mintable binding).
+/// one; the schedule re-mints a short-lived token from that subject ref on every
+/// fire (no caller bearer is persisted or replayed).
 /// </summary>
 public sealed class WorkflowScheduleProvisioningPort : IWorkflowScheduleProvisioningPort
 {
@@ -63,7 +62,6 @@ public sealed class WorkflowScheduleProvisioningPort : IWorkflowScheduleProvisio
             request.ScopeId,
             callerCredential,
             serviceRequest,
-            request.CallerBearerToken,
             ct);
 
         return new WorkflowScheduleProvisioningResult(

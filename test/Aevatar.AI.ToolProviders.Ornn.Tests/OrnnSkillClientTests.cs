@@ -131,6 +131,52 @@ public sealed class OrnnSkillClientTests
     }
 
     [Fact]
+    public async Task GetSkillSetAsync_RoutesThroughNyxIdProxyAndParsesBothMemberShapes()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson("""
+            {
+              "data": {
+                "guid": "set-guid-1",
+                "name": "aevatar-system",
+                "instructions": "set master prompt",
+                "members": [
+                  { "guid": "m-1", "name": "aevatar-skill-loading", "version": "1.1" },
+                  "aevatar-lark-provisioning@1.0"
+                ]
+              }
+            }
+            """);
+        var client = CreateClient(handler, slug: "ornn-api");
+
+        var set = await client.GetSkillSetAsync("access-token", "aevatar-system");
+
+        set.Should().NotBeNull();
+        set!.Guid.Should().Be("set-guid-1");
+        set.Members.Should().HaveCount(2);
+        set.Members[0].Reference.Should().Be("m-1");                       // object member → guid preferred
+        set.Members[1].Reference.Should().Be("aevatar-lark-provisioning"); // string member → name without @version
+
+        var request = handler.Requests.Should().ContainSingle().Subject;
+        request.Method.Should().Be(HttpMethod.Get);
+        request.Authorization!.Parameter.Should().Be("access-token");
+        request.RequestUri!.AbsoluteUri.Should().Be(
+            "https://nyx.example/api/v1/proxy/s/ornn-api/api/v1/skillsets/aevatar-system");
+    }
+
+    [Fact]
+    public async Task GetSkillSetAsync_OnNyxIdProxy403_ThrowsAccessDenied()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson(
+            """{ "error": "denied" }""",
+            HttpStatusCode.Forbidden);
+        var client = CreateClient(handler, slug: "ornn-api");
+
+        var act = async () => await client.GetSkillSetAsync("token", "aevatar-system");
+
+        await act.Should().ThrowAsync<RemoteSkillFetchException>();
+    }
+
+    [Fact]
     public async Task RemoteSkillFetcher_LiftsWorkflowYamlFilesIntoTypedDescriptorWithFrontmatterEntryOverride()
     {
         var handler = OrnnTestHttpMessageHandler.ReturningJson("""

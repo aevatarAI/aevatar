@@ -18,7 +18,23 @@ public sealed class ToolCallCredentialPolicyMiddleware : IToolCallMiddleware
         var senderBindingId = current?.SenderBinding.BindingId?.Trim();
         if (string.IsNullOrWhiteSpace(senderBindingId))
         {
-            await next();
+            // No binding at all. A direct/API caller (no Channel context) has no distinct
+            // sender to isolate from the owner, so the existing owner-credential fallback
+            // is correct. But a channel-mediated request (Lark/Discord/etc. — a real,
+            // addressable third party who never ran /init) must not get a free pass on
+            // mutating tool calls just because AgentToolCredentialPolicy never saw a binding
+            // id to deny against.
+            var isChannelMediated = !string.IsNullOrWhiteSpace(current?.Channel.SenderId);
+            if (!isChannelMediated || !AgentToolCredentialPolicy.IsMutation(context.Tool, context.ArgumentsJson))
+            {
+                await next();
+                return;
+            }
+
+            Deny(
+                context,
+                $"Tool '{context.ToolName}' was not executed because the sender is not bound to a NyxID account. Send /init to bind your NyxID account and retry. Owner credentials were not used.",
+                senderBindingId: null);
             return;
         }
 
@@ -46,7 +62,16 @@ public sealed class ToolCallCredentialPolicyMiddleware : IToolCallMiddleware
             return;
         }
 
-        var message = $"Tool '{context.ToolName}' was not executed because sender binding '{senderBindingId}' has no valid NyxID credential. Send /init to re-bind your NyxID account and retry. Owner credentials were not used.";
+        Deny(
+            context,
+            $"Tool '{context.ToolName}' was not executed because sender binding '{senderBindingId}' has no valid NyxID credential. Send /init to re-bind your NyxID account and retry. Owner credentials were not used.",
+            senderBindingId);
+    }
+
+    // Single deny shape for every credential-policy denial: error contract (error/code/message/
+    // tool_name/sender_binding_id), termination semantics, and receipt stay in lockstep.
+    private static void Deny(ToolCallContext context, string message, string? senderBindingId)
+    {
         context.Terminate = true;
         context.TerminationKind = ToolCallTerminationKind.MiddlewareTerminated;
         context.TerminationReason = message;

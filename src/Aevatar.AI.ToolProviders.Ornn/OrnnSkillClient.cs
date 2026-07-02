@@ -198,6 +198,68 @@ public sealed class OrnnSkillClient
         }
     }
 
+    /// <summary>
+    /// Fetch a skillset (by stable guid or by name) including its member list. The overlay source
+    /// resolves the host-configured set name to its guid once and then reads members by that guid,
+    /// so a later same-named squatter set cannot hijack the overlay (issue #2498). Member bodies are
+    /// refs; callers fetch each member's SKILL.md and its <c>overlay-scope-*</c> tag via
+    /// <see cref="GetSkillJsonAsync"/>.
+    /// </summary>
+    public async Task<OrnnSkillSet?> GetSkillSetAsync(
+        string accessToken,
+        string idOrName,
+        CancellationToken ct = default)
+    {
+        var path = $"/api/v1/skillsets/{Uri.EscapeDataString(idOrName)}";
+
+        using var timeoutCts = new CancellationTokenSource(_perCallTimeout);
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+
+        try
+        {
+            var response = await _nyxApi.ProxyRequestAsync(
+                token: accessToken,
+                slug: _options.NyxIdSlug,
+                path: path,
+                method: "GET",
+                body: null,
+                extraHeaders: null,
+                ct: linkedCts.Token);
+
+            if (TryUnwrapNyxIdProxyError(response, out var proxyError))
+            {
+                if (proxyError.Status == 403)
+                    throw RemoteSkillFetchException.AccessDenied(idOrName, proxyError.Detail, proxyError.Status);
+
+                return null;
+            }
+
+            var envelope = JsonSerializer.Deserialize<OrnnApiResponse<OrnnSkillSet>>(response, JsonOptions);
+            return envelope?.Data;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
+        {
+            _logger.LogWarning(
+                "Ornn get skillset exceeded {TimeoutSeconds}s per-call budget for '{IdOrName}'",
+                (int)_perCallTimeout.TotalSeconds,
+                idOrName);
+            return null;
+        }
+        catch (RemoteSkillFetchException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Ornn get skillset failed for '{IdOrName}'", idOrName);
+            return null;
+        }
+    }
+
     public async Task<OrnnSkillPublishResponse> PublishSkillAsync(
         string accessToken,
         byte[] zipBytes,
@@ -438,4 +500,98 @@ public sealed class OrnnSkillJson
     public string? Description { get; set; }
     public OrnnSkillMetadata? Metadata { get; set; }
     public Dictionary<string, string>? Files { get; set; }
+}
+
+/// <summary>A curated Ornn skillset. Its <see cref="Members"/> are references; fetch each body via
+/// <see cref="OrnnSkillClient.GetSkillJsonAsync"/>.</summary>
+public sealed class OrnnSkillSet
+{
+    public string? Guid { get; set; }
+    public string? Name { get; set; }
+    /// <summary>Set-level master prompt authored on the skillset itself.</summary>
+    public string? Instructions { get; set; }
+    public bool IsPrivate { get; set; }
+    public List<OrnnSkillSetMember> Members { get; set; } = [];
+}
+
+/// <summary>
+/// One skillset member. The upstream serializes members either as <c>"name@version"</c> strings or as
+/// objects (<c>{ guid, name, version }</c>); <see cref="OrnnSkillSetMemberJsonConverter"/> accepts both.
+/// Only the fetch <see cref="Reference"/> is load-bearing — the member's overlay-scope tag and body are
+/// read from the fetched skill JSON, not from the set entry, so the set's member shape stays irrelevant.
+/// </summary>
+[JsonConverter(typeof(OrnnSkillSetMemberJsonConverter))]
+public sealed class OrnnSkillSetMember
+{
+    public string? Guid { get; init; }
+    public string? Name { get; init; }
+    public string? Version { get; init; }
+
+    /// <summary>The id or name to fetch this member's full skill JSON with (guid preferred).</summary>
+    public string? Reference =>
+        !string.IsNullOrWhiteSpace(Guid) ? Guid :
+        string.IsNullOrWhiteSpace(Name) ? null : Name;
+}
+
+/// <summary>Reads a skillset member from either a <c>"name@version"</c> string or a <c>{guid,name,version}</c> object.</summary>
+internal sealed class OrnnSkillSetMemberJsonConverter : JsonConverter<OrnnSkillSetMember>
+{
+    public override OrnnSkillSetMember? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        switch (reader.TokenType)
+        {
+            case JsonTokenType.String:
+                return FromReferenceString(reader.GetString());
+            case JsonTokenType.StartObject:
+                using (var document = JsonDocument.ParseValue(ref reader))
+                {
+                    var root = document.RootElement;
+                    return new OrnnSkillSetMember
+                    {
+                        Guid = ReadString(root, "guid"),
+                        Name = ReadString(root, "name"),
+                        Version = ReadString(root, "version"),
+                    };
+                }
+            default:
+                reader.Skip();
+                return null;
+        }
+    }
+
+    public override void Write(Utf8JsonWriter writer, OrnnSkillSetMember value, JsonSerializerOptions options)
+    {
+        writer.WriteStartObject();
+        if (value.Guid is not null) writer.WriteString("guid", value.Guid);
+        if (value.Name is not null) writer.WriteString("name", value.Name);
+        if (value.Version is not null) writer.WriteString("version", value.Version);
+        writer.WriteEndObject();
+    }
+
+    private static OrnnSkillSetMember? FromReferenceString(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return null;
+
+        var trimmed = raw.Trim();
+        var at = trimmed.LastIndexOf('@');
+        return at > 0
+            ? new OrnnSkillSetMember { Name = trimmed[..at], Version = trimmed[(at + 1)..] }
+            : new OrnnSkillSetMember { Name = trimmed };
+    }
+
+    private static string? ReadString(JsonElement root, string propertyName)
+    {
+        foreach (var property in root.EnumerateObject())
+        {
+            if (property.NameEquals(propertyName) &&
+                property.Value.ValueKind == JsonValueKind.String)
+            {
+                var value = property.Value.GetString();
+                return string.IsNullOrWhiteSpace(value) ? null : value;
+            }
+        }
+
+        return null;
+    }
 }

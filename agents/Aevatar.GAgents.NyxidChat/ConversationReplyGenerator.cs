@@ -42,6 +42,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     private readonly INyxIdUserLlmPreferencesStore? _preferencesStore;
     private readonly IUserMemoryStore? _userMemoryStore;
     private readonly ILarkNyxClient? _larkClient;
+    private readonly ISystemSkillOverlayProvider? _overlayProvider;
     private readonly ILogger<NyxIdConversationReplyGenerator> _logger;
 
     // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
@@ -80,7 +81,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         IUserMemoryStore? userMemoryStore = null,
         ILarkNyxClient? larkClient = null,
         IToolApprovalHandler? approvalHandler = null,
-        ILogger<NyxIdConversationReplyGenerator>? logger = null)
+        ILogger<NyxIdConversationReplyGenerator>? logger = null,
+        ISystemSkillOverlayProvider? overlayProvider = null)
     {
         _llmProviderFactory = llmProviderFactory ?? throw new ArgumentNullException(nameof(llmProviderFactory));
         _toolSources = (toolSources ?? []).ToArray();
@@ -94,6 +96,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         _preferencesStore = preferencesStore;
         _userMemoryStore = userMemoryStore;
         _larkClient = larkClient;
+        _overlayProvider = overlayProvider;
         _logger = logger ?? NullLogger<NyxIdConversationReplyGenerator>.Instance;
     }
 
@@ -157,7 +160,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         }
 
         var replyPlan = await BuildEffectiveReplyPlanAsync(metadata, llmControl, toolContext, ct);
-        var primaryTools = await BuildTurnToolsAsync(replyPlan.DisableTools, ct);
+        var isChannelTurn = IsChannelRelayTurn(toolContext);
+        var primaryTools = await BuildTurnToolsAsync(replyPlan.DisableTools, isChannelTurn, ct);
 
         try
         {
@@ -183,7 +187,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 "Sender LLM request failed; retrying with bot owner LLM config and no tools. activity={ActivityId}",
                 activity.Id);
 
-            var fallbackTools = await BuildTurnToolsAsync(disableTools: true, ct);
+            var fallbackTools = await BuildTurnToolsAsync(disableTools: true, isChannelTurn, ct);
             return await GenerateWithMetadataAsync(
                     activity,
                     replyPlan.OwnerFallback,
@@ -254,7 +258,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         var replyPlan = await BuildEffectiveReplyPlanAsync(metadata, llmControl, toolContext, ct);
         var provider = ResolveProvider();
         var disableTools = forceDisableTools || replyPlan.DisableTools;
-        var tools = await BuildTurnToolsAsync(disableTools, ct);
+        var tools = await BuildTurnToolsAsync(disableTools, IsChannelRelayTurn(toolContext), ct);
         var externalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(replyPlan.Primary);
         var effectiveToolContext = replyPlan.PrimaryControl.ToToolContext(
             replyPlan.PrimaryToolContext ?? AgentToolExecutionContext.Empty with
@@ -277,7 +281,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
 
         var initialMessages = new List<ChatMessage>
         {
-            ChatMessage.System(BuildSystemPrompt(externalMetadata, input.AttachmentVisibilityInstruction)),
+            ChatMessage.System(BuildSystemPrompt(externalMetadata, effectiveToolContext, input.AttachmentVisibilityInstruction)),
         };
         initialMessages.AddRange((priorHistory ?? []).Where(IsReplayableHistoryEntry).TakeLast(MaxRecentPriorHistoryMessages).Select(ToChatMessage));
         initialMessages.Add(ChatMessage.User(input.Parts, input.Text));
@@ -298,13 +302,13 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     // slash silently consumed.
     // New: unbound sender disables tool dispatch; unknown slash gates to /init bootstrap;
     // non-slash text path unchanged (owner-LLM chat fallback).
-    private async Task<ToolManager> BuildTurnToolsAsync(bool disableTools, CancellationToken ct)
+    private async Task<ToolManager> BuildTurnToolsAsync(bool disableTools, bool isChannelTurn, CancellationToken ct)
     {
         var tools = new ToolManager();
         if (disableTools)
             return tools;
 
-        foreach (var tool in await DiscoverToolsAsync(ct))
+        foreach (var tool in await DiscoverToolsAsync(isChannelTurn, ct))
             tools.Register(tool);
 
         // Refactor (iter27/cluster-027-skill-registry-remote-skill-process-state):
@@ -365,7 +369,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             {
                 Messages =
                 [
-                    ChatMessage.System(BuildSystemPrompt(effectiveMetadata, input.AttachmentVisibilityInstruction)),
+                    ChatMessage.System(BuildSystemPrompt(effectiveMetadata, toolContext, input.AttachmentVisibilityInstruction)),
                 ],
                 Metadata = externalMetadata,
                 ToolContext = toolContext,
@@ -797,7 +801,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             {
                 Messages =
                 [
-                    ChatMessage.System(BuildSystemPrompt(externalMetadata, attachmentVisibilityInstruction)),
+                    ChatMessage.System(BuildSystemPrompt(externalMetadata, toolContext, attachmentVisibilityInstruction)),
                 ],
                 Metadata = externalMetadata,
                 ToolContext = toolContext,
@@ -992,7 +996,22 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         metadata.ContainsKey(ChannelMetadataKeys.SenderId) &&
         metadata.ContainsKey(ChannelMetadataKeys.MessageId);
 
-    private async Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct)
+    // Channel-relay detection for the human-only tool gate (issue #2580 Item 2). It must read the
+    // TYPED channel context, not metadata: channel.platform / sender_id / message_id are owned control
+    // keys that AgentToolExecutionContextMapper.StripOwnedControlKeys removes before the step state is
+    // persisted, so from the second LLM round the per-step metadata no longer carries them. The typed
+    // toolContext.Channel is an identity fact that survives stripping and every round, so the gate
+    // stays on for the whole relay turn (mirrors IsChannelTurn's Platform+SenderId+MessageId shape).
+    private static bool IsChannelRelayTurn(AgentToolExecutionContext? toolContext)
+    {
+        var channel = toolContext?.Channel;
+        return channel is not null &&
+            !string.IsNullOrWhiteSpace(channel.Platform) &&
+            !string.IsNullOrWhiteSpace(channel.SenderId) &&
+            !string.IsNullOrWhiteSpace(channel.MessageId);
+    }
+
+    private async Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(bool isChannelTurn, CancellationToken ct)
     {
         if (_toolSources.Count == 0)
             return [];
@@ -1012,6 +1031,15 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 // depended on these tools, so this changes no existing channel flow.
                 if (IsExcludedFromDirectChannelChat(tool))
                     continue;
+
+                // Issue #2580 Item 2: in a channel-relay turn the effective credential is a
+                // bot-class relay/API-key token that the broker rejects on human-only surfaces, so a
+                // tool self-declaring RequiresHumanSession can only fail. Filter it out of channel
+                // turns — never offered to the model, never registered so it cannot be invoked.
+                // Console/studio human-session turns keep the full set. Name-agnostic, like above.
+                if (isChannelTurn && DeclaresCapability(tool, AgentToolCapabilities.RequiresHumanSession))
+                    continue;
+
                 discovered[tool.Name] = tool;
             }
         }
@@ -1024,12 +1052,12 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     // The channel path never inspects a specific tool name; eligibility is a property of
     // the tool, keeping channel routing agnostic to individual tool/skill identities.
     private static bool IsExcludedFromDirectChannelChat(IAgentTool tool) =>
+        DeclaresCapability(tool, AgentToolCapabilities.ExcludeFromDirectChannelChat);
+
+    private static bool DeclaresCapability(IAgentTool tool, string capability) =>
         tool is IAgentToolCapabilityDescriptor descriptor &&
-        descriptor.Capabilities.Any(static capability =>
-            string.Equals(
-                capability,
-                AgentToolCapabilities.ExcludeFromDirectChannelChat,
-                StringComparison.OrdinalIgnoreCase));
+        descriptor.Capabilities.Any(declared =>
+            string.Equals(declared, capability, StringComparison.OrdinalIgnoreCase));
 
     private ILLMProvider ResolveProvider()
     {
@@ -1053,9 +1081,14 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
 
     private string BuildSystemPrompt(
         IReadOnlyDictionary<string, string> metadata,
+        AgentToolExecutionContext toolContext,
         string? attachmentVisibilityInstruction = null)
     {
         var prompt = LoadBaseSystemPrompt();
+        prompt = AppendSystemSkillOverlay(
+            prompt,
+            ResolveChannelPlatform(toolContext, metadata),
+            toolContext.Credentials.NyxIdAccessToken);
         prompt += NyxIdRelayPromptConfiguration.BuildChannelRuntimeConfigurationSection(_relayOptions);
         var channelContext = ChannelContextMiddleware.BuildChannelContextSection(metadata);
         if (!string.IsNullOrWhiteSpace(channelContext))
@@ -1074,8 +1107,40 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         return prompt;
     }
 
+    // The typed channel context is the authoritative platform source: the per-step plan path hands
+    // BuildSystemPrompt the STRIPPED external metadata (StripOwnedControlKeys removes channel.platform),
+    // so reading metadata alone would silently degrade platform-scoped overlay members to global-only
+    // on every AgentRun turn. Metadata stays as the fallback for callers without a typed context.
+    private static string? ResolveChannelPlatform(
+        AgentToolExecutionContext toolContext,
+        IReadOnlyDictionary<string, string> metadata)
+    {
+        if (!string.IsNullOrWhiteSpace(toolContext.Channel.Platform))
+            return toolContext.Channel.Platform;
+
+        return metadata.TryGetValue(ChannelMetadataKeys.Platform, out var platform) && !string.IsNullOrWhiteSpace(platform)
+            ? platform
+            : null;
+    }
+
+    private string AppendSystemSkillOverlay(string prompt, string? platform, string? nyxIdAccessToken)
+    {
+        var overlayMarkdown = _overlayProvider
+            ?.GetCurrent(new SystemSkillOverlayRequest(platform, nyxIdAccessToken))
+            ?.OverlayMarkdown;
+        if (string.IsNullOrWhiteSpace(overlayMarkdown))
+            return prompt;
+
+        if (string.IsNullOrWhiteSpace(prompt))
+            return overlayMarkdown.Trim();
+
+        return $"{prompt.TrimEnd()}\n\n{overlayMarkdown.Trim()}";
+    }
+
     private static string LoadBaseSystemPrompt()
     {
+        // Kernel source lock: channel replies and NyxIdChatSystemPrompt.Load both read the same
+        // embedded system-prompt.md resource; channel-only runtime facts are appended after it.
         var assembly = typeof(NyxIdChatGAgent).Assembly;
         var resourceName = assembly.GetManifestResourceNames()
             .FirstOrDefault(name => name.EndsWith("system-prompt.md", StringComparison.OrdinalIgnoreCase));
