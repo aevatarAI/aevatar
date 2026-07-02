@@ -136,7 +136,6 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool, IAgentToolCapa
             ScheduleTimezone = Normalize(args.ScheduleTimezone),
             RunImmediately = args.RunImmediately ?? true,
             CallerSubjectExternalUserId = Normalize(AgentToolRequestContext.OwnerSubject),
-            CallerBearerToken = Normalize(AgentToolRequestContext.NyxIdAccessToken),
         };
 
         try

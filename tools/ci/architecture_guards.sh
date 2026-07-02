@@ -2030,23 +2030,24 @@ check_orchestration_class_guard() {
 }
 
 check_system_skill_overlay_dual_seam_injection() {
-  local role_gagent_file="src/Aevatar.AI.Core/RoleGAgent.cs"
+  local nyxid_chat_gagent_file="agents/Aevatar.GAgents.NyxidChat/NyxIdChatGAgent.cs"
   local conversation_reply_generator_file="agents/Aevatar.GAgents.NyxidChat/ConversationReplyGenerator.cs"
   local prompt_injection_test_file="test/Aevatar.AI.Tests/SystemSkillOverlayPromptInjectionTests.cs"
 
-  if ! rg -q "DecorateSystemPrompt" "${role_gagent_file}" || ! rg -q "SystemSkillOverlayRequest\.DirectChat" "${role_gagent_file}"; then
-    echo "System skill overlay direct-chat seam must inject the overlay in RoleGAgent.DecorateSystemPrompt via the shared provider (SystemSkillOverlayRequest.DirectChat)."
+  # Direct-chat seam: the chartered chat actor (NyxIdChatGAgent) injects the overlay inside its
+  # DecorateSystemPrompt via the shared host-level provider (issue #2498).
+  if ! rg -q "override string DecorateSystemPrompt" "${nyxid_chat_gagent_file}" \
+    || ! rg -q "SystemSkillOverlayRequest\.DirectChat" "${nyxid_chat_gagent_file}"; then
+    echo "System skill overlay direct-chat seam must inject the overlay in NyxIdChatGAgent.DecorateSystemPrompt via the shared provider (SystemSkillOverlayRequest.DirectChat)."
     exit 1
   fi
 
-  # The real direct-chat actor NyxIdChatGAgent overrides DecorateSystemPrompt; it MUST call
-  # base.DecorateSystemPrompt or it silently bypasses RoleGAgent's overlay injection (issue #2498 P1).
-  local nyxid_chat_gagent_file="agents/Aevatar.GAgents.NyxidChat/NyxIdChatGAgent.cs"
-  if [ -f "${nyxid_chat_gagent_file}" ] && rg -q "override string DecorateSystemPrompt" "${nyxid_chat_gagent_file}"; then
-    if ! rg -q "base\.DecorateSystemPrompt" "${nyxid_chat_gagent_file}"; then
-      echo "NyxIdChatGAgent.DecorateSystemPrompt must call base.DecorateSystemPrompt so direct chat receives the System Skill Overlay."
-      exit 1
-    fi
+  # Non-channel isolation (#2586): the base RoleGAgent serves classifier/workflow subclasses too, so
+  # Aevatar.AI.Core must never resolve the overlay provider — otherwise every RoleGAgent subclass
+  # gets channel capability how-to force-injected into its system prompt each turn.
+  if rg -q "ISystemSkillOverlayProvider>" src/Aevatar.AI.Core -g '*.cs'; then
+    echo "Aevatar.AI.Core must not resolve ISystemSkillOverlayProvider; overlay injection belongs to the two chartered seams (NyxIdChatGAgent + ConversationReplyGenerator)."
+    exit 1
   fi
 
   if ! awk '
@@ -2096,11 +2097,14 @@ check_system_skill_overlay_dual_seam_injection() {
   fi
 }
 
-check_system_skill_overlay_eval_gate_present() {
+# Honest scope: this only asserts the golden-tasks document exists and is non-empty. No eval is
+# executed — there is no eval harness yet. Rename to check_system_skill_overlay_eval_gate once a
+# real runner consumes the tasks and its exit code gates CI.
+check_system_skill_overlay_golden_tasks_doc_present() {
   local eval_file="tools/eval/system_skill_overlay_golden_tasks.md"
 
   if [ ! -s "${eval_file}" ]; then
-    echo "System skill overlay golden-task eval gate artifact is required."
+    echo "System skill overlay golden-tasks document is required (tools/eval/system_skill_overlay_golden_tasks.md)."
     exit 1
   fi
 }
@@ -2151,7 +2155,7 @@ check_orchestration_class_guard \
   190 \
   10
 check_system_skill_overlay_dual_seam_injection
-check_system_skill_overlay_eval_gate_present
+check_system_skill_overlay_golden_tasks_doc_present
 check_system_skill_overlay_set_source
 
 echo "Running CQRS/EventSourcing boundary guard..."

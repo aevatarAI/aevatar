@@ -428,7 +428,17 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 HasLegacyDurableSenderBearerBlocked(stateTarget),
                 State.ScheduleKind == ScheduledDispatchScheduleKindState.Workflow);
             if (HasLegacyDurableSenderBearerBlocked(stateTarget))
+            {
+                // Ops-grade transition signal (#2586): a schedule provisioned before the durable-bearer
+                // removal is permanently blocked until reconfigured — every fire lands here, so alert on
+                // this message pattern instead of letting per-fire Warning + FailureCount accumulate as
+                // the only trace of a schedule that "looks alive" but never dispatches.
+                Logger.LogError(
+                    "Scheduled dispatch {ActorId} is blocked by legacy durable bearer auth and will never fire until reconfigured. scheduleId={ScheduleId} remediation=recreate the schedule with senderNyxId or scopeOwnerNyxId",
+                    Id,
+                    ResolveScheduleId());
                 throw new InvalidOperationException(LegacyDurableSenderBearerBlockedError);
+            }
 
             var receipt = await _serviceInvocationDispatchPort.DispatchAsync(
                 new ScheduledServiceInvocationDispatchRequest(

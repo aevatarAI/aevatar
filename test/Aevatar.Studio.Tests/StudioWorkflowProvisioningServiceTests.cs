@@ -114,29 +114,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
     }
 
     [Fact]
-    public async Task ProvisionAsync_WithForwardedCallerToken_StillUsesSubjectRef()
-    {
-        var member = NewMemberService();
-        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
-        var sut = NewService(member, schedule);
-
-        await sut.ProvisionAsync(
-            ScopeId,
-            Caller,
-            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "p"),
-            callerBearerToken: CallerBearerToken);
-
-        // Forwarded caller tokens are boundary input only; schedules must not
-        // persist or replay them.
-        var auth = schedule.Configuration!.Target.ServiceInvocation!.Auth;
-        auth.Should().NotBeNull();
-        auth!.SenderNyxId.Should().NotBeNull();
-        auth.DurableSenderBearerToken.Should().BeNull();
-        AssertExactlyOneCredentialSource(auth);
-    }
-
-    [Fact]
-    public async Task ProvisionAsync_UsesSubjectRef_WhenNoBearerToken()
+    public async Task ProvisionAsync_UsesSubjectRefAsOnlyCredentialSource()
     {
         var member = NewMemberService();
         var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
@@ -154,7 +132,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
     }
 
     [Fact]
-    public async Task ProvisionAsync_RecurringMonitor_WithForwardedToken_UsesSubjectRef()
+    public async Task ProvisionAsync_RecurringMonitor_UsesSubjectRef()
     {
         var member = NewMemberService();
         var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
@@ -168,8 +146,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
                 WorkflowYaml: "name: monitor",
                 Prompt: "go",
                 Cron: "0 8 * * *",
-                Timezone: "Asia/Shanghai"),
-            callerBearerToken: CallerBearerToken);
+                Timezone: "Asia/Shanghai"));
 
         // The re-mintable subject reference is the only schedule credential.
         var auth = schedule.Configuration!.Target.ServiceInvocation!.Auth;
@@ -179,7 +156,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
     }
 
     [Fact]
-    public async Task ProvisionAsync_WithBearerToken_StillReturnsAcceptedAndScheduleId_WithoutPollingBind()
+    public async Task ProvisionAsync_ReturnsAcceptedAndScheduleId_WithoutPollingBind()
     {
         var member = NewMemberService();
         var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
@@ -188,8 +165,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
         var response = await sut.ProvisionAsync(
             ScopeId,
             Caller,
-            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "go"),
-            callerBearerToken: CallerBearerToken);
+            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "go"));
 
         response.BindingStatus.Should().Be(ProvisionWorkflowBindingStatusNames.Accepted);
         response.ScheduleId.Should().Be(ScheduleId);
@@ -354,7 +330,6 @@ public sealed class StudioWorkflowProvisioningServiceTests
         schedule.Created.Should().BeFalse();
     }
 
-    private const string CallerBearerToken = "caller-bearer-token";
     /// <summary>
     /// The platform validator (<see cref="IScheduledDispatchApplicationService"/>
     /// CreateAsync → NormalizeServiceInvocationAuth) admits a schedule only when its

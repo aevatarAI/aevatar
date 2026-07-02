@@ -1,7 +1,9 @@
 # System Skill Overlay Golden Tasks
 
-This file is the eval-gate scaffold for the system skill overlay. The harness
-will consume these tasks and assert the invariants below against direct-chat and
+Status: scaffold only — no eval harness exists yet, and CI only checks that this
+document is present and non-empty (`check_system_skill_overlay_golden_tasks_doc_present`
+in `tools/ci/architecture_guards.sh`). When a real eval runner lands it should
+consume these tasks and assert the invariants below against direct-chat and
 channel reply paths.
 
 ## Task 1: Kernel Plus Overlay Composition
@@ -24,11 +26,13 @@ fabricate unavailable results, or override honest success/failure semantics.
 
 ## Task 3: Direct Chat Seam
 
-Scenario: A direct `RoleGAgent` chat turn uses a committed
+Scenario: A direct `NyxIdChatGAgent` chat turn uses a provider-sourced
 `SystemSkillOverlay` with a non-empty source watermark.
 
 Expected invariant: The prompt includes the overlay once, logs the sampled
 watermark and rough token estimates, and preserves the direct-chat kernel.
+Non-channel `RoleGAgent` subclasses (classifier, workflow roles) receive no
+overlay at all.
 
 ## Task 4: Channel Reply Seam
 

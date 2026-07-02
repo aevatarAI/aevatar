@@ -74,16 +74,10 @@ internal static class StudioProvisioningEndpoints
         if (!TryResolveCallerCredential(request, out var callerCredential, out var credentialError))
             return BadRequest("INVALID_PROVISION_WORKFLOW_REQUEST", credentialError);
 
-        // The `aevatar` nyxid downstream forwards the caller's access token
-        // (forward_access_token), so the bearer is on the request. Keep it as an
-        // explicit boundary parameter; scheduled-dispatch auth must not persist or
-        // replay this bearer.
-        var callerBearerToken = ExtractBearerToken(http);
-
         try
         {
             var response = await provisioningService.ProvisionAsync(
-                scopeId, callerCredential, request, callerBearerToken, ct);
+                scopeId, callerCredential, request, ct);
 
             // The bind and the run are both asynchronous, so provisioning always
             // ACKs with 202 Accepted: the member + bind + schedule were accepted
@@ -131,27 +125,6 @@ internal static class StudioProvisioningEndpoints
             Scope: scope,
             Tenant: string.IsNullOrWhiteSpace(caller.Tenant) ? null : caller.Tenant.Trim());
         return true;
-    }
-
-    /// <summary>
-    /// Extracts the forwarded caller bearer token from the <c>Authorization</c>
-    /// header (<c>Bearer &lt;token&gt;</c>). Returns null when absent or malformed —
-    /// the provisioning service then falls back to the caller subject ref. The
-    /// token is read here (not in the application service) so the service holds no
-    /// HttpContext.
-    /// </summary>
-    private static string? ExtractBearerToken(HttpContext http)
-    {
-        const string bearerPrefix = "Bearer ";
-        var authorization = http.Request.Headers.Authorization.FirstOrDefault();
-        if (string.IsNullOrWhiteSpace(authorization)
-            || !authorization.StartsWith(bearerPrefix, StringComparison.OrdinalIgnoreCase))
-        {
-            return null;
-        }
-
-        var token = authorization[bearerPrefix.Length..].Trim();
-        return token.Length == 0 ? null : token;
     }
 
     private static string BuildScheduleLocation(string? scheduleId) =>

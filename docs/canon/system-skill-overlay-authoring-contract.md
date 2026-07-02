@@ -66,7 +66,9 @@ grant-before-link principle. Per-domain capability how-to lives in the overlay a
 force-injected on **both** reply seams from the **same host-level source**
 (`ISystemSkillOverlayProvider`):
 
-- Direct chat: `RoleGAgent.DecorateSystemPrompt` resolves `GetCurrent` for a `dm` turn.
+- Direct chat: `NyxIdChatGAgent.DecorateSystemPrompt` resolves `GetCurrent` for a `dm`
+  turn. The base `RoleGAgent` never resolves the overlay — non-channel subclasses
+  (classifier, workflow roles) must not receive channel capability how-to.
 - Channel/relay: `NyxIdConversationReplyGenerator.BuildSystemPrompt` resolves
   `GetCurrent` for the turn's `channel.platform`, after the kernel and before the
   channel runtime facts (`kernel > overlay > runtime facts`).
@@ -79,10 +81,11 @@ built-in default overlay (`SystemSkillOverlayDefaultProvider`, exposed as
 `ISystemSkillOverlayFallback`) — the no-regression floor (coarse, platform-agnostic).
 
 These invariants are enforced by `check_system_skill_overlay_dual_seam_injection`
-(both seams inject via a real provider + DI registration),
-`check_system_skill_overlay_set_source` (non-secret `SetName`, no `OrgServiceToken`,
-skillset source, synchronous `GetCurrent`), and
-`check_system_skill_overlay_eval_gate_present`.
+(both seams inject via a real provider + DI registration, and `Aevatar.AI.Core` never
+resolves the provider), `check_system_skill_overlay_set_source` (non-secret `SetName`,
+no `OrgServiceToken`, skillset source, synchronous `GetCurrent`), and
+`check_system_skill_overlay_golden_tasks_doc_present` (golden-tasks document exists;
+no eval harness runs yet).
 
 ## Rollout Policy
 

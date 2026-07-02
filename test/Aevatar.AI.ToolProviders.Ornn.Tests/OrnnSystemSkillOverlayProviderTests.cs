@@ -153,6 +153,58 @@ public sealed class OrnnSystemSkillOverlayProviderTests
     }
 
     [Fact]
+    public async Task RefreshAsync_WatermarkIsDeterministicForSameContent_AndChangesWhenContentChanges()
+    {
+        // The watermark is the provenance handle for the injected set: identical member content must
+        // hash identically across independent refreshes, and a body change must produce a new hash
+        // (otherwise refresh silently skips the swap and serves stale content forever).
+        static OrnnTestHttpMessageHandler HandlerFor(string body) => new(
+            _ => Json(SetJson("set-guid-1", "m-global")),
+            _ => Json(MemberJson("aevatar-skill-loading", "overlay-scope-global", body)));
+
+        var first = CreateProvider(CreateClient(HandlerFor(GlobalBody)));
+        var second = CreateProvider(CreateClient(HandlerFor(GlobalBody)));
+        var changed = CreateProvider(CreateClient(HandlerFor(GlobalBody + " V2")));
+        await first.RefreshAsync("token");
+        await second.RefreshAsync("token");
+        await changed.RefreshAsync("token");
+
+        var firstWatermark = first.GetCurrent(new SystemSkillOverlayRequest("dm", null))!.SourceWatermark;
+        var secondWatermark = second.GetCurrent(new SystemSkillOverlayRequest("dm", null))!.SourceWatermark;
+        var changedWatermark = changed.GetCurrent(new SystemSkillOverlayRequest("dm", null))!.SourceWatermark;
+
+        firstWatermark.Should().NotBeNullOrEmpty();
+        secondWatermark.Should().Be(firstWatermark);
+        changedWatermark.Should().NotBe(firstWatermark);
+    }
+
+    [Fact]
+    public async Task RefreshAsync_OverBudgetMember_DegradesToCatalogLineWithinMaxBytes()
+    {
+        var bigBody = new string('x', 8 * 1024);
+        var handler = new OrnnTestHttpMessageHandler(
+            _ => Json(SetJson("set-guid-1", "m-global")),
+            _ => Json(MemberJson("aevatar-skill-loading", "overlay-scope-global", bigBody)));
+        const int maxBytes = 512;
+        var provider = new OrnnSystemSkillOverlayProvider(
+            new SystemSkillOverlayOptions
+            {
+                Enabled = true,
+                SetName = "aevatar-system",
+                MaxSkills = 32,
+                MaxBytes = maxBytes,
+            },
+            CreateClient(handler));
+
+        await provider.RefreshAsync("token");
+
+        var markdown = provider.GetCurrent(new SystemSkillOverlayRequest("dm", null))!.OverlayMarkdown;
+        System.Text.Encoding.UTF8.GetByteCount(markdown).Should().BeLessThanOrEqualTo(maxBytes);
+        markdown.Should().NotContain(bigBody);
+        markdown.Should().Contain("- aevatar-skill-loading:", "the over-budget member must degrade to a catalog line");
+    }
+
+    [Fact]
     public void GetCurrent_WithNoTokenAndNoSnapshot_ReturnsFallbackWithoutFetching()
     {
         var handler = new OrnnTestHttpMessageHandler();

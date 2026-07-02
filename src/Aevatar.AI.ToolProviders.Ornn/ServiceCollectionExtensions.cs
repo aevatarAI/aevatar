@@ -74,16 +74,15 @@ public static class ServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddSystemSkillOverlay(
         this IServiceCollection services,
-        Action<SystemSkillOverlayOptions>? configure = null)
+        Action<Aevatar.AI.Abstractions.ToolProviders.SystemSkillOverlayOptions>? configure = null)
     {
-        var options = new SystemSkillOverlayOptions();
+        var options = new Aevatar.AI.Abstractions.ToolProviders.SystemSkillOverlayOptions();
         configure?.Invoke(options);
         if (!options.Enabled || string.IsNullOrWhiteSpace(options.SetName))
             return services;
 
         services.AddOrnnSkillClient();
         services.TryAddSingleton(options);
-        services.TryAddSingleton<Aevatar.AI.Abstractions.ToolProviders.SystemSkillOverlayOptions>(options);
 
         // AddSingleton (not TryAdd) so the Ornn provider wins over the built-in default provider that
         // NyxidChat registers via TryAddSingleton, regardless of module registration order.

@@ -31,25 +31,10 @@ public sealed class ToolCallCredentialPolicyMiddleware : IToolCallMiddleware
                 return;
             }
 
-            var unboundMessage = $"Tool '{context.ToolName}' was not executed because the sender is not bound to a NyxID account. Send /init to bind your NyxID account and retry. Owner credentials were not used.";
-            context.Terminate = true;
-            context.TerminationKind = ToolCallTerminationKind.MiddlewareTerminated;
-            context.TerminationReason = unboundMessage;
-            context.Result = JsonSerializer.Serialize(new
-            {
-                error = ErrorCode,
-                code = ErrorCode,
-                message = unboundMessage,
-                tool_name = context.ToolName,
-                sender_binding_id = (string?)null,
-            });
-            context.Receipt = AgentToolReceiptFactory.CreateError(
-                context.Tool,
-                context.ToolCallId,
-                context.ToolName,
-                context.Result,
-                ErrorCode,
-                unboundMessage);
+            Deny(
+                context,
+                $"Tool '{context.ToolName}' was not executed because the sender is not bound to a NyxID account. Send /init to bind your NyxID account and retry. Owner credentials were not used.",
+                senderBindingId: null);
             return;
         }
 
@@ -77,7 +62,16 @@ public sealed class ToolCallCredentialPolicyMiddleware : IToolCallMiddleware
             return;
         }
 
-        var message = $"Tool '{context.ToolName}' was not executed because sender binding '{senderBindingId}' has no valid NyxID credential. Send /init to re-bind your NyxID account and retry. Owner credentials were not used.";
+        Deny(
+            context,
+            $"Tool '{context.ToolName}' was not executed because sender binding '{senderBindingId}' has no valid NyxID credential. Send /init to re-bind your NyxID account and retry. Owner credentials were not used.",
+            senderBindingId);
+    }
+
+    // Single deny shape for every credential-policy denial: error contract (error/code/message/
+    // tool_name/sender_binding_id), termination semantics, and receipt stay in lockstep.
+    private static void Deny(ToolCallContext context, string message, string? senderBindingId)
+    {
         context.Terminate = true;
         context.TerminationKind = ToolCallTerminationKind.MiddlewareTerminated;
         context.TerminationReason = message;

@@ -60,7 +60,6 @@ public sealed class ProvisionWorkflowScheduleToolTests
         request.RunImmediately.Should().BeFalse();
         // Caller identity is taken from the tool execution context (W1-threaded), not arguments.
         request.CallerSubjectExternalUserId.Should().Be("owner-1");
-        request.CallerBearerToken.Should().Be("access-token-1");
 
         // Result surfaces the schedule + Observatory link.
         using var document = JsonDocument.Parse(output);

@@ -1701,8 +1701,8 @@ public sealed class AgentRunGAgentTests
                 SenderBinding = new AgentToolSenderBindingContext("bnd-user-1"),
             }).ToPayload(),
             LlmControl = new LLMControlContext(
-                NyxIdAccessToken: null,
-                NyxIdOrgToken: null,
+                NyxIdAccessToken: "owner-token",
+                NyxIdOrgToken: "owner-token",
                 SenderNyxIdAccessToken: "sender-session-jwt",
                 ModelOverride: null,
                 NyxIdRoutePreference: null,
@@ -1720,6 +1720,26 @@ public sealed class AgentRunGAgentTests
         providerFactory.RoundToolNames.Should().Equal("reply_with_interaction", "ornn_publish_skill", "scheduled_agent_creator", "<final>");
         runtime.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
         runtime.State.ProducedReplyText.Should().Contain("scheduled");
+
+        // #2580 regression net for round 2+: every continuation step reads the persisted TOKEN-LESS
+        // step state and must re-supply live credentials from the transient request
+        // (ReSupplyRuntimeCredentialsAsync). With a bound sender, sender-priority promotion
+        // (BuildEffectiveReplyPlanAsync) then makes the sender token the LLM credential on EVERY
+        // round. If the re-supply seam regresses, rounds 2..N silently lose the sender credential
+        // and drift back to owner credentials — assert every round, not just round 1.
+        providerFactory.Requests.Should().HaveCount(4);
+        for (var round = 0; round < providerFactory.Requests.Count; round++)
+        {
+            var roundRequest = providerFactory.Requests[round];
+            roundRequest.LlmControl!.SenderNyxIdAccessToken.Should().Be(
+                "sender-session-jwt", $"round {round} must carry the re-supplied sender token");
+            roundRequest.LlmControl!.NyxIdAccessToken.Should().Be(
+                "sender-session-jwt", $"round {round} must keep the sender as the LLM credential (no owner drift)");
+            roundRequest.ToolContext!.Credentials.SenderNyxIdAccessToken.Should().Be(
+                "sender-session-jwt", $"round {round} tool credentials must carry the sender token");
+            roundRequest.ToolContext!.Credentials.NyxIdAccessToken.Should().NotBeNullOrEmpty(
+                $"round {round} tool credentials must not be stripped");
+        }
     }
 
     [Fact]
@@ -4514,6 +4534,8 @@ public sealed class AgentRunGAgentTests
 
         public List<string> RoundToolNames { get; } = [];
 
+        public List<LLMRequest> Requests { get; } = [];
+
         public ILLMProvider GetProvider(string name) => this;
 
         public ILLMProvider GetDefault() => this;
@@ -4524,6 +4546,7 @@ public sealed class AgentRunGAgentTests
             LLMRequest request,
             [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
         {
+            Requests.Add(request);
             var round = _round++;
             if (round < ToolNames.Length)
             {
