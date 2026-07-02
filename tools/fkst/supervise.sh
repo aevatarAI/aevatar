@@ -90,7 +90,9 @@ if [ "$RESTART" -eq 1 ]; then
   cmd+=(--restart)
 fi
 
-cmd+=("${EXTRA_ARGS[@]}")
+if [ "${#EXTRA_ARGS[@]}" -gt 0 ]; then
+  cmd+=("${EXTRA_ARGS[@]}")
+fi
 
 if [ "$BACKGROUND" -eq 1 ]; then
   log_file="$LOG_DIR/supervise.log"
