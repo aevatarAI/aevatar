@@ -39,6 +39,14 @@ function sameWindowRuns(
   });
 }
 
+function isLiveRun(run: MissionWallRun | undefined): boolean {
+  return (
+    run?.status === "running" ||
+    run?.status === "waiting" ||
+    run?.status === "retrying"
+  );
+}
+
 export function mergePublishedRunWindowRuns(
   previousRuns: readonly MissionWallRun[],
   nextRuns: readonly MissionWallRun[],
@@ -68,10 +76,18 @@ export function reducePublishedRunWindowModel(
   const selectedRunStillVisible =
     previousModel.selectedRunId &&
     nextWindowRuns.some((run) => run.runId === previousModel.selectedRunId);
+  const selectedRun = previousModel.selectedRunId
+    ? nextWindowRuns.find((run) => run.runId === previousModel.selectedRunId)
+    : undefined;
+  const firstLiveRun = nextWindowRuns.find(isLiveRun);
 
   const nextModel = {
     runs: nextWindowRuns,
     selectedRunId:
+      (selectedRunStillVisible && isLiveRun(selectedRun)
+        ? previousModel.selectedRunId
+        : undefined) ??
+      firstLiveRun?.runId ??
       newlyAddedRun?.runId ??
       (selectedRunStillVisible ? previousModel.selectedRunId : undefined) ??
       nextWindowRuns[0]?.runId,

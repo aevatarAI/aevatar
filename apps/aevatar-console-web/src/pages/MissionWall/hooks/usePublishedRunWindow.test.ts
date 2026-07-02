@@ -4,7 +4,10 @@ import {
   reducePublishedRunWindowModel,
 } from "./usePublishedRunWindow";
 
-function run(runId: string): MissionWallRun {
+function run(
+  runId: string,
+  overrides: Partial<MissionWallRun> = {},
+): MissionWallRun {
   return {
     focusPriority: 500,
     id: runId,
@@ -17,6 +20,7 @@ function run(runId: string): MissionWallRun {
     status: "running",
     visibilityReason: "running",
     workflowName: runId,
+    ...overrides,
   };
 }
 
@@ -52,9 +56,33 @@ describe("Published Run Window state", () => {
     expect(model.selectedRunId).toBe("run-second");
   });
 
-  it("selects a newly observed run when it appears at the top", () => {
+  it("keeps the currently selected live run when a new live run appears", () => {
     const first = run("run-first");
     const second = run("run-second");
+    const third = run("run-third");
+
+    const model = reducePublishedRunWindowModel(
+      {
+        runs: [first, second],
+        selectedRunId: "run-second",
+      },
+      [third, first, second],
+    );
+
+    expect(model.runs.map((item) => item.runId)).toEqual([
+      "run-third",
+      "run-first",
+      "run-second",
+    ]);
+    expect(model.selectedRunId).toBe("run-second");
+  });
+
+  it("selects a newly observed run after the current selection is done", () => {
+    const first = run("run-first");
+    const second = run("run-second", {
+      status: "completed",
+      visibilityReason: "recently_completed",
+    });
     const third = run("run-third");
 
     const model = reducePublishedRunWindowModel(

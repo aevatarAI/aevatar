@@ -7,26 +7,20 @@ import {
   subscribeToLocationChanges,
 } from "@/shared/navigation/history";
 import { resolveStudioScopeContext } from "@/shared/scope/context";
-import type { ScopeServiceRunAuditSnapshot } from "@/shared/models/runtime/scopeServices";
+import {
+  toScopeServiceRunAuditSnapshot,
+  type ScopeServiceRunAuditSnapshot,
+} from "@/shared/models/runtime/scopeServices";
 import { studioApi } from "@/shared/studio/api";
-import type {
-  StudioMemberSummary,
-  StudioTeamSummary,
-} from "@/shared/studio/models";
 import type {
   MissionWallLiveState,
   MissionWallRun,
   MissionWallSource,
 } from "../models";
 import {
-  buildMissionWallSourceFromRuntime,
-  filterMissionWallWorkflowMembers,
+  buildMissionWallSourceFromWorkflowBoardSnapshot,
   freshnessSecondsSince,
-  latestRunObservedAt,
-  MISSION_WALL_SERVICE_RUN_TAKE,
-  MISSION_WALL_SERVICE_TAKE,
   missionWallRunAuditKey,
-  selectMissionWallServiceRunTargets,
   toMissionWallRunStatus,
 } from "../missionWallRuntimeData";
 
@@ -36,17 +30,9 @@ type MissionWallRouteOptions = {
   readonly teamId?: string;
 };
 
-type RuntimeDataVersionInput = {
-  readonly authUpdatedAt: number;
-  readonly memberUpdatedAt: number;
-  readonly runQueryVersion: string;
-  readonly serviceUpdatedAt: number;
-  readonly teamUpdatedAt: number;
-};
-
-export const MISSION_WALL_ROSTER_REFETCH_INTERVAL_MS = 15_000;
 export const MISSION_WALL_RUN_REFETCH_INTERVAL_MS = 5_000;
 export const MISSION_WALL_AUDIT_REFETCH_INTERVAL_MS = 3_000;
+export const MISSION_WALL_SNAPSHOT_TAKE = 100;
 
 export interface MissionWallRuntimeData {
   readonly buildSource: () => MissionWallSource;
@@ -56,14 +42,14 @@ export interface MissionWallRuntimeData {
   readonly routeFocusRunId?: string;
   readonly scopeId?: string;
   readonly teamId?: string;
-  readonly workflowMembers: readonly StudioMemberSummary[];
 }
 
 type MissionWallRunAuditTarget = {
   readonly actorId?: string;
+  readonly memberId: string;
+  readonly publishedServiceId?: string;
   readonly runId: string;
   readonly scopeId: string;
-  readonly serviceId: string;
   readonly status: MissionWallRun["status"];
 };
 
@@ -88,16 +74,6 @@ function parseRouteOptions(locationSnapshot: string): MissionWallRouteOptions {
     scopeId: trimOptional(params.get("scopeId")) || undefined,
     teamId: trimOptional(params.get("teamId")) || undefined,
   };
-}
-
-function runtimeDataVersion(input: RuntimeDataVersionInput): string {
-  return [
-    input.authUpdatedAt,
-    input.memberUpdatedAt,
-    input.serviceUpdatedAt,
-    input.teamUpdatedAt,
-    input.runQueryVersion,
-  ].join(":");
 }
 
 function missionWallRefetchInterval(intervalMs: number): number | false {
@@ -149,7 +125,7 @@ function buildLiveState(input: {
       lastObservedAt: input.latestObservedAt,
       message: t(
         "pages.missionwall.liveState.loading",
-        "Loading published workflow runs.",
+        "Loading workflow board snapshot.",
       ),
       status: "idle",
     };
@@ -173,7 +149,7 @@ function buildLiveState(input: {
       lastObservedAt: input.latestObservedAt,
       message: t(
         "pages.missionwall.liveState.partialRunError",
-        "Some published service runs could not be loaded.",
+        "Mission wall snapshot could not be loaded.",
       ),
       status: "degraded",
     };
@@ -185,7 +161,7 @@ function buildLiveState(input: {
       lastObservedAt: input.latestObservedAt,
       message: t(
         "pages.missionwall.liveState.empty",
-        "No published workflow runs are visible yet.",
+        "No workflow board members are visible yet.",
       ),
       status: "idle",
     };
@@ -196,7 +172,7 @@ function buildLiveState(input: {
     lastObservedAt: input.latestObservedAt,
     message: t(
       "pages.missionwall.liveState.connected",
-      "Connected to published workflow run read models.",
+      "Connected to workflow board read model.",
     ),
     status: "live",
   };
@@ -222,146 +198,95 @@ export function useMissionWallRuntimeData(): MissionWallRuntimeData {
     [authSessionQuery.data],
   );
   const scopeId = routeOptions.scopeId ?? sessionScopeContext?.scopeId;
-  const membersQuery = useQuery({
-    enabled: Boolean(scopeId),
-    queryFn: () => studioApi.listMembers(scopeId ?? ""),
-    queryKey: ["mission-wall", "members", scopeId],
-    refetchInterval: missionWallRefetchInterval(
-      MISSION_WALL_ROSTER_REFETCH_INTERVAL_MS,
-    ),
-    refetchIntervalInBackground: true,
-    retry: false,
-  });
-  const teamsQuery = useQuery({
-    enabled: Boolean(scopeId),
-    queryFn: () => studioApi.listTeams(scopeId ?? ""),
-    queryKey: ["mission-wall", "teams", scopeId],
-    refetchInterval: missionWallRefetchInterval(
-      MISSION_WALL_ROSTER_REFETCH_INTERVAL_MS,
-    ),
-    refetchIntervalInBackground: true,
-    retry: false,
-  });
-  const servicesQuery = useQuery({
+  const snapshotQuery = useQuery({
     enabled: Boolean(scopeId),
     queryFn: () =>
-      scopeRuntimeApi.listServices(scopeId ?? "", {
-        take: MISSION_WALL_SERVICE_TAKE,
+      studioApi.getWorkflowBoardSnapshot(scopeId ?? "", {
+        take: MISSION_WALL_SNAPSHOT_TAKE,
+        teamId: routeOptions.teamId,
       }),
-    queryKey: ["mission-wall", "services", scopeId],
+    queryKey: [
+      "mission-wall",
+      "workflow-board-snapshot",
+      scopeId,
+      routeOptions.teamId,
+    ],
     refetchInterval: missionWallRefetchInterval(
-      MISSION_WALL_ROSTER_REFETCH_INTERVAL_MS,
+      MISSION_WALL_RUN_REFETCH_INTERVAL_MS,
     ),
     refetchIntervalInBackground: true,
     retry: false,
   });
-  const workflowMembers = React.useMemo(
-    () =>
-      filterMissionWallWorkflowMembers(
-        membersQuery.data?.members ?? [],
-        routeOptions.teamId,
-      ),
-    [membersQuery.data?.members, routeOptions.teamId],
-  );
-  const serviceRunTargets = React.useMemo(
-    () =>
-      selectMissionWallServiceRunTargets(
-        workflowMembers,
-        servicesQuery.data ?? [],
-      ),
-    [servicesQuery.data, workflowMembers],
-  );
-  const runQueries = useQueries({
-    queries: serviceRunTargets.map((target) => {
-      const serviceId = trimOptional(target.service.serviceId);
-      return {
-        enabled: Boolean(scopeId && serviceId),
-        queryFn: () =>
-          scopeRuntimeApi.listServiceRuns(scopeId ?? "", serviceId, {
-            take: MISSION_WALL_SERVICE_RUN_TAKE,
-          }),
-        queryKey: ["mission-wall", "service-runs", scopeId, serviceId],
-        refetchInterval: missionWallRefetchInterval(
-          MISSION_WALL_RUN_REFETCH_INTERVAL_MS,
-        ),
-        refetchIntervalInBackground: true,
-        retry: false,
-      };
-    }),
-  });
-  const runQueryVersion = runQueries
-    .map((query, index) => {
-      const serviceId =
-        trimOptional(serviceRunTargets[index]?.service.serviceId) || `${index}`;
-      return `${serviceId}:${query.dataUpdatedAt}:${query.errorUpdatedAt}:${query.fetchStatus}`;
-    })
-    .join("|");
-  const dataVersion = runtimeDataVersion({
-    authUpdatedAt: authSessionQuery.dataUpdatedAt,
-    memberUpdatedAt: membersQuery.dataUpdatedAt,
-    runQueryVersion,
-    serviceUpdatedAt: servicesQuery.dataUpdatedAt,
-    teamUpdatedAt: teamsQuery.dataUpdatedAt,
-  });
   const generatedAt = React.useMemo(
-    () => new Date().toISOString(),
-    [dataVersion],
-  );
-  const serviceRunCatalogs = React.useMemo(
-    () =>
-      serviceRunTargets.map((target, index) => ({
-        ...target,
-        catalog: runQueries[index]?.data,
-      })),
-    [runQueryVersion, serviceRunTargets],
+    () => snapshotQuery.data?.generatedAt ?? new Date().toISOString(),
+    [
+      authSessionQuery.dataUpdatedAt,
+      snapshotQuery.data?.generatedAt,
+      snapshotQuery.dataUpdatedAt,
+      snapshotQuery.errorUpdatedAt,
+      snapshotQuery.fetchStatus,
+    ],
   );
   const runAuditTargets = React.useMemo(() => {
     const targets = new Map<string, MissionWallRunAuditTarget>();
-    serviceRunCatalogs.forEach(({ catalog, service }) => {
-      const fallbackServiceId = trimOptional(service.serviceId);
-      (catalog?.runs ?? []).forEach((run) => {
-        const runId = trimOptional(run.runId);
-        const serviceId = trimOptional(run.serviceId) || fallbackServiceId;
-        const runScopeId = trimOptional(run.scopeId) || trimOptional(scopeId);
-        if (!runId || !serviceId || !runScopeId) {
+    snapshotQuery.data?.teams.forEach((team) => {
+      team.members.forEach((member) => {
+        const runId = trimOptional(member.currentExecutionId);
+        const memberId = trimOptional(member.memberId);
+        const publishedServiceId = trimOptional(member.publishedServiceId);
+        const runScopeId =
+          trimOptional(snapshotQuery.data?.scopeId) || trimOptional(scopeId);
+        if (!runId || !memberId || !publishedServiceId || !runScopeId) {
           return;
         }
 
         const target: MissionWallRunAuditTarget = {
-          actorId: trimOptional(run.actorId) || undefined,
+          actorId: trimOptional(member.actorId) || undefined,
+          memberId,
+          publishedServiceId,
           runId,
           scopeId: runScopeId,
-          serviceId,
-          status: toMissionWallRunStatus(run.completionStatus),
+          status: toMissionWallRunStatus(member.executionStatus),
         };
         if (!shouldBackfillRunAudit(target)) {
           return;
         }
 
-        targets.set(missionWallRunAuditKey(target), target);
+        targets.set(
+          [
+            target.scopeId,
+            target.memberId,
+            target.publishedServiceId,
+            target.runId,
+          ].join(":"),
+          target,
+        );
       });
     });
 
     return [...targets.values()];
-  }, [runQueryVersion, scopeId, serviceRunCatalogs]);
+  }, [scopeId, snapshotQuery.data]);
   const runAuditQueries = useQueries({
     queries: runAuditTargets.map((target) => ({
-      enabled: Boolean(target.scopeId && target.serviceId && target.runId),
-      queryFn: () =>
-        scopeRuntimeApi.getServiceRunAudit(
+      enabled: Boolean(target.scopeId && target.memberId && target.runId),
+      queryFn: async () => {
+        const audit = await scopeRuntimeApi.getMemberRunAudit(
           target.scopeId,
-          target.serviceId,
+          target.memberId,
           target.runId,
           {
             actorId: target.actorId,
           },
-        ),
+        );
+        return toScopeServiceRunAuditSnapshot(audit);
+      },
       queryKey: [
         "mission-wall",
-        "service-run-audit",
+        "member-run-audit",
         "window",
         target.scopeId,
-        target.serviceId,
+        target.memberId,
+        target.publishedServiceId,
         target.runId,
         target.actorId,
       ],
@@ -373,7 +298,12 @@ export function useMissionWallRuntimeData(): MissionWallRuntimeData {
   const runAuditVersion = runAuditQueries
     .map((query, index) => {
       const target = runAuditTargets[index];
-      return `${missionWallRunAuditKey(target)}:${query.dataUpdatedAt}:${query.errorUpdatedAt}:${query.fetchStatus}`;
+      const auditKey = missionWallRunAuditKey({
+        runId: target?.runId,
+        scopeId: target?.scopeId,
+        serviceId: target?.publishedServiceId,
+      });
+      return `${auditKey}:${target?.memberId ?? index}:${query.dataUpdatedAt}:${query.errorUpdatedAt}:${query.fetchStatus}`;
     })
     .join("|");
   const runAudits = React.useMemo(
@@ -385,60 +315,49 @@ export function useMissionWallRuntimeData(): MissionWallRuntimeData {
         ),
     [runAuditVersion],
   );
-  const teams = React.useMemo<readonly StudioTeamSummary[]>(
-    () => teamsQuery.data?.teams ?? [],
-    [teamsQuery.data?.teams],
-  );
-  const runCatalogSnapshots = serviceRunCatalogs.map((entry) => entry.catalog);
-  const latestObservedAt = latestRunObservedAt(runCatalogSnapshots);
-  const runCount = runCatalogSnapshots.reduce(
-    (count, catalog) => count + (catalog?.runs.length ?? 0),
-    0,
-  );
-  const anyRunQueryLoading = runQueries.some((query) => query.isLoading);
-  const anyRunQueryError = runQueries.some((query) => query.isError);
-  const hasCriticalError =
-    authSessionQuery.isError || membersQuery.isError || servicesQuery.isError;
+  const latestObservedAt =
+    trimOptional(snapshotQuery.data?.lastNodeUpdatedAt) || undefined;
+  const runCount =
+    snapshotQuery.data?.teams.reduce(
+      (count, team) => count + team.members.length,
+      0,
+    ) ?? 0;
+  const hasCriticalError = authSessionQuery.isError;
   const isLoading =
     authSessionQuery.isLoading ||
-    (Boolean(scopeId) && membersQuery.isLoading) ||
-    (Boolean(scopeId) && servicesQuery.isLoading) ||
-    anyRunQueryLoading;
+    (Boolean(scopeId) && snapshotQuery.isLoading);
   const live = React.useMemo(
     () =>
       buildLiveState({
-        allRunsLoaded: runQueries.every(
-          (query) => query.isSuccess || query.isError,
-        ),
+        allRunsLoaded: snapshotQuery.isSuccess || snapshotQuery.isError,
         generatedAt,
         hasCriticalError,
-        hasPartialRunError: anyRunQueryError,
+        hasPartialRunError: snapshotQuery.isError,
         isLoading,
         latestObservedAt,
         runCount,
         scopeId,
       }),
     [
-      anyRunQueryError,
       generatedAt,
       hasCriticalError,
       isLoading,
       latestObservedAt,
       runCount,
-      runQueryVersion,
+      snapshotQuery.isError,
+      snapshotQuery.isSuccess,
       scopeId,
     ],
   );
   const buildSource = React.useCallback(
     () =>
-      buildMissionWallSourceFromRuntime({
+      buildMissionWallSourceFromWorkflowBoardSnapshot({
         generatedAt,
         live,
         runAudits,
-        serviceRunCatalogs,
-        teams,
+        snapshot: snapshotQuery.data,
       }),
-    [generatedAt, live, runAudits, serviceRunCatalogs, teams],
+    [generatedAt, live, runAudits, snapshotQuery.data],
   );
 
   return {
@@ -449,6 +368,5 @@ export function useMissionWallRuntimeData(): MissionWallRuntimeData {
     routeFocusRunId: routeOptions.focusRunId,
     scopeId,
     teamId: routeOptions.teamId,
-    workflowMembers,
   };
 }
