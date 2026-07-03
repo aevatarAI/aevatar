@@ -1,5 +1,6 @@
 using Aevatar.Audit;
 using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Core.Projection;
 using Aevatar.Audit.Core.Stores;
 using Google.Protobuf.WellKnownTypes;
 using Shouldly;
@@ -124,6 +125,69 @@ public sealed class InMemoryAuditTrailStoreTests
         second.NextCursor.ShouldBeNull();
     }
 
+    [Fact]
+    public async Task UpsertAsync_ShouldApplyArtifactAndExposeCloneToQueryAndGet()
+    {
+        var store = new InMemoryAuditTrailStore();
+        var document = CreateDocument("audit-1");
+
+        var result = await store.UpsertAsync(document);
+        document.ScopeId = "mutated";
+        document.Record.ScopeId = "mutated";
+
+        var saved = await store.GetAsync("audit-1");
+        saved!.ScopeId = "changed-after-read";
+        var reread = await store.GetAsync("audit-1");
+        var page = await store.QueryAsync(new AuditTrailQuery { ScopeId = "scope-a", Take = 10 });
+
+        result.Disposition.ShouldBe(AuditTrailArtifactWriteDisposition.Applied);
+        saved.ShouldNotBeSameAs(document);
+        saved.Record.ScopeId.ShouldBe("scope-a");
+        reread!.ScopeId.ShouldBe("scope-a");
+        page.Records.Select(static record => record.AuditId).ShouldBe(["audit-1"]);
+    }
+
+    [Fact]
+    public async Task UpsertAsync_WhenSameAuditAndContentHashExists_ShouldReturnDuplicate()
+    {
+        var store = new InMemoryAuditTrailStore();
+        var document = CreateDocument("audit-1");
+
+        var first = await store.UpsertAsync(document);
+        var second = await store.UpsertAsync(document.Clone());
+        var page = await store.QueryAsync(new AuditTrailQuery { Take = 10 });
+
+        first.Disposition.ShouldBe(AuditTrailArtifactWriteDisposition.Applied);
+        second.Disposition.ShouldBe(AuditTrailArtifactWriteDisposition.Duplicate);
+        page.Records.Select(static record => record.AuditId).ShouldBe(["audit-1"]);
+    }
+
+    [Fact]
+    public async Task UpsertAsync_WhenSameAuditAndDifferentContentHashExists_ShouldReturnConflict()
+    {
+        var store = new InMemoryAuditTrailStore();
+        await store.UpsertAsync(CreateDocument("audit-1", "content-a"));
+
+        var result = await store.UpsertAsync(CreateDocument("audit-1", "content-b"));
+        var saved = await store.GetAsync("audit-1");
+        var page = await store.QueryAsync(new AuditTrailQuery { Take = 10 });
+
+        result.Disposition.ShouldBe(AuditTrailArtifactWriteDisposition.Conflict);
+        saved!.ContentHash.ShouldBe("content-a");
+        page.Records.Select(static record => record.AuditId).ShouldBe(["audit-1"]);
+    }
+
+    [Fact]
+    public async Task ArtifactStoreMethods_ShouldObserveCancelledToken()
+    {
+        var store = new InMemoryAuditTrailStore();
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        await Should.ThrowAsync<OperationCanceledException>(() => store.GetAsync("audit-1", cts.Token));
+        await Should.ThrowAsync<OperationCanceledException>(() => store.UpsertAsync(CreateDocument("audit-1"), cts.Token));
+    }
+
     private static AuditRecord CreateRecord(
         string auditId,
         string scopeId,
@@ -171,6 +235,34 @@ public sealed class InMemoryAuditTrailStoreTests
             ResultSummary = "result summary"
         };
     }
+
+    private static AuditTrailDocument CreateDocument(string auditId, string contentHash = "content-a") =>
+        new()
+        {
+            Id = auditId,
+            AuditId = auditId,
+            ContentHash = contentHash,
+            Record = CreateRecord(auditId, "scope-a", "actor-a", "api.call", AuditOutcome.Success),
+            OccurredAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-01-02T03:04:05Z")),
+            UpdatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-01-02T03:05:05Z")),
+            ScopeId = "scope-a",
+            AuditActorId = "actor-a",
+            OperationName = "api.call",
+            Outcome = AuditOutcome.Success,
+            SensitivityLevel = AuditSensitivityLevel.Confidential,
+            TargetKind = "workflow",
+            TargetId = $"wf-{auditId}",
+            RequestId = $"req-{auditId}",
+            CommandId = $"cmd-{auditId}",
+            CorrelationId = $"trace-{auditId}",
+            SessionId = $"session-{auditId}",
+            WorkflowRunId = $"run-{auditId}",
+            CommittedEventId = $"event-{auditId}",
+            CommittedActorId = $"actor-ref-{auditId}",
+            CommittedActorType = "WorkflowRunGAgent",
+            CommittedEventTypeUrl = "type.googleapis.com/aevatar.audit.TestEvent",
+            CommittedStateVersion = 20,
+        };
 
     private static AuditRecord CreateFocusedRecord(string auditId)
     {
