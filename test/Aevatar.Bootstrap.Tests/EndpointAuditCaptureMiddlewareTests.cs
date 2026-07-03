@@ -83,6 +83,79 @@ public sealed class EndpointAuditCaptureMiddlewareTests
     }
 
     [Fact]
+    public async Task AnnotatedEndpoint_WhenHandlerThrows_ShouldAppendErrorTerminalRecord()
+    {
+        var appender = new RecordingAuditTrailAppender();
+        await using var app = await CreateHostAsync(appender);
+
+        using var request = AuthenticatedRequest(HttpMethod.Post, "/audited/widgets/widget-1/throw");
+        var act = () => app.GetTestClient().SendAsync(request);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("handler failed");
+        appender.Records.Should().HaveCount(2);
+        appender.Records[0].OperationName.Should().Be("test.widget.throw.attempted");
+        appender.Records[0].Outcome.Should().Be(AuditOutcome.Accepted);
+        appender.Records[1].OperationName.Should().Be("test.widget.throw");
+        appender.Records[1].Outcome.Should().Be(AuditOutcome.Error);
+        appender.Records[1].ErrorCode.Should().Be("endpoint_error");
+        appender.Records[1].ErrorSummary.Should().Be(nameof(InvalidOperationException));
+    }
+
+    [Fact]
+    public async Task AnnotatedEndpoint_WhenStatusCodeIs500_ShouldAppendErrorTerminalRecord()
+    {
+        var appender = new RecordingAuditTrailAppender();
+        await using var app = await CreateHostAsync(appender);
+
+        using var request = AuthenticatedRequest(HttpMethod.Post, "/audited/widgets/widget-1/fail");
+        var response = await app.GetTestClient().SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
+        appender.Records.Should().HaveCount(2);
+        appender.Records[1].OperationName.Should().Be("test.widget.fail");
+        appender.Records[1].Outcome.Should().Be(AuditOutcome.Error);
+        appender.Records[1].ErrorCode.Should().Be("endpoint_error");
+        appender.Records[1].ErrorSummary.Should().Be("status=500");
+    }
+
+    [Fact]
+    public async Task AnnotatedEndpoint_WhenStatusCodeIs300_ShouldAppendSuccessTerminalRecord()
+    {
+        var appender = new RecordingAuditTrailAppender();
+        await using var app = await CreateHostAsync(appender);
+
+        using var request = AuthenticatedRequest(HttpMethod.Post, "/audited/widgets/widget-1/redirect");
+        var response = await app.GetTestClient().SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.MultipleChoices);
+        appender.Records.Should().HaveCount(2);
+        appender.Records[1].OperationName.Should().Be("test.widget.redirect");
+        appender.Records[1].Outcome.Should().Be(AuditOutcome.Success);
+    }
+
+    [Fact]
+    public async Task FromRouteValues_ShouldJoinRouteValuesAndRedactSensitiveSegments()
+    {
+        var appender = new RecordingAuditTrailAppender();
+        await using var app = await CreateHostAsync(appender);
+
+        using var request = AuthenticatedRequest(HttpMethod.Post, $"/audited/scopes/scope-a/members/{RawEmail}/runs/run-1");
+        var response = await app.GetTestClient().SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        appender.Records.Should().HaveCount(2);
+        appender.Records.Should().OnlyContain(record =>
+            record.Target.Kind == "workflow-run" &&
+            record.Target.Id == "scope-a/redacted/run-1" &&
+            record.RequestSummary.Contains("/audited/scopes/{scopeId}/members/{memberId}/runs/{runId}", StringComparison.Ordinal) &&
+            record.RequestSummary.Contains("scopeId=scope-a", StringComparison.Ordinal) &&
+            record.RequestSummary.Contains("memberId=redacted", StringComparison.Ordinal) &&
+            record.RequestSummary.Contains("runId=run-1", StringComparison.Ordinal));
+        appender.Records.SelectMany(RecordStrings).Should().NotContain(value => value.Contains(RawEmail, StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task UnannotatedEndpoint_ShouldNotAppendAuditRecord()
     {
         var appender = new RecordingAuditTrailAppender();
@@ -245,6 +318,41 @@ public sealed class EndpointAuditCaptureMiddlewareTests
                 EndpointAuditTargetResolvers.FromRouteValue("widget", "widgetId"),
                 EndpointAuditSanitizers.WithRouteValues("widgetId"))
             .RequireAuthorization("AdminOnly");
+        app.MapPost("/audited/widgets/{widgetId}/throw", () =>
+            {
+                throw new InvalidOperationException("handler failed");
+            })
+            .WithEndpointAudit(
+                "test.widget.throw",
+                AuditSensitivityLevel.Confidential,
+                "widget",
+                EndpointAuditTargetResolvers.FromRouteValue("widget", "widgetId"),
+                EndpointAuditSanitizers.WithRouteValues("widgetId"))
+            .RequireAuthorization();
+        app.MapPost("/audited/widgets/{widgetId}/fail", () => Results.StatusCode(StatusCodes.Status500InternalServerError))
+            .WithEndpointAudit(
+                "test.widget.fail",
+                AuditSensitivityLevel.Confidential,
+                "widget",
+                EndpointAuditTargetResolvers.FromRouteValue("widget", "widgetId"),
+                EndpointAuditSanitizers.WithRouteValues("widgetId"))
+            .RequireAuthorization();
+        app.MapPost("/audited/widgets/{widgetId}/redirect", () => Results.StatusCode(StatusCodes.Status300MultipleChoices))
+            .WithEndpointAudit(
+                "test.widget.redirect",
+                AuditSensitivityLevel.Confidential,
+                "widget",
+                EndpointAuditTargetResolvers.FromRouteValue("widget", "widgetId"),
+                EndpointAuditSanitizers.WithRouteValues("widgetId"))
+            .RequireAuthorization();
+        app.MapPost("/audited/scopes/{scopeId}/members/{memberId}/runs/{runId}", () => Results.Accepted())
+            .WithEndpointAudit(
+                "test.workflow-run.resume",
+                AuditSensitivityLevel.Confidential,
+                "workflow-run",
+                EndpointAuditTargetResolvers.FromRouteValues("workflow-run", "scopeId", "memberId", "runId"),
+                EndpointAuditSanitizers.WithRouteValues("scopeId", "memberId", "runId"))
+            .RequireAuthorization();
         app.MapGet("/plain", () => Results.Ok()).RequireAuthorization();
 
         await app.StartAsync();

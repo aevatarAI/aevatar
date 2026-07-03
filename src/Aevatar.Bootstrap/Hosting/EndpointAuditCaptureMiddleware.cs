@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Text.RegularExpressions;
 using System.Security.Claims;
 using Aevatar.Audit;
 using Aevatar.Audit.Hosting.EndpointAudit;
@@ -7,7 +6,6 @@ using Aevatar.Audit.Abstractions.Identity;
 using Aevatar.Audit.Abstractions.Ports;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Bootstrap.Hosting;
@@ -17,50 +15,23 @@ public sealed class EndpointAuditCaptureMiddleware
     private const string AttemptedSuffix = ".attempted";
     private const string AnonymousCanonicalActorKey = "system:endpoint-audit-anonymous";
     private const string UnknownScopeId = "unknown";
-    private const string Redacted = "redacted";
-    private const string JwtSegmentPattern = "[A-Za-z0-9_-]{8,}";
-
-    private static readonly string[] SensitiveSummaryFragments =
-    [
-        "authorization",
-        "bearer",
-        "token",
-        "secret",
-        "password",
-        "cookie",
-        "api_key",
-        "apikey",
-        "oauth",
-        "credential",
-        "private_key",
-    ];
-
-    private static readonly Regex JwtPattern = new(
-        $@"\b{JwtSegmentPattern}\.{JwtSegmentPattern}\.{JwtSegmentPattern}\b",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
-
-    private static readonly Regex ApiKeyPattern = new(
-        @"\b(?:sk|pk|ak|key)-[A-Za-z0-9_-]{16,}\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-
-    private static readonly Regex EmailPattern = new(
-        @"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-
-    private static readonly Regex PhonePattern = new(
-        @"(?<!\w)\+[0-9][0-9 .()-]{7,}[0-9](?!\w)",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private readonly RequestDelegate _next;
+    private readonly IAuditTrailAppender? _appender;
+    private readonly IAuditActorIdentityHasher? _identityHasher;
     private readonly ILogger<EndpointAuditCaptureMiddleware> _logger;
     private readonly TimeProvider _timeProvider;
 
     public EndpointAuditCaptureMiddleware(
         RequestDelegate next,
+        IEnumerable<IAuditTrailAppender> appenders,
+        IEnumerable<IAuditActorIdentityHasher> identityHashers,
         ILogger<EndpointAuditCaptureMiddleware> logger,
         TimeProvider? timeProvider = null)
     {
         _next = next;
+        _appender = appenders.FirstOrDefault();
+        _identityHasher = identityHashers.FirstOrDefault();
         _logger = logger;
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
@@ -80,7 +51,7 @@ public sealed class EndpointAuditCaptureMiddleware
             return;
         }
 
-        if (!TryResolveAuditPorts(context, out var appender, out var identityHasher))
+        if (_appender is null || _identityHasher is null)
         {
             await _next(context);
             return;
@@ -88,8 +59,8 @@ public sealed class EndpointAuditCaptureMiddleware
 
         await EnsureRequestCapturedBestEffortAsync(context, metadata);
         await AppendBestEffortAsync(
-            appender,
-            () => BuildRecord(context, metadata, identityHasher, metadata.OperationName + AttemptedSuffix, AuditOutcome.Accepted),
+            _appender,
+            () => BuildRecord(context, metadata, _identityHasher, metadata.OperationName + AttemptedSuffix, AuditOutcome.Accepted),
             context.RequestAborted);
 
         Exception? capturedException = null;
@@ -114,8 +85,8 @@ public sealed class EndpointAuditCaptureMiddleware
 
             var outcome = EndpointAuditOutcomeClassifier.Classify(context, capturedException);
             await AppendBestEffortAsync(
-                appender,
-                () => BuildRecord(context, metadata, identityHasher, metadata.OperationName, outcome),
+                _appender,
+                () => BuildRecord(context, metadata, _identityHasher, metadata.OperationName, outcome),
                 context.RequestAborted);
         }
     }
@@ -210,36 +181,6 @@ public sealed class EndpointAuditCaptureMiddleware
                 ex,
                 "Endpoint audit request summary capture failed for operation {OperationName}.",
                 metadata.OperationName);
-        }
-    }
-
-    private bool TryResolveAuditPorts(
-        HttpContext context,
-        out IAuditTrailAppender appender,
-        out IAuditActorIdentityHasher identityHasher)
-    {
-        appender = null!;
-        identityHasher = null!;
-
-        try
-        {
-            var resolvedAppender = context.RequestServices.GetService<IAuditTrailAppender>();
-            var resolvedHasher = context.RequestServices.GetService<IAuditActorIdentityHasher>();
-            if (resolvedAppender is null || resolvedHasher is null)
-            {
-                return false;
-            }
-
-            appender = resolvedAppender;
-            identityHasher = resolvedHasher;
-            return true;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(
-                ex,
-                "Endpoint audit port resolution failed.");
-            return false;
         }
     }
 
@@ -360,22 +301,7 @@ public sealed class EndpointAuditCaptureMiddleware
 
     private static string SanitizeRecordText(string value)
     {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return string.Empty;
-        }
-
-        var summary = value.Trim();
-        if (SensitiveSummaryFragments.Any(fragment => summary.Contains(fragment, StringComparison.OrdinalIgnoreCase)) ||
-            JwtPattern.IsMatch(summary) ||
-            ApiKeyPattern.IsMatch(summary) ||
-            EmailPattern.IsMatch(summary) ||
-            PhonePattern.IsMatch(summary))
-        {
-            return Redacted;
-        }
-
-        return summary;
+        return EndpointAuditSanitizers.SanitizeValue(value);
     }
 
     private static string ResolveRoutePattern(HttpContext context)
