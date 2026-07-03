@@ -1,7 +1,7 @@
 using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Workflow.Abstractions;
-using Aevatar.Workflow.Application.Abstractions.Security;
+using Aevatar.Workflow.Abstractions.Security;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Projection.ReadModels;
 using Google.Protobuf;

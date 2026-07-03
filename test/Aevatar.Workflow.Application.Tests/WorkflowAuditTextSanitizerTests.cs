@@ -1,4 +1,4 @@
-using Aevatar.Workflow.Application.Abstractions.Security;
+using Aevatar.Workflow.Abstractions.Security;
 using FluentAssertions;
 
 namespace Aevatar.Workflow.Application.Tests;

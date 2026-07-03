@@ -10,6 +10,7 @@ if [[ "${AEVATAR_AUDIT_TRAIL_GUARD_SELF_TEST:-}" == "1" ]]; then
   scan_roots=("$@")
 else
   scan_roots=(
+    "src/workflow/Aevatar.Workflow.Abstractions/Security"
     "src/workflow/Aevatar.Workflow.Application.Abstractions/Security"
     "src/workflow/Aevatar.Workflow.Core/WorkflowArtifactFactBuilder.cs"
     "src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionArtifactMaterializationSupport.cs"

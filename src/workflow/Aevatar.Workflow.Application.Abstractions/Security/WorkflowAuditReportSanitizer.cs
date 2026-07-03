@@ -1,3 +1,4 @@
+using Aevatar.Workflow.Abstractions.Security;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 
 namespace Aevatar.Workflow.Application.Abstractions.Security;

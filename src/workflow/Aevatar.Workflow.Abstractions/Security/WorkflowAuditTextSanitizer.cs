@@ -2,7 +2,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
-namespace Aevatar.Workflow.Application.Abstractions.Security;
+namespace Aevatar.Workflow.Abstractions.Security;
 
 public static class WorkflowAuditTextSanitizer
 {

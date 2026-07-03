@@ -2,7 +2,7 @@ using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Helpers;
 using Aevatar.Workflow.Abstractions;
-using Aevatar.Workflow.Application.Abstractions.Security;
+using Aevatar.Workflow.Abstractions.Security;
 using Aevatar.Workflow.Core.Primitives;
 using Google.Protobuf;
 
@@ -118,8 +118,8 @@ internal static class WorkflowArtifactFactBuilder
             RoleActorId = publisherActorId,
             RoleId = publisherActorId,
             SessionId = completed.SessionId ?? string.Empty,
-            Content = Redact(completed.Content),
-            ReasoningContent = Redact(completed.ReasoningContent),
+            Content = SanitizeArtifactText(completed.Content),
+            ReasoningContent = SanitizeArtifactText(completed.ReasoningContent),
             ContentEmitted = completed.Success,
         };
 
@@ -156,8 +156,8 @@ internal static class WorkflowArtifactFactBuilder
             RoleActorId = publisherActorId,
             RoleId = roleId,
             SessionId = completed.SessionId ?? string.Empty,
-            Content = Redact(completed.Content),
-            ReasoningContent = Redact(completed.ReasoningContent),
+            Content = SanitizeArtifactText(completed.Content),
+            ReasoningContent = SanitizeArtifactText(completed.ReasoningContent),
             ContentEmitted = completed.ContentEmitted,
         };
         evt.ToolCalls.AddRange(BuildEnrichedToolCalls(completed));
@@ -216,6 +216,11 @@ internal static class WorkflowArtifactFactBuilder
 
     private static string SanitizeToolDetail(string? value)
     {
+        return SanitizeArtifactText(value);
+    }
+
+    private static string SanitizeArtifactText(string? value)
+    {
         if (string.IsNullOrEmpty(value))
             return string.Empty;
 
@@ -225,19 +230,5 @@ internal static class WorkflowArtifactFactBuilder
         return scrubbed.Contains(SecretScrubber.Marker, StringComparison.Ordinal)
             ? sanitized.Replace(WorkflowAuditTextSanitizer.RedactedValue, SecretScrubber.Marker, StringComparison.Ordinal)
             : sanitized;
-    }
-
-    private static string Redact(string? value)
-    {
-        if (string.IsNullOrEmpty(value))
-            return string.Empty;
-
-        // Mask secret-shaped substrings first, THEN truncate — so a secret straddling the
-        // truncation boundary is masked before it is cut, and the marker itself is preserved.
-        var masked = SecretScrubber.Scrub(value);
-
-        return masked.Length <= ToolDetailMaxLength
-            ? masked
-            : masked[..ToolDetailMaxLength] + "...";
     }
 }
