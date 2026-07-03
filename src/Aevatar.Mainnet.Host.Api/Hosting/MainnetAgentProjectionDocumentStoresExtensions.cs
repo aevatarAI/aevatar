@@ -271,7 +271,7 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         };
     }
 
-    private sealed class ElasticsearchAuditTrailArtifactStore : IAuditTrailArtifactStore, IDisposable
+    internal sealed class ElasticsearchAuditTrailArtifactStore : IAuditTrailArtifactStore, IDisposable
     {
         private readonly JsonFormatter _formatter = new(
             JsonFormatter.Settings.Default
@@ -287,7 +287,8 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
 
         public ElasticsearchAuditTrailArtifactStore(
             ElasticsearchProjectionDocumentStoreOptions options,
-            DocumentIndexMetadata metadata)
+            DocumentIndexMetadata metadata,
+            HttpMessageHandler? httpMessageHandler = null)
         {
             ArgumentNullException.ThrowIfNull(options);
             ArgumentNullException.ThrowIfNull(metadata);
@@ -295,11 +296,11 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
             _options = options;
             _metadata = metadata;
             _indexName = BuildIndexName(options.IndexPrefix, metadata.IndexName);
-            _httpClient = new HttpClient
-            {
-                BaseAddress = ResolvePrimaryEndpoint(options.Endpoints),
-                Timeout = TimeSpan.FromMilliseconds(Math.Max(500, options.RequestTimeoutMs)),
-            };
+            _httpClient = httpMessageHandler == null
+                ? new HttpClient()
+                : new HttpClient(httpMessageHandler, disposeHandler: true);
+            _httpClient.BaseAddress = ResolvePrimaryEndpoint(options.Endpoints);
+            _httpClient.Timeout = TimeSpan.FromMilliseconds(Math.Max(500, options.RequestTimeoutMs));
 
             if (!string.IsNullOrWhiteSpace(options.Username))
             {
