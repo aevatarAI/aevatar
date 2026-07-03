@@ -119,9 +119,7 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
     {
         var services = BuildAgentServices();
         services.Configure<AevatarOAuthClientEsAclOptions>(options =>
-        {
-            options.EnforcementMode = AevatarOAuthClientEsAclEnforcementMode.Strict;
-        });
+            options.EnforcementMode = AevatarOAuthClientEsAclEnforcementMode.Strict);
         services.AddMainnetAgentProjectionDocumentStores(BuildElasticsearchConfiguration());
 
         await using var provider = services.BuildServiceProvider();

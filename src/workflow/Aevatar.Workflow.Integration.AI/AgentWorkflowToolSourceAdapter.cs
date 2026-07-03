@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.Auditing;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.Workflow.Abstractions;
@@ -76,6 +77,7 @@ public sealed class AgentWorkflowToolSourceAdapter(
                 {
                     ScopeId = Normalize(request.ScopeId),
                 },
+                Schedule = new AgentToolScheduleContext(Normalize(request.ScheduleId)),
             };
             _logger.LogInformation(
                 "Workflow tool credential context prepared. toolName={ToolName} scopeId={ScopeId} rootRunId={RootRunId} parentRunId={ParentRunId} parentStepId={ParentStepId} hasCallerCredentialBearer={HasCallerCredentialBearer} hasNyxIdAccessToken={HasNyxIdAccessToken} hasNyxIdOrgToken={HasNyxIdOrgToken}",
@@ -95,6 +97,7 @@ public sealed class AgentWorkflowToolSourceAdapter(
                 ToolCallId = Normalize(request.CallId) ?? string.Empty,
                 ArgumentsJson = request.ArgumentsJson,
                 CancellationToken = ct,
+                ExecutionContext = toolContext,
                 ApprovalGrant = request.ApprovalGrant == null
                     ? null
                     : new Aevatar.AI.Abstractions.Middleware.ToolApprovalGrant(
@@ -126,7 +129,7 @@ public sealed class AgentWorkflowToolSourceAdapter(
             var resultJson = toolCallContext.Result
                              ?? throw new InvalidOperationException(
                                  $"Tool '{_tool.Name}' returned no result.");
-            var receipt = _tool.CreateSuccessReceipt(toolCallContext.ToolCallId, _tool.Name, resultJson);
+            var receipt = ToolCallReceiptFinalizer.Finalize(toolCallContext).Receipt;
             return new WorkflowToolExecutionResult(
                 resultJson,
                 ToWorkflowManagedHandoffOutcome(receipt?.ManagedWorkflowHandoff));
