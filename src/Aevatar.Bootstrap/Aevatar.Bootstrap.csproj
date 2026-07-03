@@ -7,6 +7,7 @@
     <RootNamespace>Aevatar.Bootstrap</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Aevatar.Audit.Abstractions\Aevatar.Audit.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.Configuration\Aevatar.Configuration.csproj" />
     <ProjectReference Include="..\Aevatar.Foundation.Runtime.Hosting\Aevatar.Foundation.Runtime.Hosting.csproj" />
     <ProjectReference Include="..\Aevatar.Capabilities\Aevatar.Capabilities.csproj" />

@@ -1,5 +1,7 @@
 using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.Audit;
+using Aevatar.Audit.Abstractions.EndpointAudit;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -28,16 +30,43 @@ public static class ChannelCallbackEndpoints
 
         // Registration CRUD — requires authentication
         group.MapGet("/me", HandleGetCallerInfoAsync).RequireAuthorization();
-        group.MapPost("/registrations", HandleRegisterAsync).RequireAuthorization();
+        group.MapPost("/registrations", HandleRegisterAsync)
+            .WithEndpointAudit(
+                "channel.registration.create",
+                AuditSensitivityLevel.Confidential,
+                "channel-registration",
+                EndpointAuditTargetResolvers.Static("channel-registration", "new"),
+                ChannelRegistrationRequestSummary)
+            .RequireAuthorization();
         group.MapGet("/registrations", HandleListRegistrationsAsync).RequireAuthorization();
         group.MapGet("/registrations/{registrationId}/status", HandleGetStatusAsync).RequireAuthorization();
-        group.MapDelete("/registrations/{registrationId}", HandleDeleteRegistrationAsync).RequireAuthorization();
+        group.MapDelete("/registrations/{registrationId}", HandleDeleteRegistrationAsync)
+            .WithEndpointAudit(
+                "channel.registration.delete",
+                AuditSensitivityLevel.Confidential,
+                "channel-registration",
+                EndpointAuditTargetResolvers.FromRouteValue("channel-registration", "registrationId"),
+                EndpointAuditSanitizers.WithRouteValues("registrationId"))
+            .RequireAuthorization();
 
         // Diagnostic: test reply path without going through full LLM chat
-        group.MapPost("/registrations/{registrationId}/test-reply", HandleTestReplyAsync).RequireAuthorization();
+        group.MapPost("/registrations/{registrationId}/test-reply", HandleTestReplyAsync)
+            .WithEndpointAudit(
+                "channel.registration.test-reply",
+                AuditSensitivityLevel.Confidential,
+                "channel-registration",
+                EndpointAuditTargetResolvers.FromRouteValue("channel-registration", "registrationId"),
+                EndpointAuditSanitizers.WithRouteValues("registrationId"))
+            .RequireAuthorization();
         group.MapGet("/diagnostics/errors", HandleGetDiagnosticErrorsAsync).RequireAuthorization();
 
         return app;
+    }
+
+    private static ValueTask<string> ChannelRegistrationRequestSummary(EndpointAuditSanitizationContext context)
+    {
+        return ValueTask.FromResult(
+            $"{context.HttpContext.Request.Method} {EndpointAuditSanitizers.ResolveRoutePattern(context.HttpContext)}");
     }
 
     // ─── Registration CRUD ───

@@ -17,6 +17,10 @@
     </ItemGroup>
 
     <ItemGroup>
+        <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    </ItemGroup>
+
+    <ItemGroup>
         <Protobuf Include="audit_messages.proto" GrpcServices="None" />
     </ItemGroup>
 
