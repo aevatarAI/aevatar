@@ -14,6 +14,8 @@
     <PackageReference Include="Microsoft.IdentityModel.Tokens" />
     <PackageReference Include="Microsoft.Orleans.Clustering.Redis" />
     <PackageReference Include="System.IdentityModel.Tokens.Jwt" />
+    <ProjectReference Include="..\Aevatar.Audit.Core\Aevatar.Audit.Core.csproj" />
+    <ProjectReference Include="..\Aevatar.Audit.Hosting\Aevatar.Audit.Hosting.csproj" />
     <ProjectReference Include="..\Aevatar.Bootstrap\Aevatar.Bootstrap.csproj" />
     <ProjectReference Include="..\Aevatar.Audit.Abstractions\Aevatar.Audit.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.Authentication.Hosting\Aevatar.Authentication.Hosting.csproj" />

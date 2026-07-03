@@ -185,6 +185,43 @@ beyond the committed fact reference they carry.
 If a product surface needs current business state, it must query the relevant
 read model. If it needs governance review, it queries audit artifacts.
 
+### 7.1 HTTP Query Capability
+
+`Aevatar.Audit.Hosting` owns the audit read surface. Host projects may compose it as
+a capability bundle, but endpoint handlers must not read projection stores, document
+readers, actor state, or event stores directly. Audit artifacts are queried through
+`IAuditTrailQueryPort`.
+
+| Route | Method | Authorization | Semantics |
+|---|---|---|---|
+| `/api/audit/trail` | `GET` | Authenticated caller; platform admin only when `scope` targets another scope | Query materialized audit artifacts. Missing `scope` means caller scope. |
+| `/api/audit/actor-resolutions` | `POST` | Platform admin | Resolve an external actor identity to `auditActorId`. |
+
+The resolver accepts raw external identity only in the JSON request body. It must never
+put that identity in path or query parameters, must not log it, and must not return it.
+The only returned identity is the server-computed `auditActorId` plus
+`identityKeyId` from `IAuditActorIdentityHasher`.
+
+Default audit queries resolve to the caller's `scope_id` claim and do not call the
+platform-admin authorizer. Any cross-scope query must resolve the caller through
+`IPlatformAdminAuthorizer` before `IAuditTrailQueryPort` is invoked. Resolver calls are
+always platform-admin reads.
+
+If `IAuditTrailQueryPort` is not configured, `/api/audit/trail` returns
+`503 AUDIT_QUERY_UNAVAILABLE`; it must not fall back to projection store access, actor
+state reads, query-time replay, or event-store reconstruction. If platform-admin
+authorization is unavailable for an admin-only path, the endpoint returns
+`503 AUDIT_ADMIN_AUTH_UNAVAILABLE`.
+
+Audit query responses expose `readTimestampUtc`, `queryWatermark`, and `nextCursor`.
+Each record also exposes `occurredAtUtc` and `identityKeyId`. These fields describe
+artifact-store query freshness and must not imply strong consistency with writes that
+may still be in flight.
+
+Admin-only resolver reads and cross-scope audit trail reads carry endpoint metadata with
+`AccessLevel = ADMIN`. That metadata is for the host self-audit pipeline; it does not
+replace the runtime admin gate.
+
 ## 8. Retention and Operations
 
 Retention, export, and legal hold are artifact-store concerns. They do not
@@ -212,6 +249,8 @@ Changes to audit trail contracts or implementation must verify:
    state reads, or request-body reconstruction.
 5. Identity key rotation preserves `identity_key_id` and never exposes raw
    subjects.
+6. HTTP query endpoints authorize cross-scope reads and resolver calls before
+   invoking `IAuditTrailQueryPort` or `IAuditActorIdentityHasher`.
 
 Related references:
 
