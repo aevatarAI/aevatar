@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Helpers;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Primitives;
 using Google.Protobuf;
@@ -9,7 +10,9 @@ namespace Aevatar.Workflow.Core;
 internal static class WorkflowArtifactFactBuilder
 {
     // O1 (06-19-workflow-run-observatory): tool args/results may carry secrets; redact at the
-    // materialization boundary the same way step output_preview is truncated.
+    // materialization boundary the same way step output_preview is truncated. Redaction masks
+    // secret-shaped substrings (SecretScrubber) BEFORE truncating to ToolDetailMaxLength, so a
+    // secret straddling the truncation point is masked before it is cut.
     private const int ToolDetailMaxLength = 2000;
 
     public static bool TryBuild(
@@ -116,8 +119,8 @@ internal static class WorkflowArtifactFactBuilder
             RoleActorId = publisherActorId,
             RoleId = publisherActorId,
             SessionId = completed.SessionId ?? string.Empty,
-            Content = completed.Content ?? string.Empty,
-            ReasoningContent = completed.ReasoningContent ?? string.Empty,
+            Content = Redact(completed.Content),
+            ReasoningContent = Redact(completed.ReasoningContent),
             ContentEmitted = completed.Success,
         };
 
@@ -154,8 +157,8 @@ internal static class WorkflowArtifactFactBuilder
             RoleActorId = publisherActorId,
             RoleId = roleId,
             SessionId = completed.SessionId ?? string.Empty,
-            Content = completed.Content ?? string.Empty,
-            ReasoningContent = completed.ReasoningContent ?? string.Empty,
+            Content = Redact(completed.Content),
+            ReasoningContent = Redact(completed.ReasoningContent),
             ContentEmitted = completed.ContentEmitted,
         };
         evt.ToolCalls.AddRange(BuildEnrichedToolCalls(completed));
@@ -217,8 +220,12 @@ internal static class WorkflowArtifactFactBuilder
         if (string.IsNullOrEmpty(value))
             return string.Empty;
 
-        return value.Length <= ToolDetailMaxLength
-            ? value
-            : value[..ToolDetailMaxLength] + "...";
+        // Mask secret-shaped substrings first, THEN truncate — so a secret straddling the
+        // truncation boundary is masked before it is cut, and the marker itself is preserved.
+        var masked = SecretScrubber.Scrub(value);
+
+        return masked.Length <= ToolDetailMaxLength
+            ? masked
+            : masked[..ToolDetailMaxLength] + "...";
     }
 }

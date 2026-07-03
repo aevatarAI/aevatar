@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using Aevatar.Authentication.Abstractions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
@@ -42,12 +43,18 @@ public static class IdentityOAuthEndpoints
             .AllowAnonymous();
         // Operator-only: rebuild the cluster-singleton OAuth client snapshot
         // to point at an admin-supplied client_id (issue #549 production
-        // unblock). Auth is by static admin token header — see
-        // AevatarOAuthAdminOptions. AllowAnonymous because the auth check is
-        // done inline; no ASP.NET auth handler is wired for this module. The
-        // RebuildAuthEndpointFilter rejects unauthenticated callers BEFORE
-        // model binding / DI resolution so a flooded admin-token-less request
-        // does not run through deserialization and DI on every call.
+        // unblock). Auth (M3): primary gate is a NyxID-verified platform
+        // admin/operator role (IPlatformAdminAuthorizer -> /users/me), resolved
+        // from the caller's own bearer and fail-closed — the same pattern the
+        // CQRS/workflow observatory endpoints use. The legacy static admin
+        // token header (AevatarOAuthAdminOptions) is kept ONLY as a fallback
+        // for hosts where the admin authorizer is not registered (e.g. NyxID
+        // platform authorization not wired), so this break-glass surface never
+        // silently opens. AllowAnonymous because the auth check is done inline;
+        // no ASP.NET auth handler is wired for this module. The
+        // RebuildAuthEndpointFilter rejects unauthorized callers BEFORE model
+        // binding / DI resolution so a flooded unauthorized request does not run
+        // through deserialization and command-dispatch DI on every call.
         app.MapPost("/api/oauth/aevatar-client/rebuild", HandleAevatarOAuthClientRebuildAsync)
             .WithTags("ChannelIdentity")
             .AddEndpointFilter<RebuildAuthEndpointFilter>()
@@ -318,18 +325,23 @@ public static class IdentityOAuthEndpoints
             http,
             body,
             adminOptions,
+            // M3: optional — a host without NyxID platform authorization wired
+            // falls back to the static admin token below.
+            http.RequestServices.GetService<IPlatformAdminAuthorizer>(),
             rebuildDispatch,
             loggerFactory,
             ct);
 
     /// <summary>
-    /// Core method exposed for tests to pass admin options and the typed
-    /// dispatch service directly, without resolving endpoint-bound services.
+    /// Core method exposed for tests to pass admin options, the platform-admin
+    /// authorizer, and the typed dispatch service directly, without resolving
+    /// endpoint-bound services.
     /// </summary>
     internal static async Task<IResult> HandleAevatarOAuthClientRebuildCoreAsync(
         HttpContext http,
         RebuildAevatarOAuthClientRequest? body,
         IOptionsMonitor<AevatarOAuthAdminOptions> adminOptions,
+        IPlatformAdminAuthorizer? adminAuthorizer,
         ICommandDispatchService<ProvisionAevatarOAuthClientCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> rebuildDispatch,
         ILoggerFactory loggerFactory,
         CancellationToken ct)
@@ -339,26 +351,13 @@ public static class IdentityOAuthEndpoints
         //   New principle: 加 module-local CQRS dispatch adapters(ChannelIdentityOAuthCommandDispatch);endpoint inject typed ICommandDispatchService<...>,返回 accepted/pending + status URL,不再等 projection;删 IProjectionReadinessPort/ExternalIdentityBindingProjectionPort/AevatarOAuthClientProjectionPort/AevatarOAuthClientRebuildCoordinator/ProjectionWaitTimeout 等
         var logger = loggerFactory.CreateLogger("Aevatar.Channel.Identity.OAuthRebuild");
 
-        var configuredToken = adminOptions.CurrentValue.RebuildToken;
-        if (string.IsNullOrEmpty(configuredToken))
-        {
-            logger.LogWarning(
-                "Rebuild endpoint invoked but ChannelIdentity:Admin:RebuildToken is unset; refusing fail-secure.");
-            return Results.Json(new
-            {
-                error = "rebuild_not_configured",
-                detail = "ChannelIdentity:Admin:RebuildToken is unset. Configure it (env var ChannelIdentity__Admin__RebuildToken) and redeploy before retrying.",
-            }, statusCode: StatusCodes.Status503ServiceUnavailable);
-        }
-
-        if (!http.Request.Headers.TryGetValue(AevatarOAuthAdminOptions.RebuildTokenHeader, out var presented)
-            || !ConstantTimeEquals(configuredToken, presented.ToString()))
-        {
-            logger.LogWarning(
-                "Rebuild endpoint rejected: missing or invalid {Header}.",
-                AevatarOAuthAdminOptions.RebuildTokenHeader);
-            return Results.Unauthorized();
-        }
+        // M3: platform-admin auth (primary) with static-token fallback. Returns
+        // a rejection IResult when the caller is not authorized (or the surface
+        // is unconfigured), null when authorized.
+        var rejection = await AuthorizeRebuildAsync(http, adminOptions.CurrentValue, adminAuthorizer, logger, ct)
+            .ConfigureAwait(false);
+        if (rejection is not null)
+            return rejection;
 
         if (body is null || string.IsNullOrWhiteSpace(body.client_id))
         {
@@ -457,6 +456,82 @@ public static class IdentityOAuthEndpoints
     }
 
     /// <summary>
+    /// M3 — authorize a caller for the operator rebuild break-glass surface.
+    /// Primary gate: a NyxID-verified platform admin/operator role
+    /// (<see cref="IPlatformAdminAuthorizer"/>), resolved from the caller's own
+    /// bearer and fail-closed (same shape as the CQRS/workflow observatory
+    /// endpoints). Fallback: when the authorizer is not registered on this host,
+    /// fall back to the legacy static admin token header so a host that never
+    /// wired NyxID platform authorization is not left with an unauthenticated
+    /// rebuild — and, when neither the authorizer nor a token is available,
+    /// refuse fail-secure. Returns <see langword="null"/> when the caller is
+    /// authorized, otherwise the rejection <see cref="IResult"/> to return.
+    /// </summary>
+    private static async Task<IResult?> AuthorizeRebuildAsync(
+        HttpContext http,
+        AevatarOAuthAdminOptions adminOptions,
+        IPlatformAdminAuthorizer? adminAuthorizer,
+        ILogger logger,
+        CancellationToken ct)
+    {
+        if (adminAuthorizer is not null)
+        {
+            var bearer = ExtractBearerToken(http);
+            var caller = string.IsNullOrWhiteSpace(bearer)
+                ? PlatformCaller.NotElevated
+                : await adminAuthorizer.ResolveCallerAsync(bearer, ct).ConfigureAwait(false);
+            if (!caller.IsElevated)
+            {
+                logger.LogWarning("Rebuild endpoint rejected: caller is not a platform admin/operator.");
+                return Results.Json(
+                    new
+                    {
+                        error = "rebuild_admin_required",
+                        detail = "Rebuilding the cluster OAuth client requires a platform admin/operator role.",
+                    },
+                    statusCode: StatusCodes.Status403Forbidden);
+            }
+
+            return null;
+        }
+
+        // Fallback: no platform authorizer wired — use the legacy static token.
+        var configuredToken = adminOptions.RebuildToken;
+        if (string.IsNullOrEmpty(configuredToken))
+        {
+            logger.LogWarning(
+                "Rebuild endpoint invoked but no platform admin authorizer is registered and ChannelIdentity:Admin:RebuildToken is unset; refusing fail-secure.");
+            return Results.Json(new
+            {
+                error = "rebuild_not_configured",
+                detail = "Neither platform admin authorization nor ChannelIdentity:Admin:RebuildToken is configured. Wire NyxID platform authorization or set env var ChannelIdentity__Admin__RebuildToken, then redeploy before retrying.",
+            }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+
+        if (!http.Request.Headers.TryGetValue(AevatarOAuthAdminOptions.RebuildTokenHeader, out var presented)
+            || !ConstantTimeEquals(configuredToken, presented.ToString()))
+        {
+            logger.LogWarning(
+                "Rebuild endpoint rejected: missing or invalid {Header}.",
+                AevatarOAuthAdminOptions.RebuildTokenHeader);
+            return Results.Unauthorized();
+        }
+
+        return null;
+    }
+
+    private static string? ExtractBearerToken(HttpContext http)
+    {
+        var header = http.Request.Headers.Authorization.ToString();
+        const string bearerPrefix = "Bearer ";
+        if (!header.StartsWith(bearerPrefix, StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var token = header[bearerPrefix.Length..].Trim();
+        return string.IsNullOrWhiteSpace(token) ? null : token;
+    }
+
+    /// <summary>
     /// Length-tolerant constant-time string compare. <c>FixedTimeEquals</c>
     /// itself returns false on length mismatch in O(1), which leaks the
     /// configured token's length to a timing observer — for an admin
@@ -482,12 +557,15 @@ public static class IdentityOAuthEndpoints
     }
 
     /// <summary>
-    /// Endpoint filter that performs the rebuild admin-token check before model binding
-    /// and per-request DI activation kick in. Without this filter the handler method
-    /// still rejects unauthenticated callers (it re-runs the same check inline), but
-    /// every unauthenticated POST would needlessly deserialize the body and resolve
-    /// command dispatch services — a small but real DoS amplifier on a /rebuild
-    /// that is supposed to be operator-only break-glass.
+    /// Endpoint filter that performs the rebuild authorization check (M3:
+    /// platform-admin role with static-token fallback) before model binding and
+    /// per-request DI activation kick in. Without this filter the handler method
+    /// still rejects unauthorized callers (it re-runs the same check inline via
+    /// <see cref="AuthorizeRebuildAsync"/>), but every unauthorized POST would
+    /// needlessly deserialize the body and resolve command dispatch services — a
+    /// small but real DoS amplifier on a /rebuild that is supposed to be
+    /// operator-only break-glass. Uses the exact same authorization helper as the
+    /// handler so there is a single source of truth for the gate.
     /// </summary>
     internal sealed class RebuildAuthEndpointFilter : IEndpointFilter
     {
@@ -497,20 +575,22 @@ public static class IdentityOAuthEndpoints
             var adminOptions = http.RequestServices
                 .GetRequiredService<IOptionsMonitor<AevatarOAuthAdminOptions>>()
                 .CurrentValue;
-            var configuredToken = adminOptions.RebuildToken;
-            if (string.IsNullOrEmpty(configuredToken))
-            {
-                // Fall through to the handler so it can return the standard
-                // "rebuild_not_configured" 503; we don't want this filter to short-circuit
-                // and bypass that explicit operator-facing error.
-                return await next(context).ConfigureAwait(false);
-            }
+            var adminAuthorizer = http.RequestServices.GetService<IPlatformAdminAuthorizer>();
+            var logger = http.RequestServices
+                .GetRequiredService<ILoggerFactory>()
+                .CreateLogger("Aevatar.Channel.Identity.OAuthRebuild");
 
-            if (!http.Request.Headers.TryGetValue(AevatarOAuthAdminOptions.RebuildTokenHeader, out var presented)
-                || !ConstantTimeEquals(configuredToken, presented.ToString()))
-            {
-                return Results.Unauthorized();
-            }
+            var rejection = await AuthorizeRebuildAsync(http, adminOptions, adminAuthorizer, logger, http.RequestAborted)
+                .ConfigureAwait(false);
+
+            // "rebuild_not_configured" is a 503 the handler owns as an explicit
+            // operator-facing error; let it fall through rather than short-circuit
+            // here. Any other rejection (401/403) is returned immediately so an
+            // unauthorized caller never reaches body binding + dispatch DI.
+            if (rejection is IStatusCodeHttpResult { StatusCode: StatusCodes.Status503ServiceUnavailable })
+                return await next(context).ConfigureAwait(false);
+            if (rejection is not null)
+                return rejection;
 
             return await next(context).ConfigureAwait(false);
         }

@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.ToolProviders.NyxId.LlmCatalog;
+using Aevatar.Foundation.Abstractions.Helpers;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -106,11 +107,12 @@ public sealed class NyxIdLlmCatalogHttpClient : IUserLlmCatalogPort
         if ((int)response.StatusCode is >= 200 and <= 299)
             return;
 
+        var scrubbedBody = SecretScrubber.Scrub(response.Body);
         _logger.LogWarning(
             "{Operation} endpoint returned {StatusCode}: {Body}",
             operation,
             response.StatusCode,
-            response.Body.Length > 500 ? response.Body[..500] : response.Body);
+            scrubbedBody.Length > 500 ? scrubbedBody[..500] : scrubbedBody);
         throw new InvalidOperationException($"{operation} request failed.");
     }
 
@@ -129,10 +131,11 @@ public sealed class NyxIdLlmCatalogHttpClient : IUserLlmCatalogPort
                 ct).ConfigureAwait(false);
             if ((int)response.StatusCode is < 200 or > 299)
             {
+                var scrubbedBody = SecretScrubber.Scrub(response.Body);
                 _logger.LogWarning(
                     "NyxID proxy services endpoint returned {StatusCode}: {Body}",
                     response.StatusCode,
-                    response.Body.Length > 500 ? response.Body[..500] : response.Body);
+                    scrubbedBody.Length > 500 ? scrubbedBody[..500] : scrubbedBody);
                 return result;
             }
 
@@ -164,10 +167,11 @@ public sealed class NyxIdLlmCatalogHttpClient : IUserLlmCatalogPort
                 ct).ConfigureAwait(false);
             if ((int)response.StatusCode is < 200 or > 299)
             {
+                var scrubbedBody = SecretScrubber.Scrub(response.Body);
                 _logger.LogWarning(
                     "NyxID user keys endpoint returned {StatusCode}: {Body}",
                     response.StatusCode,
-                    response.Body.Length > 500 ? response.Body[..500] : response.Body);
+                    scrubbedBody.Length > 500 ? scrubbedBody[..500] : scrubbedBody);
                 return result;
             }
 
