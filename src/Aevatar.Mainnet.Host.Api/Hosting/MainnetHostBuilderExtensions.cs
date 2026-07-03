@@ -123,6 +123,10 @@ public static class MainnetHostBuilderExtensions
         builder.AddAevatarPlatform(options =>
         {
             options.EnableMakerExtensions = true;
+            // Mainnet invariant: the scripting capability (in-process Roslyn compile/execute of
+            // tenant-supplied C#) must never be composed into this host. Stated explicitly so a
+            // future change to the platform default cannot silently re-enable it here.
+            options.EnableScriptingCapability = false;
             options.ConfigureAIFeatures = ConfigureMainnetAIFeatures;
         });
         builder.AddGAgentServiceCapabilityBundle();

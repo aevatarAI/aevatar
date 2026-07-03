@@ -108,9 +108,11 @@ public sealed class MainnetHostCompositionTests
             .ContainSingle(static descriptor => descriptor.Name == "workflow-external-approval-continuation");
         readModelDescriptors.Should()
             .ContainSingle(static descriptor => descriptor.Name == "streaming-proxy-chat-session");
-        app.Services.GetRequiredService<IProjectionDocumentReader<ScriptNativeDocumentReadModel, string>>()
+        // Security lockdown: the scripting capability (and its read models) must never be
+        // composed into the mainnet host.
+        app.Services.GetService<IProjectionDocumentReader<ScriptNativeDocumentReadModel, string>>()
             .Should()
-            .NotBeNull();
+            .BeNull();
         app.Services.GetRequiredService<IExternalIdentityBindingQueryPort>().Should().NotBeNull();
         app.Services.GetRequiredService<ICommandDispatchService<CommitBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>>()
             .Should()

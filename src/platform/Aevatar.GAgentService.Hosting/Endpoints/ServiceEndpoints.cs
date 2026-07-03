@@ -9,6 +9,7 @@ using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
 using Aevatar.GAgentService.Hosting.Serialization;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.Mvc;
@@ -36,7 +37,10 @@ public static partial class ServiceEndpoints
         group.MapGAgentServiceGovernanceEndpoints();
         app.MapScopeServiceEndpoints();
         app.MapScopeWorkflowCapabilityEndpoints();
-        app.MapScopeScriptCapabilityEndpoints();
+        // Scope script endpoints exist only when the host composed the scripting capability;
+        // without it the routes are absent entirely (404) instead of resolving to missing services.
+        if (app.ServiceProvider.GetService<IScopeScriptQueryPort>() is not null)
+            app.MapScopeScriptCapabilityEndpoints();
         app.MapScopeGAgentCapabilityEndpoints();
         app.MapScheduledDispatchEndpoints();
         return app;

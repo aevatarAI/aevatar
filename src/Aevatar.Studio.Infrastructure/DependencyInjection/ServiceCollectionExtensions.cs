@@ -66,7 +66,15 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ActorBackedChatHistoryStore>();
         services.AddSingleton<IChatHistoryQueryPort>(sp => sp.GetRequiredService<ActorBackedChatHistoryStore>());
         services.AddSingleton<IChatHistoryCommandPort>(sp => sp.GetRequiredService<ActorBackedChatHistoryStore>());
-        services.AddSingleton<IScriptRuntimeActivityQueryPort, ScriptNativeDocumentRuntimeActivityQueryPort>();
+        // Script runtime activity reads the scripting capability's native-document read model;
+        // hosts composed without scripting have no reader, and consumers of this port already
+        // treat it as optional (resolved via GetService).
+        if (services.Any(x => x.ServiceType == typeof(
+                Aevatar.CQRS.Projection.Stores.Abstractions.IProjectionDocumentReader<
+                    Aevatar.Scripting.Projection.ReadModels.ScriptNativeDocumentReadModel, string>)))
+        {
+            services.AddSingleton<IScriptRuntimeActivityQueryPort, ScriptNativeDocumentRuntimeActivityQueryPort>();
+        }
         services.AddSingleton<ILLMCallMiddleware, UserMemoryInjectionMiddleware>();
         services.AddSingleton<ILLMCallMiddleware, ConnectedServicesContextMiddleware>();
         // Refactor (iter21/cluster-001):

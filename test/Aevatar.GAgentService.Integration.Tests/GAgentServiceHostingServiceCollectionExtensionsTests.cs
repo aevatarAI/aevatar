@@ -16,6 +16,7 @@ using Aevatar.GAgentService.Infrastructure.Adapters;
 using Aevatar.GAgentService.Infrastructure.Orchestration;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.Capabilities;
+using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
@@ -80,11 +81,12 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
             x.ServiceType == typeof(IHostedService) &&
             x.ImplementationType != null &&
             x.ImplementationType.FullName == "Aevatar.GAgentService.Hosting.Demo.GAgentServiceDemoBootstrapHostedService");
-        services.Count(x => x.ServiceType == typeof(IServiceImplementationAdapter)).Should().Be(3);
+        // Scripting was not composed first, so the scripting bridge (adapter/hook) is absent.
+        services.Count(x => x.ServiceType == typeof(IServiceImplementationAdapter)).Should().Be(2);
         services.Should().Contain(x => x.ImplementationType == typeof(StaticServiceImplementationAdapter));
-        services.Should().Contain(x => x.ImplementationType == typeof(ScriptingServiceImplementationAdapter));
+        services.Should().NotContain(x => x.ImplementationType == typeof(ScriptingServiceImplementationAdapter));
         services.Should().Contain(x => x.ImplementationType == typeof(WorkflowServiceImplementationAdapter));
-        services.Should().Contain(x =>
+        services.Should().NotContain(x =>
             x.ServiceType == typeof(ICommittedStatePublicationHook) &&
             x.ImplementationType == typeof(ScriptingServiceRevisionRepublishHook));
         services.Should().NotContain(x =>
@@ -148,6 +150,59 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         services.Count(x => x.ServiceType == typeof(IWorkflowCatalogPort))
             .Should()
             .Be(workflowRegistrationsBefore);
+    }
+
+    [Fact]
+    public void AddGAgentServiceCapability_WithoutScriptingCapability_ShouldNotRegisterScriptingBridge()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>())
+            .Build();
+
+        services.AddAevatarRuntime();
+        services.AddWorkflowProjectionReadModelProviders(configuration);
+        services.AddGAgentServiceCapability(configuration);
+
+        // No pull-back: the bundle must not compose the scripting capability on its own.
+        services.Should().NotContain(x =>
+            x.ServiceType == typeof(Aevatar.Scripting.Hosting.DependencyInjection.ServiceCollectionExtensions.ScriptCapabilityRegistrationsMarker));
+        services.Should().NotContain(x => x.ServiceType == typeof(IScopeScriptQueryPort));
+        services.Should().NotContain(x => x.ServiceType == typeof(IScopeScriptCommandPort));
+        services.Should().NotContain(x => x.ServiceType == typeof(IScopeScriptSaveObservationPort));
+        services.Should().NotContain(x => x.ImplementationType == typeof(ScriptingServiceImplementationAdapter));
+        services.Should().NotContain(x =>
+            x.ServiceType == typeof(ICommittedStatePublicationHook) &&
+            x.ImplementationType == typeof(ScriptingServiceRevisionRepublishHook));
+        services.Should().NotContain(service =>
+            ServiceTypeContains(service.ServiceType, "ScriptServiceRun"));
+
+        // Services with optional scripting dependencies still compose without it.
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IScopeBindingCommandPort>().Should().NotBeNull();
+    }
+
+    [Fact]
+    public void AddGAgentServiceCapability_WithScriptingCapability_ShouldRegisterScriptingBridge()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>())
+            .Build();
+
+        services.AddScriptCapability(configuration);
+        services.AddGAgentServiceCapability(configuration);
+
+        services.Should().Contain(x => x.ServiceType == typeof(IScopeScriptQueryPort));
+        services.Should().Contain(x => x.ServiceType == typeof(IScopeScriptCommandPort));
+        services.Should().Contain(x => x.ServiceType == typeof(IScopeScriptSaveObservationPort));
+        services.Should().Contain(x => x.ImplementationType == typeof(ScriptingServiceImplementationAdapter));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommittedStatePublicationHook) &&
+            x.ImplementationType == typeof(ScriptingServiceRevisionRepublishHook));
+        services.Should().Contain(service =>
+            ServiceTypeContains(service.ServiceType, "ScriptServiceRun"));
+        services.Count(x => x.ServiceType == typeof(IServiceImplementationAdapter)).Should().Be(3);
     }
 
     [Fact]

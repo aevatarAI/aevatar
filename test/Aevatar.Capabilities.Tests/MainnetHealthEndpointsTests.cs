@@ -83,12 +83,14 @@ public sealed class MainnetHealthEndpointsTests
         using var readinessPayload = JsonDocument.Parse(readinessBody);
         readinessPayload.RootElement.GetProperty("ok").GetBoolean().Should().BeTrue();
         readinessPayload.RootElement.GetProperty("service").GetString().Should().Be("Aevatar.Mainnet.Host.Api");
-        readinessPayload.RootElement
+        var readinessComponents = readinessPayload.RootElement
             .GetProperty("components")
             .EnumerateArray()
             .Select(static component => component.GetProperty("name").GetString())
-            .Should()
-            .Contain(["workflow-bundle", "gagent-service", "studio", "scripting-bundle"]);
+            .ToArray();
+        readinessComponents.Should().Contain(["workflow-bundle", "gagent-service", "studio"]);
+        // Security lockdown: the scripting capability must never be composed into the mainnet host.
+        readinessComponents.Should().NotContain("scripting-bundle");
 
         var apiHealthResponse = await client.GetAsync("/api/health");
         var apiHealthBody = await apiHealthResponse.Content.ReadAsStringAsync();

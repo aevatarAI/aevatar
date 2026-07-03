@@ -14,20 +14,22 @@ namespace Aevatar.GAgentService.Infrastructure.Dispatch;
 public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispatcher
 {
     private readonly IActorDispatchPort _dispatchPort;
-    private readonly IScriptRuntimeCommandPort _scriptRuntimeCommandPort;
+    // Nullable by design: the scripting capability is optional. Hosts composed without it
+    // resolve this port to null, and scripting dispatches are rejected in DispatchScriptingAsync.
+    private readonly IScriptRuntimeCommandPort? _scriptRuntimeCommandPort;
     private readonly IWorkflowRunProvisioningPort _workflowRunProvisioningPort;
     private readonly IServiceRunRegistrationPort _serviceRunRegistrationPort;
     private readonly ILogger<DefaultServiceInvocationDispatcher> _logger;
 
     public DefaultServiceInvocationDispatcher(
         IActorDispatchPort dispatchPort,
-        IScriptRuntimeCommandPort scriptRuntimeCommandPort,
+        IScriptRuntimeCommandPort? scriptRuntimeCommandPort,
         IWorkflowRunProvisioningPort workflowRunProvisioningPort,
         IServiceRunRegistrationPort serviceRunRegistrationPort,
         ILogger<DefaultServiceInvocationDispatcher>? logger = null)
     {
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
-        _scriptRuntimeCommandPort = scriptRuntimeCommandPort ?? throw new ArgumentNullException(nameof(scriptRuntimeCommandPort));
+        _scriptRuntimeCommandPort = scriptRuntimeCommandPort;
         _workflowRunProvisioningPort = workflowRunProvisioningPort ?? throw new ArgumentNullException(nameof(workflowRunProvisioningPort));
         _serviceRunRegistrationPort = serviceRunRegistrationPort ?? throw new ArgumentNullException(nameof(serviceRunRegistrationPort));
         _logger = logger ?? NullLogger<DefaultServiceInvocationDispatcher>.Instance;
@@ -70,12 +72,18 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         ServiceInvocationRequest request,
         CancellationToken ct)
     {
+        if (_scriptRuntimeCommandPort is not { } scriptRuntimeCommandPort)
+        {
+            throw new InvalidOperationException(
+                "Scripting capability is not enabled on this host; scripting services cannot be invoked.");
+        }
+
         var plan = target.Artifact.DeploymentPlan.ScriptingPlan;
         var commandId = ResolveCommandId(request);
         var correlationId = ResolveCorrelationId(request, commandId);
         var runId = ResolveRunId(request, commandId);
         await RegisterRunAsync(target, request, runId, commandId, correlationId, target.Service.PrimaryActorId, ServiceImplementationKind.Scripting, ct);
-        await _scriptRuntimeCommandPort.RunRuntimeAsync(
+        await scriptRuntimeCommandPort.RunRuntimeAsync(
             target.Service.PrimaryActorId,
             runId: commandId,
             request.Payload?.Clone(),

@@ -701,7 +701,7 @@ public static class ScopeServiceEndpoints
         [FromServices] IWorkflowChatRunInteractionPort chatRunService,
         [FromServices] WorkflowMultipartFileInputParser multipartFileInputParser,
         [FromServices] IWorkflowFileIngressPort workflowFileIngressPort,
-        [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus> scriptServiceRunService,
+        [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus>? scriptServiceRunService,
         [FromServices] IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
@@ -767,7 +767,7 @@ public static class ScopeServiceEndpoints
         [FromServices] IWorkflowChatRunInteractionPort chatRunService,
         [FromServices] WorkflowMultipartFileInputParser multipartFileInputParser,
         [FromServices] IWorkflowFileIngressPort workflowFileIngressPort,
-        [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus> scriptServiceRunService,
+        [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus>? scriptServiceRunService,
         [FromServices] IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
@@ -865,7 +865,7 @@ public static class ScopeServiceEndpoints
         [FromServices] IWorkflowChatRunInteractionPort chatRunService,
         [FromServices] WorkflowMultipartFileInputParser multipartFileInputParser,
         [FromServices] IWorkflowFileIngressPort workflowFileIngressPort,
-        [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus> scriptServiceRunService,
+        [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus>? scriptServiceRunService,
         [FromServices] IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
@@ -1759,7 +1759,7 @@ public static class ScopeServiceEndpoints
         [FromServices] IServiceRunRegistrationPort serviceRunRegistrationPort,
         [FromServices] IWorkflowChatRunInteractionPort chatRunService,
         [FromServices] IWorkflowFileIngressPort workflowFileIngressPort,
-        [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus> scriptServiceRunService,
+        [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus>? scriptServiceRunService,
         [FromServices] IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
@@ -2080,10 +2080,16 @@ public static class ScopeServiceEndpoints
         string scopeId,
         string serviceId,
         IReadOnlyDictionary<string, string>? headers,
-        ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus> interactionService,
+        ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus>? interactionService,
         ServiceInvocationRequest invocationRequest,
         CancellationToken ct)
     {
+        if (interactionService is null)
+        {
+            throw new InvalidOperationException(
+                "Scripting capability is not enabled on this host; scripting services cannot be invoked.");
+        }
+
         var actorId = target.Service.PrimaryActorId;
         var runId = Guid.NewGuid().ToString("N");
         var commandId = Guid.NewGuid().ToString("N");
