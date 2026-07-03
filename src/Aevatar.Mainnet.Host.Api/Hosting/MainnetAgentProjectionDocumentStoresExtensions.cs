@@ -1,3 +1,4 @@
+using Aevatar.Audit;
 using Aevatar.ChatRouting.Core;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
@@ -80,6 +81,7 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         TryAddElasticsearchStore<WorkflowExternalApprovalContinuationDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<StreamingProxyChatSessionTerminalSnapshot>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<StreamingProxyRoomParticipantsSnapshot>(services, configuration, static document => document.Id);
+        TryAddElasticsearchStore<AuditTrailDocument>(services, configuration, static document => document.AuditId);
     }
 
     private static void AddInMemoryStores(IServiceCollection services)
@@ -104,6 +106,10 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
             services,
             static (StreamingProxyRoomParticipantsSnapshot document) => document.Id,
             static document => document.UpdatedAt.ToDateTimeOffset());
+        TryAddInMemoryStore(
+            services,
+            static (AuditTrailDocument document) => document.AuditId,
+            static document => document.OccurredAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue);
     }
 
     // Opt-in read-model inventory descriptors, one per materialized document read-model registered above.

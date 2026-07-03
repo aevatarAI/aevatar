@@ -7,6 +7,8 @@
     <RootNamespace>Aevatar.Mainnet.Host.Api</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Aevatar.Audit.Abstractions\Aevatar.Audit.Abstractions.csproj" />
+    <ProjectReference Include="..\Aevatar.Audit.Core\Aevatar.Audit.Core.csproj" />
     <InternalsVisibleTo Include="Aevatar.Capabilities.Tests" />
     <InternalsVisibleTo Include="Aevatar.ChatRouting.Voice.Integration.Tests" />
   </ItemGroup>

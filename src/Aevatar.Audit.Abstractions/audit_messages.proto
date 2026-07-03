@@ -1,0 +1,99 @@
+syntax = "proto3";
+
+package aevatar.audit;
+
+option csharp_namespace = "Aevatar.Audit";
+
+import "google/protobuf/timestamp.proto";
+
+enum AuditActorKind {
+  AUDIT_ACTOR_KIND_UNSPECIFIED = 0;
+  AUDIT_ACTOR_KIND_SYSTEM = 1;
+  AUDIT_ACTOR_KIND_NYXID_USER = 2;
+  AUDIT_ACTOR_KIND_CHANNEL_USER = 3;
+  AUDIT_ACTOR_KIND_AGENT = 4;
+  AUDIT_ACTOR_KIND_SCHEDULE = 5;
+}
+
+enum AuditOperationKind {
+  AUDIT_OPERATION_KIND_UNSPECIFIED = 0;
+  AUDIT_OPERATION_KIND_API_REQUEST = 1;
+  AUDIT_OPERATION_KIND_TOOL_CALL = 2;
+  AUDIT_OPERATION_KIND_WORKFLOW_ACTION = 3;
+  AUDIT_OPERATION_KIND_SCHEDULED_ACTION = 4;
+  AUDIT_OPERATION_KIND_COMMITTED_FACT = 5;
+}
+
+enum AuditSensitivityLevel {
+  AUDIT_SENSITIVITY_LEVEL_UNSPECIFIED = 0;
+  AUDIT_SENSITIVITY_LEVEL_NORMAL = 1;
+  AUDIT_SENSITIVITY_LEVEL_SENSITIVE = 2;
+  AUDIT_SENSITIVITY_LEVEL_DESTRUCTIVE = 3;
+  AUDIT_SENSITIVITY_LEVEL_ADMIN = 4;
+}
+
+enum AuditOutcome {
+  AUDIT_OUTCOME_UNSPECIFIED = 0;
+  AUDIT_OUTCOME_ATTEMPTED = 1;
+  AUDIT_OUTCOME_ACCEPTED = 2;
+  AUDIT_OUTCOME_COMMITTED = 3;
+  AUDIT_OUTCOME_DENIED = 4;
+  AUDIT_OUTCOME_FAILED = 5;
+}
+
+message AuditRecord {
+  string audit_id = 1;
+  google.protobuf.Timestamp occurred_at = 2;
+  string operation_name = 3;
+  AuditOperationKind operation_kind = 4;
+  AuditSensitivityLevel sensitivity_level = 5;
+  AuditOutcome outcome = 6;
+  string scope_id = 7;
+  string audit_actor_id = 8;
+  string identity_key_id = 9;
+  AuditActorKind actor_kind = 10;
+  string actor_display = 11;
+  string owner_audit_actor_id = 12;
+  string credential_source = 13;
+  string target_kind = 14;
+  string target_id = 15;
+  int64 target_version = 16;
+  string target_hash = 17;
+  string request_id = 18;
+  string command_id = 19;
+  string correlation_id = 20;
+  string call_id = 21;
+  string session_id = 22;
+  string response_id = 23;
+  string workflow_run_id = 24;
+  string approval_mode = 25;
+  string approval_request_id = 26;
+  bool is_destructive = 27;
+  string side_effect_kind = 28;
+  string request_summary = 29;
+  string result_summary = 30;
+  string error_code = 31;
+  string error_message = 32;
+  map<string, string> annotations = 33;
+}
+
+message AuditTrailDocument {
+  string id = 1;
+  string audit_id = 2;
+  string content_hash = 3;
+  AuditRecord record = 4;
+  google.protobuf.Timestamp occurred_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+  string audit_actor_id = 7;
+  string scope_id = 8;
+  string operation_name = 9;
+  AuditOutcome outcome = 10;
+  AuditSensitivityLevel sensitivity_level = 11;
+  string target_kind = 12;
+  string target_id = 13;
+  string request_id = 14;
+  string command_id = 15;
+  string correlation_id = 16;
+  string session_id = 17;
+  string workflow_run_id = 18;
+}

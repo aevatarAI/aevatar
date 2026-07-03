@@ -9,6 +9,8 @@
     <RootNamespace>Aevatar.GAgentService.Tests</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\src\Aevatar.Audit.Abstractions\Aevatar.Audit.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Audit.Core\Aevatar.Audit.Core.csproj" />
     <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Abstractions\Aevatar.GAgentService.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Governance.Abstractions\Aevatar.GAgentService.Governance.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Core\Aevatar.GAgentService.Core.csproj" />
