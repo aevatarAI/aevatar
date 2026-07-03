@@ -11,6 +11,7 @@ public static class AuditTrailCapabilityHostBuilderExtensions
     {
         ArgumentNullException.ThrowIfNull(builder);
 
+        builder.Services.AddScoped<AuditTrailEndpointDependencies>();
         builder.Services.AddAevatarHealthContributor(new AevatarHealthContributorRegistration
         {
             Name = "audit-trail",

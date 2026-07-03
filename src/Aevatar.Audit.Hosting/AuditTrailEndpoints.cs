@@ -9,7 +9,6 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Audit.Hosting;
@@ -45,7 +44,7 @@ public static class AuditTrailEndpoints
 
     internal static async Task<IResult> QueryAuditTrail(
         HttpContext http,
-        [FromServices] IServiceProvider services,
+        [FromServices] AuditTrailEndpointDependencies dependencies,
         [FromServices] ILoggerFactory loggerFactory,
         string? scope = null,
         string? auditActorId = null,
@@ -66,7 +65,7 @@ public static class AuditTrailEndpoints
         var logger = loggerFactory.CreateLogger(AuditLoggerCategory);
         if (isCrossScope)
         {
-            if (services.GetService<IPlatformAdminAuthorizer>() is not { } authorizer)
+            if (dependencies.AdminAuthorizer is not { } authorizer)
                 return AdminAuthorizationUnavailable();
 
             var denied = await AuthorizeAdminReadAsync(
@@ -81,7 +80,7 @@ public static class AuditTrailEndpoints
                 return denied;
         }
 
-        if (services.GetService<IAuditTrailQueryPort>() is not { } queryPort)
+        if (dependencies.QueryPort is not { } queryPort)
             return QueryUnavailable();
 
         var query = new AuditTrailQuery
@@ -100,7 +99,7 @@ public static class AuditTrailEndpoints
 
     internal static async Task<IResult> ResolveAuditActor(
         HttpContext http,
-        [FromServices] IServiceProvider services,
+        [FromServices] AuditTrailEndpointDependencies dependencies,
         [FromServices] ILoggerFactory loggerFactory,
         [FromBody] AuditActorResolutionRequest? request,
         CancellationToken ct = default)
@@ -111,7 +110,7 @@ public static class AuditTrailEndpoints
             return Results.Unauthorized();
 
         var logger = loggerFactory.CreateLogger(AuditLoggerCategory);
-        if (services.GetService<IPlatformAdminAuthorizer>() is not { } authorizer)
+        if (dependencies.AdminAuthorizer is not { } authorizer)
             return AdminAuthorizationUnavailable();
 
         var denied = await AuthorizeAdminReadAsync(
@@ -132,7 +131,7 @@ public static class AuditTrailEndpoints
                 new { code = "AUDIT_ACTOR_IDENTITY_REQUIRED", message = "Provider and subject are required." },
                 statusCode: StatusCodes.Status400BadRequest);
 
-        if (services.GetService<IAuditActorIdentityHasher>() is not { } hasher)
+        if (dependencies.ActorIdentityHasher is not { } hasher)
             return HasherUnavailable();
 
         if (!TryBuildCanonicalActorKey(provider, subject, out var canonicalActorKey))
@@ -292,4 +291,23 @@ public static class AuditTrailEndpoints
             targetScope,
             reason ?? string.Empty,
             http.TraceIdentifier);
+}
+
+internal sealed class AuditTrailEndpointDependencies
+{
+    public AuditTrailEndpointDependencies(
+        IEnumerable<IAuditTrailQueryPort> queryPorts,
+        IEnumerable<IPlatformAdminAuthorizer> adminAuthorizers,
+        IEnumerable<IAuditActorIdentityHasher> actorIdentityHashers)
+    {
+        QueryPort = queryPorts.SingleOrDefault();
+        AdminAuthorizer = adminAuthorizers.SingleOrDefault();
+        ActorIdentityHasher = actorIdentityHashers.SingleOrDefault();
+    }
+
+    public IAuditTrailQueryPort? QueryPort { get; }
+
+    public IPlatformAdminAuthorizer? AdminAuthorizer { get; }
+
+    public IAuditActorIdentityHasher? ActorIdentityHasher { get; }
 }

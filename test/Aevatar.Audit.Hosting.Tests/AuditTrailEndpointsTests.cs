@@ -37,7 +37,7 @@ public sealed class AuditTrailEndpointsTests
 
         var result = await AuditTrailEndpoints.QueryAuditTrail(
             http,
-            http.RequestServices,
+            BuildEndpointDependencies(queryPort, authorizer: authorizer),
             NullLoggerFactory.Instance,
             scope: null,
             auditActorId: " audit_actor:abc ",
@@ -65,7 +65,7 @@ public sealed class AuditTrailEndpointsTests
 
         var result = await AuditTrailEndpoints.QueryAuditTrail(
             http,
-            http.RequestServices,
+            BuildEndpointDependencies(queryPort),
             NullLoggerFactory.Instance);
         var status = await ExecuteAsync(result, http);
 
@@ -89,7 +89,7 @@ public sealed class AuditTrailEndpointsTests
 
         var result = await AuditTrailEndpoints.QueryAuditTrail(
             http,
-            http.RequestServices,
+            BuildEndpointDependencies(queryPort),
             NullLoggerFactory.Instance);
         var status = await ExecuteAsync(result, http);
 
@@ -106,7 +106,7 @@ public sealed class AuditTrailEndpointsTests
 
         var result = await AuditTrailEndpoints.QueryAuditTrail(
             http,
-            http.RequestServices,
+            BuildEndpointDependencies(queryPort, authorizer: authorizer),
             NullLoggerFactory.Instance,
             scope: OtherScope);
         var status = await ExecuteAsync(result, http);
@@ -124,7 +124,7 @@ public sealed class AuditTrailEndpointsTests
 
         var result = await AuditTrailEndpoints.QueryAuditTrail(
             http,
-            http.RequestServices,
+            BuildEndpointDependencies(queryPort: null, authorizer: authorizer),
             NullLoggerFactory.Instance,
             scope: OtherScope);
         var status = await ExecuteAsync(result, http);
@@ -142,7 +142,7 @@ public sealed class AuditTrailEndpointsTests
 
         var result = await AuditTrailEndpoints.QueryAuditTrail(
             http,
-            http.RequestServices,
+            BuildEndpointDependencies(queryPort, authorizer: authorizer),
             NullLoggerFactory.Instance,
             scope: OtherScope);
         var status = await ExecuteAsync(result, http);
@@ -160,7 +160,7 @@ public sealed class AuditTrailEndpointsTests
 
         var result = await AuditTrailEndpoints.QueryAuditTrail(
             http,
-            http.RequestServices,
+            BuildEndpointDependencies(queryPort),
             NullLoggerFactory.Instance,
             scope: OtherScope);
         var (status, body) = await ExecuteWithBodyAsync(result, http);
@@ -179,7 +179,7 @@ public sealed class AuditTrailEndpointsTests
 
         var result = await AuditTrailEndpoints.QueryAuditTrail(
             http,
-            http.RequestServices,
+            BuildEndpointDependencies(queryPort, authorizer: authorizer),
             NullLoggerFactory.Instance,
             scope: OtherScope,
             take: 10);
@@ -203,7 +203,7 @@ public sealed class AuditTrailEndpointsTests
 
         var result = await AuditTrailEndpoints.QueryAuditTrail(
             http,
-            http.RequestServices,
+            BuildEndpointDependencies(queryPort),
             NullLoggerFactory.Instance,
             auditActorId: " audit_actor:abc ",
             identityKeyId: " key-1 ",
@@ -231,7 +231,7 @@ public sealed class AuditTrailEndpointsTests
 
         var result = await AuditTrailEndpoints.QueryAuditTrail(
             http,
-            http.RequestServices,
+            BuildEndpointDependencies(queryPort: null),
             NullLoggerFactory.Instance);
         var (status, body) = await ExecuteWithBodyAsync(result, http);
 
@@ -248,7 +248,7 @@ public sealed class AuditTrailEndpointsTests
 
         var result = await AuditTrailEndpoints.ResolveAuditActor(
             http,
-            BuildServiceProvider(queryPort: null, hasher, authorizer),
+            BuildEndpointDependencies(hasher: hasher, authorizer: authorizer),
             NullLoggerFactory.Instance,
             new AuditActorResolutionRequest("nyxid", "user@example.test"));
         var status = await ExecuteAsync(result, http);
@@ -275,7 +275,7 @@ public sealed class AuditTrailEndpointsTests
 
         var result = await AuditTrailEndpoints.ResolveAuditActor(
             http,
-            BuildServiceProvider(queryPort: null, hasher, authorizer),
+            BuildEndpointDependencies(hasher: hasher, authorizer: authorizer),
             NullLoggerFactory.Instance,
             new AuditActorResolutionRequest("nyxid", "user@example.test"));
         var status = await ExecuteAsync(result, http);
@@ -294,7 +294,7 @@ public sealed class AuditTrailEndpointsTests
 
         var result = await AuditTrailEndpoints.ResolveAuditActor(
             http,
-            BuildServiceProvider(queryPort: null, hasher, authorizer),
+            BuildEndpointDependencies(hasher: hasher, authorizer: authorizer),
             NullLoggerFactory.Instance,
             new AuditActorResolutionRequest("nyxid", "user@example.test"));
         var status = await ExecuteAsync(result, http);
@@ -311,7 +311,7 @@ public sealed class AuditTrailEndpointsTests
 
         var result = await AuditTrailEndpoints.ResolveAuditActor(
             http,
-            BuildServiceProvider(queryPort: null, hasher, authorizer: null),
+            BuildEndpointDependencies(hasher: hasher, authorizer: null),
             NullLoggerFactory.Instance,
             new AuditActorResolutionRequest("nyxid", "user@example.test"));
         var (status, body) = await ExecuteWithBodyAsync(result, http);
@@ -329,7 +329,7 @@ public sealed class AuditTrailEndpointsTests
 
         var result = await AuditTrailEndpoints.ResolveAuditActor(
             http,
-            BuildServiceProvider(queryPort: null, hasher: null, authorizer),
+            BuildEndpointDependencies(hasher: null, authorizer: authorizer),
             NullLoggerFactory.Instance,
             new AuditActorResolutionRequest("nyxid", "user@example.test"));
         var (status, body) = await ExecuteWithBodyAsync(result, http);
@@ -351,7 +351,7 @@ public sealed class AuditTrailEndpointsTests
 
         var result = await AuditTrailEndpoints.ResolveAuditActor(
             http,
-            BuildServiceProvider(queryPort: null, hasher, authorizer),
+            BuildEndpointDependencies(hasher: hasher, authorizer: authorizer),
             NullLoggerFactory.Instance,
             new AuditActorResolutionRequest(" nyxid ", "user@example.test"));
         var (status, body) = await ExecuteWithBodyAsync(result, http);
@@ -373,7 +373,7 @@ public sealed class AuditTrailEndpointsTests
 
         var result = await AuditTrailEndpoints.ResolveAuditActor(
             http,
-            BuildServiceProvider(queryPort: null, hasher, authorizer),
+            BuildEndpointDependencies(hasher: hasher, authorizer: authorizer),
             NullLoggerFactory.Instance,
             new AuditActorResolutionRequest("nyxid", " "));
         var status = await ExecuteAsync(result, http);
@@ -391,7 +391,7 @@ public sealed class AuditTrailEndpointsTests
 
         var result = await AuditTrailEndpoints.ResolveAuditActor(
             http,
-            BuildServiceProvider(queryPort: null, hasher, authorizer),
+            BuildEndpointDependencies(hasher: hasher, authorizer: authorizer),
             NullLoggerFactory.Instance,
             new AuditActorResolutionRequest("nyxid", "scope:user"));
         var status = await ExecuteAsync(result, http);
@@ -473,6 +473,15 @@ public sealed class AuditTrailEndpointsTests
 
     private static Claim[] BuildScopeClaims(string? scopeClaim) =>
         scopeClaim is null ? [] : [new Claim("scope_id", scopeClaim)];
+
+    private static AuditTrailEndpointDependencies BuildEndpointDependencies(
+        IAuditTrailQueryPort? queryPort = null,
+        IAuditActorIdentityHasher? hasher = null,
+        IPlatformAdminAuthorizer? authorizer = null) =>
+        new(
+            queryPort is null ? [] : [queryPort],
+            authorizer is null ? [] : [authorizer],
+            hasher is null ? [] : [hasher]);
 
     private static IServiceProvider BuildServiceProvider(
         IAuditTrailQueryPort? queryPort,
