@@ -45,6 +45,10 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         if (documentProvider.ElasticsearchEnabled)
         {
             AddElasticsearchStores(services, configuration);
+            services.Configure<AevatarOAuthClientEsAclOptions>(options =>
+            {
+                options.EnforcementMode = AevatarOAuthClientEsAclEnforcementMode.Strict;
+            });
             // Replace the identity module's default Unavailable probe with a real
             // HTTP-backed probe that inspects the Elasticsearch security API using
             // the SAME endpoint/credentials the projection store uses, so the ACL

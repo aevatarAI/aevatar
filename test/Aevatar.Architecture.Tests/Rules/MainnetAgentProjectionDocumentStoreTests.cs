@@ -74,6 +74,9 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
         AssertProviderStore<StreamingProxyRoomParticipantsSnapshot, ElasticsearchProjectionDocumentStore<StreamingProxyRoomParticipantsSnapshot, string>>(provider);
         Assert.IsType<ElasticsearchProjectionDocumentStore<AevatarOAuthClientDocument, string>>(
             provider.GetRequiredService<IProjectionIndexConsistencyProbe<AevatarOAuthClientDocument>>());
+        Assert.Equal(
+            AevatarOAuthClientEsAclEnforcementMode.Strict,
+            provider.GetRequiredService<IOptions<AevatarOAuthClientEsAclOptions>>().Value.EnforcementMode);
         Assert.Single(services, descriptor =>
             descriptor.ServiceType == typeof(IHostedService) &&
             descriptor.ImplementationType == typeof(AevatarOAuthClientEsAclStartupGuard));
