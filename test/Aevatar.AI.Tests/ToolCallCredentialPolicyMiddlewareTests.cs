@@ -91,6 +91,7 @@ public sealed class ToolCallCredentialPolicyMiddlewareTests
         });
 
         nextCalled.Should().BeTrue();
+        context.CredentialSource.Should().Be(AgentToolCredentialSource.BearerToken);
         context.Terminate.Should().BeFalse();
         AgentToolRequestContext.NyxIdAccessToken.Should().Be("owner-token");
     }
