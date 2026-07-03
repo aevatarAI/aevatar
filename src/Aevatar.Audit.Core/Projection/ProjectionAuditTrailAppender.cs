@@ -1,7 +1,6 @@
 using System.Security.Cryptography;
 using Aevatar.Audit.Abstractions.Ports;
 using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -43,7 +42,7 @@ public sealed class ProjectionAuditTrailAppender : IAuditTrailAppender
             }
 
             var observedAt = record.OccurredAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
-            var document = BuildDocument(record, auditId, contentHash, observedAt);
+            var document = AuditTrailDocumentFactory.Create(record, auditId, contentHash, observedAt);
             var write = await _store.UpsertAsync(document, ct);
             return ToAppendResult(write, auditId, record.AuditActorId ?? string.Empty, observedAt);
         }
@@ -65,38 +64,6 @@ public sealed class ProjectionAuditTrailAppender : IAuditTrailAppender
         return Convert.ToHexString(hash).ToLowerInvariant();
     }
 
-    private static Audit.AuditTrailDocument BuildDocument(
-        Audit.AuditRecord record,
-        string auditId,
-        string contentHash,
-        DateTimeOffset observedAt) =>
-        new()
-        {
-            Id = auditId,
-            AuditId = auditId,
-            ContentHash = contentHash,
-            Record = record.Clone(),
-            OccurredAt = Timestamp.FromDateTimeOffset(observedAt),
-            UpdatedAt = Timestamp.FromDateTimeOffset(observedAt),
-            AuditActorId = record.AuditActorId ?? string.Empty,
-            ScopeId = record.ScopeId ?? string.Empty,
-            OperationName = record.OperationName ?? string.Empty,
-            Outcome = record.Outcome,
-            SensitivityLevel = record.SensitivityLevel,
-            TargetKind = record.Target?.Kind ?? string.Empty,
-            TargetId = record.Target?.Id ?? string.Empty,
-            RequestId = record.Correlation?.RequestId ?? string.Empty,
-            CommandId = record.Correlation?.CommandId ?? string.Empty,
-            CorrelationId = record.Correlation?.TraceId ?? string.Empty,
-            SessionId = record.Correlation?.SessionId ?? string.Empty,
-            WorkflowRunId = record.Correlation?.WorkflowRunId ?? string.Empty,
-            CommittedEventId = record.CommittedFactRef?.CommittedEventId ?? string.Empty,
-            CommittedActorId = record.CommittedFactRef?.ActorId ?? string.Empty,
-            CommittedActorType = record.CommittedFactRef?.ActorType ?? string.Empty,
-            CommittedEventTypeUrl = record.CommittedFactRef?.EventTypeUrl ?? string.Empty,
-            CommittedStateVersion = record.CommittedFactRef?.StateVersion ?? 0,
-        };
-
     private static AuditTrailAppendResult ToAppendResult(
         AuditTrailArtifactWriteResult write,
         string auditId,
@@ -110,7 +77,7 @@ public sealed class ProjectionAuditTrailAppender : IAuditTrailAppender
                 observedAt),
             AuditTrailArtifactWriteDisposition.Duplicate => AuditTrailAppendResult.Duplicate(auditId),
             AuditTrailArtifactWriteDisposition.Conflict => AuditTrailAppendResult.Conflict(auditId, "Audit artifact write conflict."),
-            _ => AuditTrailAppendResult.StoreUnavailable(auditId, $"Audit document write was not applied: {write.Disposition}."),
+            _ => AuditTrailAppendResult.StoreUnavailable(auditId, $"Audit artifact write was not applied: {write.Disposition}."),
         };
 
     private static T? SelectSingleOrDefault<T>(IEnumerable<T> registrations, string parameterName)
@@ -122,7 +89,7 @@ public sealed class ProjectionAuditTrailAppender : IAuditTrailAppender
 
         var selected = enumerator.Current;
         if (enumerator.MoveNext())
-            throw new InvalidOperationException($"Multiple audit trail projection document store registrations were found for {typeof(T).Name}.");
+            throw new InvalidOperationException($"Multiple audit trail artifact store registrations were found for {typeof(T).Name}.");
 
         return selected;
     }
