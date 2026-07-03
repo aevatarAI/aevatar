@@ -1,3 +1,4 @@
+using Aevatar.Audit.Core.Projection;
 using Aevatar.ChatRouting.Core;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
@@ -79,6 +80,8 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
 
     private static void AddElasticsearchStores(IServiceCollection services, IConfiguration configuration)
     {
+        RegisterAuditTrailArtifactStore(services);
+        TryAddElasticsearchStore<AuditTrailArtifactStorageDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<ChannelBotRegistrationDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<ConversationDeliveryCurrentStateDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<ProjectionScopeStatusDocument>(services, configuration, static document => document.Id);
@@ -97,6 +100,8 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
 
     private static void AddInMemoryStores(IServiceCollection services)
     {
+        RegisterAuditTrailArtifactStore(services);
+        TryAddInMemoryStore<AuditTrailArtifactStorageDocument>(services, static document => document.Id);
         TryAddInMemoryStore<ChannelBotRegistrationDocument>(services, static document => document.Id);
         TryAddInMemoryStore<ConversationDeliveryCurrentStateDocument>(services, static document => document.Id);
         TryAddInMemoryStore<ProjectionScopeStatusDocument>(services, static document => document.Id);
@@ -144,6 +149,14 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         // site (it owns that read-model); registering it here too would double-count it in the inventory.
         TryAddReadModelDescriptor<StreamingProxyChatSessionTerminalSnapshot>(services, "streaming-proxy-chat-session", "StreamingProxyChatSessionGAgent", engineLabel, shape);
         TryAddReadModelDescriptor<StreamingProxyRoomParticipantsSnapshot>(services, "streaming-proxy-room-participants", "StreamingProxyRoomGAgent", engineLabel, shape);
+    }
+
+    private static void RegisterAuditTrailArtifactStore(IServiceCollection services)
+    {
+        services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<AuditTrailArtifactStorageDocument>,
+            AuditTrailDocumentMetadataProvider>();
+        services.TryAddSingleton<IAuditTrailArtifactStore, ProjectionAuditTrailArtifactStore>();
     }
 
     // Registers a single inventory descriptor that delegates to the read-model's already-registered

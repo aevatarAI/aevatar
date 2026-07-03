@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package aevatar.audit.core.projection;
+
+option csharp_namespace = "Aevatar.Audit.Core.Projection";
+
+import "audit_messages.proto";
+import "google/protobuf/timestamp.proto";
+
+message AuditTrailArtifactStorageDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at_utc_value = 5;
+  aevatar.audit.v1.AuditTrailDocument artifact = 6;
+}

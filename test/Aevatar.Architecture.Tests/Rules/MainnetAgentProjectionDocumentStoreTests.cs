@@ -1,3 +1,4 @@
+using Aevatar.Audit.Core.Projection;
 using Aevatar.ChatRouting.Core;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
@@ -33,6 +34,8 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
         services.AddMainnetAgentProjectionDocumentStores(BuildInMemoryConfiguration());
 
         using var provider = services.BuildServiceProvider();
+        AssertProviderStore<AuditTrailArtifactStorageDocument, InMemoryProjectionDocumentStore<AuditTrailArtifactStorageDocument, string>>(provider);
+        Assert.IsType<ProjectionAuditTrailArtifactStore>(provider.GetRequiredService<IAuditTrailArtifactStore>());
         AssertProviderStore<ChannelBotRegistrationDocument, InMemoryProjectionDocumentStore<ChannelBotRegistrationDocument, string>>(provider);
         AssertProviderStore<ConversationDeliveryCurrentStateDocument, InMemoryProjectionDocumentStore<ConversationDeliveryCurrentStateDocument, string>>(provider);
         AssertProviderStore<ProjectionScopeStatusDocument, InMemoryProjectionDocumentStore<ProjectionScopeStatusDocument, string>>(provider);
@@ -59,6 +62,8 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
         services.AddMainnetAgentProjectionDocumentStores(BuildElasticsearchConfiguration());
 
         using var provider = services.BuildServiceProvider();
+        AssertProviderStore<AuditTrailArtifactStorageDocument, ElasticsearchProjectionDocumentStore<AuditTrailArtifactStorageDocument, string>>(provider);
+        Assert.IsType<ProjectionAuditTrailArtifactStore>(provider.GetRequiredService<IAuditTrailArtifactStore>());
         AssertProviderStore<ChannelBotRegistrationDocument, ElasticsearchProjectionDocumentStore<ChannelBotRegistrationDocument, string>>(provider);
         AssertProviderStore<ConversationDeliveryCurrentStateDocument, ElasticsearchProjectionDocumentStore<ConversationDeliveryCurrentStateDocument, string>>(provider);
         AssertProviderStore<ProjectionScopeStatusDocument, ElasticsearchProjectionDocumentStore<ProjectionScopeStatusDocument, string>>(provider);
@@ -94,6 +99,7 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
 
         using var provider = services.BuildServiceProvider();
         AssertProviderStore<ChannelBotRegistrationDocument, InMemoryProjectionDocumentStore<ChannelBotRegistrationDocument, string>>(provider);
+        AssertProviderStore<AuditTrailArtifactStorageDocument, InMemoryProjectionDocumentStore<AuditTrailArtifactStorageDocument, string>>(provider);
         AssertProviderStore<ConversationDeliveryCurrentStateDocument, InMemoryProjectionDocumentStore<ConversationDeliveryCurrentStateDocument, string>>(provider);
         AssertProviderStore<ProjectionScopeStatusDocument, InMemoryProjectionDocumentStore<ProjectionScopeStatusDocument, string>>(provider);
         AssertProviderStore<StreamingProxyRoomParticipantsSnapshot, InMemoryProjectionDocumentStore<StreamingProxyRoomParticipantsSnapshot, string>>(provider);

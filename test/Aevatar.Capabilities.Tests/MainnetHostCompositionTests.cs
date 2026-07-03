@@ -1,4 +1,5 @@
 using Aevatar.Audit.Abstractions.Ports;
+using Aevatar.Audit.Core.Projection;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Middleware;
@@ -112,6 +113,17 @@ public sealed class MainnetHostCompositionTests
         readModelDescriptors.Should()
             .ContainSingle(static descriptor => descriptor.Name == "streaming-proxy-chat-session");
         app.Services.GetRequiredService<IAuditTrailAppender>().Should().NotBeNull();
+        app.Services.GetRequiredService<IAuditTrailArtifactStore>()
+            .Should()
+            .BeOfType<ProjectionAuditTrailArtifactStore>();
+        app.Services.GetRequiredService<IProjectionDocumentReader<AuditTrailArtifactStorageDocument, string>>()
+            .Should()
+            .NotBeNull();
+        app.Services.GetRequiredService<IProjectionDocumentWriter<AuditTrailArtifactStorageDocument>>()
+            .Should()
+            .NotBeNull();
+        readModelDescriptors.Should()
+            .NotContain(static descriptor => descriptor.Name == "audit-trail");
         // Security lockdown: the scripting capability (and its read models) must never be
         // composed into the mainnet host.
         app.Services.GetService<IProjectionDocumentReader<ScriptNativeDocumentReadModel, string>>()
