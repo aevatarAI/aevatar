@@ -103,7 +103,8 @@ public sealed class InMemoryAuditTrailStore : IAuditTrailAppender, IAuditTrailQu
                MatchesIdentity(record, query) &&
                MatchesOperation(record, query) &&
                MatchesTarget(record, query) &&
-               MatchesCorrelation(record, query);
+               MatchesCorrelation(record, query) &&
+               MatchesCommittedFactReference(record, query);
     }
 
     private static bool MatchesTime(AuditRecord record, AuditTrailQuery query)
@@ -126,7 +127,8 @@ public sealed class InMemoryAuditTrailStore : IAuditTrailAppender, IAuditTrailQu
         return Matches(record.OperationName, query.OperationName) &&
                (!query.OperationKind.HasValue || record.OperationKind == query.OperationKind.Value) &&
                (!query.Outcome.HasValue || record.Outcome == query.Outcome.Value) &&
-               (!query.SensitivityLevel.HasValue || record.SensitivityLevel == query.SensitivityLevel.Value);
+               (!query.SensitivityLevel.HasValue || record.SensitivityLevel == query.SensitivityLevel.Value) &&
+               (!query.CapturePlane.HasValue || record.CapturePlane == query.CapturePlane.Value);
     }
 
     private static bool MatchesTarget(AuditRecord record, AuditTrailQuery query)
@@ -144,6 +146,16 @@ public sealed class InMemoryAuditTrailStore : IAuditTrailAppender, IAuditTrailQu
                Matches(record.Correlation?.SessionId, query.SessionId) &&
                Matches(record.Correlation?.WorkflowRunId, query.WorkflowRunId) &&
                Matches(record.Correlation?.ApprovalId, query.ApprovalId);
+    }
+
+    private static bool MatchesCommittedFactReference(AuditRecord record, AuditTrailQuery query)
+    {
+        return Matches(record.CommittedFactRef?.CommittedEventId, query.CommittedEventId) &&
+               Matches(record.CommittedFactRef?.ActorId, query.CommittedActorId) &&
+               Matches(record.CommittedFactRef?.ActorType, query.CommittedActorType) &&
+               Matches(record.CommittedFactRef?.EventTypeUrl, query.CommittedEventTypeUrl) &&
+               (!query.CommittedStateVersion.HasValue ||
+                record.CommittedFactRef?.StateVersion == query.CommittedStateVersion.Value);
     }
 
     private static bool Matches(string? actual, string? expected)

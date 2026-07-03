@@ -98,6 +98,7 @@ public sealed class AuditRecordSanitizer
             record.CredentialSource == AuditCredentialSource.Unspecified ||
             record.OperationKind == AuditOperationKind.Unspecified ||
             record.SensitivityLevel == AuditSensitivityLevel.Unspecified ||
+            record.CapturePlane == AuditCapturePlane.Unspecified ||
             record.Outcome == AuditOutcome.Unspecified)
         {
             throw new ArgumentException("Audit enum fields must be specified.", nameof(record));

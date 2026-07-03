@@ -20,8 +20,11 @@ public sealed class AuditRecordProtoTests
         parsed.OperationKind.ShouldBe(AuditOperationKind.Tool);
         parsed.SensitivityLevel.ShouldBe(AuditSensitivityLevel.Confidential);
         parsed.Outcome.ShouldBe(AuditOutcome.Success);
+        parsed.CapturePlane.ShouldBe(AuditCapturePlane.ToolExecution);
         parsed.Target.Kind.ShouldBe("workflow");
         parsed.Correlation.RequestId.ShouldBe("req-1");
+        parsed.CommittedFactRef.CommittedEventId.ShouldBe("event-1");
+        parsed.CommittedFactRef.StateVersion.ShouldBe(42);
         parsed.Annotations["risk"].ShouldBe("low");
     }
 
@@ -46,12 +49,35 @@ public sealed class AuditRecordProtoTests
             .Select(static field => field.Name)
             .Concat(AuditTarget.Descriptor.Fields.InFieldNumberOrder().Select(static field => field.Name))
             .Concat(AuditCorrelation.Descriptor.Fields.InFieldNumberOrder().Select(static field => field.Name))
+            .Concat(AuditCommittedFactReference.Descriptor.Fields.InFieldNumberOrder().Select(static field => field.Name))
             .ToList();
 
         foreach (var forbiddenName in forbidden)
         {
             fieldNames.ShouldNotContain(forbiddenName);
         }
+    }
+
+    [Fact]
+    public void AuditRecord_Descriptor_ExposesCapturePlaneAndCommittedFactReferenceAsTypedFields()
+    {
+        var auditRecordFields = AuditRecord.Descriptor.Fields.InFieldNumberOrder()
+            .Select(static field => field.Name)
+            .ToList();
+        var committedFactFields = AuditCommittedFactReference.Descriptor.Fields.InFieldNumberOrder()
+            .Select(static field => field.Name)
+            .ToList();
+
+        auditRecordFields.ShouldContain("capture_plane");
+        auditRecordFields.ShouldContain("committed_fact_ref");
+        committedFactFields.ShouldBe(
+        [
+            "committed_event_id",
+            "actor_id",
+            "actor_type",
+            "event_type_url",
+            "state_version"
+        ]);
     }
 
     private static AuditRecord CreateRecord()
@@ -69,8 +95,17 @@ public sealed class AuditRecordProtoTests
             OperationName = "tools.invoke",
             SensitivityLevel = AuditSensitivityLevel.Confidential,
             Outcome = AuditOutcome.Success,
+            CapturePlane = AuditCapturePlane.ToolExecution,
             Target = new AuditTarget { Kind = "workflow", Id = "wf-1", DisplayName = "Workflow One" },
             Correlation = new AuditCorrelation { TraceId = "trace-1", RequestId = "req-1" },
+            CommittedFactRef = new AuditCommittedFactReference
+            {
+                CommittedEventId = "event-1",
+                ActorId = "actor-1",
+                ActorType = "WorkflowRunGAgent",
+                EventTypeUrl = "type.googleapis.com/aevatar.workflow.WorkflowRunCompletedEvent",
+                StateVersion = 42
+            },
             RequestSummary = "started workflow",
             ResultSummary = "accepted"
         };

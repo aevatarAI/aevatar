@@ -44,10 +44,16 @@ public sealed class InMemoryAuditTrailStoreTests
             OperationName = "tool.call",
             Outcome = AuditOutcome.Denied,
             SensitivityLevel = AuditSensitivityLevel.Confidential,
+            CapturePlane = AuditCapturePlane.ToolExecution,
             TargetKind = "workflow",
             TargetId = "wf-audit-2",
             RequestId = "req-audit-2",
             WorkflowRunId = "run-audit-2",
+            CommittedEventId = "event-audit-2",
+            CommittedActorId = "actor-ref-audit-2",
+            CommittedActorType = "WorkflowRunGAgent",
+            CommittedEventTypeUrl = "type.googleapis.com/aevatar.audit.TestEvent",
+            CommittedStateVersion = 20,
             Take = 10
         });
 
@@ -97,6 +103,9 @@ public sealed class InMemoryAuditTrailStoreTests
             OperationName = operationName,
             SensitivityLevel = AuditSensitivityLevel.Confidential,
             Outcome = outcome,
+            CapturePlane = operationName.StartsWith("tool.", StringComparison.Ordinal)
+                ? AuditCapturePlane.ToolExecution
+                : AuditCapturePlane.BoundaryEndpoint,
             Target = new AuditTarget { Kind = "workflow", Id = $"wf-{auditId}" },
             Correlation = new AuditCorrelation
             {
@@ -107,6 +116,14 @@ public sealed class InMemoryAuditTrailStoreTests
                 SessionId = $"session-{auditId}",
                 WorkflowRunId = $"run-{auditId}",
                 ApprovalId = $"approval-{auditId}"
+            },
+            CommittedFactRef = new AuditCommittedFactReference
+            {
+                CommittedEventId = $"event-{auditId}",
+                ActorId = $"actor-ref-{auditId}",
+                ActorType = "WorkflowRunGAgent",
+                EventTypeUrl = "type.googleapis.com/aevatar.audit.TestEvent",
+                StateVersion = seconds == 0 ? 20 : seconds
             },
             RequestSummary = "request summary",
             ResultSummary = "result summary"

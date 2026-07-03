@@ -24,6 +24,8 @@ public sealed record AuditTrailQuery
 
     public AuditSensitivityLevel? SensitivityLevel { get; init; }
 
+    public AuditCapturePlane? CapturePlane { get; init; }
+
     public string? TargetKind { get; init; }
 
     public string? TargetId { get; init; }
@@ -41,6 +43,16 @@ public sealed record AuditTrailQuery
     public string? WorkflowRunId { get; init; }
 
     public string? ApprovalId { get; init; }
+
+    public string? CommittedEventId { get; init; }
+
+    public string? CommittedActorId { get; init; }
+
+    public string? CommittedActorType { get; init; }
+
+    public string? CommittedEventTypeUrl { get; init; }
+
+    public long? CommittedStateVersion { get; init; }
 
     public string? Cursor { get; init; }
 

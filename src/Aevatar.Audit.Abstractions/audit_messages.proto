@@ -52,6 +52,13 @@ enum AuditOutcome {
   AUDIT_OUTCOME_CANCELLED = 5;
 }
 
+enum AuditCapturePlane {
+  AUDIT_CAPTURE_PLANE_UNSPECIFIED = 0;
+  AUDIT_CAPTURE_PLANE_BOUNDARY_ENDPOINT = 1;
+  AUDIT_CAPTURE_PLANE_TOOL_EXECUTION = 2;
+  AUDIT_CAPTURE_PLANE_PROJECTION_ARTIFACT = 3;
+}
+
 message AuditTarget {
   string kind = 1;
   string id = 2;
@@ -66,6 +73,14 @@ message AuditCorrelation {
   string session_id = 5;
   string workflow_run_id = 6;
   string approval_id = 7;
+}
+
+message AuditCommittedFactReference {
+  string committed_event_id = 1;
+  string actor_id = 2;
+  string actor_type = 3;
+  string event_type_url = 4;
+  int64 state_version = 5;
 }
 
 message AuditRecord {
@@ -87,4 +102,6 @@ message AuditRecord {
   string error_code = 16;
   string error_summary = 17;
   map<string, string> annotations = 18;
+  AuditCapturePlane capture_plane = 19;
+  AuditCommittedFactReference committed_fact_ref = 20;
 }

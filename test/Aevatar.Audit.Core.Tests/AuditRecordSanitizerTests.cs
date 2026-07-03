@@ -39,6 +39,17 @@ public sealed class AuditRecordSanitizerTests
         Should.Throw<ArgumentException>(() => new AuditRecordSanitizer().Sanitize(record));
     }
 
+    [Theory]
+    [InlineData("Bearer caller-token")]
+    [InlineData("-----BEGIN PRIVATE KEY----- secret -----END PRIVATE KEY-----")]
+    public void Sanitize_RejectsSecretBearingAnnotationValues(string annotationValue)
+    {
+        var record = CreateRecord();
+        record.Annotations.Add("safe-diagnostic", annotationValue);
+
+        Should.Throw<ArgumentException>(() => new AuditRecordSanitizer().Sanitize(record));
+    }
+
     [Fact]
     public void Sanitize_RejectsMissingSemanticFields()
     {
@@ -63,6 +74,7 @@ public sealed class AuditRecordSanitizerTests
             OperationName = "api.call",
             SensitivityLevel = AuditSensitivityLevel.Internal,
             Outcome = AuditOutcome.Success,
+            CapturePlane = AuditCapturePlane.BoundaryEndpoint,
             Target = new AuditTarget { Kind = "service", Id = "svc-1" },
             Correlation = new AuditCorrelation { RequestId = "req-1" }
         };
