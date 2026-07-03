@@ -259,7 +259,7 @@ public sealed class WorkflowRunObservatoryEndpointsAdminTests
             value.Contains("alice@example.com", StringComparison.Ordinal));
     }
 
-    // ── harness ──
+    // Harness.
 
     private static async Task<WebApplication> CreateRouteAuditAppAsync(
         RecordingAuditTrailAppender appender,
