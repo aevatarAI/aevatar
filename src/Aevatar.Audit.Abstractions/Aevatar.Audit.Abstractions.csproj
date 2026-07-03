@@ -1,4 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
+<<<<<<< HEAD
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -20,4 +21,27 @@
   <ItemGroup>
     <Protobuf Include="audit_messages.proto" GrpcServices="None" />
   </ItemGroup>
+=======
+
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <AssemblyName>Aevatar.Audit.Abstractions</AssemblyName>
+        <RootNamespace>Aevatar.Audit.Abstractions</RootNamespace>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Google.Protobuf" />
+        <PackageReference Include="Grpc.Tools">
+            <PrivateAssets>all</PrivateAssets>
+            <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+        </PackageReference>
+    </ItemGroup>
+
+    <ItemGroup>
+        <Protobuf Include="audit_messages.proto" GrpcServices="None" />
+    </ItemGroup>
+
+>>>>>>> origin/crnd/milestone32-platform-audit-trail
 </Project>
