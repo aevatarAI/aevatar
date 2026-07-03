@@ -165,28 +165,15 @@ public sealed class CqrsObservatoryApiEndpointsAuditTests
     {
         public List<AuditRecord> Records { get; } = [];
 
-        public Task<AuditTrailAppendReceipt> AppendAsync(
+        public Task<AuditTrailAppendResult> AppendAsync(
             AuditRecord record,
             CancellationToken cancellationToken = default)
         {
             Records.Add(record);
-            return Task.FromResult(new AuditTrailAppendReceipt(
+            return Task.FromResult(AuditTrailAppendResult.Appended(
                 record.AuditId,
                 record.AuditActorId,
                 record.OccurredAt.ToDateTimeOffset()));
-        }
-
-        public async Task<IReadOnlyList<AuditTrailAppendReceipt>> AppendManyAsync(
-            IReadOnlyList<AuditRecord> records,
-            CancellationToken cancellationToken = default)
-        {
-            var receipts = new List<AuditTrailAppendReceipt>(records.Count);
-            foreach (var record in records)
-            {
-                receipts.Add(await AppendAsync(record, cancellationToken));
-            }
-
-            return receipts;
         }
     }
 
