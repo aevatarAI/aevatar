@@ -18,6 +18,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Mainnet.Host.Api.Hosting;
 
@@ -43,6 +44,14 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         if (documentProvider.ElasticsearchEnabled)
         {
             AddElasticsearchStores(services, configuration);
+            // Replace the identity module's default Unavailable probe with a real
+            // HTTP-backed probe that inspects the Elasticsearch security API using
+            // the SAME endpoint/credentials the projection store uses, so the ACL
+            // startup guard verifies the cluster instead of self-attesting a flag.
+            services.Replace(ServiceDescriptor.Singleton<IOAuthClientEsAclProbe>(
+                sp => new HttpOAuthClientEsAclProbe(
+                    ProjectionDocumentProviderConfiguration.BindRequiredElasticsearchOptions(configuration),
+                    sp.GetService<ILogger<HttpOAuthClientEsAclProbe>>())));
             services.TryAddEnumerable(
                 ServiceDescriptor.Singleton<IHostedService, AevatarOAuthClientEsAclStartupGuard>());
             // Self-heal projection-index schema drift at startup (reindex + atomic alias swap)

@@ -27,6 +27,7 @@ internal sealed class NyxIdIdentityAssertionValidator
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ResponsesNyxIdIdentityAssertionOptions _options;
     private readonly NyxIdToolOptions? _nyxIdOptions;
+    private readonly IIdentityAssertionReplayGuard _replayGuard;
     private readonly ILogger<NyxIdIdentityAssertionValidator> _logger;
     private readonly SemaphoreSlim _refreshLock = new(1, 1);
     private NyxIdJwksCacheEntry? _cachedKeys;
@@ -37,15 +38,21 @@ internal sealed class NyxIdIdentityAssertionValidator
     // IOptions<NyxIdToolOptions> here would silently resolve to an empty default instance
     // (BaseUrl == null), which left the issuer/authority fallback dead and surfaced as the
     // generic "issuer is not configured" identity_assertion_invalid failure in production.
+    //
+    // replayGuard is optional so a bare-constructor use (tests, non-DI callers) still works; when
+    // absent it defaults to a node-local in-memory guard on the system clock. In DI the singleton
+    // guard is injected so replay detection is shared across all validations in the process.
     public NyxIdIdentityAssertionValidator(
         IHttpClientFactory httpClientFactory,
         IOptions<ResponsesNyxIdIdentityAssertionOptions> options,
         NyxIdToolOptions? nyxIdOptions = null,
+        IIdentityAssertionReplayGuard? replayGuard = null,
         ILogger<NyxIdIdentityAssertionValidator>? logger = null)
     {
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
         _nyxIdOptions = nyxIdOptions;
+        _replayGuard = replayGuard ?? new InMemoryIdentityAssertionReplayGuard(TimeProvider.System);
         _logger = logger ?? NullLogger<NyxIdIdentityAssertionValidator>.Instance;
     }
 
@@ -104,7 +111,7 @@ internal sealed class NyxIdIdentityAssertionValidator
 
         try
         {
-            var principal = handler.ValidateToken(identityToken, parameters, out _);
+            var principal = handler.ValidateToken(identityToken, parameters, out var validatedToken);
             var subject = NormalizeOptional(principal.FindFirstValue(JwtRegisteredClaimNames.Sub)) ??
                           NormalizeOptional(principal.FindFirstValue("sub"));
             var jti = NormalizeOptional(principal.FindFirstValue(JwtRegisteredClaimNames.Jti)) ??
@@ -126,6 +133,19 @@ internal sealed class NyxIdIdentityAssertionValidator
                         "identity_assertion_service_id_mismatch",
                         "NyxID identity assertion service id does not match the expected service.");
                 }
+            }
+
+            // Replay guard runs last: only a signature-valid, claims-valid, in-lifetime assertion
+            // is consumed, and each jti is single-use within its lifetime. A duplicate jti means
+            // the same proxy-minted assertion is being presented twice and is rejected.
+            // JWT ValidTo is UTC; force the kind so DateTimeOffset never throws on Unspecified.
+            var expiresUtc = new DateTimeOffset(
+                DateTime.SpecifyKind(validatedToken.ValidTo, DateTimeKind.Utc));
+            if (!_replayGuard.TryConsume(jti, expiresUtc))
+            {
+                return Fail(
+                    "identity_assertion_replayed",
+                    "NyxID identity assertion has already been used (jti replay).");
             }
 
             return new NyxIdIdentityAssertionValidationResult(true, Subject: subject);

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Aevatar.Foundation.Abstractions.Helpers;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.Channel.NyxIdRelay;
@@ -297,9 +298,12 @@ internal static class NyxApiResponseHelper
                 ? messageElement.GetString()
                 : string.Empty;
 
+            // The body/message are relayed from the upstream platform and surface into the
+            // registration error string (which is logged); scrub secret-shaped content so a
+            // misbehaving upstream cannot echo a submitted secret back into our logs.
             return $"nyx_status={status}" +
-                   (string.IsNullOrWhiteSpace(body) ? string.Empty : $" body={body}") +
-                   (string.IsNullOrWhiteSpace(message) ? string.Empty : $" message={message}");
+                   (string.IsNullOrWhiteSpace(body) ? string.Empty : $" body={SecretScrubber.Scrub(body)}") +
+                   (string.IsNullOrWhiteSpace(message) ? string.Empty : $" message={SecretScrubber.Scrub(message)}");
         }
         catch (JsonException)
         {
@@ -327,7 +331,7 @@ internal static class NyxApiResponseHelper
                     "Nyx rollback returned an error envelope: type={ResourceType}, id={ResourceId}, response={Response}",
                     resourceType,
                     resourceId,
-                    response);
+                    SecretScrubber.Scrub(response));
             }
         }
         catch (Exception ex)

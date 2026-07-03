@@ -3,6 +3,7 @@ using System.Net.Http;
 using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.LLMProviders.MEAI;
+using Aevatar.Foundation.Abstractions.Helpers;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -132,9 +133,13 @@ public sealed class NyxIdLLMProvider : ILLMProvider
     {
         var (status, body) = ExtractUpstreamStatusAndBody(ex);
 
+        // The upstream body is relayed verbatim from NyxID's downstream provider; scrub
+        // secret-shaped content before logging so a misbehaving upstream cannot echo a
+        // submitted secret into our logs. Classification below keeps the raw body — it only
+        // extracts a short human-facing summary, never persisted as a credential surface.
         _logger?.LogWarning(ex,
             "NyxID LLM error: status={Status}, route={Route}, endpoint={Endpoint}, body={Body}",
-            status, route.RouteName, route.Endpoint, body);
+            status, route.RouteName, route.Endpoint, SecretScrubber.Scrub(body));
 
         return ClassifyUpstreamFailure(ex, status, body, route);
     }
