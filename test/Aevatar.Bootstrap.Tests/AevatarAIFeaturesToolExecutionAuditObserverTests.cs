@@ -48,16 +48,10 @@ public sealed class AevatarAIFeaturesToolExecutionAuditObserverTests
 
     private sealed class RecordingAuditTrailAppender : IAuditTrailAppender
     {
-        public Task<AuditTrailAppendReceipt> AppendAsync(
+        public Task<AuditTrailAppendResult> AppendAsync(
             AuditRecord record,
             CancellationToken cancellationToken = default) =>
-            Task.FromResult(new AuditTrailAppendReceipt(record.AuditId, record.AuditActorId, DateTimeOffset.UtcNow));
-
-        public Task<IReadOnlyList<AuditTrailAppendReceipt>> AppendManyAsync(
-            IReadOnlyList<AuditRecord> records,
-            CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<AuditTrailAppendReceipt>>(
-                records.Select(record => new AuditTrailAppendReceipt(record.AuditId, record.AuditActorId, DateTimeOffset.UtcNow)).ToArray());
+            Task.FromResult(AuditTrailAppendResult.Appended(record.AuditId, record.AuditActorId, DateTimeOffset.UtcNow));
     }
 
     private sealed class StableAuditActorIdentityHasher : IAuditActorIdentityHasher

@@ -380,23 +380,14 @@ public sealed class ToolExecutionAuditMiddlewareTests
 
         public bool ThrowOnAppend { get; init; }
 
-        public Task<AuditTrailAppendReceipt> AppendAsync(AuditRecord record, CancellationToken cancellationToken = default)
+        public Task<AuditTrailAppendResult> AppendAsync(AuditRecord record, CancellationToken cancellationToken = default)
         {
             Attempts++;
             if (ThrowOnAppend)
                 throw new InvalidOperationException("audit store unavailable");
 
             Records.Add(record);
-            return Task.FromResult(new AuditTrailAppendReceipt(record.AuditId, record.AuditActorId, DateTimeOffset.UtcNow));
-        }
-
-        public Task<IReadOnlyList<AuditTrailAppendReceipt>> AppendManyAsync(
-            IReadOnlyList<AuditRecord> records,
-            CancellationToken cancellationToken = default)
-        {
-            Records.AddRange(records);
-            return Task.FromResult<IReadOnlyList<AuditTrailAppendReceipt>>(
-                records.Select(record => new AuditTrailAppendReceipt(record.AuditId, record.AuditActorId, DateTimeOffset.UtcNow)).ToArray());
+            return Task.FromResult(AuditTrailAppendResult.Appended(record.AuditId, record.AuditActorId, DateTimeOffset.UtcNow));
         }
     }
 
