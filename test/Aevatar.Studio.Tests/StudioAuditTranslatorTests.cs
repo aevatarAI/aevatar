@@ -1,17 +1,53 @@
 using Aevatar.Audit;
 using Aevatar.Audit.Abstractions.CommittedFacts;
+using Aevatar.Audit.Core.CommittedFacts;
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.StudioMember;
 using Aevatar.GAgents.StudioTeam;
 using Aevatar.Studio.Projection.Audit;
+using Aevatar.Studio.Projection.DependencyInjection;
+using Aevatar.Studio.Projection.Orchestration;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Studio.Tests;
 
 public sealed class StudioAuditTranslatorTests
 {
+    [Fact]
+    public void AddStudioProjectionComponents_ShouldWireCommittedAuditMaterializerAndTranslators()
+    {
+        var services = new ServiceCollection();
+
+        services.AddStudioProjectionComponents();
+        using var provider = services.BuildServiceProvider();
+
+        services.Should().ContainSingle(descriptor =>
+            descriptor.ServiceType == typeof(IProjectionArtifactMaterializer<StudioMaterializationContext>) &&
+            IsObservedProjectionArtifactMaterializerFor<
+                CommittedAuditArtifactMaterializer<StudioMaterializationContext>>(
+                descriptor.ImplementationType));
+        provider
+            .GetRequiredService<CommittedAuditArtifactMaterializer<StudioMaterializationContext>>()
+            .Should()
+            .NotBeNull();
+        provider
+            .GetServices<IAuditCommittedEventTranslator>()
+            .Select(static translator => translator.GetType())
+            .Should()
+            .Contain([
+                typeof(StudioMemberCreatedAuditTranslator),
+                typeof(StudioMemberImplementationUpdatedAuditTranslator),
+                typeof(StudioMemberReassignedAuditTranslator),
+                typeof(StudioTeamCreatedAuditTranslator),
+                typeof(StudioTeamUpdatedAuditTranslator),
+                typeof(StudioTeamArchivedAuditTranslator),
+            ]);
+    }
+
     [Theory]
     [MemberData(nameof(StudioSeedEvents))]
     public void StudioSeedTranslators_ShouldProduceCommittedAuditRecord(
@@ -136,4 +172,12 @@ public sealed class StudioAuditTranslatorTests
             "cmd-1",
             "req-1",
             "corr-1");
+
+    private static bool IsObservedProjectionArtifactMaterializerFor<TMaterializer>(Type? type)
+    {
+        return type?.IsGenericType == true &&
+               type.Name.StartsWith("ObservedProjectionArtifactMaterializer`", StringComparison.Ordinal) &&
+               type.GenericTypeArguments.Length == 2 &&
+               type.GenericTypeArguments[1] == typeof(TMaterializer);
+    }
 }

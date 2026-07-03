@@ -1,16 +1,47 @@
 using Aevatar.Audit;
 using Aevatar.Audit.Abstractions.CommittedFacts;
+using Aevatar.Audit.Core.CommittedFacts;
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Channel.Runtime.Audit;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
 public sealed class ChannelRegistrationAuditTranslatorTests
 {
+    [Fact]
+    public void AddChannelRuntime_ShouldWireCommittedAuditMaterializerAndTranslators()
+    {
+        var services = new ServiceCollection();
+
+        services.AddChannelRuntime();
+        using var provider = services.BuildServiceProvider();
+
+        services.Should().ContainSingle(descriptor =>
+            descriptor.ServiceType == typeof(IProjectionArtifactMaterializer<ChannelBotRegistrationMaterializationContext>) &&
+            IsObservedProjectionArtifactMaterializerFor<
+                CommittedAuditArtifactMaterializer<ChannelBotRegistrationMaterializationContext>>(
+                descriptor.ImplementationType));
+        provider
+            .GetRequiredService<CommittedAuditArtifactMaterializer<ChannelBotRegistrationMaterializationContext>>()
+            .Should()
+            .NotBeNull();
+        provider
+            .GetServices<IAuditCommittedEventTranslator>()
+            .Select(static translator => translator.GetType())
+            .Should()
+            .Contain([
+                typeof(ChannelBotRegisteredAuditTranslator),
+                typeof(ChannelBotUnregisteredAuditTranslator),
+                typeof(ChannelBotRegistrationRejectedAuditTranslator),
+            ]);
+    }
+
     [Theory]
     [MemberData(nameof(ChannelSeedEvents))]
     public void ChannelSeedTranslators_ShouldProduceCommittedAuditRecord(
@@ -92,4 +123,12 @@ public sealed class ChannelRegistrationAuditTranslatorTests
             "cmd-1",
             "req-1",
             "corr-1");
+
+    private static bool IsObservedProjectionArtifactMaterializerFor<TMaterializer>(Type? type)
+    {
+        return type?.IsGenericType == true &&
+               type.Name.StartsWith("ObservedProjectionArtifactMaterializer`", StringComparison.Ordinal) &&
+               type.GenericTypeArguments.Length == 2 &&
+               type.GenericTypeArguments[1] == typeof(TMaterializer);
+    }
 }

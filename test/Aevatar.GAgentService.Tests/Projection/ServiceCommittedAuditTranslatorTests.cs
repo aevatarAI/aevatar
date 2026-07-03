@@ -1,17 +1,52 @@
 using Aevatar.Audit;
 using Aevatar.Audit.Abstractions.CommittedFacts;
+using Aevatar.Audit.Core.CommittedFacts;
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Core.Schedules;
+using Aevatar.GAgentService.Projection.Contexts;
 using Aevatar.GAgentService.Projection.Audit;
+using Aevatar.GAgentService.Projection.DependencyInjection;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.GAgentService.Tests.Projection;
 
 public sealed class ServiceCommittedAuditTranslatorTests
 {
+    [Fact]
+    public void AddGAgentServiceProjection_ShouldWireCommittedAuditMaterializersAndTranslators()
+    {
+        var services = new ServiceCollection();
+
+        services.AddGAgentServiceProjection();
+        using var provider = services.BuildServiceProvider();
+
+        AssertCommittedAuditMaterializerRegistered<ServiceCatalogProjectionContext>(services, provider);
+        AssertCommittedAuditMaterializerRegistered<ServiceDeploymentCatalogProjectionContext>(services, provider);
+        AssertCommittedAuditMaterializerRegistered<ServiceRevisionCatalogProjectionContext>(services, provider);
+        AssertCommittedAuditMaterializerRegistered<ScheduledDispatchProjectionContext>(services, provider);
+        provider
+            .GetServices<IAuditCommittedEventTranslator>()
+            .Select(static translator => translator.GetType())
+            .Should()
+            .Contain([
+                typeof(ServiceRegistrationSucceededAuditTranslator),
+                typeof(ServiceRegistrationFailedAuditTranslator),
+                typeof(ServiceRegistrationRetiredAuditTranslator),
+                typeof(ServiceRevisionPublishedAuditTranslator),
+                typeof(ServiceDeploymentActivatedAuditTranslator),
+                typeof(ServiceDeploymentDeactivatedAuditTranslator),
+                typeof(ScheduledDispatchConfiguredAuditTranslator),
+                typeof(ScheduledDispatchEnabledAuditTranslator),
+                typeof(ScheduledDispatchDisabledAuditTranslator),
+                typeof(ScheduledDispatchDeletedAuditTranslator),
+            ]);
+    }
+
     [Theory]
     [MemberData(nameof(ServiceSeedEvents))]
     public void ServiceSeedTranslators_ShouldProduceCommittedAuditRecord(
@@ -202,4 +237,27 @@ public sealed class ServiceCommittedAuditTranslatorTests
             "command-1",
             "request-1",
             "corr-1");
+
+    private static void AssertCommittedAuditMaterializerRegistered<TContext>(
+        IServiceCollection services,
+        IServiceProvider provider)
+        where TContext : class, IProjectionMaterializationContext
+    {
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IProjectionArtifactMaterializer<TContext>) &&
+            IsObservedProjectionArtifactMaterializerFor<CommittedAuditArtifactMaterializer<TContext>>(
+                descriptor.ImplementationType));
+        provider
+            .GetRequiredService<CommittedAuditArtifactMaterializer<TContext>>()
+            .Should()
+            .NotBeNull();
+    }
+
+    private static bool IsObservedProjectionArtifactMaterializerFor<TMaterializer>(Type? type)
+    {
+        return type?.IsGenericType == true &&
+               type.Name.StartsWith("ObservedProjectionArtifactMaterializer`", StringComparison.Ordinal) &&
+               type.GenericTypeArguments.Length == 2 &&
+               type.GenericTypeArguments[1] == typeof(TMaterializer);
+    }
 }

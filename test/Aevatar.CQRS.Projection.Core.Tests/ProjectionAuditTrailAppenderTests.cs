@@ -106,6 +106,36 @@ public sealed class ProjectionAuditTrailAppenderTests
         result.Message.Should().Contain("write conflict");
     }
 
+    [Fact]
+    public async Task AppendAsync_WhenAuditIdIsBlank_ShouldReturnConflictWithoutReadingStore()
+    {
+        var store = new RecordingAuditTrailArtifactStore();
+        var appender = new ProjectionAuditTrailAppender([store]);
+
+        var result = await appender.AppendAsync(CreateRecord(" "));
+
+        result.Status.Should().Be(AuditTrailAppendStatus.Conflict);
+        result.AuditId.Should().BeEmpty();
+        result.Message.Should().Contain("Audit id is required");
+        store.ReadCount.Should().Be(0);
+        store.Documents.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(ThrowOn.Read)]
+    [InlineData(ThrowOn.Write)]
+    public async Task AppendAsync_WhenArtifactStoreThrows_ShouldReturnStoreUnavailable(ThrowOn throwOn)
+    {
+        var store = new RecordingAuditTrailArtifactStore { ThrowOn = throwOn };
+        var appender = new ProjectionAuditTrailAppender([store]);
+
+        var result = await appender.AppendAsync(CreateRecord("audit-1"));
+
+        result.Status.Should().Be(AuditTrailAppendStatus.StoreUnavailable);
+        result.AuditId.Should().Be("audit-1");
+        result.Message.Should().Be($"artifact store {throwOn.ToString().ToLowerInvariant()} failed");
+    }
+
     [Theory]
     [InlineData(CancelOn.Read)]
     [InlineData(CancelOn.Write)]
@@ -165,10 +195,18 @@ public sealed class ProjectionAuditTrailAppenderTests
 
         public CancelOn CancelOn { get; init; } = CancelOn.None;
 
+        public ThrowOn ThrowOn { get; init; } = ThrowOn.None;
+
+        public int ReadCount { get; private set; }
+
         public List<AuditTrailDocument> Documents { get; } = [];
 
         public Task<AuditTrailDocument?> GetAsync(string auditId, CancellationToken ct = default)
         {
+            ReadCount++;
+            if (ThrowOn == ThrowOn.Read)
+                throw new InvalidOperationException("artifact store read failed");
+
             if (CancelOn == CancelOn.Read)
                 ct.ThrowIfCancellationRequested();
 
@@ -177,6 +215,9 @@ public sealed class ProjectionAuditTrailAppenderTests
 
         public Task<AuditTrailArtifactWriteResult> UpsertAsync(AuditTrailDocument document, CancellationToken ct = default)
         {
+            if (ThrowOn == ThrowOn.Write)
+                throw new InvalidOperationException("artifact store write failed");
+
             if (CancelOn == CancelOn.Write)
                 ct.ThrowIfCancellationRequested();
 
@@ -186,6 +227,13 @@ public sealed class ProjectionAuditTrailAppenderTests
     }
 
     public enum CancelOn
+    {
+        None = 0,
+        Read = 1,
+        Write = 2,
+    }
+
+    public enum ThrowOn
     {
         None = 0,
         Read = 1,
