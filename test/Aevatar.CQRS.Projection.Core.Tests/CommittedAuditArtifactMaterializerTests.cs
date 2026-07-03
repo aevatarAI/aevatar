@@ -34,12 +34,13 @@ public sealed class CommittedAuditArtifactMaterializerTests
 
         appender.Records.Should().ContainSingle();
         var record = appender.Records[0];
-        record.Outcome.Should().Be(AuditOutcome.Committed);
-        record.OperationKind.Should().Be(AuditOperationKind.CommittedFact);
-        record.TargetVersion.Should().Be(42);
-        record.CommandId.Should().Be("cmd-from-baggage");
-        record.RequestId.Should().Be("req-from-baggage");
-        record.CorrelationId.Should().Be("corr-1");
+        record.Outcome.Should().Be(AuditOutcome.Success);
+        record.OperationKind.Should().Be(AuditOperationKind.System);
+        record.CapturePlane.Should().Be(AuditCapturePlane.ProjectionArtifact);
+        record.CommittedFactRef.StateVersion.Should().Be(42);
+        record.Correlation.CommandId.Should().Be("cmd-from-baggage");
+        record.Correlation.RequestId.Should().Be("req-from-baggage");
+        record.Correlation.TraceId.Should().Be("corr-1");
         record.ActorKind.Should().Be(AuditActorKind.System);
         record.Annotations["source_event_type_url"].Should().Be(StringValueAuditTranslator.TypeUrl);
     }

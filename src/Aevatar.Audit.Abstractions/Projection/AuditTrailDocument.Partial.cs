@@ -7,7 +7,7 @@ public sealed partial class AuditTrailDocument : IProjectionReadModel<AuditTrail
 {
     string IProjectionReadModel.ActorId => AuditActorId;
 
-    long IProjectionReadModel.StateVersion => Record?.TargetVersion ?? 1;
+    long IProjectionReadModel.StateVersion => CommittedStateVersion > 0 ? CommittedStateVersion : 1;
 
     string IProjectionReadModel.LastEventId => ContentHash;
 

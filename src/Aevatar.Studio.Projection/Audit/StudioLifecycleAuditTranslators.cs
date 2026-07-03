@@ -97,7 +97,7 @@ public sealed class StudioTeamArchivedAuditTranslator : StudioAuditTranslatorBas
             evt.TeamId,
             evt.ScopeId,
             "Studio team archived.",
-            AuditSensitivityLevel.Destructive,
+            AuditSensitivityLevel.Restricted,
             true);
 }
 
@@ -123,7 +123,7 @@ public abstract class StudioAuditTranslatorBase<TEvent> : IAuditCommittedEventTr
         string targetId,
         string scopeId,
         string resultSummary,
-        AuditSensitivityLevel sensitivityLevel = AuditSensitivityLevel.Sensitive,
+        AuditSensitivityLevel sensitivityLevel = AuditSensitivityLevel.Confidential,
         bool isDestructive = false,
         IReadOnlyDictionary<string, string>? Annotations = null) =>
         new(

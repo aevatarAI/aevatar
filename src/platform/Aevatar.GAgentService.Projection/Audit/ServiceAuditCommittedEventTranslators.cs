@@ -41,7 +41,7 @@ public sealed class ServiceRegistrationFailedAuditTranslator
             evt.Identity?.ServiceId ?? string.Empty,
             evt.CredentialKid,
             $"Service registration failed for {evt.Identity?.ServiceId ?? string.Empty}.",
-            AuditSensitivityLevel.Sensitive,
+            AuditSensitivityLevel.Confidential,
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["error_summary"] = evt.LastError ?? string.Empty,
@@ -63,7 +63,7 @@ public sealed class ServiceRegistrationRetiredAuditTranslator
             evt.Identity?.ServiceId ?? string.Empty,
             "",
             $"Service registration retired for {evt.Identity?.ServiceId ?? string.Empty}.",
-            AuditSensitivityLevel.Destructive,
+            AuditSensitivityLevel.Restricted,
             isDestructive: true);
 }
 
@@ -116,7 +116,7 @@ public sealed class ServiceDeploymentDeactivatedAuditTranslator
             evt.DeploymentId,
             "",
             $"Service deployment deactivated: {evt.DeploymentId}.",
-            AuditSensitivityLevel.Destructive,
+            AuditSensitivityLevel.Restricted,
             isDestructive: true);
 }
 
@@ -162,7 +162,7 @@ public sealed class ScheduledDispatchDisabledAuditTranslator
             context.OriginActorId,
             null,
             "Scheduled dispatch disabled.",
-            AuditSensitivityLevel.Destructive,
+            AuditSensitivityLevel.Restricted,
             isDestructive: true);
 }
 
@@ -180,7 +180,7 @@ public sealed class ScheduledDispatchDeletedAuditTranslator
             context.OriginActorId,
             null,
             "Scheduled dispatch deleted.",
-            AuditSensitivityLevel.Destructive,
+            AuditSensitivityLevel.Restricted,
             isDestructive: true);
 }
 
@@ -206,7 +206,7 @@ public abstract class AuditTranslatorBase<TEvent> : IAuditCommittedEventTranslat
         string targetId,
         string credentialKid,
         string resultSummary,
-        AuditSensitivityLevel sensitivityLevel = AuditSensitivityLevel.Sensitive,
+        AuditSensitivityLevel sensitivityLevel = AuditSensitivityLevel.Confidential,
         IReadOnlyDictionary<string, string>? annotations = null,
         bool isDestructive = false)
     {
@@ -241,7 +241,7 @@ public abstract class AuditTranslatorBase<TEvent> : IAuditCommittedEventTranslat
         string scheduleId,
         IDictionary<string, string>? headers,
         string resultSummary,
-        AuditSensitivityLevel sensitivityLevel = AuditSensitivityLevel.Sensitive,
+        AuditSensitivityLevel sensitivityLevel = AuditSensitivityLevel.Confidential,
         bool isDestructive = false)
     {
         var commandId = ReadHeader(headers, "command_id", "commandId");

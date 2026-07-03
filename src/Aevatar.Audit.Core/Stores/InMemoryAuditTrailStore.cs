@@ -22,7 +22,7 @@ public sealed class InMemoryAuditTrailStore : IAuditTrailAppender, IAuditTrailQu
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
-    public Task<AuditTrailAppendReceipt> AppendAsync(
+    public Task<AuditTrailAppendResult> AppendAsync(
         AuditRecord record,
         CancellationToken cancellationToken = default)
     {
@@ -34,27 +34,27 @@ public sealed class InMemoryAuditTrailStore : IAuditTrailAppender, IAuditTrailQu
             _records.Add(sanitized.Clone());
         }
 
-        var receipt = new AuditTrailAppendReceipt(
+        var result = AuditTrailAppendResult.Appended(
             sanitized.AuditId,
             sanitized.AuditActorId,
             sanitized.OccurredAt.ToDateTimeOffset());
 
-        return Task.FromResult(receipt);
+        return Task.FromResult(result);
     }
 
-    public async Task<IReadOnlyList<AuditTrailAppendReceipt>> AppendManyAsync(
+    public async Task<IReadOnlyList<AuditTrailAppendResult>> AppendManyAsync(
         IReadOnlyList<AuditRecord> records,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(records);
 
-        var receipts = new List<AuditTrailAppendReceipt>(records.Count);
+        var results = new List<AuditTrailAppendResult>(records.Count);
         foreach (var record in records)
         {
-            receipts.Add(await AppendAsync(record, cancellationToken));
+            results.Add(await AppendAsync(record, cancellationToken));
         }
 
-        return receipts;
+        return results;
     }
 
     public Task<AuditTrailPage> QueryAsync(

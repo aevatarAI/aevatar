@@ -24,11 +24,11 @@ public sealed class ServiceCommittedAuditTranslatorTests
         var record = Translate(translator, evt);
 
         record.OperationName.Should().Be(operationName);
-        record.Outcome.Should().Be(AuditOutcome.Committed);
+        record.Outcome.Should().Be(AuditOutcome.Success);
         record.ActorKind.Should().Be(AuditActorKind.System);
-        record.TargetKind.Should().Be(targetKind);
-        record.TargetId.Should().Be(targetId);
-        record.TargetVersion.Should().Be(17);
+        record.Target.Kind.Should().Be(targetKind);
+        record.Target.Id.Should().Be(targetId);
+        record.CommittedFactRef.StateVersion.Should().Be(17);
     }
 
     [Fact]

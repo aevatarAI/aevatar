@@ -24,11 +24,11 @@ public sealed class StudioAuditTranslatorTests
         var record = translator.Translate(Context(), Any.Pack(evt)).Should().ContainSingle().Subject;
 
         record.OperationName.Should().Be(operationName);
-        record.Outcome.Should().Be(AuditOutcome.Committed);
+        record.Outcome.Should().Be(AuditOutcome.Success);
         record.ActorKind.Should().Be(AuditActorKind.System);
-        record.TargetKind.Should().Be(targetKind);
-        record.TargetId.Should().Be(targetId);
-        record.TargetVersion.Should().Be(9);
+        record.Target.Kind.Should().Be(targetKind);
+        record.Target.Id.Should().Be(targetId);
+        record.CommittedFactRef.StateVersion.Should().Be(9);
     }
 
     [Fact]

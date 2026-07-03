@@ -9,7 +9,7 @@ public sealed record CommittedAuditSeed(
     string TargetKind,
     string TargetId,
     string ScopeId = "",
-    AuditSensitivityLevel SensitivityLevel = AuditSensitivityLevel.Sensitive,
+    AuditSensitivityLevel SensitivityLevel = AuditSensitivityLevel.Confidential,
     bool IsDestructive = false,
     string CommandId = "",
     string RequestId = "",
@@ -32,24 +32,37 @@ public static class CommittedAuditRecordFactory
             AuditId = auditId,
             OccurredAt = Timestamp.FromDateTimeOffset(context.ObservedAt),
             OperationName = seed.OperationName,
-            OperationKind = AuditOperationKind.CommittedFact,
+            OperationKind = AuditOperationKind.System,
             SensitivityLevel = seed.SensitivityLevel,
-            Outcome = AuditOutcome.Committed,
+            Outcome = AuditOutcome.Success,
             ScopeId = seed.ScopeId ?? string.Empty,
             AuditActorId = "system",
             IdentityKeyId = "system",
             ActorKind = AuditActorKind.System,
-            ActorDisplay = "SYSTEM",
-            CredentialSource = "system",
-            TargetKind = seed.TargetKind,
-            TargetId = seed.TargetId,
-            TargetVersion = context.StateEvent.Version,
-            RequestId = FirstNonBlank(seed.RequestId, context.RequestId),
-            CommandId = FirstNonBlank(seed.CommandId, context.CommandId, context.Envelope.Id),
-            CorrelationId = FirstNonBlank(seed.CorrelationId, context.CorrelationId),
-            IsDestructive = seed.IsDestructive,
+            CredentialSource = AuditCredentialSource.System,
+            Target = new AuditTarget
+            {
+                Kind = seed.TargetKind,
+                Id = seed.TargetId,
+            },
+            Correlation = new AuditCorrelation
+            {
+                RequestId = FirstNonBlank(seed.RequestId, context.RequestId),
+                CommandId = FirstNonBlank(seed.CommandId, context.CommandId, context.Envelope.Id),
+                TraceId = FirstNonBlank(seed.CorrelationId, context.CorrelationId),
+            },
+            CapturePlane = AuditCapturePlane.ProjectionArtifact,
+            CommittedFactRef = new AuditCommittedFactReference
+            {
+                CommittedEventId = context.StateEvent.EventId ?? string.Empty,
+                ActorId = context.OriginActorId,
+                EventTypeUrl = context.EventTypeUrl,
+                StateVersion = context.StateEvent.Version,
+            },
             ResultSummary = seed.ResultSummary ?? string.Empty,
         };
+        if (seed.IsDestructive)
+            record.Annotations.Add("is_destructive", "true");
         record.Annotations.Add("source_event_type_url", context.EventTypeUrl);
         record.Annotations.Add("source_event_id", context.StateEvent.EventId ?? string.Empty);
         record.Annotations.Add("origin_actor_id", context.OriginActorId);

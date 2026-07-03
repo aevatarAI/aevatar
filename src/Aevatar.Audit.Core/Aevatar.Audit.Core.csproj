@@ -1,5 +1,4 @@
 <Project Sdk="Microsoft.NET.Sdk">
-<<<<<<< HEAD
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -19,27 +18,7 @@
     <PackageReference Include="Google.Protobuf" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Options" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
   </ItemGroup>
-=======
-
-    <PropertyGroup>
-        <TargetFramework>net10.0</TargetFramework>
-        <ImplicitUsings>enable</ImplicitUsings>
-        <Nullable>enable</Nullable>
-        <AssemblyName>Aevatar.Audit.Core</AssemblyName>
-        <RootNamespace>Aevatar.Audit.Core</RootNamespace>
-    </PropertyGroup>
-
-    <ItemGroup>
-        <ProjectReference Include="..\Aevatar.Audit.Abstractions\Aevatar.Audit.Abstractions.csproj" />
-    </ItemGroup>
-
-    <ItemGroup>
-        <PackageReference Include="Google.Protobuf" />
-        <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
-        <PackageReference Include="Microsoft.Extensions.Options" />
-        <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
-    </ItemGroup>
-
->>>>>>> origin/crnd/milestone32-platform-audit-trail
 </Project>

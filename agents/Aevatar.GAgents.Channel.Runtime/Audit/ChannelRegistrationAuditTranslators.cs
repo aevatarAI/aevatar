@@ -39,7 +39,7 @@ public sealed class ChannelBotUnregisteredAuditTranslator : ChannelAuditTranslat
             "",
             "",
             "Channel bot unregistration committed.",
-            AuditSensitivityLevel.Destructive,
+            AuditSensitivityLevel.Restricted,
             true);
 }
 
@@ -85,7 +85,7 @@ public abstract class ChannelAuditTranslatorBase<TEvent> : IAuditCommittedEventT
         string scopeId,
         string platform,
         string resultSummary,
-        AuditSensitivityLevel sensitivityLevel = AuditSensitivityLevel.Sensitive,
+        AuditSensitivityLevel sensitivityLevel = AuditSensitivityLevel.Confidential,
         bool isDestructive = false,
         IReadOnlyDictionary<string, string>? Annotations = null)
     {

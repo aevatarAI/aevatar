@@ -22,11 +22,11 @@ public sealed class ChannelRegistrationAuditTranslatorTests
         var record = translator.Translate(Context(), Any.Pack(evt)).Should().ContainSingle().Subject;
 
         record.OperationName.Should().Be(operationName);
-        record.Outcome.Should().Be(AuditOutcome.Committed);
+        record.Outcome.Should().Be(AuditOutcome.Success);
         record.ActorKind.Should().Be(AuditActorKind.System);
-        record.TargetKind.Should().Be("channel_bot_registration");
-        record.TargetId.Should().Be(targetId);
-        record.TargetVersion.Should().Be(5);
+        record.Target.Kind.Should().Be("channel_bot_registration");
+        record.Target.Id.Should().Be(targetId);
+        record.CommittedFactRef.StateVersion.Should().Be(5);
     }
 
     [Fact]
