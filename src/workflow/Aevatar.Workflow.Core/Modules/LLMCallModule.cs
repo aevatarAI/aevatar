@@ -391,6 +391,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             // channel stamps the caller scope there). Empty stays empty; the role actor only
             // fills a caller scope that is otherwise unset.
             ScopeId = Normalize(ctx.ScopeId) ?? string.Empty,
+            ScheduleId = Normalize(ctx.ScheduleId) ?? string.Empty,
         };
         intent.InputFileRefs.Add(request.InputFileRefs.Select(static fileRef => fileRef.Clone()));
         var runtimeContext = WorkflowRunExecutionContextStateAccess.GetWorkflowRuntimeContext(

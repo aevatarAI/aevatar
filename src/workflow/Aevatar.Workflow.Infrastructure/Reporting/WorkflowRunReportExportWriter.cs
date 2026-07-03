@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using Aevatar.Workflow.Application.Abstractions.Queries;
+using Aevatar.Workflow.Application.Abstractions.Security;
 
 namespace Aevatar.Workflow.Infrastructure.Reporting;
 
@@ -31,9 +32,10 @@ public static class WorkflowRunReportExportWriter
         dir = Path.GetDirectoryName(htmlPath);
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
 
-        var json = JsonSerializer.Serialize(report, JsonOptions);
+        var sanitizedReport = WorkflowAuditReportSanitizer.Sanitize(report);
+        var json = JsonSerializer.Serialize(sanitizedReport, JsonOptions);
         await File.WriteAllTextAsync(jsonPath, json);
-        await File.WriteAllTextAsync(htmlPath, BuildHtml(report));
+        await File.WriteAllTextAsync(htmlPath, BuildHtml(sanitizedReport));
     }
 
     private static string BuildHtml(WorkflowRunReport report)

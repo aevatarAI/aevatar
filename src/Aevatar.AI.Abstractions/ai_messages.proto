@@ -101,6 +101,18 @@ message AgentToolExecutionContextPayload {
   AgentSkillRecoveryContextPayload skill_recovery = 9;
   AgentWorkflowRuntimeContextPayload workflow_runtime = 10;
   AgentToolVisibilityScopePayload tool_visibility = 11;
+  AgentToolCredentialSourcePayload credential_source = 12;
+  AgentToolScheduleContextPayload schedule = 13;
+}
+
+enum AgentToolCredentialSourcePayload {
+  AGENT_TOOL_CREDENTIAL_SOURCE_PAYLOAD_UNSPECIFIED = 0;
+  AGENT_TOOL_CREDENTIAL_SOURCE_PAYLOAD_NYXID_ASSERTION = 1;
+  AGENT_TOOL_CREDENTIAL_SOURCE_PAYLOAD_BEARER_TOKEN = 2;
+  AGENT_TOOL_CREDENTIAL_SOURCE_PAYLOAD_CHANNEL_REGISTRATION = 3;
+  AGENT_TOOL_CREDENTIAL_SOURCE_PAYLOAD_SCHEDULED_RUN = 4;
+  AGENT_TOOL_CREDENTIAL_SOURCE_PAYLOAD_SYSTEM = 5;
+  AGENT_TOOL_CREDENTIAL_SOURCE_PAYLOAD_SERVICE_ACCOUNT = 6;
 }
 
 message AgentSkillRecoveryContextPayload {
@@ -174,6 +186,10 @@ message AgentWorkflowRuntimeContextPayload {
   string parent_step_id = 3;
   string root_run_id = 4;
   int32 depth = 5;
+}
+
+message AgentToolScheduleContextPayload {
+  string schedule_id = 1;
 }
 
 message TextMessageStartEvent   { string session_id = 1; string agent_id = 2; }

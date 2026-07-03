@@ -1,4 +1,6 @@
 using System.Text;
+using Aevatar.Audit;
+using Aevatar.Audit.Hosting.EndpointAudit;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.Capabilities;
 using Aevatar.Workflow.Application.Abstractions.Observatory;
@@ -16,7 +18,8 @@ namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 //   - A NyxID platform admin/operator (verified server-side via IPlatformAdminAuthorizer -> /users/me) may pass
 //     `scope=<id>` or `scope=__all__` to view another scope / all scopes (G2 auth matrix). Admin status is never
 //     self-asserted by a query param; a non-admin cross-scope request is denied BEFORE any cross-scope query runs.
-//   - Every cross-scope attempt is audited (allowed/denied), never logging the bearer (G5).
+//   - Endpoint audit metadata marks these read surfaces; the host audit middleware writes sanitized request/outcome
+//     artifacts and never stores the bearer (G5).
 //   - The read-only guard (GET-only + query-ports-only) and inline-page guard still hold; the NyxID authorizer
 //     lives here in the endpoint layer, never in the query service.
 public static class WorkflowRunObservatoryEndpoints
@@ -27,7 +30,6 @@ public static class WorkflowRunObservatoryEndpoints
 
     // Sentinel scope meaning "all scopes" (admin overview). Not a real scope id.
     internal const string AllScopesToken = "__all__";
-    private const string AuditLoggerCategory = "Aevatar.Workflow.Observatory.AdminCrossScope";
 
     public static IEndpointRouteBuilder MapWorkflowRunObservatory(this IEndpointRouteBuilder app)
     {
@@ -50,26 +52,55 @@ public static class WorkflowRunObservatoryEndpoints
         data.MapGet("/me", GetMe)
             .WithName("GetWorkflowObservatoryCaller")
             .WithSummary("Caller identity + whether they are a platform admin/operator (drives the admin UI).")
+            .WithEndpointAudit(
+                "workflow.observatory.get-caller",
+                AuditSensitivityLevel.Internal,
+                "workflow-observatory-caller",
+                EndpointAuditTargetResolvers.Static("workflow-observatory-caller", "me"))
             .RequireAuthorization();
 
         data.MapGet("/runs", ListRuns)
             .WithName("ListWorkflowObservatoryRuns")
             .WithSummary("List runs. Default = caller scope; admins may pass scope=<id> or scope=__all__.")
+            .WithEndpointAudit(
+                "workflow.observatory.list-runs",
+                AuditSensitivityLevel.Confidential,
+                "workflow-observatory-runs",
+                ResolveWorkflowObservatoryTarget("workflow-observatory-runs"),
+                WorkflowObservatoryRequestSummary)
             .RequireAuthorization();
 
         data.MapGet("/runs/{runId}", GetRun)
             .WithName("GetWorkflowObservatoryRun")
             .WithSummary("Run timeline + summary + usage. Admins may pass scope=<id> for another scope's run.")
+            .WithEndpointAudit(
+                "workflow.observatory.get-run",
+                AuditSensitivityLevel.Confidential,
+                "workflow-run",
+                ResolveWorkflowObservatoryTarget("workflow-run"),
+                WorkflowObservatoryRequestSummary)
             .RequireAuthorization();
 
         data.MapGet("/runs/{runId}/graph", GetRunGraph)
             .WithName("GetWorkflowObservatoryRunGraph")
             .WithSummary("Run topology. Admins may pass scope=<id> for another scope's run.")
+            .WithEndpointAudit(
+                "workflow.observatory.get-run-graph",
+                AuditSensitivityLevel.Confidential,
+                "workflow-run",
+                ResolveWorkflowObservatoryTarget("workflow-run"),
+                WorkflowObservatoryRequestSummary)
             .RequireAuthorization();
 
         data.MapGet("/resolve-scope", ResolveScope)
             .WithName("ResolveWorkflowObservatoryScope")
             .WithSummary("Admin-only: resolve a NyxID email to candidate scope id(s).")
+            .WithEndpointAudit(
+                "workflow.observatory.resolve-scope",
+                AuditSensitivityLevel.Restricted,
+                "workflow-observatory-scope-resolution",
+                EndpointAuditTargetResolvers.Static("workflow-observatory-scope-resolution", "email-lookup"),
+                WorkflowObservatoryRequestSummary)
             .RequireAuthorization();
 
         return app;
@@ -240,7 +271,7 @@ public static class WorkflowRunObservatoryEndpoints
         DateTimeOffset.TryParse(value, out var parsed) ? parsed : null;
 
     // The single cross-scope authorization gate (G2). Fails closed: missing bearer -> 401; non-elevated -> 403.
-    // The cross-scope query is reached only after this returns no denial. Audits every outcome (G5).
+    // The cross-scope query is reached only after this returns no denial.
     private static async Task<(IResult? Denied, PlatformCaller Caller, string Token)> AuthorizeCrossScopeAsync(
         HttpContext http,
         string ownScopeId,
@@ -251,22 +282,17 @@ public static class WorkflowRunObservatoryEndpoints
         ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
-        var logger = loggerFactory.CreateLogger(AuditLoggerCategory);
-
         if (!TryGetBearer(http, out var token))
         {
-            Audit(logger, http, "denied", action, ownScopeId, PlatformCaller.NotElevated, targetScope, runId, "missing_bearer");
             return (Results.Unauthorized(), PlatformCaller.NotElevated, string.Empty);
         }
 
         var caller = await authorizer.ResolveCallerAsync(token, ct);
         if (!caller.IsElevated)
         {
-            Audit(logger, http, "denied", action, ownScopeId, caller, targetScope, runId, "not_admin_or_disabled");
             return (DeniedResult(), caller, token);
         }
 
-        Audit(logger, http, "allowed", action, ownScopeId, caller, targetScope, runId, reason: null);
         return (null, caller, token);
     }
 
@@ -291,21 +317,46 @@ public static class WorkflowRunObservatoryEndpoints
         return true;
     }
 
-    // Structured audit for cross-scope access. NEVER logs the bearer token (G5).
-    private static void Audit(
-        ILogger logger,
-        HttpContext http,
-        string outcome,
-        string action,
-        string callerScope,
-        PlatformCaller admin,
-        string targetScope,
-        string? runId,
-        string? reason) =>
-        logger.LogInformation(
-            "observatory_admin_cross_scope_view outcome={Outcome} action={Action} adminUserId={AdminUserId} " +
-            "adminEmail={AdminEmail} role={Role} callerScope={CallerScope} targetScope={TargetScope} runId={RunId} " +
-            "reason={Reason} correlationId={CorrelationId}",
-            outcome, action, admin.UserId, admin.Email, admin.Role, callerScope, targetScope,
-            runId ?? string.Empty, reason ?? string.Empty, http.TraceIdentifier);
+    private static EndpointAuditTargetResolver ResolveWorkflowObservatoryTarget(string targetKind)
+    {
+        return http =>
+        {
+            var targetScope = ResolveSafeScopeQuery(http);
+            var runId = EndpointAuditSanitizers.SanitizeValue(http.Request.RouteValues["runId"]?.ToString());
+            var id = string.IsNullOrWhiteSpace(runId)
+                ? targetScope
+                : string.IsNullOrWhiteSpace(targetScope)
+                    ? runId
+                    : $"{targetScope}/{runId}";
+            return ValueTask.FromResult<EndpointAuditTarget?>(new EndpointAuditTarget(targetKind, id));
+        };
+    }
+
+    private static ValueTask<string> WorkflowObservatoryRequestSummary(EndpointAuditSanitizationContext context)
+    {
+        var parts = new List<string>
+        {
+            $"{context.HttpContext.Request.Method} {EndpointAuditSanitizers.ResolveRoutePattern(context.HttpContext)}",
+        };
+
+        var scope = ResolveSafeScopeQuery(context.HttpContext);
+        if (!string.IsNullOrWhiteSpace(scope))
+        {
+            parts.Add($"scope={scope}");
+        }
+
+        var runId = EndpointAuditSanitizers.SanitizeValue(
+            context.HttpContext.Request.RouteValues["runId"]?.ToString());
+        if (!string.IsNullOrWhiteSpace(runId))
+        {
+            parts.Add($"runId={runId}");
+        }
+
+        return ValueTask.FromResult(string.Join(' ', parts));
+    }
+
+    private static string ResolveSafeScopeQuery(HttpContext http)
+    {
+        return EndpointAuditSanitizers.SanitizeValue(http.Request.Query["scope"].ToString());
+    }
 }

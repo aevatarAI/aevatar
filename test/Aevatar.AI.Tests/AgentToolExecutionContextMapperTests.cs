@@ -298,6 +298,8 @@ public sealed class AgentToolExecutionContextMapperTests
             new LLMRequestRoutingContext(" model-1 ", " route-1 ", 7, " memory-1 "),
             new AgentToolConnectedServicesContext("""{"service":"telegram"}"""),
             new AgentWorkflowRuntimeContext(" parent-actor ", " parent-run ", " parent-step ", " root-run ", 3),
+            new AgentToolScheduleContext(" schedule-1 "),
+            AgentToolCredentialSource.ChannelRegistration,
             new AgentSkillRecoveryContext(
                 RequireInitialOrnnSearch: true,
                 RequireOrnnSearchOnBlocker: true,
@@ -347,6 +349,8 @@ public sealed class AgentToolExecutionContextMapperTests
         copy.WorkflowRuntime.RootRunId.Should().Be("root-run");
         copy.WorkflowRuntime.Depth.Should().Be(3);
         copy.WorkflowRuntime.HasManagedParent.Should().BeTrue();
+        copy.Schedule.ScheduleId.Should().Be("schedule-1");
+        copy.CredentialSource.Should().Be(AgentToolCredentialSource.ChannelRegistration);
         copy.SkillRecovery.RequireInitialOrnnSearch.Should().BeTrue();
         copy.SkillRecovery.RequireOrnnSearchOnBlocker.Should().BeTrue();
         copy.SkillRecovery.CommandName.Should().Be("goal");
@@ -376,6 +380,44 @@ public sealed class AgentToolExecutionContextMapperTests
         context.SkillRecovery.CommandName.Should().Be("goal");
         context.SkillRecovery.CommandArguments.Should().BeNull();
         context.SkillRecovery.DiscoveryRequested.Should().BeFalse();
+    }
+
+    [Fact]
+    public void PayloadRoundTrip_ShouldPreserveTypedChannelContextAcrossMultipleToolRounds()
+    {
+        var firstRound = AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity("request-channel", "call-1"),
+            Channel = new AgentToolChannelContext(
+                "lark",
+                "sender-1",
+                "registration-1",
+                "message-1",
+                "platform-message-1",
+                "delivery-target-1",
+                "secrets://nyx/reply-1"),
+            SenderBinding = new AgentToolSenderBindingContext("binding-1", "nyx-user-1", "tenant-1"),
+            CredentialSource = AgentToolCredentialSource.ChannelRegistration,
+        };
+
+        var secondRound = AgentToolExecutionContextMapper
+            .FromPayload(AgentToolExecutionContextPayload.Parser.ParseFrom(firstRound.ToPayload().ToByteArray()))
+            .WithCallId("call-2");
+        var thirdRound = AgentToolExecutionContextMapper.FromPayload(
+            AgentToolExecutionContextPayload.Parser.ParseFrom(secondRound.ToPayload().ToByteArray()));
+
+        thirdRound.Request.RequestId.Should().Be("request-channel");
+        thirdRound.Request.CallId.Should().Be("call-2");
+        thirdRound.Channel.Platform.Should().Be("lark");
+        thirdRound.Channel.SenderId.Should().Be("sender-1");
+        thirdRound.Channel.RegistrationScopeId.Should().Be("registration-1");
+        thirdRound.Channel.DeliveryTargetId.Should().Be("delivery-target-1");
+        thirdRound.Channel.DurableReplyCredentialRef.Should().Be("secrets://nyx/reply-1");
+        thirdRound.SenderBinding.BindingId.Should().Be("binding-1");
+        thirdRound.SenderBinding.NyxUserId.Should().Be("nyx-user-1");
+        thirdRound.SenderBinding.SenderTenant.Should().Be("tenant-1");
+        thirdRound.CredentialSource.Should().Be(AgentToolCredentialSource.ChannelRegistration);
+        thirdRound.ExternalMetadata.Should().BeEmpty();
     }
 
     [Fact]
