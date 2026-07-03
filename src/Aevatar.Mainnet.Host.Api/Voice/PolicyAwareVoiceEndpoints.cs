@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using Aevatar.Authentication.Abstractions;
+using Aevatar.Authentication.Hosting;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
@@ -347,8 +348,22 @@ public static class PolicyAwareVoiceEndpoints
         await http.Response.WriteAsync(VoiceCredentialUnavailableReason, http.RequestAborted);
     }
 
-    private static string? ExtractCallerBearer(HttpContext http)
+    // internal (not private) so M5 can unit-test the extraction precedence
+    // directly without standing up a full WebSocket handshake.
+    internal static string? ExtractCallerBearer(HttpContext http)
     {
+        // M5: prefer the token carried in the Sec-WebSocket-Protocol handshake
+        // header (aevatar-bearer.<token>), so it never appears in the request
+        // URL (request-URL logging → stdout → Elasticsearch/ingress logs). This
+        // mirrors the JWT bearer-events extraction in
+        // AevatarAuthenticationHostExtensions. Fall back to the Authorization
+        // header, then the legacy ?access_token= query param, so older clients
+        // still work (non-breaking).
+        var subprotocolToken = WebSocketSubprotocolToken.ExtractBearer(
+            http.WebSockets.WebSocketRequestedProtocols);
+        if (!string.IsNullOrWhiteSpace(subprotocolToken))
+            return subprotocolToken.Trim();
+
         var header = http.Request.Headers.Authorization.ToString();
         const string bearerPrefix = "Bearer ";
         if (header.StartsWith(bearerPrefix, StringComparison.OrdinalIgnoreCase))

@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Helpers;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core;
 using FluentAssertions;
@@ -69,9 +70,12 @@ public sealed class WorkflowArtifactFactBuilderToolDetailTests
     }
 
     [Fact]
-    public void TryBuild_ShouldRedactOversizedToolDetail()
+    public void TryBuild_ShouldTruncateOversizedToolDetail()
     {
-        var longArgs = new string('a', 5000);
+        // Long but NOT secret-shaped: space-separated short words, so masking is a no-op and the
+        // truncation path is what's exercised. (A single 5000-char unbroken token would read as a
+        // high-entropy secret and be masked to the marker — covered by the masking tests below.)
+        var longArgs = string.Join(' ', Enumerable.Repeat("word", 2000));
         var completed = new RoleChatSessionCompletedEvent { SessionId = "session-2", ContentEmitted = true };
         completed.ToolCalls.Add(new ToolCallEvent { ToolName = "search", CallId = "call-1", ArgumentsJson = longArgs });
 
@@ -80,6 +84,7 @@ public sealed class WorkflowArtifactFactBuilderToolDetailTests
         var fact = artifactFact.Should().BeOfType<WorkflowRoleReplyRecordedEvent>().Subject;
         var toolCall = fact.ToolCalls.Should().ContainSingle().Subject;
         toolCall.ArgumentsJson.Length.Should().BeLessThan(longArgs.Length);
+        toolCall.ArgumentsJson.Should().NotContain(SecretScrubber.Marker);
         toolCall.ArgumentsJson.Should().EndWith("...");
     }
 
@@ -97,6 +102,84 @@ public sealed class WorkflowArtifactFactBuilderToolDetailTests
             .Should().BeTrue();
         artifactFact.Should().BeOfType<WorkflowRoleReplyRecordedEvent>()
             .Which.ToolCalls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void TryBuild_ShouldMaskSecretsInToolArgumentsAndResults()
+    {
+        const string jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiJ9.s5r-Xr7mYh0jRk3Qw9pLzQeVbN2cTfUaOiPkLmNoPqR";
+        var completed = new RoleChatSessionCompletedEvent { SessionId = "session-secret", ContentEmitted = true };
+        completed.ToolCalls.Add(new ToolCallEvent
+        {
+            ToolName = "call_api",
+            CallId = "call-1",
+            ArgumentsJson = "{\"api_key\":\"sk-supersecretkeyvalue000111222\",\"q\":\"weather\"}",
+        });
+        completed.ToolReceipts.Add(new AgentToolReceipt
+        {
+            CallId = "call-1",
+            Status = AgentToolReceiptStatus.Success,
+            ResultJson = $"{{\"token\":\"{jwt}\",\"ok\":true}}",
+        });
+
+        WorkflowArtifactFactBuilder.TryBuild(BuildCommittedEnvelope(completed), "workflow-run", "run-1", out var artifactFact)
+            .Should().BeTrue();
+        var fact = artifactFact.Should().BeOfType<WorkflowRoleReplyRecordedEvent>().Subject;
+        var toolCall = fact.ToolCalls.Should().ContainSingle().Subject;
+
+        // Secret VALUE masked, key + non-secret content preserved.
+        toolCall.ArgumentsJson.Should().NotContain("sk-supersecretkeyvalue000111222");
+        toolCall.ArgumentsJson.Should().Contain(SecretScrubber.Marker);
+        toolCall.ArgumentsJson.Should().Contain("\"q\":\"weather\"");
+
+        toolCall.ResultJson.Should().NotContain(jwt);
+        toolCall.ResultJson.Should().Contain(SecretScrubber.Marker);
+        toolCall.ResultJson.Should().Contain("\"ok\":true");
+    }
+
+    [Fact]
+    public void TryBuild_ShouldMaskSecretsInContentAndReasoningContent()
+    {
+        const string jwt = "eyJ0eXAiOiJKV1QifQ.eyJ1c2VyIjoiYm9iIn0.AbCdEfGhIjKlMnOpQrStUvWxYz0123456789AbCdEf";
+        var completed = new RoleChatSessionCompletedEvent
+        {
+            SessionId = "session-content",
+            Content = $"Here is your token: {jwt} — use it wisely.",
+            ReasoningContent = "{\"access_token\":\"tok-abc123secretreasoningvalue999\"}",
+            ContentEmitted = true,
+        };
+
+        WorkflowArtifactFactBuilder.TryBuild(BuildCommittedEnvelope(completed), "workflow-run", "run-1", out var artifactFact)
+            .Should().BeTrue();
+        var fact = artifactFact.Should().BeOfType<WorkflowRoleReplyRecordedEvent>().Subject;
+
+        fact.Content.Should().NotContain(jwt);
+        fact.Content.Should().Contain(SecretScrubber.Marker);
+        fact.Content.Should().Contain("use it wisely");
+
+        fact.ReasoningContent.Should().NotContain("tok-abc123secretreasoningvalue999");
+        fact.ReasoningContent.Should().Contain(SecretScrubber.Marker);
+        fact.ReasoningContent.Should().Contain("\"access_token\"");
+    }
+
+    [Fact]
+    public void TryBuild_ShouldPreserveNonSecretContent()
+    {
+        var completed = new RoleChatSessionCompletedEvent
+        {
+            SessionId = "session-plain",
+            Content = "The weather in Paris is sunny, 22C.",
+            ReasoningContent = "User asked about weather; no tools needed.",
+            ContentEmitted = true,
+        };
+
+        WorkflowArtifactFactBuilder.TryBuild(BuildCommittedEnvelope(completed), "workflow-run", "run-1", out var artifactFact)
+            .Should().BeTrue();
+        var fact = artifactFact.Should().BeOfType<WorkflowRoleReplyRecordedEvent>().Subject;
+
+        fact.Content.Should().Be("The weather in Paris is sunny, 22C.");
+        fact.Content.Should().NotContain(SecretScrubber.Marker);
+        fact.ReasoningContent.Should().Be("User asked about weather; no tools needed.");
     }
 
     private static EventEnvelope BuildCommittedEnvelope(RoleChatSessionCompletedEvent completed) =>

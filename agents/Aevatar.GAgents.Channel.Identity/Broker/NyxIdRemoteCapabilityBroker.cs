@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Aevatar.Foundation.Abstractions.Helpers;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
@@ -147,7 +148,7 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
             "NyxID revoke binding failed: status={StatusCode}, binding_id={BindingId}, body={Body}",
             (int)response.StatusCode,
             bindingId,
-            Truncate(body, 256));
+            Truncate(SecretScrubber.Scrub(body), 256));
         response.EnsureSuccessStatusCode();
     }
 
@@ -207,7 +208,7 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
             _logger.LogError(
                 "NyxID token-exchange failed: status={StatusCode}, body={Body}",
                 (int)response.StatusCode,
-                Truncate(body, 256));
+                Truncate(SecretScrubber.Scrub(body), 256));
             response.EnsureSuccessStatusCode();
         }
 
@@ -308,7 +309,7 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
             _logger.LogError(
                 "NyxID authorization-code exchange failed: status={StatusCode}, body={Body}",
                 (int)response.StatusCode,
-                Truncate(body, 256));
+                Truncate(SecretScrubber.Scrub(body), 256));
             response.EnsureSuccessStatusCode();
         }
 
