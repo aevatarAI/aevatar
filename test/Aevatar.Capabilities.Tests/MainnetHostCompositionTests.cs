@@ -1,5 +1,6 @@
 using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.Audit.Core.Projection;
+using Aevatar.Audit.Core.Stores;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Middleware;
@@ -115,13 +116,10 @@ public sealed class MainnetHostCompositionTests
         app.Services.GetRequiredService<IAuditTrailAppender>().Should().NotBeNull();
         app.Services.GetRequiredService<IAuditTrailArtifactStore>()
             .Should()
-            .BeOfType<ProjectionAuditTrailArtifactStore>();
-        app.Services.GetRequiredService<IProjectionDocumentReader<AuditTrailArtifactStorageDocument, string>>()
+            .BeOfType<InMemoryAuditTrailStore>();
+        typeof(AuditTrailArtifactStorageDocument).GetInterfaces()
             .Should()
-            .NotBeNull();
-        app.Services.GetRequiredService<IProjectionDocumentWriter<AuditTrailArtifactStorageDocument>>()
-            .Should()
-            .NotBeNull();
+            .NotContain(typeof(IProjectionReadModel));
         readModelDescriptors.Should()
             .NotContain(static descriptor => descriptor.Name == "audit-trail");
         // Security lockdown: the scripting capability (and its read models) must never be
