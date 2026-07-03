@@ -51,6 +51,7 @@ message WorkflowExecutionBoardSummaryReadModel {
   int32 running_nodes = 2;
   int32 waiting_or_pending_nodes = 3;
   int32 failed_nodes = 4;
+  optional int32 definition_step_count = 5;
 }
 
 // ─── UserConfig Current State ReadModel ───

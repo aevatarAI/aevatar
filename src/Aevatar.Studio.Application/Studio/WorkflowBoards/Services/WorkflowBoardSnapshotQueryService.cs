@@ -297,9 +297,7 @@ public sealed class WorkflowBoardSnapshotQueryService : IWorkflowBoardSnapshotQu
         if (execution.Summary is not
             {
                 CompletedSteps: not null,
-                RunningNodes: not null,
-                WaitingOrPendingNodes: not null,
-                FailedNodes: not null,
+                DefinitionStepCount: not null,
             } summary)
         {
             return null;
@@ -307,10 +305,7 @@ public sealed class WorkflowBoardSnapshotQueryService : IWorkflowBoardSnapshotQu
 
         return new WorkflowBoardMemberProgress(
             summary.CompletedSteps.Value,
-            summary.CompletedSteps.Value +
-            summary.RunningNodes.Value +
-            summary.WaitingOrPendingNodes.Value +
-            summary.FailedNodes.Value);
+            summary.DefinitionStepCount.Value);
     }
 
     private static WorkflowBoardSnapshotCounts CalculateCounts(IReadOnlyList<WorkflowBoardTeamSnapshot> teams)

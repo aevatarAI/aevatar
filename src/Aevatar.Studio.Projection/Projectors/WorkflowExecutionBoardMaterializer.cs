@@ -90,10 +90,11 @@ public sealed class WorkflowExecutionBoardMaterializer
         var document = existing?.Clone() ?? CreateDocument(context, state, observedAt);
 
         ApplyBase(document, context, state, stateEvent, observedAt);
+        var changedByDefinitionStepCount = ApplyDefinitionStepCount(document, state);
         var changedByPayload = ApplyPayload(document, stateEvent.EventData, observedAt);
         var changedByStateRoot = ApplyPendingExecutionStates(document, state, observedAt);
         var changedByWorkflowDefinition = ApplyUnexecutedDownstreamSteps(document, state, observedAt);
-        if (changedByStateRoot || changedByWorkflowDefinition || (!changedByPayload && existing != null))
+        if (changedByDefinitionStepCount || changedByStateRoot || changedByWorkflowDefinition || (!changedByPayload && existing != null))
             RefreshSummary(document);
 
         await _writeDispatcher.UpsertAsync(document, ct);
@@ -367,6 +368,43 @@ public sealed class WorkflowExecutionBoardMaterializer
         }
     }
 
+    private static bool ApplyDefinitionStepCount(
+        WorkflowExecutionBoardDocument document,
+        WorkflowRunState state)
+    {
+        if (string.IsNullOrWhiteSpace(state.WorkflowYaml) ||
+            !TryParseWorkflowDefinition(state.WorkflowYaml, out var workflow))
+        {
+            return false;
+        }
+
+        var stepCount = CountDefinitionSteps(workflow.Steps);
+        if (document.Summary.HasDefinitionStepCount &&
+            document.Summary.DefinitionStepCount == stepCount)
+        {
+            return false;
+        }
+
+        document.Summary.DefinitionStepCount = stepCount;
+        return true;
+    }
+
+    private static int CountDefinitionSteps(IReadOnlyList<StepDefinition>? steps)
+    {
+        if (steps is null)
+            return 0;
+
+        var count = 0;
+        foreach (var step in steps)
+        {
+            count++;
+            if (step.Children is { Count: > 0 })
+                count += CountDefinitionSteps(step.Children);
+        }
+
+        return count;
+    }
+
     private static bool ApplyPendingPlannedNode(
         WorkflowExecutionBoardDocument document,
         StepDefinition step,
@@ -633,17 +671,15 @@ public sealed class WorkflowExecutionBoardMaterializer
 
     private static void RefreshSummary(WorkflowExecutionBoardDocument document)
     {
-        document.Summary = new WorkflowExecutionBoardSummaryReadModel
-        {
-            CompletedSteps = document.NodeEntries.Count(static node =>
-                node.Status == WorkflowExecutionBoardNodeStatus.Completed),
-            RunningNodes = document.NodeEntries.Count(static node =>
-                node.Status == WorkflowExecutionBoardNodeStatus.Running),
-            WaitingOrPendingNodes = document.NodeEntries.Count(static node =>
-                node.Status is WorkflowExecutionBoardNodeStatus.Waiting or WorkflowExecutionBoardNodeStatus.Pending),
-            FailedNodes = document.NodeEntries.Count(static node =>
-                node.Status == WorkflowExecutionBoardNodeStatus.Failed),
-        };
+        var summary = document.Summary;
+        summary.CompletedSteps = document.NodeEntries.Count(static node =>
+            node.Status == WorkflowExecutionBoardNodeStatus.Completed);
+        summary.RunningNodes = document.NodeEntries.Count(static node =>
+            node.Status == WorkflowExecutionBoardNodeStatus.Running);
+        summary.WaitingOrPendingNodes = document.NodeEntries.Count(static node =>
+            node.Status is WorkflowExecutionBoardNodeStatus.Waiting or WorkflowExecutionBoardNodeStatus.Pending);
+        summary.FailedNodes = document.NodeEntries.Count(static node =>
+            node.Status == WorkflowExecutionBoardNodeStatus.Failed);
     }
 
     private static WorkflowExecutionBoardCompletionStatus ResolveCompletionStatus(string? status)
