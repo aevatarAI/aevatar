@@ -1,6 +1,5 @@
 using System.Security.Cryptography;
 using Aevatar.Audit.Abstractions.Ports;
-using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -10,17 +9,14 @@ namespace Aevatar.Audit.Core.Projection;
 
 public sealed class ProjectionAuditTrailAppender : IAuditTrailAppender
 {
-    private readonly IProjectionDocumentReader<Audit.AuditTrailDocument, string>? _reader;
-    private readonly IProjectionDocumentWriter<Audit.AuditTrailDocument>? _writer;
+    private readonly IAuditTrailArtifactStore? _store;
     private readonly ILogger<ProjectionAuditTrailAppender> _logger;
 
     public ProjectionAuditTrailAppender(
-        IEnumerable<IProjectionDocumentReader<Audit.AuditTrailDocument, string>> readers,
-        IEnumerable<IProjectionDocumentWriter<Audit.AuditTrailDocument>> writers,
+        IEnumerable<IAuditTrailArtifactStore> stores,
         ILogger<ProjectionAuditTrailAppender>? logger = null)
     {
-        _reader = SelectSingleOrDefault(readers, nameof(readers));
-        _writer = SelectSingleOrDefault(writers, nameof(writers));
+        _store = SelectSingleOrDefault(stores, nameof(stores));
         _logger = logger ?? NullLogger<ProjectionAuditTrailAppender>.Instance;
     }
 
@@ -32,13 +28,13 @@ public sealed class ProjectionAuditTrailAppender : IAuditTrailAppender
         if (string.IsNullOrWhiteSpace(auditId))
             return AuditTrailAppendResult.Conflict(string.Empty, "Audit id is required.");
 
-        if (_reader is null || _writer is null)
-            return AuditTrailAppendResult.StoreUnavailable(auditId, "Audit trail projection document store is not registered.");
+        if (_store is null)
+            return AuditTrailAppendResult.StoreUnavailable(auditId, "Audit trail artifact store is not registered.");
 
         try
         {
             var contentHash = ComputeContentHash(record);
-            var existing = await _reader.GetAsync(auditId, ct);
+            var existing = await _store.GetAsync(auditId, ct);
             if (existing != null)
             {
                 return string.Equals(existing.ContentHash, contentHash, StringComparison.Ordinal)
@@ -47,41 +43,9 @@ public sealed class ProjectionAuditTrailAppender : IAuditTrailAppender
             }
 
             var observedAt = record.OccurredAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
-            var document = new Audit.AuditTrailDocument
-            {
-                Id = auditId,
-                AuditId = auditId,
-                ContentHash = contentHash,
-                Record = record.Clone(),
-                OccurredAt = Timestamp.FromDateTimeOffset(observedAt),
-                UpdatedAt = Timestamp.FromDateTimeOffset(observedAt),
-                AuditActorId = record.AuditActorId ?? string.Empty,
-                ScopeId = record.ScopeId ?? string.Empty,
-                OperationName = record.OperationName ?? string.Empty,
-                Outcome = record.Outcome,
-                SensitivityLevel = record.SensitivityLevel,
-                TargetKind = record.Target?.Kind ?? string.Empty,
-                TargetId = record.Target?.Id ?? string.Empty,
-                RequestId = record.Correlation?.RequestId ?? string.Empty,
-                CommandId = record.Correlation?.CommandId ?? string.Empty,
-                CorrelationId = record.Correlation?.TraceId ?? string.Empty,
-                SessionId = record.Correlation?.SessionId ?? string.Empty,
-                WorkflowRunId = record.Correlation?.WorkflowRunId ?? string.Empty,
-                CommittedEventId = record.CommittedFactRef?.CommittedEventId ?? string.Empty,
-                CommittedActorId = record.CommittedFactRef?.ActorId ?? string.Empty,
-                CommittedActorType = record.CommittedFactRef?.ActorType ?? string.Empty,
-                CommittedEventTypeUrl = record.CommittedFactRef?.EventTypeUrl ?? string.Empty,
-                CommittedStateVersion = record.CommittedFactRef?.StateVersion ?? 0,
-            };
-
-            var write = await _writer.UpsertAsync(document, ct);
-            return write.Disposition switch
-            {
-                ProjectionWriteDisposition.Applied => AuditTrailAppendResult.Appended(auditId),
-                ProjectionWriteDisposition.Duplicate => AuditTrailAppendResult.Duplicate(auditId),
-                ProjectionWriteDisposition.Conflict => AuditTrailAppendResult.Conflict(auditId, "Audit document write conflict."),
-                _ => AuditTrailAppendResult.StoreUnavailable(auditId, $"Audit document write was not applied: {write.Disposition}."),
-            };
+            var document = BuildDocument(record, auditId, contentHash, observedAt);
+            var write = await _store.UpsertAsync(document, ct);
+            return ToAppendResult(write, auditId, record.AuditActorId ?? string.Empty, observedAt);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -100,6 +64,54 @@ public sealed class ProjectionAuditTrailAppender : IAuditTrailAppender
         var hash = SHA256.HashData(bytes);
         return Convert.ToHexString(hash).ToLowerInvariant();
     }
+
+    private static Audit.AuditTrailDocument BuildDocument(
+        Audit.AuditRecord record,
+        string auditId,
+        string contentHash,
+        DateTimeOffset observedAt) =>
+        new()
+        {
+            Id = auditId,
+            AuditId = auditId,
+            ContentHash = contentHash,
+            Record = record.Clone(),
+            OccurredAt = Timestamp.FromDateTimeOffset(observedAt),
+            UpdatedAt = Timestamp.FromDateTimeOffset(observedAt),
+            AuditActorId = record.AuditActorId ?? string.Empty,
+            ScopeId = record.ScopeId ?? string.Empty,
+            OperationName = record.OperationName ?? string.Empty,
+            Outcome = record.Outcome,
+            SensitivityLevel = record.SensitivityLevel,
+            TargetKind = record.Target?.Kind ?? string.Empty,
+            TargetId = record.Target?.Id ?? string.Empty,
+            RequestId = record.Correlation?.RequestId ?? string.Empty,
+            CommandId = record.Correlation?.CommandId ?? string.Empty,
+            CorrelationId = record.Correlation?.TraceId ?? string.Empty,
+            SessionId = record.Correlation?.SessionId ?? string.Empty,
+            WorkflowRunId = record.Correlation?.WorkflowRunId ?? string.Empty,
+            CommittedEventId = record.CommittedFactRef?.CommittedEventId ?? string.Empty,
+            CommittedActorId = record.CommittedFactRef?.ActorId ?? string.Empty,
+            CommittedActorType = record.CommittedFactRef?.ActorType ?? string.Empty,
+            CommittedEventTypeUrl = record.CommittedFactRef?.EventTypeUrl ?? string.Empty,
+            CommittedStateVersion = record.CommittedFactRef?.StateVersion ?? 0,
+        };
+
+    private static AuditTrailAppendResult ToAppendResult(
+        AuditTrailArtifactWriteResult write,
+        string auditId,
+        string auditActorId,
+        DateTimeOffset observedAt) =>
+        write.Disposition switch
+        {
+            AuditTrailArtifactWriteDisposition.Applied => AuditTrailAppendResult.Appended(
+                auditId,
+                auditActorId,
+                observedAt),
+            AuditTrailArtifactWriteDisposition.Duplicate => AuditTrailAppendResult.Duplicate(auditId),
+            AuditTrailArtifactWriteDisposition.Conflict => AuditTrailAppendResult.Conflict(auditId, "Audit artifact write conflict."),
+            _ => AuditTrailAppendResult.StoreUnavailable(auditId, $"Audit document write was not applied: {write.Disposition}."),
+        };
 
     private static T? SelectSingleOrDefault<T>(IEnumerable<T> registrations, string parameterName)
     {

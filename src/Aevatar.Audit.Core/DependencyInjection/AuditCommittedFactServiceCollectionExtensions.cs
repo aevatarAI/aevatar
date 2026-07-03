@@ -4,7 +4,6 @@ using Aevatar.Audit.Core.Projection;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
-using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -19,7 +18,6 @@ public static class AuditCommittedFactServiceCollectionExtensions
         services.TryAddSingleton<AuditCommittedEventTranslatorRegistry>();
         services.TryAddSingleton<IAuditTrailAppender, ProjectionAuditTrailAppender>();
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
-        services.TryAddSingleton<IProjectionDocumentMetadataProvider<Audit.AuditTrailDocument>, AuditTrailDocumentMetadataProvider>();
         return services;
     }
 

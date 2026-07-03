@@ -90,7 +90,7 @@ public sealed class CommittedAuditArtifactMaterializerTests
     [Fact]
     public async Task AppendAsync_WhenAuditDocumentStoreIsMissing_ShouldReturnStoreUnavailable()
     {
-        var appender = new ProjectionAuditTrailAppender([], []);
+        var appender = new ProjectionAuditTrailAppender([]);
 
         var result = await appender.AppendAsync(new AuditRecord { AuditId = "audit-1" });
 
