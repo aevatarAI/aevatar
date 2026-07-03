@@ -1,4 +1,5 @@
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.Audit.Hosting;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.Configuration;
 using Aevatar.GAgentService.Hosting.Endpoints;
@@ -62,8 +63,10 @@ public sealed class MainnetHealthEndpointsTests
         });
         builder.Services.AddSingleton<IResponsesWebSubstituteBackend, ResponsesWebSubstituteBackendAdapter>();
         builder.Services.AddSingleton<ResponsesWebSubstituteToolExecutionService>();
+        builder.Services.AddSingleton<IAuditTrailQueryPort, ReadyAuditTrailQueryPort>();
         builder.AddGAgentServiceCapabilityBundle();
         builder.AddStudioCapability();
+        builder.AddAuditTrailCapabilityBundle();
 
         await using var app = builder.Build();
         app.UseAevatarDefaultHost();
@@ -88,7 +91,7 @@ public sealed class MainnetHealthEndpointsTests
             .EnumerateArray()
             .Select(static component => component.GetProperty("name").GetString())
             .ToArray();
-        readinessComponents.Should().Contain(["workflow-bundle", "gagent-service", "studio"]);
+        readinessComponents.Should().Contain(["workflow-bundle", "gagent-service", "studio", "audit-trail"]);
         // Security lockdown: the scripting capability must never be composed into the mainnet host.
         readinessComponents.Should().NotContain("scripting-bundle");
 
@@ -146,6 +149,19 @@ public sealed class MainnetHealthEndpointsTests
             ["Projection:Graph:Providers:Neo4j:Enabled"] = "false",
         });
         return builder;
+    }
+
+    private sealed class ReadyAuditTrailQueryPort : IAuditTrailQueryPort
+    {
+        public Task<AuditTrailQueryResult> QueryAsync(
+            AuditTrailQuery query,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(new AuditTrailQueryResult(
+                [],
+                DateTimeOffset.UnixEpoch,
+                "health-test"));
+        }
     }
 
     private sealed class TemporaryAevatarHomeScope : IDisposable

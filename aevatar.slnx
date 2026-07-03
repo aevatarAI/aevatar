@@ -70,6 +70,7 @@
     <Project Path="src\Aevatar.AI.ToolProviders.Scripting\Aevatar.AI.ToolProviders.Scripting.csproj" />
     <Project Path="src\Aevatar.AI.Infrastructure.Local\Aevatar.AI.Infrastructure.Local.csproj" />
     <Project Path="src\Aevatar.AI.ToolProviders.Workflow\Aevatar.AI.ToolProviders.Workflow.csproj" />
+    <Project Path="src\Aevatar.Audit.Hosting\Aevatar.Audit.Hosting.csproj" />
     <Project Path="src\Aevatar.Bootstrap.Extensions.AI\Aevatar.Bootstrap.Extensions.AI.csproj" />
     <Project Path="src\Aevatar.Bootstrap\Aevatar.Bootstrap.csproj" />
     <Project Path="src\Aevatar.ChatRouting.Abstractions\Aevatar.ChatRouting.Abstractions.csproj" />
@@ -170,6 +171,7 @@
     <Project Path="test\Aevatar.AI.ToolProviders.Workflow.Tests\Aevatar.AI.ToolProviders.Workflow.Tests.csproj" />
     <Project Path="test\Aevatar.AI.ToolProviders.Binding.Tests\Aevatar.AI.ToolProviders.Binding.Tests.csproj" />
     <Project Path="test\Aevatar.AI.Infrastructure.Local.Tests\Aevatar.AI.Infrastructure.Local.Tests.csproj" />
+    <Project Path="test\Aevatar.Audit.Hosting.Tests\Aevatar.Audit.Hosting.Tests.csproj" />
     <Project Path="test\Aevatar.Bootstrap.Tests\Aevatar.Bootstrap.Tests.csproj" />
     <Project Path="test\Aevatar.CQRS.Core.Tests\Aevatar.CQRS.Core.Tests.csproj" />
     <Project Path="test\Aevatar.CQRS.Projection.Core.Tests\Aevatar.CQRS.Projection.Core.Tests.csproj" />

@@ -18,6 +18,7 @@ using Aevatar.AI.ToolProviders.Web;
 using Aevatar.Authentication.Hosting;
 using Aevatar.Authentication.Providers.NyxId;
 using Aevatar.Authentication.ScopeServiceTokens;
+using Aevatar.Audit.Hosting;
 using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.ChatRouting.Core;
@@ -131,6 +132,7 @@ public static class MainnetHostBuilderExtensions
         });
         builder.AddGAgentServiceCapabilityBundle();
         builder.AddStudioCapability();
+        builder.AddAuditTrailCapabilityBundle();
 
         // 06-26 ornn skills invocation page: host-side catalog read surface (composes the Ornn skill client).
         builder.Services.AddSingleton<IUserSkillCatalogQueryService, UserSkillCatalogQueryService>();
