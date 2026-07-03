@@ -50,18 +50,58 @@ use typed fields.
 
 ## 3. Capture Planes
 
-### 3.1 Boundary Endpoint Filter
+### 3.1 Boundary Endpoint Capture
 
-The boundary endpoint filter records request-plane facts at Host or adapter
-edges. Examples include authenticated request accepted, authorization denied,
-rate limit rejected, request body rejected by validation, and command receipt
-returned.
+Boundary endpoint capture records request-plane facts at Host or adapter edges
+for annotated HTTP endpoints. Examples include authenticated request attempted,
+authorization denied, rate limit rejected, request body rejected by validation,
+and command receipt returned.
 
 Boundary endpoint artifacts may include safe request method, route template,
 scope id, resource id, command id, correlation id, and sanitized caller
 identity. They must not reconstruct committed business facts. If the request
 later produces a committed event, that committed result is captured by the
 committed feed path, not by replaying or enriching the boundary artifact.
+
+Endpoint owners declare audit intent with strongly typed endpoint metadata:
+
+| Field | Meaning |
+|---|---|
+| `operation_name` | Stable allowlisted operation name. |
+| `sensitivity_level` | Audit sensitivity of the endpoint surface. |
+| `target_kind` | Safe target resource family. |
+| `target_resolver` | Safe target id/display resolver from route values or other allowlisted values. |
+| `request_sanitizer` / `result_sanitizer` | Allowlist summary builders; they must not copy request bodies, headers, tokens, cookies, prompts, credentials, raw subjects, or other forbidden material. |
+
+The endpoint filter runs only for annotated endpoints. It captures safe
+request/result summaries and target resolution for handler executions. The
+filter does not append audit records and does not define terminal authorization
+outcomes.
+
+The boundary capture middleware is registered by `Aevatar.Bootstrap` after
+`UseAuthentication()` and before `UseAuthorization()`. That placement lets the
+host record authenticated attempts and the terminal outcome even when
+authorization middleware short-circuits with `403` before endpoint filters or
+handlers run. Unauthenticated `401` challenges are not recorded because there is
+no authenticated actor to hash.
+
+The middleware is host glue only:
+
+1. Read endpoint audit metadata from the selected endpoint.
+2. Resolve the authenticated caller through `IAuditActorIdentityHasher`.
+3. Append `operation_name.attempted` plus exactly one terminal
+   `operation_name` record through `IAuditTrailAppender`.
+4. Fail open for business responses if audit append fails, while logging the
+   operational failure.
+
+Bootstrap must not define audit record schema, storage, query, retention,
+identity hashing implementation, business endpoint inventory, or concrete
+business sanitizer catalogs. Those remain in audit contracts, audit core, or
+endpoint-owning modules.
+
+Allowed endpoint summaries are intentionally narrow: route template, safe route
+ids, status/outcome class, trace/request correlation, and sanitized target
+identity. Token-shaped or secret-key-shaped values are redacted before append.
 
 ### 3.2 Tool-Execution Middleware
 

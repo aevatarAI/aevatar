@@ -18,6 +18,7 @@
     <ProjectReference Include="..\..\Aevatar.CQRS.Projection.Stores.Abstractions\Aevatar.CQRS.Projection.Stores.Abstractions.csproj" />
     <ProjectReference Include="..\..\Aevatar.Capabilities\Aevatar.Capabilities.csproj" />
     <ProjectReference Include="..\..\Aevatar.Authentication.Abstractions\Aevatar.Authentication.Abstractions.csproj" />
+    <ProjectReference Include="..\..\Aevatar.Audit.Hosting\Aevatar.Audit.Hosting.csproj" />
   </ItemGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />

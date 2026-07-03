@@ -1,3 +1,5 @@
+using Aevatar.Audit;
+using Aevatar.Audit.Hosting.EndpointAudit;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.Capabilities;
 using Aevatar.CQRS.Projection.Core.Abstractions;
@@ -23,7 +25,6 @@ namespace Aevatar.Mainnet.Host.Api.Cqrs;
 public static class CqrsObservatoryApiEndpoints
 {
     private const string DataRoutePrefix = "/api/cqrs";
-    private const string AuditLoggerCategory = "Aevatar.Cqrs.Observatory.PlatformRead";
 
     public static IEndpointRouteBuilder MapCqrsObservatoryApiEndpoints(this IEndpointRouteBuilder app)
     {
@@ -34,11 +35,21 @@ public static class CqrsObservatoryApiEndpoints
         data.MapGet("/scopes", ListScopes)
             .WithName("ListCqrsProjectionScopes")
             .WithSummary("List projection-scope statuses (version lag, active, failures). Platform admin only.")
+            .WithEndpointAudit(
+                "cqrs.observatory.list-scopes",
+                AuditSensitivityLevel.Confidential,
+                "cqrs-projection-scopes",
+                EndpointAuditTargetResolvers.Static("cqrs-projection-scopes", "platform"))
             .RequireAuthorization();
 
         data.MapGet("/readmodels", ListReadModels)
             .WithName("ListCqrsReadModels")
             .WithSummary("List materialized read-models grouped by sink shape (version, freshness, count). Platform admin only.")
+            .WithEndpointAudit(
+                "cqrs.observatory.list-readmodels",
+                AuditSensitivityLevel.Confidential,
+                "cqrs-readmodels",
+                EndpointAuditTargetResolvers.Static("cqrs-readmodels", "platform"))
             .RequireAuthorization();
 
         return app;
@@ -57,24 +68,18 @@ public static class CqrsObservatoryApiEndpoints
         if (!AevatarScopeAccessGuard.TryGetCallerScopeId(http, out var callerScopeId))
             return Results.Unauthorized();
 
-        var logger = loggerFactory.CreateLogger(AuditLoggerCategory);
-
         if (!TryGetBearer(http, out var token))
         {
-            Audit(logger, http, "denied", callerScopeId, PlatformCaller.NotElevated, "missing_bearer");
             return Results.Unauthorized();
         }
 
         var caller = await authorizer.ResolveCallerAsync(token, ct);
         if (!caller.IsElevated)
         {
-            Audit(logger, http, "denied", callerScopeId, caller, "not_admin_or_disabled");
             return Results.Json(
                 new { code = "SCOPE_ACCESS_DENIED", message = "Platform admin role required to view projection scopes." },
                 statusCode: StatusCodes.Status403Forbidden);
         }
-
-        Audit(logger, http, "allowed", callerScopeId, caller, reason: null);
 
         var snapshots = await scopeStatuses.ListAsync(new ProjectionScopeStatusListQuery { Take = take }, ct);
         return Results.Json(new
@@ -105,24 +110,18 @@ public static class CqrsObservatoryApiEndpoints
         if (!AevatarScopeAccessGuard.TryGetCallerScopeId(http, out var callerScopeId))
             return Results.Unauthorized();
 
-        var logger = loggerFactory.CreateLogger(AuditLoggerCategory);
-
         if (!TryGetBearer(http, out var token))
         {
-            Audit(logger, http, "denied", callerScopeId, PlatformCaller.NotElevated, "missing_bearer");
             return Results.Unauthorized();
         }
 
         var caller = await authorizer.ResolveCallerAsync(token, ct);
         if (!caller.IsElevated)
         {
-            Audit(logger, http, "denied", callerScopeId, caller, "not_admin_or_disabled");
             return Results.Json(
                 new { code = "SCOPE_ACCESS_DENIED", message = "Platform admin role required to view read-models." },
                 statusCode: StatusCodes.Status403Forbidden);
         }
-
-        Audit(logger, http, "allowed", callerScopeId, caller, reason: null);
 
         var result = await inventory.GetInventoryAsync(ct);
         return Results.Json(new
@@ -167,16 +166,4 @@ public static class CqrsObservatoryApiEndpoints
         return true;
     }
 
-    // Structured audit for platform-wide projection-scope reads. NEVER logs the bearer token.
-    private static void Audit(
-        ILogger logger,
-        HttpContext http,
-        string outcome,
-        string callerScope,
-        PlatformCaller admin,
-        string? reason) =>
-        logger.LogInformation(
-            "cqrs_observatory_platform_read outcome={Outcome} adminUserId={AdminUserId} adminEmail={AdminEmail} " +
-            "role={Role} callerScope={CallerScope} reason={Reason} correlationId={CorrelationId}",
-            outcome, admin.UserId, admin.Email, admin.Role, callerScope, reason ?? string.Empty, http.TraceIdentifier);
 }

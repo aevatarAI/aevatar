@@ -125,7 +125,7 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
     }
 
     [Fact]
-    public async Task AevatarOAuthClientEsAclStartupGuard_WhenElasticsearchHostAclMissing_ShouldFailClosed()
+    public async Task AevatarOAuthClientEsAclStartupGuard_WhenStrictAndElasticsearchHostAclMissing_ShouldFailClosed()
     {
         var services = BuildAgentServices();
         services.Configure<AevatarOAuthClientEsAclOptions>(options =>
