@@ -40,6 +40,8 @@
     <File Path="Directory.Build.props" />
   </Folder>
   <Folder Name="/src/">
+    <Project Path="src/Aevatar.Audit.Abstractions/Aevatar.Audit.Abstractions.csproj" />
+    <Project Path="src/Aevatar.Audit.Core/Aevatar.Audit.Core.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.Binding/Aevatar.AI.ToolProviders.Binding.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.ChronoStorage/Aevatar.AI.ToolProviders.ChronoStorage.csproj" />
     <Project Path="src/Aevatar.AI.ToolProviders.AgentCatalog/Aevatar.AI.ToolProviders.AgentCatalog.csproj" />
@@ -153,6 +155,8 @@
     <Project Path="src/workflow/extensions/Aevatar.Workflow.Extensions.Schedules/Aevatar.Workflow.Extensions.Schedules.csproj" />
   </Folder>
   <Folder Name="/test/">
+    <Project Path="test/Aevatar.Audit.Abstractions.Tests/Aevatar.Audit.Abstractions.Tests.csproj" />
+    <Project Path="test/Aevatar.Audit.Core.Tests/Aevatar.Audit.Core.Tests.csproj" />
     <Project Path="test/Aevatar.Studio.Tests/Aevatar.Studio.Tests.csproj" />
     <Project Path="test/Aevatar.ChatRouting.Core.Tests/Aevatar.ChatRouting.Core.Tests.csproj" />
     <Project Path="test/Aevatar.ChatRouting.Voice.Integration.Tests/Aevatar.ChatRouting.Voice.Integration.Tests.csproj" />

@@ -1,0 +1,90 @@
+syntax = "proto3";
+
+package aevatar.audit.v1;
+
+option csharp_namespace = "Aevatar.Audit";
+
+import "google/protobuf/timestamp.proto";
+
+enum AuditActorKind {
+  AUDIT_ACTOR_KIND_UNSPECIFIED = 0;
+  AUDIT_ACTOR_KIND_NYXID_USER = 1;
+  AUDIT_ACTOR_KIND_CHANNEL_SENDER = 2;
+  AUDIT_ACTOR_KIND_SYSTEM = 3;
+  AUDIT_ACTOR_KIND_SCHEDULE = 4;
+  AUDIT_ACTOR_KIND_SERVICE = 5;
+}
+
+enum AuditCredentialSource {
+  AUDIT_CREDENTIAL_SOURCE_UNSPECIFIED = 0;
+  AUDIT_CREDENTIAL_SOURCE_NYXID_ASSERTION = 1;
+  AUDIT_CREDENTIAL_SOURCE_BEARER_TOKEN = 2;
+  AUDIT_CREDENTIAL_SOURCE_CHANNEL_REGISTRATION = 3;
+  AUDIT_CREDENTIAL_SOURCE_SCHEDULED_RUN = 4;
+  AUDIT_CREDENTIAL_SOURCE_SYSTEM = 5;
+  AUDIT_CREDENTIAL_SOURCE_SERVICE_ACCOUNT = 6;
+}
+
+enum AuditOperationKind {
+  AUDIT_OPERATION_KIND_UNSPECIFIED = 0;
+  AUDIT_OPERATION_KIND_API = 1;
+  AUDIT_OPERATION_KIND_TOOL = 2;
+  AUDIT_OPERATION_KIND_WORKFLOW = 3;
+  AUDIT_OPERATION_KIND_SCHEDULE = 4;
+  AUDIT_OPERATION_KIND_AUTHORIZATION = 5;
+  AUDIT_OPERATION_KIND_SYSTEM = 6;
+}
+
+enum AuditSensitivityLevel {
+  AUDIT_SENSITIVITY_LEVEL_UNSPECIFIED = 0;
+  AUDIT_SENSITIVITY_LEVEL_PUBLIC = 1;
+  AUDIT_SENSITIVITY_LEVEL_INTERNAL = 2;
+  AUDIT_SENSITIVITY_LEVEL_CONFIDENTIAL = 3;
+  AUDIT_SENSITIVITY_LEVEL_RESTRICTED = 4;
+}
+
+enum AuditOutcome {
+  AUDIT_OUTCOME_UNSPECIFIED = 0;
+  AUDIT_OUTCOME_SUCCESS = 1;
+  AUDIT_OUTCOME_DENIED = 2;
+  AUDIT_OUTCOME_ERROR = 3;
+  AUDIT_OUTCOME_ACCEPTED = 4;
+  AUDIT_OUTCOME_CANCELLED = 5;
+}
+
+message AuditTarget {
+  string kind = 1;
+  string id = 2;
+  string display_name = 3;
+}
+
+message AuditCorrelation {
+  string trace_id = 1;
+  string request_id = 2;
+  string command_id = 3;
+  string call_id = 4;
+  string session_id = 5;
+  string workflow_run_id = 6;
+  string approval_id = 7;
+}
+
+message AuditRecord {
+  string audit_id = 1;
+  google.protobuf.Timestamp occurred_at = 2;
+  string scope_id = 3;
+  string audit_actor_id = 4;
+  string identity_key_id = 5;
+  AuditActorKind actor_kind = 6;
+  AuditCredentialSource credential_source = 7;
+  AuditOperationKind operation_kind = 8;
+  string operation_name = 9;
+  AuditSensitivityLevel sensitivity_level = 10;
+  AuditOutcome outcome = 11;
+  AuditTarget target = 12;
+  AuditCorrelation correlation = 13;
+  string request_summary = 14;
+  string result_summary = 15;
+  string error_code = 16;
+  string error_summary = 17;
+  map<string, string> annotations = 18;
+}
