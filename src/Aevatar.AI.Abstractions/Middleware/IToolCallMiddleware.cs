@@ -54,6 +54,12 @@ public sealed class ToolCallContext
     /// <summary>Cancellation token.</summary>
     public CancellationToken CancellationToken { get; init; }
 
+    /// <summary>Typed execution context snapshot for terminal observers.</summary>
+    public AgentToolExecutionContext? ExecutionContext { get; init; }
+
+    /// <summary>Credential source selected for this tool call.</summary>
+    public AgentToolCredentialSource CredentialSource { get; set; }
+
     /// <summary>Tool execution result. Set after execution, or by middleware to override.</summary>
     public string? Result { get; set; }
 

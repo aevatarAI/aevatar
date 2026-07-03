@@ -4,6 +4,7 @@ using Aevatar.AI.Core;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Abstractions.Voice;
 using Aevatar.AI.Core.Middleware;
+using Aevatar.AI.Core.Auditing;
 using Aevatar.AI.Core.Voice;
 using Aevatar.AI.Core.LLMProviders;
 using Aevatar.AI.LLMProviders.MEAI;
@@ -131,6 +132,7 @@ public static class ServiceCollectionExtensions
             .ScanAssemblies(typeof(RoleGAgent).Assembly)
             .Register<WorkflowRoleGAgent>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowToolSource, AgentWorkflowToolSourceAdapter>());
+        services.AddToolExecutionAuditObserver();
         // No container-level IToolApprovalHandler: a yielding handler is only valid on
         // actors that implement the pending-approval continuation (RoleGAgent wires its
         // own). Surfaces without that capability fall back to MissingApprovalHandler and

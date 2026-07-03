@@ -109,6 +109,8 @@ public sealed class WorkflowRunGAgent
 
     public string ScopeId => State.ScopeId ?? string.Empty;
 
+    public string ScheduleId => State.ScheduleId ?? string.Empty;
+
     WorkflowExecutionRuntimeContext IWorkflowExecutionStateHost.RuntimeContext => _runtimeContext;
 
     // Refactor (iter115/cluster-3): Old pattern: callers received the mutable

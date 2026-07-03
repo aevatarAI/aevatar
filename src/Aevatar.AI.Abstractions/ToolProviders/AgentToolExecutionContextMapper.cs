@@ -161,6 +161,8 @@ public static class AgentToolExecutionContextMapper
                 AgentToolExecutionContext.Normalize(payload.Routing?.UserMemoryPrompt)),
             new AgentToolConnectedServicesContext(AgentToolExecutionContext.Normalize(payload.ConnectedServices?.ContextJson)),
             FromWorkflowRuntimePayload(payload.WorkflowRuntime),
+            new AgentToolScheduleContext(AgentToolExecutionContext.Normalize(payload.Schedule?.ScheduleId)),
+            FromCredentialSourcePayload(payload.CredentialSource),
             FromSkillRecoveryPayload(payload.SkillRecovery),
             StripOwnedControlKeys(payload.ExternalMetadata));
         return context with { ToolVisibility = FromToolVisibilityPayload(payload.ToolVisibility) };
@@ -217,11 +219,18 @@ public static class AgentToolExecutionContextMapper
                 ContextJson = context.ConnectedServices.ContextJson ?? string.Empty,
             },
             WorkflowRuntime = ToWorkflowRuntimePayload(context.WorkflowRuntime),
+            CredentialSource = ToCredentialSourcePayload(context.CredentialSource),
             SkillRecovery = ToSkillRecoveryPayload(context.SkillRecovery),
         };
 
         if (context.Routing.MaxToolRoundsOverride.HasValue)
             payload.Routing.MaxToolRoundsOverride = context.Routing.MaxToolRoundsOverride.Value;
+
+        if (!string.IsNullOrWhiteSpace(context.Schedule.ScheduleId))
+            payload.Schedule = new AgentToolScheduleContextPayload
+            {
+                ScheduleId = context.Schedule.ScheduleId.Trim(),
+            };
 
         if (context.ToolVisibility.IsRestricted)
             payload.ToolVisibility = ToToolVisibilityPayload(context.ToolVisibility);
@@ -258,6 +267,30 @@ public static class AgentToolExecutionContextMapper
             AgentToolExecutionContext.Normalize(payload.CommandArguments),
             payload.DiscoveryRequested);
     }
+
+    private static AgentToolCredentialSource FromCredentialSourcePayload(AgentToolCredentialSourcePayload source) =>
+        source switch
+        {
+            AgentToolCredentialSourcePayload.NyxidAssertion => AgentToolCredentialSource.NyxIdAssertion,
+            AgentToolCredentialSourcePayload.BearerToken => AgentToolCredentialSource.BearerToken,
+            AgentToolCredentialSourcePayload.ChannelRegistration => AgentToolCredentialSource.ChannelRegistration,
+            AgentToolCredentialSourcePayload.ScheduledRun => AgentToolCredentialSource.ScheduledRun,
+            AgentToolCredentialSourcePayload.System => AgentToolCredentialSource.System,
+            AgentToolCredentialSourcePayload.ServiceAccount => AgentToolCredentialSource.ServiceAccount,
+            _ => AgentToolCredentialSource.Unspecified,
+        };
+
+    private static AgentToolCredentialSourcePayload ToCredentialSourcePayload(AgentToolCredentialSource source) =>
+        source switch
+        {
+            AgentToolCredentialSource.NyxIdAssertion => AgentToolCredentialSourcePayload.NyxidAssertion,
+            AgentToolCredentialSource.BearerToken => AgentToolCredentialSourcePayload.BearerToken,
+            AgentToolCredentialSource.ChannelRegistration => AgentToolCredentialSourcePayload.ChannelRegistration,
+            AgentToolCredentialSource.ScheduledRun => AgentToolCredentialSourcePayload.ScheduledRun,
+            AgentToolCredentialSource.System => AgentToolCredentialSourcePayload.System,
+            AgentToolCredentialSource.ServiceAccount => AgentToolCredentialSourcePayload.ServiceAccount,
+            _ => AgentToolCredentialSourcePayload.Unspecified,
+        };
 
     private static AgentWorkflowRuntimeContext FromWorkflowRuntimePayload(AgentWorkflowRuntimeContextPayload? payload)
     {
