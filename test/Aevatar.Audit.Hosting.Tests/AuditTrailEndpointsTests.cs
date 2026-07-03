@@ -33,7 +33,7 @@ public sealed class AuditTrailEndpointsTests
     {
         var queryPort = new RecordingAuditTrailQueryPort();
         var authorizer = new FakeAuthorizer(elevated: false);
-        var http = BuildHttpContext(CallerScope, bearer: "token", queryPort);
+        var http = BuildHttpContext(CallerScope, bearer: "token", queryPort, authorizer);
 
         var result = await AuditTrailEndpoints.QueryAuditTrail(
             http,
@@ -55,6 +55,46 @@ public sealed class AuditTrailEndpointsTests
         authorizer.Calls.Should().Be(0);
         body.Should().Contain("queryWatermark").And.Contain("readTimestampUtc").And.Contain("identityKeyId");
         body.Should().Contain("nextCursor");
+    }
+
+    [Fact]
+    public async Task QueryAuditTrail_WhenCallerScopeMissing_ReturnsUnauthorizedBeforeQuery()
+    {
+        var queryPort = new RecordingAuditTrailQueryPort();
+        var http = BuildHttpContext(scopeClaim: null, bearer: "token", queryPort);
+
+        var result = await AuditTrailEndpoints.QueryAuditTrail(
+            http,
+            http.RequestServices,
+            NullLoggerFactory.Instance);
+        var status = await ExecuteAsync(result, http);
+
+        status.Should().Be(StatusCodes.Status401Unauthorized);
+        queryPort.Queries.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task QueryAuditTrail_WhenCallerScopeAmbiguous_ReturnsUnauthorizedBeforeQuery()
+    {
+        var queryPort = new RecordingAuditTrailQueryPort();
+        var http = BuildHttpContext(
+            scopeClaim: null,
+            bearer: "token",
+            queryPort,
+            scopeClaims:
+            [
+                new Claim("scope_id", CallerScope),
+                new Claim("workflow.scope_id", OtherScope),
+            ]);
+
+        var result = await AuditTrailEndpoints.QueryAuditTrail(
+            http,
+            http.RequestServices,
+            NullLoggerFactory.Instance);
+        var status = await ExecuteAsync(result, http);
+
+        status.Should().Be(StatusCodes.Status401Unauthorized);
+        queryPort.Queries.Should().BeEmpty();
     }
 
     [Fact]
@@ -113,6 +153,24 @@ public sealed class AuditTrailEndpointsTests
     }
 
     [Fact]
+    public async Task QueryAuditTrail_WhenCrossScopeAndAdminAuthorizerMissing_ReturnsUnavailableBeforeQuery()
+    {
+        var queryPort = new RecordingAuditTrailQueryPort();
+        var http = BuildHttpContext(CallerScope, bearer: "token", queryPort);
+
+        var result = await AuditTrailEndpoints.QueryAuditTrail(
+            http,
+            http.RequestServices,
+            NullLoggerFactory.Instance,
+            scope: OtherScope);
+        var (status, body) = await ExecuteWithBodyAsync(result, http);
+
+        status.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        body.Should().Contain("AUDIT_ADMIN_AUTH_UNAVAILABLE");
+        queryPort.Queries.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task QueryAuditTrail_WhenCrossScopeAndAdmin_ReadsTargetScope()
     {
         var queryPort = new RecordingAuditTrailQueryPort();
@@ -136,9 +194,39 @@ public sealed class AuditTrailEndpointsTests
     }
 
     [Fact]
+    public async Task QueryAuditTrail_WhenFiltersProvided_PreservesQueryFilters()
+    {
+        var queryPort = new RecordingAuditTrailQueryPort();
+        var http = BuildHttpContext(CallerScope, bearer: "token", queryPort);
+        var from = DateTimeOffset.Parse("2026-01-01T00:00:00Z");
+        var to = DateTimeOffset.Parse("2026-01-31T23:59:59Z");
+
+        var result = await AuditTrailEndpoints.QueryAuditTrail(
+            http,
+            http.RequestServices,
+            NullLoggerFactory.Instance,
+            auditActorId: " audit_actor:abc ",
+            identityKeyId: " key-1 ",
+            cursor: " cursor-1 ",
+            from: from,
+            to: to,
+            take: 25);
+        var status = await ExecuteAsync(result, http);
+
+        status.Should().Be(StatusCodes.Status200OK);
+        var query = queryPort.Queries.Should().ContainSingle().Which;
+        query.ScopeId.Should().Be(CallerScope);
+        query.AuditActorId.Should().Be("audit_actor:abc");
+        query.IdentityKeyId.Should().Be("key-1");
+        query.Cursor.Should().Be("cursor-1");
+        query.OccurredFrom.Should().Be(from);
+        query.OccurredTo.Should().Be(to);
+        query.Take.Should().Be(25);
+    }
+
+    [Fact]
     public async Task QueryAuditTrail_WhenQueryPortMissing_ReturnsServiceUnavailable()
     {
-        var authorizer = new FakeAuthorizer(elevated: true);
         var http = BuildHttpContext(CallerScope, bearer: "token", queryPort: null);
 
         var result = await AuditTrailEndpoints.QueryAuditTrail(
@@ -149,6 +237,52 @@ public sealed class AuditTrailEndpointsTests
 
         status.Should().Be(StatusCodes.Status503ServiceUnavailable);
         body.Should().Contain("AUDIT_QUERY_UNAVAILABLE");
+    }
+
+    [Fact]
+    public async Task ResolveAuditActor_WhenCallerScopeMissing_ReturnsUnauthorizedBeforeAuthorization()
+    {
+        var hasher = new RecordingHasher();
+        var authorizer = new FakeAuthorizer(elevated: true);
+        var http = BuildHttpContext(scopeClaim: null, bearer: "token", queryPort: null);
+
+        var result = await AuditTrailEndpoints.ResolveAuditActor(
+            http,
+            BuildServiceProvider(queryPort: null, hasher, authorizer),
+            NullLoggerFactory.Instance,
+            new AuditActorResolutionRequest("nyxid", "user@example.test"));
+        var status = await ExecuteAsync(result, http);
+
+        status.Should().Be(StatusCodes.Status401Unauthorized);
+        authorizer.Calls.Should().Be(0);
+        hasher.CanonicalActorKeys.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ResolveAuditActor_WhenCallerScopeAmbiguous_ReturnsUnauthorizedBeforeAuthorization()
+    {
+        var hasher = new RecordingHasher();
+        var authorizer = new FakeAuthorizer(elevated: true);
+        var http = BuildHttpContext(
+            scopeClaim: null,
+            bearer: "token",
+            queryPort: null,
+            scopeClaims:
+            [
+                new Claim("scope_id", CallerScope),
+                new Claim("workflow.scope_id", OtherScope),
+            ]);
+
+        var result = await AuditTrailEndpoints.ResolveAuditActor(
+            http,
+            BuildServiceProvider(queryPort: null, hasher, authorizer),
+            NullLoggerFactory.Instance,
+            new AuditActorResolutionRequest("nyxid", "user@example.test"));
+        var status = await ExecuteAsync(result, http);
+
+        status.Should().Be(StatusCodes.Status401Unauthorized);
+        authorizer.Calls.Should().Be(0);
+        hasher.CanonicalActorKeys.Should().BeEmpty();
     }
 
     [Fact]
@@ -167,6 +301,42 @@ public sealed class AuditTrailEndpointsTests
 
         status.Should().Be(StatusCodes.Status403Forbidden);
         hasher.CanonicalActorKeys.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ResolveAuditActor_WhenAdminAuthorizerMissing_ReturnsUnavailableBeforeHashing()
+    {
+        var hasher = new RecordingHasher();
+        var http = BuildHttpContext(CallerScope, bearer: "token", queryPort: null);
+
+        var result = await AuditTrailEndpoints.ResolveAuditActor(
+            http,
+            BuildServiceProvider(queryPort: null, hasher, authorizer: null),
+            NullLoggerFactory.Instance,
+            new AuditActorResolutionRequest("nyxid", "user@example.test"));
+        var (status, body) = await ExecuteWithBodyAsync(result, http);
+
+        status.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        body.Should().Contain("AUDIT_ADMIN_AUTH_UNAVAILABLE");
+        hasher.CanonicalActorKeys.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ResolveAuditActor_WhenHasherMissing_ReturnsUnavailableAfterAdminAuthorization()
+    {
+        var authorizer = new FakeAuthorizer(elevated: true);
+        var http = BuildHttpContext(CallerScope, bearer: "token", queryPort: null);
+
+        var result = await AuditTrailEndpoints.ResolveAuditActor(
+            http,
+            BuildServiceProvider(queryPort: null, hasher: null, authorizer),
+            NullLoggerFactory.Instance,
+            new AuditActorResolutionRequest("nyxid", "user@example.test"));
+        var (status, body) = await ExecuteWithBodyAsync(result, http);
+
+        status.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        body.Should().Contain("AUDIT_ACTOR_HASHER_UNAVAILABLE");
+        authorizer.Calls.Should().Be(1);
     }
 
     [Fact]
@@ -263,24 +433,46 @@ public sealed class AuditTrailEndpointsTests
             .BeEquivalentTo(new AuditTrailEndpointAuditMetadata("audit-trail", "resolve-actor", "ADMIN"));
     }
 
+    [Fact]
+    public async Task AddAuditTrailCapabilityBundle_WhenQueryPortMissing_ReportsDegradedHealthContributor()
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = Environments.Development,
+        });
+        builder.WebHost.UseTestServer();
+        builder.AddAuditTrailCapabilityBundle();
+
+        await using var app = builder.Build();
+
+        var contributor = app.Services.GetServices<AevatarHealthContributorRegistration>()
+            .Single(static registration => registration.Name == "audit-trail");
+        var result = await contributor.ProbeAsync!(app.Services, CancellationToken.None);
+
+        result.Status.Should().Be(AevatarHealthStatuses.Degraded);
+        result.Message.Should().Be("Audit trail query port is not configured.");
+    }
+
     private static DefaultHttpContext BuildHttpContext(
-        string scopeClaim,
+        string? scopeClaim,
         string? bearer,
         IAuditTrailQueryPort? queryPort,
-        IPlatformAdminAuthorizer? authorizer = null)
+        IPlatformAdminAuthorizer? authorizer = null,
+        IReadOnlyCollection<Claim>? scopeClaims = null)
     {
         var context = new DefaultHttpContext
         {
             RequestServices = BuildServiceProvider(queryPort, hasher: null, authorizer),
         };
-        context.User = new ClaimsPrincipal(new ClaimsIdentity(
-            [new Claim("scope_id", scopeClaim)],
-            authenticationType: "Test"));
+        context.User = new ClaimsPrincipal(new ClaimsIdentity(scopeClaims ?? BuildScopeClaims(scopeClaim), "Test"));
         if (bearer is not null)
             context.Request.Headers.Authorization = $"Bearer {bearer}";
 
         return context;
     }
+
+    private static Claim[] BuildScopeClaims(string? scopeClaim) =>
+        scopeClaim is null ? [] : [new Claim("scope_id", scopeClaim)];
 
     private static IServiceProvider BuildServiceProvider(
         IAuditTrailQueryPort? queryPort,
