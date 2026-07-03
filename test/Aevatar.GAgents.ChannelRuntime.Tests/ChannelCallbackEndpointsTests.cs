@@ -1,16 +1,29 @@
 using System.Reflection;
+using System.Net.Http.Headers;
 using System.Security.Claims;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
+using Aevatar.Audit;
+using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Abstractions.Ports;
+using Aevatar.Bootstrap.Hosting;
 using Aevatar.Foundation.Abstractions;
 using FluentAssertions;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using NSubstitute;
 using Xunit;
 using Aevatar.Authentication.Abstractions;
@@ -21,6 +34,8 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
 public sealed class ChannelCallbackEndpointsTests
 {
+    private const string RawToken = "eyJhbGciOiJVTklUIn0.eyJzdWIiOiJ1c2VyLTEyMyJ9.c2lnbmF0dXJlLXZhbHVl";
+
     [Fact]
     public void MapChannelCallbackEndpoints_ShouldRequireAuthorization_ForDiagnosticErrors()
     {
@@ -64,6 +79,51 @@ public sealed class ChannelCallbackEndpointsTests
         routePatterns.Should().Contain("/api/channels/registrations");
         routePatterns.Should().Contain("/api/channels/diagnostics/errors");
         routePatterns.Should().NotContain("/api/channels/registrations/rebuild");
+    }
+
+    [Fact]
+    public async Task ChannelRegistrationRoute_ShouldAppendEndpointAuditRecords()
+    {
+        var appender = new RecordingAuditTrailAppender();
+        await using var app = await CreateRouteAuditAppAsync(
+            appender,
+            new ChannelRelayRegistrationFacade([new AcceptedProvisioningService()]));
+        using var client = CreateClient(app);
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"/api/channels/registrations?access_token={RawToken}&email=alice@example.com")
+        {
+            Content = new StringContent("""
+            {
+              "platform": "lark",
+              "app_id": "cli_123",
+              "app_secret": "secret-value",
+              "verification_token": "verify-value",
+              "webhook_base_url": "https://aevatar.example.com"
+            }
+            """, Encoding.UTF8, "application/json"),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", RawToken);
+
+        var response = await client.SendAsync(request);
+
+        response.StatusCode.Should().Be(System.Net.HttpStatusCode.Accepted);
+        appender.Records.Should().HaveCount(2);
+        appender.Records[0].OperationName.Should().Be("channel.registration.create.attempted");
+        appender.Records[0].Outcome.Should().Be(AuditOutcome.Accepted);
+        appender.Records[0].ResultSummary.Should().BeEmpty();
+        appender.Records[1].OperationName.Should().Be("channel.registration.create");
+        appender.Records[1].Outcome.Should().Be(AuditOutcome.Accepted);
+        appender.Records.Should().OnlyContain(record =>
+            record.Target.Kind == "channel-registration" &&
+            record.Target.Id == "new" &&
+            record.RequestSummary == "POST /api/channels/registrations" &&
+            record.CapturePlane == AuditCapturePlane.BoundaryEndpoint);
+        appender.Records.SelectMany(RecordStrings).Should().NotContain(value =>
+            value.Contains(RawToken, StringComparison.Ordinal) ||
+            value.Contains("alice@example.com", StringComparison.Ordinal) ||
+            value.Contains("secret-value", StringComparison.Ordinal) ||
+            value.Contains("verify-value", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -782,6 +842,53 @@ public sealed class ChannelCallbackEndpointsTests
         return context;
     }
 
+    private static async Task<WebApplication> CreateRouteAuditAppAsync(
+        RecordingAuditTrailAppender appender,
+        ChannelRelayRegistrationFacade registrationFacade)
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            Args = [],
+            EnvironmentName = Environments.Development,
+        });
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        builder.Services
+            .AddAuthentication("Test")
+            .AddScheme<AuthenticationSchemeOptions, RouteAuditAuthenticationHandler>("Test", _ => { });
+        builder.Services.AddAuthorization();
+        builder.Services.AddLogging();
+        builder.Services.AddSingleton<IAuditTrailAppender>(appender);
+        builder.Services.AddSingleton<IAuditActorIdentityHasher>(new StableAuditActorIdentityHasher());
+        builder.Services.AddSingleton(registrationFacade);
+        builder.Services.AddSingleton(Substitute.For<IChannelBotRegistrationQueryPort>());
+        builder.Services.AddSingleton(Substitute.For<IPlatformAdminAuthorizer>());
+        builder.Services.AddSingleton(Substitute.For<INyxChannelBotDeprovisioningService>());
+
+        var app = builder.Build();
+        app.UseRouting();
+        app.UseAuthentication();
+        app.UseMiddleware<EndpointAuditCaptureMiddleware>();
+        app.UseAuthorization();
+        app.MapChannelCallbackEndpoints();
+        await app.StartAsync();
+        return app;
+    }
+
+    private static HttpClient CreateClient(WebApplication app)
+    {
+        var address = app.Services
+            .GetRequiredService<IServer>()
+            .Features
+            .Get<IServerAddressesFeature>()!
+            .Addresses
+            .Single();
+
+        return new HttpClient
+        {
+            BaseAddress = new Uri(address),
+        };
+    }
+
     private static HttpContext CreateJsonHttpContext(string json, string? scopeId = null)
     {
         var context = CreateHttpContext(scopeId);
@@ -807,6 +914,34 @@ public sealed class ChannelCallbackEndpointsTests
         throw new InvalidOperationException($"Method '{methodName}' did not return Task<IResult>.");
     }
 
+    private static IEnumerable<string> RecordStrings(AuditRecord record)
+    {
+        yield return record.AuditId;
+        yield return record.ScopeId;
+        yield return record.AuditActorId;
+        yield return record.IdentityKeyId;
+        yield return record.OperationName;
+        yield return record.Target.Kind;
+        yield return record.Target.Id;
+        yield return record.Target.DisplayName;
+        yield return record.Correlation.TraceId;
+        yield return record.Correlation.RequestId;
+        yield return record.Correlation.CommandId;
+        yield return record.Correlation.CallId;
+        yield return record.Correlation.SessionId;
+        yield return record.Correlation.WorkflowRunId;
+        yield return record.Correlation.ApprovalId;
+        yield return record.RequestSummary;
+        yield return record.ResultSummary;
+        yield return record.ErrorCode;
+        yield return record.ErrorSummary;
+        foreach (var annotation in record.Annotations)
+        {
+            yield return annotation.Key;
+            yield return annotation.Value;
+        }
+    }
+
     private static async Task<(int StatusCode, string Body)> ExecuteResultAsync(IResult result)
     {
         var context = CreateHttpContext();
@@ -815,5 +950,86 @@ public sealed class ChannelCallbackEndpointsTests
         using var reader = new StreamReader(context.Response.Body, Encoding.UTF8);
         var body = await reader.ReadToEndAsync();
         return (context.Response.StatusCode, body);
+    }
+
+    private sealed class AcceptedProvisioningService : INyxChannelBotProvisioningService
+    {
+        public string Platform => "lark";
+
+        public Task<NyxChannelBotProvisioningResult> ProvisionAsync(
+            NyxChannelBotProvisioningRequest request,
+            CancellationToken ct)
+        {
+            request.AccessToken.Should().Be(RawToken);
+            request.ScopeId.Should().Be("scope-1");
+            return Task.FromResult(new NyxChannelBotProvisioningResult(
+                Succeeded: true,
+                Status: "accepted",
+                Platform: request.Platform,
+                RegistrationId: "reg-1"));
+        }
+    }
+
+    private sealed class RecordingAuditTrailAppender : IAuditTrailAppender
+    {
+        public List<AuditRecord> Records { get; } = [];
+
+        public Task<AuditTrailAppendReceipt> AppendAsync(
+            AuditRecord record,
+            CancellationToken cancellationToken = default)
+        {
+            Records.Add(record);
+            return Task.FromResult(new AuditTrailAppendReceipt(
+                record.AuditId,
+                record.AuditActorId,
+                record.OccurredAt.ToDateTimeOffset()));
+        }
+
+        public async Task<IReadOnlyList<AuditTrailAppendReceipt>> AppendManyAsync(
+            IReadOnlyList<AuditRecord> records,
+            CancellationToken cancellationToken = default)
+        {
+            var receipts = new List<AuditTrailAppendReceipt>(records.Count);
+            foreach (var record in records)
+            {
+                receipts.Add(await AppendAsync(record, cancellationToken));
+            }
+
+            return receipts;
+        }
+    }
+
+    private sealed class StableAuditActorIdentityHasher : IAuditActorIdentityHasher
+    {
+        public AuditActorIdentity Hash(string canonicalActorKey) =>
+            new($"hashed:{canonicalActorKey}", "kid-test");
+
+        public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId) =>
+            auditActorId == $"hashed:{canonicalActorKey}" &&
+            identityKeyId == "kid-test";
+    }
+
+    private sealed class RouteAuditAuthenticationHandler(
+        IOptionsMonitor<AuthenticationSchemeOptions> options,
+        Microsoft.Extensions.Logging.ILoggerFactory logger,
+        UrlEncoder encoder)
+        : AuthenticationHandler<AuthenticationSchemeOptions>(options, logger, encoder)
+    {
+        protected override Task<AuthenticateResult> HandleAuthenticateAsync()
+        {
+            if (!Request.Headers.TryGetValue("Authorization", out var authorization) ||
+                !authorization.ToString().StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            {
+                return Task.FromResult(AuthenticateResult.NoResult());
+            }
+
+            var identity = new ClaimsIdentity(
+            [
+                new Claim("sub", "user-123"),
+                new Claim("scope_id", "scope-1"),
+            ], Scheme.Name);
+            return Task.FromResult(AuthenticateResult.Success(
+                new AuthenticationTicket(new ClaimsPrincipal(identity), Scheme.Name)));
+        }
     }
 }

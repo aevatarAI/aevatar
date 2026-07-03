@@ -1,16 +1,28 @@
 using System.Security.Claims;
 using System.Text;
+using System.Text.Encodings.Web;
+using Aevatar.Audit;
+using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Abstractions.Ports;
+using Aevatar.Bootstrap.Hosting;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Observatory;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using FluentAssertions;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Json;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
@@ -20,6 +32,7 @@ public sealed class WorkflowRunObservatoryEndpointsAdminTests
 {
     private const string OwnScope = "scope-alice";
     private const string OtherScope = "scope-bob";
+    private const string RawToken = "eyJhbGciOiJVTklUIn0.eyJzdWIiOiJ1c2VyLTEyMyJ9.c2lnbmF0dXJlLXZhbHVl";
 
     [Fact]
     public async Task ListRuns_NoScope_UsesOwnScope_AndNeverCallsAuthorizerOrOverview()
@@ -207,7 +220,99 @@ public sealed class WorkflowRunObservatoryEndpointsAdminTests
         body.Should().Contain("scope-bob").And.Contain("bob@x.io");
     }
 
+    [Fact]
+    public async Task WorkflowObservatoryRoute_ShouldAppendEndpointAuditRecords()
+    {
+        var appender = new RecordingAuditTrailAppender();
+        var observatory = new FakeObservatory
+        {
+            Detail = new ObservatoryRunDetail(),
+        };
+        await using var app = await CreateRouteAuditAppAsync(
+            appender,
+            observatory,
+            new FakeOverview(),
+            new FakeAuthorizer(elevated: true),
+            new FakeDirectory());
+        using var client = CreateClient(app);
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"/api/workflow/observatory/runs/run-a?scope={OtherScope}&access_token={RawToken}&email=alice@example.com");
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", RawToken);
+
+        var response = await client.SendAsync(request);
+
+        response.StatusCode.Should().Be(System.Net.HttpStatusCode.OK);
+        appender.Records.Should().HaveCount(2);
+        appender.Records[0].OperationName.Should().Be("workflow.observatory.get-run.attempted");
+        appender.Records[0].Outcome.Should().Be(AuditOutcome.Accepted);
+        appender.Records[0].ResultSummary.Should().BeEmpty();
+        appender.Records[1].OperationName.Should().Be("workflow.observatory.get-run");
+        appender.Records[1].Outcome.Should().Be(AuditOutcome.Accepted);
+        appender.Records.Should().OnlyContain(record =>
+            record.Target.Kind == "workflow-run" &&
+            record.Target.Id == $"{OtherScope}/run-a" &&
+            record.RequestSummary == "GET /api/workflow/observatory/runs/{runId} scope=scope-bob runId=run-a" &&
+            record.CapturePlane == AuditCapturePlane.BoundaryEndpoint);
+        appender.Records.SelectMany(RecordStrings).Should().NotContain(value =>
+            value.Contains(RawToken, StringComparison.Ordinal) ||
+            value.Contains("alice@example.com", StringComparison.Ordinal));
+    }
+
     // ── harness ──
+
+    private static async Task<WebApplication> CreateRouteAuditAppAsync(
+        RecordingAuditTrailAppender appender,
+        IWorkflowRunObservatoryQueryService observatory,
+        IWorkflowRunAdminOverviewQueryService overview,
+        IPlatformAdminAuthorizer authorizer,
+        IPlatformUserDirectory directory)
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            Args = [],
+            EnvironmentName = Environments.Development,
+        });
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        builder.Services
+            .AddAuthentication("Test")
+            .AddScheme<AuthenticationSchemeOptions, RouteAuditAuthenticationHandler>("Test", _ => { });
+        builder.Services.AddAuthorization();
+        builder.Services.AddLogging();
+        builder.Services.AddOptions();
+        builder.Services.AddSingleton<IConfiguration>(new ConfigurationBuilder().Build());
+        builder.Services.AddSingleton<IHostEnvironment>(new TestHostEnvironment());
+        builder.Services.AddSingleton<IAuditTrailAppender>(appender);
+        builder.Services.AddSingleton<IAuditActorIdentityHasher>(new StableAuditActorIdentityHasher());
+        builder.Services.AddSingleton(observatory);
+        builder.Services.AddSingleton(overview);
+        builder.Services.AddSingleton(authorizer);
+        builder.Services.AddSingleton(directory);
+
+        var app = builder.Build();
+        app.UseRouting();
+        app.UseAuthentication();
+        app.UseMiddleware<EndpointAuditCaptureMiddleware>();
+        app.UseAuthorization();
+        app.MapWorkflowRunObservatory();
+        await app.StartAsync();
+        return app;
+    }
+
+    private static HttpClient CreateClient(WebApplication app)
+    {
+        var address = app.Services
+            .GetRequiredService<IServer>()
+            .Features
+            .Get<IServerAddressesFeature>()!
+            .Addresses
+            .Single();
+
+        return new HttpClient
+        {
+            BaseAddress = new Uri(address),
+        };
+    }
 
     private static DefaultHttpContext BuildHttpContext(string scopeClaim, string? bearer)
     {
@@ -245,6 +350,34 @@ public sealed class WorkflowRunObservatoryEndpointsAdminTests
         http.Response.Body.Seek(0, SeekOrigin.Begin);
         using var reader = new StreamReader(http.Response.Body, Encoding.UTF8, leaveOpen: true);
         return (http.Response.StatusCode, await reader.ReadToEndAsync());
+    }
+
+    private static IEnumerable<string> RecordStrings(AuditRecord record)
+    {
+        yield return record.AuditId;
+        yield return record.ScopeId;
+        yield return record.AuditActorId;
+        yield return record.IdentityKeyId;
+        yield return record.OperationName;
+        yield return record.Target.Kind;
+        yield return record.Target.Id;
+        yield return record.Target.DisplayName;
+        yield return record.Correlation.TraceId;
+        yield return record.Correlation.RequestId;
+        yield return record.Correlation.CommandId;
+        yield return record.Correlation.CallId;
+        yield return record.Correlation.SessionId;
+        yield return record.Correlation.WorkflowRunId;
+        yield return record.Correlation.ApprovalId;
+        yield return record.RequestSummary;
+        yield return record.ResultSummary;
+        yield return record.ErrorCode;
+        yield return record.ErrorSummary;
+        foreach (var annotation in record.Annotations)
+        {
+            yield return annotation.Key;
+            yield return annotation.Value;
+        }
     }
 
     private sealed class FakeAuthorizer(bool elevated, string role = "admin", string email = "a@x.io", string userId = "u1")
@@ -306,6 +439,69 @@ public sealed class WorkflowRunObservatoryEndpointsAdminTests
         {
             SearchCount++;
             return Task.FromResult(Matches);
+        }
+    }
+
+    private sealed class RecordingAuditTrailAppender : IAuditTrailAppender
+    {
+        public List<AuditRecord> Records { get; } = [];
+
+        public Task<AuditTrailAppendReceipt> AppendAsync(
+            AuditRecord record,
+            CancellationToken cancellationToken = default)
+        {
+            Records.Add(record);
+            return Task.FromResult(new AuditTrailAppendReceipt(
+                record.AuditId,
+                record.AuditActorId,
+                record.OccurredAt.ToDateTimeOffset()));
+        }
+
+        public async Task<IReadOnlyList<AuditTrailAppendReceipt>> AppendManyAsync(
+            IReadOnlyList<AuditRecord> records,
+            CancellationToken cancellationToken = default)
+        {
+            var receipts = new List<AuditTrailAppendReceipt>(records.Count);
+            foreach (var record in records)
+            {
+                receipts.Add(await AppendAsync(record, cancellationToken));
+            }
+
+            return receipts;
+        }
+    }
+
+    private sealed class StableAuditActorIdentityHasher : IAuditActorIdentityHasher
+    {
+        public AuditActorIdentity Hash(string canonicalActorKey) =>
+            new($"hashed:{canonicalActorKey}", "kid-test");
+
+        public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId) =>
+            auditActorId == $"hashed:{canonicalActorKey}" &&
+            identityKeyId == "kid-test";
+    }
+
+    private sealed class RouteAuditAuthenticationHandler(
+        IOptionsMonitor<AuthenticationSchemeOptions> options,
+        Microsoft.Extensions.Logging.ILoggerFactory logger,
+        UrlEncoder encoder)
+        : AuthenticationHandler<AuthenticationSchemeOptions>(options, logger, encoder)
+    {
+        protected override Task<AuthenticateResult> HandleAuthenticateAsync()
+        {
+            if (!Request.Headers.TryGetValue("Authorization", out var authorization) ||
+                !authorization.ToString().StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            {
+                return Task.FromResult(AuthenticateResult.NoResult());
+            }
+
+            var identity = new ClaimsIdentity(
+            [
+                new Claim("sub", "user-123"),
+                new Claim("scope_id", OwnScope),
+            ], Scheme.Name);
+            return Task.FromResult(AuthenticateResult.Success(
+                new AuthenticationTicket(new ClaimsPrincipal(identity), Scheme.Name)));
         }
     }
 
