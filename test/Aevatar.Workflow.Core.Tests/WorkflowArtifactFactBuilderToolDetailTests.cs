@@ -14,6 +14,8 @@ namespace Aevatar.Workflow.Core.Tests;
 // generic coverage bucket.
 public sealed class WorkflowArtifactFactBuilderToolDetailTests
 {
+    private const string Sentinel = "audit-secret-sentinel";
+
     [Fact]
     public void TryBuild_ShouldJoinToolCallsAndReceiptsByCallId_FromCommittedRoleChatSession()
     {
@@ -86,6 +88,34 @@ public sealed class WorkflowArtifactFactBuilderToolDetailTests
         toolCall.ArgumentsJson.Length.Should().BeLessThan(longArgs.Length);
         toolCall.ArgumentsJson.Should().NotContain(SecretScrubber.Marker);
         toolCall.ArgumentsJson.Should().EndWith("...");
+    }
+
+    [Fact]
+    public void TryBuild_ShouldSanitizeToolPayloadsBeforePersistingArtifactFact()
+    {
+        var completed = new RoleChatSessionCompletedEvent { SessionId = "session-secret", ContentEmitted = true };
+        completed.ToolCalls.Add(new ToolCallEvent
+        {
+            ToolName = "search",
+            CallId = "call-1",
+            ArgumentsJson = $$"""{"query":"weather","api_key":"{{Sentinel}}","authorization":"Bearer {{Sentinel}}"}""",
+        });
+        completed.ToolReceipts.Add(new AgentToolReceipt
+        {
+            CallId = "call-1",
+            Status = AgentToolReceiptStatus.Error,
+            ResultJson = $$"""{"result":"ok","access_token":"{{Sentinel}}"}""",
+            ErrorMessage = $"failed with token={Sentinel}",
+        });
+
+        WorkflowArtifactFactBuilder.TryBuild(BuildCommittedEnvelope(completed), "workflow-run", "run-1", out var artifactFact)
+            .Should().BeTrue();
+
+        var toolCall = artifactFact.Should().BeOfType<WorkflowRoleReplyRecordedEvent>()
+            .Subject.ToolCalls.Should().ContainSingle().Subject;
+        toolCall.ArgumentsJson.Should().NotContain(Sentinel);
+        toolCall.ResultJson.Should().NotContain(Sentinel);
+        toolCall.Error.Should().NotContain(Sentinel);
     }
 
     [Fact]
