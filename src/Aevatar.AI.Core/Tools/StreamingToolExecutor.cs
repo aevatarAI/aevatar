@@ -305,7 +305,7 @@ public sealed class StreamingToolExecutor
     {
         try
         {
-            using var _ = AgentToolContextScope.Push(_toolContext?.WithCallId(tracked.Call.Id));
+            using var _ = AgentToolContextScope.Push(ResolveExecutionContext(tracked.Call.Id, out var executionContext));
 
             var call = tracked.Call;
             var toolCtx = new AIGAgentExecutionHookContext
@@ -354,7 +354,7 @@ public sealed class StreamingToolExecutor
                 ToolName = effectiveToolName,
                 ToolCallId = call.Id,
                 ArgumentsJson = toolCtx.ToolArguments ?? call.ArgumentsJson,
-                CancellationToken = ct,
+                CancellationToken = ct, ExecutionContext = executionContext,
             };
 
             await MiddlewarePipeline.RunToolCallAsync(_toolMiddlewares, toolCallContext, async () =>
@@ -433,6 +433,14 @@ public sealed class StreamingToolExecutor
                     IsError: true),
                 SchedulerFault: false);
         }
+    }
+
+    private AgentToolExecutionContext? ResolveExecutionContext(
+        string callId,
+        out AgentToolExecutionContext? executionContext)
+    {
+        executionContext = (_toolContext ?? AgentToolRequestContext.Current)?.WithCallId(callId);
+        return executionContext;
     }
 
     private bool IsToolVisible(string? toolName) =>

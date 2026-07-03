@@ -27,6 +27,7 @@ public sealed class WorkflowRoleGAgentMappingTests
             StepId = "reply",
             SessionId = "session-1",
             Prompt = "hello",
+            ScheduleId = " schedule-1 ",
             Model = "model-a",
             UserMemoryPrompt = "memory",
             RoutePreference = " route-a ",
@@ -58,6 +59,7 @@ public sealed class WorkflowRoleGAgentMappingTests
         provider.LastRequest.ToolContext.WorkflowRuntime.RootRunId.Should().Be("root-run");
         provider.LastRequest.ToolContext.WorkflowRuntime.Depth.Should().Be(2);
         provider.LastRequest.ToolContext.WorkflowRuntime.HasManagedParent.Should().BeTrue();
+        provider.LastRequest.ToolContext.Schedule.ScheduleId.Should().Be("schedule-1");
         (provider.LastRequest.Metadata ?? new Dictionary<string, string>(StringComparer.Ordinal))
             .Should()
             .BeEmpty();

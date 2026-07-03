@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.Auditing;
 using Aevatar.AI.Core.Hooks;
 
 namespace Aevatar.AI.Core.Middleware;
@@ -22,12 +23,18 @@ public static class ToolCallMiddlewareChainFactory
         AgentHookPipeline? hooks)
     {
         var effectiveToolMiddlewares = new List<IToolCallMiddleware>();
+        effectiveToolMiddlewares.AddRange(toolMiddlewares
+            .Where(static middleware => middleware.GetType() == typeof(ToolExecutionAuditMiddleware))
+            .Take(1));
         effectiveToolMiddlewares.Add(new ToolCallCredentialPolicyMiddleware());
         effectiveToolMiddlewares.Add(new ToolApprovalMiddleware(
             approvalHandler ?? MissingApprovalHandler.Instance,
             hooks));
         effectiveToolMiddlewares.AddRange(toolMiddlewares.Where(static middleware =>
-            middleware is not ToolApprovalMiddleware and not ToolCallCredentialPolicyMiddleware));
+            middleware is not ToolExecutionAuditMiddleware &&
+            middleware is not NullToolExecutionAuditMiddleware &&
+            middleware is not ToolApprovalMiddleware &&
+            middleware is not ToolCallCredentialPolicyMiddleware));
         return effectiveToolMiddlewares;
     }
 }

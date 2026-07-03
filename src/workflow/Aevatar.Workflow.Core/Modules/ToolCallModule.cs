@@ -156,7 +156,8 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
                 RuntimeContext: runtimeContext,
                 ApprovalGrant: approvalGrant,
                 InputFileRefs: request.InputFileRefs,
-                IdempotencyKey: request.IdempotencyKey ?? string.Empty),
+                IdempotencyKey: request.IdempotencyKey ?? string.Empty,
+                ScheduleId: ctx.ScheduleId ?? string.Empty),
             ct);
     }
 

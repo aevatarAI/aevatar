@@ -27,7 +27,8 @@ public sealed class AgentWorkflowToolSourceAdapterTests
                 ScopeId: "scope-1",
                 CallerCredential: new WorkflowCallerCredential { BearerToken = "token-123" },
                 RuntimeContext: WorkflowToolRuntimeContext.Empty,
-                IdempotencyKey: "idem-agent-tool-1"),
+                IdempotencyKey: "idem-agent-tool-1",
+                ScheduleId: " schedule-1 "),
             CancellationToken.None);
 
         result.ResultJson.Should().Be("""{"observed":true}""");
@@ -38,6 +39,7 @@ public sealed class AgentWorkflowToolSourceAdapterTests
         agentTool.ObservedScopeId.Should().Be("scope-1");
         agentTool.ObservedCallId.Should().Be("call-1");
         agentTool.ObservedIdempotencyKey.Should().Be("idem-agent-tool-1");
+        agentTool.ObservedScheduleId.Should().Be("schedule-1");
         agentTool.ObservedExternalMetadata.Should().NotContainKey("ExecutionId");
         AgentToolRequestContext.Current.Should().BeNull();
     }
@@ -314,6 +316,8 @@ public sealed class AgentWorkflowToolSourceAdapterTests
 
         public string? ObservedIdempotencyKey { get; private set; }
 
+        public string? ObservedScheduleId { get; private set; }
+
         public IReadOnlyDictionary<string, string> ObservedExternalMetadata { get; private set; } =
             new Dictionary<string, string>(StringComparer.Ordinal);
 
@@ -344,6 +348,7 @@ public sealed class AgentWorkflowToolSourceAdapterTests
             ObservedScopeId = AgentToolRequestContext.ScopeId;
             ObservedCallId = AgentToolRequestContext.CallId;
             ObservedIdempotencyKey = AgentToolRequestContext.IdempotencyKey;
+            ObservedScheduleId = AgentToolRequestContext.Current?.Schedule.ScheduleId;
             ObservedExternalMetadata = AgentToolRequestContext.Current?.ExternalMetadata
                 ?? new Dictionary<string, string>(StringComparer.Ordinal);
             ObservedWorkflowRuntime = AgentToolRequestContext.Current?.WorkflowRuntime
