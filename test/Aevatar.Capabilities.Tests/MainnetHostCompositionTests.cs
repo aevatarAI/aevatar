@@ -59,6 +59,8 @@ namespace Aevatar.Capabilities.Tests;
 [Collection(ProcessEnvSerialCollection.Name)]
 public sealed class MainnetHostCompositionTests
 {
+    private const string AuditIdentityTestKeyBase64 = "YXVkaXQgaWRlbnRpdHkga2V5IG1hdGVyaWFsIGZvciB0ZXN0cw==";
+
     [Fact]
     public async Task AddAevatarMainnetHost_WithInMemoryDependencies_ShouldBuildAndStartFullComposition()
     {
@@ -763,6 +765,9 @@ public sealed class MainnetHostCompositionTests
             ["Projection:Graph:Providers:InMemory:Enabled"] = "true",
             ["Projection:Graph:Providers:Neo4j:Enabled"] = "false",
             ["Aevatar:NyxId:Authority"] = "https://nyxid.example.test",
+            ["Audit:ActorIdentityHasher:ActiveKeyId"] = "key-1",
+            ["Audit:ActorIdentityHasher:Keys:0:KeyId"] = "key-1",
+            ["Audit:ActorIdentityHasher:Keys:0:KeyBase64"] = AuditIdentityTestKeyBase64,
         };
         if (overrides != null)
         {

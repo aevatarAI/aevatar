@@ -199,8 +199,8 @@ readers, actor state, or event stores directly. Audit artifacts are queried thro
 
 The resolver accepts raw external identity only in the JSON request body. It must never
 put that identity in path or query parameters, must not log it, and must not return it.
-The only returned identity is the server-computed `auditActorId` from
-`IAuditActorIdentityHasher`.
+The only returned identity is the server-computed `auditActorId` plus
+`identityKeyId` from `IAuditActorIdentityHasher`.
 
 Default audit queries resolve to the caller's `scope_id` claim and do not call the
 platform-admin authorizer. Any cross-scope query must resolve the caller through
@@ -213,9 +213,10 @@ state reads, query-time replay, or event-store reconstruction. If platform-admin
 authorization is unavailable for an admin-only path, the endpoint returns
 `503 AUDIT_ADMIN_AUTH_UNAVAILABLE`.
 
-Audit query responses expose `readTimestampUtc` and `queryWatermark`. Each record also
-exposes `occurredAtUtc` and `recordedAtUtc`. These fields describe artifact-store query
-freshness and must not imply strong consistency with writes that may still be in flight.
+Audit query responses expose `readTimestampUtc`, `queryWatermark`, and `nextCursor`.
+Each record also exposes `occurredAtUtc` and `identityKeyId`. These fields describe
+artifact-store query freshness and must not imply strong consistency with writes that
+may still be in flight.
 
 Admin-only resolver reads and cross-scope audit trail reads carry endpoint metadata with
 `AccessLevel = ADMIN`. That metadata is for the host self-audit pipeline; it does not

@@ -1,5 +1,10 @@
+using Aevatar.Audit;
+using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.Capabilities;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -44,6 +49,8 @@ public static class AuditTrailEndpoints
         [FromServices] ILoggerFactory loggerFactory,
         string? scope = null,
         string? auditActorId = null,
+        string? identityKeyId = null,
+        string? cursor = null,
         DateTimeOffset? from = null,
         DateTimeOffset? to = null,
         int take = DefaultTake,
@@ -77,13 +84,16 @@ public static class AuditTrailEndpoints
         if (services.GetService<IAuditTrailQueryPort>() is not { } queryPort)
             return QueryUnavailable();
 
-        var query = new AuditTrailQuery(
-            targetScope,
-            NormalizeOptional(auditActorId),
-            from,
-            to,
-            NormalizeTake(take),
-            isCrossScope);
+        var query = new AuditTrailQuery
+        {
+            ScopeId = targetScope,
+            AuditActorId = NormalizeOptional(auditActorId),
+            IdentityKeyId = NormalizeOptional(identityKeyId),
+            Cursor = NormalizeOptional(cursor),
+            OccurredFrom = from,
+            OccurredTo = to,
+            Take = NormalizeTake(take),
+        };
         var result = await queryPort.QueryAsync(query, ct);
         return Results.Json(ToResponse(result));
     }
@@ -125,8 +135,20 @@ public static class AuditTrailEndpoints
         if (services.GetService<IAuditActorIdentityHasher>() is not { } hasher)
             return HasherUnavailable();
 
-        var auditActorId = hasher.ComputeAuditActorId(new AuditExternalActorIdentity(provider, subject));
-        return Results.Json(new AuditActorResolutionResponse(auditActorId, DateTimeOffset.UtcNow));
+        if (!TryBuildCanonicalActorKey(provider, subject, out var canonicalActorKey))
+            return Results.Json(
+                new
+                {
+                    code = "AUDIT_ACTOR_IDENTITY_INVALID",
+                    message = "Provider and subject must be non-empty canonical key segments."
+                },
+                statusCode: StatusCodes.Status400BadRequest);
+
+        var identity = hasher.Hash(canonicalActorKey);
+        return Results.Json(new AuditActorResolutionResponse(
+            identity.AuditActorId,
+            identity.IdentityKeyId,
+            DateTimeOffset.UtcNow));
     }
 
     private static async Task<IResult?> AuthorizeAdminReadAsync(
@@ -157,22 +179,24 @@ public static class AuditTrailEndpoints
         return null;
     }
 
-    private static AuditTrailReadResponse ToResponse(AuditTrailQueryResult result) =>
+    private static AuditTrailReadResponse ToResponse(AuditTrailPage result) =>
         new(
             result.Records.Select(static record => new AuditTrailRecordResponse(
-                    record.Id,
+                    record.AuditId,
                     record.ScopeId,
                     record.AuditActorId,
-                    record.Action,
-                    record.Outcome,
-                    record.OccurredAtUtc,
-                    record.RecordedAtUtc,
-                    record.ResourceType,
-                    record.ResourceId,
-                    record.CorrelationId))
+                    record.IdentityKeyId,
+                    record.OperationName,
+                    record.Outcome.ToString(),
+                    ToDateTimeOffset(record.OccurredAt),
+                    NormalizeOptional(record.Target?.Kind),
+                    NormalizeOptional(record.Target?.Id),
+                    NormalizeOptional(record.Correlation?.RequestId) ??
+                    NormalizeOptional(record.Correlation?.TraceId)))
                 .ToArray(),
-            result.ReadTimestampUtc,
-            result.QueryWatermark);
+            result.ReadAt,
+            result.Watermark,
+            result.NextCursor);
 
     private static IResult QueryUnavailable() =>
         Results.Json(
@@ -201,6 +225,34 @@ public static class AuditTrailEndpoints
     {
         var normalized = value?.Trim();
         return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
+    }
+
+    private static DateTimeOffset ToDateTimeOffset(Timestamp? timestamp) =>
+        timestamp is null ? DateTimeOffset.UnixEpoch : timestamp.ToDateTimeOffset();
+
+    private static bool TryBuildCanonicalActorKey(
+        string provider,
+        string subject,
+        out string canonicalActorKey)
+    {
+        canonicalActorKey = string.Empty;
+
+        var normalizedProvider = NormalizeCanonicalKeySegment(provider, lowerCase: true);
+        var normalizedSubject = NormalizeCanonicalKeySegment(subject, lowerCase: false);
+        if (normalizedProvider is null || normalizedSubject is null)
+            return false;
+
+        canonicalActorKey = $"{normalizedProvider}:{normalizedSubject}";
+        return true;
+    }
+
+    private static string? NormalizeCanonicalKeySegment(string value, bool lowerCase)
+    {
+        var normalized = NormalizeOptional(value);
+        if (normalized is null || normalized.Contains(':', StringComparison.Ordinal))
+            return null;
+
+        return lowerCase ? normalized.ToLowerInvariant() : normalized;
     }
 
     private static bool TryGetBearer(HttpContext http, out string token)

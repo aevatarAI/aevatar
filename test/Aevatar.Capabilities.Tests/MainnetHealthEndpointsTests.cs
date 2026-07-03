@@ -1,4 +1,6 @@
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.Audit.Hosting;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.Configuration;
@@ -23,6 +25,8 @@ namespace Aevatar.Capabilities.Tests;
 [Collection(ProcessEnvSerialCollection.Name)]
 public sealed class MainnetHealthEndpointsTests
 {
+    private const string AuditIdentityTestKeyBase64 = "YXVkaXQgaWRlbnRpdHkga2V5IG1hdGVyaWFsIGZvciB0ZXN0cw==";
+
     [Fact]
     public async Task MainnetHost_ShouldExposeHealthEndpoints_AndDocumentThemInOpenApi()
     {
@@ -147,20 +151,24 @@ public sealed class MainnetHealthEndpointsTests
             ["Projection:Document:Providers:Elasticsearch:Enabled"] = "false",
             ["Projection:Graph:Providers:InMemory:Enabled"] = "true",
             ["Projection:Graph:Providers:Neo4j:Enabled"] = "false",
+            ["Audit:ActorIdentityHasher:ActiveKeyId"] = "key-1",
+            ["Audit:ActorIdentityHasher:Keys:0:KeyId"] = "key-1",
+            ["Audit:ActorIdentityHasher:Keys:0:KeyBase64"] = AuditIdentityTestKeyBase64,
         });
         return builder;
     }
 
     private sealed class ReadyAuditTrailQueryPort : IAuditTrailQueryPort
     {
-        public Task<AuditTrailQueryResult> QueryAsync(
+        public Task<AuditTrailPage> QueryAsync(
             AuditTrailQuery query,
             CancellationToken cancellationToken = default)
         {
-            return Task.FromResult(new AuditTrailQueryResult(
+            return Task.FromResult(new AuditTrailPage(
                 [],
+                null,
                 DateTimeOffset.UnixEpoch,
-                "health-test"));
+                DateTimeOffset.UnixEpoch));
         }
     }
 

@@ -1,9 +1,14 @@
 using System.Net;
 using System.Security.Claims;
+using Aevatar.Audit;
+using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.Audit.Hosting;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.Capabilities;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Json;
@@ -40,15 +45,16 @@ public sealed class AuditTrailEndpointsTests
         var (status, body) = await ExecuteWithBodyAsync(result, http);
 
         status.Should().Be(StatusCodes.Status200OK);
-        queryPort.Queries.Should().ContainSingle().Which.Should().BeEquivalentTo(new AuditTrailQuery(
-            CallerScope,
-            "audit_actor:abc",
-            null,
-            null,
-            500,
-            false));
+        var query = queryPort.Queries.Should().ContainSingle().Which;
+        query.ScopeId.Should().Be(CallerScope);
+        query.AuditActorId.Should().Be("audit_actor:abc");
+        query.IdentityKeyId.Should().BeNull();
+        query.OccurredFrom.Should().BeNull();
+        query.OccurredTo.Should().BeNull();
+        query.Take.Should().Be(500);
         authorizer.Calls.Should().Be(0);
-        body.Should().Contain("queryWatermark").And.Contain("readTimestampUtc").And.Contain("recordedAtUtc");
+        body.Should().Contain("queryWatermark").And.Contain("readTimestampUtc").And.Contain("identityKeyId");
+        body.Should().Contain("nextCursor");
     }
 
     [Fact]
@@ -122,13 +128,10 @@ public sealed class AuditTrailEndpointsTests
         var status = await ExecuteAsync(result, http);
 
         status.Should().Be(StatusCodes.Status200OK);
-        queryPort.Queries.Should().ContainSingle().Which.Should().BeEquivalentTo(new AuditTrailQuery(
-            OtherScope,
-            null,
-            null,
-            null,
-            10,
-            true));
+        var query = queryPort.Queries.Should().ContainSingle().Which;
+        query.ScopeId.Should().Be(OtherScope);
+        query.AuditActorId.Should().BeNull();
+        query.Take.Should().Be(10);
         authorizer.Calls.Should().Be(1);
     }
 
@@ -163,13 +166,16 @@ public sealed class AuditTrailEndpointsTests
         var status = await ExecuteAsync(result, http);
 
         status.Should().Be(StatusCodes.Status403Forbidden);
-        hasher.Identities.Should().BeEmpty();
+        hasher.CanonicalActorKeys.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task ResolveAuditActor_WhenAdmin_ReturnsOnlyAuditActorId()
+    public async Task ResolveAuditActor_WhenAdmin_ReturnsOnlyAuditIdentity()
     {
-        var hasher = new RecordingHasher { Hash = "audit_actor:hash" };
+        var hasher = new RecordingHasher
+        {
+            Identity = new AuditActorIdentity("audit_actor:hash", "key-1"),
+        };
         var authorizer = new FakeAuthorizer(elevated: true);
         var http = BuildHttpContext(CallerScope, bearer: "token", queryPort: null);
 
@@ -181,10 +187,9 @@ public sealed class AuditTrailEndpointsTests
         var (status, body) = await ExecuteWithBodyAsync(result, http);
 
         status.Should().Be(StatusCodes.Status200OK);
-        hasher.Identities.Should().ContainSingle().Which.Should().Be(new AuditExternalActorIdentity(
-            "nyxid",
-            "user@example.test"));
+        hasher.CanonicalActorKeys.Should().ContainSingle().Which.Should().Be("nyxid:user@example.test");
         body.Should().Contain("audit_actor:hash");
+        body.Should().Contain("key-1");
         body.Should().NotContain("user@example.test");
         body.Should().NotContain("nyxid");
     }
@@ -204,21 +209,25 @@ public sealed class AuditTrailEndpointsTests
         var status = await ExecuteAsync(result, http);
 
         status.Should().Be(StatusCodes.Status400BadRequest);
-        hasher.Identities.Should().BeEmpty();
+        hasher.CanonicalActorKeys.Should().BeEmpty();
     }
 
     [Fact]
-    public void DefaultAuditActorIdentityHasher_ShouldBeDeterministicAndNotExposeRawIdentity()
+    public async Task ResolveAuditActor_WhenIdentityContainsColon_ReturnsBadRequestBeforeHashing()
     {
-        var hasher = new DefaultAuditActorIdentityHasher();
+        var hasher = new RecordingHasher();
+        var authorizer = new FakeAuthorizer(elevated: true);
+        var http = BuildHttpContext(CallerScope, bearer: "token", queryPort: null);
 
-        var first = hasher.ComputeAuditActorId(new AuditExternalActorIdentity("NyxID", "user@example.test"));
-        var second = hasher.ComputeAuditActorId(new AuditExternalActorIdentity("nyxid", "user@example.test"));
+        var result = await AuditTrailEndpoints.ResolveAuditActor(
+            http,
+            BuildServiceProvider(queryPort: null, hasher, authorizer),
+            NullLoggerFactory.Instance,
+            new AuditActorResolutionRequest("nyxid", "scope:user"));
+        var status = await ExecuteAsync(result, http);
 
-        first.Should().Be(second);
-        first.Should().StartWith("audit_actor:");
-        first.Should().NotContain("user@example.test");
-        first.Should().NotContain("nyxid");
+        status.Should().Be(StatusCodes.Status400BadRequest);
+        hasher.CanonicalActorKeys.Should().BeEmpty();
     }
 
     [Fact]
@@ -314,40 +323,47 @@ public sealed class AuditTrailEndpointsTests
     {
         public List<AuditTrailQuery> Queries { get; } = [];
 
-        public Task<AuditTrailQueryResult> QueryAsync(
+        public Task<AuditTrailPage> QueryAsync(
             AuditTrailQuery query,
             CancellationToken cancellationToken = default)
         {
             Queries.Add(query);
-            return Task.FromResult(new AuditTrailQueryResult(
+            return Task.FromResult(new AuditTrailPage(
                 [
-                    new AuditTrailRecord(
-                        "audit-1",
-                        query.ScopeId,
-                        query.AuditActorId ?? "audit_actor:default",
-                        "READ",
-                        "ALLOWED",
-                        DateTimeOffset.Parse("2026-01-02T03:04:05Z"),
-                        DateTimeOffset.Parse("2026-01-02T03:04:06Z"),
-                        ResourceType: "workflow",
-                        ResourceId: "wf-1",
-                        CorrelationId: "corr-1")
+                    new AuditRecord
+                    {
+                        AuditId = "audit-1",
+                        ScopeId = query.ScopeId!,
+                        AuditActorId = query.AuditActorId ?? "audit_actor:default",
+                        IdentityKeyId = "key-1",
+                        OperationName = "READ",
+                        Outcome = AuditOutcome.Success,
+                        OccurredAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-01-02T03:04:05Z")),
+                        Target = new AuditTarget { Kind = "workflow", Id = "wf-1" },
+                        Correlation = new AuditCorrelation { RequestId = "corr-1" },
+                    }
                 ],
+                "cursor-2",
                 DateTimeOffset.Parse("2026-01-02T03:04:07Z"),
-                "projection:42"));
+                DateTimeOffset.Parse("2026-01-02T03:04:05Z")));
         }
     }
 
     private sealed class RecordingHasher : IAuditActorIdentityHasher
     {
-        public string Hash { get; init; } = "audit_actor:test";
+        public AuditActorIdentity Identity { get; init; } = new("audit_actor:test", "key-test");
 
-        public List<AuditExternalActorIdentity> Identities { get; } = [];
+        public List<string> CanonicalActorKeys { get; } = [];
 
-        public string ComputeAuditActorId(AuditExternalActorIdentity identity)
+        public AuditActorIdentity Hash(string canonicalActorKey)
         {
-            Identities.Add(identity);
-            return Hash;
+            CanonicalActorKeys.Add(canonicalActorKey);
+            return Identity;
+        }
+
+        public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId)
+        {
+            throw new NotSupportedException();
         }
     }
 
