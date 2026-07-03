@@ -1,7 +1,14 @@
+using System.Net;
+using System.Net.Http.Headers;
+using System.Text;
+using System.Text.Json;
+using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.Audit.Core.Projection;
+using Aevatar.Audit.Core.Stores;
 using Aevatar.ChatRouting.Core;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
@@ -15,6 +22,7 @@ using Aevatar.GAgents.Scheduled;
 using Aevatar.GAgents.StatusDashboard;
 using Aevatar.GAgents.StreamingProxy;
 using Aevatar.Workflow.Projection.ReadModels;
+using Google.Protobuf;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -80,8 +88,7 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
 
     private static void AddElasticsearchStores(IServiceCollection services, IConfiguration configuration)
     {
-        RegisterAuditTrailArtifactStore(services);
-        TryAddElasticsearchStore<AuditTrailArtifactStorageDocument>(services, configuration, static document => document.Id);
+        RegisterElasticsearchAuditTrailArtifactStore(services, configuration);
         TryAddElasticsearchStore<ChannelBotRegistrationDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<ConversationDeliveryCurrentStateDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<ProjectionScopeStatusDocument>(services, configuration, static document => document.Id);
@@ -100,8 +107,7 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
 
     private static void AddInMemoryStores(IServiceCollection services)
     {
-        RegisterAuditTrailArtifactStore(services);
-        TryAddInMemoryStore<AuditTrailArtifactStorageDocument>(services, static document => document.Id);
+        RegisterInMemoryAuditTrailArtifactStore(services);
         TryAddInMemoryStore<ChannelBotRegistrationDocument>(services, static document => document.Id);
         TryAddInMemoryStore<ConversationDeliveryCurrentStateDocument>(services, static document => document.Id);
         TryAddInMemoryStore<ProjectionScopeStatusDocument>(services, static document => document.Id);
@@ -151,12 +157,22 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         TryAddReadModelDescriptor<StreamingProxyRoomParticipantsSnapshot>(services, "streaming-proxy-room-participants", "StreamingProxyRoomGAgent", engineLabel, shape);
     }
 
-    private static void RegisterAuditTrailArtifactStore(IServiceCollection services)
+    private static void RegisterElasticsearchAuditTrailArtifactStore(
+        IServiceCollection services,
+        IConfiguration configuration)
     {
-        services.TryAddSingleton<
-            IProjectionDocumentMetadataProvider<AuditTrailArtifactStorageDocument>,
-            AuditTrailDocumentMetadataProvider>();
-        services.TryAddSingleton<IAuditTrailArtifactStore, ProjectionAuditTrailArtifactStore>();
+        services.TryAddSingleton<AuditTrailDocumentMetadataProvider>();
+        services.TryAddSingleton<IAuditTrailArtifactStore>(sp =>
+            new ElasticsearchAuditTrailArtifactStore(
+                ProjectionDocumentProviderConfiguration.BindRequiredElasticsearchOptions(configuration),
+                sp.GetRequiredService<AuditTrailDocumentMetadataProvider>().Metadata));
+    }
+
+    private static void RegisterInMemoryAuditTrailArtifactStore(IServiceCollection services)
+    {
+        services.TryAddSingleton<InMemoryAuditTrailStore>();
+        services.TryAddSingleton<IAuditTrailArtifactStore>(static sp => sp.GetRequiredService<InMemoryAuditTrailStore>());
+        services.TryAddSingleton<IAuditTrailQueryPort>(static sp => sp.GetRequiredService<InMemoryAuditTrailStore>());
     }
 
     // Registers a single inventory descriptor that delegates to the read-model's already-registered
@@ -253,5 +269,253 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
                 descriptor.ServiceType == typeof(InMemoryProjectionDocumentStore<TReadModel, string>)),
             _ => false,
         };
+    }
+
+    private sealed class ElasticsearchAuditTrailArtifactStore : IAuditTrailArtifactStore, IDisposable
+    {
+        private readonly JsonFormatter _formatter = new(
+            JsonFormatter.Settings.Default
+                .WithPreserveProtoFieldNames(true)
+                .WithFormatDefaultValues(true));
+        private readonly JsonParser _parser = new(JsonParser.Settings.Default.WithIgnoreUnknownFields(true));
+        private readonly HttpClient _httpClient;
+        private readonly ElasticsearchProjectionDocumentStoreOptions _options;
+        private readonly DocumentIndexMetadata _metadata;
+        private readonly SemaphoreSlim _indexGate = new(1, 1);
+        private readonly string _indexName;
+        private bool _indexEnsured;
+
+        public ElasticsearchAuditTrailArtifactStore(
+            ElasticsearchProjectionDocumentStoreOptions options,
+            DocumentIndexMetadata metadata)
+        {
+            ArgumentNullException.ThrowIfNull(options);
+            ArgumentNullException.ThrowIfNull(metadata);
+
+            _options = options;
+            _metadata = metadata;
+            _indexName = BuildIndexName(options.IndexPrefix, metadata.IndexName);
+            _httpClient = new HttpClient
+            {
+                BaseAddress = ResolvePrimaryEndpoint(options.Endpoints),
+                Timeout = TimeSpan.FromMilliseconds(Math.Max(500, options.RequestTimeoutMs)),
+            };
+
+            if (!string.IsNullOrWhiteSpace(options.Username))
+            {
+                var raw = $"{options.Username}:{options.Password}";
+                var token = Convert.ToBase64String(Encoding.UTF8.GetBytes(raw));
+                _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", token);
+            }
+        }
+
+        public async Task<Audit.AuditTrailDocument?> GetAsync(string auditId, CancellationToken ct = default)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(auditId);
+
+            var storageDocument = await GetStorageDocumentAsync(auditId, ct);
+            return storageDocument?.Artifact.Clone();
+        }
+
+        public async Task<AuditTrailArtifactWriteResult> UpsertAsync(
+            Audit.AuditTrailDocument document,
+            CancellationToken ct = default)
+        {
+            ArgumentNullException.ThrowIfNull(document);
+
+            var storageDocument = AuditTrailArtifactStorageDocument.FromArtifact(document);
+            if (string.IsNullOrWhiteSpace(storageDocument.Id))
+                return AuditTrailArtifactWriteResult.Conflict();
+
+            var existing = await GetStorageDocumentAsync(storageDocument.Id, ct);
+            if (existing != null)
+                return EvaluateExisting(existing.Artifact, document);
+
+            await EnsureIndexAsync(ct);
+            using var createRequest = new HttpRequestMessage(
+                HttpMethod.Put,
+                $"{_indexName}/_create/{Uri.EscapeDataString(storageDocument.Id)}")
+            {
+                Content = new StringContent(
+                    _formatter.Format(storageDocument),
+                    Encoding.UTF8,
+                    "application/json"),
+            };
+
+            using var createResponse = await _httpClient.SendAsync(createRequest, ct);
+            if (createResponse.IsSuccessStatusCode)
+                return AuditTrailArtifactWriteResult.Applied();
+
+            if (createResponse.StatusCode == HttpStatusCode.Conflict)
+            {
+                var reconciled = await GetStorageDocumentAsync(storageDocument.Id, ct);
+                return reconciled == null
+                    ? AuditTrailArtifactWriteResult.Conflict()
+                    : EvaluateExisting(reconciled.Artifact, document);
+            }
+
+            await EnsureSuccessAsync(createResponse, "audit artifact create", ct);
+            return AuditTrailArtifactWriteResult.Conflict();
+        }
+
+        private async Task<AuditTrailArtifactStorageDocument?> GetStorageDocumentAsync(
+            string auditId,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            var trimmedAuditId = auditId.Trim();
+            if (trimmedAuditId.Length == 0)
+                return null;
+
+            using var response = await _httpClient.GetAsync(
+                $"{_indexName}/_doc/{Uri.EscapeDataString(trimmedAuditId)}",
+                ct);
+            if (response.StatusCode == HttpStatusCode.NotFound)
+            {
+                var notFoundPayload = await response.Content.ReadAsStringAsync(ct);
+                if (IsIndexNotFoundPayload(notFoundPayload) &&
+                    _options.MissingIndexBehavior == ElasticsearchMissingIndexBehavior.Throw &&
+                    !_options.AutoCreateIndex)
+                {
+                    throw new InvalidOperationException(
+                        $"Elasticsearch audit artifact index '{_indexName}' was not found.");
+                }
+
+                return null;
+            }
+
+            await EnsureSuccessAsync(response, "audit artifact get", ct);
+            var payload = await response.Content.ReadAsStringAsync(ct);
+            using var jsonDocument = JsonDocument.Parse(payload);
+            if (!jsonDocument.RootElement.TryGetProperty("_source", out var sourceNode))
+                return null;
+
+            return _parser.Parse<AuditTrailArtifactStorageDocument>(sourceNode.GetRawText());
+        }
+
+        private async Task EnsureIndexAsync(CancellationToken ct)
+        {
+            if (!_options.AutoCreateIndex || _indexEnsured)
+                return;
+
+            await _indexGate.WaitAsync(ct);
+            try
+            {
+                if (_indexEnsured)
+                    return;
+
+                using var response = await _httpClient.PutAsync(
+                    _indexName,
+                    new StringContent(
+                        BuildIndexPayload(),
+                        Encoding.UTF8,
+                        "application/json"),
+                    ct);
+                if (!response.IsSuccessStatusCode)
+                {
+                    var payload = await response.Content.ReadAsStringAsync(ct);
+                    if (response.StatusCode != HttpStatusCode.BadRequest ||
+                        !payload.Contains("resource_already_exists_exception", StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new InvalidOperationException(
+                            $"Elasticsearch audit artifact index create failed: {(int)response.StatusCode} {response.ReasonPhrase}. body={payload}");
+                    }
+                }
+
+                _indexEnsured = true;
+            }
+            finally
+            {
+                _indexGate.Release();
+            }
+        }
+
+        private string BuildIndexPayload()
+        {
+            var payload = new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["mappings"] = _metadata.Mappings,
+            };
+            if (_metadata.Settings.Count > 0)
+                payload["settings"] = _metadata.Settings;
+            if (_metadata.Aliases.Count > 0)
+                payload["aliases"] = _metadata.Aliases;
+
+            return JsonSerializer.Serialize(payload);
+        }
+
+        private static AuditTrailArtifactWriteResult EvaluateExisting(
+            Audit.AuditTrailDocument existing,
+            Audit.AuditTrailDocument incoming)
+        {
+            return string.Equals(existing.ContentHash, incoming.ContentHash, StringComparison.Ordinal)
+                ? AuditTrailArtifactWriteResult.Duplicate()
+                : AuditTrailArtifactWriteResult.Conflict();
+        }
+
+        private static Uri ResolvePrimaryEndpoint(IReadOnlyList<string>? endpoints)
+        {
+            if (endpoints == null || endpoints.Count == 0)
+                throw new InvalidOperationException("Elasticsearch provider requires at least one endpoint.");
+
+            var endpoint = endpoints[0].Trim();
+            if (endpoint.Length == 0)
+                throw new InvalidOperationException("Elasticsearch endpoint cannot be empty.");
+            if (!endpoint.Contains("://", StringComparison.Ordinal))
+                endpoint = "http://" + endpoint;
+
+            if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var uri))
+                throw new InvalidOperationException($"Invalid Elasticsearch endpoint '{endpoints[0]}'.");
+
+            return uri;
+        }
+
+        private static string BuildIndexName(string indexPrefix, string indexScope)
+        {
+            var prefix = NormalizeToken(indexPrefix);
+            if (prefix.Length == 0)
+                prefix = "aevatar";
+
+            var scope = NormalizeToken(indexScope);
+            if (scope.Length == 0)
+                scope = "audit-trail";
+
+            return $"{prefix}-{scope}";
+        }
+
+        private static string NormalizeToken(string? token)
+        {
+            if (string.IsNullOrWhiteSpace(token))
+                return string.Empty;
+
+            var chars = token
+                .Trim()
+                .ToLowerInvariant()
+                .Select(static ch => char.IsLetterOrDigit(ch) ? ch : '-')
+                .ToArray();
+            return new string(chars).Trim('-');
+        }
+
+        private static async Task EnsureSuccessAsync(
+            HttpResponseMessage response,
+            string operation,
+            CancellationToken ct)
+        {
+            if (response.IsSuccessStatusCode)
+                return;
+
+            var payload = await response.Content.ReadAsStringAsync(ct);
+            throw new InvalidOperationException(
+                $"Elasticsearch {operation} failed: {(int)response.StatusCode} {response.ReasonPhrase}. body={payload}");
+        }
+
+        private static bool IsIndexNotFoundPayload(string payload) =>
+            payload.Contains("index_not_found_exception", StringComparison.OrdinalIgnoreCase);
+
+        public void Dispose()
+        {
+            _httpClient.Dispose();
+            _indexGate.Dispose();
+        }
     }
 }
