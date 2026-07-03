@@ -192,6 +192,10 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
             http: http,
             body: body,
             adminOptions: options,
+            // No platform admin authorizer wired → these cases exercise the
+            // static-token fallback path (M3). Admin-role gating is covered by
+            // IdentityOAuthClientRebuildAdminAuthEndpointTests.
+            adminAuthorizer: null,
             rebuildDispatch: dispatch,
             loggerFactory: NullLoggerFactory.Instance,
             ct: ct);

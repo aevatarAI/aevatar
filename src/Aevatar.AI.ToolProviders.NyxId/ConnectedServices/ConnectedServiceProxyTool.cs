@@ -39,7 +39,7 @@ public sealed class ConnectedServiceProxyTool : IAgentTool
         ApprovalMode = ResolveApprovalMode(operation.Marker);
         IsReadOnly = operation.Marker?.ReadOnly
                      ?? operation.Method is "GET" or "HEAD";
-        IsDestructive = operation.Marker?.Destructive ?? false;
+        IsDestructive = ResolveDestructive(operation);
 
         var summary = !string.IsNullOrWhiteSpace(operation.Summary)
             ? operation.Summary
@@ -191,6 +191,26 @@ public sealed class ConnectedServiceProxyTool : IAgentTool
             _ => value.GetRawText(),
         };
     }
+
+    /// <summary>
+    /// Fail-closed destructive default: a write (any HTTP method other than the safe,
+    /// side-effect-free GET/HEAD/OPTIONS) is treated as destructive unless the spec marker
+    /// EXPLICITLY opts out with <c>destructive: false</c>. Read methods are never destructive.
+    /// This flips the historical fail-open default (<c>?? false</c>) so an unmarked
+    /// connected-service write requires approval under <see cref="ToolApprovalMode.Auto"/>.
+    /// </summary>
+    private static bool ResolveDestructive(ConnectedServiceToolOperation operation)
+    {
+        if (IsSafeMethod(operation.Method))
+            return false;
+
+        return operation.Marker?.Destructive ?? true;
+    }
+
+    private static bool IsSafeMethod(string method) =>
+        method.Equals("GET", StringComparison.OrdinalIgnoreCase) ||
+        method.Equals("HEAD", StringComparison.OrdinalIgnoreCase) ||
+        method.Equals("OPTIONS", StringComparison.OrdinalIgnoreCase);
 
     private static ToolApprovalMode ResolveApprovalMode(AevatarToolMarker? marker) =>
         marker?.Approval?.Trim().ToLowerInvariant() switch

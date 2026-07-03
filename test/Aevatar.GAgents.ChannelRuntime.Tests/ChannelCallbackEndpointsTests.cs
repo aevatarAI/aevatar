@@ -283,33 +283,12 @@ public sealed class ChannelCallbackEndpointsTests
     }
 
     [Fact]
-    public async Task HandleGetStatusAsync_CrossAccount_PendingWhenNoInboundObserved()
+    public async Task HandleGetStatusAsync_CrossAccount_NonAdmin_ReturnsNotFound()
     {
-        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
-        queryPort.GetAsync("reg-foreign", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
-            {
-                Id = "reg-foreign",
-                Platform = "lark",
-                ScopeId = "scope-2",
-                NyxChannelBotId = "bot-foreign",
-                // no LastInboundAtUtc → aevatar has not observed an inbound for it
-            }));
-        var http = CreateHttpContext("scope-1");
-        http.Request.Headers.Authorization = "Bearer test-token";
-
-        // nyxClient (arg 4) null: the cross-account path reports from the read model, no NyxID call.
-        var result = await InvokeAsync("HandleGetStatusAsync", "reg-foreign", http, queryPort, null, NullLoggerFactory.Instance, CancellationToken.None);
-        var response = await ExecuteResultAsync(result);
-
-        response.StatusCode.Should().Be(StatusCodes.Status200OK);
-        response.Body.Should().Contain("\"status\":\"pending_webhook\"");
-        response.Body.Should().Contain("\"owned\":false");
-    }
-
-    [Fact]
-    public async Task HandleGetStatusAsync_CrossAccount_ActiveWhenInboundObserved()
-    {
+        // L1: a non-admin caller querying a registration owned by another scope
+        // must get 404 (existence-hiding), NOT a populated degraded response —
+        // otherwise the foreign bot's platform/activity leaks to anyone who can
+        // guess a registration id.
         var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
         queryPort.GetAsync("reg-foreign", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
@@ -323,11 +302,40 @@ public sealed class ChannelCallbackEndpointsTests
         var http = CreateHttpContext("scope-1");
         http.Request.Headers.Authorization = "Bearer test-token";
 
-        var result = await InvokeAsync("HandleGetStatusAsync", "reg-foreign", http, queryPort, null, NullLoggerFactory.Instance, CancellationToken.None);
+        // nyxClient (arg 4) null: the not-found short-circuit returns before any NyxID call.
+        var result = await InvokeAsync("HandleGetStatusAsync", "reg-foreign", http, queryPort, null, AdminAuthorizer(false), NullLoggerFactory.Instance, CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        response.Body.Should().NotContain("bot-foreign", "the foreign bot id must not leak");
+        response.Body.Should().NotContain("active");
+    }
+
+    [Fact]
+    public async Task HandleGetStatusAsync_CrossAccount_Admin_ReturnsDegradedObservation()
+    {
+        // L1: a platform admin is allowed the cross-account view (mirrors the
+        // list all-view) and still only gets aevatar's own relay-activity
+        // observation, never the foreign owner's NyxID live status.
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        queryPort.GetAsync("reg-foreign", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
+            {
+                Id = "reg-foreign",
+                Platform = "lark",
+                ScopeId = "scope-2",
+                NyxChannelBotId = "bot-foreign",
+                LastInboundAtUtc = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            }));
+        var http = CreateHttpContext("scope-1");
+        http.Request.Headers.Authorization = "Bearer admin-token";
+
+        var result = await InvokeAsync("HandleGetStatusAsync", "reg-foreign", http, queryPort, null, AdminAuthorizer(true), NullLoggerFactory.Instance, CancellationToken.None);
         var response = await ExecuteResultAsync(result);
 
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
         response.Body.Should().Contain("\"status\":\"active\"");
+        response.Body.Should().Contain("\"owned\":false");
     }
 
     [Fact]
@@ -689,7 +697,7 @@ public sealed class ChannelCallbackEndpointsTests
         http.Request.Headers.Authorization = "Bearer test-token";
 
         // nyxClient (arg 4) is null on purpose: the not-found path returns before it is used.
-        var result = await InvokeAsync("HandleGetStatusAsync", "missing", http, queryPort, null, NullLoggerFactory.Instance, CancellationToken.None);
+        var result = await InvokeAsync("HandleGetStatusAsync", "missing", http, queryPort, null, AdminAuthorizer(false), NullLoggerFactory.Instance, CancellationToken.None);
         var response = await ExecuteResultAsync(result);
 
         response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
@@ -711,7 +719,8 @@ public sealed class ChannelCallbackEndpointsTests
         http.Request.Headers.Authorization = "Bearer test-token";
 
         // No channel bot id → returns "unknown" before touching the Nyx client (arg 4 null).
-        var result = await InvokeAsync("HandleGetStatusAsync", "reg-1", http, queryPort, null, NullLoggerFactory.Instance, CancellationToken.None);
+        // Owned by the caller, so the admin authorizer is never consulted.
+        var result = await InvokeAsync("HandleGetStatusAsync", "reg-1", http, queryPort, null, AdminAuthorizer(false), NullLoggerFactory.Instance, CancellationToken.None);
         var response = await ExecuteResultAsync(result);
 
         response.StatusCode.Should().Be(StatusCodes.Status200OK);

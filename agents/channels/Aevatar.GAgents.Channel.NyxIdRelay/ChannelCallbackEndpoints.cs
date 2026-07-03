@@ -217,11 +217,22 @@ public static class ChannelCallbackEndpoints
     /// the existing channel-bot client (no browser→NyxID CORS, no NyxID change).
     /// Status read failures degrade to <c>unknown</c> — polling must never 500.
     /// </summary>
+    /// <remarks>
+    /// L1 (cross-tenant disclosure): a registration the caller does not own is
+    /// indistinguishable from a non-existent one — the handler returns 404 rather
+    /// than a populated degraded response, so an authenticated caller cannot probe
+    /// another tenant's bot platform/last-activity by guessing registration ids.
+    /// The one exception is a NyxID-verified platform admin, who is allowed the
+    /// cross-account view (mirrors <see cref="HandleListRegistrationsAsync"/>) and
+    /// still only gets aevatar's own relay-activity observation, never the foreign
+    /// owner's NyxID live status.
+    /// </remarks>
     private static async Task<IResult> HandleGetStatusAsync(
         string registrationId,
         HttpContext http,
         [FromServices] IChannelBotRegistrationQueryPort queryPort,
         [FromServices] NyxIdApiClient nyxClient,
+        [FromServices] IPlatformAdminAuthorizer adminAuthorizer,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -238,6 +249,17 @@ public static class ChannelCallbackEndpoints
         if (!string.IsNullOrWhiteSpace(callerScope)
             && !string.Equals(registration.ScopeId, callerScope, StringComparison.Ordinal))
         {
+            // L1: only a platform admin may see a foreign registration's status.
+            // For any other caller a mismatched scope is a 404 (existence-hiding),
+            // NOT a populated degraded response — otherwise the platform/activity of
+            // another tenant's bot leaks to anyone who can guess a registration id.
+            var token = ResolveBearerAccessToken(http);
+            var caller = string.IsNullOrWhiteSpace(token)
+                ? PlatformCaller.NotElevated
+                : await adminAuthorizer.ResolveCallerAsync(token, ct);
+            if (!caller.IsElevated)
+                return Results.NotFound(new { error = "Registration not found" });
+
             var observedAt = registration.LastInboundAtUtc;
             return Results.Json(new
             {

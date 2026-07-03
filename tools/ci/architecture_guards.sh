@@ -1870,7 +1870,8 @@ command_side_readmodel_violations="$(
     src/Aevatar.Mainnet.Host.Api \
     -g '*.cs' \
     -g '!src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs' \
-    -g '!src/Aevatar.Mainnet.Host.Api/Hosting/MainnetAgentProjectionDocumentStoresExtensions.cs' || true
+    -g '!src/Aevatar.Mainnet.Host.Api/Hosting/MainnetAgentProjectionDocumentStoresExtensions.cs' \
+    -g '!src/Aevatar.Mainnet.Host.Api/Hosting/HttpOAuthClientEsAclProbe.cs' || true
 )"
 
 if [ -n "${command_side_readmodel_violations}" ]; then

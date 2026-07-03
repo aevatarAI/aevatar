@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Aevatar.Foundation.Abstractions.Helpers;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.Channel.Identity;
@@ -76,7 +77,7 @@ public class NyxIdDynamicClientRegistrationClient
             _logger.LogError(
                 "NyxID DCR failed: status={StatusCode}, body={Body}",
                 (int)response.StatusCode,
-                Truncate(body, 256));
+                Truncate(SecretScrubber.Scrub(body), 256));
             response.EnsureSuccessStatusCode();
         }
 
