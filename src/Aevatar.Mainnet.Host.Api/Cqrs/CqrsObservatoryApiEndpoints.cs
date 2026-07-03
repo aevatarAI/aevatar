@@ -1,5 +1,5 @@
 using Aevatar.Audit;
-using Aevatar.Audit.Abstractions.EndpointAudit;
+using Aevatar.Audit.Hosting.EndpointAudit;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.Capabilities;
 using Aevatar.CQRS.Projection.Core.Abstractions;

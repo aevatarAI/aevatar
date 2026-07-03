@@ -1,6 +1,6 @@
 using Microsoft.AspNetCore.Http;
 
-namespace Aevatar.Audit.Abstractions.EndpointAudit;
+namespace Aevatar.Audit.Hosting.EndpointAudit;
 
 public static class EndpointAuditHttpContextState
 {

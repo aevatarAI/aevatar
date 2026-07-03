@@ -1,7 +1,7 @@
 using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Audit;
-using Aevatar.Audit.Abstractions.EndpointAudit;
+using Aevatar.Audit.Hosting.EndpointAudit;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.Workflow.Application.Abstractions.Runs;

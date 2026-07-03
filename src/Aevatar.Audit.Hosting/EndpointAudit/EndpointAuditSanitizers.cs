@@ -3,7 +3,7 @@ using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Routing;
 using System.Text.RegularExpressions;
 
-namespace Aevatar.Audit.Abstractions.EndpointAudit;
+namespace Aevatar.Audit.Hosting.EndpointAudit;
 
 public static class EndpointAuditSanitizers
 {

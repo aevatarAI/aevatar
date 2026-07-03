@@ -1,5 +1,5 @@
 using Aevatar.Audit;
-using Aevatar.Audit.Abstractions.EndpointAudit;
+using Aevatar.Audit.Hosting.EndpointAudit;
 using Microsoft.AspNetCore.Http;
 
 namespace Aevatar.Bootstrap.Hosting;

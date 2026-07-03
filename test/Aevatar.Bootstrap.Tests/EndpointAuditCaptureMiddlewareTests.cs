@@ -3,7 +3,7 @@ using System.Net.Http.Headers;
 using System.Security.Claims;
 using System.Text;
 using Aevatar.Audit;
-using Aevatar.Audit.Abstractions.EndpointAudit;
+using Aevatar.Audit.Hosting.EndpointAudit;
 using Aevatar.Audit.Abstractions.Identity;
 using Aevatar.Audit.Abstractions.Models;
 using Aevatar.Audit.Abstractions.Ports;

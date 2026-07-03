@@ -1,7 +1,7 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Audit;
-using Aevatar.Audit.Abstractions.EndpointAudit;
+using Aevatar.Audit.Hosting.EndpointAudit;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;

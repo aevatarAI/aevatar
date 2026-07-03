@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Text.RegularExpressions;
 using System.Security.Claims;
 using Aevatar.Audit;
-using Aevatar.Audit.Abstractions.EndpointAudit;
+using Aevatar.Audit.Hosting.EndpointAudit;
 using Aevatar.Audit.Abstractions.Identity;
 using Aevatar.Audit.Abstractions.Ports;
 using Google.Protobuf.WellKnownTypes;

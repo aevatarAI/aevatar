@@ -1,4 +1,4 @@
-namespace Aevatar.Audit.Abstractions.EndpointAudit;
+namespace Aevatar.Audit.Hosting.EndpointAudit;
 
 public sealed record EndpointAuditTarget(
     string Kind,

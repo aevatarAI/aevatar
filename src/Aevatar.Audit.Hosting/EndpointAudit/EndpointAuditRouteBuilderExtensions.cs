@@ -3,7 +3,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 
-namespace Aevatar.Audit.Abstractions.EndpointAudit;
+namespace Aevatar.Audit.Hosting.EndpointAudit;
 
 public static class EndpointAuditRouteBuilderExtensions
 {
