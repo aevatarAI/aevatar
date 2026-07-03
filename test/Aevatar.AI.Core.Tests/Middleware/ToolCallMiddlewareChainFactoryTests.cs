@@ -160,16 +160,11 @@ public sealed class ToolCallMiddlewareChainFactoryTests
 
     private sealed class RecordingAuditTrailAppender(List<string> events) : IAuditTrailAppender
     {
-        public Task<AuditTrailAppendReceipt> AppendAsync(AuditRecord record, CancellationToken cancellationToken = default)
+        public Task<AuditTrailAppendResult> AppendAsync(AuditRecord record, CancellationToken cancellationToken = default)
         {
             events.Add("audit:append");
-            return Task.FromResult(new AuditTrailAppendReceipt(record.AuditId, record.AuditActorId, DateTimeOffset.UtcNow));
+            return Task.FromResult(AuditTrailAppendResult.Appended(record.AuditId, record.AuditActorId, DateTimeOffset.UtcNow));
         }
-
-        public Task<IReadOnlyList<AuditTrailAppendReceipt>> AppendManyAsync(
-            IReadOnlyList<AuditRecord> records,
-            CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<AuditTrailAppendReceipt>>([]);
     }
 
     private sealed class StableAuditActorIdentityHasher : IAuditActorIdentityHasher

@@ -1,6 +1,7 @@
 using Aevatar.Audit.Abstractions.Identity;
 using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.Audit.Core.Identity;
+using Aevatar.Audit.Core.Projection;
 using Aevatar.Audit.Core.Sanitization;
 using Aevatar.Audit.Core.Stores;
 using Microsoft.Extensions.Configuration;
@@ -36,6 +37,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<InMemoryAuditTrailStore>();
         services.TryAddSingleton<IAuditTrailAppender>(static sp => sp.GetRequiredService<InMemoryAuditTrailStore>());
         services.TryAddSingleton<IAuditTrailQueryPort>(static sp => sp.GetRequiredService<InMemoryAuditTrailStore>());
+        services.TryAddSingleton<IAuditTrailArtifactStore>(static sp => sp.GetRequiredService<InMemoryAuditTrailStore>());
 
         return services;
     }

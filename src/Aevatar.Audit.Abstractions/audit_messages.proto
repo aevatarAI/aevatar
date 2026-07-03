@@ -105,3 +105,29 @@ message AuditRecord {
   AuditCapturePlane capture_plane = 19;
   AuditCommittedFactReference committed_fact_ref = 20;
 }
+
+message AuditTrailDocument {
+  string id = 1;
+  string audit_id = 2;
+  string content_hash = 3;
+  AuditRecord record = 4;
+  google.protobuf.Timestamp occurred_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+  string audit_actor_id = 7;
+  string scope_id = 8;
+  string operation_name = 9;
+  AuditOutcome outcome = 10;
+  AuditSensitivityLevel sensitivity_level = 11;
+  string target_kind = 12;
+  string target_id = 13;
+  string request_id = 14;
+  string command_id = 15;
+  string correlation_id = 16;
+  string session_id = 17;
+  string workflow_run_id = 18;
+  string committed_event_id = 19;
+  string committed_actor_id = 20;
+  string committed_actor_type = 21;
+  string committed_event_type_url = 22;
+  int64 committed_state_version = 23;
+}

@@ -3,6 +3,7 @@ using Aevatar.Audit.Abstractions.Identity;
 using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.Audit.Core.DependencyInjection;
 using Aevatar.Audit.Core.Identity;
+using Aevatar.Audit.Core.Projection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -32,6 +33,7 @@ public sealed class ServiceCollectionExtensionsTests
 
         provider.GetRequiredService<IAuditActorIdentityHasher>().ShouldNotBeNull();
         provider.GetRequiredService<IAuditTrailAppender>().ShouldBeSameAs(provider.GetRequiredService<IAuditTrailQueryPort>());
+        provider.GetRequiredService<IAuditTrailArtifactStore>().ShouldBeSameAs(provider.GetRequiredService<IAuditTrailAppender>());
     }
 
     [Fact]

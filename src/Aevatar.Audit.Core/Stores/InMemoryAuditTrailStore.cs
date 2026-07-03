@@ -1,11 +1,13 @@
 using Aevatar.Audit;
 using Aevatar.Audit.Abstractions.Models;
 using Aevatar.Audit.Abstractions.Ports;
+using Aevatar.Audit.Core.Projection;
 using Aevatar.Audit.Core.Sanitization;
+using Google.Protobuf;
 
 namespace Aevatar.Audit.Core.Stores;
 
-public sealed class InMemoryAuditTrailStore : IAuditTrailAppender, IAuditTrailQueryPort
+public sealed class InMemoryAuditTrailStore : IAuditTrailAppender, IAuditTrailQueryPort, IAuditTrailArtifactStore
 {
     private const int DefaultTake = 100;
     private const int MaxTake = 500;
@@ -13,6 +15,7 @@ public sealed class InMemoryAuditTrailStore : IAuditTrailAppender, IAuditTrailQu
     private readonly AuditRecordSanitizer _sanitizer;
     private readonly TimeProvider _timeProvider;
     private readonly List<AuditRecord> _records = [];
+    private readonly List<AuditTrailDocument> _documents = [];
 
     public InMemoryAuditTrailStore(
         AuditRecordSanitizer? sanitizer = null,
@@ -22,7 +25,7 @@ public sealed class InMemoryAuditTrailStore : IAuditTrailAppender, IAuditTrailQu
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
-    public Task<AuditTrailAppendReceipt> AppendAsync(
+    public Task<AuditTrailAppendResult> AppendAsync(
         AuditRecord record,
         CancellationToken cancellationToken = default)
     {
@@ -32,29 +35,67 @@ public sealed class InMemoryAuditTrailStore : IAuditTrailAppender, IAuditTrailQu
         lock (_records)
         {
             _records.Add(sanitized.Clone());
+            _documents.Add(ToDocument(sanitized));
         }
 
-        var receipt = new AuditTrailAppendReceipt(
+        var result = AuditTrailAppendResult.Appended(
             sanitized.AuditId,
             sanitized.AuditActorId,
             sanitized.OccurredAt.ToDateTimeOffset());
 
-        return Task.FromResult(receipt);
+        return Task.FromResult(result);
     }
 
-    public async Task<IReadOnlyList<AuditTrailAppendReceipt>> AppendManyAsync(
+    public async Task<IReadOnlyList<AuditTrailAppendResult>> AppendManyAsync(
         IReadOnlyList<AuditRecord> records,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(records);
 
-        var receipts = new List<AuditTrailAppendReceipt>(records.Count);
+        var results = new List<AuditTrailAppendResult>(records.Count);
         foreach (var record in records)
         {
-            receipts.Add(await AppendAsync(record, cancellationToken));
+            results.Add(await AppendAsync(record, cancellationToken));
         }
 
-        return receipts;
+        return results;
+    }
+
+    public Task<AuditTrailDocument?> GetAsync(string auditId, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(auditId);
+        ct.ThrowIfCancellationRequested();
+
+        lock (_records)
+        {
+            var document = _documents.FirstOrDefault(document =>
+                string.Equals(document.AuditId, auditId, StringComparison.Ordinal));
+            return Task.FromResult(document?.Clone());
+        }
+    }
+
+    public Task<AuditTrailArtifactWriteResult> UpsertAsync(AuditTrailDocument document, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ct.ThrowIfCancellationRequested();
+
+        var record = _sanitizer.Sanitize(document.Record);
+        lock (_records)
+        {
+            var existing = _documents.FirstOrDefault(candidate =>
+                string.Equals(candidate.AuditId, document.AuditId, StringComparison.Ordinal));
+            if (existing is not null)
+            {
+                return Task.FromResult(string.Equals(existing.ContentHash, document.ContentHash, StringComparison.Ordinal)
+                    ? AuditTrailArtifactWriteResult.Duplicate()
+                    : AuditTrailArtifactWriteResult.Conflict());
+            }
+
+            _records.Add(record.Clone());
+            _documents.Add(document.Clone());
+        }
+
+        return Task.FromResult(AuditTrailArtifactWriteResult.Applied());
     }
 
     public Task<AuditTrailPage> QueryAsync(
@@ -189,5 +230,13 @@ public sealed class InMemoryAuditTrailStore : IAuditTrailAppender, IAuditTrailQu
         {
             throw new ArgumentException("Audit query cursor is invalid.", nameof(cursor), ex);
         }
+    }
+
+    private static AuditTrailDocument ToDocument(AuditRecord record)
+    {
+        var contentHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(record.ToByteArray()))
+            .ToLowerInvariant();
+        var observedAt = record.OccurredAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
+        return AuditTrailDocumentFactory.Create(record, record.AuditId, contentHash, observedAt);
     }
 }
