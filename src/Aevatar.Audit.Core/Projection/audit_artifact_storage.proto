@@ -9,9 +9,9 @@ import "google/protobuf/timestamp.proto";
 
 message AuditTrailArtifactStorageDocument {
   string id = 1;
-  string actor_id = 2;
-  int64 state_version = 3;
-  string last_event_id = 4;
   google.protobuf.Timestamp updated_at_utc_value = 5;
   aevatar.audit.v1.AuditTrailDocument artifact = 6;
+
+  reserved 2, 3, 4;
+  reserved "actor_id", "state_version", "last_event_id";
 }

@@ -3,7 +3,6 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 namespace Aevatar.Audit.Core.Projection;
 
 public sealed class AuditTrailDocumentMetadataProvider
-    : IProjectionDocumentMetadataProvider<AuditTrailArtifactStorageDocument>
 {
     public DocumentIndexMetadata Metadata { get; } = new(
         IndexName: "audit-trail",
