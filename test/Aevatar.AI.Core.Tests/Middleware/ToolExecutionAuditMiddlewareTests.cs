@@ -297,6 +297,42 @@ public sealed class ToolExecutionAuditMiddlewareTests
         appender.Records.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task InvokeAsync_WhenToolExecutionThrows_ShouldAppendSyntheticErrorAuditRecordAndRethrow()
+    {
+        var appender = new RecordingAuditTrailAppender();
+        var middleware = NewMiddleware(appender);
+        var context = NewContext(
+            new FakeAgentTool("throwing_tool", isDestructive: true, sideEffectKind: "tool.throw"),
+            AgentToolExecutionContext.Empty with
+            {
+                Request = new AgentToolRequestIdentity("request-error", "call-error"),
+                Caller = new AgentToolCallerContext("scope-error", "owner-error", "session-error"),
+            });
+        var exception = new InvalidOperationException("tool exploded");
+
+        var act = async () => await middleware.InvokeAsync(context, () =>
+        {
+            context.CredentialSource = AgentToolCredentialSource.BearerToken;
+            throw exception;
+        });
+
+        var thrown = await act.Should().ThrowAsync<InvalidOperationException>();
+        thrown.Which.Should().BeSameAs(exception);
+        var record = appender.Records.Should().ContainSingle().Subject;
+        record.Outcome.Should().Be(AuditOutcome.Error);
+        record.ErrorCode.Should().Be("tool_execution_exception");
+        record.ErrorSummary.Should().Be("tool exploded");
+        record.CredentialSource.Should().Be(AuditCredentialSource.BearerToken);
+        record.Target.Kind.Should().Be("tool");
+        record.Target.Id.Should().Be("call-error");
+        record.Correlation.RequestId.Should().Be("request-error");
+        record.Correlation.CallId.Should().Be("call-error");
+        record.Annotations.Should().Contain("receipt_synthetic", "true");
+        record.Annotations.Should().Contain("tool_receipt_status", AgentToolReceiptStatus.Error.ToString());
+        record.Annotations.Should().Contain("side_effect_kind", "tool.throw");
+    }
+
     private static ToolExecutionAuditMiddleware NewMiddleware(RecordingAuditTrailAppender appender) =>
         new(appender, new ToolAuditRecordFactory(new StableAuditActorIdentityHasher()));
 
