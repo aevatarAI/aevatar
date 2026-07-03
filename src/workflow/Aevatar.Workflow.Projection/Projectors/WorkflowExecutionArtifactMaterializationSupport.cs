@@ -1,6 +1,7 @@
 using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Security;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Projection.ReadModels;
 using Google.Protobuf;
@@ -153,9 +154,9 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         readModel.RootActorId = context.RootActorId;
         readModel.CommandId = state.LastCommandId ?? string.Empty;
         readModel.WorkflowName = ResolveWorkflowName(state, readModel.WorkflowName);
-        readModel.Input = state.Input ?? string.Empty;
-        readModel.FinalOutput = state.FinalOutput ?? string.Empty;
-        readModel.FinalError = state.FinalError ?? string.Empty;
+        readModel.Input = SanitizeAuditText(state.Input);
+        readModel.FinalOutput = SanitizeAuditText(state.FinalOutput);
+        readModel.FinalError = SanitizeAuditText(state.FinalError);
         readModel.Success = ResolveSuccess(state.Status);
         readModel.CompletionStatus = ResolveCompletionStatus(state.Status, readModel.CompletionStatus);
         readModel.StateVersion = stateEvent.Version;
@@ -195,7 +196,7 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         DateTimeOffset observedAt)
     {
         readModel.WorkflowName = string.IsNullOrWhiteSpace(evt.WorkflowName) ? readModel.WorkflowName : evt.WorkflowName;
-        readModel.Input = evt.Input ?? string.Empty;
+        readModel.Input = SanitizeAuditText(evt.Input);
         if (readModel.StartedAt == default)
             readModel.StartedAt = observedAt;
         AddTimeline(
@@ -245,13 +246,13 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         step.StepId = evt.StepId ?? string.Empty;
         step.CompletedAt = observedAt;
         step.Success = evt.Success;
-        step.OutputPreview = Truncate(evt.Output ?? string.Empty, 240);
-        step.Error = evt.Error ?? string.Empty;
+        step.OutputPreview = SanitizeAuditTextForDisplay(evt.Output, 240);
+        step.Error = SanitizeAuditText(evt.Error);
         step.WorkerId = evt.WorkerId ?? string.Empty;
         step.NextStepId = evt.NextStepId ?? string.Empty;
         step.BranchKey = evt.BranchKey ?? string.Empty;
         step.AssignedVariable = evt.AssignedVariable ?? string.Empty;
-        step.AssignedValue = evt.AssignedValue ?? string.Empty;
+        step.AssignedValue = SanitizeAuditValue(evt.AssignedVariable, evt.AssignedValue);
         step.Usage = ToReadModelUsage(evt.Usage);
         ReplaceMap(step.CompletionAnnotations, evt.Annotations);
         AddTimeline(
@@ -274,7 +275,7 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
     {
         var step = GetOrCreateStep(readModel.Steps, evt.StepId);
         step.SuspensionType = evt.SuspensionType ?? string.Empty;
-        step.SuspensionPrompt = evt.Prompt ?? string.Empty;
+        step.SuspensionPrompt = SanitizeAuditText(evt.Prompt);
         step.SuspensionTimeoutSeconds = evt.TimeoutSeconds == 0 ? null : evt.TimeoutSeconds;
         step.RequestedVariableName = evt.VariableName ?? string.Empty;
         readModel.CompletionStatus = WorkflowExecutionCompletionStatus.WaitingForSignal;
@@ -336,7 +337,7 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             readModel.Timeline,
             observedAt,
             "signal.waiting",
-            evt.SignalName ?? string.Empty,
+            SanitizeAuditText(evt.SignalName),
             readModel.RootActorId,
             evt.StepId,
             null,
@@ -358,7 +359,7 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             readModel.Timeline,
             observedAt,
             "signal.buffered",
-            evt.SignalName ?? string.Empty,
+            SanitizeAuditText(evt.SignalName),
             readModel.RootActorId,
             evt.StepId,
             null,
@@ -392,13 +393,14 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         DateTimeOffset observedAt)
     {
         var roleId = string.IsNullOrWhiteSpace(evt.RoleId) ? evt.RoleActorId : evt.RoleId;
+        var content = SanitizeAuditText(evt.Content);
         readModel.RoleReplies.Add(new WorkflowExecutionRoleReply
         {
             Timestamp = observedAt,
             RoleId = roleId,
             SessionId = evt.SessionId ?? string.Empty,
-            Content = evt.Content ?? string.Empty,
-            ContentLength = (evt.Content ?? string.Empty).Length,
+            Content = content,
+            ContentLength = content.Length,
         });
         AddTimeline(
             readModel.Timeline,
@@ -429,22 +431,20 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         }
     }
 
-    // O1 (06-19-workflow-run-observatory): surface enriched tool detail (arguments/result/success/error)
-    // on the committed tool.call timeline entry. Redaction already happened at the fact-builder boundary.
     private static Dictionary<string, string> BuildToolCallTimelineData(WorkflowRoleReplyToolCall toolCall)
     {
         var data = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            ["call_id"] = toolCall.CallId ?? string.Empty,
+            ["call_id"] = SanitizeAuditText(toolCall.CallId),
             ["success"] = toolCall.Success ? "true" : "false",
         };
 
         if (!string.IsNullOrEmpty(toolCall.ArgumentsJson))
-            data["arguments_json"] = toolCall.ArgumentsJson;
+            data["arguments_json"] = SanitizeAuditText(toolCall.ArgumentsJson);
         if (!string.IsNullOrEmpty(toolCall.ResultJson))
-            data["result_json"] = toolCall.ResultJson;
+            data["result_json"] = SanitizeAuditText(toolCall.ResultJson);
         if (!string.IsNullOrEmpty(toolCall.Error))
-            data["error"] = toolCall.Error;
+            data["error"] = SanitizeAuditText(toolCall.Error);
 
         return data;
     }
@@ -459,8 +459,8 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             ? WorkflowExecutionCompletionStatus.Completed
             : WorkflowExecutionCompletionStatus.Failed;
         readModel.Success = evt.Success;
-        readModel.FinalOutput = evt.Output ?? string.Empty;
-        readModel.FinalError = evt.Error ?? string.Empty;
+        readModel.FinalOutput = SanitizeAuditText(evt.Output);
+        readModel.FinalError = SanitizeAuditText(evt.Error);
         readModel.EndedAt = observedAt;
         AddTimeline(
             readModel.Timeline,
@@ -484,13 +484,13 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         readModel.Success = false;
         readModel.FinalOutput = string.Empty;
         if (!string.IsNullOrWhiteSpace(evt.Reason))
-            readModel.FinalError = evt.Reason;
+            readModel.FinalError = SanitizeAuditText(evt.Reason);
         readModel.EndedAt = observedAt;
         AddTimeline(
             readModel.Timeline,
             observedAt,
             "workflow.stopped",
-            evt.Reason ?? "stopped",
+            SanitizeAuditText(evt.Reason ?? "stopped"),
             readModel.RootActorId,
             null,
             null,
@@ -508,13 +508,13 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         readModel.Success = false;
         readModel.FinalOutput = string.Empty;
         if (!string.IsNullOrWhiteSpace(evt.Reason))
-            readModel.FinalError = evt.Reason;
+            readModel.FinalError = SanitizeAuditText(evt.Reason);
         readModel.EndedAt = observedAt;
         AddTimeline(
             readModel.Timeline,
             observedAt,
             "workflow.stopped",
-            evt.Reason ?? "stopped",
+            SanitizeAuditText(evt.Reason ?? "stopped"),
             readModel.RootActorId,
             null,
             null,
@@ -583,7 +583,7 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             StepId = stepId ?? string.Empty,
             StepType = stepType ?? string.Empty,
             EventType = eventType ?? string.Empty,
-            Data = data?.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal) ?? [],
+            Data = SanitizeAuditMap(data),
         });
     }
 
@@ -741,9 +741,18 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
     {
         target.Clear();
         foreach (var (key, value) in source)
-            target[key] = value;
+            target[SanitizeAuditText(key)] = SanitizeAuditValue(key, value);
     }
 
-    private static string Truncate(string text, int maxLen) =>
-        text.Length <= maxLen ? text : text[..maxLen] + "...";
+    private static string SanitizeAuditText(string? value) =>
+        WorkflowAuditTextSanitizer.Sanitize(value);
+
+    private static string SanitizeAuditValue(string? key, string? value) =>
+        WorkflowAuditTextSanitizer.SanitizeValue(key, value);
+
+    private static string SanitizeAuditTextForDisplay(string? value, int maxLen) =>
+        WorkflowAuditTextSanitizer.SanitizeForDisplay(value, maxLen);
+
+    private static Dictionary<string, string> SanitizeAuditMap(IEnumerable<KeyValuePair<string, string>>? data) =>
+        WorkflowAuditTextSanitizer.SanitizeMap(data);
 }

@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Security;
 using Aevatar.Workflow.Core.Primitives;
 using Google.Protobuf;
 
@@ -8,8 +9,6 @@ namespace Aevatar.Workflow.Core;
 
 internal static class WorkflowArtifactFactBuilder
 {
-    // O1 (06-19-workflow-run-observatory): tool args/results may carry secrets; redact at the
-    // materialization boundary the same way step output_preview is truncated.
     private const int ToolDetailMaxLength = 2000;
 
     public static bool TryBuild(
@@ -186,12 +185,12 @@ internal static class WorkflowArtifactFactBuilder
             {
                 ToolName = toolCall.ToolName ?? string.Empty,
                 CallId = callId,
-                ArgumentsJson = Redact(toolCall.ArgumentsJson),
+                ArgumentsJson = SanitizeToolDetail(toolCall.ArgumentsJson),
             };
 
             if (callId.Length > 0 && receiptsByCallId.TryGetValue(callId, out var receipt))
             {
-                enriched.ResultJson = Redact(receipt.ResultJson);
+                enriched.ResultJson = SanitizeToolDetail(receipt.ResultJson);
                 enriched.Success = receipt.Status == AgentToolReceiptStatus.Success;
                 enriched.Error = ResolveReceiptError(receipt);
             }
@@ -205,20 +204,13 @@ internal static class WorkflowArtifactFactBuilder
     private static string ResolveReceiptError(AgentToolReceipt receipt)
     {
         if (!string.IsNullOrWhiteSpace(receipt.ErrorMessage))
-            return Redact(receipt.ErrorMessage);
+            return SanitizeToolDetail(receipt.ErrorMessage);
         if (!string.IsNullOrWhiteSpace(receipt.ErrorCode))
-            return receipt.ErrorCode.Trim();
+            return WorkflowAuditTextSanitizer.Sanitize(receipt.ErrorCode);
 
         return string.Empty;
     }
 
-    private static string Redact(string? value)
-    {
-        if (string.IsNullOrEmpty(value))
-            return string.Empty;
-
-        return value.Length <= ToolDetailMaxLength
-            ? value
-            : value[..ToolDetailMaxLength] + "...";
-    }
+    private static string SanitizeToolDetail(string? value) =>
+        WorkflowAuditTextSanitizer.SanitizeForDisplay(value, ToolDetailMaxLength);
 }
