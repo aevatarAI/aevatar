@@ -89,10 +89,9 @@ public sealed class EndpointAuditCaptureMiddlewareTests
         await using var app = await CreateHostAsync(appender);
 
         using var request = AuthenticatedRequest(HttpMethod.Post, "/audited/widgets/widget-1/throw");
-        var act = () => app.GetTestClient().SendAsync(request);
+        var response = await app.GetTestClient().SendAsync(request);
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("handler failed");
+        response.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
         appender.Records.Should().HaveCount(2);
         appender.Records[0].OperationName.Should().Be("test.widget.throw.attempted");
         appender.Records[0].Outcome.Should().Be(AuditOutcome.Accepted);

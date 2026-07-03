@@ -99,7 +99,8 @@ public sealed class ScopeServiceBindingEndpointTests : ScopeServiceEndpointTestK
                     scriptId = "script-a",
                     scriptRevision = "script-rev-1",
                 },
-            });
+            },
+            "scope-a");
 
         var response = await host.Client.SendAsync(request);
 
