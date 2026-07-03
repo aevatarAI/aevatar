@@ -2165,6 +2165,9 @@ bash tools/ci/cqrs_eventsourcing_boundary_guard.sh
 echo "Running committed-state projection guard..."
 bash tools/ci/committed_state_projection_guard.sh
 
+echo "Running audit trail guard..."
+bash tools/ci/audit_trail_guards.sh
+
 echo "Running projection activation provider coverage guard..."
 bash tools/ci/projection_activation_provider_coverage_guard.sh
 

@@ -59,6 +59,8 @@ namespace Aevatar.Capabilities.Tests;
 [Collection(ProcessEnvSerialCollection.Name)]
 public sealed class MainnetHostCompositionTests
 {
+    private const string AuditIdentityTestKeyBase64 = "YXVkaXQgaWRlbnRpdHkga2V5IG1hdGVyaWFsIGZvciB0ZXN0cw==";
+
     [Fact]
     public async Task AddAevatarMainnetHost_WithInMemoryDependencies_ShouldBuildAndStartFullComposition()
     {
@@ -138,6 +140,8 @@ public sealed class MainnetHostCompositionTests
         routePatterns.Should().Contain("/api/webhooks/nyxid-relay/health");
         routePatterns.Should().Contain("/api/channels/registrations");
         routePatterns.Should().Contain("/api/oauth/nyxid-callback");
+        routePatterns.Should().Contain("/api/audit/trail");
+        routePatterns.Should().Contain("/api/audit/actor-resolutions");
         routePatterns.Should().Contain("/api/services/");
         routePatterns.Should().Contain("/api/skill-runners/{agentId}/external-trigger-sources/{sourceId}/deliveries");
         routePatterns.Should().Contain("/v1/responses");
@@ -761,6 +765,9 @@ public sealed class MainnetHostCompositionTests
             ["Projection:Graph:Providers:InMemory:Enabled"] = "true",
             ["Projection:Graph:Providers:Neo4j:Enabled"] = "false",
             ["Aevatar:NyxId:Authority"] = "https://nyxid.example.test",
+            ["Audit:ActorIdentityHasher:ActiveKeyId"] = "key-1",
+            ["Audit:ActorIdentityHasher:Keys:0:KeyId"] = "key-1",
+            ["Audit:ActorIdentityHasher:Keys:0:KeyBase64"] = AuditIdentityTestKeyBase64,
         };
         if (overrides != null)
         {
