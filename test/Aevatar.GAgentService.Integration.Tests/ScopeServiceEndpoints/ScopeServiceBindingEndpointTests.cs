@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Reflection;
 using System.Security.Claims;
@@ -50,6 +51,8 @@ namespace Aevatar.GAgentService.Integration.Tests;
 [Collection(ScopeServiceEndpointCollection.Name)]
 public sealed class ScopeServiceBindingEndpointTests : ScopeServiceEndpointTestKit
 {
+    private const string RawToken = "eyJhbGciOiJVTklUIn0.eyJzdWIiOiJ1c2VyLTEyMyJ9.c2lnbmF0dXJlLXZhbHVl";
+
     [Fact]
     public async Task ScopeBindingEndpoint_ShouldBindWorkflowBundleToDefaultService()
     {
@@ -90,7 +93,7 @@ public sealed class ScopeServiceBindingEndpointTests : ScopeServiceEndpointTestK
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
         using var request = CreateAuthenticatedJsonRequest(
             HttpMethod.Put,
-            "/api/scopes/scope-a/binding?access_token=eyJhbGciOiJVTklUIn0.eyJzdWIiOiJ1c2VyLTEyMyJ9.c2lnbmF0dXJlLXZhbHVl",
+            $"/api/scopes/scope-a/binding?access_token={RawToken}",
             new
             {
                 implementationKind = "scripting",
@@ -101,6 +104,7 @@ public sealed class ScopeServiceBindingEndpointTests : ScopeServiceEndpointTestK
                 },
             },
             "scope-a");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", RawToken);
 
         var response = await host.Client.SendAsync(request);
 
@@ -117,7 +121,7 @@ public sealed class ScopeServiceBindingEndpointTests : ScopeServiceEndpointTestK
             record.RequestSummary == "PUT /api/scopes/{scopeId}/binding scopeId=scope-a" &&
             record.CapturePlane == AuditCapturePlane.BoundaryEndpoint);
         host.AuditTrailAppender.Records.SelectMany(RecordStrings).Should().NotContain(value =>
-            value.Contains("eyJhbGciOiJVTklUIn0.eyJzdWIiOiJ1c2VyLTEyMyJ9.c2lnbmF0dXJlLXZhbHVl", StringComparison.Ordinal));
+            value.Contains(RawToken, StringComparison.Ordinal));
     }
 
     [Fact]
