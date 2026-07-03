@@ -54,7 +54,8 @@ public sealed class ServiceCommittedAuditTranslatorTests
         IMessage evt,
         string operationName,
         string targetKind,
-        string targetId)
+        string targetId,
+        ExpectedAuditFields expected)
     {
         var record = Translate(translator, evt);
 
@@ -63,7 +64,14 @@ public sealed class ServiceCommittedAuditTranslatorTests
         record.ActorKind.Should().Be(AuditActorKind.System);
         record.Target.Kind.Should().Be(targetKind);
         record.Target.Id.Should().Be(targetId);
+        record.ScopeId.Should().Be(expected.ScopeId);
+        record.SensitivityLevel.Should().Be(expected.SensitivityLevel);
+        record.Correlation.CommandId.Should().Be(expected.CommandId);
+        record.Correlation.RequestId.Should().Be(expected.RequestId);
+        record.Correlation.TraceId.Should().Be("corr-1");
         record.CommittedFactRef.StateVersion.Should().Be(17);
+        AssertDestructiveAnnotation(record, expected.IsDestructive);
+        AssertAnnotations(record, expected.Annotations);
     }
 
     [Fact]
@@ -98,6 +106,13 @@ public sealed class ServiceCommittedAuditTranslatorTests
             "service.registration.succeeded",
             "service",
             "svc-a",
+            ServiceExpected(
+                annotations: ServiceAnnotations(
+                    identity,
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["credential_kid"] = "kid-1",
+                    })),
         ];
         yield return
         [
@@ -111,6 +126,14 @@ public sealed class ServiceCommittedAuditTranslatorTests
             "service.registration.failed",
             "service",
             "svc-a",
+            ServiceExpected(
+                annotations: ServiceAnnotations(
+                    identity,
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["credential_kid"] = "kid-1",
+                        ["error_summary"] = "provider rejected",
+                    })),
         ];
         yield return
         [
@@ -124,6 +147,10 @@ public sealed class ServiceCommittedAuditTranslatorTests
             "service.registration.retired",
             "service",
             "svc-a",
+            ServiceExpected(
+                AuditSensitivityLevel.Restricted,
+                true,
+                ServiceAnnotations(identity)),
         ];
         yield return
         [
@@ -136,6 +163,7 @@ public sealed class ServiceCommittedAuditTranslatorTests
             "service.revision.published",
             "service",
             "rev-1",
+            ServiceExpected(annotations: ServiceAnnotations(identity)),
         ];
         yield return
         [
@@ -150,6 +178,7 @@ public sealed class ServiceCommittedAuditTranslatorTests
             "service.deployment.activated",
             "service",
             "dep-1",
+            ServiceExpected(annotations: ServiceAnnotations(identity)),
         ];
         yield return
         [
@@ -163,6 +192,10 @@ public sealed class ServiceCommittedAuditTranslatorTests
             "service.deployment.deactivated",
             "service",
             "dep-1",
+            ServiceExpected(
+                AuditSensitivityLevel.Restricted,
+                true,
+                ServiceAnnotations(identity)),
         ];
         yield return
         [
@@ -176,11 +209,19 @@ public sealed class ServiceCommittedAuditTranslatorTests
                 {
                     ["command_id"] = "cmd-from-event",
                     ["request_id"] = "req-from-event",
+                    ["scope_id"] = "scope-from-event",
                 },
             },
             "scheduled.dispatch.configured",
             "scheduled_dispatch",
             "schedule-1",
+            new ExpectedAuditFields(
+                "scope-from-event",
+                AuditSensitivityLevel.Confidential,
+                false,
+                "cmd-from-event",
+                "req-from-event",
+                EmptyAnnotations),
         ];
         yield return
         [
@@ -189,6 +230,7 @@ public sealed class ServiceCommittedAuditTranslatorTests
             "scheduled.dispatch.enabled",
             "scheduled_dispatch",
             "actor-1",
+            DefaultExpected,
         ];
         yield return
         [
@@ -197,6 +239,7 @@ public sealed class ServiceCommittedAuditTranslatorTests
             "scheduled.dispatch.disabled",
             "scheduled_dispatch",
             "actor-1",
+            RestrictedDestructiveExpected,
         ];
         yield return
         [
@@ -205,7 +248,77 @@ public sealed class ServiceCommittedAuditTranslatorTests
             "scheduled.dispatch.deleted",
             "scheduled_dispatch",
             "actor-1",
+            RestrictedDestructiveExpected,
         ];
+    }
+
+    private static IReadOnlyDictionary<string, string> EmptyAnnotations { get; } =
+        new Dictionary<string, string>(StringComparer.Ordinal);
+
+    private static ExpectedAuditFields DefaultExpected { get; } =
+        new(
+            "",
+            AuditSensitivityLevel.Confidential,
+            false,
+            "command-1",
+            "request-1",
+            EmptyAnnotations);
+
+    private static ExpectedAuditFields RestrictedDestructiveExpected { get; } =
+        new(
+            "",
+            AuditSensitivityLevel.Restricted,
+            true,
+            "command-1",
+            "request-1",
+            EmptyAnnotations);
+
+    private static ExpectedAuditFields ServiceExpected(
+        AuditSensitivityLevel sensitivityLevel = AuditSensitivityLevel.Confidential,
+        bool isDestructive = false,
+        IReadOnlyDictionary<string, string>? annotations = null) =>
+        new(
+            "tenant-a/app-a",
+            sensitivityLevel,
+            isDestructive,
+            "command-1",
+            "request-1",
+            annotations ?? EmptyAnnotations);
+
+    private static IReadOnlyDictionary<string, string> ServiceAnnotations(
+        ServiceIdentity identity,
+        IReadOnlyDictionary<string, string>? extraAnnotations = null)
+    {
+        var annotations = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["tenant_id"] = identity.TenantId,
+            ["app_id"] = identity.AppId,
+            ["namespace"] = identity.Namespace,
+            ["service_id"] = identity.ServiceId,
+        };
+        if (extraAnnotations != null)
+        {
+            foreach (var pair in extraAnnotations)
+                annotations[pair.Key] = pair.Value;
+        }
+
+        return annotations;
+    }
+
+    private static void AssertDestructiveAnnotation(AuditRecord record, bool isDestructive)
+    {
+        if (isDestructive)
+            record.Annotations.Should().Contain("is_destructive", "true");
+        else
+            record.Annotations.Should().NotContainKey("is_destructive");
+    }
+
+    private static void AssertAnnotations(
+        AuditRecord record,
+        IReadOnlyDictionary<string, string> expectedAnnotations)
+    {
+        foreach (var annotation in expectedAnnotations)
+            record.Annotations.Should().Contain(annotation.Key, annotation.Value);
     }
 
     private static AuditRecord Translate(IAuditCommittedEventTranslator translator, IMessage evt)
@@ -260,4 +373,12 @@ public sealed class ServiceCommittedAuditTranslatorTests
                type.GenericTypeArguments.Length == 2 &&
                type.GenericTypeArguments[1] == typeof(TMaterializer);
     }
+
+    public sealed record ExpectedAuditFields(
+        string ScopeId,
+        AuditSensitivityLevel SensitivityLevel,
+        bool IsDestructive,
+        string CommandId,
+        string RequestId,
+        IReadOnlyDictionary<string, string> Annotations);
 }

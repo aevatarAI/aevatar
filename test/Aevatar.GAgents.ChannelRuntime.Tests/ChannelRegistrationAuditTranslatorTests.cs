@@ -48,7 +48,8 @@ public sealed class ChannelRegistrationAuditTranslatorTests
         IAuditCommittedEventTranslator translator,
         IMessage evt,
         string operationName,
-        string targetId)
+        string targetId,
+        ExpectedAuditFields expected)
     {
         var record = translator.Translate(Context(), Any.Pack(evt)).Should().ContainSingle().Subject;
 
@@ -57,7 +58,15 @@ public sealed class ChannelRegistrationAuditTranslatorTests
         record.ActorKind.Should().Be(AuditActorKind.System);
         record.Target.Kind.Should().Be("channel_bot_registration");
         record.Target.Id.Should().Be(targetId);
+        record.ScopeId.Should().Be(expected.ScopeId);
+        record.SensitivityLevel.Should().Be(expected.SensitivityLevel);
+        record.Correlation.CommandId.Should().Be("cmd-1");
+        record.Correlation.RequestId.Should().Be("req-1");
+        record.Correlation.TraceId.Should().Be("corr-1");
         record.CommittedFactRef.StateVersion.Should().Be(5);
+        AssertDestructiveAnnotation(record, expected.IsDestructive);
+        foreach (var annotation in expected.Annotations)
+            record.Annotations.Should().Contain(annotation.Key, annotation.Value);
     }
 
     [Fact]
@@ -85,6 +94,14 @@ public sealed class ChannelRegistrationAuditTranslatorTests
             },
             "channel.bot.registered",
             "reg-1",
+            new ExpectedAuditFields(
+                "scope-1",
+                AuditSensitivityLevel.Confidential,
+                false,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["platform"] = "lark",
+                }),
         ];
         yield return
         [
@@ -92,6 +109,14 @@ public sealed class ChannelRegistrationAuditTranslatorTests
             new ChannelBotUnregisteredEvent { RegistrationId = "reg-1" },
             "channel.bot.unregistered",
             "reg-1",
+            new ExpectedAuditFields(
+                "",
+                AuditSensitivityLevel.Restricted,
+                true,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["platform"] = "",
+                }),
         ];
         yield return
         [
@@ -104,7 +129,24 @@ public sealed class ChannelRegistrationAuditTranslatorTests
             },
             "channel.bot.registration.rejected",
             "reg-requested",
+            new ExpectedAuditFields(
+                "",
+                AuditSensitivityLevel.Confidential,
+                false,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["platform"] = "lark",
+                    ["reason"] = "missing scope",
+                }),
         ];
+    }
+
+    private static void AssertDestructiveAnnotation(AuditRecord record, bool isDestructive)
+    {
+        if (isDestructive)
+            record.Annotations.Should().Contain("is_destructive", "true");
+        else
+            record.Annotations.Should().NotContainKey("is_destructive");
     }
 
     private static CommittedAuditTranslationContext Context() =>
@@ -131,4 +173,10 @@ public sealed class ChannelRegistrationAuditTranslatorTests
                type.GenericTypeArguments.Length == 2 &&
                type.GenericTypeArguments[1] == typeof(TMaterializer);
     }
+
+    public sealed record ExpectedAuditFields(
+        string ScopeId,
+        AuditSensitivityLevel SensitivityLevel,
+        bool IsDestructive,
+        IReadOnlyDictionary<string, string> Annotations);
 }

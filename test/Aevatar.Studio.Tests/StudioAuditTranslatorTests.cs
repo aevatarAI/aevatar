@@ -55,7 +55,8 @@ public sealed class StudioAuditTranslatorTests
         IMessage evt,
         string operationName,
         string targetKind,
-        string targetId)
+        string targetId,
+        ExpectedAuditFields expected)
     {
         var record = translator.Translate(Context(), Any.Pack(evt)).Should().ContainSingle().Subject;
 
@@ -64,7 +65,15 @@ public sealed class StudioAuditTranslatorTests
         record.ActorKind.Should().Be(AuditActorKind.System);
         record.Target.Kind.Should().Be(targetKind);
         record.Target.Id.Should().Be(targetId);
+        record.ScopeId.Should().Be(expected.ScopeId);
+        record.SensitivityLevel.Should().Be(expected.SensitivityLevel);
+        record.Correlation.CommandId.Should().Be("cmd-1");
+        record.Correlation.RequestId.Should().Be("req-1");
+        record.Correlation.TraceId.Should().Be("corr-1");
         record.CommittedFactRef.StateVersion.Should().Be(9);
+        AssertDestructiveAnnotation(record, expected.IsDestructive);
+        foreach (var annotation in expected.Annotations)
+            record.Annotations.Should().Contain(annotation.Key, annotation.Value);
     }
 
     [Fact]
@@ -91,6 +100,11 @@ public sealed class StudioAuditTranslatorTests
             "studio.member.created",
             "studio_member",
             "m-alpha",
+            new ExpectedAuditFields(
+                "scope-alpha",
+                AuditSensitivityLevel.Confidential,
+                false,
+                EmptyAnnotations),
         ];
         yield return
         [
@@ -102,6 +116,14 @@ public sealed class StudioAuditTranslatorTests
             "studio.member.implementation.updated",
             "studio_member",
             "studio-member-actor",
+            new ExpectedAuditFields(
+                "",
+                AuditSensitivityLevel.Confidential,
+                false,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["implementation_kind"] = StudioMemberImplementationKind.Workflow.ToString(),
+                }),
         ];
         yield return
         [
@@ -110,11 +132,21 @@ public sealed class StudioAuditTranslatorTests
             {
                 MemberId = "m-alpha",
                 ScopeId = "scope-alpha",
+                FromTeamId = "team-old",
                 ToTeamId = "team-alpha",
             },
             "studio.member.reassigned",
             "studio_member",
             "m-alpha",
+            new ExpectedAuditFields(
+                "scope-alpha",
+                AuditSensitivityLevel.Confidential,
+                false,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["from_team_id"] = "team-old",
+                    ["to_team_id"] = "team-alpha",
+                }),
         ];
         yield return
         [
@@ -128,6 +160,11 @@ public sealed class StudioAuditTranslatorTests
             "studio.team.created",
             "studio_team",
             "team-alpha",
+            new ExpectedAuditFields(
+                "scope-alpha",
+                AuditSensitivityLevel.Confidential,
+                false,
+                EmptyAnnotations),
         ];
         yield return
         [
@@ -141,6 +178,11 @@ public sealed class StudioAuditTranslatorTests
             "studio.team.updated",
             "studio_team",
             "team-alpha",
+            new ExpectedAuditFields(
+                "scope-alpha",
+                AuditSensitivityLevel.Confidential,
+                false,
+                EmptyAnnotations),
         ];
         yield return
         [
@@ -153,7 +195,23 @@ public sealed class StudioAuditTranslatorTests
             "studio.team.archived",
             "studio_team",
             "team-alpha",
+            new ExpectedAuditFields(
+                "scope-alpha",
+                AuditSensitivityLevel.Restricted,
+                true,
+                EmptyAnnotations),
         ];
+    }
+
+    private static IReadOnlyDictionary<string, string> EmptyAnnotations { get; } =
+        new Dictionary<string, string>(StringComparer.Ordinal);
+
+    private static void AssertDestructiveAnnotation(AuditRecord record, bool isDestructive)
+    {
+        if (isDestructive)
+            record.Annotations.Should().Contain("is_destructive", "true");
+        else
+            record.Annotations.Should().NotContainKey("is_destructive");
     }
 
     private static CommittedAuditTranslationContext Context() =>
@@ -180,4 +238,10 @@ public sealed class StudioAuditTranslatorTests
                type.GenericTypeArguments.Length == 2 &&
                type.GenericTypeArguments[1] == typeof(TMaterializer);
     }
+
+    public sealed record ExpectedAuditFields(
+        string ScopeId,
+        AuditSensitivityLevel SensitivityLevel,
+        bool IsDestructive,
+        IReadOnlyDictionary<string, string> Annotations);
 }
