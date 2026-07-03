@@ -209,6 +209,8 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             SessionId = sessionId,
             RunId = state.RunId,
             StepId = state.StepId,
+            ScopeId = Normalize(ctx.ScopeId) ?? string.Empty,
+            ScheduleId = Normalize(ctx.ScheduleId) ?? string.Empty,
         };
         WorkflowLlmExecutionIntentRuntimeContextAccess.ApplySenderNyxIdAccessToken(ctx, intent);
         CopyParametersToIntent(state.ChatMetadataParameters, intent);
@@ -246,6 +248,8 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             SessionId = sessionId,
             RunId = state.RunId,
             StepId = state.StepId,
+            ScopeId = Normalize(ctx.ScopeId) ?? string.Empty,
+            ScheduleId = Normalize(ctx.ScheduleId) ?? string.Empty,
         };
         WorkflowLlmExecutionIntentRuntimeContextAccess.ApplySenderNyxIdAccessToken(ctx, intent);
         CopyParametersToIntent(state.ChatMetadataParameters, intent);

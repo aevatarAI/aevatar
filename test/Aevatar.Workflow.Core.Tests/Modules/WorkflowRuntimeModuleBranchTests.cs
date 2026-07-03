@@ -403,6 +403,29 @@ public sealed class WorkflowRuntimeModuleBranchTests
     }
 
     [Fact]
+    public async Task LlmCallModule_ShouldDispatchScheduleIdFromWorkflowContext()
+    {
+        var module = new LLMCallModule();
+        var ctx = new RecordingWorkflowContext
+        {
+            ScheduleId = " schedule-llm ",
+        };
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "llm-schedule",
+                StepType = "llm_call",
+                RunId = "run-llm-schedule",
+                Input = "prompt",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        DispatchedLlmIntent(ctx).ScheduleId.Should().Be("schedule-llm");
+    }
+
+    [Fact]
     public async Task EvaluateModule_ShouldPublishDeterministicFailure_WhenStepIdMissing()
     {
         var module = new EvaluateModule();
@@ -498,6 +521,29 @@ public sealed class WorkflowRuntimeModuleBranchTests
         failure.RunId.Should().Be("run-evaluate-failure");
         failure.Success.Should().BeFalse();
         failure.Error.Should().Be("evaluate LLM call failed.");
+    }
+
+    [Fact]
+    public async Task EvaluateModule_ShouldDispatchScheduleIdFromWorkflowContext()
+    {
+        var module = new EvaluateModule();
+        var ctx = new RecordingWorkflowContext
+        {
+            ScheduleId = " schedule-evaluate ",
+        };
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "evaluate-schedule",
+                StepType = "evaluate",
+                RunId = "run-evaluate-schedule",
+                Input = "draft",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        DispatchedLlmIntent(ctx).ScheduleId.Should().Be("schedule-evaluate");
     }
 
     [Fact]
@@ -797,6 +843,44 @@ public sealed class WorkflowRuntimeModuleBranchTests
         failure.RunId.Should().Be("run-reflect-failure");
         failure.Success.Should().BeFalse();
         failure.Error.Should().Be("reflect LLM call failed.");
+    }
+
+    [Fact]
+    public async Task ReflectModule_ShouldPreserveScheduleIdOnCritiqueAndImproveIntents()
+    {
+        var module = new ReflectModule();
+        var ctx = new RecordingWorkflowContext
+        {
+            ScheduleId = " schedule-reflect ",
+        };
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "reflect-schedule",
+                StepType = "reflect",
+                RunId = "run-reflect-schedule",
+                Input = "draft",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var critique = ctx.Published.Select(x => x.Event).OfType<WorkflowLlmExecutionIntent>().Single();
+        critique.ScheduleId.Should().Be("schedule-reflect");
+
+        await module.HandleAsync(
+            Wrap(new WorkflowLlmInvocationCompletedEvent
+            {
+                SessionId = critique.SessionId,
+                Success = true,
+                Content = "needs work",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var improve = ctx.Published.Select(x => x.Event).OfType<WorkflowLlmExecutionIntent>().Last();
+        improve.SessionId.Should().Contain("_improve");
+        improve.ScheduleId.Should().Be("schedule-reflect");
     }
 
     [Fact]
@@ -1147,6 +1231,8 @@ public sealed class WorkflowRuntimeModuleBranchTests
         public string AgentId => "agent-1";
 
         public string RunId => "run-1";
+
+        public string ScheduleId { get; init; } = string.Empty;
 
         public IServiceProvider Services => _services;
 
