@@ -96,6 +96,7 @@ public sealed class WorkflowBoardSnapshotQueryServiceTests
             running: 1,
             waiting: 2,
             failed: 0,
+            definitionSteps: 15,
             currentExecutionId: "run-alpha"));
         var service = NewService(roster, execution);
 
@@ -111,7 +112,7 @@ public sealed class WorkflowBoardSnapshotQueryServiceTests
         member.PublishedServiceId.Should().Be("svc-alpha");
         member.CurrentExecutionId.Should().Be("run-alpha");
         member.ExecutionStatus.Should().Be(WorkflowBoardMemberExecutionStatus.Running);
-        member.Progress.Should().Be(new WorkflowBoardMemberProgress(3, 6));
+        member.Progress.Should().Be(new WorkflowBoardMemberProgress(3, 15));
         snapshot.Counts.Should().Be(new WorkflowBoardSnapshotCounts(1, 0, 0, 0, 0));
         roster.MemberListRequests.Should().BeEmpty();
         execution.Lookups.Should().ContainSingle()
@@ -213,7 +214,7 @@ public sealed class WorkflowBoardSnapshotQueryServiceTests
             .AddMember(NewMember("m-incomplete", "t-alpha"))
             .AddMember(NewMember("m-unavailable", "t-alpha"));
         var execution = new LookupExecutionQueryPort()
-            .Add("m-available", Available(WorkflowBoardMemberExecutionStatus.Completed, completed: 2, running: 1, waiting: 3, failed: 4))
+            .Add("m-available", Available(WorkflowBoardMemberExecutionStatus.Completed, completed: 2, running: 1, waiting: 3, failed: 4, definitionSteps: 15))
             .Add("m-incomplete", new WorkflowBoardExecutionSnapshot(
                 WorkflowBoardExecutionAvailability.Available,
                 [],
@@ -221,7 +222,7 @@ public sealed class WorkflowBoardSnapshotQueryServiceTests
                 [])
             {
                 ExecutionStatus = WorkflowBoardMemberExecutionStatus.Running,
-                Summary = new WorkflowBoardExecutionSummary(1, null, 0, 0),
+                Summary = new WorkflowBoardExecutionSummary(1, 0, 0, 0, null),
             })
             .Add("m-unavailable", new WorkflowBoardExecutionSnapshot(
                 WorkflowBoardExecutionAvailability.Unavailable,
@@ -235,7 +236,7 @@ public sealed class WorkflowBoardSnapshotQueryServiceTests
             TeamId: "t-alpha"));
 
         var members = snapshot.Teams.Single().Members.ToDictionary(static member => member.MemberId);
-        members["m-available"].Progress.Should().Be(new WorkflowBoardMemberProgress(2, 10));
+        members["m-available"].Progress.Should().Be(new WorkflowBoardMemberProgress(2, 15));
         members["m-incomplete"].Progress.Should().BeNull();
         members["m-unavailable"].Progress.Should().BeNull();
         members["m-unavailable"].ExecutionStatus.Should().Be(WorkflowBoardMemberExecutionStatus.Unknown);
@@ -627,6 +628,7 @@ public sealed class WorkflowBoardSnapshotQueryServiceTests
         int running = 0,
         int waiting = 0,
         int failed = 0,
+        int? definitionSteps = 10,
         string? currentExecutionId = null,
         string? revision = null) =>
         new(
@@ -637,7 +639,7 @@ public sealed class WorkflowBoardSnapshotQueryServiceTests
         {
             CurrentExecutionId = currentExecutionId,
             ExecutionStatus = status,
-            Summary = new WorkflowBoardExecutionSummary(completed, running, waiting, failed),
+            Summary = new WorkflowBoardExecutionSummary(completed, running, waiting, failed, definitionSteps),
             Revision = revision,
         };
 
