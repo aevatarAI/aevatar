@@ -124,7 +124,7 @@ public sealed class ChannelRegistrationAuditTranslatorTests
             "req-1",
             "corr-1");
 
-    private static bool IsObservedProjectionArtifactMaterializerFor<TMaterializer>(Type? type)
+    private static bool IsObservedProjectionArtifactMaterializerFor<TMaterializer>(System.Type? type)
     {
         return type?.IsGenericType == true &&
                type.Name.StartsWith("ObservedProjectionArtifactMaterializer`", StringComparison.Ordinal) &&
