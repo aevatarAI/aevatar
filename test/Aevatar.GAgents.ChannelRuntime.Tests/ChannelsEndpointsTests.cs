@@ -1,11 +1,13 @@
-using System.Reflection;
+using Aevatar.BackendConsole.Hosting;
+using Aevatar.GAgents.Channel.NyxIdRelay;
 using FluentAssertions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
-using Aevatar.GAgents.Channel.NyxIdRelay;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
@@ -37,9 +39,6 @@ public sealed class ChannelsEndpointsTests
         endpoints.Any(route => route.RoutePattern.RawText == "/channels/callback").Should().BeFalse();
     }
 
-    // Regression guard: the page is generated from channels.html at tools-time and embedded as a
-    // const. These markers anchor the contract pieces that must not silently drop on regeneration —
-    // the skill-mandated Tier-1 scope and the default-LLM reminder (the explicit product ask).
     [Fact]
     public void EmbeddedPage_PreservesContractMarkers()
     {
@@ -50,7 +49,7 @@ public sealed class ChannelsEndpointsTests
         html.Should().NotContain("class=\"dock\"", "the design-review dock must be stripped from the shipped page");
         // OIDC uses the unified suite's shared redirect target + shared storage (one login spans all pages)
         html.Should().Contain("/auto/callback");
-        html.Should().Contain("aevatar-console:nyxid:pkce");
+        html.Should().Contain("__BACKEND_CONSOLE_CONFIG__");
         // the consolidated suite brand is fixed top-left across every page
         html.Should().Contain("Aevatar Backend Console");
         // skill Tier-1 scope (the #1 silent-bot fix), event sub, and the default LLM reminder
@@ -69,11 +68,46 @@ public sealed class ChannelsEndpointsTests
 
     private static string ReadEmbeddedHtml()
     {
-        var pageType = typeof(ChannelsEndpoints).Assembly
-            .GetType("Aevatar.GAgents.Channel.NyxIdRelay.ChannelsPage")
-            ?? throw new InvalidOperationException("ChannelsPage type not found.");
-        var field = pageType.GetField("Html", BindingFlags.Public | BindingFlags.Static)
-            ?? throw new InvalidOperationException("ChannelsPage.Html not found.");
-        return (string)(field.GetValue(null) ?? throw new InvalidOperationException("ChannelsPage.Html is null."));
+        var assembly = typeof(ChannelsEndpoints).Assembly;
+        var resourceName = assembly.GetManifestResourceNames()
+            .Single(name => name.EndsWith("channels.html", StringComparison.Ordinal));
+        using var stream = assembly.GetManifestResourceStream(resourceName)
+            ?? throw new InvalidOperationException("channels.html resource not found.");
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
+
+    [Fact]
+    public async Task GetChannelsPage_ShouldRenderInjectedEmbeddedAsset()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Aevatar:BackendConsole:OidcAuthority"] = "https://id.example.test",
+                ["Aevatar:BackendConsole:OidcClientId"] = "client-example",
+                ["Aevatar:BackendConsole:OidcScope"] = "openid profile",
+                ["Aevatar:BackendConsole:StorageKey"] = "console:test",
+            })
+            .Build();
+        services.AddBackendConsoleStaticAssets(configuration);
+        services.AddLogging();
+        var http = new DefaultHttpContext
+        {
+            RequestServices = services.BuildServiceProvider(),
+        };
+        http.Response.Body = new MemoryStream();
+
+        var result = ChannelsEndpoints.GetChannelsPage(http);
+        await result.ExecuteAsync(http);
+
+        http.Response.ContentType.Should().Be("text/html; charset=utf-8");
+        http.Response.Body.Position = 0;
+        using var reader = new StreamReader(http.Response.Body);
+        var html = await reader.ReadToEndAsync();
+        html.Should().Contain("https://id.example.test");
+        html.Should().Contain("client-example");
+        html.Should().Contain("console:test");
+        html.Should().NotContain("__BACKEND_CONSOLE_CONFIG__");
     }
 }

@@ -1,5 +1,5 @@
 using System.Security.Claims;
-using System.Text;
+using Aevatar.BackendConsole.Hosting;
 using Aevatar.Capabilities;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -16,6 +16,13 @@ internal static class WorkflowSkillsEndpoints
     private const string PageRoute = "/workflow/skills";
     private const string DataRoutePrefix = "/api/workflow/skills";
 
+    private static readonly BackendConsoleAsset PageAsset = new(
+        LogicalName: "workflow-skills",
+        Assembly: typeof(WorkflowSkillsEndpoints).Assembly,
+        ResourceSuffix: "Skills.workflow-skills.html",
+        ContentType: "text/html",
+        InjectHostConfiguration: true);
+
     public static IEndpointRouteBuilder MapWorkflowSkillsEndpoints(this IEndpointRouteBuilder app)
     {
         ArgumentNullException.ThrowIfNull(app);
@@ -23,7 +30,7 @@ internal static class WorkflowSkillsEndpoints
         app.MapGet(PageRoute, GetSkillsPage)
             .WithTags("WorkflowSkills")
             .WithName("GetWorkflowSkillsPage")
-            .WithSummary("ornn skills invocation page (inline self-contained page; browser OIDC PKCE).")
+            .WithSummary("ornn skills invocation page served from an embedded static asset.")
             .AllowAnonymous();
 
         var data = app.MapGroup(DataRoutePrefix).WithTags("WorkflowSkills");
@@ -54,7 +61,7 @@ internal static class WorkflowSkillsEndpoints
     internal static IResult GetSkillsPage(HttpContext http)
     {
         ArgumentNullException.ThrowIfNull(http);
-        return Results.Text(WorkflowSkillsPage.Html, "text/html", Encoding.UTF8);
+        return http.ServeBackendConsoleAsset(PageAsset);
     }
 
     internal static async Task<IResult> ListSkills(

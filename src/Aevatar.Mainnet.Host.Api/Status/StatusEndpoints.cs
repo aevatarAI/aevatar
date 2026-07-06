@@ -1,10 +1,11 @@
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Aevatar.BackendConsole.Hosting;
 using Aevatar.GAgents.StatusDashboard;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -13,6 +14,13 @@ namespace Aevatar.Mainnet.Host.Api.Status;
 public static class StatusEndpoints
 {
     private const int HistorySampleCount = 120;
+
+    private static readonly BackendConsoleAsset PageAsset = new(
+        LogicalName: "status",
+        Assembly: typeof(StatusEndpoints).Assembly,
+        ResourceSuffix: "Status.status.html",
+        ContentType: "text/html",
+        InjectHostConfiguration: false);
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -37,18 +45,19 @@ public static class StatusEndpoints
         .WithSummary("Aggregated health snapshot for all configured probe targets.")
         .AllowAnonymous();
 
-        app.MapGet("/status", (HttpContext ctx) =>
-        {
-            ctx.Response.StatusCode = StatusCodes.Status200OK;
-            ctx.Response.ContentType = "text/html; charset=utf-8";
-            return ctx.Response.WriteAsync(StatusHtml.Page, Encoding.UTF8, ctx.RequestAborted);
-        })
+        app.MapGet("/status", GetStatusHtml)
         .WithTags("Status")
         .WithName("GetStatusHtml")
         .WithSummary("Sub2api-style HTML dashboard for service health.")
         .AllowAnonymous();
 
         return app;
+    }
+
+    internal static IResult GetStatusHtml(HttpContext http)
+    {
+        ArgumentNullException.ThrowIfNull(http);
+        return http.ServeBackendConsoleAsset(PageAsset);
     }
 
     private sealed record StatusResponse(

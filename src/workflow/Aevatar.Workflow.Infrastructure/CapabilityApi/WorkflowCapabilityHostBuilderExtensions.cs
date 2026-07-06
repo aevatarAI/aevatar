@@ -1,3 +1,4 @@
+using Aevatar.BackendConsole.Hosting;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Capabilities;
 using Aevatar.Workflow.Application.Abstractions.Queries;
@@ -13,6 +14,8 @@ public static class WorkflowCapabilityHostBuilderExtensions
     public static WebApplicationBuilder AddWorkflowCapabilityBundle(this WebApplicationBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
+
+        builder.Services.AddBackendConsoleStaticAssets(builder.Configuration);
 
         builder.Services.AddAevatarHealthContributor(new AevatarHealthContributorRegistration
         {

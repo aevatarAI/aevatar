@@ -1,16 +1,3 @@
-namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
-
-// Workflow Studio: one inline self-contained HTML page (no wwwroot, no build step), mirroring the
-// /workflow/observatory precedent. Browser OIDC Authorization Code + PKCE against nyxid (reuse of the
-// console-web client; same authority/clientId/scope as observatory, isolated PKCE storage + callback
-// route). The page is the anonymous static shell; the app is gated behind login exactly like observatory.
-// Increment 2a wires the signed-in app to live backend data: the scope chip from GET /api/studio/context,
-// chat from POST /api/chat (SSE), the session list from localStorage, and the Schedules card from
-// GET /api/schedules (polled). The right-pane workflow graph / Team / Service cards are deferred to
-// Increment 2b and render honest empty states (no mock data).
-internal static class WorkflowStudioPage
-{
-    public const string Html = """
 <!doctype html>
 <html lang="zh-CN">
 <head>
@@ -475,12 +462,13 @@ internal static class WorkflowStudioPage
    session, no NyxID change. This increment gates the page behind login only; the
    chat/cards below still render from the mock constants until live data is wired.
    =========================================================================== */
+const BACKEND_CONSOLE_CONFIG = __BACKEND_CONSOLE_CONFIG__;
 const CFG = {
-  authority: "https://nyx.chrono-ai.fun",
-  clientId: "37a93189-2734-406e-bca1-7dbdf25c5a53",
-  scope: "openid profile email proxy",
+  authority: BACKEND_CONSOLE_CONFIG.authority || "",
+  clientId: BACKEND_CONSOLE_CONFIG.clientId || "",
+  scope: BACKEND_CONSOLE_CONFIG.scope || "",
   redirectUri: location.origin + "/auto/callback",
-  storageKey: "aevatar-console:nyxid:pkce"
+  storageKey: BACKEND_CONSOLE_CONFIG.storageKey || ""
 };
 const TOKEN_KEY = CFG.storageKey + ":token";
 const PKCE_KEY  = CFG.storageKey + ":pkce";
@@ -1464,6 +1452,3 @@ if(window.matchMedia){ window.matchMedia("(prefers-color-scheme: light)").addEve
 </script>
 </body>
 </html>
-
-""";
-}

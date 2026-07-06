@@ -1,18 +1,20 @@
-using System.Text;
+using Aevatar.BackendConsole.Hosting;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 
 namespace Aevatar.Mainnet.Host.Api.Cqrs;
 
-// CQRS / projection observatory page mount. Mirrors the /voice + /workflow/studio + /workflow/observatory
-// precedent: the page is served anonymously as a self-contained static shell; the in-page JS gates the app
-// behind a nyxid bearer login exactly like its siblings, and carries the shared suite navigation so the six
-// console pages move as one. The live data surface (GET /api/cqrs/scopes) is mapped separately by
-// CqrsObservatoryApiEndpoints; no data endpoint is mapped from this file.
 internal static class CqrsObservatoryPageEndpoints
 {
     private const string PageRoute = "/cqrs";
+
+    private static readonly BackendConsoleAsset PageAsset = new(
+        LogicalName: "cqrs-observatory",
+        Assembly: typeof(CqrsObservatoryPageEndpoints).Assembly,
+        ResourceSuffix: "Cqrs.cqrs-observatory.html",
+        ContentType: "text/html",
+        InjectHostConfiguration: true);
 
     public static IEndpointRouteBuilder MapCqrsObservatoryPageEndpoints(this IEndpointRouteBuilder app)
     {
@@ -21,7 +23,7 @@ internal static class CqrsObservatoryPageEndpoints
         app.MapGet(PageRoute, GetCqrsObservatoryPage)
             .WithTags("CqrsObservatory")
             .WithName("GetCqrsObservatoryPage")
-            .WithSummary("CQRS / projection observatory (inline self-contained page).")
+            .WithSummary("CQRS / projection observatory served from an embedded static asset.")
             .AllowAnonymous();
 
         return app;
@@ -30,6 +32,6 @@ internal static class CqrsObservatoryPageEndpoints
     internal static IResult GetCqrsObservatoryPage(HttpContext http)
     {
         ArgumentNullException.ThrowIfNull(http);
-        return Results.Text(CqrsObservatoryPage.Html, "text/html", Encoding.UTF8);
+        return http.ServeBackendConsoleAsset(PageAsset);
     }
 }
