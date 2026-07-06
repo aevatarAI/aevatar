@@ -35,7 +35,7 @@ public static class AuditTrailEndpoints
 
         data.MapGet("/trail", QueryAuditTrail)
             .WithName("QueryAuditTrail")
-            .WithSummary("Query audit trail records. Default scope is the caller scope; cross-scope reads require platform admin.")
+            .WithSummary("Query audit trail records. Default scope is the caller scope; cross-scope reads require aevatar admin access.")
             .RequireAuthorization()
             .WithMetadata(new AuditTrailEndpointAuditMetadata("audit-trail", "query-cross-scope", AdminAccessLevel));
 
@@ -182,7 +182,7 @@ public static class AuditTrailEndpoints
         {
             Audit(logger, http, "denied", action, callerScopeId, targetScope, caller, "not_admin_or_disabled");
             return Results.Json(
-                new { code = "SCOPE_ACCESS_DENIED", message = "Platform admin role required for audit reads." },
+                new { code = "SCOPE_ACCESS_DENIED", message = "Aevatar admin access required for audit reads." },
                 statusCode: StatusCodes.Status403Forbidden);
         }
 
@@ -293,12 +293,13 @@ public static class AuditTrailEndpoints
         string? reason) =>
         logger.LogInformation(
             "audit_trail_admin_read outcome={Outcome} action={Action} adminUserId={AdminUserId} adminEmail={AdminEmail} " +
-            "role={Role} callerScope={CallerScope} targetScope={TargetScope} reason={Reason} correlationId={CorrelationId}",
+            "role={Role} grantSource={GrantSource} callerScope={CallerScope} targetScope={TargetScope} reason={Reason} correlationId={CorrelationId}",
             outcome,
             action,
             admin.UserId,
             admin.Email,
             admin.Role,
+            admin.GrantSource,
             callerScope,
             targetScope,
             reason ?? string.Empty,

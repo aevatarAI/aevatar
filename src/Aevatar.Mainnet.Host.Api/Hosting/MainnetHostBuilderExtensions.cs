@@ -20,6 +20,7 @@ using Aevatar.Authentication.Providers.NyxId;
 using Aevatar.Authentication.ScopeServiceTokens;
 using Aevatar.Audit.Core.DependencyInjection;
 using Aevatar.Audit.Hosting;
+using Aevatar.BackendConsole.Hosting;
 using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.ChatRouting.Core;
@@ -135,6 +136,7 @@ public static class MainnetHostBuilderExtensions
         builder.AddStudioCapability();
         builder.Services.AddAuditTrailCore(builder.Configuration);
         builder.AddAuditTrailCapabilityBundle();
+        builder.Services.AddBackendConsoleStaticAssets(builder.Configuration);
 
         // 06-26 ornn skills invocation page: host-side catalog read surface (composes the Ornn skill client).
         builder.Services.AddSingleton<IUserSkillCatalogQueryService, UserSkillCatalogQueryService>();
@@ -249,7 +251,7 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddStudioProvisioningTools();
         builder.Services.Configure<DeviceEventOptions>(
             builder.Configuration.GetSection("Aevatar:DeviceEvents"));
-        // 06-20-observatory-admin-cross-scope: NyxID-backed platform-admin authorizer for the run observatory.
+        // NyxID-backed current-user resolver plus aevatar admin access policy.
         builder.Services.AddNyxIdPlatformAuthorization(builder.Configuration);
         builder.Services.AddNyxIdTools(o =>
         {

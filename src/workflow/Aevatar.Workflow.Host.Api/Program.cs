@@ -24,7 +24,7 @@ builder.AddAevatarDefaultHost(
         options.EnableWebSockets = true;
     });
 builder.AddAevatarPlatform();
-// 06-20-observatory-admin-cross-scope: NyxID-backed platform-admin authorizer for the run observatory.
+// NyxID-backed current-user resolver plus aevatar admin access policy.
 builder.Services.AddNyxIdPlatformAuthorization(builder.Configuration);
 builder.Services.AddNyxIdTools(options =>
 {
