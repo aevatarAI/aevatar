@@ -1201,8 +1201,8 @@ var FLEET_LOADED=false, FLEET_ERR=null, FLEET_FORBIDDEN=false, FLEET_LOADING=fal
 /* 与 COMPANIES 别名保持一致，沿用既有 render 代码对全局名的引用 */
 var COMPANIES=FLEET_COMPANIES;
 
-/* nyxid 用户名册 host（与本站不同源；CORS 开放且接受 Authorization） */
-var NYX_API=BACKEND_CONSOLE_CONFIG.nyxidApi||'https://nyx-api.chrono-ai.fun';
+/* nyxid 用户名册 host（由运行时配置注入；CORS 开放且接受 Authorization） */
+var NYX_API=BACKEND_CONSOLE_CONFIG.nyxidApi||'';
 function nyxShortId(id){ id=String(id||''); return id.length>12?id.slice(0,8):id; }
 function fleetAgoMins(iso){ if(!iso) return null; var t=new Date(iso); if(isNaN(t.getTime())) return null;
   return Math.max(0,Math.round((Date.now()-t.getTime())/60000)); }
@@ -1239,6 +1239,7 @@ function mapNyxUser(u){
     isAdmin:!!(u.is_admin||u.isAdmin) }; }
 function loadNyxUsers(){
   var tok=accessToken(); if(!tok) return Promise.resolve({forbidden:true});
+  if(!NYX_API) return Promise.resolve({disabled:true});
   var per=50, acc={};
   function page(p){
     return fetch(NYX_API+'/api/v1/admin/users?search=&per_page='+per+'&page='+p,
@@ -1351,7 +1352,7 @@ function statsForEmployee(eid){ return null; }
 
 /* ============================================================
    NyxID OIDC PKCE 登录（与后端 console 套件共享单点登录）
-   token: localStorage[aevatar-console:nyxid:pkce:token]；
+   token: localStorage[配置的 storageKey + ':token']；
    code 交换经共享 /auto/callback 完成后回跳本页（returnTo=/admin）。
    ============================================================ */
 var OIDC={ authority:BACKEND_CONSOLE_CONFIG.authority||'', clientId:BACKEND_CONSOLE_CONFIG.clientId||'',
@@ -3553,7 +3554,7 @@ function chanStep3(){
       '<div class="cfg-card"><div class="cfg-title">结果</div><div class="kv"><div class="kv-row"><span class="kk">bot_id</span><span class="vv">'+(r.botId||'—')+'</span></div><div class="kv-row"><span class="kk">scope</span><span class="vv">'+ACCOUNT.scope+'</span></div></div></div>'+
       wzFoot({back:true, next:{label:'下一步：回复模型', act:'wzCfgNext'}});
   }
-  var webhook=r.webhookUrl||'https://nyx.chrono-ai.fun/relay/lark/cb_xxxx';
+  var webhook=r.webhookUrl||'';
   var t1=['im:message','im:message.group_at_msg','im:chat:readonly','contact:user.base','contact:contact.base'];
   var t2=['im:resource','im:message:send_as_bot','contact:department.base'];
   var perm=WZ.perm;
