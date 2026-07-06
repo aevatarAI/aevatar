@@ -17,39 +17,29 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class NyxIdRelayChannelInteractionNotificationPortTests
 {
     [Fact]
-    public async Task DeliverAsync_WhenLarkTarget_ShouldSendComposedInteractiveCardThroughGenericPort()
+    public async Task DeliverAsync_WhenLarkTarget_ShouldSendComposedInteractiveCardThroughNyxProxy()
     {
         var registry = BuildRegistry(BuildTarget("agent-lark-1", "lark", "oc_chat_1"));
-        var dispatcher = Substitute.For<ILarkOutboundDispatcher>();
-        dispatcher.SendNewMessageAsync(Arg.Any<LarkSendNewMessageRequest>(), Arg.Any<CancellationToken>())
-            .Returns(call =>
-            {
-                var request = call.Arg<LarkSendNewMessageRequest>();
-                return Task.FromResult(LarkSendNewMessageResult.Sent(
-                    "om_1",
-                    request.PrimaryTarget,
-                    usedFallback: false));
-            });
+        var handler = new RecordingHandler("""{"code":0,"data":{"message_id":"om_1"}}""");
         var port = new NyxIdRelayChannelInteractionNotificationPort(
             registry,
-            CreateNyxClient(new RecordingHandler("""{"ok":true}""")),
+            CreateNyxClient(handler),
             [new LarkChannelNativeMessageProducer(new LarkMessageComposer())],
-            NullLogger<NyxIdRelayChannelInteractionNotificationPort>.Instance,
-            dispatcher);
+            NullLogger<NyxIdRelayChannelInteractionNotificationPort>.Instance);
 
         await port.DeliverAsync(BuildApprovalRequest("agent-lark-1"), CancellationToken.None);
 
-        await dispatcher.Received(1).SendNewMessageAsync(
-            Arg.Is<LarkSendNewMessageRequest>(request =>
-                request.NyxApiKey == "nyx-api-key-1" &&
-                request.NyxProviderSlug == "api-lark-bot" &&
-                request.MessageType == "interactive" &&
-                request.PrimaryTarget.ReceiveId == "oc_chat_1" &&
-                request.PrimaryTarget.ReceiveIdType == "chat_id" &&
-                request.ContentJson.Contains("\"schema\":\"2.0\"", StringComparison.Ordinal) &&
-                request.ContentJson.Contains("\"actor_id\":\"workflow-actor-1\"", StringComparison.Ordinal) &&
-                request.ContentJson.Contains("\"approved\":true", StringComparison.Ordinal)),
-            Arg.Any<CancellationToken>());
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.RequestUri!.ToString()
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages?receive_id_type=chat_id");
+        using var body = JsonDocument.Parse(handler.LastBody!);
+        body.RootElement.GetProperty("receive_id").GetString().Should().Be("oc_chat_1");
+        body.RootElement.GetProperty("msg_type").GetString().Should().Be("interactive");
+        var content = body.RootElement.GetProperty("content").GetString();
+        content.Should().NotBeNull();
+        content.Should().Contain("\"schema\":\"2.0\"");
+        content.Should().Contain("\"actor_id\":\"workflow-actor-1\"");
+        content.Should().Contain("\"approved\":true");
     }
 
     [Fact]
@@ -76,6 +66,41 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
         body.RootElement.GetProperty("text").GetString().Should().Contain("Reject");
         body.RootElement.TryGetProperty("reply_markup", out _).Should().BeFalse(
             "Telegram cannot safely fit typed workflow resume identity in callback data, so approval delivery degrades to text");
+    }
+
+    [Fact]
+    public async Task DeliverAsync_WhenTemplateSpecTargetsLark_ShouldSendSafeFallbackCardThroughGenericRelay()
+    {
+        var registry = BuildRegistry(BuildTarget("agent-lark-template-1", "lark", "oc_chat_1"));
+        var handler = new RecordingHandler("""{"code":0,"data":{"message_id":"om_1"}}""");
+        var port = new NyxIdRelayChannelInteractionNotificationPort(
+            registry,
+            CreateNyxClient(handler),
+            [new LarkChannelNativeMessageProducer(new LarkMessageComposer())],
+            NullLogger<NyxIdRelayChannelInteractionNotificationPort>.Instance);
+        var template = new InteractionTemplateSpec { TemplateId = "tpl-1" };
+        template.TemplateVariable["run"] = "run-1";
+        template.TemplateVariable["title"] = "Deploy";
+
+        await port.DeliverAsync(new ChannelInteractionNotificationRequest
+        {
+            ActorId = "workflow-actor-1",
+            RunId = "run-1",
+            StepId = "notify-template",
+            DeliveryTargetId = "agent-lark-template-1",
+            InteractionTemplateSpec = template,
+        }, CancellationToken.None);
+
+        using var body = JsonDocument.Parse(handler.LastBody!);
+        body.RootElement.GetProperty("msg_type").GetString().Should().Be("interactive");
+        var content = body.RootElement.GetProperty("content").GetString();
+        content.Should().NotBeNull();
+        content.Should().Contain("Interaction notification template: tpl-1");
+        content.Should().Contain("Template ID: tpl-1");
+        content.Should().Contain("Deploy");
+        content.Should().Contain("run-1");
+        content.Should().NotContain("\"type\":\"template\"",
+            "the generic relay path intentionally keeps templates channel-neutral instead of depending on Lark-native templates");
     }
 
     [Fact]

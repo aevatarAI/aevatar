@@ -184,6 +184,58 @@ public sealed class TelegramMessageComposerTests : MessageComposerUnitTests<Tele
     }
 
     [Fact]
+    public void Compose_with_short_callback_emits_callback_data()
+    {
+        var intent = new MessageContent { Text = "Choose" };
+        intent.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.Button,
+            ActionId = "ok",
+            Label = "OK",
+        });
+
+        var payload = CreateComposer().Compose(intent, BuildContext());
+
+        payload.IsInteractive.ShouldBeTrue();
+        using var document = JsonDocument.Parse(payload.ContentJson);
+        var callbackData = document.RootElement
+            .GetProperty("reply_markup")
+            .GetProperty("inline_keyboard")[0][0]
+            .GetProperty("callback_data")
+            .GetString();
+        callbackData.ShouldNotBeNull();
+        Encoding.UTF8.GetByteCount(callbackData!).ShouldBeLessThanOrEqualTo(64);
+        using var callbackDocument = JsonDocument.Parse(callbackData!);
+        callbackDocument.RootElement.GetProperty("a").GetString().ShouldBe("ok");
+    }
+
+    [Fact]
+    public void Compose_with_long_workflow_callback_fails_closed_to_text()
+    {
+        var intent = new MessageContent { Text = "Approve?" };
+        intent.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.FormSubmit,
+            ActionId = "approve",
+            Label = "Approve",
+            WorkflowResume = new WorkflowResumeActionPayload
+            {
+                ActorId = "workflow-actor-1234567890",
+                RunId = "run-1234567890",
+                StepId = "step-1234567890",
+                Approved = true,
+            },
+        });
+
+        var payload = CreateComposer().Compose(intent, BuildContext());
+
+        payload.IsInteractive.ShouldBeFalse();
+        payload.ContentJson.ShouldNotContain("callback_data");
+        payload.PlainText.ShouldContain("• Approve");
+        CreateComposer().Evaluate(intent, BuildContext()).ShouldBe(ComposeCapability.Degraded);
+    }
+
+    [Fact]
     public void Compose_with_link_action_emits_url_button()
     {
         var intent = new MessageContent { Text = "Setup" };

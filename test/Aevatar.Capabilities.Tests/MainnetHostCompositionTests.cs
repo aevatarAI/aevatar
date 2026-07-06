@@ -1,6 +1,3 @@
-using Aevatar.Audit.Abstractions.Ports;
-using Aevatar.Audit.Core.Projection;
-using Aevatar.Audit.Core.Stores;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Middleware;
@@ -23,8 +20,6 @@ using Aevatar.Configuration;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Credentials;
-using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Runtime.Hosting.Maintenance;
 using Aevatar.Foundation.VoicePresence;
@@ -33,9 +28,9 @@ using Aevatar.Foundation.VoicePresence.Hosting;
 using Aevatar.Foundation.VoicePresence.Transport;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgents.Authoring.Lark;
-using Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
 using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
+using Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Device;
 using Aevatar.GAgents.Scheduled;
@@ -65,8 +60,6 @@ namespace Aevatar.Capabilities.Tests;
 [Collection(ProcessEnvSerialCollection.Name)]
 public sealed class MainnetHostCompositionTests
 {
-    private const string AuditIdentityTestKeyBase64 = "YXVkaXQgaWRlbnRpdHkga2V5IG1hdGVyaWFsIGZvciB0ZXN0cw==";
-
     [Fact]
     public async Task AddAevatarMainnetHost_WithInMemoryDependencies_ShouldBuildAndStartFullComposition()
     {
@@ -107,12 +100,6 @@ public sealed class MainnetHostCompositionTests
         app.Services.GetRequiredService<IProjectionDocumentReader<WorkflowExternalApprovalContinuationDocument, string>>()
             .Should()
             .NotBeNull();
-        app.Services.GetRequiredService<ISecretVault>()
-            .Should()
-            .BeOfType<InMemorySecretVault>();
-        app.Services.GetRequiredService<IRuntimeSecretStore>()
-            .Should()
-            .BeOfType<InMemoryRuntimeSecretStore>();
         var readModelDescriptors = app.Services.GetServices<IProjectionReadModelDescriptor>().ToList();
         readModelDescriptors.Select(static descriptor => descriptor.Name)
             .Should()
@@ -122,20 +109,9 @@ public sealed class MainnetHostCompositionTests
             .ContainSingle(static descriptor => descriptor.Name == "workflow-external-approval-continuation");
         readModelDescriptors.Should()
             .ContainSingle(static descriptor => descriptor.Name == "streaming-proxy-chat-session");
-        app.Services.GetRequiredService<IAuditTrailAppender>().Should().NotBeNull();
-        app.Services.GetRequiredService<IAuditTrailArtifactStore>()
+        app.Services.GetRequiredService<IProjectionDocumentReader<ScriptNativeDocumentReadModel, string>>()
             .Should()
-            .BeOfType<InMemoryAuditTrailStore>();
-        typeof(AuditTrailArtifactStorageDocument).GetInterfaces()
-            .Should()
-            .NotContain(typeof(IProjectionReadModel));
-        readModelDescriptors.Should()
-            .NotContain(static descriptor => descriptor.Name == "audit-trail");
-        // Security lockdown: the scripting capability (and its read models) must never be
-        // composed into the mainnet host.
-        app.Services.GetService<IProjectionDocumentReader<ScriptNativeDocumentReadModel, string>>()
-            .Should()
-            .BeNull();
+            .NotBeNull();
         app.Services.GetRequiredService<IExternalIdentityBindingQueryPort>().Should().NotBeNull();
         app.Services.GetRequiredService<ICommandDispatchService<CommitBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>>()
             .Should()
@@ -161,8 +137,6 @@ public sealed class MainnetHostCompositionTests
         routePatterns.Should().Contain("/api/webhooks/nyxid-relay/health");
         routePatterns.Should().Contain("/api/channels/registrations");
         routePatterns.Should().Contain("/api/oauth/nyxid-callback");
-        routePatterns.Should().Contain("/api/audit/trail");
-        routePatterns.Should().Contain("/api/audit/actor-resolutions");
         routePatterns.Should().Contain("/api/services/");
         routePatterns.Should().Contain("/api/skill-runners/{agentId}/external-trigger-sources/{sourceId}/deliveries");
         routePatterns.Should().Contain("/v1/responses");
@@ -786,9 +760,6 @@ public sealed class MainnetHostCompositionTests
             ["Projection:Graph:Providers:InMemory:Enabled"] = "true",
             ["Projection:Graph:Providers:Neo4j:Enabled"] = "false",
             ["Aevatar:NyxId:Authority"] = "https://nyxid.example.test",
-            ["Audit:ActorIdentityHasher:ActiveKeyId"] = "key-1",
-            ["Audit:ActorIdentityHasher:Keys:0:KeyId"] = "key-1",
-            ["Audit:ActorIdentityHasher:Keys:0:KeyBase64"] = AuditIdentityTestKeyBase64,
         };
         if (overrides != null)
         {

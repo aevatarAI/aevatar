@@ -11,11 +11,6 @@ public static class HumanInteractionMessageMapper
     /// <summary>
     /// Maps one typed human interaction notification request into composer-ready channel message content.
     /// </summary>
-    /// <param name="request">The workflow-owned interaction notification request.</param>
-    /// <returns>A channel-neutral message intent that platform composers can render.</returns>
-    /// <exception cref="InvalidOperationException">
-    /// Thrown when the request does not contain exactly one typed notification payload.
-    /// </exception>
     public static MessageContent ToMessageContent(ChannelInteractionNotificationRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -23,9 +18,7 @@ public static class HumanInteractionMessageMapper
         ValidatePayload(request);
 
         if (request.InteractionSpec is { } interactionSpec)
-        {
             return InteractionSpecMapper.ToMessageContent(interactionSpec, BuildWorkflowResumePayload(request));
-        }
 
         return ToTemplateFallbackMessage(request.InteractionTemplateSpec!);
     }
