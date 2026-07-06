@@ -55,11 +55,7 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
-    // 06-20-observatory-admin-cross-scope (G3/G8): registers the NyxID-backed platform-admin authorizer + user
-    //   directory behind their provider-agnostic interfaces, plus the per-token decision cache. Requires
-    //   AddNyxIdTools to have registered NyxIdApiClient (the typed client backing INyxIdUserReadApi).
-    //   Authorizer/directory are scoped (per-request); the IMemoryCache that backs the decision cache is the
-    //   singleton, so positive decisions are shared across requests within the TTL.
+    // Registers the NyxID-backed current-user resolver behind the aevatar admin authorization seam.
     public static IServiceCollection AddNyxIdPlatformAuthorization(
         this IServiceCollection services,
         IConfiguration? configuration = null,

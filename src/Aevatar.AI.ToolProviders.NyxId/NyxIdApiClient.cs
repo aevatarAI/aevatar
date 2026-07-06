@@ -97,7 +97,7 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     public Task<string> GetCurrentUserAsync(string token, CancellationToken ct) =>
         GetAsync(token, "/api/v1/users/me", ct);
 
-    // 06-20-observatory-admin-cross-scope: platform admin/operator-gated user search (email -> user id).
+    // Admin-gated user search (email -> user id).
     // Existing NyxID route; case-insensitive regex match on email. Returns {"users":[{id,email,role,...}],...}.
     public Task<string> SearchAdminUsersAsync(string token, string email, CancellationToken ct) =>
         GetAsync(token, $"/api/v1/admin/users?search={Uri.EscapeDataString(email)}", ct);
