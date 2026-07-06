@@ -148,14 +148,6 @@ public static class IdentityServiceCollectionExtensions
                 AevatarOAuthClientGAgent.WellKnownId,
                 "channel-identity.oauth-rebuild"));
 
-        // ─── Operator admin surface (rebuild endpoint, issue #549) ───
-        // Bound from configuration when present; absence keeps the rebuild
-        // endpoint fail-secure (503 with "rebuild not configured"). Production
-        // sets the token via env var ChannelIdentity__Admin__RebuildToken.
-        var adminOptions = services.AddOptions<AevatarOAuthAdminOptions>();
-        if (configuration is not null)
-            adminOptions.Bind(configuration.GetSection(AevatarOAuthAdminOptions.SectionName));
-
         // ─── Broker (self-bootstrapping, no appsettings dependency) ───
         // Register broker as a *singleton* and inject IHttpClientFactory so
         // each call resolves a fresh HttpClient backed by the factory's

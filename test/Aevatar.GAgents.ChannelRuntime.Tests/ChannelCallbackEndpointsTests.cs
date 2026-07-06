@@ -268,7 +268,12 @@ public sealed class ChannelCallbackEndpointsTests
     {
         var authorizer = Substitute.For<IPlatformAdminAuthorizer>();
         authorizer.ResolveCallerAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new PlatformCaller(elevated, elevated ? "admin" : string.Empty, "e@x", "u")));
+            .Returns(Task.FromResult(new PlatformCaller(
+                elevated,
+                elevated ? "admin" : string.Empty,
+                "e@x",
+                "u",
+                elevated ? PlatformAdminGrantSources.NyxIdPlatformRole : string.Empty)));
         return authorizer;
     }
 
@@ -374,7 +379,7 @@ public sealed class ChannelCallbackEndpointsTests
     [Fact]
     public async Task HandleGetStatusAsync_CrossAccount_Admin_ReturnsDegradedObservation()
     {
-        // L1: a platform admin is allowed the cross-account view (mirrors the
+        // L1: an admin is allowed the cross-account view (mirrors the
         // list all-view) and still only gets aevatar's own relay-activity
         // observation, never the foreign owner's NyxID live status.
         var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();

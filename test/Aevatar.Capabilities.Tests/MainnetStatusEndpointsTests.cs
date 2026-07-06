@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using Aevatar.BackendConsole.Hosting;
 using Aevatar.GAgents.StatusDashboard;
 using Aevatar.Mainnet.Host.Api.Status;
 using FluentAssertions;
@@ -144,6 +145,7 @@ public sealed class MainnetStatusEndpointsTests
         });
         builder.WebHost.UseTestServer();
         builder.Services.AddSingleton<IHealthStatusQueryPort>(new InMemoryStatusQueryPort(documents));
+        builder.Services.AddBackendConsoleStaticAssets(builder.Configuration);
 
         var app = builder.Build();
         app.MapStatusEndpoints();
