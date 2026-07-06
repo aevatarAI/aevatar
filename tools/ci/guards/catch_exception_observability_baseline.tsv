@@ -50,12 +50,6 @@ src/Aevatar.Studio.Infrastructure/Storage/ChronoStorageMasterKeyResolver.cs	102	
 src/Aevatar.Studio.Infrastructure/Storage/ChronoStorageMasterKeyResolver.cs	140	empty broad catch block
 src/Aevatar.Studio.Infrastructure/Storage/ChronoStorageMasterKeyResolver.cs	156	broad catch returns null without visible failure signal
 src/Aevatar.Studio.Infrastructure/Storage/ChronoStorageMasterKeyResolver.cs	174	broad catch returns null without visible failure signal
-src/Aevatar.Studio.Infrastructure/Storage/FileAevatarSettingsStore.cs	323	empty broad catch block
-src/Aevatar.Studio.Infrastructure/Storage/FileAevatarSettingsStore.cs	341	empty broad catch block
-src/Aevatar.Studio.Infrastructure/Storage/FileAevatarSettingsStore.cs	394	empty broad catch block
-src/Aevatar.Studio.Infrastructure/Storage/FileAevatarSettingsStore.cs	410	broad catch returns null without visible failure signal
-src/Aevatar.Studio.Infrastructure/Storage/FileAevatarSettingsStore.cs	428	broad catch returns null without visible failure signal
-src/Aevatar.Studio.Infrastructure/Storage/FileAevatarSettingsStore.cs	452	broad catch returns null without visible failure signal
 src/platform/Aevatar.GAgentService.Application/ScopeGAgents/ScopeGAgentActorTypeResolver.cs	27	empty broad catch block
 src/platform/Aevatar.GAgentService.Hosting/Endpoints/ScopeGAgentEndpoints.cs	186	empty broad catch block
 src/platform/Aevatar.GAgentService.Hosting/Endpoints/ScopeGAgentEndpoints.cs	213	empty broad catch block

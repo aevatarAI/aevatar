@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider;
@@ -32,6 +33,8 @@ public sealed class MainnetDistributedHostBuilderExtensionsTests
         using var consumerGroup = new EnvironmentVariableScope("AEVATAR_ActorRuntime__KafkaConsumerGroup", "mainnet-kafka-provider-group");
         using var queueCount = new EnvironmentVariableScope("AEVATAR_Orleans__QueueCount", "6");
         using var queueCacheSize = new EnvironmentVariableScope("AEVATAR_Orleans__QueueCacheSize", "512");
+        using var keyringFile = TemporaryKeyringFile.Create();
+        using var keyringPath = new EnvironmentVariableScope("AEVATAR_ActorRuntime__SecretStoreKeyringPath", keyringFile.Path);
 
         var builder = CreateBuilder(new Dictionary<string, string?>
         {
@@ -102,6 +105,8 @@ public sealed class MainnetDistributedHostBuilderExtensionsTests
         using var streamBackend = new EnvironmentVariableScope("AEVATAR_ActorRuntime__OrleansStreamBackend", "KafkaProvider");
         using var persistence = new EnvironmentVariableScope("AEVATAR_ActorRuntime__OrleansPersistenceBackend", "Garnet");
         using var garnetConn = new EnvironmentVariableScope("AEVATAR_ActorRuntime__OrleansGarnetConnectionString", "127.0.0.1:6379");
+        using var keyringFile = TemporaryKeyringFile.Create();
+        using var keyringPath = new EnvironmentVariableScope("AEVATAR_ActorRuntime__SecretStoreKeyringPath", keyringFile.Path);
 
         var builder = CreateBuilder(new Dictionary<string, string?>
         {
@@ -176,5 +181,44 @@ public sealed class MainnetDistributedHostBuilderExtensionsTests
         }
 
         public void Dispose() => Environment.SetEnvironmentVariable(_name, _previous);
+    }
+
+    private sealed class TemporaryKeyringFile : IDisposable
+    {
+        private TemporaryKeyringFile(string path)
+        {
+            Path = path;
+        }
+
+        public string Path { get; }
+
+        public static TemporaryKeyringFile Create()
+        {
+            var path = System.IO.Path.Combine(
+                System.IO.Path.GetTempPath(),
+                $"aevatar-secret-keyring-{Guid.NewGuid():N}.json");
+            File.WriteAllText(
+                path,
+                """
+                {
+                  "activeKeyId": "key-1",
+                  "keys": [
+                    {
+                      "keyId": "key-1",
+                      "keyBase64": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+                    }
+                  ],
+                  "fingerprintKeyBase64": "ZmVkY2JhOTg3NjU0MzIxMGZlZGNiYTk4NzY1NDMyMTA="
+                }
+                """,
+                Encoding.UTF8);
+            return new TemporaryKeyringFile(path);
+        }
+
+        public void Dispose()
+        {
+            if (File.Exists(Path))
+                File.Delete(Path);
+        }
     }
 }

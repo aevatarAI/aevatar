@@ -1,6 +1,8 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core.EventSourcing;
+using Google.Protobuf.WellKnownTypes;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -10,13 +12,15 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
 public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
 {
+    private InMemoryEventStore _store = null!;
     private UserAgentCatalogGAgent _agent = null!;
     private ServiceProvider _serviceProvider = null!;
 
     public async Task InitializeAsync()
     {
         var services = new ServiceCollection();
-        services.AddSingleton<IEventStore, InMemoryEventStore>();
+        _store = new InMemoryEventStore();
+        services.AddSingleton<IEventStore>(_store);
         services.AddSingleton<EventSourcingRuntimeOptions>();
         services.AddTransient(
             typeof(IEventSourcingBehaviorFactory<>),
@@ -38,6 +42,64 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
     {
         _serviceProvider.Dispose();
         return Task.CompletedTask;
+    }
+
+    [Fact]
+    public async Task HandleUpsertAsync_WithRawNyxApiKeyOnly_DoesNotPersistRawKey()
+    {
+        await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
+        {
+            AgentId = "agent-raw",
+            ConversationId = "oc_chat_raw",
+            NyxApiKey = "raw-command-secret",
+        });
+
+        var entry = _agent.State.Entries.Should().ContainSingle().Subject;
+#pragma warning disable CS0612 // asserting deprecated field stays empty on new writes
+        entry.NyxApiKey.Should().BeEmpty();
+#pragma warning restore CS0612
+        entry.NyxApiKeyReference.Should().BeNull();
+
+        var persisted = await _store.GetEventsAsync(_agent.Id);
+        var committed = persisted.Should().ContainSingle().Subject.EventData.Unpack<UserAgentCatalogUpsertedEvent>();
+#pragma warning disable CS0612 // asserting deprecated field stays empty on new writes
+        committed.Entry.NyxApiKey.Should().BeEmpty();
+#pragma warning restore CS0612
+        committed.Entry.NyxApiKeyReference.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleUpsertAsync_WithReferenceAndRawNyxApiKey_PersistsReferenceOnly()
+    {
+        var reference = new SecretReference
+        {
+            Ref = "sec-scheduled-1",
+            Purpose = CredentialSecretPurposes.ScheduledNyxApiKey,
+            OwnerScopeKey = "scope-key-1",
+        };
+
+        await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
+        {
+            AgentId = "agent-reference",
+            ConversationId = "oc_chat_reference",
+            NyxApiKey = "raw-command-secret",
+            NyxApiKeyReference = reference,
+        });
+
+        var entry = _agent.State.Entries.Should().ContainSingle().Subject;
+#pragma warning disable CS0612 // asserting deprecated field stays empty on new writes
+        entry.NyxApiKey.Should().BeEmpty();
+#pragma warning restore CS0612
+        entry.NyxApiKeyReference.Should().NotBeNull();
+        entry.NyxApiKeyReference!.Ref.Should().Be("sec-scheduled-1");
+
+        var persisted = await _store.GetEventsAsync(_agent.Id);
+        var committed = persisted.Should().ContainSingle().Subject.EventData.Unpack<UserAgentCatalogUpsertedEvent>();
+#pragma warning disable CS0612 // asserting deprecated field stays empty on new writes
+        committed.Entry.NyxApiKey.Should().BeEmpty();
+#pragma warning restore CS0612
+        committed.Entry.NyxApiKeyReference.Should().NotBeNull();
+        committed.Entry.NyxApiKeyReference!.Ref.Should().Be("sec-scheduled-1");
     }
 
     [Fact]

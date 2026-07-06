@@ -6,6 +6,7 @@ option csharp_namespace = "Aevatar.GAgents.Scheduled";
 
 import "google/protobuf/timestamp.proto";
 import "agent_messages.proto";
+import "Credentials/credential_secret_references.proto";
 import "skill_runner.proto";
 
 // Refactor (iter91/cluster-091-owner-scope-foundation):
@@ -71,6 +72,7 @@ message UserAgentCatalogEntry {
   // This is distinct from owner_scope.platform, which identifies the caller surface.
   string target_platform = 28;
   ScheduledAgentSharingGrant sharing_grant = 29;
+  aevatar.credentials.SecretReference nyx_api_key_reference = 30;
 }
 
 message UserAgentCatalogState {
@@ -114,6 +116,7 @@ message UserAgentCatalogUpsertCommand {
   // Delivery target platform selected by the creator.
   // This is distinct from owner_scope.platform, which identifies the caller surface.
   string target_platform = 20;
+  aevatar.credentials.SecretReference nyx_api_key_reference = 21;
 }
 
 message UserAgentCatalogTombstoneCommand {
@@ -211,9 +214,11 @@ message UserAgentCatalogDocument {
 // Runtime-only Nyx credential read model for delivery-target execution paths.
 message UserAgentCatalogNyxCredentialDocument {
   string id = 1;
-  string nyx_api_key = 2;
+  string nyx_api_key = 2 [deprecated = true];
   int64 state_version = 3;
   string last_event_id = 4;
   google.protobuf.Timestamp updated_at_utc = 5;
   string actor_id = 6;
+  aevatar.credentials.SecretReference nyx_api_key_reference = 7;
+  string api_key_id = 8;
 }

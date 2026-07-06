@@ -22,10 +22,17 @@ public sealed class FileAevatarSettingsStore : IAevatarSettingsStore
     private const string KeychainAccount = "aevatar-masterkey";
 
     private readonly string _filePath;
+    private readonly LocalSecretProtectionOptions _protectionOptions;
 
     public FileAevatarSettingsStore()
+        : this(ResolveSecretsFilePath(), LocalSecretProtectionOptions.FromEnvironment())
     {
-        _filePath = ResolveSecretsFilePath();
+    }
+
+    public FileAevatarSettingsStore(string filePath, LocalSecretProtectionOptions protectionOptions)
+    {
+        _filePath = filePath;
+        _protectionOptions = protectionOptions;
     }
 
     public Task<StoredAevatarSettings> GetAsync(CancellationToken cancellationToken = default)
@@ -192,7 +199,7 @@ public sealed class FileAevatarSettingsStore : IAevatarSettingsStore
             return encrypted;
         }
 
-        return TryLoadPlaintext(json);
+        return LoadPlaintext(json);
     }
 
     private bool TryLoadEncrypted(string json, out Dictionary<string, string> secrets)
@@ -234,8 +241,10 @@ public sealed class FileAevatarSettingsStore : IAevatarSettingsStore
         }
     }
 
-    private static Dictionary<string, string> TryLoadPlaintext(string json)
+    private Dictionary<string, string> LoadPlaintext(string json)
     {
+        _protectionOptions.ThrowIfPlaintextUnavailable();
+
         try
         {
             return JsonSerializer.Deserialize<Dictionary<string, string>>(json)
@@ -298,6 +307,8 @@ public sealed class FileAevatarSettingsStore : IAevatarSettingsStore
 
     private void SavePlaintext(Dictionary<string, string> secrets)
     {
+        _protectionOptions.ThrowIfPlaintextUnavailable();
+
         EnsureAevatarDirectories();
         var json = JsonSerializer.Serialize(secrets, new JsonSerializerOptions { WriteIndented = true });
         WriteAtomically(json);
@@ -320,8 +331,9 @@ public sealed class FileAevatarSettingsStore : IAevatarSettingsStore
             {
                 File.SetUnixFileMode(tempFile, UnixFileMode.UserRead | UnixFileMode.UserWrite);
             }
-            catch
+            catch (Exception ex)
             {
+                LogWarning("set-unix-file-mode", ex);
             }
         }
 
@@ -338,8 +350,9 @@ public sealed class FileAevatarSettingsStore : IAevatarSettingsStore
                     File.Delete(tempFile);
                 }
             }
-            catch
+            catch (Exception ex)
             {
+                LogWarning("delete-temp-secret-file", ex);
             }
         }
     }
@@ -391,8 +404,9 @@ public sealed class FileAevatarSettingsStore : IAevatarSettingsStore
                 {
                     process.Kill(entireProcessTree: true);
                 }
-                catch
+                catch (Exception ex)
                 {
+                    LogWarning("kill-keychain-process", ex);
                 }
 
                 return null;
@@ -407,8 +421,9 @@ public sealed class FileAevatarSettingsStore : IAevatarSettingsStore
             var bytes = Convert.FromBase64String(b64);
             return bytes.Length == KeyBytes ? bytes : null;
         }
-        catch
+        catch (Exception ex)
         {
+            LogWarning("read-keychain-master-key", ex);
             return null;
         }
     }
@@ -425,8 +440,9 @@ public sealed class FileAevatarSettingsStore : IAevatarSettingsStore
             var bytes = File.ReadAllBytes(path);
             return bytes.Length == KeyBytes ? bytes : null;
         }
-        catch
+        catch (Exception ex)
         {
+            LogWarning("load-file-master-key", ex);
             return null;
         }
     }
@@ -449,10 +465,17 @@ public sealed class FileAevatarSettingsStore : IAevatarSettingsStore
             gcm.Decrypt(nonce, ciphertext, tag, plaintext, Encoding.UTF8.GetBytes(Aad));
             return plaintext;
         }
-        catch
+        catch (Exception ex)
         {
+            LogWarning("decrypt-secret-envelope", ex);
             return null;
         }
+    }
+
+    private static void LogWarning(string operation, Exception exception)
+    {
+        Console.Error.WriteLine(
+            $"Aevatar settings secret store warning: operation={operation}; exceptionType={exception.GetType().Name}");
     }
 
     private static HashSet<string> ExtractProviderNames(IReadOnlyDictionary<string, string> all)

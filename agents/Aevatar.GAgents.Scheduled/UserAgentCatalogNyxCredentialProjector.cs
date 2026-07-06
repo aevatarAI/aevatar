@@ -25,7 +25,8 @@ public sealed class UserAgentCatalogNyxCredentialProjector
     protected override string EntryKey(UserAgentCatalogEntry entry) => entry.AgentId ?? string.Empty;
 
     protected override ProjectionVerdict Evaluate(UserAgentCatalogEntry entry) =>
-        entry.Tombstoned || string.IsNullOrWhiteSpace(entry.NyxApiKey)
+        entry.Tombstoned ||
+        string.IsNullOrWhiteSpace(entry.NyxApiKeyReference?.Ref)
             ? ProjectionVerdict.Tombstone
             : ProjectionVerdict.Project;
 
@@ -37,7 +38,9 @@ public sealed class UserAgentCatalogNyxCredentialProjector
         new()
         {
             Id = entry.AgentId,
-            NyxApiKey = entry.NyxApiKey ?? string.Empty,
+            NyxApiKey = string.Empty,
+            NyxApiKeyReference = entry.NyxApiKeyReference?.Clone(),
+            ApiKeyId = entry.ApiKeyId ?? string.Empty,
             StateVersion = stateEvent.Version,
             LastEventId = stateEvent.EventId ?? string.Empty,
             ActorId = context.RootActorId,

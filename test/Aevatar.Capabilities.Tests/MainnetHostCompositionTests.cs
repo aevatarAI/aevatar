@@ -23,6 +23,8 @@ using Aevatar.Configuration;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Runtime.Hosting.Maintenance;
 using Aevatar.Foundation.VoicePresence;
@@ -104,6 +106,12 @@ public sealed class MainnetHostCompositionTests
         app.Services.GetRequiredService<IProjectionDocumentReader<WorkflowExternalApprovalContinuationDocument, string>>()
             .Should()
             .NotBeNull();
+        app.Services.GetRequiredService<ISecretVault>()
+            .Should()
+            .BeOfType<InMemorySecretVault>();
+        app.Services.GetRequiredService<IRuntimeSecretStore>()
+            .Should()
+            .BeOfType<InMemoryRuntimeSecretStore>();
         var readModelDescriptors = app.Services.GetServices<IProjectionReadModelDescriptor>().ToList();
         readModelDescriptors.Select(static descriptor => descriptor.Name)
             .Should()
