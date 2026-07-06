@@ -577,7 +577,7 @@ public sealed class AuditTrailEndpointsTests
                     new AuditRecord
                     {
                         AuditId = "audit-1",
-                        ScopeId = query.ScopeId!,
+                        ScopeId = query.ScopeId ?? "scope-from-store",
                         AuditActorId = query.AuditActorId ?? "audit_actor:default",
                         IdentityKeyId = "key-1",
                         OperationName = "READ",
