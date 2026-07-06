@@ -69,6 +69,23 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
     }
 
     [Fact]
+    public async Task DeliverAsync_WhenTelegramProxyReturnsOkFalse_ShouldFailDelivery()
+    {
+        var registry = BuildRegistry(BuildTarget("agent-telegram-1", "telegram", "12345"));
+        var handler = new RecordingHandler("""{"ok":false,"error_code":403,"description":"Forbidden: bot was blocked by the user"}""");
+        var port = new NyxIdRelayChannelInteractionNotificationPort(
+            registry,
+            CreateNyxClient(handler),
+            [new TelegramChannelNativeMessageProducer(new TelegramMessageComposer())],
+            NullLogger<NyxIdRelayChannelInteractionNotificationPort>.Instance);
+
+        Func<Task> act = () => port.DeliverAsync(BuildApprovalRequest("agent-telegram-1"), CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*telegram_code=403*Forbidden: bot was blocked by the user*");
+    }
+
+    [Fact]
     public async Task DeliverAsync_WhenTemplateSpecTargetsLark_ShouldSendSafeFallbackCardThroughGenericRelay()
     {
         var registry = BuildRegistry(BuildTarget("agent-lark-template-1", "lark", "oc_chat_1"));

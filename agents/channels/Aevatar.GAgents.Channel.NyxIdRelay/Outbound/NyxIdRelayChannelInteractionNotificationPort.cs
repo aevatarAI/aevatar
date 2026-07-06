@@ -226,6 +226,50 @@ public sealed class NyxIdRelayChannelInteractionNotificationPort : IChannelInter
             throw new InvalidOperationException(
                 $"Telegram interaction notification delivery failed: {NyxApiResponseHelper.ExtractErrorDetail(response)}");
         }
+
+        if (TryGetTelegramError(response, out var detail))
+            throw new InvalidOperationException($"Telegram interaction notification delivery failed: {detail}");
+    }
+
+    private static bool TryGetTelegramError(string? response, out string detail)
+    {
+        detail = string.Empty;
+        if (string.IsNullOrWhiteSpace(response))
+        {
+            detail = "empty_send_response";
+            return true;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return false;
+
+            if (root.TryGetProperty("ok", out var okProperty) && okProperty.ValueKind == JsonValueKind.False)
+            {
+                var errorCode = root.TryGetProperty("error_code", out var errorCodeProperty) &&
+                                errorCodeProperty.ValueKind == JsonValueKind.Number &&
+                                errorCodeProperty.TryGetInt32(out var code)
+                    ? $"telegram_code={code} "
+                    : string.Empty;
+                var description = TryReadString(root, "description") ?? "telegram_ok_false";
+                detail = $"{errorCode}{description}".Trim();
+                return true;
+            }
+
+            var rawBody = TryReadString(root, "body");
+            if (string.IsNullOrWhiteSpace(rawBody))
+                return false;
+
+            return TryGetTelegramError(rawBody, out detail);
+        }
+        catch (JsonException)
+        {
+            detail = "invalid_send_response_json";
+            return true;
+        }
     }
 
     private static LarkSendResult ParseLarkSendResponse(
