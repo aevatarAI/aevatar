@@ -439,7 +439,9 @@ public class AIFeatureBootstrapCoverageTests
         var tempHome = Path.Combine(Path.GetTempPath(), $"ai-feature-reload-{Guid.NewGuid():N}");
         Directory.CreateDirectory(tempHome);
         var previousHome = Environment.GetEnvironmentVariable(AevatarPaths.HomeEnv);
+        var previousAllowPlaintext = Environment.GetEnvironmentVariable(LocalSecretProtectionOptions.AllowPlaintextSecretsEnv);
         Environment.SetEnvironmentVariable(AevatarPaths.HomeEnv, tempHome);
+        Environment.SetEnvironmentVariable(LocalSecretProtectionOptions.AllowPlaintextSecretsEnv, "true");
 
         try
         {
@@ -482,6 +484,7 @@ public class AIFeatureBootstrapCoverageTests
         finally
         {
             Environment.SetEnvironmentVariable(AevatarPaths.HomeEnv, previousHome);
+            Environment.SetEnvironmentVariable(LocalSecretProtectionOptions.AllowPlaintextSecretsEnv, previousAllowPlaintext);
             Directory.Delete(tempHome, recursive: true);
         }
     }

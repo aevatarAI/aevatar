@@ -70,6 +70,9 @@ start_host() {
     Projection__Policies__DenyInMemoryDocumentReadStore=false \
     Projection__Policies__DenyInMemoryGraphFactStore=false \
     Projection__Policies__Environment=Development \
+    Audit__ActorIdentityHasher__ActiveKeyId=main-flow-smoke-key \
+    Audit__ActorIdentityHasher__Keys__0__KeyId=main-flow-smoke-key \
+    Audit__ActorIdentityHasher__Keys__0__Key="main-flow-smoke-audit-hasher-key-0001" \
     dotnet "${APP_DLL}" >"${log_file}" 2>&1
   ) &
 

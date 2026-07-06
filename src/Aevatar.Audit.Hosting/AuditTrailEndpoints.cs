@@ -21,6 +21,12 @@ public static class AuditTrailEndpoints
     private const int DefaultTake = 100;
     private const int MaxTake = 500;
 
+    // Cross-scope wildcard, mirroring the run observatory's AllScopesToken convention. When the
+    // caller passes this value the audit read becomes a platform-admin-only aggregate query across
+    // every scope (the underlying store matches ScopeId == null as "any scope"); any other value is
+    // treated as a literal scope id.
+    private const string AllScopesToken = "__all__";
+
     public static IEndpointRouteBuilder MapAuditTrailEndpoints(this IEndpointRouteBuilder app)
     {
         ArgumentNullException.ThrowIfNull(app);
@@ -60,7 +66,12 @@ public static class AuditTrailEndpoints
         if (!AevatarScopeAccessGuard.TryGetCallerScopeId(http, out var callerScopeId))
             return Results.Unauthorized();
 
-        var targetScope = NormalizeOptional(scope) ?? callerScopeId;
+        var normalizedScope = NormalizeOptional(scope);
+        var isAllScopes = string.Equals(normalizedScope, AllScopesToken, StringComparison.Ordinal);
+        var targetScope = isAllScopes ? AllScopesToken : (normalizedScope ?? callerScopeId);
+        // "__all__" and any literal scope id other than the caller's own are both cross-scope reads
+        // and require platform admin; the difference is only whether the store filters by one scope
+        // or matches ScopeId == null as a wildcard across every scope.
         var isCrossScope = !string.Equals(targetScope, callerScopeId, StringComparison.Ordinal);
         var logger = loggerFactory.CreateLogger(AuditLoggerCategory);
         if (isCrossScope)
@@ -85,7 +96,8 @@ public static class AuditTrailEndpoints
 
         var query = new AuditTrailQuery
         {
-            ScopeId = targetScope,
+            // "__all__" collapses to a null scope so the store matches records from any scope.
+            ScopeId = isAllScopes ? null : targetScope,
             AuditActorId = NormalizeOptional(auditActorId),
             IdentityKeyId = NormalizeOptional(identityKeyId),
             Cursor = NormalizeOptional(cursor),

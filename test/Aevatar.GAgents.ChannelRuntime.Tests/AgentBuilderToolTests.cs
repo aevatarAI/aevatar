@@ -6,6 +6,8 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.GAgentService.Abstractions.Ports;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -1240,7 +1242,7 @@ public sealed class AgentBuilderToolTests
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
         var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
-        var scheduledAgentMapper = new ScheduledAgentCreateRequestMapper();
+        var scheduledAgentMapper = new ScheduledAgentCreateRequestMapper(new InMemorySecretVault());
         var scheduledAgentApiKeyIssuer = new ScheduledAgentApiKeyIssuer(
             nyxClientFactory,
             new ScheduledAgentCreatorOptions());
@@ -1333,7 +1335,7 @@ public sealed class AgentBuilderToolTests
             skillRunnerPort,
             catalogCommandPort,
             callerScopeResolver,
-            new ScheduledAgentCreateRequestMapper(),
+            new ScheduledAgentCreateRequestMapper(new InMemorySecretVault()),
             new ScheduledAgentApiKeyIssuer(nyxClientFactory, new ScheduledAgentCreatorOptions()));
         var tools = await source.DiscoverToolsAsync();
 
@@ -1383,6 +1385,7 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(catalogCommandPort);
         services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory(nyxClient));
         services.AddSingleton(nyxClient);
+        services.AddSingleton<ISecretVault>(new InMemorySecretVault());
         services.AddSingleton(Substitute.For<IUserAgentDeliveryTargetReader>());
         services.AddSingleton<LarkMessageComposer>();
         services.TryAddSingleton<ILogger<FeishuCardNotificationPort>>(NullLogger<FeishuCardNotificationPort>.Instance);

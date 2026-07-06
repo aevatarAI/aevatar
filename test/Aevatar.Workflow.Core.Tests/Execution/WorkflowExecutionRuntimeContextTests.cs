@@ -1,5 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Execution;
@@ -17,7 +19,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
     [Fact]
     public async Task SetRequestMetadata_ShouldNotPromoteConnectorAuthorization_AndGuardPassthrough()
     {
-        var host = new RecordingStateHost();
+        var host = new RecordingStateHost(new InMemoryRuntimeSecretStore());
 
         await WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(
             host,
@@ -68,7 +70,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
     [Fact]
     public async Task SetRequestMetadata_ShouldOnlyClearPassthroughWhenMetadataIsNullEmptyOrInvalid()
     {
-        var host = new RecordingStateHost();
+        var host = new RecordingStateHost(new InMemoryRuntimeSecretStore());
         await WorkflowCallerCredentialRuntimeContextAccess.SetCredentialAsync(
             host,
             new WorkflowCallerCredential { BearerToken = "typed" });
@@ -82,7 +84,10 @@ public sealed class WorkflowExecutionRuntimeContextTests
 
         await WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(host, null);
 
-        host.ExecutionContextState.CallerCredential!.BearerToken.Should().Be("typed");
+        host.ExecutionContextState.CallerCredential!.BearerToken.Should().BeEmpty();
+        host.ExecutionContextState.CallerCredential.RuntimeSecretReference.Should().NotBeNull();
+        host.ExecutionContextState.CallerCredential.RuntimeSecretReference.Purpose
+            .Should().Be(CredentialSecretPurposes.WorkflowCallerBearerToken);
         host.RuntimeContext.RequestPassthroughMetadata.Values.Should().BeEmpty();
 
         await WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(
@@ -92,7 +97,8 @@ public sealed class WorkflowExecutionRuntimeContextTests
                 [" "] = " ",
             });
 
-        host.ExecutionContextState.CallerCredential!.BearerToken.Should().Be("typed");
+        host.ExecutionContextState.CallerCredential!.BearerToken.Should().BeEmpty();
+        host.ExecutionContextState.CallerCredential.RuntimeSecretReference.Should().NotBeNull();
         host.RuntimeContext.RequestPassthroughMetadata.Values.Should().BeEmpty();
     }
 
@@ -161,7 +167,11 @@ public sealed class WorkflowExecutionRuntimeContextTests
             new WorkflowCallerCredential { BearerToken = " secret " });
 
         delta.ClearCallerCredential.Should().BeTrue();
-        delta.CallerCredential!.BearerToken.Should().Be("secret");
+        delta.CallerCredential!.BearerToken.Should().BeEmpty();
+        delta.CallerCredential.RuntimeSecretReference.Should().NotBeNull();
+        delta.CallerCredential.RuntimeSecretReference.Purpose.Should().Be(CredentialSecretPurposes.WorkflowCallerBearerToken);
+        delta.CallerCredential.RuntimeSecretReference.OwnerRunId.Should().Be("run-1");
+        delta.CallerCredential.RuntimeSecretReference.OwnerStepId.Should().Be("workflow.caller");
 
         var emptyDelta = WorkflowRunExecutionContextStateAccess.BuildCallerCredentialDelta(
             new WorkflowCallerCredential { BearerToken = " " });
@@ -176,15 +186,23 @@ public sealed class WorkflowExecutionRuntimeContextTests
     }
 
     [Fact]
-    public async Task WorkflowCallerCredentialRuntimeAccess_ShouldTrimSetAndClearTypedState()
+    public async Task WorkflowCallerCredentialRuntimeAccess_ShouldStoreBearerInRuntimeSecretStore_AndPersistOnlyReference()
     {
-        var host = new RecordingStateHost();
+        var runtimeSecrets = new InMemoryRuntimeSecretStore();
+        var host = new RecordingStateHost(runtimeSecrets);
 
         await WorkflowCallerCredentialRuntimeContextAccess.SetCredentialAsync(
             host,
             new WorkflowCallerCredential { BearerToken = " secret " });
 
-        host.ExecutionContextState.CallerCredential!.BearerToken.Should().Be("secret");
+        host.ExecutionContextState.CallerCredential!.BearerToken.Should().BeEmpty();
+        host.ExecutionContextState.CallerCredential.RuntimeSecretReference.Should().NotBeNull();
+        host.ExecutionContextState.CallerCredential.RuntimeSecretReference.Purpose
+            .Should().Be(CredentialSecretPurposes.WorkflowCallerBearerToken);
+
+        var credential = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(host);
+        credential.Found.Should().BeTrue();
+        credential.Credential.BearerToken.Should().Be("secret");
 
         await WorkflowCallerCredentialRuntimeContextAccess.SetCredentialAsync(
             host,
@@ -217,7 +235,28 @@ public sealed class WorkflowExecutionRuntimeContextTests
     }
 
     [Fact]
-    public void WorkflowCallerCredentialRuntimeAccess_ShouldReadFromTypedStateHost()
+    public async Task WorkflowCallerCredentialRuntimeAccess_ShouldFailClosed_WhenRuntimeReferenceCannotResolve()
+    {
+        var context = new RecordingWorkflowExecutionContext();
+        context.ExecutionContextState.CallerCredential = new WorkflowCallerCredentialState
+        {
+            RuntimeSecretReference = new RuntimeSecretReference
+            {
+                Ref = "missing",
+                Purpose = CredentialSecretPurposes.WorkflowCallerBearerToken,
+                OwnerRunId = "run-1",
+                OwnerStepId = "workflow.caller",
+            },
+        };
+
+        var credential = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(
+            (IWorkflowExecutionContext)context);
+        credential.Found.Should().BeFalse();
+        credential.Credential.BearerToken.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void WorkflowCallerCredentialRuntimeAccess_ShouldReadLegacyPlaintextStateOnlyForExistingState()
     {
         var context = new RecordingWorkflowExecutionContext();
         context.ExecutionContextState.CallerCredential = new WorkflowCallerCredentialState
@@ -308,7 +347,8 @@ public sealed class WorkflowExecutionRuntimeContextTests
     [Fact]
     public async Task SecureInputRuntimeAccess_ShouldStoreRemoveAndClearTypedCapturedValues()
     {
-        var context = new RecordingWorkflowExecutionContext();
+        var runtimeSecrets = new InMemoryRuntimeSecretStore();
+        var context = new RecordingWorkflowExecutionContext(runtimeSecrets);
 
         await SecureInputRuntimeContextAccess.SetCapturedValueAsync(
             context,
@@ -317,18 +357,24 @@ public sealed class WorkflowExecutionRuntimeContextTests
             "secret",
             CancellationToken.None);
 
-        SecureInputRuntimeContextAccess.TryGetCapturedValue(context, "run-1", "api_key", out var value)
-            .Should()
-            .BeTrue();
-        value.Should().Be("secret");
+        var capturedValue = await SecureInputRuntimeContextAccess.TryGetCapturedValueAsync(context, "run-1", "api_key");
+        capturedValue.Found.Should().BeTrue();
+        capturedValue.Value.Should().Be("secret");
         context.SecureInputState.Captured.Should().ContainKey("run-1::api_key");
+        var captured = context.SecureInputState.Captured["run-1::api_key"];
+        captured.Value.Should().BeEmpty();
+        captured.ValueReference.Should().NotBeNull();
+        captured.ValueReference.Purpose.Should().Be(CredentialSecretPurposes.WorkflowSecureInputValue);
+        captured.ValueReference.OwnerRunId.Should().Be("run-1");
+        captured.ValueReference.OwnerStepId.Should().Be("api_key");
 
         (await SecureInputRuntimeContextAccess.RemoveCapturedValueAsync(
             context,
             "run-1",
             "api_key",
             CancellationToken.None)).Should().BeTrue();
-        SecureInputRuntimeContextAccess.TryGetCapturedValue(context, "run-1", "api_key", out _)
+        (await SecureInputRuntimeContextAccess.TryGetCapturedValueAsync(context, "run-1", "api_key"))
+            .Found
             .Should()
             .BeFalse();
 
@@ -340,11 +386,92 @@ public sealed class WorkflowExecutionRuntimeContextTests
         context.SecureInputState.Captured.Should().ContainKey("run-2::api_key");
     }
 
-    private sealed class RecordingStateHost : IWorkflowExecutionStateHost
+    [Fact]
+    public async Task SecureInputRuntimeAccess_ShouldFailClosed_WhenReferenceCannotResolve()
+    {
+        var context = new RecordingWorkflowExecutionContext();
+        var state = new SecureInputModuleState();
+        state.Captured["run-1::api_key"] = new CapturedSecureInputState
+        {
+            RunId = "run-1",
+            VariableName = "api_key",
+            ValueReference = new RuntimeSecretReference
+            {
+                Ref = "missing",
+                Purpose = CredentialSecretPurposes.WorkflowSecureInputValue,
+                OwnerRunId = "run-1",
+                OwnerStepId = "api_key",
+            },
+        };
+        await context.SaveStateAsync(SecureInputStateAccess.ModuleStateKey, state);
+
+        var value = await SecureInputRuntimeContextAccess.TryGetCapturedValueAsync(context, "run-1", "api_key");
+        value.Found.Should().BeFalse();
+        value.Value.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task SecureInputModule_ShouldKeepPendingAndNotPublishCapture_WhenRuntimeSecretStoreFails()
+    {
+        var context = new RecordingWorkflowExecutionContext(new FailingRuntimeSecretStore());
+        var module = new SecureInputModule();
+        var pendingKey = SecureInputStateAccess.BuildPendingKey("run-1", "secure-step");
+        var state = new SecureInputModuleState();
+        state.Pending[pendingKey] = new PendingSecureInputState
+        {
+            StepId = "secure-step",
+            RunId = "run-1",
+            Input = "original-input",
+            OnTimeout = "fail",
+            AllowEmpty = false,
+            VariableName = "api_key",
+            MaskedOutput = "[masked]",
+        };
+        await context.SaveStateAsync(SecureInputStateAccess.ModuleStateKey, state);
+
+        await FluentActions.Awaiting(() => module.HandleAsync(
+                Envelope(new WorkflowResumedEvent
+                {
+                    RunId = "run-1",
+                    StepId = "secure-step",
+                    Approved = true,
+                    UserInput = "secret",
+                }),
+                context,
+                CancellationToken.None))
+            .Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage("runtime secret store unavailable");
+
+        var persisted = context.SecureInputState;
+        persisted.Pending.Should().ContainKey(pendingKey);
+        persisted.Captured.Should().NotContainKey("run-1::api_key");
+        persisted.Captured.Values.Select(x => x.Value).Should().NotContain("secret");
+        context.Published.Select(x => x.Event).OfType<SecureValueCapturedEvent>().Should().BeEmpty();
+        context.Published.Select(x => x.Event).OfType<StepCompletedEvent>().Should().BeEmpty();
+    }
+
+    private static EventEnvelope Envelope(IMessage evt) =>
+        new()
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(evt),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
+        };
+
+    private sealed class RecordingStateHost : IWorkflowExecutionStateHost, IRuntimeSecretStoreAccessor
     {
         private readonly Dictionary<string, Any> _states = new(StringComparer.Ordinal);
 
+        public RecordingStateHost(IRuntimeSecretStore? runtimeSecretStore = null)
+        {
+            RuntimeSecretStore = runtimeSecretStore;
+        }
+
         public string RunId => "run-1";
+
+        public IRuntimeSecretStore? RuntimeSecretStore { get; }
 
         public WorkflowExecutionRuntimeContext RuntimeContext { get; } = new();
 
@@ -437,15 +564,25 @@ public sealed class WorkflowExecutionRuntimeContextTests
     private sealed class RecordingWorkflowExecutionContext :
         ContextWithoutRuntimeAccessor,
         IWorkflowExecutionRuntimeContextAccessor,
-        IWorkflowExecutionStateHost
+        IWorkflowExecutionStateHost,
+        IRuntimeSecretStoreAccessor
     {
         private readonly Dictionary<string, Any> _states = new(StringComparer.Ordinal);
+
+        public RecordingWorkflowExecutionContext(IRuntimeSecretStore? runtimeSecretStore = null)
+        {
+            RuntimeSecretStore = runtimeSecretStore;
+        }
+
+        public IRuntimeSecretStore? RuntimeSecretStore { get; }
 
         public WorkflowExecutionRuntimeContext RuntimeContext { get; } = new();
 
         public WorkflowRunExecutionContextState ExecutionContextState { get; } = new();
 
         public WorkflowRunExecutionContextState ExecutionContextSnapshot => ExecutionContextState.Clone();
+
+        public List<(IMessage Event, TopologyAudience Audience)> Published { get; } = [];
 
         public SecureInputModuleState SecureInputState =>
             _states.TryGetValue(SecureInputStateAccess.ModuleStateKey, out var state) &&
@@ -565,6 +702,49 @@ public sealed class WorkflowExecutionRuntimeContextTests
             ExecutionContextState.CallerCredential = null;
             return Task.CompletedTask;
         }
+
+        public override Task PublishAsync<TEvent>(
+            TEvent evt,
+            TopologyAudience audience = TopologyAudience.Children,
+            CancellationToken ct = default,
+            EventEnvelopePublishOptions? options = null)
+        {
+            ct.ThrowIfCancellationRequested();
+            _ = options;
+            Published.Add((evt, audience));
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class FailingRuntimeSecretStore : IRuntimeSecretStore
+    {
+        public Task<StoreRuntimeSecretResult> PutAsync(StoreRuntimeSecretRequest request, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            _ = request;
+            throw new InvalidOperationException("runtime secret store unavailable");
+        }
+
+        public Task<ResolveRuntimeSecretResult> ResolveAsync(ResolveRuntimeSecretRequest request, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            _ = request;
+            return Task.FromResult(new ResolveRuntimeSecretResult(null, null));
+        }
+
+        public Task<ConsumeRuntimeSecretResult> ConsumeAsync(ConsumeRuntimeSecretRequest request, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            _ = request;
+            return Task.FromResult(new ConsumeRuntimeSecretResult(false));
+        }
+
+        public Task<RevokeRuntimeSecretResult> RevokeAsync(RevokeRuntimeSecretRequest request, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            _ = request;
+            return Task.FromResult(new RevokeRuntimeSecretResult(false));
+        }
     }
 
     private static void ApplyDelta(
@@ -592,6 +772,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
             state.CallerCredential = new WorkflowCallerCredentialState
             {
                 BearerToken = delta.CallerCredential.BearerToken,
+                RuntimeSecretReference = delta.CallerCredential.RuntimeSecretReference?.Clone(),
             };
         }
     }
@@ -632,7 +813,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
 
         public Task CancelDurableCallbackAsync(RuntimeCallbackLease lease, CancellationToken ct = default) => Task.CompletedTask;
 
-        public Task PublishAsync<TEvent>(
+        public virtual Task PublishAsync<TEvent>(
             TEvent evt,
             TopologyAudience audience = TopologyAudience.Children,
             CancellationToken ct = default,

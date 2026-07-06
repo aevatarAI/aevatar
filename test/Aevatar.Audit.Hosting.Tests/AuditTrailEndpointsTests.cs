@@ -194,6 +194,49 @@ public sealed class AuditTrailEndpointsTests
     }
 
     [Fact]
+    public async Task QueryAuditTrail_WhenAllScopesAndAdmin_FiltersByNullScope()
+    {
+        var queryPort = new RecordingAuditTrailQueryPort();
+        var authorizer = new FakeAuthorizer(elevated: true);
+        var http = BuildHttpContext(CallerScope, bearer: "token", queryPort, authorizer);
+
+        var result = await AuditTrailEndpoints.QueryAuditTrail(
+            http,
+            BuildEndpointDependencies(queryPort, authorizer: authorizer),
+            NullLoggerFactory.Instance,
+            scope: "__all__",
+            take: 10);
+        var status = await ExecuteAsync(result, http);
+
+        status.Should().Be(StatusCodes.Status200OK);
+        // The store matches ScopeId == null as "any scope"; the wildcard must not leak the literal
+        // "__all__" token into the query.
+        var query = queryPort.Queries.Should().ContainSingle().Which;
+        query.ScopeId.Should().BeNull();
+        query.Take.Should().Be(10);
+        authorizer.Calls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task QueryAuditTrail_WhenAllScopesAndNonAdmin_DeniesBeforeQuery()
+    {
+        var queryPort = new RecordingAuditTrailQueryPort();
+        var authorizer = new FakeAuthorizer(elevated: false);
+        var http = BuildHttpContext(CallerScope, bearer: "token", queryPort, authorizer);
+
+        var result = await AuditTrailEndpoints.QueryAuditTrail(
+            http,
+            BuildEndpointDependencies(queryPort, authorizer: authorizer),
+            NullLoggerFactory.Instance,
+            scope: "__all__");
+        var status = await ExecuteAsync(result, http);
+
+        status.Should().Be(StatusCodes.Status403Forbidden);
+        queryPort.Queries.Should().BeEmpty();
+        authorizer.Calls.Should().Be(1);
+    }
+
+    [Fact]
     public async Task QueryAuditTrail_WhenFiltersProvided_PreservesQueryFilters()
     {
         var queryPort = new RecordingAuditTrailQueryPort();
@@ -534,7 +577,7 @@ public sealed class AuditTrailEndpointsTests
                     new AuditRecord
                     {
                         AuditId = "audit-1",
-                        ScopeId = query.ScopeId!,
+                        ScopeId = query.ScopeId ?? "scope-from-store",
                         AuditActorId = query.AuditActorId ?? "audit_actor:default",
                         IdentityKeyId = "key-1",
                         OperationName = "READ",

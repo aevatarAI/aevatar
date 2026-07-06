@@ -1,5 +1,7 @@
 using System.Globalization;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Abstractions.Execution;
@@ -271,9 +273,13 @@ internal sealed record CanceledCallback(
     public long ExpectedGeneration => Lease.Generation;
 }
 
-internal sealed class TestAgent(string id, string? runId = null) : IAgent, IWorkflowExecutionStateHost
+internal sealed class TestAgent(string id, string? runId = null) :
+    IAgent,
+    IWorkflowExecutionStateHost,
+    IRuntimeSecretStoreAccessor
 {
     private readonly Dictionary<string, Any> _executionStates = new(StringComparer.Ordinal);
+    private readonly IRuntimeSecretStore _runtimeSecretStore = new InMemoryRuntimeSecretStore();
 
     public string Id { get; } = id;
 
@@ -284,6 +290,8 @@ internal sealed class TestAgent(string id, string? runId = null) : IAgent, IWork
     public WorkflowRunExecutionContextState ExecutionContextState { get; } = new();
 
     public WorkflowRunExecutionContextState ExecutionContextSnapshot => ExecutionContextState.Clone();
+
+    public IRuntimeSecretStore RuntimeSecretStore => _runtimeSecretStore;
 
     public Task UpdateExecutionContextAsync(WorkflowRunExecutionContextDelta delta, CancellationToken ct = default)
     {
@@ -384,9 +392,13 @@ internal sealed class TestAgent(string id, string? runId = null) : IAgent, IWork
     public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
 }
 
-internal sealed class TestWorkflowRunAgent(string id, string runId) : IAgent, IWorkflowExecutionStateHost
+internal sealed class TestWorkflowRunAgent(string id, string runId) :
+    IAgent,
+    IWorkflowExecutionStateHost,
+    IRuntimeSecretStoreAccessor
 {
     private readonly Dictionary<string, Any> _executionStates = new(StringComparer.Ordinal);
+    private readonly IRuntimeSecretStore _runtimeSecretStore = new InMemoryRuntimeSecretStore();
 
     public string Id { get; } = id;
 
@@ -397,6 +409,8 @@ internal sealed class TestWorkflowRunAgent(string id, string runId) : IAgent, IW
     public WorkflowRunExecutionContextState ExecutionContextState { get; } = new();
 
     public WorkflowRunExecutionContextState ExecutionContextSnapshot => ExecutionContextState.Clone();
+
+    public IRuntimeSecretStore RuntimeSecretStore => _runtimeSecretStore;
 
     public Task UpdateExecutionContextAsync(WorkflowRunExecutionContextDelta delta, CancellationToken ct = default)
     {
@@ -523,6 +537,7 @@ internal static class WorkflowExecutionContextTestState
             state.CallerCredential = new WorkflowCallerCredentialState
             {
                 BearerToken = delta.CallerCredential.BearerToken,
+                RuntimeSecretReference = delta.CallerCredential.RuntimeSecretReference?.Clone(),
             };
         }
     }
