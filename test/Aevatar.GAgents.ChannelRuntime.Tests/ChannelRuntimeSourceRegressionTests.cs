@@ -62,6 +62,40 @@ public sealed class ChannelRuntimeSourceRegressionTests
     }
 
     [Fact]
+    public void Workflow_and_ai_human_interaction_delivery_must_not_depend_on_lark_notification_sender()
+    {
+        var repositoryRoot = GetRepositoryRoot();
+        var forbiddenTokens = new[]
+        {
+            "FeishuCardNotificationPort",
+            "FeishuCardOutboundMessageSender",
+            "LarkMessageComposer",
+            "LarkSendNewMessageRequest",
+            "open-apis/im/v1/messages",
+        };
+        var roots = new[]
+        {
+            Path.Combine(repositoryRoot, "src/workflow"),
+            Path.Combine(repositoryRoot, "src/Aevatar.Foundation.Abstractions/HumanInteraction"),
+        };
+        var hits = roots
+            .SelectMany(root => Directory.EnumerateFiles(root, "*.*", SearchOption.AllDirectories))
+            .Where(static file =>
+                (file.EndsWith(".cs", StringComparison.Ordinal) ||
+                 file.EndsWith(".proto", StringComparison.Ordinal)) &&
+                !file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal) &&
+                !file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Select(file => (File: Path.GetRelativePath(repositoryRoot, file), Source: ReadPolicySurface(file)))
+            .SelectMany(item => forbiddenTokens
+                .Where(token => item.Source.Contains(token, StringComparison.Ordinal))
+                .Select(token => $"{item.File}: {token}"))
+            .ToArray();
+
+        hits.Should().BeEmpty(
+            "workflow/AI human-interaction delivery must depend on channel-neutral notification ports and intents, not Lark sender APIs");
+    }
+
+    [Fact]
     public void Workflow_core_notify_boundary_must_not_reintroduce_channel_or_raw_lark_tokens()
     {
         var repositoryRoot = GetRepositoryRoot();

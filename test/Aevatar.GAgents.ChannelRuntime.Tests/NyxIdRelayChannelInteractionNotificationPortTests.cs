@@ -1,0 +1,178 @@
+using System.Net;
+using System.Text;
+using System.Text.Json;
+using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.Foundation.Abstractions.HumanInteraction;
+using Aevatar.Foundation.Abstractions.Interactions;
+using Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
+using Aevatar.GAgents.Platform.Lark;
+using Aevatar.GAgents.Platform.Telegram;
+using Aevatar.GAgents.Scheduled;
+using FluentAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
+using NSubstitute;
+
+namespace Aevatar.GAgents.ChannelRuntime.Tests;
+
+public sealed class NyxIdRelayChannelInteractionNotificationPortTests
+{
+    [Fact]
+    public async Task DeliverAsync_WhenLarkTarget_ShouldSendComposedInteractiveCardThroughGenericPort()
+    {
+        var registry = BuildRegistry(BuildTarget("agent-lark-1", "lark", "oc_chat_1"));
+        var dispatcher = Substitute.For<ILarkOutboundDispatcher>();
+        dispatcher.SendNewMessageAsync(Arg.Any<LarkSendNewMessageRequest>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                var request = call.Arg<LarkSendNewMessageRequest>();
+                return Task.FromResult(LarkSendNewMessageResult.Sent(
+                    "om_1",
+                    request.PrimaryTarget,
+                    usedFallback: false));
+            });
+        var port = new NyxIdRelayChannelInteractionNotificationPort(
+            registry,
+            CreateNyxClient(new RecordingHandler("""{"ok":true}""")),
+            [new LarkChannelNativeMessageProducer(new LarkMessageComposer())],
+            NullLogger<NyxIdRelayChannelInteractionNotificationPort>.Instance,
+            dispatcher);
+
+        await port.DeliverAsync(BuildApprovalRequest("agent-lark-1"), CancellationToken.None);
+
+        await dispatcher.Received(1).SendNewMessageAsync(
+            Arg.Is<LarkSendNewMessageRequest>(request =>
+                request.NyxApiKey == "nyx-api-key-1" &&
+                request.NyxProviderSlug == "api-lark-bot" &&
+                request.MessageType == "interactive" &&
+                request.PrimaryTarget.ReceiveId == "oc_chat_1" &&
+                request.PrimaryTarget.ReceiveIdType == "chat_id" &&
+                request.ContentJson.Contains("\"schema\":\"2.0\"", StringComparison.Ordinal) &&
+                request.ContentJson.Contains("\"actor_id\":\"workflow-actor-1\"", StringComparison.Ordinal) &&
+                request.ContentJson.Contains("\"approved\":true", StringComparison.Ordinal)),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task DeliverAsync_WhenTelegramTarget_ShouldSendTextAndReplyMarkupThroughSameGenericPort()
+    {
+        var registry = BuildRegistry(BuildTarget("agent-telegram-1", "telegram", "12345"));
+        var handler = new RecordingHandler("""{"ok":true,"result":{"message_id":7}}""");
+        var port = new NyxIdRelayChannelInteractionNotificationPort(
+            registry,
+            CreateNyxClient(handler),
+            [new TelegramChannelNativeMessageProducer(new TelegramMessageComposer())],
+            NullLogger<NyxIdRelayChannelInteractionNotificationPort>.Instance);
+
+        await port.DeliverAsync(BuildApprovalRequest("agent-telegram-1"), CancellationToken.None);
+
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.RequestUri!.ToString()
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-telegram-bot/sendMessage");
+        using var body = JsonDocument.Parse(handler.LastBody!);
+        body.RootElement.GetProperty("chat_id").GetString().Should().Be("12345");
+        body.RootElement.GetProperty("parse_mode").GetString().Should().Be("Markdown");
+        body.RootElement.GetProperty("text").GetString().Should().Contain("Approval required");
+        body.RootElement.GetProperty("text").GetString().Should().Contain("Approve");
+        body.RootElement.GetProperty("text").GetString().Should().Contain("Reject");
+        body.RootElement.TryGetProperty("reply_markup", out _).Should().BeFalse(
+            "Telegram cannot safely fit typed workflow resume identity in callback data, so approval delivery degrades to text");
+    }
+
+    [Fact]
+    public async Task DeliverAsync_WhenNoProducerRegistered_ShouldReturnExplicitUnsupportedResult()
+    {
+        var registry = BuildRegistry(BuildTarget("agent-discord-1", "discord", "channel-1"));
+        var port = new NyxIdRelayChannelInteractionNotificationPort(
+            registry,
+            CreateNyxClient(new RecordingHandler("""{"ok":true}""")),
+            [],
+            NullLogger<NyxIdRelayChannelInteractionNotificationPort>.Instance);
+
+        Func<Task> act = () => port.DeliverAsync(BuildApprovalRequest("agent-discord-1"), CancellationToken.None);
+
+        await act.Should().ThrowAsync<NotSupportedException>()
+            .WithMessage("*No channel message producer is registered for platform: discord*");
+    }
+
+    private static ChannelInteractionNotificationRequest BuildApprovalRequest(string deliveryTargetId) =>
+        new()
+        {
+            ActorId = "workflow-actor-1",
+            RunId = "run-1",
+            StepId = "step-1",
+            DeliveryTargetId = deliveryTargetId,
+            InteractionSpec = new InteractionSpec
+            {
+                Title = "Approval required",
+                Body = "Approve deployment?",
+                Actions =
+                {
+                    new InteractionAction
+                    {
+                        Kind = InteractionActionKind.FormSubmit,
+                        ActionId = "approve",
+                        Label = "Approve",
+                        ApprovalDecision = InteractionApprovalDecision.Approve,
+                    },
+                    new InteractionAction
+                    {
+                        Kind = InteractionActionKind.FormSubmit,
+                        ActionId = "reject",
+                        Label = "Reject",
+                        ApprovalDecision = InteractionApprovalDecision.Reject,
+                    },
+                },
+            },
+        };
+
+    private static IUserAgentDeliveryTargetReader BuildRegistry(UserAgentDeliveryTarget target)
+    {
+        var registry = Substitute.For<IUserAgentDeliveryTargetReader>();
+        registry.GetAsync(target.AgentId, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentDeliveryTarget?>(target));
+        return registry;
+    }
+
+    private static UserAgentDeliveryTarget BuildTarget(
+        string deliveryTargetId,
+        string platform,
+        string conversationId) =>
+        new(
+            AgentId: deliveryTargetId,
+            Platform: platform,
+            ConversationId: conversationId,
+            NyxProviderSlug: platform == "telegram" ? "api-telegram-bot" : "api-lark-bot",
+            NyxApiKey: "nyx-api-key-1",
+            LarkReceiveId: platform == "lark" ? conversationId : string.Empty,
+            LarkReceiveIdType: platform == "lark" ? "chat_id" : string.Empty,
+            LarkReceiveIdFallback: string.Empty,
+            LarkReceiveIdTypeFallback: string.Empty,
+            OutputFormat: SkillRunnerOutputFormat.Auto,
+            TemplateName: string.Empty,
+            AgentType: string.Empty);
+
+    private static NyxIdApiClient CreateNyxClient(HttpMessageHandler handler) =>
+        new(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+    private sealed class RecordingHandler(string responseBody) : HttpMessageHandler
+    {
+        public HttpRequestMessage? LastRequest { get; private set; }
+        public string? LastBody { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            LastRequest = request;
+            LastBody = request.Content is null
+                ? null
+                : await request.Content.ReadAsStringAsync(cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(responseBody, Encoding.UTF8, "application/json"),
+            };
+        }
+    }
+}

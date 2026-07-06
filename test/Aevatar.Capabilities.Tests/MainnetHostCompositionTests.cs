@@ -33,6 +33,7 @@ using Aevatar.Foundation.VoicePresence.Hosting;
 using Aevatar.Foundation.VoicePresence.Transport;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgents.Authoring.Lark;
+using Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
 using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
@@ -183,7 +184,7 @@ public sealed class MainnetHostCompositionTests
             .BeOfType<SkillBackedHumanInteractionPort>();
         app.Services.GetRequiredService<IChannelInteractionNotificationPort>()
             .Should()
-            .BeOfType<FeishuCardNotificationPort>();
+            .BeOfType<NyxIdRelayChannelInteractionNotificationPort>();
         // Yield capability follows the actor, never the container (#2004): a DI-global
         // yielding handler hands "I will resume you" to surfaces with no pending-approval
         // continuation, stranding dead-letter approvals. RoleGAgent wires its own handler;

@@ -112,9 +112,9 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
                 AppendParagraph(builder, $"{field.Title}: {field.Text}");
         }
 
-        // Render available action labels as a bullet list so the user can still see what
-        // the agent intended to offer if the inline keyboard is unavailable downstream.
-        var buttonActions = GetInlineKeyboardActions(intent)
+        // Render action labels as a bullet list so the user can still see what the agent
+        // intended to offer when Telegram cannot safely express the action as callback data.
+        var visibleActions = GetVisibleActions(intent)
             .Select(static action =>
             {
                 var label = action.Label!.Trim();
@@ -123,11 +123,11 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
                     : $"• {label}";
             })
             .ToArray();
-        if (buttonActions.Length > 0)
+        if (visibleActions.Length > 0)
         {
             if (builder.Length > 0)
                 builder.AppendLine().AppendLine();
-            builder.Append(string.Join("\n", buttonActions));
+            builder.Append(string.Join("\n", visibleActions));
         }
 
         // NyxID's Telegram relay sends every reply with parse_mode="Markdown"
@@ -158,6 +158,11 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
                 action.Kind == ActionElementKind.Link
                     ? IsValidTelegramUrl(action.Value)
                     : TryBuildCallbackData(action, out _))
+            .ToArray();
+
+    private static ActionElement[] GetVisibleActions(MessageContent intent) =>
+        intent.Actions
+            .Where(static action => !string.IsNullOrWhiteSpace(action.Label))
             .ToArray();
 
     private static Dictionary<string, string> BuildInlineKeyboardButton(ActionElement action)
