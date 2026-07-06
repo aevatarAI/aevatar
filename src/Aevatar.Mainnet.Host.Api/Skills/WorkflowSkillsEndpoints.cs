@@ -58,10 +58,13 @@ internal static class WorkflowSkillsEndpoints
         return app;
     }
 
-    internal static IResult GetSkillsPage(HttpContext http)
+    internal static IResult GetSkillsPage(
+        HttpContext http,
+        [FromServices] IBackendConsoleAssetService assets)
     {
         ArgumentNullException.ThrowIfNull(http);
-        return http.ServeBackendConsoleAsset(PageAsset);
+        ArgumentNullException.ThrowIfNull(assets);
+        return assets.Serve(PageAsset);
     }
 
     internal static async Task<IResult> ListSkills(

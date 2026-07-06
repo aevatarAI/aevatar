@@ -74,6 +74,42 @@ public sealed class BackendConsoleAssetServiceTests
     }
 
     [Fact]
+    public void Render_ShouldUseNyxAndAuthFallbacksWhenBackendConsoleFieldsAreBlank()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Aevatar:BackendConsole:OidcAuthority"] = "",
+                ["Aevatar:BackendConsole:OidcClientId"] = "client-example",
+                ["Aevatar:BackendConsole:OidcScope"] = "openid profile",
+                ["Aevatar:BackendConsole:NyxApiBaseUrl"] = "",
+                ["Aevatar:BackendConsole:StorageKey"] = "console:test",
+                ["Aevatar:Authentication:Authority"] = "https://auth.example.test",
+                ["Aevatar:NyxId:Authority"] = "https://nyx.example.test",
+                ["Aevatar:NyxId:ApiBaseUrl"] = "https://nyx-api.example.test",
+            })
+            .Build();
+        services.AddBackendConsoleStaticAssets(configuration);
+
+        var assets = services.BuildServiceProvider().GetRequiredService<IBackendConsoleAssetService>();
+
+        var html = assets.Render(new BackendConsoleAsset(
+            "fixture",
+            typeof(BackendConsoleAssetServiceTests).Assembly,
+            "BackendConsoleAssetServiceTests.fixture.html",
+            "text/html",
+            InjectHostConfiguration: true));
+
+        html.Should().Contain("\"authority\":\"https://auth.example.test\"");
+        html.Should().Contain("\"clientId\":\"client-example\"");
+        html.Should().Contain("\"scope\":\"openid profile\"");
+        html.Should().Contain("\"nyxidApi\":\"https://nyx-api.example.test\"");
+        html.Should().Contain("\"storageKey\":\"console:test\"");
+        html.Should().NotContain("__BACKEND_CONSOLE_CONFIG__");
+    }
+
+    [Fact]
     public void Render_ShouldEncodeInjectedConfigForScriptContext()
     {
         var services = new ServiceCollection();

@@ -19,10 +19,11 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
             RequestServices = BuildProvider(),
         };
         http.Response.Body = new MemoryStream();
+        var assets = http.RequestServices.GetRequiredService<IBackendConsoleAssetService>();
 
         var result = endpoint == "observatory"
-            ? WorkflowRunObservatoryEndpoints.GetObservatoryPage(http)
-            : WorkflowStudioEndpoints.GetStudioPage(http);
+            ? WorkflowRunObservatoryEndpoints.GetObservatoryPage(http, assets)
+            : WorkflowStudioEndpoints.GetStudioPage(http, assets);
 
         await result.ExecuteAsync(http);
 

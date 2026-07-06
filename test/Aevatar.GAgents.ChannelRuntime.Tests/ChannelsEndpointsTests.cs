@@ -98,7 +98,8 @@ public sealed class ChannelsEndpointsTests
         };
         http.Response.Body = new MemoryStream();
 
-        var result = ChannelsEndpoints.GetChannelsPage(http);
+        var assets = http.RequestServices.GetRequiredService<IBackendConsoleAssetService>();
+        var result = ChannelsEndpoints.GetChannelsPage(http, assets);
         await result.ExecuteAsync(http);
 
         http.Response.ContentType.Should().Be("text/html; charset=utf-8");

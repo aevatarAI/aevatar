@@ -1,6 +1,7 @@
 using Aevatar.BackendConsole.Hosting;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 
 namespace Aevatar.GAgents.Channel.NyxIdRelay;
@@ -36,9 +37,12 @@ public static class ChannelsEndpoints
         return app;
     }
 
-    internal static IResult GetChannelsPage(HttpContext http)
+    internal static IResult GetChannelsPage(
+        HttpContext http,
+        [FromServices] IBackendConsoleAssetService assets)
     {
         ArgumentNullException.ThrowIfNull(http);
-        return http.ServeBackendConsoleAsset(PageAsset);
+        ArgumentNullException.ThrowIfNull(assets);
+        return assets.Serve(PageAsset);
     }
 }

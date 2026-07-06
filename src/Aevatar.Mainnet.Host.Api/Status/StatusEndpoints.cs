@@ -54,10 +54,13 @@ public static class StatusEndpoints
         return app;
     }
 
-    internal static IResult GetStatusHtml(HttpContext http)
+    internal static IResult GetStatusHtml(
+        HttpContext http,
+        [FromServices] IBackendConsoleAssetService assets)
     {
         ArgumentNullException.ThrowIfNull(http);
-        return http.ServeBackendConsoleAsset(PageAsset);
+        ArgumentNullException.ThrowIfNull(assets);
+        return assets.Serve(PageAsset);
     }
 
     private sealed record StatusResponse(

@@ -1,6 +1,7 @@
 using Aevatar.BackendConsole.Hosting;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
@@ -52,9 +53,12 @@ public static class WorkflowStudioEndpoints
         return app;
     }
 
-    internal static IResult GetStudioPage(HttpContext http)
+    internal static IResult GetStudioPage(
+        HttpContext http,
+        [FromServices] IBackendConsoleAssetService assets)
     {
         ArgumentNullException.ThrowIfNull(http);
-        return http.ServeBackendConsoleAsset(PageAsset);
+        ArgumentNullException.ThrowIfNull(assets);
+        return assets.Serve(PageAsset);
     }
 }

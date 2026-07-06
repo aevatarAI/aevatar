@@ -113,10 +113,13 @@ public static class WorkflowRunObservatoryEndpoints
         return app;
     }
 
-    internal static IResult GetObservatoryPage(HttpContext http)
+    internal static IResult GetObservatoryPage(
+        HttpContext http,
+        [FromServices] IBackendConsoleAssetService assets)
     {
         ArgumentNullException.ThrowIfNull(http);
-        return http.ServeBackendConsoleAsset(PageAsset);
+        ArgumentNullException.ThrowIfNull(assets);
+        return assets.Serve(PageAsset);
     }
 
     internal static async Task<IResult> GetMe(

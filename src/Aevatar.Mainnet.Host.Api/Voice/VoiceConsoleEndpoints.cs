@@ -1,6 +1,7 @@
 using Aevatar.BackendConsole.Hosting;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 
 namespace Aevatar.Mainnet.Host.Api.Voice;
@@ -38,9 +39,12 @@ internal static class VoiceConsoleEndpoints
         return app;
     }
 
-    internal static IResult GetVoiceConsolePage(HttpContext http)
+    internal static IResult GetVoiceConsolePage(
+        HttpContext http,
+        [FromServices] IBackendConsoleAssetService assets)
     {
         ArgumentNullException.ThrowIfNull(http);
-        return http.ServeBackendConsoleAsset(PageAsset);
+        ArgumentNullException.ThrowIfNull(assets);
+        return assets.Serve(PageAsset);
     }
 }
