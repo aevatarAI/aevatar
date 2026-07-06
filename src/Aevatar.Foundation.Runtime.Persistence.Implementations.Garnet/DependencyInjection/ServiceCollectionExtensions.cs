@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using StackExchange.Redis;
@@ -31,6 +32,27 @@ public static class ServiceCollectionExtensions
         services.Replace(ServiceDescriptor.Singleton<IEventStore, GarnetEventStore>());
         services.Replace(ServiceDescriptor.Singleton<IEventStoreMaintenance>(sp =>
             (IEventStoreMaintenance)sp.GetRequiredService<IEventStore>()));
+        return services;
+    }
+
+    public static IServiceCollection AddGarnetSecretStores(
+        this IServiceCollection services,
+        Action<GarnetSecretStoreOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(configure);
+
+        var options = new GarnetSecretStoreOptions();
+        configure(options);
+        options.Validate();
+
+        services.Replace(ServiceDescriptor.Singleton(options));
+        services.Replace(ServiceDescriptor.Singleton(_ => GarnetSecretStoreKeyring.LoadFromFile(options.KeyringPath)));
+        services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton<IGarnetSecretConnection, GarnetSecretConnectionMultiplexer>();
+        services.TryAddSingleton<IGarnetSecretKeyValueStore, GarnetSecretKeyValueStore>();
+        services.Replace(ServiceDescriptor.Singleton<ISecretVault, GarnetBackedSecretVault>());
+        services.Replace(ServiceDescriptor.Singleton<IRuntimeSecretStore, GarnetRuntimeSecretStore>());
         return services;
     }
 

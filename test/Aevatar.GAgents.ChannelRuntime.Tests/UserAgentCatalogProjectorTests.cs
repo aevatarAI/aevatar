@@ -3,6 +3,7 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgents.Channel.Abstractions;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
@@ -312,7 +313,7 @@ public sealed class UserAgentCatalogProjectorTests
     }
 
     [Fact]
-    public async Task NyxCredentialProjector_WithValidCommittedEvent_UpsertsRuntimeCredentialDocument()
+    public async Task NyxCredentialProjector_WithReferenceCommittedEvent_UpsertsReferenceOnlyCredentialDocument()
     {
         var dispatcher = new RecordingCredentialWriteDispatcher();
         var projector = new UserAgentCatalogNyxCredentialProjector(dispatcher, _clock);
@@ -323,7 +324,13 @@ public sealed class UserAgentCatalogProjectorTests
                 new UserAgentCatalogEntry
                 {
                     AgentId = "agent-1",
-                    NyxApiKey = "nyx-key-1",
+                    ApiKeyId = "key-1",
+                    NyxApiKeyReference = new SecretReference
+                    {
+                        Ref = "sec-1",
+                        Purpose = CredentialSecretPurposes.ScheduledNyxApiKey,
+                        OwnerScopeKey = "scope-1",
+                    },
                 },
             },
         };
@@ -333,11 +340,40 @@ public sealed class UserAgentCatalogProjectorTests
         dispatcher.Upserts.Should().ContainSingle();
         var document = dispatcher.Upserts[0];
         document.Id.Should().Be("agent-1");
-        document.NyxApiKey.Should().Be("nyx-key-1");
+        document.NyxApiKey.Should().BeEmpty();
+        document.ApiKeyId.Should().Be("key-1");
+        document.NyxApiKeyReference.Ref.Should().Be("sec-1");
+        document.NyxApiKeyReference.Purpose.Should().Be(CredentialSecretPurposes.ScheduledNyxApiKey);
         document.StateVersion.Should().Be(4);
         document.LastEventId.Should().Be("evt-agent-cred");
         document.ActorId.Should().Be("agent-registry-store");
         document.UpdatedAt.Should().Be(_clock.UtcNow);
+    }
+
+    [Fact]
+    public async Task NyxCredentialProjector_WithRawOnlyCredential_DeletesDocument()
+    {
+        var dispatcher = new RecordingCredentialWriteDispatcher();
+        var projector = new UserAgentCatalogNyxCredentialProjector(dispatcher, _clock);
+        var state = new UserAgentCatalogState
+        {
+            Entries =
+            {
+                new UserAgentCatalogEntry
+                {
+                    AgentId = "agent-legacy-raw",
+                    ApiKeyId = "key-raw",
+#pragma warning disable CS0612 // legacy raw state must not be projected into new writes
+                    NyxApiKey = "legacy-raw-secret",
+#pragma warning restore CS0612
+                },
+            },
+        };
+
+        await projector.ProjectAsync(_context, BuildCommittedEnvelope("evt-agent-raw-cred", 6, state), CancellationToken.None);
+
+        dispatcher.Upserts.Should().BeEmpty();
+        dispatcher.Deletes.Should().ContainSingle().Which.Should().Be("agent-legacy-raw");
     }
 
     [Fact]

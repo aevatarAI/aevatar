@@ -186,7 +186,7 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
         if (!key.Success)
             return key.ToErrorJson();
 
-        var mapped = _mapper.Map(plan.Request!, key);
+        var mapped = await _mapper.MapAsync(plan.Request!, key, ct);
         if (!mapped.Success)
         {
             await _apiKeyIssuer.TryRevokeAsync(token, key.ApiKeyId ?? string.Empty, ct);

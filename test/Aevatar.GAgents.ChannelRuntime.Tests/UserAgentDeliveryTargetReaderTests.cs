@@ -1,5 +1,7 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
 using NSubstitute;
@@ -14,6 +16,13 @@ public sealed class UserAgentDeliveryTargetReaderTests
     {
         var documentReader = Substitute.For<IProjectionDocumentReader<UserAgentCatalogDocument, string>>();
         var credentialReader = Substitute.For<IProjectionDocumentReader<UserAgentCatalogNyxCredentialDocument, string>>();
+        var secretVault = new InMemorySecretVault();
+        var stored = await secretVault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.ScheduledNyxApiKey,
+            "owner-scope:agent-1",
+            "key-1",
+            "live-key",
+            "test"));
 
         documentReader.GetAsync("agent-1", Arg.Any<CancellationToken>())
             .Returns(new UserAgentCatalogDocument
@@ -21,16 +30,18 @@ public sealed class UserAgentDeliveryTargetReaderTests
                 Id = "agent-1",
                 ConversationId = "oc_chat_1",
                 NyxProviderSlug = "api-lark-bot",
+                ApiKeyId = "key-1",
                 OutputFormat = SkillRunnerOutputFormat.Text,
             });
         credentialReader.GetAsync("agent-1", Arg.Any<CancellationToken>())
             .Returns(new UserAgentCatalogNyxCredentialDocument
             {
                 Id = "agent-1",
-                NyxApiKey = "live-key",
+                ApiKeyId = "key-1",
+                NyxApiKeyReference = stored.Reference,
             });
 
-        var reader = new UserAgentDeliveryTargetReader(documentReader, credentialReader);
+        var reader = new UserAgentDeliveryTargetReader(documentReader, credentialReader, secretVault);
 
         var target = await reader.GetAsync("agent-1", CancellationToken.None);
 
@@ -45,6 +56,13 @@ public sealed class UserAgentDeliveryTargetReaderTests
     {
         var documentReader = Substitute.For<IProjectionDocumentReader<UserAgentCatalogDocument, string>>();
         var credentialReader = Substitute.For<IProjectionDocumentReader<UserAgentCatalogNyxCredentialDocument, string>>();
+        var secretVault = new InMemorySecretVault();
+        var stored = await secretVault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.ScheduledNyxApiKey,
+            "owner-scope:aelf-twitter-approval",
+            "key-approval",
+            "secret-created-key",
+            "test"));
 
         documentReader.GetAsync("aelf-twitter-approval", Arg.Any<CancellationToken>())
             .Returns(new UserAgentCatalogDocument
@@ -57,16 +75,18 @@ public sealed class UserAgentDeliveryTargetReaderTests
                 TargetPlatform = "lark",
                 AgentType = "delivery_target",
                 TemplateName = "explicit_delivery_target",
+                ApiKeyId = "key-approval",
                 OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
             });
         credentialReader.GetAsync("aelf-twitter-approval", Arg.Any<CancellationToken>())
             .Returns(new UserAgentCatalogNyxCredentialDocument
             {
                 Id = "aelf-twitter-approval",
-                NyxApiKey = "secret-created-key",
+                ApiKeyId = "key-approval",
+                NyxApiKeyReference = stored.Reference,
             });
 
-        var reader = new UserAgentDeliveryTargetReader(documentReader, credentialReader);
+        var reader = new UserAgentDeliveryTargetReader(documentReader, credentialReader, secretVault);
 
         var target = await reader.GetAsync("aelf-twitter-approval", CancellationToken.None);
 
@@ -86,6 +106,13 @@ public sealed class UserAgentDeliveryTargetReaderTests
     {
         var documentReader = Substitute.For<IProjectionDocumentReader<UserAgentCatalogDocument, string>>();
         var credentialReader = Substitute.For<IProjectionDocumentReader<UserAgentCatalogNyxCredentialDocument, string>>();
+        var secretVault = new InMemorySecretVault();
+        var stored = await secretVault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.ScheduledNyxApiKey,
+            "owner-scope:email-approval",
+            "key-email",
+            "secret-created-key",
+            "test"));
 
         documentReader.GetAsync("email-approval", Arg.Any<CancellationToken>())
             .Returns(new UserAgentCatalogDocument
@@ -96,16 +123,18 @@ public sealed class UserAgentDeliveryTargetReaderTests
                 NyxProviderSlug = "api-email-outbound",
                 AgentType = "delivery_target",
                 TemplateName = "explicit_delivery_target",
+                ApiKeyId = "key-email",
                 OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
             });
         credentialReader.GetAsync("email-approval", Arg.Any<CancellationToken>())
             .Returns(new UserAgentCatalogNyxCredentialDocument
             {
                 Id = "email-approval",
-                NyxApiKey = "secret-created-key",
+                ApiKeyId = "key-email",
+                NyxApiKeyReference = stored.Reference,
             });
 
-        var reader = new UserAgentDeliveryTargetReader(documentReader, credentialReader);
+        var reader = new UserAgentDeliveryTargetReader(documentReader, credentialReader, secretVault);
 
         var target = await reader.GetAsync("email-approval", CancellationToken.None);
 
@@ -124,7 +153,7 @@ public sealed class UserAgentDeliveryTargetReaderTests
         documentReader.GetAsync("missing", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<UserAgentCatalogDocument?>(null));
 
-        var reader = new UserAgentDeliveryTargetReader(documentReader, credentialReader);
+        var reader = new UserAgentDeliveryTargetReader(documentReader, credentialReader, new InMemorySecretVault());
         (await reader.GetAsync("missing", CancellationToken.None)).Should().BeNull();
     }
 
@@ -136,7 +165,7 @@ public sealed class UserAgentDeliveryTargetReaderTests
         documentReader.GetAsync("dead", Arg.Any<CancellationToken>())
             .Returns(new UserAgentCatalogDocument { Id = "dead", Tombstoned = true });
 
-        var reader = new UserAgentDeliveryTargetReader(documentReader, credentialReader);
+        var reader = new UserAgentDeliveryTargetReader(documentReader, credentialReader, new InMemorySecretVault());
         (await reader.GetAsync("dead", CancellationToken.None)).Should().BeNull();
     }
 
@@ -154,25 +183,38 @@ public sealed class UserAgentDeliveryTargetReaderTests
         credentialReader.GetAsync("agent-1", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<UserAgentCatalogNyxCredentialDocument?>(null));
 
-        var reader = new UserAgentDeliveryTargetReader(documentReader, credentialReader);
+        var reader = new UserAgentDeliveryTargetReader(documentReader, credentialReader, new InMemorySecretVault());
         (await reader.GetAsync("agent-1", CancellationToken.None)).Should().BeNull(
             "credential not yet projected → fail-closed; never construct a target with empty NyxApiKey");
     }
 
     [Fact]
-    public async Task GetAsync_ReturnsNull_When_CredentialNyxApiKeyIsBlank()
+    public async Task GetAsync_ReturnsNull_When_CredentialReferenceCannotResolve()
     {
-        // Same fail-closed behavior when the credential document exists but the key
-        // is blank (ghost record / partial projection). Issue #466 review.
         var documentReader = Substitute.For<IProjectionDocumentReader<UserAgentCatalogDocument, string>>();
         var credentialReader = Substitute.For<IProjectionDocumentReader<UserAgentCatalogNyxCredentialDocument, string>>();
         documentReader.GetAsync("agent-1", Arg.Any<CancellationToken>())
-            .Returns(new UserAgentCatalogDocument { Id = "agent-1", ConversationId = "oc_chat_1" });
+            .Returns(new UserAgentCatalogDocument
+            {
+                Id = "agent-1",
+                ConversationId = "oc_chat_1",
+                ApiKeyId = "key-1",
+            });
         credentialReader.GetAsync("agent-1", Arg.Any<CancellationToken>())
-            .Returns(new UserAgentCatalogNyxCredentialDocument { Id = "agent-1", NyxApiKey = "" });
+            .Returns(new UserAgentCatalogNyxCredentialDocument
+            {
+                Id = "agent-1",
+                ApiKeyId = "key-1",
+                NyxApiKeyReference = new SecretReference
+                {
+                    Ref = "missing",
+                    Purpose = CredentialSecretPurposes.ScheduledNyxApiKey,
+                    OwnerScopeKey = "owner-scope:agent-1",
+                },
+            });
 
-        var reader = new UserAgentDeliveryTargetReader(documentReader, credentialReader);
+        var reader = new UserAgentDeliveryTargetReader(documentReader, credentialReader, new InMemorySecretVault());
         (await reader.GetAsync("agent-1", CancellationToken.None)).Should().BeNull(
-            "credential document exists but key is blank → fail-closed");
+            "credential references must resolve before constructing a delivery target");
     }
 }

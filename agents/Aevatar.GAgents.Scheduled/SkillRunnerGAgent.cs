@@ -12,6 +12,7 @@ using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.Channel.Abstractions;
@@ -291,6 +292,9 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         var outboundConfig = command.OutboundConfig?.Clone() ?? new SkillRunnerOutboundConfig();
         if (command.OutputFormat != SkillRunnerOutputFormat.Auto || outboundConfig.OutputFormat == SkillRunnerOutputFormat.Auto)
             outboundConfig.OutputFormat = command.OutputFormat;
+#pragma warning disable CS0612 // legacy credential field must remain empty on new writes
+        outboundConfig.NyxApiKey = string.Empty;
+#pragma warning restore CS0612
 
         var initialized = new SkillRunnerInitializedEvent
         {
@@ -758,7 +762,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         var toolContext = llmControl.ToToolContext(BuildExecutionToolContext(requestId, metadata));
         var content = new StringBuilder();
 
-        var sink = TryCreateStreamingSink();
+        var sink = await TryCreateStreamingSinkAsync(ct);
         var streamingState = sink is null
             ? null
             : new SkillRunnerStreamingRunState(sink, SkillRunnerDefaults.StreamingEditThrottle, TimeProvider.System);
@@ -876,6 +880,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
         var requestId = Guid.NewGuid().ToString("N");
         var prompt = BuildExecutionPrompt(now, reason);
+        var nyxApiKey = await ResolveNyxApiKeyAsync(ct);
         var command = new WorkflowChatRunRequest(
             Prompt: prompt,
             Source: WorkflowChatSource.InlineYamlBundle(
@@ -884,8 +889,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             SessionId: requestId,
             Metadata: await BuildExecutionMetadataAsync(ct),
             ScopeId: State.ScopeId,
-            LlmControl: ToWorkflowLlmControl(await BuildExecutionLlmControlAsync(ct)),
-            CallerCredential: new WorkflowCallerCredential(State.OutboundConfig?.NyxApiKey),
+            LlmControl: ToWorkflowLlmControl(await BuildExecutionLlmControlAsync(nyxApiKey, ct)),
+            CallerCredential: new WorkflowCallerCredential(nyxApiKey),
             CommandIdSeed: requestId,
             CorrelationIdSeed: requestId);
 
@@ -964,7 +969,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
     private async Task<bool> TryDispatchCardKitOutputAsync(string output, string requestId, CancellationToken ct)
     {
-        var sink = TryCreateCardKitSink();
+        var sink = await TryCreateCardKitSinkAsync(ct);
         if (sink is null)
             return false;
 
@@ -1012,7 +1017,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         throw new SkillRunnerVisibleDeliveryException(BuildLarkRejectionMessage(result.LarkCode, result.Detail));
     }
 
-    private SkillRunnerCardKitReplySink? TryCreateCardKitSink()
+    private async Task<SkillRunnerCardKitReplySink?> TryCreateCardKitSinkAsync(CancellationToken ct)
     {
         if (!ShouldPreferCardKitOutput())
             return null;
@@ -1026,12 +1031,20 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             return null;
         }
 
-        if (string.IsNullOrWhiteSpace(State.OutboundConfig?.NyxApiKey) ||
-            string.IsNullOrWhiteSpace(State.OutboundConfig?.NyxProviderSlug) ||
+        if (string.IsNullOrWhiteSpace(State.OutboundConfig?.NyxProviderSlug) ||
             string.IsNullOrWhiteSpace(State.OutboundConfig?.ConversationId))
         {
             Logger.LogWarning(
-                "Skill runner {ActorId} has incomplete outbound config (NyxApiKey/NyxProviderSlug/ConversationId); CardKit delivery is disabled, falling back to text.",
+                "Skill runner {ActorId} has incomplete outbound config (NyxProviderSlug/ConversationId); CardKit delivery is disabled, falling back to text.",
+                Id);
+            return null;
+        }
+
+        var nyxApiKey = await ResolveNyxApiKeyAsync(ct);
+        if (string.IsNullOrWhiteSpace(nyxApiKey))
+        {
+            Logger.LogWarning(
+                "Skill runner {ActorId} could not resolve Nyx API key; CardKit delivery is disabled, falling back to text.",
                 Id);
             return null;
         }
@@ -1045,7 +1058,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             ResolveLarkCardKitClient(client, State.OutboundConfig.NyxProviderSlug),
             ResolveLarkOutboundDispatcher(client),
             new LarkSendNewMessageRequest(
-                State.OutboundConfig.NyxApiKey,
+                nyxApiKey,
                 State.OutboundConfig.NyxProviderSlug,
                 MessageType: "interactive",
                 ContentJson: string.Empty,
@@ -1059,7 +1072,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     /// now uses CardKit after the run passes the tool-success safety net, which avoids Lark's
     /// text-message edit cap and prevents partial hallucinated reports from becoming visible.
     /// </summary>
-    private SkillRunnerStreamingReplySink? TryCreateStreamingSink()
+    private async Task<SkillRunnerStreamingReplySink?> TryCreateStreamingSinkAsync(CancellationToken ct)
     {
         // Issue #439: when the run
         // is gated by EnsureToolStatusAllowsCompletion (RequiresNyxidProxySuccess set),
@@ -1089,12 +1102,20 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             return null;
         }
 
-        if (string.IsNullOrWhiteSpace(State.OutboundConfig?.NyxApiKey) ||
-            string.IsNullOrWhiteSpace(State.OutboundConfig?.NyxProviderSlug) ||
+        if (string.IsNullOrWhiteSpace(State.OutboundConfig?.NyxProviderSlug) ||
             string.IsNullOrWhiteSpace(State.OutboundConfig?.ConversationId))
         {
             Logger.LogWarning(
-                "Skill runner {ActorId} has incomplete outbound config (NyxApiKey/NyxProviderSlug/ConversationId); streaming-edit delivery is disabled, falling back to one-shot SendOutputAsync.",
+                "Skill runner {ActorId} has incomplete outbound config (NyxProviderSlug/ConversationId); streaming-edit delivery is disabled, falling back to one-shot SendOutputAsync.",
+                Id);
+            return null;
+        }
+
+        var nyxApiKey = await ResolveNyxApiKeyAsync(ct);
+        if (string.IsNullOrWhiteSpace(nyxApiKey))
+        {
+            Logger.LogWarning(
+                "Skill runner {ActorId} could not resolve Nyx API key; streaming-edit delivery is disabled, falling back to one-shot SendOutputAsync.",
                 Id);
             return null;
         }
@@ -1107,7 +1128,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         return new SkillRunnerStreamingReplySink(
             ResolveLarkOutboundDispatcher(client),
             new LarkSendNewMessageRequest(
-                State.OutboundConfig.NyxApiKey,
+                nyxApiKey,
                 State.OutboundConfig.NyxProviderSlug,
                 MessageType: "text",
                 ContentJson: string.Empty,
@@ -1343,7 +1364,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         SkillDefinition? skill;
         try
         {
-            skill = await fetcher.FetchSkillAsync(State.OutboundConfig?.NyxApiKey ?? string.Empty, normalized.Name, ct);
+            skill = await fetcher.FetchSkillAsync(await ResolveNyxApiKeyAsync(ct), normalized.Name, ct);
         }
         catch (RemoteSkillFetchException ex) when (
             ex.FailureKind == RemoteSkillFetchFailureKind.AccessDenied ||
@@ -1793,11 +1814,17 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(State.OutboundConfig?.NyxApiKey) ||
-            string.IsNullOrWhiteSpace(State.OutboundConfig?.NyxProviderSlug) ||
+        if (string.IsNullOrWhiteSpace(State.OutboundConfig?.NyxProviderSlug) ||
             string.IsNullOrWhiteSpace(State.OutboundConfig?.ConversationId))
         {
             Logger.LogWarning("Skill runner {ActorId} has incomplete outbound config; skipping outbound delivery", Id);
+            return;
+        }
+
+        var nyxApiKey = await ResolveNyxApiKeyAsync(ct);
+        if (string.IsNullOrWhiteSpace(nyxApiKey))
+        {
+            Logger.LogWarning("Skill runner {ActorId} could not resolve Nyx API key; skipping outbound delivery", Id);
             return;
         }
 
@@ -1824,7 +1851,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
         var outcome = await ResolveLarkOutboundDispatcher(client).SendNewMessageAsync(
             new LarkSendNewMessageRequest(
-                State.OutboundConfig.NyxApiKey,
+                nyxApiKey,
                 slug,
                 MessageType: "text",
                 ContentJson: JsonSerializer.Serialize(new { text = output }),
@@ -2017,9 +2044,14 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
     private async Task<LLMControlContext> BuildExecutionLlmControlAsync(CancellationToken ct)
     {
+        return await BuildExecutionLlmControlAsync(await ResolveNyxApiKeyAsync(ct), ct);
+    }
+
+    private async Task<LLMControlContext> BuildExecutionLlmControlAsync(string nyxApiKey, CancellationToken ct)
+    {
         var control = new LLMControlContext(
-            NyxIdAccessToken: State.OutboundConfig?.NyxApiKey,
-            NyxIdOrgToken: State.OutboundConfig?.NyxApiKey,
+            NyxIdAccessToken: nyxApiKey,
+            NyxIdOrgToken: nyxApiKey,
             SenderNyxIdAccessToken: null,
             ModelOverride: null,
             NyxIdRoutePreference: null,
@@ -2046,6 +2078,26 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             ct);
     }
 
+    private async Task<string> ResolveNyxApiKeyAsync(CancellationToken ct)
+    {
+        var reference = State.OutboundConfig?.NyxApiKeyReference;
+        if (!string.IsNullOrWhiteSpace(reference?.Ref))
+        {
+            var secretVault = Services.GetService<ISecretVault>()
+                ?? throw new InvalidOperationException("Scheduled Nyx API key secret vault is unavailable.");
+            var resolved = await secretVault.ResolveAsync(new ResolveSecretRequest(
+                reference.Ref,
+                CredentialSecretPurposes.ScheduledNyxApiKey,
+                reference.OwnerScopeKey,
+                State.OutboundConfig?.ApiKeyId ?? string.Empty,
+                "scheduled-skill-runner"),
+                ct);
+            return resolved.Secret?.Trim() ?? string.Empty;
+        }
+
+        return State.OutboundConfig?.NyxApiKey?.Trim() ?? string.Empty;
+    }
+
     private string BuildExecutionPrompt(DateTimeOffset now, string? reason)
     {
         var prompt = string.IsNullOrWhiteSpace(State.ExecutionPrompt)
@@ -2063,7 +2115,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             AgentId = Id,
             ConversationId = State.OutboundConfig?.ConversationId ?? string.Empty,
             NyxProviderSlug = State.OutboundConfig?.NyxProviderSlug ?? string.Empty,
-            NyxApiKey = State.OutboundConfig?.NyxApiKey ?? string.Empty,
+            NyxApiKey = string.Empty,
+            NyxApiKeyReference = State.OutboundConfig?.NyxApiKeyReference?.Clone(),
             AgentType = SkillRunnerDefaults.AgentType,
             TemplateName = State.TemplateName ?? string.Empty,
             ScopeId = State.ScopeId ?? string.Empty,
