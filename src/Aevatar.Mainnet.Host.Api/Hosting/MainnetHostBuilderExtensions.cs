@@ -249,7 +249,7 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddStudioProvisioningTools();
         builder.Services.Configure<DeviceEventOptions>(
             builder.Configuration.GetSection("Aevatar:DeviceEvents"));
-        // 06-20-observatory-admin-cross-scope: NyxID-backed platform-admin authorizer for the run observatory.
+        // NyxID-backed current-user resolver plus aevatar admin access policy.
         builder.Services.AddNyxIdPlatformAuthorization(builder.Configuration);
         builder.Services.AddNyxIdTools(o =>
         {
