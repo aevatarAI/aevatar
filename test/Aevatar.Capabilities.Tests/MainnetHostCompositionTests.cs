@@ -13,6 +13,7 @@ using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.AI.ToolProviders.Telegram;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.AI.ToolProviders.Web;
+using Aevatar.Audit.Core.Identity;
 using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
@@ -109,9 +110,11 @@ public sealed class MainnetHostCompositionTests
             .ContainSingle(static descriptor => descriptor.Name == "workflow-external-approval-continuation");
         readModelDescriptors.Should()
             .ContainSingle(static descriptor => descriptor.Name == "streaming-proxy-chat-session");
-        app.Services.GetRequiredService<IProjectionDocumentReader<ScriptNativeDocumentReadModel, string>>()
+        readModelDescriptors.Should()
+            .NotContain(static descriptor => descriptor.Name == "script-native-document");
+        app.Services.GetService<IProjectionDocumentReader<ScriptNativeDocumentReadModel, string>>()
             .Should()
-            .NotBeNull();
+            .BeNull();
         app.Services.GetRequiredService<IExternalIdentityBindingQueryPort>().Should().NotBeNull();
         app.Services.GetRequiredService<ICommandDispatchService<CommitBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>>()
             .Should()
@@ -755,6 +758,9 @@ public sealed class MainnetHostCompositionTests
         {
             ["ActorRuntime:Provider"] = "InMemory",
             ["GAgentService:Demo:Enabled"] = "false",
+            [$"{AuditActorIdentityHasherOptions.SectionName}:ActiveKeyId"] = "test-key-1",
+            [$"{AuditActorIdentityHasherOptions.SectionName}:Keys:0:KeyId"] = "test-key-1",
+            [$"{AuditActorIdentityHasherOptions.SectionName}:Keys:0:Key"] = "mainnet composition audit identity key",
             ["Projection:Document:Providers:InMemory:Enabled"] = "true",
             ["Projection:Document:Providers:Elasticsearch:Enabled"] = "false",
             ["Projection:Graph:Providers:InMemory:Enabled"] = "true",

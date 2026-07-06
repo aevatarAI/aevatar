@@ -9,6 +9,7 @@ using Aevatar.GAgents.Platform.Lark;
 using Aevatar.GAgents.Platform.Telegram;
 using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 
@@ -24,6 +25,7 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
         var port = new NyxIdRelayChannelInteractionNotificationPort(
             registry,
             CreateNyxClient(handler),
+            CreateLarkRelayDispatcher(handler),
             [new LarkChannelNativeMessageProducer(new LarkMessageComposer())],
             NullLogger<NyxIdRelayChannelInteractionNotificationPort>.Instance);
 
@@ -50,6 +52,7 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
         var port = new NyxIdRelayChannelInteractionNotificationPort(
             registry,
             CreateNyxClient(handler),
+            Substitute.For<ILarkOutboundRelayDispatcher>(),
             [new TelegramChannelNativeMessageProducer(new TelegramMessageComposer())],
             NullLogger<NyxIdRelayChannelInteractionNotificationPort>.Instance);
 
@@ -76,6 +79,7 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
         var port = new NyxIdRelayChannelInteractionNotificationPort(
             registry,
             CreateNyxClient(handler),
+            Substitute.For<ILarkOutboundRelayDispatcher>(),
             [new TelegramChannelNativeMessageProducer(new TelegramMessageComposer())],
             NullLogger<NyxIdRelayChannelInteractionNotificationPort>.Instance);
 
@@ -93,6 +97,7 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
         var port = new NyxIdRelayChannelInteractionNotificationPort(
             registry,
             CreateNyxClient(handler),
+            CreateLarkRelayDispatcher(handler),
             [new LarkChannelNativeMessageProducer(new LarkMessageComposer())],
             NullLogger<NyxIdRelayChannelInteractionNotificationPort>.Instance);
         var template = new InteractionTemplateSpec { TemplateId = "tpl-1" };
@@ -127,6 +132,7 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
         var port = new NyxIdRelayChannelInteractionNotificationPort(
             registry,
             CreateNyxClient(new RecordingHandler("""{"ok":true}""")),
+            Substitute.For<ILarkOutboundRelayDispatcher>(),
             [],
             NullLogger<NyxIdRelayChannelInteractionNotificationPort>.Instance);
 
@@ -197,6 +203,9 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
         new(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+    private static ILarkOutboundRelayDispatcher CreateLarkRelayDispatcher(HttpMessageHandler handler) =>
+        new LarkOutboundRelayDispatcher(new LarkOutboundDispatcher(CreateNyxClient(handler), NullLogger.Instance));
 
     private sealed class RecordingHandler(string responseBody) : HttpMessageHandler
     {

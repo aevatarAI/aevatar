@@ -11,21 +11,23 @@ public sealed class NyxIdRelayChannelInteractionNotificationPort : IChannelInter
 {
     private const int LarkOpenIdCrossApp = 99992361;
     private const int LarkUserIdCrossTenant = 99992364;
-    private const int LarkBotNotInChat = 230002;
 
     private readonly IUserAgentDeliveryTargetReader _deliveryTargetReader;
     private readonly NyxIdApiClient _nyxIdApiClient;
+    private readonly ILarkOutboundRelayDispatcher _larkOutboundDispatcher;
     private readonly IReadOnlyDictionary<string, IChannelNativeMessageProducer> _nativeProducers;
     private readonly ILogger<NyxIdRelayChannelInteractionNotificationPort> _logger;
 
     public NyxIdRelayChannelInteractionNotificationPort(
         IUserAgentDeliveryTargetReader deliveryTargetReader,
         NyxIdApiClient nyxIdApiClient,
+        ILarkOutboundRelayDispatcher larkOutboundDispatcher,
         IEnumerable<IChannelNativeMessageProducer> nativeProducers,
         ILogger<NyxIdRelayChannelInteractionNotificationPort> logger)
     {
         _deliveryTargetReader = deliveryTargetReader ?? throw new ArgumentNullException(nameof(deliveryTargetReader));
         _nyxIdApiClient = nyxIdApiClient ?? throw new ArgumentNullException(nameof(nyxIdApiClient));
+        _larkOutboundDispatcher = larkOutboundDispatcher ?? throw new ArgumentNullException(nameof(larkOutboundDispatcher));
         ArgumentNullException.ThrowIfNull(nativeProducers);
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
@@ -132,62 +134,27 @@ public sealed class NyxIdRelayChannelInteractionNotificationPort : IChannelInter
     {
         var primaryTarget = ResolveLarkPrimaryTarget(target);
         var fallbackTarget = ResolveLarkFallbackTarget(target);
-        var result = await SendLarkToTargetAsync(
-            target,
-            nativeMessage,
-            primaryTarget,
-            usedFallback: false,
-            cancellationToken).ConfigureAwait(false);
-
-        if (!result.Succeeded &&
-            result.LarkCode == LarkBotNotInChat &&
-            fallbackTarget is { } fallback)
-        {
-            _logger.LogInformation(
-                "Lark interaction notification primary target rejected as bot-not-in-chat; retrying once with fallback receive_id_type={FallbackType}",
-                fallback.ReceiveIdType);
-            result = await SendLarkToTargetAsync(
-                target,
-                nativeMessage,
-                fallback,
-                usedFallback: true,
-                cancellationToken).ConfigureAwait(false);
-        }
-
-        if (!result.Succeeded)
-            throw new InvalidOperationException(BuildLarkRejectionMessage(result.LarkCode, result.Detail));
-    }
-
-    private async Task<LarkSendResult> SendLarkToTargetAsync(
-        UserAgentDeliveryTarget target,
-        ChannelNativeMessage nativeMessage,
-        LarkReceiveTarget targetAddress,
-        bool usedFallback,
-        CancellationToken cancellationToken)
-    {
         var contentJson = nativeMessage.CardPayload is null
             ? JsonSerializer.Serialize(new { text = nativeMessage.Text ?? string.Empty })
             : SerializeNativePayload(nativeMessage.CardPayload);
         var messageType = string.IsNullOrWhiteSpace(nativeMessage.MessageType)
             ? nativeMessage.CardPayload is null ? "text" : "interactive"
             : nativeMessage.MessageType;
-        var body = JsonSerializer.Serialize(new
-        {
-            receive_id = targetAddress.ReceiveId,
-            msg_type = messageType,
-            content = contentJson,
-        });
 
-        var response = await _nyxIdApiClient.ProxyRequestAsync(
-            target.NyxApiKey,
-            target.NyxProviderSlug,
-            $"open-apis/im/v1/messages?receive_id_type={Uri.EscapeDataString(targetAddress.ReceiveIdType)}",
-            "POST",
-            body,
-            extraHeaders: null,
+        var result = await _larkOutboundDispatcher.SendNewMessageAsync(
+            new LarkOutboundRelayRequest(
+                target.NyxApiKey,
+                target.NyxProviderSlug,
+                messageType,
+                contentJson,
+                primaryTarget.ReceiveId,
+                primaryTarget.ReceiveIdType,
+                fallbackTarget?.ReceiveId,
+                fallbackTarget?.ReceiveIdType),
             cancellationToken).ConfigureAwait(false);
 
-        return ParseLarkSendResponse(response, targetAddress, usedFallback);
+        if (!result.Succeeded)
+            throw new InvalidOperationException(BuildLarkRejectionMessage(result.LarkCode, result.Detail));
     }
 
     private async Task SendTelegramAsync(
@@ -272,123 +239,6 @@ public sealed class NyxIdRelayChannelInteractionNotificationPort : IChannelInter
         }
     }
 
-    private static LarkSendResult ParseLarkSendResponse(
-        string? response,
-        LarkReceiveTarget target,
-        bool usedFallback)
-    {
-        if (TryGetLarkError(response, out var larkCode, out var detail))
-            return LarkSendResult.Failed(target, usedFallback, larkCode, detail);
-
-        if (string.IsNullOrWhiteSpace(response))
-            return LarkSendResult.Failed(target, usedFallback, null, "empty_send_response");
-
-        try
-        {
-            using var document = JsonDocument.Parse(response);
-            var root = document.RootElement;
-            if (!root.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object)
-                return LarkSendResult.Failed(target, usedFallback, null, "missing_data");
-            if (!data.TryGetProperty("message_id", out var idProperty) ||
-                idProperty.ValueKind != JsonValueKind.String)
-            {
-                return LarkSendResult.Failed(target, usedFallback, null, "missing_message_id");
-            }
-
-            var messageId = idProperty.GetString();
-            return string.IsNullOrWhiteSpace(messageId)
-                ? LarkSendResult.Failed(target, usedFallback, null, "empty_message_id")
-                : LarkSendResult.Sent(messageId, target, usedFallback);
-        }
-        catch (JsonException)
-        {
-            return LarkSendResult.Failed(target, usedFallback, null, "invalid_send_response_json");
-        }
-    }
-
-    private static bool TryGetLarkError(string? response, out int? larkCode, out string detail)
-    {
-        larkCode = null;
-        detail = string.Empty;
-        if (string.IsNullOrWhiteSpace(response))
-            return false;
-
-        try
-        {
-            using var document = JsonDocument.Parse(response);
-            var root = document.RootElement;
-            if (root.ValueKind != JsonValueKind.Object)
-                return false;
-
-            if (root.TryGetProperty("code", out var topCodeProperty) &&
-                topCodeProperty.ValueKind == JsonValueKind.Number &&
-                topCodeProperty.TryGetInt32(out var topCode) &&
-                topCode != 0)
-            {
-                larkCode = topCode;
-                detail = TryReadString(root, "msg") ?? $"code={topCode}";
-                return true;
-            }
-
-            if (!root.TryGetProperty("error", out var errorProperty))
-                return false;
-
-            var hasErrorFlag = errorProperty.ValueKind == JsonValueKind.True ||
-                               (errorProperty.ValueKind == JsonValueKind.String &&
-                                !string.IsNullOrWhiteSpace(errorProperty.GetString()));
-            if (!hasErrorFlag)
-                return false;
-
-            if (TryParseNestedLarkBody(root, out larkCode, out detail))
-                return true;
-
-            detail = errorProperty.ValueKind == JsonValueKind.String
-                ? errorProperty.GetString()!.Trim()
-                : TryReadString(root, "message") ?? TryReadString(root, "body") ?? "proxy_error";
-            return true;
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
-    }
-
-    private static bool TryParseNestedLarkBody(JsonElement root, out int? larkCode, out string detail)
-    {
-        larkCode = null;
-        detail = string.Empty;
-        var rawBody = TryReadString(root, "body");
-        if (string.IsNullOrEmpty(rawBody))
-            return false;
-
-        try
-        {
-            using var nested = JsonDocument.Parse(rawBody);
-            var nestedRoot = nested.RootElement;
-            if (nestedRoot.ValueKind != JsonValueKind.Object ||
-                !nestedRoot.TryGetProperty("code", out var codeProperty) ||
-                codeProperty.ValueKind != JsonValueKind.Number ||
-                !codeProperty.TryGetInt32(out var code) ||
-                code == 0)
-            {
-                return false;
-            }
-
-            larkCode = code;
-            var msg = TryReadString(nestedRoot, "msg") ?? $"code={code}";
-            detail = root.TryGetProperty("status", out var statusProperty) &&
-                     statusProperty.ValueKind == JsonValueKind.Number &&
-                     statusProperty.TryGetInt32(out var status)
-                ? $"nyx_status={status} lark_code={code} msg={msg}"
-                : $"lark_code={code} msg={msg}";
-            return true;
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
-    }
-
     private static string SerializeNativePayload(object payload) =>
         payload is JsonElement element ? element.GetRawText() : JsonSerializer.Serialize(payload);
 
@@ -470,23 +320,4 @@ public sealed class NyxIdRelayChannelInteractionNotificationPort : IChannelInter
             : value.Trim().ToLowerInvariant();
 
     private sealed record LarkReceiveTarget(string ReceiveId, string ReceiveIdType);
-
-    private sealed record LarkSendResult(
-        bool Succeeded,
-        string? MessageId,
-        LarkReceiveTarget Target,
-        bool UsedFallback,
-        int? LarkCode,
-        string Detail)
-    {
-        public static LarkSendResult Sent(string messageId, LarkReceiveTarget target, bool usedFallback) =>
-            new(true, messageId, target, usedFallback, null, string.Empty);
-
-        public static LarkSendResult Failed(
-            LarkReceiveTarget target,
-            bool usedFallback,
-            int? larkCode,
-            string detail) =>
-            new(false, null, target, usedFallback, larkCode, detail);
-    }
 }
