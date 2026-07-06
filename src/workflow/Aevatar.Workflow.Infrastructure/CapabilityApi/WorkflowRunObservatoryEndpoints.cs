@@ -1,7 +1,7 @@
-using System.Text;
 using Aevatar.Audit;
 using Aevatar.Audit.Hosting.EndpointAudit;
 using Aevatar.Authentication.Abstractions;
+using Aevatar.BackendConsole.Hosting;
 using Aevatar.Capabilities;
 using Aevatar.Workflow.Application.Abstractions.Observatory;
 using Microsoft.AspNetCore.Builder;
@@ -28,6 +28,13 @@ public static class WorkflowRunObservatoryEndpoints
     private const string CallbackRoute = "/workflow/observatory/callback";
     private const string DataRoutePrefix = "/api/workflow/observatory";
 
+    private static readonly BackendConsoleAsset PageAsset = new(
+        LogicalName: "workflow-observatory",
+        Assembly: typeof(WorkflowRunObservatoryEndpoints).Assembly,
+        ResourceSuffix: "CapabilityApi.workflow-observatory.html",
+        ContentType: "text/html",
+        InjectHostConfiguration: true);
+
     // Sentinel scope meaning "all scopes" (admin overview). Not a real scope id.
     internal const string AllScopesToken = "__all__";
 
@@ -38,7 +45,7 @@ public static class WorkflowRunObservatoryEndpoints
         app.MapGet(PageRoute, GetObservatoryPage)
             .WithTags("WorkflowObservatory")
             .WithName("GetWorkflowObservatoryPage")
-            .WithSummary("Read-only workflow run observatory (inline self-contained page).")
+            .WithSummary("Read-only workflow run observatory served from an embedded static asset.")
             .AllowAnonymous();
 
         app.MapGet(CallbackRoute, GetObservatoryPage)
@@ -106,10 +113,13 @@ public static class WorkflowRunObservatoryEndpoints
         return app;
     }
 
-    internal static IResult GetObservatoryPage(HttpContext http)
+    internal static IResult GetObservatoryPage(
+        HttpContext http,
+        [FromServices] IBackendConsoleAssetService assets)
     {
         ArgumentNullException.ThrowIfNull(http);
-        return Results.Text(WorkflowRunObservatoryPage.Html, "text/html", Encoding.UTF8);
+        ArgumentNullException.ThrowIfNull(assets);
+        return assets.Serve(PageAsset);
     }
 
     internal static async Task<IResult> GetMe(

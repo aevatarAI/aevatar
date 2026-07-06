@@ -34,4 +34,8 @@
   <ItemGroup>
     <Compile Include="..\TestAgentToolContexts.cs" Link="TestAgentToolContexts.cs" />
   </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="BackendConsoleAssetServiceTests.fixture.html" />
+    <EmbeddedResource Include="BackendConsoleAssetServiceTests.no-placeholder.html" />
+  </ItemGroup>
 </Project>
