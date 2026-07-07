@@ -19,7 +19,7 @@ public sealed class LarkChannelNativeMessageSender : IChannelNativeMessageSender
     public ChannelId Channel => ChannelId.From("lark");
 
     public async Task SendAsync(
-        UserAgentDeliveryTarget target,
+        ChannelNativeDeliveryTarget target,
         ChannelNativeMessage message,
         CancellationToken cancellationToken)
     {
@@ -54,7 +54,7 @@ public sealed class LarkChannelNativeMessageSender : IChannelNativeMessageSender
     private static string SerializeNativePayload(object payload) =>
         payload is JsonElement element ? element.GetRawText() : JsonSerializer.Serialize(payload);
 
-    private static LarkReceiveTarget ResolvePrimaryTarget(UserAgentDeliveryTarget target)
+    private static LarkReceiveTarget ResolvePrimaryTarget(ChannelNativeDeliveryTarget target)
     {
         var receiveId = FirstNonWhiteSpace(target.LarkReceiveId, target.ConversationId);
         if (string.IsNullOrWhiteSpace(receiveId))
@@ -66,7 +66,7 @@ public sealed class LarkChannelNativeMessageSender : IChannelNativeMessageSender
         return new LarkReceiveTarget(receiveId.Trim(), receiveIdType);
     }
 
-    private static LarkReceiveTarget? ResolveFallbackTarget(UserAgentDeliveryTarget target)
+    private static LarkReceiveTarget? ResolveFallbackTarget(ChannelNativeDeliveryTarget target)
     {
         var fallbackId = target.LarkReceiveIdFallback?.Trim();
         var fallbackType = target.LarkReceiveIdTypeFallback?.Trim();

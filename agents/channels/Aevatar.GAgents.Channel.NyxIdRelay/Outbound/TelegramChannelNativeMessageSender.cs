@@ -1,7 +1,6 @@
 using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgents.Channel.Abstractions;
-using Aevatar.GAgents.Scheduled;
 
 namespace Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
 
@@ -17,7 +16,7 @@ public sealed class TelegramChannelNativeMessageSender : IChannelNativeMessageSe
     public ChannelId Channel => ChannelId.From("telegram");
 
     public async Task SendAsync(
-        UserAgentDeliveryTarget target,
+        ChannelNativeDeliveryTarget target,
         ChannelNativeMessage message,
         CancellationToken cancellationToken)
     {

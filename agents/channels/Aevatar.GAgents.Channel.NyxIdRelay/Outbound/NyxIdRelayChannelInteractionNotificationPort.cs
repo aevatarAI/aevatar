@@ -67,7 +67,7 @@ public sealed class NyxIdRelayChannelInteractionNotificationPort : IChannelInter
 
         var content = HumanInteractionMessageMapper.ToMessageContent(request);
         var nativeMessage = ProduceNativeMessage(producer, content, target);
-        await sender.SendAsync(target, nativeMessage, cancellationToken).ConfigureAwait(false);
+        await sender.SendAsync(ToNativeDeliveryTarget(target), nativeMessage, cancellationToken).ConfigureAwait(false);
 
         _logger.LogInformation(
             "Delivered channel interaction notification: target={DeliveryTargetId}, platform={Platform}, run={RunId}, step={StepId}, capability={Capability}",
@@ -123,6 +123,18 @@ public sealed class NyxIdRelayChannelInteractionNotificationPort : IChannelInter
 
         return nativeMessage;
     }
+
+    private static ChannelNativeDeliveryTarget ToNativeDeliveryTarget(UserAgentDeliveryTarget target) =>
+        new(
+            AgentId: target.AgentId,
+            Platform: target.Platform,
+            ConversationId: target.ConversationId,
+            NyxProviderSlug: target.NyxProviderSlug,
+            NyxApiKey: target.NyxApiKey,
+            LarkReceiveId: target.LarkReceiveId,
+            LarkReceiveIdType: target.LarkReceiveIdType,
+            LarkReceiveIdFallback: target.LarkReceiveIdFallback,
+            LarkReceiveIdTypeFallback: target.LarkReceiveIdTypeFallback);
 
     private static string NormalizePlatform(string? value) =>
         string.IsNullOrWhiteSpace(value)
