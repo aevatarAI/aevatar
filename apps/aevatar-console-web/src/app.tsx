@@ -2,16 +2,9 @@ import {
   PageLoading,
   ProConfigProvider,
 } from "@ant-design/pro-components";
-import {
-  DownOutlined,
-  GlobalOutlined,
-  LogoutOutlined,
-  SettingOutlined,
-  UserOutlined,
-} from "@ant-design/icons";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { Avatar, Badge, Button, ConfigProvider, Dropdown, Typography } from "antd";
-import { getLocale, setLocale, useIntl } from "@umijs/max";
+import { Badge, ConfigProvider } from "antd";
+import { getLocale, useIntl } from "@umijs/max";
 import React from "react";
 import MainLayout from "@/layouts/MainLayout";
 import { history } from "./shared/navigation/history";
@@ -26,7 +19,6 @@ import {
 import { getNyxIDRuntimeConfig } from "./shared/auth/config";
 import {
   buildAuthInitialState,
-  clearStoredAuthSession,
   loadRestorableAuthSession,
   loadStoredAuthSession,
   sanitizeReturnTo,
@@ -48,6 +40,7 @@ import { readMissionControlRouteContext } from "@/pages/MissionControl/services/
 import { loadRecentRuns } from "@/shared/runs/recentRuns";
 import { queryClient } from "./shared/query/queryClient";
 import { aevatarThemeConfig } from "@/shared/ui/aevatarWorkbench";
+import { ConsoleHeaderActions } from "@/shared/ui/ConsoleHeaderActions";
 import {
   normalizeConsoleLocale,
   resolveAntdLocale,
@@ -56,11 +49,16 @@ import {
 
 const PUBLIC_ROUTES = new Set(["/login", "/auth/callback"]);
 const DEFAULT_PROTECTED_ROUTE = CONSOLE_HOME_ROUTE;
+const FULLSCREEN_DISPLAY_ROUTES = new Set(["/runtime/mission-wall"]);
 const STUDIO_HOST_ROUTES = new Set([
   "/studio",
   "/scopes/:scopeId/teams/:teamId/members/new/workflow",
   "/scopes/:scopeId/teams/:teamId/members/:memberId/workflow",
 ]);
+
+function isFullscreenDisplayRoute(pathname: string): boolean {
+  return FULLSCREEN_DISPLAY_ROUTES.has(pathname);
+}
 
 function isStudioHostRoute(pathname: string): boolean {
   if (STUDIO_HOST_ROUTES.has(pathname)) {
@@ -138,15 +136,11 @@ type AuthSessionBootstrapProps = {
 
 type ConsoleRuntimeProvidersProps = {
   children: React.ReactNode;
+  isFullscreenDisplayRoute: boolean;
   isPublicRoute: boolean;
   isStudioRoute: boolean;
   pathname: string;
   search: string;
-};
-
-type ConsoleLocaleOption = {
-  readonly key: "zh-CN" | "en-US";
-  readonly messageId: "common.language.zhCN" | "common.language.english";
 };
 
 const LIVE_OPS_ATTENTION_BADGE_KEY = "live.attention";
@@ -154,10 +148,6 @@ const LIVE_OPS_ATTENTION_MAX_CANDIDATES = 6;
 const LIVE_OPS_ATTENTION_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 const LIVE_OPS_ATTENTION_REFRESH_MS = 30_000;
 const NAVIGATION_GROUP_ORDER: readonly NavigationGroup[] = getNavigationGroupOrder();
-const CONSOLE_LOCALE_OPTIONS: readonly ConsoleLocaleOption[] = [
-  { key: "zh-CN", messageId: "common.language.zhCN" },
-  { key: "en-US", messageId: "common.language.english" },
-];
 const NAVIGATION_MENU_MESSAGE_IDS: Readonly<Record<string, string>> = {
   "/chat": "nav.items.chat",
   "/scopes": "nav.items.myTeams",
@@ -211,134 +201,6 @@ const NavigationGroupLabel: React.FC<{
     />
   </span>
 );
-
-const ConsoleLanguageSwitch: React.FC = () => {
-  const intl = useIntl();
-  const selectedLocale = normalizeConsoleLocale(intl.locale || getLocale());
-  const selectedOption =
-    CONSOLE_LOCALE_OPTIONS.find((option) => option.key === selectedLocale) ||
-    CONSOLE_LOCALE_OPTIONS[0];
-
-  return (
-    <Dropdown
-      menu={{
-        items: CONSOLE_LOCALE_OPTIONS.map((option) => ({
-          key: option.key,
-          label: intl.formatMessage({ id: option.messageId }),
-        })),
-        onClick: ({ key }) => {
-          const nextLocale = key === "en-US" ? "en-US" : "zh-CN";
-          if (nextLocale === selectedLocale) {
-            return;
-          }
-
-          setLocale(nextLocale, false);
-        },
-        selectedKeys: [selectedLocale],
-      }}
-      placement="bottomRight"
-      trigger={["click"]}
-    >
-      <Button
-        aria-label={intl.formatMessage({ id: "common.language.switch" })}
-        icon={<GlobalOutlined />}
-        style={{
-          alignItems: "center",
-          display: "inline-flex",
-          height: 36,
-        }}
-        type="text"
-      >
-        {intl.formatMessage({ id: selectedOption.messageId })}
-      </Button>
-    </Dropdown>
-  );
-};
-
-const ConsoleAuthActions: React.FC = () => {
-  const intl = useIntl();
-  const session = loadRestorableAuthSession();
-  if (!session) {
-    return null;
-  }
-
-  const displayName =
-    session.user.name || session.user.email || session.user.sub;
-
-  return (
-    <Dropdown
-      menu={{
-        items: [
-          {
-            key: "settings",
-            icon: <SettingOutlined />,
-            label: intl.formatMessage({ id: "common.user.settings" }),
-          },
-          {
-            key: "logout",
-            icon: <LogoutOutlined />,
-            label: intl.formatMessage({ id: "common.user.logout" }),
-          },
-        ],
-        onClick: ({ key }) => {
-          if (key === "settings") {
-            history.push("/settings");
-            return;
-          }
-
-          if (key === "logout") {
-            clearStoredAuthSession();
-            window.location.replace("/login");
-          }
-        },
-      }}
-      placement="bottomRight"
-      trigger={["click"]}
-    >
-      <span
-        style={{
-          alignItems: "center",
-          background: "var(--ant-color-fill-tertiary)",
-          border: "1px solid var(--ant-color-border-secondary)",
-          borderRadius: 999,
-          cursor: "pointer",
-          display: "inline-flex",
-          gap: 8,
-          height: 36,
-          maxWidth: 220,
-          padding: "0 10px 0 6px",
-        }}
-        title={displayName}
-      >
-        <Avatar
-          icon={<UserOutlined />}
-          size={24}
-          src={session.user.picture}
-        />
-        <Typography.Text
-          style={{
-            flex: 1,
-            color: "var(--ant-color-text)",
-            lineHeight: "20px",
-            marginBottom: 0,
-            maxWidth: 160,
-            minWidth: 0,
-            whiteSpace: "nowrap",
-          }}
-          ellipsis={{ tooltip: displayName }}
-        >
-          {displayName}
-        </Typography.Text>
-        <DownOutlined
-          style={{
-            color: "var(--ant-color-text-tertiary)",
-            fontSize: 11,
-          }}
-        />
-      </span>
-    </Dropdown>
-  );
-};
 
 function trimOptional(value?: string | null): string | undefined {
   const normalized = value?.trim();
@@ -801,6 +663,7 @@ const AuthSessionBootstrap: React.FC<AuthSessionBootstrapProps> = ({
 
 const ConsoleRuntimeProviders: React.FC<ConsoleRuntimeProvidersProps> = ({
   children,
+  isFullscreenDisplayRoute,
   isPublicRoute,
   isStudioRoute,
   pathname,
@@ -808,7 +671,7 @@ const ConsoleRuntimeProviders: React.FC<ConsoleRuntimeProvidersProps> = ({
 }) => {
   const intl = useIntl();
   const currentLocale = normalizeConsoleLocale(intl.locale || getLocale());
-  const localizedContent = isPublicRoute ? (
+  const localizedContent = isPublicRoute || isFullscreenDisplayRoute ? (
     children
   ) : (
     <MainLayout>{children}</MainLayout>
@@ -816,8 +679,8 @@ const ConsoleRuntimeProviders: React.FC<ConsoleRuntimeProvidersProps> = ({
 
   return (
     <ConfigProvider
-      locale={resolveAntdLocale(currentLocale)}
       button={{ autoInsertSpace: false }}
+      locale={resolveAntdLocale(currentLocale)}
       theme={aevatarThemeConfig}
     >
       <ProConfigProvider intl={resolveProIntl(currentLocale)}>
@@ -841,6 +704,7 @@ export const layout = ({
   const pathname = window.location.pathname;
   const search = window.location.search;
   const collapseForRoute = shouldCollapseLayout(pathname, search);
+  const fullscreenDisplayRoute = isFullscreenDisplayRoute(pathname);
 
   return {
     onPageChange: () => {
@@ -860,6 +724,10 @@ export const layout = ({
     postMenuData: (menuData: NavigationMenuItem[]) =>
       decorateNavigationMenuItems(menuData),
     menuRender: (_: unknown, defaultDom: React.ReactNode) => {
+      if (isFullscreenDisplayRoute(window.location.pathname)) {
+        return false;
+      }
+
       if (!React.isValidElement(defaultDom)) {
         return defaultDom;
       }
@@ -872,10 +740,11 @@ export const layout = ({
       );
     },
     actionsRender: () => {
-      return [
-        <ConsoleLanguageSwitch key="language-switch" />,
-        <ConsoleAuthActions key="auth-actions" />,
-      ];
+      if (isFullscreenDisplayRoute(window.location.pathname)) {
+        return [];
+      }
+
+      return [<ConsoleHeaderActions key="header-actions" />];
     },
     childrenRender: (children: React.ReactNode) =>
       initialState ? (
@@ -884,6 +753,7 @@ export const layout = ({
           const search = window.location.search;
           const isPublicRoute = PUBLIC_ROUTES.has(pathname);
           const isStudioRoute = isStudioHostRoute(pathname);
+          const isDisplayRoute = isFullscreenDisplayRoute(pathname);
           const liveSession = loadStoredAuthSession();
           const needsProtectedRouteRedirect =
             !isPublicRoute &&
@@ -902,6 +772,7 @@ export const layout = ({
             );
           return (
             <ConsoleRuntimeProviders
+              isFullscreenDisplayRoute={isDisplayRoute}
               isPublicRoute={isPublicRoute}
               isStudioRoute={isStudioRoute}
               pathname={pathname}
@@ -923,16 +794,26 @@ export const layout = ({
       collapsedShowTitle: false,
       type: "group",
     },
-    contentStyle: {
-      background: "transparent",
-      display: "flex",
-      flexDirection: "column",
-      height: "calc(100vh - 56px)",
-      minHeight: 0,
-      overflow: "hidden",
-      padding: 0,
-    },
+    contentStyle: fullscreenDisplayRoute
+      ? {
+          background: "#09110f",
+          display: "block",
+          height: "100vh",
+          minHeight: 0,
+          overflow: "hidden",
+          padding: 0,
+        }
+      : {
+          background: "transparent",
+          display: "flex",
+          flexDirection: "column",
+          height: "calc(100vh - 56px)",
+          minHeight: 0,
+          overflow: "hidden",
+          padding: 0,
+        },
     defaultCollapsed: shouldDefaultCollapseLayout(pathname, search),
+    headerRender: fullscreenDisplayRoute ? false : undefined,
     ...(collapseForRoute ? { collapsed: true } : {}),
     logo: <BrandLogo />,
   };
