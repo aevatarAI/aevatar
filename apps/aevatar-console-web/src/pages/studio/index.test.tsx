@@ -446,6 +446,7 @@ function mockCreateDefaultWorkflowSummaries() {
       stepCount: 2,
       hasLayout: true,
       updatedAtUtc: "2026-03-18T00:00:00Z",
+      draftVersion: 7,
     },
   ];
 }
@@ -510,6 +511,7 @@ function resetMockState(): void {
     findings: [],
     draftExists: true,
     updatedAtUtc: "2026-03-18T00:00:00Z",
+    draftVersion: 7,
     document: mockParsedDocument,
   };
   mockConnectorCatalog = {
@@ -1032,6 +1034,7 @@ jest.mock("@/shared/studio/api", () => ({
       async (input: {
         workflowId?: string;
         draftExists?: boolean | null;
+        expectedDraftVersion?: number | null;
         directoryId: string;
         workflowName: string;
         fileName?: string | null;
@@ -1049,6 +1052,7 @@ jest.mock("@/shared/studio/api", () => ({
           yaml: input.yaml,
           draftExists: input.draftExists ?? true,
           updatedAtUtc: "2026-03-18T00:05:00Z",
+          draftVersion: (input.expectedDraftVersion ?? mockWorkflowFile.draftVersion ?? 0) + 1,
           document: {
             ...mockWorkflowFile.document,
             name: input.workflowName,
@@ -1068,6 +1072,7 @@ jest.mock("@/shared/studio/api", () => ({
           stepCount: 0,
           hasLayout: true,
           updatedAtUtc: "2026-03-18T00:05:00Z",
+          draftVersion: mockWorkflowFile.draftVersion,
         };
         if (existingSummaryIndex >= 0) {
           mockWorkflowSummaries[existingSummaryIndex] = nextSummary;
@@ -1078,7 +1083,7 @@ jest.mock("@/shared/studio/api", () => ({
         return mockWorkflowFile;
       }
     ),
-    deleteWorkflow: jest.fn(async (workflowId: string) => {
+    deleteWorkflow: jest.fn(async (workflowId: string, _scopeId?: string, _expectedDraftVersion?: number) => {
       mockWorkflowSummaries = mockWorkflowSummaries.filter(
         (workflow) => workflow.workflowId !== workflowId
       );
@@ -1276,6 +1281,8 @@ jest.mock("@/shared/studio/api", () => ({
       displayName?: string;
       workflowId: string;
       workflowYamls: string[];
+      sourceKind?: string | null;
+      expectedDraftVersion?: number | null;
     }) => {
       mockStudioMembers = mockStudioMembers.map((member) =>
         member.memberId === input.memberId
@@ -4189,6 +4196,7 @@ describe("StudioPage", () => {
           workflowId: "workflow-1",
           directoryId: "dir-1",
           workflowName: "workspace-demo",
+          expectedDraftVersion: 7,
           yaml: "name: workspace-demo\nsteps:\n  - id: approve_step\n",
         })
       );
@@ -5141,6 +5149,7 @@ describe("StudioPage", () => {
       expect(studioApi.deleteWorkflow).toHaveBeenCalledWith(
         "workflow-1",
         undefined,
+        7,
       );
     });
 
@@ -5585,6 +5594,8 @@ describe("StudioPage", () => {
           memberId: "workspace-demo",
           displayName: "workspace-demo",
           workflowId: "workflow-1",
+          sourceKind: "editor_snapshot",
+          expectedDraftVersion: 7,
           workflowYamls: expect.arrayContaining([expect.stringContaining("name: workspace-demo")]),
         }),
       );
@@ -6030,6 +6041,8 @@ describe("StudioPage", () => {
           memberId: "draft1",
           displayName: "draft1",
           workflowId: "workflow-1",
+          sourceKind: "editor_snapshot",
+          expectedDraftVersion: 7,
         })
       );
     });

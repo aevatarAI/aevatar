@@ -35,6 +35,20 @@ public sealed class StudioMemberBindingRunCurrentStateProjectorTests
             PlatformBindingCommandId = "platform-bind-1",
             AttemptCount = 1,
             UpdatedAtUtc = updatedAt,
+            Request = new StudioMemberBindingRequest
+            {
+                Workflow = new StudioMemberWorkflowBindingRequest
+                {
+                    WorkflowId = "wf-alpha",
+                    Source = new StudioMemberWorkflowBindingSource
+                    {
+                        SourceKind = StudioMemberWorkflowBindingSourceKind.EditorSnapshot,
+                        DraftVersion = 7,
+                        SourceHash = "sha256:workflow-bundle",
+                        SourceCapturedAtUtc = updatedAt,
+                    },
+                },
+            },
         };
 
         await projector.ProjectAsync(
@@ -53,6 +67,10 @@ public sealed class StudioMemberBindingRunCurrentStateProjectorTests
         written.PlatformBindingCommandId.Should().Be("platform-bind-1");
         written.AttemptCount.Should().Be(1);
         written.UpdatedAt.Should().Be(updatedAt);
+        written.WorkflowSourceKind.Should().Be(StudioWorkflowBindingSourceKindNames.EditorSnapshot);
+        written.WorkflowSourceDraftVersion.Should().Be(7);
+        written.WorkflowSourceHash.Should().Be("sha256:workflow-bundle");
+        written.WorkflowSourceCapturedAt.Should().Be(updatedAt);
     }
 
     [Fact]

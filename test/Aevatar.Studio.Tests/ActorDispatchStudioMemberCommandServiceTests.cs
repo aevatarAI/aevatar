@@ -256,7 +256,10 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
                         [
                             "workflow:\n  name: alpha_runtime",
                             "workflow:\n  name: beta",
-                        ]))),
+                        ],
+                        SourceKind: StudioWorkflowBindingSourceKindNames.EditorSnapshot,
+                        ExpectedDraftVersion: 7,
+                        SourceHash: "sha256:workflow-bundle"))),
             CancellationToken.None);
 
         var evt = dispatch.Dispatches.Should().ContainSingle().Which
@@ -266,6 +269,10 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
         evt.Request.Workflow.WorkflowYamls.Should().Equal(
             "workflow:\n  name: alpha_runtime",
             "workflow:\n  name: beta");
+        evt.Request.Workflow.Source.SourceKind.Should().Be(StudioMemberWorkflowBindingSourceKind.EditorSnapshot);
+        evt.Request.Workflow.Source.DraftVersion.Should().Be(7);
+        evt.Request.Workflow.Source.SourceHash.Should().Be("sha256:workflow-bundle");
+        evt.Request.Workflow.Source.SourceCapturedAtUtc.Should().NotBeNull();
     }
 
     [Fact]

@@ -31,6 +31,17 @@ message WorkflowActorSnapshot {
   google.protobuf.Timestamp started_at_utc = 20;
   string scope_id = 21;
   string run_origin = 22;
+  WorkflowRunSourceProvenanceSnapshot source_provenance = 23;
+}
+
+message WorkflowRunSourceProvenanceSnapshot {
+  string source_kind = 1;
+  string workflow_id = 2;
+  int64 draft_version = 3;
+  string workflow_revision_id = 4;
+  string binding_revision_id = 5;
+  string source_hash = 6;
+  google.protobuf.Timestamp source_captured_at_utc = 7;
 }
 
 message WorkflowRunFileRef {

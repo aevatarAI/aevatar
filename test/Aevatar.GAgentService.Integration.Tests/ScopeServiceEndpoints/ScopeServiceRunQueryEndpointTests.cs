@@ -125,6 +125,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
                 CreatedAt: createdAt,
                 UpdatedAt: updatedAt),
         ];
+        var sourceCapturedAt = DateTimeOffset.UtcNow.AddMinutes(-8);
         host.WorkflowQueryService.SnapshotsByActorId["run-actor-default-detail-1"] = new WorkflowActorSnapshot
         {
             ActorId = "run-actor-default-detail-1",
@@ -142,6 +143,14 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
             DeadLetterFailedCompensationStepId = "refund_payment",
             DeadLetterRemainingUncompensated = 2,
             DeadLetterError = "refund failed",
+            SourceProvenance = new WorkflowRunSourceProvenanceSnapshot
+            {
+                SourceKind = "editor_snapshot",
+                WorkflowId = "wf-alpha",
+                DraftVersion = 7,
+                SourceHash = "sha256:editor-snapshot",
+                SourceCapturedAtUtc = Timestamp.FromDateTimeOffset(sourceCapturedAt),
+            },
         };
 
         var response = await host.Client.GetFromJsonAsync<ScopeServiceEndpoints.ScopeServiceRunSummaryHttpResponse>("/api/scopes/scope-a/runs/run-default-detail-1");
@@ -160,6 +169,12 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
         response.DeadLetter!.FailedCompensationStepId.Should().Be("refund_payment");
         response.DeadLetter.RemainingUncompensated.Should().Be(2);
         response.DeadLetter.Error.Should().Be("refund failed");
+        response.SourceProvenance.Should().NotBeNull();
+        response.SourceProvenance!.SourceKind.Should().Be("editor_snapshot");
+        response.SourceProvenance.WorkflowId.Should().Be("wf-alpha");
+        response.SourceProvenance.DraftVersion.Should().Be(7);
+        response.SourceProvenance.SourceHash.Should().Be("sha256:editor-snapshot");
+        response.SourceProvenance.SourceCapturedAtUtc.Should().Be(sourceCapturedAt);
     }
 
     [Fact]

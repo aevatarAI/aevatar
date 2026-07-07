@@ -200,6 +200,7 @@ function toCommittedWorkflowSummary(
     stepCount: 0,
     hasLayout: false,
     updatedAtUtc: workflow.updatedAt,
+    draftVersion: 0,
   };
 }
 
@@ -224,6 +225,30 @@ function toCommittedWorkflowFile(
     draftExists: false,
     findings: [],
     updatedAtUtc: workflow.updatedAt,
+    draftVersion: 0,
+  };
+}
+
+function decodeStudioWorkflowDraftSummary(
+  value: unknown,
+  label = "StudioWorkflowDraftSummary"
+): StudioWorkflowDraftSummary {
+  const record = expectRecord(value, label);
+  return {
+    workflowId: readString(record, "workflowId", `${label}.workflowId`),
+    name: readString(record, "name", `${label}.name`),
+    description: readString(record, "description", `${label}.description`),
+    fileName: readString(record, "fileName", `${label}.fileName`),
+    filePath: readString(record, "filePath", `${label}.filePath`),
+    directoryId: readString(record, "directoryId", `${label}.directoryId`),
+    directoryLabel: readString(record, "directoryLabel", `${label}.directoryLabel`),
+    stepCount: readNumber(record, "stepCount", `${label}.stepCount`),
+    hasLayout: readBoolean(record, "hasLayout", `${label}.hasLayout`),
+    updatedAtUtc: readString(record, "updatedAtUtc", `${label}.updatedAtUtc`),
+    draftVersion:
+      record.draftVersion === null || record.draftVersion === undefined
+        ? 0
+        : readNumber(record, "draftVersion", `${label}.draftVersion`),
   };
 }
 
@@ -258,6 +283,10 @@ function decodeStudioWorkflowDraft(
     yaml: readString(record, "yaml", `${label}.yaml`),
     layout: record.layout,
     updatedAtUtc: readString(record, "updatedAtUtc", `${label}.updatedAtUtc`),
+    draftVersion:
+      record.draftVersion === null || record.draftVersion === undefined
+        ? 0
+        : readNumber(record, "draftVersion", `${label}.draftVersion`),
   };
 }
 
@@ -2132,7 +2161,19 @@ export const studioApi = {
   },
 
   listWorkflowDrafts(scopeId?: string | null): Promise<StudioWorkflowDraftSummary[]> {
-    return requestJson(withOptionalScopeId("/api/workspace/workflow-drafts", scopeId));
+    return requestDecodedJson(
+      withOptionalScopeId("/api/workspace/workflow-drafts", scopeId),
+      (value) =>
+        expectArray(
+          value,
+          "StudioWorkflowDraftSummary[]",
+          (entry, label) =>
+            decodeStudioWorkflowDraftSummary(
+              entry,
+              label ?? "StudioWorkflowDraftSummary"
+            )
+        )
+    );
   },
 
   getTemplateWorkflow(
@@ -2148,11 +2189,12 @@ export const studioApi = {
     workflowId: string,
     scopeId?: string | null
   ): Promise<StudioWorkflowDraft> {
-    return requestJson(
+    return requestDecodedJson(
       withOptionalScopeId(
         `/api/workspace/workflow-drafts/${encodeURIComponent(workflowId)}`,
         scopeId
-      )
+      ),
+      decodeStudioWorkflowDraft
     );
   },
 
@@ -2202,11 +2244,12 @@ export const studioApi = {
   updateWorkflowDraft(
     input: StudioSaveWorkflowInput & { workflowId: string }
   ): Promise<StudioWorkflowDraft> {
-    return requestJson(
+    return requestDecodedJson(
       withOptionalScopeId(
         `/api/workspace/workflow-drafts/${encodeURIComponent(input.workflowId)}`,
         input.scopeId
       ),
+      decodeStudioWorkflowDraft,
       {
         method: "PUT",
         headers: JSON_HEADERS,
@@ -2217,6 +2260,7 @@ export const studioApi = {
             fileName: trimOptional(input.fileName),
             yaml: input.yaml,
             layout: input.layout,
+            expectedDraftVersion: input.expectedDraftVersion ?? undefined,
           })
         ),
       }
@@ -2225,13 +2269,25 @@ export const studioApi = {
 
   deleteWorkflowDraft(
     workflowId: string,
-    scopeId?: string | null
+    scopeId?: string | null,
+    expectedDraftVersion?: number | null
   ): Promise<void> {
+    const path = withOptionalScopeId(
+      `/api/workspace/workflow-drafts/${encodeURIComponent(workflowId)}`,
+      scopeId
+    );
+    const normalizedExpectedDraftVersion =
+      typeof expectedDraftVersion === "number" && expectedDraftVersion > 0
+        ? expectedDraftVersion
+        : undefined;
+    const requestPath = normalizedExpectedDraftVersion
+      ? `${path}${path.includes("?") ? "&" : "?"}expectedDraftVersion=${encodeURIComponent(
+          String(normalizedExpectedDraftVersion)
+        )}`
+      : path;
+
     return requestJson(
-      withOptionalScopeId(
-        `/api/workspace/workflow-drafts/${encodeURIComponent(workflowId)}`,
-        scopeId
-      ),
+      requestPath,
       {
         method: "DELETE",
       }
@@ -2292,12 +2348,15 @@ export const studioApi = {
       return toWorkflowFile(draft, true);
     }
 
-    const draft = await requestJsonOrNull<StudioWorkflowDraft>(
+    const draftPayload = await requestJsonOrNull<unknown>(
       withOptionalScopeId(
         `/api/workspace/workflow-drafts/${encodeURIComponent(workflowId)}`,
         normalizedScopeId
       )
     );
+    const draft = draftPayload
+      ? decodeStudioWorkflowDraft(draftPayload)
+      : null;
     if (draft) {
       return toWorkflowFile(draft, true);
     }
@@ -2375,9 +2434,10 @@ export const studioApi = {
 
   deleteWorkflow(
     workflowId: string,
-    scopeId?: string | null
+    scopeId?: string | null,
+    expectedDraftVersion?: number | null
   ): Promise<void> {
-    return this.deleteWorkflowDraft(workflowId, scopeId);
+    return this.deleteWorkflowDraft(workflowId, scopeId, expectedDraftVersion);
   },
 
   parseYaml(input: {
@@ -2444,6 +2504,7 @@ export const studioApi = {
     scopeId: string;
     displayName?: string | null;
     workflowYamls: string[];
+    workflowId?: string | null;
     revisionId?: string | null;
   }): Promise<StudioScopeBindingResult> {
     return requestDecodedJson(
@@ -2456,8 +2517,13 @@ export const studioApi = {
           compactObject({
             implementationKind: "workflow",
             displayName: trimOptional(input.displayName),
-            workflowYamls:
-              input.workflowYamls.length > 0 ? input.workflowYamls : undefined,
+            workflow:
+              input.workflowYamls.length > 0
+                ? compactObject({
+                    workflowId: trimOptional(input.workflowId),
+                    workflowYamls: input.workflowYamls,
+                  })
+                : undefined,
             revisionId: trimOptional(input.revisionId),
           })
         ),
@@ -2553,6 +2619,9 @@ export const studioApi = {
             workflow: {
               workflowId,
               workflowYamls: input.workflowYamls,
+              sourceKind: trimOptional(input.sourceKind),
+              expectedDraftVersion: input.expectedDraftVersion ?? undefined,
+              sourceHash: trimOptional(input.sourceHash),
             },
             revisionId: trimOptional(input.revisionId),
           })

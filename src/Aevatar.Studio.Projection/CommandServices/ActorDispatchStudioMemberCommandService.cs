@@ -303,6 +303,7 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
                 request.Workflow = new StudioMemberWorkflowBindingRequest
                 {
                     WorkflowId = binding.Workflow?.WorkflowId ?? string.Empty,
+                    Source = BuildWorkflowBindingSource(binding.Workflow),
                 };
                 request.Workflow.WorkflowYamls.Add(binding.Workflow?.WorkflowYamls ?? []);
                 break;
@@ -340,6 +341,32 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
         request.RequestHash = ComputeRequestHash(request);
         return request;
     }
+
+    private static StudioMemberWorkflowBindingSource BuildWorkflowBindingSource(
+        StudioMemberWorkflowBindingSpec? workflow)
+    {
+        var sourceKind = ParseWorkflowBindingSourceKind(workflow?.SourceKind);
+        var source = new StudioMemberWorkflowBindingSource
+        {
+            SourceKind = sourceKind,
+            SourceHash = workflow?.SourceHash?.Trim() ?? string.Empty,
+            SourceCapturedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+        if (workflow?.ExpectedDraftVersion.HasValue == true)
+            source.DraftVersion = workflow.ExpectedDraftVersion.Value;
+
+        return source;
+    }
+
+    private static StudioMemberWorkflowBindingSourceKind ParseWorkflowBindingSourceKind(string? rawValue) =>
+        rawValue?.Trim() switch
+        {
+            null or "" => StudioMemberWorkflowBindingSourceKind.EditorSnapshot,
+            StudioWorkflowBindingSourceKindNames.SavedDraft => StudioMemberWorkflowBindingSourceKind.SavedDraft,
+            StudioWorkflowBindingSourceKindNames.EditorSnapshot => StudioMemberWorkflowBindingSourceKind.EditorSnapshot,
+            StudioWorkflowBindingSourceKindNames.InlineYamlBundle => StudioMemberWorkflowBindingSourceKind.InlineYamlBundle,
+            _ => throw new InvalidOperationException($"Unsupported workflow binding sourceKind '{rawValue}'."),
+        };
 
     private static StudioMemberGAgentEndpointKind ParseGAgentEndpointKind(string? rawValue) =>
         rawValue?.Trim().ToLowerInvariant() switch

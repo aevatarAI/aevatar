@@ -663,6 +663,20 @@ public sealed class StudioMemberService : IStudioMemberService
                     $"member '{memberId}' bind: workflowId is required for workflow members.");
             }
 
+            var sourceKind = NormalizeWorkflowBindingSourceKind(request.Workflow.SourceKind);
+            if (string.Equals(sourceKind, StudioWorkflowBindingSourceKindNames.SavedDraft, StringComparison.Ordinal) &&
+                !request.Workflow.ExpectedDraftVersion.HasValue)
+            {
+                throw new InvalidOperationException(
+                    $"member '{memberId}' bind: expectedDraftVersion is required when sourceKind is 'saved_draft'.");
+            }
+
+            if (request.Workflow.ExpectedDraftVersion is <= 0)
+            {
+                throw new InvalidOperationException(
+                    $"member '{memberId}' bind: expectedDraftVersion must be greater than 0.");
+            }
+
             if (request.Workflow.WorkflowYamls.Count == 0)
             {
                 throw new InvalidOperationException(
@@ -704,6 +718,20 @@ public sealed class StudioMemberService : IStudioMemberService
 
     private static InvalidOperationException BuildMemberNotBoundException(string memberId) =>
         new($"member '{memberId}' has no published service yet; bind the member before reading or mutating its revisions.");
+
+    private static string NormalizeWorkflowBindingSourceKind(string? sourceKind)
+    {
+        var normalized = NormalizeOptional(sourceKind);
+        return normalized switch
+        {
+            null => StudioWorkflowBindingSourceKindNames.EditorSnapshot,
+            StudioWorkflowBindingSourceKindNames.SavedDraft => StudioWorkflowBindingSourceKindNames.SavedDraft,
+            StudioWorkflowBindingSourceKindNames.EditorSnapshot => StudioWorkflowBindingSourceKindNames.EditorSnapshot,
+            StudioWorkflowBindingSourceKindNames.InlineYamlBundle => StudioWorkflowBindingSourceKindNames.InlineYamlBundle,
+            _ => throw new InvalidOperationException(
+                $"Unsupported workflow binding sourceKind '{sourceKind}'."),
+        };
+    }
 
     private readonly record struct BoundServiceContext(
         string ScopeId,

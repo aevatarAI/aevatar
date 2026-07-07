@@ -31,3 +31,24 @@ public sealed class WorkflowDraftPathConflictException : InvalidOperationExcepti
 
     public string ConflictingWorkflowId { get; }
 }
+
+public sealed class WorkflowDraftVersionConflictException : InvalidOperationException
+{
+    public WorkflowDraftVersionConflictException(
+        string workflowId,
+        long expectedDraftVersion,
+        long currentDraftVersion)
+        : base(
+            $"Workflow draft '{workflowId}' expected draftVersion {expectedDraftVersion} but current draftVersion is {currentDraftVersion}.")
+    {
+        WorkflowId = workflowId;
+        ExpectedDraftVersion = expectedDraftVersion;
+        CurrentDraftVersion = currentDraftVersion;
+    }
+
+    public string WorkflowId { get; }
+
+    public long ExpectedDraftVersion { get; }
+
+    public long CurrentDraftVersion { get; }
+}

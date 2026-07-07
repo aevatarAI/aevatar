@@ -1094,6 +1094,43 @@ public sealed class WorkflowExecutionProjectionProjectorTests
     }
 
     [Fact]
+    public async Task WorkflowExecutionCurrentStateProjector_ShouldMapSourceProvenance_FromCommittedRunState()
+    {
+        var capturedAt = new DateTimeOffset(2026, 4, 30, 10, 0, 0, TimeSpan.Zero);
+        var dispatcher = new RecordingWriteDispatcher<WorkflowExecutionCurrentStateDocument>();
+        var projector = new WorkflowExecutionCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(new DateTimeOffset(2026, 4, 30, 10, 5, 0, TimeSpan.Zero)));
+
+        await projector.ProjectAsync(
+            CreateContext(),
+            WrapCommitted(
+                new BindWorkflowRunDefinitionEvent { RunId = "root-actor" },
+                new WorkflowRunState
+                {
+                    RunId = "root-actor",
+                    Status = "bound",
+                    SourceProvenance = new WorkflowRunSourceProvenance
+                    {
+                        SourceKind = "editor_snapshot",
+                        WorkflowId = "wf-alpha",
+                        DraftVersion = 7,
+                        SourceHash = "sha256:editor-snapshot",
+                        SourceCapturedAtUtc = Timestamp.FromDateTimeOffset(capturedAt),
+                    },
+                },
+                includeEnvelopeTimestamp: false));
+
+        var document = dispatcher.Upserts.Should().ContainSingle().Subject;
+        document.SourceProvenance.Should().NotBeNull();
+        document.SourceProvenance.SourceKind.Should().Be("editor_snapshot");
+        document.SourceProvenance.WorkflowId.Should().Be("wf-alpha");
+        document.SourceProvenance.DraftVersion.Should().Be(7);
+        document.SourceProvenance.SourceHash.Should().Be("sha256:editor-snapshot");
+        document.SourceProvenance.SourceCapturedAtUtc.ToDateTimeOffset().Should().Be(capturedAt);
+    }
+
+    [Fact]
     public async Task WorkflowExecutionCurrentStateProjector_ShouldLeaveStartedAtUnset_WhenStateHasNoStartFact()
     {
         var dispatcher = new RecordingWriteDispatcher<WorkflowExecutionCurrentStateDocument>();

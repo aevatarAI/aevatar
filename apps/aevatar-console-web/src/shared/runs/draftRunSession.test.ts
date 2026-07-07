@@ -14,6 +14,10 @@ describe("draftRunSession", () => {
     const key = saveScopeDraftRunPayload({
       bundleName: "main",
       bundleYamls: ["name: main\nsteps: []"],
+      workflowId: "wf-alpha",
+      draftVersion: 7,
+      sourceKind: "editor_snapshot",
+      sourceHash: "sha256:editor",
     });
 
     expect(loadDraftRunPayload(key)).toEqual(
@@ -21,6 +25,10 @@ describe("draftRunSession", () => {
         kind: "scope_draft",
         bundleName: "main",
         bundleYamls: ["name: main\nsteps: []"],
+        workflowId: "wf-alpha",
+        draftVersion: 7,
+        sourceKind: "editor_snapshot",
+        sourceHash: "sha256:editor",
       })
     );
   });

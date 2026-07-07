@@ -34,6 +34,8 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using WorkflowSagaStatus = Aevatar.Workflow.Abstractions.WorkflowSagaStatus;
 
@@ -159,6 +161,7 @@ public static class ScopeServiceEndpoints
 
             var normalizedPrompt = request.Prompt?.Trim() ?? string.Empty;
             var llmControl = await BuildScopedLlmControlAsync(http, ct);
+            var sourceProvenance = BuildDraftRunSourceProvenance(request);
             var chatRequest = new WorkflowChatRunRequest(
                 Prompt: normalizedPrompt,
                 Source: WorkflowChatSource.InlineYamlBundle(request.WorkflowYamls),
@@ -168,7 +171,8 @@ public static class ScopeServiceEndpoints
                 ScopeId: scopeId,
                 CallerCredential: callerCredential.Credential,
                 LlmControl: ToWorkflowLlmControl(llmControl),
-                Headers: scopedHeaders);
+                Headers: scopedHeaders,
+                SourceProvenance: sourceProvenance);
 
             if (eventFormat == ScopeWorkflowEndpoints.ScopeWorkflowStreamEventFormat.Agui)
             {
@@ -195,7 +199,8 @@ public static class ScopeServiceEndpoints
                     LlmControl = ToChatLlmControlInput(llmControl),
                 },
                 chatRunService,
-                ct);
+                ct,
+                sourceProvenance: sourceProvenance);
         }
         catch (InvalidOperationException ex)
         {
@@ -280,6 +285,41 @@ public static class ScopeServiceEndpoints
         {
             return null;
         }
+    }
+
+    private static WorkflowRunSourceProvenance BuildDraftRunSourceProvenance(
+        ScopeDraftRunHttpRequest request)
+    {
+        var sourceKind = string.IsNullOrWhiteSpace(request.SourceKind)
+            ? "inline_yaml_bundle"
+            : request.SourceKind.Trim();
+        var sourceHash = string.IsNullOrWhiteSpace(request.SourceHash)
+            ? ComputeWorkflowYamlBundleHash(request.WorkflowYamls ?? [])
+            : request.SourceHash.Trim();
+
+        return new WorkflowRunSourceProvenance(
+            SourceKind: sourceKind,
+            WorkflowId: string.IsNullOrWhiteSpace(request.WorkflowId) ? null : request.WorkflowId.Trim(),
+            DraftVersion: request.DraftVersion is > 0 ? request.DraftVersion : null,
+            WorkflowRevisionId: string.IsNullOrWhiteSpace(request.WorkflowRevisionId) ? null : request.WorkflowRevisionId.Trim(),
+            BindingRevisionId: string.IsNullOrWhiteSpace(request.BindingRevisionId) ? null : request.BindingRevisionId.Trim(),
+            SourceHash: sourceHash,
+            SourceCapturedAtUtc: DateTimeOffset.UtcNow);
+    }
+
+    private static string ComputeWorkflowYamlBundleHash(IReadOnlyList<string> workflowYamls)
+    {
+        var builder = new StringBuilder();
+        foreach (var yaml in workflowYamls)
+        {
+            builder.Append(yaml?.Length ?? 0);
+            builder.Append('\n');
+            builder.Append(yaml ?? string.Empty);
+            builder.Append('\n');
+        }
+
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(builder.ToString()));
+        return $"sha256:{Convert.ToHexString(hash).ToLowerInvariant()}";
     }
 
     private static async Task<IResult> HandleUpsertBindingAsync(
@@ -3231,7 +3271,8 @@ const response = await fetch("{{invokePath}}", {
             string.Empty,
             string.Empty,
             binding.ActorId,
-            binding.CreatedAt);
+            binding.CreatedAt,
+            MapRunSourceProvenance(snapshot?.SourceProvenance));
     }
 
     private static async Task<ScopeServiceRunSummaryHttpResponse> BuildScopeRunSummaryFromRegistryAsync(
@@ -3281,7 +3322,8 @@ const response = await fetch("{{invokePath}}", {
             snapshot.CorrelationId,
             snapshot.EndpointId,
             snapshot.TargetActorId,
-            snapshot.CreatedAt);
+            snapshot.CreatedAt,
+            MapRunSourceProvenance(workflowSnapshot?.SourceProvenance));
     }
 
     private static async Task<WorkflowActorBinding?> ResolveWorkflowRunBindingAsync(
@@ -3348,7 +3390,8 @@ const response = await fetch("{{invokePath}}", {
             summary.LastOutput,
             summary.LastError,
             summary.SagaStatus,
-            summary.DeadLetter);
+            summary.DeadLetter,
+            summary.SourceProvenance);
     }
 
     private static ScopeServiceRunDeadLetterHttpResponse? BuildScopeServiceRunDeadLetter(
@@ -3361,6 +3404,22 @@ const response = await fetch("{{invokePath}}", {
             snapshot.DeadLetterFailedCompensationStepId,
             snapshot.DeadLetterRemainingUncompensated,
             snapshot.DeadLetterError);
+    }
+
+    private static ScopeServiceRunSourceProvenanceHttpResponse? MapRunSourceProvenance(
+        WorkflowRunSourceProvenanceSnapshot? source)
+    {
+        if (source == null || string.IsNullOrWhiteSpace(source.SourceKind))
+            return null;
+
+        return new ScopeServiceRunSourceProvenanceHttpResponse(
+            source.SourceKind,
+            string.IsNullOrWhiteSpace(source.WorkflowId) ? null : source.WorkflowId,
+            source.DraftVersion > 0 ? source.DraftVersion : null,
+            string.IsNullOrWhiteSpace(source.WorkflowRevisionId) ? null : source.WorkflowRevisionId,
+            string.IsNullOrWhiteSpace(source.BindingRevisionId) ? null : source.BindingRevisionId,
+            string.IsNullOrWhiteSpace(source.SourceHash) ? null : source.SourceHash,
+            source.SourceCapturedAtUtc?.ToDateTimeOffset());
     }
 
     private static ServiceDeploymentSnapshot? ResolveRunDeployment(
@@ -4185,7 +4244,13 @@ const response = await fetch("{{invokePath}}", {
         string? SessionId = null,
         Dictionary<string, string>? Headers = null,
         string? EventFormat = null,
-        IReadOnlyList<StreamContentPartHttpRequest>? InputParts = null);
+        IReadOnlyList<StreamContentPartHttpRequest>? InputParts = null,
+        string? WorkflowId = null,
+        long? DraftVersion = null,
+        string? SourceKind = null,
+        string? SourceHash = null,
+        string? WorkflowRevisionId = null,
+        string? BindingRevisionId = null);
 
     public sealed record UpsertScopeBindingHttpRequest(
         string ImplementationKind,
@@ -4552,7 +4617,8 @@ const response = await fetch("{{invokePath}}", {
         string CorrelationId,
         string EndpointId,
         string TargetActorId,
-        DateTimeOffset? CreatedAt = null);
+        DateTimeOffset? CreatedAt = null,
+        ScopeServiceRunSourceProvenanceHttpResponse? SourceProvenance = null);
 
     public sealed record MemberScopeServiceRunSummaryHttpResponse(
         string ScopeId,
@@ -4577,7 +4643,17 @@ const response = await fetch("{{invokePath}}", {
         string LastOutput,
         string LastError,
         WorkflowSagaStatus SagaStatus,
-        ScopeServiceRunDeadLetterHttpResponse? DeadLetter);
+        ScopeServiceRunDeadLetterHttpResponse? DeadLetter,
+        ScopeServiceRunSourceProvenanceHttpResponse? SourceProvenance = null);
+
+    public sealed record ScopeServiceRunSourceProvenanceHttpResponse(
+        string SourceKind,
+        string? WorkflowId,
+        long? DraftVersion,
+        string? WorkflowRevisionId,
+        string? BindingRevisionId,
+        string? SourceHash,
+        DateTimeOffset? SourceCapturedAtUtc);
 
     public sealed record ScopeServiceRunDeadLetterHttpResponse(
         string FailedCompensationStepId,

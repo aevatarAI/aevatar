@@ -233,6 +233,11 @@ message StudioMemberBindingRunCurrentStateDocument {
   string result_revision_id = 41;
   string result_implementation_kind = 42;
   string result_expected_actor_id = 43;
+
+  string workflow_source_kind = 50;
+  int64 workflow_source_draft_version = 51;
+  string workflow_source_hash = 52;
+  google.protobuf.Timestamp workflow_source_captured_at = 53;
 }
 
 // ─── StudioTeam Current State ReadModel ───

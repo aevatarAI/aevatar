@@ -30,6 +30,7 @@ public sealed class WorkflowExecutionReadModelMapper
             RequestedSteps = 0,
             CompletedSteps = 0,
             RoleReplyCount = 0,
+            SourceProvenance = MapSourceProvenance(source.SourceProvenance),
             InputFileRefs = { source.InputFileRefs.Select(MapInputFileRef) },
         };
     }
@@ -179,6 +180,24 @@ public sealed class WorkflowExecutionReadModelMapper
             OwnerRunId = source.OwnerRunId,
             OwnerScopeId = source.OwnerScopeId,
         };
+
+    private static WorkflowRunSourceProvenanceSnapshot? MapSourceProvenance(
+        WorkflowRunSourceProvenanceReadModel? source)
+    {
+        if (source == null || string.IsNullOrWhiteSpace(source.SourceKind))
+            return null;
+
+        return new WorkflowRunSourceProvenanceSnapshot
+        {
+            SourceKind = source.SourceKind?.Trim() ?? string.Empty,
+            WorkflowId = source.WorkflowId?.Trim() ?? string.Empty,
+            DraftVersion = source.DraftVersion,
+            WorkflowRevisionId = source.WorkflowRevisionId?.Trim() ?? string.Empty,
+            BindingRevisionId = source.BindingRevisionId?.Trim() ?? string.Empty,
+            SourceHash = source.SourceHash?.Trim() ?? string.Empty,
+            SourceCapturedAtUtc = source.SourceCapturedAtUtc,
+        };
+    }
 
     private static WorkflowRunCompletionStatus MapCompletionStatus(
         WorkflowExecutionCompletionStatus status)

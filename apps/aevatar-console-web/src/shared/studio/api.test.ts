@@ -390,6 +390,7 @@ describe('studioApi host-session requests', () => {
         yaml: 'name: scope-demo\nsteps: []\n',
         layout: null,
         updatedAtUtc: '2026-04-16T00:00:00Z',
+        draftVersion: 3,
       }),
     } as Response);
     global.fetch = fetchMock as typeof global.fetch;
@@ -436,6 +437,7 @@ describe('studioApi host-session requests', () => {
               stepCount: 1,
               hasLayout: true,
               updatedAtUtc: '2026-04-16T00:00:00Z',
+              draftVersion: 7,
             },
           ],
         } as Response;
@@ -492,6 +494,7 @@ describe('studioApi host-session requests', () => {
         stepCount: 1,
         hasLayout: true,
         updatedAtUtc: '2026-04-16T00:00:00Z',
+        draftVersion: 7,
       },
       {
         activeRevisionId: 'rev-published',
@@ -506,6 +509,7 @@ describe('studioApi host-session requests', () => {
         stepCount: 0,
         hasLayout: false,
         updatedAtUtc: '2026-04-14T00:00:00Z',
+        draftVersion: 0,
       },
     ]);
   });
@@ -577,6 +581,7 @@ describe('studioApi host-session requests', () => {
       draftExists: false,
       findings: [],
       updatedAtUtc: '2026-04-16T00:00:00Z',
+      draftVersion: 0,
     });
   });
 
@@ -634,6 +639,7 @@ describe('studioApi host-session requests', () => {
       draftExists: false,
       findings: [],
       updatedAtUtc: '2026-04-17T00:00:00Z',
+      draftVersion: 0,
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0]?.[0]).toBe(
@@ -667,6 +673,7 @@ describe('studioApi host-session requests', () => {
         yaml: 'name: scope-demo\nsteps: []\n',
         layout: null,
         updatedAtUtc: '2026-04-16T00:00:00Z',
+        draftVersion: 4,
       }),
     } as Response);
     global.fetch = fetchMock as typeof global.fetch;
@@ -720,6 +727,7 @@ describe('studioApi host-session requests', () => {
 
     await studioApi.saveWorkflow({
       workflowId: 'workflow-1',
+      expectedDraftVersion: 3,
       scopeId: 'scope-1',
       directoryId: 'scope:scope-1',
       workflowName: 'scope-demo',
@@ -732,6 +740,12 @@ describe('studioApi host-session requests', () => {
     ];
     expect(input).toBe('/api/workspace/workflow-drafts/workflow-1?scopeId=scope-1');
     expect(init?.method).toBe('PUT');
+    expect(JSON.parse(String(init?.body))).toEqual({
+      directoryId: 'scope:scope-1',
+      workflowName: 'scope-demo',
+      yaml: 'name: scope-demo\nsteps: []\n',
+      expectedDraftVersion: 3,
+    });
     expect(new Headers(init?.headers).get('Authorization')).toBe(
       'Bearer access-token',
     );
@@ -756,13 +770,13 @@ describe('studioApi host-session requests', () => {
     } as Response);
     global.fetch = fetchMock as typeof global.fetch;
 
-    await studioApi.deleteWorkflow('workflow-1', 'scope-1');
+    await studioApi.deleteWorkflow('workflow-1', 'scope-1', 3);
 
     const [input, init] = fetchMock.mock.calls[0] as [
       string,
       RequestInit | undefined,
     ];
-    expect(input).toBe('/api/workspace/workflow-drafts/workflow-1?scopeId=scope-1');
+    expect(input).toBe('/api/workspace/workflow-drafts/workflow-1?scopeId=scope-1&expectedDraftVersion=3');
     expect(init?.method).toBe('DELETE');
     expect(new Headers(init?.headers).get('Authorization')).toBe(
       'Bearer access-token',
@@ -942,6 +956,9 @@ describe('studioApi host-session requests', () => {
       displayName: 'joker',
       workflowId: 'workflow-stable-1',
       workflowYamls: [runtimeWorkflowYaml],
+      sourceKind: 'editor_snapshot',
+      expectedDraftVersion: 7,
+      sourceHash: 'sha256:editor',
       revisionId: 'rev-1',
     });
 
@@ -966,6 +983,9 @@ describe('studioApi host-session requests', () => {
       workflow: {
         workflowId: 'workflow-stable-1',
         workflowYamls: [runtimeWorkflowYaml],
+        sourceKind: 'editor_snapshot',
+        expectedDraftVersion: 7,
+        sourceHash: 'sha256:editor',
       },
       revisionId: 'rev-1',
     });

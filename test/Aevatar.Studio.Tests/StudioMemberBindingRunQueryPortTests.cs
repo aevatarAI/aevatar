@@ -183,6 +183,38 @@ public sealed class StudioMemberBindingRunQueryPortTests
     }
 
     [Fact]
+    public async Task GetAsync_ShouldMapWorkflowSourceFromBindingRunDocument()
+    {
+        var capturedAt = DateTimeOffset.Parse("2026-04-30T10:00:00Z");
+        var actorId = StudioMemberConventions.BuildBindingRunActorId("bind-1");
+        var reader = new StubDocumentReader([
+            new StudioMemberBindingRunCurrentStateDocument
+            {
+                Id = actorId,
+                ActorId = actorId,
+                BindingRunId = "bind-1",
+                ScopeId = "scope-1",
+                MemberId = "m-1",
+                Status = StudioMemberBindingRunStatusNames.Succeeded,
+                WorkflowSourceKind = StudioWorkflowBindingSourceKindNames.EditorSnapshot,
+                WorkflowSourceDraftVersion = 7,
+                WorkflowSourceHash = "sha256:workflow-bundle",
+                WorkflowSourceCapturedAt = Timestamp.FromDateTimeOffset(capturedAt),
+            },
+        ]);
+        var port = new ProjectionStudioMemberBindingRunQueryPort(reader);
+
+        var run = await port.GetAsync("scope-1", "m-1", "bind-1");
+
+        run.Should().NotBeNull();
+        run!.WorkflowSource.Should().NotBeNull();
+        run.WorkflowSource!.SourceKind.Should().Be(StudioWorkflowBindingSourceKindNames.EditorSnapshot);
+        run.WorkflowSource.DraftVersion.Should().Be(7);
+        run.WorkflowSource.SourceHash.Should().Be("sha256:workflow-bundle");
+        run.WorkflowSource.SourceCapturedAtUtc.Should().Be(capturedAt);
+    }
+
+    [Fact]
     public async Task GetAsync_ShouldOmitResult_WhenCoreResultFieldsAreIncomplete()
     {
         var actorId = StudioMemberConventions.BuildBindingRunActorId("bind-1");
