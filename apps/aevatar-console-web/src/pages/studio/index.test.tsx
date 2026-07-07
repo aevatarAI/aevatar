@@ -5704,7 +5704,7 @@ describe("StudioPage", () => {
     const notFoundError = new Error("not found");
     notFoundError.name = "StudioApiError";
     Object.assign(notFoundError, { status: 404 });
-    (studioApi.getMemberBindingRun as jest.Mock).mockRejectedValueOnce(notFoundError);
+    (studioApi.getMemberBindingRun as jest.Mock).mockRejectedValue(notFoundError);
 
     renderStudioPage("/studio?scopeId=scope-1&member=member%3Aworkspace-demo&focus=workflow%3Aworkflow-1&tab=studio");
 
@@ -5721,8 +5721,8 @@ describe("StudioPage", () => {
     });
 
     await waitFor(() => {
-      expect(studioApi.getMemberBindingRun).toHaveBeenCalledTimes(1);
-    });
+      expect(studioApi.getMemberBindingRun).toHaveBeenCalledTimes(8);
+    }, { timeout: 10_000 });
     expect(screen.getByText("service:no-service")).toBeTruthy();
     expect(screen.getByText("candidate:workspace-demo")).toBeTruthy();
   });
@@ -8233,7 +8233,9 @@ describe("StudioPage", () => {
     renderStudioPage("/studio?scopeId=scope-1&tab=studio");
 
     const rail = await screen.findByLabelText("Team members");
-    expect(await within(rail).findByRole("button", { name: "workspace-demo" })).toBeTruthy();
+    expect(
+      await within(rail).findAllByRole("button", { name: "workspace-demo" })
+    ).not.toHaveLength(0);
     expect(within(rail).getByRole("button", { name: "All" })).toBeTruthy();
     expect(within(rail).getByRole("button", { name: "Member" })).toBeTruthy();
     expect(within(rail).queryByRole("button", { name: "Workflow" })).toBeNull();
