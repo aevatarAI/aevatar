@@ -33,7 +33,13 @@ const CallbackPage: React.FC = () => {
       }
     };
 
-    if (!loadStoredAuthSession()) {
+    const callbackParams = new URLSearchParams(window.location.search);
+    const hasCallbackPayload =
+      callbackParams.has('code') ||
+      callbackParams.has('state') ||
+      callbackParams.has('error');
+
+    if (hasCallbackPayload || !loadStoredAuthSession()) {
       void finishLogin();
     } else {
       window.location.replace(CONSOLE_HOME_ROUTE);
