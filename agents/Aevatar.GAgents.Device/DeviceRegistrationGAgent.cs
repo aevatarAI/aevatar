@@ -38,12 +38,17 @@ public sealed class DeviceRegistrationGAgent : GAgentBase<DeviceRegistrationStat
         {
             Id = Guid.NewGuid().ToString("N"),
             ScopeId = cmd.ScopeId,
+            // Legacy plaintext key retained for back-compat (empty for new writes that carry HmacKeyRef).
             HmacKey = cmd.HmacKey,
             NyxConversationId = cmd.NyxConversationId,
             Description = cmd.Description,
             DeviceEventTargetActorId = cmd.DeviceEventTargetActorId,
             CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
+
+        // Encryption happened at ingress (vault.PutAsync); the actor only carries the reference.
+        if (cmd.HmacKeyRef is not null)
+            entry.HmacKeyRef = cmd.HmacKeyRef;
 
         await PersistDomainEventAsync(new DeviceRegisteredEvent { Entry = entry });
         Logger.LogInformation("Registered device: id={Id}, scope={ScopeId}", entry.Id, entry.ScopeId);

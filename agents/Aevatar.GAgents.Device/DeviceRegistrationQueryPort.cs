@@ -38,6 +38,7 @@ public sealed class DeviceRegistrationQueryPort : IDeviceRegistrationQueryPort
             Id = document.Id ?? string.Empty,
             ScopeId = document.ScopeId ?? string.Empty,
             HmacKey = document.HmacKey ?? string.Empty,
+            HmacKeyRef = document.HmacKeyRef,
             NyxConversationId = document.NyxConversationId ?? string.Empty,
             Description = document.Description ?? string.Empty,
             DeviceEventTargetActorId = document.DeviceEventTargetActorId ?? string.Empty,
