@@ -92,6 +92,12 @@ public sealed class ServiceCollectionExtensionsTests
             .Should().Be(0);
         services.Count(descriptor => descriptor.ServiceType == typeof(INyxChannelBotProvisioningService))
             .Should().Be(2);
+        provider.GetServices<IChannelNativeMessageSender>()
+            .Select(sender => sender.GetType())
+            .Should()
+            .Contain(typeof(LarkChannelNativeMessageSender))
+            .And
+            .Contain(typeof(TelegramChannelNativeMessageSender));
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(ChannelRelayRegistrationFacade));
         services.Should().Contain(descriptor =>

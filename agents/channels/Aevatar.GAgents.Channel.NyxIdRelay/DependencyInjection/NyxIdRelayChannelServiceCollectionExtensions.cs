@@ -30,6 +30,7 @@ public static class NyxIdRelayChannelServiceCollectionExtensions
         // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=public/manual projection refresh dispatch, new=startup-owned projection refresh
         ArgumentNullException.ThrowIfNull(services);
 
+        services.TryAddSingleton<NyxIdToolOptions>();
         services.TryAddSingleton<NyxIdApiClient>();
         services.TryAddSingleton<ICommandContextPolicy, DefaultCommandContextPolicy>();
         services.TryAddSingleton<ChannelRegistrationCommandFacade>();
@@ -59,6 +60,12 @@ public static class NyxIdRelayChannelServiceCollectionExtensions
         services.TryAddSingleton<ChannelPlatformReplyService>();
         services.TryAddSingleton<NyxIdRelayOutboundPort>();
         services.TryAddSingleton<ILarkOutboundRelayDispatcher, LarkOutboundRelayDispatcher>();
+        services.TryAddSingleton<LarkChannelNativeMessageSender>();
+        services.TryAddSingleton<TelegramChannelNativeMessageSender>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelNativeMessageSender, LarkChannelNativeMessageSender>(
+            sp => sp.GetRequiredService<LarkChannelNativeMessageSender>()));
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelNativeMessageSender, TelegramChannelNativeMessageSender>(
+            sp => sp.GetRequiredService<TelegramChannelNativeMessageSender>()));
         // Mainnet workflow/human interaction delivery must go through the channel-neutral
         // relay path; platform packages keep only native rendering/transport adapters.
         services.Replace(ServiceDescriptor.Singleton<IChannelInteractionNotificationPort, NyxIdRelayChannelInteractionNotificationPort>());
