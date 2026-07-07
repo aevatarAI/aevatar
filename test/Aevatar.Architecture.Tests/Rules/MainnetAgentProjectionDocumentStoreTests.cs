@@ -138,6 +138,8 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
         services.Configure<AevatarOAuthClientEsAclOptions>(options =>
             options.EnforcementMode = AevatarOAuthClientEsAclEnforcementMode.Strict);
         services.AddMainnetAgentProjectionDocumentStores(BuildElasticsearchConfiguration());
+        services.AddSingleton<IOAuthClientEsAclProbe>(new FakeOAuthClientEsAclProbe(EsAclProbeResult.Restricted(
+            "Test grant is restricted.")));
 
         await using var provider = services.BuildServiceProvider();
         var guard = ActivatorUtilities.CreateInstance<AevatarOAuthClientEsAclStartupGuard>(provider);
@@ -159,7 +161,7 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
         });
         services.AddMainnetAgentProjectionDocumentStores(BuildElasticsearchConfiguration());
         services.Replace(ServiceDescriptor.Singleton<IOAuthClientEsAclProbe>(
-            new FixedOAuthClientEsAclProbe(EsAclProbeResult.Restricted("test grant is restricted"))));
+            new FakeOAuthClientEsAclProbe(EsAclProbeResult.Restricted("Test grant is restricted."))));
 
         await using var provider = services.BuildServiceProvider();
         var options = provider.GetRequiredService<IOptions<AevatarOAuthClientEsAclOptions>>().Value;
@@ -176,6 +178,7 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
         var configuration = new ConfigurationBuilder().Build();
         var services = new ServiceCollection();
 
+        services.AddSingleton<ISecretVault, InMemorySecretVault>();
         services.AddChannelRuntime(configuration);
         services.AddChannelIdentity(configuration);
         services.AddChatRoutingAgents(configuration);
@@ -183,7 +186,6 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
         services.AddScheduledAgents(configuration);
         services.AddStatusDashboard(configuration);
         services.AddStreamingProxy(configuration);
-        services.AddSingleton<ISecretVault, InMemorySecretVault>();
 
         return services;
     }
@@ -215,7 +217,7 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
         Assert.IsType<TStore>(provider.GetRequiredService<IProjectionDocumentWriter<TDocument>>());
     }
 
-    private sealed class FixedOAuthClientEsAclProbe(EsAclProbeResult result) : IOAuthClientEsAclProbe
+    private sealed class FakeOAuthClientEsAclProbe(EsAclProbeResult result) : IOAuthClientEsAclProbe
     {
         public Task<EsAclProbeResult> ProbeAsync(CancellationToken cancellationToken = default)
         {

@@ -24,9 +24,8 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
         var handler = new RecordingHandler("""{"code":0,"data":{"message_id":"om_1"}}""");
         var port = new NyxIdRelayChannelInteractionNotificationPort(
             registry,
-            CreateNyxClient(handler),
-            CreateLarkRelayDispatcher(handler),
             [new LarkChannelNativeMessageProducer(new LarkMessageComposer())],
+            [new LarkChannelNativeMessageSender(CreateLarkOutboundDispatcher(handler))],
             NullLogger<NyxIdRelayChannelInteractionNotificationPort>.Instance);
 
         await port.DeliverAsync(BuildApprovalRequest("agent-lark-1"), CancellationToken.None);
@@ -51,9 +50,8 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
         var handler = new RecordingHandler("""{"ok":true,"result":{"message_id":7}}""");
         var port = new NyxIdRelayChannelInteractionNotificationPort(
             registry,
-            CreateNyxClient(handler),
-            Substitute.For<ILarkOutboundRelayDispatcher>(),
             [new TelegramChannelNativeMessageProducer(new TelegramMessageComposer())],
+            [new TelegramChannelNativeMessageSender(CreateNyxClient(handler))],
             NullLogger<NyxIdRelayChannelInteractionNotificationPort>.Instance);
 
         await port.DeliverAsync(BuildApprovalRequest("agent-telegram-1"), CancellationToken.None);
@@ -78,9 +76,8 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
         var handler = new RecordingHandler("""{"ok":false,"error_code":403,"description":"Forbidden: bot was blocked by the user"}""");
         var port = new NyxIdRelayChannelInteractionNotificationPort(
             registry,
-            CreateNyxClient(handler),
-            Substitute.For<ILarkOutboundRelayDispatcher>(),
             [new TelegramChannelNativeMessageProducer(new TelegramMessageComposer())],
+            [new TelegramChannelNativeMessageSender(CreateNyxClient(handler))],
             NullLogger<NyxIdRelayChannelInteractionNotificationPort>.Instance);
 
         Func<Task> act = () => port.DeliverAsync(BuildApprovalRequest("agent-telegram-1"), CancellationToken.None);
@@ -96,9 +93,8 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
         var handler = new RecordingHandler("""{"code":0,"data":{"message_id":"om_1"}}""");
         var port = new NyxIdRelayChannelInteractionNotificationPort(
             registry,
-            CreateNyxClient(handler),
-            CreateLarkRelayDispatcher(handler),
             [new LarkChannelNativeMessageProducer(new LarkMessageComposer())],
+            [new LarkChannelNativeMessageSender(CreateLarkOutboundDispatcher(handler))],
             NullLogger<NyxIdRelayChannelInteractionNotificationPort>.Instance);
         var template = new InteractionTemplateSpec { TemplateId = "tpl-1" };
         template.TemplateVariable["run"] = "run-1";
@@ -131,8 +127,7 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
         var registry = BuildRegistry(BuildTarget("agent-discord-1", "discord", "channel-1"));
         var port = new NyxIdRelayChannelInteractionNotificationPort(
             registry,
-            CreateNyxClient(new RecordingHandler("""{"ok":true}""")),
-            Substitute.For<ILarkOutboundRelayDispatcher>(),
+            [],
             [],
             NullLogger<NyxIdRelayChannelInteractionNotificationPort>.Instance);
 
@@ -140,6 +135,22 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
 
         await act.Should().ThrowAsync<NotSupportedException>()
             .WithMessage("*No channel message producer is registered for platform: discord*");
+    }
+
+    [Fact]
+    public async Task DeliverAsync_WhenNoSenderRegistered_ShouldReturnExplicitUnsupportedResult()
+    {
+        var registry = BuildRegistry(BuildTarget("agent-telegram-1", "telegram", "12345"));
+        var port = new NyxIdRelayChannelInteractionNotificationPort(
+            registry,
+            [new TelegramChannelNativeMessageProducer(new TelegramMessageComposer())],
+            [],
+            NullLogger<NyxIdRelayChannelInteractionNotificationPort>.Instance);
+
+        Func<Task> act = () => port.DeliverAsync(BuildApprovalRequest("agent-telegram-1"), CancellationToken.None);
+
+        await act.Should().ThrowAsync<NotSupportedException>()
+            .WithMessage("*No channel message sender is registered for platform: telegram*");
     }
 
     private static ChannelInteractionNotificationRequest BuildApprovalRequest(string deliveryTargetId) =>
@@ -204,8 +215,8 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
 
-    private static ILarkOutboundRelayDispatcher CreateLarkRelayDispatcher(HttpMessageHandler handler) =>
-        new LarkOutboundRelayDispatcher(new LarkOutboundDispatcher(CreateNyxClient(handler), NullLogger.Instance));
+    private static ILarkOutboundDispatcher CreateLarkOutboundDispatcher(HttpMessageHandler handler) =>
+        new LarkOutboundDispatcher(CreateNyxClient(handler), NullLogger.Instance);
 
     private sealed class RecordingHandler(string responseBody) : HttpMessageHandler
     {

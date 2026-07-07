@@ -240,7 +240,7 @@ public sealed class ElasticsearchAuditTrailArtifactStoreTests
                 .WithPreserveProtoFieldNames(true)
                 .WithFormatDefaultValues(true));
 
-        return $$"""{"_source":{{formatter.Format(storageDocument)}}}""";
+        return "{\"_source\":" + formatter.Format(storageDocument) + "}";
     }
 
     private static string BuildSearchPayload(AuditTrailDocument document, string sortJson)
@@ -251,19 +251,11 @@ public sealed class ElasticsearchAuditTrailArtifactStoreTests
                 .WithPreserveProtoFieldNames(true)
                 .WithFormatDefaultValues(true));
 
-        var sourceJson = formatter.Format(storageDocument);
-        return $$"""
-               {
-                 "hits": {
-                   "hits": [
-                     {
-                       "_source": {{sourceJson}},
-                       "sort": {{sortJson}}
-                     }
-                   ]
-                 }
-               }
-               """;
+        return "{\"hits\":{\"hits\":[{\"_source\":"
+            + formatter.Format(storageDocument)
+            + ",\"sort\":"
+            + sortJson
+            + "}]}}";
     }
 
     private static HttpResponseMessage CreateJsonResponse(HttpStatusCode statusCode, string json)

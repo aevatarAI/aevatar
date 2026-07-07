@@ -1,10 +1,9 @@
 using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
-using Aevatar.GAgents.Platform.Lark;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
-namespace Aevatar.GAgents.Scheduled;
+namespace Aevatar.GAgents.Platform.Lark;
 
 /// <summary>
 /// Sends new Lark messages through the NyxID proxy and returns typed delivery outcomes.

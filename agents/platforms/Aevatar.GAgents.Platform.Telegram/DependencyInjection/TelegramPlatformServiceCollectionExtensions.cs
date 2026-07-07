@@ -1,3 +1,4 @@
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgents.Channel.Abstractions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -18,10 +19,15 @@ public static class TelegramPlatformServiceCollectionExtensions
 
         services.TryAddSingleton<TelegramMessageComposer>();
         services.TryAddSingleton<TelegramChannelNativeMessageProducer>();
+        services.TryAddSingleton<NyxIdToolOptions>();
+        services.TryAddSingleton<NyxIdApiClient>();
+        services.TryAddSingleton<TelegramChannelNativeMessageSender>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IMessageComposer, TelegramMessageComposer>(
             sp => sp.GetRequiredService<TelegramMessageComposer>()));
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelNativeMessageProducer, TelegramChannelNativeMessageProducer>(
             sp => sp.GetRequiredService<TelegramChannelNativeMessageProducer>()));
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelNativeMessageSender, TelegramChannelNativeMessageSender>(
+            sp => sp.GetRequiredService<TelegramChannelNativeMessageSender>()));
         services.TryAddSingleton<TelegramPayloadRedactor>();
 
         return services;

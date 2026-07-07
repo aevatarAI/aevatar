@@ -480,8 +480,15 @@ function randomString(len){ const a=new Uint8Array(len); crypto.getRandomValues(
 function getToken(){ const raw=localStorage.getItem(TOKEN_KEY); if(!raw) return null; try { return JSON.parse(raw); } catch(e){ console.warn("studio: token parse failed", e); } return null; }
 function setToken(t){ localStorage.setItem(TOKEN_KEY, JSON.stringify(t)); }
 function clearToken(){ localStorage.removeItem(TOKEN_KEY); }
+function isEmbeddedInAdmin(){ try { return window.parent && window.parent !== window && window.frameElement && window.frameElement.getAttribute("data-console-frame") === "1"; } catch(e){ return false; } }
+function notifyAdminShellAuth(type, reason){
+  if(!isEmbeddedInAdmin()) return false;
+  window.parent.postMessage({ source:"aevatar-backend-console-suite", type, reason: reason || "" }, location.origin);
+  return true;
+}
 
 async function beginLogin(){
+  if(notifyAdminShellAuth("login-request")) return;
   const verifier = randomString(64);
   const st = randomString(32);
   const challenge = await sha256(verifier);
@@ -538,8 +545,8 @@ async function api(path){
   return await res.json();
 }
 
-function signOut(){ clearToken(); beginLogin(); }
-function signOutSilent(){ clearToken(); state.signedIn = false; render(); }
+function signOut(){ clearToken(); if(notifyAdminShellAuth("auth-required", "已登出 NyxID，请重新登录。")) return; beginLogin(); }
+function signOutSilent(){ clearToken(); state.signedIn = false; if(notifyAdminShellAuth("auth-required", "登录已过期，请重新使用 NyxID 登录。")) return; render(); }
 
 const OBS = "/workflow/observatory";   // 运行观测台路由
 
@@ -1433,7 +1440,7 @@ document.body.appendChild(ctxToggleBtn);
 (async function init(){
   try { await completeLoginIfCallback(); }
   catch(e){ console.warn("studio: login callback failed", e); }
-  if(!getToken()){ state.signedIn = false; render(); return; }
+  if(!getToken()){ state.signedIn = false; if(notifyAdminShellAuth("auth-required", "登录已过期，请重新使用 NyxID 登录。")) return; render(); return; }
   state.signedIn = true;
   // Sessions are owned by this page (localStorage); restore + pick the most recent.
   state.sessions = loadSessions();
