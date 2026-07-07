@@ -55,6 +55,7 @@ start_host() {
     AEVATAR_ActorRuntime__Provider=Orleans \
     AEVATAR_ActorRuntime__OrleansStreamBackend=InMemory \
     AEVATAR_ActorRuntime__OrleansPersistenceBackend=InMemory \
+    AEVATAR_ActorRuntime__SecretStoreBackend=InMemory \
     AEVATAR_Orleans__ClusteringMode=Development \
     AEVATAR_Orleans__ClusterId="${cluster_id}" \
     AEVATAR_Orleans__ServiceId="${service_id}" \
