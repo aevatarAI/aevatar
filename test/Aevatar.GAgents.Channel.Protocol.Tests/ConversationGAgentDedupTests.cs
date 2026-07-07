@@ -3068,6 +3068,7 @@ public sealed class ConversationGAgentDedupTests
         public Task<ConversationStreamChunkResult> RunStreamChunkAsync(
             LlmReplyStreamChunkEvent chunk,
             string? currentPlatformMessageId,
+            NyxRelayTextOperationKind operation,
             ConversationTurnRuntimeContext runtimeContext,
             CancellationToken ct)
         {

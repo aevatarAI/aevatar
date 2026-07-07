@@ -1362,13 +1362,12 @@ public sealed class AgentRunLarkCardDeliveryTests
         public Task<ConversationStreamChunkResult> RunStreamChunkAsync(
             LlmReplyStreamChunkEvent chunk,
             string? currentPlatformMessageId,
+            NyxRelayTextOperationKind operation,
             ConversationTurnRuntimeContext runtimeContext,
             CancellationToken ct)
         {
             StreamCalls.Add(new StreamCall(
-                string.IsNullOrWhiteSpace(currentPlatformMessageId)
-                    ? NyxRelayTextOperationKind.Interim
-                    : NyxRelayTextOperationKind.Interim,
+                operation,
                 chunk.AccumulatedText,
                 currentPlatformMessageId));
             return Task.FromResult(ConversationStreamChunkResult.Succeeded(currentPlatformMessageId ?? "om"));

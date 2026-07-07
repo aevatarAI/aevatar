@@ -1,6 +1,4 @@
-using Aevatar.GAgents.Platform.Lark;
-
-namespace Aevatar.GAgents.Scheduled;
+namespace Aevatar.GAgents.Platform.Lark;
 
 /// <summary>
 /// Narrow boundary for posting new outbound Lark messages from actor-owned execution paths.
@@ -22,7 +20,7 @@ public interface ILarkOutboundDispatcher
 }
 
 public sealed record LarkSendNewMessageRequest(
-    string NyxApiKey,
+    string NyxBearerToken,
     string NyxProviderSlug,
     string MessageType,
     string ContentJson,

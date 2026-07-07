@@ -158,7 +158,7 @@ internal sealed class FeishuCardOutboundMessageSender
     {
         var result = await ResolveLarkOutboundDispatcher().SendNewMessageAsync(
             new LarkSendNewMessageRequest(
-                target.NyxApiKey,
+                NyxBearerToken: target.NyxApiKey,
                 target.NyxProviderSlug,
                 messageType,
                 contentJson,

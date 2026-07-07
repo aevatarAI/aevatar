@@ -1,10 +1,9 @@
 using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
-using Aevatar.GAgents.Platform.Lark;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
-namespace Aevatar.GAgents.Scheduled;
+namespace Aevatar.GAgents.Platform.Lark;
 
 /// <summary>
 /// Sends new Lark messages through the NyxID proxy and returns typed delivery outcomes.
@@ -73,7 +72,7 @@ public sealed class LarkOutboundDispatcher : ILarkOutboundDispatcher
         });
 
         var response = await _client.ProxyRequestAsync(
-            request.NyxApiKey,
+            request.NyxBearerToken,
             request.NyxProviderSlug,
             $"open-apis/im/v1/messages?receive_id_type={Uri.EscapeDataString(target.ReceiveIdType)}",
             "POST",
@@ -121,8 +120,8 @@ public sealed class LarkOutboundDispatcher : ILarkOutboundDispatcher
 
     private static void Validate(LarkSendNewMessageRequest request)
     {
-        if (string.IsNullOrWhiteSpace(request.NyxApiKey))
-            throw new ArgumentException("NyxID API key is required.", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.NyxBearerToken))
+            throw new ArgumentException("NyxID bearer token is required.", nameof(request));
         if (string.IsNullOrWhiteSpace(request.NyxProviderSlug))
             throw new ArgumentException("NyxID provider slug is required.", nameof(request));
         if (string.IsNullOrWhiteSpace(request.MessageType))

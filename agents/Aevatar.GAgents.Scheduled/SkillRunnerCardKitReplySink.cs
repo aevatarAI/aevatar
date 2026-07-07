@@ -46,7 +46,7 @@ internal sealed class SkillRunnerCardKitReplySink
         _cardKit = cardKit ?? throw new ArgumentNullException(nameof(cardKit));
         _outboundDispatcher = outboundDispatcher ?? throw new ArgumentNullException(nameof(outboundDispatcher));
         _interactiveMessageTemplate = interactiveMessageTemplate ?? throw new ArgumentNullException(nameof(interactiveMessageTemplate));
-        _token = interactiveMessageTemplate.NyxApiKey;
+        _token = interactiveMessageTemplate.NyxBearerToken;
         _logger = logger;
     }
 

@@ -134,7 +134,7 @@ public sealed class LarkOutboundDispatcherTests
 
     public static TheoryData<LarkSendNewMessageRequest, string> InvalidRequests => new()
     {
-        { CreateRequest(nyxApiKey: " "), "NyxID API key is required." },
+        { CreateRequest(nyxBearerToken: " "), "NyxID bearer token is required." },
         { CreateRequest(nyxProviderSlug: " "), "NyxID provider slug is required." },
         { CreateRequest(messageType: " "), "Lark message type is required." },
         { CreateRequest(contentJson: " "), "Lark message content JSON is required." },
@@ -187,13 +187,13 @@ public sealed class LarkOutboundDispatcherTests
 
     private static LarkSendNewMessageRequest CreateRequest(
         LarkReceiveTarget? fallback = null,
-        string nyxApiKey = "nyx-api-key",
+        string nyxBearerToken = "nyx-api-key",
         string nyxProviderSlug = "api-lark-bot",
         string messageType = "text",
         string contentJson = """{"text":"hello"}""",
         LarkReceiveTarget? primaryTarget = null) =>
         new(
-            nyxApiKey,
+            nyxBearerToken,
             nyxProviderSlug,
             messageType,
             contentJson,

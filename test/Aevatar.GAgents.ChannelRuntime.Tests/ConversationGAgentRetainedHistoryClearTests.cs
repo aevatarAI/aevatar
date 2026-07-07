@@ -213,6 +213,7 @@ public sealed class ConversationGAgentRetainedHistoryClearTests
         public Task<ConversationStreamChunkResult> RunStreamChunkAsync(
             LlmReplyStreamChunkEvent chunk,
             string? currentPlatformMessageId,
+            NyxRelayTextOperationKind operation,
             ConversationTurnRuntimeContext runtimeContext,
             CancellationToken ct) =>
             Task.FromResult(ConversationStreamChunkResult.Succeeded(currentPlatformMessageId));
