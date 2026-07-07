@@ -1374,14 +1374,21 @@ var TOKEN_KEY=OIDC.storageKey+':token', PKCE_KEY=OIDC.storageKey+':pkce';
 function getToken(){ try{ var t=JSON.parse(localStorage.getItem(TOKEN_KEY)||'null'); return (t&&t.access_token)?t:null; }catch(e){ return null; } }
 function accessToken(){ var t=getToken(); return t?t.access_token:null; }
 function clearToken(){ try{ localStorage.removeItem(TOKEN_KEY); }catch(e){} }
-function logout(){ clearToken(); location.reload(); }
+function loginReturnTo(){
+  var h=(location.hash&&location.hash.indexOf('#/')===0&&/^#[A-Za-z0-9._~!$&'()*+,;=:@/?%-]*$/.test(location.hash))?location.hash:'';
+  return location.pathname + h;
+}
+function showLoginGate(reason){
+  clearToken(); ACCOUNT=null; renderAcctW(); renderLoginGate(reason||'');
+}
+function logout(){ showLoginGate('已登出 NyxID，请重新登录。'); }
 function _b64url(buf){ var s=btoa(String.fromCharCode.apply(null,new Uint8Array(buf))); return s.replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
 function _rand(n){ var a=new Uint8Array(n); crypto.getRandomValues(a); var s=''; for(var i=0;i<a.length;i++){ s+=('0'+(a[i]&0xff).toString(16)).slice(-2); } return s.slice(0,n); }
 async function _sha256(s){ return _b64url(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s))); }
 async function beginLogin(){
   if(!OIDC.authority||!OIDC.clientId){ alert('BackendConsole OIDC 配置缺失。'); return; }
   var verifier=_rand(64), state=_rand(32), challenge=await _sha256(verifier);
-  sessionStorage.setItem(PKCE_KEY, JSON.stringify({verifier:verifier,state:state,returnTo:location.pathname}));
+  sessionStorage.setItem(PKCE_KEY, JSON.stringify({verifier:verifier,state:state,returnTo:loginReturnTo()}));
   var u=new URL(OIDC.authority.replace(/\/+$/,'')+'/oauth/authorize');
   u.searchParams.set('response_type','code'); u.searchParams.set('client_id',OIDC.clientId);
   u.searchParams.set('redirect_uri',OIDC.redirectUri); u.searchParams.set('scope',OIDC.scope);
@@ -1398,7 +1405,7 @@ function accountFromToken(){ var t=getToken(); if(!t) return null; var c=decodeJ
 async function adminApi(path,opts){ opts=opts||{}; var h=Object.assign({},opts.headers||{}); var tok=accessToken();
   if(tok) h['Authorization']='Bearer '+tok;
   var res=await fetch(path, Object.assign({},opts,{headers:h}));
-  if(res.status===401){ clearToken(); renderLoginGate(); throw {unauthorized:true}; }
+  if(res.status===401){ showLoginGate('登录已过期，请重新使用 NyxID 登录。'); throw {unauthorized:true}; }
   if(res.status===403){ return {forbidden:true,status:403}; }
   return res; }
 async function adminJson(path,opts){ var res=await adminApi(path,opts); if(res&&res.forbidden) return res;
@@ -3769,7 +3776,7 @@ function viewVoice(){
 /* ---------------- 模块分发 ---------------- */
 /* 内嵌真页(同源共享 token);onload 注入 CSS 隐藏真页自带 .topbar(brand+suite-nav),消除与 /admin 左栏的双层导航。 */
 function embedTrim(f){ try{ var d=f.contentDocument; if(d&&d.head){ var s=d.createElement('style'); s.textContent='.topbar{display:none!important}'; d.head.appendChild(s); } }catch(e){} }
-function suiteFrame(src,title){ return '<iframe class="suite-embed" src="'+src+'" title="'+title+'" onload="embedTrim(this)"></iframe>'; }
+function suiteFrame(src,title){ return '<iframe class="suite-embed" src="'+src+'" title="'+title+'" data-console-frame="1" onload="embedTrim(this)"></iframe>'; }
 /* 真页更完整的用真页(观测台全 trace/token graph、CQRS 4 面板、Studio 对话编排、Voice 真在场/WebRTC——我的预览版全 mock 不可用)→iframe;状态/技能/排班/通道保留更优本地实现。 */
 function viewObservatory(){ return {html:suiteFrame('/workflow/observatory','运行观测台')}; }
 function viewCqrs(){ if(!(ACCOUNT&&ACCOUNT.admin)) return {html:moduleSubHeader('cqrs','')+'<div class="view-scroll">'+auth403('CQRS 投影管道仅平台管理员可见。')+'</div>'}; return {html:suiteFrame('/cqrs','投影管道 CQRS')}; }
@@ -4293,6 +4300,13 @@ function closeSrcPop(){ if(_srcPopEl){ _srcPopEl.remove(); _srcPopEl=null; } }
 
 /* ---------- events (delegation) ---------- */
 function bindEvents(){
+  window.addEventListener('message',function(ev){
+    if(ev.origin!==location.origin) return;
+    var msg=ev.data||{};
+    if(!msg || msg.source!=='aevatar-backend-console-suite') return;
+    if(msg.type==='auth-required'){ showLoginGate(msg.reason||'登录已过期，请重新使用 NyxID 登录。'); return; }
+    if(msg.type==='login-request'){ beginLogin(); }
+  });
   document.addEventListener('click',function(ev){
     var t=ev.target;
     /* outside-click closes the source popover */
@@ -4372,7 +4386,7 @@ function startClock(){
 }
 
 /* ---------- login gate（未登录全屏） ---------- */
-function renderLoginGate(){
+function renderLoginGate(reason){
   var app=document.getElementById('app'); if(!app) return;
   app.setAttribute('aria-busy','false');
   app.innerHTML=
@@ -4382,6 +4396,7 @@ function renderLoginGate(){
           '<span class="name" style="font-size:15px">Aevatar Backend Console</span></div>'+
         '<div class="et" style="margin-top:10px">后端运维控制台</div>'+
         '<div class="es">使用 NyxID 账号登录，访问运行观测台、技能调用、投影管道、通道接入等后端运维模块。</div>'+
+        (reason?'<div class="auth-banner" style="justify-content:center;margin-top:12px">'+esc(reason)+'</div>':'')+
         '<button class="btn btn-primary" data-act="login" style="margin-top:10px">使用 NyxID 登录</button>'+
       '</div>'+
     '</div>';
