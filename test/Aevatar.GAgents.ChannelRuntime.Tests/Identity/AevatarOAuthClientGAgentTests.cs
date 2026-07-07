@@ -1,4 +1,6 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -33,15 +35,18 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
     private AevatarOAuthClientGAgent _agent = null!;
     private ServiceProvider _serviceProvider = null!;
     private RecordingDcrClient _registrar = null!;
+    private InMemorySecretVault _secretVault = null!;
     private IdentityGAgentTestHarness.NoopCallbackScheduler _callbackScheduler = null!;
 
     public async Task InitializeAsync()
     {
         _registrar = new RecordingDcrClient();
+        _secretVault = new InMemorySecretVault();
         _callbackScheduler = new IdentityGAgentTestHarness.NoopCallbackScheduler();
 
         var services = new ServiceCollection();
         services.AddSingleton<IEventStore, IdentityGAgentTestHarness.InMemoryEventStore>();
+        services.AddSingleton<ISecretVault>(_secretVault);
         services.AddSingleton<EventSourcingRuntimeOptions>();
         services.AddTransient(
             typeof(IEventSourcingBehaviorFactory<>),
@@ -87,7 +92,11 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         _agent.State.ClientId.Should().Be(_registrar.NextClientId);
         _agent.State.NyxidAuthority.Should().Be("https://nyxid.test");
         _agent.State.OauthScope.Should().Be(AevatarOAuthClientScopes.AuthorizationScope);
-        _agent.State.HmacKey.Length.Should().Be(32);
+        // New writes store the key in the vault and leave [hmac_key] empty; the
+        // state carries only a ref that resolves to 32 raw bytes.
+        _agent.State.HmacKey.Length.Should().Be(0, "new writes leave the legacy plaintext field empty");
+        _agent.State.HmacKeyRef.Should().NotBeNull();
+        (await ResolveKeyAsync(_agent.State.HmacKeyRef!)).Should().HaveCount(32);
         _agent.State.ProvisioningRetryAttempt.Should().Be(0);
     }
 
@@ -103,7 +112,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
 
         await _agent.HandleEnsureProvisioned(cmd);
         var firstClientId = _agent.State.ClientId;
-        var firstHmacKey = _agent.State.HmacKey;
+        var firstHmacKeyRef = _agent.State.HmacKeyRef;
         var beforeRefreshState = _agent.State.Clone();
         var beforeRefreshVersion = _agent.EventSourcing!.CurrentVersion;
 
@@ -111,7 +120,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
 
         _registrar.Calls.Should().HaveCount(1, "actor must serialize the DCR side-effect");
         _agent.State.ClientId.Should().Be(firstClientId);
-        _agent.State.HmacKey.Should().BeEquivalentTo(firstHmacKey);
+        _agent.State.HmacKeyRef.Should().Be(firstHmacKeyRef, "already-provisioned ensure must not rotate the key");
         _agent.State.Should().BeEquivalentTo(beforeRefreshState,
             "already-provisioned ensure must not mutate OAuth client facts");
         _agent.EventSourcing!.CurrentVersion.Should().Be(beforeRefreshVersion,
@@ -598,7 +607,9 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         });
 
         _agent.State.ClientId.Should().Be("manual-fixture-client");
-        _agent.State.HmacKey.Length.Should().Be(32, "HMAC key seeds on first provision regardless of which command path triggered it");
+        _agent.State.HmacKey.Length.Should().Be(0, "new writes leave the legacy plaintext field empty");
+        _agent.State.HmacKeyRef.Should().NotBeNull("HMAC key seeds into the vault on first provision regardless of which command path triggered it");
+        (await ResolveKeyAsync(_agent.State.HmacKeyRef!)).Should().HaveCount(32);
         _registrar.Calls.Should().BeEmpty("manual provision must not call DCR");
     }
 
@@ -735,22 +746,32 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
             ClientId = "client-x",
             NyxidAuthority = "https://nyxid.test",
         });
-        var seededKey = _agent.State.HmacKey;
+        var seededKeyRef = _agent.State.HmacKeyRef;
+        var seededKeyBytes = await ResolveKeyAsync(seededKeyRef!);
         var seededKid = _agent.State.HmacKid;
         seededKid.Should().Be(AevatarOAuthClientGAgent.InitialHmacKid);
 
         await _agent.HandleRotateHmacKey(new RotateAevatarOAuthClientHmacKeyCommand());
 
-        _agent.State.HmacKey.Should().NotBeEquivalentTo(seededKey);
-        _agent.State.HmacKey.Length.Should().Be(32);
+        // The rotated key is a fresh vault ref; [hmac_key] stays empty for new
+        // writes. The resolved current bytes differ from the seeded key.
+        _agent.State.HmacKey.Length.Should().Be(0);
+        _agent.State.HmacKeyRef.Should().NotBeNull();
+        _agent.State.HmacKeyRef.Should().NotBe(seededKeyRef);
+        var rotatedKeyBytes = await ResolveKeyAsync(_agent.State.HmacKeyRef!);
+        rotatedKeyBytes.Should().HaveCount(32);
+        rotatedKeyBytes.Should().NotBeEquivalentTo(seededKeyBytes);
         _agent.State.ClientId.Should().Be("client-x");
         // Kid increments deterministically (v1 → v2) so verifiers can route
         // signed tokens to the right key.
         _agent.State.HmacKid.Should().Be("v2");
         // Previous key must be carried for the grace window so in-flight
-        // state tokens signed with the old key still verify.
+        // state tokens signed with the old key still verify. On a ref-backed
+        // rotation the previous key is demoted as a ref (the demoted seed ref).
         _agent.State.PreviousHmacKid.Should().Be(seededKid);
-        _agent.State.PreviousHmacKey.Should().BeEquivalentTo(seededKey);
+        _agent.State.PreviousHmacKey.Length.Should().Be(0);
+        _agent.State.PreviousHmacKeyRef.Should().Be(seededKeyRef);
+        (await ResolveKeyAsync(_agent.State.PreviousHmacKeyRef!)).Should().Equal(seededKeyBytes);
         _agent.State.PreviousHmacDemotedAtUnix.Should().BeGreaterThan(0);
     }
 
@@ -897,7 +918,37 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
 
         _agent.State.HmacKid.Should().Be(AevatarOAuthClientGAgent.InitialHmacKid);
         _agent.State.PreviousHmacKey.Length.Should().Be(0);
+        _agent.State.PreviousHmacKeyRef.Should().BeNull();
         _agent.State.PreviousHmacKid.Should().BeNullOrEmpty();
+    }
+
+    [Fact]
+    public async Task HandleProvision_LegacyPlaintextKey_RotatesToRefAndDemotesLegacyBytes()
+    {
+        // Dual-read migration: a legacy actor whose state carries a plaintext
+        // [hmac_key] with no ref must rotate cleanly — the new key is a vault
+        // ref and the demoted previous key keeps the legacy plaintext bytes so
+        // in-flight tokens signed with it still verify during the grace window.
+        await _agent.HandleProvision(new ProvisionAevatarOAuthClientCommand
+        {
+            ClientId = "legacy-client",
+            NyxidAuthority = "https://nyxid.test",
+        });
+        // Simulate pre-migration state: plaintext key, no ref.
+        var legacyKey = new byte[32];
+        Array.Fill(legacyKey, (byte)0x55);
+        _agent.State.HmacKey = Google.Protobuf.ByteString.CopyFrom(legacyKey);
+        _agent.State.HmacKeyRef = null;
+
+        await _agent.HandleRotateHmacKey(new RotateAevatarOAuthClientHmacKeyCommand());
+
+        _agent.State.HmacKeyRef.Should().NotBeNull("rotation stores the new key in the vault");
+        _agent.State.HmacKey.Length.Should().Be(0, "new writes leave the legacy field empty");
+        (await ResolveKeyAsync(_agent.State.HmacKeyRef!)).Should().HaveCount(32);
+        // The demoted previous key is the legacy plaintext (no ref existed).
+        _agent.State.PreviousHmacKeyRef.Should().BeNull();
+        _agent.State.PreviousHmacKey.ToByteArray().Should().Equal(legacyKey);
+        _agent.State.PreviousHmacDemotedAtUnix.Should().BeGreaterThan(0);
     }
 
     private sealed class RecordingDcrClient
@@ -951,6 +1002,18 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
     {
         evt.RedirectUris.AddRange(redirectUris);
         return evt;
+    }
+
+    private async Task<byte[]> ResolveKeyAsync(SecretReference reference)
+    {
+        var result = await _secretVault.ResolveAsync(new ResolveSecretRequest(
+            reference.Ref,
+            CredentialSecretPurposes.OAuthStateTokenHmacKey,
+            AevatarOAuthClientGAgent.WellKnownId,
+            AevatarOAuthClientGAgent.WellKnownId,
+            "test.resolve"));
+        result.Resolved.Should().BeTrue("the actor must have stored the key under this ref");
+        return Convert.FromBase64String(result.Secret!);
     }
 
     private async Task<IReadOnlyList<T>> ReadEventsAsync<T>()
