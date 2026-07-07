@@ -1,6 +1,8 @@
 using Aevatar.Audit.Core.Projection;
 using Aevatar.Audit.Core.Stores;
 using Aevatar.Audit.Abstractions.Ports;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.ChatRouting.Core;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
@@ -21,6 +23,7 @@ using Aevatar.GAgents.StreamingProxy;
 using Aevatar.Mainnet.Host.Api.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 
@@ -155,6 +158,8 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
             options.GrantDescription = "Test grant matches grain/event-store internal services.";
         });
         services.AddMainnetAgentProjectionDocumentStores(BuildElasticsearchConfiguration());
+        services.Replace(ServiceDescriptor.Singleton<IOAuthClientEsAclProbe>(
+            new FixedOAuthClientEsAclProbe(EsAclProbeResult.Restricted("test grant is restricted"))));
 
         await using var provider = services.BuildServiceProvider();
         var options = provider.GetRequiredService<IOptions<AevatarOAuthClientEsAclOptions>>().Value;
@@ -178,6 +183,7 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
         services.AddScheduledAgents(configuration);
         services.AddStatusDashboard(configuration);
         services.AddStreamingProxy(configuration);
+        services.AddSingleton<ISecretVault, InMemorySecretVault>();
 
         return services;
     }
@@ -207,5 +213,14 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
     {
         Assert.IsType<TStore>(provider.GetRequiredService<IProjectionDocumentReader<TDocument, string>>());
         Assert.IsType<TStore>(provider.GetRequiredService<IProjectionDocumentWriter<TDocument>>());
+    }
+
+    private sealed class FixedOAuthClientEsAclProbe(EsAclProbeResult result) : IOAuthClientEsAclProbe
+    {
+        public Task<EsAclProbeResult> ProbeAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(result);
+        }
     }
 }
