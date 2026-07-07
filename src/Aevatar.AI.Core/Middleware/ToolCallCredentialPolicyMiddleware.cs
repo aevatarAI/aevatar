@@ -18,7 +18,38 @@ public sealed class ToolCallCredentialPolicyMiddleware : IToolCallMiddleware
         var senderBindingId = current?.SenderBinding.BindingId?.Trim();
         if (string.IsNullOrWhiteSpace(senderBindingId))
         {
-            await next();
+            // No binding at all. A direct/API caller (no Channel context) has no distinct
+            // sender to isolate from the owner, so the existing owner-credential fallback
+            // is correct. But a channel-mediated request (Lark/Discord/etc. — a real,
+            // addressable third party who never ran /init) must not get a free pass on
+            // mutating tool calls just because AgentToolCredentialPolicy never saw a binding
+            // id to deny against.
+            var isChannelMediated = !string.IsNullOrWhiteSpace(current?.Channel.SenderId);
+            if (!isChannelMediated || !AgentToolCredentialPolicy.IsMutation(context.Tool, context.ArgumentsJson))
+            {
+                await next();
+                return;
+            }
+
+            var unboundMessage = $"Tool '{context.ToolName}' was not executed because the sender is not bound to a NyxID account. Send /init to bind your NyxID account and retry. Owner credentials were not used.";
+            context.Terminate = true;
+            context.TerminationKind = ToolCallTerminationKind.MiddlewareTerminated;
+            context.TerminationReason = unboundMessage;
+            context.Result = JsonSerializer.Serialize(new
+            {
+                error = ErrorCode,
+                code = ErrorCode,
+                message = unboundMessage,
+                tool_name = context.ToolName,
+                sender_binding_id = (string?)null,
+            });
+            context.Receipt = AgentToolReceiptFactory.CreateError(
+                context.Tool,
+                context.ToolCallId,
+                context.ToolName,
+                context.Result,
+                ErrorCode,
+                unboundMessage);
             return;
         }
 
