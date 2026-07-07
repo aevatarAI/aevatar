@@ -55,6 +55,15 @@ message RefreshBindingCommand {
   string reason = 3;
 }
 
+// Operator/maintenance command: re-materialize the current-state readmodel for
+// this binding from the surviving authoritative actor state — without minting or
+// changing any binding_id and without appending a new domain event. Recovers a
+// wiped/reset projection readmodel (disaster recovery) whose authoritative actor
+// state survived. When the actor holds no active binding_id it is a no-op.
+message RebuildBindingProjectionCommand {
+  aevatar.gagents.channel.abstractions.ExternalSubjectRef external_subject = 1;
+}
+
 // Persisted when CommitBindingCommand is accepted by the actor.
 message ExternalIdentityBoundEvent {
   aevatar.gagents.channel.abstractions.ExternalSubjectRef external_subject = 1;

@@ -135,6 +135,10 @@ public static class IdentityServiceCollectionExtensions
             static command => new ChannelIdentityOAuthCommandTarget(
                 command.ExternalSubject.ToActorId(),
                 "channel-identity.oauth-refresh"));
+        services.AddIdentityOAuthCommandDispatch<RebuildBindingProjectionCommand, ExternalIdentityBindingGAgent>(
+            static command => new ChannelIdentityOAuthCommandTarget(
+                command.ExternalSubject.ToActorId(),
+                "channel-identity.projection-rebuild"));
         services.AddIdentityOAuthCommandDispatch<ObserveBrokerCapabilityCommand, AevatarOAuthClientGAgent>(
             static _ => new ChannelIdentityOAuthCommandTarget(
                 AevatarOAuthClientGAgent.WellKnownId,

@@ -88,6 +88,13 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
                 cmd.ExternalSubject.ExternalUserId,
                 State.BindingId,
                 cmd.BindingId);
+            // Self-heal: the identity fact is unchanged (no event appended), but a
+            // projection-store reset can leave the current-state readmodel wiped while
+            // this actor still holds the binding. Re-emitting the current committed
+            // state rebuilds that row, so a re-auth (/init callback or Studio re-login)
+            // recovers a wiped readmodel instead of dead-locking on the idempotent
+            // discard. See GAgentBase.RepublishCommittedStateAsync.
+            await RepublishCurrentBindingStateAsync();
             return;
         }
 
@@ -143,6 +150,9 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
                 cmd.ExternalSubject.Tenant,
                 cmd.ExternalSubject.ExternalUserId,
                 cmd.BindingId);
+            // Self-heal a wiped readmodel without appending an event (same rationale as
+            // the CommitBinding discard branch).
+            await RepublishCurrentBindingStateAsync();
             return;
         }
 
@@ -222,6 +232,59 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
             revokedBindingId,
             reason);
     }
+
+    /// <summary>
+    /// Maintenance / disaster-recovery: re-materialize this binding's current-state
+    /// readmodel from the surviving authoritative actor state. Appends no event and
+    /// changes no binding_id — it re-emits the current committed state so a projection
+    /// store that was wiped/reset (while the actor state in the event store survived)
+    /// rebuilds the row. No-op when the actor holds no active binding.
+    /// </summary>
+    [EventHandler]
+    public async Task HandleRebuildBindingProjection(RebuildBindingProjectionCommand cmd)
+    {
+        ArgumentNullException.ThrowIfNull(cmd);
+
+        if (cmd.ExternalSubject is null)
+        {
+            Logger.LogWarning("RebuildBindingProjection rejected: external_subject is required.");
+            return;
+        }
+
+        if (!IsCommandSubjectMatchingActor(cmd.ExternalSubject))
+            return;
+
+        if (string.IsNullOrEmpty(State.BindingId))
+        {
+            Logger.LogInformation(
+                "RebuildBindingProjection found no active binding for {Platform}:{Tenant}:{User}; nothing to rebuild",
+                cmd.ExternalSubject.Platform,
+                cmd.ExternalSubject.Tenant,
+                cmd.ExternalSubject.ExternalUserId);
+            return;
+        }
+
+        await RepublishCurrentBindingStateAsync();
+
+        Logger.LogInformation(
+            "Rebuilt external identity binding readmodel from surviving actor state: {Platform}:{Tenant}:{User} (binding_id={BindingId})",
+            cmd.ExternalSubject.Platform,
+            cmd.ExternalSubject.Tenant,
+            cmd.ExternalSubject.ExternalUserId,
+            State.BindingId);
+    }
+
+    // Re-emits the actor's current committed binding state to the projection pipeline
+    // without appending a new event. The reconstructed ExternalIdentityBoundEvent is
+    // used only for projection routing/activation; the materialized row comes from the
+    // current state snapshot. Precondition: State.BindingId is non-empty.
+    private Task RepublishCurrentBindingStateAsync() =>
+        RepublishCommittedStateAsync(new ExternalIdentityBoundEvent
+        {
+            ExternalSubject = State.ExternalSubject?.Clone(),
+            BindingId = State.BindingId,
+            BoundAt = State.BoundAt,
+        });
 
     // ─── Identity guard ───
 
