@@ -251,7 +251,11 @@ public sealed class ElasticsearchAuditTrailArtifactStoreTests
                 .WithPreserveProtoFieldNames(true)
                 .WithFormatDefaultValues(true));
 
-        return $$"""{"hits":{"hits":[{"_source":{{formatter.Format(storageDocument)}},"sort":{{sortJson}}}]}}""";
+        return "{\"hits\":{\"hits\":[{\"_source\":"
+            + formatter.Format(storageDocument)
+            + ",\"sort\":"
+            + sortJson
+            + "}]}}";
     }
 
     private static HttpResponseMessage CreateJsonResponse(HttpStatusCode statusCode, string json)
