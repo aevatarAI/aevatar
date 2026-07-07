@@ -172,6 +172,35 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
             .Which.Error.Should().Be("workflow_input_file_binding_failed");
     }
 
+    [Fact]
+    public async Task ChatRequest_WhenStartSelfPublishFails_ShouldCommitTerminalFailure()
+    {
+        var runId = "run-1917-" + Guid.NewGuid().ToString("N");
+        var harness = await CreateRunAsync(runId, WorkflowYaml(onFailure: false));
+        harness.Publisher.FailPublish = evt => evt is StartWorkflowEvent;
+
+        await harness.Agent.HandleEventAsync(EnvelopeFrom("api", new WorkflowChatRequestEvent
+        {
+            Prompt = "hello",
+            ScopeId = "scope-1",
+        }));
+
+        CommittedEvents<WorkflowRunExecutionStartedEvent>(harness.CommittedPublisher)
+            .Should()
+            .ContainSingle()
+            .Which.RunId.Should().Be(runId);
+        var completed = CommittedEvents<WorkflowCompletedEvent>(harness.CommittedPublisher)
+            .Should()
+            .ContainSingle()
+            .Subject;
+        completed.RunId.Should().Be(runId);
+        completed.Success.Should().BeFalse();
+        completed.Error.Should().StartWith("start_dispatch_failed: failed during start_dispatch: ");
+        completed.Error.Should().NotContain("super-secret-token");
+        completed.Error.Should().NotContain("Bearer");
+        harness.Agent.State.FinalError.Should().Be(completed.Error);
+    }
+
     private static async Task<RunHarness> CreateStartedRunAsync(string workflowYaml, int attempt)
     {
         var runId = "run-1859-" + Guid.NewGuid().ToString("N");
@@ -239,6 +268,16 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
             return null;
 
         return published.StateEvent.EventData.Unpack<WorkflowRunForkRequestedEvent>();
+    }
+
+    private static IReadOnlyList<TEvent> CommittedEvents<TEvent>(RecordingCommittedStatePublicationHook hook)
+        where TEvent : class, IMessage<TEvent>, new()
+    {
+        var descriptor = new TEvent().Descriptor;
+        return hook.Events
+            .Where(x => x.StateEvent?.EventData?.Is(descriptor) == true)
+            .Select(x => x.StateEvent!.EventData.Unpack<TEvent>())
+            .ToArray();
     }
 
     private static EventEnvelope SelfEnvelope(string runId, IMessage payload) =>
@@ -353,6 +392,8 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
     {
         public List<(IMessage Event, TopologyAudience Audience)> Published { get; } = [];
 
+        public Func<IMessage, bool>? FailPublish { get; set; }
+
         public async Task PublishAsync<T>(
             T evt,
             TopologyAudience audience,
@@ -362,6 +403,9 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
             where T : IMessage
         {
             ct.ThrowIfCancellationRequested();
+            if (FailPublish?.Invoke(evt) == true)
+                throw new InvalidOperationException("start failed with bearer super-secret-token");
+
             Published.Add((evt, audience));
 
             if (audience == TopologyAudience.Self)
