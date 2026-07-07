@@ -1078,16 +1078,29 @@ button{font-family:inherit;cursor:pointer;}
 .chip-label{font-size:11px;color:var(--faint);font-weight:600;letter-spacing:.02em;margin-right:2px;}
 .audit-search{height:30px;width:260px;max-width:100%;border:1px solid var(--border);border-radius:6px;padding:0 11px;font:13px var(--sans);background:var(--surface);}
 .audit-search:focus{outline:0;border-color:var(--primary);}
+.audit-root{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;overflow:hidden;}
+.audit-root > .view-scroll{flex:1 1 auto;min-height:0;overflow:auto;padding-bottom:28px;}
+.audit-table-wrap{max-width:100%;overflow:auto;}
+.audit-table{table-layout:fixed;min-width:960px;}
 .audit-table td{vertical-align:top;}
+.audit-table th,.audit-table td{overflow:hidden;}
+.audit-table .col-time{width:128px;}
+.audit-table .col-result{width:86px;}
+.audit-table .col-action{width:260px;}
+.audit-table .col-target{width:38%;}
+.audit-table .col-actor{width:170px;}
+.audit-table .col-corr{width:150px;}
 .audit-time{display:flex;flex-direction:column;line-height:1.35;}
 .audit-time .audit-ago{font-size:11px;}
 .audit-action{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
-.audit-action b{color:var(--heading);font-weight:550;font-family:var(--mono);font-size:12.5px;}
+.audit-action b{color:var(--heading);font-weight:550;font-family:var(--mono);font-size:12.5px;overflow-wrap:anywhere;}
 .audit-action .chip{height:18px;padding:0 7px;font-size:10.5px;background:var(--surface-3);border-color:var(--border);color:var(--muted);}
-.audit-res-id{display:block;font-family:var(--mono);font-size:11px;color:var(--faint);}
-.audit-actor{font-size:12.5px;color:var(--heading);}
+.audit-target{display:block;min-width:0;max-width:100%;}
+.audit-res-kind{display:block;color:var(--heading);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.audit-res-id{display:block;font-family:var(--mono);font-size:11px;color:var(--faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.audit-actor{display:block;font-size:12.5px;color:var(--heading);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .audit-actor-sub{font-size:10.5px;max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.audit-corr{font-size:11.5px;color:var(--muted);}
+.audit-corr{display:block;font-size:11.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 
 /* ---------------- responsive ---------------- */
 @media (max-width:1024px){
@@ -3968,18 +3981,21 @@ function auditTable(){
   var body=rows.map(function(r){
     var cat=auditActionCategory(r.action);
     var catLabel=(AUDIT_CATEGORIES.filter(function(c){return c.k===cat;})[0]||{label:cat}).label;
-    var res=(r.resourceType||r.resourceId)?(esc(r.resourceType||'—')+'<span class="audit-res-id">'+esc(r.resourceId||'')+'</span>'):'<span class="faint">—</span>';
+    var targetTitle=[r.resourceType,r.resourceId].filter(Boolean).join(' / ');
+    var res=(r.resourceType||r.resourceId)
+      ? '<span class="audit-target" title="'+esc(targetTitle)+'"><span class="audit-res-kind">'+esc(r.resourceType||'—')+'</span><span class="audit-res-id">'+esc(r.resourceId||'')+'</span></span>'
+      : '<span class="faint">—</span>';
     return '<tr data-act="auditRow" data-id="'+esc(r.id)+'">'+
       '<td><div class="audit-time"><b class="num">'+esc(auditFmtTime(r.occurredAtUtc))+'</b><span class="audit-ago faint">'+esc(auditAgo(r.occurredAtUtc))+'</span></div></td>'+
       '<td>'+auditOutcomeTag(r.outcome)+'</td>'+
       '<td><div class="audit-action"><b>'+esc(r.action||'—')+'</b><span class="audit-cat chip">'+esc(catLabel)+'</span></div></td>'+
       '<td>'+res+'</td>'+
-      '<td><span class="audit-actor mono">'+esc(r.auditActorId||'—')+'</span><div class="audit-actor-sub faint">'+esc(r.identityKeyId||'')+'</div></td>'+
-      '<td><span class="audit-corr mono">'+esc(r.correlationId||'—')+'</span></td>'+
+      '<td><span class="audit-actor mono" title="'+esc(r.auditActorId||'')+'">'+esc(r.auditActorId||'—')+'</span><div class="audit-actor-sub faint" title="'+esc(r.identityKeyId||'')+'">'+esc(r.identityKeyId||'')+'</div></td>'+
+      '<td><span class="audit-corr mono" title="'+esc(r.correlationId||'')+'">'+esc(r.correlationId||'—')+'</span></td>'+
     '</tr>';
   }).join('');
-  return '<div class="protable-wrap"><table class="protable audit-table"><thead><tr>'+
-    '<th style="width:180px">时间</th><th style="width:90px">结果</th><th>操作</th><th>目标资源</th><th>操作者</th><th>关联 ID</th>'+
+  return '<div class="protable-wrap audit-table-wrap"><table class="protable audit-table"><thead><tr>'+
+    '<th class="col-time">时间</th><th class="col-result">结果</th><th class="col-action">操作</th><th class="col-target">目标资源</th><th class="col-actor">操作者</th><th class="col-corr">关联 ID</th>'+
     '</tr></thead><tbody>'+body+'</tbody></table></div>';
 }
 function auditPager(){
