@@ -86,6 +86,41 @@ public class NyxLarkProvisioningServiceTests
     }
 
     [Fact]
+    public async Task ProvisionAsync_Rejects_Cleartext_Http_WebhookBaseUrl_Before_Calling_Nyx()
+    {
+        // The relay callback URL receives the short-lived X-NyxID-User-Token; registering a
+        // cleartext http:// callback would ship that first-party bearer over the wire in the clear.
+        var handler = new RecordingHandler();
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler));
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        var commandFacade = ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime);
+        var service = new NyxLarkProvisioningService(
+            nyxClient,
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            commandFacade,
+            Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxLarkProvisioningService>>());
+
+        var result = await service.ProvisionAsync(
+            new NyxLarkProvisioningRequest(
+                AccessToken: "user-token",
+                AppId: "cli_a1b2c3",
+                AppSecret: "secret-xyz",
+                VerificationToken: "verify-123",
+                WebhookBaseUrl: "http://aevatar.example.com",
+                ScopeId: "scope-1",
+                Label: "Ops Bot",
+                NyxProviderSlug: "api-lark-bot"),
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be("insecure_webhook_base_url");
+        // Guard must fail closed BEFORE any NyxID provisioning call is made.
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ProvisionAsync_Stores_NyxAssigned_PerConnection_Slug_When_Connect_Returns_Suffixed_Slug()
     {
         // Regression: a user's 2nd+ Lark bot. NyxID auto-numbers the proxy slug when `api-lark-bot`

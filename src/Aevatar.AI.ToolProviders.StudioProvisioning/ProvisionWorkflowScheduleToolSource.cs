@@ -28,3 +28,27 @@ public sealed class ProvisionWorkflowScheduleToolSource : IAgentToolSource
             [new ProvisionWorkflowScheduleTool(_provisioningPort)]);
     }
 }
+
+/// <summary>
+/// Tool source for local Studio team creation. The port is optional so hosts can
+/// register the source generically while only exposing the tool when Studio team
+/// application services are composed.
+/// </summary>
+public sealed class CreateStudioTeamToolSource : IAgentToolSource
+{
+    private readonly IStudioTeamProvisioningPort? _teamProvisioningPort;
+
+    public CreateStudioTeamToolSource(IStudioTeamProvisioningPort? teamProvisioningPort = null)
+    {
+        _teamProvisioningPort = teamProvisioningPort;
+    }
+
+    public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult<IReadOnlyList<IAgentTool>>(
+            _teamProvisioningPort is null
+                ? []
+                : [new CreateStudioTeamTool(_teamProvisioningPort)]);
+    }
+}

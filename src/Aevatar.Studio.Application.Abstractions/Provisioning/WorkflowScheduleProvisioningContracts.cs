@@ -13,9 +13,8 @@ namespace Aevatar.Studio.Application.Provisioning;
 /// NyxID subject reference (re-minted into a short-lived token on every fire). On
 /// the channel-free studio path the scope IS the caller's NyxID subject, so the
 /// subject platform defaults to <c>nyxid</c> and the external user id defaults to
-/// the scope owner subject; <see cref="CallerBearerToken"/> (the caller's forwarded
-/// NyxID access token) is threaded as the run's durable credential so a soon-firing
-/// run authenticates without a re-mintable binding.
+/// the scope owner subject. Schedule auth never accepts, persists, or replays a
+/// caller bearer token — the subject reference is the only credential source.
 /// </summary>
 public sealed record WorkflowScheduleProvisioningRequest(
     string ScopeId,
@@ -58,14 +57,6 @@ public sealed record WorkflowScheduleProvisioningRequest(
 
     /// <summary>Optional caller NyxID subject tenant.</summary>
     public string? CallerSubjectTenant { get; init; }
-
-    /// <summary>
-    /// The caller's forwarded NyxID access token, threaded as the run's durable
-    /// credential (or the seed for minting a durable agent key when a credential
-    /// issuer is wired). Optional: when absent the flow falls back to the subject
-    /// reference token-exchange.
-    /// </summary>
-    public string? CallerBearerToken { get; init; }
 }
 
 /// <summary>

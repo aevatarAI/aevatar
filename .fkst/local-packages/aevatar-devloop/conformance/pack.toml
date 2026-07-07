@@ -1,0 +1,155 @@
+schema = 1
+runner_protocol = "fkst-declarative-rulepack@1"
+owner_package = "aevatar-devloop"
+
+[[rules]]
+id = "require-rule-source-projection-policy"
+severity = "error"
+kind = "text_require_regex"
+include = ["policy/**/*.md"]
+pattern = "`CLAUDE\\.md` is the authoritative human and Claude Code instruction source"
+message = "Aevatar FKST policy must document that CLAUDE.md is the authoritative source and devloop.md is the FKST projection."
+
+[[rules]]
+id = "require-conformance-pack-role-policy"
+severity = "error"
+kind = "text_require_regex"
+include = ["policy/**/*.md"]
+pattern = "`conformance/pack\\.toml` contains the machine-checkable rules"
+message = "Aevatar FKST policy must document the machine-checkable role of conformance/pack.toml."
+
+[[rules]]
+id = "require-serialized-issue-policy"
+severity = "error"
+kind = "text_require_regex"
+include = ["policy/**/*.md"]
+pattern = "Only one issue may be processed at a time"
+message = "Aevatar FKST devloop must document serialized one-issue-at-a-time processing."
+
+[[rules]]
+id = "require-unassigned-before-work-policy"
+severity = "error"
+kind = "text_require_regex"
+include = ["policy/**/*.md"]
+pattern = "Only issues with no assignee may be selected"
+message = "Aevatar FKST devloop must only select unassigned issues before claiming work."
+
+[[rules]]
+id = "require-assign-before-work-policy"
+severity = "error"
+kind = "text_require_regex"
+include = ["policy/**/*.md"]
+pattern = "Assign the issue to the FKST actor before implementation starts"
+message = "Aevatar FKST devloop must claim an issue before implementation starts."
+
+[[rules]]
+id = "require-claude-projection-section"
+severity = "error"
+kind = "text_require_regex"
+include = ["policy/**/*.md"]
+pattern = "Projected CLAUDE\\.md rules for automated code work"
+message = "Aevatar FKST policy must project key CLAUDE.md rules for generated-code work."
+
+[[rules]]
+id = "require-layering-policy"
+severity = "error"
+kind = "text_require_regex"
+include = ["policy/**/*.md"]
+pattern = "Keep strict layering: `Domain / Application / Infrastructure / Host`"
+message = "Aevatar FKST policy must preserve the CLAUDE.md layering boundary."
+
+[[rules]]
+id = "require-readmodel-query-policy"
+severity = "error"
+kind = "text_require_regex"
+include = ["policy/**/*.md"]
+pattern = "queries read materialized readmodels"
+message = "Aevatar FKST policy must preserve command/event/readmodel separation."
+
+[[rules]]
+id = "require-no-query-replay-policy"
+severity = "error"
+kind = "text_require_regex"
+include = ["policy/**/*.md"]
+pattern = "Query paths must not replay events"
+message = "Aevatar FKST policy must forbid query-time replay and side reads."
+
+[[rules]]
+id = "require-protobuf-policy"
+severity = "error"
+kind = "text_require_regex"
+include = ["policy/**/*.md"]
+pattern = "Use Protobuf for actor state"
+message = "Aevatar FKST policy must preserve the repository protobuf storage contract."
+
+[[rules]]
+id = "require-hard-gate-scope-policy"
+severity = "error"
+kind = "text_require_regex"
+include = ["policy/**/*.md"]
+pattern = "FKST hard gates should focus on three mandatory outcomes"
+message = "Aevatar FKST policy must keep hard gates focused on process verification, runtime impact verification, and architecture boundaries."
+
+[[rules]]
+id = "require-runtime-impact-hard-gate-policy"
+severity = "error"
+kind = "text_require_regex"
+include = ["policy/**/*.md"]
+pattern = "Runtime impact verification hard gate"
+message = "Aevatar FKST policy must require runtime impact verification for non-trivial product behavior changes."
+
+[[rules]]
+id = "require-runtime-impact-exemption-policy"
+severity = "error"
+kind = "text_require_regex"
+include = ["policy/**/*.md"]
+pattern = "Documentation-only, test-only, formatting-only, and tooling-only changes do not require runtime impact verification"
+message = "Aevatar FKST policy must exempt non-product-behavior changes from runtime impact verification."
+
+[[rules]]
+id = "require-runtime-impact-evidence-policy"
+severity = "error"
+kind = "text_require_regex"
+include = ["policy/**/*.md"]
+pattern = "runtime impact verification evidence"
+message = "Aevatar FKST policy must require PR evidence or explicit infeasibility justification for runtime impact verification."
+
+[[rules]]
+id = "require-no-hardcoded-endpoint-mapping-policy"
+severity = "error"
+kind = "text_require_regex"
+include = ["policy/**/*.md"]
+pattern = "must not maintain a hard-coded file-to-endpoint mapping"
+message = "Aevatar FKST policy must keep endpoint selection as FKST reasoning, not hard-coded route mapping."
+
+[[rules]]
+id = "require-unresolved-review-policy"
+severity = "error"
+kind = "text_require_regex"
+include = ["policy/**/*.md"]
+pattern = "unresolved P1/P2 comments"
+message = "Aevatar FKST policy must prevent merge-ready advancement with unresolved high-priority automated review comments."
+
+[[rules]]
+id = "require-guard-verification-policy"
+severity = "error"
+kind = "text_require_regex"
+include = ["policy/**/*.md"]
+pattern = "tools/ci/\\*guard\\*\\.sh"
+message = "Aevatar FKST policy must require matching guard scripts for guarded change areas."
+
+[[rules]]
+id = "require-main-flow-smoke-command-reference"
+severity = "error"
+kind = "text_require_regex"
+include = ["policy/**/*.md"]
+pattern = "scripts/run\\.sh main-flow-smoke"
+message = "Aevatar service verification should reference scripts/run.sh main-flow-smoke."
+
+[[rules]]
+id = "forbid-github-token-in-host-package"
+severity = "error"
+kind = "text_forbid_regex"
+include = ["**/*"]
+pattern = "gh[pousr]_[A-Za-z0-9_]+"
+message = "Do not commit GitHub tokens in the aevatar FKST host package."

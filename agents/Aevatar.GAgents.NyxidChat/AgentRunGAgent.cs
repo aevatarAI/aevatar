@@ -494,13 +494,19 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
     private async Task PersistStepStateAsync(AgentRunReplyStepState stepState)
     {
+        // The persisted per-step waterline must never carry bearer tokens (agent_run.proto
+        // contract). Strip runtime credentials at the single commit funnel: the executor
+        // re-supplies them from the transient self-message request at execution time, so a
+        // committed AgentRunReplyStepStateUpdatedEvent — and State.GenerationStep rebuilt from
+        // it — keeps only identity/routing facts.
+        var persisted = AgentRunReplyStepCredentials.StripRuntimeCredentials(stepState);
         await PersistDomainEventAsync(new AgentRunReplyStepStateUpdatedEvent
         {
-            RunId = stepState.RunId,
-            CorrelationId = stepState.CorrelationId,
-            TargetActorId = stepState.TargetActorId,
-            Attempt = stepState.Attempt,
-            StepState = stepState.Clone(),
+            RunId = persisted.RunId,
+            CorrelationId = persisted.CorrelationId,
+            TargetActorId = persisted.TargetActorId,
+            Attempt = persisted.Attempt,
+            StepState = persisted,
         });
     }
 
@@ -928,8 +934,14 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
         var request = command.Request?.Clone() ?? BuildStepRequest(command);
         ApplyTargetRefOverrides(request);
+        // The persisted owner-fallback control is token-less (credentials are stripped before commit).
+        // Capture the bot-owner token from the transient request's inbound LlmControl — it rode the
+        // self-message chain and is never persisted — before overwriting request.LlmControl, and
+        // re-supply it so the executor's uniform per-step credential re-supply uses the bot-owner
+        // token on the owner-fallback step.
+        var inboundControl = request.LlmControl;
         request.Activity = ClearRuntimeUserAccessToken(request.Activity);
-        request.LlmControl = ResolveOwnerFallbackControl(currentStep).ToPayload();
+        request.LlmControl = ReSupplyOwnerFallbackToken(ResolveOwnerFallbackControl(currentStep), inboundControl).ToPayload();
         request.ToolContext = ResolveOwnerFallbackToolContext(currentStep).ToPayload();
         StripServerDefaultFallbackMetadata(request.Metadata);
 
@@ -1063,6 +1075,23 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             !string.Equals(message.Role, "assistant", StringComparison.Ordinal) &&
             !string.Equals(message.Role, "tool", StringComparison.Ordinal)));
         return next;
+    }
+
+    // ResolveOwnerFallbackControl now yields only server-default routing (the persisted
+    // OwnerFallbackLlmControl is token-less after the strip). Re-supply the bot-owner token from the
+    // transient request's inbound LlmControl so the owner-fallback step still authenticates as the
+    // bot owner; the executor picks this up through its per-step credential re-supply.
+    private static LLMControlContext ReSupplyOwnerFallbackToken(
+        LLMControlContext fallbackControl,
+        Aevatar.AI.Abstractions.LLMControlContextPayload? inboundControl)
+    {
+        if (inboundControl is null)
+            return fallbackControl;
+        return fallbackControl with
+        {
+            NyxIdAccessToken = NormalizeOptional(inboundControl.NyxIdAccessToken),
+            NyxIdOrgToken = NormalizeOptional(inboundControl.NyxIdOrgToken),
+        };
     }
 
     private static LLMControlContext ResolveOwnerFallbackControl(AgentRunReplyStepState stepState)

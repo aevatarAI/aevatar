@@ -23,6 +23,7 @@ using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Google.Protobuf;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 namespace Aevatar.AI.Core;
 
@@ -37,6 +38,17 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
     private string _appliedEventModules = string.Empty;
     private string _appliedEventRoutes = string.Empty;
     private IServiceProvider? _appliedModuleServices;
+    // Per-turn NyxID token, stashed before ChatStreamAsync so chartered direct-chat subclasses can
+    // hand it to per-turn context consumers (DecorateSystemPrompt has no context param). The base
+    // role agent itself never resolves capability overlays — see CurrentTurnNyxIdAccessToken.
+    private string? _currentTurnNyxIdAccessToken;
+
+    /// <summary>
+    /// The NyxID access token of the turn currently streaming, or null outside a turn. Exposed for
+    /// chartered direct-chat subclasses (e.g. the NyxID chat actor's System Skill Overlay seam);
+    /// never persisted or logged, cleared when the turn ends.
+    /// </summary>
+    protected string? CurrentTurnNyxIdAccessToken => _currentTurnNyxIdAccessToken;
 
     public RoleGAgent(
         ILLMProviderFactory? llmProviderFactory = null,
@@ -443,6 +455,15 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         }
     }
 
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public Task HandleSystemSkillOverlayRefresh(SystemSkillOverlayRefreshFiredEvent evt)
+    {
+        // Retired (issue #2498): the overlay is now sourced by the host-level ISystemSkillOverlayProvider,
+        // not materialized per-actor. This no-op absorbs any durable refresh timeout still queued for
+        // grains activated before this change; no new refreshes are ever scheduled.
+        return Task.CompletedTask;
+    }
+
     // ─── Approval continuation constants ───
 
     private const int ApprovalLocalTimeoutSeconds = 15;
@@ -724,6 +745,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         StateTransitionMatcher
             .Match(current, evt)
             .On<InitializeRoleAgentEvent>(ApplyInitializeRoleAgent)
+            .On<SystemSkillOverlayMaterializedEvent>(ApplySystemSkillOverlayMaterialized)
             .On<RoleChatSessionStartedEvent>(ApplyChatSessionStarted)
             .On<RoleChatSessionCompletedEvent>(ApplyChatSessionCompleted)
             .On<PendingToolApprovalPersistedEvent>(ApplyPendingApproval)
@@ -866,6 +888,12 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                     ? BuildLlmFailureContent(ex.Message)
                     : $"LLM request failed [tools={toolNames}]: {SanitizeFailureMessage(ex.Message)}");
         }
+        finally
+        {
+            // The stashed per-turn token must not outlive its turn: a later turn without a token
+            // (e.g. an internal continuation) must not trigger an overlay refresh with a stale credential.
+            _currentTurnNyxIdAccessToken = null;
+        }
 
         // ─── Detect approval-pending tool result and set up continuation ───
         var pendingApproval = DetectPendingApproval(replayRecord, request);
@@ -932,6 +960,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             : null;
         var llmControl = LLMControlContextMapper.FromPayload(request.LlmControl);
         var toolContext = llmControl.ToToolContext(AgentToolExecutionContextMapper.FromPayload(request.ToolContext));
+        // Stash this turn's token for chartered direct-chat subclasses (System Skill Overlay seam).
+        // Kept in memory only for the turn; never persisted or logged.
+        _currentTurnNyxIdAccessToken = toolContext.Credentials.NyxIdAccessToken;
         var inputParts = ResolveRequestInputParts(request);
 
         await foreach (var chunk in ChatStreamAsync(inputParts, request.SessionId, llmControl, toolContext, metadata, streamCt))
@@ -1347,6 +1378,15 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         else
             overrides.ClearEnableSummarization();
         return next;
+    }
+
+    private static RoleGAgentState ApplySystemSkillOverlayMaterialized(
+        RoleGAgentState current,
+        SystemSkillOverlayMaterializedEvent evt)
+    {
+        // Retired (issue #2498): the overlay is no longer stored in actor state. Kept as a no-op reducer
+        // so historical journals containing this event still replay without an unknown-event error.
+        return current;
     }
 
     private static RoleGAgentState ApplyChatSessionStarted(

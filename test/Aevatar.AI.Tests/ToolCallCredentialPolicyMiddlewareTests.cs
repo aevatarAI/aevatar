@@ -94,8 +94,11 @@ public sealed class ToolCallCredentialPolicyMiddlewareTests
     }
 
     [Fact]
-    public async Task InvokeAsync_WhenNoSenderBinding_ShouldLeaveOwnerCredentialsUnchanged()
+    public async Task InvokeAsync_WhenNoChannelAndNoSenderBinding_ShouldLeaveOwnerCredentialsUnchanged()
     {
+        // No Channel context at all == a direct/API caller, not a channel-relayed third
+        // party. There is no distinct "sender" to isolate from the owner here, so the
+        // owner-credential fallback (including for mutations) is intentional and unchanged.
         var middleware = new ToolCallCredentialPolicyMiddleware();
         var context = NewContext(new StubTool(isReadOnly: false), "{}");
         using var _ = AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
@@ -115,6 +118,67 @@ public sealed class ToolCallCredentialPolicyMiddlewareTests
         observed.Credentials.NyxIdOrgToken.Should().Be("owner-org-token");
         context.Terminate.Should().BeFalse();
     }
+
+    [Fact]
+    public async Task InvokeAsync_WhenChannelSenderUnboundMutation_ShouldDenyAndTerminate()
+    {
+        // Regression test: an addressable channel sender (e.g. a Lark group member who
+        // @-mentions the bot, or DMs it) who never ran /init must not get their mutating
+        // tool calls executed under the bot owner's NyxID credentials.
+        var middleware = new ToolCallCredentialPolicyMiddleware();
+        var context = NewContext(new StubTool(isReadOnly: false), "{}");
+        using var _ = AgentToolContextScope.Push(ChannelUnboundContext(ownerToken: "owner-token"));
+        var nextCalled = false;
+
+        await middleware.InvokeAsync(context, () =>
+        {
+            nextCalled = true;
+            return Task.CompletedTask;
+        });
+
+        nextCalled.Should().BeFalse();
+        context.Terminate.Should().BeTrue();
+        context.TerminationKind.Should().Be(ToolCallTerminationKind.MiddlewareTerminated);
+        context.Result.Should().Contain("credential_denied");
+        context.Result.Should().Contain("Owner credentials were not used");
+        context.Result.Should().Contain("/init");
+        using var result = JsonDocument.Parse(context.Result!);
+        result.RootElement.GetProperty("error").GetString().Should().Be("credential_denied");
+    }
+
+    [Fact]
+    public async Task InvokeAsync_WhenChannelSenderUnboundReadOnly_ShouldNotBlock()
+    {
+        // Read-only tool calls from an unbound channel sender still run under the owner's
+        // credentials (the bot can still answer for anyone it's addressable to) — only
+        // mutations require a bound sender identity.
+        var middleware = new ToolCallCredentialPolicyMiddleware();
+        var context = NewContext(new StubTool(isReadOnly: true), "{}");
+        using var _ = AgentToolContextScope.Push(ChannelUnboundContext(ownerToken: "owner-token"));
+        var nextCalled = false;
+
+        await middleware.InvokeAsync(context, () =>
+        {
+            nextCalled = true;
+            return Task.CompletedTask;
+        });
+
+        nextCalled.Should().BeTrue();
+        context.Terminate.Should().BeFalse();
+        AgentToolRequestContext.NyxIdAccessToken.Should().Be("owner-token");
+    }
+
+    private static AgentToolExecutionContext ChannelUnboundContext(string ownerToken) =>
+        AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials(ownerToken, ownerToken, null),
+            Channel = new AgentToolChannelContext(
+                Platform: "lark",
+                SenderId: "ou_stranger",
+                RegistrationScopeId: "scope-1",
+                MessageId: "msg-1",
+                PlatformMessageId: null),
+        };
 
     private static ToolCallContext NewContext(IAgentTool tool, string argumentsJson) => new()
     {
