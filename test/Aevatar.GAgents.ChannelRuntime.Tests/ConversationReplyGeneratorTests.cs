@@ -3,11 +3,15 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.Lark;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgents.Authoring.Lark;
 using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
+using NSubstitute;
 using Xunit;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
@@ -1915,6 +1919,97 @@ public sealed class ConversationReplyGeneratorTests
         var request = providerFactory.Requests.Should().ContainSingle().Subject;
         request.Tools.Should().BeNull();
         toolSource.DiscoverCount.Should().Be(0);
+    }
+
+    // The unbound-sender gate detaches every tool while the kernel prompt still documents
+    // them; the system prompt must carry the honest override so the model reports "tools
+    // disabled this turn, bind to enable" instead of denying the capability exists
+    // (2026-07 incident: the bot answered "no scheduling tool entry point" to a bound-
+    // looking user whose turn ran in the unbound degrade).
+    [Fact]
+    public async Task GenerateReplyAsync_ForUnboundChannelTurn_TellsModelToolsAreDisabledAndBindable()
+    {
+        var providerFactory = new RecordingProviderFactory();
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            toolSources: [new SingleToolSource(new FixedResultTool("any_tool", """{"ok":true}"""))]);
+
+        await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-unbound-tools-notice",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-1" },
+                Content = new MessageContent { Text = "remind me in five minutes" },
+            },
+            new Dictionary<string, string>
+            {
+                [ChannelMetadataKeys.Platform] = "lark",
+                [ChannelMetadataKeys.SenderId] = "ou_user_1",
+                [ChannelMetadataKeys.MessageId] = "msg-unbound-tools-notice",
+            },
+            Control("owner-only-model", "owner-route", 4),
+            toolContext: null,
+            streamingSink: null,
+            CancellationToken.None);
+
+        var request = providerFactory.Requests.Should().ContainSingle().Subject;
+        request.Tools.Should().BeNull();
+        var systemMessage = request.Messages.Should().Contain(message => message.Role == "system").Which;
+        systemMessage.Content.Should().Contain("Tools disabled for this turn");
+        systemMessage.Content.Should().Contain("/init");
+    }
+
+    // The production DI pool hands the channel reply generator EVERY registered tool
+    // source, including the Lark authoring source carrying the scheduling tool. Pin the
+    // full bound-sender relay path — real AgentBuilderToolSource → discovery → channel
+    // filters → LLM request — so a future change that drops the source or gates its tools
+    // out of channel turns fails here instead of shipping. Concrete tool names appear as
+    // test fixtures only (CLAUDE.md testfile exception).
+    [Fact]
+    public async Task GenerateReplyAsync_ForBoundLarkRelayTurn_InjectsAgentBuilderToolsIntoLlmRequest()
+    {
+        var providerFactory = new RecordingProviderFactory();
+        var nyxClientFactory = Substitute.For<INyxIdApiClientFactory>();
+        var agentBuilderSource = new AgentBuilderToolSource(
+            Substitute.For<IUserAgentCatalogQueryPort>(),
+            Substitute.For<ISkillRunnerExecutionQueryPort>(),
+            nyxClientFactory,
+            Substitute.For<ISkillRunnerCommandPort>(),
+            Substitute.For<IUserAgentCatalogCommandPort>(),
+            Substitute.For<ICallerScopeResolver>(),
+            new ScheduledAgentCreateRequestMapper(),
+            new ScheduledAgentApiKeyIssuer(nyxClientFactory, new ScheduledAgentCreatorOptions()));
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            toolSources: [agentBuilderSource]);
+
+        await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-bound-channel-tools",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-1" },
+                Content = new MessageContent { Text = "remind me in five minutes" },
+            },
+            new Dictionary<string, string>
+            {
+                [ChannelMetadataKeys.Platform] = "lark",
+                [ChannelMetadataKeys.SenderId] = "ou_user_1",
+                [ChannelMetadataKeys.MessageId] = "msg-bound-channel-tools",
+            },
+            Control("sender-model", "sender-route", 4),
+            RelayToolContext("bnd-user-1", "msg-bound-channel-tools"),
+            streamingSink: null,
+            CancellationToken.None);
+
+        var request = providerFactory.Requests.Should().ContainSingle().Subject;
+        request.Tools.Should().NotBeNull();
+        request.Tools!.Select(static tool => tool.Name).Should().Contain(
+        [
+            "scheduled_agent_creator",
+            "agent_builder",
+        ]);
+        request.Messages.Should().Contain(message => message.Role == "system")
+            .Which.Content.Should().NotContain("Tools disabled for this turn");
     }
 
     [Fact]
