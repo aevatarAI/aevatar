@@ -114,6 +114,9 @@ function workflowBoardCurrentNodeStatus(
 function workflowBoardMember(input: {
   readonly actorId: string;
   readonly completedSteps: number;
+  readonly currentNode?: NonNullable<
+    StudioWorkflowBoardSnapshot["teams"][number]["members"][number]["currentNode"]
+  > | null;
   readonly currentNodeStatus?: NonNullable<
     StudioWorkflowBoardSnapshot["teams"][number]["members"][number]["currentNode"]
   >["status"];
@@ -139,16 +142,19 @@ function workflowBoardMember(input: {
       nodeId: `completed_${index + 1}`,
     })),
     currentExecutionId: input.runId,
-    currentNode: {
-      durationMs: input.durationMs,
-      name: currentNodeName,
-      nodeId: currentNodeName,
-      startedAt: "2026-06-30T04:58:00.000Z",
-      status:
-        input.currentNodeStatus ??
-        workflowBoardCurrentNodeStatus(input.executionStatus),
-      updatedAt: input.lastNodeUpdatedAt,
-    },
+    currentNode:
+      input.currentNode === null
+        ? null
+        : input.currentNode ?? {
+            durationMs: input.durationMs,
+            name: currentNodeName,
+            nodeId: currentNodeName,
+            startedAt: "2026-06-30T04:58:00.000Z",
+            status:
+              input.currentNodeStatus ??
+              workflowBoardCurrentNodeStatus(input.executionStatus),
+            updatedAt: input.lastNodeUpdatedAt,
+          },
     displayName: input.member.displayName,
     executionAvailability: "available",
     executionStatus: input.executionStatus,
@@ -640,6 +646,34 @@ describe("MissionWallPage", () => {
     expect(probeCard).not.toHaveTextContent("0 / 0 steps");
     expect(probeCard).not.toHaveTextContent("00:00");
     expect(scopeRuntimeApi.getMemberRunAudit).not.toHaveBeenCalled();
+  });
+
+  it("uses completed node durations when completed workflow-board snapshots omit current node duration", async () => {
+    const completedMember = workflowBoardMember({
+      actorId: "actor-probe-run",
+      completedSteps: 5,
+      currentNode: null,
+      executionStatus: "completed",
+      lastNodeUpdatedAt: "2026-07-07T12:58:22.000Z",
+      member: riskMember,
+      runId: "run-probe",
+      totalSteps: 5,
+      workflowName: "weekly_report_five_nodes",
+    });
+
+    (studioApi.getWorkflowBoardSnapshot as jest.Mock).mockResolvedValue(
+      workflowBoardSnapshot([completedMember]),
+    );
+
+    renderWithQueryClient(React.createElement(MissionWallPage));
+
+    const probeCard = (
+      await screen.findByText("weekly_report_five_nodes")
+    ).closest("button");
+    expect(probeCard).toBeTruthy();
+    expect(probeCard).toHaveTextContent("5 / 5 steps");
+    expect(probeCard).toHaveTextContent("00:05");
+    expect(probeCard).not.toHaveTextContent("--");
   });
 
   it("keeps a run card duration stable when focus moves between workflows", async () => {

@@ -256,8 +256,16 @@ function workflowBoardMemberUpdatedAt(
 function calculateWorkflowBoardDurationMs(
   member: StudioWorkflowBoardMemberSnapshot,
 ): number | undefined {
+  const completedNodesDurationMs = positiveFiniteNumber(
+    member.completedNodes.reduce(
+      (total, node) => total + (positiveFiniteNumber(node.durationMs) ?? 0),
+      0,
+    ),
+  );
+
   return (
     positiveFiniteNumber(member.currentNode?.durationMs) ??
+    completedNodesDurationMs ??
     positiveDurationBetween(
       member.currentNode?.startedAt,
       member.currentNode?.updatedAt ?? member.lastNodeUpdatedAt,
