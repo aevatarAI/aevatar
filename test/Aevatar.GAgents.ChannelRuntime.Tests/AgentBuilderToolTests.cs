@@ -1387,6 +1387,8 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(nyxClient);
         services.AddSingleton<ISecretVault>(new InMemorySecretVault());
         services.AddSingleton(Substitute.For<IUserAgentDeliveryTargetReader>());
+        var existingNotificationPort = Substitute.For<IChannelInteractionNotificationPort>();
+        services.AddSingleton(existingNotificationPort);
         services.AddSingleton<LarkMessageComposer>();
         services.TryAddSingleton<ILogger<FeishuCardNotificationPort>>(NullLogger<FeishuCardNotificationPort>.Instance);
         services.AddSingleton(callerScopeResolver);
@@ -1398,7 +1400,7 @@ public sealed class AgentBuilderToolTests
         var source = provider.GetServices<IAgentToolSource>().Should().ContainSingle().Subject;
         source.Should().BeOfType<AgentBuilderToolSource>();
         provider.GetService<IHumanInteractionPort>().Should().BeNull();
-        provider.GetRequiredService<IChannelInteractionNotificationPort>().Should().BeOfType<FeishuCardNotificationPort>();
+        provider.GetRequiredService<IChannelInteractionNotificationPort>().Should().BeSameAs(existingNotificationPort);
 
         var tools = await source.DiscoverToolsAsync();
 

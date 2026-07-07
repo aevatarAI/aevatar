@@ -1,5 +1,6 @@
 using Aevatar.Audit.Core.Projection;
 using Aevatar.Audit.Core.Stores;
+using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.ChatRouting.Core;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
@@ -8,6 +9,8 @@ using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.DependencyInjection;
 using Aevatar.GAgents.Channel.Runtime;
@@ -64,6 +67,9 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
 
         using var provider = services.BuildServiceProvider();
         Assert.NotNull(provider.GetRequiredService<IAuditTrailArtifactStore>());
+        Assert.Same(
+            provider.GetRequiredService<IAuditTrailArtifactStore>(),
+            provider.GetRequiredService<IAuditTrailQueryPort>());
         Assert.DoesNotContain(typeof(IProjectionReadModel), typeof(AuditTrailArtifactStorageDocument).GetInterfaces());
         AssertProviderStore<ChannelBotRegistrationDocument, ElasticsearchProjectionDocumentStore<ChannelBotRegistrationDocument, string>>(provider);
         AssertProviderStore<ConversationDeliveryCurrentStateDocument, ElasticsearchProjectionDocumentStore<ConversationDeliveryCurrentStateDocument, string>>(provider);
@@ -131,6 +137,8 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
         services.Configure<AevatarOAuthClientEsAclOptions>(options =>
             options.EnforcementMode = AevatarOAuthClientEsAclEnforcementMode.Strict);
         services.AddMainnetAgentProjectionDocumentStores(BuildElasticsearchConfiguration());
+        services.AddSingleton<IOAuthClientEsAclProbe>(new FakeOAuthClientEsAclProbe(EsAclProbeResult.Restricted(
+            "Test grant is restricted.")));
 
         await using var provider = services.BuildServiceProvider();
         var guard = ActivatorUtilities.CreateInstance<AevatarOAuthClientEsAclStartupGuard>(provider);
@@ -151,6 +159,8 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
             options.GrantDescription = "Test grant matches grain/event-store internal services.";
         });
         services.AddMainnetAgentProjectionDocumentStores(BuildElasticsearchConfiguration());
+        services.AddSingleton<IOAuthClientEsAclProbe>(new FakeOAuthClientEsAclProbe(EsAclProbeResult.Restricted(
+            "Test grant is restricted.")));
 
         await using var provider = services.BuildServiceProvider();
         var options = provider.GetRequiredService<IOptions<AevatarOAuthClientEsAclOptions>>().Value;
@@ -167,6 +177,7 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
         var configuration = new ConfigurationBuilder().Build();
         var services = new ServiceCollection();
 
+        services.AddSingleton<ISecretVault, InMemorySecretVault>();
         services.AddChannelRuntime(configuration);
         services.AddChannelIdentity(configuration);
         services.AddChatRoutingAgents(configuration);
@@ -203,5 +214,21 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
     {
         Assert.IsType<TStore>(provider.GetRequiredService<IProjectionDocumentReader<TDocument, string>>());
         Assert.IsType<TStore>(provider.GetRequiredService<IProjectionDocumentWriter<TDocument>>());
+    }
+
+    private sealed class FakeOAuthClientEsAclProbe : IOAuthClientEsAclProbe
+    {
+        private readonly EsAclProbeResult _result;
+
+        public FakeOAuthClientEsAclProbe(EsAclProbeResult result)
+        {
+            _result = result;
+        }
+
+        public Task<EsAclProbeResult> ProbeAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(_result);
+        }
     }
 }

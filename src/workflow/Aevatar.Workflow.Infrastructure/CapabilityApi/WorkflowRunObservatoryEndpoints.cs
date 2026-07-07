@@ -1,7 +1,7 @@
-using System.Text;
 using Aevatar.Audit;
 using Aevatar.Audit.Hosting.EndpointAudit;
 using Aevatar.Authentication.Abstractions;
+using Aevatar.BackendConsole.Hosting;
 using Aevatar.Capabilities;
 using Aevatar.Workflow.Application.Abstractions.Observatory;
 using Microsoft.AspNetCore.Builder;
@@ -15,7 +15,7 @@ namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 // 06-19-workflow-run-observatory (C2) + 06-20-observatory-admin-cross-scope: read-only run viewer surface.
 //   - ALL data endpoints are GET-only + bearer (RequireAuthorization). For a normal caller, scope is implicit =
 //     their own scope_id claim, so they can only ever see their own runs; a cross-scope runId -> 404.
-//   - A NyxID platform admin/operator (verified server-side via IPlatformAdminAuthorizer -> /users/me) may pass
+//   - A caller with aevatar admin access may pass
 //     `scope=<id>` or `scope=__all__` to view another scope / all scopes (G2 auth matrix). Admin status is never
 //     self-asserted by a query param; a non-admin cross-scope request is denied BEFORE any cross-scope query runs.
 //   - Endpoint audit metadata marks these read surfaces; the host audit middleware writes sanitized request/outcome
@@ -28,6 +28,13 @@ public static class WorkflowRunObservatoryEndpoints
     private const string CallbackRoute = "/workflow/observatory/callback";
     private const string DataRoutePrefix = "/api/workflow/observatory";
 
+    private static readonly BackendConsoleAsset PageAsset = new(
+        LogicalName: "workflow-observatory",
+        Assembly: typeof(WorkflowRunObservatoryEndpoints).Assembly,
+        ResourceSuffix: "CapabilityApi.workflow-observatory.html",
+        ContentType: "text/html",
+        InjectHostConfiguration: true);
+
     // Sentinel scope meaning "all scopes" (admin overview). Not a real scope id.
     internal const string AllScopesToken = "__all__";
 
@@ -38,7 +45,7 @@ public static class WorkflowRunObservatoryEndpoints
         app.MapGet(PageRoute, GetObservatoryPage)
             .WithTags("WorkflowObservatory")
             .WithName("GetWorkflowObservatoryPage")
-            .WithSummary("Read-only workflow run observatory (inline self-contained page).")
+            .WithSummary("Read-only workflow run observatory served from an embedded static asset.")
             .AllowAnonymous();
 
         app.MapGet(CallbackRoute, GetObservatoryPage)
@@ -51,7 +58,7 @@ public static class WorkflowRunObservatoryEndpoints
 
         data.MapGet("/me", GetMe)
             .WithName("GetWorkflowObservatoryCaller")
-            .WithSummary("Caller identity + whether they are a platform admin/operator (drives the admin UI).")
+            .WithSummary("Caller identity + whether they have aevatar admin access (drives the admin UI).")
             .WithEndpointAudit(
                 "workflow.observatory.get-caller",
                 AuditSensitivityLevel.Internal,
@@ -106,10 +113,13 @@ public static class WorkflowRunObservatoryEndpoints
         return app;
     }
 
-    internal static IResult GetObservatoryPage(HttpContext http)
+    internal static IResult GetObservatoryPage(
+        HttpContext http,
+        [FromServices] IBackendConsoleAssetService assets)
     {
         ArgumentNullException.ThrowIfNull(http);
-        return Results.Text(WorkflowRunObservatoryPage.Html, "text/html", Encoding.UTF8);
+        ArgumentNullException.ThrowIfNull(assets);
+        return assets.Serve(PageAsset);
     }
 
     internal static async Task<IResult> GetMe(
@@ -129,6 +139,7 @@ public static class WorkflowRunObservatoryEndpoints
             isAdmin = caller.IsElevated,
             role = caller.Role,
             email = caller.Email,
+            grantSource = caller.GrantSource,
             scopeId,
         });
     }
@@ -298,7 +309,7 @@ public static class WorkflowRunObservatoryEndpoints
 
     private static IResult DeniedResult() =>
         Results.Json(
-            new { code = "SCOPE_ACCESS_DENIED", message = "Platform admin role required for cross-scope viewing." },
+            new { code = "SCOPE_ACCESS_DENIED", message = "Aevatar admin access required for cross-scope viewing." },
             statusCode: StatusCodes.Status403Forbidden);
 
     private static bool TryGetBearer(HttpContext http, out string token)

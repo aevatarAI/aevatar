@@ -1,16 +1,3 @@
-namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
-
-// Workflow Studio: one inline self-contained HTML page (no wwwroot, no build step), mirroring the
-// /workflow/observatory precedent. Browser OIDC Authorization Code + PKCE against nyxid (reuse of the
-// console-web client; same authority/clientId/scope as observatory, isolated PKCE storage + callback
-// route). The page is the anonymous static shell; the app is gated behind login exactly like observatory.
-// Increment 2a wires the signed-in app to live backend data: the scope chip from GET /api/studio/context,
-// chat from POST /api/chat (SSE), the session list from localStorage, and the Schedules card from
-// GET /api/schedules (polled). The right-pane workflow graph / Team / Service cards are deferred to
-// Increment 2b and render honest empty states (no mock data).
-internal static class WorkflowStudioPage
-{
-    public const string Html = """
 <!doctype html>
 <html lang="zh-CN">
 <head>
@@ -475,12 +462,13 @@ internal static class WorkflowStudioPage
    session, no NyxID change. This increment gates the page behind login only; the
    chat/cards below still render from the mock constants until live data is wired.
    =========================================================================== */
+const BACKEND_CONSOLE_CONFIG = __BACKEND_CONSOLE_CONFIG__;
 const CFG = {
-  authority: "https://nyx.chrono-ai.fun",
-  clientId: "37a93189-2734-406e-bca1-7dbdf25c5a53",
-  scope: "openid profile email proxy",
+  authority: BACKEND_CONSOLE_CONFIG.authority || "",
+  clientId: BACKEND_CONSOLE_CONFIG.clientId || "",
+  scope: BACKEND_CONSOLE_CONFIG.scope || "",
   redirectUri: location.origin + "/auto/callback",
-  storageKey: "aevatar-console:nyxid:pkce"
+  storageKey: BACKEND_CONSOLE_CONFIG.storageKey || ""
 };
 const TOKEN_KEY = CFG.storageKey + ":token";
 const PKCE_KEY  = CFG.storageKey + ":pkce";
@@ -492,8 +480,15 @@ function randomString(len){ const a=new Uint8Array(len); crypto.getRandomValues(
 function getToken(){ const raw=localStorage.getItem(TOKEN_KEY); if(!raw) return null; try { return JSON.parse(raw); } catch(e){ console.warn("studio: token parse failed", e); } return null; }
 function setToken(t){ localStorage.setItem(TOKEN_KEY, JSON.stringify(t)); }
 function clearToken(){ localStorage.removeItem(TOKEN_KEY); }
+function isEmbeddedInAdmin(){ try { return window.parent && window.parent !== window && window.frameElement && window.frameElement.getAttribute("data-console-frame") === "1"; } catch(e){ return false; } }
+function notifyAdminShellAuth(type, reason){
+  if(!isEmbeddedInAdmin()) return false;
+  window.parent.postMessage({ source:"aevatar-backend-console-suite", type, reason: reason || "" }, location.origin);
+  return true;
+}
 
 async function beginLogin(){
+  if(notifyAdminShellAuth("login-request")) return;
   const verifier = randomString(64);
   const st = randomString(32);
   const challenge = await sha256(verifier);
@@ -550,8 +545,8 @@ async function api(path){
   return await res.json();
 }
 
-function signOut(){ clearToken(); beginLogin(); }
-function signOutSilent(){ clearToken(); state.signedIn = false; render(); }
+function signOut(){ clearToken(); if(notifyAdminShellAuth("auth-required", "已登出 NyxID，请重新登录。")) return; beginLogin(); }
+function signOutSilent(){ clearToken(); state.signedIn = false; if(notifyAdminShellAuth("auth-required", "登录已过期，请重新使用 NyxID 登录。")) return; render(); }
 
 const OBS = "/workflow/observatory";   // 运行观测台路由
 
@@ -1445,7 +1440,7 @@ document.body.appendChild(ctxToggleBtn);
 (async function init(){
   try { await completeLoginIfCallback(); }
   catch(e){ console.warn("studio: login callback failed", e); }
-  if(!getToken()){ state.signedIn = false; render(); return; }
+  if(!getToken()){ state.signedIn = false; if(notifyAdminShellAuth("auth-required", "登录已过期，请重新使用 NyxID 登录。")) return; render(); return; }
   state.signedIn = true;
   // Sessions are owned by this page (localStorage); restore + pick the most recent.
   state.sessions = loadSessions();
@@ -1464,6 +1459,3 @@ if(window.matchMedia){ window.matchMedia("(prefers-color-scheme: light)").addEve
 </script>
 </body>
 </html>
-
-""";
-}

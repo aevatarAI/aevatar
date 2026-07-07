@@ -1,30 +1,3 @@
-namespace Aevatar.Mainnet.Host.Api.Cqrs;
-
-// CQRS / Projection Observatory: one inline self-contained HTML page (no wwwroot, no build step), mirroring
-// the /voice + /workflow/observatory + /workflow/studio precedent. Browser OIDC Authorization Code + PKCE
-// against nyxid (reuse of the console-web client; same authority/clientId/scope + shared /auto/callback +
-// shared storageKey as the rest of the suite). The page is the anonymous static shell; the app is gated
-// behind login exactly like its siblings, and carries the shared suite navigation so the six console pages
-// move as one.
-//
-// Honest wiring (DATA HONESTY — never show mock/fixture data as LIVE):
-//   - Panel A (pipeline canvas): STATIC. The pipeline structure is an always-true architectural diagram; it
-//     fetches nothing. Animated tokens + reduced-motion handling are preserved.
-//   - Panel B (scope & lag rail + headline metrics): LIVE via GET /api/cqrs/scopes (platform-admin gated).
-//     Scope ids embed the owning nyxid account id (hyphenated UUID); we resolve it to a display_name via the
-//     nyxid admin single-user endpoint (GET {authority}/api/v1/admin/users/<id>, admin-only, CORS-open) and
-//     surface family + owner facets so 200 scopes across 24 families read as people, not opaque ids. A miss
-//     leaves the raw id — never a fabricated name. 401 -> re-login; 403 -> honest "needs platform admin".
-//   - Panel C (read-model inventory): LIVE via GET /api/cqrs/readmodels (platform-admin gated). The endpoint
-//     exposes the registry (read-model name + owning actor); version/updated are not surfaced by it, so those
-//     empty columns are NOT rendered (no "v—"/"更新 —" noise) — count shows only where the backend has one.
-//     401 -> re-login; 403 -> honest "needs platform admin" state; nullable fields are omitted, never faked.
-//   - Panel D (envelope inspector): the recent-envelope LIST is unbacked (event-stream browse is a gap) ->
-//     pending state. The state_root snapshot SHAPE block (field names + types) is structural and kept, as
-//     are the two existing pending-backend stubs.
-internal static class CqrsObservatoryPage
-{
-    public const string Html = """
 <!doctype html>
 <html lang="zh-CN">
 <head>
@@ -366,12 +339,14 @@ internal static class CqrsObservatoryPage
    authority/clientId/scope identical), shared /auto/callback + shared storageKey
    so a single login covers the whole console suite.
    =========================================================================== */
+const BACKEND_CONSOLE_CONFIG = __BACKEND_CONSOLE_CONFIG__;
 const CFG = {
-  authority: "https://nyx.chrono-ai.fun",
-  clientId: "37a93189-2734-406e-bca1-7dbdf25c5a53",
-  scope: "openid profile email proxy",
+  authority: BACKEND_CONSOLE_CONFIG.authority || "",
+  clientId: BACKEND_CONSOLE_CONFIG.clientId || "",
+  scope: BACKEND_CONSOLE_CONFIG.scope || "",
   redirectUri: location.origin + "/auto/callback",
-  storageKey: "aevatar-console:nyxid:pkce"
+  storageKey: BACKEND_CONSOLE_CONFIG.storageKey || "",
+  nyxidApi: BACKEND_CONSOLE_CONFIG.nyxidApi || ""
 };
 const TOKEN_KEY = CFG.storageKey + ":token";
 const PKCE_KEY  = CFG.storageKey + ":pkce";
@@ -383,8 +358,15 @@ function randomString(len){ const a=new Uint8Array(len); crypto.getRandomValues(
 function getToken(){ const raw=localStorage.getItem(TOKEN_KEY); if(!raw) return null; try { return JSON.parse(raw); } catch(e){ console.warn("cqrs: token parse failed", e); } return null; }
 function setToken(t){ localStorage.setItem(TOKEN_KEY, JSON.stringify(t)); }
 function clearToken(){ localStorage.removeItem(TOKEN_KEY); }
+function isEmbeddedInAdmin(){ try { return window.parent && window.parent !== window && window.frameElement && window.frameElement.getAttribute("data-console-frame") === "1"; } catch(e){ return false; } }
+function notifyAdminShellAuth(type, reason){
+  if(!isEmbeddedInAdmin()) return false;
+  window.parent.postMessage({ source:"aevatar-backend-console-suite", type, reason: reason || "" }, location.origin);
+  return true;
+}
 
 async function beginLogin(){
+  if(notifyAdminShellAuth("login-request")) return;
   const verifier = randomString(64);
   const st = randomString(32);
   const challenge = await sha256(verifier);
@@ -431,8 +413,8 @@ async function fetchUserInfo(){
 }
 function toAccount(info){ return info ? { label: info.email || info.preferred_username || info.sub || "已登录" } : null; }
 
-function signOut(){ clearToken(); beginLogin(); }
-function signOutSilent(){ clearToken(); state.signedIn = false; render(); }
+function signOut(){ clearToken(); if(notifyAdminShellAuth("auth-required", "已登出 NyxID，请重新登录。")) return; beginLogin(); }
+function signOutSilent(){ clearToken(); state.signedIn = false; if(notifyAdminShellAuth("auth-required", "登录已过期，请重新使用 NyxID 登录。")) return; render(); }
 
 /* scope-gated bearer fetch helper. Attaches Bearer; 401 -> re-login. Callers inspect res.status
    themselves for non-401 handling (403 forbidden, error detail). */
@@ -455,7 +437,7 @@ async function authFetch(path){
    the row showing its raw id, never a fabricated name. Only the FIRST hyphenated
    uuid in a scope id is the owner (later 32-char hex ids are run/definition/chat
    ids, not accounts). */
-const NYXID_API = "https://nyx-api.chrono-ai.fun";
+const NYXID_API = CFG.nyxidApi || "";
 const NYXID_USER_API = NYXID_API + "/api/v1/admin/users/";
 const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 const ownerCache = {};                 // uuid -> display_name | null (null = resolved-but-unknown)
@@ -1171,7 +1153,7 @@ applyTheme();
 (async function init(){
   try { await completeLoginIfCallback(); }
   catch(e){ console.warn("cqrs: login callback failed", e); }
-  if(!getToken()){ state.signedIn = false; render(); return; }
+  if(!getToken()){ state.signedIn = false; if(notifyAdminShellAuth("auth-required", "登录已过期，请重新使用 NyxID 登录。")) return; render(); return; }
   state.signedIn = true;
   render();
   loadContext();
@@ -1184,6 +1166,3 @@ if(window.matchMedia){ window.matchMedia("(prefers-color-scheme: light)").addEve
 </script>
 </body>
 </html>
-
-""";
-}

@@ -14,16 +14,14 @@ using Xunit;
 namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
 
 /// <summary>
-/// M3 — <c>POST /api/oauth/aevatar-client/rebuild</c> is gated on a NyxID-verified
-/// platform admin/operator role (<see cref="IPlatformAdminAuthorizer"/>) instead of
-/// a static token when the authorizer is registered. These tests exercise the
-/// admin-auth primary path; the static-token fallback (authorizer not registered)
-/// is covered by <see cref="IdentityOAuthClientRebuildEndpointTests"/>.
+/// <c>POST /api/oauth/aevatar-client/rebuild</c> is gated on aevatar admin access
+/// resolved through <see cref="IPlatformAdminAuthorizer"/>.
 /// </summary>
 public sealed class IdentityOAuthClientRebuildAdminAuthEndpointTests
 {
     private const string OperatorClientId = "17cecaad-214b-4521-9dba-d435462e4095";
     private const string AdminBearer = "admin-bearer-token";
+    private const string LegacyStaticTokenHeader = "X-Aevatar-Admin-Token";
 
     [Fact]
     public async Task Denies403_WhenCallerIsNotPlatformAdmin()
@@ -44,32 +42,48 @@ public sealed class IdentityOAuthClientRebuildAdminAuthEndpointTests
     }
 
     [Fact]
-    public async Task Denies403_WhenNoBearerPresent_EvenWithStaticTokenConfigured()
+    public async Task Denies403_WhenNoBearerPresent_EvenWithStaticTokenHeader()
     {
-        // Authorizer registered → the static token is NOT a valid bypass; a
-        // missing bearer is fail-closed (the authorizer is never consulted with
-        // an empty token, and PlatformCaller.NotElevated is used).
         var dispatch = new RecordingCommandDispatch<ProvisionAevatarOAuthClientCommand>();
         var authorizer = new FakePlatformAdminAuthorizer(elevated: true);
 
         var result = await InvokeRebuildAsync(
             authorizer: authorizer,
             bearer: null,
-            staticToken: "configured-but-should-not-matter",
-            staticTokenHeader: "configured-but-should-not-matter",
+            legacyStaticTokenHeader: "configured-but-should-not-matter",
             dispatch: dispatch);
 
         var (_, statusCode) = await ReadJsonAsync(result);
         statusCode.Should().Be(StatusCodes.Status403Forbidden);
         dispatch.Commands.Should().BeEmpty();
-        authorizer.ResolvedBearers.Should().BeEmpty("a blank bearer is rejected without calling the IdP");
+        authorizer.ResolvedBearers.Should().BeEmpty("a blank bearer is rejected without calling the authorizer");
     }
 
     [Fact]
-    public async Task DispatchesProvisionCommand_WhenCallerIsPlatformAdmin()
+    public async Task Returns503_WhenAuthorizerMissing_EvenWithStaticTokenHeader()
     {
         var dispatch = new RecordingCommandDispatch<ProvisionAevatarOAuthClientCommand>();
-        var authorizer = new FakePlatformAdminAuthorizer(elevated: true);
+
+        var result = await InvokeRebuildAsync(
+            authorizer: null,
+            bearer: AdminBearer,
+            legacyStaticTokenHeader: "configured-but-should-not-matter",
+            dispatch: dispatch);
+
+        var (doc, statusCode) = await ReadJsonAsync(result);
+        statusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        doc.RootElement.GetProperty("error").GetString().Should().Be("rebuild_admin_authorizer_unavailable");
+        dispatch.Commands.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DispatchesProvisionCommand_WhenCallerHasAevatarAdminGrant()
+    {
+        var dispatch = new RecordingCommandDispatch<ProvisionAevatarOAuthClientCommand>();
+        var authorizer = new FakePlatformAdminAuthorizer(
+            elevated: true,
+            role: "user",
+            grantSource: PlatformAdminGrantSources.AllowedUserId);
 
         var result = await InvokeRebuildAsync(
             authorizer: authorizer,
@@ -85,34 +99,32 @@ public sealed class IdentityOAuthClientRebuildAdminAuthEndpointTests
     }
 
     private static Task<IResult> InvokeRebuildAsync(
-        FakePlatformAdminAuthorizer authorizer,
+        FakePlatformAdminAuthorizer? authorizer,
         string? bearer,
         RecordingCommandDispatch<ProvisionAevatarOAuthClientCommand> dispatch,
-        string staticToken = "",
-        string? staticTokenHeader = null)
+        string? legacyStaticTokenHeader = null)
     {
         var http = NewHttpContext();
         if (!string.IsNullOrEmpty(bearer))
             http.Request.Headers.Authorization = "Bearer " + bearer;
-        if (staticTokenHeader is not null)
-            http.Request.Headers[AevatarOAuthAdminOptions.RebuildTokenHeader] = staticTokenHeader;
-
-        var options = new StaticOptionsMonitor<AevatarOAuthAdminOptions>(
-            new AevatarOAuthAdminOptions { RebuildToken = staticToken });
+        if (legacyStaticTokenHeader is not null)
+            http.Request.Headers[LegacyStaticTokenHeader] = legacyStaticTokenHeader;
 
         return IdentityOAuthEndpoints.HandleAevatarOAuthClientRebuildCoreAsync(
             http: http,
             body: new IdentityOAuthEndpoints.RebuildAevatarOAuthClientRequest(
                 client_id: OperatorClientId,
                 client_id_issued_at_unix: 1700000000),
-            adminOptions: options,
             adminAuthorizer: authorizer,
             rebuildDispatch: dispatch,
             loggerFactory: NullLoggerFactory.Instance,
             ct: default);
     }
 
-    private sealed class FakePlatformAdminAuthorizer(bool elevated) : IPlatformAdminAuthorizer
+    private sealed class FakePlatformAdminAuthorizer(
+        bool elevated,
+        string role = "admin",
+        string grantSource = PlatformAdminGrantSources.NyxIdPlatformRole) : IPlatformAdminAuthorizer
     {
         public List<string> ResolvedBearers { get; } = new();
 
@@ -120,19 +132,9 @@ public sealed class IdentityOAuthClientRebuildAdminAuthEndpointTests
         {
             ResolvedBearers.Add(bearerToken);
             return Task.FromResult(elevated
-                ? new PlatformCaller(true, "admin", "admin@example.com", "admin-1")
+                ? new PlatformCaller(true, role, "admin@example.com", "admin-1", grantSource)
                 : PlatformCaller.NotElevated);
         }
-    }
-
-    private sealed class StaticOptionsMonitor<T>(T value) : IOptionsMonitor<T>
-        where T : class
-    {
-        public T CurrentValue => value;
-
-        public T Get(string? name) => value;
-
-        public IDisposable? OnChange(Action<T, string?> listener) => null;
     }
 
     private static async Task<(JsonDocument Document, int StatusCode)> ReadJsonAsync(IResult result)

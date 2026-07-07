@@ -1,27 +1,3 @@
-namespace Aevatar.Mainnet.Host.Api.Voice;
-
-// Voice console: one inline self-contained HTML page (no wwwroot, no build step), mirroring the
-// /workflow/observatory and /workflow/studio precedent. Browser OIDC Authorization Code + PKCE against
-// nyxid (reuse of the console-web client; same authority/clientId/scope as observatory/studio, isolated
-// PKCE storage + callback route). The page is the anonymous static shell; the app is gated behind login
-// exactly like its siblings, and carries the shared suite navigation so the five console pages move as one.
-//
-// Minimal, usable page centred on what works. Four views:
-//   - Talk: a REAL in-browser voice client over /ws/voice — mic (PCM16 mono 24kHz) ↔ response audio,
-//     half-duplex, status driven by the server's VoiceControlFrame stream (sessionAccepted / realtimeFrame).
-//     Wire format mirrors voice-presence's AevatarVoiceClient.cs; auth reuses this page's NyxID OIDC token
-//     carried in the Sec-WebSocket-Protocol header ("aevatar-bearer.<token>"), not the URL. No actor id → /ws/voice auto-provisions the caller's
-//     default voice agent (module voice_presence_openai; per-session NyxID ephemeral via slug openai-realtime).
-//   - Default agent: the zero-config agent's real runtime defaults (provider/model/persona), read-only —
-//     aevatar has no default-agent config write. Plus the one real voice HTTP write as an advanced action:
-//     POST /api/scopes/{scopeId}/gagent-actors/{actorId}/voice-presence/enable (attach to a specific actor).
-//   - Tools: the default session tool allowlist (VOICE_TOOL_ALLOWLIST), read-only.
-//   - Settings: provider credential chain (NyxID-managed); publishing is host-gated (a disabled chip).
-// Real HTTP surfaces called: GET /api/studio/context (scope chip), the enable POST above, and the /ws/voice
-// WebSocket. Non-functional stub views (Live Sessions / Display Outputs / WHIP) were removed.
-internal static class VoiceConsolePage
-{
-    public const string Html = """
 <!doctype html>
 <html lang="zh-CN">
 <head>
@@ -360,12 +336,13 @@ internal static class VoiceConsolePage
    Browser OIDC Authorization Code + PKCE against nyxid (same console-web client;
    authority/clientId/scope identical), isolated PKCE storage + callback route.
    =========================================================================== */
+const BACKEND_CONSOLE_CONFIG = __BACKEND_CONSOLE_CONFIG__;
 const CFG = {
-  authority: "https://nyx.chrono-ai.fun",
-  clientId: "37a93189-2734-406e-bca1-7dbdf25c5a53",
-  scope: "openid profile email proxy",
+  authority: BACKEND_CONSOLE_CONFIG.authority || "",
+  clientId: BACKEND_CONSOLE_CONFIG.clientId || "",
+  scope: BACKEND_CONSOLE_CONFIG.scope || "",
   redirectUri: location.origin + "/auto/callback",
-  storageKey: "aevatar-console:nyxid:pkce"
+  storageKey: BACKEND_CONSOLE_CONFIG.storageKey || ""
 };
 const TOKEN_KEY = CFG.storageKey + ":token";
 const PKCE_KEY  = CFG.storageKey + ":pkce";
@@ -377,8 +354,15 @@ function randomString(len){ const a=new Uint8Array(len); crypto.getRandomValues(
 function getToken(){ const raw=localStorage.getItem(TOKEN_KEY); if(!raw) return null; try { return JSON.parse(raw); } catch(e){ console.warn("voice: token parse failed", e); } return null; }
 function setToken(t){ localStorage.setItem(TOKEN_KEY, JSON.stringify(t)); }
 function clearToken(){ localStorage.removeItem(TOKEN_KEY); }
+function isEmbeddedInAdmin(){ try { return window.parent && window.parent !== window && window.frameElement && window.frameElement.getAttribute("data-console-frame") === "1"; } catch(e){ return false; } }
+function notifyAdminShellAuth(type, reason){
+  if(!isEmbeddedInAdmin()) return false;
+  window.parent.postMessage({ source:"aevatar-backend-console-suite", type, reason: reason || "" }, location.origin);
+  return true;
+}
 
 async function beginLogin(){
+  if(notifyAdminShellAuth("login-request")) return;
   const verifier = randomString(64);
   const st = randomString(32);
   const challenge = await sha256(verifier);
@@ -435,8 +419,8 @@ async function apiGet(path){
   return await res.json();
 }
 
-function signOut(){ try{stopVoice(true);}catch(e){} clearToken(); beginLogin(); }
-function signOutSilent(){ try{stopVoice(true);}catch(e){} clearToken(); state.signedIn = false; render(); }
+function signOut(){ try{stopVoice(true);}catch(e){} clearToken(); if(notifyAdminShellAuth("auth-required", "已登出 NyxID，请重新登录。")) return; beginLogin(); }
+function signOutSilent(){ try{stopVoice(true);}catch(e){} clearToken(); state.signedIn = false; if(notifyAdminShellAuth("auth-required", "登录已过期，请重新使用 NyxID 登录。")) return; render(); }
 
 /* ===========================================================================
    App state + DOM helpers
@@ -1012,7 +996,7 @@ applyTheme();
 (async function init(){
   try { await completeLoginIfCallback(); }
   catch(e){ console.warn("voice: login callback failed", e); }
-  if(!getToken()){ state.signedIn = false; render(); return; }
+  if(!getToken()){ state.signedIn = false; if(notifyAdminShellAuth("auth-required", "登录已过期，请重新使用 NyxID 登录。")) return; render(); return; }
   state.signedIn = true;
   render();
   loadContext();
@@ -1023,6 +1007,3 @@ if(window.matchMedia){ window.matchMedia("(prefers-color-scheme: light)").addEve
 </script>
 </body>
 </html>
-
-""";
-}

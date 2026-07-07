@@ -17,6 +17,7 @@
     <PackageReference Include="Microsoft.Orleans.Clustering.Redis" />
     <PackageReference Include="System.IdentityModel.Tokens.Jwt" />
     <ProjectReference Include="..\Aevatar.Audit.Core\Aevatar.Audit.Core.csproj" />
+    <ProjectReference Include="..\Aevatar.BackendConsole.Hosting\Aevatar.BackendConsole.Hosting.csproj" />
     <ProjectReference Include="..\Aevatar.Audit.Hosting\Aevatar.Audit.Hosting.csproj" />
     <ProjectReference Include="..\Aevatar.Bootstrap\Aevatar.Bootstrap.csproj" />
     <ProjectReference Include="..\Aevatar.Authentication.Hosting\Aevatar.Authentication.Hosting.csproj" />
@@ -54,8 +55,11 @@
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.Web\Aevatar.AI.ToolProviders.Web.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <!-- Fused backend admin console served at /admin (BackendConsole/AdminConsoleEndpoints.cs).
-         Kept as a real .html asset embedded in the assembly rather than a C# raw-string. -->
     <EmbeddedResource Include="BackendConsole\admin.html" />
+    <EmbeddedResource Include="BackendConsole\auto-callback.html" />
+    <EmbeddedResource Include="Status\status.html" />
+    <EmbeddedResource Include="Cqrs\cqrs-observatory.html" />
+    <EmbeddedResource Include="Voice\voice-console.html" />
+    <EmbeddedResource Include="Skills\workflow-skills.html" />
   </ItemGroup>
 </Project>

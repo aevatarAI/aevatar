@@ -29,7 +29,6 @@ public static class AuthoringServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        services.Replace(ServiceDescriptor.Singleton<IChannelInteractionNotificationPort, FeishuCardNotificationPort>());
         services.Replace(ServiceDescriptor.Singleton<IRemoteToolApprovalNotificationPort, LarkRemoteToolApprovalNotificationPort>());
         services.TryAddSingleton<ScheduledAgentCreatorOptions>();
         services.TryAddSingleton<ScheduledAgentCreateRequestMapper>();

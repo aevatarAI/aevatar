@@ -1,19 +1,3 @@
-// Channels onboarding page — one inline self-contained HTML page (no wwwroot, no
-// build step), mirroring the /workflow/studio + /workflow/observatory precedent.
-// Browser OIDC Authorization Code + PKCE against nyxid (same console-web client).
-// NyxID rejects unregistered redirect_uris and is external, so the page reuses
-// studio's registered /workflow/studio/callback and shares its PKCE + token
-// storage key (a live studio session also signs you in here). The page is the
-// anonymous static shell; the app is gated behind login, then wired to the live
-// channel-registration facade (POST/GET/DELETE /api/channels/registrations +
-// /status) and the owner LLM config (/api/user-config/llm). Source of the page is
-// authored at tools-time; this constant is the committed artifact. Authoritative
-// onboarding flow = the published aevatar-lark-bot-registration skill.
-namespace Aevatar.GAgents.Channel.NyxIdRelay;
-
-internal static class ChannelsPage
-{
-    public const string Html = """
 <!doctype html>
 <html lang="zh-CN">
 <head>
@@ -563,12 +547,13 @@ function applyTheme(){ const t=localStorage.getItem("channels-theme"); document.
    signs you in here automatically. returnTo carries our path so the shared shell
    can route back to /channels once it supports cross-page return.
    =========================================================================== */
+const BACKEND_CONSOLE_CONFIG = __BACKEND_CONSOLE_CONFIG__;
 const CFG = {
-  authority: "https://nyx.chrono-ai.fun",
-  clientId: "37a93189-2734-406e-bca1-7dbdf25c5a53",
-  scope: "openid profile email proxy",
+  authority: BACKEND_CONSOLE_CONFIG.authority || "",
+  clientId: BACKEND_CONSOLE_CONFIG.clientId || "",
+  scope: BACKEND_CONSOLE_CONFIG.scope || "",
   redirectUri: location.origin + "/auto/callback",
-  storageKey: "aevatar-console:nyxid:pkce"
+  storageKey: BACKEND_CONSOLE_CONFIG.storageKey || ""
 };
 const TOKEN_KEY = CFG.storageKey + ":token";
 const PKCE_KEY  = CFG.storageKey + ":pkce";
@@ -1368,5 +1353,3 @@ if(window.matchMedia){ window.matchMedia("(prefers-color-scheme: light)").addEve
 </script>
 </body>
 </html>
-""";
-}

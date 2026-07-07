@@ -9,10 +9,7 @@ using Microsoft.Extensions.Options;
 
 namespace Aevatar.AI.ToolProviders.NyxId;
 
-// 06-20-observatory-admin-cross-scope (G1/G8): NyxID-backed platform-admin authorizer.
-//   Calls NyxID /api/v1/users/me with the caller's own bearer and reads the authoritative platform `role`.
-//   Strictly fail-closed: elevated ONLY when HTTP 200 + valid JSON object + no {"error":true} envelope + a
-//   role that is exactly "admin" or "operator". Caches only positive decisions, per token, short TTL.
+// NyxID-backed current-user resolver with aevatar-owned admin policy.
 public sealed class NyxIdPlatformAdminAuthorizer : IPlatformAdminAuthorizer
 {
     // Per-process random salt: cache keys are non-reversible and never portable across processes. Never logged.
@@ -25,6 +22,9 @@ public sealed class NyxIdPlatformAdminAuthorizer : IPlatformAdminAuthorizer
     private readonly IMemoryCache _cache;
     private readonly TimeSpan _cacheTtl;
     private readonly bool _crossScopeEnabled;
+    private readonly HashSet<string> _allowedUserIds;
+    private readonly HashSet<string> _allowedEmails;
+    private readonly bool _trustNyxIdPlatformRole;
     private readonly ILogger<NyxIdPlatformAdminAuthorizer> _logger;
 
     public NyxIdPlatformAdminAuthorizer(
@@ -38,12 +38,14 @@ public sealed class NyxIdPlatformAdminAuthorizer : IPlatformAdminAuthorizer
         var ttlSeconds = options.Value.AdminRoleCacheTtlSeconds;
         _cacheTtl = TimeSpan.FromSeconds(ttlSeconds > 0 ? ttlSeconds : 30);
         _crossScopeEnabled = options.Value.CrossScopeEnabled;
+        _allowedUserIds = NormalizeUserIds(options.Value.AllowedUserIds);
+        _allowedEmails = NormalizeEmails(options.Value.AllowedEmails);
+        _trustNyxIdPlatformRole = options.Value.TrustNyxIdPlatformRole;
         _logger = logger ?? NullLogger<NyxIdPlatformAdminAuthorizer>.Instance;
     }
 
     public async Task<PlatformCaller> ResolveCallerAsync(string bearerToken, CancellationToken ct = default)
     {
-        // Kill-switch (G8): when disabled, nobody is elevated and we never call NyxID. Takes effect on restart.
         if (!_crossScopeEnabled || string.IsNullOrWhiteSpace(bearerToken))
             return PlatformCaller.NotElevated;
 
@@ -62,25 +64,23 @@ public sealed class NyxIdPlatformAdminAuthorizer : IPlatformAdminAuthorizer
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "NyxID /users/me failed while resolving platform admin status; denying.");
+            _logger.LogWarning(ex, "NyxID /users/me failed while resolving current user for admin access; denying.");
             return PlatformCaller.NotElevated;
         }
 
-        var caller = ParseCaller(raw);
+        var identity = ParseCurrentUser(raw);
+        var caller = Authorize(identity);
 
-        // G8: cache ONLY a positive (elevated) decision. Never cache a denial/error — a transient NyxID failure
-        // must not pin "not admin", and a freshly granted admin must not be stuck denied for the TTL.
         if (caller.IsElevated)
             _cache.Set(cacheKey, caller, _cacheTtl);
 
         return caller;
     }
 
-    // Strict fail-closed parse (G1). Public-internal for unit tests covering the full matrix.
-    internal static PlatformCaller ParseCaller(string? raw)
+    internal static NyxIdCurrentUser ParseCurrentUser(string? raw)
     {
         if (string.IsNullOrWhiteSpace(raw))
-            return PlatformCaller.NotElevated;
+            return NyxIdCurrentUser.Invalid;
 
         JsonDocument document;
         try
@@ -89,31 +89,87 @@ public sealed class NyxIdPlatformAdminAuthorizer : IPlatformAdminAuthorizer
         }
         catch (JsonException)
         {
-            return PlatformCaller.NotElevated;
+            return NyxIdCurrentUser.Invalid;
         }
 
         using (document)
         {
             var root = document.RootElement;
             if (root.ValueKind != JsonValueKind.Object)
-                return PlatformCaller.NotElevated;
+                return NyxIdCurrentUser.Invalid;
 
             // NyxIdApiClient encodes non-2xx as {"error":true,...} — fail closed.
             if (root.TryGetProperty("error", out var errorProp) && errorProp.ValueKind == JsonValueKind.True)
-                return PlatformCaller.NotElevated;
+                return NyxIdCurrentUser.Invalid;
 
             var role = GetString(root, "role").Trim();
-            if (role.Length == 0 || !ElevatedRoles.Contains(role))
-                return PlatformCaller.NotElevated;
+            var email = NormalizeEmail(GetString(root, "email"));
+            var userId = GetString(root, "id").Trim();
+            if (string.IsNullOrWhiteSpace(userId) && string.IsNullOrWhiteSpace(email))
+                return NyxIdCurrentUser.Invalid;
 
-            return new PlatformCaller(true, role, GetString(root, "email"), GetString(root, "id"));
+            return new NyxIdCurrentUser(true, role, email, userId);
         }
+    }
+
+    private PlatformCaller Authorize(NyxIdCurrentUser identity)
+    {
+        if (!identity.IsValid)
+            return PlatformCaller.NotElevated;
+
+        if (!string.IsNullOrWhiteSpace(identity.UserId) && _allowedUserIds.Contains(identity.UserId))
+        {
+            return new PlatformCaller(
+                true,
+                identity.Role,
+                identity.Email,
+                identity.UserId,
+                PlatformAdminGrantSources.AllowedUserId);
+        }
+
+        if (!string.IsNullOrWhiteSpace(identity.Email) && _allowedEmails.Contains(identity.Email))
+        {
+            return new PlatformCaller(
+                true,
+                identity.Role,
+                identity.Email,
+                identity.UserId,
+                PlatformAdminGrantSources.AllowedEmail);
+        }
+
+        if (_trustNyxIdPlatformRole && ElevatedRoles.Contains(identity.Role))
+        {
+            return new PlatformCaller(
+                true,
+                identity.Role,
+                identity.Email,
+                identity.UserId,
+                PlatformAdminGrantSources.NyxIdPlatformRole);
+        }
+
+        return PlatformCaller.NotElevated;
     }
 
     private static string GetString(JsonElement root, string name) =>
         root.TryGetProperty(name, out var prop) && prop.ValueKind == JsonValueKind.String
             ? prop.GetString() ?? string.Empty
             : string.Empty;
+
+    private static HashSet<string> NormalizeUserIds(IEnumerable<string>? values) =>
+        values?
+            .Select(static value => value.Trim())
+            .Where(static value => value.Length > 0)
+            .ToHashSet(StringComparer.Ordinal) ??
+        new HashSet<string>(StringComparer.Ordinal);
+
+    private static HashSet<string> NormalizeEmails(IEnumerable<string>? values) =>
+        values?
+            .Select(NormalizeEmail)
+            .Where(static value => value.Length > 0)
+            .ToHashSet(StringComparer.Ordinal) ??
+        new HashSet<string>(StringComparer.Ordinal);
+
+    private static string NormalizeEmail(string value) => value.Trim().ToLowerInvariant();
 
     private static string BuildCacheKey(string token)
     {
@@ -122,6 +178,11 @@ public sealed class NyxIdPlatformAdminAuthorizer : IPlatformAdminAuthorizer
         Buffer.BlockCopy(CacheSalt, 0, buffer, 0, CacheSalt.Length);
         Buffer.BlockCopy(tokenBytes, 0, buffer, CacheSalt.Length, tokenBytes.Length);
         var hash = SHA256.HashData(buffer);
-        return "observatory:admin:" + Convert.ToHexString(hash);
+        return "aevatar:admin-access:" + Convert.ToHexString(hash);
+    }
+
+    internal sealed record NyxIdCurrentUser(bool IsValid, string Role, string Email, string UserId)
+    {
+        public static NyxIdCurrentUser Invalid { get; } = new(false, string.Empty, string.Empty, string.Empty);
     }
 }

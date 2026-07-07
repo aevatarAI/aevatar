@@ -2,6 +2,8 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using Aevatar.Audit;
+using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.Audit.Core.Projection;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
 using Aevatar.Mainnet.Host.Api.Hosting;
@@ -106,6 +108,75 @@ public sealed class ElasticsearchAuditTrailArtifactStoreTests
     }
 
     [Fact]
+    public async Task QueryAsync_ShouldSearchAuditArtifactsAndReturnRecordsWithCursor()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            BuildSearchPayload(
+                BuildDocument("audit-1", "hash-1"),
+                """["2026-07-03T09:00:00Z","audit-1"]""")));
+        using var store = CreateStore(new ElasticsearchProjectionDocumentStoreOptions(), handler);
+
+        var page = await ((IAuditTrailQueryPort)store).QueryAsync(new AuditTrailQuery
+        {
+            ScopeId = "scope-1",
+            AuditActorId = "audit_actor:abc",
+            IdentityKeyId = "identity-key-1",
+            OperationName = "audit.test",
+            Outcome = AuditOutcome.Success,
+            OccurredFrom = DateTimeOffset.Parse("2026-07-03T00:00:00+00:00"),
+            OccurredTo = DateTimeOffset.Parse("2026-07-04T00:00:00+00:00"),
+            Take = 1,
+        });
+
+        page.Records.Should().ContainSingle()
+            .Which.AuditId.Should().Be("audit-1");
+        page.NextCursor.Should().NotBeNullOrWhiteSpace();
+        handler.CapturedRequests.Should().ContainSingle()
+            .Which.PathAndQuery.Should().Be("/audit-tests-audit-trail/_search");
+        using var requestBody = JsonDocument.Parse(handler.CapturedRequests[0].Body);
+        var filterJson = requestBody.RootElement
+            .GetProperty("query")
+            .GetProperty("bool")
+            .GetProperty("filter")
+            .GetRawText();
+        filterJson.Should().Contain("artifact.scope_id.keyword");
+        filterJson.Should().Contain("scope-1");
+        filterJson.Should().Contain("artifact.audit_actor_id.keyword");
+        filterJson.Should().Contain("audit_actor:abc");
+        filterJson.Should().Contain("artifact.record.identity_key_id.keyword");
+        filterJson.Should().Contain("identity-key-1");
+        filterJson.Should().Contain("artifact.operation_name.keyword");
+        filterJson.Should().Contain("audit.test");
+        filterJson.Should().Contain("artifact.outcome.keyword");
+        filterJson.Should().Contain("AUDIT_OUTCOME_SUCCESS");
+        filterJson.Should().Contain("artifact.occurred_at");
+        requestBody.RootElement.GetProperty("size").GetInt32().Should().Be(1);
+    }
+
+    [Fact]
+    public async Task QueryAsync_WhenCursorProvided_ShouldPassSearchAfter()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"hits":{"hits":[]}}"""));
+        using var store = CreateStore(new ElasticsearchProjectionDocumentStoreOptions(), handler);
+        var cursor = Convert.ToBase64String(Encoding.UTF8.GetBytes("""["2026-07-03T09:00:00Z","audit-1"]"""));
+
+        _ = await ((IAuditTrailQueryPort)store).QueryAsync(new AuditTrailQuery
+        {
+            Cursor = cursor,
+            Take = 10,
+        });
+
+        using var requestBody = JsonDocument.Parse(handler.CapturedRequests.Single().Body);
+        requestBody.RootElement.GetProperty("search_after")[0].GetString()
+            .Should().Be("2026-07-03T09:00:00Z");
+        requestBody.RootElement.GetProperty("search_after")[1].GetString()
+            .Should().Be("audit-1");
+    }
+
+    [Fact]
     public async Task UpsertAsync_WhenCreateFails_ShouldSurfaceHttpFailure()
     {
         var handler = new ScriptedHttpMessageHandler();
@@ -147,6 +218,9 @@ public sealed class ElasticsearchAuditTrailArtifactStoreTests
                 AuditId = auditId,
                 OperationName = "audit.test",
                 ScopeId = "scope-1",
+                AuditActorId = "audit_actor:abc",
+                IdentityKeyId = "identity-key-1",
+                Outcome = AuditOutcome.Success,
                 Target = new AuditTarget
                 {
                     Kind = "test-target",
@@ -166,7 +240,22 @@ public sealed class ElasticsearchAuditTrailArtifactStoreTests
                 .WithPreserveProtoFieldNames(true)
                 .WithFormatDefaultValues(true));
 
-        return $$"""{"_source":{{formatter.Format(storageDocument)}}}""";
+        return "{\"_source\":" + formatter.Format(storageDocument) + "}";
+    }
+
+    private static string BuildSearchPayload(AuditTrailDocument document, string sortJson)
+    {
+        var storageDocument = AuditTrailArtifactStorageDocument.FromArtifact(document);
+        var formatter = new JsonFormatter(
+            JsonFormatter.Settings.Default
+                .WithPreserveProtoFieldNames(true)
+                .WithFormatDefaultValues(true));
+
+        return "{\"hits\":{\"hits\":[{\"_source\":"
+            + formatter.Format(storageDocument)
+            + ",\"sort\":"
+            + sortJson
+            + "}]}}";
     }
 
     private static HttpResponseMessage CreateJsonResponse(HttpStatusCode statusCode, string json)

@@ -256,6 +256,59 @@ public sealed class ChannelCallbackEndpointsTests
         response.Body.Should().Contain("missing_bot_token");
     }
 
+    [Fact]
+    public async Task HandleRegisterAsync_ReturnsConflict_WhenChannelBotAlreadyRegistered()
+    {
+        // NyxID enforces one active channel-bot per app across all accounts. When the app is already
+        // registered (possibly under another account this registration cannot auto-clean), the failure
+        // must surface as 409 Conflict, not an opaque 502 that reads as an outage.
+        var provisioningService = Substitute.For<INyxChannelBotProvisioningService>();
+        provisioningService.Platform.Returns("lark");
+        provisioningService.ProvisionAsync(Arg.Any<NyxChannelBotProvisioningRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new NyxChannelBotProvisioningResult(
+                Succeeded: false,
+                Status: "error",
+                Platform: "lark",
+                Error: "channel_bot_id_request_failed nyx_status=409 body=Bot lark_bot is already registered on lark")));
+
+        var http = CreateJsonHttpContext(
+            """{"platform":"lark","app_id":"cli_123","app_secret":"secret","webhook_base_url":"https://aevatar.example.com"}""",
+            "scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        var result = await InvokeAsync("HandleRegisterAsync", http, CreateRegistrationFacade(provisioningService), NullLoggerFactory.Instance, CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
+        response.Body.Should().Contain("already registered");
+    }
+
+    [Fact]
+    public async Task HandleRegisterAsync_ReturnsBadRequest_WhenWebhookBaseUrlInsecure()
+    {
+        // A non-HTTPS webhook_base_url is a client input error, so the local validation failure must
+        // map to 400 (like its missing_* siblings), not fall through to the 502 catch-all.
+        var provisioningService = Substitute.For<INyxChannelBotProvisioningService>();
+        provisioningService.Platform.Returns("lark");
+        provisioningService.ProvisionAsync(Arg.Any<NyxChannelBotProvisioningRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new NyxChannelBotProvisioningResult(
+                Succeeded: false,
+                Status: "error",
+                Platform: "lark",
+                Error: "insecure_webhook_base_url")));
+
+        var http = CreateJsonHttpContext(
+            """{"platform":"lark","app_id":"cli_123","app_secret":"secret","webhook_base_url":"https://aevatar.example.com"}""",
+            "scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        var result = await InvokeAsync("HandleRegisterAsync", http, CreateRegistrationFacade(provisioningService), NullLoggerFactory.Instance, CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        response.Body.Should().Contain("insecure_webhook_base_url");
+    }
+
     private static IChannelBotRegistrationQueryPort QueryPortWith(params ChannelBotRegistrationEntry[] entries)
     {
         var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
@@ -268,7 +321,12 @@ public sealed class ChannelCallbackEndpointsTests
     {
         var authorizer = Substitute.For<IPlatformAdminAuthorizer>();
         authorizer.ResolveCallerAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new PlatformCaller(elevated, elevated ? "admin" : string.Empty, "e@x", "u")));
+            .Returns(Task.FromResult(new PlatformCaller(
+                elevated,
+                elevated ? "admin" : string.Empty,
+                "e@x",
+                "u",
+                elevated ? PlatformAdminGrantSources.NyxIdPlatformRole : string.Empty)));
         return authorizer;
     }
 
@@ -374,7 +432,7 @@ public sealed class ChannelCallbackEndpointsTests
     [Fact]
     public async Task HandleGetStatusAsync_CrossAccount_Admin_ReturnsDegradedObservation()
     {
-        // L1: a platform admin is allowed the cross-account view (mirrors the
+        // L1: an admin is allowed the cross-account view (mirrors the
         // list all-view) and still only gets aevatar's own relay-activity
         // observation, never the foreign owner's NyxID live status.
         var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();

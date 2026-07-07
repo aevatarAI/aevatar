@@ -5,6 +5,7 @@ package aevatar.gagents.channel.identity;
 option csharp_namespace = "Aevatar.GAgents.Channel.Identity";
 
 import "google/protobuf/timestamp.proto";
+import "Credentials/credential_secret_references.proto";
 
 // Cluster-singleton state for the aevatar host's own OAuth client registration
 // against NyxID. Persisted by AevatarOAuthClientGAgent (well-known id
@@ -85,6 +86,16 @@ message AevatarOAuthClientState {
   // NyxID client per silo. Cleared by the next normal (non-force) ensure after
   // operators remove AEVATAR_OAUTH_FORCE_DCR_ON_STARTUP.
   bool force_reprovision_consumed = 25;
+  // Secret-vault reference for the current HMAC signing key. New writes
+  // populate this and leave [hmac_key] empty; the projection provider
+  // resolves the key material from ISecretVault at read time. Legacy state
+  // carries the plaintext key in [hmac_key] with this ref unset — the
+  // provider falls back to the legacy bytes (dual-read migration).
+  aevatar.credentials.SecretReference hmac_key_ref = 26;
+  // Secret-vault reference for the demoted previous HMAC key kept for the
+  // rotation grace window. Set only when a rotation demoted an existing
+  // ref-backed key; empty on initial seed and for legacy state.
+  aevatar.credentials.SecretReference previous_hmac_key_ref = 27;
 }
 
 // Issued by the bootstrap startup service from every silo on cluster cold-
@@ -239,6 +250,12 @@ message AevatarOAuthClientHmacKeyRotatedEvent {
   bytes previous_hmac_key = 5;
   string previous_hmac_kid = 6;
   int64 previous_hmac_demoted_at_unix = 7;
+  // Secret-vault reference for the newly-generated HMAC key. New writes set
+  // this and leave [hmac_key] empty; the reducer copies the ref into state.
+  aevatar.credentials.SecretReference hmac_key_ref = 8;
+  // Secret-vault reference for the demoted previous key on rotation. Empty on
+  // initial seed and when the demoted key was legacy plaintext-only.
+  aevatar.credentials.SecretReference previous_hmac_key_ref = 9;
 }
 
 // Persisted when the OAuth callback observes the broker capability for
@@ -293,4 +310,12 @@ message AevatarOAuthClientDocument {
   // Mirror of AevatarOAuthClientState.redirect_uris for diagnostics and drift
   // detection of explicitly configured external callbacks.
   repeated string redirect_uris = 18;
+  // Secret-vault reference for the current HMAC key mirrored from state. When
+  // set, AevatarOAuthClientProjectionProvider resolves the key material from
+  // ISecretVault; legacy documents carry the plaintext key in [hmac_key] with
+  // this ref unset (dual-read migration).
+  aevatar.credentials.SecretReference hmac_key_ref = 19;
+  // Secret-vault reference for the demoted previous HMAC key mirrored from
+  // state for the rotation grace window.
+  aevatar.credentials.SecretReference previous_hmac_key_ref = 20;
 }
