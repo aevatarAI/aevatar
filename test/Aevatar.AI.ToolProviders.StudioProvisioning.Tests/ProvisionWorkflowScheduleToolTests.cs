@@ -12,6 +12,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
 {
     private const string ScheduleToolName = "aevatar_provision_workflow_schedule";
     private const string CreateTeamToolName = "aevatar_create_team";
+    private const string CreateMemberToolName = "aevatar_create_member";
 
     [Fact]
     public async Task ToolSource_ShouldDiscoverProvisionWorkflowScheduleTool()
@@ -37,11 +38,23 @@ public sealed class ProvisionWorkflowScheduleToolTests
     }
 
     [Fact]
-    public async Task AddStudioProvisioningTools_WhenTeamPortRegistered_ShouldExposeCreateTeamTool()
+    public async Task ToolSource_WhenMemberPortRegistered_ShouldDiscoverCreateMemberTool()
+    {
+        var source = new CreateStudioMemberToolSource(new RecordingMemberProvisioningPort());
+
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Should().ContainSingle();
+        tools[0].Name.Should().Be(CreateMemberToolName);
+    }
+
+    [Fact]
+    public async Task AddStudioProvisioningTools_WhenPortsRegistered_ShouldExposeScheduleTeamAndMemberTools()
     {
         var services = new ServiceCollection();
         services.AddSingleton<IWorkflowScheduleProvisioningPort, RecordingProvisioningPort>();
         services.AddSingleton<IStudioTeamProvisioningPort, RecordingTeamProvisioningPort>();
+        services.AddSingleton<IStudioMemberProvisioningPort, RecordingMemberProvisioningPort>();
         services.AddStudioProvisioningTools();
 
         var provider = services.BuildServiceProvider();
@@ -55,12 +68,23 @@ public sealed class ProvisionWorkflowScheduleToolTests
 
         toolNames.Should().Contain(ScheduleToolName);
         toolNames.Should().Contain(CreateTeamToolName);
+        toolNames.Should().Contain(CreateMemberToolName);
     }
 
     [Fact]
     public async Task ToolSource_WhenTeamPortMissing_ShouldNotDiscoverCreateTeamTool()
     {
         var source = new CreateStudioTeamToolSource();
+
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ToolSource_WhenMemberPortMissing_ShouldNotDiscoverCreateMemberTool()
+    {
+        var source = new CreateStudioMemberToolSource();
 
         var tools = await source.DiscoverToolsAsync();
 
@@ -133,6 +157,83 @@ public sealed class ProvisionWorkflowScheduleToolTests
     public async Task CreateTeam_ShouldUseSharedCreateScopedResourceApprovalPolicy()
     {
         var tool = await DiscoverCreateTeamToolAsync(new RecordingTeamProvisioningPort());
+
+        tool.ApprovalMode.Should().Be(ToolApprovalPolicies.CreateScopedResource);
+        tool.Should().NotBeAssignableTo<IAgentToolCapabilityDescriptor>();
+    }
+
+    [Fact]
+    public async Task CreateMember_ShouldCallMemberPortWithCallerScope()
+    {
+        var memberPort = new RecordingMemberProvisioningPort();
+        var tool = await DiscoverCreateMemberToolAsync(memberPort);
+
+        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""
+            {
+              "display_name": "Alpha Member",
+              "implementation_kind": "workflow",
+              "description": "Current caller scope member",
+              "member_id": "member-alpha",
+              "team_id": "team-alpha"
+            }
+            """);
+
+        memberPort.LastRequest.Should().NotBeNull();
+        memberPort.LastRequest!.ScopeId.Should().Be("scope-current");
+        memberPort.LastRequest.DisplayName.Should().Be("Alpha Member");
+        memberPort.LastRequest.ImplementationKind.Should().Be("workflow");
+        memberPort.LastRequest.Description.Should().Be("Current caller scope member");
+        memberPort.LastRequest.MemberId.Should().Be("member-alpha");
+        memberPort.LastRequest.TeamId.Should().Be("team-alpha");
+
+        using var document = JsonDocument.Parse(output);
+        var root = document.RootElement;
+        root.GetProperty("success").GetBoolean().Should().BeTrue();
+        root.GetProperty("scope_id").GetString().Should().Be("scope-current");
+        root.GetProperty("member_id").GetString().Should().Be("member-alpha");
+        root.GetProperty("team_id").GetString().Should().Be("team-alpha");
+        root.GetProperty("member_url").GetString().Should().Be("/api/scopes/scope-current/members/member-alpha");
+    }
+
+    [Fact]
+    public async Task CreateMember_WhenScopeMissing_ShouldReturnStructuredErrorAndNotCallPort()
+    {
+        var memberPort = new RecordingMemberProvisioningPort();
+        var tool = await DiscoverCreateMemberToolAsync(memberPort);
+
+        using var _ = PushContext(scopeId: null, ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""{"display_name":"Alpha Member","implementation_kind":"workflow"}""");
+
+        ErrorCode(output).Should().Be("caller_scope_unavailable");
+        memberPort.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task CreateMember_WhenModelSuppliesScope_ShouldRejectUnknownArgumentAndNotCallPort()
+    {
+        var memberPort = new RecordingMemberProvisioningPort();
+        var tool = await DiscoverCreateMemberToolAsync(memberPort);
+
+        using var _ = PushContext(scopeId: "scope-context", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""
+            {
+              "scope_id": "scope-model",
+              "display_name": "Alpha Member",
+              "implementation_kind": "workflow",
+              "member_id": "member-alpha"
+            }
+            """);
+
+        ErrorCode(output).Should().Be("invalid_arguments");
+        ErrorMessage(output).Should().Be("Unknown argument: scope_id");
+        memberPort.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task CreateMember_ShouldUseSharedCreateScopedResourceApprovalPolicy()
+    {
+        var tool = await DiscoverCreateMemberToolAsync(new RecordingMemberProvisioningPort());
 
         tool.ApprovalMode.Should().Be(ToolApprovalPolicies.CreateScopedResource);
         tool.Should().NotBeAssignableTo<IAgentToolCapabilityDescriptor>();
@@ -311,6 +412,13 @@ public sealed class ProvisionWorkflowScheduleToolTests
         return tools.Single(tool => tool.Name == CreateTeamToolName);
     }
 
+    private static async Task<IAgentTool> DiscoverCreateMemberToolAsync(IStudioMemberProvisioningPort memberPort)
+    {
+        var source = new CreateStudioMemberToolSource(memberPort);
+        var tools = await source.DiscoverToolsAsync();
+        return tools.Single(tool => tool.Name == CreateMemberToolName);
+    }
+
     private static AgentToolContextScope PushContext(string? scopeId, string? ownerSubject, string? accessToken)
     {
         return AgentToolContextScope.Push(new AgentToolExecutionContext(
@@ -391,6 +499,33 @@ public sealed class ProvisionWorkflowScheduleToolTests
                 MemberCount: 0,
                 CreatedAt: DateTimeOffset.Parse("2026-07-01T00:00:00Z"),
                 UpdatedAt: DateTimeOffset.Parse("2026-07-01T00:00:00Z")));
+        }
+    }
+
+    private sealed class RecordingMemberProvisioningPort : IStudioMemberProvisioningPort
+    {
+        public StudioMemberProvisioningRequest? LastRequest { get; private set; }
+
+        public Task<StudioMemberProvisioningResult> CreateAsync(
+            StudioMemberProvisioningRequest request,
+            CancellationToken ct = default)
+        {
+            LastRequest = request;
+            return Task.FromResult(new StudioMemberProvisioningResult(
+                Success: true,
+                ScopeId: request.ScopeId,
+                MemberId: request.MemberId ?? "member-generated",
+                DisplayName: request.DisplayName,
+                Description: request.Description ?? string.Empty,
+                ImplementationKind: request.ImplementationKind,
+                LifecycleStage: "created",
+                PublishedServiceId: "published-service-1",
+                LastBoundRevisionId: null,
+                CreatedAt: DateTimeOffset.Parse("2026-07-01T00:00:00Z"),
+                UpdatedAt: DateTimeOffset.Parse("2026-07-01T00:00:00Z"))
+            {
+                TeamId = request.TeamId,
+            });
         }
     }
 }
