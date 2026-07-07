@@ -27,6 +27,13 @@ export default [
     hideInMenu: true,
   },
   {
+    path: "/chat",
+    name: "Chat",
+    component: "./chat",
+    menuGroupKey: "chat",
+    hideInMenu: false,
+  },
+  {
     path: "/scopes",
     name: "My Teams",
     component: "./teams",
@@ -113,11 +120,6 @@ export default [
     path: "/runtime/primitives",
     name: "Connectors",
     component: "./primitives",
-    hideInMenu: true,
-  },
-  {
-    path: "/chat",
-    component: "./chat",
     hideInMenu: true,
   },
   {

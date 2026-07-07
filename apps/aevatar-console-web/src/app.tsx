@@ -29,6 +29,10 @@ import {
   type NavigationGroup,
 } from "./shared/navigation/navigationGroups";
 import { getNavigationSelectedKeys } from "./shared/navigation/navigationMenuSelection";
+import {
+  groupNavigationMenuItems,
+  type NavigationMenuItem,
+} from "./shared/navigation/navigationMenuGrouping";
 import { runtimeActorsApi } from "@/shared/api/runtimeActorsApi";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { buildMissionSnapshotFromRuntime } from "@/pages/MissionControl/runtimeAdapter";
@@ -125,19 +129,6 @@ type LiveOpsAttentionCandidate = {
   serviceId?: string;
 };
 
-type NavigationMenuItem = {
-  children?: NavigationMenuItem[];
-  className?: string;
-  disabled?: boolean;
-  icon?: React.ReactNode;
-  menuBadgeKey?: string;
-  menuGroupKey?: string;
-  name?: React.ReactNode;
-  path?: string;
-  key?: React.Key;
-  [key: string]: unknown;
-};
-
 type AuthSessionBootstrapProps = {
   pathname: string;
   children: React.ReactNode;
@@ -158,6 +149,7 @@ const LIVE_OPS_ATTENTION_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 const LIVE_OPS_ATTENTION_REFRESH_MS = 30_000;
 const NAVIGATION_GROUP_ORDER: readonly NavigationGroup[] = getNavigationGroupOrder();
 const NAVIGATION_MENU_MESSAGE_IDS: Readonly<Record<string, string>> = {
+  "/chat": "nav.items.chat",
   "/scopes": "nav.items.myTeams",
   "/runtime/runs": "nav.items.eventStream",
   "/services": "nav.items.services",
@@ -509,65 +501,17 @@ const LiveOpsGroupIcon: React.FC<{
 
 LiveOpsGroupIcon.displayName = "LiveOpsGroupIcon";
 
-function groupNavigationMenuItems(items: NavigationMenuItem[]): NavigationMenuItem[] {
-  const grouped = new Map<string, NavigationMenuItem[]>();
-  const ungrouped: NavigationMenuItem[] = [];
-
-  for (const item of items) {
-    const groupKey =
-      typeof item.menuGroupKey === "string" ? item.menuGroupKey : undefined;
-    if (!groupKey) {
-      ungrouped.push(item);
-      continue;
-    }
-
-    const existing = grouped.get(groupKey);
-    if (existing) {
-      existing.push(item);
-      continue;
-    }
-
-    grouped.set(groupKey, [item]);
-  }
-
-  const menuGroups = NAVIGATION_GROUP_ORDER.reduce<NavigationMenuItem[]>(
-    (result, group) => {
-      const children = grouped.get(group.key);
-      if (!children || children.length === 0) {
-        return result;
-      }
-
-      if (group.flattenSingleItem && children.length === 1) {
-        result.push({
-          ...children[0],
-          icon: children[0].icon ?? group.icon,
-          menuGroupKey: group.key,
-        });
-        return result;
-      }
-
-      result.push({
-        children: children.map((child) => ({
-          ...child,
-          menuGroupKey: group.key,
-        })),
-        key: `menu-group:${group.key}`,
-        menuGroupKey: group.key,
-        name: React.createElement(NavigationGroupLabel, { group }),
-      });
-      return result;
-    },
-    []
-  );
-
-  return [...menuGroups, ...ungrouped];
-}
-
 function decorateNavigationMenuItems(
   items: NavigationMenuItem[],
   groupItems = true
 ): NavigationMenuItem[] {
-  const sourceItems = groupItems ? groupNavigationMenuItems(items) : items;
+  const sourceItems = groupItems
+    ? groupNavigationMenuItems(
+        items,
+        NAVIGATION_GROUP_ORDER,
+        (group) => React.createElement(NavigationGroupLabel, { group }),
+      )
+    : items;
 
   return sourceItems.map((item) => {
     const path = typeof item.path === "string" ? item.path : undefined;
