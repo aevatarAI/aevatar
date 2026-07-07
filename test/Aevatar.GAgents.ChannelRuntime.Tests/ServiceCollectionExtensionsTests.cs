@@ -4,10 +4,13 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.EventSourcing;
+using Aevatar.Foundation.Abstractions.HumanInteraction;
+using Aevatar.GAgents.Authoring.Lark;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.DependencyInjection;
 using Aevatar.GAgents.Channel.NyxIdRelay;
+using Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Device;
 using Aevatar.GAgents.NyxidChat;
@@ -185,6 +188,22 @@ public sealed class ServiceCollectionExtensionsTests
         provider.GetRequiredService<IInteractiveReplyCollector>().Should().NotBeNull();
         registry.GetNativeProducer(ChannelId.From("lark")).Should().BeOfType<LarkChannelNativeMessageProducer>();
         registry.Get(ChannelId.From("lark")).Should().BeOfType<LarkMessageComposer>();
+    }
+
+    [Fact]
+    public void AddNyxIdRelayChannel_ShouldReplaceInteractionNotificationPortWithChannelNeutralRelay()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IChannelInteractionNotificationPort, FeishuCardNotificationPort>();
+
+        services.AddNyxIdRelayChannel();
+
+        services.Where(descriptor => descriptor.ServiceType == typeof(IChannelInteractionNotificationPort))
+            .Should()
+            .ContainSingle()
+            .Which.ImplementationType
+            .Should()
+            .Be(typeof(NyxIdRelayChannelInteractionNotificationPort));
     }
 
     private static void AssertNoRetiredLarkConversationInboxRegistration(IServiceCollection services)

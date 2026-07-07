@@ -493,6 +493,15 @@ public record MessageContent(
 
 **Card action typed payload rule**：workflow resume 与 LLM selection 是仓库内可控的控制语义，必须通过 `WorkflowResumeActionPayload` / `LlmSelectionActionPayload` 挂在 `ActionElement` 与 `CardActionSubmission` 上。`ActionElement.arguments` / `CardActionSubmission.Arguments` 只作为第三方或平台扩展 map，以及旧 callback JSON 的入站兼容边界；进入 `ChannelConversationTurnRunner`、`ChannelCardActionRouting` 或 LLM selection handoff 后，不得把这些字段当成权威事实源。
 
+**Human interaction notification rule**: workflow and AI-facing human-interaction delivery is a `MessageContent` intent, not a Lark, Telegram, Slack, or Discord payload. `HumanInteractionRequest` / `ChannelInteractionNotificationRequest` producers may express typed workflow facts such as `ActorId`, `RunId`, `StepId`, action ids, and approval decisions; they must not choose card schema, button layout, callback encoding, thread mechanics, or platform API routes. The canonical mapper is responsible for converting `InteractionSpec` / `InteractionTemplateSpec` into `MessageContent`, preserving workflow resume semantics in `WorkflowResumeActionPayload`, and providing deterministic text fallback. Platform-specific UX belongs in `IChannelNativeMessageProducer` / `IMessageComposer` implementations and the NyxID relay outbound adapter.
+
+The default workflow notification delivery path is `IChannelInteractionNotificationPort` backed by delivery-target lookup, `MessageContent` composition, and NyxID/channel relay dispatch. Lark-specific classes such as `FeishuCardNotificationPort` can remain as adapter-local legacy helpers or test surfaces, but they must not be the default workflow notification port. Adding a new channel therefore means:
+
+1. Register a platform `IChannelNativeMessageProducer` / composer for the channel id.
+2. Teach the relay outbound adapter how to submit the produced native payload to that platform's NyxID/channel transport.
+3. Keep workflow, AGUI, and AI tool code unchanged; those layers continue to emit typed human-interaction requests.
+4. If a platform cannot safely express a capability, degrade in the composer/adapter to deterministic text or return an explicit unsupported result. Do not ask AI prompts, workflow branches, or skills to decide platform UX.
+
 **为什么不做 universal card schema（Adaptive Cards 路线）**：universal schema 是 Level-3 抽象——为了一致性牺牲 native 表达力。Slack Block Kit 的嵌套 / Discord Embed 的字段限制 / Lark 卡片的交互模型各自有自己最自然的表达方式，强行统一会得到"处处一致但处处不好用"的结果。我们选 Level-2：intent 层统一，表达层 native，能力缺失就显式降级。
 
 ### 5.4 `IChannelTransport` + `IChannelOutboundPort` + `IMessageComposer`
@@ -2262,6 +2271,8 @@ v1 cutover step 2 细化为：
 | `ChatActivity.Id` 必须来自 platform delivery key，禁止 `Guid.NewGuid` / `DateTime.UtcNow.Ticks` | 同上，`[ActivityIdGenerator]` attribute + analyzer |
 | 业务层（非 adapter internal）调 `IChannelOutboundPort.SendAsync` 默认走 bot credential（非 user token） | `Architecture.Tests`：找所有调 `IChannelOutboundPort.SendAsync` 的 class，其 namespace 必须属于 `agents/platforms/**`（adapter 内部）或经 `ITurnContext`；不允许业务 agent 类（`SkillRunnerGAgent` 等）直接调 |
 | proactive caller 不得直接调 `IChannelOutboundPort.ContinueConversationAsync`（必须 dispatch envelope） | `Architecture.Tests`：`SkillRunnerGAgent` / `WorkflowAgentGAgent` / admin endpoint controllers 的 call graph 不得包含 `IChannelOutboundPort.ContinueConversationAsync` 直接调用 |
+| workflow/AI human-interaction delivery 不得依赖 Lark-only sender APIs | Source regression test：扫描 `src/workflow/**` 与 `src/Aevatar.Foundation.Abstractions/HumanInteraction/**`，禁止出现 `FeishuCardNotificationPort` / `FeishuCardOutboundMessageSender` / `LarkSendNewMessageRequest` / `open-apis/im/v1/messages` 等平台 sender token；workflow 只能依赖 `IChannelInteractionNotificationPort` 与 typed interaction requests |
+| default human-interaction notification port must be generic relay-backed delivery | Composition test：mainnet host composition resolves `IChannelInteractionNotificationPort` to the NyxID relay channel notification adapter, not the legacy Lark card notification port |
 | Raw payload blob write 前必须经 redaction | Roslyn analyzer：`IBlobStore.WriteAsync(..., RawPayload, ...)` 类型流必须经过 `IPayloadRedactor.Redact` 类型转换 |
 | durable inbox 实现依赖 `Orleans.Streams.IAsyncStream<ChatActivity>` | `Architecture.Tests`：实现 `IChannelDurableInbox` 契约的类必须依赖 `IAsyncStream<ChatActivity>` 抽象，不得直接使用内存 Channel / ConcurrentQueue 作为 durable store |
 
