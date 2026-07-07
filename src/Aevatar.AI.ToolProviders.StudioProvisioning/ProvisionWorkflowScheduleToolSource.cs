@@ -52,3 +52,22 @@ public sealed class CreateStudioTeamToolSource : IAgentToolSource
                 : [new CreateStudioTeamTool(_teamProvisioningPort)]);
     }
 }
+
+public sealed class CreateStudioMemberToolSource : IAgentToolSource
+{
+    private readonly IStudioMemberProvisioningPort? _memberProvisioningPort;
+
+    public CreateStudioMemberToolSource(IStudioMemberProvisioningPort? memberProvisioningPort = null)
+    {
+        _memberProvisioningPort = memberProvisioningPort;
+    }
+
+    public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult<IReadOnlyList<IAgentTool>>(
+            _memberProvisioningPort is null
+                ? []
+                : [new CreateStudioMemberTool(_memberProvisioningPort)]);
+    }
+}
