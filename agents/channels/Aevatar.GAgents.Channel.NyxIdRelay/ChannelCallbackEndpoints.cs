@@ -456,12 +456,20 @@ public static class ChannelCallbackEndpoints
 
     private static int ResolveProvisioningFailureStatusCode(string? error)
     {
-        return error switch
+        var reason = error ?? string.Empty;
+        return reason switch
         {
             "unsupported_platform" => StatusCodes.Status409Conflict,
             "missing_access_token" => StatusCodes.Status401Unauthorized,
-            "missing_app_id" or "missing_app_secret" or "missing_verification_token" or "missing_bot_token" or "missing_webhook_base_url" or "missing_scope_id" => StatusCodes.Status400BadRequest,
+            "missing_app_id" or "missing_app_secret" or "missing_verification_token" or "missing_bot_token" or "missing_webhook_base_url" or "missing_scope_id" or "insecure_webhook_base_url" => StatusCodes.Status400BadRequest,
             "nyx_base_url_not_configured" => StatusCodes.Status500InternalServerError,
+            // A downstream NyxID channel-bot uniqueness conflict (NyxID allows one active bot per
+            // app across all accounts) is a real Conflict, not a gateway failure. Surface 409 so the
+            // caller learns the app is already registered — possibly under another account this
+            // registration cannot auto-clean — instead of an opaque 502 that reads as an outage.
+            _ when reason.Contains("nyx_status=409", StringComparison.Ordinal)
+                || reason.Contains("already registered", StringComparison.OrdinalIgnoreCase)
+                => StatusCodes.Status409Conflict,
             _ => StatusCodes.Status502BadGateway,
         };
     }
