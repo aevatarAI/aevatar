@@ -942,8 +942,15 @@ function randomString(len){ const a=new Uint8Array(len); crypto.getRandomValues(
 function getToken(){ const raw=localStorage.getItem(TOKEN_KEY); if(!raw) return null; try { return JSON.parse(raw); } catch(e){ console.warn("observatory: token parse failed", e); } return null; }
 function setToken(t){ localStorage.setItem(TOKEN_KEY, JSON.stringify(t)); }
 function clearToken(){ localStorage.removeItem(TOKEN_KEY); }
+function isEmbeddedInAdmin(){ try { return window.parent && window.parent !== window && window.frameElement && window.frameElement.getAttribute("data-console-frame") === "1"; } catch(e){ return false; } }
+function notifyAdminShellAuth(type, reason){
+  if(!isEmbeddedInAdmin()) return false;
+  window.parent.postMessage({ source:"aevatar-backend-console-suite", type, reason: reason || "" }, location.origin);
+  return true;
+}
 
 async function beginLogin(){
+  if(notifyAdminShellAuth("login-request")) return;
   const verifier = randomString(64);
   const st = randomString(32);
   const challenge = await sha256(verifier);
@@ -1152,8 +1159,8 @@ function clearSession(){
   adminState.isAdmin=false; adminState.role=""; adminState.email=""; adminState.ownScope="";
   adminState.currentScope=null; adminState.inputDraft=""; adminState.candidates=null; adminState.message="";
 }
-function signOut(){ clearToken(); clearSession(); beginLogin(); }
-function signOutSilent(){ clearToken(); clearSession(); state.signedIn=false; state.scenario="login"; render(); }
+function signOut(){ clearToken(); clearSession(); if(notifyAdminShellAuth("auth-required", "已登出 NyxID，请重新登录。")) return; beginLogin(); }
+function signOutSilent(){ clearToken(); clearSession(); state.signedIn=false; state.scenario="login"; if(notifyAdminShellAuth("auth-required", "登录已过期，请重新使用 NyxID 登录。")) return; render(); }
 
 /* The API graph carries only nodes/edges; per-node status is reconstructed from the
    committed timeline (never invented) so the DAG can show real progress honestly. */
@@ -2504,7 +2511,7 @@ applyTheme();
 (async function init(){
   try { await completeLoginIfCallback(); }
   catch(e){ console.warn("observatory: login callback failed", e); }
-  if(!getToken()){ state.signedIn = false; state.scenario = "login"; render(); return; }
+  if(!getToken()){ state.signedIn = false; state.scenario = "login"; if(notifyAdminShellAuth("auth-required", "登录已过期，请重新使用 NyxID 登录。")) return; render(); return; }
   state.signedIn = true;
   state.scenario = "listLoading";
   render();

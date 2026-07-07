@@ -251,6 +251,10 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddStudioProvisioningTools();
         builder.Services.Configure<DeviceEventOptions>(
             builder.Configuration.GetSection("Aevatar:DeviceEvents"));
+        // Fail-fast: device HMAC verification must never be disabled in production.
+        var deviceEventOptions = builder.Configuration.GetSection("Aevatar:DeviceEvents").Get<DeviceEventOptions>()
+            ?? new DeviceEventOptions();
+        deviceEventOptions.EnsureNotSkippingHmacInProduction(builder.Environment.IsProduction());
         // NyxID-backed current-user resolver plus aevatar admin access policy.
         builder.Services.AddNyxIdPlatformAuthorization(builder.Configuration);
         builder.Services.AddNyxIdTools(o =>

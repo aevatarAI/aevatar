@@ -158,6 +158,8 @@ public sealed class AevatarOAuthClientEsAclStartupGuardTests
             GrantMatchesGrainEventStoreInternal = aclAsserted,
         }));
         services.AddSingleton(probe);
+        services.AddSingleton<Aevatar.Foundation.Abstractions.Credentials.ISecretVault,
+            Aevatar.Foundation.Abstractions.Credentials.Testing.InMemorySecretVault>();
         services.AddSingleton<IAevatarOAuthClientProvider, AevatarOAuthClientProjectionProvider>();
         services.AddSingleton<IProjectionDocumentReader<AevatarOAuthClientDocument, string>, NoOpOAuthClientDocumentReader>();
         services.AddSingleton<IProjectionDocumentWriter<AevatarOAuthClientDocument>, NoOpOAuthClientDocumentWriter>();

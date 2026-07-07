@@ -1,5 +1,6 @@
 using Aevatar.Audit.Core.Projection;
 using Aevatar.Audit.Core.Stores;
+using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.ChatRouting.Core;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
@@ -64,6 +65,9 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
 
         using var provider = services.BuildServiceProvider();
         Assert.NotNull(provider.GetRequiredService<IAuditTrailArtifactStore>());
+        Assert.Same(
+            provider.GetRequiredService<IAuditTrailArtifactStore>(),
+            provider.GetRequiredService<IAuditTrailQueryPort>());
         Assert.DoesNotContain(typeof(IProjectionReadModel), typeof(AuditTrailArtifactStorageDocument).GetInterfaces());
         AssertProviderStore<ChannelBotRegistrationDocument, ElasticsearchProjectionDocumentStore<ChannelBotRegistrationDocument, string>>(provider);
         AssertProviderStore<ConversationDeliveryCurrentStateDocument, ElasticsearchProjectionDocumentStore<ConversationDeliveryCurrentStateDocument, string>>(provider);
