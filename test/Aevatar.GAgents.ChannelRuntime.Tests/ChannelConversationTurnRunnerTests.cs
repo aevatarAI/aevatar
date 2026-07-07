@@ -694,6 +694,58 @@ public sealed class ChannelConversationTurnRunnerTests
         result.LlmReplyRequest!.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
     }
 
+    // A binding-lookup failure must NOT fail or drop the turn: the deferred relay retry
+    // cannot re-run a relay turn (the runtime-only reply token is never persisted, so the
+    // retry terminally fails with missing_runtime_reply_token before re-invoking the
+    // runner), and a propagated exception drops the message outright. The pinned contract
+    // is: degrade to an owner-config LLM reply with an EMPTY sender binding — the reply
+    // generator's tools-disabled notice then keeps the model honest about the missing
+    // tool surface (2026-07 incident). Covers both classifier branches, including the
+    // production ES reader's InvalidOperationException wrapping of 5xx/429.
+    [Theory]
+    [InlineData(typeof(HttpRequestException))]
+    [InlineData(typeof(TaskCanceledException))]
+    [InlineData(typeof(InvalidOperationException))]
+    public async Task RunInboundAsync_ShouldDegradeToOwnerConfigLlmReply_WhenSenderBindingLookupThrows(System.Type failureType)
+    {
+        var failure = (Exception)Activator.CreateInstance(failureType, "binding readmodel unavailable")!;
+        var bindingPort = new ThrowingIdentityBindingQueryPort(failure);
+        var services = new ServiceCollection()
+            .AddSingleton<IExternalIdentityBindingQueryPort>(bindingPort)
+            .BuildServiceProvider();
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter, services);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity("hello", "msg-binding-lookup-fails"),
+            CancellationToken.None);
+
+        bindingPort.Calls.Should().Be(1);
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest!.ToolContext);
+        toolContext.SenderBinding.BindingId.Should().BeNullOrEmpty();
+    }
+
+    // Real cancellation is not a lookup failure and must still propagate.
+    [Fact]
+    public async Task RunInboundAsync_ShouldPropagateCancellation_WhenSenderBindingLookupIsCanceled()
+    {
+        using var cts = new CancellationTokenSource();
+        var bindingPort = new CancellingIdentityBindingQueryPort(cts);
+        var services = new ServiceCollection()
+            .AddSingleton<IExternalIdentityBindingQueryPort>(bindingPort)
+            .BuildServiceProvider();
+        var runner = CreateRunner(BuildRegistrationQueryPort(), new RecordingPlatformAdapter(), services);
+
+        var act = () => runner.RunInboundAsync(
+            BuildInboundActivity("hello", "msg-binding-lookup-canceled"),
+            cts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
     [Fact]
     public async Task RunInboundAsync_ShouldSkipOwnerConfigOverrides_WhenSpecificFieldsEmpty()
     {
@@ -4358,6 +4410,27 @@ public sealed class ChannelConversationTurnRunnerTests
         }
 
         public NyxIdApiClient CreateClient() => _client;
+    }
+
+    private sealed class ThrowingIdentityBindingQueryPort(Exception failure) : IExternalIdentityBindingQueryPort
+    {
+        public int Calls { get; private set; }
+
+        public Task<BindingId?> ResolveAsync(ExternalSubjectRef externalSubject, CancellationToken ct = default)
+        {
+            Calls++;
+            throw failure;
+        }
+    }
+
+    private sealed class CancellingIdentityBindingQueryPort(CancellationTokenSource cts) : IExternalIdentityBindingQueryPort
+    {
+        public Task<BindingId?> ResolveAsync(ExternalSubjectRef externalSubject, CancellationToken ct = default)
+        {
+            cts.Cancel();
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<BindingId?>(null);
+        }
     }
 
     private sealed class StubUserLlmOptionsService : IUserLlmOptionsService
