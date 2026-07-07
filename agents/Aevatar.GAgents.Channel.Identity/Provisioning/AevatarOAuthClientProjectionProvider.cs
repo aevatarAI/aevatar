@@ -37,7 +37,9 @@ public sealed class AevatarOAuthClientProjectionProvider : IAevatarOAuthClientPr
         if (document is null || !document.IsProvisioned || !hasCurrentKey)
             throw new AevatarOAuthClientNotProvisionedException();
 
-        var hmacKey = await ResolveKeyAsync(document.HmacKeyRef, document.HmacKey, ct).ConfigureAwait(false);
+        // Current key: an unresolvable reference is a provisioning fault (fail closed).
+        var hmacKey = await TryResolveKeyAsync(document.HmacKeyRef, document.HmacKey, ct).ConfigureAwait(false)
+            ?? throw new AevatarOAuthClientNotProvisionedException();
 
         var brokerObservedAt = document.BrokerCapabilityObservedAtUnix > 0
             ? DateTimeOffset.FromUnixTimeSeconds(document.BrokerCapabilityObservedAtUnix)
@@ -48,16 +50,22 @@ public sealed class AevatarOAuthClientProjectionProvider : IAevatarOAuthClientPr
         // we surface the resolved bytes raw here. Dual-read: a ref-backed
         // previous key resolves via the vault, a legacy previous key falls
         // back to the plaintext bytes.
+        // Previous key is a best-effort grace-window carrier: a lost or unresolvable
+        // previous reference must NOT break verification of current-key tokens, so a
+        // resolution failure here drops the previous key rather than faulting the snapshot.
         string? previousKid = null;
         byte[]? previousKey = null;
         DateTimeOffset? previousDemotedAt = null;
         if (HasRef(document.PreviousHmacKeyRef) || !document.PreviousHmacKey.IsEmpty)
         {
-            previousKid = string.IsNullOrEmpty(document.PreviousHmacKid) ? null : document.PreviousHmacKid;
-            previousKey = await ResolveKeyAsync(document.PreviousHmacKeyRef, document.PreviousHmacKey, ct).ConfigureAwait(false);
-            previousDemotedAt = document.PreviousHmacDemotedAtUnix > 0
-                ? DateTimeOffset.FromUnixTimeSeconds(document.PreviousHmacDemotedAtUnix)
-                : null;
+            previousKey = await TryResolveKeyAsync(document.PreviousHmacKeyRef, document.PreviousHmacKey, ct).ConfigureAwait(false);
+            if (previousKey is not null)
+            {
+                previousKid = string.IsNullOrEmpty(document.PreviousHmacKid) ? null : document.PreviousHmacKid;
+                previousDemotedAt = document.PreviousHmacDemotedAtUnix > 0
+                    ? DateTimeOffset.FromUnixTimeSeconds(document.PreviousHmacDemotedAtUnix)
+                    : null;
+            }
         }
 
         var redirectUris = document.RedirectUris.Count > 0
@@ -85,13 +93,14 @@ public sealed class AevatarOAuthClientProjectionProvider : IAevatarOAuthClientPr
         reference is not null && !string.IsNullOrEmpty(reference.Ref);
 
     /// <summary>
-    /// Resolves HMAC key bytes, preferring the vault reference and falling
-    /// back to legacy plaintext bytes when no ref is present. Ref-backed
-    /// material is stored base64-encoded (raw 32B key), so decode on resolve.
-    /// A ref that fails to resolve is a provisioning fault, not a silent
-    /// fall-through to stale legacy bytes.
+    /// Resolves HMAC key bytes, preferring the vault reference and falling back
+    /// to legacy plaintext bytes when no ref is present. Ref-backed material is
+    /// stored base64-encoded (raw 32B key), so decode on resolve. Returns null
+    /// when a present reference cannot be resolved (never a silent fall-through
+    /// to stale legacy bytes); the caller decides whether that is fail-closed
+    /// (current key) or best-effort (previous grace-window key).
     /// </summary>
-    private async Task<byte[]> ResolveKeyAsync(
+    private async Task<byte[]?> TryResolveKeyAsync(
         SecretReference? reference,
         ByteString legacy,
         CancellationToken ct)
@@ -106,11 +115,9 @@ public sealed class AevatarOAuthClientProjectionProvider : IAevatarOAuthClientPr
                     AevatarOAuthClientGAgent.WellKnownId,
                     "identity.oauth.resolve"),
                 ct).ConfigureAwait(false);
-            if (!result.Resolved)
-                throw new AevatarOAuthClientNotProvisionedException();
-            return Convert.FromBase64String(result.Secret!);
+            return result.Resolved ? Convert.FromBase64String(result.Secret!) : null;
         }
 
-        return legacy.ToByteArray();
+        return legacy.IsEmpty ? null : legacy.ToByteArray();
     }
 }

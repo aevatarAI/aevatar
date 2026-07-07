@@ -982,6 +982,88 @@ public class DeviceEventEndpointsTests
         result.Should().BeTrue();
     }
 
+    [Fact]
+    public async Task HmacVerification_dangling_reference_does_not_fall_through_to_legacy_key()
+    {
+        // Branch-exclusivity guard: when a reference is present but unresolvable, the
+        // verifier must fail closed — it must NOT silently fall back to a still-populated
+        // legacy plaintext key. The body is signed with the legacy key on purpose, so a
+        // fall-through regression would accept it (this test would then catch it).
+        const string legacyKey = "legacy-key-must-not-be-used-01234";
+        const string scopeId = "scope-danglingref";
+        var vault = new InMemorySecretVault();
+        var body = EncodeCallbackPayload(JsonSerializer.Serialize(new
+        {
+            event_id = "evt-dangling",
+            event_type = "motion_detected",
+            detected = true,
+        }));
+        var (context, bodyBytes) = CreateContextWithSignature(body, legacyKey);
+
+        var registration = new DeviceRegistrationEntry
+        {
+            Id = "reg-dangling",
+            ScopeId = scopeId,
+            HmacKey = legacyKey, // populated legacy key that must be ignored once a ref is present
+            HmacKeyRef = new Aevatar.Foundation.Abstractions.Credentials.SecretReference
+            {
+                Ref = "sec_0000000000000099", // never stored → unresolvable
+                Purpose = CredentialSecretPurposes.DeviceHmacSigningKey,
+                OwnerScopeKey = scopeId,
+            },
+            CreatedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+        var options = new DeviceEventOptions { SkipHmacVerification = false };
+
+        var result = await DeviceEventEndpoints.VerifyHmacSignature(
+            context, bodyBytes, registration, options, vault, CancellationToken.None);
+
+        result.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task HmacVerification_unauthorized_reference_does_not_fall_through_to_legacy_key()
+    {
+        // The reference resolves to a real vault secret, but stored under a DIFFERENT owner
+        // scope/subject than the registration claims, so the vault's purpose+owner+subject
+        // binding denies it. Verification must fail closed, not fall back to the legacy key.
+        const string legacyKey = "legacy-key-must-not-be-used-56789";
+        const string vaultKey = "vault-secret-under-other-scope-01";
+        var vault = new InMemorySecretVault();
+        var stored = await vault.PutAsync(
+            new StoreSecretRequest(
+                CredentialSecretPurposes.DeviceHmacSigningKey,
+                "scope-owner-a",
+                "conv-owner-a",
+                vaultKey,
+                "device.register"),
+            CancellationToken.None);
+
+        var body = EncodeCallbackPayload(JsonSerializer.Serialize(new
+        {
+            event_id = "evt-unauthorized",
+            event_type = "motion_detected",
+            detected = true,
+        }));
+        var (context, bodyBytes) = CreateContextWithSignature(body, legacyKey);
+
+        // Registration claims scope-owner-b but points at scope-owner-a's secret → vault denies.
+        var registration = new DeviceRegistrationEntry
+        {
+            Id = "reg-unauthorized",
+            ScopeId = "scope-owner-b",
+            HmacKey = legacyKey, // populated legacy key that must be ignored once a ref is present
+            HmacKeyRef = stored.Reference,
+            CreatedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+        var options = new DeviceEventOptions { SkipHmacVerification = false };
+
+        var result = await DeviceEventEndpoints.VerifyHmacSignature(
+            context, bodyBytes, registration, options, vault, CancellationToken.None);
+
+        result.Should().BeFalse();
+    }
+
     // ─── Registration ingress: length gate + encrypt-on-ingress ───
 
     [Fact]

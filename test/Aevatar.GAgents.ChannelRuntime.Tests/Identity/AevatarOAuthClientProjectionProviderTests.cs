@@ -123,6 +123,45 @@ public sealed class AevatarOAuthClientProjectionProviderTests
     }
 
     [Fact]
+    public async Task GetAsync_DropsPreviousKey_WhenPreviousRefCannotResolve_ButKeepsCurrent()
+    {
+        // Availability guard: a lost/unresolvable PREVIOUS (grace-window) key reference
+        // must not fault the whole snapshot — current-key token verification stays
+        // healthy and only the demoted key is dropped. Contrast with a dangling CURRENT
+        // ref, which is fail-closed (GetAsync_Throws_WhenRefCannotResolve).
+        var vault = new InMemorySecretVault();
+        var currentKey = FilledKey(0x55);
+        var currentRef = await vault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.OAuthStateTokenHmacKey,
+            AevatarOAuthClientGAgent.WellKnownId,
+            AevatarOAuthClientGAgent.WellKnownId,
+            Convert.ToBase64String(currentKey),
+            "test.rotate-current"));
+
+        var document = ProvisionedDocument();
+        document.HmacKey = ByteString.Empty;
+        document.HmacKeyRef = currentRef.Reference;
+        document.HmacKid = "v2";
+        // Previous ref points at a secret the vault never stored → unresolvable.
+        document.PreviousHmacKeyRef = new SecretReference
+        {
+            Ref = "sec_0000000000000077",
+            Purpose = CredentialSecretPurposes.OAuthStateTokenHmacKey,
+            OwnerScopeKey = AevatarOAuthClientGAgent.WellKnownId,
+        };
+        document.PreviousHmacKid = "v1";
+        document.PreviousHmacDemotedAtUnix = 1700000500;
+        var provider = new AevatarOAuthClientProjectionProvider(new StubReader(document), vault);
+
+        var snapshot = await provider.GetAsync();
+
+        snapshot.HmacKey.Should().Equal(currentKey);
+        snapshot.PreviousHmacKey.Should().BeNull();
+        snapshot.PreviousHmacKid.Should().BeNull();
+        snapshot.PreviousHmacDemotedAt.Should().BeNull();
+    }
+
+    [Fact]
     public async Task RefBackedSnapshot_RoundTripsThroughStateTokenCodec()
     {
         // End-to-end: a ref-backed document resolves via the vault into a

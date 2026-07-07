@@ -588,6 +588,54 @@ public sealed class MainnetHostCompositionTests
     }
 
     [Fact]
+    public void AddAevatarMainnetHost_WhenSkipHmacVerificationEnabledInProduction_ShouldThrow()
+    {
+        // Security fail-fast wiring: the host must abort startup if device-event HMAC
+        // verification is disabled in a Production environment. This exercises the real
+        // wiring (config section "Aevatar:DeviceEvents" + builder.Environment.IsProduction()),
+        // not just the DeviceEventOptions.EnsureNotSkippingHmacInProduction helper.
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder(
+            new Dictionary<string, string?>
+            {
+                ["Aevatar:DeviceEvents:SkipHmacVerification"] = "true",
+            },
+            environmentName: Environments.Production);
+
+        var act = () => builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        act.Should()
+            .Throw<InvalidOperationException>()
+            .WithMessage("*SkipHmacVerification*");
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_WhenSkipHmacVerificationEnabledOutsideProduction_ShouldNotThrow()
+    {
+        // The same flag is permitted outside Production, proving the guard is
+        // environment-gated rather than unconditional.
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder(
+            new Dictionary<string, string?>
+            {
+                ["Aevatar:DeviceEvents:SkipHmacVerification"] = "true",
+            },
+            environmentName: Environments.Development);
+
+        var act = () => builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        act.Should().NotThrow();
+    }
+
+    [Fact]
     public void AddAevatarMainnetHost_ShouldStartHostedServicesSequentially()
     {
         // Regression guard (2026-06-03 prod incident): enabling
@@ -768,11 +816,13 @@ public sealed class MainnetHostCompositionTests
             .ContainSingle("type.googleapis.com/aevatar.gagents.household.DeviceInbound");
     }
 
-    private static WebApplicationBuilder CreateBuilder(IReadOnlyDictionary<string, string?>? overrides = null)
+    private static WebApplicationBuilder CreateBuilder(
+        IReadOnlyDictionary<string, string?>? overrides = null,
+        string? environmentName = null)
     {
         var options = new WebApplicationOptions
         {
-            EnvironmentName = Environments.Development,
+            EnvironmentName = environmentName ?? Environments.Development,
         };
 
         var builder = WebApplication.CreateBuilder(options);
