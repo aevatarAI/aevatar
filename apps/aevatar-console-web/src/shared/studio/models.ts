@@ -784,7 +784,7 @@ export interface StudioWorkflowBoardMemberSnapshot {
 export interface StudioWorkflowBoardTeamSnapshot {
   readonly teamId: string;
   readonly teamName: string;
-  readonly totalMemberCount: number;
+  readonly totalMemberCount?: number | null;
   readonly members: readonly StudioWorkflowBoardMemberSnapshot[];
 }
 

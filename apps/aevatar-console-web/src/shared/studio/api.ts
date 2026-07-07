@@ -1168,19 +1168,18 @@ function decodeStudioWorkflowBoardTeamSnapshot(
   label = "StudioWorkflowBoardTeamSnapshot"
 ): StudioWorkflowBoardSnapshot["teams"][number] {
   const record = expectRecord(value, label);
+  const members = expectArray(
+    record.members ?? record.Members ?? [],
+    `${label}.members`,
+    decodeStudioWorkflowBoardMemberSnapshot
+  );
   return {
-    members: expectArray(
-      record.members ?? record.Members ?? [],
-      `${label}.members`,
-      decodeStudioWorkflowBoardMemberSnapshot
-    ),
+    members,
     teamId: readString(record, ["teamId", "TeamId"], `${label}.teamId`),
     teamName: readString(record, ["teamName", "TeamName"], `${label}.teamName`),
-    totalMemberCount: readNumber(
-      record,
-      ["totalMemberCount", "TotalMemberCount"],
-      `${label}.totalMemberCount`
-    ),
+    totalMemberCount:
+      readOptionalNumber(record.totalMemberCount ?? record.TotalMemberCount) ??
+      null,
   };
 }
 

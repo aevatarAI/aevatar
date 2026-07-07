@@ -1550,6 +1550,7 @@ describe('studioApi host-session requests', () => {
       teams: [
         {
           teamId: 't-alpha',
+          totalMemberCount: 8,
           members: [
             {
               memberId: 'm-alpha',
@@ -1580,6 +1581,60 @@ describe('studioApi host-session requests', () => {
         method: 'POST',
       }),
     );
+  });
+
+  it('accepts nullable workflow board team totals from the backend contract', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        scopeId: 'scope-mainnet-01',
+        generatedAt: '2026-06-24T13:24:16+00:00',
+        watermark: 'workflow-board:v2:filterhash:facthash',
+        counts: {
+          running: 0,
+          waiting: 0,
+          failed: 0,
+          retrying: 0,
+          completed: 0,
+        },
+        teams: [
+          {
+            teamId: 't-alpha',
+            teamName: 'Alpha Team',
+            totalMemberCount: null,
+            members: [],
+          },
+        ],
+        lastNodeUpdatedAt: null,
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      studioApi.getWorkflowBoardSnapshot('scope-mainnet-01', {
+        take: 100,
+      }),
+    ).resolves.toMatchObject({
+      teams: [
+        {
+          teamId: 't-alpha',
+          totalMemberCount: null,
+        },
+      ],
+    });
   });
 
   it('gets a studio team summary from the team authority endpoint', async () => {
