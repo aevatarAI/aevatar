@@ -108,6 +108,42 @@ public sealed class ServiceCollectionExtensionsTests
     }
 
     [Fact]
+    public void AddNyxIdRelayChannel_ShouldNotOwnPlatformNativeMessageSenders()
+    {
+        var services = new ServiceCollection();
+
+        services.AddNyxIdRelayChannel();
+
+        services.Should().NotContain(descriptor =>
+            descriptor.ServiceType == typeof(IChannelNativeMessageSender));
+        services.Should().NotContain(descriptor =>
+            descriptor.ServiceType == typeof(LarkChannelNativeMessageSender));
+        services.Should().NotContain(descriptor =>
+            descriptor.ServiceType == typeof(TelegramChannelNativeMessageSender));
+        services.Any(IsLarkOutboundRelayDispatcherDescriptor).Should().BeFalse();
+    }
+
+    [Fact]
+    public void AddLarkAndTelegramPlatform_ShouldRegisterPlatformNativeMessageSenders()
+    {
+        var services = new ServiceCollection();
+
+        services.AddLarkPlatform();
+        services.AddTelegramPlatform();
+
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(LarkChannelNativeMessageSender));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(TelegramChannelNativeMessageSender));
+        services.Count(descriptor => descriptor.ServiceType == typeof(IChannelNativeMessageSender))
+            .Should()
+            .Be(2);
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(ILarkOutboundDispatcher) &&
+            descriptor.ImplementationType == typeof(LarkOutboundDispatcher));
+    }
+
+    [Fact]
     public void AddNyxIdChat_ShouldNotRegisterVoiceDemoBootstrapCommandSurface()
     {
         var services = new ServiceCollection();
@@ -129,6 +165,14 @@ public sealed class ServiceCollectionExtensionsTests
         var implementationTypeName = descriptor.ImplementationType?.FullName;
         return serviceTypeName?.Contains("VoiceDemo", StringComparison.Ordinal) == true ||
                implementationTypeName?.Contains("VoiceDemo", StringComparison.Ordinal) == true;
+    }
+
+    private static bool IsLarkOutboundRelayDispatcherDescriptor(ServiceDescriptor descriptor)
+    {
+        var serviceTypeName = descriptor.ServiceType.FullName;
+        var implementationTypeName = descriptor.ImplementationType?.FullName;
+        return serviceTypeName?.Contains("LarkOutboundRelayDispatcher", StringComparison.Ordinal) == true ||
+               implementationTypeName?.Contains("LarkOutboundRelayDispatcher", StringComparison.Ordinal) == true;
     }
 
     [Fact]

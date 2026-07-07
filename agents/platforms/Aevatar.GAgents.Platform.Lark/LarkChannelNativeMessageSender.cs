@@ -1,17 +1,16 @@
 using System.Text.Json;
 using Aevatar.GAgents.Channel.Abstractions;
-using Aevatar.GAgents.Scheduled;
 
-namespace Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
+namespace Aevatar.GAgents.Platform.Lark;
 
 public sealed class LarkChannelNativeMessageSender : IChannelNativeMessageSender
 {
     private const int LarkOpenIdCrossApp = 99992361;
     private const int LarkUserIdCrossTenant = 99992364;
 
-    private readonly ILarkOutboundRelayDispatcher _larkOutboundDispatcher;
+    private readonly ILarkOutboundDispatcher _larkOutboundDispatcher;
 
-    public LarkChannelNativeMessageSender(ILarkOutboundRelayDispatcher larkOutboundDispatcher)
+    public LarkChannelNativeMessageSender(ILarkOutboundDispatcher larkOutboundDispatcher)
     {
         _larkOutboundDispatcher = larkOutboundDispatcher ?? throw new ArgumentNullException(nameof(larkOutboundDispatcher));
     }
@@ -36,15 +35,21 @@ public sealed class LarkChannelNativeMessageSender : IChannelNativeMessageSender
             : message.MessageType;
 
         var result = await _larkOutboundDispatcher.SendNewMessageAsync(
-            new LarkOutboundRelayRequest(
+            new LarkSendNewMessageRequest(
                 target.NyxApiKey,
                 target.NyxProviderSlug,
                 messageType,
                 contentJson,
-                primaryTarget.ReceiveId,
-                primaryTarget.ReceiveIdType,
-                fallbackTarget?.ReceiveId,
-                fallbackTarget?.ReceiveIdType),
+                new LarkReceiveTarget(
+                    primaryTarget.ReceiveId,
+                    primaryTarget.ReceiveIdType,
+                    FellBackToPrefixInference: false),
+                fallbackTarget is null
+                    ? null
+                    : new LarkReceiveTarget(
+                        fallbackTarget.ReceiveId,
+                        fallbackTarget.ReceiveIdType,
+                        FellBackToPrefixInference: false)),
             cancellationToken).ConfigureAwait(false);
 
         if (!result.Succeeded)
@@ -54,7 +59,7 @@ public sealed class LarkChannelNativeMessageSender : IChannelNativeMessageSender
     private static string SerializeNativePayload(object payload) =>
         payload is JsonElement element ? element.GetRawText() : JsonSerializer.Serialize(payload);
 
-    private static LarkReceiveTarget ResolvePrimaryTarget(ChannelNativeDeliveryTarget target)
+    private static NativeLarkReceiveTarget ResolvePrimaryTarget(ChannelNativeDeliveryTarget target)
     {
         var receiveId = FirstNonWhiteSpace(target.LarkReceiveId, target.ConversationId);
         if (string.IsNullOrWhiteSpace(receiveId))
@@ -63,16 +68,16 @@ public sealed class LarkChannelNativeMessageSender : IChannelNativeMessageSender
         var receiveIdType = string.IsNullOrWhiteSpace(target.LarkReceiveIdType)
             ? InferReceiveIdType(receiveId)
             : target.LarkReceiveIdType.Trim();
-        return new LarkReceiveTarget(receiveId.Trim(), receiveIdType);
+        return new NativeLarkReceiveTarget(receiveId.Trim(), receiveIdType);
     }
 
-    private static LarkReceiveTarget? ResolveFallbackTarget(ChannelNativeDeliveryTarget target)
+    private static NativeLarkReceiveTarget? ResolveFallbackTarget(ChannelNativeDeliveryTarget target)
     {
         var fallbackId = target.LarkReceiveIdFallback?.Trim();
         var fallbackType = target.LarkReceiveIdTypeFallback?.Trim();
         return string.IsNullOrEmpty(fallbackId) || string.IsNullOrEmpty(fallbackType)
             ? null
-            : new LarkReceiveTarget(fallbackId, fallbackType);
+            : new NativeLarkReceiveTarget(fallbackId, fallbackType);
     }
 
     private static string InferReceiveIdType(string receiveId)
@@ -114,5 +119,5 @@ public sealed class LarkChannelNativeMessageSender : IChannelNativeMessageSender
     private static string FirstNonWhiteSpace(params string?[] values) =>
         values.FirstOrDefault(static value => !string.IsNullOrWhiteSpace(value)) ?? string.Empty;
 
-    private sealed record LarkReceiveTarget(string ReceiveId, string ReceiveIdType);
+    private sealed record NativeLarkReceiveTarget(string ReceiveId, string ReceiveIdType);
 }

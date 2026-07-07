@@ -1,8 +1,9 @@
 using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.Foundation.Abstractions.Helpers;
 
-namespace Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
+namespace Aevatar.GAgents.Platform.Telegram;
 
 public sealed class TelegramChannelNativeMessageSender : IChannelNativeMessageSender
 {
@@ -49,10 +50,10 @@ public sealed class TelegramChannelNativeMessageSender : IChannelNativeMessageSe
             JsonSerializer.Serialize(body),
             extraHeaders: null,
             cancellationToken).ConfigureAwait(false);
-        if (NyxApiResponseHelper.LooksLikeErrorEnvelope(response))
+        if (LooksLikeErrorEnvelope(response))
         {
             throw new InvalidOperationException(
-                $"Telegram interaction notification delivery failed: {NyxApiResponseHelper.ExtractErrorDetail(response)}");
+                $"Telegram interaction notification delivery failed: {ExtractErrorDetail(response)}");
         }
 
         if (TryGetTelegramError(response, out var detail))
@@ -102,6 +103,54 @@ public sealed class TelegramChannelNativeMessageSender : IChannelNativeMessageSe
 
     private static string SerializeNativePayload(object payload) =>
         payload is JsonElement element ? element.GetRawText() : JsonSerializer.Serialize(payload);
+
+    private static bool LooksLikeErrorEnvelope(string response)
+    {
+        if (string.IsNullOrWhiteSpace(response))
+            return true;
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+            return root.ValueKind == JsonValueKind.Object &&
+                   root.TryGetProperty("error", out var errorProp) &&
+                   errorProp.ValueKind == JsonValueKind.True;
+        }
+        catch (JsonException)
+        {
+            return true;
+        }
+    }
+
+    private static string ExtractErrorDetail(string response)
+    {
+        if (string.IsNullOrWhiteSpace(response))
+            return "empty_response";
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+            var status = root.TryGetProperty("status", out var statusElement) && statusElement.ValueKind == JsonValueKind.Number
+                ? statusElement.GetInt32().ToString()
+                : "unknown";
+            var body = root.TryGetProperty("body", out var bodyElement) && bodyElement.ValueKind == JsonValueKind.String
+                ? bodyElement.GetString()
+                : string.Empty;
+            var message = root.TryGetProperty("message", out var messageElement) && messageElement.ValueKind == JsonValueKind.String
+                ? messageElement.GetString()
+                : string.Empty;
+
+            return $"nyx_status={status}" +
+                   (string.IsNullOrWhiteSpace(body) ? string.Empty : $" body={SecretScrubber.Scrub(body)}") +
+                   (string.IsNullOrWhiteSpace(message) ? string.Empty : $" message={SecretScrubber.Scrub(message)}");
+        }
+        catch (JsonException)
+        {
+            return "invalid_error_envelope";
+        }
+    }
 
     private static string? TryReadString(JsonElement element, string propertyName)
     {

@@ -3,7 +3,6 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgents.Platform.Lark;
-using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 

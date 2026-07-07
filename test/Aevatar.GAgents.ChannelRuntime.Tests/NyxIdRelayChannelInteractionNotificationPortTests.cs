@@ -25,7 +25,7 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
         var port = new NyxIdRelayChannelInteractionNotificationPort(
             registry,
             [new LarkChannelNativeMessageProducer(new LarkMessageComposer())],
-            [new LarkChannelNativeMessageSender(CreateLarkRelayDispatcher(handler))],
+            [new LarkChannelNativeMessageSender(CreateLarkOutboundDispatcher(handler))],
             NullLogger<NyxIdRelayChannelInteractionNotificationPort>.Instance);
 
         await port.DeliverAsync(BuildApprovalRequest("agent-lark-1"), CancellationToken.None);
@@ -94,7 +94,7 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
         var port = new NyxIdRelayChannelInteractionNotificationPort(
             registry,
             [new LarkChannelNativeMessageProducer(new LarkMessageComposer())],
-            [new LarkChannelNativeMessageSender(CreateLarkRelayDispatcher(handler))],
+            [new LarkChannelNativeMessageSender(CreateLarkOutboundDispatcher(handler))],
             NullLogger<NyxIdRelayChannelInteractionNotificationPort>.Instance);
         var template = new InteractionTemplateSpec { TemplateId = "tpl-1" };
         template.TemplateVariable["run"] = "run-1";
@@ -215,8 +215,8 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
 
-    private static ILarkOutboundRelayDispatcher CreateLarkRelayDispatcher(HttpMessageHandler handler) =>
-        new LarkOutboundRelayDispatcher(new LarkOutboundDispatcher(CreateNyxClient(handler), NullLogger.Instance));
+    private static ILarkOutboundDispatcher CreateLarkOutboundDispatcher(HttpMessageHandler handler) =>
+        new LarkOutboundDispatcher(CreateNyxClient(handler), NullLogger.Instance);
 
     private sealed class RecordingHandler(string responseBody) : HttpMessageHandler
     {
