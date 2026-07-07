@@ -1,6 +1,6 @@
 using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
-using Aevatar.GAgents.Platform.Lark.Abstractions;
+using Aevatar.GAgents.Platform.Lark;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.Scheduled;
@@ -208,7 +208,7 @@ internal sealed class SkillRunnerStreamingReplySink : IDisposable
         });
 
         var response = await _editClient.ProxyRequestAsync(
-            _initialMessageTemplate.NyxProxyBearerToken,
+            _initialMessageTemplate.NyxApiKey,
             _initialMessageTemplate.NyxProviderSlug,
             $"open-apis/im/v1/messages/{Uri.EscapeDataString(platformMessageId)}",
             "PUT",

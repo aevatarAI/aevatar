@@ -2,8 +2,6 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
-using Aevatar.GAgents.Platform.Lark;
-using Aevatar.GAgents.Platform.Lark.Abstractions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
@@ -15,7 +13,7 @@ namespace Aevatar.GAgents.NyxidChat;
 public sealed partial class AgentRunGAgent : IReplyOperationActorContext
 {
     private static readonly TimeSpan LarkCardOperationTimeout = TimeSpan.FromSeconds(10);
-    private static readonly TimeSpan LarkCardTextFallbackOperationTimeout = TimeSpan.FromSeconds(10);
+    private const string LarkCardTextFallbackStatusText = "Processing your request. Please wait...";
 
     private sealed record LarkCardOperationInFlight(
         LarkCardOperationPhase Operation,
@@ -36,7 +34,8 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
         string? PendingAccumulatedText,
         string? PendingFinalizeText,
         string? PendingFinalizeCommandId,
-        IReadOnlyList<ConversationHistoryEntry> PendingAppendedHistory)
+        IReadOnlyList<ConversationHistoryEntry> PendingAppendedHistory,
+        AgentRunLarkCardTextFallbackPhase TextFallbackPhase)
     {
         public const string DefaultStreamingElementId = "streaming_main";
 
@@ -54,7 +53,8 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
             PendingAccumulatedText: null,
             PendingFinalizeText: null,
             PendingFinalizeCommandId: null,
-            PendingAppendedHistory: []);
+            PendingAppendedHistory: [],
+            TextFallbackPhase: AgentRunLarkCardTextFallbackPhase.Idle);
 
         public bool AllowsInterimEdit =>
             Phase is AgentRunLarkCardDeliveryPhase.Idle
@@ -91,10 +91,7 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
         if (await HandleLarkCardStreamingChunkCoreAsync(evt, correlationId))
             return;
 
-        if (evt.IsFinal)
-        {
-            await DeliverLarkCardTextFallbackOnlyAsync(evt, evt.AccumulatedText);
-        }
+        await ForwardLarkCardTextFallbackSnapshotAsync(evt, correlationId);
     }
 
     [EventHandler(AllowSelfHandling = true)]
@@ -211,26 +208,6 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
         if (state.Phase is AgentRunLarkCardDeliveryPhase.Idle
             or AgentRunLarkCardDeliveryPhase.CreationFailed)
         {
-            if (HasPendingCardDeliveryCompletion() &&
-                state.Phase is AgentRunLarkCardDeliveryPhase.CreationFailed &&
-                IsTerminalLarkCardTextFallbackPhase(State.LarkCardTextFallback?.Phase))
-            {
-                await DispatchPendingCardDeliveryCompletionAsync();
-                await TryFinalizeAfterDispatchAsync(BuildCardDeliveryCompletionRetryRequest(), runId);
-                return true;
-            }
-
-            if (state.Phase is AgentRunLarkCardDeliveryPhase.CreationFailed)
-            {
-                var fallbackFinalText = outboundIntent?.Text ?? replyText;
-                await CompleteLarkCardTextFallbackAsync(
-                    request.Activity?.Clone() ?? new ChatActivity(),
-                    correlationId,
-                    fallbackFinalText,
-                    appendedHistory);
-                return true;
-            }
-
             return false;
         }
 
@@ -443,7 +420,7 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
                 terminalReason: $"create_failed:{result.ErrorCode}",
                 fieldUpdate: s => s with { InFlight = null });
             if (evt.Chunk is not null)
-                await StartLarkCardTextFallbackAsync(evt.Chunk, result.ErrorCode, result.ErrorSummary);
+                await ForwardLarkCardTextFallbackSnapshotAsync(evt.Chunk, correlationId);
             return;
         }
 
@@ -839,842 +816,66 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
         return completed;
     }
 
-    private Task StartLarkCardTextFallbackAsync(
+    private async Task ForwardLarkCardTextFallbackSnapshotAsync(
         LlmReplyCardStreamChunkEvent chunk,
-        string? errorCode,
-        string? errorSummary) =>
-        StartLarkCardTextFallbackAsync(
-            chunk.Activity?.Clone() ?? new ChatActivity(),
-            NormalizeOptional(chunk.CorrelationId) ?? State.CorrelationId ?? string.Empty,
-            errorCode,
-            errorSummary);
-
-    private async Task StartLarkCardTextFallbackAsync(
-        ChatActivity activity,
-        string correlationId,
-        string? errorCode,
-        string? errorSummary)
+        string correlationId)
     {
-        if (NormalizeLarkCardTextFallbackPhase(State.LarkCardTextFallback?.Phase)
-            is AgentRunLarkCardTextFallbackPhase.StatusSent
-            or AgentRunLarkCardTextFallbackPhase.Completed
-            or AgentRunLarkCardTextFallbackPhase.Failed)
+        var state = GetOrInitLarkCardDeliveryState();
+        if (state.Phase is not AgentRunLarkCardDeliveryPhase.CreationFailed)
+            return;
+
+        if (NormalizeLarkCardTextFallbackPhase(state.TextFallbackPhase)
+            is AgentRunLarkCardTextFallbackPhase.Idle)
+        {
+            await DispatchTextFallbackChunkAsync(ToTextStreamChunk(chunk, LarkCardTextFallbackStatusText));
+            state = await TransitionLarkCardDeliveryPhaseAsync(
+                correlationId,
+                state,
+                state.Phase,
+                fieldUpdate: s => s with
+                {
+                    TextFallbackPhase = AgentRunLarkCardTextFallbackPhase.StatusForwarded,
+                });
+        }
+
+        if (!chunk.IsFinal)
+            return;
+
+        if (NormalizeLarkCardTextFallbackPhase(state.TextFallbackPhase)
+            is AgentRunLarkCardTextFallbackPhase.FinalForwarded)
         {
             return;
         }
 
-        if (!TryBuildLarkTextFallbackContext(
-                activity,
-                out var nyxUserAccessToken,
-                out var providerSlug,
-                out var primaryTarget,
-                out var fallbackTarget,
-                out var failureCode,
-                out var failureMessage))
-        {
-            await PersistLarkCardTextFallbackChangedAsync(
-                correlationId,
-                AgentRunLarkCardTextFallbackPhase.Failed,
-                lastErrorCode: failureCode,
-                lastErrorMessage: failureMessage);
+        await DispatchTextFallbackChunkAsync(ToTextStreamChunk(chunk, chunk.AccumulatedText));
+        await TransitionLarkCardDeliveryPhaseAsync(
+            correlationId,
+            state,
+            state.Phase,
+            fieldUpdate: s => s with
+            {
+                TextFallbackPhase = AgentRunLarkCardTextFallbackPhase.FinalForwarded,
+            });
+    }
+
+    private async Task DispatchTextFallbackChunkAsync(LlmReplyStreamChunkEvent chunk)
+    {
+        var targetActorId = NormalizeOptional(State.TargetActorId);
+        if (targetActorId is null)
             return;
-        }
 
         try
         {
-            var dispatcher = ResolveLarkOutboundDispatcher();
-            if (dispatcher is null)
-            {
-                await PersistLarkCardTextFallbackChangedAsync(
-                    correlationId,
-                    AgentRunLarkCardTextFallbackPhase.Failed,
-                    lastErrorCode: "lark_text_fallback_delivery_unavailable",
-                    lastErrorMessage: "ILarkOutboundDispatcher is not registered for Lark text fallback delivery.");
-                return;
-            }
-
-            var result = await ExecuteLarkCardTextFallbackOperationAsync(
-                ct => dispatcher.SendNewMessageAsync(
-                    new LarkSendNewMessageRequest(
-                        nyxUserAccessToken,
-                        providerSlug,
-                        LarkMessageTypes.Text,
-                        LarkCardTextFallbackPolicy.BuildTextContentJson(LarkCardTextFallbackPolicy.StatusText),
-                        primaryTarget,
-                        fallbackTarget),
-                    ct),
-                "status_send_timeout");
-
-            if (result.TimedOut)
-            {
-                const string timeoutMessage = "Lark text fallback status send timed out.";
-                await PersistLarkCardTextFallbackChangedAsync(
-                    correlationId,
-                    AgentRunLarkCardTextFallbackPhase.Failed,
-                    lastErrorCode: "status_send_timeout",
-                    lastErrorMessage: timeoutMessage);
-                return;
-            }
-
-            if (!result.Value.Succeeded || string.IsNullOrWhiteSpace(result.Value.MessageId))
-            {
-                await PersistLarkCardTextFallbackChangedAsync(
-                    correlationId,
-                    AgentRunLarkCardTextFallbackPhase.Failed,
-                    lastErrorCode: BuildLarkFallbackFailureCode("status_send_failed", result.Value.LarkCode),
-                    lastErrorMessage: result.Value.Detail);
-                return;
-            }
-
-            await PersistLarkCardTextFallbackChangedAsync(
-                correlationId,
-                AgentRunLarkCardTextFallbackPhase.StatusSent,
-                statusMessageId: result.Value.MessageId,
-                lastDeliveredText: LarkCardTextFallbackPolicy.StatusText,
-                segmentsDelivered: 1,
-                totalSegments: 1);
+            await SendToAsync(targetActorId, chunk, CancellationToken.None);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(
                 ex,
-                "Failed to send Lark card text fallback status message. runId={RunId} correlation={CorrelationId} cardError={CardError} summary={ErrorSummary}",
+                "Failed to dispatch card fallback text chunk to conversation actor; dropping. runId={RunId} correlation={CorrelationId}",
                 State.RunId,
-                correlationId,
-                errorCode,
-                TrimLogValue(errorSummary, 256));
-            await PersistLarkCardTextFallbackChangedAsync(
-                correlationId,
-                AgentRunLarkCardTextFallbackPhase.Failed,
-                lastErrorCode: "status_send_exception",
-                lastErrorMessage: ex.Message);
+                chunk.CorrelationId);
         }
-    }
-
-    private Task<LarkTextFallbackTimedOperationResult<LarkSendNewMessageResult>> SendLarkCardTextFallbackMessageAsync(
-        ILarkOutboundDispatcher dispatcher,
-        string nyxUserAccessToken,
-        string providerSlug,
-        LarkReceiveTarget primaryTarget,
-        LarkReceiveTarget? fallbackTarget,
-        string text,
-        string timeoutCode) =>
-        ExecuteLarkCardTextFallbackOperationAsync(
-            ct => dispatcher.SendNewMessageAsync(
-                new LarkSendNewMessageRequest(
-                    nyxUserAccessToken,
-                    providerSlug,
-                    LarkMessageTypes.Text,
-                    LarkCardTextFallbackPolicy.BuildTextContentJson(text),
-                    primaryTarget,
-                    fallbackTarget),
-                    ct),
-            timeoutCode);
-
-    private Task CompleteLarkCardTextFallbackAsync(
-        LlmReplyCardStreamChunkEvent chunk,
-        string finalText,
-        IReadOnlyList<ConversationHistoryEntry> appendedHistory) =>
-        CompleteLarkCardTextFallbackAsync(
-            chunk.Activity?.Clone() ?? new ChatActivity(),
-            NormalizeOptional(chunk.CorrelationId) ?? State.CorrelationId ?? string.Empty,
-            finalText,
-            appendedHistory);
-
-    private Task DeliverLarkCardTextFallbackOnlyAsync(
-        LlmReplyCardStreamChunkEvent chunk,
-        string finalText) =>
-        DeliverLarkCardTextFallbackOnlyAsync(
-            chunk.Activity?.Clone() ?? new ChatActivity(),
-            NormalizeOptional(chunk.CorrelationId) ?? State.CorrelationId ?? string.Empty,
-            finalText);
-
-    private async Task DeliverLarkCardTextFallbackOnlyAsync(
-        ChatActivity activity,
-        string correlationId,
-        string finalText)
-    {
-        await DeliverLarkCardTextFallbackFinalAndPersistAsync(activity, correlationId, finalText);
-    }
-
-    private async Task CompleteLarkCardTextFallbackAsync(
-        ChatActivity activity,
-        string correlationId,
-        string finalText,
-        IReadOnlyList<ConversationHistoryEntry> appendedHistory)
-    {
-        var result = await DeliverLarkCardTextFallbackFinalAndPersistAsync(activity, correlationId, finalText);
-        if (result.AlreadyCompleted && result.Succeeded)
-        {
-            await CompleteCardStreamedDeliveryAsync(
-                correlationId,
-                BuildLlmReplyCommandId(correlationId),
-                activity,
-                result.StatusMessageId,
-                finalText ?? string.Empty,
-                deliveryFailure: null,
-                appendedHistory);
-            return;
-        }
-
-        await CompleteCardStreamedDeliveryAsync(
-            correlationId,
-            BuildLlmReplyCommandId(correlationId),
-            activity,
-            result.StatusMessageId,
-            result.VisibleText,
-            result.Succeeded
-                ? null
-                : BuildLarkTextFallbackFailure(correlationId, result.ErrorCode, result.ErrorMessage),
-            appendedHistory);
-    }
-
-    private async Task<LarkTextFallbackPersistedFinalDelivery> DeliverLarkCardTextFallbackFinalAndPersistAsync(
-        ChatActivity activity,
-        string correlationId,
-        string finalText)
-    {
-        if (NormalizeLarkCardTextFallbackPhase(State.LarkCardTextFallback?.Phase)
-            is not AgentRunLarkCardTextFallbackPhase.StatusSent)
-        {
-            await StartLarkCardTextFallbackAsync(activity, correlationId, errorCode: null, errorSummary: null);
-        }
-
-        var fallback = State.LarkCardTextFallback;
-        if (NormalizeLarkCardTextFallbackPhase(fallback?.Phase) is AgentRunLarkCardTextFallbackPhase.Failed)
-        {
-            return LarkTextFallbackPersistedFinalDelivery.Failed(
-                fallback?.StatusMessageId ?? string.Empty,
-                fallback?.LastDeliveredText ?? string.Empty,
-                fallback?.LastErrorCode ?? string.Empty,
-                fallback?.LastErrorMessage ?? string.Empty);
-        }
-
-        if (NormalizeLarkCardTextFallbackPhase(fallback?.Phase) is AgentRunLarkCardTextFallbackPhase.Completed)
-        {
-            var completedStatusMessageId = fallback?.StatusMessageId ?? string.Empty;
-            var completedVisibleText = fallback?.LastDeliveredText ?? string.Empty;
-            var authoritativeSegments = LarkCardTextFallbackPolicy.SegmentText(finalText ?? string.Empty);
-            var authoritativeVisibleText = string.Join("\n", authoritativeSegments);
-            if (string.Equals(completedVisibleText, authoritativeVisibleText, StringComparison.Ordinal))
-            {
-                return LarkTextFallbackPersistedFinalDelivery.Completed(
-                    completedStatusMessageId,
-                    completedVisibleText,
-                    alreadyCompleted: true);
-            }
-
-            return await UpdateCompletedLarkCardTextFallbackFinalAndPersistAsync(
-                activity,
-                correlationId,
-                completedStatusMessageId,
-                authoritativeSegments,
-                authoritativeVisibleText);
-        }
-
-        if (!TryBuildLarkTextFallbackContext(
-                activity,
-                out var nyxUserAccessToken,
-                out var providerSlug,
-                out var primaryTarget,
-                out var fallbackTarget,
-                out var failureCode,
-                out var failureMessage))
-        {
-            await PersistLarkCardTextFallbackChangedAsync(
-                correlationId,
-                AgentRunLarkCardTextFallbackPhase.Failed,
-                lastErrorCode: failureCode,
-                lastErrorMessage: failureMessage);
-            return LarkTextFallbackPersistedFinalDelivery.Failed(
-                fallback?.StatusMessageId ?? string.Empty,
-                fallback?.LastDeliveredText ?? string.Empty,
-                failureCode,
-                failureMessage);
-        }
-
-        fallback = State.LarkCardTextFallback;
-        var statusMessageId = NormalizeOptional(fallback?.StatusMessageId);
-        if (statusMessageId is null)
-        {
-            const string statusMessageFailureCode = "status_message_unavailable";
-            const string statusMessageFailureMessage = "Lark text fallback status message id is unavailable.";
-            await PersistLarkCardTextFallbackChangedAsync(
-                correlationId,
-                AgentRunLarkCardTextFallbackPhase.Failed,
-                lastErrorCode: statusMessageFailureCode,
-                lastErrorMessage: statusMessageFailureMessage);
-            return LarkTextFallbackPersistedFinalDelivery.Failed(
-                string.Empty,
-                string.Empty,
-                statusMessageFailureCode,
-                statusMessageFailureMessage);
-        }
-
-        var segments = LarkCardTextFallbackPolicy.SegmentText(finalText ?? string.Empty);
-        var finalDelivery = await DeliverLarkCardTextFallbackFinalAsync(
-            correlationId,
-            nyxUserAccessToken,
-            providerSlug,
-            primaryTarget,
-            fallbackTarget,
-            statusMessageId,
-            segments);
-
-        var visibleText = string.Join("\n", segments);
-        if (finalDelivery.Succeeded)
-        {
-            await PersistLarkCardTextFallbackChangedAsync(
-                correlationId,
-                AgentRunLarkCardTextFallbackPhase.Completed,
-                lastDeliveredText: visibleText,
-                segmentsDelivered: finalDelivery.SegmentsDelivered,
-                totalSegments: segments.Count,
-                lastErrorCode: string.Empty,
-                lastErrorMessage: string.Empty);
-            return LarkTextFallbackPersistedFinalDelivery.Completed(
-                statusMessageId,
-                visibleText,
-                alreadyCompleted: false);
-        }
-
-        await PersistLarkCardTextFallbackChangedAsync(
-            correlationId,
-            AgentRunLarkCardTextFallbackPhase.Failed,
-            lastDeliveredText: finalDelivery.LastDeliveredText,
-            segmentsDelivered: finalDelivery.SegmentsDelivered,
-            totalSegments: segments.Count,
-            lastErrorCode: finalDelivery.ErrorCode,
-            lastErrorMessage: finalDelivery.ErrorMessage);
-        return LarkTextFallbackPersistedFinalDelivery.Failed(
-            statusMessageId,
-            finalDelivery.LastDeliveredText,
-            finalDelivery.ErrorCode,
-            finalDelivery.ErrorMessage);
-    }
-
-    private async Task<LarkTextFallbackPersistedFinalDelivery> UpdateCompletedLarkCardTextFallbackFinalAndPersistAsync(
-        ChatActivity activity,
-        string correlationId,
-        string statusMessageId,
-        IReadOnlyList<string> authoritativeSegments,
-        string authoritativeVisibleText)
-    {
-        if (!TryBuildLarkTextFallbackContext(
-                activity,
-                out var nyxUserAccessToken,
-                out var providerSlug,
-                out var primaryTarget,
-                out var fallbackTarget,
-                out var failureCode,
-                out var failureMessage))
-        {
-            await PersistLarkCardTextFallbackChangedAsync(
-                correlationId,
-                AgentRunLarkCardTextFallbackPhase.Failed,
-                lastErrorCode: failureCode,
-                lastErrorMessage: failureMessage);
-            return LarkTextFallbackPersistedFinalDelivery.Failed(
-                statusMessageId,
-                State.LarkCardTextFallback?.LastDeliveredText ?? string.Empty,
-                failureCode,
-                failureMessage);
-        }
-
-        if (string.IsNullOrWhiteSpace(statusMessageId))
-        {
-            const string statusMessageFailureCode = "status_message_unavailable";
-            const string statusMessageFailureMessage = "Lark text fallback status message id is unavailable.";
-            await PersistLarkCardTextFallbackChangedAsync(
-                correlationId,
-                AgentRunLarkCardTextFallbackPhase.Failed,
-                lastErrorCode: statusMessageFailureCode,
-                lastErrorMessage: statusMessageFailureMessage);
-            return LarkTextFallbackPersistedFinalDelivery.Failed(
-                string.Empty,
-                State.LarkCardTextFallback?.LastDeliveredText ?? string.Empty,
-                statusMessageFailureCode,
-                statusMessageFailureMessage);
-        }
-
-        var finalDelivery = await DeliverLarkCardTextFallbackFinalAsync(
-            correlationId,
-            nyxUserAccessToken,
-            providerSlug,
-            primaryTarget,
-            fallbackTarget,
-            statusMessageId,
-            authoritativeSegments);
-
-        if (finalDelivery.Succeeded)
-        {
-            await PersistLarkCardTextFallbackChangedAsync(
-                correlationId,
-                AgentRunLarkCardTextFallbackPhase.Completed,
-                lastDeliveredText: authoritativeVisibleText,
-                segmentsDelivered: finalDelivery.SegmentsDelivered,
-                totalSegments: authoritativeSegments.Count,
-                lastErrorCode: string.Empty,
-                lastErrorMessage: string.Empty);
-            return LarkTextFallbackPersistedFinalDelivery.Completed(
-                statusMessageId,
-                authoritativeVisibleText,
-                alreadyCompleted: false);
-        }
-
-        await PersistLarkCardTextFallbackChangedAsync(
-            correlationId,
-            AgentRunLarkCardTextFallbackPhase.Failed,
-            lastDeliveredText: finalDelivery.LastDeliveredText,
-            segmentsDelivered: finalDelivery.SegmentsDelivered,
-            totalSegments: authoritativeSegments.Count,
-            lastErrorCode: finalDelivery.ErrorCode,
-            lastErrorMessage: finalDelivery.ErrorMessage);
-        return LarkTextFallbackPersistedFinalDelivery.Failed(
-            statusMessageId,
-            finalDelivery.LastDeliveredText,
-            finalDelivery.ErrorCode,
-            finalDelivery.ErrorMessage);
-    }
-
-    private async Task<LarkTextFallbackFinalDelivery> DeliverLarkCardTextFallbackFinalAsync(
-        string correlationId,
-        string nyxUserAccessToken,
-        string providerSlug,
-        LarkReceiveTarget primaryTarget,
-        LarkReceiveTarget? fallbackTarget,
-        string statusMessageId,
-        IReadOnlyList<string> segments)
-    {
-        var delivered = 0;
-        var lastDeliveredText = State.LarkCardTextFallback?.LastDeliveredText ?? string.Empty;
-        var editPort = ResolveLarkTextMessageEditPort();
-        if (editPort is null)
-        {
-            return LarkTextFallbackFinalDelivery.Failed(
-                delivered,
-                lastDeliveredText,
-                "lark_text_fallback_edit_unavailable",
-                "ILarkTextMessageEditPort is not registered for Lark text fallback edit delivery.");
-        }
-
-        LarkTextMessageEditResult edit;
-        try
-        {
-            var editResult = await ExecuteLarkCardTextFallbackOperationAsync(
-                ct => editPort.EditAsync(
-                    new LarkTextMessageEditRequest(
-                        nyxUserAccessToken,
-                        providerSlug,
-                        statusMessageId,
-                        segments[0]),
-                    ct),
-                "status_edit_timeout");
-            if (editResult.TimedOut)
-            {
-                return LarkTextFallbackFinalDelivery.Failed(
-                    delivered,
-                    lastDeliveredText,
-                    "status_edit_timeout",
-                    "Lark text fallback status edit timed out.");
-            }
-
-            edit = editResult.Value;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(
-                ex,
-                "Lark card text fallback final status edit threw. runId={RunId} correlation={CorrelationId}",
-                State.RunId,
-                correlationId);
-            return LarkTextFallbackFinalDelivery.Failed(
-                delivered,
-                lastDeliveredText,
-                "status_edit_exception",
-                ex.Message);
-        }
-
-        if (edit.Succeeded)
-        {
-            delivered = 1;
-            lastDeliveredText = segments[0];
-        }
-        else
-        {
-            _logger.LogWarning(
-                "Lark card text fallback final status edit failed; sending final text as new messages. runId={RunId} correlation={CorrelationId} larkCode={LarkCode} detail={Detail}",
-                State.RunId,
-                correlationId,
-                edit.LarkCode,
-                edit.Detail);
-            var freshResult = await SendLarkCardTextFallbackSegmentSafeAsync(
-                nyxUserAccessToken,
-                providerSlug,
-                primaryTarget,
-                fallbackTarget,
-                segments[0],
-                "final_send_exception_after_edit_failed",
-                "final_send_timeout_after_edit_failed");
-            if (!freshResult.Succeeded)
-            {
-                var failureCode = freshResult.ExceptionThrown
-                    ? freshResult.ErrorCode
-                    : BuildLarkFallbackFailureCode("final_send_failed_after_edit_failed", freshResult.LarkCode);
-                return LarkTextFallbackFinalDelivery.Failed(
-                    delivered,
-                    lastDeliveredText,
-                    failureCode,
-                    AppendFailureDetail("status_edit_failed", edit.Detail, freshResult.Detail));
-            }
-
-            delivered = 1;
-            lastDeliveredText = segments[0];
-        }
-
-        for (var i = 1; i < segments.Count; i++)
-        {
-            var sendResult = await SendLarkCardTextFallbackSegmentSafeAsync(
-                nyxUserAccessToken,
-                providerSlug,
-                primaryTarget,
-                fallbackTarget,
-                segments[i],
-                "segment_send_exception",
-                "segment_send_timeout");
-            if (!sendResult.Succeeded)
-            {
-                var failureCode = sendResult.ExceptionThrown
-                    ? sendResult.ErrorCode
-                    : BuildLarkFallbackFailureCode("segment_send_failed", sendResult.LarkCode);
-                return LarkTextFallbackFinalDelivery.Failed(
-                    delivered,
-                    lastDeliveredText,
-                    failureCode,
-                    sendResult.Detail);
-            }
-
-            delivered++;
-            lastDeliveredText = segments[i];
-        }
-
-        return LarkTextFallbackFinalDelivery.Completed(delivered, lastDeliveredText);
-    }
-
-    private async Task<LarkTextFallbackSegmentSendResult> SendLarkCardTextFallbackSegmentSafeAsync(
-        string nyxUserAccessToken,
-        string providerSlug,
-        LarkReceiveTarget primaryTarget,
-        LarkReceiveTarget? fallbackTarget,
-        string text,
-        string exceptionCode,
-        string timeoutCode)
-    {
-        var dispatcher = ResolveLarkOutboundDispatcher();
-        if (dispatcher is null)
-        {
-            return LarkTextFallbackSegmentSendResult.Failed(
-                "lark_text_fallback_delivery_unavailable",
-                null,
-                "ILarkOutboundDispatcher is not registered for Lark text fallback delivery.",
-                exceptionThrown: false);
-        }
-
-        try
-        {
-            var result = await SendLarkCardTextFallbackMessageAsync(
-                dispatcher,
-                nyxUserAccessToken,
-                providerSlug,
-                primaryTarget,
-                fallbackTarget,
-                text,
-                timeoutCode);
-            if (result.TimedOut)
-            {
-                return LarkTextFallbackSegmentSendResult.Failed(
-                    timeoutCode,
-                    null,
-                    "Lark text fallback message send timed out.",
-                    exceptionThrown: true);
-            }
-
-            return result.Value.Succeeded
-                ? LarkTextFallbackSegmentSendResult.Sent(result.Value.MessageId ?? string.Empty)
-                : LarkTextFallbackSegmentSendResult.Failed(
-                    string.Empty,
-                    result.Value.LarkCode,
-                    result.Value.Detail,
-                    exceptionThrown: false);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(
-                ex,
-                "Lark card text fallback segment send threw. runId={RunId} providerSlug={ProviderSlug}",
-                State.RunId,
-                providerSlug);
-            return LarkTextFallbackSegmentSendResult.Failed(
-                exceptionCode,
-                null,
-                ex.Message,
-                exceptionThrown: true);
-        }
-    }
-
-    private async Task PersistLarkCardTextFallbackChangedAsync(
-        string correlationId,
-        AgentRunLarkCardTextFallbackPhase phase,
-        string? statusMessageId = null,
-        string? lastDeliveredText = null,
-        int? segmentsDelivered = null,
-        int? totalSegments = null,
-        string? lastErrorCode = null,
-        string? lastErrorMessage = null)
-    {
-        var changed = new AgentRunLarkCardTextFallbackChangedEvent
-        {
-            RunId = State.RunId ?? string.Empty,
-            CorrelationId = correlationId,
-            ChangedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
-            Phase = phase,
-        };
-        if (statusMessageId is not null)
-            changed.StatusMessageId = statusMessageId;
-        if (lastDeliveredText is not null)
-            changed.LastDeliveredText = lastDeliveredText;
-        if (segmentsDelivered.HasValue)
-            changed.SegmentsDelivered = segmentsDelivered.Value;
-        if (totalSegments.HasValue)
-            changed.TotalSegments = totalSegments.Value;
-        if (lastErrorCode is not null)
-            changed.LastErrorCode = lastErrorCode;
-        if (lastErrorMessage is not null)
-            changed.LastErrorMessage = lastErrorMessage;
-
-        await PersistDomainEventAsync(changed);
-    }
-
-    private async Task<LarkTextFallbackTimedOperationResult<T>> ExecuteLarkCardTextFallbackOperationAsync<T>(
-        Func<CancellationToken, Task<T>> operation,
-        string timeoutCode)
-    {
-        using var timeout = new CancellationTokenSource(LarkCardTextFallbackOperationTimeout, _timeProvider);
-        try
-        {
-            return LarkTextFallbackTimedOperationResult<T>.Completed(
-                await operation(timeout.Token).WaitAsync(
-                    LarkCardTextFallbackOperationTimeout,
-                    _timeProvider));
-        }
-        catch (Exception ex) when (
-            ex is TimeoutException ||
-            ex is OperationCanceledException && timeout.IsCancellationRequested)
-        {
-            _logger.LogWarning(
-                "Lark card text fallback operation timed out. runId={RunId} timeoutCode={TimeoutCode}",
-                State.RunId,
-                timeoutCode);
-            return LarkTextFallbackTimedOperationResult<T>.FromTimeout(timeoutCode);
-        }
-    }
-
-    private static AgentRunGAgentState ApplyLarkCardTextFallbackChanged(
-        AgentRunGAgentState current,
-        AgentRunLarkCardTextFallbackChangedEvent evt)
-    {
-        var next = current.Clone();
-        next.RunId = string.IsNullOrWhiteSpace(next.RunId) ? evt.RunId : next.RunId;
-        next.CorrelationId = string.IsNullOrWhiteSpace(next.CorrelationId) ? evt.CorrelationId : next.CorrelationId;
-        next.LarkCardTextFallback ??= new AgentRunLarkCardTextFallbackState();
-        var state = next.LarkCardTextFallback;
-        state.CorrelationId = evt.CorrelationId ?? string.Empty;
-        state.Phase = NormalizeLarkCardTextFallbackPhase(evt.Phase);
-        state.UpdatedAtUnixMs = evt.ChangedAtUnixMs;
-        if (evt.HasStatusMessageId)
-            state.StatusMessageId = evt.StatusMessageId ?? string.Empty;
-        if (evt.HasLastDeliveredText)
-            state.LastDeliveredText = evt.LastDeliveredText ?? string.Empty;
-        if (evt.HasSegmentsDelivered)
-            state.SegmentsDelivered = evt.SegmentsDelivered;
-        if (evt.HasTotalSegments)
-            state.TotalSegments = evt.TotalSegments;
-        if (evt.HasLastErrorCode)
-            state.LastErrorCode = evt.LastErrorCode ?? string.Empty;
-        if (evt.HasLastErrorMessage)
-            state.LastErrorMessage = evt.LastErrorMessage ?? string.Empty;
-        return next;
-    }
-
-    private static AgentRunLarkCardTextFallbackPhase NormalizeLarkCardTextFallbackPhase(
-        AgentRunLarkCardTextFallbackPhase? phase) =>
-        phase is null or AgentRunLarkCardTextFallbackPhase.Unspecified
-            ? AgentRunLarkCardTextFallbackPhase.Idle
-            : phase.Value;
-
-    private static bool IsTerminalLarkCardTextFallbackPhase(
-        AgentRunLarkCardTextFallbackPhase? phase) =>
-        NormalizeLarkCardTextFallbackPhase(phase) is AgentRunLarkCardTextFallbackPhase.Completed
-                                               or AgentRunLarkCardTextFallbackPhase.Failed;
-
-    private bool TryBuildLarkTextFallbackContext(
-        ChatActivity activity,
-        out string nyxUserAccessToken,
-        out string providerSlug,
-        out LarkReceiveTarget primaryTarget,
-        out LarkReceiveTarget? fallbackTarget,
-        out string failureCode,
-        out string failureMessage)
-    {
-        var extras = activity.TransportExtras;
-        nyxUserAccessToken = NormalizeOptional(extras?.NyxUserAccessToken) ?? string.Empty;
-        providerSlug = NormalizeOptional(extras?.NyxProviderSlug) ?? string.Empty;
-        primaryTarget = default;
-        fallbackTarget = null;
-        failureCode = string.Empty;
-        failureMessage = string.Empty;
-
-        if (string.IsNullOrWhiteSpace(nyxUserAccessToken))
-        {
-            failureCode = LarkCardTextFallbackPolicy.AccessTokenUnavailableErrorCode;
-            failureMessage = "NyxUserAccessToken is required for Lark card text fallback delivery.";
-            return false;
-        }
-
-        if (string.IsNullOrWhiteSpace(providerSlug))
-        {
-            failureCode = "lark_provider_slug_unavailable";
-            failureMessage = "NyxProviderSlug is required for Lark card text fallback delivery.";
-            return false;
-        }
-
-        var target = LarkConversationTargets.BuildFromInboundWithFallback(
-            ResolveLarkChatType(activity.Conversation),
-            NormalizeOptional(extras?.NyxConversationId) ?? activity.Conversation?.CanonicalKey,
-            extras?.NyxSenderUserId,
-            extras?.NyxLarkUnionId,
-            extras?.NyxLarkChatId);
-        if (string.IsNullOrWhiteSpace(target.Primary.ReceiveId) ||
-            string.IsNullOrWhiteSpace(target.Primary.ReceiveIdType))
-        {
-            failureCode = "lark_receive_target_unavailable";
-            failureMessage = "Lark receive target is unavailable for text fallback delivery.";
-            return false;
-        }
-
-        primaryTarget = target.Primary;
-        fallbackTarget = target.Fallback;
-        return true;
-    }
-
-    private static string ResolveLarkChatType(ConversationReference? conversation) =>
-        conversation?.Scope switch
-        {
-            ConversationScope.DirectMessage => "p2p",
-            ConversationScope.Group => "group",
-            ConversationScope.Channel => "channel",
-            ConversationScope.Thread => "thread",
-            _ => string.Empty,
-        };
-
-    private LlmReplyDeliveryFailedEvent BuildLarkTextFallbackFailure(
-        string correlationId,
-        string errorCode,
-        string errorMessage) =>
-        new()
-        {
-            CorrelationId = correlationId,
-            RunId = State.RunId ?? string.Empty,
-            FailedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
-            ErrorCode = errorCode ?? string.Empty,
-            ErrorMessage = errorMessage ?? string.Empty,
-        };
-
-    private static string BuildLarkFallbackFailureCode(string prefix, int? larkCode) =>
-        larkCode.HasValue
-            ? $"{prefix}:{larkCode.Value}"
-            : prefix;
-
-    private static string AppendFailureDetail(string firstCode, string firstDetail, string secondDetail) =>
-        $"{firstCode}={firstDetail}; send={secondDetail}";
-
-    private ILarkOutboundDispatcher? ResolveLarkOutboundDispatcher() =>
-        Services.GetService<ILarkOutboundDispatcher>();
-
-    private ILarkTextMessageEditPort? ResolveLarkTextMessageEditPort() =>
-        Services.GetService<ILarkTextMessageEditPort>();
-
-    private sealed record LarkTextFallbackPersistedFinalDelivery(
-        bool Succeeded,
-        bool AlreadyCompleted,
-        string StatusMessageId,
-        string VisibleText,
-        string ErrorCode,
-        string ErrorMessage)
-    {
-        public static LarkTextFallbackPersistedFinalDelivery Completed(
-            string statusMessageId,
-            string visibleText,
-            bool alreadyCompleted) =>
-            new(true, alreadyCompleted, statusMessageId, visibleText, string.Empty, string.Empty);
-
-        public static LarkTextFallbackPersistedFinalDelivery Failed(
-            string statusMessageId,
-            string visibleText,
-            string errorCode,
-            string errorMessage) =>
-            new(false, false, statusMessageId, visibleText, errorCode, errorMessage);
-    }
-
-    private sealed record LarkTextFallbackTimedOperationResult<T>(
-        bool TimedOut,
-        string TimeoutCode,
-        T Value)
-    {
-        public static LarkTextFallbackTimedOperationResult<T> Completed(T value) =>
-            new(false, string.Empty, value);
-
-        public static LarkTextFallbackTimedOperationResult<T> FromTimeout(string timeoutCode) =>
-            new(true, timeoutCode, default!);
-    }
-
-    private sealed record LarkTextFallbackSegmentSendResult(
-        bool Succeeded,
-        string MessageId,
-        string ErrorCode,
-        int? LarkCode,
-        string Detail,
-        bool ExceptionThrown)
-    {
-        public static LarkTextFallbackSegmentSendResult Sent(string messageId) =>
-            new(true, messageId, string.Empty, null, string.Empty, false);
-
-        public static LarkTextFallbackSegmentSendResult Failed(
-            string errorCode,
-            int? larkCode,
-            string detail,
-            bool exceptionThrown) =>
-            new(false, string.Empty, errorCode, larkCode, detail, exceptionThrown);
-    }
-
-    private sealed record LarkTextFallbackFinalDelivery(
-        bool Succeeded,
-        int SegmentsDelivered,
-        string LastDeliveredText,
-        string ErrorCode,
-        string ErrorMessage)
-    {
-        public static LarkTextFallbackFinalDelivery Completed(
-            int segmentsDelivered,
-            string lastDeliveredText) =>
-            new(true, segmentsDelivered, lastDeliveredText, string.Empty, string.Empty);
-
-        public static LarkTextFallbackFinalDelivery Failed(
-            int segmentsDelivered,
-            string lastDeliveredText,
-            string errorCode,
-            string errorMessage) =>
-            new(false, segmentsDelivered, lastDeliveredText, errorCode, errorMessage);
     }
 
     private Task StartLarkCardCreateOperationAsync(
@@ -1805,7 +1006,8 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
             NormalizeOptional(state.PendingAccumulatedText),
             NormalizeOptional(state.PendingFinalizeText),
             NormalizeOptional(state.PendingFinalizeCommandId),
-            state.PendingAppendedHistory.Select(entry => entry.Clone()).ToArray());
+            state.PendingAppendedHistory.Select(entry => entry.Clone()).ToArray(),
+            NormalizeLarkCardTextFallbackPhase(state.TextFallbackPhase));
     }
 
     private async Task<LarkCardDeliveryRuntimeState> TransitionLarkCardDeliveryPhaseAsync(
@@ -1921,6 +1123,8 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
             evt.FinalizeCommandId = updated.PendingFinalizeCommandId ?? string.Empty;
         if (!HistoryEntriesEqual(current.PendingAppendedHistory, updated.PendingAppendedHistory))
             evt.AppendedHistory.AddRange(updated.PendingAppendedHistory.Select(entry => entry.Clone()));
+        if (current.TextFallbackPhase != updated.TextFallbackPhase)
+            evt.TextFallbackPhase = updated.TextFallbackPhase;
 
         return evt;
     }
@@ -1963,6 +1167,8 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
             state.PendingFinalizeText = evt.FinalizeText ?? string.Empty;
         if (evt.HasFinalizeCommandId)
             state.PendingFinalizeCommandId = evt.FinalizeCommandId ?? string.Empty;
+        if (evt.HasTextFallbackPhase)
+            state.TextFallbackPhase = NormalizeLarkCardTextFallbackPhase(evt.TextFallbackPhase);
         if (evt.AppendedHistory.Count > 0)
         {
             state.PendingAppendedHistory.Clear();
@@ -2080,7 +1286,8 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
         from = NormalizeLarkCardDeliveryPhase(from);
         to = NormalizeLarkCardDeliveryPhase(to);
         if (from == to && from is AgentRunLarkCardDeliveryPhase.Creating
-                         or AgentRunLarkCardDeliveryPhase.Streaming)
+                         or AgentRunLarkCardDeliveryPhase.Streaming
+                         or AgentRunLarkCardDeliveryPhase.CreationFailed)
         {
             return true;
         }
@@ -2102,6 +1309,12 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
         AgentRunLarkCardDeliveryPhase phase) =>
         phase == AgentRunLarkCardDeliveryPhase.Unspecified
             ? AgentRunLarkCardDeliveryPhase.Idle
+            : phase;
+
+    private static AgentRunLarkCardTextFallbackPhase NormalizeLarkCardTextFallbackPhase(
+        AgentRunLarkCardTextFallbackPhase phase) =>
+        phase == AgentRunLarkCardTextFallbackPhase.Unspecified
+            ? AgentRunLarkCardTextFallbackPhase.Idle
             : phase;
 
     private long NextLarkCardOperationGeneration(LarkCardDeliveryRuntimeState state) =>
@@ -2168,6 +1381,20 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
             durable.TransportExtras.NyxUserAccessToken = string.Empty;
         return durable;
     }
+
+    private static LlmReplyStreamChunkEvent ToTextStreamChunk(
+        LlmReplyCardStreamChunkEvent evt,
+        string accumulatedText) =>
+        new()
+        {
+            CorrelationId = evt.CorrelationId,
+            RegistrationId = evt.RegistrationId,
+            Activity = evt.Activity?.Clone(),
+            AccumulatedText = accumulatedText ?? string.Empty,
+            ChunkAtUnixMs = evt.ChunkAtUnixMs,
+            ReplyToken = evt.ReplyToken,
+            ReplyTokenExpiresAtUnixMs = evt.ReplyTokenExpiresAtUnixMs,
+        };
 
     private static string BuildLlmReplyCommandId(string? correlationId) =>
         $"llm:{correlationId?.Trim() ?? string.Empty}";

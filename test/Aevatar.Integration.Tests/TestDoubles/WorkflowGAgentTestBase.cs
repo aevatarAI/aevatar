@@ -65,7 +65,7 @@ public abstract class WorkflowGAgentTestBase
             ILLMProviderFactory llmProviderFactory,
             string agentId)
         {
-            var services = new ServiceCollection()
+            await using var services = new ServiceCollection()
                 .AddSingleton<IEventStore>(eventStore)
                 .AddSingleton(eventStore)
                 .AddSingleton<EventSourcingRuntimeOptions>()

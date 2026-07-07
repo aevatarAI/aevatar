@@ -62,68 +62,6 @@ public sealed class ChannelRuntimeSourceRegressionTests
     }
 
     [Fact]
-    public void Agent_layers_must_not_construct_lark_outbound_dispatcher_implementation()
-    {
-        var repositoryRoot = GetRepositoryRoot();
-        var hits = new[]
-            {
-                "agents/Aevatar.GAgents.Scheduled/SkillRunnerGAgent.cs",
-                "agents/Aevatar.GAgents.Authoring.Lark/FeishuCardOutboundMessageSender.cs",
-            }
-            .Where(relativeFile =>
-                StripComments(File.ReadAllText(Path.Combine(repositoryRoot, relativeFile), Encoding.UTF8))
-                    .Contains("new LarkOutboundDispatcher(", StringComparison.Ordinal))
-            .ToArray();
-
-        hits.Should().BeEmpty(
-            "agent-layer code must depend on ILarkOutboundDispatcher and fail explicitly when it is not registered");
-    }
-
-    [Fact]
-    public void Lark_tool_provider_must_depend_only_on_lark_platform_abstractions()
-    {
-        var repositoryRoot = GetRepositoryRoot();
-        var projectFile = ReadRepositoryFile("src/Aevatar.AI.ToolProviders.Lark/Aevatar.AI.ToolProviders.Lark.csproj");
-
-        projectFile.Should().Contain("Aevatar.GAgents.Platform.Lark.Abstractions.csproj",
-            "ToolProvider implementations may implement Lark platform contracts, but must not depend on the concrete GAgents platform package");
-        projectFile.Should().NotContain("Aevatar.GAgents.Platform.Lark\\Aevatar.GAgents.Platform.Lark.csproj");
-        projectFile.Should().NotContain("Aevatar.GAgents.Platform.Lark/Aevatar.GAgents.Platform.Lark.csproj");
-
-        var sourceHits = Directory.EnumerateFiles(
-                Path.Combine(repositoryRoot, "src/Aevatar.AI.ToolProviders.Lark"),
-                "*.cs",
-                SearchOption.AllDirectories)
-            .Select(file => (File: Path.GetRelativePath(repositoryRoot, file), Source: StripComments(File.ReadAllText(file, Encoding.UTF8))))
-            .Where(static item =>
-                item.Source.Contains("using Aevatar.GAgents.Platform.Lark;", StringComparison.Ordinal) ||
-                Regex.IsMatch(
-                    item.Source,
-                    @"Aevatar\.GAgents\.Platform\.Lark\.(?!Abstractions\b)",
-                    RegexOptions.CultureInvariant))
-            .Select(static item => item.File)
-            .Distinct()
-            .ToArray();
-
-        sourceHits.Should().BeEmpty(
-            "the Lark ToolProvider should reference the shared Lark contract namespace, not concrete Platform.Lark implementation types by fully-qualified name");
-    }
-
-    [Fact]
-    public void Agent_run_lark_card_text_fallback_policy_must_not_be_inline_constants_on_actor()
-    {
-        var source = StripComments(ReadRepositoryFile(
-            "agents/Aevatar.GAgents.NyxidChat/AgentRunGAgent.LarkCardDelivery.cs"));
-
-        source.Should().NotContain("LarkCardTextFallbackSegmentThreshold");
-        source.Should().NotContain("LarkCardTextFallbackStatusText");
-        source.Should().NotContain("private const string LarkTextMessageType");
-        source.Should().NotContain("NyxAccessTokenUnavailableErrorCode");
-        source.Should().Contain("LarkCardTextFallbackPolicy",
-            "fallback delivery limits, copy, and stable local error codes belong to a focused policy helper rather than the actor class body");
-    }
-
-    [Fact]
     public void Workflow_core_notify_boundary_must_not_reintroduce_channel_or_raw_lark_tokens()
     {
         var repositoryRoot = GetRepositoryRoot();

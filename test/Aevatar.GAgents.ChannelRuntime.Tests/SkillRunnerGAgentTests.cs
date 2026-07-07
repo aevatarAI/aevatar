@@ -5,7 +5,6 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.CQRS.Core.Abstractions.Commands;
@@ -19,7 +18,6 @@ using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Platform.Lark;
-using Aevatar.GAgents.Platform.Lark.Abstractions;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -1852,55 +1850,6 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task ExecuteSkillAsync_AutoOutput_ShouldUseCardKitAbstractionsWithoutNyxIdApiClient()
-    {
-        using var serviceProvider = BuildServiceProvider(
-            new InMemoryEventStore(),
-            services =>
-            {
-                services.AddSingleton<RecordingLarkOutboundDispatcher>();
-                services.AddSingleton<ILarkOutboundDispatcher>(
-                    serviceProvider => serviceProvider.GetRequiredService<RecordingLarkOutboundDispatcher>());
-                services.AddSingleton<RecordingLarkCardKitClient>();
-                services.AddSingleton<ILarkCardKitClient>(
-                    serviceProvider => serviceProvider.GetRequiredService<RecordingLarkCardKitClient>());
-            });
-        serviceProvider.GetService<NyxIdApiClient>().Should().BeNull();
-        var provider = new StubStreamingProviderFactory("abstraction-only");
-        var agent = CreateAgent(
-            "skill-runner-cardkit-no-nyx-client",
-            serviceProvider,
-            providerFactory: provider);
-        await agent.ActivateAsync();
-        var initialize = CreateInitializeCommand();
-        initialize.OutboundConfig.LarkReceiveId = "oc_chat_1";
-        initialize.OutboundConfig.LarkReceiveIdType = "chat_id";
-        await agent.HandleInitializeAsync(initialize);
-
-        var output = await InvokeExecuteSkillAsync(agent);
-
-        output.Should().Be("abstraction-only");
-        var cardKit = serviceProvider.GetRequiredService<RecordingLarkCardKitClient>();
-        cardKit.CreateRequests.Should().ContainSingle();
-        cardKit.StreamRequests.Should().ContainSingle();
-        cardKit.StreamRequests[0].Content.Should().Be("abstraction-only");
-        cardKit.SettingsRequests.Should().ContainSingle();
-        var dispatcher = serviceProvider.GetRequiredService<RecordingLarkOutboundDispatcher>();
-        dispatcher.Requests.Should().ContainSingle();
-        dispatcher.Requests[0].MessageType.Should().Be("interactive");
-        dispatcher.Requests[0].PrimaryTarget.ReceiveId.Should().Be("oc_chat_1");
-        var deliveries = await ReadDeliveryProducedEventsAsync(
-            serviceProvider.GetRequiredService<IEventStore>() as InMemoryEventStore
-            ?? throw new InvalidOperationException("test store missing"),
-            "skill-runner-cardkit-no-nyx-client");
-        deliveries.Should().ContainSingle(delivery =>
-            delivery.DeliveryKind == DeliveryKind.StreamingCard &&
-            delivery.Status == DeliveryStatus.Succeeded &&
-            delivery.LarkMessageId == "om_one_shot" &&
-            delivery.CardId == "card_recorded");
-    }
-
-    [Fact]
     public async Task ExecuteSkillAsync_TextOutputFormat_ShouldUseLegacyStreamingTextEdit()
     {
         var provider = new StubStreamingProviderFactory("a", "b", "c");
@@ -2965,8 +2914,6 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             BindingFlags.Instance | BindingFlags.NonPublic);
         field.Should().NotBeNull();
         field!.SetValue(agent, client);
-        agent.Services.GetRequiredService<MutableLarkOutboundDispatcher>().Client = client;
-        agent.Services.GetRequiredService<MutableLarkCardKitClient>().Client = client;
     }
 
     private static Task InvokeSendOutputAsync(SkillRunnerGAgent agent, string output)
@@ -3093,117 +3040,6 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         }
     }
 
-    private sealed class RecordingLarkCardKitClient : ILarkCardKitClient
-    {
-        public List<LarkCardKitCreateRequest> CreateRequests { get; } = [];
-        public List<LarkCardKitStreamElementContentRequest> StreamRequests { get; } = [];
-        public List<LarkCardKitSettingsRequest> SettingsRequests { get; } = [];
-        public List<LarkCardKitUpdateRequest> UpdateRequests { get; } = [];
-
-        public Task<string> CreateCardAsync(
-            string token,
-            LarkCardKitCreateRequest request,
-            CancellationToken ct)
-        {
-            ct.ThrowIfCancellationRequested();
-            token.Should().Be("nyx-api-key");
-            CreateRequests.Add(request);
-            return Task.FromResult("""{"code":0,"msg":"success","data":{"card_id":"card_recorded"}}""");
-        }
-
-        public Task<string> StreamElementContentAsync(
-            string token,
-            LarkCardKitStreamElementContentRequest request,
-            CancellationToken ct)
-        {
-            ct.ThrowIfCancellationRequested();
-            token.Should().Be("nyx-api-key");
-            StreamRequests.Add(request);
-            return Task.FromResult("""{"code":0,"msg":"success","data":{}}""");
-        }
-
-        public Task<string> SetCardSettingsAsync(
-            string token,
-            LarkCardKitSettingsRequest request,
-            CancellationToken ct)
-        {
-            ct.ThrowIfCancellationRequested();
-            token.Should().Be("nyx-api-key");
-            SettingsRequests.Add(request);
-            return Task.FromResult("""{"code":0,"msg":"success","data":{}}""");
-        }
-
-        public Task<string> UpdateCardAsync(
-            string token,
-            LarkCardKitUpdateRequest request,
-            CancellationToken ct)
-        {
-            ct.ThrowIfCancellationRequested();
-            token.Should().Be("nyx-api-key");
-            UpdateRequests.Add(request);
-            return Task.FromResult("""{"code":0,"msg":"success","data":{}}""");
-        }
-    }
-
-    private sealed class MutableLarkOutboundDispatcher : ILarkOutboundDispatcher
-    {
-        public NyxIdApiClient? Client { get; set; }
-
-        public Task<LarkSendNewMessageResult> SendNewMessageAsync(
-            LarkSendNewMessageRequest request,
-            CancellationToken ct)
-        {
-            if (Client is null)
-                throw new InvalidOperationException("Test NyxIdApiClient was not attached.");
-
-            return new LarkOutboundDispatcher(
-                    Client,
-                    NullLogger<LarkOutboundDispatcher>.Instance)
-                .SendNewMessageAsync(request, ct);
-        }
-    }
-
-    private sealed class MutableLarkCardKitClient : ILarkCardKitClient
-    {
-        public NyxIdApiClient? Client { get; set; }
-
-        public string ProviderSlug { get; set; } = "api-lark-bot";
-
-        public Task<string> CreateCardAsync(
-            string token,
-            LarkCardKitCreateRequest request,
-            CancellationToken ct) =>
-            CreateClient().CreateCardAsync(token, request, ct);
-
-        public Task<string> StreamElementContentAsync(
-            string token,
-            LarkCardKitStreamElementContentRequest request,
-            CancellationToken ct) =>
-            CreateClient().StreamElementContentAsync(token, request, ct);
-
-        public Task<string> SetCardSettingsAsync(
-            string token,
-            LarkCardKitSettingsRequest request,
-            CancellationToken ct) =>
-            CreateClient().SetCardSettingsAsync(token, request, ct);
-
-        public Task<string> UpdateCardAsync(
-            string token,
-            LarkCardKitUpdateRequest request,
-            CancellationToken ct) =>
-            CreateClient().UpdateCardAsync(token, request, ct);
-
-        private LarkCardKitClient CreateClient()
-        {
-            if (Client is null)
-                throw new InvalidOperationException("Test NyxIdApiClient was not attached.");
-
-            return new LarkCardKitClient(
-                new LarkToolOptions { ProviderSlug = ProviderSlug },
-                Client);
-        }
-    }
-
     /// <summary>
     /// Returns a different response per request in the order given. Used to simulate the
     /// `bot not in chat` rejection on the primary attempt followed by a successful fallback
@@ -3266,12 +3102,6 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         services.AddSingleton(eventStore);
         services.AddSingleton<EventSourcingRuntimeOptions>();
         services.AddSingleton<IActorRuntimeCallbackScheduler>(new RecordingCallbackScheduler());
-        services.AddSingleton<MutableLarkOutboundDispatcher>();
-        services.AddSingleton<ILarkOutboundDispatcher>(
-            serviceProvider => serviceProvider.GetRequiredService<MutableLarkOutboundDispatcher>());
-        services.AddSingleton<MutableLarkCardKitClient>();
-        services.AddSingleton<ILarkCardKitClient>(
-            serviceProvider => serviceProvider.GetRequiredService<MutableLarkCardKitClient>());
         services.AddTransient(
             typeof(IEventSourcingBehaviorFactory<>),
             typeof(DefaultEventSourcingBehaviorFactory<>));

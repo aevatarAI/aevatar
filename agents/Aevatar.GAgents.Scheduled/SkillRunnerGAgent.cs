@@ -6,6 +6,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.LLMProviders;
+using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.CQRS.Core.Abstractions.Commands;
@@ -16,7 +17,6 @@ using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Platform.Lark;
-using Aevatar.GAgents.Platform.Lark.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf;
@@ -1017,6 +1017,15 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         if (!ShouldPreferCardKitOutput())
             return null;
 
+        var client = _nyxIdApiClient ?? Services.GetService<NyxIdApiClient>();
+        if (client is null)
+        {
+            Logger.LogWarning(
+                "Skill runner {ActorId} has no NyxIdApiClient registered; CardKit delivery is disabled, falling back to text.",
+                Id);
+            return null;
+        }
+
         if (string.IsNullOrWhiteSpace(State.OutboundConfig?.NyxApiKey) ||
             string.IsNullOrWhiteSpace(State.OutboundConfig?.NyxProviderSlug) ||
             string.IsNullOrWhiteSpace(State.OutboundConfig?.ConversationId))
@@ -1031,26 +1040,10 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             State.OutboundConfig.LarkReceiveId,
             State.OutboundConfig.LarkReceiveIdType,
             State.OutboundConfig.ConversationId);
-        var dispatcher = ResolveLarkOutboundDispatcher();
-        if (dispatcher is null)
-        {
-            Logger.LogWarning(
-                "Skill runner {ActorId} has no ILarkOutboundDispatcher registered; CardKit delivery is disabled, falling back to text.",
-                Id);
-            return null;
-        }
-        var cardKit = ResolveLarkCardKitClient();
-        if (cardKit is null)
-        {
-            Logger.LogWarning(
-                "Skill runner {ActorId} has no ILarkCardKitClient registered; CardKit delivery is disabled, falling back to text.",
-                Id);
-            return null;
-        }
 
         return new SkillRunnerCardKitReplySink(
-            cardKit,
-            dispatcher,
+            ResolveLarkCardKitClient(client, State.OutboundConfig.NyxProviderSlug),
+            ResolveLarkOutboundDispatcher(client),
             new LarkSendNewMessageRequest(
                 State.OutboundConfig.NyxApiKey,
                 State.OutboundConfig.NyxProviderSlug,
@@ -1110,17 +1103,9 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             State.OutboundConfig.LarkReceiveId,
             State.OutboundConfig.LarkReceiveIdType,
             State.OutboundConfig.ConversationId);
-        var dispatcher = ResolveLarkOutboundDispatcher();
-        if (dispatcher is null)
-        {
-            Logger.LogWarning(
-                "Skill runner {ActorId} has no ILarkOutboundDispatcher registered; streaming-edit delivery is disabled, falling back to one-shot SendOutputAsync.",
-                Id);
-            return null;
-        }
 
         return new SkillRunnerStreamingReplySink(
-            dispatcher,
+            ResolveLarkOutboundDispatcher(client),
             new LarkSendNewMessageRequest(
                 State.OutboundConfig.NyxApiKey,
                 State.OutboundConfig.NyxProviderSlug,
@@ -1837,21 +1822,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 deliveryTarget.ReceiveIdType);
         }
 
-        var dispatcher = ResolveLarkOutboundDispatcher();
-        if (dispatcher is null)
-        {
-            await PersistDeliveryProducedAsync(
-                DeliveryKind.TextMessage,
-                DeliveryStatus.FailedPreSend,
-                requestId: deliveryRequestId,
-                sourceEventId: string.Empty,
-                larkMessageId: string.Empty,
-                cardId: string.Empty,
-                ct);
-            throw new InvalidOperationException("ILarkOutboundDispatcher is not registered for Lark outbound delivery.");
-        }
-
-        var outcome = await dispatcher.SendNewMessageAsync(
+        var outcome = await ResolveLarkOutboundDispatcher(client).SendNewMessageAsync(
             new LarkSendNewMessageRequest(
                 State.OutboundConfig.NyxApiKey,
                 slug,
@@ -1917,11 +1888,26 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             : new LarkReceiveTarget(fallbackId, fallbackType, FellBackToPrefixInference: false);
     }
 
-    private ILarkOutboundDispatcher? ResolveLarkOutboundDispatcher() =>
-        _larkOutboundDispatcher ?? Services.GetService<ILarkOutboundDispatcher>();
+    private ILarkOutboundDispatcher ResolveLarkOutboundDispatcher(NyxIdApiClient client) =>
+        _larkOutboundDispatcher ?? Services.GetService<ILarkOutboundDispatcher>() ?? new LarkOutboundDispatcher(client, Logger);
 
-    private ILarkCardKitClient? ResolveLarkCardKitClient() =>
-        _larkCardKitClient ?? Services.GetService<ILarkCardKitClient>();
+    /// <summary>
+    /// Resolves the CardKit client for a scheduled run. Prefers an injected/DI instance; falls
+    /// back to a per-agent <see cref="LarkCardKitClient"/> bound to this agent's own Nyx provider
+    /// slug so the CardKit wire protocol stays the single shared implementation used by both the
+    /// scheduled and direct-chat paths.
+    /// </summary>
+    private ILarkCardKitClient ResolveLarkCardKitClient(NyxIdApiClient client, string providerSlug)
+    {
+        if (_larkCardKitClient is { } injected)
+            return injected;
+
+        if (Services.GetService<ILarkCardKitClient>() is { } fromDi)
+            return fromDi;
+
+        var effectiveSlug = string.IsNullOrWhiteSpace(providerSlug) ? "api-lark-bot" : providerSlug;
+        return new LarkCardKitClient(new LarkToolOptions { ProviderSlug = effectiveSlug }, client);
+    }
 
     private static string BuildLarkRejectionMessage(int? larkCode, string detail)
     {

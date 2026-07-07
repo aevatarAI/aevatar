@@ -264,7 +264,7 @@ sequenceDiagram
 
 ### 2.7 Lark HTTP 传输：`LarkOutboundDispatcher`
 
-所有新消息 POST（文本 + CardKit bind）走 `ILarkOutboundDispatcher.SendNewMessageAsync`。契约位于 `agents/platforms/Aevatar.GAgents.Platform.Lark.Abstractions/ILarkOutboundDispatcher.cs`；当前 NyxID 代理实现位于 `src/Aevatar.AI.ToolProviders.Lark/LarkOutboundDispatcher.cs`，由 `AddLarkTools()` 注册：
+所有新消息 POST（文本 + CardKit bind）走 `ILarkOutboundDispatcher.SendNewMessageAsync`（`LarkOutboundDispatcher.cs`）：
 
 - 序列化 `{receive_id, msg_type, content}` → `NyxIdApiClient.ProxyRequestAsync(nyxApiKey, providerSlug, "open-apis/im/v1/messages?receive_id_type=...", "POST", body)`。
 - 遇 `230002 bot not in chat`：用 `FallbackTarget` 重试一次。
@@ -371,11 +371,10 @@ flowchart LR
 - 投递目标 reader：`agents/Aevatar.GAgents.Scheduled/UserAgentDeliveryTargetReader.cs`
 - 文本流式 sink：`agents/Aevatar.GAgents.Scheduled/SkillRunnerStreamingReplySink.cs`
 - CardKit sink：`agents/Aevatar.GAgents.Scheduled/SkillRunnerCardKitReplySink.cs`
-- Lark HTTP 传输实现：`src/Aevatar.AI.ToolProviders.Lark/LarkOutboundDispatcher.cs`；发送契约：`agents/platforms/Aevatar.GAgents.Platform.Lark.Abstractions/ILarkOutboundDispatcher.cs`
+- Lark HTTP 传输：`agents/Aevatar.GAgents.Scheduled/LarkOutboundDispatcher.cs`
 - 交互投递追踪：`agents/Aevatar.GAgents.Scheduled/SkillRunnerInteractiveDeliveryTrackingMiddleware.cs`
 
 ### 共享 / 平台层
-- Lark 平台契约：`agents/platforms/Aevatar.GAgents.Platform.Lark.Abstractions/`（`ILarkOutboundDispatcher`、`ILarkCardKitClient`、`ILarkTextMessageEditPort`、receive target、错误码解析等）
 - 卡片 schema：`agents/platforms/Aevatar.GAgents.Platform.Lark/LarkStreamingCardShell.cs`
 - 消息组合：`agents/platforms/Aevatar.GAgents.Platform.Lark/LarkMessageComposer.cs` + `LarkChannelNativeMessageProducer.cs`
 - Ornn 客户端：`src/Aevatar.AI.ToolProviders.Ornn/OrnnSkillClient.cs` + `OrnnRemoteSkillFetcher.cs`

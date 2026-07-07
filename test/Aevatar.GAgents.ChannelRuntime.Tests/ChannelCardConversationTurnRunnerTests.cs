@@ -2,8 +2,6 @@ using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat;
-using Aevatar.GAgents.Platform.Lark;
-using Aevatar.GAgents.Platform.Lark.Abstractions;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;

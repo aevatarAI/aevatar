@@ -1,5 +1,4 @@
 using Aevatar.AI.ToolProviders.NyxId;
-using Aevatar.GAgents.Platform.Lark.Abstractions;
 
 namespace Aevatar.AI.ToolProviders.Lark;
 

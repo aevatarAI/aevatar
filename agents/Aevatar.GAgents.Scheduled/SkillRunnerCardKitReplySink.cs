@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.GAgents.Platform.Lark;
-using Aevatar.GAgents.Platform.Lark.Abstractions;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.Scheduled;
@@ -34,7 +34,7 @@ internal sealed class SkillRunnerCardKitReplySink
     private readonly ILarkCardKitClient _cardKit;
     private readonly ILarkOutboundDispatcher _outboundDispatcher;
     private readonly LarkSendNewMessageRequest _interactiveMessageTemplate;
-    private readonly string _nyxProxyBearerToken;
+    private readonly string _token;
     private readonly ILogger? _logger;
 
     public SkillRunnerCardKitReplySink(
@@ -46,7 +46,7 @@ internal sealed class SkillRunnerCardKitReplySink
         _cardKit = cardKit ?? throw new ArgumentNullException(nameof(cardKit));
         _outboundDispatcher = outboundDispatcher ?? throw new ArgumentNullException(nameof(outboundDispatcher));
         _interactiveMessageTemplate = interactiveMessageTemplate ?? throw new ArgumentNullException(nameof(interactiveMessageTemplate));
-        _nyxProxyBearerToken = interactiveMessageTemplate.NyxProxyBearerToken;
+        _token = interactiveMessageTemplate.NyxApiKey;
         _logger = logger;
     }
 
@@ -93,7 +93,7 @@ internal sealed class SkillRunnerCardKitReplySink
         try
         {
             var response = await _cardKit.CreateCardAsync(
-                _nyxProxyBearerToken,
+                _token,
                 new LarkCardKitCreateRequest("card_json", LarkStreamingCardShell.BuildInitialCardJson(StreamingElementId)),
                 ct).ConfigureAwait(false);
 
@@ -158,7 +158,7 @@ internal sealed class SkillRunnerCardKitReplySink
         try
         {
             var response = await _cardKit.StreamElementContentAsync(
-                _nyxProxyBearerToken,
+                _token,
                 new LarkCardKitStreamElementContentRequest(
                     CardId: cardId,
                     ElementId: StreamingElementId,
@@ -191,7 +191,7 @@ internal sealed class SkillRunnerCardKitReplySink
         try
         {
             var response = await _cardKit.SetCardSettingsAsync(
-                _nyxProxyBearerToken,
+                _token,
                 new LarkCardKitSettingsRequest(
                     CardId: cardId,
                     SettingsJson: LarkStreamingCardShell.BuildCloseStreamingSettingsJson(),

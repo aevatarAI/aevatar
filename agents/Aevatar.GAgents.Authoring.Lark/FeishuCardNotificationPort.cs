@@ -1,9 +1,9 @@
 using System.Text.Json;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.Foundation.Abstractions.Interactions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Platform.Lark;
-using Aevatar.GAgents.Platform.Lark.Abstractions;
 using Aevatar.GAgents.Scheduled;
 using Microsoft.Extensions.Logging;
 
@@ -17,15 +17,18 @@ public sealed class FeishuCardNotificationPort : IChannelInteractionNotification
 
     public FeishuCardNotificationPort(
         IUserAgentDeliveryTargetReader deliveryTargetReader,
+        NyxIdApiClient nyxIdApiClient,
         LarkMessageComposer composer,
         ILogger<FeishuCardNotificationPort> logger,
         ILarkOutboundDispatcher? larkOutboundDispatcher = null)
     {
         ArgumentNullException.ThrowIfNull(deliveryTargetReader);
+        ArgumentNullException.ThrowIfNull(nyxIdApiClient);
         _composer = composer ?? throw new ArgumentNullException(nameof(composer));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _sender = new FeishuCardOutboundMessageSender(
             deliveryTargetReader,
+            nyxIdApiClient,
             logger,
             larkOutboundDispatcher);
     }

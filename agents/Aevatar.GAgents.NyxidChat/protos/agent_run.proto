@@ -84,7 +84,6 @@ message AgentRunGAgentState {
   AgentRunLarkCardDeliveryCompletion pending_card_delivery_completion = 26;
   repeated aevatar.gagents.channel.abstractions.DeliveryLedgerEntry recent_deliveries = 27;
   aevatar.gagents.channel.abstractions.DeliveryLedgerEntry last_successful_delivery = 28;
-  AgentRunLarkCardTextFallbackState lark_card_text_fallback = 29;
 }
 
 enum AgentRunLarkCardDeliveryPhase {
@@ -96,6 +95,14 @@ enum AgentRunLarkCardDeliveryPhase {
   AGENT_RUN_LARK_CARD_DELIVERY_PHASE_ABORTED = 5;
   AGENT_RUN_LARK_CARD_DELIVERY_PHASE_TERMINATED = 6;
   AGENT_RUN_LARK_CARD_DELIVERY_PHASE_CREATION_FAILED = 7;
+}
+
+enum AgentRunLarkCardTextFallbackPhase {
+  AGENT_RUN_LARK_CARD_TEXT_FALLBACK_PHASE_UNSPECIFIED = 0;
+  AGENT_RUN_LARK_CARD_TEXT_FALLBACK_PHASE_IDLE = 1;
+  AGENT_RUN_LARK_CARD_TEXT_FALLBACK_PHASE_STATUS_FORWARDED = 2;
+  AGENT_RUN_LARK_CARD_TEXT_FALLBACK_PHASE_FINAL_FORWARDED = 3;
+  AGENT_RUN_LARK_CARD_TEXT_FALLBACK_PHASE_FAILED = 4;
 }
 
 message AgentRunLarkCardDeliveryState {
@@ -114,6 +121,7 @@ message AgentRunLarkCardDeliveryState {
   string pending_finalize_text = 13;
   string pending_finalize_command_id = 14;
   repeated aevatar.gagents.channel.runtime.ConversationHistoryEntry pending_appended_history = 15;
+  AgentRunLarkCardTextFallbackPhase text_fallback_phase = 16;
 }
 
 message AgentRunLarkCardDeliveryChangedEvent {
@@ -136,6 +144,7 @@ message AgentRunLarkCardDeliveryChangedEvent {
   optional string finalize_text = 17;
   optional string finalize_command_id = 18;
   repeated aevatar.gagents.channel.runtime.ConversationHistoryEntry appended_history = 19;
+  optional AgentRunLarkCardTextFallbackPhase text_fallback_phase = 20;
 }
 
 message AgentRunLarkCardDeliveryCompletion {
@@ -160,39 +169,6 @@ enum AgentRunLarkCardDeliveryCompletionOutcome {
   AGENT_RUN_LARK_CARD_DELIVERY_COMPLETION_OUTCOME_UNSPECIFIED = 0;
   AGENT_RUN_LARK_CARD_DELIVERY_COMPLETION_OUTCOME_COMPLETED = 1;
   AGENT_RUN_LARK_CARD_DELIVERY_COMPLETION_OUTCOME_FAILED = 2;
-}
-
-enum AgentRunLarkCardTextFallbackPhase {
-  AGENT_RUN_LARK_CARD_TEXT_FALLBACK_PHASE_UNSPECIFIED = 0;
-  AGENT_RUN_LARK_CARD_TEXT_FALLBACK_PHASE_IDLE = 1;
-  AGENT_RUN_LARK_CARD_TEXT_FALLBACK_PHASE_STATUS_SENT = 2;
-  AGENT_RUN_LARK_CARD_TEXT_FALLBACK_PHASE_COMPLETED = 3;
-  AGENT_RUN_LARK_CARD_TEXT_FALLBACK_PHASE_FAILED = 4;
-}
-
-message AgentRunLarkCardTextFallbackState {
-  AgentRunLarkCardTextFallbackPhase phase = 1;
-  string correlation_id = 2;
-  string status_message_id = 3;
-  string last_delivered_text = 4;
-  int32 segments_delivered = 5;
-  int32 total_segments = 6;
-  string last_error_code = 7;
-  string last_error_message = 8;
-  int64 updated_at_unix_ms = 9;
-}
-
-message AgentRunLarkCardTextFallbackChangedEvent {
-  string run_id = 1;
-  string correlation_id = 2;
-  int64 changed_at_unix_ms = 3;
-  AgentRunLarkCardTextFallbackPhase phase = 4;
-  optional string status_message_id = 5;
-  optional string last_delivered_text = 6;
-  optional int32 segments_delivered = 7;
-  optional int32 total_segments = 8;
-  optional string last_error_code = 9;
-  optional string last_error_message = 10;
 }
 
 enum AgentRunReplyStepKind {
