@@ -694,6 +694,52 @@ public sealed class ChannelConversationTurnRunnerTests
         result.LlmReplyRequest!.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
     }
 
+    // A failed binding lookup must not demote a possibly-bound sender to unbound: since
+    // issue #1318 an empty sender binding also detaches the whole channel tool surface,
+    // so the old swallow-to-null degrade turned infra blips into silent tool-less turns
+    // (2026-07 incident). Transient lookup failures become a retryable turn failure the
+    // conversation actor owns.
+    [Fact]
+    public async Task RunInboundAsync_ShouldReportTransientFailure_WhenSenderBindingLookupThrowsTransiently()
+    {
+        var bindingPort = new ThrowingIdentityBindingQueryPort(new HttpRequestException("binding readmodel unavailable"));
+        var services = new ServiceCollection()
+            .AddSingleton<IExternalIdentityBindingQueryPort>(bindingPort)
+            .BuildServiceProvider();
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter, services);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity("hello", "msg-binding-lookup-fails"),
+            CancellationToken.None);
+
+        bindingPort.Calls.Should().Be(1);
+        result.Success.Should().BeFalse();
+        result.ErrorCode.Should().Be("sender_binding_lookup_failed");
+        result.FailureKind.Should().Be(FailureKind.TransientAdapterError);
+        result.LlmReplyRequest.Should().BeNull();
+        adapter.Replies.Should().BeEmpty();
+    }
+
+    // Non-transient lookup exceptions are programmer errors and surface instead of being
+    // reclassified as "sender unbound" (CLAUDE.md 编码规范: no blanket catch).
+    [Fact]
+    public async Task RunInboundAsync_ShouldPropagate_WhenSenderBindingLookupThrowsNonTransiently()
+    {
+        var bindingPort = new ThrowingIdentityBindingQueryPort(new InvalidOperationException("binding lookup bug"));
+        var services = new ServiceCollection()
+            .AddSingleton<IExternalIdentityBindingQueryPort>(bindingPort)
+            .BuildServiceProvider();
+        var runner = CreateRunner(BuildRegistrationQueryPort(), new RecordingPlatformAdapter(), services);
+
+        var act = () => runner.RunInboundAsync(
+            BuildInboundActivity("hello", "msg-binding-lookup-bug"),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("binding lookup bug");
+    }
+
     [Fact]
     public async Task RunInboundAsync_ShouldSkipOwnerConfigOverrides_WhenSpecificFieldsEmpty()
     {
@@ -4358,6 +4404,17 @@ public sealed class ChannelConversationTurnRunnerTests
         }
 
         public NyxIdApiClient CreateClient() => _client;
+    }
+
+    private sealed class ThrowingIdentityBindingQueryPort(Exception failure) : IExternalIdentityBindingQueryPort
+    {
+        public int Calls { get; private set; }
+
+        public Task<BindingId?> ResolveAsync(ExternalSubjectRef externalSubject, CancellationToken ct = default)
+        {
+            Calls++;
+            throw failure;
+        }
     }
 
     private sealed class StubUserLlmOptionsService : IUserLlmOptionsService

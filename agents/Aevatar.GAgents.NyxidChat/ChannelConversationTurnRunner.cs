@@ -206,7 +206,29 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         // carry that binding forward so the reply generator can try the
         // sender's own NyxID LLM prefs first; otherwise the run actor/generator
         // will use the bot owner's ambient LLM config.
-        var senderBinding = await TryResolveSenderBindingAsync(inbound, registration, ct).ConfigureAwait(false);
+        //
+        // A FAILED lookup is not "sender is unbound": since issue #1318 an empty
+        // sender binding also detaches the entire channel tool surface for the
+        // turn, so degrading a lookup failure to null would silently strip a
+        // bound user's tools with no error anywhere. Transient infra failures
+        // become a transient turn failure instead — the conversation actor owns
+        // the retry — and non-transient exceptions surface.
+        ResolvedSenderBinding? senderBinding;
+        try
+        {
+            senderBinding = await TryResolveSenderBindingAsync(inbound, registration, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException && IsTransientBindingLookupFailure(ex))
+        {
+            _logger.LogWarning(
+                ex,
+                "Sender NyxID binding lookup failed; requesting turn retry instead of degrading the sender to unbound. activity={ActivityId}, conversation={CanonicalKey}",
+                activity.Id,
+                activity.Conversation?.CanonicalKey);
+            return ConversationTurnResult.TransientFailure(
+                "sender_binding_lookup_failed",
+                "Sender identity binding lookup failed transiently; the turn will be retried.");
+        }
 
         if (await TryHandleLlmSelectionCardActionAsync(activity, inbound, registration, runtimeContext, senderBinding?.BindingId, ct).ConfigureAwait(false) is { } llmSelectionResult)
             return llmSelectionResult;
@@ -557,6 +579,13 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     // Normal LLM messages are allowed to use the bot owner's LLM config when
     // the sender has no NyxID binding. Binding is only required by commands
     // that configure or inspect per-user state (/models, /model use, ...).
+    //
+    // null is strictly the authoritative not-found result (or "binding
+    // infrastructure absent / sender unidentifiable"). Lookup failures
+    // propagate: the caller converts transient ones into a retryable turn
+    // failure and lets programmer errors surface, because a null here also
+    // disables the channel tool surface for the turn (issue #1318) — far more
+    // than the owner-LLM-config fallback this method originally degraded to.
     private async Task<ResolvedSenderBinding?> TryResolveSenderBindingAsync(
         InboundMessage inbound,
         ChannelBotRegistrationEntry registration,
@@ -569,41 +598,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (!TryResolveExternalSubject(inbound, registration, out var subject))
             return null;
 
-        BindingId? existing;
-        try
-        {
-            existing = await queryPort.ResolveAsync(subject, ct);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex) when (IsTransientBindingLookupFailure(ex))
-        {
-            // Transient infra failures (DB blip, transient HTTP, JSON shape mismatch from
-            // upstream): degrade to owner credentials and keep the conversation alive.
-            _logger.LogWarning(
-                ex,
-                "Transient sender NyxID binding lookup failure; falling back to bot owner LLM config. subject={Platform}:{Tenant}:{User}",
-                subject.Platform,
-                subject.Tenant,
-                subject.ExternalUserId);
-            return null;
-        }
-        catch (Exception ex)
-        {
-            // Non-transient (programmer error, unexpected NRE, serialization break): surface
-            // at Error level so ops can distinguish from "sender just isn't bound" — but still
-            // fall through to owner credentials so the user gets a reply rather than nothing.
-            _logger.LogError(
-                ex,
-                "Sender NyxID binding lookup raised non-transient exception; falling back to bot owner LLM config. subject={Platform}:{Tenant}:{User}",
-                subject.Platform,
-                subject.Tenant,
-                subject.ExternalUserId);
-            return null;
-        }
-
+        var existing = await queryPort.ResolveAsync(subject, ct);
         if (existing is not null)
             return new ResolvedSenderBinding(existing.Value, subject.Clone());
 
@@ -611,13 +606,13 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     }
 
     /// <summary>
-    /// Distinguish infra-shaped binding lookup failures (worth a Warning + owner fallback)
-    /// from logic/programmer errors (worth an Error log so ops sees them).
+    /// Infra-shaped binding lookup failures that are worth a grain-owned turn retry
+    /// (DB blip, transient HTTP, upstream JSON shape mismatch). Everything else is a
+    /// logic/programmer error and surfaces instead of being reclassified.
     /// </summary>
     private static bool IsTransientBindingLookupFailure(Exception ex) =>
         ex is HttpRequestException
             or TimeoutException
-            or TaskCanceledException
             or System.Text.Json.JsonException
             or System.IO.IOException;
 

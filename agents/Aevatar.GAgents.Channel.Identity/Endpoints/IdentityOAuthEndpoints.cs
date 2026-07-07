@@ -45,6 +45,13 @@ public static class IdentityOAuthEndpoints
             .WithTags("ChannelIdentity")
             .AddEndpointFilter<RebuildAuthEndpointFilter>()
             .AllowAnonymous();
+        // Operator-only: rebuild a wiped/reset current-state readmodel for one NyxID
+        // owner binding from the surviving actor state — headless disaster recovery,
+        // no browser round-trip. Same admin gate as the client rebuild.
+        app.MapPost("/api/oauth/nyxid-binding/rebuild", HandleNyxIdBindingRebuildAsync)
+            .WithTags("ChannelIdentity")
+            .AddEndpointFilter<RebuildAuthEndpointFilter>()
+            .AllowAnonymous();
 
         return app;
     }
@@ -434,6 +441,129 @@ public static class IdentityOAuthEndpoints
             admin_grant_source = authorization.Caller.GrantSource,
             detail = "Provision command accepted for dispatch. Re-poll the status URL; it will reflect the new client_id once the actor commits and projection materializes.",
         });
+    }
+
+    // ─── Operator binding-readmodel rebuild (disaster recovery) ───
+
+    /// <summary>
+    /// Body for <c>POST /api/oauth/nyxid-binding/rebuild</c>. Identifies the external
+    /// subject whose current-state readmodel should be re-materialized from the
+    /// surviving actor state. <c>platform</c> defaults to the NyxID owner platform and
+    /// <c>tenant</c> to empty — matching how NyxID owner subjects are constructed
+    /// elsewhere — so the common case only needs <c>external_user_id</c>.
+    /// </summary>
+    public sealed record RebuildNyxIdBindingRequest(
+        string? external_user_id,
+        string? platform,
+        string? tenant);
+
+    internal static Task<IResult> HandleNyxIdBindingRebuildAsync(
+        HttpContext http,
+        [FromBody] RebuildNyxIdBindingRequest? body,
+        [FromServices] ICommandDispatchService<RebuildBindingProjectionCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> rebuildDispatch,
+        [FromServices] ILoggerFactory loggerFactory,
+        CancellationToken ct) =>
+        HandleNyxIdBindingRebuildCoreAsync(
+            http,
+            body,
+            http.RequestServices.GetService<IPlatformAdminAuthorizer>(),
+            rebuildDispatch,
+            loggerFactory,
+            ct);
+
+    /// <summary>
+    /// Core method exposed for tests to pass the admin authorizer and typed dispatch
+    /// service directly, without resolving endpoint-bound services.
+    /// </summary>
+    internal static async Task<IResult> HandleNyxIdBindingRebuildCoreAsync(
+        HttpContext http,
+        RebuildNyxIdBindingRequest? body,
+        IPlatformAdminAuthorizer? adminAuthorizer,
+        ICommandDispatchService<RebuildBindingProjectionCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> rebuildDispatch,
+        ILoggerFactory loggerFactory,
+        CancellationToken ct)
+    {
+        var logger = loggerFactory.CreateLogger("Aevatar.Channel.Identity.BindingRebuild");
+
+        var authorization = await AuthorizeRebuildAsync(http, adminAuthorizer, logger, ct).ConfigureAwait(false);
+        if (authorization.Rejection is not null)
+            return authorization.Rejection;
+
+        var externalUserId = body?.external_user_id?.Trim();
+        if (string.IsNullOrWhiteSpace(externalUserId))
+        {
+            return Results.BadRequest(new
+            {
+                error = "external_user_id_required",
+                detail = "Body must include external_user_id (the NyxID owner subject whose binding readmodel should be rebuilt).",
+            });
+        }
+
+        var subject = new ExternalSubjectRef
+        {
+            Platform = string.IsNullOrWhiteSpace(body?.platform)
+                ? OwnerScope.NyxIdPlatform
+                : body!.platform!.Trim().ToLowerInvariant(),
+            Tenant = string.IsNullOrWhiteSpace(body?.tenant) ? string.Empty : body!.tenant!.Trim(),
+            ExternalUserId = externalUserId,
+        };
+
+        try
+        {
+            ExternalSubjectRefExtensions.EnsureValid(subject);
+        }
+        catch (ArgumentException ex)
+        {
+            return Results.BadRequest(new { error = "invalid_external_subject", detail = ex.Message });
+        }
+
+        CommandDispatchResult<ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> accepted;
+        try
+        {
+            accepted = await rebuildDispatch
+                .DispatchAsync(new RebuildBindingProjectionCommand { ExternalSubject = subject }, ct)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Binding rebuild endpoint failed to dispatch RebuildBindingProjectionCommand for actor={ActorId}.", subject.ToActorId());
+            return Results.Json(new
+            {
+                error = "actor_dispatch_failed",
+                detail = "Failed to dispatch the rebuild command to the binding actor. Check silo logs.",
+            }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+
+        if (!accepted.Succeeded || accepted.Receipt is null)
+        {
+            logger.LogError(
+                "Binding rebuild endpoint dispatch rejected for actor={ActorId}: error={Error}",
+                subject.ToActorId(),
+                accepted.Error);
+            return Results.Json(new
+            {
+                error = "actor_dispatch_rejected",
+                detail = "Rebuild command was rejected before entering the binding actor inbox.",
+            }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+
+        logger.LogWarning(
+            "Operator binding-readmodel rebuild accepted: actor_id={ActorId}, command_id={CommandId}, admin_user_id={AdminUserId}, admin_email={AdminEmail}, admin_grant_source={GrantSource}.",
+            accepted.Receipt.ActorId,
+            accepted.Receipt.CommandId,
+            authorization.Caller.UserId,
+            authorization.Caller.Email,
+            authorization.Caller.GrantSource);
+
+        return Results.Json(new
+        {
+            status = "rebuild_pending",
+            actor_id = accepted.Receipt.ActorId,
+            command_id = accepted.Receipt.CommandId,
+            correlation_id = accepted.Receipt.CorrelationId,
+            admin_grant_source = authorization.Caller.GrantSource,
+            detail = "Rebuild command accepted for dispatch. The current-state readmodel re-materializes from the surviving actor state; re-check the binding (e.g. retry the scope-owner schedule) shortly. No-op if the actor holds no active binding.",
+        }, statusCode: StatusCodes.Status202Accepted);
     }
 
     /// <summary>
