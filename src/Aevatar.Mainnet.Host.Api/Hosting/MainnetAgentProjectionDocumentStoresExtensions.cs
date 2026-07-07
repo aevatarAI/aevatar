@@ -1,7 +1,10 @@
 using System.Net;
 using System.Net.Http.Headers;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using Aevatar.Audit;
+using Aevatar.Audit.Abstractions.Models;
 using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.Audit.Core.Projection;
 using Aevatar.Audit.Core.Stores;
@@ -162,10 +165,14 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         IConfiguration configuration)
     {
         services.TryAddSingleton<AuditTrailDocumentMetadataProvider>();
-        services.TryAddSingleton<IAuditTrailArtifactStore>(sp =>
+        services.TryAddSingleton<ElasticsearchAuditTrailArtifactStore>(sp =>
             new ElasticsearchAuditTrailArtifactStore(
                 ProjectionDocumentProviderConfiguration.BindRequiredElasticsearchOptions(configuration),
                 sp.GetRequiredService<AuditTrailDocumentMetadataProvider>().Metadata));
+        services.TryAddSingleton<IAuditTrailArtifactStore>(static sp =>
+            sp.GetRequiredService<ElasticsearchAuditTrailArtifactStore>());
+        services.TryAddSingleton<IAuditTrailQueryPort>(static sp =>
+            sp.GetRequiredService<ElasticsearchAuditTrailArtifactStore>());
     }
 
     private static void RegisterInMemoryAuditTrailArtifactStore(IServiceCollection services)
@@ -271,8 +278,11 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         };
     }
 
-    internal sealed class ElasticsearchAuditTrailArtifactStore : IAuditTrailArtifactStore, IDisposable
+    internal sealed class ElasticsearchAuditTrailArtifactStore : IAuditTrailArtifactStore, IAuditTrailQueryPort, IDisposable
     {
+        private const int DefaultAuditQueryTake = 100;
+        private const int MaxAuditQueryTake = 500;
+
         private readonly JsonFormatter _formatter = new(
             JsonFormatter.Settings.Default
                 .WithPreserveProtoFieldNames(true)
@@ -316,6 +326,72 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
 
             var storageDocument = await GetStorageDocumentAsync(auditId, ct);
             return storageDocument?.Artifact.Clone();
+        }
+
+        public async Task<AuditTrailPage> QueryAsync(
+            AuditTrailQuery query,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(query);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var boundedTake = ClampAuditQueryTake(query.Take);
+            using var request = new HttpRequestMessage(HttpMethod.Post, $"{_indexName}/_search")
+            {
+                Content = new StringContent(
+                    BuildAuditQueryPayload(query, boundedTake),
+                    Encoding.UTF8,
+                    "application/json"),
+            };
+            using var response = await _httpClient.SendAsync(request, cancellationToken);
+            if (response.StatusCode == HttpStatusCode.NotFound)
+            {
+                var notFoundPayload = await response.Content.ReadAsStringAsync(cancellationToken);
+                if (IsIndexNotFoundPayload(notFoundPayload) &&
+                    _options.MissingIndexBehavior == ElasticsearchMissingIndexBehavior.Throw &&
+                    !_options.AutoCreateIndex)
+                {
+                    throw new InvalidOperationException(
+                        $"Elasticsearch audit artifact index '{_indexName}' was not found.");
+                }
+
+                return new AuditTrailPage([], null, DateTimeOffset.UtcNow, null);
+            }
+
+            await EnsureSuccessAsync(response, "audit artifact query", cancellationToken);
+            var payload = await response.Content.ReadAsStringAsync(cancellationToken);
+            using var jsonDocument = JsonDocument.Parse(payload);
+            if (!jsonDocument.RootElement.TryGetProperty("hits", out var hitsNode) ||
+                !hitsNode.TryGetProperty("hits", out var hitItems))
+            {
+                return new AuditTrailPage([], null, DateTimeOffset.UtcNow, null);
+            }
+
+            var records = new List<AuditRecord>();
+            string? nextCursor = null;
+            DateTimeOffset? watermark = null;
+            foreach (var hit in hitItems.EnumerateArray())
+            {
+                if (!hit.TryGetProperty("_source", out var sourceNode))
+                    continue;
+
+                var storageDocument = _parser.Parse<AuditTrailArtifactStorageDocument>(sourceNode.GetRawText());
+                if (storageDocument.Artifact?.Record is not { } record)
+                    continue;
+
+                records.Add(record.Clone());
+                var occurredAt = record.OccurredAt?.ToDateTimeOffset();
+                if (occurredAt.HasValue && (!watermark.HasValue || occurredAt.Value > watermark.Value))
+                    watermark = occurredAt.Value;
+
+                nextCursor = BuildSearchAfterCursor(hit);
+            }
+
+            return new AuditTrailPage(
+                records,
+                records.Count == boundedTake ? nextCursor : null,
+                DateTimeOffset.UtcNow,
+                watermark);
         }
 
         public async Task<AuditTrailArtifactWriteResult> UpsertAsync(
@@ -443,6 +519,203 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
                 payload["aliases"] = _metadata.Aliases;
 
             return JsonSerializer.Serialize(payload);
+        }
+
+        private static string BuildAuditQueryPayload(AuditTrailQuery query, int boundedTake)
+        {
+            var filters = BuildAuditQueryFilters(query);
+            var root = new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["size"] = boundedTake,
+                ["sort"] = new object[]
+                {
+                    new Dictionary<string, object?>
+                    {
+                        ["artifact.occurred_at"] = new Dictionary<string, object?>
+                        {
+                            ["order"] = "asc",
+                            ["unmapped_type"] = "date",
+                        },
+                    },
+                    new Dictionary<string, object?>
+                    {
+                        ["id.keyword"] = new Dictionary<string, object?>
+                        {
+                            ["order"] = "asc",
+                            ["unmapped_type"] = "keyword",
+                        },
+                    },
+                },
+                ["query"] = filters.Count == 0
+                    ? new Dictionary<string, object?>
+                    {
+                        ["match_all"] = new Dictionary<string, object?>(),
+                    }
+                    : new Dictionary<string, object?>
+                    {
+                        ["bool"] = new Dictionary<string, object?>
+                        {
+                            ["filter"] = filters,
+                        },
+                    },
+            };
+
+            var searchAfter = DecodeSearchAfterCursor(query.Cursor);
+            if (searchAfter is not null)
+                root["search_after"] = searchAfter;
+
+            return JsonSerializer.Serialize(root);
+        }
+
+        private static List<object> BuildAuditQueryFilters(AuditTrailQuery query)
+        {
+            var filters = new List<object>();
+
+            AddTimestampRange(filters, "artifact.occurred_at", query.OccurredFrom, query.OccurredTo);
+            AddTerm(filters, "artifact.scope_id.keyword", query.ScopeId);
+            AddTerm(filters, "artifact.audit_actor_id.keyword", query.AuditActorId);
+            AddTerm(filters, "artifact.record.identity_key_id.keyword", query.IdentityKeyId);
+            AddTerm(filters, "artifact.operation_name.keyword", query.OperationName);
+            AddTerm(filters, "artifact.target_kind.keyword", query.TargetKind);
+            AddTerm(filters, "artifact.target_id.keyword", query.TargetId);
+            AddTerm(filters, "artifact.correlation_id.keyword", query.TraceId);
+            AddTerm(filters, "artifact.request_id.keyword", query.RequestId);
+            AddTerm(filters, "artifact.command_id.keyword", query.CommandId);
+            AddTerm(filters, "artifact.record.correlation.call_id.keyword", query.CallId);
+            AddTerm(filters, "artifact.session_id.keyword", query.SessionId);
+            AddTerm(filters, "artifact.workflow_run_id.keyword", query.WorkflowRunId);
+            AddTerm(filters, "artifact.record.correlation.approval_id.keyword", query.ApprovalId);
+            AddTerm(filters, "artifact.committed_event_id.keyword", query.CommittedEventId);
+            AddTerm(filters, "artifact.committed_actor_id.keyword", query.CommittedActorId);
+            AddTerm(filters, "artifact.committed_actor_type.keyword", query.CommittedActorType);
+            AddTerm(filters, "artifact.committed_event_type_url.keyword", query.CommittedEventTypeUrl);
+            AddEnumTerm(filters, "artifact.record.actor_kind.keyword", query.ActorKind);
+            AddEnumTerm(filters, "artifact.record.operation_kind.keyword", query.OperationKind);
+            AddEnumTerm(filters, "artifact.outcome.keyword", query.Outcome);
+            AddEnumTerm(filters, "artifact.sensitivity_level.keyword", query.SensitivityLevel);
+            AddEnumTerm(filters, "artifact.record.capture_plane.keyword", query.CapturePlane);
+            if (query.CommittedStateVersion.HasValue)
+                AddTerm(filters, "artifact.committed_state_version", query.CommittedStateVersion.Value);
+
+            return filters;
+        }
+
+        private static void AddTimestampRange(
+            List<object> filters,
+            string fieldPath,
+            DateTimeOffset? from,
+            DateTimeOffset? to)
+        {
+            if (!from.HasValue && !to.HasValue)
+                return;
+
+            var range = new Dictionary<string, object?>(StringComparer.Ordinal);
+            if (from.HasValue)
+                range["gte"] = from.Value.UtcDateTime.ToString("O");
+            if (to.HasValue)
+                range["lte"] = to.Value.UtcDateTime.ToString("O");
+
+            filters.Add(new Dictionary<string, object?>
+            {
+                ["range"] = new Dictionary<string, object?>
+                {
+                    [fieldPath] = range,
+                },
+            });
+        }
+
+        private static void AddTerm(List<object> filters, string fieldPath, string? value)
+        {
+            if (value is null)
+                return;
+
+            var normalized = value.Trim();
+            if (normalized.Length == 0)
+                return;
+
+            AddTermValue(filters, fieldPath, normalized);
+        }
+
+        private static void AddTerm(List<object> filters, string fieldPath, long value)
+        {
+            AddTermValue(filters, fieldPath, value);
+        }
+
+        private static void AddEnumTerm<TEnum>(List<object> filters, string fieldPath, TEnum? value)
+            where TEnum : struct, Enum
+        {
+            if (!value.HasValue)
+                return;
+
+            AddTerm(filters, fieldPath, GetProtoEnumName(value.Value));
+        }
+
+        private static void AddTermValue(List<object> filters, string fieldPath, object value)
+        {
+            filters.Add(new Dictionary<string, object?>
+            {
+                ["term"] = new Dictionary<string, object?>
+                {
+                    [fieldPath] = value,
+                },
+            });
+        }
+
+        private static string GetProtoEnumName<TEnum>(TEnum value)
+            where TEnum : struct, Enum
+        {
+            var member = typeof(TEnum).GetMember(value.ToString()).FirstOrDefault();
+            return member?.GetCustomAttribute<Google.Protobuf.Reflection.OriginalNameAttribute>()?.Name
+                   ?? value.ToString();
+        }
+
+        private static int ClampAuditQueryTake(int take)
+        {
+            return take <= 0 ? DefaultAuditQueryTake : Math.Min(take, MaxAuditQueryTake);
+        }
+
+        private static object[]? DecodeSearchAfterCursor(string? cursor)
+        {
+            if (string.IsNullOrWhiteSpace(cursor))
+                return null;
+
+            try
+            {
+                var payload = Encoding.UTF8.GetString(Convert.FromBase64String(cursor.Trim()));
+                using var json = JsonDocument.Parse(payload);
+                if (json.RootElement.ValueKind != JsonValueKind.Array)
+                    return null;
+
+                return json.RootElement.EnumerateArray()
+                    .Select(ToSearchAfterValue)
+                    .ToArray();
+            }
+            catch (Exception ex) when (ex is FormatException or JsonException)
+            {
+                throw new ArgumentException("Audit query cursor is invalid.", nameof(cursor), ex);
+            }
+        }
+
+        private static object? ToSearchAfterValue(JsonElement value)
+        {
+            return value.ValueKind switch
+            {
+                JsonValueKind.String => value.GetString(),
+                JsonValueKind.Number when value.TryGetInt64(out var longValue) => longValue,
+                JsonValueKind.Number when value.TryGetDouble(out var doubleValue) => doubleValue,
+                JsonValueKind.True => true,
+                JsonValueKind.False => false,
+                JsonValueKind.Null => null,
+                _ => value.GetRawText(),
+            };
+        }
+
+        private static string? BuildSearchAfterCursor(JsonElement hit)
+        {
+            if (!hit.TryGetProperty("sort", out var sortNode) || sortNode.ValueKind != JsonValueKind.Array)
+                return null;
+
+            return Convert.ToBase64String(Encoding.UTF8.GetBytes(sortNode.GetRawText()));
         }
 
         private static AuditTrailArtifactWriteResult EvaluateExisting(
