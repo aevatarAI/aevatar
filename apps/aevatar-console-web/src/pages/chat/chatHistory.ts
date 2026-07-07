@@ -209,7 +209,10 @@ export function serializeChatMessages(
   messages: readonly ChatMessage[]
 ): StoredChatMessage[] {
   return messages
-    .filter((message) => message.status !== "streaming")
+    .filter(
+      (message) =>
+        message.status !== "streaming" || hasVisibleStreamingMessage(message)
+    )
     .map((message) => ({
       content: message.content,
       error: message.error,
@@ -228,6 +231,19 @@ export function serializeChatMessages(
       timestamp: message.timestamp,
       toolCalls: message.toolCalls ? [...message.toolCalls] : undefined,
     }));
+}
+
+function hasVisibleStreamingMessage(message: ChatMessage): boolean {
+  return Boolean(
+    message.content.trim() ||
+      message.error?.trim() ||
+      message.thinking?.trim() ||
+      message.pendingApproval ||
+      message.pendingRunIntervention ||
+      message.events?.length ||
+      message.steps?.length ||
+      message.toolCalls?.length
+  );
 }
 
 export function hydrateChatMessages(

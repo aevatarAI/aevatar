@@ -56,6 +56,33 @@ function createSseResponse(frames: readonly unknown[]): Response {
   } as Response;
 }
 
+function createControlledSseResponse(): {
+  close: () => void;
+  enqueue: (frame: unknown) => void;
+  response: Response;
+} {
+  const encoder = new TextEncoder();
+  let streamController: ReadableStreamDefaultController<Uint8Array> | null = null;
+  const response = {
+    body: new ReadableStream({
+      start(controller) {
+        streamController = controller;
+      },
+    }),
+    ok: true,
+  } as Response;
+
+  return {
+    close: () => streamController?.close(),
+    enqueue: (frame: unknown) => {
+      streamController?.enqueue(
+        encoder.encode(`data: ${JSON.stringify(frame)}\n\n`)
+      );
+    },
+    response,
+  };
+}
+
 function setNativeTextareaValue(
   element: HTMLElement,
   value: string
@@ -157,6 +184,37 @@ describe("ChatPage MVP", () => {
     expect(await screen.findByText("Request completed. I saved the conversation here.")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Open Workflow Studio" })).toBeNull();
     expect(await screen.findByText("12 tokens")).toBeTruthy();
+  });
+
+  it("persists visible assistant streaming text before the response finishes", async () => {
+    const stream = createControlledSseResponse();
+    (authFetch as jest.Mock).mockResolvedValueOnce(stream.response);
+
+    renderWithQueryClient(<ChatPage />);
+    await sendPrompt("Stream a draft plan");
+
+    stream.enqueue({
+      textMessageContent: {
+        delta: "Draft plan in progress",
+        messageId: "message-a",
+      },
+    });
+
+    await screen.findByText("Draft plan in progress");
+    const stored = JSON.parse(
+      window.localStorage.getItem("aevatar.chat.localHistory.v1:scope-a") || "[]"
+    );
+    expect(stored[0].messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          content: "Draft plan in progress",
+          role: "assistant",
+          status: "complete",
+        }),
+      ])
+    );
+
+    stream.close();
   });
 
   it("shows confirmation as the primary path and sends confirmation on the same session", async () => {

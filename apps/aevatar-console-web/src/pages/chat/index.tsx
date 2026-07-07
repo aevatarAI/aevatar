@@ -631,11 +631,13 @@ const ChatPage: React.FC = () => {
       );
       const rawFrames: unknown[] = [];
       const accumulator = createRuntimeEventAccumulator();
+      let streamingConversation = startedConversation;
 
       abortControllerRef.current?.abort();
       const controller = new AbortController();
       abortControllerRef.current = controller;
       setPrompt("");
+      activeConversationRef.current = startedConversation;
       setActiveConversation(startedConversation);
       void persistConversation(startedConversation);
       setSession({
@@ -671,20 +673,24 @@ const ChatPage: React.FC = () => {
             accumulator,
             accumulator.errorText ? "error" : "streaming"
           );
+          const patchedConversation: ConversationState = {
+            ...streamingConversation,
+            messages: streamingConversation.messages.map((message) =>
+              message.id === assistantMessageId
+                ? { ...message, ...patch }
+                : message
+            ),
+          };
+          streamingConversation = patchedConversation;
+          activeConversationRef.current = patchedConversation;
           setActiveConversation((current) => {
             if (!current || current.id !== conversation.id) {
               return current;
             }
 
-            return {
-              ...current,
-              messages: current.messages.map((message) =>
-                message.id === assistantMessageId
-                  ? { ...message, ...patch }
-                  : message
-              ),
-            };
+            return patchedConversation;
           });
+          void persistConversation(patchedConversation);
           setSession(
             buildSessionFromAccumulator(
               scopeId,
