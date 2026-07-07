@@ -40,6 +40,6 @@
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
   <ItemGroup>
-    <Protobuf Include="protos\*.proto" GrpcServices="None" ProtoRoot="protos" />
+    <Protobuf Include="protos\*.proto" GrpcServices="None" ProtoRoot="protos" AdditionalImportDirs="..\..\src\Aevatar.Foundation.Abstractions" />
   </ItemGroup>
 </Project>
